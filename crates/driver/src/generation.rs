@@ -433,6 +433,24 @@ pub fn prepare_file(
         let (provider, input) = hir::core::meta::native_derive_provider(db, request, provider_ty)
             .map_err(|cause| match cause {
             hir::core::meta::NativeDeriveProviderError::Message(message) => error(range, message),
+            hir::core::meta::NativeDeriveProviderError::Provider(failure) => {
+                let diagnostics = failure
+                    .vouchers()
+                    .iter()
+                    .map(|voucher| voucher.to_complete(db))
+                    .collect::<Vec<_>>();
+                diagnostic_error(
+                    db,
+                    &diagnostics,
+                    error(
+                        range,
+                        format!(
+                            "provider application not admitted: {}",
+                            failure.description()
+                        ),
+                    ),
+                )
+            }
             hir::core::meta::NativeDeriveProviderError::Target(failure) => {
                 let diagnostics = failure
                     .vouchers()

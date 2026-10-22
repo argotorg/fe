@@ -553,7 +553,7 @@ pub enum GroundBoundAdmissionCause {
 
 /// Validate declaration requirements of the proof already selected by the
 /// evidence engine. This never selects an implementation or replaces a proof.
-fn retained_bound_requirements<'db>(
+pub(crate) fn retained_bound_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: crate::analysis::ty::evidence::EvidenceId<'db>,
     goal: TraitInstId<'db>,

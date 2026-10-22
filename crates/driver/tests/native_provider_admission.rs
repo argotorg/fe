@@ -27,7 +27,7 @@ fn false_provider_condition_refuses_before_body_execution() {
             error.contains("provider application not admitted"),
             "{error}"
         );
-        assert!(error.contains("ConditionsNotAdmitted"), "{error}");
+        assert!(error.contains("const where predicate failed"), "{error}");
         assert!(!error.contains("division by zero"), "{error}");
     }
 }
