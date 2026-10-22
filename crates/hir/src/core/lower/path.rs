@@ -162,7 +162,15 @@ fn member_generic_is_bound(segment: &ast::PathSegment, name: &str) -> bool {
         .syntax()
         .ancestors()
         .take_while(|node| ast::QuoteExpr::cast(node.clone()).is_none())
-        .filter_map(|node| node.children().find_map(ast::GenericParamList::cast))
+        .filter_map(|node| {
+            node.children()
+                .find_map(ast::GenericParamList::cast)
+                .or_else(|| {
+                    node.children()
+                        .find_map(ast::FuncSignature::cast)
+                        .and_then(|signature| signature.generic_params())
+                })
+        })
         .flat_map(|params| params.into_iter())
         .any(|param| match param.kind() {
             ast::GenericParamKind::Type(param) => {
