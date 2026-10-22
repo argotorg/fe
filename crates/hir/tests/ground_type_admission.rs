@@ -118,16 +118,23 @@ fn parametric_failure_stays_at_the_written_application_once() {
 }
 
 #[test]
-fn unsupported_conditional_nominal_and_generic_impl_conditions_remain_refused() {
+fn nominal_conditions_use_existing_checks_while_generic_impl_conditions_remain_refused() {
     let nominal = "trait Marker {}\nstruct Inner where true {}\nimpl Marker for Inner {}\nstruct Target<T: Marker> { value: T }\nfn inspect(_ value: Target<Inner>) {}";
     inspect(nominal, |error| {
-        assert!(matches!(
-            error.unwrap().0,
-            GroundTypeAdmissionKind::Bound {
-                cause: GroundBoundAdmissionCause::UnsupportedConditions,
-                ..
-            }
-        ))
+        assert!(
+            error.is_none(),
+            "lawful upstream nominal conditions must remain admitted: {error:?}"
+        );
+    });
+    inspect(&nominal.replace("where true", "where false"), |error| {
+        let (kind, diagnostics) = error.expect("false nominal declaration must be refused");
+        assert!(matches!(kind, GroundTypeAdmissionKind::Declaration));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message == "const where predicate failed"),
+            "{diagnostics:?}"
+        );
     });
     inspect(&nominal.replace(" where true", ""), |error| {
         assert!(error.is_none(), "{error:?}")

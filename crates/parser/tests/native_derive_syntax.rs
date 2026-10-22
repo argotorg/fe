@@ -172,27 +172,31 @@ fn native_derive_valid_provider_paths_parse_without_recovery() {
 }
 
 #[test]
-fn constraint_kind_bounds_only_parse_as_unparenthesized_codomain_or_bare_bound() {
+fn ordinary_trait_bounds_do_not_introduce_public_constraint_kinds() {
     for valid in [
-        "trait Foo<G: Constraint> {}\n",
+        "trait Constraint {}\ntrait Foo<G: Constraint> {}\n",
+        "trait Foo<G: *> {}\n",
+        "trait Foo<G: * -> *> {}\n",
+    ] {
+        let (_, errors) = fe_parser::parse_source_file(valid, RecoveryMode::NoRecover);
+        assert!(
+            errors.is_empty(),
+            "ordinary bound `{valid}` must parse: {errors:?}"
+        );
+    }
+    for invalid in [
         "trait Foo<G: * -> Constraint> {}\n",
         "trait Foo<G: * -> * -> Constraint> {}\n",
         "trait Foo<G: (* -> *) -> Constraint> {}\n",
-    ] {
-        let (_, errors) = fe_parser::parse_source_file(valid, RecoveryMode::Recover);
-        assert!(
-            errors.is_empty(),
-            "expected valid kind bound for `{valid}`, got {errors:?}"
-        );
-    }
-
-    for invalid in [
         "trait Foo<G: Constraint -> *> {}\n",
         "trait Foo<G: (Constraint)> {}\n",
         "trait Foo<G: (Constraint) -> Constraint> {}\n",
         "trait Foo<G: * -> Constraint -> *> {}\n",
     ] {
-        let (_, errors) = fe_parser::parse_source_file(invalid, RecoveryMode::Recover);
-        assert!(!errors.is_empty(), "expected parse error for `{invalid}`");
+        let (_, errors) = fe_parser::parse_source_file(invalid, RecoveryMode::NoRecover);
+        assert!(
+            !errors.is_empty(),
+            "public Constraint kind remains unsupported: `{invalid}`"
+        );
     }
 }

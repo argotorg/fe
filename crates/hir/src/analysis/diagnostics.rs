@@ -2820,6 +2820,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+            Self::PermitConstruction { primary, reason } => primary_diag(
+                severity,
+                reason,
+                "this carrier may only be issued by its designated compiler protocol",
+                primary.resolve(db),
+                error_code,
+            ),
             Self::CompileTimePhase { primary, message } => primary_diag(
                 severity,
                 message,
