@@ -541,7 +541,8 @@ const fn run() -> u256 {
 "#;
     let err2 = prepare_err(ill_formed_provider_nominal);
     assert!(
-        err2.contains("scoped derive provider admission failed")
+        err2.contains("const where predicate failed")
+            && err2.contains("BadProvider")
             && !err2.contains("division by zero"),
         "{err2}"
     );
@@ -575,7 +576,8 @@ const fn run() -> u256 {
 "#;
     let err3 = prepare_err(ill_formed_target_nominal);
     assert!(
-        err3.contains("scoped derive target admission failed")
+        err3.contains("const where predicate failed")
+            && err3.contains("BadTarget")
             && !err3.contains("division by zero"),
         "{err3}"
     );
@@ -607,7 +609,8 @@ const fn generic_caller<T>(_ x: T) -> u256 {
 "#;
     let err4 = prepare_err(generic_target);
     assert!(
-        err4.contains("generated output admission failed") && !err4.contains("division by zero"),
+        err4.contains("scoped derive requires a concrete authored record")
+            && !err4.contains("division by zero"),
         "{err4}"
     );
 }
@@ -1022,9 +1025,7 @@ const fn observe() -> u256 {
             .replace("Pair::value()", &format!("<{target} as Value>::value()"));
         let error = prepare_err(&generic);
         assert!(
-            error.contains(
-                "scoped on-demand derive for generic record targets is not supported yet"
-            ),
+            error.contains("scoped derive cannot yet preserve concrete generic target arguments"),
             "{target}: {error}"
         );
     }
