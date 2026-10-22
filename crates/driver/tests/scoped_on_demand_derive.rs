@@ -1303,10 +1303,13 @@ impl Derive<Score> for Provider {
 const fn run() -> u256 { let Provider = ()
     with (Provider) { Pair::score() }
 }
+const fn parameter(_ Provider: ()) -> u256 { with (Provider) { Pair::score() } }
+const fn parameter_run() -> u256 { parameter(()) }
 "#;
     let (db, file) = input(source);
     assert!(prepare_file(&db, file).unwrap().is_none());
     assert_eq!(eval_const_fn_u256(&db, "run"), "100");
+    assert_eq!(eval_const_fn_u256(&db, "parameter_run"), "100");
     let source = source.replace("let Provider = ()", "let other = ()");
     let output = prepare(&source).unwrap();
     assert_eq!(eval_const_fn_u256(&output, "run"), "42");
@@ -1361,4 +1364,33 @@ const fn run() -> u256 { with (Provider) { core::iter::Identity<u256>::score() }
         "{error}"
     );
     assert!(!error.contains("division by zero"), "{error}");
+}
+
+#[test]
+fn ordinary_choice_in_an_ingot_does_not_trigger_standalone_generation_restriction() {
+    let mut db = DriverDataBase::default();
+    db.workspace().touch(
+        &mut db,
+        Url::parse("file:///tmp/ordinary-choice-ingot/fe.toml").unwrap(),
+        Some("[ingot]\nname = \"ordinary-choice\"\nversion = \"0.1.0\"\n".into()),
+    );
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///tmp/ordinary-choice-ingot/src/lib.fe").unwrap(),
+        Some(
+            r#"
+trait Score { const fn score() -> u256 }
+struct Pair {}
+impl Score for Pair as Named { const fn score() -> u256 { 7 } }
+const fn run() -> u256 { with (Named) { Pair::score() } }
+"#
+            .into(),
+        ),
+    );
+    assert_eq!(
+        file.containing_ingot(&db).unwrap().kind(&db),
+        common::ingot::IngotKind::Local
+    );
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert!(!db.run_on_top_mod(db.top_mod(file)).has_errors(&db));
 }
