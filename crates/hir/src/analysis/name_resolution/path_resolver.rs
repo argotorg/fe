@@ -2704,6 +2704,21 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                         // resolve yet, such as `Q::T` in `Option<Q::T>` before `Q: Ty` is
                         // collected, fails the trait path, so its bound waits for the others.
                         for (arg_idx, arg) in path.generic_args(db).data(db).iter().enumerate() {
+                            if arg_idx == 0
+                                && let Some(role) =
+                                    super::super::ty::ty_lower::protocol_argument_role(db, t.into())
+                                && super::super::ty::ty_lower::lower_protocol_descriptor(
+                                    db,
+                                    arg,
+                                    role,
+                                    scope,
+                                    assumptions,
+                                    lowering_cx,
+                                )
+                                .is_some()
+                            {
+                                continue;
+                            }
                             if let Some((nth, result)) =
                                 trait_arg_path_error(db, arg, scope, assumptions, lowering_cx)
                             {
