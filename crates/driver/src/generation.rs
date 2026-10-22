@@ -584,9 +584,18 @@ pub fn prepare_file(
         if !pending.is_empty() {
             let mut new_requests = Vec::new();
             let mut batch = std::collections::HashSet::new();
-            for pending in pending {
-                let range = pending.opening.binding_range;
-                let demand = pending.demand.map_err(|cause| error(range, cause))?;
+            // Reject every invalid opening before any provider can run; query
+            // accumulator order must never grant authority to an earlier entry.
+            let pending = pending
+                .into_iter()
+                .map(|pending| {
+                    pending
+                        .demand
+                        .map_err(|cause| error(pending.opening.binding_range, cause))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for demand in pending {
+                let range = demand.opening.binding_range;
                 if !batch.insert(demand.clone()) {
                     continue;
                 }
@@ -672,6 +681,16 @@ fn provider_needs_generation<'db>(
             return true;
         }
         let instance = hir::analysis::semantic::SemanticInstance::new(db, key);
+        // Access preflight follows semantic dependencies beyond explicit calls,
+        // including const references and implicit codec callees. Its cached
+        // accumulator is authoritative for preparation before error handling.
+        if !hir::analysis::semantic::access::semantic_access_check_query::accumulated::<
+            GenerationDemand,
+        >(db, instance)
+        .is_empty()
+        {
+            return true;
+        }
         for callee in instance.callees(db) {
             pending.push_back(callee.key);
         }

@@ -1071,3 +1071,71 @@ const fn observe() -> u256 {
     let output = prepare(&positive).unwrap();
     assert_eq!(eval_const_fn_u256(&output, "observe"), "1");
 }
+
+#[test]
+fn ordinary_named_choice_does_not_require_generation() {
+    let (db, file) = input(
+        r#"
+trait Score { const fn score() -> u256 }
+struct Pair {}
+impl Score for Pair as Named { const fn score() -> u256 { 7 } }
+const fn run() -> u256 { with (Named) { Pair::score() } }
+"#,
+    );
+    assert!(prepare_file(&db, file).unwrap().is_none());
+}
+
+#[test]
+fn provider_dependency_is_prepared_before_its_body_executes() {
+    let output = prepare(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Seed { const fn seed() -> u256 }
+struct Pair {}
+struct Token {}
+struct A {}
+struct B {}
+impl Derive<Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = helper()
+        quote { const fn score() -> u256 { ${n} } }
+    }
+}
+const fn helper() -> u256 { with (B) { Token::seed() } }
+impl Derive<Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 42 } }
+    }
+}
+const fn run() -> u256 { with (A) { Pair::score() } }
+"#,
+    )
+    .expect("provider dependencies should prepare before evaluation");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn cyclic_provider_dependency_refuses_before_execution() {
+    let cause = prepare_err(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct Pair {}
+struct A {}
+impl Derive<Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = with (A) { Pair::score() }
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${n} + ${fault} } }
+    }
+}
+const fn run() -> u256 { with (A) { Pair::score() } }
+"#,
+    );
+    assert!(cause.contains("cannot make progress"), "{cause}");
+    assert!(!cause.contains("division by zero"), "{cause}");
+}
