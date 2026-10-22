@@ -1057,7 +1057,7 @@ const fn observe() -> u256 {
     let error = prepare_err(source);
     assert!(
         error.contains(
-            "scoped on-demand derive for generic provider applications is not supported yet"
+            "bounded scoped derive does not yet admit concrete generic provider applications"
         ),
         "{error}"
     );
