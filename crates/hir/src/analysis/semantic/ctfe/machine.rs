@@ -2061,15 +2061,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     }
                     .into());
                 };
-                if matches!(input.owner(), crate::core::meta::RecordOwner::Enum(_))
-                    && input.variant_index().is_none()
-                {
-                    return Err(CtfeError::InvalidOperation {
-                        origin,
-                        message: "field_count requires a struct or selected enum variant".into(),
-                    }
-                    .into());
-                }
                 Ok(CtfeConstValue::int(
                     self.db,
                     result_ty,
