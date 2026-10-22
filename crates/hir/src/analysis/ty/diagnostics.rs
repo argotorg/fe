@@ -33,6 +33,15 @@ pub enum FuncBodyDiag<'db> {
 }
 
 impl<'db> FuncBodyDiag<'db> {
+    /// Severity does not depend on source spans. Semantic consumers must not
+    /// render diagnostics (or require a spanned database) to decide admission.
+    pub fn severity(&self) -> common::diagnostics::Severity {
+        match self {
+            Self::Body(BodyDiag::MutAccessCopied { .. }) => common::diagnostics::Severity::Warning,
+            _ => common::diagnostics::Severity::Error,
+        }
+    }
+
     pub(super) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
         match self {
             Self::Ty(diag) => diag.to_voucher(),

@@ -990,11 +990,13 @@ impl DiagnosticVoucher for DefConflictError<'_> {
 
 impl DiagnosticVoucher for FuncBodyDiag<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        match self {
+        let mut diagnostic = match self {
             Self::Ty(diag) => diag.to_complete(db),
             Self::Body(diag) => diag.to_complete(db),
             Self::NameRes(diag) => diag.to_complete(db),
-        }
+        };
+        diagnostic.severity = self.severity();
+        diagnostic
     }
 }
 
