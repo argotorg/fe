@@ -569,15 +569,12 @@ fn retained_bound_requirements<'db>(
         if let Some(unmet) = check_type_requirements(db, argument, origin, &FxHashSet::default()) {
             return Err((
                 GroundBoundAdmissionCause::ConditionsNotAdmitted,
-                vec![
-                    unmet_requirement_diag(
-                        span.clone(),
-                        unmet.predicate,
-                        unmet.failure,
-                        Some(unmet.ty),
-                    )
-                    .into(),
-                ],
+                vec![unmet_requirement_diag(
+                    span.clone(),
+                    unmet.predicate,
+                    unmet.failure,
+                    Some(unmet.ty),
+                )],
             ));
         }
     }
