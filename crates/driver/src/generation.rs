@@ -581,7 +581,7 @@ pub fn prepare_file(
                 if !batch.insert(demand.clone()) {
                     continue;
                 }
-                if !completed.insert(demand.clone()) {
+                if completed.contains(&demand) {
                     return Err(error(
                         range,
                         "generated implementation did not discharge its preparation dependency"
@@ -612,6 +612,12 @@ pub fn prepare_file(
                     demand,
                 });
                 new_requests.push(plan);
+                // Publish one ready dependency before considering its dependents.
+                break;
+            }
+            if new_requests.is_empty() {
+                return Err(error(root.syntax().text_range(),
+                    "scoped derive dependencies cannot make progress (cyclic or unresolved provider bodies)".into()));
             }
             requests.extend(new_requests);
             continue;
@@ -634,6 +640,30 @@ pub fn prepare_file(
         root.syntax().text_range(),
         "scoped generation preparation limit exceeded".into(),
     ))
+}
+
+fn provider_needs_generation<'db>(
+    db: &'db DriverDataBase,
+    key: hir::analysis::semantic::SemanticInstanceKey<'db>,
+) -> bool {
+    use hir::analysis::ty::trait_resolution::generation::GenerationDemand;
+    let mut pending = std::collections::VecDeque::from([key]);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(key) = pending.pop_front() {
+        if !seen.insert(key) {
+            continue;
+        }
+        if let BodyOwner::Func(function, _) = key.owner(db)
+            && !check_func_body::accumulated::<GenerationDemand>(db, function).is_empty()
+        {
+            return true;
+        }
+        let instance = hir::analysis::semantic::SemanticInstance::new(db, key);
+        for callee in instance.callees(db) {
+            pending.push_back(callee.key);
+        }
+    }
+    false
 }
 
 fn scoped_selection_name(demand: &common::generation::ScopedDeriveDemand) -> String {
