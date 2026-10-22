@@ -640,7 +640,7 @@ fn evaluate_provider_instance<'db>(
             error(range, "authored provider body diagnostics".into()),
         ));
     }
-    let owner = BodyOwner::Func(provider, None);
+    let owner = provider_key.owner(db);
     let instance = hir::analysis::semantic::SemanticInstance::new(db, provider_key);
     let mut validation_diagnostics = Vec::new();
     let mut unresolved = Vec::new();
