@@ -519,6 +519,55 @@ pub fn prepare_file(
                 cause: first.message.clone(),
             });
         }
+        // A generated header is not eligible merely because it was lowered.
+        // Validate conformance before retrying any goal against the new plan.
+        use hir::diagnosable::Diagnosable;
+        for scoped in requests
+            .iter()
+            .filter_map(|request| request.scoped_impl.as_ref())
+        {
+            let implementation = output_module
+                .all_impl_traits(&output)
+                .iter()
+                .copied()
+                .find(|implementation| {
+                    implementation
+                        .selection_name(&output)
+                        .is_some_and(|name| name.data(&output) == &scoped.selection_name)
+                })
+                .ok_or_else(|| {
+                    error(
+                        scoped.demand.opening.binding_range,
+                        "generated scoped implementation was not constructed".into(),
+                    )
+                })?;
+            let mut complete = implementation
+                .diags(&output)
+                .into_iter()
+                .map(|diagnostic| diagnostic.to_complete(&output))
+                .collect::<Vec<_>>();
+            for method in implementation.methods(&output) {
+                complete.extend(
+                    method
+                        .diags(&output)
+                        .into_iter()
+                        .map(|diagnostic| diagnostic.to_complete(&output)),
+                );
+            }
+            if complete
+                .iter()
+                .any(|diagnostic| diagnostic.severity == common::diagnostics::Severity::Error)
+            {
+                return Err(diagnostic_error(
+                    &output,
+                    &complete,
+                    error(
+                        scoped.demand.opening.binding_range,
+                        "generated implementation admission failed".into(),
+                    ),
+                ));
+            }
+        }
         let pending = hir::analysis::ty::trait_resolution::generation::preparation_demands(
             &output,
             output_module,
