@@ -1488,9 +1488,13 @@ const RESULT: u256 = run()
     let source = source
         .replace(
             "        let extra = quote { const fn ignored() -> bool { missing } }\n",
-            "",
+            "        let answer: u256 = 7\n",
         )
-        .replace("            ${extra}\n", "");
+        .replace("            ${extra}\n", "")
+        .replace(
+            "const fn value() -> u256 { 7 }",
+            "const fn value() -> u256 { ${answer} }",
+        );
     let output = prepare(&source).unwrap();
     assert_eq!(eval_const_fn_u256(&output, "run"), "7");
 }
