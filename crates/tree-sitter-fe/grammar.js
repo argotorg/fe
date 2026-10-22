@@ -1267,12 +1267,9 @@ module.exports = grammar({
       field('body', choice($.block, $.quote_pattern, $.quote_where, $.match_arm_list)),
     ),
 
-    quote_pattern: $ => prec(1, seq(
-      '{',
-      choice($.wildcard_pattern, $.rest_pattern, $.mut_pattern,
-        $.maybe_mut_pattern, $.ref_pattern, $.var_pattern),
-      '}',
-    )),
+    // Mode-headed patterns already fit the block token grammar. These two
+    // pattern heads cannot form expressions and need an explicit body rule.
+    quote_pattern: $ => seq('{', choice($.wildcard_pattern, $.rest_pattern), '}'),
 
     quote_where: $ => seq('{', $.where_clause, '}'),
 
