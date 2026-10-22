@@ -776,9 +776,26 @@ pub(crate) fn declared_bound_evidence<'db>(
     subst: &CompleteSubst<'db>,
     solve_cx: TraitSolveCx<'db>,
 ) -> EvidenceList<'db> {
+    declared_bound_evidence_with_pending(db, declared, signature, subst, solve_cx).0
+}
+
+/// Preserve preparation state from the same proof production that fills the
+/// slots. A missing pending slot is not an unsatisfied trait obligation.
+pub(crate) fn declared_bound_evidence_with_pending<'db>(
+    db: &'db dyn HirAnalysisDb,
+    declared: PredicateListId<'db>,
+    signature: PredicateListId<'db>,
+    subst: &CompleteSubst<'db>,
+    solve_cx: TraitSolveCx<'db>,
+) -> (EvidenceList<'db>, bool) {
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-    let declared_proof = |goal| prove(db, solve_cx, goal);
-    EvidenceList::of(
+    let mut pending = false;
+    let mut declared_proof = |goal| {
+        let outcome = prove_outcome(db, solve_cx, goal);
+        pending |= matches!(outcome, ProofOutcome::NeedsGeneration);
+        outcome.evidence()
+    };
+    let evidence = EvidenceList::of(
         db,
         signature
             .list(db)
@@ -820,7 +837,8 @@ pub(crate) fn declared_bound_evidence<'db>(
                 answer
             })
             .collect(),
-    )
+    );
+    (evidence, pending)
 }
 
 /// An implementation's implied bound is proved in its declaration context,

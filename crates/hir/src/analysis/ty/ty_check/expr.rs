@@ -1964,6 +1964,24 @@ impl<'db> TyChecker<'db> {
             self.env.type_expr(value, ExprProp::invalid(self.db));
             return true;
         };
+        if let Partial::Present(Expr::RecordInit(_, fields)) = value.data(self.db, body)
+            && !fields.is_empty()
+        {
+            use salsa::Accumulator;
+            let message = "scoped derive provider literals must have no fields; provider values are not evaluated";
+            super::super::trait_resolution::generation::GenerationDemand {
+                opening: key,
+                demand: Err(message.into()),
+            }
+            .accumulate(self.db);
+            self.push_diag(BodyDiag::CompileTimePhase {
+                primary: value.span(body).into(),
+                message: message.into(),
+            });
+            self.env.named_impl_operands.insert(value);
+            self.env.type_expr(value, ExprProp::invalid(self.db));
+            return true;
+        }
         for trait_ in offers {
             let opening =
                 ProviderOpening::new(self.db, key.clone(), provider_ty, trait_, self.env.scope());
@@ -2224,14 +2242,16 @@ impl<'db> TyChecker<'db> {
             if binding.key_path.is_none()
                 && let Partial::Present(Expr::Path(Partial::Present(path))) =
                     binding.value.data(self.db, self.body())
-                && let Ok(crate::analysis::name_resolution::PathRes::Ty(provider_ty)) =
-                    crate::analysis::name_resolution::resolve_path(
-                        self.db,
-                        *path,
-                        self.env.scope(),
-                        self.env.assumptions(),
-                        false,
-                    )
+                && let Ok(
+                    crate::analysis::name_resolution::PathRes::Ty(provider_ty)
+                    | crate::analysis::name_resolution::PathRes::TyAlias(_, provider_ty),
+                ) = crate::analysis::name_resolution::resolve_path(
+                    self.db,
+                    *path,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    false,
+                )
                 && self.try_open_derive_provider(binding.value, provider_ty)
             {
                 continue;

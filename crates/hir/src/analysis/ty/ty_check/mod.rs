@@ -1028,6 +1028,15 @@ pub(crate) fn provider_opening_at<'db>(
             }
         }
     }
+    // Inherent associated constants use the same declared expected type as
+    // BodyAnalysisPass::run_on_module and check_anon_const_body.
+    for &implementation in module.all_impls(db) {
+        for constant in implementation.assoc_consts(db) {
+            if let (Some(body), Some(expected)) = (constant.value_body(db), constant.ty(db)) {
+                owners.push(BodyOwner::AnonConstBody { body, expected });
+            }
+        }
+    }
     for &trait_ in module.all_traits(db) {
         for constant in trait_.assoc_consts(db) {
             if let (Some(body), Some(expected)) = (constant.default_body(db), constant.ty(db)) {
