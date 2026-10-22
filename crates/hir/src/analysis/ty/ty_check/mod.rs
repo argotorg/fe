@@ -405,17 +405,15 @@ pub fn check_generic_default_bodies<'db>(
     owner: GenericParamOwner<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let mut diags = Vec::new();
-    for view in owner.params(db) {
-        for checked in check_generic_default_body_types(db, owner, view.idx) {
-            diags.extend(checked.diagnostics.iter().cloned());
-            if checked.ctfe_ready {
-                diags.extend(const_body_ctfe_diags(
-                    db,
-                    checked.body,
-                    checked.expected,
-                    ConstUsePolicy::AllowDependent,
-                ));
-            }
+    for checked in generic_default_body_checks(db, owner) {
+        diags.extend(checked.diagnostics.iter().cloned());
+        if checked.ctfe_ready {
+            diags.extend(const_body_ctfe_diags(
+                db,
+                checked.body,
+                checked.expected,
+                ConstUsePolicy::AllowDependent,
+            ));
         }
     }
     diags
@@ -427,6 +425,17 @@ pub(crate) struct DefaultConstBodyCheck<'db> {
     pub(crate) expected: TyId<'db>,
     pub(crate) diagnostics: Vec<FuncBodyDiag<'db>>,
     pub(crate) ctfe_ready: bool,
+}
+
+/// Share the actual checked default bodies and their declared expected types
+/// with consumers of retained metadata. Do not rediscover defaults from syntax.
+fn generic_default_body_checks<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> impl Iterator<Item = &'db DefaultConstBodyCheck<'db>> + 'db {
+    owner
+        .params(db)
+        .flat_map(move |view| check_generic_default_body_types(db, owner, view.idx).iter())
 }
 
 /// Name/type checking stays separate from const execution so structural
@@ -1054,6 +1063,14 @@ pub(crate) fn provider_opening_at<'db>(
     }
     for &item in module.all_items(db) {
         owners.extend(BodyOwner::const_predicates_of(db, item));
+        if let Some(owner) = GenericParamOwner::from_item_opt(item) {
+            owners.extend(generic_default_body_checks(db, owner).map(|checked| {
+                BodyOwner::AnonConstBody {
+                    body: checked.body,
+                    expected: checked.expected,
+                }
+            }));
+        }
     }
     for &assert_ in module.all_static_asserts(db) {
         let (body, expected) = static_assert_body(db, assert_);
