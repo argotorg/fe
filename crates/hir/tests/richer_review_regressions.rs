@@ -178,7 +178,7 @@ fn pattern_only_fragments_copy_into_generated_bindings() {
         let source = format!(
             "{PRELUDE} const fn make(_ record: Record) -> Code<Item> {{
             let p: Code<Pat> = quote {{ {pattern} }}
-            quote {{ fn generated() -> u256 {{ let ${{p}}: u256 = 7\n 42 }} }}
+            quote {{ fn generated() -> u256 {{ var source: u256 = 7\n let ${{p}}: u256 = source\n source + 35 }} }}
         }}"
         );
         let diags = output(&source, "Pair");
