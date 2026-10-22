@@ -25,3 +25,9 @@ fn generated_choice_runs_and_crosses_declared_bounds() {
     }
     assert!(Pair::score() == 100)
 }
+
+#[test]
+fn closure_retains_its_generated_choice() {
+    let f = || { with (Provider) { Pair::score() } }
+    assert!(f() == 42)
+}

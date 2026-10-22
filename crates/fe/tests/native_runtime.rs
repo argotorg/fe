@@ -2941,7 +2941,8 @@ fn scoped_generated_trait_methods_execute_on_both_backends() {
             );
             assert!(
                 stdout.contains("generated_choice_runs_and_crosses_declared_bounds")
-                    && stdout.contains("1 passed; 0 failed"),
+                    && stdout.contains("2 passed; 0 failed")
+                    && stdout.contains("closure_retains_its_generated_choice"),
                 "{backend} O{level} did not execute the expected test:\n{stdout}\n{stderr}"
             );
         }
