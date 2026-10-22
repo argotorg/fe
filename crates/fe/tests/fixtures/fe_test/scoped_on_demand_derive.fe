@@ -1,0 +1,27 @@
+use core::derive::Derive
+use core::meta::{Record, Code, Item, field_count}
+
+trait Score { fn score() -> u256 }
+pub struct Pair { pub a: u256, pub b: u256 }
+impl Score for Pair { fn score() -> u256 { 100 } }
+impl Score for Pair as Named { fn score() -> u256 { 7 } }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote { fn score() -> u256 { 40 + ${n} } }
+    }
+}
+fn read<T: Score>() -> u256 { T::score() }
+
+#[test]
+fn generated_choice_runs_and_crosses_declared_bounds() {
+    assert!(Pair::score() == 100)
+    with (Provider) {
+        assert!(Pair::score() == 42)
+        assert!(read<Pair>() == 42)
+        with (Named) { assert!(Pair::score() == 7) }
+        assert!(Pair::score() == 42)
+    }
+    assert!(Pair::score() == 100)
+}
