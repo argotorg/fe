@@ -669,3 +669,25 @@ fn tree_sitter_parses_named_and_ordinary_impl_operands() {
         tree.root_node().to_sexp()
     );
 }
+
+#[test]
+fn public_named_implementation_visibility_agrees_between_parsers() {
+    let mut parser = new_parser();
+    for source in [
+        "pub impl Pick for Item as Public {}",
+        "pub unsafe impl Pick for Item as Public {}",
+        "pub impl<T> Pick for Item<T> as Public where T: Copy {}",
+    ] {
+        let (_, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let errors = parse_errors(&mut parser, source);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+    }
+    let source = "pub impl Pick for Item {}";
+    let (_, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+    assert!(
+        !errors.is_empty(),
+        "ordinary implementations have no public selection name"
+    );
+    assert!(!parse_errors(&mut parser, source).is_empty());
+}
