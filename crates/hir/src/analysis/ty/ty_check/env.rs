@@ -1331,6 +1331,7 @@ impl<'db> TyCheckEnv<'db> {
     pub(super) fn call_site(&self) -> CallSite<'db> {
         CallSite {
             frames: self.effect_env.with_frames(),
+            choices: self.choices,
             closure: self.closure_stack.last().map(|active| active.def),
         }
     }
@@ -1339,7 +1340,8 @@ impl<'db> TyCheckEnv<'db> {
     /// `leave_call_site`: under its `with` blocks, in its closure's body. A
     /// closure already checked gives its finished environment, whose row is
     /// fixed.
-    pub(super) fn enter_call_site(&mut self, site: &CallSite<'db>) {
+    pub(super) fn enter_call_site(&mut self, site: &CallSite<'db>) -> Option<ChosenImpls<'db>> {
+        let enclosing_choices = std::mem::replace(&mut self.choices, site.choices);
         debug_assert!(
             site.closure.is_some() || self.closure_stack.is_empty(),
             "a call outside closures resolves after them"
@@ -1358,9 +1360,11 @@ impl<'db> TyCheckEnv<'db> {
             self.late_closure = Some((def, enclosing));
         }
         self.effect_env.reopen_with_frames(site.frames.clone());
+        enclosing_choices
     }
 
-    pub(super) fn leave_call_site(&mut self) {
+    pub(super) fn leave_call_site(&mut self, enclosing_choices: Option<ChosenImpls<'db>>) {
+        self.choices = enclosing_choices;
         self.effect_env.close_with_frames();
         if let Some((def, enclosing)) = self.late_closure.take() {
             let env = std::mem::replace(&mut self.effect_env, enclosing);
@@ -1550,8 +1554,7 @@ impl<'db> TyCheckEnv<'db> {
         self.pending_vars.clear();
     }
 
-    pub(super) fn register_trait_obligation(&mut self, mut obligation: TraitObligation<'db>) {
-        obligation.choices = self.choices;
+    pub(super) fn register_trait_obligation(&mut self, obligation: TraitObligation<'db>) {
         self.deferred.push(DeferredTask::Obligation(obligation))
     }
 
@@ -2730,6 +2733,7 @@ pub(super) struct PendingMethod<'db> {
 #[derive(Debug, Clone)]
 pub(super) struct CallSite<'db> {
     frames: Vec<keyed_effect_env::EffectFrame<'db>>,
+    pub choices: Option<ChosenImpls<'db>>,
     pub closure: Option<ClosureDef<'db>>,
 }
 

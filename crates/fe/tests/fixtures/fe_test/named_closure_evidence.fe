@@ -30,3 +30,23 @@ fn effect_row() {
     let f = || charge()
     with (Wholesale, Price = Item {}) { assert!(apply(f) == 70) }
 }
+
+// Both receiver implementations return u256, so the result annotation does
+// not settle the receiver. Its call must keep the choices where it was written.
+struct Deferred<T> { v: T }
+trait Read { fn read<T: Pick>(self, _value: T) -> u256 }
+impl Read for Deferred<u256> {
+    fn read<T: Pick>(self, _value: T) -> u256 { T::value() }
+}
+impl Read for Deferred<u8> {
+    fn read<T: Pick>(self, _value: T) -> u256 { T::value() }
+}
+#[test]
+fn deferred_choice_keeps_its_call_site() {
+    let x = 5
+    let chosen: u256 = with (Discount) { Deferred { v: x }.read(Item {}) }
+    let ordinary: u256 = Deferred { v: x }.read(Item {})
+    let resolved: u256 = x
+    assert!(chosen == 70)
+    assert!(ordinary == 100)
+}
