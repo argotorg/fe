@@ -292,9 +292,13 @@ const RESULT: u256 = Key::value()
     let source = source
         .replace(
             "        let extra = quote { const fn ignored() -> bool { missing } }\n",
-            "",
+            "        let answer: u256 = 7\n",
         )
-        .replace("            ${extra}\n", "");
+        .replace("            ${extra}\n", "")
+        .replace(
+            "const fn value() -> u256 { 7 }",
+            "const fn value() -> u256 { ${answer} }",
+        );
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///tmp/explicit-derive-one-item.fe").unwrap();
     let file = db.workspace().touch(&mut db, url.clone(), Some(source));
