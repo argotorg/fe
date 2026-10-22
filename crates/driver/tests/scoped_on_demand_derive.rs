@@ -1300,9 +1300,10 @@ impl Derive<Score> for Provider {
         quote { const fn score() -> u256 { 42 } }
     }
 }
-const fn run() -> u256 { let Provider = ()
+const fn local(_ Provider: ()) -> u256 { let Provider = ()
     with (Provider) { Pair::score() }
 }
+const fn run() -> u256 { local(()) }
 const fn parameter(_ Provider: ()) -> u256 { with (Provider) { Pair::score() } }
 const fn parameter_run() -> u256 { parameter(()) }
 "#;
@@ -1310,7 +1311,15 @@ const fn parameter_run() -> u256 { parameter(()) }
     assert!(prepare_file(&db, file).unwrap().is_none());
     assert_eq!(eval_const_fn_u256(&db, "run"), "100");
     assert_eq!(eval_const_fn_u256(&db, "parameter_run"), "100");
-    let source = source.replace("let Provider = ()", "let other = ()");
+    // A bare name matching an existing struct is a constructor pattern, not
+    // a new binding. The parameter supplies a lawful value binding so the
+    // nested let can exercise local rebinding of the same provider spelling.
+    let source = source
+        .replace(
+            "const fn local(_ Provider: ())",
+            "const fn local(_ unused: ())",
+        )
+        .replace("let Provider = ()", "let other = ()");
     let output = prepare(&source).unwrap();
     assert_eq!(eval_const_fn_u256(&output, "run"), "42");
 }
