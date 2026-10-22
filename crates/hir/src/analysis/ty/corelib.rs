@@ -97,6 +97,17 @@ pub fn resolve_lib_trait_path<'db>(
     resolve_lib_trait(db, scope, path_id)
 }
 
+/// Field queries are evaluated without a lexical named opening. Their canonical
+/// protocol therefore has only ordinary implementations; unrelated user traits
+/// with the same spelling retain the usual named-implementation behavior.
+pub(crate) fn is_ordinary_field_query_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> bool {
+    trait_.scope().top_mod(db).ingot(db).kind(db) == IngotKind::Core
+        && resolve_lib_trait_path(db, trait_.scope(), "core::meta::FieldQuery") == Some(trait_)
+}
+
 /// Returns `true` if `func` is the library function at the fully-qualified
 /// `core::...` or `std::...` path.
 ///

@@ -5798,6 +5798,13 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
         let error_code =
             GlobalErrorCode::new(DiagnosticPass::ImplTraitDefinition, self.local_code());
         match self {
+            Self::NamedFieldQuery { primary } => primary_diag(
+                Severity::Error,
+                "FieldQuery requires an ordinary implementation",
+                "field queries run outside lexical implementation openings",
+                primary.span().resolve(db),
+                error_code,
+            ),
             Self::NamedOutputsNeedOrdinary { primary } => primary_diag(
                 Severity::Error,
                 "named associated outputs require an ordinary implementation",
