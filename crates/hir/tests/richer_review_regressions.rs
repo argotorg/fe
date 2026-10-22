@@ -50,7 +50,12 @@ fn output(source: &str, target: &str) -> String {
     let file = db.new_stand_alone("richer-review.fe".into(), source);
     db.generation_inputs().set_requests(&mut db).to(vec![plan]);
     let (module, _) = db.top_mod(file);
-    format_diagnostics(&db, &db.run_on_top_mod(module))
+    let mut diagnostics = format_diagnostics(&db, &db.run_on_top_mod(module));
+    for error in fe_hir::lower::generation_lowering_errors(&db, module) {
+        diagnostics.push_str(&error.message);
+        diagnostics.push('\n');
+    }
+    diagnostics
 }
 
 const PRELUDE: &str = "use core::meta::{Code, Item, Record, Expr, Pat, field, field_type, type_is, field_count, variant_count, variant}\nstruct Pair { value: u256 }\n";
@@ -259,6 +264,7 @@ fn member_splices_keep_their_producer_and_method_generic_binders() {
     db.generation_inputs().set_requests(&mut db).to(vec![plan]);
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
+    assert!(fe_hir::lower::generation_lowering_errors(&db, module).is_empty());
     let owner = BodyOwner::Func(find_func(&db, module, "generated"), None);
     let outcome = fe_hir::analysis::semantic::eval_body_owner_const(
         &db,
