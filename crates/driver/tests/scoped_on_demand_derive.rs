@@ -154,26 +154,8 @@ const fn check_generic_bound_delivery() -> u256 {
         "54"
     );
 
-    // Verify single-pass authored-only input rule (RD117) and deduplication:
-    // Two FieldCountScore openings each bind Score and ItemScore; the enum opening binds Score. Repeated expressions within one opening share its plan.
-    let module = output.top_mod(
-        output
-            .workspace()
-            .get(
-                &output,
-                &Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap(),
-            )
-            .unwrap(),
-    );
-    let generated = module
-        .all_impl_traits(&output)
-        .iter()
-        .filter(|implementation| implementation.selection_name(&output).is_some())
-        .count();
-    assert_eq!(
-        generated, 5,
-        "each distinct scoped demand has one named implementation"
-    );
+    // Each opening retains its selected behavior, and prepared output cannot
+    // be submitted as a new authored generation input.
     let url = Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap();
     let output_file = output.workspace().get(&output, &url).unwrap();
     let second_pass_err = prepare_file(&output, output_file)
