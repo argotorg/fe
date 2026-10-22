@@ -1,6 +1,6 @@
 use fe_hir::{
     analysis::ty::{
-        trait_def::CheckedApplicationError,
+        ty_check::GroundBoundAdmissionCause,
         ty_check::{GroundTypeAdmissionKind, admit_ground_type_application},
     },
     test_db::{HirAnalysisTestDb, find_func},
@@ -73,7 +73,7 @@ fn false_bound_is_checked_and_retains_original_condition_diagnostic() {
         assert!(matches!(
             kind,
             GroundTypeAdmissionKind::Bound {
-                cause: CheckedApplicationError::ConditionsNotAdmitted,
+                cause: GroundBoundAdmissionCause::ConditionsNotAdmitted,
                 ..
             }
         ));
@@ -94,7 +94,7 @@ fn initial_admission_does_not_assume_the_origins_missing_bound() {
         assert!(matches!(
             kind,
             GroundTypeAdmissionKind::Bound {
-                cause: CheckedApplicationError::NotProven,
+                cause: GroundBoundAdmissionCause::NotProven,
                 ..
             }
         ));
@@ -124,7 +124,7 @@ fn unsupported_conditional_nominal_and_generic_impl_conditions_remain_refused() 
         assert!(matches!(
             error.unwrap().0,
             GroundTypeAdmissionKind::Bound {
-                cause: CheckedApplicationError::UnsupportedConditions,
+                cause: GroundBoundAdmissionCause::UnsupportedConditions,
                 ..
             }
         ))
@@ -138,7 +138,7 @@ fn unsupported_conditional_nominal_and_generic_impl_conditions_remain_refused() 
         assert!(matches!(
             kind,
             GroundTypeAdmissionKind::Bound {
-                cause: CheckedApplicationError::ConditionsNotAdmitted,
+                cause: GroundBoundAdmissionCause::ConditionsNotAdmitted,
                 ..
             }
         ));
@@ -169,7 +169,7 @@ fn condition_fault_cause_is_preserved_and_not_replaced_by_a_boolean() {
         assert!(matches!(
             kind,
             GroundTypeAdmissionKind::Bound {
-                cause: CheckedApplicationError::ConditionsNotAdmitted,
+                cause: GroundBoundAdmissionCause::ConditionsNotAdmitted,
                 ..
             }
         ));
@@ -197,12 +197,9 @@ fn existing_declaration_and_cycle_checks_remain_in_force() {
 }
 
 #[test]
-fn named_canonical_impl_and_unfulfilled_derive_request_cannot_bypass_lower_impl_trait() {
+fn named_canonical_and_pending_derive_never_supply_ordinary_evidence() {
     use fe_hir::{
-        analysis::ty::{
-            trait_def::{TraitInstId, prove_selected_hir_application},
-            trait_resolution::TraitSolveCx,
-        },
+        analysis::ty::{evidence::prove, trait_resolution::TraitSolveCx},
         test_db::initialize_test_analysis_pass,
     };
 
@@ -271,42 +268,34 @@ impl Score for Other with (Provider)
         .find(|t| t.name(&db).to_opt().unwrap().data(&db) == "Score")
         .unwrap();
 
-    // Neither the named canonical impl nor the unfulfilled derive request may pass prove_selected_hir_application.
-    for &impl_trait in module.all_impl_traits(&db) {
-        let Some(goal) = impl_trait.trait_inst(&db) else {
+    let mut checked = 0;
+    for &implementation in module.all_impl_traits(&db) {
+        let Ok(goal) = implementation.candidate_trait_inst_result(&db) else {
             continue;
         };
         if goal.def(&db) == score_trait {
-            let res = prove_selected_hir_application(
-                &db,
-                TraitSolveCx::new(&db, module.scope()),
-                impl_trait,
-                TraitInstId::new_simple(&db, score_trait, goal.args(&db).to_vec()),
-            );
+            checked += 1;
             assert!(
-                res.is_err(),
-                "expected prove_selected_hir_application to reject unauthorized/unfulfilled impl, got {res:?}"
+                prove(&db, TraitSolveCx::new(&db, module.scope()), goal).is_none(),
+                "unauthorized named and unprepared declarations supply no ordinary proof"
             );
         }
     }
+    assert_eq!(checked, 2, "both authored request headers must be checked");
 }
 
 #[test]
-fn local_shadowing_of_constraint_rejects_arrow_constraint_kind_bound() {
-    use fe_hir::test_db::initialize_test_analysis_pass;
+fn protocol_port_does_not_enable_public_constraint_kinds() {
+    use fe_parser::{RecoveryMode, parse_source_file};
 
     for source in [
         "trait Constraint {}\ntrait CustomDerive<G: * -> Constraint> {}\n",
         "mod core { pub mod obligations { pub trait Constraint {} } }\nuse ingot::core::obligations::Constraint\ntrait CustomDerive<G: * -> Constraint> {}\n",
     ] {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone("shadowed-constraint-kind.fe".into(), source);
-        let (module, _) = db.top_mod(file);
-        let mut pass_manager = initialize_test_analysis_pass();
-        let diags = pass_manager.run_on_module(&db, module);
+        let (_, errors) = parse_source_file(source, RecoveryMode::NoRecover);
         assert!(
-            !diags.is_empty(),
-            "shadowed Constraint in `* -> Constraint` must be rejected by kind lowering: {source}"
+            !errors.is_empty(),
+            "public Constraint kinds remain deferred: {source}"
         );
     }
 }
