@@ -1405,7 +1405,11 @@ pub fn native_derive_provider<'db>(
         Some(inst),
         &[],
     )
-    .map_err(|_| "no admitted ordinary Derive<requested goal> provider implementation")?;
+    .map_err(|cause| {
+        format!(
+            "no ordinary Derive<requested goal> provider implementation was admitted: {cause:?}"
+        )
+    })?;
     Ok((key, input))
 }
 
