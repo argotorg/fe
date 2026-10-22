@@ -540,7 +540,7 @@ const fn bound<T: Pick>() -> u256 {{ T::value() }}
 fn chosen() {{ with (Discount) {{ let x: Array<{{ {value} }}> = Array {{}} }} }}
 "#
         ));
-        assert!(codes.contains(&"8-0130".to_string()), "{value}: {codes:?}");
+        assert!(codes.contains(&"8-0138".to_string()), "{value}: {codes:?}");
     }
     let source = format!(
         r#"{PICKS}
@@ -567,7 +567,7 @@ type Count = Array<{{ Item::value() }}>
 fn chosen() {{ with (Discount) {{ let x: Count = Array {{}} }} }}
 "#
     ));
-    assert!(codes.contains(&"8-0130".to_string()), "{codes:?}");
+    assert!(codes.contains(&"8-0138".to_string()), "{codes:?}");
 }
 
 #[test]
@@ -647,7 +647,7 @@ fn chosen() {{ with (Discount) {{ {statement} }} }}
 "#
         ));
         assert!(
-            codes.contains(&"8-0130".to_string()),
+            codes.contains(&"8-0138".to_string()),
             "{statement}: {codes:?}"
         );
     }
