@@ -828,7 +828,7 @@ struct Arg {}
 trait Ready {}
 trait Pick<A> { fn value() -> u256 }
 impl Pick<Arg> for Item { fn value() -> u256 { 100 } }
-impl<A: Ready> Pick<A> for Item as Broken { fn value() -> u256 { 70 } }
+impl<T: Ready> Pick<Arg> for T as Broken { fn value() -> u256 { 70 } }
 fn infer<T: Pick<A>, A>(_ item: T) -> u256 { T::value() }
 fn chosen() -> u256 { with (Broken) { infer(Item {}) } }
 "#;
