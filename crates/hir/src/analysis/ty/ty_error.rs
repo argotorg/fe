@@ -502,27 +502,24 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         args: crate::hir_def::GenericArgListId<'db>,
     ) {
         for (index, arg) in args.data(self.db).iter().enumerate() {
-            ctxt.with_new_ctxt(
-                |span| span.arg(index),
-                |ctxt| {
-                    if index == 0
-                        && let Some((expected, role)) = self.protocol_arguments
-                        && expected == args
-                        && let Some(diagnostics) = protocol_argument_diags(
-                            self.db,
-                            arg,
-                            role,
-                            ctxt.span().unwrap(),
-                            ctxt.scope(),
-                            self.assumptions,
-                        )
-                    {
-                        self.diags.extend(diagnostics);
-                        return;
-                    }
-                    self.visit_generic_arg(ctxt, arg);
-                },
-            );
+            let mut argument_ctxt =
+                VisitorCtxt::new(self.db, ctxt.scope(), ctxt.span().unwrap().arg(index));
+            if index == 0
+                && let Some((expected, role)) = self.protocol_arguments
+                && expected == args
+                && let Some(diagnostics) = protocol_argument_diags(
+                    self.db,
+                    arg,
+                    role,
+                    argument_ctxt.span().unwrap(),
+                    argument_ctxt.scope(),
+                    self.assumptions,
+                )
+            {
+                self.diags.extend(diagnostics);
+                continue;
+            }
+            self.visit_generic_arg(&mut argument_ctxt, arg);
         }
     }
 

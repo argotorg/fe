@@ -106,7 +106,7 @@ where
         T: Unifiable<'db>,
     {
         let snapshot = self.snapshot();
-        match lhs.unify(self, rhs) {
+        match lhs.unify(self, *rhs) {
             Ok(()) => {
                 self.table.commit(snapshot);
                 Ok(())
