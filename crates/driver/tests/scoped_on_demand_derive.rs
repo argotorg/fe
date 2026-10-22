@@ -926,19 +926,35 @@ const fn total() -> u256 {
     let url = Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap();
     let file = output.workspace().get(&output, &url).unwrap();
     let top_mod = output.top_mod(file);
-    let selection_names = top_mod
-        .all_impl_traits(&output)
+    use hir::span::LazySpan;
+    let contract_target = top_mod
+        .all_structs(&output)
         .iter()
-        .filter_map(|impl_trait| impl_trait.selection_name(&output))
-        .map(|ident| ident.data(&output).clone())
-        .collect::<Vec<_>>();
+        .copied()
+        .find(|record| {
+            record
+                .name(&output)
+                .to_opt()
+                .is_some_and(|name| name.data(&output) == "InContractRecv")
+        })
+        .expect("the authored contract target exists");
+    let target_range = contract_target.span().resolve(&output).unwrap().range;
     assert!(
-        selection_names
+        output
+            .generation_inputs()
+            .requests(&output)
             .iter()
-            .any(|name| name.contains("InContractRecv")),
-        "{selection_names:?}"
+            .any(
+                |request| request.scoped_impl.as_ref().is_some_and(|scoped| scoped
+                    .demand
+                    .target
+                    .target_file
+                    == url
+                    && scoped.demand.target.target_range == target_range)
+            ),
+        "contract receive preparation must retain its exact target declaration"
     );
-    // Holder::C = 101, <Holder as HasConst>::TC = 102 -> 203
+
     assert_eq!(eval_const_fn_u256(&output, "total"), "203");
 }
 
