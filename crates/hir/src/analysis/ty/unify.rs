@@ -106,7 +106,7 @@ where
         T: Unifiable<'db>,
     {
         let snapshot = self.snapshot();
-        match lhs.unify(self, *rhs) {
+        match lhs.unify(self, rhs) {
             Ok(()) => {
                 self.table.commit(snapshot);
                 Ok(())
@@ -146,7 +146,7 @@ where
                 {
                     return Err(UnificationError::TypeMismatch);
                 }
-                lhs.unify(self, rhs)
+                lhs.unify(self, *rhs)
             }
 
             (TyData::TyApp(ty1_1, ty1_2), TyData::TyApp(ty2_1, ty2_2)) => {
