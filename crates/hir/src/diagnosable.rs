@@ -1722,7 +1722,8 @@ impl<'db> ImplTrait<'db> {
         let is_satisfied = |goal, span: DynLazySpan<'db>, out: &mut Vec<_>| {
             match trait_resolution::is_goal_satisfiable(db, solve_cx, goal) {
                 GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
-                GoalSatisfiability::NeedsConfirmation { .. } => {}
+                GoalSatisfiability::NeedsConfirmation { .. }
+                | GoalSatisfiability::NeedsGeneration(_) => {}
                 GoalSatisfiability::UnSat(_) => {
                     out.push(
                         TraitConstraintDiag::TraitBoundNotSat {

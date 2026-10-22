@@ -987,7 +987,7 @@ pub(crate) fn provider_opening_at<'db>(
     offered_trait: crate::hir_def::Trait<'db>,
 ) -> Option<super::trait_resolution::generation::ProviderOpening<'db>> {
     let file = db.workspace().get(db, &key.file)?;
-    let module = crate::lower::map_file_to_mod(db, file);
+    let module = crate::lower::map_file_to_mod_impl(db, file);
     let mut owners = Vec::new();
     for &function in module.all_funcs(db) {
         owners.extend(BodyOwner::func_bodies(db, function));
@@ -1041,7 +1041,7 @@ pub(crate) fn provider_opening_at<'db>(
     let mut retained = None;
     for owner in owners {
         let typed = &infer_body(db, owner).1;
-        for &opening in &typed.provider_openings {
+        for &opening in &typed.tables.provider_openings {
             if opening.key(db) == key && opening.offered_trait(db) == offered_trait {
                 if retained.is_some_and(|previous| previous != opening) {
                     return None;

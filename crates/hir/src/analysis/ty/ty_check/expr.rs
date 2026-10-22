@@ -13,7 +13,7 @@ use crate::core::{
     },
     semantic::{EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey},
 };
-use crate::span::{DynLazySpan, types::LazyTySpan};
+use crate::span::{DynLazySpan, LazySpan, types::LazyTySpan};
 
 use super::{
     BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike, RowArg, Typeable,
