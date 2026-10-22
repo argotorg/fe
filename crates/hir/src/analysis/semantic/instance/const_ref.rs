@@ -422,17 +422,6 @@ pub struct FinalizedGeneratedCall<'db> {
     pub evidence: Option<crate::analysis::ty::evidence::EvidenceId<'db>>,
 }
 
-pub fn generated_callee<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    func: Func<'db>,
-    trait_inst: Option<TraitInstId<'db>>,
-    own_args: &[TyId<'db>],
-) -> Result<FinalizedGeneratedCall<'db>, MethodArgMapError<'db>> {
-    Ok(generated_callee(db, scope, assumptions, func, trait_inst, own_args)?.key)
-}
-
 pub fn generated_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -441,6 +430,17 @@ pub fn generated_callee_key<'db>(
     trait_inst: Option<TraitInstId<'db>>,
     own_args: &[TyId<'db>],
 ) -> Result<SemanticInstanceKey<'db>, MethodArgMapError<'db>> {
+    Ok(generated_callee(db, scope, assumptions, func, trait_inst, own_args)?.key)
+}
+
+pub fn generated_callee<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    func: Func<'db>,
+    trait_inst: Option<TraitInstId<'db>>,
+    own_args: &[TyId<'db>],
+) -> Result<FinalizedGeneratedCall<'db>, MethodArgMapError<'db>> {
     let keys = ParamSchemaId::full(db, func.into()).keys(db);
     let inherited = trait_inst.map_or(&[][..], |inst| inst.args(db));
     let inherited_len = GenericParamOwner::Func(func)
