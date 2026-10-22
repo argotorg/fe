@@ -2059,3 +2059,56 @@ const fn make(_ record: Record) -> Code<Item> {
     assert!(error.cause.contains("type mismatch"), "{}", error.cause);
     assert!(db.generation_inputs().functions(&db).is_empty());
 }
+
+#[test]
+fn field_query_body_warnings_remain_nonfatal_but_errors_refuse() {
+    let source = r#"use core::meta::{Record, Code, Item, FieldQuery, field, field_type, query_field}
+struct Cell { word: u256 }
+impl Cell { const fn get_mut(mut self) -> mut u256 { mut self.word } }
+struct Query<T> {}
+impl<T> FieldQuery<u256> for Query<T> {
+    const fn evaluate() -> u256 {
+        var cell = Cell { word: 0 }
+        var w = cell.get_mut()
+        w += 1
+        7
+    }
+}
+#[generate(make)]
+struct Target { word: u256 }
+const fn make(_ record: Record) -> Code<Item> {
+    let n = query_field<Query, u256>(field_type(field(record, 0)))
+    quote { const fn value() -> u256 { ${n} } }
+}
+"#;
+    for source in [
+        source.to_owned(),
+        source.replace("var w = cell.get_mut()", "let w = mut cell.get_mut()"),
+    ] {
+        let (db, file) = input(&source);
+        let output = prepare_file(&db, file)
+            .expect("lawful query body must evaluate")
+            .unwrap();
+        let output_file = output
+            .workspace()
+            .get(&output, &file.url(&db).unwrap())
+            .unwrap();
+        let diagnostics = output.run_on_top_mod(output.top_mod(output_file));
+        assert!(!diagnostics.has_errors(&output));
+        if source.contains("var w") {
+            assert!(
+                diagnostics
+                    .format_diags(&output)
+                    .contains("warning[8-0121]")
+            );
+        }
+        assert_generated_integer(&output, output_file, "value", "7");
+    }
+    let invalid = source.replace("word: 0", "word: true");
+    let (db, file) = input(&invalid);
+    assert!(
+        prepare_file(&db, file).is_err(),
+        "query body errors must refuse evaluation"
+    );
+    assert!(db.generation_inputs().functions(&db).is_empty());
+}

@@ -2,6 +2,7 @@
 // put them just past clippy's 128-byte `Err` threshold.
 #![allow(clippy::result_large_err)]
 
+use crate::analysis::diagnostics::DiagnosticVoucher;
 use cranelift_entity::EntityRef;
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
@@ -2455,9 +2456,13 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                         continue;
                     }
                     if let BodyOwner::Func(f, _) = check_key.owner(self.db)
-                        && !crate::analysis::ty::ty_check::check_func_body(self.db, f)
+                        && crate::analysis::ty::ty_check::check_func_body(self.db, f)
                             .0
-                            .is_empty()
+                            .iter()
+                            .any(|diagnostic| {
+                                diagnostic.to_complete(self.db).severity
+                                    == common::diagnostics::Severity::Error
+                            })
                     {
                         return Err(CtfeError::InvalidBody { origin }.into());
                     }
