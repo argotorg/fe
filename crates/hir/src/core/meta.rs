@@ -1527,6 +1527,127 @@ fn finalized_derive_provider<'db>(
     Ok((finalized.key, input))
 }
 
+/// Freeze an elaboration dependency without evaluating metadata or selecting a provider.
+pub fn freeze_generation_request<'db>(
+    db: &'db dyn HirAnalysisDb,
+    request: crate::analysis::ty::trait_resolution::generation::GenerationRequest<'db>,
+) -> Result<common::generation::ScopedDeriveDemand, String> {
+    use crate::hir_def::ItemKind;
+    let goal = request.goal(db);
+    let opening = request.opening(db);
+    if goal.def(db) != opening.offered_trait(db) {
+        return Err("scoped derive request does not match its advertised trait".into());
+    }
+    if goal.args(db).len() != 1
+        || !goal.assoc_type_bindings(db).is_empty()
+        || !goal.def(db).types(db).is_empty()
+        || !goal.def(db).consts(db).is_empty()
+    {
+        return Err(
+            "scoped derive requires an unparameterized goal without associated outputs".into(),
+        );
+    }
+    if goal.def(db).ingot(db) != opening.scope(db).top_mod(db).ingot(db)
+        || ItemKind::Trait(goal.def(db))
+            .attrs(db)
+            .is_some_and(|attrs| attrs.has_attr(db, "canonical"))
+    {
+        return Err(
+            "scoped derive of canonical or library goals requires a separate authority API".into(),
+        );
+    }
+    let target = RecordInput::for_authored_type(db, goal.self_ty(db))
+        .map_err(|cause| format!("scoped derive requires a concrete authored record: {cause:?}"))?;
+    if !goal.self_ty(db).decompose_ty_app(db).1.is_empty() {
+        return Err("scoped derive cannot yet preserve concrete generic target arguments".into());
+    }
+    if !opening.provider_ty(db).decompose_ty_app(db).1.is_empty() {
+        return Err("scoped derive cannot yet preserve concrete generic provider arguments".into());
+    }
+    let trait_ = goal.def(db);
+    let module = trait_.top_mod(db);
+    let root = crate::lower::top_mod_ast(db, module);
+    let HirOrigin::Raw(pointer) = trait_.origin(db) else {
+        return Err("scoped derive requires an authored trait declaration".into());
+    };
+    Ok(common::generation::ScopedDeriveDemand {
+        opening: opening.key(db).clone(),
+        trait_ref: common::generation::FrozenTraitRef {
+            file: module
+                .file(db)
+                .url(db)
+                .ok_or("trait declaration has no source URL")?,
+            range: pointer.to_node(root.syntax()).syntax().text_range(),
+        },
+        target: target.freeze(db).map_err(str::to_owned)?,
+    })
+}
+
+/// Translate one immutable prepared binding to its admitted named candidate.
+/// No proof or database-local item ID crosses between preparation views.
+#[salsa::tracked(returns(copy))]
+pub fn scoped_derive_implementation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    opening: crate::analysis::ty::trait_resolution::generation::ProviderOpening<'db>,
+    goal: crate::analysis::ty::trait_def::TraitInstId<'db>,
+) -> Option<crate::analysis::ty::trait_def::ImplementorId<'db>> {
+    use crate::analysis::ty::trait_resolution::generation::GenerationRequest;
+    let demand = freeze_generation_request(db, GenerationRequest::new(db, opening, goal)).ok()?;
+    let scoped = db
+        .generation_inputs()
+        .requests(db)
+        .iter()
+        .find_map(|request| {
+            request
+                .scoped_impl
+                .as_ref()
+                .filter(|scoped| scoped.demand == demand)
+        })?;
+    let file = db.workspace().get(db, &demand.opening.file)?;
+    let module = crate::lower::map_file_to_mod(db, file);
+    let name = IdentId::new(db, scoped.selection_name.clone());
+    let mut implementations = module
+        .all_impl_traits(db)
+        .iter()
+        .copied()
+        .filter(|implementation| {
+            implementation.selection_name(db) == Some(name)
+                && matches!(implementation.origin(db), HirOrigin::Synthetic)
+        });
+    let implementation = implementations.next()?;
+    if implementations.next().is_some() {
+        return None;
+    }
+    crate::analysis::ty::trait_lower::lower_impl_trait(db, implementation)
+}
+
+/// Scoped requests use the same finalized ordinary provider boundary as explicit requests.
+pub fn scoped_derive_provider<'db>(
+    db: &'db dyn HirAnalysisDb,
+    opening: crate::analysis::ty::trait_resolution::generation::ProviderOpening<'db>,
+    goal: crate::analysis::ty::trait_def::TraitInstId<'db>,
+    origin: crate::hir_def::ItemKind<'db>,
+    span: crate::span::DynLazySpan<'db>,
+) -> Result<
+    (
+        crate::analysis::semantic::SemanticInstanceKey<'db>,
+        RecordInput<'db>,
+    ),
+    NativeDeriveProviderError<'db>,
+> {
+    use crate::analysis::ty::trait_resolution::generation::GenerationRequest;
+    freeze_generation_request(db, GenerationRequest::new(db, opening, goal))
+        .map_err(NativeDeriveProviderError::Message)?;
+    finalized_derive_provider(
+        db,
+        goal,
+        opening.provider_ty(db),
+        origin,
+        opening.scope(db),
+        (span.clone(), span),
+    )
+}
+
 /// Recover the exact authored header, never a first-by-name implementation.
 pub fn authored_derive_request<'db>(
     db: &'db dyn HirAnalysisDb,
