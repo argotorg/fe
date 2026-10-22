@@ -2232,10 +2232,9 @@ impl<'db> TyChecker<'db> {
                         self.env.assumptions(),
                         false,
                     )
+                && self.try_open_derive_provider(binding.value, provider_ty)
             {
-                if self.try_open_derive_provider(binding.value, provider_ty) {
-                    continue;
-                }
+                continue;
             }
             let value_prop = self.check_expr_unknown(binding.value);
             // A record literal is also a spelling of a compile-time provider.

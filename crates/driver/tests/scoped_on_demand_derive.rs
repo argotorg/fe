@@ -426,12 +426,17 @@ const fn conflict() -> u256 {
     }
 }
 "#;
-    let rendered2 = prepare_err(two_providers);
-    assert!(
-        rendered2.contains("one `with` header gives two derive providers for the same trait")
-            && !rendered2.contains("division by zero"),
-        "{rendered2}"
-    );
+    for source in [
+        two_providers.to_owned(),
+        two_providers.replace("ProviderA, ProviderB", "ProviderB, ProviderA"),
+    ] {
+        let rendered2 = prepare_err(&source);
+        assert!(
+            rendered2.contains("one `with` header gives two derive providers for the same trait")
+                && !rendered2.contains("division by zero"),
+            "{rendered2}"
+        );
+    }
 
     let canonical_scoped = r#"
 use core::derive::Derive
