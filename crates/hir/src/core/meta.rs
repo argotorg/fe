@@ -1649,7 +1649,7 @@ pub fn rebind_generation_request<'db>(
         .workspace()
         .get(db, &demand.trait_ref.file)
         .ok_or("requested trait file is missing")?;
-    let trait_module = crate::lower::map_file_to_mod(db, trait_file);
+    let trait_module = crate::lower::map_file_to_mod_impl(db, trait_file);
     let trait_root = crate::lower::top_mod_ast(db, trait_module);
     let trait_ = trait_module
         .all_traits(db)
@@ -1666,7 +1666,7 @@ pub fn rebind_generation_request<'db>(
         .workspace()
         .get(db, &demand.target.target_file)
         .ok_or("requested target file is missing")?;
-    let target_module = crate::lower::map_file_to_mod(db, target_file);
+    let target_module = crate::lower::map_file_to_mod_impl(db, target_file);
     let target_root = crate::lower::top_mod_ast(db, target_module);
     let target = match demand.target.owner_kind {
         common::generation::FrozenRecordOwnerKind::Struct => target_module
@@ -1731,7 +1731,7 @@ pub fn scoped_derive_implementation<'db>(
                 .filter(|scoped| scoped.demand == demand)
         })?;
     let file = db.workspace().get(db, &demand.opening.file)?;
-    let module = crate::lower::map_file_to_mod(db, file);
+    let module = crate::lower::map_file_to_mod_impl(db, file);
     let name = IdentId::new(db, scoped.selection_name.clone());
     let mut implementations = module
         .all_impl_traits(db)
