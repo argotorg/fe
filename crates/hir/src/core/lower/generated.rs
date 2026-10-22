@@ -478,4 +478,26 @@ fn lower_scoped_derive<'db>(
         crate::span::HirOrigin::synthetic(),
     );
     ctxt.leave_item_scope(implementation);
+    // The header belongs to the authored opening; the method body independently
+    // retains its quote producer's lexical origin.
+    let root = super::top_mod_ast(db, ctxt.top_mod());
+    let opening_node = root
+        .syntax()
+        .descendants()
+        .find(|node| node.text_range() == scoped.demand.opening.binding_range)
+        .expect("validated scoped opening belongs to unchanged authored source");
+    let producer_module = opening_node
+        .ancestors()
+        .find_map(ast::Mod::cast)
+        .map(|module| module.syntax().text_range());
+    let producer_block = opening_node
+        .ancestors()
+        .find_map(ast::BlockExpr::cast)
+        .map(|block| block.syntax().text_range());
+    ctxt.builder.defer_quoted_item_origin(
+        implementation.into(),
+        ctxt.top_mod(),
+        producer_module,
+        producer_block,
+    );
 }
