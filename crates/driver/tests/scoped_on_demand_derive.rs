@@ -1285,3 +1285,80 @@ const fn run() -> usize { with (A) { Pair::score() } }
     assert!(!error.contains("requires a prepared"), "{error}");
     assert!(!error.contains("division by zero"), "{error}");
 }
+
+#[test]
+fn scoped_provider_type_respects_lexical_value_shadowing() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+pub struct Pair {}
+impl Score for Pair { const fn score() -> u256 { 100 } }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ r: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { 42 } }
+    }
+}
+const fn run() -> u256 { let Provider = ()
+    with (Provider) { Pair::score() }
+}
+"#;
+    let (db, file) = input(source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(eval_const_fn_u256(&db, "run"), "100");
+    let source = source.replace("let Provider = ()", "let other = ()");
+    let output = prepare(&source).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn scoped_provider_alias_requires_its_own_visibility() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+pub struct Pair {}
+mod author {
+    use super::Score
+    use core::derive::Derive
+    use core::meta::{Record, Code, Item}
+    pub struct Provider {}
+    type Alias = Provider
+    impl Derive<Score> for Provider {
+        const fn derive(_ r: Record) -> Code<Item> {
+            quote { const fn score() -> u256 { 42 } }
+        }
+    }
+}
+const fn run() -> u256 { with (author::Alias) { Pair::score() } }
+"#;
+    let error = prepare_err(source);
+    assert!(error.contains("provider path is not visible"), "{error}");
+    let output = prepare(&source.replace("type Alias", "pub type Alias")).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn scoped_external_target_is_refused_before_provider_execution() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${fault} } }
+    }
+}
+const fn run() -> u256 { with (Provider) { core::iter::Identity<u256>::score() } }
+"#;
+    let error = prepare_err(source);
+    assert!(
+        error.contains("target declared in the requesting ingot"),
+        "{error}"
+    );
+    assert!(!error.contains("division by zero"), "{error}");
+}

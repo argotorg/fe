@@ -1925,7 +1925,12 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn try_open_derive_provider(&mut self, value: ExprId, provider_ty: TyId<'db>) -> bool {
+    fn try_open_derive_provider(
+        &mut self,
+        value: ExprId,
+        provider_ty: TyId<'db>,
+        alias_scope: Option<crate::hir_def::scope_graph::ScopeId<'db>>,
+    ) -> bool {
         use super::super::trait_resolution::{
             ChosenImpls,
             generation::{ProviderOpening, offered_traits},
@@ -1964,6 +1969,29 @@ impl<'db> TyChecker<'db> {
             self.env.type_expr(value, ExprProp::invalid(self.db));
             return true;
         };
+        for scope in [alias_scope, provider_ty.as_scope(self.db)]
+            .into_iter()
+            .flatten()
+        {
+            if !is_scope_visible_from(self.db, scope, self.env.scope()) {
+                use salsa::Accumulator;
+                super::super::trait_resolution::generation::GenerationDemand {
+                    opening: key,
+                    demand: Err("scoped derive provider path is not visible".into()),
+                }
+                .accumulate(self.db);
+                if let Some(name) = scope.name(self.db) {
+                    self.push_diag(PathResDiag::Invisible(
+                        value.span(body).into(),
+                        name,
+                        scope.name_span(self.db),
+                    ));
+                }
+                self.env.named_impl_operands.insert(value);
+                self.env.type_expr(value, ExprProp::invalid(self.db));
+                return true;
+            }
+        }
         if let Partial::Present(Expr::RecordInit(_, fields)) = value.data(self.db, body)
             && !fields.is_empty()
         {
@@ -2242,17 +2270,29 @@ impl<'db> TyChecker<'db> {
             if binding.key_path.is_none()
                 && let Partial::Present(Expr::Path(Partial::Present(path))) =
                     binding.value.data(self.db, self.body())
-                && let Ok(
-                    crate::analysis::name_resolution::PathRes::Ty(provider_ty)
-                    | crate::analysis::name_resolution::PathRes::TyAlias(_, provider_ty),
-                ) = crate::analysis::name_resolution::resolve_path(
+                && !(path.is_bare_ident(self.db)
+                    && self
+                        .env
+                        .visible_binding(
+                            path.local_ident(self.db)
+                                .unwrap_or_else(|| path.ident(self.db).unwrap()),
+                        )
+                        .is_some())
+                && let Ok(resolved) = crate::analysis::name_resolution::resolve_path(
                     self.db,
                     *path,
                     self.env.scope(),
                     self.env.assumptions(),
                     false,
                 )
-                && self.try_open_derive_provider(binding.value, provider_ty)
+                && let Some((provider_ty, alias_scope)) = (match resolved {
+                    crate::analysis::name_resolution::PathRes::Ty(ty) => Some((ty, None)),
+                    crate::analysis::name_resolution::PathRes::TyAlias(alias, ty) => {
+                        Some((ty, Some(alias.alias.scope())))
+                    }
+                    _ => None,
+                })
+                && self.try_open_derive_provider(binding.value, provider_ty, alias_scope)
             {
                 continue;
             }
@@ -2266,7 +2306,7 @@ impl<'db> TyChecker<'db> {
                     binding.value.data(self.db, self.body()),
                     Partial::Present(Expr::RecordInit(..))
                 )
-                && self.try_open_derive_provider(binding.value, provider_ty)
+                && self.try_open_derive_provider(binding.value, provider_ty, None)
             {
                 continue;
             }

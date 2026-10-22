@@ -1576,6 +1576,11 @@ pub fn freeze_generation_request<'db>(
     }
     let target_item = adt.adt_ref(db).as_item();
     let target_module = target_item.scope().top_mod(db);
+    if target_module.ingot(db) != opening.scope(db).top_mod(db).ingot(db) {
+        return Err(
+            "scoped derive currently requires a target declared in the requesting ingot".into(),
+        );
+    }
     let target_root = crate::lower::top_mod_ast(db, target_module);
     let (owner_kind, target_range) = match adt.adt_ref(db) {
         crate::analysis::ty::adt_def::AdtRef::Struct(record) => {
