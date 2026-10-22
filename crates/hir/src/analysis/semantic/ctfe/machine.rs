@@ -2061,6 +2061,15 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     }
                     .into());
                 };
+                if matches!(input.owner(), crate::core::meta::RecordOwner::Enum(_))
+                    && input.variant_index().is_none()
+                {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "field_count requires a struct or selected enum variant".into(),
+                    }
+                    .into());
+                }
                 Ok(CtfeConstValue::int(
                     self.db,
                     result_ty,
@@ -2150,6 +2159,15 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     }
                     .into());
                 };
+                if !matches!(input.owner(), crate::core::meta::RecordOwner::Enum(_))
+                    || input.variant_index().is_some()
+                {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "variant_count requires a whole enum".into(),
+                    }
+                    .into());
+                }
                 Ok(CtfeConstValue::int(
                     self.db,
                     result_ty,
@@ -2306,6 +2324,22 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 let [target_ty] = key.subst(self.db).generic_args(self.db) else {
                     return Err(CtfeError::NotConstEvaluable { origin }.into());
                 };
+                if !matches!(
+                    target_ty.data(self.db),
+                    crate::analysis::ty::ty_def::TyData::TyBase(
+                        crate::analysis::ty::ty_def::TyBase::Prim(
+                            crate::analysis::ty::ty_def::PrimTy::Bool
+                                | crate::analysis::ty::ty_def::PrimTy::U64
+                                | crate::analysis::ty::ty_def::PrimTy::U256
+                        )
+                    )
+                ) {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "type_is supports only bool, u64, and u256 candidates".into(),
+                    }
+                    .into());
+                }
                 let field_ty = field.ty(self.db);
                 if field_ty.has_invalid(self.db)
                     || target_ty.has_invalid(self.db)
@@ -2340,6 +2374,22 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 let [family, query_result] = key.subst(self.db).generic_args(self.db) else {
                     return Err(CtfeError::NotConstEvaluable { origin }.into());
                 };
+                if !matches!(
+                    target_ty.data(self.db),
+                    crate::analysis::ty::ty_def::TyData::TyBase(
+                        crate::analysis::ty::ty_def::TyBase::Prim(
+                            crate::analysis::ty::ty_def::PrimTy::Bool
+                                | crate::analysis::ty::ty_def::PrimTy::U64
+                                | crate::analysis::ty::ty_def::PrimTy::U256
+                        )
+                    )
+                ) {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "type_is supports only bool, u64, and u256 candidates".into(),
+                    }
+                    .into());
+                }
                 let field_ty = field.ty(self.db);
                 if field_ty.has_invalid(self.db)
                     || family.has_invalid(self.db)

@@ -375,6 +375,9 @@ impl<'db> TyChecker<'db> {
                         {
                             let root = crate::lower::top_mod_ast(self.db, body.top_mod(self.db));
                             if let ast::ExprKind::Quote(quote) = ptr.to_node(root.syntax()).kind() {
+                                if quote.pattern().is_some() {
+                                    return FrozenCodeKind::Pat;
+                                }
                                 if quote.item_list().is_some() {
                                     return FrozenCodeKind::Item;
                                 }

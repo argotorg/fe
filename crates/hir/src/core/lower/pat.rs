@@ -329,7 +329,9 @@ impl<'db> Pat<'db> {
                     })
                     .collect();
                 ctxt.f_ctxt.quote_frames.push(frame);
-                let pat_id = if let Some(block) = quote.body()
+                let pat_id = if let Some(pat) = quote.pattern() {
+                    Self::lower_ast(ctxt, pat)
+                } else if let Some(block) = quote.body()
                     && block.items().next().is_none()
                     && block.stmts().count() == 1
                     && let Some(stmt) = block.stmts().next()

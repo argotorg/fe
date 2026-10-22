@@ -54,6 +54,17 @@ impl<'db> Expr<'db> {
                         );
                         Self::Cast(value, crate::hir_def::Partial::Present(ty))
                     }
+                    Some(FrozenHoleValue::Field(_)) => {
+                        let ident = ctxt
+                            .f_ctxt
+                            .lower_field_hole_ident(hole.syntax().text_range());
+                        Self::Path(
+                            ident
+                                .to_opt()
+                                .map(|ident| PathId::from_ident(ctxt.f_ctxt.db(), ident))
+                                .into(),
+                        )
+                    }
                     Some(FrozenHoleValue::Code(code)) => {
                         return Self::lower_code(ctxt, &code, &ast);
                     }
@@ -201,6 +212,13 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::Path(path) => {
+                if let Some(authored) = path.path() {
+                    if let Some(segment) = authored.segments().next()
+                        && let Some(ast::PathSegmentKind::Ident(ident)) = segment.kind()
+                    {
+                        ctxt.validate_open_name_use(ident.text(), ident.text_range());
+                    }
+                }
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, path.path());
                 Self::Path(path)
             }

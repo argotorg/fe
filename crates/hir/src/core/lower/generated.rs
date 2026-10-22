@@ -1,7 +1,7 @@
 //! Output HIR is built from the original checked quote syntax, never from an
 //! emitted source string. Provider evaluation has completed before this query.
 use super::FileLowerCtxt;
-use crate::hir_def::{Func, Impl, ImplTrait, ItemKind, TopLevelMod};
+use crate::hir_def::{Const, Func, Impl, ImplTrait, ItemKind, TopLevelMod};
 use common::generation::{FrozenCode, FrozenCodeKind, FrozenHoleValue};
 use parser::ast::{self, prelude::*};
 
@@ -18,6 +18,9 @@ pub(crate) struct ActiveQuoteFrame<'db> {
     pub(super) quote_range: parser::TextRange,
     pub(super) producer_scope: crate::hir_def::scope_graph::ScopeId<'db>,
     pub(super) is_sub_quote: bool,
+    /// Members keep their public/local binder names but resolve free names in
+    /// the spliced template's producer, not the containing quote's producer.
+    pub(super) is_member_quote: bool,
     pub(super) open_names: Vec<(String, parser::TextRange)>,
     pub(super) bound_names: rustc_hash::FxHashSet<String>,
     pub(super) holes: Vec<(parser::TextRange, FrozenHoleValue)>,
@@ -68,6 +71,7 @@ pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {
             quote_range: plan.quote_range,
             producer_scope,
             is_sub_quote: false,
+            is_member_quote: false,
             open_names,
             bound_names: rustc_hash::FxHashSet::default(),
             holes,
@@ -132,6 +136,15 @@ fn lower_quoted_ast_item<'db>(
             );
             Some(Func::lower_ast(ctxt, func).into())
         }
+        ast::ItemKind::Const(const_) => {
+            super::item::validate_unsupported_item_attrs(
+                ctxt,
+                const_.attr_list(),
+                "const",
+                const_.name().map(|name| name.text().to_string()),
+            );
+            Some(Const::lower_ast(ctxt, const_).into())
+        }
         ast::ItemKind::Impl(impl_) => {
             super::item::validate_unsupported_item_attrs(ctxt, impl_.attr_list(), "impl", None);
             Some(Impl::lower_ast(ctxt, impl_).into())
@@ -148,7 +161,7 @@ fn lower_quoted_ast_item<'db>(
         _ => {
             ctxt.record_generation_error(
                 item.syntax().text_range(),
-                "item quotation supports function, impl, and trait impl declarations",
+                "item quotation supports function, constant, impl, and trait impl declarations",
             );
             None
         }
@@ -248,5 +261,87 @@ pub(super) fn lower_generated_item_code<'db>(ctxt: &mut FileLowerCtxt<'db>, code
                 .map_or_else(|| parser::TextRange::empty(0.into()), |f| f.quote_range);
             ctxt.record_generation_error(range, "item-level quotation splice requires Code<Item>");
         }
+    }
+}
+
+/// Copy members into the already-entered destination declaration. A nested
+/// template owns its source/hole frame, but never changes the destination scope.
+pub(super) fn lower_member_hole<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    hole: ast::QuoteHole,
+    lower: &mut dyn FnMut(&mut FileLowerCtxt<'db>, ast::Item),
+) {
+    fn code<'db>(
+        ctxt: &mut FileLowerCtxt<'db>,
+        value: &FrozenCode,
+        lower: &mut dyn FnMut(&mut FileLowerCtxt<'db>, ast::Item),
+    ) {
+        match value {
+            FrozenCode::Empty {
+                kind: FrozenCodeKind::Item,
+            } => {}
+            FrozenCode::Template {
+                kind: FrozenCodeKind::Item,
+                quote_file,
+                quote_range,
+                producer_module,
+                producer_block,
+                holes,
+            } => {
+                let (quote, mut frame) = ctxt.resolve_quote_template(
+                    quote_file,
+                    *quote_range,
+                    *producer_module,
+                    *producer_block,
+                    false,
+                    holes.clone(),
+                );
+                frame.is_member_quote = true;
+                ctxt.quote_frames.push(frame);
+                if let Some(items) = quote.item_list() {
+                    for child in items.syntax().children() {
+                        if let Some(item) = ast::Item::cast(child.clone()) {
+                            lower(ctxt, item);
+                        } else if let Some(hole) = ast::QuoteHole::cast(child) {
+                            lower_member_hole(ctxt, hole, lower);
+                        }
+                    }
+                } else if let Some(block) = quote.body() {
+                    for child in block.syntax().children() {
+                        if let Some(item) = ast::Item::cast(child.clone()) {
+                            lower(ctxt, item);
+                        } else if let Some(stmt) = ast::Stmt::cast(child)
+                            && let ast::StmtKind::Expr(expr) = stmt.kind()
+                            && let Some(expr) = expr.expr()
+                            && let ast::ExprKind::QuoteHole(hole) = expr.kind()
+                            && let Some(FrozenHoleValue::Code(nested)) =
+                                ctxt.current_hole(hole.syntax().text_range())
+                        {
+                            code(ctxt, &nested, lower);
+                        } else {
+                            ctxt.record_generation_error(
+                                *quote_range,
+                                "member quotation requires function or constant declarations",
+                            );
+                        }
+                    }
+                }
+                ctxt.pop_quote_frame();
+            }
+            _ => ctxt.record_generation_error(
+                ctxt.quote_frames
+                    .last()
+                    .map_or_else(|| parser::TextRange::empty(0.into()), |f| f.quote_range),
+                "member quotation requires Code<Item>",
+            ),
+        }
+    }
+    if let Some(FrozenHoleValue::Code(value)) = ctxt.current_hole(hole.syntax().text_range()) {
+        code(ctxt, &value, lower);
+    } else {
+        ctxt.record_generation_error(
+            hole.syntax().text_range(),
+            "member quotation hole requires Code<Item>",
+        );
     }
 }

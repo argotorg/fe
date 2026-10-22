@@ -594,6 +594,7 @@ impl super::Parse for QuoteExprScope {
             QuoteBodyKind::Arms => parser.parse(MatchArmListScope::default()),
             QuoteBodyKind::Where => parser.parse(QuoteWhereScope::default()),
             QuoteBodyKind::Expr => parser.parse(BlockExprScope::default()),
+            QuoteBodyKind::Pat => parser.parse(QuotePatScope::default()),
         }
     }
 }
@@ -601,6 +602,7 @@ impl super::Parse for QuoteExprScope {
 /// What a quote body holds, decided by its item/where head or top-level arm arrow.
 enum QuoteBodyKind {
     Expr,
+    Pat,
     Arms,
     Items,
     Where,
@@ -625,11 +627,28 @@ fn quote_body_kind<S: TokenStream>(parser: &mut Parser<S>) -> QuoteBodyKind {
                 _ => {
                     // Only an arrow at this body's top level introduces arm syntax.
                     // Arrows inside nested matches and record/tuple patterns do not.
+                    let pattern_only = matches!(
+                        p.current_kind(),
+                        Some(
+                            SyntaxKind::Underscore
+                                | SyntaxKind::MutKw
+                                | SyntaxKind::MaybeMutKw
+                                | SyntaxKind::RefKw
+                                | SyntaxKind::VarKw
+                                | SyntaxKind::Dot2
+                        )
+                    );
                     let mut depth = 0usize;
                     loop {
                         match p.current_kind() {
                             Some(SyntaxKind::FatArrow) if depth == 0 => return QuoteBodyKind::Arms,
-                            Some(SyntaxKind::RBrace) if depth == 0 => return QuoteBodyKind::Expr,
+                            Some(SyntaxKind::RBrace) if depth == 0 => {
+                                return if pattern_only {
+                                    QuoteBodyKind::Pat
+                                } else {
+                                    QuoteBodyKind::Expr
+                                };
+                            }
                             Some(
                                 SyntaxKind::LBrace | SyntaxKind::LParen | SyntaxKind::LBracket,
                             ) => depth += 1,
@@ -647,6 +666,18 @@ fn quote_body_kind<S: TokenStream>(parser: &mut Parser<S>) -> QuoteBodyKind {
     });
     parser.set_newline_as_trivia(newline_as_trivia);
     kind
+}
+
+define_scope! { QuotePatScope, QuotePat, (RBrace) }
+impl super::Parse for QuotePatScope {
+    type Error = Recovery<ErrProof>;
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::LBrace);
+        parse_pat(parser)?;
+        parser.expect(&[SyntaxKind::RBrace], None)?;
+        parser.bump();
+        Ok(())
+    }
 }
 
 define_scope! { QuoteOpenListScope, QuoteOpenList, (RParen, Comma) }
@@ -830,5 +861,36 @@ fn skip_splice<S: TokenStream>(p: &mut Parser<S>) -> bool {
         if depth == 0 {
             return true;
         }
+    }
+}
+
+#[cfg(test)]
+mod quote_pattern_tests {
+    use crate::{
+        SyntaxKind, SyntaxNode,
+        ast::{self, prelude::*},
+        parser::RecoveryMode,
+    };
+
+    #[test]
+    fn pattern_only_quotes_parse_without_reclassifying_match_arms() {
+        for pattern in ["_", "mut x", "ref x", "var x", ".."] {
+            let source = format!("const fn p() {{ let value = quote {{ {pattern} }} }}");
+            let (green, errors) = crate::parse_source_file(&source, RecoveryMode::default());
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            let root = SyntaxNode::new_root(green);
+            let quote = root.descendants().find_map(ast::QuoteExpr::cast).unwrap();
+            assert!(quote.pattern().is_some(), "{source}");
+        }
+        let (green, errors) = crate::parse_source_file(
+            "const fn p() { let arms = quote { _ => 7 } }",
+            RecoveryMode::default(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(
+            SyntaxNode::new_root(green)
+                .descendants()
+                .any(|node| node.kind() == SyntaxKind::MatchArmList)
+        );
     }
 }

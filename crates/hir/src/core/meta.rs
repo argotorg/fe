@@ -1151,12 +1151,13 @@ impl<'db> ItemCode<'db> {
                             item.kind(),
                             Some(
                                 ast::ItemKind::Func(_)
+                                    | ast::ItemKind::Const(_)
                                     | ast::ItemKind::Impl(_)
                                     | ast::ItemKind::ImplTrait(_)
                             )
                         ) {
                             return Err(
-                                "item quotation supports function, impl, and trait impl declarations",
+                                "item quotation supports function, constant, impl, and trait impl declarations",
                             );
                         }
                     }
@@ -1180,12 +1181,13 @@ impl<'db> ItemCode<'db> {
                         item.kind(),
                         Some(
                             ast::ItemKind::Func(_)
+                                | ast::ItemKind::Const(_)
                                 | ast::ItemKind::Impl(_)
                                 | ast::ItemKind::ImplTrait(_)
                         )
                     ) {
                         return Err(
-                            "item quotation supports function, impl, and trait impl declarations",
+                            "item quotation supports function, constant, impl, and trait impl declarations",
                         );
                     }
                 }
@@ -1213,7 +1215,7 @@ impl<'db> ItemCode<'db> {
                 let valid_pat_block = quote.body().is_some_and(|block| {
                     block.items().next().is_none() && block.stmts().count() == 1
                 });
-                if !valid_pat_block {
+                if quote.pattern().is_none() && !valid_pat_block {
                     return Err("pattern quotation requires a pattern");
                 }
             }

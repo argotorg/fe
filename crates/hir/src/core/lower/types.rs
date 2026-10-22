@@ -36,7 +36,22 @@ impl<'db> TypeId<'db> {
                                             ))),
                                         )
                                     });
-                                    GenericArg::Type(TypeGenericArg { ty: ty.into() })
+                                    match param {
+                                        crate::hir_def::params::GenericParam::Const(_) => {
+                                            GenericArg::Const(
+                                                crate::hir_def::params::ConstGenericArg {
+                                                    value: param
+                                                        .name()
+                                                        .to_opt()
+                                                        .map(|name| {
+                                                            Body::lower_const_param_name(ctxt, name)
+                                                        })
+                                                        .into(),
+                                                },
+                                            )
+                                        }
+                                        _ => GenericArg::Type(TypeGenericArg { ty: ty.into() }),
+                                    }
                                 })
                                 .collect();
                             GenericArgListId::new(db, args, true)
