@@ -1477,7 +1477,43 @@ impl<'db> TyChecker<'db> {
                 // An entry of a collection whose elements are places is a
                 // place, mutable through a mutable base, like an array element.
                 self.check_expr(rhs_expr, key_ty);
-                self.env.record_place_entry(expr);
+                let trait_def =
+                    resolve_core_trait(self.db, self.env.scope(), &["ops", "StateIndex"])
+                        .expect("StateIndex was resolved for this entry");
+                let func = trait_def.method_defs(self.db)[&IdentId::new(self.db, "locate")];
+                let goal = TraitInstId::new_simple(self.db, trait_def, vec![base_ty]);
+                let callable = Callable::from_item(
+                    self.db,
+                    CallableDef::Func(func),
+                    vec![base_ty],
+                    Some(goal),
+                );
+                let lanes = goal
+                    .trait_ref(self.db)
+                    .project_assoc_ty(self.db, IdentId::new(self.db, "Lanes"))
+                    .expect("StateIndex declares Lanes");
+                let codec_ty = self.normalize_ty(lanes);
+                let codec_trait =
+                    resolve_core_trait(self.db, self.env.scope(), &["ops", "LaneCodec"])
+                        .expect("core declares LaneCodec");
+                let codec_goal =
+                    TraitInstId::new_simple(self.db, codec_trait, vec![codec_ty, output_ty]);
+                let codec = ["get", "set"].map(|name| {
+                    let method = codec_trait.method_defs(self.db)[&IdentId::new(self.db, name)];
+                    Callable::from_item(
+                        self.db,
+                        CallableDef::Func(method),
+                        vec![codec_ty, output_ty],
+                        Some(codec_goal),
+                    )
+                });
+                self.env.record_place_entry(
+                    expr,
+                    super::PlaceEntryCalls {
+                        locate: callable,
+                        codec,
+                    },
+                );
                 return ExprProp::new(output_ty, lhs.is_mut);
             }
         }

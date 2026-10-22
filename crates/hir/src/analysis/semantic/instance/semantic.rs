@@ -394,8 +394,11 @@ fn provisional_call_sites<'db>(
     );
 
     for (expr, _) in body.exprs(db).iter() {
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
-        else {
+        let callable = match typed_body.semantic_expr_lowering(expr) {
+            Some(SemanticExprLowering::Call { callable }) => Some(callable),
+            _ => typed_body.place_entry_callable(expr),
+        };
+        let Some(callable) = callable else {
             continue;
         };
         if regions.expr(expr) != region {
@@ -767,8 +770,11 @@ fn finalize_call_sites<'db>(
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
             continue;
         };
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
-        else {
+        let callable = match typed_body.semantic_expr_lowering(expr) {
+            Some(SemanticExprLowering::Call { callable }) => Some(callable),
+            _ => typed_body.place_entry_callable(expr),
+        };
+        let Some(callable) = callable else {
             continue;
         };
         finalize_call_site(
@@ -1398,6 +1404,42 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
+    /// Codec calls belonging to one checked entry. A codec is only required
+    /// after the ordinary associated layout says this entry is packed. The
+    /// callable may defer an obligation that becomes closed on substitution;
+    /// the shared callee finalizer owns that obligation, as for written calls.
+    #[salsa::tracked(returns(copy))]
+    pub fn entry_codec_callees(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+    ) -> Result<[SemanticInstanceKey<'db>; 2], SemanticDiagnosticId<'db>> {
+        let finalize = || {
+            let calls = self
+                .key(db)
+                .typed_body(db)
+                .place_entry_calls(expr)
+                .ok_or(MethodArgMapError::MissingBody)?;
+            let one = |callable: &Callable<'db>| {
+                let callee = semantic_callee_key_with_effect_providers(
+                    db,
+                    self.key(db),
+                    callable,
+                    &[],
+                    &[],
+                )?
+                .ok_or(MethodArgMapError::MissingBody)?;
+                if !callee.concrete_dispatch {
+                    return Err(MethodArgMapError::MissingBody);
+                }
+                Ok(callee.key)
+            };
+            Ok([one(&calls.codec[0])?, one(&calls.codec[1])?])
+        };
+        finalize()
+            .map_err(|error| method_arg_map_diagnostic(db, self, error, SemOrigin::Expr(expr)))
+    }
+
     /// How `ty` packs its elements into lanes when its elements are places
     /// (`core::ops::StateIndex`), in this instance.
     #[salsa::tracked(returns(copy))]
@@ -1627,7 +1669,17 @@ impl<'db> SemanticInstance<'db> {
         }
 
         if let Some(body) = typed_body.body() {
+            let regions = closure_regions(db, body);
+            let region = self.key(db).owner(db).closure_region();
             for (expr, _) in body.exprs(db).iter() {
+                if regions.expr(expr) == region
+                    && let Some(calls) = typed_body.place_entry_calls(expr)
+                    && let Some(goal) = calls.locate.trait_inst()
+                    && self.state_index_lanes(db, goal.self_ty(db)).is_some()
+                    && let Err(error) = self.entry_codec_callees(db, expr)
+                {
+                    return Err(SemanticBodyAdmissionError::CallSiteFinalization(error));
+                }
                 let Some(SemanticExprLowering::ConstIntrinsic { callable, kind }) =
                     typed_body.semantic_expr_lowering(expr)
                 else {

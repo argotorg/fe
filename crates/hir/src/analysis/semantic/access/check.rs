@@ -482,7 +482,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 NDataProjection::Field(field) => PlaceStep::Field(field.0 as usize),
                 NDataProjection::VariantField { .. } => PlaceStep::Variant,
                 NDataProjection::Index(_) => PlaceStep::Index,
-                NDataProjection::Entry(_) => PlaceStep::Entry,
+                NDataProjection::Entry(..) => PlaceStep::Entry,
             };
             walk.step(db, self.instance, start, (container, step, result));
             container = result;
@@ -1711,7 +1711,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     NPlaceBase::Deref { .. } => None,
                 };
                 if let Some(key) = key
-                    && !path.contains(&Step::Index(None))
+                    && !path.iter().any(Step::is_dynamic_index)
                 {
                     state.initialize(|(moved, moved_path)| {
                         *moved == key && moved_path.starts_with(&path)
@@ -2172,10 +2172,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
             NPlaceBase::CapabilityTarget { carrier } => self.carrier_key(carrier),
         };
-        // `[*]` names no definite element, so the drop may reach one moved
-        // out and destroy again what was moved, unless that owns nothing.
+        // `[*]` and a dynamic entry name no definite element, so the drop may
+        // reach one moved out and destroy again what was moved, unless that
+        // owns nothing.
         if let Some(key) = key
-            && path.contains(&Step::Index(None))
+            && path.iter().any(Step::is_dynamic_index)
             && let Some(found) = state.moved.iter().find(|(moved, moved_path)| {
                 *moved == key
                     && paths_overlap(moved_path, &path)
@@ -2201,10 +2202,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
             let parts = self.drop_parts(key, &path, place.ty, state);
             self.record_drop(statement, parts, place.ty, origin)?;
         }
-        // `[*]` names no definite element; the store a drop precedes
-        // initializes it again.
+        // `[*]` and a dynamic entry name no definite element: none is
+        // recorded as moved, as a store there initializes none.
         if let Some(key) = key
-            && !path.contains(&Step::Index(None))
+            && !path.iter().any(Step::is_dynamic_index)
         {
             state.record_move((key, path));
         }
@@ -2421,7 +2422,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     origin,
                 )?;
                 // `[*]` names no definite element to restore.
-                if path.contains(&Step::Index(None)) {
+                if path.iter().any(Step::is_dynamic_index) {
                     return Err(self.diag(
                         SemanticDiagnosticKind::MoveConflict,
                         origin,
@@ -3147,6 +3148,9 @@ fn drop_step(step: Step) -> DropStep {
         Step::Variant { variant, field } => DropStep::Variant { variant, field },
         Step::Index(index) => {
             DropStep::Index(index.expect("a part of a drop lies at constant indices"))
+        }
+        Step::Entry { .. } => {
+            unreachable!("a part of a drop lies at fields, variant fields and constant indices")
         }
     }
 }

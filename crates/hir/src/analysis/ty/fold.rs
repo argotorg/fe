@@ -652,9 +652,11 @@ impl<'db> TyFoldable<'db> for PlaceProjection<'db> {
                 result_ty: result_ty.fold_with(db, folder),
             },
             PlaceProjection::Entry {
+                entry_expr,
                 key_expr,
                 result_ty,
             } => PlaceProjection::Entry {
+                entry_expr,
                 key_expr,
                 result_ty: result_ty.fold_with(db, folder),
             },

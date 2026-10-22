@@ -3898,6 +3898,8 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "multicall",
     "mut_self_storage_receiver_regression",
     "mutex_lock_slot_no_transient_collision",
+    "named_storage_codecs",
+    "named_storage_evidence",
     "nested_index_assignment",
     "never_returning_recv_returns",
     "newtype_casts",
@@ -5572,4 +5574,53 @@ fn test_cli_build_payable_return_abi() {
         deposit["outputs"],
         serde_json::json!([{"name": "", "type": "uint256"}])
     );
+}
+
+#[test]
+fn named_storage_preserves_dispatch_at_both_optimization_levels() {
+    for fixture in ["named_storage_evidence.fe", "named_storage_codecs.fe"] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        for level in ["0", "1"] {
+            let (output, exit) = run_fe_main(&[
+                "test",
+                "--backend",
+                "sonatina",
+                "--jobs",
+                "1",
+                "-O",
+                level,
+                path.to_str().unwrap(),
+            ]);
+            assert_eq!(exit, 0, "{fixture} at O{level}: {output}");
+        }
+    }
+}
+
+#[test]
+fn named_storage_aliases_do_not_assume_distinct_dictionaries_are_disjoint() {
+    let source = include_str!("fixtures/named_storage_alias.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("alias.fe");
+    for (choice, should_pass) in [("<Words as StateIndex>", true), ("Shifted", false)] {
+        fs::write(
+            &path,
+            source.replace("with (Shifted)", &format!("with ({choice})")),
+        )
+        .unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        if should_pass {
+            assert_eq!(exit, 0, "ordinary distinct keys: {output}");
+        } else {
+            assert_ne!(
+                exit, 0,
+                "different dictionaries may select the same location"
+            );
+            assert!(
+                output.contains("16-0001") && output.contains("access conflict"),
+                "{output}"
+            );
+        }
+    }
 }

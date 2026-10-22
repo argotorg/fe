@@ -542,7 +542,7 @@ fn drop_step(projection: NDataProjection) -> DropStep {
             field: FieldIndex(field),
         } => DropStep::Variant { variant, field },
         NDataProjection::Index(NIndex::Const(index)) => DropStep::Index(index),
-        NDataProjection::Index(NIndex::Value(_)) | NDataProjection::Entry(_) => {
+        NDataProjection::Index(NIndex::Value(_)) | NDataProjection::Entry(..) => {
             unreachable!("a drop's parts lie at fields, variant fields and constant indices")
         }
     }
@@ -570,7 +570,9 @@ fn project_class<'db>(
                     field,
                 )
             }
-            NDataProjection::Index(_) | NDataProjection::Entry(_) => project_index_class(db, class),
+            NDataProjection::Index(_) | NDataProjection::Entry(..) => {
+                project_index_class(db, class)
+            }
         })
 }
 

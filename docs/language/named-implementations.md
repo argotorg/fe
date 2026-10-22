@@ -132,5 +132,24 @@ be used there, and an unbounded concrete helper retains its ordinary behavior
 in a type constant. This restriction also covers const methods used to form
 types, even though their return values may differ between implementations.
 
+## Indexed storage
+
+A storage entry uses the `StateIndex::locate` dictionary proved where the
+indexing operation is checked. Its prerequisites follow the same choice rules
+as written calls. Thus a named `StorageKey` can send a key to a different map
+location, including through a generic method's declared bound. Packed entries
+also retain the selected `LaneCodec::get` and `set` dictionaries.
+
+For example, write 5 through the ordinary key encoding and 6 through a named
+encoding that adds 1000 to the key. Reading through those respective encodings
+returns 5 and 6. The choice changes the indexing computation; associated layout
+outputs still obey ordinary-output agreement. It does not move a contract's
+field allocation or change the entry's type, address space, or lane width.
+
+The unsafe `StateIndex` contract separates distinct keys within one dictionary.
+It does not promise that locations from different dictionaries are disjoint.
+The access checker conservatively treats such entries as potentially overlapping,
+even when their literal keys differ.
+
 Implementation names are compile-time operands of `with`. This feature does
 not add public evidence values, a `prove` expression, or a `Constraint` kind.

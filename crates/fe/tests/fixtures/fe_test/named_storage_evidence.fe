@@ -1,0 +1,44 @@
+use std::evm::{Evm, Create, Call, Wei}
+use std::evm::{StorageMap, StorageKey}
+struct Key { n: u256 }
+impl Copy for Key {}
+impl StorageKey for Key {
+    fn encoded_len(self) -> u256 { 32 }
+    unsafe fn write_key(ptr: *u8, self) { u256::write_key(ptr: ptr, self.n) }
+}
+impl StorageKey for Key as Shifted {
+    fn encoded_len(self) -> u256 { 32 }
+    unsafe fn write_key(ptr: *u8, self) { u256::write_key(ptr: ptr, self.n + 1000) }
+}
+msg M {
+    #[selector = 0x10]
+    Put -> u256,
+    #[selector = 0x11]
+    Get -> (u256, u256, u256, u256),
+}
+pub contract K {
+    mut m: StorageMap<Key, u256>
+    recv M {
+        Put -> u256 uses (mut m) {
+            m.set(key: Key { n: 3 }, value: 5)
+            with (Shifted) { m.set(key: Key { n: 3 }, value: 6) }
+            m[Key { n: 7 }] = 11
+            with (Shifted) { m[Key { n: 7 }] = 13 }
+            1
+        }
+        Get -> (u256, u256, u256, u256) uses (m) {
+            (m.get(Key { n: 3 }), with (Shifted) { m.get(Key { n: 3 }) },
+             m[Key { n: 7 }], with (Shifted) { m[Key { n: 7 }] })
+        }
+    }
+}
+#[test]
+fn keys_differ() uses (evm: mut Evm) {
+    let k = evm.create2<K>(value: Wei::zero(), args: (), salt: 0)
+    let _: u256 = evm.call(addr: k, gas: 400000, value: Wei::zero(), message: M::Put {})
+    let g: (u256, u256, u256, u256) = evm.call(addr: k, gas: 400000, value: Wei::zero(), message: M::Get {})
+    assert!(g.0 == 5)
+    assert!(g.1 == 6)
+    assert!(g.2 == 11)
+    assert!(g.3 == 13)
+}

@@ -34,7 +34,7 @@ use crate::{
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
             SemOrigin, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
-            SemanticInstanceKey, core_method_callee_key,
+            SemanticInstanceKey,
             diagnostics::{
                 BlockedSemanticBody, SemanticDiagnosticId, SemanticDiagnosticSpan,
                 SemanticNormalizationFailure,
@@ -302,7 +302,7 @@ pub fn projection_component_spaces<'db>(
                     Step::Variant { variant, field } => {
                         ReturnProjectionStep::VariantField { variant, field }
                     }
-                    Step::Index(_) => {
+                    Step::Index(_) | Step::Entry { .. } => {
                         unreachable!("an access component lies at fields and variant fields")
                     }
                 })
@@ -564,47 +564,30 @@ fn generated_callees<'db>(
         return Vec::new();
     };
     let body = admitted.body(db);
-    let scope = instance.key(db).owner(db).scope();
-    let assumptions = instance.assumptions(db);
     let mut callees = Vec::new();
     for statement in body.blocks.iter().flat_map(|block| &block.statements) {
         let mut visit = |place: &NPlace<'db>| {
             for (idx, projection) in place.path.iter().enumerate() {
-                let NDataProjection::Entry(_) = projection else {
+                let NDataProjection::Entry(_, entry) = projection else {
                     continue;
                 };
                 let Some(collection) = body.place_prefix_ty(db, place, idx) else {
                     continue;
                 };
                 let collection = instance.normalized_ty(db, collection);
-                let locate = core_method_callee_key(
-                    db,
-                    scope,
-                    assumptions,
-                    &["ops", "StateIndex"],
-                    "locate",
-                    vec![collection],
-                );
-                let codec_args = instance
+                let locate = instance.call_sites(db)[entry.index()]
+                    .as_ref()
+                    .and_then(|site| site.callee)
+                    .map(|callee| callee.key);
+                let codec = instance
                     .state_index_lanes(db, collection)
-                    .zip(body.place_prefix_ty(db, place, idx + 1))
-                    .map(|(lanes, element)| vec![lanes.codec, instance.normalized_ty(db, element)]);
-                let codec = codec_args.into_iter().flat_map(|args| {
-                    ["get", "set"].map(|name| {
-                        core_method_callee_key(
-                            db,
-                            scope,
-                            assumptions,
-                            &["ops", "LaneCodec"],
-                            name,
-                            args.clone(),
-                        )
-                    })
-                });
+                    .and_then(|_| instance.entry_codec_callees(db, *entry).ok())
+                    .into_iter()
+                    .flatten();
                 callees.extend(
-                    iter::once(locate)
+                    locate
+                        .into_iter()
                         .chain(codec)
-                        .filter_map(Result::ok)
                         .map(|key| (key, statement.origin)),
                 );
             }

@@ -1052,7 +1052,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Projection::Deref => {
                 panic!("decision-tree lowering does not support deref projections yet")
             }
-            Projection::Index(_) | Projection::Entry(_) => {
+            Projection::Index(_) | Projection::Entry(..) => {
                 panic!("decision-tree lowering does not support index projections yet")
             }
         }
@@ -1100,7 +1100,7 @@ pub(crate) fn enum_tag_ty<'db>(db: &'db dyn HirAnalysisDb, enum_ty: TyId<'db>) -
 /// A decision-tree path step as a place's projection.
 fn semantic_projection<'db>(
     projection: &Projection<'db>,
-) -> crate::projection::Projection<TyId<'db>, VariantIndex, SLocalId> {
+) -> crate::projection::Projection<TyId<'db>, VariantIndex, SLocalId, crate::hir_def::ExprId> {
     match projection {
         Projection::Field(field) => crate::projection::Projection::Field(*field),
         Projection::VariantField {
@@ -1113,7 +1113,7 @@ fn semantic_projection<'db>(
             field_idx: *field_idx,
         },
         Projection::Discriminant => crate::projection::Projection::Discriminant,
-        Projection::Index(_) | Projection::Entry(_) | Projection::Deref => {
+        Projection::Index(_) | Projection::Entry(..) | Projection::Deref => {
             unreachable!("a pattern binds through fields and variant fields")
         }
     }

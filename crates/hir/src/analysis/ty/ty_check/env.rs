@@ -203,7 +203,7 @@ pub(crate) struct TyCheckEnv<'db> {
     inspected_places: FxHashSet<ExprId>,
     /// Index expressions naming an entry of a collection whose elements are
     /// places (`core::ops::StateIndex`).
-    place_entries: FxHashSet<ExprId>,
+    place_entries: FxHashMap<ExprId, super::PlaceEntryCalls<'db>>,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
     unsafe_splits: FxHashSet<ExprId>,
     /// The tuples passed to product parameters, a part each.
@@ -367,7 +367,7 @@ impl<'db> TyCheckEnv<'db> {
             consumed_accesses: FxHashSet::default(),
             matched_places: FxHashSet::default(),
             inspected_places: FxHashSet::default(),
-            place_entries: FxHashSet::default(),
+            place_entries: FxHashMap::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
@@ -687,7 +687,7 @@ impl<'db> TyCheckEnv<'db> {
             expr,
             |expr| self.typed_expr(expr).and_then(|p| p.binding),
             |expr| self.typed_expr_ty(expr),
-            |expr| self.place_entries.contains(&expr),
+            |expr| self.place_entries.contains_key(&expr),
         )
     }
 
@@ -1014,8 +1014,12 @@ impl<'db> TyCheckEnv<'db> {
         self.matched_places.contains(&expr)
     }
 
-    pub(super) fn record_place_entry(&mut self, expr: ExprId) {
-        self.place_entries.insert(expr);
+    pub(super) fn record_place_entry(
+        &mut self,
+        expr: ExprId,
+        callable: super::PlaceEntryCalls<'db>,
+    ) {
+        self.place_entries.insert(expr, callable);
     }
 
     pub(super) fn record_unsafe_split(&mut self, tuple: ExprId) {
@@ -1668,6 +1672,23 @@ impl<'db> TyCheckEnv<'db> {
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
         let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
+        for (&expr, calls) in &mut self.place_entries {
+            let solve_cx = solve_cx.with_choices(self.expr_choices[expr]);
+            for callable in calls.iter_mut() {
+                *callable = callable.clone().fold_with(self.db, &mut prober);
+                callable.record_evidence(self.db, solve_cx);
+                callable.record_bound_evidence(self.db, solve_cx);
+            }
+            if let Some(goal) = calls.locate.trait_inst()
+                && calls.locate.evidence().is_none()
+                && !super::super::visitor::collect_flags(self.db, goal).intersects(
+                    super::super::ty_def::TyFlags::HAS_VAR
+                        | super::super::ty_def::TyFlags::HAS_INVALID,
+                )
+            {
+                diags.push(failed_proof(goal, expr.span(self.body).into()));
+            }
+        }
         for (expr, lowering) in self.semantic_expr_lowering.iter_mut() {
             let Some(lowering) = lowering else {
                 continue;
@@ -1753,7 +1774,7 @@ impl<'db> TyCheckEnv<'db> {
                         |prop| prop.ty,
                     )
                 },
-                |expr| self.place_entries.contains(&expr),
+                |expr| self.place_entries.contains_key(&expr),
             ) {
                 let place_id = expr_places.push(place);
                 expr_place[expr] = place_id.into();

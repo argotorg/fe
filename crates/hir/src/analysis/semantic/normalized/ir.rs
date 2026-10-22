@@ -131,7 +131,7 @@ impl<'db> NormalizedBody<'db> {
         };
         base.into_iter()
             .chain(place.path.iter().filter_map(|projection| match projection {
-                NDataProjection::Index(NIndex::Value(value)) | NDataProjection::Entry(value) => {
+                NDataProjection::Index(NIndex::Value(value)) | NDataProjection::Entry(value, _) => {
                     Some(*value)
                 }
                 NDataProjection::Field(_)
@@ -178,7 +178,7 @@ impl<'db> NormalizedBody<'db> {
                         let mut used = expression_uses_value(expr);
                         if let NExpr::ProjectValue { path, .. } = expr {
                             used |= path.0.iter().any(|projection| {
-                                matches!(projection, NDataProjection::Index(NIndex::Value(value)) | NDataProjection::Entry(value) if *value == target)
+                                matches!(projection, NDataProjection::Index(NIndex::Value(value)) | NDataProjection::Entry(value, _) if *value == target)
                             });
                         }
                         expr.for_each_place_operand(|place| used |= place_uses_target(place));
@@ -350,8 +350,9 @@ pub enum NDataProjection {
     },
     Index(NIndex),
     /// The element at key `value` of a collection whose elements are places
-    /// (`core::ops::StateIndex`), at a slot the collection computes.
-    Entry(NValueId),
+    /// (`core::ops::StateIndex`), at a slot the collection computes. The ID
+    /// references its recorded call plan, canonical among equal dispatches.
+    Entry(NValueId, ExprId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
