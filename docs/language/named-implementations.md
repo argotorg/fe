@@ -138,7 +138,11 @@ A storage entry uses the `StateIndex::locate` dictionary proved where the
 indexing operation is checked. Its prerequisites follow the same choice rules
 as written calls. Thus a named `StorageKey` can send a key to a different map
 location, including through a generic method's declared bound. Packed entries
-also retain the selected `LaneCodec::get` and `set` dictionaries.
+also retain the selected `LaneCodec::get` and `set` dictionaries. If a selected
+codec's prerequisites fail, packed access reports that failure instead of using
+an ordinary codec. Whole-slot access does not require unused codec methods.
+An ordinary codec obligation that depends on a generic element can be completed
+after substitution; this completion preserves any enclosing selected dictionary.
 
 For example, write 5 through the ordinary key encoding and 6 through a named
 encoding that adds 1000 to the key. Reading through those respective encodings
