@@ -1447,3 +1447,50 @@ fn run() -> u256 {
             .has_errors(&output)
     );
 }
+
+#[test]
+fn scoped_derive_refuses_sibling_item_holes_without_dropping_output() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Value { const fn value() -> u256 }
+struct Key {}
+struct Provider {}
+impl Derive<Value> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let extra = quote { const fn ignored() -> bool { missing } }
+        quote {
+            const fn value() -> u256 { 7 }
+            ${extra}
+        }
+    }
+}
+const fn run() -> u256 { with (Provider) { Key::value() } }
+const RESULT: u256 = run()
+"#;
+    for rejected in [
+        source.to_owned(),
+        source.replace("${extra}", "const fn ignored() -> bool { missing }"),
+    ] {
+        let (db, file) = input(&rejected);
+        let error = prepare_file(&db, file)
+            .err()
+            .expect("every sibling output node must be admitted or refused");
+        assert!(
+            error
+                .cause
+                .contains("bounded derive requires one function template"),
+            "{error}"
+        );
+        assert!(db.generation_inputs().functions(&db).is_empty());
+        assert!(db.generation_inputs().requests(&db).is_empty());
+        assert_eq!(file.text(&db).as_str(), rejected);
+    }
+    let source = source
+        .replace(
+            "        let extra = quote { const fn ignored() -> bool { missing } }\n",
+            "",
+        )
+        .replace("            ${extra}\n", "");
+    let output = prepare(&source).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "run"), "7");
+}
