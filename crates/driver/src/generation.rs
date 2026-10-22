@@ -606,7 +606,11 @@ pub fn prepare_file(
                         error(range, "scoped derive provider admission failed".into()),
                     )
                 })?;
+                if provider_needs_generation(&output, key) {
+                    continue;
+                }
                 let mut plan = evaluate_provider_instance(&output, output_file, key, input, range)?;
+                completed.insert(demand.clone());
                 plan.scoped_impl = Some(common::generation::FrozenScopedImpl {
                     selection_name: scoped_selection_name(&demand),
                     demand,
