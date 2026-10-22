@@ -1179,17 +1179,32 @@ impl<'db> TyChecker<'db> {
             return ExprProp::new(to, true);
         }
 
-        if let Partial::Present(Expr::Lit(LitKind::Int(int_id))) =
-            inner_expr.data(self.db, self.body())
-        {
+        let literal = match inner_expr.data(self.db, self.body()) {
+            Partial::Present(Expr::Lit(LitKind::Int(integer))) => Some((*integer, false)),
+            Partial::Present(Expr::Un(inner, UnOp::Minus)) => {
+                match inner.data(self.db, self.body()) {
+                    Partial::Present(Expr::Lit(LitKind::Int(integer))) => Some((*integer, true)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some((int_id, negative)) = literal {
             let value = int_id.data(self.db);
             let leaf = self.peel_transparent_newtypes(to);
-            if to.is_string(self.db) && self.int_literal_fits_in_ty(value, TyId::u256(self.db)) {
+            if !negative
+                && to.is_string(self.db)
+                && self.int_literal_fits_in_ty(value, TyId::u256(self.db))
+            {
                 let _ = self.table.unify(from, TyId::u256(self.db));
                 return ExprProp::new(to, true);
             }
 
-            if self.int_literal_fits_in_ty(value, to) {
+            if if negative {
+                self.negated_int_literal_fits_in_ty(value, to)
+            } else {
+                self.int_literal_fits_in_ty(value, to)
+            } {
                 // Unify the literal's type variable with the target leaf type
                 // so it doesn't remain unresolved.
                 let _ = self.table.unify(from, leaf);
@@ -1203,7 +1218,8 @@ impl<'db> TyChecker<'db> {
                 from,
                 to,
                 hint: Some(format!(
-                    "integer literal `{}` is not representable in `{}`",
+                    "integer literal `{}{}` is not representable in `{}`",
+                    if negative { "-" } else { "" },
                     value,
                     leaf.pretty_print(self.db),
                 )),
