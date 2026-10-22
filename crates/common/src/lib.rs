@@ -140,7 +140,11 @@ macro_rules! impl_db_default {
                 db.options = Some(options);
                 let settings = $crate::compilation::CompilationSettings::default(&db);
                 db.settings = Some(settings);
-                db.generation = Some($crate::generation::GenerationInputs::new(&db, vec![]));
+                db.generation = Some($crate::generation::GenerationInputs::new(
+                    &db,
+                    vec![],
+                    vec![],
+                ));
                 $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
                 $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
                 db

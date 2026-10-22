@@ -80,6 +80,20 @@ fn item_constructor_refuses_statement_fragments_and_over_budget_templates() {
             ),
             "construction node limit of 4096",
         ),
+        (
+            format!(
+                "quote {{ fn generated() -> u256 {{ // {}\n 42 }} }}",
+                "x".repeat(4100)
+            ),
+            "template byte limit of 4096",
+        ),
+        (
+            format!(
+                "quote {{ fn generated() -> u256 {{ {} 0 }} }}",
+                (0..65).map(|_| "${1} + ").collect::<String>()
+            ),
+            "hole limit of 64",
+        ),
     ] {
         let mut db = HirAnalysisTestDb::default();
         let source = format!(
@@ -94,4 +108,35 @@ fn item_constructor_refuses_statement_fragments_and_over_budget_templates() {
         assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
         assert!(format!("{outcome:?}").contains(cause), "{outcome:?}");
     }
+}
+
+#[test]
+fn exponential_quote_splice_dag_is_refused_by_expanded_node_budget() {
+    let mut db = HirAnalysisTestDb::default();
+    let source = r#"use core::meta::{Code, Expr, Item}
+const fn explode() -> Code<Item> {
+    var q: Code<Expr> = quote { 1 + 1 }
+    var i: usize = 0
+    while i < 12 {
+        q = quote { ${q} + ${q} }
+        i += 1
+    }
+    quote {
+        fn big() -> u256 {
+            ${q}
+        }
+    }
+}
+"#;
+    let file = db.new_stand_alone("dag-budget.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "explode"), None);
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
+    assert!(
+        format!("{outcome:?}").contains("expanded AST node limit of 4096"),
+        "{outcome:?}"
+    );
 }

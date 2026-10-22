@@ -590,12 +590,35 @@ impl ToDoc for ast::ConstGenericParam {
     }
 }
 
+/// A splice keeps its delimiters while its value uses ordinary expression
+/// formatting. Token traversal also retains comments between `$`, `{`, and
+/// the value, including line comments that require a following newline.
+pub(super) fn quote_hole_doc<'a>(
+    ctx: &'a RewriteContext<'a>,
+    syntax: &parser::SyntaxNode,
+) -> Doc<'a> {
+    token_doc(
+        ctx,
+        syntax,
+        ctx.config.indent_width as isize,
+        |node| ast::Expr::cast(node).map(|expr| TokenPiece::new(expr.to_doc(ctx))),
+        |_| None,
+    )
+}
+
+impl ToDoc for ast::QuoteHole {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        quote_hole_doc(ctx, self.syntax())
+    }
+}
+
 fn where_predicate_doc<'a>(
     predicate: ast::WhereClausePredicate,
     ctx: &'a RewriteContext<'a>,
 ) -> Doc<'a> {
     match predicate.kind() {
         ast::WherePredicateKind::Type(predicate) => predicate.to_doc(ctx),
+        ast::WherePredicateKind::Hole(hole) => hole.to_doc(ctx),
         ast::WherePredicateKind::Const(predicate) => match predicate.expr() {
             Some(expr) => expr.to_doc(ctx),
             None => ctx.alloc.nil(),
@@ -615,7 +638,7 @@ fn ends_with_braced_condition_and_comma(clause: &ast::WhereClause) -> bool {
         ast::WherePredicateKind::Const(predicate) => predicate
             .expr()
             .is_some_and(|expr| matches!(expr.kind(), ast::ExprKind::Block(_))),
-        ast::WherePredicateKind::Type(_) => false,
+        ast::WherePredicateKind::Type(_) | ast::WherePredicateKind::Hole(_) => false,
     };
     braced
         && std::iter::successors(last.syntax().next_sibling_or_token(), |element| {
@@ -894,6 +917,7 @@ impl ToDoc for ast::Type {
             TypeKind::Tuple(tuple) => tuple.to_doc(ctx),
             TypeKind::Array(array) => array.to_doc(ctx),
             TypeKind::Never(never) => never.to_doc(ctx),
+            TypeKind::QuoteHole(hole) => quote_hole_doc(ctx, hole.syntax()),
         }
     }
 }
@@ -1256,9 +1280,8 @@ impl ToDoc for ast::Expr {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         use parser::ast::ExprKind;
         match self.kind() {
-            ExprKind::Quote(_) | ExprKind::QuoteHole(_) => {
-                ctx.alloc.text(ctx.snippet(self.syntax().text_range()))
-            }
+            ExprKind::QuoteHole(hole) => quote_hole_doc(ctx, hole.syntax()),
+            ExprKind::Quote(_) => ctx.alloc.text(ctx.snippet(self.syntax().text_range())),
             ExprKind::Lit(lit) => lit.to_doc(ctx),
             ExprKind::Block(block) => block.to_doc(ctx),
             ExprKind::Closure(closure) => closure.to_doc(ctx),

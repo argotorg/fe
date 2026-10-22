@@ -552,13 +552,7 @@ fn verify_expr<'db>(
             Ok(())
         }
         NExpr::ItemQuote { holes, .. } => {
-            let scope = body.owner.key(db).impl_env(db).normalization_scope(db);
-            let code =
-                crate::analysis::ty::corelib::resolve_lib_type_path(db, scope, "core::meta::Code");
-            let item =
-                crate::analysis::ty::corelib::resolve_lib_type_path(db, scope, "core::meta::Item");
-            if !matches!((code, item), (Some(code), Some(item)) if result_ty == TyId::app(db, code, item))
-            {
+            if crate::core::meta::code_kind_from_ty(db, result_ty).is_none() {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
             }
             for &hole in holes {

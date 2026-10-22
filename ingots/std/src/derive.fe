@@ -1,0 +1,57 @@
+use core::abi::AbiSize
+use core::meta::{Code, Expr, Field, Record, field, field_count, field_type}
+
+/// One step of a fold over the fields of a record, written as code.
+///
+/// A deriver builds the code for a whole record by folding its fields in
+/// declaration order, so the result follows the record's shape. `unit` is the
+/// code for a record with no fields. `step` extends the code built from the
+/// earlier fields by one more field. `fold_fields` runs the fold.
+pub trait FieldStep {
+    const fn unit() -> Code<Expr>
+    const fn step(_ acc: Code<Expr>, _ field: Field) -> Code<Expr>
+}
+
+/// Fold the fields of `record` with the step `S`, in declaration order:
+/// `step(.. step(step(unit, f0), f1) .., fn)`. Takes a struct, or an enum
+/// payload chosen with `variant`. The result is code for the caller to splice
+/// into the item it generates.
+pub const fn fold_fields<S: FieldStep>(_ record: Record) -> Code<Expr> {
+    var acc = S::unit()
+    var i: usize = 0
+    while i < field_count(record) {
+        acc = S::step(acc, field(record, i))
+        i += 1
+    }
+    acc
+}
+
+/// Whether the ABI encoding of `T` has a dynamic part.
+pub const fn abi_is_dynamic<T: AbiSize>() -> bool {
+    <T as AbiSize>::IS_DYNAMIC
+}
+
+/// Sum of the fields' head sizes: the head size of an ABI record. A dynamic
+/// field counts as the one word that points to its tail.
+pub struct AbiHeadSize {}
+impl FieldStep for AbiHeadSize {
+    const fn unit() -> Code<Expr> {
+        quote { 0 }
+    }
+    const fn step(_ acc: Code<Expr>, _ field: Field) -> Code<Expr> {
+        let ty = field_type(field)
+        quote { ${acc} + core::abi::abi_field_head_size<${ty}>() }
+    }
+}
+
+/// Whether any field is dynamic: whether the ABI record is dynamic.
+pub struct AbiIsDynamic {}
+impl FieldStep for AbiIsDynamic {
+    const fn unit() -> Code<Expr> {
+        quote { false }
+    }
+    const fn step(_ acc: Code<Expr>, _ field: Field) -> Code<Expr> {
+        let ty = field_type(field)
+        quote { ${acc} || ingot::derive::abi_is_dynamic<${ty}>() }
+    }
+}

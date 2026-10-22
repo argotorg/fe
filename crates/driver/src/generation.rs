@@ -120,9 +120,35 @@ fn evaluation_error<'db>(
         CtfeError::DivisionByZero { origin } => {
             (*origin, "division by zero in const context".to_string())
         }
+        CtfeError::ArithmeticOverflow { origin } => {
+            (*origin, "arithmetic overflow in const context".to_string())
+        }
         CtfeError::InvalidOperation { origin, message } => (*origin, message.clone()),
         CtfeError::OutOfBounds { origin } => {
             (*origin, "constant index outside record or aggregate".into())
+        }
+        CtfeError::NonConstCall { origin } => (
+            *origin,
+            "cannot call non-const function in const context".to_string(),
+        ),
+        CtfeError::InvalidBorrow { origin } => (
+            *origin,
+            "invalid borrow in const evaluation context".to_string(),
+        ),
+        CtfeError::InvalidProviderUse { origin } => (
+            *origin,
+            "invalid effect provider use in const context".to_string(),
+        ),
+        CtfeError::InvalidBody { origin } => (
+            *origin,
+            "invalid body in const evaluation context".to_string(),
+        ),
+        CtfeError::NotConstEvaluable { origin } => (
+            *origin,
+            "expression cannot be evaluated at compile time".to_string(),
+        ),
+        CtfeError::RecursiveConst { origin } => {
+            (*origin, "recursive const evaluation detected".to_string())
         }
         CtfeError::StepLimitExceeded { origin } => {
             (*origin, "existing CTFE step limit exceeded".into())
@@ -160,7 +186,9 @@ pub fn prepare_file(
         range,
         cause,
     };
-    if !db.generation_inputs().functions(db).is_empty() {
+    if !db.generation_inputs().functions(db).is_empty()
+        || !db.generation_inputs().requests(db).is_empty()
+    {
         return Err(error(
             parser::TextRange::empty(0.into()),
             "generation requires the authored input view; output is checked once".into(),
@@ -199,13 +227,15 @@ pub fn prepare_file(
         ));
     }
     let module = db.top_mod(file);
-    let mut plans = Vec::new();
+    let mut requests = Vec::new();
     let mut consumed = std::collections::HashSet::new();
     for item in root.items().into_iter().flatten() {
-        let Some(ast::ItemKind::Struct(record)) = item.kind() else {
-            continue;
+        let attributes = match item.kind() {
+            Some(ast::ItemKind::Struct(record)) => record.attr_list(),
+            Some(ast::ItemKind::Enum(enum_)) => enum_.attr_list(),
+            _ => continue,
         };
-        let Some(attributes) = record.attr_list() else {
+        let Some(attributes) = attributes else {
             continue;
         };
         for attribute in attributes.normal_attrs_named("generate") {
@@ -281,7 +311,7 @@ pub fn prepare_file(
                 .ok_or_else(|| error(range, "missing Record carrier".into()))?;
             let code = resolve_lib_type_path(db, provider.scope(), "core::meta::Code")
                 .ok_or_else(|| error(range, "missing Code carrier".into()))?;
-            let item = resolve_lib_type_path(db, provider.scope(), "core::meta::Item")
+            let item_marker = resolve_lib_type_path(db, provider.scope(), "core::meta::Item")
                 .ok_or_else(|| error(range, "missing Item kind".into()))?;
             let arguments = provider.arg_tys(db);
             if arguments.len() != 1
@@ -294,7 +324,7 @@ pub fn prepare_file(
                     .return_ty(db)
                     .as_view(db)
                     .unwrap_or(provider.return_ty(db))
-                    != TyId::app(db, code, item)
+                    != TyId::app(db, code, item_marker)
             {
                 return Err(error(
                     range,
@@ -305,7 +335,7 @@ pub fn prepare_file(
                             .map(|a| a.instantiate_identity().pretty_print(db))
                             .collect::<Vec<_>>(),
                         provider.return_ty(db).pretty_print(db),
-                        TyId::app(db, code, item).pretty_print(db)
+                        TyId::app(db, code, item_marker).pretty_print(db)
                     ),
                 ));
             }
@@ -337,7 +367,7 @@ pub fn prepare_file(
                     error(range, "authored provider body diagnostics".into()),
                 ));
             }
-            let input = RecordInput::for_authored_syntax(db, module, &record).map_err(|cause| {
+            let input = RecordInput::for_authored_item(db, module, &item).map_err(|cause| {
                 error(
                     range,
                     format!("cannot issue concrete authored record: {cause:?}"),
@@ -359,21 +389,15 @@ pub fn prepare_file(
             let mut unresolved = Vec::new();
             {
                 use hir::analysis::semantic::access::SemanticAccessCheckResult;
-                let mut pending = std::collections::VecDeque::from([instance]);
+                let mut pending = vec![instance];
                 let mut seen = std::collections::HashSet::new();
-                while let Some(current) = pending.pop_front() {
+                while let Some(current) = pending.pop() {
                     if !seen.insert(current) {
                         continue;
                     }
                     match hir::analysis::semantic::access::semantic_access_check_query(db, current)
                     {
-                        SemanticAccessCheckResult::Ok { .. } => {
-                            for callee in current.callees(db) {
-                                pending.push_back(hir::analysis::semantic::SemanticInstance::new(
-                                    db, callee.key,
-                                ));
-                            }
-                        }
+                        SemanticAccessCheckResult::Ok { .. } => {}
                         SemanticAccessCheckResult::Err(diagnostic) => {
                             let diagnostic = diagnostic.diag(db);
                             let origin_owner = diagnostic.instance.key(db).owner(db);
@@ -399,6 +423,11 @@ pub fn prepare_file(
                                 unresolved.push(format!("Blocked: {cause:?}"));
                             }
                         }
+                    }
+                    for callee in current.callees(db) {
+                        pending.push(hir::analysis::semantic::SemanticInstance::new(
+                            db, callee.key,
+                        ));
                     }
                 }
             }
@@ -450,8 +479,8 @@ pub fn prepare_file(
                     "provider returned an ordinary value rather than checked item code".into(),
                 ));
             };
-            plans.push(
-                code.freeze_function(db, file)
+            requests.push(
+                code.freeze_request(db, file)
                     .map_err(|cause| error(range, cause.into()))?,
             );
         }
@@ -474,7 +503,7 @@ pub fn prepare_file(
             ));
         }
     }
-    if plans.is_empty() {
+    if requests.is_empty() {
         return Err(error(
             parser::TextRange::empty(0.into()),
             "generation request requires an authored concrete root record".into(),
@@ -499,9 +528,18 @@ pub fn prepare_file(
         .to(db.compilation_settings().target(db));
     output
         .generation_inputs()
-        .set_functions(&mut output)
-        .to(plans);
+        .set_requests(&mut output)
+        .to(requests);
     let output_module = output.top_mod(output_file);
+    let _ = output_module.scope_graph(&output);
+    let lowering_errors = hir::lower::generation_lowering_errors(&output, output_module);
+    if let Some(first) = lowering_errors.first() {
+        return Err(GenerationError {
+            file: first.file.url(&output).unwrap_or(url),
+            range: first.primary_range,
+            cause: first.message.clone(),
+        });
+    }
     let diagnostics = output.run_on_top_mod(output_module);
     if diagnostics.has_errors(&output) {
         return Err(diagnostic_error(

@@ -403,7 +403,20 @@ static bool skip_quote_trivia(TSLexer *lexer, bool allow_newlines) {
 static bool scan_quote_keyword(TSLexer *lexer) {
   if (!scan_word(lexer, "quote")) return false;
   lexer->mark_end(lexer);
-  return skip_quote_trivia(lexer, false) && lexer->lookahead == '{';
+  if (!skip_quote_trivia(lexer, false)) return false;
+  if (lexer->lookahead == '(') {
+    int depth = 0;
+    do {
+      if (lexer->lookahead == '(') depth++;
+      if (lexer->lookahead == ')') depth--;
+      if (lexer->eof(lexer) || lexer->lookahead == '\n') return false;
+      if (lexer->lookahead == '"') { advance_over_string_literal(lexer); continue; }
+      if (lexer->lookahead == '/') { advance_over_comment(lexer); continue; }
+      advance(lexer);
+    } while (depth > 0);
+    if (!skip_quote_trivia(lexer, false)) return false;
+  }
+  return lexer->lookahead == '{';
 }
 
 
@@ -549,6 +562,22 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
               if (bracket_depth == 0 && brace_depth == 0) goto not_generic;
               advance(lexer);
               continue;
+            case '$': {
+              advance(lexer);
+              if (!skip_quote_trivia(lexer, true) || lexer->lookahead != '{') goto not_generic;
+              int splice_depth = 1;
+              advance(lexer);
+              while (splice_depth > 0 && !lexer->eof(lexer)) {
+                if (lexer->lookahead == '"') { advance_over_string_literal(lexer); continue; }
+                if (lexer->lookahead == '/') { advance_over_comment(lexer); continue; }
+                if (lexer->lookahead == '{') splice_depth++;
+                if (lexer->lookahead == '}') splice_depth--;
+                advance(lexer);
+              }
+              if (splice_depth != 0) goto not_generic;
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) last_top_char = '$';
+              continue;
+            }
             case '|':
               advance(lexer);
               // || at top level is a boolean operator -- can't be in generics

@@ -1964,7 +1964,10 @@ where
         0
     };
     match path.kind(ctxt.db) {
-        PathKind::Ident { .. } => {
+        PathKind::Ident { .. }
+        | PathKind::BoundIngot { .. }
+        | PathKind::BoundItem { .. }
+        | PathKind::InScope { .. } => {
             if let Some(ident) = path.ident(ctxt.db).to_opt() {
                 ctxt.with_new_ctxt(
                     |span| span.segment(idx).into_atom(),

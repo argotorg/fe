@@ -26,6 +26,7 @@ pub use abi_struct::{AbiStructDiagnostic, AbiStructDiagnosticKind};
 pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
+pub use generated::GenerationLoweringError;
 pub use item::{FieldModifierError, FieldModifierErrorKind, MsgDiagnostic, MsgDiagnosticKind};
 pub use parse::{ParsedFile, parse_file_impl};
 
@@ -123,6 +124,20 @@ pub fn scope_graph<'db>(
     scope_graph_impl(db, top_mod)
 }
 
+pub fn generation_lowering_errors<'db>(
+    db: &'db dyn LowerHirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<GenerationLoweringError> {
+    scope_graph_impl(db, top_mod)
+        .lower_diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            LowerDiagnostic::Generation(error) => Some(error.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Returns the ingot module tree of the given ingot.
 pub fn module_tree<'db>(db: &'db dyn LowerHirDb, ingot: Ingot<'db>) -> &'db ModuleTree<'db> {
     module_tree_impl(db, ingot)
@@ -179,7 +194,7 @@ pub(crate) fn func_body_graph_impl<'db>(
     let ast = ptr.to_node(top_mod_ast(db, func.top_mod(db)).syntax());
     let body = ast.body()?;
     let mut ctxt = FileLowerCtxt::enter_func_body(db, func);
-    Body::lower_func_body(&mut ctxt, &ast, body);
+    Body::lower_func_body(&mut ctxt, &ast, body, Vec::new());
     Some(ctxt.build())
 }
 
@@ -212,6 +227,7 @@ pub enum LowerDiagnostic {
     AbiStruct(AbiStructDiagnostic),
     AbiField(AbiFieldDiagnostic),
     AttrMisuse(AttrMisuseError),
+    Generation(GenerationLoweringError),
 }
 
 pub(super) struct FileLowerCtxt<'db> {
@@ -220,10 +236,8 @@ pub(super) struct FileLowerCtxt<'db> {
     next_impl_trait_idx: u32,
     next_static_assert_idx: u32,
     diagnostics: Vec<LowerDiagnostic>,
-    generation_holes: Vec<(parser::TextRange, common::generation::FrozenScalar)>,
-    /// Set while a generated function is lowered: its body is lowered with the
-    /// module, where the splice values are known, not on demand.
-    lowering_generated_function: bool,
+    next_quote_frame_id: usize,
+    pub(super) quote_frames: Vec<generated::ActiveQuoteFrame<'db>>,
 }
 
 impl<'db> FileLowerCtxt<'db> {
@@ -234,8 +248,8 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
             diagnostics: Vec::new(),
-            generation_holes: Vec::new(),
-            lowering_generated_function: false,
+            next_quote_frame_id: 0,
+            quote_frames: Vec::new(),
         }
     }
 
@@ -246,9 +260,305 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
             diagnostics: Vec::new(),
-            generation_holes: Vec::new(),
-            lowering_generated_function: false,
+            next_quote_frame_id: 0,
+            quote_frames: Vec::new(),
         }
+    }
+
+    pub(super) fn next_quote_frame_id(&mut self) -> usize {
+        let id = self.next_quote_frame_id;
+        self.next_quote_frame_id += 1;
+        id
+    }
+
+    pub(super) fn resolve_sub_quote_local_ident(&self, text: &str) -> IdentId<'db> {
+        let db = self.db();
+        for frame in self.quote_frames.iter().rev() {
+            if !frame.is_sub_quote {
+                break;
+            }
+            if !frame.open_names.iter().any(|(name, _)| name == text) {
+                return IdentId::new(db, format!("\0q{}_{text}", frame.frame_id));
+            }
+        }
+        IdentId::new(db, text.to_string())
+    }
+
+    pub(super) fn record_bound_name(&mut self, name: &str) {
+        for frame in self.quote_frames.iter_mut().rev() {
+            frame.bound_names.insert(name.to_string());
+            if !frame.is_sub_quote {
+                break;
+            }
+        }
+    }
+
+    pub(super) fn pop_quote_frame(&mut self) {
+        let Some(frame) = self.quote_frames.pop() else {
+            return;
+        };
+        if !frame.is_sub_quote {
+            let db = self.db();
+            let file = frame.quote_top_mod.file(db);
+            for (name, range) in frame.open_names {
+                if !frame.bound_names.contains(&name) {
+                    self.file_scoped_error(
+                        file,
+                        range,
+                        format!("quoted open name `{name}` has no enclosing binder"),
+                    );
+                }
+            }
+        }
+    }
+
+    pub(super) fn current_hole(
+        &self,
+        range: parser::TextRange,
+    ) -> Option<common::generation::FrozenHoleValue> {
+        self.quote_frames
+            .last()?
+            .holes
+            .iter()
+            .find(|(r, _)| *r == range)
+            .map(|(_, value)| value.clone())
+    }
+
+    pub(super) fn current_quote_ingot(&self) -> Option<common::ingot::Ingot<'db>> {
+        let frame = self.quote_frames.last()?;
+        let db = self.db();
+        let quote_ingot = frame.quote_top_mod.ingot(db);
+        (quote_ingot != self.top_mod().ingot(db)).then_some(quote_ingot)
+    }
+
+    pub(super) fn resolve_quote_template(
+        &mut self,
+        quote_file: &url::Url,
+        quote_range: parser::TextRange,
+        producer_module: Option<parser::TextRange>,
+        producer_block: Option<parser::TextRange>,
+        is_sub_quote: bool,
+        holes: Vec<common::generation::FrozenHoleValue>,
+    ) -> (ast::QuoteExpr, generated::ActiveQuoteFrame<'db>) {
+        let db = self.db();
+        let file = db
+            .workspace()
+            .get(db, quote_file)
+            .expect("validated frozen quote file exists in workspace");
+        let quote_top_mod = map_file_to_mod_impl(db, file);
+        let root = top_mod_ast(db, quote_top_mod);
+        let quote = root
+            .syntax()
+            .descendants()
+            .filter_map(ast::QuoteExpr::cast)
+            .find(|quote| quote.syntax().text_range() == quote_range)
+            .expect("validated frozen quote belongs to unchanged input source");
+        let holes = crate::core::meta::quote_holes(&quote)
+            .expect("checked frozen quote retains valid bounded syntax")
+            .into_iter()
+            .map(|hole| hole.syntax().text_range())
+            .zip(holes)
+            .collect();
+        let open_names = quote
+            .open_list()
+            .map(|list| {
+                list.names()
+                    .map(|n| (n.text().to_string(), n.text_range()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let producer_scope =
+            self.builder
+                .resolve_producer_scope(quote_top_mod, producer_module, producer_block);
+        let frame_id = self.next_quote_frame_id();
+        (
+            quote,
+            generated::ActiveQuoteFrame {
+                frame_id,
+                quote_top_mod,
+                quote_range,
+                producer_scope,
+                is_sub_quote,
+                open_names,
+                bound_names: rustc_hash::FxHashSet::default(),
+                holes,
+            },
+        )
+    }
+
+    pub(super) fn resolve_record_item(
+        &self,
+        record_ref: &common::generation::FrozenRecordRef,
+    ) -> ItemKind<'db> {
+        let db = self.db();
+        let file = db
+            .workspace()
+            .get(db, &record_ref.target_file)
+            .expect("validated frozen record file exists in workspace");
+        let record_top_mod = map_file_to_mod_impl(db, file);
+        if record_top_mod == self.top_mod() {
+            return self
+                .builder
+                .find_item_by_range(record_ref.target_range)
+                .expect("validated authored record item exists in module");
+        }
+        let root = top_mod_ast(db, record_top_mod);
+        record_top_mod
+            .scope_graph(db)
+            .scopes
+            .keys()
+            .find_map(|scope| match *scope {
+                crate::hir_def::scope_graph::ScopeId::Item(item @ ItemKind::Struct(s)) => {
+                    let HirOrigin::Raw(ptr) = s.origin(db) else {
+                        return None;
+                    };
+                    (ptr.to_node(root.syntax()).syntax().text_range() == record_ref.target_range)
+                        .then_some(item)
+                }
+                crate::hir_def::scope_graph::ScopeId::Item(item @ ItemKind::Enum(e)) => {
+                    let HirOrigin::Raw(ptr) = e.origin(db) else {
+                        return None;
+                    };
+                    (ptr.to_node(root.syntax()).syntax().text_range() == record_ref.target_range)
+                        .then_some(item)
+                }
+                _ => None,
+            })
+            .expect("validated authored record item exists in target module")
+    }
+
+    pub(super) fn lower_field_hole_ident(
+        &mut self,
+        range: parser::TextRange,
+    ) -> Partial<IdentId<'db>> {
+        let Some(common::generation::FrozenHoleValue::Field(field_ref)) = self.current_hole(range)
+        else {
+            self.record_generation_error(
+                range,
+                "record field label hole requires a Field<T, F> splice",
+            );
+            return Partial::Absent;
+        };
+        let db = self.db();
+        match (
+            self.resolve_record_item(&field_ref.record),
+            field_ref.record.variant_index,
+        ) {
+            (ItemKind::Struct(s), None) => match s.fields(db).data(db).get(field_ref.index) {
+                Some(f) => f.name,
+                None => {
+                    self.record_generation_error(
+                        range,
+                        "invalid field splice in record field label",
+                    );
+                    Partial::Absent
+                }
+            },
+            (ItemKind::Enum(e), Some(v)) => {
+                match e.variants_list(db).data(db).get(v).map(|v| &v.kind) {
+                    Some(crate::hir_def::VariantKind::Record(fields)) => {
+                        match fields.data(db).get(field_ref.index) {
+                            Some(f) => f.name,
+                            None => {
+                                self.record_generation_error(
+                                    range,
+                                    "invalid field splice in record field label",
+                                );
+                                Partial::Absent
+                            }
+                        }
+                    }
+                    Some(crate::hir_def::VariantKind::Tuple(_)) => {
+                        self.record_generation_error(
+                            range,
+                            "tuple variant field cannot be used as a named record field label",
+                        );
+                        Partial::Absent
+                    }
+                    _ => {
+                        self.record_generation_error(
+                            range,
+                            "invalid field splice in record field label",
+                        );
+                        Partial::Absent
+                    }
+                }
+            }
+            _ => {
+                self.record_generation_error(range, "invalid field splice in record field label");
+                Partial::Absent
+            }
+        }
+    }
+
+    pub(super) fn lower_field_hole_index(
+        &mut self,
+        range: parser::TextRange,
+    ) -> Partial<crate::hir_def::expr::FieldIndex<'db>> {
+        use crate::hir_def::expr::FieldIndex;
+        let Some(common::generation::FrozenHoleValue::Field(field_ref)) = self.current_hole(range)
+        else {
+            self.record_generation_error(range, "field access hole requires a Field<T, F> splice");
+            return Partial::Absent;
+        };
+        let db = self.db();
+        let res: Partial<FieldIndex<'db>> = match (
+            self.resolve_record_item(&field_ref.record),
+            field_ref.record.variant_index,
+        ) {
+            (ItemKind::Struct(s), None) => s
+                .fields(db)
+                .data(db)
+                .get(field_ref.index)
+                .and_then(|f| f.name.to_opt())
+                .map(FieldIndex::Ident)
+                .into(),
+            (ItemKind::Enum(e), Some(v)) => {
+                match e.variants_list(db).data(db).get(v).map(|v| &v.kind) {
+                    Some(crate::hir_def::VariantKind::Record(fields)) => fields
+                        .data(db)
+                        .get(field_ref.index)
+                        .and_then(|f| f.name.to_opt())
+                        .map(FieldIndex::Ident)
+                        .into(),
+                    Some(crate::hir_def::VariantKind::Tuple(_)) => Partial::Present(
+                        FieldIndex::Index(IntegerId::new(db, BigUint::from(field_ref.index))),
+                    ),
+                    _ => Partial::Absent,
+                }
+            }
+            _ => Partial::Absent,
+        };
+        if res.to_opt().is_none() {
+            self.record_generation_error(range, "invalid field splice in field projection");
+        }
+        res
+    }
+
+    pub(super) fn record_generation_error(
+        &mut self,
+        range: parser::TextRange,
+        message: impl Into<String>,
+    ) {
+        let db = self.db();
+        let file = self.quote_frames.last().map_or_else(
+            || self.top_mod().file(db),
+            |frame| frame.quote_top_mod.file(db),
+        );
+        self.file_scoped_error(file, range, message);
+    }
+
+    pub(super) fn file_scoped_error(
+        &mut self,
+        file: common::file::File,
+        range: parser::TextRange,
+        message: impl Into<String>,
+    ) {
+        self.report(GenerationLoweringError {
+            file,
+            primary_range: range,
+            message: message.into(),
+        });
     }
 
     pub(super) fn build(self) -> ScopeGraph<'db> {

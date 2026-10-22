@@ -459,9 +459,7 @@ fn trait_inst_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId
 fn sem_const_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> bool {
     match value.value(db) {
         SemConstValue::ItemCode { ty, .. } => ty_is_fully_ground(db, *ty),
-        SemConstValue::Meta { ty, value } => {
-            ty_is_fully_ground(db, *ty) && ty_is_fully_ground(db, value.input().ty())
-        }
+        SemConstValue::Meta { ty, .. } => ty_is_fully_ground(db, *ty),
         SemConstValue::Unit => true,
         SemConstValue::Scalar { ty, .. } => ty_is_fully_ground(db, *ty),
         SemConstValue::Description(term) => const_ty_is_fully_ground(db, *term),

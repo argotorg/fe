@@ -1246,6 +1246,10 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     PathKind::Ident { ident, .. } => ident
                         .to_opt()
                         .map_or_else(|| segment.pretty_print(db), |id| id.data(db).to_owned()),
+                    PathKind::BoundIngot { display, .. } => display.data(db).to_owned(),
+                    PathKind::BoundItem { display, .. } | PathKind::InScope { display, .. } => {
+                        display.pretty_print(db)
+                    }
                     PathKind::QualifiedType { type_, trait_ } => {
                         let ty = type_.pretty_print(db);
                         let trait_name = trait_.pretty_print(db);

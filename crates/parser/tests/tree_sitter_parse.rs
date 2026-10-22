@@ -700,6 +700,44 @@ fn tree_sitter_agrees_on_basic_quotation_and_contextual_quote_names() {
 }
 
 #[test]
+fn tree_sitter_agrees_on_composed_quotation_and_enum_reflection_examples() {
+    let mut parser = new_parser();
+    for source in [
+        include_str!(
+            "../test_files/quotation/generic_struct_within_with_fold_fields_and_field_type_splice.fe"
+        ),
+        include_str!(
+            "../test_files/quotation/enum_eq_across_unit_tuple_record_and_generic_enums_with_hygienic_binders.fe"
+        ),
+        include_str!(
+            "../test_files/quotation/field_type_queries_and_abi_derive_helpers_evaluate_in_provider.fe"
+        ),
+        "const fn make() { quote(other) { impl ${record} { fn test(self) { ${body} } } } }",
+        "const fn make() { quote { fn f() -> Wrapper<$ {ty}> { make() } } }",
+        "const fn make() { quote { fn f() -> Wrapper<$\n{ty}> { make() } } }",
+        "const fn make() { quote { fn f() -> Wrapper<$// comment\n{ty}> { make() } } }",
+    ] {
+        let (_, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{errors:?}\n{source}");
+        let errors = parse_errors(&mut parser, source);
+        assert!(errors.is_empty(), "{errors:?}\n{source}");
+        let tree = parser.parse(source, None).unwrap();
+        let mut pending = vec![tree.root_node()];
+        while let Some(node) = pending.pop() {
+            if matches!(node.kind(), "quote" | "<") {
+                assert_eq!(
+                    node.utf8_text(source.as_bytes()).unwrap(),
+                    node.kind(),
+                    "{source}"
+                );
+            }
+            let mut cursor = node.walk();
+            pending.extend(node.children(&mut cursor));
+        }
+    }
+}
+
+#[test]
 fn tree_sitter_highlight_query_accepts_pattern_paths() {
     tree_sitter::Query::new(
         &tree_sitter_fe::LANGUAGE.into(),

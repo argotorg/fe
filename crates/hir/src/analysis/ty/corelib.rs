@@ -284,6 +284,13 @@ pub(crate) enum CtfeExternIntrinsic {
     MetaFieldCount,
     MetaField,
     MetaFieldType,
+    MetaBinders,
+    MetaBinderAt,
+    MetaVariantCount,
+    MetaVariant,
+    MetaTypeIs,
+    MetaQueryField,
+    MetaEmpty,
     SizeOf,
     StorageSlots,
     Keccak256,
@@ -318,6 +325,20 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(CtfeExternIntrinsic::MetaField)
     } else if lib_func_matches(db, func, "core::meta::field_type") {
         Some(CtfeExternIntrinsic::MetaFieldType)
+    } else if lib_func_matches(db, func, "core::meta::binders") {
+        Some(CtfeExternIntrinsic::MetaBinders)
+    } else if lib_func_matches(db, func, "core::meta::binder_at") {
+        Some(CtfeExternIntrinsic::MetaBinderAt)
+    } else if lib_func_matches(db, func, "core::meta::variant_count") {
+        Some(CtfeExternIntrinsic::MetaVariantCount)
+    } else if lib_func_matches(db, func, "core::meta::variant") {
+        Some(CtfeExternIntrinsic::MetaVariant)
+    } else if lib_func_matches(db, func, "core::meta::type_is") {
+        Some(CtfeExternIntrinsic::MetaTypeIs)
+    } else if lib_func_matches(db, func, "core::meta::query_field") {
+        Some(CtfeExternIntrinsic::MetaQueryField)
+    } else if lib_func_matches(db, func, "core::meta::empty") {
+        Some(CtfeExternIntrinsic::MetaEmpty)
     } else if lib_func_matches(db, func, "core::intrinsic::size_of") {
         Some(CtfeExternIntrinsic::SizeOf)
     } else if lib_func_matches(db, func, "core::intrinsic::storage_slots") {
