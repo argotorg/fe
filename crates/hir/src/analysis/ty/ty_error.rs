@@ -322,6 +322,7 @@ pub(crate) fn path_generic_arg_diags<'db>(
         assumptions,
         diags: Vec::new(),
         const_bodies: ConstBodyLowering::Eager,
+        protocol_arguments: None,
     };
     walk_path(&mut vis, &mut VisitorCtxt::new(db, scope, path_span), path);
     vis.diags
