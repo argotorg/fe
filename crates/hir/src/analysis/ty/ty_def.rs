@@ -878,6 +878,7 @@ impl<'db> TyId<'db> {
             TyData::QualifiedTy(trait_inst) | TyData::GoalDescriptor(trait_inst) => {
                 Some(trait_inst.def(db).scope())
             }
+            TyData::TyBase(TyBase::TraitDescriptor(trait_)) => Some(trait_.scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),

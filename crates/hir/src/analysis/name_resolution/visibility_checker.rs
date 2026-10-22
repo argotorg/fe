@@ -114,6 +114,14 @@ pub(crate) fn is_ty_visible_from(db: &dyn HirAnalysisDb, ty: TyId, from_scope: S
             }
         },
         TyData::TyVar(_) | TyData::Never | TyData::Invalid(_) => true,
+        TyData::GoalDescriptor(goal) => {
+            is_scope_visible_from(db, goal.def(db).scope(), from_scope)
+                && goal
+                    .args(db)
+                    .iter()
+                    .chain(goal.assoc_type_bindings(db).values())
+                    .all(|&argument| is_ty_visible_from(db, argument, from_scope))
+        }
         TyData::QualifiedTy(trait_inst) => {
             is_scope_visible_from(db, trait_inst.def(db).scope(), from_scope)
         }
