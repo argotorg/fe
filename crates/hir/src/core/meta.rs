@@ -1556,13 +1556,48 @@ pub fn freeze_generation_request<'db>(
             "scoped derive of canonical or library goals requires a separate authority API".into(),
         );
     }
-    let target = RecordInput::for_authored_type(db, goal.self_ty(db))
-        .map_err(|cause| format!("scoped derive requires a concrete authored record: {cause:?}"))?;
+    // Solver discovery freezes declarations only. RecordInput validates and
+    // instantiates fields, so it belongs to admission outside solver queries.
+    let (base, _) = goal.self_ty(db).decompose_ty_app(db);
+    let crate::analysis::ty::ty_def::TyData::TyBase(crate::analysis::ty::ty_def::TyBase::Adt(adt)) =
+        base.data(db)
+    else {
+        return Err("scoped derive requires a concrete authored record".into());
+    };
+    if !goal.self_ty(db).is_star_kind(db) {
+        return Err("scoped derive requires a fully applied authored record".into());
+    }
+    let target_item = adt.adt_ref(db).as_item();
+    let target_module = target_item.scope().top_mod(db);
+    let target_root = crate::lower::top_mod_ast(db, target_module);
+    let (owner_kind, target_range) = match adt.adt_ref(db) {
+        crate::analysis::ty::adt_def::AdtRef::Struct(record) => {
+            let HirOrigin::Raw(pointer) = record.origin(db) else {
+                return Err("scoped target is not authored".into());
+            };
+            (
+                common::generation::FrozenRecordOwnerKind::Struct,
+                pointer.to_node(target_root.syntax()).syntax().text_range(),
+            )
+        }
+        crate::analysis::ty::adt_def::AdtRef::Enum(record) => {
+            let HirOrigin::Raw(pointer) = record.origin(db) else {
+                return Err("scoped target is not authored".into());
+            };
+            (
+                common::generation::FrozenRecordOwnerKind::Enum,
+                pointer.to_node(target_root.syntax()).syntax().text_range(),
+            )
+        }
+    };
     if !goal.self_ty(db).decompose_ty_app(db).1.is_empty() {
         return Err("scoped derive cannot yet preserve concrete generic target arguments".into());
     }
     if !opening.provider_ty(db).decompose_ty_app(db).1.is_empty() {
-        return Err("scoped derive cannot yet preserve concrete generic provider arguments".into());
+        return Err(
+            "bounded scoped derive does not yet admit concrete generic provider applications"
+                .into(),
+        );
     }
     let trait_ = goal.def(db);
     let module = trait_.top_mod(db);
@@ -1579,7 +1614,15 @@ pub fn freeze_generation_request<'db>(
                 .ok_or("trait declaration has no source URL")?,
             range: pointer.to_node(root.syntax()).syntax().text_range(),
         },
-        target: target.freeze(db).map_err(str::to_owned)?,
+        target: common::generation::FrozenRecordRef {
+            owner_kind,
+            target_file: target_module
+                .file(db)
+                .url(db)
+                .ok_or("target declaration has no source URL")?,
+            target_range,
+            variant_index: None,
+        },
     })
 }
 
