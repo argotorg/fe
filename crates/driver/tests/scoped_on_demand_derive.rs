@@ -808,8 +808,8 @@ const fn run() -> u256 {
         diags.iter().any(|diag| matches!(
             diag,
             hir::analysis::ty::diagnostics::FuncBodyDiag::Body(
-                hir::analysis::ty::diagnostics::BodyDiag::ObligationOpening { reason, .. }
-            ) if *reason == hir::analysis::ty::ty_check::UNFULFILLED_SCOPED_DERIVE_REASON
+                hir::analysis::ty::diagnostics::BodyDiag::CompileTimePhase { message, .. }
+            ) if message.contains("prepared generated implementation")
         )),
         "expected unfulfilled scoped derive diagnostic when checking without prepare_file, got: {diags:#?}"
     );
@@ -857,7 +857,7 @@ pub struct Trigger {
     let err = prepare_err(pass2_generated_demand);
     assert!(
         err.contains("generated output admission failed")
-            && err.contains(hir::analysis::ty::ty_check::UNFULFILLED_SCOPED_DERIVE_REASON),
+            && err.contains("generated openings need a portable generated-owner identity"),
         "{err}"
     );
 }
