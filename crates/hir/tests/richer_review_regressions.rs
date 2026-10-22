@@ -10,21 +10,43 @@ use fe_hir::{
     core::meta::{MetaValue, RecordInput},
     test_db::{HirAnalysisTestDb, find_func, format_diagnostics},
 };
+use parser::ast::prelude::*;
 use salsa::Setter;
 
 fn request(source: &str, target: &str) -> Result<FrozenGenerationRequest, String> {
+    request_with_input(source, target, false)
+}
+
+fn request_with_input(
+    source: &str,
+    target: &str,
+    declaration_identity: bool,
+) -> Result<FrozenGenerationRequest, String> {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone("richer-review.fe".into(), source);
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let func = find_func(&db, module, "make");
     let carrier = resolve_lib_type_path(&db, module.scope(), "core::meta::Record").unwrap();
-    let ty = resolve_lib_type_path(&db, module.scope(), target).unwrap();
+    let record = if declaration_identity {
+        let (green, errors) = parser::parse_source_file(source, parser::RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{errors:?}");
+        let root = parser::SyntaxNode::new_root(green);
+        let syntax = root
+            .descendants()
+            .filter_map(parser::ast::Struct::cast)
+            .find(|item| item.name().is_some_and(|name| name.text() == target))
+            .unwrap();
+        RecordInput::for_authored_syntax(&db, module, &syntax).unwrap()
+    } else {
+        let ty = resolve_lib_type_path(&db, module.scope(), target).unwrap();
+        RecordInput::for_authored_type(&db, ty).unwrap()
+    };
     let value = SemConstId::new(
         &db,
         SemConstValue::Meta {
             ty: carrier,
-            value: MetaValue::Record(RecordInput::for_authored_type(&db, ty).unwrap()),
+            value: MetaValue::Record(record),
         },
     );
     let owner = BodyOwner::Func(func, None);
@@ -45,7 +67,10 @@ fn request(source: &str, target: &str) -> Result<FrozenGenerationRequest, String
 }
 
 fn output(source: &str, target: &str) -> String {
-    let plan = request(source, target).unwrap();
+    output_request(source, request(source, target).unwrap())
+}
+
+fn output_request(source: &str, plan: FrozenGenerationRequest) -> String {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone("richer-review.fe".into(), source);
     db.generation_inputs().set_requests(&mut db).to(vec![plan]);
@@ -139,6 +164,11 @@ fn reflection_rejects_wrong_record_kinds_and_unsupported_type_is_candidates() {
             "if type_is<Pair>(field_type(field(record, 0))) { 1 } else { 0 }",
             "type_is supports only bool, u64, and u256",
         ),
+        (
+            "Pair",
+            "if type_is<u8>(field_type(field(record, 0))) { 1 } else { 0 }",
+            "type_is supports only bool, u64, and u256",
+        ),
     ] {
         let source = format!(
             "{PRELUDE} enum Choice {{ One(u256) }}\n const fn make(_ record: Record) -> Code<Item> {{ let n: usize = {expression}\n quote {{ fn result() -> usize {{ ${{n}} }} }} }}"
@@ -166,10 +196,13 @@ fn metadata_field_names_lower_in_declarations_and_expression_holes() {
 
 #[test]
 fn const_generic_record_splice_preserves_const_argument_kind() {
-    let source = format!("{PRELUDE} struct Array<const N: usize> {{ value: [u256; N] }}\n type Concrete = Array<2>\n
+    let source = format!("{PRELUDE} struct Array<const N: usize> {{ value: [u256; N] }}\n
         const fn make(_ record: Record) -> Code<Item> {{ quote {{ impl ${{record}} {{ fn marker() -> u256 {{ 1 }} }} }} }}");
-    // The provider sees one concrete record; generated target still copies the declaration's N binder.
-    assert!(output(&source, "Concrete").is_empty());
+    // This test copies the declaration's identity Array<N>, not Array<2>.
+    // The explicit derive stage separately rejects losing concrete arguments.
+    let plan = request_with_input(&source, "Array", true).unwrap();
+    let diags = output_request(&source, plan);
+    assert!(diags.is_empty(), "{diags}");
 }
 
 #[test]
