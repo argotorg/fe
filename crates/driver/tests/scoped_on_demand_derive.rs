@@ -803,6 +803,13 @@ const fn run() -> u256 {
         .find(|func| func.name(&db).to_opt().map(|id| id.data(&db).as_str()) == Some("run"))
         .expect("expected `run` function");
     let (diags, _) = hir::analysis::ty::ty_check::check_func_body(&db, func);
+    let pending = hir::analysis::ty::ty_check::check_func_body::accumulated::<
+        hir::analysis::ty::trait_resolution::generation::GenerationDemand,
+    >(&db, func);
+    assert!(
+        pending.iter().any(|request| request.demand.is_ok()),
+        "raw checking must preserve the actual preparation request"
+    );
     assert!(
         diags.iter().any(|diag| matches!(
             diag,
@@ -1172,4 +1179,63 @@ const fn run() -> u256 { with (A) { Out::value() } }
     );
     assert!(cause.contains("missing_generated_value"), "{cause}");
     assert!(!cause.contains("division by zero"), "{cause}");
+}
+
+#[test]
+fn provider_literals_refuse_field_evaluation_without_losing_empty_literal_support() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct Pair {}
+impl Score for Pair { const fn score() -> u256 { 100 } }
+struct Provider { n: u256 }
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { 42 } }
+    }
+}
+const fn field_fault() -> u256 { let zero: u256 = 0
+ 1 / zero }
+const fn run() -> u256 { with (Provider { n: field_fault() }) { Pair::score() } }
+"#;
+    let cause = prepare_err(source);
+    assert!(
+        cause.contains("provider literals must have no fields"),
+        "{cause}"
+    );
+    assert!(!cause.contains("division by zero"), "{cause}");
+    let positive = source
+        .replace("struct Provider { n: u256 }", "struct Provider {}")
+        .replace("Provider { n: field_fault() }", "Provider {}");
+    let output = prepare(&positive).expect("empty literals remain valid provider operands");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn scoped_generation_in_static_assert_uses_its_checked_body_owner() {
+    let output = prepare(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct Pair {}
+impl Score for Pair { const fn score() -> u256 { 100 } }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { 42 } }
+    }
+}
+static_assert(with (Provider) { Pair::score() == 42 })
+"#,
+    )
+    .expect("static assertions must rebind the same checked opening as preparation");
+    assert!(
+        output
+            .generation_inputs()
+            .requests(&output)
+            .iter()
+            .any(|request| request.scoped_impl.is_some())
+    );
 }
