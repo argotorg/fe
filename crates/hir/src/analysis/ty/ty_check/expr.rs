@@ -6127,6 +6127,8 @@ fn resolve_ident_expr<'db>(
     lowering_cx: &LoweringContext<'db>,
 ) -> ResolvedPathInBody<'db> {
     let ident = path.ident(db).unwrap();
+    let local_ident = path.local_ident(db).unwrap_or(ident);
+    let hygiene_scope = path.hygiene_scope(db);
 
     let resolve_bucket = |bucket: &NameResBucket<'db>, scope| {
         // First, surface any ambiguity/conflict in the bucket as a dedicated
@@ -6182,31 +6184,33 @@ fn resolve_ident_expr<'db>(
 
     loop {
         let block = env.get_block(current_idx);
-        if let Some(binding) = block.lookup_var(ident) {
+        if let Some(binding) = block.lookup_var(local_ident) {
             return ResolvedPathInBody::Binding(binding);
         }
 
-        let scope = block.scope;
-        let directive = QueryDirective::for_scope(db, scope).disallow_lex();
-        let query = EarlyNameQueryId::new(db, ident, scope, directive);
-        let bucket = resolve_query(db, query);
-
-        let resolved = resolve_bucket(bucket, scope);
-        if matches!(resolved, ResolvedPathInBody::Invalid) {
-            if current_idx == 0 {
-                break;
+        // A spliced quote keeps its producer's free names. Only its hygienic
+        // local binders may resolve in the enclosing generated body.
+        if hygiene_scope.is_none() {
+            let scope = block.scope;
+            let directive = QueryDirective::for_scope(db, scope).disallow_lex();
+            let query = EarlyNameQueryId::new(db, ident, scope, directive);
+            let bucket = resolve_query(db, query);
+            let resolved = resolve_bucket(bucket, scope);
+            if !matches!(resolved, ResolvedPathInBody::Invalid) {
+                return resolved;
             }
-            current_idx -= 1;
-        } else {
-            return resolved;
         }
+        if current_idx == 0 {
+            break;
+        }
+        current_idx -= 1;
     }
 
-    let body_scope = env.body().scope();
+    let body_scope = hygiene_scope.unwrap_or_else(|| env.body().scope());
     let directive = QueryDirective::for_scope(db, body_scope);
     let query = EarlyNameQueryId::new(db, ident, body_scope, directive);
     let bucket = resolve_query(db, query);
-    match resolve_bucket(bucket, env.scope()) {
+    match resolve_bucket(bucket, hygiene_scope.unwrap_or_else(|| env.scope())) {
         ResolvedPathInBody::Invalid => ResolvedPathInBody::NewBinding(ident),
         r => r,
     }
