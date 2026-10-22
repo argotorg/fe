@@ -109,9 +109,18 @@ pub enum FrozenCode {
     },
 }
 
+/// A checked scoped output binds one lexical opening and ground goal to a
+/// compiler-private named implementation in this immutable output view.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FrozenScopedImpl {
+    pub demand: ScopedDeriveDemand,
+    pub selection_name: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FrozenGenerationRequest {
     pub target_file: Url,
+    pub scoped_impl: Option<FrozenScopedImpl>,
     /// Authored derive header receiving this generated method.
     pub request_impl: Option<TextRange>,
     pub code: FrozenCode,

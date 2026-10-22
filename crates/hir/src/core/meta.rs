@@ -1067,6 +1067,7 @@ impl<'db> ItemCode<'db> {
             return Err("generation request requires Code<Item>");
         }
         Ok(common::generation::FrozenGenerationRequest {
+            scoped_impl: None,
             target_file: target
                 .url(db)
                 .ok_or("generation target has no source URL")?,
