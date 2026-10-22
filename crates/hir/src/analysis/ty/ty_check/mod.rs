@@ -94,7 +94,7 @@ use super::{
     instantiate_trait_self,
     trait_def::{TraitInstId, selected_assoc_const_body_template},
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness,
+        GoalSatisfiability, PredicateListId, TraitSolveCompletion, TraitSolveCx, WellFormedness,
         check_trait_inst_wf_without_self, check_ty_wf, goal_query_has_no_distinct_solution,
         is_goal_query_satisfiable, is_goal_satisfiable,
     },
@@ -1557,6 +1557,7 @@ enum TraitObligationOutcome<'db> {
     Discharged,
     Progressed,
     Requeue(env::TraitObligation<'db>),
+    RequeueProgressed(env::TraitObligation<'db>),
 }
 
 enum Viability {
@@ -2353,7 +2354,40 @@ impl<'db> TyChecker<'db> {
             .with_assumptions(assumptions)
             .with_choices(obligation.choices);
         let query = solve_cx.query(db, goal);
-        match is_goal_query_satisfiable(db, solve_cx, &query) {
+        let result = is_goal_query_satisfiable(db, solve_cx, &query);
+        if obligation.choices.is_some()
+            && flags.contains(TyFlags::HAS_VAR)
+            && matches!(
+                &result,
+                GoalSatisfiability::NeedsConfirmation {
+                    completion: TraitSolveCompletion::UnresolvedChoice,
+                    ..
+                }
+            )
+        {
+            // A choice selects at known arguments; it cannot invent them.
+            // Reuse ordinary inference (including its uniqueness/completion
+            // checks) only to constrain those arguments. Its proof never
+            // discharges the authored obligation: retry that obligation with
+            // its original choices after applying the inferred substitution.
+            let inference = env::TraitObligation {
+                choices: None,
+                ..obligation.clone()
+            };
+            if matches!(
+                self.process_trait_obligation(inference, false),
+                TraitObligationOutcome::Progressed
+            ) {
+                return match self.process_trait_obligation(obligation, final_pass) {
+                    TraitObligationOutcome::Discharged => TraitObligationOutcome::Progressed,
+                    TraitObligationOutcome::Requeue(obligation) => {
+                        TraitObligationOutcome::RequeueProgressed(obligation)
+                    }
+                    outcome => outcome,
+                };
+            }
+        }
+        match result {
             GoalSatisfiability::Satisfied(solution) => {
                 // A function item's shape determines its generic arguments:
                 // the function is known, so solving does not invent it.
@@ -2637,6 +2671,10 @@ impl<'db> TyChecker<'db> {
                             TraitObligationOutcome::Discharged => {}
                             TraitObligationOutcome::Progressed => progressed = true,
                             TraitObligationOutcome::Requeue(obligation) => {
+                                self.env.register_trait_obligation(obligation);
+                            }
+                            TraitObligationOutcome::RequeueProgressed(obligation) => {
+                                progressed = true;
                                 self.env.register_trait_obligation(obligation);
                             }
                         }

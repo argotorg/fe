@@ -819,3 +819,37 @@ fn run() -> u256 {
     );
     assert_eq!(diagnostics(&outside), ["6-0003"]);
 }
+
+#[test]
+fn ordinary_argument_inference_does_not_discharge_a_failed_choice() {
+    let source = r#"
+struct Item {}
+struct Arg {}
+trait Ready {}
+trait Pick<A> { fn value() -> u256 }
+impl Pick<Arg> for Item { fn value() -> u256 { 100 } }
+impl<A: Ready> Pick<A> for Item as Broken { fn value() -> u256 { 70 } }
+fn infer<T: Pick<A>, A>(_ item: T) -> u256 { T::value() }
+fn chosen() -> u256 { with (Broken) { infer(Item {}) } }
+"#;
+    let codes = diagnostics(source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"8-0031".to_string()), "{codes:?}");
+}
+
+#[test]
+fn a_choice_does_not_resolve_ambiguous_ordinary_arguments() {
+    let source = r#"
+struct Item {}
+struct One {}
+struct Two {}
+trait Pick<A> { fn value() -> u256 }
+impl Pick<One> for Item { fn value() -> u256 { 1 } }
+impl Pick<Two> for Item { fn value() -> u256 { 2 } }
+impl Pick<One> for Item as Chosen { fn value() -> u256 { 7 } }
+fn infer<T: Pick<A>, A>(_ item: T) -> u256 { T::value() }
+fn chosen() -> u256 { with (Chosen) { infer(Item {}) } }
+"#;
+    let codes = diagnostics(source);
+    assert!(codes.contains(&"8-0031".to_string()), "{codes:?}");
+}
