@@ -299,3 +299,33 @@ fn protocol_port_does_not_enable_public_constraint_kinds() {
         );
     }
 }
+
+#[test]
+fn descriptor_elaboration_is_scoped_to_the_canonical_argument_occurrence() {
+    use fe_hir::test_db::{format_diagnostics, initialize_test_analysis_pass};
+    for (source, expect_error) in [
+        (
+            "trait Score {}\nstruct Pair {}\ntype Allowed = core::permits::ImplPermit<Score<Pair>>\n",
+            false,
+        ),
+        (
+            "trait Score {}\nstruct Pair {}\ntype Mixed = (core::permits::ImplPermit<Score<Pair>>, Score<Pair>)\n",
+            true,
+        ),
+        (
+            "struct ImplPermit<G> {}\ntrait Score {}\nstruct Pair {}\ntype Forged = ImplPermit<Score<Pair>>\n",
+            true,
+        ),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("descriptor-argument-role.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let diagnostics = initialize_test_analysis_pass().run_on_module(&db, module);
+        let rendered = format_diagnostics(&db, &diagnostics);
+        assert_eq!(
+            diagnostics.is_empty(),
+            !expect_error,
+            "canonical argument authority must not spread to another occurrence or a same-spelling type: {rendered}"
+        );
+    }
+}
