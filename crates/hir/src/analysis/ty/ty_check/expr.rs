@@ -13,7 +13,7 @@ use crate::core::{
     },
     semantic::{EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey},
 };
-use crate::span::{DynLazySpan, LazySpan, types::LazyTySpan};
+use crate::span::{DynLazySpan, types::LazyTySpan};
 
 use super::{
     BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike, RowArg, Typeable,
@@ -1925,6 +1925,61 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn try_open_derive_provider(&mut self, value: ExprId, provider_ty: TyId<'db>) -> bool {
+        use super::super::trait_resolution::{
+            ChosenImpls,
+            generation::{ProviderOpening, offered_traits},
+        };
+        use parser::ast::prelude::*;
+        let offers = offered_traits(self.db, self.env.scope(), provider_ty);
+        if offers.is_empty() {
+            return false;
+        }
+        let mut owner_scope = Some(self.env.owner().scope());
+        let mut generated_owner = false;
+        while let Some(scope) = owner_scope {
+            generated_owner |= scope.data(self.db).publication_parent.is_some();
+            owner_scope = scope.parent(self.db);
+        }
+        let body = self.body();
+        let origin = body.source_map(self.db).expr_map.node_to_source(value);
+        let key = if !generated_owner
+            && let crate::span::HirOrigin::Raw(pointer) = origin
+            && let Some(file) = body.top_mod(self.db).file(self.db).url(self.db)
+        {
+            let root = crate::lower::top_mod_ast(self.db, body.top_mod(self.db));
+            Some(common::generation::ScopedDeriveOpeningKey {
+                file,
+                binding_range: pointer.to_node(root.syntax()).syntax().text_range(),
+            })
+        } else {
+            None
+        };
+        let Some(key) = key else {
+            self.push_diag(BodyDiag::CompileTimePhase {
+                primary: value.span(body).into(),
+                message: "scoped derive openings require a uniquely identified authored body; generated openings need a portable generated-owner identity".into(),
+            });
+            self.env.named_impl_operands.insert(value);
+            self.env.type_expr(value, ExprProp::invalid(self.db));
+            return true;
+        };
+        for trait_ in offers {
+            let opening =
+                ProviderOpening::new(self.db, key.clone(), provider_ty, trait_, self.env.scope());
+            self.env.provider_openings.push(opening);
+            self.env.choices = Some(ChosenImpls::push_provider(
+                self.db,
+                self.env.choices,
+                opening,
+            ));
+        }
+        self.env.named_impl_operands.insert(value);
+        self.env
+            .type_expr(value, ExprProp::new(TyId::unit(self.db), false));
+        true
+    }
+
     fn check_with(
         &mut self,
         bindings: &[WithBinding<'db>],
@@ -2178,57 +2233,24 @@ impl<'db> TyChecker<'db> {
                         false,
                     )
             {
-                use super::super::trait_resolution::{
-                    ChosenImpls,
-                    generation::{ProviderOpening, offered_traits},
-                };
-                let offers = offered_traits(self.db, self.env.scope(), provider_ty);
-                if !offers.is_empty()
-                    && let Some(span) = binding.value.span(self.body()).resolve(self.db)
-                    && let Some(file) = span.file.url(self.db)
-                {
-                    let mut owner_scope = Some(self.env.owner().scope());
-                    let mut generated_owner = false;
-                    while let Some(scope) = owner_scope {
-                        generated_owner |= scope.data(self.db).publication_parent.is_some();
-                        owner_scope = scope.parent(self.db);
-                    }
-                    if generated_owner {
-                        self.push_diag(BodyDiag::CompileTimePhase {
-                            primary: binding.value.span(self.body()).into(),
-                            message: "scoped derive openings in generated bodies require a portable generated-owner identity".into(),
-                        });
-                        self.env.named_impl_operands.insert(binding.value);
-                        self.env
-                            .type_expr(binding.value, ExprProp::invalid(self.db));
-                        continue;
-                    }
-                    let key = common::generation::ScopedDeriveOpeningKey {
-                        file,
-                        binding_range: span.range,
-                    };
-                    for trait_ in offers {
-                        let opening = ProviderOpening::new(
-                            self.db,
-                            key.clone(),
-                            provider_ty,
-                            trait_,
-                            self.env.scope(),
-                        );
-                        self.env.provider_openings.push(opening);
-                        self.env.choices = Some(ChosenImpls::push_provider(
-                            self.db,
-                            self.env.choices,
-                            opening,
-                        ));
-                    }
-                    self.env.named_impl_operands.insert(binding.value);
-                    self.env
-                        .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                if self.try_open_derive_provider(binding.value, provider_ty) {
                     continue;
                 }
             }
             let value_prop = self.check_expr_unknown(binding.value);
+            // A record literal is also a spelling of a compile-time provider.
+            // Its type is owned by ordinary expression checking, not re-resolved
+            // from the constructor's source spelling.
+            let provider_ty = self.table.fold_ty(self.db, value_prop.ty);
+            if binding.key_path.is_none()
+                && matches!(
+                    binding.value.data(self.db, self.body()),
+                    Partial::Present(Expr::RecordInit(..))
+                )
+                && self.try_open_derive_provider(binding.value, provider_ty)
+            {
+                continue;
+            }
             // A provider confers authority over its place for the body; it
             // opens no access.
             self.consume_access(binding.value);
@@ -2306,20 +2328,51 @@ impl<'db> TyChecker<'db> {
                 .iter()
                 .any(|entry| matches!(entry, ChoiceEntry::Provider(_)))
             {
-                let mut seen = rustc_hash::FxHashSet::default();
+                let mut seen = rustc_hash::FxHashMap::default();
+                let mut conflict = None;
                 for entry in entries {
-                    let trait_ = match entry {
-                        ChoiceEntry::Impl(choice) => {
-                            choice.implementation().trait_inst(self.db).def(self.db)
-                        }
-                        ChoiceEntry::Provider(opening) => opening.offered_trait(self.db),
+                    let (trait_, provider) = match entry {
+                        ChoiceEntry::Impl(choice) => (
+                            choice.implementation().trait_inst(self.db).def(self.db),
+                            false,
+                        ),
+                        ChoiceEntry::Provider(opening) => (opening.offered_trait(self.db), true),
                     };
-                    if !seen.insert(trait_) {
-                        self.push_diag(BodyDiag::CompileTimePhase {
-                            primary: body_expr.span(self.body()).into(),
-                            message: "one with opening cannot contain competing providers or implementations for the same trait".into(),
+                    if let Some(previous_provider) = seen.insert(trait_, provider)
+                        && (previous_provider || provider)
+                    {
+                        conflict = Some(if previous_provider && provider {
+                            "one `with` header gives two derive providers for the same trait"
+                        } else {
+                            "one `with` header gives a derive provider and a choice for the same trait"
                         });
+                        break;
                     }
+                }
+                if let Some(message) = conflict {
+                    use salsa::Accumulator;
+                    let opening = entries
+                        .iter()
+                        .find_map(|entry| match entry {
+                            ChoiceEntry::Provider(opening) => Some(*opening),
+                            ChoiceEntry::Impl(_) => None,
+                        })
+                        .expect("provider-containing group");
+                    super::super::trait_resolution::generation::GenerationDemand {
+                        opening: opening.key(self.db).clone(),
+                        demand: Err(message.into()),
+                    }
+                    .accumulate(self.db);
+                    self.push_diag(BodyDiag::CompileTimePhase {
+                        primary: body_expr.span(self.body()).into(),
+                        message: message.into(),
+                    });
+                    // An invalid opening supplies no candidates or requests.
+                    // In particular, do not check its body under a winning
+                    // provider or silently retry it under ordinary selection.
+                    self.env.effect_env_mut().pop_frame();
+                    self.env.choices = outer_choices;
+                    return ExprProp::invalid(self.db);
                 }
             }
         }
