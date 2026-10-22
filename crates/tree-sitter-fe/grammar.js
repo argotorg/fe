@@ -1264,8 +1264,15 @@ module.exports = grammar({
     quote_expression: $ => seq(
       alias($._quote_keyword, 'quote'),
       optional($.quote_open_list),
-      field('body', choice($.block, $.quote_where, $.match_arm_list)),
+      field('body', choice($.block, $.quote_pattern, $.quote_where, $.match_arm_list)),
     ),
+
+    quote_pattern: $ => prec(1, seq(
+      '{',
+      choice($.wildcard_pattern, $.rest_pattern, $.mut_pattern,
+        $.maybe_mut_pattern, $.ref_pattern, $.var_pattern),
+      '}',
+    )),
 
     quote_where: $ => seq('{', $.where_clause, '}'),
 

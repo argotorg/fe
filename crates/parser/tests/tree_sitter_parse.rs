@@ -782,3 +782,27 @@ fn public_named_implementation_visibility_agrees_between_parsers() {
     );
     assert!(!parse_errors(&mut parser, source).is_empty());
 }
+
+#[test]
+fn tree_sitter_agrees_on_pattern_only_quotation_bodies() {
+    let mut parser = new_parser();
+    for pattern in ["_", "mut x", "mut? x", "ref x", "var x", ".."] {
+        let source = format!("const fn make() {{ let p = quote {{ {pattern} }} }}");
+        let (_, errors) = parse_source_file(&source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let errors = parse_errors(&mut parser, &source);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let tree = parser.parse(&source, None).unwrap();
+        assert!(
+            tree.root_node().to_sexp().contains("quote_pattern"),
+            "{source}: {}",
+            tree.root_node().to_sexp()
+        );
+    }
+    let source = "const fn make() { let p = quote { _ => 7 } }";
+    let (_, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(parse_errors(&mut parser, source).is_empty());
+    let tree = parser.parse(source, None).unwrap();
+    assert!(tree.root_node().to_sexp().contains("match_arm_list"));
+}
