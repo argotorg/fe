@@ -1396,12 +1396,6 @@ pub fn native_derive_provider<'db>(
     ),
     NativeDeriveProviderError<'db>,
 > {
-    use crate::analysis::ty::{
-        corelib::resolve_core_trait,
-        trait_def::TraitInstId,
-        trait_resolution::PredicateListId,
-        ty_def::{TyBase, TyData},
-    };
     if !request.impl_params(db).is_empty() || !request.where_clause(db).predicates(db).is_empty() {
         return Err(
             "bounded native derive requires a concrete header without binders or where conditions"
@@ -1416,6 +1410,38 @@ pub fn native_derive_provider<'db>(
     // No establishment receipt or old-database proof enters the output template.
     crate::analysis::ty::permits::establishment_for_goal(db, request, goal)
         .map_err(|cause| format!("canonical root establishment failed: {cause}"))?;
+    finalized_derive_provider(
+        db,
+        goal,
+        provider_ty,
+        request.into(),
+        request.scope(),
+        (request.span().ty().into(), request.span().into()),
+    )
+}
+
+/// Validate a concrete request and finalize its ordinary provider call once.
+/// The explicit/scoped entry owns its authority check before calling this helper.
+fn finalized_derive_provider<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: crate::analysis::ty::trait_def::TraitInstId<'db>,
+    provider_ty: TyId<'db>,
+    origin: crate::hir_def::ItemKind<'db>,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    spans: (crate::span::DynLazySpan<'db>, crate::span::DynLazySpan<'db>),
+) -> Result<
+    (
+        crate::analysis::semantic::SemanticInstanceKey<'db>,
+        RecordInput<'db>,
+    ),
+    NativeDeriveProviderError<'db>,
+> {
+    use crate::analysis::ty::{
+        corelib::resolve_core_trait,
+        trait_def::TraitInstId,
+        trait_resolution::PredicateListId,
+        ty_def::{TyBase, TyData},
+    };
     if goal.args(db).len() != 1
         || !goal.assoc_type_bindings(db).is_empty()
         || !goal.def(db).types(db).is_empty()
@@ -1426,7 +1452,7 @@ pub fn native_derive_provider<'db>(
                 .into(),
         );
     }
-    if goal.def(db).ingot(db) != request.top_mod(db).ingot(db) {
+    if goal.def(db).ingot(db) != scope.top_mod(db).ingot(db) {
         return Err("library/canonical goal establishment is pending the permits owner API".into());
     }
     let input = RecordInput::for_authored_type_from(db, goal.args(db)[0], request.scope())
@@ -1440,8 +1466,8 @@ pub fn native_derive_provider<'db>(
     crate::analysis::ty::ty_check::admit_ground_type_application(
         db,
         input.ty(),
-        request.into(),
-        request.span().ty().into(),
+        origin,
+        spans.0.clone(),
     )
     .map_err(NativeDeriveProviderError::Target)?;
     if provider_ty.has_param(db) || provider_ty.has_invalid(db) || !provider_ty.is_star_kind(db) {
@@ -1450,11 +1476,11 @@ pub fn native_derive_provider<'db>(
     crate::analysis::ty::ty_check::admit_ground_type_application(
         db,
         provider_ty,
-        request.into(),
-        request.span().into(),
+        origin,
+        spans.1.clone(),
     )
     .map_err(NativeDeriveProviderError::Target)?;
-    let derive = resolve_core_trait(db, request.scope(), &["derive", "Derive"])
+    let derive = resolve_core_trait(db, scope, &["derive", "Derive"])
         .ok_or("missing canonical Derive protocol")?;
     let constructor = TyId::new(db, TyData::TyBase(TyBase::TraitDescriptor(goal.def(db))));
     let inst = TraitInstId::new_simple(db, derive, vec![provider_ty, constructor]);
@@ -1465,7 +1491,7 @@ pub fn native_derive_provider<'db>(
         .ok_or("canonical Derive protocol has no derive method")?;
     let finalized = crate::analysis::semantic::generated_callee(
         db,
-        request.scope(),
+        scope,
         PredicateListId::empty_list(db),
         derive_method,
         Some(inst),
