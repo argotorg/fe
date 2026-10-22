@@ -137,7 +137,17 @@ where
 
             (_, TyData::TyVar(var)) => self.unify_var_value(var, ty1),
 
-            (TyData::GoalDescriptor(lhs), TyData::GoalDescriptor(rhs)) => lhs.unify(self, rhs),
+            (TyData::GoalDescriptor(lhs), TyData::GoalDescriptor(rhs)) => {
+                // Descriptor identity is exact, unlike entailment between a
+                // more specific trait constraint and a less specific one.
+                if lhs.mode(self.db) != rhs.mode(self.db)
+                    || lhs.assoc_type_bindings(self.db).len()
+                        != rhs.assoc_type_bindings(self.db).len()
+                {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                lhs.unify(self, rhs)
+            }
 
             (TyData::TyApp(ty1_1, ty1_2), TyData::TyApp(ty2_1, ty2_2)) => {
                 self.unify_ty(*ty1_1, *ty2_1)?;
