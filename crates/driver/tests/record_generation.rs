@@ -273,7 +273,7 @@ fn runtime_metadata_refuses_and_compile_time_quotes_stay_valid() {
         let (db, file) = input(source);
         let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
         assert!(
-            diagnostics.contains("8-0122") && diagnostics.contains("compile-time-only"),
+            diagnostics.contains("8-0137") && diagnostics.contains("compile-time-only"),
             "{diagnostics}"
         );
         assert!(!diagnostics.contains("16-0004"), "{diagnostics}");
