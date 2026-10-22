@@ -107,3 +107,18 @@ fn caller() -> u256 {
         "{bad_errors:?}"
     );
 }
+
+#[test]
+fn quoted_item_whitelist_does_not_restrict_ordinary_local_declarations() {
+    let nested = "const fn make() { quote { fn generated() { trait Local { const VALUE: u256 }\n impl Local for Pair { const VALUE: u256 = 7 } } } }";
+    let (_, errors) = parse_source_file(nested, RecoveryMode::NoRecover);
+    assert!(errors.is_empty(), "{errors:?}");
+    let root_trait = "const fn make() { quote { trait Local { const VALUE: u256 } } }";
+    let (_, errors) = parse_source_file(root_trait, RecoveryMode::Recover);
+    assert!(
+        errors.iter().any(|error| error
+            .msg()
+            .contains("only functions, constants and impls can be quoted")),
+        "{errors:?}"
+    );
+}

@@ -137,7 +137,7 @@ impl super::Parse for ItemScope {
             parser.error(&error_msg);
         }
 
-        if parser.quote_scope_depth() > 0
+        if at_quoted_item_root(parser)
             && !matches!(parser.current_kind(), Some(FnKw | ConstKw | ImplKw))
         {
             parser.error_msg_on_current_token("only functions, constants and impls can be quoted");
@@ -194,8 +194,22 @@ impl super::Parse for ItemScope {
 
 /// A quoted function may become a method where it is spliced, so it may take
 /// `self`.
+/// Only the immediate output items have the bounded Code<Item> whitelist.
+/// Bodies of those items contain ordinary Fe declarations, just like authored
+/// function bodies; being a descendant of a quote does not change that grammar.
+fn at_quoted_item_root<S: TokenStream>(parser: &Parser<S>) -> bool {
+    let mut parents = parser.parents.iter().rev().skip(1);
+    match parents.next().map(|entry| entry.kind) {
+        Some(SyntaxKind::QuoteItemList) => true,
+        Some(SyntaxKind::BlockExpr) => parents
+            .next()
+            .is_some_and(|entry| entry.kind == SyntaxKind::QuoteExpr),
+        _ => false,
+    }
+}
+
 fn quoted_fn_scope<S: TokenStream>(parser: &Parser<S>) -> FuncDefScope {
-    if parser.quote_scope_depth() > 0 {
+    if at_quoted_item_root(parser) {
         FuncDefScope::Impl
     } else {
         FuncDefScope::Normal

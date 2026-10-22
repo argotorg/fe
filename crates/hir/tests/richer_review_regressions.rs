@@ -141,7 +141,7 @@ fn reflection_rejects_wrong_record_kinds_and_unsupported_type_is_candidates() {
         ),
     ] {
         let source = format!(
-            "{PRELUDE} enum Choice {{ One(u256) }}\n const fn make(_ record: Record) -> Code<Item> {{ let n = {expression}\n quote {{ fn result() -> usize {{ ${{n}} }} }} }}"
+            "{PRELUDE} enum Choice {{ One(u256) }}\n const fn make(_ record: Record) -> Code<Item> {{ let n: usize = {expression}\n quote {{ fn result() -> usize {{ ${{n}} }} }} }}"
         );
         let error = request(&source, target).unwrap_err();
         assert!(error.contains(expected), "{error}");
@@ -178,10 +178,11 @@ fn pattern_only_fragments_copy_into_generated_bindings() {
         let source = format!(
             "{PRELUDE} const fn make(_ record: Record) -> Code<Item> {{
             let p: Code<Pat> = quote {{ {pattern} }}
-            quote {{ fn generated() -> u256 {{ let ${{p}} = 7\n 42 }} }}
+            quote {{ fn generated() -> u256 {{ let ${{p}}: u256 = 7\n 42 }} }}
         }}"
         );
-        assert!(output(&source, "Pair").is_empty(), "{pattern}");
+        let diags = output(&source, "Pair");
+        assert!(diags.is_empty(), "{pattern}: {diags}");
     }
 }
 
@@ -256,7 +257,7 @@ fn member_splices_keep_their_producer_and_method_generic_binders() {
         const fn private_value() -> u256 {{ 999 }}
         const fn make(_ record: Record) -> Code<Item> {{ let methods = author::methods()\n
             quote {{ impl Pair {{ ${{methods}} }}\n
-                const fn generated() -> u256 {{ Pair::selected(7) + Pair::projected<u256>() - 42 }} }}
+                const fn generated() -> u256 {{ Pair::selected<u256>(7) + Pair::projected<u256>() - 42 }} }}
         }}");
     let plan = request(&source, "Pair").unwrap();
     let mut db = HirAnalysisTestDb::default();
