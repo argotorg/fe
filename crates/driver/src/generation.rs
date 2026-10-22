@@ -194,10 +194,19 @@ pub fn prepare_file(
     let (green, parse_errors) =
         parser::parse_source_file(file.text(db), parser::RecoveryMode::Recover);
     let root = ast::Root::cast(parser::SyntaxNode::new_root(green)).unwrap();
-    let has_scoped_opening = root
+    let has_scoped_syntax = root
         .syntax()
         .descendants()
         .any(|node| ast::WithExpr::cast(node).is_some());
+    // Ordinary lexical implementation choices do not require preparation or
+    // the standalone generation adapter. Only actual provider demands do.
+    let has_scoped_opening = has_scoped_syntax
+        && parse_errors.is_empty()
+        && !hir::analysis::ty::trait_resolution::generation::preparation_demands(
+            db,
+            db.top_mod(file),
+        )
+        .is_empty();
     if !has_scoped_opening
         && !root
             .syntax()
