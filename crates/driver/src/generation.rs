@@ -726,21 +726,33 @@ fn scoped_provider_error(
     cause: hir::core::meta::NativeDeriveProviderError<'_>,
     fallback: GenerationError,
 ) -> GenerationError {
-    match cause {
-        hir::core::meta::NativeDeriveProviderError::Message(message) => GenerationError {
-            cause: message,
+    let (failure, label) = match cause {
+        hir::core::meta::NativeDeriveProviderError::Message(message) => {
+            return GenerationError {
+                cause: message,
+                ..fallback
+            };
+        }
+        hir::core::meta::NativeDeriveProviderError::Provider(failure) => {
+            (failure, "provider application not admitted")
+        }
+        hir::core::meta::NativeDeriveProviderError::Target(failure) => {
+            (failure, "scoped derive target admission failed")
+        }
+    };
+    let complete = failure
+        .vouchers()
+        .iter()
+        .map(|voucher| voucher.to_complete(db))
+        .collect::<Vec<_>>();
+    diagnostic_error(
+        db,
+        &complete,
+        GenerationError {
+            cause: format!("{label}: {}", failure.description()),
             ..fallback
         },
-        hir::core::meta::NativeDeriveProviderError::Provider(failure)
-        | hir::core::meta::NativeDeriveProviderError::Target(failure) => {
-            let complete = failure
-                .vouchers()
-                .iter()
-                .map(|voucher| voucher.to_complete(db))
-                .collect::<Vec<_>>();
-            diagnostic_error(db, &complete, fallback)
-        }
-    }
+    )
 }
 
 fn prepared_view(

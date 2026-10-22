@@ -155,7 +155,7 @@ const fn check_generic_bound_delivery() -> u256 {
     );
 
     // Verify single-pass authored-only input rule (RD117) and deduplication:
-    // (Score, Pair), (ItemScore, Pair), and (Score, Choice) were demanded across multiple expressions/functions, producing 3 plans.
+    // Two FieldCountScore openings each bind Score and ItemScore; the enum opening binds Score. Repeated expressions within one opening share its plan.
     let module = output.top_mod(
         output
             .workspace()
@@ -171,7 +171,7 @@ const fn check_generic_bound_delivery() -> u256 {
         .filter(|implementation| implementation.selection_name(&output).is_some())
         .count();
     assert_eq!(
-        generated, 3,
+        generated, 5,
         "each distinct scoped demand has one named implementation"
     );
     let url = Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap();
@@ -468,8 +468,9 @@ const fn forbidden() -> u256 {
 "#;
     let rendered3 = prepare_err(canonical_scoped);
     assert!(
-        rendered3.contains("a canonical goal accepts only its ordinary home provision")
-            && !rendered3.contains("division by zero"),
+        rendered3.contains(
+            "scoped derive of canonical or library goals requires a separate authority API"
+        ) && !rendered3.contains("division by zero"),
         "{rendered3}"
     );
 }
@@ -506,7 +507,7 @@ const fn run() -> u256 {
     let err = prepare_err(false_provider_cond);
     assert!(
         err.contains("provider application not admitted")
-            && err.contains("ConditionsNotAdmitted")
+            && err.contains("const where predicate failed")
             && !err.contains("division by zero"),
         "{err}"
     );
@@ -681,9 +682,8 @@ const fn run() -> u256 {
 "#;
     let err1 = prepare_err(primitive_method);
     assert!(
-        err1.contains(
-            "on-demand derive provider in `with (...)` requires a concrete struct or enum target"
-        ) && !err1.contains("division by zero"),
+        err1.contains("scoped derive requires a concrete authored record")
+            && !err1.contains("division by zero"),
         "{err1}"
     );
 
@@ -721,9 +721,7 @@ const fn run() -> u256 {
 "#;
     let err2 = prepare_err(primitive_bound_call);
     assert!(
-        err2.contains(
-            "on-demand derive provider in `with (...)` requires a concrete struct or enum target"
-        ),
+        err2.contains("scoped derive requires a concrete authored record"),
         "{err2}"
     );
 
@@ -752,9 +750,7 @@ const fn generic_caller<T: Score>(_ x: T) -> u256 {
 "#;
     let err4 = prepare_err(generic_bound_fallback);
     assert!(
-        err4.contains(
-            "on-demand derive provider in `with (...)` requires a concrete struct or enum target"
-        ),
+        err4.contains("scoped derive requires a concrete authored record"),
         "{err4}"
     );
 }
