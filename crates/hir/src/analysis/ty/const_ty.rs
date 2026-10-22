@@ -125,6 +125,8 @@ pub(crate) enum ConstBodyLowering {
 #[derive(Debug)]
 pub(crate) struct LoweringContext<'db> {
     const_bodies: ConstBodyLowering,
+    /// Lexical candidate availability for value-tail method discovery only.
+    method_choices: Option<super::trait_resolution::ChosenImpls<'db>>,
     /// The impl whose associated type this lowering lowers: there `Self::A`
     /// is the impl's own binding of `A`.
     impl_assoc_type: Option<ImplTrait<'db>>,
@@ -152,11 +154,24 @@ impl<'db> LoweringContext<'db> {
     pub(crate) fn for_const_bodies(const_bodies: ConstBodyLowering) -> Self {
         Self {
             const_bodies,
+            method_choices: None,
             impl_assoc_type: None,
             default_capture: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
         }
+    }
+
+    pub(crate) fn with_method_choices(
+        mut self,
+        choices: Option<super::trait_resolution::ChosenImpls<'db>>,
+    ) -> Self {
+        self.method_choices = choices;
+        self
+    }
+
+    pub(crate) fn method_choices(&self) -> Option<super::trait_resolution::ChosenImpls<'db>> {
+        self.method_choices
     }
 
     /// Makes this lowering lower an associated type of `impl_trait`.

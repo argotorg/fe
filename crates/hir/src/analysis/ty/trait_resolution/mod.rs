@@ -30,9 +30,10 @@ use rustc_hash::FxHashSet;
 use salsa::SalsaValue;
 
 pub(crate) mod constraint;
+pub mod generation;
 mod table_solver;
 
-pub(crate) use table_solver::answering_assumption;
+pub(crate) use table_solver::{ChoiceMatch, answering_assumption, matching_choice};
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 
@@ -94,12 +95,49 @@ impl<'db> TyVisitable<'db> for ChosenImpl<'db> {
     }
 }
 
-/// Explicit implementations in lexical order, outermost first. This is input
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum ChoiceEntry<'db> {
+    Impl(ChosenImpl<'db>),
+    Provider(generation::ProviderOpening<'db>),
+}
+
+impl<'db> ChoiceEntry<'db> {
+    pub fn implementation(self) -> Option<ChosenImpl<'db>> {
+        match self {
+            Self::Impl(choice) => Some(choice),
+            Self::Provider(_) => None,
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ChoiceEntry<'db> {
+    fn super_fold_with<F: super::fold::TyFolder<'db>>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        folder: &mut F,
+    ) -> Self {
+        match self {
+            Self::Impl(choice) => Self::Impl(choice.fold_with(db, folder)),
+            Self::Provider(opening) => Self::Provider(opening.fold_with(db, folder)),
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for ChoiceEntry<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        match self {
+            Self::Impl(choice) => choice.visit_with(visitor),
+            Self::Provider(opening) => opening.visit_with(visitor),
+        }
+    }
+}
+
+/// Explicit implementations and provider offers in lexical order, outermost first. This is input
 /// to proof construction, never an ambient environment attached to a callee.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ChosenImpls<'db> {
-    pub items: Vec<ChosenImpl<'db>>,
+    pub items: Vec<ChoiceEntry<'db>>,
 }
 
 impl<'db> ChosenImpls<'db> {
@@ -111,10 +149,10 @@ impl<'db> ChosenImpls<'db> {
         let mut items = outer
             .map(|outer| outer.items(db).clone())
             .unwrap_or_default();
-        items.push(ChosenImpl {
+        items.push(ChoiceEntry::Impl(ChosenImpl {
             template: implementation,
             applied: None,
-        });
+        }));
         Self::new(db, items)
     }
     pub fn push_applied(
@@ -126,10 +164,22 @@ impl<'db> ChosenImpls<'db> {
         let mut items = outer
             .map(|outer| outer.items(db).clone())
             .unwrap_or_default();
-        items.push(ChosenImpl {
+        items.push(ChoiceEntry::Impl(ChosenImpl {
             template,
             applied: Some(applied),
-        });
+        }));
+        Self::new(db, items)
+    }
+
+    pub fn push_provider(
+        db: &'db dyn HirAnalysisDb,
+        outer: Option<Self>,
+        opening: generation::ProviderOpening<'db>,
+    ) -> Self {
+        let mut items = outer
+            .map(|outer| outer.items(db).clone())
+            .unwrap_or_default();
+        items.push(ChoiceEntry::Provider(opening));
         Self::new(db, items)
     }
 }
@@ -217,6 +267,8 @@ pub enum Selection<T> {
     Unique(T),
     Ambiguous(IndexSet<T>),
     NotFound,
+    /// Preparation must admit a requested candidate before selection resumes.
+    NeedsGeneration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
@@ -319,6 +371,7 @@ impl<'db> TraitSolveCx<'db> {
             }
         };
         match result {
+            GoalSatisfiability::NeedsGeneration(_) => Selection::NeedsGeneration,
             GoalSatisfiability::Satisfied(solution) => {
                 Selection::Unique(solution.value.implementor)
             }
@@ -542,7 +595,9 @@ pub fn goal_holds<'db>(
         GoalSatisfiability::NeedsConfirmation { solutions, .. } => {
             !solutions.is_empty() && !goal.args(db).iter().any(|ty| ty.has_var(db))
         }
-        GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
+        GoalSatisfiability::ContainsInvalid
+        | GoalSatisfiability::UnSat(_)
+        | GoalSatisfiability::NeedsGeneration(_) => false,
     }
 }
 
@@ -1000,6 +1055,8 @@ impl TraitSolveCompletion {
 
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub enum GoalSatisfiability<'db> {
+    /// The winning lexical offer has not yet supplied an admitted candidate.
+    NeedsGeneration(generation::GenerationRequest<'db>),
     /// Goal is satisfied with the unique solution.
     Satisfied(Solution<TraitGoalSolution<'db>>),
     /// The goal has multiple complete answers or resolution stopped before
@@ -1298,6 +1355,190 @@ mod tests {
             })
             .unwrap_or_else(|| panic!("missing `{name}` struct"));
         TyId::adt(db, AdtRef::from(struct_).as_adt(db))
+    }
+
+    fn pending_opening<'db>(
+        db: &'db HirAnalysisTestDb,
+        module: TopLevelMod<'db>,
+        trait_: Trait<'db>,
+    ) -> super::generation::ProviderOpening<'db> {
+        super::generation::ProviderOpening::new(
+            db,
+            common::generation::ScopedDeriveOpeningKey {
+                file: module.file(db).url(db).unwrap(),
+                binding_range: parser::TextRange::empty(0.into()),
+            },
+            named_struct_ty(db, module, "Provider"),
+            trait_,
+            module.scope(),
+        )
+    }
+
+    #[test]
+    fn provider_availability_preempts_ordinary_and_declared_assumption_and_replays_cached_demand() {
+        use crate::analysis::ty::evidence::{ProofOutcome, prove_outcome};
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "pending_provider.fe".into(),
+            "trait Tag {} struct Item {} struct Provider {} impl Tag for Item {}",
+        );
+        let (module, _) = db.top_mod(file);
+        let trait_ = named_trait(&db, module, "Tag");
+        let goal = TraitInstId::new_simple(&db, trait_, vec![named_struct_ty(&db, module, "Item")]);
+        let ordinary = TraitSolveCx::new(&db, module.scope());
+        assert!(matches!(
+            is_goal_satisfiable(&db, ordinary, goal),
+            GoalSatisfiability::Satisfied(_)
+        ));
+        let opening = pending_opening(&db, module, trait_);
+        let chosen = ordinary
+            .with_assumptions(PredicateListId::new(&db, vec![goal]))
+            .with_choices(Some(super::ChosenImpls::push_provider(&db, None, opening)));
+        assert!(matches!(
+            prove_outcome(&db, chosen, goal),
+            ProofOutcome::NeedsGeneration
+        ));
+        let query = chosen.query(&db, goal);
+        for _ in 0..2 {
+            assert!(matches!(
+                is_goal_query_satisfiable(&db, chosen, &query),
+                GoalSatisfiability::NeedsGeneration(_)
+            ));
+            let requests = super::is_query_satisfiable::accumulated::<
+                super::generation::GenerationDemand,
+            >(&db, chosen.origin_ingot(), query.canonical());
+            assert_eq!(requests.len(), 1);
+            assert!(requests[0].demand.is_ok(), "{:?}", requests[0]);
+        }
+        assert!(
+            matches!(
+                is_goal_satisfiable(&db, ordinary, goal),
+                GoalSatisfiability::Satisfied(_)
+            ),
+            "leaving the lexical opening restores ordinary selection"
+        );
+    }
+
+    #[test]
+    fn provider_demand_survives_recursive_prerequisites_and_targeted_search() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("recursive_provider.fe".into(),
+            "trait Tag {} trait Outer {} struct Item {} struct Provider {} impl<T: Tag> Outer for T {} impl Tag for Item {}");
+        let (module, _) = db.top_mod(file);
+        let tag = named_trait(&db, module, "Tag");
+        let item = named_struct_ty(&db, module, "Item");
+        let goal = TraitInstId::new_simple(&db, named_trait(&db, module, "Outer"), vec![item]);
+        let solve = TraitSolveCx::new(&db, module.scope()).with_choices(Some(
+            super::ChosenImpls::push_provider(&db, None, pending_opening(&db, module, tag)),
+        ));
+        let GoalSatisfiability::NeedsGeneration(request) = is_goal_satisfiable(&db, solve, goal)
+        else {
+            panic!("a prerequisite must retain its pending provider");
+        };
+        assert_eq!(
+            request.goal(&db),
+            TraitInstId::new_simple(&db, tag, vec![item])
+        );
+        let query = solve.query(&db, goal);
+        assert!(matches!(
+            super::query_has_solution(
+                &db,
+                solve.origin_ingot(),
+                query.canonical(),
+                Canonical::new(&db, goal),
+                super::table_solver::TargetSolutionMatch::Equal
+            ),
+            super::table_solver::TargetSolutionStatus::NeedsGeneration
+        ));
+        assert!(
+            !super::goal_query_has_no_distinct_solution(
+                &db,
+                solve,
+                &query,
+                Canonical::new(&db, goal)
+            ),
+            "pending is not a saturated absence proof"
+        );
+    }
+
+    #[test]
+    fn lexical_named_and_provider_order_is_shared_and_a_failed_inner_choice_never_falls_back() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "provider_priority.fe".into(),
+            r#"
+trait Tag {} trait Missing {} struct Item {} struct Provider {}
+impl Tag for Item {}
+impl Tag for Item as Named {}
+impl Tag for Item as Broken where Item: Missing {}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        let tag = named_trait(&db, module, "Tag");
+        let goal = TraitInstId::new_simple(&db, tag, vec![named_struct_ty(&db, module, "Item")]);
+        let implementation = |name: &str| {
+            let hir = module
+                .all_impl_traits(&db)
+                .iter()
+                .copied()
+                .find(|i| i.selection_name(&db).is_some_and(|n| n.data(&db) == name))
+                .unwrap();
+            crate::analysis::ty::trait_lower::lower_impl_trait(&db, hir).unwrap()
+        };
+        let provider = pending_opening(&db, module, tag);
+        let outer = super::ChosenImpls::push_provider(&db, None, provider);
+        let named = implementation("Named");
+        let inner = super::ChosenImpls::push(&db, Some(outer), named);
+        let solve = TraitSolveCx::new(&db, module.scope());
+        let GoalSatisfiability::Satisfied(solution) =
+            is_goal_satisfiable(&db, solve.with_choices(Some(inner)), goal)
+        else {
+            panic!("inner named candidate wins")
+        };
+        assert_eq!(solution.value.implementor.origin(&db), named.origin(&db));
+        let inner_provider = super::ChosenImpls::push_provider(&db, Some(inner), provider);
+        assert!(matches!(
+            is_goal_satisfiable(&db, solve.with_choices(Some(inner_provider)), goal),
+            GoalSatisfiability::NeedsGeneration(_)
+        ));
+        let broken = super::ChosenImpls::push(&db, Some(outer), implementation("Broken"));
+        assert!(
+            matches!(
+                is_goal_satisfiable(&db, solve.with_choices(Some(broken)), goal),
+                GoalSatisfiability::UnSat(_)
+            ),
+            "a failing explicit implementation cannot fall through to its outer provider or the ordinary implementation"
+        );
+    }
+
+    #[test]
+    fn pending_provider_does_not_choose_unsettled_inference_arguments() {
+        use crate::analysis::ty::evidence::{ProofOutcome, prove_outcome};
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "unsettled_provider.fe".into(),
+            "trait Tag {} struct Item {} struct Provider {} impl Tag for Item {}",
+        );
+        let (module, _) = db.top_mod(file);
+        let trait_ = named_trait(&db, module, "Tag");
+        let solve = TraitSolveCx::new(&db, module.scope()).with_choices(Some(
+            super::ChosenImpls::push_provider(&db, None, pending_opening(&db, module, trait_)),
+        ));
+        let mut table = UnificationTable::new(&db);
+        let _ = table.new_var(TyVarSort::General, &Kind::Star);
+        let unknown = table.new_var(TyVarSort::General, &Kind::Star);
+        let goal = TraitInstId::new_simple(&db, trait_, vec![unknown]);
+        assert!(matches!(
+            prove_outcome(&db, solve, goal),
+            ProofOutcome::Deferred
+        ));
+        assert!(matches!(
+            is_goal_satisfiable(&db, solve, goal),
+            GoalSatisfiability::NeedsConfirmation {
+                completion: TraitSolveCompletion::UnresolvedChoice,
+                ..
+            }
+        ));
     }
 
     fn nested_ty<'db>(

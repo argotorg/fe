@@ -981,6 +981,78 @@ pub fn check_body<'db>(
     (diags, typed)
 }
 
+pub(crate) fn provider_opening_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: &common::generation::ScopedDeriveOpeningKey,
+    offered_trait: crate::hir_def::Trait<'db>,
+) -> Option<super::trait_resolution::generation::ProviderOpening<'db>> {
+    let file = db.workspace().get(db, &key.file)?;
+    let module = crate::lower::map_file_to_mod(db, file);
+    let mut owners = Vec::new();
+    for &function in module.all_funcs(db) {
+        owners.extend(BodyOwner::func_bodies(db, function));
+    }
+    for item in module.all_items(db) {
+        if let ItemKind::Const(constant) = item {
+            owners.push(BodyOwner::Const(*constant));
+        }
+    }
+    for &contract in module.all_contracts(db) {
+        owners.push(BodyOwner::ContractInit { contract });
+        for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
+            for arm_idx in 0..recv.arms.data(db).len() {
+                owners.push(BodyOwner::ContractRecvArm {
+                    contract,
+                    recv_idx: recv_idx as u32,
+                    arm_idx: arm_idx as u32,
+                });
+            }
+        }
+    }
+    for &implementation in module.all_impl_traits(db) {
+        let Some(implementor) = super::trait_lower::lower_impl_trait(db, implementation) else {
+            continue;
+        };
+        for constant in implementation.assoc_consts(db) {
+            let Some(body) = constant.value_body(db) else {
+                continue;
+            };
+            let expected = constant
+                .name(db)
+                .and_then(|name| implementor.trait_def(db).const_(db, name))
+                .and_then(|constant| constant.ty_binder(db))
+                .map(|binder| binder.instantiate(db, implementor.trait_(db).args(db)))
+                .or_else(|| constant.ty(db));
+            if let Some(expected) = expected {
+                owners.push(BodyOwner::AnonConstBody { body, expected });
+            }
+        }
+    }
+    for &trait_ in module.all_traits(db) {
+        for constant in trait_.assoc_consts(db) {
+            if let (Some(body), Some(expected)) = (constant.default_body(db), constant.ty(db)) {
+                owners.push(BodyOwner::AnonConstBody { body, expected });
+            }
+        }
+    }
+    for &item in module.all_items(db) {
+        owners.extend(BodyOwner::const_predicates_of(db, item));
+    }
+    let mut retained = None;
+    for owner in owners {
+        let typed = &infer_body(db, owner).1;
+        for &opening in &typed.provider_openings {
+            if opening.key(db) == key && opening.offered_trait(db) == offered_trait {
+                if retained.is_some_and(|previous| previous != opening) {
+                    return None;
+                }
+                retained = Some(opening);
+            }
+        }
+    }
+    retained
+}
+
 /// How the bindings of a pattern take what its source grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AccessBinding {
@@ -1511,6 +1583,7 @@ fn typed_body_for_bodyless_func<'db>(
         inspected_places: FxHashSet::default(),
         covered_providers: FxHashSet::default(),
         named_impl_operands: FxHashSet::default(),
+        provider_openings: Vec::new(),
         expr_choices: SecondaryMap::new(),
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
@@ -2585,6 +2658,13 @@ impl<'db> TyChecker<'db> {
                 } else {
                     TraitObligationOutcome::Requeue(obligation)
                 }
+            }
+            GoalSatisfiability::NeedsGeneration(_) => {
+                self.push_diag(BodyDiag::CompileTimePhase {
+                    primary: obligation.span,
+                    message: "scoped derive requires a prepared generated implementation".into(),
+                });
+                TraitObligationOutcome::Discharged
             }
             GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged,
         }
@@ -4606,6 +4686,8 @@ mod typed_body_tables {
         /// `with` values whose resources the function's own authority covers.
         pub(super) covered_providers: FxHashSet<ExprId>,
         pub(super) named_impl_operands: FxHashSet<ExprId>,
+        pub(super) provider_openings:
+            Vec<super::trait_resolution::generation::ProviderOpening<'db>>,
         pub(super) expr_choices:
             SecondaryMap<ExprId, Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
@@ -7054,6 +7136,7 @@ impl<'db> TypedBody<'db> {
             inspected_places: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             named_impl_operands: FxHashSet::default(),
+            provider_openings: Vec::new(),
             expr_choices: SecondaryMap::new(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),

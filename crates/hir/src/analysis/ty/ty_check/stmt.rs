@@ -743,7 +743,8 @@ impl<'db> TyChecker<'db> {
                     self.commit_trait_goal_solution(goal, solution);
                 }
                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => return None,
-                GoalSatisfiability::NeedsConfirmation { .. } => {}
+                GoalSatisfiability::NeedsConfirmation { .. }
+                | GoalSatisfiability::NeedsGeneration(_) => {}
             }
         }
         if confirm || base_ty.is_some() {

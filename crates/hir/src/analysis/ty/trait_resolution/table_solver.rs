@@ -92,34 +92,79 @@ fn impl_header_may_match<'db>(
 
 /// Select a lexical header before checking its conditions. A failing explicit
 /// candidate does not silently fall back to an ordinary implementation.
-pub(super) fn matching_choice<'db>(
+#[derive(Clone, Copy)]
+pub(crate) enum ChoiceMatch<'db> {
+    Implementation(super::ChosenImpl<'db>),
+    NeedsGeneration(super::generation::GenerationRequest<'db>),
+    Unsettled,
+}
+
+/// One priority scan serves proof shortcuts and solver candidate availability.
+fn matching_choice_in<'db>(
     db: &'db dyn HirAnalysisDb,
     choices: Option<super::ChosenImpls<'db>>,
     goal: TraitInstId<'db>,
-) -> Option<ImplementorId<'db>> {
+    table: &PersistentUnificationTable<'db>,
+) -> Option<ChoiceMatch<'db>> {
     let choices = choices?;
-    choices
-        .items(db)
-        .iter()
-        .rev()
-        .copied()
-        .find(|&choice| {
-            let implementation = choice.implementation();
-            if implementation.trait_inst(db).def(db) != goal.def(db)
-                || !impl_header_may_match(db, implementation, goal)
-            {
-                return false;
+    for &entry in choices.items(db).iter().rev() {
+        let choice = match entry {
+            super::ChoiceEntry::Impl(choice) => choice,
+            super::ChoiceEntry::Provider(opening) => {
+                if opening.offered_trait(db) != goal.def(db) {
+                    continue;
+                }
+                if super::super::visitor::collect_flags(db, goal)
+                    .intersects(super::super::ty_def::TyFlags::HAS_VAR)
+                {
+                    return Some(ChoiceMatch::Unsettled);
+                }
+                let Some(implementation) =
+                    crate::core::meta::scoped_derive_implementation(db, opening, goal)
+                else {
+                    return Some(ChoiceMatch::NeedsGeneration(
+                        super::generation::GenerationRequest::new(db, opening, goal),
+                    ));
+                };
+                super::ChosenImpl {
+                    template: implementation,
+                    applied: Some(implementation),
+                }
             }
-            let mut table = PersistentUnificationTable::new(db);
-            let candidate = choice.instantiate(&mut table);
-            table
-                .unify(
-                    trait_inst_head(db, candidate.trait_inst(db)),
-                    trait_inst_head(db, goal),
-                )
-                .is_ok()
-        })
-        .map(|choice| choice.template)
+        };
+        let implementation = choice.implementation();
+        if implementation.trait_inst(db).def(db) != goal.def(db)
+            || !impl_header_may_match(db, implementation, goal)
+        {
+            continue;
+        }
+        let mut table = table.clone();
+        let candidate = choice.instantiate(&mut table);
+        if table
+            .unify(
+                trait_inst_head(db, candidate.trait_inst(db)),
+                trait_inst_head(db, goal),
+            )
+            .is_ok()
+        {
+            let matched_goal = goal.fold_with(db, &mut table);
+            if Canonicalized::new(db, goal).canonical()
+                != Canonicalized::new(db, matched_goal).canonical()
+            {
+                return Some(ChoiceMatch::Unsettled);
+            }
+            return Some(ChoiceMatch::Implementation(choice));
+        }
+    }
+    None
+}
+
+pub(crate) fn matching_choice<'db>(
+    db: &'db dyn HirAnalysisDb,
+    choices: Option<super::ChosenImpls<'db>>,
+    goal: TraitInstId<'db>,
+) -> Option<ChoiceMatch<'db>> {
+    matching_choice_in(db, choices, goal, &PersistentUnificationTable::new(db))
 }
 
 fn normalize_assoc_binding<'db>(
@@ -203,7 +248,8 @@ pub(crate) fn answering_assumption<'db>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StopReason {
+enum StopReason<'db> {
+    NeedsGeneration(super::generation::GenerationRequest<'db>),
     UnresolvedChoice,
     MaximumTypeDepth,
     TargetFound,
@@ -214,6 +260,7 @@ pub(crate) enum TargetSolutionStatus {
     Found,
     NotFound,
     Incomplete,
+    NeedsGeneration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -406,12 +453,17 @@ impl<'db> TraitResolutionContext<'db> {
                 branch.remaining_goals.iter().rposition(|goal| {
                     let goal = goal.fold_with(self.db, &mut branch.table);
                     !goal.args(self.db).iter().any(|ty| ty.has_var(self.db))
-                        || !choices.items(self.db).iter().any(|choice| {
-                            let implementation = choice
-                                .implementation()
-                                .fold_with(self.db, &mut branch.table);
-                            implementation.trait_inst(self.db).def(self.db) == goal.def(self.db)
-                                && impl_header_may_match(self.db, implementation, goal)
+                        || !choices.items(self.db).iter().any(|entry| match entry {
+                            super::ChoiceEntry::Provider(opening) => {
+                                opening.offered_trait(self.db) == goal.def(self.db)
+                            }
+                            super::ChoiceEntry::Impl(choice) => {
+                                let implementation = choice
+                                    .implementation()
+                                    .fold_with(self.db, &mut branch.table);
+                                implementation.trait_inst(self.db).def(self.db) == goal.def(self.db)
+                                    && impl_header_may_match(self.db, implementation, goal)
+                            }
                         })
                 })
             })
@@ -455,7 +507,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
     type State = Branch<'db>;
     type Rebase = CanonicalGoalQuery<'db>;
     type Error = Infallible;
-    type StopReason = StopReason;
+    type StopReason = StopReason<'db>;
 
     fn canonicalize(
         &mut self,
@@ -482,32 +534,22 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         key: &Self::Key,
     ) -> Result<CallbackOutcome<Vec<Self::Clause>, Self::StopReason>, Self::Error> {
         let prepared = self.prepare_query(*key);
-        if let Some(choices) = prepared.query.choices {
-            for &choice in choices.items(self.db).iter().rev() {
-                let implementation = choice.implementation();
-                if !impl_header_may_match(self.db, implementation, prepared.normalized_goal) {
-                    continue;
-                }
-                let mut table = prepared.table.clone();
-                let candidate = choice.instantiate(&mut table);
-                if table
-                    .unify(
-                        trait_inst_head(self.db, candidate.trait_inst(self.db)),
-                        trait_inst_head(self.db, prepared.normalized_goal),
-                    )
-                    .is_ok()
-                {
-                    let matched_goal = prepared.normalized_goal.fold_with(self.db, &mut table);
-                    if Canonicalized::new(self.db, prepared.normalized_goal).canonical()
-                        != Canonicalized::new(self.db, matched_goal).canonical()
-                    {
-                        // Header priority is selection at known arguments, not
-                        // permission to pick those arguments before other bounds.
-                        return Ok(CallbackOutcome::Stop(StopReason::UnresolvedChoice));
-                    }
-                    return Ok(CallbackOutcome::Continue(vec![Clause::Chosen(choice)]));
-                }
+        match matching_choice_in(
+            self.db,
+            prepared.query.choices,
+            prepared.normalized_goal,
+            &prepared.table,
+        ) {
+            Some(ChoiceMatch::Implementation(choice)) => {
+                return Ok(CallbackOutcome::Continue(vec![Clause::Chosen(choice)]));
             }
+            Some(ChoiceMatch::NeedsGeneration(request)) => {
+                return Ok(CallbackOutcome::Stop(StopReason::NeedsGeneration(request)));
+            }
+            Some(ChoiceMatch::Unsettled) => {
+                return Ok(CallbackOutcome::Stop(StopReason::UnresolvedChoice));
+            }
+            None => {}
         }
         // An impl lives in its normalized self type's ingot or its trait's
         // (`trait_impl_admissibility`): `<Option<P> as Unwrap>::Out: Copy` is
@@ -875,7 +917,7 @@ impl<'db> Observer<TraitResolutionContext<'db>> for UnresolvedGoalObserver<'db> 
     }
 }
 
-fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
+fn map_completion(completion: Completion<StopReason<'_>>) -> TraitSolveCompletion {
     match completion {
         Completion::Saturated => TraitSolveCompletion::Saturated,
         Completion::RootAnswerLimit { limit } => TraitSolveCompletion::RootAnswerLimit { limit },
@@ -884,6 +926,9 @@ fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
         Completion::PendingWorkLimit { limit } => TraitSolveCompletion::PendingWorkLimit { limit },
         Completion::Adapter(StopReason::UnresolvedChoice) => TraitSolveCompletion::UnresolvedChoice,
         Completion::Adapter(StopReason::MaximumTypeDepth) => TraitSolveCompletion::MaximumTypeDepth,
+        Completion::Adapter(StopReason::NeedsGeneration(_)) => {
+            unreachable!("generation dependency is handled before ordinary completion")
+        }
         Completion::Adapter(StopReason::TargetFound) => {
             unreachable!("ordinary trait solving never installs a target")
         }
@@ -917,6 +962,10 @@ pub(super) fn solve<'db>(
         Ok(report) => report,
         Err(never) => match never {},
     };
+    if let Completion::Adapter(StopReason::NeedsGeneration(request)) = report.completion {
+        super::generation::record_request(db, request);
+        return GoalSatisfiability::NeedsGeneration(request);
+    }
     let root = report.root;
     let solutions: IndexSet<_> = report.answers.into_iter().collect();
     let completion = map_completion(report.completion);
@@ -963,6 +1012,10 @@ pub(super) fn has_solution<'db>(
         Err(never) => match never {},
     };
     match report.completion {
+        Completion::Adapter(StopReason::NeedsGeneration(request)) => {
+            super::generation::record_request(db, request);
+            TargetSolutionStatus::NeedsGeneration
+        }
         Completion::Adapter(StopReason::TargetFound) => TargetSolutionStatus::Found,
         Completion::Saturated => TargetSolutionStatus::NotFound,
         Completion::RootAnswerLimit { .. }

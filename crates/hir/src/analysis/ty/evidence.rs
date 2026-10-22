@@ -695,6 +695,7 @@ fn is_closed_goal<'db>(db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> bo
 /// Consumers must not turn an unavailable lexical proof into ordinary dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, SalsaValue)]
 pub(crate) enum ProofOutcome<'db> {
+    NeedsGeneration,
     Proven(EvidenceId<'db>),
     Deferred,
     Unavailable,
@@ -704,7 +705,7 @@ impl<'db> ProofOutcome<'db> {
     pub(crate) fn evidence(self) -> Option<EvidenceId<'db>> {
         match self {
             Self::Proven(evidence) => Some(evidence),
-            Self::Deferred | Self::Unavailable => None,
+            Self::Deferred | Self::Unavailable | Self::NeedsGeneration => None,
         }
     }
 }
@@ -949,14 +950,19 @@ fn prove_in<'db>(
     if !settled(collect_flags(db, goal)) {
         return ProofOutcome::Deferred;
     }
-    let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, goal) else {
-        return if collect_flags(db, goal).intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
-            && !solve_cx.has_matching_choice(db, goal)
-        {
-            ProofOutcome::Deferred
-        } else {
-            ProofOutcome::Unavailable
-        };
+    let resolved = match resolve_trait_impl_instance(db, solve_cx, goal) {
+        Selection::Unique(resolved) => resolved,
+        Selection::NeedsGeneration => return ProofOutcome::NeedsGeneration,
+        Selection::NotFound | Selection::Ambiguous(_) => {
+            return if collect_flags(db, goal)
+                .intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
+                && !solve_cx.has_matching_choice(db, goal)
+            {
+                ProofOutcome::Deferred
+            } else {
+                ProofOutcome::Unavailable
+            };
+        }
     };
     if !settled(collect_flags(db, resolved)) {
         return ProofOutcome::Deferred;
@@ -974,32 +980,34 @@ fn prove_in<'db>(
             },
         ));
     }
+    let mut conditions = Vec::new();
+    if matches!(resolved.selected().origin(db), ImplementorOrigin::Hir(_)) {
+        let mode = Some(if goal.is_mut(db) {
+            BorrowKind::Mut
+        } else {
+            BorrowKind::Ref
+        });
+        for &condition in resolved.instantiated_constraints(db).list(db) {
+            match prove_outcome(db, solve_cx, condition.at_mode(db, mode)) {
+                ProofOutcome::Proven(proof) => conditions.push(proof),
+                ProofOutcome::NeedsGeneration => return ProofOutcome::NeedsGeneration,
+                ProofOutcome::Deferred | ProofOutcome::Unavailable => {
+                    return ProofOutcome::Unavailable;
+                }
+            }
+        }
+    }
     let selected_proof = || -> Option<EvidenceId<'db>> {
         let evidence = match resolved.selected().origin(db) {
             ImplementorOrigin::Assumption => Evidence::Assumption(
                 BoundSchemaId::context(db, solve_cx.assumptions().extend_all_bounds(db))
                     .slot(db, answering_assumption(db, solve_cx, goal)?)?,
             ),
-            ImplementorOrigin::Hir(_) => {
-                // A `mut` goal's conditions are its implementation's `mut?`
-                // bounds at `mut`.
-                let mode = Some(if goal.is_mut(db) {
-                    BorrowKind::Mut
-                } else {
-                    BorrowKind::Ref
-                });
-                Evidence::Impl {
-                    selected: resolved.selected(),
-                    instantiated: resolved.instantiated(),
-                    conds: resolved
-                        .instantiated_constraints(db)
-                        .list(db)
-                        .iter()
-                        .map(|&cond| prove(db, solve_cx, cond.at_mode(db, mode)))
-                        .collect::<Option<_>>()?,
-                }
-            }
-
+            ImplementorOrigin::Hir(_) => Evidence::Impl {
+                selected: resolved.selected(),
+                instantiated: resolved.instantiated(),
+                conds: conditions,
+            },
             ImplementorOrigin::VirtualContract(_)
             | ImplementorOrigin::Callable
             | ImplementorOrigin::Structural => Evidence::Impl {
@@ -1076,7 +1084,7 @@ pub(crate) fn instantiated_selection<'db>(
         }
         None => match resolve_trait_impl_instance(db, solve_cx, inst) {
             Selection::Unique(resolved) => Some(resolved),
-            Selection::Ambiguous(_) | Selection::NotFound => None,
+            Selection::Ambiguous(_) | Selection::NotFound | Selection::NeedsGeneration => None,
         },
     }
 }

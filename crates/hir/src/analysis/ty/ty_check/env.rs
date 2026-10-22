@@ -213,6 +213,8 @@ pub(crate) struct TyCheckEnv<'db> {
     value_calls: FxHashSet<ExprId>,
     covered_providers: FxHashSet<ExprId>,
     pub(super) named_impl_operands: FxHashSet<ExprId>,
+    pub(super) provider_openings:
+        Vec<super::super::trait_resolution::generation::ProviderOpening<'db>>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
 
@@ -374,6 +376,7 @@ impl<'db> TyCheckEnv<'db> {
             value_calls: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             named_impl_operands: FxHashSet::default(),
+            provider_openings: Vec::new(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
             path_applications: Vec::new(),
@@ -871,6 +874,7 @@ impl<'db> TyCheckEnv<'db> {
             choices
                 .items(self.db)
                 .iter()
+                .filter_map(|entry| entry.implementation())
                 .map(|choice| choice.implementation().trait_inst(self.db)),
         );
         PredicateListId::new(self.db, assumptions).extend_all_bounds(self.db)
@@ -1818,6 +1822,7 @@ impl<'db> TyCheckEnv<'db> {
             inspected_places: self.inspected_places,
             covered_providers: self.covered_providers,
             named_impl_operands: self.named_impl_operands,
+            provider_openings: self.provider_openings,
             expr_choices: self.expr_choices,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,

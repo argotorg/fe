@@ -20,7 +20,9 @@ use super::{
     EarlyNameQueryId, ExpectedPathKind, NameDomain,
     diagnostics::PathResDiag,
     is_scope_visible_from,
-    method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
+    method_selection::{
+        MethodCandidate, MethodSelectionError, select_method_candidate_with_choices,
+    },
     name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query,
     traits_in_scope::traits_available_for_selection,
@@ -1585,13 +1587,14 @@ fn resolve_segment<'db>(
                 && lowering_cx.const_bodies() == ConstBodyLowering::Eager
             {
                 let receiver_ty = Canonicalized::new(db, ty);
-                match select_method_candidate(
+                match select_method_candidate_with_choices(
                     db,
                     &receiver_ty,
                     ident,
                     parent_scope,
                     assumptions,
                     None,
+                    lowering_cx.method_choices(),
                 ) {
                     Ok(cand) => {
                         *decided_by_value = true;

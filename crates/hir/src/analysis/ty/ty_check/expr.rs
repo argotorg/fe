@@ -93,7 +93,8 @@ use crate::analysis::{
         is_scope_visible_from,
         method_selection::{
             AmbiguousTraitMethods, MethodCandidate, MethodSelectionError,
-            select_callable_value_method, select_method_candidate, select_trait_method_candidates,
+            select_callable_value_method, select_method_candidate_with_choices,
+            select_trait_method_candidates,
         },
         resolve_name_res_with_minter, resolve_query,
     },
@@ -2165,6 +2166,68 @@ impl<'db> TyChecker<'db> {
                     .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                 continue;
             }
+            if binding.key_path.is_none()
+                && let Partial::Present(Expr::Path(Partial::Present(path))) =
+                    binding.value.data(self.db, self.body())
+                && let Ok(crate::analysis::name_resolution::PathRes::Ty(provider_ty)) =
+                    crate::analysis::name_resolution::resolve_path(
+                        self.db,
+                        *path,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        false,
+                    )
+            {
+                use super::super::trait_resolution::{
+                    ChosenImpls,
+                    generation::{ProviderOpening, offered_traits},
+                };
+                let offers = offered_traits(self.db, self.env.scope(), provider_ty);
+                if !offers.is_empty()
+                    && let Some(span) = binding.value.span(self.body()).resolve(self.db)
+                    && let Some(file) = span.file.url(self.db)
+                {
+                    let mut owner_scope = Some(self.env.owner().scope());
+                    let mut generated_owner = false;
+                    while let Some(scope) = owner_scope {
+                        generated_owner |= scope.data(self.db).publication_parent.is_some();
+                        owner_scope = scope.parent(self.db);
+                    }
+                    if generated_owner {
+                        self.push_diag(BodyDiag::CompileTimePhase {
+                            primary: binding.value.span(self.body()).into(),
+                            message: "scoped derive openings in generated bodies require a portable generated-owner identity".into(),
+                        });
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::invalid(self.db));
+                        continue;
+                    }
+                    let key = common::generation::ScopedDeriveOpeningKey {
+                        file,
+                        binding_range: span.range,
+                    };
+                    for trait_ in offers {
+                        let opening = ProviderOpening::new(
+                            self.db,
+                            key.clone(),
+                            provider_ty,
+                            trait_,
+                            self.env.scope(),
+                        );
+                        self.env.provider_openings.push(opening);
+                        self.env.choices = Some(ChosenImpls::push_provider(
+                            self.db,
+                            self.env.choices,
+                            opening,
+                        ));
+                    }
+                    self.env.named_impl_operands.insert(binding.value);
+                    self.env
+                        .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                    continue;
+                }
+            }
             let value_prop = self.check_expr_unknown(binding.value);
             // A provider confers authority over its place for the body; it
             // opens no access.
@@ -2235,6 +2298,31 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        if let Some(choices) = self.env.choices {
+            use super::super::trait_resolution::ChoiceEntry;
+            let start = outer_choices.map_or(0, |outer| outer.items(self.db).len());
+            let entries = &choices.items(self.db)[start..];
+            if entries
+                .iter()
+                .any(|entry| matches!(entry, ChoiceEntry::Provider(_)))
+            {
+                let mut seen = rustc_hash::FxHashSet::default();
+                for entry in entries {
+                    let trait_ = match entry {
+                        ChoiceEntry::Impl(choice) => {
+                            choice.implementation().trait_inst(self.db).def(self.db)
+                        }
+                        ChoiceEntry::Provider(opening) => opening.offered_trait(self.db),
+                    };
+                    if !seen.insert(trait_) {
+                        self.push_diag(BodyDiag::CompileTimePhase {
+                            primary: body_expr.span(self.body()).into(),
+                            message: "one with opening cannot contain competing providers or implementations for the same trait".into(),
+                        });
+                    }
+                }
+            }
+        }
         let result = if result_discarded {
             self.check_expr_with_discarded_result(body_expr, expected)
         } else {
@@ -4236,13 +4324,14 @@ impl<'db> TyChecker<'db> {
 
         let mut selected_receiver_ty = receiver_tys[0];
         let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
-        let mut candidate = select_method_candidate(
+        let mut candidate = select_method_candidate_with_choices(
             self.db,
             &canonical_r_ty,
             method_name,
             self.env.scope(),
             method_assumptions,
             None,
+            self.env.choices,
         );
         if matches!(
             candidate,
@@ -4250,13 +4339,14 @@ impl<'db> TyChecker<'db> {
         ) {
             for &receiver_ty in receiver_tys.iter().skip(1) {
                 let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
-                let fallback = select_method_candidate(
+                let fallback = select_method_candidate_with_choices(
                     self.db,
                     &fallback_canonical,
                     method_name,
                     self.env.scope(),
                     method_assumptions,
                     None,
+                    self.env.choices,
                 );
 
                 if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
@@ -4440,7 +4530,7 @@ impl<'db> TyChecker<'db> {
         let idx = path.segment_index(self.db);
         let generic_args = path.generic_args(self.db);
         let generic_args_span = path_span.clone().segment(idx).generic_args();
-        let lowering_cx = LoweringContext::new();
+        let lowering_cx = LoweringContext::new().with_method_choices(self.env.choices);
         let unify_generic_args = |tc: &mut Self, callable: &mut Callable<'db>| {
             callable.unify_generic_args(tc, generic_args, generic_args_span.clone())
         };
@@ -5727,13 +5817,14 @@ impl<'db> TyChecker<'db> {
         } else {
             let mut selected_lhs_ty = lhs_candidates[0];
             let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
-            let mut method_candidate = select_method_candidate(
+            let mut method_candidate = select_method_candidate_with_choices(
                 self.db,
                 &c_lhs_ty,
                 op.trait_method(self.db),
                 self.env.scope(),
                 method_assumptions,
                 Some(trait_def),
+                self.env.choices,
             );
             if matches!(
                 method_candidate,
@@ -5741,13 +5832,14 @@ impl<'db> TyChecker<'db> {
             ) {
                 for &candidate_ty in lhs_candidates.iter().skip(1) {
                     let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
-                    let fallback = select_method_candidate(
+                    let fallback = select_method_candidate_with_choices(
                         self.db,
                         &c_candidate_ty,
                         op.trait_method(self.db),
                         self.env.scope(),
                         method_assumptions,
                         Some(trait_def),
+                        self.env.choices,
                     );
                     if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
                     {

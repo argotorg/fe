@@ -1166,7 +1166,9 @@ pub(crate) fn classify_constraint_entailment(
         GoalSatisfiability::NeedsConfirmation { solutions, .. } if !solutions.is_empty() => {
             ConstraintEntailment::Proven
         }
-        GoalSatisfiability::NeedsConfirmation { .. } => ConstraintEntailment::Incomplete,
+        GoalSatisfiability::NeedsConfirmation { .. } | GoalSatisfiability::NeedsGeneration(_) => {
+            ConstraintEntailment::Incomplete
+        }
         GoalSatisfiability::UnSat(_) => ConstraintEntailment::Disproven,
     }
 }

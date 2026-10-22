@@ -465,12 +465,14 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
         ImplSelection::Unique(resolved) => Selection::Unique(resolved),
         ImplSelection::Ambiguous => Selection::Ambiguous(IndexSet::new()),
         ImplSelection::NotFound => Selection::NotFound,
+        ImplSelection::NeedsGeneration => Selection::NeedsGeneration,
     }
 }
 
 /// An implementation selection, without candidates for an ambiguous one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum ImplSelection<'db> {
+    NeedsGeneration,
     Unique(ResolvedImplInstance<'db>),
     Ambiguous,
     NotFound,
@@ -494,30 +496,28 @@ fn resolve_trait_impl_instance_query<'db>(
             // A selected name can supply arguments absent from the trait head.
             // Keep its application (and captured outer parameters) instead of
             // attempting to reconstruct all implementation arguments from `inst`.
-            if let Some(choices) = solve_cx.choices() {
-                for &choice in choices.items(db).iter().rev() {
-                    if choice.template.origin(db) != selected.origin(db) {
-                        continue;
-                    }
-                    let mut table = UnificationTable::new(db);
-                    let instantiated = super::trait_resolution::ChosenImpl {
-                        template: selected,
-                        ..choice
-                    }
-                    .instantiate(&mut table);
-                    if instantiated
-                        .trait_inst(db)
-                        .args(db)
-                        .iter()
-                        .zip(inst.args(db))
-                        .all(|(&candidate, &goal)| table.unify(candidate, goal).is_ok())
-                    {
-                        return ImplSelection::Unique(ResolvedImplInstance {
-                            selected,
-                            instantiated: instantiated.fold_with(db, &mut table),
-                            trait_inst: inst.fold_with(db, &mut table),
-                        });
-                    }
+            if let Some(super::trait_resolution::ChoiceMatch::Implementation(choice)) =
+                super::trait_resolution::matching_choice(db, solve_cx.choices(), inst)
+                && choice.template.origin(db) == selected.origin(db)
+            {
+                let mut table = UnificationTable::new(db);
+                let instantiated = super::trait_resolution::ChosenImpl {
+                    template: selected,
+                    ..choice
+                }
+                .instantiate(&mut table);
+                if instantiated
+                    .trait_inst(db)
+                    .args(db)
+                    .iter()
+                    .zip(inst.args(db))
+                    .all(|(&candidate, &goal)| table.unify(candidate, goal).is_ok())
+                {
+                    return ImplSelection::Unique(ResolvedImplInstance {
+                        selected,
+                        instantiated: instantiated.fold_with(db, &mut table),
+                        trait_inst: inst.fold_with(db, &mut table),
+                    });
                 }
             }
             instantiate_selected_impl(db, selected, inst)
@@ -529,6 +529,7 @@ fn resolve_trait_impl_instance_query<'db>(
         // owned by the caller through a fresh local table.
         Selection::Ambiguous(_) => ImplSelection::Ambiguous,
         Selection::NotFound => ImplSelection::NotFound,
+        Selection::NeedsGeneration => ImplSelection::NeedsGeneration,
     }
 }
 
@@ -817,7 +818,7 @@ pub fn assoc_const_body_template_for_trait_inst<'db>(
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
-        Selection::NotFound => return None,
+        Selection::NotFound | Selection::NeedsGeneration => return None,
     };
     selected_assoc_const_body_template(db, resolved, const_name)
 }
