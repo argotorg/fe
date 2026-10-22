@@ -794,3 +794,28 @@ const fn chosen() -> u256 { with (ChosenA, ChosenB) { infer(Item {}) } }
         &[("chosen", 2)],
     );
 }
+
+#[test]
+fn deferred_named_only_bound_uses_the_authored_choice_scope() {
+    let source = r#"
+struct Item {}
+trait Pick { fn value() -> u256 }
+impl Pick for Item as Only { fn value() -> u256 { 71 } }
+struct Deferred<T> { value: T }
+trait Read { fn read<T: Pick>(self, _ value: T) -> u256 }
+impl Read for Deferred<u256> { fn read<T: Pick>(self, _ value: T) -> u256 { T::value() } }
+impl Read for Deferred<u8> { fn read<T: Pick>(self, _ value: T) -> u256 { T::value() } }
+fn run() -> u256 {
+    let x = 5
+    let result: u256 = with (Only) { Deferred { value: x }.read(Item {}) }
+    let settled: u256 = x
+    result
+}
+"#;
+    assert!(diagnostics(source).is_empty());
+    let outside = source.replace(
+        "with (Only) { Deferred { value: x }.read(Item {}) }",
+        "Deferred { value: x }.read(Item {})",
+    );
+    assert_eq!(diagnostics(&outside), ["6-0003"]);
+}

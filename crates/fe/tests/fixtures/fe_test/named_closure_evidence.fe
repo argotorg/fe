@@ -34,12 +34,12 @@ fn effect_row() {
 // Both receiver implementations return u256, so the result annotation does
 // not settle the receiver. Its call must keep the choices where it was written.
 struct Deferred<T> { v: T }
-trait Read { fn read<T: Pick>(self, _value: T) -> u256 }
+trait Read { fn read<T: Pick>(self, _ value: T) -> u256 }
 impl Read for Deferred<u256> {
-    fn read<T: Pick>(self, _value: T) -> u256 { T::value() }
+    fn read<T: Pick>(self, _ value: T) -> u256 { T::value() }
 }
 impl Read for Deferred<u8> {
-    fn read<T: Pick>(self, _value: T) -> u256 { T::value() }
+    fn read<T: Pick>(self, _ value: T) -> u256 { T::value() }
 }
 #[test]
 fn deferred_choice_keeps_its_call_site() {
@@ -49,4 +49,14 @@ fn deferred_choice_keeps_its_call_site() {
     let resolved: u256 = x
     assert!(chosen == 70)
     assert!(ordinary == 100)
+}
+
+struct NamedOnly {}
+impl Pick for NamedOnly as Only { fn value() -> u256 { 71 } }
+#[test]
+fn deferred_named_only_bound() {
+    let x = 5
+    let chosen: u256 = with (Only) { Deferred { v: x }.read(NamedOnly {}) }
+    let resolved: u256 = x
+    assert!(chosen == 71)
 }
