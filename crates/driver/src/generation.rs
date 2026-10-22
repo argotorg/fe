@@ -80,6 +80,18 @@ fn diagnostic_error(
     fallback
 }
 
+fn body_errors(
+    db: &DriverDataBase,
+    function: hir::hir_def::Func<'_>,
+) -> Vec<common::diagnostics::CompleteDiagnostic> {
+    check_func_body(db, function)
+        .0
+        .iter()
+        .map(|diagnostic| diagnostic.to_complete(db))
+        .filter(|diagnostic| diagnostic.severity == common::diagnostics::Severity::Error)
+        .collect()
+}
+
 fn evaluation_error<'db>(
     db: &'db DriverDataBase,
     mut owner: BodyOwner<'db>,
@@ -92,12 +104,8 @@ fn evaluation_error<'db>(
         error = source;
     }
     if let BodyOwner::Func(function, _) = owner {
-        let diagnostics = &check_func_body(db, function).0;
-        if !diagnostics.is_empty() {
-            let complete = diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.to_complete(db))
-                .collect::<Vec<_>>();
+        let complete = body_errors(db, function);
+        if !complete.is_empty() {
             return diagnostic_error(
                 db,
                 &complete,
@@ -302,7 +310,7 @@ pub fn prepare_file(
                 ));
             }
             let diagnostics = &check_func_body(db, provider).0;
-            if !diagnostics.is_empty() {
+            if !body_errors(db, provider).is_empty() {
                 for diagnostic in diagnostics {
                     if let hir::analysis::ty::diagnostics::FuncBodyDiag::Body(
                         hir::analysis::ty::diagnostics::BodyDiag::UndefinedVariable(span, name, _),
@@ -369,30 +377,24 @@ pub fn prepare_file(
                         SemanticAccessCheckResult::Err(diagnostic) => {
                             let diagnostic = diagnostic.diag(db);
                             let origin_owner = diagnostic.instance.key(db).owner(db);
-                            if let BodyOwner::Func(function, _) = origin_owner
-                                && !check_func_body(db, function).0.is_empty()
-                            {
-                                validation_diagnostics.extend(
-                                    check_func_body(db, function)
-                                        .0
-                                        .iter()
-                                        .map(|cause| cause.to_complete(db)),
-                                );
+                            let errors = match origin_owner {
+                                BodyOwner::Func(function, _) => body_errors(db, function),
+                                _ => Vec::new(),
+                            };
+                            if !errors.is_empty() {
+                                validation_diagnostics.extend(errors);
                             } else {
                                 validation_diagnostics.push(diagnostic.to_complete(db));
                             }
                         }
                         SemanticAccessCheckResult::Blocked(cause) => {
                             let origin_owner = current.key(db).owner(db);
-                            if let BodyOwner::Func(function, _) = origin_owner
-                                && !check_func_body(db, function).0.is_empty()
-                            {
-                                validation_diagnostics.extend(
-                                    check_func_body(db, function)
-                                        .0
-                                        .iter()
-                                        .map(|cause| cause.to_complete(db)),
-                                );
+                            let errors = match origin_owner {
+                                BodyOwner::Func(function, _) => body_errors(db, function),
+                                _ => Vec::new(),
+                            };
+                            if !errors.is_empty() {
+                                validation_diagnostics.extend(errors);
                             } else {
                                 unresolved.push(format!("Blocked: {cause:?}"));
                             }

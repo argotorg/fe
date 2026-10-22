@@ -794,3 +794,42 @@ fn output_warnings_remain_diagnostics_without_refusing_generation() {
     assert!(error.cause.contains("type mismatch"), "{}", error.cause);
     assert!(db.generation_inputs().functions(&db).is_empty());
 }
+
+#[test]
+fn provider_body_warnings_do_not_refuse_generation_or_hide_errors() {
+    let source = r#"use core::meta::{Record, Code, Item}
+struct Cell { word: u256 }
+impl Cell { const fn get_mut(mut self) -> mut u256 { mut self.word } }
+#[generate(make)]
+struct Target {}
+const fn make(_ record: Record) -> Code<Item> {
+    var cell = Cell { word: 0 }
+    var w = cell.get_mut()
+    w += 1
+    quote { const fn value() -> u256 { 7 } }
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .expect("warning-only provider is valid")
+        .unwrap();
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let diagnostics = output.run_on_top_mod(output.top_mod(output_file));
+    assert!(!diagnostics.has_errors(&output));
+    assert!(
+        diagnostics
+            .format_diags(&output)
+            .contains("warning[8-0121]")
+    );
+    assert_eq!(output.generation_inputs().functions(&output).len(), 1);
+    let invalid = source.replace("word: 0", "word: true");
+    let (db, file) = input(&invalid);
+    let error = prepare_file(&db, file)
+        .err()
+        .expect("real body error refuses provider");
+    assert!(error.cause.contains("type mismatch"), "{}", error.cause);
+    assert!(db.generation_inputs().functions(&db).is_empty());
+}
