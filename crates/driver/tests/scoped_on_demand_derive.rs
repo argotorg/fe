@@ -1274,8 +1274,14 @@ const fn run() -> usize { with (A) { Pair::score() } }
 "#;
     let output = prepare(source).unwrap();
     assert_eq!(eval_const_fn_u256(&output, "run"), "42");
-    let false_condition = source.replace("Token::seed() == 42", "Token::seed() == 41");
+    let false_condition = source
+        .replace("Token::seed() == 42", "Token::seed() == 41")
+        .replace(
+            "quote { const fn score() -> usize { 42 } }",
+            "let zero: usize = 0\n let fault = 1 / zero\n quote { const fn score() -> usize { ${fault} } }",
+        );
     let error = prepare_err(&false_condition);
     assert!(error.contains("const where predicate failed"), "{error}");
     assert!(!error.contains("requires a prepared"), "{error}");
+    assert!(!error.contains("division by zero"), "{error}");
 }
