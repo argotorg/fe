@@ -557,8 +557,22 @@ fn retained_bound_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: crate::analysis::ty::evidence::EvidenceId<'db>,
     goal: TraitInstId<'db>,
+    origin: ScopeId<'db>,
+    span: DynLazySpan<'db>,
 ) -> Result<(), (GroundBoundAdmissionCause, Vec<FuncBodyDiag<'db>>)> {
     use crate::analysis::ty::{evidence::Evidence, trait_def::ImplementorOrigin};
+    for &argument in goal
+        .args(db)
+        .iter()
+        .chain(goal.assoc_type_bindings(db).values())
+    {
+        if let Some(unmet) = check_type_requirements(db, argument, origin, &FxHashSet::default()) {
+            return Err((
+                GroundBoundAdmissionCause::ConditionsNotAdmitted,
+                vec![unmet_requirement_diag(span.clone(), unmet.predicate, unmet.failure).into()],
+            ));
+        }
+    }
     let Some(resolved) = proof.answering(db, goal) else {
         return Err((GroundBoundAdmissionCause::UnsupportedInput, Vec::new()));
     };
@@ -578,7 +592,7 @@ fn retained_bound_requirements<'db>(
             return Err((GroundBoundAdmissionCause::Incomplete, Vec::new()));
         }
         for (&condition, &proof) in conditions.list(db).iter().zip(conds) {
-            retained_bound_requirements(db, proof, condition)?;
+            retained_bound_requirements(db, proof, condition, origin, span.clone())?;
         }
     }
     Ok(())
@@ -692,7 +706,9 @@ pub fn admit_ground_type_application<'db>(
             let goal = bound.normalize(db, origin.scope(), context.assumptions());
             let admitted = crate::analysis::ty::evidence::prove(db, context, goal)
                 .ok_or((GroundBoundAdmissionCause::NotProven, Vec::new()))
-                .and_then(|proof| retained_bound_requirements(db, proof, goal));
+                .and_then(|proof| {
+                    retained_bound_requirements(db, proof, goal, origin.scope(), span.clone())
+                });
             if let Err((cause, mut diagnostics)) = admitted {
                 if diagnostics.is_empty() {
                     diagnostics.push(
