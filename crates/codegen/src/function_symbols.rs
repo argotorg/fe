@@ -376,10 +376,11 @@ fn readable_type_component<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Optio
             contract.name(db).to_opt().map(|name| name.data(db).clone())
         }
         TyData::TyBase(
-            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::TraitCtor(_),
+            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::TraitDescriptor(_),
         )
         | TyData::TyParam(_)
-        | TyData::QualifiedTy(_) => {
+        | TyData::QualifiedTy(_)
+        | TyData::GoalDescriptor(_) => {
             let component = base.pretty_print(db).to_string();
             (!component.is_empty()).then_some(component)
         }
