@@ -842,13 +842,21 @@ pub(crate) fn effect_key_wf_diag<'db>(
     ))
 }
 
+/// The declaration-owned condition and expected type used both for checking
+/// and for recovering the checked body's retained preparation metadata.
+fn static_assert_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assert_: StaticAssert<'db>,
+) -> (Body<'db>, TyId<'db>) {
+    (assert_.condition(db), TyId::bool(db))
+}
+
 #[salsa::tracked]
 pub fn check_static_assert<'db>(
     db: &'db dyn HirAnalysisDb,
     assert_: StaticAssert<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let condition = assert_.condition(db);
-    let expected = TyId::bool(db);
+    let (condition, expected) = static_assert_body(db, assert_);
     let owner = BodyOwner::AnonConstBody {
         body: condition,
         expected,
@@ -1046,6 +1054,10 @@ pub(crate) fn provider_opening_at<'db>(
     }
     for &item in module.all_items(db) {
         owners.extend(BodyOwner::const_predicates_of(db, item));
+    }
+    for &assert_ in module.all_static_asserts(db) {
+        let (body, expected) = static_assert_body(db, assert_);
+        owners.push(BodyOwner::AnonConstBody { body, expected });
     }
     let mut retained = None;
     for owner in owners {
