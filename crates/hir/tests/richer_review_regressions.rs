@@ -127,7 +127,7 @@ fn reflection_rejects_wrong_record_kinds_and_unsupported_type_is_candidates() {
         (
             "Choice",
             "field_count(record)",
-            "field_count requires a struct or selected enum variant",
+            "field_count requires a struct",
         ),
         (
             "Choice",
