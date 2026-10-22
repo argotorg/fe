@@ -212,12 +212,11 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::Path(path) => {
-                if let Some(authored) = path.path() {
-                    if let Some(segment) = authored.segments().next()
-                        && let Some(ast::PathSegmentKind::Ident(ident)) = segment.kind()
-                    {
-                        ctxt.validate_open_name_use(ident.text(), ident.text_range());
-                    }
+                if let Some(authored) = path.path()
+                    && let Some(segment) = authored.segments().next()
+                    && let Some(ast::PathSegmentKind::Ident(ident)) = segment.kind()
+                {
+                    ctxt.validate_open_name_use(ident.text(), ident.text_range());
                 }
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, path.path());
                 Self::Path(path)
