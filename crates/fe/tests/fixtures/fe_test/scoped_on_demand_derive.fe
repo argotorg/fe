@@ -31,3 +31,21 @@ fn closure_retains_its_generated_choice() {
     let f = || { with (Provider) { Pair::score() } }
     assert!(f() == 42)
 }
+
+trait RowScore { fn row_score(self) -> u256 }
+impl RowScore for Pair { fn row_score(self) -> u256 { 100 } }
+struct RowProvider {}
+impl Derive<RowScore> for RowProvider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn row_score(self) -> u256 { 42 } }
+    }
+}
+fn row_charge() -> u256 uses (p: RowScore) { p.row_score() }
+fn row_apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+
+#[test]
+fn generated_choice_fills_a_deferred_closure_effect_row() {
+    let f = || row_charge()
+    with (RowScore = Pair {}) { assert!(row_apply(f) == 100) }
+    with (RowProvider, RowScore = Pair {}) { assert!(row_apply(f) == 42) }
+}

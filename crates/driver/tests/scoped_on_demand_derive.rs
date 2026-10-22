@@ -1394,3 +1394,47 @@ const fn run() -> u256 { with (Named) { Pair::score() } }
     assert!(prepare_file(&db, file).unwrap().is_none());
     assert!(!db.run_on_top_mod(db.top_mod(file)).has_errors(&db));
 }
+
+#[test]
+fn deferred_closure_effect_rows_preserve_pending_generation_outcomes() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { fn score(self) -> u256 }
+pub struct Pair {}
+impl Score for Pair { fn score(self) -> u256 { 100 } }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn score(self) -> u256 { 42 } }
+    }
+}
+fn charge() -> u256 uses (p: Score) { p.score() }
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+fn run() -> u256 {
+    let f = || charge()
+    with (Provider, Score = Pair {}) { apply(f) }
+}
+"#;
+    let (db, file) = input(source);
+    let module = db.top_mod(file);
+    let demands = hir::analysis::ty::trait_resolution::generation::preparation_demands(&db, module);
+    assert!(
+        !demands.is_empty(),
+        "the substituted effect row must request generation"
+    );
+    assert!(demands.iter().all(|d| d.demand.is_ok()));
+    let diagnostics = db.run_on_top_mod(module).format_diags(&db);
+    assert!(diagnostics.contains("error[8-0137]"), "{diagnostics}");
+    assert!(!diagnostics.contains("error[8-0031]"), "{diagnostics}");
+    let output = prepare(source).unwrap();
+    let file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    assert!(
+        !output
+            .run_on_top_mod(output.top_mod(file))
+            .has_errors(&output)
+    );
+}
