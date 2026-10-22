@@ -41,7 +41,7 @@ use crate::analysis::{
             model::EffectRequirementDecl,
             rows::{RowComponent, expand_rows},
         },
-        evidence::prove,
+        evidence::{BoundOwner, BoundSchemaId, prove_outcome},
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         provider::AddressSpace,
@@ -1682,6 +1682,7 @@ impl<'db> TyCheckEnv<'db> {
                     && solve_cx.choices().is_some()
                     && matches!(outcome, super::super::evidence::ProofOutcome::Unavailable);
                 callable.record_bound_evidence(self.db, solve_cx);
+                callable.qualify_evidence(self.db, self.owner);
             }
             calls.codec_choice_failed = codec_choice_failed;
             if let Some(goal) = calls.locate.trait_inst()
@@ -1702,6 +1703,8 @@ impl<'db> TyCheckEnv<'db> {
             let callable = lowering.callable_mut();
             callable.record_evidence(self.db, solve_cx);
             callable.record_bound_evidence(self.db, solve_cx);
+            callable.qualify_evidence(self.db, self.owner);
+
             if solve_cx.choices().is_some() {
                 for goal in callable.missing_bound_evidence(self.db) {
                     diags.push(failed_proof(goal, expr.span(self.body).into()));
@@ -1726,6 +1729,8 @@ impl<'db> TyCheckEnv<'db> {
             for call in &mut plan.calls {
                 call.callable.record_evidence(self.db, solve_cx);
                 call.callable.record_bound_evidence(self.db, solve_cx);
+                call.callable.qualify_evidence(self.db, self.owner);
+
                 if solve_cx.choices().is_some() {
                     for goal in call.callable.missing_bound_evidence(self.db) {
                         diags.push(failed_proof(goal, stmt.span(self.body).into()));
@@ -1745,18 +1750,20 @@ impl<'db> TyCheckEnv<'db> {
             };
             let choices = self.expr_choices[expr];
             if let ConstRef::TraitConst { use_, evidence, .. } = const_ref {
-                *evidence = prove(
+                let outcome = prove_outcome(
                     self.db,
                     use_.solve_cx(self.db).with_choices(choices),
                     use_.inst(),
                 );
-                if choices.is_some() && evidence.is_none() {
+                evidence.record_dispatch(use_.inst(), outcome.evidence());
+                if choices.is_some() && evidence.dispatch_proof().is_none() {
                     diags.push(failed_proof(use_.inst(), expr.span(self.body).into()));
                 }
             }
             for goal in const_ref.record_bound_evidence(self.db, choices) {
                 diags.push(failed_proof(goal, expr.span(self.body).into()));
             }
+            const_ref.qualify_evidence(self.db, self.owner);
         }
         self.closure_infos
             .values_mut()
@@ -1794,6 +1801,7 @@ impl<'db> TyCheckEnv<'db> {
             body: Some(self.body),
             result_ty,
             signature,
+            bound_schema: BoundSchemaId::new(self.db, BoundOwner::Body(self.owner), assumptions),
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,

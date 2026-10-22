@@ -119,6 +119,9 @@ where
     V: TyVisitor<'db> + ?Sized,
 {
     closure.parent_args(visitor.db()).visit_with(visitor);
+    if let Some(bound) = closure.bound_evidence(visitor.db()) {
+        bound.entries.visit_with(visitor);
+    }
     closure.captures(visitor.db()).visit_with(visitor);
     closure.params(visitor.db()).visit_with(visitor);
     closure.ret_ty(visitor.db()).visit_with(visitor);

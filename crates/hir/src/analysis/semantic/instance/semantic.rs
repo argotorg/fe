@@ -118,6 +118,7 @@ impl<'db> SemanticInstanceKey<'db> {
                     .map(|entry| entry.filter(|proof| proof.has_named_impl(db)))
                     .collect(),
             )
+            .with_rows(db, supplied.rows(db).clone())
         } else {
             supplied
         };
@@ -323,34 +324,146 @@ pub fn instantiated_typed_body<'db>(
         let (scope, assumptions) = (env.normalization_scope(db), env.assumptions(db));
         body = body.with_known_params(db, |shape| normalize_ty(db, shape, scope, assumptions));
     }
+    let raw_goals = if matches!(key.owner(db), BodyOwner::Closure { .. }) {
+        body.assumptions()
+    } else {
+        body.signature()
+    };
+    let row_owner = match key.owner(db) {
+        BodyOwner::Closure { def, .. } => Some((def.body.scope(), Some(def.expr))),
+        BodyOwner::Func(func, _) => func.body(db).map(|body| (body.scope(), None)),
+        _ => None,
+    };
+    // This declaration-side expansion cannot call key.typed_body(): that would
+    // make dictionary transport depend on the result it is constructing.
+    let row_paths = if let Some(site) = effect_param_site(key.owner(db)) {
+        let requirements = EffectEnvView::new(site)
+            .requirements(db)
+            .into_iter()
+            .map(|requirement| {
+                let key_ty = key
+                    .subst(db)
+                    .mapping(db)
+                    .as_ref()
+                    .and_then(|subst| substitute_complete(db, requirement.key.clone(), subst).ok())
+                    .unwrap_or_else(|| requirement.key.clone());
+                EffectRequirement {
+                    key: key_ty,
+                    ..requirement
+                }
+            })
+            .collect::<Vec<_>>();
+        expand_rows(db, &requirements, key.owner(db).scope(), body.assumptions())
+    } else {
+        RowExpansion::default()
+    };
+    if let Some(owner) = row_owner {
+        body = body.fold_with(
+            db,
+            &mut RowProviderSubst {
+                owner,
+                providers: key.effect_providers(db).providers(db),
+            },
+        );
+    }
+    let goals = if matches!(key.owner(db), BodyOwner::Closure { .. }) {
+        body.assumptions()
+    } else {
+        body.signature()
+    };
+    let mut entries = key.evidence(db).entries(db).clone();
+    entries.resize(goals.list(db).len(), None);
+    for (index, &raw_goal) in raw_goals.list(db).iter().enumerate() {
+        let TyData::TyParam(param) = raw_goal.self_ty(db).data(db) else {
+            continue;
+        };
+        if param.row_effect_provider_of() != row_owner || row_owner.is_none() {
+            continue;
+        }
+        let path = row_paths
+            .components
+            .iter()
+            .find(|component| component.requirement.binding_idx as usize == param.idx)
+            .map(|component| component.path.clone())
+            .or_else(|| {
+                matches!(key.owner(db), BodyOwner::Closure { .. })
+                    .then(|| crate::analysis::ty::effects::rows::RowPath::entry(param.idx as u32))
+            });
+        let Some(row) = path.and_then(|path| {
+            key.evidence(db)
+                .rows(db)
+                .iter()
+                .find(|row| row.path == path)
+        }) else {
+            continue;
+        };
+        let goal = goals.list(db)[index];
+        entries[index] = row.proof.and_then(|proof| {
+            if row.goal == goal {
+                Some(proof)
+            } else {
+                crate::analysis::ty::evidence::implied_bound_evidence(
+                    db,
+                    proof,
+                    goal,
+                    body.assumptions(),
+                )
+            }
+        });
+    }
+    let supplied = EvidenceList::of(db, entries).with_rows(db, key.evidence(db).rows(db).clone());
     let evidence = instance_evidence(
         db,
-        body.signature(),
-        key.evidence(db),
+        goals,
+        supplied,
         TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
     );
-    body.bind_evidence(db, evidence);
-    // A body's row provider parameters are the providers its call binds.
-    let owner = match key.owner(db) {
-        BodyOwner::Closure { def, .. } => (def.body.scope(), Some(def.expr)),
-        BodyOwner::Func(func, mode)
-            if let Some(func_body) = func.body(db)
-                && func
-                    .effect_requirements(db, mode)
-                    .iter()
-                    .any(|requirement| requirement.key.key_row().is_some()) =>
-        {
-            (func_body.scope(), None)
-        }
-        _ => return body,
+    let bound = crate::analysis::ty::evidence::BoundEvidence {
+        schema: body.bound_schema(),
+        entries: evidence,
     };
-    body.fold_with(
-        db,
-        &mut RowProviderSubst {
-            owner,
-            providers: key.effect_providers(db).providers(db),
-        },
-    )
+    body.bind_evidence(db, bound);
+    if let Some(defining_body) = body.body() {
+        body = body.fold_with(
+            db,
+            &mut CaptureClosureEvidence {
+                defining_body,
+                bound,
+            },
+        );
+    }
+    body
+}
+
+struct CaptureClosureEvidence<'db> {
+    defining_body: crate::hir_def::Body<'db>,
+    bound: crate::analysis::ty::evidence::BoundEvidence<'db>,
+}
+
+impl<'db> TyFolder<'db> for CaptureClosureEvidence<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let ty = ty.super_fold_with(db, self);
+        let Some(closure) = ty.as_closure(db).filter(|closure| {
+            closure.def(db).body == self.defining_body && closure.bound_evidence(db).is_none()
+        }) else {
+            return ty;
+        };
+        TyId::closure(
+            db,
+            crate::analysis::ty::ty_def::ClosureTy::new(
+                db,
+                closure.def(db),
+                crate::analysis::ty::ty_def::ClosureContext {
+                    args: closure.parent_args(db).clone(),
+                    evidence: Some(self.bound),
+                },
+                closure.captures(db).clone(),
+                closure.params(db).clone(),
+                closure.ret_ty(db),
+                closure.effects(db).clone(),
+            ),
+        )
+    }
 }
 
 struct RowProviderSubst<'a, 'db> {
@@ -539,6 +652,20 @@ fn expand_row_args<'db>(
             else {
                 continue;
             };
+            if let Some(row) = key
+                .evidence(db)
+                .rows(db)
+                .iter()
+                .find(|row| row.path == caller.path)
+            {
+                callable.supply_row_evidence(
+                    db,
+                    crate::analysis::ty::evidence::RowEvidence {
+                        path: callee.path.clone(),
+                        ..row.clone()
+                    },
+                );
+            }
             let slot = caller.requirement.binding_idx;
             let binding = LocalBinding::EffectParam {
                 site: caller.requirement.binding_site,

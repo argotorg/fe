@@ -142,7 +142,7 @@ fn assumption<'db>(
     let Evidence::Assumption(index) = evidence.data(db) else {
         panic!("expected an assumption: {:?}", evidence.data(db));
     };
-    typed_body.assumptions().list(db)[*index as usize].pretty_print(db, true)
+    typed_body.assumptions().list(db)[index.index as usize].pretty_print(db, true)
 }
 
 /// The proofs of an implementation's conditions.
@@ -205,23 +205,16 @@ fn grow_call_bodies<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) -> (Option
 /// nothing is assumed, and where the body's assumptions are.
 fn k_use_bodies(db: &HirAnalysisTestDb, func: Func<'_>) -> (bool, bool) {
     let typed_body = check_func_body(db, func).1.clone();
-    let Some(ConstRef::TraitConst {
-        use_,
-        evidence,
-        bound_evidence,
-    }) = typed_body.const_refs().next()
-    else {
+    let Some(ConstRef::TraitConst { use_, evidence }) = typed_body.const_refs().next() else {
         panic!("missing trait constant use");
     };
     let without_assumptions = ConstRef::TraitConst {
         use_: use_.with_env(func.scope(), PredicateListId::empty_list(db)),
         evidence,
-        bound_evidence,
     };
     let with_assumptions = ConstRef::TraitConst {
         use_: use_.with_env(func.scope(), typed_body.assumptions()),
         evidence,
-        bound_evidence,
     };
     (
         without_assumptions.trait_const_body(db).is_some(),
@@ -510,4 +503,122 @@ fn a_generic_instance_dispatches_through_the_bound_its_caller_proved() {
         )
         .expect("the bound answers the call");
     assert_eq!(method.body(), None);
+}
+
+#[test]
+fn bound_slots_are_owned_and_foreign_slot_zero_cannot_bind() {
+    use fe_hir::analysis::ty::evidence::{BoundEvidence, BoundOwner, BoundSchemaId, EvidenceList};
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(Utf8PathBuf::from("bound_slot_ownership.fe"), SOURCE);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = func(&db, module, "bound");
+    let (body, call) = method_call(&db, owner);
+    let proof = call.evidence().unwrap();
+    let Evidence::Assumption(slot) = proof.data(&db) else {
+        panic!("bound proof")
+    };
+    assert_eq!(
+        slot.schema.owner(&db),
+        BoundOwner::Body(BodyOwner::func(&db, owner))
+    );
+    assert_eq!(slot.schema, body.bound_schema());
+    assert_eq!(slot.index, 0);
+
+    let other_owner = BodyOwner::func(&db, func(&db, module, "relay"));
+    let adapter = BoundSchemaId::new(
+        &db,
+        BoundOwner::MethodBasis {
+            body: owner,
+            nominal: func(&db, module, "relay"),
+            mode: None,
+        },
+        slot.schema.slots(&db),
+    );
+    let adapter_leaf = EvidenceId::new(&db, Evidence::Assumption(adapter.slot(&db, 0).unwrap()));
+    assert_eq!(
+        proof.bind(
+            &db,
+            BoundEvidence {
+                schema: adapter,
+                entries: EvidenceList::of(&db, vec![Some(adapter_leaf)]),
+            }
+        ),
+        proof,
+        "an adapter basis is not the body's signature"
+    );
+    // Deliberately identical goals and index, with a different declaration owner.
+    let foreign = BoundSchemaId::new(&db, BoundOwner::Body(other_owner), slot.schema.slots(&db));
+    let foreign_leaf = EvidenceId::new(&db, Evidence::Assumption(foreign.slot(&db, 0).unwrap()));
+    let entries = EvidenceList::of(&db, vec![Some(foreign_leaf)]);
+    assert_eq!(
+        proof.bind(
+            &db,
+            BoundEvidence {
+                schema: foreign,
+                entries
+            }
+        ),
+        proof
+    );
+    assert_eq!(
+        proof.bind(
+            &db,
+            BoundEvidence {
+                schema: slot.schema,
+                entries
+            }
+        ),
+        foreign_leaf
+    );
+}
+
+#[test]
+fn a_schema_view_may_extend_a_prefix_but_cannot_reorder_it() {
+    use fe_hir::analysis::ty::evidence::{BoundEvidence, BoundOwner, BoundSchemaId, EvidenceList};
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(Utf8PathBuf::from("bound_slot_prefix.fe"), SOURCE);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::func(&db, func(&db, module, "pair"));
+    let (body, _) = method_call(&db, func(&db, module, "bound"));
+    let pair = &check_func_body(&db, func(&db, module, "pair")).1;
+    let goals = pair.bound_schema().slots(&db).list(&db);
+    assert_eq!(goals.len(), 2);
+    let prefix = BoundSchemaId::new(
+        &db,
+        BoundOwner::Body(owner),
+        PredicateListId::new(&db, vec![goals[0]]),
+    );
+    let leaf = EvidenceId::new(&db, Evidence::Assumption(prefix.slot(&db, 0).unwrap()));
+    let replacement = EvidenceId::new(
+        &db,
+        Evidence::Assumption(body.bound_schema().slot(&db, 0).unwrap()),
+    );
+    let entries = EvidenceList::of(&db, vec![Some(replacement)]);
+    assert_eq!(
+        leaf.bind(
+            &db,
+            BoundEvidence {
+                schema: pair.bound_schema(),
+                entries
+            }
+        ),
+        replacement
+    );
+    let reordered = BoundSchemaId::new(
+        &db,
+        BoundOwner::Body(owner),
+        PredicateListId::new(&db, vec![goals[1], goals[0]]),
+    );
+    assert_eq!(
+        leaf.bind(
+            &db,
+            BoundEvidence {
+                schema: reordered,
+                entries
+            }
+        ),
+        leaf
+    );
 }

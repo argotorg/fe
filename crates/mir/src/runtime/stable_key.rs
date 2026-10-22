@@ -372,16 +372,15 @@ fn impl_env_identity<'db>(
         ingot_identity_for_top_mod(db, scope.top_mod(db)),
         module_path_components_for_scope(db, scope).join("$")
     );
-    if !evidence
-        .entries(db)
-        .iter()
-        .flatten()
-        .any(|ev| ev.has_named_impl(db))
-    {
-        return identity;
+    let proofs = evidence_list_identity(db, evidence);
+    if proofs.is_empty() {
+        identity
+    } else {
+        format!("{identity}$evidence${proofs}")
     }
-    // Instances that differ only in non-ordinary evidence or evidence parameters
-    // run different code.
+}
+
+fn evidence_list_identity<'db>(db: &'db dyn HirAnalysisDb, evidence: EvidenceList<'db>) -> String {
     let mut parts = Vec::new();
     for (idx, entry) in evidence.entries(db).iter().enumerate() {
         if let Some(ev) = entry
@@ -390,7 +389,19 @@ fn impl_env_identity<'db>(
             parts.push(format!("bound{idx}={}", evidence_id_identity(db, *ev)));
         }
     }
-    format!("{identity}$evidence${}", parts.join("$"))
+    for row in evidence.rows(db) {
+        if let Some(proof) = row.proof.filter(|proof| proof.has_named_impl(db)) {
+            parts.push(format!(
+                "row{}{:?}={:?}:{}:{}",
+                row.path.entry,
+                row.path.steps,
+                row.goal.mode(db),
+                trait_identity(db, row.goal),
+                evidence_id_identity(db, proof)
+            ));
+        }
+    }
+    parts.join("$")
 }
 
 fn evidence_id_identity<'db>(db: &'db dyn HirAnalysisDb, ev: EvidenceId<'db>) -> String {
@@ -399,7 +410,7 @@ fn evidence_id_identity<'db>(db: &'db dyn HirAnalysisDb, ev: EvidenceId<'db>) ->
     }
     use hir::analysis::ty::trait_def::ImplementorOrigin;
     match ev.data(db) {
-        Evidence::Assumption(idx) => format!("assumption{idx}"),
+        Evidence::Assumption(idx) => format!("assumption{}", idx.index),
         Evidence::DeferredSolCodec { .. } => "ordinary".to_string(),
         Evidence::Impl {
             selected,
@@ -743,7 +754,16 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                     .iter()
                     .map(|param| param.pretty_print_product(db))
                     .collect();
-                format!("closure${owner}${}${shapes:?}${tys}", def.expr.as_u32(),)
+                let proofs = closure
+                    .bound_evidence(db)
+                    .map(|bound| evidence_list_identity(db, bound.entries))
+                    .unwrap_or_default();
+                let base = format!("closure${owner}${}${:?}${tys}", def.expr.as_u32(), shapes);
+                if proofs.is_empty() {
+                    base
+                } else {
+                    format!("{base}$proofs${proofs}")
+                }
             }
         },
         TyData::TyParam(param) => {

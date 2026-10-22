@@ -1,0 +1,32 @@
+struct Item {}
+trait Pick { fn value() -> u256 }
+impl Pick for Item { fn value() -> u256 { 100 } }
+impl Pick for Item as Discount { fn value() -> u256 { 70 } }
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+fn relay<T: Pick>() -> u256 {
+    let f = || T::value()
+    apply(f)
+}
+trait Price { fn amount(self) -> u256 }
+impl Price for Item { fn amount(self) -> u256 { 100 } }
+impl Price for Item as Wholesale { fn amount(self) -> u256 { 70 } }
+fn charge() -> u256 uses (p: Price) { p.amount() }
+#[test]
+fn lexical_choice_escapes() {
+    let chosen = with (Discount) { || Item::value() }
+    assert!(apply(chosen) == 70)
+}
+#[test]
+fn ordinary_closure() {
+    let ordinary = || Item::value()
+    assert!(apply(ordinary) == 100)
+}
+#[test]
+fn captured_bound() { assert!(with (Discount) { relay<Item>() } == 70) }
+#[test]
+fn ordinary_bound() { assert!(relay<Item>() == 100) }
+#[test]
+fn effect_row() {
+    let f = || charge()
+    with (Wholesale, Price = Item {}) { assert!(apply(f) == 70) }
+}
