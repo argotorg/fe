@@ -1421,10 +1421,22 @@ impl<'db> SemanticInstance<'db> {
                 .place_entry_calls(expr)
                 .ok_or(MethodArgMapError::MissingBody)?;
             let one = |callable: &Callable<'db>| {
+                let mut callable = callable.clone();
+                if callable.evidence().is_none() {
+                    // A codec's layout obligation can first become decidable
+                    // here. Produce its proof once, including prerequisites,
+                    // before applying the ordinary shared call finalizer.
+                    // Existing named or bound proofs are never replaced.
+                    callable.record_evidence(
+                        db,
+                        TraitSolveCx::new(db, self.normalization_scope(db))
+                            .with_assumptions(self.assumptions(db)),
+                    );
+                }
                 let callee = semantic_callee_key_with_effect_providers(
                     db,
                     self.key(db),
-                    callable,
+                    &callable,
                     &[],
                     &[],
                 )?

@@ -538,6 +538,13 @@ fn prove_in<'db>(
     if !settled(collect_flags(db, resolved)) {
         return None;
     }
+    if matches!(
+        resolved.selected().origin(db),
+        ImplementorOrigin::Structural
+    ) && super::sol_codec::sol_codec_proof_is_deferred(db, resolved.trait_inst())
+    {
+        return None;
+    }
     let evidence = match resolved.selected().origin(db) {
         ImplementorOrigin::Assumption => {
             Evidence::Assumption(answering_assumption(db, solve_cx, goal)? as u32)

@@ -14,13 +14,27 @@ use super::{
     corelib::{resolve_core_trait, resolve_lib_trait_path, resolve_lib_type_path},
     trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId},
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
-    ty_def::TyId,
+    ty_def::{TyFlags, TyId},
+    visitor::collect_flags,
 };
 use crate::{
     analysis::{HirAnalysisDb, semantic::int_const},
     core::semantic::storage_slot_span,
     hir_def::scope_graph::ScopeId,
 };
+
+/// A generic whole-slot fallback is provisional layout information, not a
+/// proof that survives substitution: its element can later be `SolPacked`.
+/// Keep that obligation deferred until instance finalization. A declared
+/// bound or an actual implementation proof is independent of this fallback.
+pub(crate) fn sol_codec_proof_is_deferred<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: TraitInstId<'db>,
+) -> bool {
+    sol_codec_elem(db, goal).is_some_and(|(_, elem)| {
+        collect_flags(db, elem).intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
+    })
+}
 
 /// The implementation proving `goal` when it is `SolLanes: LaneCodec<T>`
 /// for a `T` that is not `SolPacked` under `assumptions`. A `T` still to be
