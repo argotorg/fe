@@ -11,12 +11,13 @@ code.
 
 A field packs when its value is narrower than a word, like a Solidity value
 type: a `bool`, an integer narrower than `u256`, or a newtype of one (a
-struct with a single field, which takes its field's bytes). A newtype with a
-`std::evm::SolPacked` encoding narrower than its field takes its `BITS`
-instead, so `Address` takes 20 bytes, `FixedBytes<N>` takes `N` and the
-odd-width integers such as `Uint24` take their width. Its field's value lies
-in those bytes, and writing a value they cannot hold reverts, as its
-`SolPacked` encoding does. Narrow fields fill a slot from its low-order end
+struct with a single field, which takes its field's bytes). The std Solidity
+value types take their `std::evm::SolPacked` width instead, so `Address`
+takes 20 bytes, `FixedBytes<N>` takes `N` and the odd-width integers such as
+`Uint24` take their width. Its field's value lies in those bytes, and writing
+a value they cannot hold reverts, as its `SolPacked` encoding does. A
+`SolPacked` impl of your own does not narrow its type, since its encoding
+need not be its field's value. Narrow fields fill a slot from its low-order end
 in declaration order, and a field that does not fit the rest of the slot
 starts the next one. Any other struct, tuple, array or enum takes whole
 slots of its own, and the field after it starts a new slot, as in Solidity.

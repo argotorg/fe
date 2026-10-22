@@ -386,11 +386,13 @@ impl<'db> ContractStorageLayoutResult<'db> {
 /// The bytes a value of `ty` takes in a storage slot it shares with its
 /// neighbours as a struct, tuple or contract field, like a Solidity value
 /// type: a boolean or an integer narrower than a word, or a newtype of one,
-/// a struct with a single field, which lies in its field's bytes. A newtype
-/// with a `std::evm::SolPacked` encoding a whole number of bytes narrower
-/// than its field takes the encoding's `BITS` instead and holds its field's
-/// value in them: `Address` takes 20 bytes and `Uint24` 3. Any other
-/// encoding leaves it in its field's bytes. Everything else takes whole
+/// a struct with a single field, which lies in its field's bytes. A std
+/// Solidity value type (`std::evm::sol_slot::SolValueType`) whose
+/// `std::evm::SolPacked` encoding is a whole number of bytes narrower than
+/// its field takes the encoding's `BITS` instead and holds its field's value
+/// in them: `Address` takes 20 bytes and `Uint24` 3. Any other newtype lies
+/// in its field's bytes, since its encoding need not be its field's value.
+/// Everything else takes whole
 /// slots. Runtime layouts carry the same widths
 /// (`mir::runtime::storage_scalar_bytes` and a struct layout's
 /// `lane_bytes`).
@@ -493,17 +495,29 @@ fn newtype_scalar_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Optio
     }
 }
 
-/// `std::evm::SolPacked::BITS` of `ty`, when `ty` has that encoding.
+/// `std::evm::SolPacked::BITS` of `ty`, when `ty` is a
+/// `std::evm::sol_slot::SolValueType`.
 fn sol_packed_bits<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u64> {
     if ty.has_param(db) || ty.has_var(db) {
         return None;
     }
     let scope = ty.adt_def(db)?.scope(db);
+    let solve_cx = TraitSolveCx::new(db, scope);
     let sol_packed = resolve_lib_trait_path(db, scope, "std::evm::SolPacked")?;
-    let Selection::Unique(resolved) = resolve_trait_impl_instance(
-        db,
-        TraitSolveCx::new(db, scope),
-        TraitInstId::new_simple(db, sol_packed, vec![ty]),
+    // The marker is `pub(ingot)`, so it resolves only from within std.
+    let value_type =
+        resolve_lib_trait_path(db, sol_packed.scope(), "std::evm::sol_slot::SolValueType")?;
+    let (Selection::Unique(_), Selection::Unique(resolved)) = (
+        resolve_trait_impl_instance(
+            db,
+            solve_cx,
+            TraitInstId::new_simple(db, value_type, vec![ty]),
+        ),
+        resolve_trait_impl_instance(
+            db,
+            solve_cx,
+            TraitInstId::new_simple(db, sol_packed, vec![ty]),
+        ),
     ) else {
         return None;
     };

@@ -1,11 +1,12 @@
-use std::abi::sol::{Bytes4, Int24, Uint24}
+use std::abi::sol::{Bytes4, Int24, Uint24, Uint40}
 use std::evm::{Address, Evm, RawStorage, SolPacked, StorageMap}
 use std::evm::layout::mapping_slot
 
 // Solidity value types pack into shared storage slots like booleans and
 // narrow integers: `Address` takes 20 bytes, `bytesN` N, and the odd-width
 // integers their width. A newtype, a struct with one field, packs like its
-// field, or at its `SolPacked` width when that is narrower. The expected raw
+// field, or, for a std value type, at its `SolPacked` width when that is
+// narrower. The expected raw
 // slots are what `solc --storage-layout` reports for the same Solidity
 // structs, with `type Stamp is uint64`:
 //
@@ -27,23 +28,6 @@ struct Owner {
 
 impl Copy for Owner {}
 
-// Held in a `u64`, stored in five bytes like a Solidity `uint40`.
-struct Time {
-    secs: u64,
-}
-
-impl Copy for Time {}
-
-impl SolPacked for Time {
-    const BITS: u256 = 40
-    fn to_packed(own self) -> u256 {
-        self.secs as u256
-    }
-    fn from_packed(_ bits: u256) -> Self {
-        Time { secs: bits.downcast_truncate() }
-    }
-}
-
 struct Rec {
     owner: Address,
     flag: bool,
@@ -57,7 +41,7 @@ struct Odd {
     wide: Uint24,
     neg: Int24,
     nested: Owner,
-    time: Time,
+    time: Uint40,
 }
 
 impl Copy for Odd {}
@@ -131,14 +115,14 @@ pub contract ValueTypes {
                 wide: Uint24 { val: 0xabcdef },
                 neg: Int24 { val: -5 },
                 nested: Owner { a: Address::from_word_truncate(0x77) },
-                time: Time { secs: 0x1122334455 },
+                time: Uint40 { val: 0x1122334455 },
             }
         }
         ReadOdd -> i256 uses (odd) {
             assert(odd.tag.val == 0x01ffc9a7)
             assert(odd.wide.val == 0xabcdef)
             assert(odd.nested.a == Address::from_word_truncate(0x77))
-            assert(odd.time.secs == 0x1122334455)
+            assert(odd.time.val == 0x1122334455)
             let copy = odd
             assert(copy.neg.val == -5)
             odd.neg.val as i256
@@ -152,7 +136,7 @@ pub contract ValueTypes {
             odd.neg.val = 0x800000
         }
         DirtyTime {} uses (mut odd) {
-            odd.time.secs = 0x10000000000
+            odd.time.val = 0x10000000000
         }
         FillEntry {} uses (mut entries) {
             entries[3] = Rec { owner: Address::from_word_truncate(0x99), flag: true, stamp: Stamp { t: 2 } }
@@ -349,93 +333,76 @@ fn test_narrowed_map_value_write_checks() uses (evm: mut Evm) {
 }
 
 // ---------------------------------------------------------------------------
-// A `SolPacked` width only narrows a newtype's field: `Wider` declares 40
-// bits but holds a `Narrow` stored in 32, so it takes `Narrow`'s four bytes
-// wherever it lies, packed beside a field or alone as a map value.
+// A `SolPacked` impl outside std leaves its newtype at its field's width, as
+// its encoding need not be its field's value: `Time` declares 40 bits but
+// takes its `u64`'s eight bytes, and `Milli` its `u256`'s whole slot.
 // ---------------------------------------------------------------------------
 
-struct Narrow {
-    val: u64,
+struct Time {
+    secs: u64,
 }
 
-impl Copy for Narrow {}
+impl Copy for Time {}
 
-impl SolPacked for Narrow {
-    const BITS: u256 = 32
-    fn to_packed(own self) -> u256 {
-        self.val as u256
-    }
-    fn from_packed(_ bits: u256) -> Self {
-        Narrow { val: bits.downcast_truncate() }
-    }
-}
-
-struct Wider {
-    inner: Narrow,
-}
-
-impl Copy for Wider {}
-
-impl SolPacked for Wider {
+impl SolPacked for Time {
     const BITS: u256 = 40
     fn to_packed(own self) -> u256 {
-        self.inner.val as u256
+        self.secs as u256
     }
     fn from_packed(_ bits: u256) -> Self {
-        Wider { inner: Narrow { val: bits.downcast_truncate() } }
+        Time { secs: bits.downcast_truncate() }
     }
 }
 
-msg NestedMsg {
+struct Milli {
+    raw: u256,
+}
+
+impl Copy for Milli {}
+
+impl SolPacked for Milli {
+    const BITS: u256 = 64
+    fn to_packed(own self) -> u256 {
+        self.raw / 1000
+    }
+    fn from_packed(_ bits: u256) -> Self {
+        Milli { raw: bits * 1000 }
+    }
+}
+
+msg UserMsg {
     #[selector = 1]
     Fill {},
     #[selector = 2]
     Slot { slot: u256 } -> u256,
-    #[selector = 3]
-    PackedWide {},
-    #[selector = 4]
-    EntryWide {},
 }
 
-// Slots: wider and flag 0, entries 1.
-pub contract Nested {
-    mut wider: Wider,
+// Slots: time and flag 0, milli 1, after 2.
+pub contract UserPacked {
+    mut time: Time,
     mut flag: u8,
-    mut entries: StorageMap<u256, Wider>,
+    mut milli: Milli,
+    mut after: u8,
 
-    recv NestedMsg {
-        Fill {} uses (mut wider, mut flag) {
-            wider = Wider { inner: Narrow { val: 0x11223344 } }
+    recv UserMsg {
+        Fill {} uses (mut time, mut flag, mut milli, mut after) {
+            // Beyond `Time`'s 40 bits, within its `u64`.
+            time = Time { secs: 0x10000000000 }
             flag = 0x55
+            milli = Milli { raw: 5000 }
+            after = 0x66
         }
         Slot { slot } -> u256 uses (raw: RawStorage) {
             unsafe { raw.sload(slot) }
-        }
-        // Within `Wider`'s 40 bits but not `Narrow`'s 32.
-        PackedWide {} uses (mut wider) {
-            wider = Wider { inner: Narrow { val: 0x100000000 } }
-        }
-        EntryWide {} uses (mut entries) {
-            entries[1] = Wider { inner: Narrow { val: 0x100000000 } }
         }
     }
 }
 
 #[test]
-fn test_nested_newtype_takes_narrower_width() uses (evm: mut Evm) {
-    let c = evm.create2<Nested>(value: Wei::zero(), args: (), salt: 1)
-    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: NestedMsg::Fill {})
-    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: NestedMsg::Slot { slot: 0 }) == (0x55 << 32) | 0x11223344)
-}
-
-#[test(should_revert)]
-fn test_nested_packed_newtype_write_checks() uses (evm: mut Evm) {
-    let c = evm.create2<Nested>(value: Wei::zero(), args: (), salt: 2)
-    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: NestedMsg::PackedWide {})
-}
-
-#[test(should_revert)]
-fn test_nested_map_value_newtype_write_checks() uses (evm: mut Evm) {
-    let c = evm.create2<Nested>(value: Wei::zero(), args: (), salt: 3)
-    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: NestedMsg::EntryWide {})
+fn test_user_sol_packed_keeps_field_width() uses (evm: mut Evm) {
+    let c = evm.create2<UserPacked>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: UserMsg::Fill {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: UserMsg::Slot { slot: 0 }) == (0x55 << 64) | 0x10000000000)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: UserMsg::Slot { slot: 1 }) == 5000)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: UserMsg::Slot { slot: 2 }) == 0x66)
 }

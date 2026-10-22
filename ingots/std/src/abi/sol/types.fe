@@ -651,6 +651,8 @@ impl<const N: usize> ingot::evm::SolPacked for FixedBytes<N> {
     }
 }
 
+impl<const N: usize> ingot::evm::sol_slot::SolValueType for FixedBytes<N> {}
+
 // `value` if it is a valid right-aligned `bytes{len}`; reverts otherwise,
 // like `FixedBytes::word`.
 fn checked_fixed_bytes(value: u256, len: u256) -> u256 {

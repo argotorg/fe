@@ -49,6 +49,12 @@ pub trait SolPacked {
     fn from_packed(_ bits: u256) -> Self
 }
 
+/// Marker for the std Solidity value types whose `SolPacked` encoding is
+/// their field's value, such as `Address`. A contract or struct field of such
+/// a type packs at its `BITS` width; one of any other `SolPacked` type packs
+/// at its field's width.
+pub(ingot) trait SolValueType {}
+
 pub struct SolSlot {
     payload: Payload,
 }
@@ -282,6 +288,8 @@ impl SolPacked for Address {
     fn to_packed(own self) -> u256 { self.inner }
     fn from_packed(_ bits: u256) -> Self { Address::from_word_truncate(bits) }
 }
+
+impl SolValueType for Address {}
 
 impl SolPacked for u8 {
     const BITS: u256 = 8
