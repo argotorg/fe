@@ -305,7 +305,7 @@ fn nested_trait_member_splices_are_checked_at_the_destination() {
     let source = format!(
         "{PRELUDE}
         const fn make(_ record: Record) -> Code<Item> {{
-            let declaration: Code<Item> = quote {{ const VALUE: u256 }}
+            let declaration: Code<Item> = quote {{ const VALUE: u256 = 3 }}
             let definition: Code<Item> = quote {{ const VALUE: u256 = 7 }}
             quote {{ fn generated() -> u256 {{
                 trait Local {{ ${{declaration}} }}
