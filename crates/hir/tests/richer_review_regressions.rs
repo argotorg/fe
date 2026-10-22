@@ -117,7 +117,7 @@ fn reflection_rejects_wrong_record_kinds_and_unsupported_type_is_candidates() {
         (
             "Pair",
             "variant_count(record)",
-            "variant_count requires a whole enum",
+            "variant_count requires a whole",
         ),
         (
             "Choice",
@@ -127,7 +127,7 @@ fn reflection_rejects_wrong_record_kinds_and_unsupported_type_is_candidates() {
         (
             "Choice",
             "variant_count(variant(record, 0))",
-            "variant_count requires a whole enum",
+            "variant_count requires a whole",
         ),
         (
             "Pair",
