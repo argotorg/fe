@@ -48,7 +48,8 @@ use crate::analysis::{
         shape::Shape,
         trait_def::TraitInstId,
         trait_resolution::{
-            PredicateListId, TraitSolveCx, constraint::collect_func_effect_provider_constraints,
+            ChosenImpls, PredicateListId, TraitSolveCx,
+            constraint::collect_func_effect_provider_constraints,
         },
         ty_def::{
             BorrowKind, ClosureDef, ClosureTy, InvalidCause, StringFallback, TyData, TyId,

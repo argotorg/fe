@@ -495,7 +495,6 @@ impl<'db> Callable<'db> {
             ),
             entries: evidence,
         });
-        pending
     }
 
     /// Missing dictionaries cannot be reconstructed ordinarily after a lexical
