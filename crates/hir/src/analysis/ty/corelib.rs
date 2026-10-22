@@ -810,9 +810,10 @@ fn resolve_lib_trait<'db>(
         path = path.push_str(db, segment);
     }
 
-    let assumptions = PredicateListId::empty_list(db);
-    match resolve_path(db, path, scope, assumptions, true).ok()? {
-        PathRes::Trait(trait_) => Some(trait_.def(db)),
+    match crate::analysis::name_resolution::resolve_type_path_definition(db, path, scope)? {
+        crate::analysis::name_resolution::NameResKind::Scope(ScopeId::Item(ItemKind::Trait(
+            trait_,
+        ))) => Some(trait_),
         _ => None,
     }
 }
