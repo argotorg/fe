@@ -1535,6 +1535,13 @@ pub fn freeze_generation_request<'db>(
     use crate::hir_def::ItemKind;
     let goal = request.goal(db);
     let opening = request.opening(db);
+    let mode = match goal.mode(db) {
+        crate::hir_def::ModeMarker::None => common::generation::ScopedDeriveMode::Ref,
+        crate::hir_def::ModeMarker::Mut => common::generation::ScopedDeriveMode::Mut,
+        crate::hir_def::ModeMarker::MaybeMut => {
+            return Err("scoped derive requires a settled trait access mode".into());
+        }
+    };
     if goal.def(db) != opening.offered_trait(db) {
         return Err("scoped derive request does not match its advertised trait".into());
     }
@@ -1606,6 +1613,7 @@ pub fn freeze_generation_request<'db>(
         return Err("scoped derive requires an authored trait declaration".into());
     };
     Ok(common::generation::ScopedDeriveDemand {
+        mode,
         opening: opening.key(db).clone(),
         trait_ref: common::generation::FrozenTraitRef {
             file: module
@@ -1624,6 +1632,82 @@ pub fn freeze_generation_request<'db>(
             variant_index: None,
         },
     })
+}
+
+/// Rebind an accumulated dependency through exact declarations and the checked
+/// opening table. Provider type and proofs are never reconstructed from text.
+pub fn rebind_generation_request<'db>(
+    db: &'db dyn HirAnalysisDb,
+    demand: &common::generation::ScopedDeriveDemand,
+) -> Result<crate::analysis::ty::trait_resolution::generation::GenerationRequest<'db>, String> {
+    use crate::analysis::ty::{
+        adt_def::AdtRef,
+        trait_def::TraitInstId,
+        trait_resolution::generation::{GenerationRequest, provider_opening_at},
+    };
+    let trait_file = db
+        .workspace()
+        .get(db, &demand.trait_ref.file)
+        .ok_or("requested trait file is missing")?;
+    let trait_module = crate::lower::map_file_to_mod(db, trait_file);
+    let trait_root = crate::lower::top_mod_ast(db, trait_module);
+    let trait_ = trait_module
+        .all_traits(db)
+        .iter()
+        .copied()
+        .find(|trait_| {
+            let HirOrigin::Raw(pointer) = trait_.origin(db) else {
+                return false;
+            };
+            pointer.to_node(trait_root.syntax()).syntax().text_range() == demand.trait_ref.range
+        })
+        .ok_or("requested trait declaration is missing")?;
+    let target_file = db
+        .workspace()
+        .get(db, &demand.target.target_file)
+        .ok_or("requested target file is missing")?;
+    let target_module = crate::lower::map_file_to_mod(db, target_file);
+    let target_root = crate::lower::top_mod_ast(db, target_module);
+    let target = match demand.target.owner_kind {
+        common::generation::FrozenRecordOwnerKind::Struct => target_module
+            .all_structs(db)
+            .iter()
+            .copied()
+            .find(|target| {
+                let HirOrigin::Raw(pointer) = target.origin(db) else {
+                    return false;
+                };
+                pointer.to_node(target_root.syntax()).syntax().text_range()
+                    == demand.target.target_range
+            })
+            .map(AdtRef::Struct),
+        common::generation::FrozenRecordOwnerKind::Enum => target_module
+            .all_enums(db)
+            .iter()
+            .copied()
+            .find(|target| {
+                let HirOrigin::Raw(pointer) = target.origin(db) else {
+                    return false;
+                };
+                pointer.to_node(target_root.syntax()).syntax().text_range()
+                    == demand.target.target_range
+            })
+            .map(AdtRef::Enum),
+    }
+    .ok_or("requested target declaration is missing")?;
+    let opening = provider_opening_at(db, &demand.opening, trait_)
+        .ok_or("request has no unique checked authored provider opening")?;
+    let mode = match demand.mode {
+        common::generation::ScopedDeriveMode::Ref => crate::hir_def::ModeMarker::None,
+        common::generation::ScopedDeriveMode::Mut => crate::hir_def::ModeMarker::Mut,
+    };
+    let goal = TraitInstId::new_simple(db, trait_, vec![TyId::adt(db, target.as_adt(db))])
+        .with_mode(db, mode);
+    let request = GenerationRequest::new(db, opening, goal);
+    if freeze_generation_request(db, request)? != *demand {
+        return Err("requested identities changed while preparing unchanged source".into());
+    }
+    Ok(request)
 }
 
 /// Translate one immutable prepared binding to its admitted named candidate.

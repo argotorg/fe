@@ -19,10 +19,17 @@ pub struct FrozenTraitRef {
     pub range: TextRange,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScopedDeriveMode {
+    Ref,
+    Mut,
+}
+
 /// Candidate availability requested by the ordinary evidence engine. Provider
 /// identity is retained by the checked opening in the current database view.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ScopedDeriveDemand {
+    pub mode: ScopedDeriveMode,
     pub opening: ScopedDeriveOpeningKey,
     pub trait_ref: FrozenTraitRef,
     pub target: FrozenRecordRef,
