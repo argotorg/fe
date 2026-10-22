@@ -1510,8 +1510,8 @@ fn finalized_derive_provider<'db>(
         db,
         proof,
         inst,
-        request.scope(),
-        request.span().into(),
+        scope,
+        spans.1.clone(),
     )
     .map_err(|(cause, diagnostics)| {
         NativeDeriveProviderError::Provider(
