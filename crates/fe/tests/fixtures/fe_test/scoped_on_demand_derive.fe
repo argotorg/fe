@@ -45,7 +45,8 @@ fn row_apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
 
 #[test]
 fn generated_choice_fills_a_deferred_closure_effect_row() {
-    let f = || row_charge()
-    with (RowScore = Pair {}) { assert!(row_apply(f) == 100) }
-    with (RowProvider, RowScore = Pair {}) { assert!(row_apply(f) == 42) }
+    let ordinary = || row_charge()
+    with (RowScore = Pair {}) { assert!(row_apply(ordinary) == 100) }
+    let generated = || row_charge()
+    with (RowProvider, RowScore = Pair {}) { assert!(row_apply(generated) == 42) }
 }
