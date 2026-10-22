@@ -329,3 +329,27 @@ fn descriptor_elaboration_is_scoped_to_the_canonical_argument_occurrence() {
         );
     }
 }
+
+#[test]
+fn goal_descriptor_types_do_not_weaken_or_strengthen_associated_equalities() {
+    use fe_hir::test_db::{format_diagnostics, initialize_test_analysis_pass};
+    for (argument_goal, expect_error) in [
+        ("Has<Pair, Out = u8>", false),
+        ("Has<Pair>", true),
+        ("Has<Pair, Out = u256>", true),
+    ] {
+        let source = format!(
+            "trait Has {{ type Out }}\nstruct Pair {{}}\nimpl Has for Pair {{ type Out = u8 }}\nfn consume(_ permit: core::permits::ImplPermit<Has<Pair, Out = u8>>) {{}}\nfn forward(_ permit: core::permits::ImplPermit<{argument_goal}>) {{ consume(permit) }}\n"
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("descriptor-exact-equalities.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        let diagnostics = initialize_test_analysis_pass().run_on_module(&db, module);
+        let rendered = format_diagnostics(&db, &diagnostics);
+        assert_eq!(
+            diagnostics.is_empty(),
+            !expect_error,
+            "{source}\n{rendered}"
+        );
+    }
+}
