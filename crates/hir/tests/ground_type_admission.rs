@@ -270,7 +270,7 @@ impl Score for Other with (Provider)
 
     let mut checked = 0;
     for &implementation in module.all_impl_traits(&db) {
-        let Ok(goal) = implementation.candidate_trait_inst_result(&db) else {
+        let Some(goal) = implementation.trait_inst(&db) else {
             continue;
         };
         if goal.def(&db) == score_trait {
@@ -286,7 +286,7 @@ impl Score for Other with (Provider)
 
 #[test]
 fn protocol_port_does_not_enable_public_constraint_kinds() {
-    use fe_parser::{RecoveryMode, parse_source_file};
+    use parser::{RecoveryMode, parse_source_file};
 
     for source in [
         "trait Constraint {}\ntrait CustomDerive<G: * -> Constraint> {}\n",
