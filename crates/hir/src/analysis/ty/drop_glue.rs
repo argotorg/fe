@@ -68,12 +68,19 @@ pub fn ty_has_drop_glue<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool 
         TyData::TyBase(TyBase::Prim(PrimTy::Array)) => any(&ty.generic_args(db)[..1]),
         TyData::TyBase(TyBase::Prim(PrimTy::Tuple(_))) => any(ty.generic_args(db)),
         TyData::TyBase(TyBase::Closure(closure)) => any(closure.captures(db)),
-        TyData::TyBase(TyBase::Prim(_) | TyBase::Contract(_) | TyBase::Func(_)) => false,
+        TyData::TyBase(
+            TyBase::Prim(_) | TyBase::Contract(_) | TyBase::Func(_) | TyBase::TraitDescriptor(_),
+        ) => false,
         // A value of a shape not yet known may hold anything, as a type
         // parameter may; the other shape constructors are not value types.
         TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier)) => true,
         TyData::TyBase(TyBase::Shape(_)) => false,
         TyData::TyVar(_) | TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_) => true,
-        TyData::TyApp(..) | TyData::ConstTy(_) | TyData::Never | TyData::Invalid(_) => false,
+        // A goal descriptor is compiler-issued metadata that holds no value.
+        TyData::TyApp(..)
+        | TyData::ConstTy(_)
+        | TyData::GoalDescriptor(_)
+        | TyData::Never
+        | TyData::Invalid(_) => false,
     }
 }

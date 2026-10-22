@@ -1,7 +1,10 @@
 mod callable;
 mod const_requirements;
 pub(crate) use const_requirements::check_declared_type_requirements;
-pub use const_requirements::{EvaluationStop, RequirementFailure};
+pub use const_requirements::{
+    EvaluationStop, GroundBoundAdmissionCause, GroundTypeAdmissionError, GroundTypeAdmissionKind,
+    RequirementFailure, admit_ground_type_application,
+};
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -1155,7 +1158,7 @@ pub(crate) fn inference_met_lowering_cycle<'db>(
 /// recursive const definition would be an unrecoverable salsa cycle through
 /// body checking instead of converging to a `RecursiveConst` error in the
 /// eval queries.
-#[salsa::tracked]
+#[salsa::tracked(cycle_initial = check_const_value_cycle_initial)]
 pub fn check_const_value<'db>(
     db: &'db dyn HirAnalysisDb,
     const_: Const<'db>,
@@ -1171,6 +1174,21 @@ pub fn check_const_value<'db>(
     }
 
     const_body_ctfe_diags(db, body, const_.ty(db), ConstUsePolicy::RequireValue)
+}
+
+fn check_const_value_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    const_: Const<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let span = const_
+        .body(db)
+        .to_opt()
+        .map(|body| body.span().into())
+        .unwrap_or_else(DynLazySpan::invalid);
+    vec![FuncBodyDiag::Ty(
+        TyLowerDiag::TypeLoweringCycle(span).into(),
+    )]
 }
 
 /// CTFE-validates an anonymous const body (a top-level `const` initializer or

@@ -88,7 +88,7 @@ where
         TyData::TyVar(var) => visitor.visit_var(var),
         TyData::TyParam(param) => visitor.visit_param(param),
         TyData::AssocTy(assoc_ty) => visitor.visit_assoc_ty(assoc_ty),
-        TyData::QualifiedTy(trait_inst) => {
+        TyData::QualifiedTy(trait_inst) | TyData::GoalDescriptor(trait_inst) => {
             visitor.visit_ty(trait_inst.self_ty(visitor.db()));
             trait_inst.visit_with(visitor);
         }
@@ -109,6 +109,7 @@ where
         TyBase::Adt(adt) => visitor.visit_adt(*adt),
         TyBase::Contract(c) => visitor.visit_contract(*c),
         TyBase::Func(func) => visitor.visit_func(*func),
+        TyBase::TraitDescriptor(_) => {}
         TyBase::Closure(closure) => visitor.visit_closure(*closure),
         TyBase::Shape(_) => {}
     }

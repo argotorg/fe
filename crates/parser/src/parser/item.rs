@@ -938,6 +938,29 @@ impl super::Parse for ImplScope {
             }
         }
 
+        if is_impl_trait
+            && parser
+                .current_token()
+                .is_some_and(|token| token.text() == "with")
+        {
+            parser.bump();
+            parser.set_scope_recovery_stack(&[SyntaxKind::LParen, SyntaxKind::RParen]);
+            parser.set_newline_as_trivia(true);
+            if parser.find_and_pop(SyntaxKind::LParen, ExpectedKind::Unspecified)? {
+                parser.bump();
+                parser.parse_or_recover(PathScope::default())?;
+            }
+            if parser.find_and_pop(
+                SyntaxKind::RParen,
+                ExpectedKind::ClosingBracket {
+                    bracket: SyntaxKind::RParen,
+                    parent: SyntaxKind::ImplTrait,
+                },
+            )? {
+                parser.bump();
+            }
+            return Ok(());
+        }
         parser.expect_and_pop_recovery_stack()?;
         parse_where_clause_opt(parser, ItemBlock::Required)?;
 

@@ -311,7 +311,15 @@ fn verify_sem_const_shape_impl<'db>(
                 crate::core::meta::MetaValue::Record(_) => {}
                 crate::core::meta::MetaValue::Field(field)
                 | crate::core::meta::MetaValue::FieldType(field) => {
-                    if field.index() >= field.record().field_count(db) {
+                    let field_count = field.record().field_count(db).map_err(
+                        |cause| match cause {
+                            crate::core::meta::RecordInputError::WholeEnumHasNoFields => {
+                                "field metadata requires a selected enum payload, not a whole enum"
+                            }
+                            _ => "field metadata does not identify an authored field collection",
+                        },
+                    )?;
+                    if field.index() >= field_count {
                         return Err("field index outside record");
                     }
                 }

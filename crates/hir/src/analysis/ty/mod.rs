@@ -43,6 +43,7 @@ pub mod corelib;
 pub mod effects;
 pub mod evidence;
 pub mod msg_selector;
+pub mod permits;
 
 pub mod decision_tree;
 pub mod diagnostics;
@@ -255,6 +256,32 @@ fn copy_impl_self_may_match<'db>(
     impl_base == target_base
 }
 
+pub(crate) fn adt_cycle_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+) -> Option<TyLowerDiag<'db>> {
+    // An `#[abi]` struct's ABI type holds its fields' wherever their
+    // values keep them.
+    let cycle = match adt.adt_ref(db) {
+        AdtRef::Struct(struct_)
+            if matches!(
+                struct_.origin(db),
+                HirOrigin::Desugared(DesugaredOrigin::AbiStruct(_))
+            ) =>
+        {
+            adt.recursive_cycle_through_arguments(db)
+        }
+        _ => adt.recursive_cycle(db),
+    };
+    if let Some(cycle) = cycle {
+        Some(TyLowerDiag::RecursiveType(cycle))
+    } else {
+        ingot_growing_cycles(db, adt.ingot(db))
+            .get(&adt)
+            .map(|cycle| TyLowerDiag::GrowingRecursiveType(cycle.clone()))
+    }
+}
+
 /// An analysis pass for type definitions.
 pub struct AdtDefAnalysisPass {}
 
@@ -273,7 +300,6 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
 
         let mut diags = vec![];
         let mut cycle_participants = FxHashSet::<AdtDef<'db>>::default();
-        let growing = ingot_growing_cycles(db, top_mod.ingot(db));
 
         for adt_ref in adts {
             diags.extend(adt_ref.diags(db).into_iter().map(|d| d.to_voucher()));
@@ -281,24 +307,11 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             if cycle_participants.contains(&adt) {
                 continue;
             }
-            // An `#[abi]` struct's ABI type holds its fields' wherever their
-            // values keep them.
-            let cycle = match adt_ref {
-                AdtRef::Struct(struct_)
-                    if matches!(
-                        struct_.origin(db),
-                        HirOrigin::Desugared(DesugaredOrigin::AbiStruct(_))
-                    ) =>
-                {
-                    adt.recursive_cycle_through_arguments(db)
+            if let Some(diagnostic) = adt_cycle_diagnostic(db, adt) {
+                if let TyLowerDiag::RecursiveType(cycle) = &diagnostic {
+                    cycle_participants.extend(cycle.iter().map(|m| m.adt));
                 }
-                _ => adt.recursive_cycle(db),
-            };
-            if let Some(cycle) = cycle {
-                diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
-                cycle_participants.extend(cycle.iter().map(|m| m.adt));
-            } else if let Some(cycle) = growing.get(&adt) {
-                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
+                diags.push(Box::new(diagnostic) as _);
             }
         }
         diags
@@ -1089,7 +1102,17 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
                 }
                 _ => true,
             })
-            .flat_map(|impl_trait| impl_trait.diags(db))
+            .flat_map(|impl_trait| {
+                if crate::core::meta::is_unfulfilled_derive_request(db, *impl_trait) {
+                    vec![diagnostics::TyDiagCollection::Impl(
+                        diagnostics::ImplDiag::UnfulfilledDeriveRequest {
+                            primary: impl_trait.span().into(),
+                        },
+                    )]
+                } else {
+                    impl_trait.diags(db)
+                }
+            })
             .map(|diag| diag.to_voucher())
             .collect()
     }

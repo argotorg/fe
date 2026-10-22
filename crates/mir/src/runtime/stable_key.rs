@@ -712,6 +712,7 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
 
     match ty.data(db) {
         TyData::TyBase(base) => match base {
+            TyBase::TraitCtor(def) => format!("trait_ctor${}", item_identity(db, (*def).into())),
             TyBase::Prim(prim) => format!("prim${prim:?}"),
             TyBase::Shape(con) => format!("shape${con:?}"),
             TyBase::Adt(adt) => format!("adt${}", item_identity(db, adt.adt_ref(db).as_item())),

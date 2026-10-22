@@ -264,7 +264,12 @@ fn spliced_members_meet_the_attribute_rules_of_written_members() {
                 quote {{ {destination} }}
             }}"
         );
-        let diags = output(&source, "Pair");
+        // Item quotations are validated when the provider returns them, so the
+        // attribute may be refused before any output is lowered.
+        let diags = match request(&source, "Pair") {
+            Ok(plan) => output_request(&source, plan),
+            Err(refusal) => refusal,
+        };
         assert!(diags.contains("#[generate]"), "{destination}: {diags}");
     }
 }

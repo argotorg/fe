@@ -1,0 +1,7 @@
+//! Prototype canonical root authority; root configuration remains a compiler input gap.
+pub struct PermitAuthority<G> {}
+pub struct ImplPermit<G> {}
+/// Reusable ordinary immutable effect authority, not a move-once token.
+pub fn impl_permit<G>() -> ImplPermit<G> uses (grant: PermitAuthority<G>) {
+    ImplPermit {}
+}

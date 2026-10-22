@@ -1894,6 +1894,61 @@ struct Box<T> { value: T }
 }
 
 #[test]
+fn instantiated_generic_field_type_splice_refuses_without_losing_scalar_reflection() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record, field, field_count, field_type}
+trait Value { const fn value() -> u256 }
+struct Box<T> { value: T }
+struct Provider {}
+impl Derive<Value> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let ty = field_type(field(record, 0))
+        quote { const fn value() -> ${ty} { 7 } }
+    }
+}
+impl Value for Box<u256> with (Provider)
+const fn observe() -> u256 { <Box<u256> as Value>::value() }
+"#;
+    let (db, file) = input(source);
+    let error = prepare_file(&db, file)
+        .err()
+        .expect("instantiated type arguments must not be discarded");
+    assert!(
+        error
+            .cause
+            .contains("field type splices from instantiated generic records are not supported yet"),
+        "{error}"
+    );
+
+    let record_splice = source.replace("-> ${ty} { 7 }", "-> ${record} { 7 }");
+    let (db, file) = input(&record_splice);
+    let error = prepare_file(&db, file)
+        .err()
+        .expect("record splice must not lose concrete target arguments");
+    assert!(
+        error
+            .cause
+            .contains("record splices from instantiated generic records are not supported yet"),
+        "{error}"
+    );
+
+    let scalar = source
+        .replace(
+            "let ty = field_type(field(record, 0))",
+            "let n = field_count(record)",
+        )
+        .replace("-> ${ty} { 7 }", "-> u256 { ${n} as u256 }");
+    let fixed_field = source.replace(
+        "struct Box<T> { value: T }",
+        "struct Box<T> { value: u256 }",
+    );
+    for positive in [scalar, fixed_field] {
+        let (db, file) = input(&positive);
+        assert!(prepare_file(&db, file).unwrap().is_some());
+    }
+}
+
+#[test]
 fn reflected_field_query_family_rejects_named_implementations() {
     let (db, file) = input(
         r#"

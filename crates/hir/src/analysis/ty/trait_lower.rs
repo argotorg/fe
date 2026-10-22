@@ -83,7 +83,8 @@ fn raw_impl_self_key<'db>(
                     | TyBase::Contract(_)
                     | TyBase::Func(_)
                     | TyBase::Closure(_)
-                    | TyBase::Shape(_) => unreachable!(),
+                    | TyBase::Shape(_)
+                    | TyBase::TraitDescriptor(_) => unreachable!(),
                 },
                 NameResKind::Scope(
                     scope @ ScopeId::Item(
@@ -145,7 +146,13 @@ pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Option<ImplementorId<'db>> {
+    if crate::core::meta::is_unfulfilled_derive_request(db, impl_trait) {
+        return None;
+    }
     let trait_inst = impl_trait.trait_inst_result(db).ok()?;
+    if super::permits::establishment_for_goal(db, impl_trait, trait_inst).is_err() {
+        return None;
+    }
     let params = impl_trait.impl_params(db);
 
     // This is the checked item-signature path used after candidate lookup or by
@@ -336,10 +343,16 @@ pub(crate) fn lower_impl_trait_header<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Option<ImplementorId<'db>> {
+    if crate::core::meta::is_unfulfilled_derive_request(db, impl_trait) {
+        return None;
+    }
     // Delegate trait-ref lowering and ingot checks to the semantic helper on
     // `ImplTrait`. If lowering fails or the ingot rule is violated, this
     // returns `None`.
     let trait_inst = impl_trait.candidate_trait_inst_result(db).ok()?;
+    if super::permits::establishment_for_goal(db, impl_trait, trait_inst).is_err() {
+        return None;
+    }
 
     // Semantic generic parameters for this impl-trait block.
     let params = impl_trait.impl_params(db);
@@ -578,7 +591,14 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     let generic_args = path.generic_args(db);
     // Lower provided explicit args (excluding Self) as a type's generic args
     // are: a path among them is the constant it names, if it names one.
-    let lowered = lower_generic_arg_list(db, generic_args, scope, assumptions, lowering_cx);
+    let lowered = super::ty_lower::lower_protocol_generic_arg_list(
+        db,
+        generic_args,
+        scope,
+        assumptions,
+        lowering_cx,
+        t.into(),
+    );
     let mut provided_explicit = Vec::new();
     let mut assoc_bindings = IndexMap::new();
     for (arg, lowered) in generic_args.data(db).iter().zip(lowered) {

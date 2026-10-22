@@ -137,6 +137,8 @@ where
 
             (_, TyData::TyVar(var)) => self.unify_var_value(var, ty1),
 
+            (TyData::GoalDescriptor(lhs), TyData::GoalDescriptor(rhs)) => lhs.unify(self, rhs),
+
             (TyData::TyApp(ty1_1, ty1_2), TyData::TyApp(ty2_1, ty2_2)) => {
                 self.unify_ty(*ty1_1, *ty2_1)?;
                 self.unify_ty(*ty1_2, *ty2_2)

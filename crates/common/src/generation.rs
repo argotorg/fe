@@ -88,6 +88,8 @@ pub enum FrozenCode {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FrozenGenerationRequest {
     pub target_file: Url,
+    /// Authored derive header receiving this generated method.
+    pub request_impl: Option<TextRange>,
     pub code: FrozenCode,
 }
 

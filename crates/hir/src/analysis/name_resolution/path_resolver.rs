@@ -1277,7 +1277,14 @@ fn trait_arg_path_error<'db>(
                         position,
                         lowering_cx,
                     )
-                    .is_ok_and(|ty| ty.is_const_ty(db)) =>
+                    .is_ok_and(|ty| {
+                        ty.is_const_ty(db)
+                            || matches!(
+                                ty.base_ty(db).data(db),
+                                TyData::TyBase(TyBase::TraitDescriptor(_))
+                                    | TyData::GoalDescriptor(_)
+                            )
+                    }) =>
                 {
                     None
                 }
@@ -2614,7 +2621,20 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args(), lowering_cx)?)
+                    PathRes::Ty(ty_from_adtref(
+                        db,
+                        path,
+                        adt_ref,
+                        &super::super::ty::ty_lower::lower_protocol_generic_arg_list(
+                            db,
+                            path.generic_args(db),
+                            scope,
+                            assumptions,
+                            lowering_cx,
+                            item,
+                        ),
+                        lowering_cx,
+                    )?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters

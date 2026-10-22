@@ -18,7 +18,7 @@ fn concrete_record_keeps_field_order_type_and_nominal_identity() {
     let pair = RecordInput::for_authored_type(&db, pair_ty).unwrap();
     let twin = RecordInput::for_authored_type(&db, twin_ty).unwrap();
     assert_ne!(pair, twin);
-    assert_eq!(pair.field_count(&db), 2);
+    assert_eq!(pair.field_count(&db), Ok(2));
     let first = pair.field(&db, 0).unwrap();
     let second = pair.field(&db, 1).unwrap();
     assert_eq!(first.name(&db).unwrap().data(&db), "first");

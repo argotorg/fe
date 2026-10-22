@@ -1253,7 +1253,25 @@ impl<'db> ImplTrait<'db> {
         out_types.retain(|out_type: &AssocTyDef| {
             !types.iter().any(|defined| defined.name == out_type.name)
         });
+
         types.extend(out_types);
+
+        // The authored header owns generated methods and ordinary impl identity.
+        let db = ctxt.db();
+        let file_url = ctxt.top_mod().file(db).url(db);
+        let plan = db
+            .generation_inputs()
+            .requests(db)
+            .iter()
+            .find(|plan| {
+                Some(&plan.target_file) == file_url.as_ref()
+                    && plan.request_impl == Some(ast.syntax().text_range())
+            })
+            .cloned();
+        if let Some(plan) = plan {
+            super::generated::lower_derive_method(ctxt, &plan.code);
+        }
+
         let impl_trait = Self::new(
             ctxt.db(),
             id,

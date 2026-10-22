@@ -39,6 +39,12 @@ pub(super) struct ScopeGraphBuilder<'db> {
     module_stack: Vec<NodeId>,
     id_stack: Vec<TrackedItemId<'db>>,
     declared_blocks: Vec<FxHashMap<NodeId, Option<ExprId>>>,
+    quoted_origins: Vec<(
+        ItemKind<'db>,
+        TopLevelMod<'db>,
+        Option<parser::TextRange>,
+        Option<parser::TextRange>,
+    )>,
 }
 
 impl<'db> ScopeGraphBuilder<'db> {
@@ -52,6 +58,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             module_stack: Default::default(),
             id_stack: Default::default(),
             declared_blocks: vec![],
+            quoted_origins: vec![],
         };
 
         let id = TrackedItemId::new(db, None, TrackedItemVariant::TopLevelMod(top_mod.name(db)));
@@ -70,6 +77,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             module_stack: Default::default(),
             id_stack: vec![func.id(db)],
             declared_blocks: vec![],
+            quoted_origins: vec![],
         }
     }
 
@@ -405,8 +413,25 @@ impl<'db> ScopeGraphBuilder<'db> {
         ScopeId::Item(ItemKind::TopMod(quote_top_mod))
     }
 
-    /// Keep target discovery edges while giving the whole generated function
-    /// its producer lexical origin. Its body remains a child of the function.
+    /// Keep target discovery edges while giving the whole generated item
+    /// its producer lexical origin. Its body remains a child of the item.
+    pub(super) fn defer_quoted_item_origin(
+        &mut self,
+        item: ItemKind<'db>,
+        quote_top_mod: TopLevelMod<'db>,
+        producer: Option<parser::TextRange>,
+        producer_block: Option<parser::TextRange>,
+    ) {
+        self.quoted_origins
+            .push((item, quote_top_mod, producer, producer_block));
+    }
+
+    pub(super) fn apply_quoted_function_origins(&mut self) {
+        for (item, quote_top_mod, producer, block) in std::mem::take(&mut self.quoted_origins) {
+            self.set_quoted_item_origin(item, quote_top_mod, producer, block);
+        }
+    }
+
     pub(super) fn set_quoted_function_origin(
         &mut self,
         function: crate::hir_def::Func<'db>,
@@ -429,12 +454,30 @@ impl<'db> ScopeGraphBuilder<'db> {
             .iter()
             .find_map(|(node, (scope, _))| (*scope == ScopeId::Item(item)).then_some(node))
             .expect("generated item scope");
+        let (publication_node, publication) = self
+            .graph
+            .edges
+            .get(&item_node)
+            .and_then(|edges| {
+                edges
+                    .iter()
+                    .find(|(_, kind)| matches!(kind, EdgeKind::Lex(_)))
+            })
+            .map(|(node, _)| (*node, self.graph.nodes[*node].0))
+            .expect("generated item retains its publication scope");
         self.graph
             .edges
             .entry(item_node)
             .or_default()
             .retain(|(_, kind)| !matches!(kind, EdgeKind::Lex(_)));
-        self.graph.nodes[item_node].1.publication_parent = Some(self.top_mod.scope());
+        self.graph.nodes[item_node].1.publication_parent = Some(publication);
+        if matches!(
+            publication,
+            ScopeId::Item(ItemKind::ImplTrait(_) | ItemKind::Impl(_) | ItemKind::Trait(_))
+        ) {
+            self.graph
+                .add_edge(item_node, publication_node, EdgeKind::self_ty());
+        }
         let lexical_scope = self.resolve_producer_scope(quote_top_mod, producer, producer_block);
         if quote_top_mod != self.top_mod {
             self.graph
