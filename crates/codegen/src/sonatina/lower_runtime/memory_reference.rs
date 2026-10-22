@@ -381,15 +381,19 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                     let clean = this
                         .fb
                         .insert_inst(And::new(this.module.inst_set(), word, mask), Type::I256);
-                    let fitted = if signed {
-                        this.reference_sign_extend(reference.layout, clean)?
-                    } else {
-                        clean
-                    };
-                    let lost = this
-                        .fb
-                        .insert_inst(Ne::new(this.module.inst_set(), fitted, word), Type::I1);
-                    this.emit_empty_revert(lost)?;
+                    // A lane is at least a byte, so only a wider integer, a
+                    // packed newtype's field, can be narrowed and not fit.
+                    if matches!(scalar.repr, ScalarRepr::Int { bits, .. } if bits > 8) {
+                        let fitted = if signed {
+                            this.reference_sign_extend(reference.layout, clean)?
+                        } else {
+                            clean
+                        };
+                        let lost = this
+                            .fb
+                            .insert_inst(Ne::new(this.module.inst_set(), fitted, word), Type::I1);
+                        this.emit_empty_revert(lost)?;
+                    }
                     Ok(clean)
                 })?;
                 let shift = self.reference_lane_shift(reference.layout);
