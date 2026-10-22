@@ -1906,10 +1906,13 @@ impl<T> FieldQuery<u256> for Query<T> as Alternate {
     );
     let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
     assert!(
-        diagnostics.contains("this trait cannot have a named implementation"),
+        diagnostics.contains("error[5-0007]: FieldQuery requires an ordinary implementation"),
         "{diagnostics}"
     );
-    assert!(diagnostics.contains("FieldQuery"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("field queries run outside lexical implementation openings"),
+        "{diagnostics}"
+    );
 }
 
 #[test]
