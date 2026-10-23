@@ -362,6 +362,7 @@ fn bind_generic_arg_list_to_scope<'db>(
             GenericArg::Const(c) => GenericArg::Const(c.clone()),
             GenericArg::AssocType(assoc) => GenericArg::AssocType(AssocTypeGenericArg {
                 name: assoc.name,
+                mode: assoc.mode,
                 ty: assoc
                     .ty
                     .to_opt()

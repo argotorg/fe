@@ -179,5 +179,8 @@ fn member_generic_is_bound(segment: &ast::PathSegment, name: &str) -> bool {
             ast::GenericParamKind::Const(param) => {
                 param.name().is_some_and(|ident| ident.text() == name)
             }
+            ast::GenericParamKind::Shape(param) => {
+                param.name().is_some_and(|ident| ident.text() == name)
+            }
         })
 }
