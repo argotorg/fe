@@ -879,7 +879,7 @@ fn with_operand_rejects_a_value_and_named_impl_with_the_same_bare_name() {
         ));
     }
     cases.push(
-        "pub struct Item {}\ntrait Pick { const fn value() -> u256 }\nmod options {\n pub impl Pick for Item as Collision { const fn value() -> u256 { 7 } }\n pub const Collision: u256 = 99\n}\nuse options::Collision\nconst fn run() -> u256 { with (Collision) { Item::value() } }".into(),
+        "pub struct Item {}\ntrait Pick { const fn value() -> u256 }\nmod options {\n use ingot::{Item, Pick}\n pub impl Pick for Item as Collision { const fn value() -> u256 { 7 } }\n pub const Collision: u256 = 99\n}\nuse options::Collision\nconst fn run() -> u256 { with (Collision) { Item::value() } }".into(),
     );
     for source in cases {
         let mut db = HirAnalysisTestDb::default();
@@ -922,7 +922,9 @@ const OnlyValue: u256 = 99
 const Named: u256 = 99
 struct TypeOnly {}
 impl Pick for Item as TypeOnly { const fn value() -> u256 { 3 } }
-mod options { pub impl Pick for Item as Qualified { const fn value() -> u256 { 11 } } }
+mod options {
+ use ingot::{Item, Pick}
+ pub impl Pick for Item as Qualified { const fn value() -> u256 { 11 } } }
 const fn value_only() -> u256 { with (OnlyValue) { Item::value() } }
 const fn explicit_value() -> u256 { with ({ Named }) { Item::value() } }
 const fn type_only_name() -> u256 { with (TypeOnly) { Item::value() } }
