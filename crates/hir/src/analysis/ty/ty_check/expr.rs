@@ -2083,6 +2083,7 @@ impl<'db> TyChecker<'db> {
                                     _ => value.name_span(self.db),
                                 },
                                 ResolvedPathInBody::Diag(diagnostic) => {
+                                    ambiguous_opening = true;
                                     self.push_diag(diagnostic);
                                     self.env.named_impl_operands.insert(binding.value);
                                     self.env.type_expr(
