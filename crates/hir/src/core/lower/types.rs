@@ -360,6 +360,7 @@ fn bind_generic_arg_list_to_scope<'db>(
                     .into(),
             }),
             GenericArg::Const(c) => GenericArg::Const(c.clone()),
+            GenericArg::Mode(mode) => GenericArg::Mode(*mode),
             GenericArg::AssocType(assoc) => GenericArg::AssocType(AssocTypeGenericArg {
                 name: assoc.name,
                 mode: assoc.mode,
