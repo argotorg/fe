@@ -817,7 +817,7 @@ fn output_warnings_remain_diagnostics_without_refusing_generation() {
         rendered.contains("`var` copies a `mut` access"),
         "{rendered}"
     );
-    assert_generated_integer(&output, output_file, "value", "7");
+    assert_generated_integer(&output, output_file, "generated_count", "42");
 
     let invalid = source.replace("boost(${n})", "true");
     let (db, file) = input(&invalid);
@@ -857,7 +857,7 @@ const fn make(_ record: Record) -> Code<Item> {
             .format_diags(&output)
             .contains("warning[8-0121]")
     );
-    assert_eq!(output.generation_inputs().functions(&output).len(), 1);
+    assert_generated_integer(&output, output_file, "value", "7");
     let invalid = source.replace("word: 0", "word: true");
     let (db, file) = input(&invalid);
     let error = prepare_file(&db, file)
