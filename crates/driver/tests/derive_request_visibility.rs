@@ -68,7 +68,7 @@ impl Derive<Score> for Provider {
 #[test]
 fn explicit_and_scoped_private_fields_refuse_before_provider_execution() {
     for request in [
-        "impl Score for owner::Secret with Provider\nconst fn run() -> u256 { owner::Secret::score() }",
+        "impl Score for owner::Secret with (Provider)\nconst fn run() -> u256 { owner::Secret::score() }",
         "const fn run() -> u256 { with (Provider) { owner::Secret::score() } }",
     ] {
         let prefix = PREFIX.replace(
@@ -91,7 +91,7 @@ fn explicit_and_scoped_private_fields_refuse_before_provider_execution() {
 #[test]
 fn owner_side_requests_can_reflect_private_fields_with_an_external_provider() {
     for request in [
-        "impl Score for Secret with Provider\npub const fn value() -> u256 { Secret::score() }",
+        "impl Score for Secret with (Provider)\npub const fn value() -> u256 { Secret::score() }",
         "pub const fn value() -> u256 { with (Provider) { Secret::score() } }",
     ] {
         let source = format!(
@@ -105,7 +105,7 @@ fn owner_side_requests_can_reflect_private_fields_with_an_external_provider() {
 #[test]
 fn sibling_requests_can_reflect_public_fields() {
     for request in [
-        "impl Score for owner::Public with Provider\nconst fn run() -> u256 { owner::Public::score() }",
+        "impl Score for owner::Public with (Provider)\nconst fn run() -> u256 { owner::Public::score() }",
         "const fn run() -> u256 { with (Provider) { owner::Public::score() } }",
     ] {
         let source = format!(
