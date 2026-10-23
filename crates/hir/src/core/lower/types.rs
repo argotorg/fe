@@ -4,8 +4,7 @@ use super::FileLowerCtxt;
 use crate::core::hir_def::{
     AssocTypeGenericArg, Body, GenericArg, GenericArgListId, IdentId, ItemKind, Partial, PathId,
     PathKind, TraitRefId, TupleTypeId, TypeGenericArg, TypeId, TypeKind, TypeMode, VariantKind,
-    params::{FuncParamMode, GenericParamListId, callable_shape_name},
-    scope_graph::ScopeId,
+    params::GenericParamListId, scope_graph::ScopeId,
 };
 
 impl<'db> TypeId<'db> {
