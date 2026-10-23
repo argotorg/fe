@@ -1903,23 +1903,11 @@ impl<'db> TyChecker<'db> {
                     ImplNameRes::Ambiguous => {
                         // An ambiguous implementation name cannot become an
                         // effect operand merely because selection failed.
-                        let span = binding.value.span(self.body()).into();
-                        let diagnostic = match resolve_ident_expr(
-                            self.db,
-                            &self.env,
-                            path,
-                            span,
-                            &LoweringContext::new(),
-                        ) {
-                            ResolvedPathInBody::Diag(diagnostic) => diagnostic,
-                            _ => PathResDiag::Ambiguous(
-                                binding.value.span(self.body()).into(),
-                                path.ident(self.db).expect("implementation path identifier"),
-                                Vec::new(),
-                            )
-                            .into(),
-                        };
-                        self.push_diag(diagnostic);
+                        self.push_diag(PathResDiag::Ambiguous(
+                            binding.value.span(self.body()).into(),
+                            path.ident(self.db).expect("implementation path identifier"),
+                            Vec::new(),
+                        ));
                         self.env.named_impl_operands.insert(binding.value);
                         self.env
                             .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
