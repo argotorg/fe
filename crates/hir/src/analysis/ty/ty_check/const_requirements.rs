@@ -578,6 +578,11 @@ pub(crate) fn retained_bound_requirements<'db>(
             ));
         }
     }
+    // Provisional codec evidence must be completed at the shared instance boundary.
+    // It cannot establish admission or justify reconstructing a selected parent.
+    if matches!(proof.data(db), Evidence::DeferredSolCodec { .. }) {
+        return Err((GroundBoundAdmissionCause::Incomplete, Vec::new()));
+    }
     let Some(resolved) = proof.answering(db, goal) else {
         return Err((GroundBoundAdmissionCause::UnsupportedInput, Vec::new()));
     };
