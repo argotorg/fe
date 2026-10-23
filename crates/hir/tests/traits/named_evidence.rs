@@ -853,3 +853,86 @@ fn chosen() -> u256 { with (Chosen) { infer(Item {}) } }
     let codes = diagnostics(source);
     assert!(codes.contains(&"8-0031".to_string()), "{codes:?}");
 }
+
+#[test]
+fn with_operand_rejects_a_value_and_named_impl_with_the_same_bare_name() {
+    let declarations = [
+        "impl Pick for Item as Collision { const fn value() -> u256 { 7 } }\nconst Collision: u256 = 99",
+        "const Collision: u256 = 99\nimpl Pick for Item as Collision { const fn value() -> u256 { 7 } }",
+    ];
+    let mut cases = declarations
+        .into_iter()
+        .map(|declarations| {
+            format!(
+                "struct Item {{}}\ntrait Pick {{ const fn value() -> u256 }}\n{declarations}\nconst fn run() -> u256 {{ with (Collision) {{ Item::value() }} }}"
+            )
+        })
+        .collect::<Vec<_>>();
+    for binding in ["let Collision: u256 = 99", ""] {
+        let parameter = if binding.is_empty() {
+            "_ Collision: u256"
+        } else {
+            ""
+        };
+        cases.push(format!(
+            "struct Item {{}}\ntrait Pick {{ const fn value() -> u256 }}\nimpl Pick for Item as Collision {{ const fn value() -> u256 {{ 7 }} }}\nconst fn run({parameter}) -> u256 {{ {binding}\n with (Collision) {{ Item::value() }} }}"
+        ));
+    }
+    cases.push(
+        "pub struct Item {}\ntrait Pick { const fn value() -> u256 }\nmod options {\n pub impl Pick for Item as Collision { const fn value() -> u256 { 7 } }\n pub const Collision: u256 = 99\n}\nuse options::Collision\nconst fn run() -> u256 { with (Collision) { Item::value() } }".into(),
+    );
+    for source in cases {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("ambiguous_with_operand.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        let diagnostics = fe_hir::analysis::initialize_analysis_pass()
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diagnostic| diagnostic.to_complete(&db))
+            .collect::<Vec<_>>();
+        let ambiguity = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.message.contains("Collision") && diagnostic.message.contains("ambiguous")
+            })
+            .unwrap_or_else(|| {
+                panic!("expected a value/implementation ambiguity: {diagnostics:?}")
+            });
+        assert!(
+            ambiguity
+                .sub_diagnostics
+                .iter()
+                .filter(|label| label.message.starts_with("candidate "))
+                .count()
+                >= 2,
+            "both meanings must be identified: {ambiguity:?}"
+        );
+    }
+}
+
+#[test]
+fn with_operand_keeps_unambiguous_and_explicit_value_meanings() {
+    values(
+        r#"
+struct Item {}
+trait Pick { const fn value() -> u256 }
+impl Pick for Item { const fn value() -> u256 { 100 } }
+impl Pick for Item as Named { const fn value() -> u256 { 7 } }
+const OnlyValue: u256 = 99
+const Named: u256 = 99
+struct TypeOnly {}
+impl Pick for Item as TypeOnly { const fn value() -> u256 { 3 } }
+mod options { pub impl Pick for Item as Qualified { const fn value() -> u256 { 11 } } }
+const fn value_only() -> u256 { with (OnlyValue) { Item::value() } }
+const fn explicit_value() -> u256 { with ({ Named }) { Item::value() } }
+const fn type_only_name() -> u256 { with (TypeOnly) { Item::value() } }
+const fn qualified_name() -> u256 { with (options::Qualified) { Item::value() } }
+"#,
+        &[
+            ("value_only", 100),
+            ("explicit_value", 100),
+            ("type_only_name", 3),
+            ("qualified_name", 11),
+        ],
+    );
+}
