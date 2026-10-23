@@ -115,3 +115,34 @@ fn sibling_requests_can_reflect_public_fields() {
         assert_value(&output, "1");
     }
 }
+
+#[test]
+fn enum_payload_fields_follow_the_same_requester_visibility_rule() {
+    for request in [
+        "impl Score for owner::Payload with (Provider)\nconst fn run() -> u256 { owner::Payload::score() }",
+        "const fn run() -> u256 { with (Provider) { owner::Payload::score() } }",
+    ] {
+        let faulting = PREFIX.replace(
+            "let count = field_count(record) as u256",
+            "let zero: u256 = 0\nlet count = 1 / zero",
+        );
+        let source = format!(
+            "{faulting}\nmod owner {{ pub enum Payload {{ Case {{ hidden: u256 }} }} }}\n{request}"
+        );
+        let cause = prepare(&source).err().expect("private payload field");
+        assert!(
+            cause.contains("visible from the requesting scope"),
+            "{cause}"
+        );
+        assert!(!cause.contains("division by zero"), "{cause}");
+
+        let reflected = PREFIX
+            .replace("Item, field_count", "Item, field_count, variant")
+            .replace("field_count(record)", "field_count(variant(record, 0))");
+        let source = format!(
+            "{reflected}\nmod owner {{ pub enum Payload {{ Case {{ pub exposed: u256 }} }} }}\n{request}"
+        );
+        let output = prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+        assert_value(&output, "1");
+    }
+}
