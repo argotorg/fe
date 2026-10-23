@@ -1,0 +1,65 @@
+// A deferred method in a closure must retain an unresolved string literal's
+// type until later constraints in the enclosing body are checked. Defaulting
+// to the literal's length at the end of the closure selects the wrong method.
+struct W<T> { v: T }
+
+trait Width {
+    fn width(self) -> u256
+}
+
+impl Width for W<String<1>> {
+    fn width(self) -> u256 {
+        1
+    }
+}
+
+impl Width for W<String<8>> {
+    fn width(self) -> u256 {
+        8
+    }
+}
+
+fn annotation_after_closure() -> u256 {
+    let x = "a"
+    let g = || W { v: x }.width()
+    let y: String<8> = x
+    g()
+}
+
+fn annotation_before_closure() -> u256 {
+    let x = "a"
+    let y: String<8> = x
+    let g = || W { v: x }.width()
+    g()
+}
+
+#[test]
+fn deferred_closure_keeps_outer_string_constraints() {
+    assert!(annotation_after_closure() == 8)
+    assert!(annotation_before_closure() == 8)
+}
+
+fn keep<const N: usize>(_ s: String<N>) -> String<N> {
+    s
+}
+
+#[test]
+fn deferred_closure_keeps_outer_string_length_constraints() {
+    let x = keep("a")
+    let g = || W { v: x }.width()
+    let y: String<8> = x
+    let result: u256 = g()
+    assert!(result == 8)
+}
+
+#[test]
+fn nested_deferred_closure_keeps_outer_string_constraints() {
+    let x = "a"
+    let g = || {
+        let h = || W { v: x }.width()
+        h()
+    }
+    let y: String<8> = x
+    let result: u256 = g()
+    assert!(result == 8)
+}
