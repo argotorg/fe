@@ -246,7 +246,7 @@ impl<'db> RecordInput<'db> {
         requesting_scope: crate::hir_def::scope_graph::ScopeId<'db>,
     ) -> Result<Self, RecordInputError> {
         use crate::{
-            analysis::name_resolution::visibility_checker::is_scope_visible_from,
+            analysis::name_resolution::is_scope_visible_from,
             hir_def::{EnumVariant, FieldParent, scope_graph::ScopeId},
         };
         let input = Self::for_authored_type(db, ty)?;
@@ -1415,15 +1415,16 @@ pub fn native_derive_provider<'db>(
     if goal.def(db).ingot(db) != request.top_mod(db).ingot(db) {
         return Err("library/canonical goal establishment is pending the permits owner API".into());
     }
-    let input = RecordInput::for_authored_type_from(db, goal.args(db)[0], scope).map_err(
-        |cause| match cause {
+    let input =
+        RecordInput::for_authored_type_from(db, goal.args(db)[0], scope).map_err(|cause| {
+            match cause {
             RecordInputError::InvisibleField => {
                 "native derive requires every target field to be visible from the requesting scope"
                     .to_string()
             }
             _ => format!("native derive requires a concrete authored record: {cause:?}"),
-        },
-    )?;
+        }
+        })?;
     crate::analysis::ty::ty_check::admit_ground_type_application(
         db,
         input.ty(),
