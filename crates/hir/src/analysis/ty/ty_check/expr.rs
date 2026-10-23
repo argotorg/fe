@@ -1855,6 +1855,14 @@ impl<'db> TyChecker<'db> {
                                         None
                                     }
                                     PathRes::Trait(_) | PathRes::Mod(_) => None,
+                                    PathRes::EnumVariant(variant)
+                                        if matches!(
+                                            variant.kind(self.db),
+                                            VariantKind::Record(_)
+                                        ) =>
+                                    {
+                                        None
+                                    }
                                     _ => value.name_span(self.db),
                                 },
                                 ResolvedPathInBody::Diag(diagnostic) => {
