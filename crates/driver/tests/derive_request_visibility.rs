@@ -89,14 +89,14 @@ fn explicit_and_scoped_private_fields_refuse_before_provider_execution() {
 }
 
 #[test]
-fn owner_side_requests_can_reflect_private_fields_with_an_external_provider() {
-    for request in [
-        "impl Score for Secret with (Provider)\npub const fn value() -> u256 { Secret::score() }",
-        "pub const fn value() -> u256 { with (Provider) { Secret::score() } }",
-    ] {
-        let source = format!(
-            "{PREFIX}\nmod owner {{ use ingot::{{Score, Provider}}\npub struct Secret {{ hidden: u256 }}\n{request}\n}}\nconst fn run() -> u256 {{ owner::value() }}"
-        );
+fn requesters_with_private_field_access_remain_lawful() {
+    let explicit = format!(
+        "{PREFIX}\nstruct Secret {{ hidden: u256 }}\nimpl Score for Secret with (Provider)\nconst fn run() -> u256 {{ Secret::score() }}"
+    );
+    let scoped = format!(
+        "{PREFIX}\nmod owner {{ use ingot::{{Score, Provider}}\npub struct Secret {{ hidden: u256 }}\npub const fn value() -> u256 {{ with (Provider) {{ Secret::score() }} }}\n}}\nconst fn run() -> u256 {{ owner::value() }}"
+    );
+    for source in [explicit, scoped] {
         let output = prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
         assert_value(&output, "1");
     }
