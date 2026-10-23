@@ -60,3 +60,63 @@ fn deferred_named_only_bound() {
     let resolved: u256 = x
     assert!(chosen == 71)
 }
+
+// Product/opaque callable shapes must keep the selected dictionary through
+// both closures, rather than reconstructing it after parameter expansion.
+fn apply_product<F: Fn((own u256, ref u256)) -> u256>(_ f: F, _ x: u256) -> u256 uses F::E {
+    f((2, ref x))
+}
+fn nested_product<T: Pick>(_ x: u256) -> u256 {
+    let outer = || {
+        let inner = |(a, b): (own u256, ref u256)| T::value() + a + b
+        apply_product(inner, x)
+    }
+    apply(outer)
+}
+#[test]
+fn named_product_nested_closure() {
+    assert!(with (Discount) { nested_product<Item>(3) } == 75)
+    assert!(nested_product<Item>(3) == 105)
+}
+
+struct ModeLog { n: u256, writes: u256 }
+struct ModeOnly {}
+trait ModeGet { fn get(self) -> mut? u256 uses (log: mut? ModeLog) }
+impl ModeGet for ModeOnly {
+    fn get(self) -> mut? u256 uses (log: mut? ModeLog) { mut? log.n }
+}
+impl ModeGet for ModeOnly as ChosenModes {
+    fn get(self) -> ref u256 uses (log: ModeLog) { ref log.n }
+    fn get(self) -> mut u256 uses (log: mut ModeLog) {
+        log.writes += 1
+        mut log.n
+    }
+}
+fn read_mode<T: ModeGet>(_ value: T) -> u256 uses (log: ModeLog) { value.get() }
+fn write_mode<T: mut ModeGet>(_ value: T, _ n: u256) uses (log: mut ModeLog) { value.get() = n }
+#[test]
+fn named_effect_only_modes() {
+    var log = ModeLog { n: 3, writes: 0 }
+    with (ModeLog = log, ChosenModes) {
+        assert!(read_mode(ModeOnly {}) == 3)
+        write_mode(ModeOnly {}, 9)
+        assert!(read_mode(ModeOnly {}) == 9)
+    }
+    assert!(log.n == 9 && log.writes == 1)
+    with (ModeLog = log) { write_mode(ModeOnly {}, 11) }
+    assert!(log.n == 11 && log.writes == 1)
+}
+
+fn row_value() -> u256 uses (log: ModeLog) { log.n }
+fn row_before_choice<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E, p: Price) {
+    f() + p.amount()
+}
+#[test]
+fn expanded_row_keeps_later_named_dictionary() {
+    let log = ModeLog { n: 5, writes: 0 }
+    let f = || row_value()
+    with (ModeLog = log, Price = Item {}) {
+        assert!(row_before_choice(f) == 105)
+        with (Wholesale) { assert!(row_before_choice(f) == 75) }
+    }
+}
