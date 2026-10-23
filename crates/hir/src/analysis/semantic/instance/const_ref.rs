@@ -41,8 +41,7 @@ use crate::{
     },
     core::semantic::{EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding},
     hir_def::{
-        CallableDef, Const, Func, GenericParamOwner, HirIngot, IdentId, params::FuncParamMode,
-        scope_graph::ScopeId,
+        CallableDef, Const, Func, GenericParamOwner, HirIngot, IdentId, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };

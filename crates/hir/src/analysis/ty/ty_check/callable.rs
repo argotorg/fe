@@ -454,7 +454,7 @@ impl<'db> Callable<'db> {
             solve_cx,
         );
         let requirements = func
-            .effect_requirements(db)
+            .effect_requirements(db, mode)
             .iter()
             .map(|requirement| crate::core::semantic::EffectRequirement {
                 key: super::super::binder::Binder::bind(func.into(), requirement.key.clone())
