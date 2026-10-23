@@ -23,6 +23,39 @@ fn input(source: &str) -> (DriverDataBase, common::file::File) {
     (db, file)
 }
 
+fn assert_generated_integer(
+    db: &DriverDataBase,
+    file: common::file::File,
+    function_name: &str,
+    expected: &str,
+) {
+    let function = db
+        .top_mod(file)
+        .all_funcs(db)
+        .iter()
+        .copied()
+        .find(|function| {
+            function
+                .name(db)
+                .to_opt()
+                .is_some_and(|ident| ident.data(db) == function_name)
+        })
+        .expect("the admitted generated function must exist");
+    let owner = BodyOwner::Func(function, None);
+    let result = eval_body_owner_const(db, owner, GenericSubst::for_body_owner(db, owner, vec![]));
+    let EvalOutcome::Ready(value) = result else {
+        panic!("generated function did not evaluate: {result:?}")
+    };
+    let SemConstValue::Scalar {
+        value: SemConstScalar::Int { value },
+        ..
+    } = value.value(db)
+    else {
+        panic!("generated function did not return an integer")
+    };
+    assert_eq!(value.to_string(), expected);
+}
+
 #[test]
 fn output_view_keeps_the_compilation_settings_of_the_input() {
     use salsa::Setter;
@@ -784,7 +817,7 @@ fn output_warnings_remain_diagnostics_without_refusing_generation() {
         rendered.contains("`var` copies a `mut` access"),
         "{rendered}"
     );
-    assert_eq!(output.generation_inputs().functions(&output).len(), 1);
+    assert_generated_integer(&output, output_file, "value", "7");
 
     let invalid = source.replace("boost(${n})", "true");
     let (db, file) = input(&invalid);
