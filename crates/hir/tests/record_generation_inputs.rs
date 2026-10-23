@@ -362,3 +362,24 @@ fn canonical_trait_identity_does_not_require_instantiating_its_parameters() {
         Some(expected)
     );
 }
+
+#[test]
+fn unauthorized_request_does_not_validate_hidden_field_metadata() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "private-record-metadata.fe".into(),
+        "mod owner { pub struct Secret { hidden: Missing } }\n",
+    );
+    let (module, _) = db.top_mod(file);
+    let ty = resolve_lib_type_path(&db, module.scope(), "owner::Secret").unwrap();
+    // The invalid field is intentional: an outside request must first be
+    // refused by visibility, rather than validating inaccessible metadata.
+    assert_eq!(
+        RecordInput::for_authored_type_from(&db, ty, module.scope()),
+        Err(RecordInputError::InvisibleField)
+    );
+    assert_eq!(
+        RecordInput::for_authored_type(&db, ty),
+        Err(RecordInputError::InvalidField)
+    );
+}
