@@ -1913,7 +1913,9 @@ impl<'db> TyChecker<'db> {
                         // effect operand merely because selection failed.
                         self.push_diag(PathResDiag::Ambiguous(
                             binding.value.span(self.body()).into(),
-                            path.ident(self.db).expect("implementation path identifier"),
+                            path.ident(self.db)
+                                .to_opt()
+                                .expect("implementation path identifier"),
                             Vec::new(),
                         ));
                         self.env.named_impl_operands.insert(binding.value);
