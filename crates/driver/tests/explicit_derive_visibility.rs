@@ -67,9 +67,8 @@ impl Derive<Score> for Provider {
 
 #[test]
 fn explicit_private_fields_refuse_before_provider_execution() {
-    for request in [
-        "impl Score for owner::Secret with (Provider)\nconst fn run() -> u256 { owner::Secret::score() }",
-    ] {
+    let request = "impl Score for owner::Secret with (Provider)\nconst fn run() -> u256 { owner::Secret::score() }";
+    {
         let prefix = PREFIX.replace(
             "let count = field_count(record) as u256",
             "let zero: u256 = 0\nlet count = 1 / zero",
@@ -98,9 +97,8 @@ fn requesters_with_private_field_access_remain_lawful() {
 
 #[test]
 fn sibling_requests_can_reflect_public_fields() {
-    for request in [
-        "impl Score for owner::Public with (Provider)\nconst fn run() -> u256 { owner::Public::score() }",
-    ] {
+    let request = "impl Score for owner::Public with (Provider)\nconst fn run() -> u256 { owner::Public::score() }";
+    {
         let source = format!(
             "{PREFIX}\nmod owner {{ pub struct Public {{ pub exposed: u256 }} }}\n{request}"
         );
@@ -111,9 +109,8 @@ fn sibling_requests_can_reflect_public_fields() {
 
 #[test]
 fn enum_payload_fields_follow_the_same_requester_visibility_rule() {
-    for request in [
-        "impl Score for owner::Payload with (Provider)\nconst fn run() -> u256 { owner::Payload::score() }",
-    ] {
+    let request = "impl Score for owner::Payload with (Provider)\nconst fn run() -> u256 { owner::Payload::score() }";
+    {
         let faulting = PREFIX.replace(
             "let count = field_count(record) as u256",
             "let zero: u256 = 0\nlet count = 1 / zero",
