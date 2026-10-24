@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/ambiguous_value_tail.fe
+---
+error[2-0004]: `X` is ambiguous
+   ┌─ ambiguous_value_tail.fe:27:5
+   │
+ 6 │     pub const X: bool = true
+   │               - candidate 1
+   ·
+11 │     pub const X: bool = false
+   │               - candidate 2
+   ·
+27 │     X
+   │     ^ `X` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_tail.fe:30:23
+   │
+ 7 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+12 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+30 │ fn generic_arg(_ w: W<N>) {}
+   │                       ^ `N` is ambiguous

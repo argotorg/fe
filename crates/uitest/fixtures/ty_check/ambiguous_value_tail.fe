@@ -1,0 +1,30 @@
+use a::*
+use b::*
+
+mod a {
+    pub fn S() {}
+    pub const X: bool = true
+    pub const N: u256 = 1
+}
+mod b {
+    pub fn S() {}
+    pub const X: bool = false
+    pub const N: u256 = 2
+}
+
+struct S { v: u256 }
+struct W<const K: u256> {}
+
+// A type of the same name wins over an ambiguous value.
+fn record(s: S) -> S {
+    let S { v } = s
+    S { v }
+}
+
+// An ambiguous value with no type of the same name is an error, not a
+// missing type.
+fn value() -> bool {
+    X
+}
+
+fn generic_arg(_ w: W<N>) {}
