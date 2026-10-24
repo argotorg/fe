@@ -1,0 +1,36 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_struct_sol_compat.fe
+---
+error[9-0006]: selector declares `uint256` but field `value` has ABI type `address`
+   ┌─ msg_struct_sol_compat.fe:23:16
+   │
+23 │     Mismatch { value: WrongType },
+   │                ^^^^^^^^^^^^^^^^ expected a `uint256`-typed value
+   │
+   = `u256` decodes and encodes Solidity `uint256`
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `Mismatch`
+   ┌─ msg_struct_sol_compat.fe:23:23
+   │
+23 │     Mismatch { value: WrongType },
+   │                       ^^^^^^^^^ `WrongType` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+   │
+   = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: unsupported ABI field type in msg variant `InvalidName`
+   ┌─ msg_struct_sol_compat.fe:25:26
+   │
+25 │     InvalidName { value: InvalidType },
+   │                          ^^^^^^^^^^^ `InvalidType` cannot be represented in the Solidity ABI
+   │
+   = unsupported ABI struct type `InvalidType`: its `SolCompat::SOL_TYPE` `uint7` is neither a canonical non-tuple Solidity ABI type nor its structural tuple type `(uint256)`
+
+error[9-0008]: unsupported ABI field type in msg variant `InvalidTuple`
+   ┌─ msg_struct_sol_compat.fe:27:27
+   │
+27 │     InvalidTuple { value: WrongTuple },
+   │                           ^^^^^^^^^^ `WrongTuple` cannot be represented in the Solidity ABI
+   │
+   = unsupported ABI struct type `WrongTuple`: its `SolCompat::SOL_TYPE` `(address)` is neither a canonical non-tuple Solidity ABI type nor its structural tuple type `(uint256)`

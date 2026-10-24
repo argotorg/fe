@@ -255,6 +255,22 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
             }
             match adt_ref {
                 AdtRef::Struct(struct_) => {
+                    // Hand-written codecs can give a struct a scalar or array
+                    // wire type. Derived records retain their named components
+                    // without evaluating the generated tuple's SolCompat impl.
+                    let declared = if matches!(
+                        struct_.origin(db),
+                        HirOrigin::Desugared(DesugaredOrigin::AbiStruct(_))
+                    ) {
+                        None
+                    } else {
+                        declared_sol_compat_abi_type(db, ty, struct_.scope())
+                    };
+                    if let Some(sol_type) = &declared
+                        && is_canonical_non_tuple_sol_type(sol_type)
+                    {
+                        return Ok(AbiTypeDesc::simple(sol_type));
+                    }
                     if adt_ref.as_adt(db).recursive_cycle(db).is_some() {
                         return Err(AbiTypeError::Recursive(format!(
                             "recursive ABI type `{}`",
@@ -307,6 +323,14 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
                             .map(|(_, desc)| desc.clone())
                             .collect::<Vec<_>>(),
                     );
+                    if let Some(sol_type) = declared
+                        && sol_type != canonical
+                    {
+                        return Err(AbiTypeError::unsupported(format!(
+                            "unsupported ABI struct type `{}`: its `SolCompat::SOL_TYPE` `{sol_type}` is neither a canonical non-tuple Solidity ABI type nor its structural tuple type `{canonical}`",
+                            ty.pretty_print(db)
+                        )));
+                    }
                     Ok(AbiTypeDesc::tuple(
                         component_descs
                             .into_iter()
