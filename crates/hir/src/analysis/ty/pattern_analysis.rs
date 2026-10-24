@@ -142,51 +142,6 @@ pub(crate) fn analyze_match<'db>(
     }
 }
 
-pub fn check_exhaustiveness<'db>(
-    db: &'db dyn HirAnalysisDb,
-    store: &PatternStore<'db>,
-    roots: &[ValidatedPatId],
-    ty: TyId<'db>,
-) -> Result<(), Vec<String>> {
-    match analyze_patterns(db, store, roots, ty) {
-        Ok(Analysis {
-            exhaustiveness: Exhaustiveness::Exhaustive,
-            ..
-        }) => Ok(()),
-        Ok(Analysis {
-            exhaustiveness: Exhaustiveness::NonExhaustive(witness),
-            ..
-        }) => Err(witness
-            .iter()
-            .map(|pattern| display_missing_pattern(db, pattern))
-            .collect()),
-        Ok(Analysis {
-            exhaustiveness: Exhaustiveness::Inconclusive(_),
-            ..
-        })
-        | Err(_) => Err(Vec::new()),
-    }
-}
-
-pub fn check_reachability<'db>(
-    db: &'db dyn HirAnalysisDb,
-    store: &PatternStore<'db>,
-    roots: &[ValidatedPatId],
-) -> Vec<bool> {
-    let Some(root) = roots.first() else {
-        return Vec::new();
-    };
-    let ty = store.node(*root).match_ty().raw();
-    match analyze_patterns(db, store, roots, ty) {
-        Ok(analysis) => analysis
-            .arms
-            .into_iter()
-            .map(|reachability| !matches!(reachability, Reachability::Unreachable(_)))
-            .collect(),
-        Err(_) => vec![true; roots.len()],
-    }
-}
-
 pub fn is_exhaustive<'db>(
     db: &'db dyn HirAnalysisDb,
     store: &PatternStore<'db>,

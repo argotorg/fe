@@ -82,7 +82,7 @@ fn assigned_pattern_child_carrier_ty<'db>(
 ) -> TyId<'db> {
     let (container_ty, parent_mode) = destructure_pattern_source(db, parent_carrier_ty);
     let projected_source = project_pattern_child_source_ty(db, container_ty, projection);
-    let assigned_match = pattern_store.node(child).match_ty().raw();
+    let assigned_match = pattern_store.node(child).match_ty();
     let assigned_carrier = with_source_carriers(db, projected_source, assigned_match);
     apply_pattern_borrow_mode(db, parent_mode, assigned_carrier)
 }
@@ -316,14 +316,12 @@ fn switch_first_arm(switch: &SwitchNode<'_>) -> Option<usize> {
 }
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
-    fn validated_pattern_is_irrefutable(&self, pat: ValidatedPatId) -> bool {
-        self.typed_body.pattern_store().is_irrefutable(self.db, pat)
-    }
-
     pub(super) fn pattern_is_irrefutable(&self, pat: PatId) -> bool {
-        self.typed_body
-            .pattern_root(pat)
-            .is_none_or(|root| self.validated_pattern_is_irrefutable(root))
+        self.typed_body.pattern_root(pat).is_none_or(|root| {
+            self.typed_body
+                .pattern_store()
+                .is_irrefutable(self.db, root)
+        })
     }
 
     pub(super) fn bind_pattern(&mut self, pat: PatId, source: PatternSource<'db>) {
@@ -846,6 +844,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if idx > 0 {
                     self.switch_to(dispatch_bb);
                 }
+                // A switch's cases cover every value, so the last one needs no
+                // test.
                 let is_last = idx + 1 == case_blocks.len();
                 match case {
                     Case::Default | Case::Constructor(ConstructorKind::Type(_)) => {
@@ -855,8 +855,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         );
                         break;
                     }
-                    Case::Constructor(ctor) if is_last => {
-                        let _ = ctor;
+                    Case::Constructor(_) if is_last => {
                         self.set_synthetic_terminator(
                             self.current,
                             STerminatorKind::Goto(*case_bb),

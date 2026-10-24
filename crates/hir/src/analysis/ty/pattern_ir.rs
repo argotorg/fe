@@ -6,6 +6,7 @@ use smallvec1::SmallVec;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::adt_def::{AdtRef, instantiate_adt_field_shape};
 use crate::analysis::ty::fold::{TyFoldable, TyFolder};
+use crate::analysis::ty::pattern_analysis::is_exhaustive;
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor};
 use crate::core::hir_def::{EnumVariant, FieldParent, IdentId, LitKind, PatId, VariantKind};
@@ -16,36 +17,20 @@ pub struct BindingRef<'db> {
     pub representative_pat: PatId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
-pub struct PatternMatchTy<'db>(TyId<'db>);
-
-impl<'db> PatternMatchTy<'db> {
-    pub fn new(ty: TyId<'db>) -> Self {
-        Self(ty)
-    }
-
-    pub fn raw(self) -> TyId<'db> {
-        self.0
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ValidatedPat<'db> {
     // Match-analysis type only. This intentionally stays separate from the final
     // binding type and from the carrier/source type used during semantic lowering.
-    match_ty: PatternMatchTy<'db>,
+    match_ty: TyId<'db>,
     kind: ValidatedPatKind<'db>,
 }
 
 impl<'db> ValidatedPat<'db> {
     pub fn new(match_ty: TyId<'db>, kind: ValidatedPatKind<'db>) -> Self {
-        Self {
-            match_ty: PatternMatchTy::new(match_ty),
-            kind,
-        }
+        Self { match_ty, kind }
     }
 
-    pub fn match_ty(&self) -> PatternMatchTy<'db> {
+    pub fn match_ty(&self) -> TyId<'db> {
         self.match_ty
     }
 
@@ -119,30 +104,23 @@ impl<'db> PatternStore<'db> {
         self.roots_by_pat.get(&pat).copied()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &ValidatedPat<'db>> {
-        self.nodes.iter()
-    }
-
+    /// A pattern is irrefutable when it alone is exhaustive. A product is
+    /// proven field by field, so that the exhaustiveness analysis, which is
+    /// bounded, only sees or-patterns.
     pub fn is_irrefutable(&self, db: &'db dyn HirAnalysisDb, id: ValidatedPatId) -> bool {
         match self.node(id).kind() {
             ValidatedPatKind::Wildcard { .. } => true,
-            ValidatedPatKind::Constructor { ctor, fields } => match ctor {
-                ConstructorKind::Type(_) => {
-                    fields.iter().all(|field| self.is_irrefutable(db, *field))
-                }
-                ConstructorKind::Variant(variant, _) if variant.enum_.len_variants(db) == 1 => {
-                    fields.iter().all(|field| self.is_irrefutable(db, *field))
-                }
-                ConstructorKind::Variant(..) | ConstructorKind::Literal(..) => false,
-            },
+            ValidatedPatKind::Constructor { ctor, fields } => {
+                let only_ctor = match ctor {
+                    ConstructorKind::Type(_) => true,
+                    ConstructorKind::Variant(variant, _) => variant.enum_.len_variants(db) == 1,
+                    ConstructorKind::Literal(..) => false,
+                };
+                only_ctor && fields.iter().all(|&field| self.is_irrefutable(db, field))
+            }
             ValidatedPatKind::Or(pats) => {
-                pats.iter().any(|pat| self.is_irrefutable(db, *pat))
-                    || crate::analysis::ty::pattern_analysis::is_exhaustive(
-                        db,
-                        self,
-                        pats,
-                        self.node(id).match_ty().raw(),
-                    )
+                pats.iter().any(|&pat| self.is_irrefutable(db, pat))
+                    || is_exhaustive(db, self, pats, self.node(id).match_ty)
             }
         }
     }
@@ -152,32 +130,9 @@ impl<'db> PatternStore<'db> {
         match self.node(id).kind() {
             ValidatedPatKind::Wildcard { binding } => binding.is_some(),
             ValidatedPatKind::Constructor { fields, .. } => {
-                fields.iter().any(|field| self.binds(*field))
+                fields.iter().any(|&field| self.binds(field))
             }
-            ValidatedPatKind::Or(pats) => pats.iter().any(|pat| self.binds(*pat)),
-        }
-    }
-
-    pub fn mir_unsupported_reason(&self, id: ValidatedPatId) -> Option<&'static str> {
-        match self.node(id).kind() {
-            ValidatedPatKind::Wildcard { .. } => None,
-            ValidatedPatKind::Constructor { ctor, fields } => match ctor {
-                ConstructorKind::Variant(..) | ConstructorKind::Type(_) => fields
-                    .iter()
-                    .find_map(|field| self.mir_unsupported_reason(*field)),
-                ConstructorKind::Literal(
-                    LitKind::Int(_) | LitKind::Bool(_) | LitKind::Byte(_),
-                    _,
-                ) => fields
-                    .iter()
-                    .find_map(|field| self.mir_unsupported_reason(*field)),
-                ConstructorKind::Literal(LitKind::String(_), _) => {
-                    Some("string literal patterns are not supported in MIR lowering")
-                }
-            },
-            ValidatedPatKind::Or(pats) => pats
-                .iter()
-                .find_map(|pat| self.mir_unsupported_reason(*pat)),
+            ValidatedPatKind::Or(pats) => pats.iter().any(|&pat| self.binds(pat)),
         }
     }
 }
@@ -255,155 +210,18 @@ impl<'db> ConstructorKind<'db> {
     }
 }
 
-impl<'db> TyVisitable<'db> for BindingRef<'db> {
-    fn visit_with<V>(&self, _visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
-    }
-}
-
-impl<'db> TyFoldable<'db> for BindingRef<'db> {
-    fn super_fold_with<F>(self, _db: &'db dyn HirAnalysisDb, _folder: &mut F) -> Self
-    where
-        F: TyFolder<'db>,
-    {
-        self
-    }
-}
-
-impl<'db> TyVisitable<'db> for ValidatedPatId {
-    fn visit_with<V>(&self, _visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
-    }
-}
-
-impl<'db> TyFoldable<'db> for ValidatedPatId {
-    fn super_fold_with<F>(self, _db: &'db dyn HirAnalysisDb, _folder: &mut F) -> Self
-    where
-        F: TyFolder<'db>,
-    {
-        self
-    }
-}
-
-impl<'db> TyVisitable<'db> for PatternAnalysisStatus {
-    fn visit_with<V>(&self, _visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
-    }
-}
-
-impl<'db> TyFoldable<'db> for PatternAnalysisStatus {
-    fn super_fold_with<F>(self, _db: &'db dyn HirAnalysisDb, _folder: &mut F) -> Self
-    where
-        F: TyFolder<'db>,
-    {
-        self
-    }
-}
-
-impl<'db> TyVisitable<'db> for ValidatedPat<'db> {
-    fn visit_with<V>(&self, visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
-        self.match_ty.visit_with(visitor);
-        self.kind.visit_with(visitor);
-    }
-}
-
-impl<'db> TyFoldable<'db> for ValidatedPat<'db> {
-    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
-    where
-        F: TyFolder<'db>,
-    {
-        Self {
-            match_ty: self.match_ty.fold_with(db, folder),
-            kind: self.kind.fold_with(db, folder),
+impl<'db> ConstructorKind<'db> {
+    fn ty(&self) -> TyId<'db> {
+        match self {
+            Self::Variant(_, ty) | Self::Type(ty) | Self::Literal(_, ty) => *ty,
         }
     }
-}
 
-impl<'db> TyVisitable<'db> for PatternMatchTy<'db> {
-    fn visit_with<V>(&self, visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
-        self.0.visit_with(visitor);
-    }
-}
-
-impl<'db> TyFoldable<'db> for PatternMatchTy<'db> {
-    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
-    where
-        F: TyFolder<'db>,
-    {
-        Self(self.0.fold_with(db, folder))
-    }
-}
-
-impl<'db> TyVisitable<'db> for ValidatedPatKind<'db> {
-    fn visit_with<V>(&self, visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
+    fn with_ty(self, ty: TyId<'db>) -> Self {
         match self {
-            Self::Wildcard { binding } => {
-                if let Some(binding) = binding {
-                    binding.visit_with(visitor);
-                }
-            }
-            Self::Constructor { ctor, fields } => {
-                ctor.visit_with(visitor);
-                fields.visit_with(visitor);
-            }
-            Self::Or(pats) => pats.visit_with(visitor),
-        }
-    }
-}
-
-impl<'db> TyFoldable<'db> for ValidatedPatKind<'db> {
-    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
-    where
-        F: TyFolder<'db>,
-    {
-        match self {
-            Self::Wildcard { binding } => Self::Wildcard {
-                binding: binding.map(|binding| binding.fold_with(db, folder)),
-            },
-            Self::Constructor { ctor, fields } => Self::Constructor {
-                ctor: ctor.fold_with(db, folder),
-                fields: fields.fold_with(db, folder),
-            },
-            Self::Or(pats) => Self::Or(pats.fold_with(db, folder)),
-        }
-    }
-}
-
-impl<'db> TyVisitable<'db> for ConstructorKind<'db> {
-    fn visit_with<V>(&self, visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
-        match self {
-            Self::Variant(_, ty) | Self::Type(ty) | Self::Literal(_, ty) => ty.visit_with(visitor),
-        }
-    }
-}
-
-impl<'db> TyFoldable<'db> for ConstructorKind<'db> {
-    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
-    where
-        F: TyFolder<'db>,
-    {
-        match self {
-            Self::Variant(variant, ty) => Self::Variant(variant, ty.fold_with(db, folder)),
-            Self::Type(ty) => Self::Type(ty.fold_with(db, folder)),
-            Self::Literal(lit, ty) => Self::Literal(lit, ty.fold_with(db, folder)),
+            Self::Variant(variant, _) => Self::Variant(variant, ty),
+            Self::Type(_) => Self::Type(ty),
+            Self::Literal(lit, _) => Self::Literal(lit, ty),
         }
     }
 }
@@ -413,18 +231,26 @@ impl<'db> TyVisitable<'db> for PatternStore<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
-        self.nodes.visit_with(visitor);
+        for node in &self.nodes {
+            node.match_ty.visit_with(visitor);
+            if let ValidatedPatKind::Constructor { ctor, .. } = &node.kind {
+                ctor.ty().visit_with(visitor);
+            }
+        }
     }
 }
 
 impl<'db> TyFoldable<'db> for PatternStore<'db> {
-    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    fn super_fold_with<F>(mut self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
         F: TyFolder<'db>,
     {
-        Self {
-            nodes: self.nodes.fold_with(db, folder),
-            roots_by_pat: self.roots_by_pat,
+        for node in &mut self.nodes {
+            node.match_ty = node.match_ty.fold_with(db, folder);
+            if let ValidatedPatKind::Constructor { ctor, .. } = &mut node.kind {
+                *ctor = ctor.with_ty(ctor.ty().fold_with(db, folder));
+            }
         }
+        self
     }
 }
