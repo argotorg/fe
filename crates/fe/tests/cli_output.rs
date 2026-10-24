@@ -3874,6 +3874,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "abi_array_overflow_revert",
     "abi_array_view",
     "abi_bounded_input_len_untrusted",
+    "abi_decode_field_names",
     "abi_decode_input_len_bound",
     "abi_dynamic_payload",
     "abi_nested_msg_decode_bounds",

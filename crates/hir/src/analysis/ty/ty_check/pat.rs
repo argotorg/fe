@@ -1,14 +1,18 @@
 use std::ops::Range;
 
 use crate::core::hir_def::{
-    BindingMarker, IdentId, IntegerId, ItemKind, LitKind, Partial, Pat, PatId, PathId,
+    BindingMarker, Func, IdentId, IntegerId, ItemKind, LitKind, Partial, Pat, PatId, PathId,
     TupleTypeId, VariantKind, scope_graph::ScopeId,
 };
+use crate::span::HirOrigin;
 use either::Either;
 use num_bigint::BigUint;
 
-use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
+use super::{
+    BodyOwner, ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker,
+};
 use crate::analysis::{
+    HirAnalysisDb,
     name_resolution::{
         ExpectedPathKind, NameDomain, NameRes, NameResolutionError, PathRes, PathResError,
         ResolvedVariant, resolve_ident_to_bucket,
@@ -48,6 +52,14 @@ struct UnpackedRestPat<'db> {
 pub(super) struct PatCheckResult<'db> {
     pub(super) ty: TyId<'db>,
     pub(super) analysis: PatternAnalysisStatus,
+}
+
+/// Whether `func` is generated from a declaration, like a msg variant's
+/// `decode_payload`. Checking a body depends on this rather than on `func`'s
+/// origin, which moves with the source text.
+#[salsa::tracked(returns(copy))]
+fn is_generated_func<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> bool {
+    matches!(func.origin(db), HirOrigin::Desugared(_))
 }
 
 impl<'db> TyChecker<'db> {
@@ -400,8 +412,14 @@ impl<'db> TyChecker<'db> {
         // A bare identifier is a local binding unless it names something a
         // pattern matches, like a constant or a unit variant; a function,
         // module, or trait of its name is shadowed. One that is ambiguous
-        // among things a pattern matches is an error.
+        // among things a pattern matches is an error. A generated function's
+        // bindings are fresh names, which bind whatever else is in scope: its
+        // declaration avoids only the names it mentions.
         if let Some(name) = path.as_ident(self.db) {
+            let generated = matches!(
+                self.env.owner(),
+                BodyOwner::Func(func, _) if is_generated_func(self.db, func)
+            );
             let shadowed = |res: &NameRes<'db>| {
                 matches!(
                     res.scope(),
@@ -415,18 +433,22 @@ impl<'db> TyChecker<'db> {
                     )
                 )
             };
-            let bucket = resolve_ident_to_bucket(self.db, *path, self.env.scope());
-            let named = [NameDomain::VALUE, NameDomain::TYPE]
-                .into_iter()
-                .find_map(|domain| match bucket.pick(domain) {
-                    Ok(res) => Some(Ok(res)),
-                    Err(err @ NameResolutionError::Ambiguous(cands))
-                        if !cands.iter().all(shadowed) =>
-                    {
-                        Some(Err(err))
-                    }
-                    Err(_) => None,
-                });
+            let named = if generated {
+                None
+            } else {
+                let bucket = resolve_ident_to_bucket(self.db, *path, self.env.scope());
+                [NameDomain::VALUE, NameDomain::TYPE]
+                    .into_iter()
+                    .find_map(|domain| match bucket.pick(domain) {
+                        Ok(res) => Some(Ok(res)),
+                        Err(err @ NameResolutionError::Ambiguous(cands))
+                            if !cands.iter().all(shadowed) =>
+                        {
+                            Some(Err(err))
+                        }
+                        Err(_) => None,
+                    })
+            };
             match named {
                 Some(Err(err)) => {
                     let err = PathResError::from_name_res_error(err.clone(), *path);
