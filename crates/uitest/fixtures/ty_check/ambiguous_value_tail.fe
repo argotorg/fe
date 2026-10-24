@@ -3,17 +3,25 @@ use b::*
 
 mod a {
     pub fn S() {}
+    pub fn f() {}
+    pub const g: u8 = 1
     pub const X: bool = true
     pub const N: u256 = 1
+    pub const Y: u8 = 1
 }
 mod b {
     pub fn S() {}
+    pub fn f() {}
+    pub fn g() {}
     pub const X: bool = false
     pub const N: u256 = 2
+    pub const Y: u8 = 2
 }
 
 struct S { v: u256 }
 struct W<const K: u256> {}
+trait Y {}
+trait Conv<T> {}
 
 // A type of the same name wins over an ambiguous value.
 fn record(s: S) -> S {
@@ -21,10 +29,49 @@ fn record(s: S) -> S {
     S { v }
 }
 
+// A binding shadows ambiguous functions, as it does one function, and a
+// trait, generic or not.
+fn shadow(x: u8) -> u8 {
+    let f = x
+    f
+}
+
+fn shadow_trait(x: u8) -> u8 {
+    let Conv = x
+    Conv
+}
+
 // An ambiguous value with no type of the same name is an error, not a
-// missing type.
+// binding or a missing type.
 fn value() -> bool {
     X
+}
+
+fn bare_value(x: bool) -> u256 {
+    match x {
+        X => 1
+    }
+}
+
+// An ambiguous name in a pattern is an error, not a binding, even with a
+// trait of the same name; its uses are ambiguous too.
+fn bare_binding(x: u8) -> u8 {
+    let g = x
+    g
+}
+
+fn bare_with_trait(x: u8) -> u8 {
+    match x {
+        Y => 1
+        _ => 0
+    }
+}
+
+fn bare_twice(p: (bool, bool)) -> u8 {
+    match p {
+        (X, X) => 1
+        _ => 0
+    }
 }
 
 fn generic_arg(_ w: W<N>) {}

@@ -2930,7 +2930,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let mut labels = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: format!("expected unit variant here, but found {kind_name}"),
+                    message: if let Some(kind_name) = kind_name {
+                        format!("expected unit variant here, but found {kind_name}")
+                    } else {
+                        "expected unit variant here".to_string()
+                    },
                     span: primary.resolve(db),
                 }];
 

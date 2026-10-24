@@ -1,0 +1,7 @@
+fn f(_ x: u8) -> u8 {
+    match x {
+        Bar(y) => y
+        Baz { z } => z
+        _ => 0
+    }
+}

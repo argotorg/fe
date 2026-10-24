@@ -1,0 +1,16 @@
+mod m {
+    pub struct Foo {
+        pub a: u8,
+    }
+}
+
+fn f(_ x: m::Foo) -> u8 {
+    match x {
+        Foo { a } => a
+    }
+}
+
+fn g(_ x: m::Foo) -> u8 {
+    let Foo { a } = x
+    a
+}

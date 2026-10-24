@@ -4,25 +4,97 @@ expression: diags
 input_file: fixtures/ty_check/ambiguous_value_tail.fe
 ---
 error[2-0004]: `X` is ambiguous
-   ┌─ ambiguous_value_tail.fe:27:5
+   ┌─ ambiguous_value_tail.fe:47:5
    │
- 6 │     pub const X: bool = true
+ 8 │     pub const X: bool = true
    │               - candidate 1
    ·
-11 │     pub const X: bool = false
+16 │     pub const X: bool = false
    │               - candidate 2
    ·
-27 │     X
+47 │     X
    │     ^ `X` is ambiguous
 
-error[2-0004]: `N` is ambiguous
-   ┌─ ambiguous_value_tail.fe:30:23
+error[2-0004]: `X` is ambiguous
+   ┌─ ambiguous_value_tail.fe:52:9
    │
- 7 │     pub const N: u256 = 1
+ 8 │     pub const X: bool = true
    │               - candidate 1
    ·
-12 │     pub const N: u256 = 2
+16 │     pub const X: bool = false
    │               - candidate 2
    ·
-30 │ fn generic_arg(_ w: W<N>) {}
+52 │         X => 1
+   │         ^ `X` is ambiguous
+
+error[2-0004]: `g` is ambiguous
+   ┌─ ambiguous_value_tail.fe:59:9
+   │
+ 7 │     pub const g: u8 = 1
+   │               - candidate 1
+   ·
+15 │     pub fn g() {}
+   │            - candidate 2
+   ·
+59 │     let g = x
+   │         ^ `g` is ambiguous
+
+error[2-0004]: `g` is ambiguous
+   ┌─ ambiguous_value_tail.fe:60:5
+   │
+ 7 │     pub const g: u8 = 1
+   │               - candidate 1
+   ·
+15 │     pub fn g() {}
+   │            - candidate 2
+   ·
+60 │     g
+   │     ^ `g` is ambiguous
+
+error[2-0004]: `Y` is ambiguous
+   ┌─ ambiguous_value_tail.fe:65:9
+   │
+10 │     pub const Y: u8 = 1
+   │               - candidate 1
+   ·
+18 │     pub const Y: u8 = 2
+   │               - candidate 2
+   ·
+65 │         Y => 1
+   │         ^ `Y` is ambiguous
+
+error[2-0004]: `X` is ambiguous
+   ┌─ ambiguous_value_tail.fe:72:10
+   │
+ 8 │     pub const X: bool = true
+   │               - candidate 1
+   ·
+16 │     pub const X: bool = false
+   │               - candidate 2
+   ·
+72 │         (X, X) => 1
+   │          ^ `X` is ambiguous
+
+error[2-0004]: `X` is ambiguous
+   ┌─ ambiguous_value_tail.fe:72:13
+   │
+ 8 │     pub const X: bool = true
+   │               - candidate 1
+   ·
+16 │     pub const X: bool = false
+   │               - candidate 2
+   ·
+72 │         (X, X) => 1
+   │             ^ `X` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_tail.fe:77:23
+   │
+ 9 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+17 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+77 │ fn generic_arg(_ w: W<N>) {}
    │                       ^ `N` is ambiguous
