@@ -1636,6 +1636,15 @@ impl<'db> TyChecker<'db> {
                 self.resolve_recv_arm_types(contract, recv_idx, arm_idx, arm, arm_span);
             self.expected = ret_ty;
             self.check_recv_arm_pat(arm.pat, pat_ty);
+            // A message selects its arm by its variant alone, so the arm's
+            // pattern must match every value of that variant.
+            if let Some(root) = self.env.pattern_store().root(arm.pat)
+                && !self.env.pattern_store().is_irrefutable(self.db, root)
+            {
+                self.push_diag(BodyDiag::RefutableRecvArmPattern {
+                    primary: arm.pat.span(self.body()).into(),
+                });
+            }
             self.seed_pat_bindings(arm.pat);
             self.check_arm_effect_names(arm.pat);
             self.env.flush_pending_bindings();

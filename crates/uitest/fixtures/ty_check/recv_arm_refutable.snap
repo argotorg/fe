@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_refutable.fe
+---
+error[8-0153]: refutable pattern in a recv arm
+   ┌─ recv_arm_refutable.fe:17:9
+   │
+17 │         V { n, k } -> u256 { n * 100 + k }
+   │         ^^^^^^^^^^ this pattern may not match every value of its variant
+
+error[8-0153]: refutable pattern in a recv arm
+   ┌─ recv_arm_refutable.fe:19:9
+   │
+19 │         L { flag: true, k } -> u256 { k }
+   │         ^^^^^^^^^^^^^^^^^^^ this pattern may not match every value of its variant

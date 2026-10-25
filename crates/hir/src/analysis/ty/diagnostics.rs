@@ -994,6 +994,11 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// A recv arm's pattern that may not match every value of its variant.
+    RefutableRecvArmPattern {
+        primary: DynLazySpan<'db>,
+    },
+
     /// A loop's driver, of type `driver` over `base`, that drives no
     /// collection of the chain: `receiver`, the collection the chain starts
     /// from, is of another type, or there is none.
@@ -1520,6 +1525,7 @@ impl<'db> BodyDiag<'db> {
             Self::MaybeMutWithoutMode { .. } => 130,
             Self::RefutableParamPattern { .. } => 133,
             Self::RefutableLoopPattern { .. } => 148,
+            Self::RefutableRecvArmPattern { .. } => 153,
             Self::LoopDriverBase { .. } => 149,
             Self::ProductArgExpected { .. } => 135,
             Self::ProductArgTooWeak { .. } => 150,
