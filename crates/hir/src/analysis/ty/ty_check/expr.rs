@@ -2037,6 +2037,7 @@ impl<'db> TyChecker<'db> {
 
         self.env.effect_env_mut().push_frame();
         let outer_choices = self.env.choices;
+        let mut ambiguous_opening = false;
 
         for binding in bindings {
             let named = if binding.key_path.is_none()
@@ -2095,6 +2096,7 @@ impl<'db> TyChecker<'db> {
                                 }
                             };
                             if let Some(value_span) = value_span {
+                                ambiguous_opening = true;
                                 self.push_diag(PathResDiag::Ambiguous(
                                     binding.value.span(self.body()).into(),
                                     name,
@@ -2125,6 +2127,7 @@ impl<'db> TyChecker<'db> {
                         continue;
                     }
                     ImplNameRes::Ambiguous => {
+                        ambiguous_opening = true;
                         // An ambiguous implementation name cannot become an
                         // effect operand merely because selection failed.
                         self.push_diag(PathResDiag::Ambiguous(
@@ -2434,6 +2437,28 @@ impl<'db> TyChecker<'db> {
                     return ExprProp::invalid(self.db);
                 }
             }
+        }
+        if ambiguous_opening {
+            // Preparation consumes demands before final diagnostics. An invalid
+            // header must not let an unrelated provider execute first.
+            if let Some(opening) = self.env.choices.and_then(|choices| {
+                choices.items(self.db).iter().find_map(|entry| match entry {
+                    super::super::trait_resolution::ChoiceEntry::Provider(opening) => {
+                        Some(*opening)
+                    }
+                    super::super::trait_resolution::ChoiceEntry::Impl(_) => None,
+                })
+            }) {
+                use salsa::Accumulator;
+                super::super::trait_resolution::generation::GenerationDemand {
+                    opening: opening.key(self.db).clone(),
+                    demand: Err("ambiguous implementation operand in `with` header".into()),
+                }
+                .accumulate(self.db);
+            }
+            self.env.effect_env_mut().pop_frame();
+            self.env.choices = outer_choices;
+            return ExprProp::invalid(self.db);
         }
         let result = if result_discarded {
             self.check_expr_with_discarded_result(body_expr, expected)

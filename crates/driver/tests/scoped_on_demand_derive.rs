@@ -1498,3 +1498,31 @@ const RESULT: u256 = run()
     let output = prepare(&source).unwrap();
     assert_eq!(eval_const_fn_u256(&output, "run"), "7");
 }
+
+#[test]
+fn ambiguous_implementation_operand_refuses_before_provider_execution() {
+    for header in ["Collision, Provider", "Provider, Collision"] {
+        let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Pick { const fn pick() -> u256 }
+struct Pair {}
+struct Provider {}
+impl Pick for Pair as Collision { const fn pick() -> u256 { 7 } }
+const Collision: u256 = 99
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${fault} } }
+    }
+}
+const fn run() -> u256 { with (HEADER) { Pair::score() } }
+"#
+        .replace("HEADER", header);
+        let cause = prepare_err(&source);
+        assert!(cause.contains("ambiguous"), "{cause}");
+        assert!(!cause.contains("division by zero"), "{cause}");
+    }
+}
