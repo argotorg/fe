@@ -1456,13 +1456,15 @@ fn finalized_derive_provider<'db>(
     if goal.def(db).ingot(db) != scope.top_mod(db).ingot(db) {
         return Err("library/canonical goal establishment is pending the permits owner API".into());
     }
-    let input = RecordInput::for_authored_type_from(db, goal.args(db)[0], request.scope())
-        .map_err(|cause| match cause {
+    let input =
+        RecordInput::for_authored_type_from(db, goal.args(db)[0], scope).map_err(|cause| {
+            match cause {
             RecordInputError::InvisibleField => {
                 "native derive requires every target field to be visible from the requesting scope"
                     .to_string()
             }
             _ => format!("native derive requires a concrete authored record: {cause:?}"),
+        }
         })?;
     crate::analysis::ty::ty_check::admit_ground_type_application(
         db,
