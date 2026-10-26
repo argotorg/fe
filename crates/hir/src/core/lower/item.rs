@@ -555,10 +555,11 @@ impl<'db> Func<'db> {
         let modifiers = FuncModifiers::new(vis, is_unsafe, is_const, is_extern);
         // A body that declares items is lowered with the module, which resolves
         // their imports and collects their impls. Other bodies are lowered when
-        // first needed (`Func::body`).
+        // first needed (`Func::body`). A generated function is lowered with the
+        // module too: its splice values are known only there.
         let eager_body = ast
             .body()
-            .filter(ast::BlockExpr::declares_items)
+            .filter(|body| body.declares_items() || ctxt.lowering_generated_function)
             .map(|body| Body::lower_func_body(ctxt, &ast, body));
         let origin = HirOrigin::raw(&ast);
         let top_mod = ctxt.top_mod();
