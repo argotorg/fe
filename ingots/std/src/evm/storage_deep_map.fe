@@ -1,0 +1,152 @@
+//! Storage maps keyed by several keys, addressed one level at a time.
+//!
+//! `StorageDeepMap` is the Fe counterpart of nested Solidity mappings such as
+//! `mapping(A => mapping(B => mapping(C => V)))`. It stores all entries in one
+//! flat `StorageMap` keyed by the full key, and lets callers walk into it one
+//! key at a time:
+//!
+//! ```fe
+//! use std::evm::{DeepKey3, StorageDeepMap}
+//!
+//! struct Store {
+//!     // year => month => day => steps
+//!     steps: StorageDeepMap<DeepKey3<u256, u256, u256>, u256>,
+//! }
+//!
+//! // read steps[2026][5][3]
+//! let walked = store.steps.at(2026).at(5).at(3).get()
+//!
+//! // steps[2026][5][3] += 100
+//! let mut day = store.steps.at_mut(2026).at(5).at(3)
+//! day.set(value: day.get() + 100)
+//! ```
+//!
+//! `at` returns a read-only `DeepMapCursor`; `at_mut` requires a mutable map
+//! and returns a `DeepMapCursorMut`, which can also write. Further `at` calls
+//! keep the kind of cursor. A cursor remembers the keys applied so far and can
+//! be passed to other functions, which then only see that part of the map.
+//! `get` and `set` exist only once all keys are applied.
+//!
+//! The full key type is nested to the left, because each `at` pairs the
+//! previous prefix with the next key: `at(a).at(b).at(c)` produces the key
+//! `((a, b), c)`. The `DeepKey2` to `DeepKey6` aliases spell this out, so
+//! `DeepKey3<A, B, C>` is `((A, B), C)`. Deeper maps can write the nested
+//! tuple by hand; there is no depth limit.
+//!
+//! The storage slot of an entry is `keccak256(k1 ++ k2 ++ ... ++ kn ++ SALT)`,
+//! i.e. the same slot a `StorageMap` with a flat tuple key `(k1, ..., kn)` and
+//! the same `SALT` uses. It is computed with a single hash regardless of
+//! depth. This is not the layout of a nested Solidity mapping; use
+//! `SolMapping` when Solidity-compatible slots are required.
+use super::effects::RawStorage
+use super::storage_map::{StorageKey, StorageMap}
+use super::word::WordRepr
+
+/// Full key of a two-level `StorageDeepMap`: `at(a).at(b)`.
+pub type DeepKey2<A, B> = (A, B)
+
+/// Full key of a three-level `StorageDeepMap`: `at(a).at(b).at(c)`.
+pub type DeepKey3<A, B, C> = ((A, B), C)
+
+/// Full key of a four-level `StorageDeepMap`.
+pub type DeepKey4<A, B, C, D> = (((A, B), C), D)
+
+/// Full key of a five-level `StorageDeepMap`.
+pub type DeepKey5<A, B, C, D, E> = ((((A, B), C), D), E)
+
+/// Full key of a six-level `StorageDeepMap`.
+pub type DeepKey6<A, B, C, D, E, F> = (((((A, B), C), D), E), F)
+
+/// A storage-backed map from a multi-level key `K` to values `V`.
+///
+/// `K` is the full key, nested to the left (see `DeepKey3` and friends).
+/// `SALT` is the slot seed, inferred per contract field like `StorageMap`'s.
+pub struct StorageDeepMap<K, V, const SALT: u256 = _> {
+    map: StorageMap<K, V, SALT>,
+}
+
+impl<K, V, const SALT: u256> Copy for StorageDeepMap<K, V, SALT> {}
+
+/// A read-only view of a `StorageDeepMap` with the key prefix `P` applied.
+///
+/// Obtained from `StorageDeepMap::at`. Once `P` equals the full key `K`, the
+/// cursor addresses a single entry and offers `get`.
+pub struct DeepMapCursor<K, P, V, const SALT: u256> {
+    map: StorageMap<K, V, SALT>,
+    prefix: P,
+}
+
+impl<K, P: Copy, V, const SALT: u256> Copy for DeepMapCursor<K, P, V, SALT> {}
+
+/// A writable view of a `StorageDeepMap` with the key prefix `P` applied.
+///
+/// Obtained from `StorageDeepMap::at_mut`. Once `P` equals the full key `K`,
+/// the cursor addresses a single entry and offers `get` and `set`.
+pub struct DeepMapCursorMut<K, P, V, const SALT: u256> {
+    map: StorageMap<K, V, SALT>,
+    prefix: P,
+}
+
+impl<K, P: Copy, V, const SALT: u256> Copy for DeepMapCursorMut<K, P, V, SALT> {}
+
+impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageDeepMap<K, V, SALT> {
+    pub(ingot) fn new_unchecked() -> Self {
+        Self { map: StorageMap::new_unchecked() }
+    }
+
+    pub fn new() -> Self
+    uses (storage: mut RawStorage)
+    {
+        Self::new_unchecked()
+    }
+
+    /// Applies the first key, for reading.
+    #[inline(always)]
+    pub fn at<A: Copy>(self, _ key: A) -> DeepMapCursor<K, A, V, SALT> {
+        DeepMapCursor { map: self.map, prefix: key }
+    }
+
+    /// Applies the first key, for reading and writing.
+    #[inline(always)]
+    pub fn at_mut<A: Copy>(mut self, _ key: A) -> DeepMapCursorMut<K, A, V, SALT> {
+        DeepMapCursorMut { map: self.map, prefix: key }
+    }
+}
+
+impl<K, P: Copy, V, const SALT: u256> DeepMapCursor<K, P, V, SALT> {
+    /// Applies the next key.
+    #[inline(always)]
+    pub fn at<N: Copy>(self, _ key: N) -> DeepMapCursor<K, (P, N), V, SALT> {
+        DeepMapCursor { map: self.map, prefix: (self.prefix, key) }
+    }
+}
+
+impl<K: StorageKey + Copy, V: WordRepr, const SALT: u256> DeepMapCursor<K, K, V, SALT> {
+    /// Reads the entry addressed by the full key.
+    #[inline(always)]
+    pub fn get(self) -> V {
+        self.map.get_unchecked(self.prefix)
+    }
+}
+
+impl<K, P: Copy, V, const SALT: u256> DeepMapCursorMut<K, P, V, SALT> {
+    /// Applies the next key.
+    #[inline(always)]
+    pub fn at<N: Copy>(self, _ key: N) -> DeepMapCursorMut<K, (P, N), V, SALT> {
+        DeepMapCursorMut { map: self.map, prefix: (self.prefix, key) }
+    }
+}
+
+impl<K: StorageKey + Copy, V: WordRepr, const SALT: u256> DeepMapCursorMut<K, K, V, SALT> {
+    /// Reads the entry addressed by the full key.
+    #[inline(always)]
+    pub fn get(self) -> V {
+        self.map.get_unchecked(self.prefix)
+    }
+
+    /// Writes the entry addressed by the full key.
+    #[inline(always)]
+    pub fn set(mut self, value: own V) {
+        self.map.set_unchecked(key: self.prefix, value)
+    }
+}
