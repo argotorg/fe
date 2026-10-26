@@ -796,12 +796,12 @@ const fn run() -> u256 {
         .copied()
         .find(|func| func.name(&db).to_opt().map(|id| id.data(&db).as_str()) == Some("run"))
         .expect("expected `run` function");
-    let (diags, _) = hir::analysis::ty::ty_check::check_func_body(&db, func);
-    let pending = hir::analysis::ty::ty_check::check_func_body::accumulated::<
-        hir::analysis::ty::trait_resolution::generation::GenerationDemand,
-    >(&db, func);
+    let (diags, typed) = hir::analysis::ty::ty_check::check_func_body(&db, func);
     assert!(
-        pending.iter().any(|request| request.demand.is_ok()),
+        typed
+            .generation_demands()
+            .iter()
+            .any(|request| request.demand.is_ok()),
         "raw checking must preserve the actual preparation request"
     );
     assert!(
@@ -1136,6 +1136,37 @@ const fn run() -> u256 { with (A) { Pair::score() } }
 }
 
 #[test]
+fn provider_constant_dependency_is_prepared_before_its_body_executes() {
+    let output = prepare(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Seed { const fn seed() -> u256 }
+struct Pair {}
+struct Token {}
+struct A {}
+struct B {}
+impl Derive<Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = SEEDED
+        quote { const fn score() -> u256 { ${n} } }
+    }
+}
+const SEEDED: u256 = with (B) { Token::seed() }
+impl Derive<Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 42 } }
+    }
+}
+const fn run() -> u256 { with (A) { Pair::score() } }
+"#,
+    )
+    .expect("a constant a provider reads is prepared before the provider executes");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
 fn cyclic_provider_dependency_refuses_before_execution() {
     let cause = prepare_err(
         r#"
@@ -1284,6 +1315,57 @@ const fn run() -> usize { with (A) { Pair::score() } }
     assert!(error.contains("const where predicate failed"), "{error}");
     assert!(!error.contains("requires a prepared"), "{error}");
     assert!(!error.contains("division by zero"), "{error}");
+}
+
+#[test]
+fn provider_condition_prepares_prerequisites_of_the_helpers_it_calls() {
+    // The generated prerequisite is opened inside helpers that the provider's
+    // condition calls. Preparation must serve it before admission whatever the
+    // order of the declarations, so the program below is valid with the use
+    // declared before or after its helpers.
+    let template = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> usize }
+trait Seed { const fn seed() -> usize }
+pub struct Pair {}
+pub struct Token {}
+struct B {}
+impl Derive<Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> usize { 42 } }
+    }
+}
+struct A {}
+impl Derive<Score> for A where { condition() } {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> usize { 42 } }
+    }
+}
+const fn run() -> usize { with (A) { Pair::score() } }
+const fn condition() -> bool { inner() }
+const fn inner() -> bool { with (B) { Token::seed() == 42 } }
+"#;
+    let run = "const fn run() -> usize { with (A) { Pair::score() } }\n";
+    let helpers = "const fn condition() -> bool { inner() }\nconst fn inner() -> bool { with (B) { Token::seed() == 42 } }\n";
+    for source in [
+        template.to_owned(),
+        template
+            .replace(run, "")
+            .replace(helpers, &format!("{helpers}{run}")),
+        // The condition is the target type's rather than the provider's.
+        template
+            .replace(
+                "pub struct Pair {}",
+                "pub struct Pair where { condition() } {}",
+            )
+            .replace("for A where { condition() }", "for A"),
+    ] {
+        let output = prepare(&source).unwrap();
+        assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+        let false_condition = source.replace("Token::seed() == 42", "Token::seed() == 41");
+        let error = prepare_err(&false_condition);
+        assert!(error.contains("const where predicate failed"), "{error}");
+    }
 }
 
 #[test]

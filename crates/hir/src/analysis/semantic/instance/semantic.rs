@@ -1728,6 +1728,43 @@ impl<'db> SemanticInstance<'db> {
         collect_semantic_callees(db, self)
     }
 
+    /// The instances that running the body evaluates besides its explicit
+    /// calls: the constants it reads and the codec callees of its place
+    /// entries. A constant is not a callee, but evaluating it runs its body.
+    pub fn implicit_dependencies(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<SemanticInstanceKey<'db>> {
+        let typed_body = self.key(db).typed_body(db);
+        let Some(body) = typed_body.body() else {
+            return Vec::new();
+        };
+        let mut keys = Vec::new();
+        let mut push = |key| {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        };
+        for expr in body.exprs(db).keys() {
+            if let Some(const_ref) = typed_body.expr_const_ref(expr)
+                && let Some(resolved) = super::const_ref::resolve_semantic_const_ref(
+                    db,
+                    const_ref,
+                    typed_body.expr_ty(db, expr),
+                    SemOrigin::Expr(expr),
+                )
+            {
+                push(resolved.instance(db));
+            }
+            if typed_body.place_entry_calls(expr).is_some()
+                && let Ok(codec) = self.entry_codec_callees(db, expr)
+            {
+                codec.into_iter().for_each(&mut push);
+            }
+        }
+        keys
+    }
+
     /// Borrow checking and runtime lowering consume concrete layouts, so a
     /// concrete instance demands the layout of every type its body consumes:
     /// each expression's and, given the semantic `body`, each local's

@@ -111,7 +111,7 @@ use crate::analysis::{
     },
 };
 use crate::core::semantic::storage_slot_span;
-use crate::hir_def::{BlockKind, FieldParent, ItemKind, scope_graph::ScopeId};
+use crate::hir_def::{BlockKind, FieldParent, ItemKind, Trait, scope_graph::ScopeId};
 use crate::semantic::{ProviderBinding, ProviderSource};
 use common::{compilation::Target, indexmap::IndexMap};
 
@@ -1974,12 +1974,9 @@ impl<'db> TyChecker<'db> {
             .flatten()
         {
             if !is_scope_visible_from(self.db, scope, self.env.scope()) {
-                use salsa::Accumulator;
-                super::super::trait_resolution::generation::GenerationDemand {
-                    opening: key,
-                    demand: Err("scoped derive provider path is not visible".into()),
-                }
-                .accumulate(self.db);
+                self.env
+                    .generation_demands
+                    .refuse(key, "scoped derive provider path is not visible");
                 if let Some(name) = scope.name(self.db) {
                     self.push_diag(PathResDiag::Invisible(
                         value.span(body).into(),
@@ -1995,13 +1992,8 @@ impl<'db> TyChecker<'db> {
         if let Partial::Present(Expr::RecordInit(_, fields)) = value.data(self.db, body)
             && !fields.is_empty()
         {
-            use salsa::Accumulator;
             let message = "scoped derive provider literals must have no fields; provider values are not evaluated";
-            super::super::trait_resolution::generation::GenerationDemand {
-                opening: key,
-                demand: Err(message.into()),
-            }
-            .accumulate(self.db);
+            self.env.generation_demands.refuse(key, message);
             self.push_diag(BodyDiag::CompileTimePhase {
                 primary: value.span(body).into(),
                 message: message.into(),
@@ -2413,7 +2405,6 @@ impl<'db> TyChecker<'db> {
                     }
                 }
                 if let Some(message) = conflict {
-                    use salsa::Accumulator;
                     let opening = entries
                         .iter()
                         .find_map(|entry| match entry {
@@ -2421,11 +2412,9 @@ impl<'db> TyChecker<'db> {
                             ChoiceEntry::Impl(_) => None,
                         })
                         .expect("provider-containing group");
-                    super::super::trait_resolution::generation::GenerationDemand {
-                        opening: opening.key(self.db).clone(),
-                        demand: Err(message.into()),
-                    }
-                    .accumulate(self.db);
+                    self.env
+                        .generation_demands
+                        .refuse(opening.key(self.db).clone(), message);
                     self.push_diag(BodyDiag::CompileTimePhase {
                         primary: body_expr.span(self.body()).into(),
                         message: message.into(),
@@ -2450,12 +2439,10 @@ impl<'db> TyChecker<'db> {
                     super::super::trait_resolution::ChoiceEntry::Impl(_) => None,
                 })
             }) {
-                use salsa::Accumulator;
-                super::super::trait_resolution::generation::GenerationDemand {
-                    opening: opening.key(self.db).clone(),
-                    demand: Err("ambiguous implementation operand in `with` header".into()),
-                }
-                .accumulate(self.db);
+                self.env.generation_demands.refuse(
+                    opening.key(self.db).clone(),
+                    "ambiguous implementation operand in `with` header",
+                );
             }
             self.env.effect_env_mut().pop_frame();
             self.env.choices = outer_choices;
@@ -4462,29 +4449,19 @@ impl<'db> TyChecker<'db> {
 
         let mut selected_receiver_ty = receiver_tys[0];
         let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
-        let mut candidate = select_method_candidate_with_choices(
-            self.db,
-            &canonical_r_ty,
-            method_name,
-            self.env.scope(),
-            method_assumptions,
-            None,
-            self.env.choices,
-        );
+        let mut candidate =
+            self.select_method_in_scope(&canonical_r_ty, method_name, method_assumptions, None);
         if matches!(
             candidate,
             Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
         ) {
             for &receiver_ty in receiver_tys.iter().skip(1) {
                 let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
-                let fallback = select_method_candidate_with_choices(
-                    self.db,
+                let fallback = self.select_method_in_scope(
                     &fallback_canonical,
                     method_name,
-                    self.env.scope(),
                     method_assumptions,
                     None,
-                    self.env.choices,
                 );
 
                 if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
@@ -4645,6 +4622,30 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// Selects a method under the lexical choices at this point of the body.
+    /// Requests that candidate probes stopped on become demands of the body.
+    fn select_method_in_scope(
+        &mut self,
+        receiver: &Canonicalized<'db, TyId<'db>>,
+        method_name: IdentId<'db>,
+        assumptions: PredicateListId<'db>,
+        trait_: Option<Trait<'db>>,
+    ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+        let outcome = select_method_candidate_with_choices(
+            self.db,
+            receiver,
+            method_name,
+            self.env.scope(),
+            assumptions,
+            trait_,
+            self.env.choices,
+        );
+        self.env
+            .generation_demands
+            .requests(self.db, outcome.pending);
+        outcome.result
+    }
+
     fn check_path(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
         let Expr::Path(path) = expr_data else {
             unreachable!()
@@ -4701,6 +4702,9 @@ impl<'db> TyChecker<'db> {
                 }
             }
         };
+        self.env
+            .generation_demands
+            .requests(self.db, lowering_cx.take_generation_requests());
         match res {
             ResolvedPathInBody::Binding(binding) => {
                 let ty = self
@@ -5955,14 +5959,11 @@ impl<'db> TyChecker<'db> {
         } else {
             let mut selected_lhs_ty = lhs_candidates[0];
             let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
-            let mut method_candidate = select_method_candidate_with_choices(
-                self.db,
+            let mut method_candidate = self.select_method_in_scope(
                 &c_lhs_ty,
                 op.trait_method(self.db),
-                self.env.scope(),
                 method_assumptions,
                 Some(trait_def),
-                self.env.choices,
             );
             if matches!(
                 method_candidate,
@@ -5970,14 +5971,11 @@ impl<'db> TyChecker<'db> {
             ) {
                 for &candidate_ty in lhs_candidates.iter().skip(1) {
                     let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
-                    let fallback = select_method_candidate_with_choices(
-                        self.db,
+                    let fallback = self.select_method_in_scope(
                         &c_candidate_ty,
                         op.trait_method(self.db),
-                        self.env.scope(),
                         method_assumptions,
                         Some(trait_def),
-                        self.env.choices,
                     );
                     if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
                     {

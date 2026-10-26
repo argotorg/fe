@@ -584,8 +584,9 @@ pub fn prepare_file(
         if !pending.is_empty() {
             let mut new_requests = Vec::new();
             let mut batch = std::collections::HashSet::new();
-            // Reject every invalid opening before any provider can run; query
-            // accumulator order must never grant authority to an earlier entry.
+            // Reject every invalid opening before any provider can run; the
+            // order in which demands were found must never grant authority to
+            // an earlier entry.
             let pending = pending
                 .into_iter()
                 .map(|pending| {
@@ -612,11 +613,12 @@ pub fn prepare_file(
                 }
                 let request = hir::core::meta::rebind_generation_request(&output, &demand)
                     .map_err(|cause| error(range, cause))?;
-                let dependencies = scoped_provider_admission_preflight::accumulated::<
-                    hir::analysis::ty::trait_resolution::generation::GenerationDemand,
-                >(&output, request);
+                let dependencies =
+                    hir::analysis::ty::trait_resolution::generation::admission_demands(
+                        &output, request,
+                    );
                 let blocked = !dependencies.is_empty();
-                for dependency in dependencies {
+                for dependency in &dependencies {
                     pending.push_back(
                         dependency
                             .demand
@@ -686,58 +688,13 @@ pub fn prepare_file(
     ))
 }
 
-#[salsa::tracked]
-fn scoped_provider_admission_preflight<'db>(
-    db: &'db dyn hir::analysis::HirAnalysisDb,
-    request: hir::analysis::ty::trait_resolution::generation::GenerationRequest<'db>,
-) {
-    let opening = request.opening(db);
-    let origin = opening.scope(db).item();
-    let _ = hir::core::meta::scoped_derive_provider(
-        db,
-        opening,
-        request.goal(db),
-        origin,
-        origin.span().into(),
-    );
-}
-
-#[salsa::tracked]
-fn provider_access_preflight<'db>(
-    db: &'db dyn hir::analysis::HirAnalysisDb,
-    instance: hir::analysis::semantic::SemanticInstance<'db>,
-) {
-    let _ = hir::analysis::semantic::access::semantic_access_check_query(db, instance);
-}
-
+/// Whether the provider instance `key`, or anything its evaluation runs, waits
+/// for a generated implementation.
 fn provider_needs_generation<'db>(
     db: &'db DriverDataBase,
     key: hir::analysis::semantic::SemanticInstanceKey<'db>,
 ) -> bool {
-    use hir::analysis::ty::trait_resolution::generation::GenerationDemand;
-    let mut pending = std::collections::VecDeque::from([key]);
-    let mut seen = std::collections::HashSet::new();
-    while let Some(key) = pending.pop_front() {
-        if !seen.insert(key) {
-            continue;
-        }
-        if let BodyOwner::Func(function, _) = key.owner(db)
-            && !check_func_body::accumulated::<GenerationDemand>(db, function).is_empty()
-        {
-            return true;
-        }
-        let instance = hir::analysis::semantic::SemanticInstance::new(db, key);
-        // Access preflight follows semantic dependencies beyond explicit calls,
-        // including const references and implicit codec callees. Its cached
-        // accumulator is authoritative for preparation before error handling.
-        if !provider_access_preflight::accumulated::<GenerationDemand>(db, instance).is_empty() {
-            return true;
-        }
-        for callee in instance.callees(db) {
-            pending.push_back(callee.key);
-        }
-    }
-    false
+    !hir::analysis::ty::trait_resolution::generation::evaluation_demands(db, key).is_empty()
 }
 
 fn scoped_selection_name(demand: &common::generation::ScopedDeriveDemand) -> String {

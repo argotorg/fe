@@ -256,11 +256,11 @@ enum StopReason<'db> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::SalsaValue)]
-pub(crate) enum TargetSolutionStatus {
+pub(crate) enum TargetSolutionStatus<'db> {
     Found,
     NotFound,
     Incomplete,
-    NeedsGeneration,
+    NeedsGeneration(super::generation::GenerationRequest<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -963,7 +963,6 @@ pub(super) fn solve<'db>(
         Err(never) => match never {},
     };
     if let Completion::Adapter(StopReason::NeedsGeneration(request)) = report.completion {
-        super::generation::record_request(db, request);
         return GoalSatisfiability::NeedsGeneration(request);
     }
     let root = report.root;
@@ -990,7 +989,7 @@ pub(super) fn has_solution<'db>(
     query: Query<'db>,
     target: Canonical<TraitInstId<'db>>,
     relation: TargetSolutionMatch,
-) -> TargetSolutionStatus {
+) -> TargetSolutionStatus<'db> {
     let mut root_table = PersistentUnificationTable::new(db);
     let root_goal = query.extract_identity(&mut root_table);
     let target = TargetAnswer {
@@ -1013,8 +1012,7 @@ pub(super) fn has_solution<'db>(
     };
     match report.completion {
         Completion::Adapter(StopReason::NeedsGeneration(request)) => {
-            super::generation::record_request(db, request);
-            TargetSolutionStatus::NeedsGeneration
+            TargetSolutionStatus::NeedsGeneration(request)
         }
         Completion::Adapter(StopReason::TargetFound) => TargetSolutionStatus::Found,
         Completion::Saturated => TargetSolutionStatus::NotFound,

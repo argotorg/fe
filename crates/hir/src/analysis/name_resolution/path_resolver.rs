@@ -1587,7 +1587,7 @@ fn resolve_segment<'db>(
                 && lowering_cx.const_bodies() == ConstBodyLowering::Eager
             {
                 let receiver_ty = Canonicalized::new(db, ty);
-                match select_method_candidate_with_choices(
+                let selection = select_method_candidate_with_choices(
                     db,
                     &receiver_ty,
                     ident,
@@ -1595,7 +1595,9 @@ fn resolve_segment<'db>(
                     assumptions,
                     None,
                     lowering_cx.method_choices(),
-                ) {
+                );
+                lowering_cx.record_generation_requests(selection.pending);
+                match selection.result {
                     Ok(cand) => {
                         *decided_by_value = true;
                         return Ok(PathRes::Method(ty, cand));

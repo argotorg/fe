@@ -311,6 +311,9 @@ impl<'db> PredicateFormation<'db> {
 pub(super) struct RequirementCheck<'db> {
     pub(super) diags: Vec<FuncBodyDiag<'db>>,
     pub(super) recursive: bool,
+    /// The generation demands the check met: those of the proofs it asked
+    /// for and those of the bodies it read.
+    pub(super) demands: GenerationDemands,
 }
 
 impl<'db> RequirementCheck<'db> {
@@ -352,6 +355,7 @@ impl<'db> RequirementCheck<'db> {
     fn extend(&mut self, other: Self) {
         self.recursive |= other.recursive;
         self.diags.extend(other.diags);
+        self.demands.extend(&other.demands);
     }
 }
 
@@ -882,7 +886,7 @@ pub(super) fn check_body_requirements<'db>(
                             None,
                         ),
                     );
-                    if let Some(goal) = type_choice_read(db, ty, cx) {
+                    if let Some(goal) = type_choice_read(db, ty, cx, &mut check.demands) {
                         check.diags.push(
                             BodyDiag::ChosenTypeRead {
                                 primary: nested.expr(db).span(nested).into(),
@@ -906,7 +910,7 @@ pub(super) fn check_body_requirements<'db>(
             let cx = TraitSolveCx::new(db, written.scope)
                 .with_assumptions(typed.assumptions())
                 .with_choices(Some(choices));
-            if let Some(goal) = type_choice_read(db, deferred, cx) {
+            if let Some(goal) = type_choice_read(db, deferred, cx, &mut check.demands) {
                 check.diags.push(
                     BodyDiag::ChosenTypeRead {
                         primary: written.span.clone(),
@@ -934,7 +938,7 @@ pub(super) fn check_body_requirements<'db>(
                     None,
                 ),
             );
-            if let Some(goal) = type_choice_read(db, ty, cx) {
+            if let Some(goal) = type_choice_read(db, ty, cx, &mut check.demands) {
                 check.diags.push(
                     BodyDiag::ChosenTypeRead {
                         primary: nested.expr(db).span(nested).into(),
@@ -1293,12 +1297,15 @@ fn anon_const_position_check<'db>(
     let owner = BodyOwner::AnonConstBody { body, expected };
     let (diags, typed) = infer_body(db, owner);
     if diags_allow_evaluation(db, diags) {
-        return check_body_requirements(db, owner, typed);
+        let mut check = check_body_requirements(db, owner, typed);
+        check.demands.extend(typed.generation_demands());
+        return check;
     }
     // A lone path to a constant is read as that constant, not checked as a
     // body, so its failures are reported where the constant is.
     let position = body.scope().parent(db).unwrap_or(body.scope());
     let mut check = RequirementCheck::default();
+    check.demands.extend(typed.generation_demands());
     if !crate::analysis::ty::ty_lower::const_body_names_a_constant(
         db,
         body,
@@ -1802,6 +1809,43 @@ fn check_type_requirements<'db>(
         check_own_type_requirements(db, ty, scope, reported).map_or(Ok(()), Err)
     })
     .err()
+}
+
+/// The instances that admitting the ground type `ty` evaluates: for each
+/// record or enum application in it, the declaration's ground predicates (as
+/// `check_where_const_predicates` evaluates them) and its predicates that
+/// mention parameters, with the arguments of the application (as
+/// `check_own_type_requirements` evaluates them).
+pub(crate) fn type_admission_instances<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Vec<SemanticInstance<'db>> {
+    use crate::analysis::semantic::const_body_instance;
+    let mut instances = Vec::new();
+    let _ = visit_type_applications(db, ty, &mut |application| {
+        let Some(declaration) = adt_declaration(db, application) else {
+            return Ok::<(), ()>(());
+        };
+        for predicate in evaluated_const_predicates(db, declaration) {
+            let owner = BodyOwner::const_predicate(db, predicate);
+            instances.push(const_body_instance(db, owner, GenericSubst::none(db)));
+        }
+        let args = application.decompose_ty_app(db).1;
+        let generic_owner = GenericParamOwner::from(declaration);
+        if args.len() == collect_generic_params(db, generic_owner).params(db).len()
+            && args.iter().all(|arg| !arg.has_var(db))
+        {
+            for &predicate in declaration.where_clause(db).const_predicates(db) {
+                if checked_at_uses(db, predicate) {
+                    let owner = BodyOwner::const_predicate(db, predicate);
+                    let subst = GenericSubst::for_body_owner(db, owner, args.to_vec());
+                    instances.push(const_body_instance(db, owner, subst));
+                }
+            }
+        }
+        Ok(())
+    });
+    instances
 }
 
 fn check_own_type_requirements<'db>(
@@ -2536,39 +2580,51 @@ fn written_const_args<'db>(
 /// Until type normalization consumes evidence, a written type cannot request
 /// a lexical dictionary. Deferred type constants retain the checked uses and
 /// substitutions needed here, including aliases, without evaluating source.
+///
+/// The proofs asked for under the choices may stop on generation requests; those
+/// and the demands of the constant bodies read are left in `demands`.
 fn type_choice_read<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     cx: TraitSolveCx<'db>,
+    demands: &mut GenerationDemands,
 ) -> Option<TraitInstId<'db>> {
     use crate::analysis::ty::{
         const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId},
-        evidence::prove,
+        evidence::prove_outcome,
         visitor::{TyVisitable, TyVisitor, walk_const_ty},
     };
-    struct Reads<'db> {
+    struct Reads<'db, 'a> {
         db: &'db dyn HirAnalysisDb,
         cx: TraitSolveCx<'db>,
         found: Option<TraitInstId<'db>>,
         seen: FxHashSet<ConstTyId<'db>>,
+        demands: &'a mut GenerationDemands,
     }
-    impl<'db> Reads<'db> {
+    impl<'db> Reads<'db, '_> {
         fn goal(&mut self, goal: TraitInstId<'db>) {
-            if self.found.is_none()
-                && prove(self.db, self.cx, goal).is_some_and(|proof| proof.has_named_impl(self.db))
-            {
-                self.found = Some(goal);
+            if self.found.is_none() {
+                let outcome = prove_outcome(self.db, self.cx, goal);
+                self.demands.requests(self.db, outcome.request());
+                if outcome
+                    .evidence()
+                    .is_some_and(|proof| proof.has_named_impl(self.db))
+                {
+                    self.found = Some(goal);
+                }
             }
         }
         fn body(&mut self, body: Body<'db>, expected: TyId<'db>, capture: &ConstCaptureEnv<'db>) {
             let typed = &infer_body(self.db, BodyOwner::AnonConstBody { body, expected }).1;
+            self.demands.extend(typed.generation_demands());
             for expr in body.exprs(self.db).keys() {
                 if let Some(callable) = typed.callable_expr(expr) {
                     let mut callable = capture.specialize(self.db, callable.clone());
                     if let Some(goal) = callable.trait_inst() {
                         self.goal(goal);
                     }
-                    callable.record_bound_evidence(self.db, self.cx);
+                    let requests = callable.record_bound_evidence(self.db, self.cx);
+                    self.demands.requests(self.db, requests);
                     if let (CallableDef::Func(func), Some(proofs)) =
                         (callable.callable_def(), callable.bound_evidence())
                         && let Ok(subst) = CompleteSubst::for_owner(
@@ -2601,7 +2657,7 @@ fn type_choice_read<'db>(
             }
         }
     }
-    impl<'db> TyVisitor<'db> for Reads<'db> {
+    impl<'db> TyVisitor<'db> for Reads<'db, '_> {
         fn db(&self) -> &'db dyn HirAnalysisDb {
             self.db
         }
@@ -2638,6 +2694,7 @@ fn type_choice_read<'db>(
         cx,
         found: None,
         seen: FxHashSet::default(),
+        demands,
     };
     ty.visit_with(&mut reads);
     reads.found

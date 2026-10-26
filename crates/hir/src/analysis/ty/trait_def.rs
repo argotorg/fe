@@ -460,19 +460,19 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
-) -> Selection<ResolvedImplInstance<'db>> {
+) -> Selection<'db, ResolvedImplInstance<'db>> {
     match resolve_trait_impl_instance_query(db, solve_cx, inst) {
         ImplSelection::Unique(resolved) => Selection::Unique(resolved),
         ImplSelection::Ambiguous => Selection::Ambiguous(IndexSet::new()),
         ImplSelection::NotFound => Selection::NotFound,
-        ImplSelection::NeedsGeneration => Selection::NeedsGeneration,
+        ImplSelection::NeedsGeneration(request) => Selection::NeedsGeneration(request),
     }
 }
 
 /// An implementation selection, without candidates for an ambiguous one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum ImplSelection<'db> {
-    NeedsGeneration,
+    NeedsGeneration(super::trait_resolution::generation::GenerationRequest<'db>),
     Unique(ResolvedImplInstance<'db>),
     Ambiguous,
     NotFound,
@@ -529,7 +529,7 @@ fn resolve_trait_impl_instance_query<'db>(
         // owned by the caller through a fresh local table.
         Selection::Ambiguous(_) => ImplSelection::Ambiguous,
         Selection::NotFound => ImplSelection::NotFound,
-        Selection::NeedsGeneration => ImplSelection::NeedsGeneration,
+        Selection::NeedsGeneration(request) => ImplSelection::NeedsGeneration(request),
     }
 }
 
@@ -818,7 +818,7 @@ pub fn assoc_const_body_template_for_trait_inst<'db>(
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
-        Selection::NotFound | Selection::NeedsGeneration => return None,
+        Selection::NotFound | Selection::NeedsGeneration(_) => return None,
     };
     selected_assoc_const_body_template(db, resolved, const_name)
 }

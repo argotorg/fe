@@ -14,7 +14,7 @@ use crate::analysis::{
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
         trait_resolution::{
             ChoiceEntry, ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCx,
-            goal_query_has_solution, is_goal_query_satisfiable,
+            generation::GenerationRequest, goal_query_has_solution, is_goal_query_satisfiable,
         },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
@@ -102,6 +102,23 @@ pub struct AmbiguousTraitMethods<'db> {
     pub diagnostic_traits: ThinVec<TraitInstId<'db>>,
 }
 
+/// A method selection and the generation requests its candidate probes stopped
+/// on. A probe that stops on a pending request leaves its candidate unconfirmed;
+/// the request is still owed to preparation.
+pub(crate) struct MethodSelectionOutcome<'db> {
+    pub(crate) result: Result<MethodCandidate<'db>, MethodSelectionError<'db>>,
+    pub(crate) pending: Vec<GenerationRequest<'db>>,
+}
+
+impl<'db> MethodSelectionOutcome<'db> {
+    fn of(result: Result<MethodCandidate<'db>, MethodSelectionError<'db>>) -> Self {
+        Self {
+            result,
+            pending: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum TraitCandidateCheck<'db> {
     Confirmed(TraitMethodCand<'db>),
@@ -127,6 +144,7 @@ pub(crate) fn select_method_candidate<'db>(
         trait_,
         None,
     )
+    .result
 }
 
 pub(crate) fn select_method_candidate_with_choices<'db>(
@@ -137,7 +155,7 @@ pub(crate) fn select_method_candidate_with_choices<'db>(
     assumptions: PredicateListId<'db>,
     trait_: Option<Trait<'db>>,
     choices: Option<ChosenImpls<'db>>,
-) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+) -> MethodSelectionOutcome<'db> {
     let filter = trait_.map_or(TraitFilter::Any, TraitFilter::Trait);
     select_filtered_method(
         db,
@@ -171,6 +189,7 @@ pub(crate) fn select_callable_value_method<'db>(
             TraitFilter::CallableTraits,
             None,
         )
+        .result
     };
     match select("call") {
         Err(MethodSelectionError::NotFound) => select("call_mut"),
@@ -186,10 +205,10 @@ fn select_filtered_method<'db>(
     assumptions: PredicateListId<'db>,
     filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
-) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+) -> MethodSelectionOutcome<'db> {
     let receiver_ty = receiver.original();
     if receiver_ty.is_ty_var(db) {
-        return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
+        return MethodSelectionOutcome::of(Err(MethodSelectionError::ReceiverTypeMustBeKnown));
     }
 
     let candidates = assemble_method_candidates(
@@ -210,6 +229,7 @@ fn select_filtered_method<'db>(
         assumptions,
         filter,
         choices,
+        pending: Default::default(),
     };
 
     selector.select()
@@ -252,6 +272,7 @@ pub(crate) fn select_trait_method_candidates<'db>(
         assumptions,
         filter,
         choices: None,
+        pending: Default::default(),
     };
 
     // Every candidate implements `trait_`, which the caller picked directly
@@ -508,15 +529,20 @@ struct MethodSelector<'db, 'a> {
     assumptions: PredicateListId<'db>,
     filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
+    /// Requests that the probes of unconfirmed candidates stopped on.
+    pending: std::cell::RefCell<Vec<GenerationRequest<'db>>>,
 }
 
 impl<'db, 'a> MethodSelector<'db, 'a> {
-    fn select(self) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
-        if let Some(res) = self.select_inherent_method() {
-            return res;
+    fn select(self) -> MethodSelectionOutcome<'db> {
+        let result = match self.select_inherent_method() {
+            Some(res) => res,
+            None => self.select_trait_methods(),
+        };
+        MethodSelectionOutcome {
+            result,
+            pending: self.pending.into_inner(),
         }
-
-        self.select_trait_methods()
     }
 
     fn select_inherent_method(
@@ -838,11 +864,19 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 });
                 contains_confirmed
                     || (reached_answer_cutoff
-                        && goal_query_has_solution(self.db, solve_cx, &query, confirmed))
+                        && goal_query_has_solution(
+                            self.db,
+                            solve_cx,
+                            &query,
+                            confirmed,
+                            &mut self.pending.borrow_mut(),
+                        ))
             }
-            GoalSatisfiability::ContainsInvalid
-            | GoalSatisfiability::UnSat(_)
-            | GoalSatisfiability::NeedsGeneration(_) => false,
+            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
+            GoalSatisfiability::NeedsGeneration(request) => {
+                self.pending.borrow_mut().push(request);
+                false
+            }
         }
     }
 
@@ -898,8 +932,11 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     let solved = query.extract_solution(&mut table, solution).inst;
                     let _ = table.unify(constraint, solved);
                 }
+                GoalSatisfiability::NeedsGeneration(request) => {
+                    self.pending.borrow_mut().push(request);
+                    needs_confirmation = true;
+                }
                 GoalSatisfiability::NeedsConfirmation { .. }
-                | GoalSatisfiability::NeedsGeneration(_)
                 | GoalSatisfiability::ContainsInvalid => {
                     needs_confirmation = true;
                 }
@@ -958,7 +995,8 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             table.instantiate_with_fresh_vars(inst)
         };
 
-        match is_goal_query_satisfiable(self.db, solve_cx, &query) {
+        let result = is_goal_query_satisfiable(self.db, solve_cx, &query);
+        match result {
             GoalSatisfiability::Satisfied(solution) => {
                 // Map back the solution to the current context.
                 let solution = query.extract_solution(&mut table, solution).inst;
@@ -982,6 +1020,9 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             | GoalSatisfiability::NeedsGeneration(_)
             | GoalSatisfiability::ContainsInvalid
             | GoalSatisfiability::UnSat(_) => {
+                if let GoalSatisfiability::NeedsGeneration(request) = result {
+                    self.pending.borrow_mut().push(request);
+                }
                 MethodCandidate::NeedsConfirmation(TraitMethodCand::new(
                     self.receiver
                         .canonicalize_solution(self.db, &mut table, inst),

@@ -263,12 +263,12 @@ impl<'db> CanonicalGoalQuery<'db> {
 }
 
 #[derive(Debug, Clone)]
-pub enum Selection<T> {
+pub enum Selection<'db, T> {
     Unique(T),
     Ambiguous(IndexSet<T>),
     NotFound,
-    /// Preparation must admit a requested candidate before selection resumes.
-    NeedsGeneration,
+    /// Preparation must admit the requested candidate before selection resumes.
+    NeedsGeneration(generation::GenerationRequest<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
@@ -340,7 +340,7 @@ impl<'db> TraitSolveCx<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
         inst: TraitInstId<'db>,
-    ) -> Selection<ImplementorId<'db>> {
+    ) -> Selection<'db, ImplementorId<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
         let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions);
         // An assumption proves a bound; it is not a second implementation.
@@ -371,7 +371,7 @@ impl<'db> TraitSolveCx<'db> {
             }
         };
         match result {
-            GoalSatisfiability::NeedsGeneration(_) => Selection::NeedsGeneration,
+            GoalSatisfiability::NeedsGeneration(request) => Selection::NeedsGeneration(request),
             GoalSatisfiability::Satisfied(solution) => {
                 Selection::Unique(solution.value.implementor)
             }
@@ -510,7 +510,7 @@ fn query_has_solution<'db>(
     query: Canonical<TraitSolverQuery<'db>>,
     target: Canonical<TraitInstId<'db>>,
     relation: TargetSolutionMatch,
-) -> TargetSolutionStatus {
+) -> TargetSolutionStatus<'db> {
     if query.flags(db).contains(TyFlags::HAS_INVALID) {
         return TargetSolutionStatus::NotFound;
     }
@@ -524,44 +524,60 @@ fn query_has_solution_cycle_initial<'db>(
     _query: Canonical<TraitSolverQuery<'db>>,
     _target: Canonical<TraitInstId<'db>>,
     _relation: TargetSolutionMatch,
-) -> TargetSolutionStatus {
+) -> TargetSolutionStatus<'db> {
     TargetSolutionStatus::Incomplete
 }
 
+/// Whether a search for `target` among the answers of `query` finds it. A search
+/// that stops on a pending request finds nothing and leaves the request in
+/// `pending`.
 pub(crate) fn goal_query_has_solution<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     query: &CanonicalGoalQuery<'db>,
     target: Canonical<TraitInstId<'db>>,
+    pending: &mut Vec<generation::GenerationRequest<'db>>,
 ) -> bool {
-    matches!(
-        query_has_solution(
-            db,
-            solve_cx.origin_ingot(),
-            query.canonical(),
-            target,
-            TargetSolutionMatch::Equal,
-        ),
-        TargetSolutionStatus::Found
-    )
+    match query_has_solution(
+        db,
+        solve_cx.origin_ingot(),
+        query.canonical(),
+        target,
+        TargetSolutionMatch::Equal,
+    ) {
+        TargetSolutionStatus::Found => true,
+        TargetSolutionStatus::NeedsGeneration(request) => {
+            pending.push(request);
+            false
+        }
+        TargetSolutionStatus::NotFound | TargetSolutionStatus::Incomplete => false,
+    }
 }
 
+/// Whether the answers of `query` contain nothing but `target`. A search that
+/// stops on a pending request proves nothing and leaves the request in
+/// `pending`.
 pub(crate) fn goal_query_has_no_distinct_solution<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     query: &CanonicalGoalQuery<'db>,
     target: Canonical<TraitInstId<'db>>,
+    pending: &mut Vec<generation::GenerationRequest<'db>>,
 ) -> bool {
-    matches!(
-        query_has_solution(
-            db,
-            solve_cx.origin_ingot(),
-            query.canonical(),
-            target,
-            TargetSolutionMatch::NotEqual,
-        ),
-        TargetSolutionStatus::NotFound
-    )
+    match query_has_solution(
+        db,
+        solve_cx.origin_ingot(),
+        query.canonical(),
+        target,
+        TargetSolutionMatch::NotEqual,
+    ) {
+        TargetSolutionStatus::NotFound => true,
+        TargetSolutionStatus::NeedsGeneration(request) => {
+            pending.push(request);
+            false
+        }
+        TargetSolutionStatus::Found | TargetSolutionStatus::Incomplete => false,
+    }
 }
 
 pub fn is_goal_query_satisfiable<'db>(
@@ -680,10 +696,17 @@ pub(crate) fn check_ty_wf<'db>(
         let mut table = UnificationTable::new(db);
         let query = CanonicalGoalQuery::new(db, goal, assumptions);
 
-        if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query)
-        {
-            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-            return WellFormedness::IllFormed { goal, subgoal };
+        match is_goal_query_satisfiable(db, solve_cx, &query) {
+            GoalSatisfiability::UnSat(subgoal) => {
+                let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
+                return WellFormedness::IllFormed { goal, subgoal };
+            }
+            GoalSatisfiability::NeedsGeneration(request) => {
+                return WellFormedness::Pending(request);
+            }
+            GoalSatisfiability::Satisfied(_)
+            | GoalSatisfiability::NeedsConfirmation { .. }
+            | GoalSatisfiability::ContainsInvalid => {}
         }
     }
 
@@ -891,17 +914,25 @@ fn unsatisfied_goal<'db>(
     let assumptions = solve_cx.assumptions();
     let mut table = UnificationTable::new(db);
     let query = CanonicalGoalQuery::new(db, goal, assumptions);
-    if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query) {
-        let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-        Some(WellFormedness::IllFormed { goal, subgoal })
-    } else {
-        None
+    match is_goal_query_satisfiable(db, solve_cx, &query) {
+        GoalSatisfiability::UnSat(subgoal) => {
+            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
+            Some(WellFormedness::IllFormed { goal, subgoal })
+        }
+        GoalSatisfiability::NeedsGeneration(request) => Some(WellFormedness::Pending(request)),
+        GoalSatisfiability::Satisfied(_)
+        | GoalSatisfiability::NeedsConfirmation { .. }
+        | GoalSatisfiability::ContainsInvalid => None,
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, SalsaValue)]
 pub(crate) enum WellFormedness<'db> {
     WellFormed,
+    /// Neither well- nor ill-formed yet: the check stopped on a goal that
+    /// waits for a generated implementation. Preparation must serve the
+    /// request before the check can be repeated.
+    Pending(generation::GenerationRequest<'db>),
     IllFormed {
         goal: TraitInstId<'db>,
         subgoal: Option<TraitInstId<'db>>,
@@ -974,10 +1005,17 @@ fn trait_inst_wf<'db>(
     for &goal in normalized_constraints.list(db) {
         let mut table = UnificationTable::new(db);
         let query = CanonicalGoalQuery::new(db, goal, assumptions);
-        if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query)
-        {
-            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-            return WellFormedness::IllFormed { goal, subgoal };
+        match is_goal_query_satisfiable(db, solve_cx, &query) {
+            GoalSatisfiability::UnSat(subgoal) => {
+                let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
+                return WellFormedness::IllFormed { goal, subgoal };
+            }
+            GoalSatisfiability::NeedsGeneration(request) => {
+                return WellFormedness::Pending(request);
+            }
+            GoalSatisfiability::Satisfied(_)
+            | GoalSatisfiability::NeedsConfirmation { .. }
+            | GoalSatisfiability::ContainsInvalid => {}
         }
     }
 
@@ -1394,21 +1432,20 @@ mod tests {
         let chosen = ordinary
             .with_assumptions(PredicateListId::new(&db, vec![goal]))
             .with_choices(Some(super::ChosenImpls::push_provider(&db, None, opening)));
-        assert!(matches!(
-            prove_outcome(&db, chosen, goal),
-            ProofOutcome::NeedsGeneration
-        ));
+        let ProofOutcome::NeedsGeneration(proof_request) = prove_outcome(&db, chosen, goal) else {
+            panic!("a pending provider stops the proof on its request");
+        };
         let query = chosen.query(&db, goal);
         for _ in 0..2 {
-            assert!(matches!(
-                is_goal_query_satisfiable(&db, chosen, &query),
-                GoalSatisfiability::NeedsGeneration(_)
-            ));
-            let requests = super::is_query_satisfiable::accumulated::<
-                super::generation::GenerationDemand,
-            >(&db, chosen.origin_ingot(), query.canonical());
-            assert_eq!(requests.len(), 1);
-            assert!(requests[0].demand.is_ok(), "{:?}", requests[0]);
+            // A cached result carries the same single request as a fresh one.
+            let GoalSatisfiability::NeedsGeneration(request) =
+                is_goal_query_satisfiable(&db, chosen, &query)
+            else {
+                panic!("a pending provider stops the search on its request");
+            };
+            assert_eq!(request, proof_request);
+            let demand = super::generation::GenerationDemand::pending(&db, request);
+            assert!(demand.demand.is_ok(), "{demand:?}");
         }
         assert!(
             matches!(
@@ -1440,25 +1477,30 @@ mod tests {
             TraitInstId::new_simple(&db, tag, vec![item])
         );
         let query = solve.query(&db, goal);
-        assert!(matches!(
+        let super::table_solver::TargetSolutionStatus::NeedsGeneration(targeted) =
             super::query_has_solution(
                 &db,
                 solve.origin_ingot(),
                 query.canonical(),
                 Canonical::new(&db, goal),
-                super::table_solver::TargetSolutionMatch::Equal
-            ),
-            super::table_solver::TargetSolutionStatus::NeedsGeneration
-        ));
+                super::table_solver::TargetSolutionMatch::Equal,
+            )
+        else {
+            panic!("a targeted search stops on the pending request");
+        };
+        assert_eq!(targeted, request);
+        let mut pending = Vec::new();
         assert!(
             !super::goal_query_has_no_distinct_solution(
                 &db,
                 solve,
                 &query,
-                Canonical::new(&db, goal)
+                Canonical::new(&db, goal),
+                &mut pending,
             ),
             "pending is not a saturated absence proof"
         );
+        assert_eq!(pending, [request], "the stopped search reports its request");
     }
 
     #[test]
@@ -1996,7 +2038,13 @@ impl Foo for Third {}
             .find(|candidate| !returned.contains(candidate))
             .expect("the two-answer cutoff must omit one implementation");
 
-        assert!(goal_query_has_solution(&db, solve_cx, &query, target));
+        assert!(goal_query_has_solution(
+            &db,
+            solve_cx,
+            &query,
+            target,
+            &mut Vec::new()
+        ));
     }
     #[test]
     fn implementation_selection_uses_assumptions_for_obligations() {

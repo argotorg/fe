@@ -27,7 +27,8 @@ use super::{
     trait_lower::lower_impl_trait,
     trait_resolution::{
         PredicateListId, Selection, TraitSolveCx, answering_assumption,
-        constraint::collect_candidate_constraints, normalize_trait_inst_preserving_validity,
+        constraint::collect_candidate_constraints, generation::GenerationRequest,
+        normalize_trait_inst_preserving_validity,
     },
     ty_check::{BodyOwner, func_declared_bounds, func_signature},
     ty_def::{BorrowKind, TyFlags},
@@ -695,7 +696,8 @@ fn is_closed_goal<'db>(db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> bo
 /// Consumers must not turn an unavailable lexical proof into ordinary dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, SalsaValue)]
 pub(crate) enum ProofOutcome<'db> {
-    NeedsGeneration,
+    /// Preparation must admit the requested candidate before the goal can be proved.
+    NeedsGeneration(GenerationRequest<'db>),
     Proven(EvidenceId<'db>),
     Deferred,
     Unavailable,
@@ -705,7 +707,15 @@ impl<'db> ProofOutcome<'db> {
     pub(crate) fn evidence(self) -> Option<EvidenceId<'db>> {
         match self {
             Self::Proven(evidence) => Some(evidence),
-            Self::Deferred | Self::Unavailable | Self::NeedsGeneration => None,
+            Self::Deferred | Self::Unavailable | Self::NeedsGeneration(_) => None,
+        }
+    }
+
+    /// The request that stopped the proof, if preparation must serve one.
+    pub(crate) fn request(self) -> Option<GenerationRequest<'db>> {
+        match self {
+            Self::NeedsGeneration(request) => Some(request),
+            Self::Proven(_) | Self::Deferred | Self::Unavailable => None,
         }
     }
 }
@@ -769,30 +779,20 @@ pub(crate) fn prove_outcome<'db>(
 /// lexical choice or supplied dictionary affects it. Resolved effect-provider
 /// arguments supply proofs through these same slots. Implied bounds project from their declared
 /// root dictionaries rather than selecting independently in the caller.
-pub(crate) fn declared_bound_evidence<'db>(
-    db: &'db dyn HirAnalysisDb,
-    declared: PredicateListId<'db>,
-    signature: PredicateListId<'db>,
-    subst: &CompleteSubst<'db>,
-    solve_cx: TraitSolveCx<'db>,
-) -> EvidenceList<'db> {
-    declared_bound_evidence_with_pending(db, declared, signature, subst, solve_cx).0
-}
-
-/// Preserve preparation state from the same proof production that fills the
-/// slots. A missing pending slot is not an unsatisfied trait obligation.
+/// The generation requests the proofs stopped on are returned with the slots:
+/// a missing slot that waits on one is not an unsatisfied trait obligation.
 pub(crate) fn declared_bound_evidence_with_pending<'db>(
     db: &'db dyn HirAnalysisDb,
     declared: PredicateListId<'db>,
     signature: PredicateListId<'db>,
     subst: &CompleteSubst<'db>,
     solve_cx: TraitSolveCx<'db>,
-) -> (EvidenceList<'db>, bool) {
+) -> (EvidenceList<'db>, Vec<GenerationRequest<'db>>) {
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-    let mut pending = false;
+    let mut pending = Vec::new();
     let mut declared_proof = |goal| {
         let outcome = prove_outcome(db, solve_cx, goal);
-        pending |= matches!(outcome, ProofOutcome::NeedsGeneration);
+        pending.extend(outcome.request());
         outcome.evidence()
     };
     let evidence = EvidenceList::of(
@@ -970,7 +970,7 @@ fn prove_in<'db>(
     }
     let resolved = match resolve_trait_impl_instance(db, solve_cx, goal) {
         Selection::Unique(resolved) => resolved,
-        Selection::NeedsGeneration => return ProofOutcome::NeedsGeneration,
+        Selection::NeedsGeneration(request) => return ProofOutcome::NeedsGeneration(request),
         Selection::NotFound | Selection::Ambiguous(_) => {
             return if collect_flags(db, goal)
                 .intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
@@ -1008,7 +1008,9 @@ fn prove_in<'db>(
         for &condition in resolved.instantiated_constraints(db).list(db) {
             match prove_outcome(db, solve_cx, condition.at_mode(db, mode)) {
                 ProofOutcome::Proven(proof) => conditions.push(proof),
-                ProofOutcome::NeedsGeneration => return ProofOutcome::NeedsGeneration,
+                ProofOutcome::NeedsGeneration(request) => {
+                    return ProofOutcome::NeedsGeneration(request);
+                }
                 ProofOutcome::Deferred | ProofOutcome::Unavailable => {
                     return ProofOutcome::Unavailable;
                 }
@@ -1102,7 +1104,7 @@ pub(crate) fn instantiated_selection<'db>(
         }
         None => match resolve_trait_impl_instance(db, solve_cx, inst) {
             Selection::Unique(resolved) => Some(resolved),
-            Selection::Ambiguous(_) | Selection::NotFound | Selection::NeedsGeneration => None,
+            Selection::Ambiguous(_) | Selection::NotFound | Selection::NeedsGeneration(_) => None,
         },
     }
 }

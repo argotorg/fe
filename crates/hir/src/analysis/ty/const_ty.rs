@@ -137,6 +137,11 @@ pub(crate) struct LoweringContext<'db> {
     /// Set while lowering resolves a path that an anonymous constant's body
     /// writes (`without_recording`).
     recording_paused: std::cell::Cell<bool>,
+    /// The generation requests that method discovery under `method_choices`
+    /// stopped on. The caller that supplied the choices owes them to
+    /// preparation (`take_generation_requests`).
+    generation_requests:
+        std::cell::RefCell<Vec<super::trait_resolution::generation::GenerationRequest<'db>>>,
 }
 
 impl<'db> LoweringContext<'db> {
@@ -159,6 +164,7 @@ impl<'db> LoweringContext<'db> {
             default_capture: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
+            generation_requests: Default::default(),
         }
     }
 
@@ -172,6 +178,21 @@ impl<'db> LoweringContext<'db> {
 
     pub(crate) fn method_choices(&self) -> Option<super::trait_resolution::ChosenImpls<'db>> {
         self.method_choices
+    }
+
+    /// Called by path resolution for the requests a method discovery met.
+    pub(crate) fn record_generation_requests(
+        &self,
+        requests: impl IntoIterator<Item = super::trait_resolution::generation::GenerationRequest<'db>>,
+    ) {
+        self.generation_requests.borrow_mut().extend(requests);
+    }
+
+    /// The requests path resolution met under this context's choices.
+    pub(crate) fn take_generation_requests(
+        &self,
+    ) -> Vec<super::trait_resolution::generation::GenerationRequest<'db>> {
+        std::mem::take(&mut self.generation_requests.borrow_mut())
     }
 
     /// Makes this lowering lower an associated type of `impl_trait`.
