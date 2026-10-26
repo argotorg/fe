@@ -1,0 +1,270 @@
+//! Ownership and role-based access control as capabilities, after Solady's
+//! `Ownable` and `OwnableRoles`.
+//!
+//! Instead of a modifier that has to be remembered on every privileged
+//! entry point, authorization produces a value: [`Ownable::authorize`]
+//! checks the caller and returns an [`OnlyOwner`], [`Roles::authorize`]
+//! returns a [`Role<ROLES>`]. Only this module can construct them, and
+//! privileged functions declare the one they need as an effect:
+//!
+//! ```fe
+//! use std::evm::auth::{OnlyOwner, Ownable, Role, Roles}
+//!
+//! const MINTER: u256 = 1 << 0
+//!
+//! fn mint(to: Address, amount: u256) uses (minter: Role<MINTER>, store: mut Store) {
+//!     // only reachable with a MINTER capability in scope
+//! }
+//!
+//! recv Admin {
+//!     GrantMinter { account } uses (ownable, mut roles, ctx, mut log) {
+//!         with (OnlyOwner = ownable.authorize()) {
+//!             roles.grant_roles(account, MINTER)
+//!         }
+//!     }
+//!     Mint { to, amount } uses (roles, mut store, ctx) {
+//!         with (Role<MINTER> = roles.authorize<MINTER>()) {
+//!             mint(to, amount)
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! Calling `mint` from a handler that never authorized is a compile error
+//! (the effect is missing), not a runtime bug, and every function that can
+//! reach `mint` says so in its signature. The capabilities are proofs about
+//! the current call: they are not `Copy` and should not be stored, since a
+//! stored proof outlives the check that produced it.
+//!
+//! Roles are bit flags in a `u256` as in Solady, so a `Role<ROLES>` with
+//! several bits set is granted to accounts holding any of them. Storage and
+//! events match Solady's semantics, not its slot layout.
+use super::effects::{Address, Ctx, Log, revert_error}
+use super::storage_map::StorageMap
+
+/// The caller is not authorized: not the owner, or holds none of the
+/// required roles. Selector `0x82b42900`, as in Solady.
+#[error]
+pub struct Unauthorized {}
+
+/// Ownership cannot be transferred to the zero address.
+#[error]
+pub struct NewOwnerIsZeroAddress {}
+
+/// The pending owner has no valid handover request.
+#[error]
+pub struct NoHandoverRequest {}
+
+#[event]
+pub struct OwnershipTransferred {
+    #[indexed]
+    pub old_owner: Address,
+    #[indexed]
+    pub new_owner: Address,
+}
+
+#[event]
+pub struct OwnershipHandoverRequested {
+    #[indexed]
+    pub pending_owner: Address,
+}
+
+#[event]
+pub struct OwnershipHandoverCanceled {
+    #[indexed]
+    pub pending_owner: Address,
+}
+
+/// `user`'s roles changed; `roles` is the complete new set.
+#[event]
+pub struct RolesUpdated {
+    #[indexed]
+    pub user: Address,
+    #[indexed]
+    pub roles: u256,
+}
+
+/// How long an ownership handover request stays valid: 48 hours.
+pub const HANDOVER_VALID_FOR: u256 = 172800
+
+/// Proof that the caller of the current call is the owner.
+pub struct OnlyOwner { owner: Address }
+
+impl OnlyOwner {
+    /// The authorized owner, which is the caller.
+    pub fn account(self) -> Address {
+        self.owner
+    }
+}
+
+/// Proof that the caller of the current call holds at least one of the
+/// role bits in `ROLES`.
+pub struct Role<const ROLES: u256> { account: Address }
+
+impl<const ROLES: u256> Role<ROLES> {
+    /// The authorized account, which is the caller.
+    pub fn account(self) -> Address {
+        self.account
+    }
+}
+
+/// Single-owner storage with Solady's two-step handover.
+///
+/// Initialize it in the contract's `init` with [`Ownable::init_owner`].
+pub struct Ownable { owner: Address, handover_expiries: StorageMap<Address, u256> }
+
+impl Ownable {
+    /// Sets the initial owner and emits `OwnershipTransferred(0, owner)`.
+    pub fn init_owner(mut self, _ owner: Address) uses (log: mut Log) {
+        self.set_owner(owner)
+    }
+    pub fn owner(self) -> Address {
+        self.owner
+    }
+
+    /// The owner capability for the caller. Reverts with `Unauthorized()`
+    /// unless the caller is the owner.
+    pub fn authorize(self) -> OnlyOwner uses (ctx: Ctx) {
+        let caller = ctx.caller()
+        if caller != self.owner {
+            revert_error(Unauthorized {})
+        }
+        OnlyOwner { owner: caller }
+    }
+
+    /// Like `authorize`, but returns `None` instead of reverting.
+    pub fn try_authorize(self) -> Option<OnlyOwner> uses (ctx: Ctx) {
+        let caller = ctx.caller()
+        if caller != self.owner {
+            return Option::None
+        }
+        Option::Some(OnlyOwner { owner: caller })
+    }
+
+    /// Transfers ownership in one step. Reverts with
+    /// `NewOwnerIsZeroAddress()` for the zero address; use
+    /// `renounce_ownership` to give up ownership.
+    pub fn transfer_ownership(mut self, _ new_owner: Address)
+    uses (auth: OnlyOwner, log: mut Log)
+    {
+        if new_owner == Address::zero() {
+            revert_error(NewOwnerIsZeroAddress {})
+        }
+        self.set_owner(new_owner)
+    }
+
+    /// Leaves the contract without an owner, so `authorize` always reverts.
+    pub fn renounce_ownership(mut self) uses (auth: OnlyOwner, log: mut Log) {
+        self.set_owner(Address::zero())
+    }
+
+    /// Records that the caller wants to become the owner. The request
+    /// expires after `HANDOVER_VALID_FOR` seconds.
+    pub fn request_handover(mut self) uses (ctx: Ctx, log: mut Log) {
+        let pending_owner = ctx.caller()
+        self.handover_expiries.set(
+                key: pending_owner,
+                value: ctx.timestamp() + HANDOVER_VALID_FOR,
+            )
+        log.emit(OwnershipHandoverRequested { pending_owner })
+    }
+
+    /// Withdraws the caller's handover request.
+    pub fn cancel_handover(mut self) uses (ctx: Ctx, log: mut Log) {
+        let pending_owner = ctx.caller()
+        self.handover_expiries.set(key: pending_owner, value: 0)
+        log.emit(OwnershipHandoverCanceled { pending_owner })
+    }
+
+    /// Transfers ownership to `pending_owner`, which must have an unexpired
+    /// request, and consumes the request. Reverts with
+    /// `NoHandoverRequest()` otherwise.
+    pub fn complete_handover(mut self, _ pending_owner: Address)
+    uses (auth: OnlyOwner, ctx: Ctx, log: mut Log)
+    {
+        let expiry = self.handover_expiries.get(pending_owner)
+        if ctx.timestamp() > expiry {
+            revert_error(NoHandoverRequest {})
+        }
+        self.handover_expiries.set(key: pending_owner, value: 0)
+        self.set_owner(pending_owner)
+    }
+
+    /// When `pending_owner`'s handover request expires, or 0 if there is
+    /// none.
+    pub fn handover_expiry(self, _ pending_owner: Address) -> u256 {
+        self.handover_expiries.get(pending_owner)
+    }
+
+    fn set_owner(mut self, _ new_owner: Address) uses (log: mut Log) {
+        log.emit(OwnershipTransferred { old_owner: self.owner, new_owner })
+        self.owner = new_owner
+    }
+}
+
+/// Per-account role bit sets, managed by the owner.
+pub struct Roles { roles: StorageMap<Address, u256> }
+
+impl Roles {
+    /// The role bits held by `user`.
+    pub fn roles_of(self, _ user: Address) -> u256 {
+        self.roles.get(user)
+    }
+
+    /// Whether `user` holds at least one of the bits in `roles`.
+    pub fn has_any_role(self, _ user: Address, _ roles: u256) -> bool {
+        self.roles.get(user) & roles != 0
+    }
+
+    /// Whether `user` holds every bit in `roles`.
+    pub fn has_all_roles(self, _ user: Address, _ roles: u256) -> bool {
+        self.roles.get(user) & roles == roles
+    }
+
+    /// The `Role<ROLES>` capability for the caller. Reverts with
+    /// `Unauthorized()` unless the caller holds at least one bit of
+    /// `ROLES`.
+    pub fn authorize<const ROLES: u256>(self) -> Role<ROLES> uses (ctx: Ctx) {
+        let caller = ctx.caller()
+        if !self.has_any_role(caller, ROLES) {
+            revert_error(Unauthorized {})
+        }
+        Role { account: caller }
+    }
+
+    /// Like `authorize`, but returns `None` instead of reverting.
+    pub fn try_authorize<const ROLES: u256>(self) -> Option<Role<ROLES>>
+    uses (ctx: Ctx)
+    {
+        let caller = ctx.caller()
+        if !self.has_any_role(caller, ROLES) {
+            return Option::None
+        }
+        Option::Some(Role { account: caller })
+    }
+
+    /// Adds the bits in `roles` to `user`'s roles.
+    pub fn grant_roles(mut self, _ user: Address, _ roles: u256)
+    uses (auth: OnlyOwner, log: mut Log)
+    {
+        self.set_roles(user, self.roles.get(user) | roles)
+    }
+
+    /// Removes the bits in `roles` from `user`'s roles.
+    pub fn revoke_roles(mut self, _ user: Address, _ roles: u256)
+    uses (auth: OnlyOwner, log: mut Log)
+    {
+        self.set_roles(user, self.roles.get(user) & !roles)
+    }
+
+    /// Removes the bits in `roles` from the caller's own roles.
+    pub fn renounce_roles(mut self, _ roles: u256) uses (ctx: Ctx, log: mut Log) {
+        let user = ctx.caller()
+        self.set_roles(user, self.roles.get(user) & !roles)
+    }
+
+    fn set_roles(mut self, _ user: Address, _ roles: u256) uses (log: mut Log) {
+        self.roles.set(key: user, value: roles)
+        log.emit(RolesUpdated { user, roles })
+    }
+}
