@@ -1,0 +1,59 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unchecked_operator_requires_wrapping_trait.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ unchecked_operator_requires_wrapping_trait.fe:62:15
+   │
+62 │     let sum = x + y
+   │               ^^^^^ `Checked` doesn't implement `WrappingAdd<Checked, Output = Checked>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ unchecked_operator_requires_wrapping_trait.fe:63:22
+   │
+63 │     let difference = x - y
+   │                      ^^^^^ `Checked` doesn't implement `WrappingSub<Checked, Output = Checked>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ unchecked_operator_requires_wrapping_trait.fe:64:19
+   │
+64 │     let product = x * y
+   │                   ^^^^^ `Checked` doesn't implement `WrappingMul<Checked, Output = Checked>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ unchecked_operator_requires_wrapping_trait.fe:68:5
+   │
+68 │     z += y
+   │     ^^^^^^ `Checked` doesn't implement `WrappingAdd<Checked, Output = Checked>`
+
+error[8-0016]: `core::ops::WrappingPow` trait is not implemented
+   ┌─ unchecked_operator_requires_wrapping_trait.fe:65:17
+   │
+65 │     let power = x ** y
+   │                 ^^^^^^
+   │                 │
+   │                 `**` can't be applied to `Checked`
+   │                 Try implementing `core::ops::WrappingPow` for `Checked`
+   │
+   = arithmetic is unchecked here, so `**` wraps on overflow, which calls `core::ops::WrappingPow`
+
+error[8-0016]: `core::ops::WrappingNeg` trait is not implemented
+   ┌─ unchecked_operator_requires_wrapping_trait.fe:66:20
+   │
+66 │     let negation = -x
+   │                    ^^
+   │                    │
+   │                    `-` can't be applied to `Checked`
+   │                    Try implementing `core::ops::WrappingNeg` for `Checked`
+   │
+   = arithmetic is unchecked here, so `-` wraps on overflow, which calls `core::ops::WrappingNeg`
+
+error[8-0016]: `core::ops::Neg` trait is not implemented
+   ┌─ unchecked_operator_requires_wrapping_trait.fe:75:5
+   │
+75 │     -x
+   │     ^^
+   │     │
+   │     `-` can't be applied to `u8`
+   │     Try implementing `core::ops::Neg` for `u8`

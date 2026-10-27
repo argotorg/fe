@@ -10,9 +10,9 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        EffectProviderSubst, ImplEnv, SConst, SExpr, SLocalId, SStmt, SStmtKind, STerminatorKind,
-        SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticInstance,
-        SemanticInstanceKey, SemanticLocalRole, array_const, bool_const,
+        BinaryOp, EffectProviderSubst, ImplEnv, SConst, SExpr, SLocalId, SStmt, SStmtKind,
+        STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalRole, UnaryOp, array_const, bool_const,
         consts::{instantiate_const_template, retype_verified_sem_const},
         enum_const, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
         int_const, int_ty_shape, normalize_int_to_shape, sem_const_from_ty, sem_const_ty,
@@ -24,17 +24,15 @@ use crate::analysis::{
             ConstTyData, ConstTyId, const_ty_from_assoc_const_use,
             const_ty_from_inherent_const_use, const_ty_from_sem_const,
         },
-        corelib::{
-            PrimitiveWrapperCallKind, core_primitive_wrapper_call_kind, ctfe_extern_intrinsic_kind,
-        },
+        corelib::ctfe_extern_intrinsic_kind,
         evidence::EvidenceList,
         subst::instantiate_scoped_into,
         ty_check::BodyOwner,
         ty_def::{TyData, TyId},
     },
 };
+use crate::hir_def::CompBinOp;
 use crate::hir_def::scope_graph::ScopeId;
-use crate::hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp};
 
 use super::{
     machine::{
@@ -773,7 +771,10 @@ impl<'db> BodyTermWalk<'_, 'db> {
                     vec![value.value],
                 )
             }
-            SExpr::Unary { op, value } if matches!(op, UnOp::Plus | UnOp::Minus | UnOp::Not) => {
+            SExpr::Unary {
+                op: op @ (UnaryOp::Neg(_) | UnaryOp::Not),
+                value,
+            } => {
                 let operand = read(value.value)?;
                 let term = ConstTyId::new(
                     db,
@@ -782,7 +783,6 @@ impl<'db> BodyTermWalk<'_, 'db> {
                             db,
                             ConstExpr::UnOp {
                                 op: *op,
-                                mode: self.body.template_owner.arithmetic_mode(db),
                                 expr: TyId::const_ty(db, operand.term),
                             },
                         ),
@@ -801,19 +801,16 @@ impl<'db> BodyTermWalk<'_, 'db> {
                 )
             }
             SExpr::Binary {
-                op: BinOp::Arith(op),
+                op:
+                    op @ (BinaryOp::Add(_)
+                    | BinaryOp::Sub(_)
+                    | BinaryOp::Mul(_)
+                    | BinaryOp::Div(_)
+                    | BinaryOp::Rem
+                    | BinaryOp::Pow(_)),
                 lhs,
                 rhs,
-            } if matches!(
-                op,
-                ArithBinOp::Add
-                    | ArithBinOp::Sub
-                    | ArithBinOp::Mul
-                    | ArithBinOp::Div
-                    | ArithBinOp::Rem
-                    | ArithBinOp::Pow
-            ) =>
-            {
+            } => {
                 let lhs_term = read(lhs.value)?;
                 let rhs_term = read(rhs.value)?;
                 let term = ConstTyId::new(
@@ -823,7 +820,6 @@ impl<'db> BodyTermWalk<'_, 'db> {
                             db,
                             ConstExpr::ArithBinOp {
                                 op: *op,
-                                mode: self.body.template_owner.arithmetic_mode(db),
                                 lhs: TyId::const_ty(db, lhs_term.term),
                                 rhs: TyId::const_ty(db, rhs_term.term),
                             },
@@ -843,7 +839,7 @@ impl<'db> BodyTermWalk<'_, 'db> {
                 )
             }
             SExpr::Binary {
-                op: BinOp::Comp(op),
+                op: BinaryOp::Comp(op),
                 lhs,
                 rhs,
             } => {
@@ -888,119 +884,60 @@ impl<'db> BodyTermWalk<'_, 'db> {
                     .iter()
                     .map(|arg| read(arg.value))
                     .collect::<Option<Vec<_>>>()?;
-                let term = if let Some(kind) = core_primitive_wrapper_call_kind(db, func, local.ty)
+                let mut nested_frames = self.frames.to_vec();
+                nested_frames.push(TermCallFrame {
+                    origin: stmt.origin,
+                    callee: callee.key,
+                });
+                let saved_order = self.extraction.next_order;
+                let inlined = if !func.is_extern(db)
+                    && !func.is_associated_func(db)
+                    && callee.key.effect_providers(db).providers(db).is_empty()
                 {
-                    let expr = match (kind, operands.as_slice()) {
-                        (
-                            PrimitiveWrapperCallKind::Unary(
-                                op @ (UnOp::Plus | UnOp::Minus | UnOp::Not),
-                            ),
-                            [value],
-                        ) => ConstExpr::UnOp {
-                            op,
-                            mode: self.body.template_owner.arithmetic_mode(db),
-                            expr: TyId::const_ty(db, value.term),
-                        },
-                        (
-                            PrimitiveWrapperCallKind::Binary(BinOp::Arith(
-                                op @ (ArithBinOp::Add
-                                | ArithBinOp::Sub
-                                | ArithBinOp::Mul
-                                | ArithBinOp::Div
-                                | ArithBinOp::Rem
-                                | ArithBinOp::Pow),
-                            )),
-                            [lhs, rhs],
-                        ) => ConstExpr::ArithBinOp {
-                            op,
-                            mode: self.body.template_owner.arithmetic_mode(db),
-                            lhs: TyId::const_ty(db, lhs.term),
-                            rhs: TyId::const_ty(db, rhs.term),
-                        },
-                        (PrimitiveWrapperCallKind::Binary(BinOp::Comp(op)), [lhs, rhs])
-                            if comparable(lhs.term).is_some() =>
-                        {
-                            ConstExpr::Compare {
-                                op,
-                                lhs: TyId::const_ty(db, lhs.term),
-                                rhs: TyId::const_ty(db, rhs.term),
-                            }
-                        }
-                        _ => return None,
-                    };
-                    let term = ConstTyId::new(
+                    extract_pure_body_term(
                         db,
-                        ConstTyData::Abstract(ConstExprId::new(db, expr), local.ty),
-                    );
-                    operation_provenance(
-                        term,
-                        stmt.origin,
-                        operands.clone(),
-                        self.frames,
+                        callee.key,
+                        &operands,
+                        &self.stack,
+                        &nested_frames,
                         self.extraction,
                     )
                 } else {
-                    let mut nested_frames = self.frames.to_vec();
-                    nested_frames.push(TermCallFrame {
-                        origin: stmt.origin,
-                        callee: callee.key,
-                    });
-                    let saved_order = self.extraction.next_order;
-                    let inlined = if !func.is_extern(db)
-                        && !func.is_associated_func(db)
-                        && callee.key.effect_providers(db).providers(db).is_empty()
-                    {
-                        extract_pure_body_term(
-                            db,
-                            callee.key,
-                            &operands,
-                            &self.stack,
-                            &nested_frames,
-                            self.extraction,
-                        )
-                    } else {
-                        None
-                    };
-                    if let Some(term) = inlined {
-                        term
-                    } else if !func.is_associated_func(db)
-                        && callee.key.effect_providers(db).providers(db).is_empty()
-                    {
-                        self.extraction.next_order = saved_order;
-                        let term = ConstTyId::new(
-                            db,
-                            ConstTyData::Abstract(
-                                ConstExprId::new(
+                    None
+                };
+                let term = if let Some(term) = inlined {
+                    term
+                } else if !func.is_associated_func(db)
+                    && callee.key.effect_providers(db).providers(db).is_empty()
+                {
+                    self.extraction.next_order = saved_order;
+                    let term = ConstTyId::new(
+                        db,
+                        ConstTyData::Abstract(
+                            ConstExprId::new(
+                                db,
+                                ConstExpr::Invocation(ConstInvocation::new(
                                     db,
-                                    ConstExpr::Invocation(ConstInvocation::new(
-                                        db,
-                                        callee.key,
-                                        operands
-                                            .iter()
-                                            .map(|operand| TyId::const_ty(db, operand.term))
-                                            .collect(),
-                                    )),
-                                ),
-                                local.ty,
+                                    callee.key,
+                                    operands
+                                        .iter()
+                                        .map(|operand| TyId::const_ty(db, operand.term))
+                                        .collect(),
+                                )),
                             ),
-                        );
-                        operation_provenance(
-                            term,
-                            stmt.origin,
-                            operands,
-                            self.frames,
-                            self.extraction,
-                        )
-                    } else {
-                        extract_pure_body_term(
-                            db,
-                            callee.key,
-                            &operands,
-                            &self.stack,
-                            &nested_frames,
-                            self.extraction,
-                        )?
-                    }
+                            local.ty,
+                        ),
+                    );
+                    operation_provenance(term, stmt.origin, operands, self.frames, self.extraction)
+                } else {
+                    extract_pure_body_term(
+                        db,
+                        callee.key,
+                        &operands,
+                        &self.stack,
+                        &nested_frames,
+                        self.extraction,
+                    )?
                 };
                 (term, args.iter().map(|arg| arg.value).collect())
             }
@@ -1565,9 +1502,8 @@ fn force_const_term<'db>(
             return Ok(bool_const(db, holds));
         }
         ConstExpr::UnOp {
-            op: UnOp::Not,
+            op: UnaryOp::Not,
             expr,
-            ..
         } => {
             let child = term_child_provenance(db, provenance, *expr, 0, origin)?;
             let value = boolean(force_const_term_operand(db, *expr, cx, origin, child)?)?;
@@ -1653,7 +1589,7 @@ fn force_const_term<'db>(
         return Err(CtfeError::NotConstEvaluable { origin }.into());
     };
     let value = match term.data(db) {
-        ConstExpr::ArithBinOp { op, mode, lhs, rhs } => {
+        ConstExpr::ArithBinOp { op, lhs, rhs } => {
             let lhs_provenance = term_child_provenance(db, provenance, *lhs, 0, origin)?;
             let rhs_provenance = term_child_provenance(db, provenance, *rhs, 1, origin)?;
             let lhs = term_integer(
@@ -1666,18 +1602,18 @@ fn force_const_term<'db>(
                 force_const_term_operand(db, *rhs, cx, origin, rhs_provenance)?,
                 origin,
             )?;
-            execute_source_int_binary(db, result_ty, *mode, *op, lhs, rhs).map_err(|fault| {
+            execute_source_int_binary(db, result_ty, *op, lhs, rhs).map_err(|fault| {
                 term_operation_error(db, primitive_error(origin, fault), provenance)
             })?
         }
-        ConstExpr::UnOp { op, mode, expr } => {
+        ConstExpr::UnOp { op, expr } => {
             let child = term_child_provenance(db, provenance, *expr, 0, origin)?;
             let value = term_integer(
                 db,
                 force_const_term_operand(db, *expr, cx, origin, child)?,
                 origin,
             )?;
-            execute_source_int_unary(db, result_ty, *mode, *op, value).map_err(|fault| {
+            execute_source_int_unary(db, result_ty, *op, value).map_err(|fault| {
                 term_operation_error(db, primitive_error(origin, fault), provenance)
             })?
         }

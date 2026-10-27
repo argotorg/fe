@@ -1,23 +1,20 @@
 use cranelift_entity::EntityRef;
 use rustc_hash::FxHashSet;
 
-use crate::{
-    analysis::{
-        HirAnalysisDb,
-        semantic::{
-            FieldIndex, Mutability, SConst, SemanticInstance, VariantIndex,
-            capability::semantics::contains_capability, lower::enum_tag_ty, normalized::*,
-            sem_const_ty,
-        },
-        ty::{
-            adt_def::AdtRef,
-            provider::provider_semantics,
-            ty_check::EffectPassMode,
-            ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
-            ty_is_copy,
-        },
+use crate::analysis::{
+    HirAnalysisDb,
+    semantic::{
+        BinaryOp, FieldIndex, Mutability, SConst, SemanticInstance, UnaryOp, VariantIndex,
+        capability::semantics::contains_capability, int_ty_shape, lower::enum_tag_ty,
+        normalized::*, sem_const_ty,
     },
-    hir_def::{ArithBinOp, BinOp, UnOp},
+    ty::{
+        adt_def::AdtRef,
+        provider::provider_semantics,
+        ty_check::EffectPassMode,
+        ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
+        ty_is_copy,
+    },
 };
 
 use super::normalize::{structural_repack_mapping, structural_types_are_boundary_compatible};
@@ -298,11 +295,12 @@ fn verify_expr<'db>(
             verify_scalar_result(db, body, result_ty)?;
             let value_ty = operand_ty(body, *value)?;
             let valid = match op {
-                UnOp::Plus | UnOp::Minus | UnOp::BitNot => {
-                    value_ty == result_ty && value_ty.is_integral(db)
+                UnaryOp::Neg(_) => {
+                    value_ty == result_ty
+                        && int_ty_shape(db, value_ty).is_some_and(|(_, signed)| signed)
                 }
-                UnOp::Not => value_ty.is_bool(db) && result_ty.is_bool(db),
-                UnOp::Mut | UnOp::MaybeMut | UnOp::Ref | UnOp::Deref => false,
+                UnaryOp::BitNot => value_ty == result_ty && value_ty.is_integral(db),
+                UnaryOp::Not => value_ty.is_bool(db) && result_ty.is_bool(db),
             };
             valid
                 .then_some(())
@@ -315,23 +313,21 @@ fn verify_expr<'db>(
             let lhs_ty = operand_ty(body, *lhs)?;
             let rhs_ty = operand_ty(body, *rhs)?;
             let valid = match op {
-                BinOp::Arith(ArithBinOp::Range) => false,
-                BinOp::Arith(op) => {
+                BinaryOp::Comp(_) => {
+                    lhs_ty == rhs_ty
+                        && result_ty.is_bool(db)
+                        && (lhs_ty.is_integral(db) || lhs_ty.is_bool(db) || lhs_ty.is_string(db))
+                }
+                op => {
                     lhs_ty == rhs_ty
                         && lhs_ty == result_ty
                         && (lhs_ty.is_integral(db)
                             || lhs_ty.is_bool(db)
                                 && matches!(
                                     op,
-                                    ArithBinOp::BitAnd | ArithBinOp::BitOr | ArithBinOp::BitXor
+                                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
                                 ))
                 }
-                BinOp::Comp(_) => {
-                    lhs_ty == rhs_ty
-                        && result_ty.is_bool(db)
-                        && (lhs_ty.is_integral(db) || lhs_ty.is_bool(db) || lhs_ty.is_string(db))
-                }
-                BinOp::Logical(_) | BinOp::Index => false,
             };
             valid
                 .then_some(())

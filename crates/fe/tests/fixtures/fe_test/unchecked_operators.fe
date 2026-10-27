@@ -1,0 +1,150 @@
+// An arithmetic operator wraps in unchecked code, where it is written: on
+// primitive operands it is a wrapping operation, and on other operands it
+// calls the wrapping operator trait. A called function's own operators keep
+// its own mode.
+use core::ops::Add
+use std::evm::Evm
+
+struct Pair {
+    a: u8,
+    b: [i8; 2],
+}
+
+fn increment(_ x: mut u8) {
+    x += 1
+}
+
+#[arithmetic(unchecked)]
+fn increment_wrapping(_ x: mut u8) {
+    x += 1
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn primitive_operators_wrap() {
+    let max: u8 = 255
+    let min: i8 = -128
+    assert!(max + 1 == 0)
+    assert!(0 - max == 1)
+    assert!(max * max == 1)
+    assert!(max ** 2 == 1)
+    assert!(-min == min)
+    assert!(min / -1 == min)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn compound_assignments_wrap() {
+    var x: u8 = 255
+    x += 2
+    assert!(x == 1)
+    x -= 2
+    assert!(x == 255)
+    x *= 2
+    assert!(x == 254)
+    x **= 2
+    assert!(x == 4)
+    var pair = Pair { a: 255, b: [127, -128] }
+    pair.a += 1
+    pair.b[0] += 1
+    pair.b[1] -= 1
+    assert!(pair.a == 0 && pair.b[0] == -128 && pair.b[1] == 127)
+    var y: u8 = 255
+    increment_wrapping(mut y)
+    assert!(y == 0)
+    // An integer whose type is known only later.
+    var z = 255
+    z += 1
+    let typed: u8 = z
+    assert!(typed == 0)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn closures_wrap_in_unchecked_code() {
+    let add_one = |value: u8| value + 1
+    assert!(add_one(255) == 0)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn checked_compound_assignment_reverts() {
+    var x: u8 = 255
+    x += 1
+}
+
+#[test(should_revert, panic = 0x11)]
+fn checked_field_compound_assignment_reverts() {
+    var pair = Pair { a: 0, b: [-128, 0] }
+    pair.b[0] -= 1
+}
+
+#[test(should_revert, panic = 0x11)]
+fn checked_negation_reverts() {
+    let min: i8 = -128
+    let x = -min
+}
+
+#[arithmetic(unchecked)]
+#[test(should_revert, panic = 0x11)]
+fn called_function_stays_checked() {
+    var x: u8 = 255
+    increment(mut x)
+}
+
+#[arithmetic(unchecked)]
+#[test(should_revert, panic = 0x11)]
+fn explicit_operator_method_stays_checked() {
+    let x: u8 = 255
+    let y = x.add(1)
+}
+
+fn sum<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+    a + b
+}
+
+#[arithmetic(unchecked)]
+#[test(should_revert, panic = 0x11)]
+fn generic_operator_stays_checked() {
+    let x: u8 = 255
+    let y = sum(x, 1)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn bool_compound_assignments() {
+    var flag = true
+    flag &= false
+    assert!(!flag)
+    flag ^= true
+    assert!(flag)
+    flag |= false
+    assert!(flag)
+}
+
+msg Msg {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract Wrapping {
+    mut total: u256,
+
+    recv Msg {
+        Run -> u256 uses (mut total) {
+            decrement(mut total)
+            total
+        }
+    }
+}
+
+#[arithmetic(unchecked)]
+fn decrement(_ total: mut u256) {
+    total -= 1
+}
+
+#[test]
+fn storage_compound_assignment_wraps() uses (evm: mut Evm) {
+    let c = evm.create2<Wrapping>(value: Wei::zero(), args: (), salt: 1)
+    let v: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Run {})
+    assert!(v == u256::max())
+}

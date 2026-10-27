@@ -730,64 +730,54 @@ func private %return_value(v0.i256) {
 
 func private %search(v0.i256, v1.i256, v2.i256, v3.i256) -> @layout_7 {
     block0:
-        v4.objref<i256> = obj.alloc i256;
-        v5.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        obj.store v4 v2;
         jump block2;
 
     block2:
-        v7.i256 = obj.load v4;
-        v9.i1 = lt v7 v3;
-        br v9 block3 block4;
+        v5.i256 = phi (v2 block1) (v51 block7);
+        v7.i1 = lt v5 v3;
+        br v7 block3 block4;
 
     block3:
-        v10.i256 = obj.load v4;
-        v13.i1 = eq 32.i256 0.i256;
-        br v13 block12 block13;
+        v11.i1 = eq 32.i256 0.i256;
+        br v11 block12 block13;
 
     block4:
-        v26.@layout_7 = enum.make @layout_7 #variant_0;
-        return v26;
+        v24.@layout_7 = enum.make @layout_7 #variant_0;
+        return v24;
 
     block5:
-        v27.i256 = obj.load v5;
-        v28.i1 = lt v27 32.i256;
-        br v28 block8 block7;
+        v51.i256 = phi (v5 block14) (v45 block11);
+        v25.i256 = phi (v23 block14) (v43 block11);
+        v26.i1 = lt v25 32.i256;
+        br v26 block8 block7;
 
     block6:
-        v29.i256 = obj.load v5;
-        v31.i256 = mul v29 8.i256;
-        v33.i256 = shr v31 v22;
-        v35.i256 = and v33 255.i256;
-        v37.i1 = eq v35 v1;
-        br v37 block9 block10;
+        v29.i256 = mul v25 8.i256;
+        v31.i256 = shr v29 v20;
+        v33.i256 = and v31 255.i256;
+        v35.i1 = eq v33 v1;
+        br v35 block9 block10;
 
     block7:
         jump block2;
 
     block8:
-        v38.i256 = obj.load v4;
-        v40.i1 = lt v38 v3;
-        br v40 block6 block7;
+        v38.i1 = lt v51 v3;
+        br v38 block6 block7;
 
     block9:
-        v41.i256 = obj.load v4;
-        v42.@layout_7 = enum.make @layout_7 #variant_1 v41;
-        return v42;
+        v40.@layout_7 = enum.make @layout_7 #variant_1 v51;
+        return v40;
 
     block10:
         jump block11;
 
     block11:
-        v44.i256 = obj.load v5;
-        v45.i256 = add v44 1.i256;
-        obj.store v5 v45;
-        v46.i256 = obj.load v4;
-        v47.i256 = add v46 1.i256;
-        obj.store v4 v47;
+        v43.i256 = add v25 1.i256;
+        v45.i256 = add v51 1.i256;
         jump block5;
 
     block12:
@@ -796,17 +786,15 @@ func private %search(v0.i256, v1.i256, v2.i256, v3.i256) -> @layout_7 {
         evm_revert 0.i256 36.i256;
 
     block13:
-        v18.i256 = evm_udiv v10 32.i256;
-        v20.@layout_6 = call %locate v0 v0 v18;
-        v21.i256 = extract_value v20 0.i256;
-        v22.i256 = evm_sload v21;
-        v23.i256 = obj.load v4;
-        v24.i1 = eq 32.i256 0.i256;
-        br v24 block12 block14;
+        v16.i256 = evm_udiv v5 32.i256;
+        v18.@layout_6 = call %locate v0 v0 v16;
+        v19.i256 = extract_value v18 0.i256;
+        v20.i256 = evm_sload v19;
+        v22.i1 = eq 32.i256 0.i256;
+        br v22 block12 block14;
 
     block14:
-        v25.i256 = evm_umod v23 32.i256;
-        obj.store v5 v25;
+        v23.i256 = evm_umod v5 32.i256;
         jump block5;
 }
 
@@ -938,8 +926,8 @@ func inline(always) private %slice(v0.@layout_4, v1.i256, v2.i256) -> @layout_4 
         jump block1;
 
     block1:
-        v5.i256 = extract_value v0 1.i256;
-        v7.i1 = gt v1 v5;
+        v6.i256 = extract_value v0 1.i256;
+        v7.i1 = gt v1 v6;
         br v7 block2 block5;
 
     block2:
@@ -957,9 +945,9 @@ func inline(always) private %slice(v0.@layout_4, v1.i256, v2.i256) -> @layout_4 
         return v16;
 
     block5:
-        v18.i256 = extract_value v0 1.i256;
-        v20.i256 = sub v18 v1;
-        v22.i1 = gt v2 v20;
+        v19.i256 = extract_value v0 1.i256;
+        v21.i256 = sub v19 v1;
+        v22.i1 = gt v2 v21;
         br v22 block2 block3;
 }
 
@@ -989,8 +977,8 @@ func inline(always) private %tail(v0.@layout_4, v1.i256) -> @layout_4 {
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 1.i256;
-        v6.i1 = gt v1 v4;
+        v5.i256 = extract_value v0 1.i256;
+        v6.i1 = gt v1 v5;
         br v6 block2 block3;
 
     block2:

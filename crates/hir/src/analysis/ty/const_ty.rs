@@ -38,18 +38,18 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
     semantic::{
-        ConstDesc, ConstRepr, CtfeConfig, CtfeError, EffectProviderSubst, EvalFailure, EvalOutcome,
-        GenericSubst, ImplEnv, PrimitiveFault, SConst, SemConstId, SemConstScalar, SemConstValue,
-        SemOrigin, SemanticInstanceKey, VariantIndex, VerifiedConstValueId,
-        const_computation_for_instance, describe_const_computation, enum_const,
-        eval_body_owner_const, execute_source_int_binary, execute_source_int_unary,
+        BinaryOp, ConstDesc, ConstRepr, CtfeConfig, CtfeError, EffectProviderSubst, EvalFailure,
+        EvalOutcome, GenericSubst, ImplEnv, Overflow, PrimitiveFault, SConst, SemConstId,
+        SemConstScalar, SemConstValue, SemOrigin, SemanticInstanceKey, UnaryOp, VariantIndex,
+        VerifiedConstValueId, const_computation_for_instance, describe_const_computation,
+        enum_const, eval_body_owner_const, execute_source_int_binary, execute_source_int_unary,
         force_const_description, force_const_term_value, int_const, int_ty_shape,
         normalize_int_to_shape, sem_const_from_ty,
     },
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
 };
-use crate::hir_def::{CallableDef, ItemKind, attr::ArithmeticMode, scope_graph::ScopeId};
+use crate::hir_def::{CallableDef, ItemKind, scope_graph::ScopeId};
 use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -539,29 +539,18 @@ fn canonicalize_const_expr_for_mode<'db>(
                 }),
             )
         }
-        ConstExpr::ArithBinOp {
-            op,
-            mode: arithmetic_mode,
-            lhs,
-            rhs,
-        } => ConstExprId::new(
+        ConstExpr::ArithBinOp { op, lhs, rhs } => ConstExprId::new(
             db,
             ConstExpr::ArithBinOp {
                 op: *op,
-                mode: *arithmetic_mode,
                 lhs: canonicalize_ty_for_mode(db, *lhs, env, mode),
                 rhs: canonicalize_ty_for_mode(db, *rhs, env, mode),
             },
         ),
-        ConstExpr::UnOp {
-            op,
-            mode: arithmetic_mode,
-            expr,
-        } => ConstExprId::new(
+        ConstExpr::UnOp { op, expr } => ConstExprId::new(
             db,
             ConstExpr::UnOp {
                 op: *op,
-                mode: *arithmetic_mode,
                 expr: canonicalize_ty_for_mode(db, *expr, env, mode),
             },
         ),
@@ -1666,6 +1655,8 @@ fn invalid_cause_from_const_int_error<'db>(
     }
 }
 
+/// The value of an integer expression of literals, constants and arithmetic,
+/// before type checking, with the arithmetic checked.
 fn eval_int_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -1698,17 +1689,17 @@ fn eval_int_expr<'db>(
                 }
                 _ => eval_int_expr(db, body, *inner, expected, has_captures)?,
             };
-            if matches!(op, UnOp::Minus) && expected.is_none() {
-                return Err(ConstIntError::Overflow(expr));
+            match op {
+                UnOp::Plus => Ok(value),
+                UnOp::Minus => {
+                    let Some(expected) = expected else {
+                        return Err(ConstIntError::Overflow(expr));
+                    };
+                    execute_source_int_unary(db, expected, UnaryOp::Neg(Overflow::Checked), value)
+                        .map_err(|fault| const_int_error(fault, expr))
+                }
+                _ => Err(ConstIntError::NotIntExpr),
             }
-            execute_source_int_unary(
-                db,
-                expected.unwrap_or_else(|| TyId::u256(db)),
-                ArithmeticMode::Checked,
-                *op,
-                value,
-            )
-            .map_err(|fault| const_int_error(fault, expr))
         }
         Expr::Bin(lhs, rhs, op) => {
             let (Partial::Present(_), Partial::Present(_)) =
@@ -1719,10 +1710,8 @@ fn eval_int_expr<'db>(
             let expected = expected.unwrap_or_else(|| TyId::u256(db));
             let lhs = eval_int_expr(db, body, *lhs, Some(expected), has_captures)?;
             let rhs = eval_int_expr(db, body, *rhs, Some(expected), has_captures)?;
-            let BinOp::Arith(op) = op else {
-                return Err(ConstIntError::NotIntExpr);
-            };
-            execute_source_int_binary(db, expected, ArithmeticMode::Checked, *op, lhs, rhs)
+            let op = BinaryOp::new(*op, Overflow::Checked).ok_or(ConstIntError::NotIntExpr)?;
+            execute_source_int_binary(db, expected, op, lhs, rhs)
                 .map_err(|fault| const_int_error(fault, expr))
         }
         // A path's meaning under captured generic arguments needs full CTFE.

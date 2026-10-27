@@ -1,0 +1,76 @@
+use core::ops::{Add, AddAssign, Mul, Neg, Pow, Sub}
+
+struct Checked {
+    value: i8,
+}
+
+impl Copy for Checked {}
+
+impl Add for Checked {
+    fn add(own self, _ other: own Checked) -> Checked {
+        Checked { value: self.value + other.value }
+    }
+}
+
+impl AddAssign for Checked {
+    fn add_assign(mut self, _ other: own Checked) {
+        self.value += other.value
+    }
+}
+
+impl Sub for Checked {
+    fn sub(own self, _ other: own Checked) -> Checked {
+        Checked { value: self.value - other.value }
+    }
+}
+
+impl Mul for Checked {
+    fn mul(own self, _ other: own Checked) -> Checked {
+        Checked { value: self.value * other.value }
+    }
+}
+
+impl Pow for Checked {
+    fn pow(own self, _ other: own Checked) -> Checked {
+        Checked { value: self.value ** other.value }
+    }
+}
+
+impl Neg for Checked {
+    fn neg(own self) -> Checked {
+        Checked { value: -self.value }
+    }
+}
+
+pub fn checked(x: Checked, y: Checked) -> Checked {
+    let sum = x + y
+    let difference = x - y
+    let product = x * y
+    let power = x ** y
+    let negation = -x
+    var z = x
+    z += y
+    z
+}
+
+// In unchecked code, the operators that can overflow call the wrapping
+// traits, which `Checked` does not implement. (std's blanket `WrappingAdd`,
+// `WrappingSub` and `WrappingMul` impls for its Solidity integer types make
+// those three report an unsatisfied bound.)
+#[arithmetic(unchecked)]
+pub fn unchecked(x: Checked, y: Checked) -> Checked {
+    let sum = x + y
+    let difference = x - y
+    let product = x * y
+    let power = x ** y
+    let negation = -x
+    var z = x
+    z += y
+    z
+}
+
+// Unsigned integers have no negation in either mode.
+#[arithmetic(unchecked)]
+pub fn unsigned(x: u8) -> u8 {
+    -x
+}

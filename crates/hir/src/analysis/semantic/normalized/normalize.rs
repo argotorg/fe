@@ -2993,8 +2993,8 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                FieldIndex, Mutability, SConst, SStmtId, SemanticInstance, VariantIndex,
-                identity_semantic_instance_key,
+                BinaryOp, FieldIndex, Mutability, Overflow, SConst, SStmtId, SemanticInstance,
+                UnaryOp, VariantIndex, identity_semantic_instance_key,
                 normalized::{
                     NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NPlace, NPlaceBase,
                     NRootId, NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
@@ -3008,7 +3008,7 @@ mod tests {
                 ty_def::TyId,
             },
         },
-        hir_def::{ArithBinOp, BinOp, ItemKind, LogicalBinOp, UnOp},
+        hir_def::ItemKind,
         test_db::HirAnalysisTestDb,
     };
 
@@ -3309,7 +3309,7 @@ struct Wide {
 }
 
 fn unary(wide: own Wide, value: u256) -> u256 {
-    +value
+    ~value
 }
 
 fn compare(flag: bool, value: u256) -> u8 {
@@ -3336,7 +3336,11 @@ fn widen(wide: own Wide, value: u8) -> u256 {
                 .find_map(|statement| match statement.kind {
                     NStatementKind::Define {
                         result,
-                        expr: NExpr::Unary { op: UnOp::Plus, .. },
+                        expr:
+                            NExpr::Unary {
+                                op: UnaryOp::BitNot,
+                                ..
+                            },
                     } => Some(result),
                     _ => None,
                 })
@@ -3372,8 +3376,8 @@ fn widen(wide: own Wide, value: u8) -> u256 {
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 
-        let mut borrow_operator = unary.clone();
-        let unary_op = borrow_operator
+        let mut bool_operator = unary.clone();
+        let unary_op = bool_operator
             .blocks
             .iter_mut()
             .flat_map(|block| &mut block.statements)
@@ -3385,9 +3389,9 @@ fn widen(wide: own Wide, value: u8) -> u256 {
                 _ => None,
             })
             .expect("unary expression");
-        *unary_op = UnOp::Ref;
+        *unary_op = UnaryOp::Not;
         assert_eq!(
-            verify_normalized_body(&db, &borrow_operator),
+            verify_normalized_body(&db, &bool_operator),
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 
@@ -3409,7 +3413,8 @@ fn widen(wide: own Wide, value: u8) -> u256 {
                     result,
                     expr:
                         NExpr::Binary {
-                            op: BinOp::Comp(_), ..
+                            op: BinaryOp::Comp(_),
+                            ..
                         },
                 } => Some(result),
                 _ => None,
@@ -3425,11 +3430,11 @@ fn widen(wide: own Wide, value: u8) -> u256 {
                 NStatementKind::Define {
                     expr: NExpr::Binary { op, .. },
                     ..
-                } if matches!(op, BinOp::Comp(_)) => Some(op),
+                } if matches!(op, BinaryOp::Comp(_)) => Some(op),
                 _ => None,
             })
             .expect("literal comparison expression");
-        *comparison_op = BinOp::Arith(ArithBinOp::Add);
+        *comparison_op = BinaryOp::Add(Overflow::Checked);
         assert_eq!(
             verify_normalized_body(&db, &arithmetic_result_mismatch),
             Err(NormalizedBodyVerifyError::ExpressionType)
@@ -3439,25 +3444,6 @@ fn widen(wide: own Wide, value: u8) -> u256 {
         comparison_result_mismatch.values[comparison_result.index()].ty = TyId::u256(&db);
         assert_eq!(
             verify_normalized_body(&db, &comparison_result_mismatch),
-            Err(NormalizedBodyVerifyError::ExpressionType)
-        );
-
-        let mut logical_node = comparison.clone();
-        let comparison_op = logical_node
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.statements)
-            .find_map(|statement| match &mut statement.kind {
-                NStatementKind::Define {
-                    expr: NExpr::Binary { op, .. },
-                    ..
-                } if matches!(op, BinOp::Comp(_)) => Some(op),
-                _ => None,
-            })
-            .expect("literal comparison expression");
-        *comparison_op = BinOp::Logical(LogicalBinOp::And);
-        assert_eq!(
-            verify_normalized_body(&db, &logical_node),
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 

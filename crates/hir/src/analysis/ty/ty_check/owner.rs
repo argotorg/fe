@@ -237,9 +237,15 @@ impl<'db> BodyOwner<'db> {
             })
     }
 
+    /// The arithmetic mode the body is written in, which selects what its
+    /// arithmetic operators do on overflow. A closure's is its parent's.
     pub fn arithmetic_mode(self, db: &'db dyn HirAnalysisDb) -> ArithmeticMode {
-        if let Self::Func(func, _) = self {
-            return func.arithmetic_mode(db);
+        match self {
+            Self::Func(func, _) => return func.arithmetic_mode(db),
+            Self::Closure { def, .. } if let Some(parent) = Self::closure_parent(db, def) => {
+                return parent.arithmetic_mode(db);
+            }
+            _ => {}
         }
 
         let mut scope = self.scope().parent_module(db);

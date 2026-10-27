@@ -11,7 +11,7 @@ error[16-0001]: access conflict in `fn theta_held`
    │                        ------------ access opened here
    ·
 68 │                 state[x + 5 * y] ^= delta
-   │                 ^^^^^^^^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │                 ^^^^^^^^^^^^^^^^ cannot read this place while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn theta_aliased`
    ┌─ loop_input_authority.fe:86:44
