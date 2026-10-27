@@ -1804,10 +1804,10 @@ pub fn main() -> u256 uses (evm: std::evm::RawOps) {
 "#,
     );
     // A `Copy` view argument is a copy: copying untrusted calldata validates
-    // its enum tags before the call.
+    // its enum tags before the call, panicking with `Panic(0x21)`.
     let read_input = sonatina_function_body(&ir, "read_input");
     assert!(
-        read_input.contains("unreachable"),
+        read_input.contains("mstore 4.i256 33.i256 i256;"),
         "snapshotting nested enums must still validate their tags before the call:\n{ir}"
     );
 }
