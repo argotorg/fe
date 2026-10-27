@@ -139,7 +139,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 statements: Vec::new(),
                 terminator: NTerminator {
                     origin: crate::analysis::semantic::SemOrigin::Synthetic,
-                    kind: NTerminatorKind::Assert { message: None },
+                    kind: NTerminatorKind::Unreachable,
                 },
             })
             .collect();
@@ -1830,7 +1830,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .map(|target| self.successor(block, raw.origin, target))
                     .transpose()?,
             },
-            STerminatorKind::Assert { message } => NTerminatorKind::Assert { message: *message },
+            STerminatorKind::Fail(reason) => NTerminatorKind::Fail(*reason),
+            STerminatorKind::Unreachable => NTerminatorKind::Unreachable,
             STerminatorKind::Return(value) => NTerminatorKind::Return(
                 value
                     .map(|value| self.read_result(block, raw.origin, value))

@@ -537,7 +537,8 @@ impl<'db> BodyTermWalk<'_, 'db> {
                 STerminatorKind::Return(_)
                 | STerminatorKind::Yield { .. }
                 | STerminatorKind::MatchEnum { .. }
-                | STerminatorKind::Assert { .. } => return None,
+                | STerminatorKind::Fail(_)
+                | STerminatorKind::Unreachable => return None,
             }
         }
     }

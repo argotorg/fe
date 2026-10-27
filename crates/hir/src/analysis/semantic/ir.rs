@@ -778,6 +778,14 @@ pub struct STerminator<'db> {
     pub kind: STerminatorKind<'db>,
 }
 
+/// Why execution fails at a `Fail` terminator. Each reason reverts with its
+/// own payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum FailReason<'db> {
+    /// An `assert!` failed: `Error(message)`, or `Panic(0x01)` without one.
+    Assert { message: Option<StringId<'db>> },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum STerminatorKind<'db> {
     Goto(SBlockId),
@@ -792,9 +800,11 @@ pub enum STerminatorKind<'db> {
         cases: Box<[(VariantIndex, SBlockId)]>,
         default: Option<SBlockId>,
     },
-    Assert {
-        message: Option<StringId<'db>>,
-    },
+    /// Execution fails.
+    Fail(FailReason<'db>),
+    /// Control never reaches here: the rest of a block after a call that
+    /// never returns, or a match arm no value takes.
+    Unreachable,
     Return(Option<SOperand>),
     /// A projection grants `value` to its caller and suspends. When the
     /// caller ends the session, the slide resumes at `resume`.
@@ -816,7 +826,7 @@ impl STerminatorKind<'_> {
                 .map(|(_, block)| *block)
                 .chain(*default)
                 .collect(),
-            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+            Self::Fail(_) | Self::Unreachable | Self::Return(_) => Vec::new(),
         }
     }
 
@@ -832,13 +842,13 @@ impl STerminatorKind<'_> {
                 .map(|(_, block)| block)
                 .chain(default.as_mut())
                 .collect(),
-            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+            Self::Fail(_) | Self::Unreachable | Self::Return(_) => Vec::new(),
         }
     }
 
     pub fn used_locals(&self) -> Vec<SLocalId> {
         match self {
-            Self::Goto(_) | Self::Assert { .. } | Self::Return(None) => Vec::new(),
+            Self::Goto(_) | Self::Fail(_) | Self::Unreachable | Self::Return(None) => Vec::new(),
             Self::Branch { cond: value, .. }
             | Self::MatchEnum { value, .. }
             | Self::Return(Some(value))

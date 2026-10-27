@@ -212,7 +212,7 @@ impl<'db> NTerminatorKind<'db> {
             | Self::MatchEnum { value: cond, .. }
             | Self::Return(Some(cond))
             | Self::Yield { value: cond, .. } => Some(OperationAccess::operand(db, body, *cond)),
-            Self::Goto(_) | Self::Assert { .. } | Self::Return(None) => None,
+            Self::Goto(_) | Self::Fail(_) | Self::Unreachable | Self::Return(None) => None,
         }
     }
 }

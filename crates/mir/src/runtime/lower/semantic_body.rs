@@ -121,7 +121,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                 ExecutableBlock::Unreachable => {
                     block.params = Box::default();
                     block.statements.clear();
-                    block.terminator.kind = NTerminatorKind::Assert { message: None };
+                    block.terminator.kind = NTerminatorKind::Unreachable;
                 }
                 ExecutableBlock::Diverges(call) => {
                     let end = block
@@ -130,7 +130,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                         .position(|statement| statement.source == Some(*call))
                         .expect("a diverging call survives runtime normalization");
                     block.statements.truncate(end + 1);
-                    block.terminator.kind = NTerminatorKind::Assert { message: None };
+                    block.terminator.kind = NTerminatorKind::Unreachable;
                 }
                 ExecutableBlock::Continues(feasible) => {
                     for (successor, feasible) in block
@@ -162,7 +162,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                 statements: Vec::new(),
                 terminator: NTerminator {
                     origin: SemOrigin::Synthetic,
-                    kind: NTerminatorKind::Assert { message: None },
+                    kind: NTerminatorKind::Unreachable,
                 },
             });
         }

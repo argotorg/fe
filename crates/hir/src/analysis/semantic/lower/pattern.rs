@@ -736,13 +736,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match tree {
             DecisionTree::Unreachable => match target {
                 DecisionTreeTarget::MatchArms { .. } => {
-                    // Semantic IR has no dedicated unreachable terminator. Keep the
-                    // impossible path terminal and fail safely if malformed runtime
-                    // input ever reaches it.
-                    self.set_synthetic_terminator(
-                        self.current,
-                        STerminatorKind::Assert { message: None },
-                    );
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
                     false
                 }
                 DecisionTreeTarget::Branch { else_bb, .. } => {

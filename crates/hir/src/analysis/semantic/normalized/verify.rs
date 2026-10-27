@@ -620,7 +620,7 @@ fn verify_terminator<'db>(
             }
             Ok(())
         }
-        NTerminatorKind::Assert { .. } => Ok(()),
+        NTerminatorKind::Fail(_) | NTerminatorKind::Unreachable => Ok(()),
     }
 }
 
@@ -1106,7 +1106,9 @@ fn terminator_successors(terminator: &NTerminatorKind<'_>) -> Vec<NBlockId> {
             .chain(default.iter().map(|target| target.block))
             .collect(),
         NTerminatorKind::Yield { resume, .. } => vec![resume.block],
-        NTerminatorKind::Assert { .. } | NTerminatorKind::Return(_) => Vec::new(),
+        NTerminatorKind::Fail(_) | NTerminatorKind::Unreachable | NTerminatorKind::Return(_) => {
+            Vec::new()
+        }
     }
 }
 
@@ -1143,7 +1145,8 @@ fn collect_terminator_values(terminator: &NTerminatorKind<'_>, values: &mut Vec<
             values.push(value.value);
             values.extend(resume.args.iter().map(|argument| argument.value));
         }
-        NTerminatorKind::Assert { .. } | NTerminatorKind::Return(None) => {}
+        NTerminatorKind::Fail(_) | NTerminatorKind::Unreachable | NTerminatorKind::Return(None) => {
+        }
     }
 }
 

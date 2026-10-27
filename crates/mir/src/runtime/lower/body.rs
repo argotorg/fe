@@ -5,11 +5,11 @@ use std::mem::size_of;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        BinaryOp, DropFlagPoint, EvalOutcome, FieldIndex, Overflow, RuntimeSizeError, SConst,
-        SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef,
-        SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance,
-        SemanticInstanceKey, SemanticLocalRole, VariantIndex, core_method_callee_key,
-        eval_const_ref, generated_callee_key,
+        BinaryOp, DropFlagPoint, EvalOutcome, FailReason, FieldIndex, Overflow, RuntimeSizeError,
+        SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
+        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex,
+        core_method_callee_key, eval_const_ref, generated_callee_key,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
             NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
@@ -1742,18 +1742,8 @@ impl<'db> RmirEmitter<'db> {
         ptr
     }
 
-    fn lower_assert_terminator(
-        &mut self,
-        bb: RBlockId,
-        message: Option<hir::hir_def::StringId<'db>>,
-    ) -> RTerminator<'db> {
-        // A failed assertion without a message panics with code 0x01.
-        let Some(message) = message else {
-            return RTerminator::Panic {
-                code: self.alloc_u256_const(bb, 0x01),
-            };
-        };
-        let payload = solidity_error_string_payload(message.data(self.db).as_bytes());
+    /// Reverts with `payload`.
+    fn lower_revert_terminator(&mut self, bb: RBlockId, payload: Vec<u8>) -> RTerminator<'db> {
         let payload_len = self.alloc_u256_const(bb, payload.len());
         let allocated_len = self.alloc_memory_int_const(bb, payload.len().next_multiple_of(32));
         let ptr = self.malloc_bytes(bb, allocated_len);
@@ -4428,7 +4418,18 @@ impl<'db> RmirEmitter<'db> {
                     default: default.as_ref().map(|target| self.lower_successor(target)),
                 }
             }
-            NTerminatorKind::Assert { message } => self.lower_assert_terminator(bb, *message),
+            NTerminatorKind::Fail(FailReason::Assert {
+                message: Some(message),
+            }) => {
+                let payload = solidity_error_string_payload(message.data(self.db).as_bytes());
+                self.lower_revert_terminator(bb, payload)
+            }
+            // A failed assertion without a message panics with code 0x01, as
+            // does reaching unreachable code, which is a compiler bug.
+            NTerminatorKind::Fail(FailReason::Assert { message: None })
+            | NTerminatorKind::Unreachable => RTerminator::Panic {
+                code: self.alloc_u256_const(bb, 0x01),
+            },
             // A projection's slide returns nothing: its caller inlines it.
             NTerminatorKind::Return(None)
                 if self

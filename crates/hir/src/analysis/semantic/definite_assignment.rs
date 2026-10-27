@@ -505,7 +505,9 @@ fn block_successors<'db>(
             .chain(default.iter().map(|target| target.block))
             .collect(),
         NTerminatorKind::Yield { resume, .. } => vec![resume.block],
-        NTerminatorKind::Assert { .. } | NTerminatorKind::Return(_) => Vec::new(),
+        NTerminatorKind::Fail(_) | NTerminatorKind::Unreachable | NTerminatorKind::Return(_) => {
+            Vec::new()
+        }
     }
 }
 
