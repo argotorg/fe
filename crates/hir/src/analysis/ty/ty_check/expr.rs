@@ -4153,11 +4153,16 @@ impl<'db> TyChecker<'db> {
                             shape: *shape,
                         });
                     }
-                    // An access's type still being inferred is checked once
-                    // it is known.
-                    if access.is_some() && ty.has_var(self.db) {
+                    // A known product's accesses are captured as any access
+                    // is. An access's type still being inferred is checked
+                    // once it is known.
+                    let is_access = access.is_some()
+                        || self.env.param_product(&binding).is_some_and(|shape| {
+                            !matches!(shape, Shape::Opaque(_)) && shape.has_access()
+                        });
+                    if is_access && ty.has_var(self.db) {
                         self.env.record_access_capture(expr, binding, ty);
-                    } else if access.is_some() && !self.ty_is_copy(ty) {
+                    } else if is_access && !self.ty_is_copy(ty) {
                         self.push_diag(BodyDiag::AccessCapture {
                             primary: path_expr_span.into(),
                             name: binding.binding_name(&self.env),
@@ -4169,8 +4174,13 @@ impl<'db> TyChecker<'db> {
                 ExprProp {
                     binding: Some(binding),
                     borrow_provider: self.concrete_borrow_provider_for_binding(binding),
-                    // A product parameter is the accesses its parts grant.
-                    shape: self.env.param_product(&binding).cloned(),
+                    // A product parameter is the accesses its parts grant;
+                    // a closure's copy of a tuple of them is a value.
+                    shape: self
+                        .env
+                        .param_product(&binding)
+                        .filter(|shape| !captured || !matches!(shape, Shape::Tuple(_)))
+                        .cloned(),
                     ..ExprProp::new(ty, is_mut)
                 }
             }

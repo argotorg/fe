@@ -943,10 +943,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             {
                 self.lower_access(*inner)
             }
-            // A transport binding of an opaque shape is passed on as it is,
-            // moved: it is used at most once.
+            // A transport binding of an opaque or product shape is passed on
+            // as it is, moved: it is used at most once. A product parameter's
+            // binding holds the product its parts gather.
             Partial::Present(Expr::Path(_))
-                if matches!(shape, Shape::Opaque(_))
+                if matches!(shape, Shape::Opaque(_) | Shape::Tuple(_))
                     && let Some(binding) = self.typed_body.expr_binding(expr) =>
             {
                 let value = self.binding_locals[&binding];
@@ -1225,10 +1226,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let fields = captures
                     .into_iter()
                     .map(|capture| {
-                        SOperand::expr(
-                            self.lower_binding_read(expr, capture.binding, capture.ty, None),
-                            expr,
-                        )
+                        let value = if let Some(product) =
+                            self.typed_body.param_product(capture.binding).cloned()
+                            && matches!(product, Shape::Tuple(_))
+                            && product.has_access()
+                            && !self.capture_places.contains_key(&capture.binding)
+                        {
+                            let place = SPlace::new(self.binding_locals[&capture.binding]);
+                            self.lower_product_values(expr, place, &product)
+                        } else {
+                            self.lower_binding_read(expr, capture.binding, capture.ty, None)
+                        };
+                        SOperand::expr(value, expr)
                     })
                     .collect();
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
@@ -1624,6 +1633,31 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.typed_body.expr_code_region_ref(self.db, expr),
             ),
         }
+    }
+
+    /// Reads the values of the product `shape` at `place`, each part through
+    /// its access: what a closure capturing a product parameter copies.
+    fn lower_product_values(
+        &mut self,
+        expr: ExprId,
+        place: SPlace<'db>,
+        shape: &Shape<'db>,
+    ) -> SValueId {
+        let origin = SemOrigin::Expr(expr);
+        let ty = shape.erased_ty(self.db);
+        let Shape::Tuple(elems) = shape else {
+            return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
+        };
+        let fields = elems
+            .iter()
+            .enumerate()
+            .map(|(idx, elem)| {
+                let mut place = place.clone();
+                place.push_field(FieldIndex(idx as u16));
+                SOperand::expr(self.lower_product_values(expr, place, elem), expr)
+            })
+            .collect();
+        self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
     }
 
     /// Reads `binding` as a `ty` value for `expr`: a path to it, or a

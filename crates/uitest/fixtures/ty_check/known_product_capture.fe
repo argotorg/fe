@@ -1,0 +1,105 @@
+// A closure's capture of a known product is a tuple of values, read-only.
+struct Tok {
+    v: u256,
+}
+
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+}
+
+struct Held {
+    b: u256,
+}
+
+impl Driver for Held {
+    shape Step = (own Tok, mut? u256)
+
+    fn at(mut? self) -> (own Tok, mut? u256) {
+        (Tok { v: 1 }, mut? self.b)
+    }
+}
+
+struct One {
+    t: Tok,
+}
+
+impl Driver for One {
+    shape Step = mut? Tok
+
+    fn at(mut? self) -> mut? Tok {
+        mut? self.t
+    }
+}
+
+fn sum(_ s: Pair::Step<ref>) -> u256 {
+    let (a, b) = s
+    a + b
+}
+
+fn write_part(_ s: Pair::Step<mut>) {
+    let f = || {
+        let (a, mut b) = s
+        b += a
+    }
+}
+
+fn write_field(_ s: Pair::Step<mut>) {
+    let f = || {
+        s.1 = 3
+    }
+}
+
+fn mut_access(_ s: Pair::Step<mut>) {
+    let f = || {
+        let x = mut s.1
+        x += 1
+    }
+}
+
+fn pass_on(_ s: Pair::Step<ref>) -> u256 {
+    let f = || sum(s)
+    f()
+}
+
+fn non_copy_part(_ s: Held::Step<ref>) -> u256 {
+    let f = || s.1
+    f()
+}
+
+fn non_copy_generic_part<T>(_ s: Generic<T>::Step<ref>) -> u256 {
+    let f = || s.0
+    f()
+}
+
+fn non_copy_single_part(_ s: One::Step<ref>) -> u256 {
+    let f = || s.v
+    f()
+}
+
+struct Generic<T> {
+    a: u256,
+    b: T,
+}
+
+impl<T> Driver for Generic<T> {
+    shape Step = (own u256, mut? T)
+
+    fn at(mut? self) -> (own u256, mut? T) {
+        (self.a, mut? self.b)
+    }
+}

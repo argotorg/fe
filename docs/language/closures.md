@@ -105,8 +105,9 @@ A closure captures what its body uses from the enclosing body by copy, for
 writing to one, taking `mut` access to it, or moving a non-`Copy` capture out
 of the body is an error. A closure cannot capture an access (a view
 parameter, a `ref` or `mut` binding) of a non-`Copy` value; pass the value as
-a parameter instead. Thread state through parameters and results:
-`fold(init, |acc, x| acc + x)`.
+a parameter instead. A named parameter of a known product shape is captured
+the same way, as a tuple of its parts' values. Thread state through
+parameters and results: `fold(init, |acc, x| acc + x)`.
 
 ## Effects
 
