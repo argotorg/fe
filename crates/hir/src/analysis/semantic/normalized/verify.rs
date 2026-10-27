@@ -189,6 +189,10 @@ pub fn verify_normalized_body<'db>(
                 NStatementKind::Drop {
                     target: NDropTarget::Place(place),
                 } => verify_place(db, body, place)?,
+                NStatementKind::CheckIndex { index, array } => {
+                    let indexed = NDataPath::new([NDataProjection::Index(*index)]);
+                    project_path_ty(db, body.owner, &body.values, *array, &indexed)?;
+                }
             }
         }
         verify_terminator(db, body, &block.terminator.kind)?;
@@ -723,8 +727,21 @@ pub(crate) fn project_path_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     values: &[NValue<'db>],
+    ty: TyId<'db>,
+    path: &NDataPath,
+) -> Result<TyId<'db>, NormalizedBodyVerifyError> {
+    project_path_ty_indexing(db, instance, values, ty, path, |_, _| {})
+}
+
+/// `project_path_ty`, calling `indexed` with each `Index` step's index and the
+/// array type it indexes.
+pub(crate) fn project_path_ty_indexing<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    values: &[NValue<'db>],
     mut ty: TyId<'db>,
     path: &NDataPath,
+    mut indexed: impl FnMut(NIndex, TyId<'db>),
 ) -> Result<TyId<'db>, NormalizedBodyVerifyError> {
     ty = instance.normalized_ty(db, ty);
     for projection in path.iter() {
@@ -757,6 +774,7 @@ pub(crate) fn project_path_ty<'db>(
                     .ok_or(NormalizedBodyVerifyError::InvalidProjection)?
             }
             NDataProjection::Index(index) => {
+                indexed(index, ty);
                 match index {
                     NIndex::Const(index) => {
                         if ty.array_len(db).is_some_and(|len| index >= len) {
@@ -1078,6 +1096,11 @@ fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBod
                 NStatementKind::Drop {
                     target: NDropTarget::Place(place),
                 } => uses.extend(body.place_values(place)),
+                NStatementKind::CheckIndex { index, .. } => {
+                    if let NIndex::Value(value) = index {
+                        uses.push(*value);
+                    }
+                }
             }
             for value in uses {
                 verify_value_dominates_use(body, &dominators, value, block_id, statement_index)?;

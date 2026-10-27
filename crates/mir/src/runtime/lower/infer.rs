@@ -325,7 +325,8 @@ impl<'db, S: AssignmentSpace<'db>> SparseAnalysis for CarrierInferer<'_, '_, 'db
             NStatementKind::Define { expr, .. } => expr,
             NStatementKind::Store { .. }
             | NStatementKind::End { .. }
-            | NStatementKind::Drop { .. } => {
+            | NStatementKind::Drop { .. }
+            | NStatementKind::CheckIndex { .. } => {
                 panic!(
                     "assignment facts point to non-assignment statement: block={} stmt={}",
                     assign.block_idx, assign.stmt_idx

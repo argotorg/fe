@@ -628,6 +628,7 @@ fn generated_callees<'db>(
                 target: NDropTarget::Place(destination),
             } => visit(destination),
             NStatementKind::End { .. }
+            | NStatementKind::CheckIndex { .. }
             | NStatementKind::Drop {
                 target: NDropTarget::Value(_),
             } => {}

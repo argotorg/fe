@@ -90,7 +90,7 @@ use super::{
     source::{
         RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource,
         alias_source_place_for_local as source_alias_source_place_for_local,
-        data_path_index_bounds, nonself_alias_source_place_for_local,
+        nonself_alias_source_place_for_local,
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
@@ -784,11 +784,13 @@ impl<'db> RmirEmitter<'db> {
         stmt_idx: usize,
         stmt: &NStatement<'db>,
     ) -> RBlockId {
-        self.lower_stmt_index_checks(bb, &stmt.kind);
         if self.terminated_blocks[bb.index()] {
             return bb;
         }
         match &stmt.kind {
+            NStatementKind::CheckIndex { index, array } => {
+                self.lower_index_check(bb, *index, *array)
+            }
             NStatementKind::Define { result, expr } => {
                 self.lower_assign(bb, block, stmt_idx, stmt.source, *result, expr)
             }
@@ -3013,70 +3015,27 @@ impl<'db> RmirEmitter<'db> {
         call_result
     }
 
-    fn lower_stmt_index_checks(&mut self, bb: RBlockId, stmt: &NStatementKind<'db>) {
-        match stmt {
-            NStatementKind::Define { expr, .. } => {
-                expr.for_each_place_operand(|place| self.lower_place_index_checks(bb, place));
-                if let NExpr::ProjectValue { value, path } = expr {
-                    let ty = self
-                        .semantic_body
-                        .normalized
-                        .value(value.value)
-                        .expect("verified structural projection source exists")
-                        .ty;
-                    self.lower_data_path_index_checks(bb, ty, &path.0);
-                }
-            }
-            NStatementKind::Store { destination, .. } => {
-                self.lower_place_index_checks(bb, destination)
-            }
-            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
-        }
-    }
-
-    fn lower_place_index_checks(&mut self, bb: RBlockId, place: &NPlace<'db>) {
-        if !place
-            .path
-            .iter()
-            .any(|projection| matches!(projection, NDataProjection::Index(_)))
-        {
-            return;
-        }
-        let Some(ty) = self.semantic_place_root_ty(place) else {
-            return;
+    fn lower_index_check(&mut self, bb: RBlockId, index: NIndex, array: TyId<'db>) {
+        let len = runtime_array_len(self.db, array)
+            .expect("valid runtime array length")
+            .expect("an index check's array has a concrete length");
+        let index = match index {
+            NIndex::Const(index) => IndexSource::Constant(index),
+            NIndex::Value(index) => IndexSource::Dynamic(self.read_normalized_value(bb, index)),
         };
-        self.lower_data_path_index_checks(bb, ty, &place.path);
-    }
-
-    fn lower_data_path_index_checks(&mut self, bb: RBlockId, ty: TyId<'db>, path: &NDataPath) {
-        if self.terminated_blocks[bb.index()] {
-            return;
+        self.push_stmt(
+            bb,
+            RStmt::AssertIndexInBounds {
+                index,
+                len: len
+                    .try_into()
+                    .expect("array length must fit the runtime index representation"),
+            },
+        );
+        // No index is below zero, so the check always fails.
+        if len == 0 {
+            self.set_terminator(bb, RTerminator::Trap);
         }
-        for (index, len) in data_path_index_bounds(self.db, self.semantic_body.owner(), ty, path) {
-            let index = match index {
-                NIndex::Const(index) => IndexSource::Constant(index),
-                NIndex::Value(index) => IndexSource::Dynamic(self.read_normalized_value(bb, index)),
-            };
-            self.push_stmt(
-                bb,
-                RStmt::AssertIndexInBounds {
-                    index,
-                    len: len
-                        .try_into()
-                        .expect("array length must fit the runtime index representation"),
-                },
-            );
-            if len == 0 {
-                self.set_terminator(bb, RTerminator::Trap);
-                return;
-            }
-        }
-    }
-
-    fn semantic_place_root_ty(&self, place: &NPlace<'db>) -> Option<TyId<'db>> {
-        self.semantic_body
-            .normalized
-            .place_base_ty(self.db, place.base)
     }
 
     fn lower_extern_builtin_call(

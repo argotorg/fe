@@ -559,7 +559,8 @@ fn array_repeat_lowering_preserves_repeat_expr_through_normalization() {
             NStatementKind::Define { .. }
             | NStatementKind::Store { .. }
             | NStatementKind::End { .. }
-            | NStatementKind::Drop { .. } => None,
+            | NStatementKind::Drop { .. }
+            | NStatementKind::CheckIndex { .. } => None,
         })
         .expect("expected concrete array repeat to remain structural after normalization");
     assert_eq!(normalized_array_len, 4);
@@ -614,7 +615,8 @@ fn generic_array_repeat_with_symbolic_len_normalizes_as_repeat() {
             NStatementKind::Define { .. }
             | NStatementKind::Store { .. }
             | NStatementKind::End { .. }
-            | NStatementKind::Drop { .. } => None,
+            | NStatementKind::Drop { .. }
+            | NStatementKind::CheckIndex { .. } => None,
         })
         .expect("expected symbolic array repeat to stay unexpanded after normalization");
 }

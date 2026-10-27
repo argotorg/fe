@@ -241,7 +241,9 @@ impl<'db> RuntimeSemanticBody<'db> {
                     NStatementKind::Define { expr, .. } => {
                         self.mark_expr_root_demand(db, local, expr, &mut demand)
                     }
-                    NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
+                    NStatementKind::End { .. }
+                    | NStatementKind::Drop { .. }
+                    | NStatementKind::CheckIndex { .. } => {}
                     NStatementKind::Store { destination, .. } => {
                         if self.place_source(destination) == Some(local) {
                             // Whole-local assignments update its value binding.

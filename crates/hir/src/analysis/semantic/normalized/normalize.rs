@@ -25,7 +25,7 @@ use crate::{
                     NLayoutBackingSource, NLayoutPlan, NLayoutProjection, NLayoutSourcePath,
                     NLayoutUseBacking, NRootRepresentation, NValueRepresentation,
                 },
-                verify::project_path_ty,
+                verify::{project_path_ty, project_path_ty_indexing},
             },
             sem_const_ty,
         },
@@ -571,7 +571,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             )?;
                             value = self.operand(result, statement.origin, ReadMode::Move);
                         }
-                        self.emit_store(raw_block, None, statement.origin, destination, value);
+                        self.emit_store(raw_block, None, statement.origin, destination, value)?;
                     } else {
                         let value = self.emit_define(
                             raw_block,
@@ -600,6 +600,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                 target,
                             )?;
                         }
+                        // The drop before `a[i] = v` reads `a[i]`, so `i` is
+                        // checked before the old element is destroyed.
+                        self.emit_place_index_checks(raw_block, statement.origin, &target)?;
                         NDropTarget::Place(target)
                     };
                     let id = NStatementId::new(self.statement_count);
@@ -640,7 +643,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         statement.origin,
                         destination,
                         value,
-                    );
+                    )?;
                 }
             }
         }
@@ -1926,6 +1929,15 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         if forwarded.is_none() && !constructed {
             self.prepare_layout_backing_indices(block, origin, source_local)?;
         }
+        let mut places = Vec::new();
+        expr.for_each_place_operand(|place| places.push(place.clone()));
+        for place in places {
+            self.emit_place_index_checks(block, origin, &place)?;
+        }
+        if let NExpr::ProjectValue { value, path } = &expr {
+            let ty = self.values[value.value.index()].ty;
+            self.emit_index_checks(block, origin, ty, &path.0)?;
+        }
         let statement = self.blocks[block.index()].statements.len() as u32;
         let source_binding = forwarded
             .and_then(|source| self.values.get(source.index())?.source)
@@ -1979,7 +1991,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         origin: SemOrigin<'db>,
         destination: NPlace<'db>,
         value: NOperand,
-    ) {
+    ) -> Result<(), NormalizeError<'db>> {
+        self.emit_place_index_checks(block, origin, &destination)?;
         let id = NStatementId::new(self.statement_count);
         self.statement_count += 1;
         self.blocks[block.index()].statements.push(NStatement {
@@ -1988,6 +2001,49 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             origin,
             kind: NStatementKind::Store { destination, value },
         });
+        Ok(())
+    }
+
+    fn emit_place_index_checks(
+        &mut self,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+        place: &NPlace<'db>,
+    ) -> Result<(), NormalizeError<'db>> {
+        let ty = self.place_base_ty(place.base)?;
+        self.emit_index_checks(block, origin, ty, &place.path)
+    }
+
+    /// Checks each array index `path` takes from a value of type `ty`, before
+    /// the statement that takes it.
+    fn emit_index_checks(
+        &mut self,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+        ty: TyId<'db>,
+        path: &NDataPath,
+    ) -> Result<(), NormalizeError<'db>> {
+        let mut checks = Vec::new();
+        project_path_ty_indexing(
+            self.db,
+            self.instance,
+            &self.values,
+            ty,
+            path,
+            |index, array| checks.push((index, array)),
+        )
+        .map_err(|_| NormalizeError::InvalidProjection)?;
+        for (index, array) in checks {
+            let id = NStatementId::new(self.statement_count);
+            self.statement_count += 1;
+            self.blocks[block.index()].statements.push(NStatement {
+                id,
+                source: None,
+                origin,
+                kind: NStatementKind::CheckIndex { index, array },
+            });
+        }
+        Ok(())
     }
 
     fn record_layout_backings(
@@ -3143,7 +3199,8 @@ fn read_twice(var _ index: own usize, values: [u256; 2]) -> u256 {
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
                 | NStatementKind::End { .. }
-                | NStatementKind::Drop { .. } => None,
+                | NStatementKind::Drop { .. }
+                | NStatementKind::CheckIndex { .. } => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(

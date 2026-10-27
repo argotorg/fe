@@ -738,7 +738,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     fn flow(&mut self, statement: &NStatement<'db>, changed: &mut bool) {
         match &statement.kind {
-            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
+            NStatementKind::End { .. }
+            | NStatementKind::Drop { .. }
+            | NStatementKind::CheckIndex { .. } => {}
             NStatementKind::Store { destination, value } => {
                 let held = self.values[value.value.index()].clone();
                 if held.is_empty() {
@@ -1360,7 +1362,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
             }),
             NStatementKind::Store { .. }
             | NStatementKind::End { .. }
-            | NStatementKind::Drop { .. } => {}
+            | NStatementKind::Drop { .. }
+            | NStatementKind::CheckIndex { .. } => {}
         }
         match unknown {
             Some(origin) => Err(self.diag(
@@ -1794,7 +1797,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 let result = self.drop_target(statement.id, target, state, origin);
                 self.report(result)?;
             }
-            NStatementKind::End { .. } => {}
+            NStatementKind::End { .. } | NStatementKind::CheckIndex { .. } => {}
         }
         Ok(())
     }

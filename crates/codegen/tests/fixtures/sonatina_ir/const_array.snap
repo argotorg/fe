@@ -36,21 +36,23 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         br v6 block2 block3;
 
     block2:
-        evm_revert 0.i256 0.i256;
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 50.i256 i256;
+        evm_revert 0.i256 36.i256;
 
     block3:
-        v9.constref<i256> = const.index v2 v0;
-        v10.i256 = const.load v9;
-        v11.constref<[i256; 3]> = const.ref $const_region_0;
-        v13.i1 = lt v1 3.i256;
-        v14.i1 = is_zero v13;
-        br v14 block2 block4;
+        v13.constref<i256> = const.index v2 v0;
+        v14.i256 = const.load v13;
+        v15.constref<[i256; 3]> = const.ref $const_region_0;
+        v17.i1 = lt v1 3.i256;
+        v18.i1 = is_zero v17;
+        br v18 block2 block4;
 
     block4:
-        v16.constref<i256> = const.index v11 v1;
-        v17.i256 = const.load v16;
-        (v19.i256, v20.i1) = uaddo v10 v17;
-        br v20 block5 block6;
+        v20.constref<i256> = const.index v15 v1;
+        v21.i256 = const.load v20;
+        (v23.i256, v24.i1) = uaddo v14 v21;
+        br v24 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -58,7 +60,7 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        return v19;
+        return v23;
 }
 
 

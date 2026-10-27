@@ -6963,7 +6963,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         }
     }
 
-    /// `index`, checked to be below `len`: an out-of-range index reverts. A
+    /// `index`, checked to be below `len`: an out-of-range index panics. A
     /// constant in range needs no check; a check whose index is, or after
     /// sealing becomes, a constant out of range always reverts, and
     /// `drop_dead_index_accesses` deletes the access behind it.
@@ -7001,12 +7001,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 .expect("`lt` has a result"),
             len,
         });
-        // EVM keeps the cheaper empty revert. A native panic reports its reason.
-        if self.module.is_native_target() {
-            self.emit_panic_revert(out_of_bounds, PANIC_INDEX_OUT_OF_BOUNDS)?;
-        } else {
-            self.emit_empty_revert(out_of_bounds)?;
-        }
+        self.emit_panic_revert(out_of_bounds, PANIC_INDEX_OUT_OF_BOUNDS)?;
         Ok(index)
     }
 

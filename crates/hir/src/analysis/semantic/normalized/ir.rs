@@ -110,7 +110,8 @@ impl<'db> NormalizedBody<'db> {
             NStatementKind::Define { expr, .. } => Some((block, expr)),
             NStatementKind::Store { .. }
             | NStatementKind::End { .. }
-            | NStatementKind::Drop { .. } => None,
+            | NStatementKind::Drop { .. }
+            | NStatementKind::CheckIndex { .. } => None,
         }
     }
 
@@ -233,6 +234,7 @@ impl<'db> NormalizedBody<'db> {
                     NStatementKind::Drop {
                         target: NDropTarget::Place(place),
                     } => place_uses_target(place),
+                    NStatementKind::CheckIndex { index, .. } => *index == NIndex::Value(target),
                 };
                 if used {
                     return true;
@@ -656,6 +658,13 @@ pub enum NStatementKind<'db> {
     /// or a projection call's session.
     End {
         access: NValueId,
+    },
+    /// Fails unless `index` is below the length of `array`, an array type a
+    /// place or value path indexes. It precedes the statement whose path
+    /// takes the index.
+    CheckIndex {
+        index: NIndex,
+        array: TyId<'db>,
     },
     /// Destroys what `target` still owns (`SStmtKind::Drop`).
     Drop {
