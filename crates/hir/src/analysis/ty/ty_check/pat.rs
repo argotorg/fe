@@ -4,7 +4,7 @@ use crate::core::hir_def::{
     BindingMarker, Func, IdentId, IntegerId, ItemKind, LitKind, Partial, Pat, PatId, PathId,
     TupleTypeId, VariantKind, scope_graph::ScopeId,
 };
-use crate::span::HirOrigin;
+use crate::span::{DynLazySpan, HirOrigin};
 use either::Either;
 use num_bigint::BigUint;
 
@@ -18,21 +18,24 @@ use crate::analysis::{
         ResolvedVariant, resolve_ident_to_bucket,
     },
     semantic::{
-        SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
+        EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
         instance::resolve_semantic_const_ref,
     },
     ty::adt_def::instantiate_adt_field_shape,
     ty::{
         assoc_const::{AssocConstUse, InherentConstUse},
-        const_ty::{LoweringContext, instantiate_inherent_const_decl_ty},
-        diagnostics::{BodyDiag, TraitConstraintDiag, TyDiagCollection},
+        const_ty::{
+            LoweringContext, instantiate_inherent_const_decl_ty, invalid_cause_from_eval_failure,
+        },
+        diagnostics::{BodyDiag, RevealedBy, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
         fold::TyFoldable,
         pattern_ir::{
             BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPat, ValidatedPatKind,
         },
         trait_def::TraitInstId,
         trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
-        ty_def::{InvalidCause, Kind, TyId, TyVarSort},
+        ty_def::{InvalidCause, Kind, TyFlags, TyId, TyVarSort},
+        visitor::collect_flags,
     },
 };
 
@@ -175,20 +178,13 @@ impl<'db> TyChecker<'db> {
         &self,
         statuses: impl IntoIterator<Item = PatternAnalysisStatus>,
     ) -> Result<Vec<crate::analysis::ty::pattern_ir::ValidatedPatId>, PatternAnalysisStatus> {
-        let mut roots = Vec::new();
-        let mut unsupported = false;
-        for status in statuses {
-            match status {
-                PatternAnalysisStatus::Ready(root) => roots.push(root),
-                PatternAnalysisStatus::Invalid => return Err(PatternAnalysisStatus::Invalid),
-                PatternAnalysisStatus::Unsupported => unsupported = true,
-            }
-        }
-        if unsupported {
-            Err(PatternAnalysisStatus::Unsupported)
-        } else {
-            Ok(roots)
-        }
+        statuses
+            .into_iter()
+            .map(|status| match status {
+                PatternAnalysisStatus::Ready(root) => Ok(root),
+                PatternAnalysisStatus::Invalid => Err(PatternAnalysisStatus::Invalid),
+            })
+            .collect()
     }
 
     fn binding_ref(&self, pat: PatId, name: IdentId<'db>) -> BindingRef<'db> {
@@ -233,41 +229,94 @@ impl<'db> TyChecker<'db> {
         self.ready_constructor(ty, ConstructorKind::Literal(lit, ty), Vec::new())
     }
 
-    fn eval_const_pattern_literal(
-        &self,
+    /// The analysis of `pat`, which names the constant `cref` of type `ty`: a
+    /// literal, for an integer or `bool`. A pattern can't compare against any
+    /// other value, nor against one that depends on generic parameters.
+    fn const_pattern_status(
+        &mut self,
+        pat: PatId,
         cref: ConstRef<'db>,
+        ty: TyId<'db>,
         expected: TyId<'db>,
-    ) -> Option<LitKind<'db>> {
-        let expected = expected
+    ) -> PatternAnalysisStatus {
+        let value_ty = expected
             .as_capability(self.db)
             .map_or(expected, |(_, inner)| inner);
-        let cref = resolve_semantic_const_ref(self.db, cref, expected, SemOrigin::Synthetic)?;
-        match eval_const_ref(self.db, cref).into_ready()?.value(self.db) {
-            SemConstValue::Scalar {
-                value: SemConstScalar::Int { value },
-                ..
-            } => {
-                let (_, bytes) = value.to_bytes_be();
-                Some(LitKind::Int(crate::hir_def::IntegerId::new(
-                    self.db,
-                    num_bigint::BigUint::from_bytes_be(&bytes),
-                )))
+        let primary: DynLazySpan<'db> = pat.span(self.body()).into();
+        let lit = match resolve_semantic_const_ref(self.db, cref, value_ty, SemOrigin::Synthetic)
+            .map(|cref| {
+                let owner = cref.instance(self.db).owner(self.db);
+                (owner, eval_const_ref(self.db, cref))
+            }) {
+            Some((_, EvalOutcome::Ready(value))) => match value.value(self.db) {
+                SemConstValue::Scalar {
+                    value: SemConstScalar::Int { value },
+                    ..
+                } => {
+                    let (_, bytes) = value.to_bytes_be();
+                    LitKind::Int(crate::hir_def::IntegerId::new(
+                        self.db,
+                        num_bigint::BigUint::from_bytes_be(&bytes),
+                    ))
+                }
+                SemConstValue::Scalar {
+                    value: SemConstScalar::Bool(flag),
+                    ..
+                } => LitKind::Bool(*flag),
+                SemConstValue::Unit
+                | SemConstValue::Description(..)
+                | SemConstValue::Tuple { .. }
+                | SemConstValue::Struct { .. }
+                | SemConstValue::Array { .. }
+                | SemConstValue::Enum { .. }
+                | SemConstValue::Scalar {
+                    value: SemConstScalar::Bytes(_),
+                    ..
+                } => {
+                    self.push_diag(BodyDiag::ConstPatternType { primary, ty });
+                    return PatternAnalysisStatus::Invalid;
+                }
+            },
+            Some((owner, EvalOutcome::Failed(failure))) => {
+                // Reported here even if the declaration reports it too: a
+                // failure can depend on the generic arguments of this use,
+                // as `G<0>::C` does with `const C: u256 = 1 / N`.
+                let cause = invalid_cause_from_eval_failure(self.db, owner, failure);
+                match TyId::invalid(self.db, cause).emit_diag(self.db, primary.clone()) {
+                    Some(fault) => {
+                        self.push_diag(TyDiagCollection::from(TyLowerDiag::RevealedConstFault {
+                            site: primary,
+                            revealed_by: RevealedBy::Evaluation,
+                            fault: Box::new(fault),
+                        }))
+                    }
+                    None => self.push_diag(BodyDiag::InvalidConstPattern { primary }),
+                }
+                return PatternAnalysisStatus::Invalid;
             }
-            SemConstValue::Scalar {
-                value: SemConstScalar::Bool(flag),
-                ..
-            } => Some(LitKind::Bool(*flag)),
-            SemConstValue::Unit
-            | SemConstValue::Description(..)
-            | SemConstValue::Tuple { .. }
-            | SemConstValue::Struct { .. }
-            | SemConstValue::Array { .. }
-            | SemConstValue::Enum { .. }
-            | SemConstValue::Scalar {
-                value: SemConstScalar::Bytes(_),
-                ..
-            } => None,
-        }
+            Some((_, EvalOutcome::Blocked(_))) => {
+                self.push_diag(BodyDiag::GenericConstPattern { primary });
+                return PatternAnalysisStatus::Invalid;
+            }
+            // No value to evaluate: the use's generic parameters would select
+            // it, or there is none, as for a constant that an impl omits.
+            None => {
+                let generic = match cref {
+                    ConstRef::Const(_) => false,
+                    ConstRef::TraitConst { use_, .. } => {
+                        collect_flags(self.db, use_.inst()).contains(TyFlags::HAS_PARAM)
+                    }
+                    ConstRef::InherentConst(use_) => use_.receiver_ty().has_param(self.db),
+                };
+                self.push_diag(if generic {
+                    BodyDiag::GenericConstPattern { primary }
+                } else {
+                    BodyDiag::InvalidConstPattern { primary }
+                });
+                return PatternAnalysisStatus::Invalid;
+            }
+        };
+        self.literal_constructor_status(expected, lit)
     }
 
     fn consume_rest_pat(&mut self, pat: PatId, ty: TyId<'db>) {
@@ -526,10 +575,7 @@ impl<'db> TyChecker<'db> {
 
             Ok(PathRes::Const(const_def, ty)) => (
                 ty,
-                self.eval_const_pattern_literal(ConstRef::Const(const_def), expected)
-                    .map_or(PatternAnalysisStatus::Unsupported, |lit| {
-                        self.literal_constructor_status(expected, lit)
-                    }),
+                self.const_pattern_status(pat, ConstRef::Const(const_def), ty, expected),
             ),
 
             Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
@@ -585,13 +631,7 @@ impl<'db> TyChecker<'db> {
                         evidence: None,
                         bound_evidence: None,
                     };
-                    (
-                        ty,
-                        self.eval_const_pattern_literal(cref, expected)
-                            .map_or(PatternAnalysisStatus::Unsupported, |lit| {
-                                self.literal_constructor_status(expected, lit)
-                            }),
-                    )
+                    (ty, self.const_pattern_status(pat, cref, ty, expected))
                 } else {
                     (
                         TyId::invalid(self.db, InvalidCause::Other),
@@ -615,13 +655,7 @@ impl<'db> TyChecker<'db> {
                         recv_ty,
                         name,
                     ));
-                    (
-                        ty,
-                        self.eval_const_pattern_literal(cref, expected)
-                            .map_or(PatternAnalysisStatus::Unsupported, |lit| {
-                                self.literal_constructor_status(expected, lit)
-                            }),
-                    )
+                    (ty, self.const_pattern_status(pat, cref, ty, expected))
                 } else {
                     (
                         TyId::invalid(self.db, InvalidCause::Other),

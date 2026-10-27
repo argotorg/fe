@@ -59,14 +59,13 @@ entity_impl!(ValidatedPatId);
 pub enum PatternAnalysisStatus {
     Ready(ValidatedPatId),
     Invalid,
-    Unsupported,
 }
 
 impl PatternAnalysisStatus {
     pub fn ready_root(self) -> Option<ValidatedPatId> {
         match self {
             Self::Ready(root) => Some(root),
-            Self::Invalid | Self::Unsupported => None,
+            Self::Invalid => None,
         }
     }
 

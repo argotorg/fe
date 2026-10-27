@@ -4450,6 +4450,33 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::ConstPatternType { primary, ty } => primary_diag(
+                Severity::Error,
+                "unsupported constant pattern",
+                format!(
+                    "a constant pattern must be an integer or `bool`, but this has type `{}`",
+                    ty.pretty_print(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::GenericConstPattern { primary } => primary_diag(
+                Severity::Error,
+                "unsupported constant pattern",
+                "a constant pattern can't depend on generic parameters",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::InvalidConstPattern { primary } => primary_diag(
+                Severity::Error,
+                "failed to evaluate constant pattern",
+                "this constant's definition is invalid or depends on this pattern",
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::LoopDriverBase {
                 primary,
                 driver,

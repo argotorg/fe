@@ -5224,21 +5224,12 @@ impl<'db> TypedBody<'db> {
                 Some(self.missing_place_issue(db, expr, *dst))
             }
             Expr::Match(_, Partial::Absent) => Some(SmirLoweringIssue::InvalidExpr(expr)),
-            Expr::Match(_, Partial::Present(arms)) => {
+            Expr::Match(_, Partial::Present(arms))
                 if arms.iter().any(|arm| {
-                    matches!(
-                        self.pattern_status(arm.pat),
-                        PatternAnalysisStatus::Unsupported
-                    )
-                }) {
-                    Some(SmirLoweringIssue::IncompleteExpr(expr))
-                } else if arms.iter().any(|arm| {
                     matches!(self.pattern_status(arm.pat), PatternAnalysisStatus::Invalid)
-                }) {
-                    Some(SmirLoweringIssue::InvalidExpr(expr))
-                } else {
-                    None
-                }
+                }) =>
+            {
+                Some(SmirLoweringIssue::InvalidExpr(expr))
             }
             _ => None,
         }
@@ -7781,7 +7772,6 @@ mod smir_lowering_readiness_tests {
     use camino::Utf8PathBuf;
 
     use crate::{
-        analysis::ty::pattern_ir::PatternAnalysisStatus,
         hir_def::{Expr, ItemKind, Partial},
         test_db::HirAnalysisTestDb,
     };
@@ -7846,64 +7836,5 @@ fn target() -> u256 {
             incomplete.smir_lowering_readiness(&db),
             SmirLoweringReadiness::IncompletePlan
         );
-    }
-
-    #[test]
-    fn incomplete_match_pattern_dominates_invalid_pattern_in_any_arm_order() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("smir_match_readiness.fe"),
-            r#"
-enum Choice {
-    First,
-    Second,
-}
-
-fn target(choice: Choice) -> u256 {
-    match choice {
-        Choice::First => 0,
-        Choice::Second => 1,
-    }
-}
-"#,
-        );
-        let (top_mod, _) = db.top_mod(file);
-        let target = top_mod
-            .all_items(&db)
-            .iter()
-            .find_map(|item| match item {
-                ItemKind::Func(func)
-                    if func
-                        .name(&db)
-                        .to_opt()
-                        .is_some_and(|name| name.data(&db) == "target") =>
-                {
-                    Some(*func)
-                }
-                _ => None,
-            })
-            .expect("target function");
-        let (_, checked) = check_func_body(&db, target);
-        let body = checked.body().expect("target body");
-        let arms = body
-            .exprs(&db)
-            .iter()
-            .find_map(|(_, data)| match data {
-                Partial::Present(Expr::Match(_, Partial::Present(arms))) => Some(arms),
-                _ => None,
-            })
-            .expect("target match");
-        assert_eq!(arms.len(), 2);
-
-        for (invalid, unsupported) in [(0, 1), (1, 0)] {
-            let mut mixed = checked.clone();
-            mixed.tables_mut().pattern_status[arms[invalid].pat] = PatternAnalysisStatus::Invalid;
-            mixed.tables_mut().pattern_status[arms[unsupported].pat] =
-                PatternAnalysisStatus::Unsupported;
-            assert_eq!(
-                mixed.smir_lowering_readiness(&db),
-                SmirLoweringReadiness::IncompletePlan
-            );
-        }
     }
 }

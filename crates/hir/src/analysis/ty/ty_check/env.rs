@@ -1424,9 +1424,7 @@ impl<'db> TyCheckEnv<'db> {
     pub(super) fn set_pattern_status(&mut self, pat: PatId, status: PatternAnalysisStatus) {
         match status {
             PatternAnalysisStatus::Ready(root) => self.pattern_store.set_root(pat, root),
-            PatternAnalysisStatus::Invalid | PatternAnalysisStatus::Unsupported => {
-                self.pattern_store.clear_root(pat)
-            }
+            PatternAnalysisStatus::Invalid => self.pattern_store.clear_root(pat),
         }
         self.pattern_status[pat] = status;
     }
