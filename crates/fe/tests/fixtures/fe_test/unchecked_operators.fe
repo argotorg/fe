@@ -3,7 +3,7 @@
 // calls the wrapping operator trait. A called function's own operators keep
 // its own mode.
 use core::ops::Add
-use std::evm::Evm
+use std::evm::{Duration, Evm, Timestamp, seconds, wei}
 
 struct Pair {
     a: u8,
@@ -119,6 +119,64 @@ fn bool_compound_assignments() {
     assert!(flag)
     flag |= false
     assert!(flag)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn wei_wraps() {
+    let max = Wei::zero() - wei(1)
+    assert!(max.as_wei() == u256::max())
+    assert!((max + wei(2)).as_wei() == 1)
+    assert!((max * 2).as_wei() == u256::max() - 1)
+    var total = max
+    total += wei(1)
+    assert!(total == Wei::zero())
+    total -= wei(1)
+    assert!(total == max)
+    assert!(max / 2 == wei(u256::max() / 2))
+}
+
+#[test(should_revert, panic = 0x11)]
+fn wei_add_reverts() {
+    let max = wei(u256::max())
+    let sum = max + wei(1)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn wei_add_assign_reverts() {
+    var total = wei(u256::max())
+    total += wei(1)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn time_wraps() {
+    let start = Timestamp::from_seconds(1)
+    let earlier = start - seconds(2)
+    assert!(earlier.as_seconds() == u256::max())
+    assert!((start - earlier).as_seconds() == 2)
+    assert!((earlier + seconds(2)) == start)
+    var later = earlier
+    later += seconds(3)
+    assert!(later.as_seconds() == 2)
+    later -= seconds(3)
+    assert!(later == earlier)
+    assert!((seconds(u256::max()) * 2).as_seconds() == u256::max() - 1)
+    var span = seconds(0)
+    span -= seconds(1)
+    assert!(span.as_seconds() == u256::max())
+}
+
+#[test(should_revert, panic = 0x11)]
+fn time_sub_reverts() {
+    let start = Timestamp::from_seconds(1)
+    let earlier = start - seconds(2)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn duration_sub_assign_reverts() {
+    var span: Duration = seconds(0)
+    span -= seconds(1)
 }
 
 msg Msg {

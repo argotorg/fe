@@ -4396,7 +4396,9 @@ fn test_cli_test_profile_selects_ingot_arithmetic() {
     assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
     assert!(
         test_output.contains("PASS  [<time>] arithmetic_profile_ingot_wraps_in_test_profile")
-            && test_output.contains("1 passed"),
+            && test_output
+                .contains("PASS  [<time>] arithmetic_profile_ingot_wraps_wei_in_test_profile")
+            && test_output.contains("2 passed"),
         "expected test profile to run unchecked arithmetic:\n{test_output}"
     );
 
@@ -4407,7 +4409,7 @@ fn test_cli_test_profile_selects_ingot_arithmetic() {
         "expected release profile test failure:\n{release_output}"
     );
     assert!(
-        release_output.contains("1 failed"),
+        release_output.contains("2 failed"),
         "expected checked arithmetic failure in release profile:\n{release_output}"
     );
 }

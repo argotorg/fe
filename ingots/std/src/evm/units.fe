@@ -13,7 +13,9 @@
 /// `const fn`s and work in constant initializers.
 use core::abi::{Abi, AbiDecoder, AbiFrame, AbiSize, AbiSpan, ByteInput, Decode, Encode}
 use core::num::mul_div
-use core::ops::{Add, AddAssign, Div, Eq, Mul, Ord, Rem, Sub, SubAssign}
+use core::ops::{
+    Add, AddAssign, Div, Eq, Mul, Ord, Rem, Sub, SubAssign, WrappingAdd, WrappingMul, WrappingSub,
+}
 use ingot::abi::sol::types::{SolCompat, StaticAbiElement, StaticAbiElementSeal}
 use ingot::evm::{EncodePacked, Packed, SolPacked, StorageKey, TopicValue}
 use ingot::evm::packed::write_word_prefix
@@ -115,6 +117,26 @@ impl AddAssign for Wei {
 
 impl SubAssign for Wei {
     const fn sub_assign(mut self, _ other: own Wei) { self = self - other }
+}
+
+// The operators written in unchecked code.
+
+impl WrappingAdd for Wei {
+    const fn wrapping_add(self, _ other: Wei) -> Wei {
+        Wei { amount: self.amount.wrapping_add(other.amount) }
+    }
+}
+
+impl WrappingSub for Wei {
+    const fn wrapping_sub(self, _ other: Wei) -> Wei {
+        Wei { amount: self.amount.wrapping_sub(other.amount) }
+    }
+}
+
+impl WrappingMul<u256> for Wei {
+    const fn wrapping_mul(self, _ other: u256) -> Wei {
+        Wei { amount: self.amount.wrapping_mul(other) }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -219,6 +241,24 @@ impl SubAssign for Duration {
     const fn sub_assign(mut self, _ other: own Duration) { self = self - other }
 }
 
+impl WrappingAdd for Duration {
+    const fn wrapping_add(self, _ other: Duration) -> Duration {
+        Duration { secs: self.secs.wrapping_add(other.secs) }
+    }
+}
+
+impl WrappingSub for Duration {
+    const fn wrapping_sub(self, _ other: Duration) -> Duration {
+        Duration { secs: self.secs.wrapping_sub(other.secs) }
+    }
+}
+
+impl WrappingMul<u256> for Duration {
+    const fn wrapping_mul(self, _ other: u256) -> Duration {
+        Duration { secs: self.secs.wrapping_mul(other) }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Timestamp
 // -----------------------------------------------------------------------------
@@ -276,6 +316,25 @@ impl AddAssign<Duration> for Timestamp {
 
 impl SubAssign<Duration> for Timestamp {
     const fn sub_assign(mut self, _ other: own Duration) { self = self - other }
+}
+
+impl WrappingAdd<Duration> for Timestamp {
+    const fn wrapping_add(self, _ other: Duration) -> Timestamp {
+        Timestamp { secs: self.secs.wrapping_add(other.secs) }
+    }
+}
+
+impl WrappingSub<Duration> for Timestamp {
+    const fn wrapping_sub(self, _ other: Duration) -> Timestamp {
+        Timestamp { secs: self.secs.wrapping_sub(other.secs) }
+    }
+}
+
+impl WrappingSub<Timestamp> for Timestamp {
+    type Output = Duration
+    const fn wrapping_sub(self, _ other: Timestamp) -> Duration {
+        Duration { secs: self.secs.wrapping_sub(other.secs) }
+    }
 }
 
 // -----------------------------------------------------------------------------
