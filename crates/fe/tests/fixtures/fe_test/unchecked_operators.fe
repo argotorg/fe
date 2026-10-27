@@ -1,8 +1,9 @@
 // An arithmetic operator wraps in unchecked code, where it is written: on
 // primitive operands it is a wrapping operation, and on other operands it
-// calls the wrapping operator trait. A called function's own operators keep
-// its own mode.
-use core::ops::Add
+// calls the wrapping operator trait if their type implements it. A called
+// function's own operators keep its own mode.
+use core::fixed::Wad
+use core::ops::{Add, WrappingAdd}
 use std::evm::{Duration, Evm, Timestamp, seconds, wei}
 
 struct Pair {
@@ -110,6 +111,40 @@ fn generic_operator_stays_checked() {
 }
 
 #[arithmetic(unchecked)]
+fn unchecked_sum<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+    a + b
+}
+
+#[arithmetic(unchecked)]
+fn unchecked_wrapping_sum<T: Add<Output = T> + WrappingAdd<Output = T>>(
+    _ a: own T,
+    _ b: own T,
+) -> T {
+    a + b
+}
+
+// Without a `WrappingAdd` bound, `+` on a type parameter calls `Add`.
+#[test(should_revert, panic = 0x11)]
+fn unchecked_generic_operator_without_wrapping_bound_is_checked() {
+    let x: u8 = 255
+    let y = unchecked_sum(x, 1)
+}
+
+#[test]
+fn unchecked_generic_operator_with_wrapping_bound_wraps() {
+    let x: u8 = 255
+    assert!(unchecked_wrapping_sum(x, 1) == 0)
+}
+
+// `Wad` implements no wrapping traits, so its operators stay checked.
+#[arithmetic(unchecked)]
+#[test(should_revert, panic = 0x11)]
+fn fixed_point_operators_stay_checked() {
+    let max = Wad::from_raw(u256::max())
+    let sum = max + Wad::from_raw(1)
+}
+
+#[arithmetic(unchecked)]
 #[test]
 fn bool_compound_assignments() {
     var flag = true
@@ -134,6 +169,23 @@ fn wei_wraps() {
     total -= wei(1)
     assert!(total == max)
     assert!(max / 2 == wei(u256::max() / 2))
+}
+
+struct Holder {
+    amount: Wei,
+}
+
+#[arithmetic(unchecked)]
+fn add_through_borrows(_ total: mut Wei, _ holder: ref Holder) -> Wei {
+    total + holder.amount
+}
+
+// An operand reached through a borrow wraps like an owned one.
+#[test]
+fn borrowed_wei_wraps() {
+    var total = wei(u256::max())
+    let holder = Holder { amount: wei(1) }
+    assert!(add_through_borrows(mut total, ref holder) == Wei::zero())
 }
 
 #[test(should_revert, panic = 0x11)]

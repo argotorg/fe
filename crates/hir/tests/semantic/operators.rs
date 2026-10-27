@@ -123,12 +123,12 @@ fn bit_not_typed_late() -> u8 {
 }
 
 #[test]
-fn unchecked_operators_on_other_types_call_wrapping_traits() {
+fn unchecked_operators_call_the_wrapping_traits_a_type_implements() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "wrapping_traits.fe".into(),
         r#"
-use core::ops::{Add, AddAssign, Div, Neg, WrappingAdd, WrappingNeg}
+use core::ops::{Add, AddAssign, Div, Neg, SubAssign, WrappingAdd, WrappingNeg}
 
 struct Money { cents: i256 }
 impl Copy for Money {}
@@ -166,17 +166,49 @@ fn unchecked(a: Money, b: Money) -> Money {
     c += -a
     c / 2
 }
+
+// A type without the wrapping traits calls the checked ones in either mode.
+struct Points { value: u8 }
+impl Copy for Points {}
+
+impl Add for Points {
+    fn add(own self, _ other: own Points) -> Points { Points { value: self.value + other.value } }
+}
+impl SubAssign<u8> for Points {
+    fn sub_assign(mut self, _ other: own u8) { self.value -= other }
+}
+
+#[arithmetic(unchecked)]
+fn checked_only(a: Points, b: Points) -> Points {
+    var c = a + b
+    c -= 1
+    c
+}
+
+// A type parameter implements what its bounds say.
+#[arithmetic(unchecked)]
+fn generic<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+    a + b
+}
+
+#[arithmetic(unchecked)]
+fn generic_wrapping<T: Add<Output = T> + WrappingAdd<Output = T>>(_ a: own T, _ b: own T) -> T {
+    a + b
+}
 "#,
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
     for (name, expected) in [
-        ("checked", ["add", "neg", "add_assign", "div"]),
+        ("checked", &["add", "neg", "add_assign", "div"][..]),
         (
             "unchecked",
-            ["wrapping_add", "wrapping_neg", "wrapping_add", "div"],
+            &["wrapping_add", "wrapping_neg", "wrapping_add", "div"],
         ),
+        ("checked_only", &["add", "sub_assign"]),
+        ("generic", &["add"]),
+        ("generic_wrapping", &["wrapping_add"]),
     ] {
         let (binary, unary, calls) = operations(&db, top_mod, name);
         assert!(binary.is_empty() && unary.is_empty(), "{name}");

@@ -1,0 +1,81 @@
+use core::ops::{Add, AddAssign, Mul, Neg, WrappingMul}
+
+// `Checked` implements only the checked operator traits, so its operators
+// call them in unchecked code too.
+struct Checked {
+    value: i8,
+}
+
+impl Copy for Checked {}
+
+impl Add for Checked {
+    fn add(own self, _ other: own Checked) -> Checked {
+        Checked { value: self.value + other.value }
+    }
+}
+
+impl AddAssign for Checked {
+    fn add_assign(mut self, _ other: own Checked) {
+        self.value += other.value
+    }
+}
+
+impl Neg for Checked {
+    fn neg(own self) -> Checked {
+        Checked { value: -self.value }
+    }
+}
+
+#[arithmetic(unchecked)]
+pub fn checked(x: Checked, y: Checked) -> Checked {
+    var z = x + y
+    z += -x
+    z
+}
+
+// `Scaled` implements `WrappingMul` for other right operands than `Mul`, so
+// in unchecked code `*` calls `WrappingMul`, which takes no `Scaled`.
+struct Scaled {
+    value: i8,
+}
+
+impl Copy for Scaled {}
+
+impl Mul for Scaled {
+    fn mul(own self, _ other: own Scaled) -> Scaled {
+        Scaled { value: self.value * other.value }
+    }
+}
+
+impl WrappingMul<i8> for Scaled {
+    #[arithmetic(unchecked)]
+    fn wrapping_mul(self, _ other: i8) -> Scaled {
+        Scaled { value: self.value * other }
+    }
+}
+
+impl WrappingMul<i16> for Scaled {
+    #[arithmetic(unchecked)]
+    fn wrapping_mul(self, _ other: i16) -> Scaled {
+        Scaled { value: self.value * other.downcast_truncate() }
+    }
+}
+
+#[arithmetic(unchecked)]
+pub fn scaled(x: Scaled, y: Scaled) -> Scaled {
+    x * y
+}
+
+// A type with neither trait lacks the checked one, as in checked code.
+struct Plain {}
+
+#[arithmetic(unchecked)]
+pub fn plain(x: Plain, y: Plain) {
+    let difference = x - y
+}
+
+// Unsigned integers have no negation in either mode.
+#[arithmetic(unchecked)]
+pub fn unsigned(x: u8) -> u8 {
+    -x
+}

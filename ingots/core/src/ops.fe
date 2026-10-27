@@ -37,8 +37,9 @@ pub trait Pow<T = Self> {
 }
 
 // Wrapping arithmetic. In unchecked code, `a + b`, `a - b`, `a * b`, `a ** b`
-// and `-a` on non-primitive operands call these traits, and `a += b` is
-// `a = a.wrapping_add(b)`.
+// and `-a` on a non-primitive operand whose type implements these traits
+// call them, and `a += b` is `a = a.wrapping_add(b)`. On other types they
+// call the checked traits.
 pub trait WrappingAdd<T = Self> {
     type Output = Self
     fn wrapping_add(self, _ other: T) -> Self::Output

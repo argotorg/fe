@@ -1092,18 +1092,46 @@ impl<'db> TyChecker<'db> {
         self.check_ops_trait(expr, prop.ty, &op, None)
     }
 
-    /// The operator `op` on an operand of type `ty` as written in this body:
-    /// in unchecked code, the operators that can overflow call the wrapping
-    /// traits. An operator a primitive lacks is a missing checked trait in
-    /// either mode.
-    fn mode_op<T>(&mut self, ty: TyId<'db>, op: T) -> ModeOp<T> {
-        let ty = ty.fold_with(self.db, &mut self.table);
-        let overflow = if ty.is_integral(self.db) || ty.is_bool(self.db) {
-            Overflow::Checked
-        } else {
-            self.overflow
+    /// The operator `op` on an operand of type `ty` as written in this body.
+    /// In unchecked code, an operator that can overflow calls its wrapping
+    /// trait if `ty` implements it for some right operand, and otherwise the
+    /// trait it calls in checked code, so code that compiles checked compiles
+    /// unchecked too. A type parameter implements what its bounds say.
+    fn mode_op<T: Copy>(&mut self, ty: TyId<'db>, op: T) -> ModeOp<T>
+    where
+        ModeOp<T>: TraitOps,
+    {
+        let mode_op = ModeOp {
+            op,
+            overflow: self.overflow,
         };
-        ModeOp { op, overflow }
+        if !mode_op.wraps() {
+            return mode_op;
+        }
+        let Some(trait_def) =
+            resolve_core_trait(self.db, self.env.scope(), &mode_op.trait_path_segments())
+        else {
+            return mode_op;
+        };
+        let snapshot = self.snapshot_state();
+        let mut args = vec![ty.fold_with(self.db, &mut self.table)];
+        args.extend(self.fresh_tys_n(trait_def.params(self.db).len() - 1));
+        let goal = TraitInstId::new_simple(self.db, trait_def, args);
+        let solve_cx =
+            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let implemented = !matches!(
+            is_goal_satisfiable(self.db, solve_cx, goal),
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+        );
+        self.rollback_state(snapshot);
+        if implemented {
+            mode_op
+        } else {
+            ModeOp {
+                op,
+                overflow: Overflow::Checked,
+            }
+        }
     }
 
     /// The built-in operation of the unary operator `op` on an operand of
@@ -5297,10 +5325,11 @@ impl<'db> TyChecker<'db> {
         }
 
         // In unchecked code, an operator that can overflow calls its wrapping
-        // trait, which has no `*Assign` counterpart: `x += y` is
-        // `x = x.wrapping_add(y)`, with the place read and written once.
-        // Otherwise `x += y` calls `AddAssign::add_assign`. The assignment is
-        // unit even if resolution fails.
+        // trait if the type implements it, which has no `*Assign`
+        // counterpart: `x += y` is `x = x.wrapping_add(y)`, with the place
+        // read and written once. Otherwise `x += y` calls
+        // `AddAssign::add_assign`. The assignment is unit even if resolution
+        // fails.
         let mode_op = self.mode_op(lhs_place_ty, bin_op);
         if mode_op.wraps() {
             let result = self.check_ops_trait(expr, lhs_place_ty, &mode_op, Some(*rhs));
@@ -6065,8 +6094,8 @@ pub(crate) trait TraitOps {
 
 /// An operator in the arithmetic mode of the body it is written in. In
 /// unchecked code, `+`, `-`, `*`, `**` and unary `-` call the wrapping traits
-/// (`WrappingAdd::wrapping_add`, ...); every other operator calls the same
-/// trait in either mode.
+/// (`WrappingAdd::wrapping_add`, ...) on a type that implements them; every
+/// other operator calls the same trait in either mode.
 #[derive(Clone, Copy, Debug)]
 struct ModeOp<T> {
     op: T,
