@@ -3955,11 +3955,11 @@ impl<'db> AdtDef<'db> {
 /// inside an ADT argument still counts every constructor, including `[T; 0]`.
 /// Shared binary type subterms and parameter states give linear-size reach
 /// clauses and growth flows, solved separately before reconstructing a witness.
-#[salsa::tracked]
+#[salsa::tracked(cycle_initial = ingot_growing_cycles_cycle_initial)]
 pub fn ingot_growing_cycles<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-) -> IndexMap<AdtDef<'db>, Vec<AdtCycleMember<'db>>> {
+) -> GrowingCycles<'db> {
     struct Edge<'db> {
         from: usize,
         to: usize,
@@ -4212,6 +4212,16 @@ pub fn ingot_growing_cycles<'db>(
     // walk from one of its parameters across a growing flow.
     let mut reported = vec![false; components];
     let mut cycles = IndexMap::default();
+    let growing_adts = adts
+        .iter()
+        .copied()
+        .filter(|adt| {
+            adt.params(db)
+                .iter()
+                .filter_map(|param| params.get_index_of(param))
+                .any(|state| growing[component[state]].is_some())
+        })
+        .collect();
     for adt in adts {
         let Some((state, edge)) = adt
             .params(db)
@@ -4236,7 +4246,39 @@ pub fn ingot_growing_cycles<'db>(
             .collect();
         cycles.insert(adt, cycle);
     }
-    cycles
+    GrowingCycles {
+        cycles,
+        adts: growing_adts,
+    }
+}
+
+// Type checking a field type's const body asks which ADTs grow; until the
+// fields are known, none does.
+fn ingot_growing_cycles_cycle_initial<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _: Ingot<'db>,
+) -> GrowingCycles<'db> {
+    GrowingCycles {
+        cycles: IndexMap::default(),
+        adts: IndexSet::default(),
+    }
+}
+
+/// An ingot's growing recursive cycles; see `ingot_growing_cycles`.
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+pub struct GrowingCycles<'db> {
+    /// A cycle of each growing component, at its first ADT.
+    pub cycles: IndexMap<AdtDef<'db>, Vec<AdtCycleMember<'db>>>,
+    /// The ADTs with a parameter in a growing component.
+    pub adts: IndexSet<AdtDef<'db>>,
+}
+
+/// Whether `adt` is part of a growing recursive cycle, so its applications
+/// reach infinitely many distinct types through their fields.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn adt_grows<'db>(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> bool {
+    ingot_growing_cycles(db, adt.ingot(db)).adts.contains(&adt)
 }
 
 /// Calls `f` on `ty` and on each type a value of `ty` holds in place: not
