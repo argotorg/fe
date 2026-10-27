@@ -2125,20 +2125,11 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             ArithBinOp::Add => lhs + rhs,
             ArithBinOp::Sub => lhs - rhs,
             ArithBinOp::Mul => lhs * rhs,
-            ArithBinOp::Div => {
-                if rhs.is_zero() {
-                    BigInt::zero()
-                } else {
-                    lhs / rhs
-                }
+            ArithBinOp::Div | ArithBinOp::Rem if rhs.is_zero() => {
+                return Err(CtfeError::DivisionByZero { origin });
             }
-            ArithBinOp::Rem => {
-                if rhs.is_zero() {
-                    BigInt::zero()
-                } else {
-                    lhs % rhs
-                }
-            }
+            ArithBinOp::Div => lhs / rhs,
+            ArithBinOp::Rem => lhs % rhs,
             ArithBinOp::Pow => self.wrapping_pow(result_ty, &lhs, &rhs, origin)?,
             ArithBinOp::LShift => self.wrapping_shift(result_ty, lhs, rhs, true, origin)?,
             ArithBinOp::RShift => self.wrapping_shift(result_ty, lhs, rhs, false, origin)?,
@@ -2171,20 +2162,11 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             ArithBinOp::Add => lhs.wrapping_add(rhs),
             ArithBinOp::Sub => lhs.wrapping_sub(rhs),
             ArithBinOp::Mul => lhs.wrapping_mul(rhs),
-            ArithBinOp::Div if !signed => {
-                if rhs.is_zero() {
-                    U256::ZERO
-                } else {
-                    lhs.wrapping_div(rhs)
-                }
+            ArithBinOp::Div | ArithBinOp::Rem if rhs.is_zero() => {
+                return Err(CtfeError::DivisionByZero { origin });
             }
-            ArithBinOp::Rem if !signed => {
-                if rhs.is_zero() {
-                    U256::ZERO
-                } else {
-                    lhs.wrapping_rem(rhs)
-                }
-            }
+            ArithBinOp::Div if !signed => lhs.wrapping_div(rhs),
+            ArithBinOp::Rem if !signed => lhs.wrapping_rem(rhs),
             ArithBinOp::Pow => lhs.wrapping_pow(rhs),
             ArithBinOp::LShift => wrapping_shift_word(bits, signed, lhs, rhs, true),
             ArithBinOp::RShift => wrapping_shift_word(bits, signed, lhs, rhs, false),
@@ -3632,7 +3614,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_core_numeric_edges_keep_evm_word_semantics() {
+    fn raw_core_numeric_edges_wrap_and_reject_zero_divisors() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
             "raw_numeric_edges.fe".into(),
@@ -3642,29 +3624,32 @@ mod tests {
         let origin = SemOrigin::Body(BodyOwner::Func(module.all_funcs(&db)[0], None));
         let u8_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::U8)));
         let machine = CtfeMachine::new(&db, CtfeConfig::default());
-
-        for (op, lhs, rhs, expected) in [
-            (ArithBinOp::Div, 9, 0, 0),
-            (ArithBinOp::Rem, 9, 0, 0),
-            (ArithBinOp::Pow, 2, 8, 0),
-        ] {
+        let eval = |op, lhs: u8, rhs: u8| {
             let args = [lhs, rhs].map(|value| CtfeConstValue::int(&db, u8_ty, value.into()));
-            let actual = machine
-                .eval_numeric_extern_intrinsic(
-                    NumericExternIntrinsic::WrappingBinary(op),
-                    u8_ty,
-                    &args,
-                    origin,
-                )
-                .unwrap();
-            let SemConstValue::Scalar {
-                value: SemConstScalar::Int { value },
-                ..
-            } = actual.materialize(&db).value(&db)
-            else {
-                panic!("expected numeric intrinsic result");
-            };
-            assert_eq!(*value, BigInt::from(expected), "{op:?}");
+            machine.eval_numeric_extern_intrinsic(
+                NumericExternIntrinsic::WrappingBinary(op),
+                u8_ty,
+                &args,
+                origin,
+            )
+        };
+
+        for op in [ArithBinOp::Div, ArithBinOp::Rem] {
+            assert!(
+                matches!(eval(op, 9, 0), Err(CtfeError::DivisionByZero { .. })),
+                "{op:?}"
+            );
         }
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = eval(ArithBinOp::Pow, 2, 8)
+            .unwrap()
+            .materialize(&db)
+            .value(&db)
+        else {
+            panic!("expected numeric intrinsic result");
+        };
+        assert_eq!(*value, BigInt::ZERO);
     }
 }

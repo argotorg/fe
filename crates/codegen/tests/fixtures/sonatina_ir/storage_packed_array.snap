@@ -418,15 +418,28 @@ func inline(always) private %get(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.i256 = evm_umod v1 32.i256;
-        v6.i256 = mul v4 8.i256;
-        v7.i256 = evm_udiv v1 32.i256;
-        v9.@layout_6 = call %locate v0 v0 v7;
-        v11.i256 = extract_value v9 0.i256;
-        v12.i256 = evm_sload v11;
-        v13.i256 = shr v6 v12;
-        v15.i256 = and v13 255.i256;
-        return v15;
+        v5.i1 = eq 32.i256 0.i256;
+        br v5 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 18.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        v10.i256 = evm_umod v1 32.i256;
+        v12.i256 = mul v10 8.i256;
+        v14.i1 = eq 32.i256 0.i256;
+        br v14 block2 block4;
+
+    block4:
+        v15.i256 = evm_udiv v1 32.i256;
+        v17.@layout_6 = call %locate v0 v0 v15;
+        v18.i256 = extract_value v17 0.i256;
+        v19.i256 = evm_sload v18;
+        v21.i256 = shr v12 v19;
+        v23.i256 = and v21 255.i256;
+        return v23;
 }
 
 func private %get_status(v0.i256, v1.i256) -> i256 {
@@ -732,55 +745,68 @@ func private %search(v0.i256, v1.i256, v2.i256, v3.i256) -> @layout_7 {
 
     block3:
         v10.i256 = obj.load v4;
-        v12.i256 = evm_udiv v10 32.i256;
-        v14.@layout_6 = call %locate v0 v0 v12;
-        v16.i256 = extract_value v14 0.i256;
-        v17.i256 = evm_sload v16;
-        v18.i256 = obj.load v4;
-        v19.i256 = evm_umod v18 32.i256;
-        obj.store v5 v19;
-        jump block5;
+        v13.i1 = eq 32.i256 0.i256;
+        br v13 block12 block13;
 
     block4:
-        v20.@layout_7 = enum.make @layout_7 #variant_0;
-        return v20;
+        v26.@layout_7 = enum.make @layout_7 #variant_0;
+        return v26;
 
     block5:
-        v21.i256 = obj.load v5;
-        v22.i1 = lt v21 32.i256;
-        br v22 block8 block7;
+        v27.i256 = obj.load v5;
+        v28.i1 = lt v27 32.i256;
+        br v28 block8 block7;
 
     block6:
-        v23.i256 = obj.load v5;
-        v25.i256 = mul v23 8.i256;
-        v27.i256 = shr v25 v17;
-        v29.i256 = and v27 255.i256;
-        v31.i1 = eq v29 v1;
-        br v31 block9 block10;
+        v29.i256 = obj.load v5;
+        v31.i256 = mul v29 8.i256;
+        v33.i256 = shr v31 v22;
+        v35.i256 = and v33 255.i256;
+        v37.i1 = eq v35 v1;
+        br v37 block9 block10;
 
     block7:
         jump block2;
 
     block8:
-        v32.i256 = obj.load v4;
-        v34.i1 = lt v32 v3;
-        br v34 block6 block7;
+        v38.i256 = obj.load v4;
+        v40.i1 = lt v38 v3;
+        br v40 block6 block7;
 
     block9:
-        v35.i256 = obj.load v4;
-        v36.@layout_7 = enum.make @layout_7 #variant_1 v35;
-        return v36;
+        v41.i256 = obj.load v4;
+        v42.@layout_7 = enum.make @layout_7 #variant_1 v41;
+        return v42;
 
     block10:
         jump block11;
 
     block11:
-        v38.i256 = obj.load v5;
-        v39.i256 = add v38 1.i256;
-        obj.store v5 v39;
-        v40.i256 = obj.load v4;
-        v41.i256 = add v40 1.i256;
-        obj.store v4 v41;
+        v44.i256 = obj.load v5;
+        v45.i256 = add v44 1.i256;
+        obj.store v5 v45;
+        v46.i256 = obj.load v4;
+        v47.i256 = add v46 1.i256;
+        obj.store v4 v47;
+        jump block5;
+
+    block12:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 18.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block13:
+        v18.i256 = evm_udiv v10 32.i256;
+        v20.@layout_6 = call %locate v0 v0 v18;
+        v21.i256 = extract_value v20 0.i256;
+        v22.i256 = evm_sload v21;
+        v23.i256 = obj.load v4;
+        v24.i1 = eq 32.i256 0.i256;
+        br v24 block12 block14;
+
+    block14:
+        v25.i256 = evm_umod v23 32.i256;
+        obj.store v5 v25;
         jump block5;
 }
 
@@ -813,19 +839,32 @@ func inline(always) private %set(v0.i256, v1.i256, v2.i256) {
         jump block1;
 
     block1:
-        v5.i256 = evm_umod v1 32.i256;
-        v7.i256 = mul v5 8.i256;
-        v9.i256 = shl v7 255.i256;
-        v10.i256 = evm_udiv v1 32.i256;
-        v12.@layout_6 = call %locate v0 v0 v10;
-        v14.i256 = extract_value v12 0.i256;
-        v15.i256 = evm_sload v14;
-        v17.i256 = xor -1.i256 v9;
-        v18.i256 = and v15 v17;
-        v20.i256 = and v2 255.i256;
-        v21.i256 = shl v7 v20;
-        v22.i256 = or v18 v21;
-        evm_sstore v14 v22;
+        v6.i1 = eq 32.i256 0.i256;
+        br v6 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 18.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        v11.i256 = evm_umod v1 32.i256;
+        v13.i256 = mul v11 8.i256;
+        v15.i256 = shl v13 255.i256;
+        v17.i1 = eq 32.i256 0.i256;
+        br v17 block2 block4;
+
+    block4:
+        v18.i256 = evm_udiv v1 32.i256;
+        v20.@layout_6 = call %locate v0 v0 v18;
+        v21.i256 = extract_value v20 0.i256;
+        v22.i256 = evm_sload v21;
+        v25.i256 = xor -1.i256 v15;
+        v26.i256 = and v22 v25;
+        v28.i256 = and v2 255.i256;
+        v30.i256 = shl v13 v28;
+        v31.i256 = or v26 v30;
+        evm_sstore v21 v31;
         return;
 }
 
