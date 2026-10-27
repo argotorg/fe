@@ -1622,8 +1622,7 @@ fn const_int_error<'db>(fault: PrimitiveFault, expr: ExprId) -> ConstIntError<'d
         PrimitiveFault::ArithmeticOverflow => ConstIntError::Overflow(expr),
         PrimitiveFault::DivisionByZero => ConstIntError::DivisionByZero(expr),
         PrimitiveFault::NegativeExponent => ConstIntError::NegativeExponent(expr),
-        PrimitiveFault::InvalidPowerExponent
-        | PrimitiveFault::OutsideSupportedSubset
+        PrimitiveFault::OutsideSupportedSubset
         | PrimitiveFault::InvalidCast
         | PrimitiveFault::UnsupportedCast => ConstIntError::NotIntExpr,
     }

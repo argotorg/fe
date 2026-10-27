@@ -27,6 +27,7 @@ use crate::{
             enum_const, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
             int_const, int_in_range, int_ty_shape, normalize_int_to_shape, runtime_size_bytes,
             sem_const_eq, sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
+            wrapping_pow,
         },
         ty::{
             const_check::const_effects_supported,
@@ -733,10 +734,6 @@ fn u256_from_bigint(value: &BigInt) -> U256 {
     U256::from_be_bytes(out)
 }
 
-fn biguint_from_u256(value: U256) -> BigUint {
-    BigUint::from_bytes_be(&value.to_be_bytes::<32>())
-}
-
 fn bigint_from_u256(value: U256) -> BigInt {
     BigInt::from_bytes_be(Sign::Plus, &value.to_be_bytes::<32>())
 }
@@ -799,10 +796,6 @@ pub(super) fn primitive_error<'db>(
         PrimitiveFault::ArithmeticOverflow => CtfeError::ArithmeticOverflow { origin },
         PrimitiveFault::DivisionByZero => CtfeError::DivisionByZero { origin },
         PrimitiveFault::NegativeExponent => CtfeError::NegativeExponent { origin },
-        PrimitiveFault::InvalidPowerExponent => CtfeError::InvalidOperation {
-            origin,
-            message: "invalid power exponent".into(),
-        },
         PrimitiveFault::UnsupportedCast => CtfeError::NotConstEvaluable { origin },
         PrimitiveFault::InvalidCast => CtfeError::InvalidOperation {
             origin,
@@ -2002,7 +1995,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             }
             ArithBinOp::Div => lhs / rhs,
             ArithBinOp::Rem => lhs % rhs,
-            ArithBinOp::Pow => self.wrapping_pow(result_ty, &lhs, &rhs, origin)?,
+            ArithBinOp::Pow => wrapping_pow(self.db, result_ty, &lhs, &rhs)
+                .map_err(|fault| primitive_error(origin, fault))?,
             ArithBinOp::LShift => self.wrapping_shift(result_ty, lhs, rhs, true, origin)?,
             ArithBinOp::RShift => self.wrapping_shift(result_ty, lhs, rhs, false, origin)?,
             ArithBinOp::BitAnd => self.bitwise(result_ty, lhs, rhs, |lhs, rhs| lhs & rhs)?,
@@ -2892,36 +2886,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             }
         }
         Ok(acc)
-    }
-
-    fn wrapping_pow(
-        &self,
-        result_ty: TyId<'db>,
-        lhs: &BigInt,
-        rhs: &BigInt,
-        origin: SemOrigin<'db>,
-    ) -> Result<BigInt, CtfeError<'db>> {
-        let Some((bits, _)) = int_ty_shape(self.db, result_ty) else {
-            return Err(CtfeError::NotConstEvaluable { origin });
-        };
-        if bits == 0 {
-            return Ok(BigInt::zero());
-        }
-        let modulus = BigUint::one() << usize::from(bits);
-        let base = biguint_from_u256(u256_from_bigint(&normalize_int_to_shape(
-            lhs.clone(),
-            bits,
-            false,
-        )));
-        let exp = biguint_from_u256(u256_from_bigint(&normalize_int_to_shape(
-            rhs.clone(),
-            bits,
-            false,
-        )));
-        Ok(BigInt::from_biguint(
-            Sign::Plus,
-            base.modpow(&exp, &modulus),
-        ))
     }
 
     fn wrapping_shift(

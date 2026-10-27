@@ -19,7 +19,7 @@ pub use outcome::{
 };
 pub(crate) use primitive::{
     PrimitiveFault, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
-    int_in_range,
+    int_in_range, wrapping_pow,
 };
 pub use request::{
     ConstComputationId, ConstDesc, ConstEntry, ConstRepr, ConstUsePolicy, VerifiedConstValueId,

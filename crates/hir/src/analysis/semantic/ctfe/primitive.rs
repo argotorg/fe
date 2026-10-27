@@ -1,5 +1,5 @@
-use num_bigint::{BigInt, BigUint, Sign};
-use num_traits::{One, ToPrimitive, Zero};
+use num_bigint::{BigInt, BigUint};
+use num_traits::{One, Zero};
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -16,7 +16,6 @@ pub(crate) enum PrimitiveFault {
     ArithmeticOverflow,
     DivisionByZero,
     NegativeExponent,
-    InvalidPowerExponent,
     OutsideSupportedSubset,
     InvalidCast,
     UnsupportedCast,
@@ -52,12 +51,7 @@ pub(crate) fn execute_source_int_binary(
         }
         BinaryOp::Div(_) => lhs / rhs,
         BinaryOp::Rem => lhs % rhs,
-        BinaryOp::Pow(_) if rhs.sign() == Sign::Minus => {
-            return Err(PrimitiveFault::NegativeExponent);
-        }
-        BinaryOp::Pow(Overflow::Wrapping) => {
-            lhs.pow(rhs.to_u32().ok_or(PrimitiveFault::InvalidPowerExponent)?)
-        }
+        BinaryOp::Pow(Overflow::Wrapping) => wrapping_pow(db, result_ty, &lhs, &rhs)?,
         BinaryOp::Pow(Overflow::Checked) => {
             let Some(mut exp) = rhs.to_biguint() else {
                 return Err(PrimitiveFault::NegativeExponent);
@@ -90,6 +84,24 @@ pub(crate) fn execute_source_int_binary(
         | BinaryOp::Comp(_) => return Err(PrimitiveFault::OutsideSupportedSubset),
     };
     checked_result(db, result_ty, op.overflow(), value)
+}
+
+/// `lhs ** rhs` modulo `2^bits` of `result_ty`, with both operands read as
+/// unsigned words, so a negative exponent is a large one, as at runtime.
+pub(crate) fn wrapping_pow(
+    db: &dyn HirAnalysisDb,
+    result_ty: TyId<'_>,
+    lhs: &BigInt,
+    rhs: &BigInt,
+) -> Result<BigInt, PrimitiveFault> {
+    let (bits, _) = int_ty_shape(db, result_ty).ok_or(PrimitiveFault::OutsideSupportedSubset)?;
+    let word = |value: &BigInt| {
+        normalize_int_to_shape(value.clone(), bits, false)
+            .into_parts()
+            .1
+    };
+    let modulus = BigUint::one() << usize::from(bits);
+    Ok(BigInt::from(word(lhs).modpow(&word(rhs), &modulus)))
 }
 
 /// The integer result of the arithmetic operation `op`, before a wrapping

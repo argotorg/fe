@@ -199,6 +199,26 @@ const fn wrapping_signed_div() -> i8 {
     x / -1
 }
 
+// A wrapping `**` reduces modulo the type's width, with a negative
+// exponent read as an unsigned word, as at runtime.
+#[arithmetic(unchecked)]
+const fn wrapping_pow_huge_exponent() -> u256 {
+    let x: u256 = 2
+    x ** 4294967296
+}
+
+#[arithmetic(unchecked)]
+const fn wrapping_pow_long() -> u256 {
+    let x: u256 = 3
+    x ** 20000000
+}
+
+#[arithmetic(unchecked)]
+const fn wrapping_pow_negative_exponent() -> i8 {
+    let x: i8 = 3
+    x ** -1
+}
+
 #[arithmetic(unchecked)]
 const fn unchecked_div_by_zero() -> u8 {
     let x: u8 = 1
@@ -238,7 +258,16 @@ const fn checked_callee() -> u8 {
         error
     };
 
-    for (name, expected) in [("wrapping_add", "0"), ("wrapping_signed_div", "-128")] {
+    for (name, expected) in [
+        ("wrapping_add", "0"),
+        ("wrapping_signed_div", "-128"),
+        ("wrapping_pow_huge_exponent", "0"),
+        (
+            "wrapping_pow_long",
+            "51833636103163324557804808377416182321812292029380532382974275346112971727873",
+        ),
+        ("wrapping_pow_negative_exponent", "-85"),
+    ] {
         let EvalOutcome::Ready(value) = eval(name) else {
             panic!("{name}: {:?}", eval(name));
         };
