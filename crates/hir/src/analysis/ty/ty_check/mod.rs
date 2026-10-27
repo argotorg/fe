@@ -3048,7 +3048,7 @@ impl<'db> TyChecker<'db> {
             split_reads: Vec::new(),
             diags: Vec::new(),
             final_pass: false,
-            overflow: env.owner().arithmetic_mode(db).into(),
+            overflow: env.owner().scope().arithmetic_mode(db).into(),
             env,
         }
     }

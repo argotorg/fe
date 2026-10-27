@@ -294,3 +294,39 @@ const fn checked_callee() -> u8 {
         );
     }
 }
+
+#[test]
+fn constant_expressions_take_the_mode_of_their_function() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "lexical_constants.fe".into(),
+        r#"
+const fn pick<const N: u8>() -> u8 { N }
+
+#[arithmetic(unchecked)]
+const fn generic_arg() -> u8 {
+    pick<{ 255 + 1 }>()
+}
+
+// Evaluated by full CTFE rather than the early integer evaluator.
+#[arithmetic(unchecked)]
+const fn generic_arg_block() -> u8 {
+    pick<{
+        let x: u8 = 255
+        x + 2
+    }>()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    for (name, expected) in [("generic_arg", "0"), ("generic_arg_block", "1")] {
+        let owner = BodyOwner::Func(find_func(&db, top_mod, name), None);
+        let value =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let EvalOutcome::Ready(value) = value else {
+            panic!("{name}: {value:?}");
+        };
+        assert_eq!(value.pretty_print(&db), expected, "{name}");
+    }
+}
