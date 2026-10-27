@@ -34,9 +34,9 @@ error[6-0024]: method `index` has incompatible effects
  63 │     fn index(self, _ i: u256) -> ref u256 {
     │        ^^^^^ expected 1 effects, found 0
     │
-    ┌─ src/ops.fe:273:8
+    ┌─ src/ops.fe:283:8
     │
-273 │     fn index(mut? self, _ index: I) -> mut? Self::Output uses E
+283 │     fn index(mut? self, _ index: I) -> mut? Self::Output uses E
     │        ----- trait requires these effects
 
 error[6-0034]: the effect row `E` names itself
