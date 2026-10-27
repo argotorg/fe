@@ -29,7 +29,10 @@ use ingot::evm::ops::revert_empty
 /// const TOPIC0: u256 = keccak((Transfer::SOL_TYPE, "(", Address::SOL_TYPE, ",", u256::SOL_TYPE, ")"))
 /// ```
 ///
-/// Implement this trait for custom types to use them as event fields.
+/// Implement this trait for custom types to use them as event fields. For
+/// structs with hand-written ABI codecs, a canonical scalar or array name also
+/// defines their `msg` selector and JSON ABI type. Tuple names must match the
+/// struct's field encoding; `#[abi]` records supply that tuple automatically.
 pub trait SolCompat {
     type S: AsBytes
     const SOL_TYPE: Self::S

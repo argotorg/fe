@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: MIT
+// An unvalidated Solidity calldata address word. Keep the full ABI word until
+// Solidity would consume the field; std::evm::Address is always canonical.
+use core::abi::{AbiSize, AbiSpan, AbiDecoder, ByteInput, Decode, Encode, AbiFrame}
+use std::abi::{Sol, SolCompat}
+use std::evm::Address
+
+pub struct AddressWord { value: u256 }
+impl Copy for AddressWord {}
+impl AddressWord {
+    pub fn from_address(_ address: Address) -> Self { Self { value: address.word() } }
+    pub fn word(self) -> u256 { self.value }
+}
+impl SolCompat for AddressWord {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "address"
+}
+impl AbiSize for AddressWord {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl AbiSpan<Sol> for AddressWord {
+    fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }
+}
+impl Decode<Sol> for AddressWord {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Self { value: d.read_word(input) }
+    }
+}
+impl Encode<Sol> for AddressWord {
+    fn encode(own self, _ out: AbiFrame) { out.store_word(at: 0, value: self.value) }
+}
+
+use std::abi::sol
+use std::evm::Evm
+
+#[abi]
+pub struct Request {
+    pub account: AddressWord,
+    pub count: u256,
+}
+
+pub msg WrapperMsg {
+    #[selector = sol("echo(address)")]
+    Echo { value: AddressWord } -> AddressWord,
+    #[selector = sol("record((address,uint256))")]
+    Record { value: Request } -> Request,
+    #[selector = sol("array(address[2])")]
+    Array { values: [AddressWord; 2] } -> [AddressWord; 2],
+}
+
+// The calldata words use the same wire shape; this sends a dirty address word.
+pub msg RawMsg {
+    #[selector = 0x2ffdbf1a]
+    Echo { value: u256 } -> u256,
+}
+
+pub contract Wrapper {
+    recv WrapperMsg {
+        Echo { value } -> AddressWord { value }
+        Record { value } -> Request { value }
+        Array { values } -> [AddressWord; 2] { values }
+    }
+}
+
+#[test]
+fn scalar_struct_and_nested_records_round_trip() uses (evm: mut Evm) {
+    let target = evm.create2<Wrapper>(value: 0, args: (), salt: 0)
+    let address = Address::new(0x1234)
+    let scalar = evm.call(addr: target, gas: 1000000, value: 0,
+        message: WrapperMsg::Echo { value: AddressWord::from_address(address) })
+    assert!(scalar.word() == address.word())
+    let record = evm.call(addr: target, gas: 1000000, value: 0,
+        message: WrapperMsg::Record { value: Request {
+            account: AddressWord::from_address(address), count: 9,
+        } })
+    assert!(record.account.word() == address.word() && record.count == 9)
+    let values = evm.call(addr: target, gas: 1000000, value: 0,
+        message: WrapperMsg::Array { values: [AddressWord::from_address(address), AddressWord::from_address(Address::zero())] })
+    assert!(values[0].word() == address.word() && values[1].word() == 0)
+}
+
+#[test]
+fn custom_codec_preserves_unvalidated_word() uses (evm: mut Evm) {
+    assert!(<WrapperMsg::Echo as core::message::MsgVariant<Sol>>::SELECTOR == <RawMsg::Echo as core::message::MsgVariant<Sol>>::SELECTOR)
+    let target = evm.create2<Wrapper>(value: 0, args: (), salt: 0)
+    let dirty: u256 = 1 << 200
+    let result = evm.call(addr: target, gas: 1000000, value: 0,
+        message: RawMsg::Echo { value: dirty })
+    assert!(result == dirty)
+}
