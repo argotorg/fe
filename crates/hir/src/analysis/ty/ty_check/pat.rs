@@ -19,7 +19,7 @@ use crate::analysis::{
     },
     semantic::{
         EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
-        instance::resolve_semantic_const_ref,
+        instance::resolve_semantic_const_ref, normalize_int_to_shape,
     },
     ty::adt_def::instantiate_adt_field_shape,
     ty::{
@@ -253,11 +253,12 @@ impl<'db> TyChecker<'db> {
                     value: SemConstScalar::Int { value },
                     ..
                 } => {
-                    let (_, bytes) = value.to_bytes_be();
-                    LitKind::Int(crate::hir_def::IntegerId::new(
-                        self.db,
-                        num_bigint::BigUint::from_bytes_be(&bytes),
-                    ))
+                    // A literal holds an unsigned integer, so a negative value
+                    // is held as its two's complement in 256 bits, the widest
+                    // integer type. Lowering reads it at the matched type's
+                    // width.
+                    let (_, bits) = normalize_int_to_shape(value.clone(), 256, false).into_parts();
+                    LitKind::Int(IntegerId::new(self.db, bits))
                 }
                 SemConstValue::Scalar {
                     value: SemConstScalar::Bool(flag),
