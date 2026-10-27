@@ -78,6 +78,11 @@ fn literal_typed_late() -> u8 {
     z += 1
     z ** 2
 }
+
+fn bit_not_typed_late() -> u8 {
+    let a = 5
+    !a | ~a
+}
 "#,
     );
     let (top_mod, _) = db.top_mod(file);
@@ -112,6 +117,9 @@ fn literal_typed_late() -> u8 {
         ]
     );
     assert!(calls.is_empty(), "{calls:?}");
+
+    let (_, unary, _) = operations(&db, top_mod, "bit_not_typed_late");
+    assert_eq!(unary, [UnaryOp::BitNot, UnaryOp::BitNot]);
 }
 
 #[test]

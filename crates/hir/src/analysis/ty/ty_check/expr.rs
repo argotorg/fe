@@ -1003,13 +1003,14 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if prop.ty.is_integral_var(self.db) && matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
+        if prop.ty.is_integral_var(self.db)
+            && matches!(op, UnOp::Plus | UnOp::Minus | UnOp::Not | UnOp::BitNot)
         {
             if *op == UnOp::Plus {
                 return prop;
             }
-            // Every integer type has `~`. `-` needs a signed type, which is
-            // checked once the operand's type is known.
+            // Every integer type has `!` and `~`. `-` needs a signed type,
+            // which is checked once the operand's type is known.
             let builtin = if *op == UnOp::Minus {
                 self.env
                     .register_pending_negation(PendingNegation { expr, inner: *lhs });
