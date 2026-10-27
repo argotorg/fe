@@ -1911,23 +1911,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 }
                 Ok(CtfeConstValue::int(self.db, result_ty, value))
             }
-            NumericExternIntrinsic::WrappingNeg => {
-                let [value] = args else {
-                    return Err(CtfeError::NotConstEvaluable { origin });
-                };
-                if let Some(word) = self.expect_matching_int_word(value, result_ty, origin)? {
-                    return Ok(CtfeConstValue::int_word(
-                        self.db,
-                        result_ty,
-                        word.wrapping_neg(),
-                    ));
-                }
-                Ok(CtfeConstValue::int(
-                    self.db,
-                    result_ty,
-                    -self.expect_int(value.clone(), origin)?,
-                ))
-            }
             NumericExternIntrinsic::BitNot => {
                 let [value] = args else {
                     return Err(CtfeError::NotConstEvaluable { origin });

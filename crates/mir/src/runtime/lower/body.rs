@@ -3549,13 +3549,6 @@ impl<'db> RmirEmitter<'db> {
                     value: *value,
                 }
             }
-            "neg" => {
-                let [value] = args else { return None };
-                RExpr::Unary {
-                    op: UnOp::Minus,
-                    value: *value,
-                }
-            }
             _ => return None,
         })
     }

@@ -275,7 +275,6 @@ pub(crate) enum NumericExternIntrinsic {
     Comparison(CompBinOp),
     BoolBinary(ArithBinOp),
     CheckedNeg,
-    WrappingNeg,
     BitNot,
     BoolNot,
 }
@@ -389,8 +388,6 @@ pub(crate) fn numeric_extern_intrinsic(name: &str) -> Option<NumericExternIntrin
                 NumericExternIntrinsic::Comparison(CompBinOp::Gt)
             } else if suffix("__ge_").is_some() {
                 NumericExternIntrinsic::Comparison(CompBinOp::GtEq)
-            } else if suffix("__neg_").is_some() {
-                NumericExternIntrinsic::WrappingNeg
             } else if suffix("__bitnot_").is_some() {
                 NumericExternIntrinsic::BitNot
             } else {
