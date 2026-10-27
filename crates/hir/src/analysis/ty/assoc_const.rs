@@ -85,7 +85,7 @@ impl<'db> TyFoldable<'db> for AssocConstUse<'db> {
     {
         Self {
             origin_scope: self.origin_scope,
-            assumptions: self.assumptions.fold_with(db, folder),
+            assumptions: folder.fold_const_env(db, self.assumptions),
             inst: self.inst.fold_with(db, folder),
             name: self.name,
         }
@@ -170,7 +170,7 @@ impl<'db> TyFoldable<'db> for InherentConstUse<'db> {
     {
         Self {
             origin_scope: self.origin_scope,
-            assumptions: self.assumptions.fold_with(db, folder),
+            assumptions: folder.fold_const_env(db, self.assumptions),
             impl_: self.impl_,
             receiver_ty: self.receiver_ty.fold_with(db, folder),
             name: self.name,

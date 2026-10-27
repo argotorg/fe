@@ -66,6 +66,19 @@ pub trait TyFolder<'db> {
         capture.fold_ranges(db, self)
     }
 
+    /// The assumptions a const use or instance is solved under. They only
+    /// decide how evaluation finds the constant, not what it depends on.
+    fn fold_const_env(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        assumptions: PredicateListId<'db>,
+    ) -> PredicateListId<'db>
+    where
+        Self: Sized,
+    {
+        assumptions.fold_with(db, self)
+    }
+
     fn fold_ty_app(
         &mut self,
         db: &'db dyn HirAnalysisDb,
@@ -299,7 +312,7 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
             ImplEnv::new(
                 db,
                 folder.fold_scope(env.normalization_scope(db)),
-                env.assumptions(db).fold_with(db, folder),
+                folder.fold_const_env(db, env.assumptions(db)),
                 env.witnesses(db).clone().fold_with(db, folder),
             ),
             self.evidence(db).fold_with(db, folder),

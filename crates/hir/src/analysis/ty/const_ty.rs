@@ -16,7 +16,7 @@ use super::{
     diagnostics::{BodyDiag, FuncBodyDiag},
     evidence::EvidenceList,
     fold::{TyFoldable, TyFolder},
-    generic_defaults::DefaultApplication,
+    generic_defaults::{DefaultApplication, default_param_of_body},
     normalize::{normalize_ty, normalize_with_trait_evidence},
     subst::substitute_complete,
     trait_def::{
@@ -50,7 +50,7 @@ use crate::analysis::{
     ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
 };
 use crate::hir_def::{CallableDef, ItemKind, attr::ArithmeticMode, scope_graph::ScopeId};
-use common::indexmap::IndexMap;
+use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,7 +128,6 @@ pub(crate) struct LoweringContext<'db> {
     /// The impl whose associated type this lowering lowers: there `Self::A`
     /// is the impl's own binding of `A`.
     impl_assoc_type: Option<ImplTrait<'db>>,
-    default_capture: Option<(GenericParamOwner<'db>, SourceParamIndex)>,
     /// Every path segment this lowering resolved, in resolution order, when
     /// the caller asked for them (`recording_resolutions`).
     resolutions: Option<std::cell::RefCell<Vec<(PathId<'db>, PathRes<'db>)>>>,
@@ -153,7 +152,6 @@ impl<'db> LoweringContext<'db> {
         Self {
             const_bodies,
             impl_assoc_type: None,
-            default_capture: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
         }
@@ -203,19 +201,6 @@ impl<'db> LoweringContext<'db> {
 
     pub(crate) fn const_bodies(&self) -> ConstBodyLowering {
         self.const_bodies
-    }
-
-    pub(crate) fn with_default_capture(
-        mut self,
-        owner: GenericParamOwner<'db>,
-        param_idx: SourceParamIndex,
-    ) -> Self {
-        self.default_capture = Some((owner, param_idx));
-        self
-    }
-
-    pub(crate) fn default_capture(&self) -> Option<(GenericParamOwner<'db>, SourceParamIndex)> {
-        self.default_capture
     }
 }
 
@@ -1819,32 +1804,6 @@ pub(super) fn try_eval_const_int_expr<'db>(
     .ok()
 }
 
-/// A default's capture contains only parameters available before that default.
-/// Its declaration assumptions may still mention the current or later
-/// parameters; those predicates cannot justify evaluating the default.
-fn specialize_available_const_assumptions<'db>(
-    db: &'db dyn HirAnalysisDb,
-    assumptions: PredicateListId<'db>,
-    subst: Option<&CompleteSubst<'db>>,
-) -> PredicateListId<'db> {
-    let Some(subst) = subst else {
-        return assumptions;
-    };
-    let predicates: Vec<_> = assumptions
-        .list(db)
-        .iter()
-        .copied()
-        .filter_map(
-            |predicate| match substitute_complete(db, predicate, subst) {
-                Ok(predicate) => Some(predicate),
-                Err(SubstError::MissingArgument { .. }) => None,
-                Err(error) => panic!("invalid const assumption capture: {error:?}"),
-            },
-        )
-        .collect();
-    PredicateListId::new(db, predicates)
-}
-
 #[salsa::tracked(returns(copy), cycle_initial=evaluate_const_ty_cycle_initial)]
 pub(crate) fn evaluate_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -2026,8 +1985,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         inst.mode(db),
                     );
                     let inst = capture.specialize(db, inst);
-                    let assumptions =
-                        specialize_available_const_assumptions(db, assumptions, capture_subst());
+                    let assumptions = capture.specialize(db, assumptions);
 
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let expr = ConstExprId::new(
@@ -2060,8 +2018,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                 }
                 PathRes::InherentConst(recv_ty, impl_, name) => {
                     let recv_ty = capture.specialize(db, recv_ty);
-                    let assumptions =
-                        specialize_available_const_assumptions(db, assumptions, capture_subst());
+                    let assumptions = capture.specialize(db, assumptions);
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
                             use_scope,
@@ -2387,7 +2344,7 @@ pub(crate) fn const_body_assumptions<'db>(
         parent_item = parent.scope().parent_item(db);
     }
 
-    match parent_item {
+    let assumptions = match parent_item {
         // A const body has no mode: a `mut?` bound is plain in it.
         Some(ItemKind::Func(func)) => {
             crate::semantic::func_body_assumptions(db, func).at_mode(db, None)
@@ -2402,7 +2359,54 @@ pub(crate) fn const_body_assumptions<'db>(
             || PredicateListId::empty_list(db),
             |owner| collect_constraints(db, owner).instantiate_identity(),
         ),
+    };
+
+    if let ScopeId::Item(ItemKind::Body(body)) = scope
+        && let Some(domain) = ConstCaptureDomain::of_body(db, body)
+        && domain.before.is_some()
+        && let Some(prefix) = ConstCaptureEnv::Identity(domain).complete(db)
+    {
+        project_assumptions(db, assumptions, &prefix)
+    } else {
+        assumptions
     }
+}
+
+/// What `assumptions` say about the parameters `prefix` covers, for the body
+/// of a default, which is evaluated with only those parameters. It can't
+/// assume a predicate on its own or a later parameter, such as a trait's
+/// `Self: Trait<.., L>` in the default of `L`, but it keeps what such a
+/// predicate implies of the parameters before it: a supertrait, or the trait
+/// itself where only an associated type binding names a later one.
+fn project_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assumptions: PredicateListId<'db>,
+    prefix: &CompleteSubst<'db>,
+) -> PredicateListId<'db> {
+    let expressible = |ty: TyId<'db>| {
+        !matches!(
+            substitute_complete(db, ty, prefix),
+            Err(SubstError::MissingArgument { .. })
+        )
+    };
+    let predicates: IndexSet<_> = assumptions
+        .extend_all_bounds(db)
+        .list(db)
+        .iter()
+        .filter(|predicate| predicate.args(db).iter().all(|&arg| expressible(arg)))
+        .map(|predicate| {
+            let mut bindings = predicate.assoc_type_bindings(db).clone();
+            bindings.retain(|_, ty| expressible(*ty));
+            TraitInstId::new(
+                db,
+                predicate.def(db),
+                predicate.args(db).clone(),
+                bindings,
+                predicate.mode(db),
+            )
+        })
+        .collect();
+    PredicateListId::new(db, predicates.into_iter().collect::<Vec<_>>())
 }
 
 fn evaluate_const_ty_cycle_initial<'db>(
@@ -2913,7 +2917,7 @@ impl<'db> ConstTyId<'db> {
             ty,
             template_ty: ty,
             const_def,
-            capture: ConstCaptureEnv::identity_for_body(db, body, None),
+            capture: ConstCaptureEnv::identity_for_body(db, body),
             policy: UnevaluatedConstPolicy::Evaluate,
         };
         Self::new(db, data)
@@ -3077,6 +3081,18 @@ impl<'db> ConstCaptureDomain<'db> {
         }
     }
 
+    /// The parameters `body` can read: those before the default it is written
+    /// in, or else all of its owner's. Lowering a bound asks this for the
+    /// bound's const bodies, so it depends only on the body's source position,
+    /// and the bounds a body assumes are derived from it.
+    fn of_body(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<Self> {
+        let owner = lexical_const_body_owner(db, body)?;
+        Some(match default_param_of_body(db, owner, body) {
+            Some(index) => Self::before(owner, ParamBasis::Full, index),
+            None => Self::full(owner, ParamBasis::Full),
+        })
+    }
+
     fn materialize(self, db: &'db dyn HirAnalysisDb) -> ParamDomainId<'db> {
         let schema = param_schema(db, self.owner, self.basis);
         self.before.map_or_else(
@@ -3177,22 +3193,8 @@ impl<'db> ConstCaptureEnv<'db> {
         Self::Bound(subst)
     }
 
-    pub(crate) fn identity_for_body(
-        db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
-        context: Option<&LoweringContext<'db>>,
-    ) -> Self {
-        if let Some((owner, param_idx)) = context.and_then(LoweringContext::default_capture) {
-            return Self::Identity(ConstCaptureDomain::before(
-                owner,
-                ParamBasis::Full,
-                param_idx,
-            ));
-        }
-        let Some(owner) = lexical_const_body_owner(db, body) else {
-            return Self::Empty;
-        };
-        Self::Identity(ConstCaptureDomain::full(owner, ParamBasis::Full))
+    pub(crate) fn identity_for_body(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Self {
+        ConstCaptureDomain::of_body(db, body).map_or(Self::Empty, Self::Identity)
     }
 
     pub(crate) fn bound(

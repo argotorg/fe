@@ -1,0 +1,244 @@
+// A const body nested in a generic parameter's default reads the parameters
+// before that default, as the default itself does.
+const fn add_one<const M: usize>() -> usize {
+    M + 1
+}
+
+const fn len<T, const M: usize>(_ a: [T; M]) -> usize {
+    M
+}
+
+struct InLet<const N: usize, const L: usize = {
+    let _a: [u8; { N + 1 }] = [0; N + 1]
+    N + 1
+}> {
+    x: [u8; L],
+}
+
+struct InGenericArg<const N: usize, const L: usize = { add_one<{ N + 1 }>() }> {
+    x: [u8; L],
+}
+
+// The nested length decides the default's value.
+struct ValueFromNested<const N: usize, const L: usize = {
+    let a: [u8; { N * 2 }] = [0; N * 2]
+    len(a) + 1
+}> {
+    x: [u8; L],
+}
+
+// A parameter after the default stays out of its reach.
+struct LaterParam<const N: usize, const L: usize = {
+    let _a: [u8; { N + 1 }] = [0; N + 1]
+    N + 1
+}, T = u8> {
+    x: [T; L],
+}
+
+struct InTypeDefault<const N: usize, T = [u8; {
+    let _a: [u8; { N + 1 }] = [0; N + 1]
+    N + 1
+}]> {
+    x: T,
+}
+
+trait Width {
+    const W: usize
+}
+
+// The nested body reads a type parameter's bound.
+struct FromTypeParam<T: Width, const L: usize = {
+    let _a: [u8; { T::W + 1 }] = [0; T::W + 1]
+    T::W + 1
+}> {
+    x: [u8; L],
+    t: T,
+}
+
+const fn zeros<const M: usize>() -> [u8; M] {
+    [0; M]
+}
+
+struct DoublyNested<const N: usize, const L: usize = {
+    let _a: [u8; { add_one<{ N + 1 }>() }] = zeros()
+    N + 2
+}> {
+    x: [u8; L],
+}
+
+enum InEnum<const N: usize, const L: usize = {
+    let _a: [u8; { N + 1 }] = [0; N + 1]
+    N + 1
+}> {
+    V([u8; L]),
+}
+
+type InAlias<const N: usize, const L: usize = {
+    let _a: [u8; { N + 1 }] = [0; N + 1]
+    N + 1
+}> = [u8; L]
+
+fn in_fn<const N: usize, const L: usize = {
+    let _a: [u8; { N + 1 }] = [0; N + 1]
+    N + 1
+}>() -> usize {
+    L
+}
+
+struct W<T> {
+    t: T,
+}
+
+impl<T> W<T> {
+    fn in_method<const N: usize, const L: usize = {
+        let _a: [u8; { N + 1 }] = [0; N + 1]
+        N + 1
+    }>(self) -> usize {
+        L
+    }
+}
+
+trait InTraitMethod {
+    fn in_trait_method<const N: usize, const L: usize = {
+        let _a: [u8; { N + 1 }] = [0; N + 1]
+        N + 1
+    }>(self) -> usize {
+        L
+    }
+}
+
+// The trait's own `Self: InTrait<N, L>` names the defaulted parameter.
+trait InTrait<const N: usize, const L: usize = {
+    let _a: [u8; { N + 1 }] = [0; N + 1]
+    N + 1
+}> {
+    fn in_trait(self) -> usize {
+        L
+    }
+}
+
+fn in_trait_of<T: InTrait<1>>(_ t: T) -> usize {
+    t.in_trait()
+}
+
+trait InTraitTypeDefault<const N: usize, T = [u8; { N + 1 }]> {
+    fn in_trait_type_default(self) -> usize {
+        N
+    }
+}
+
+fn in_trait_type_default_of<T: InTraitTypeDefault<1>>(_ t: T) -> usize {
+    t.in_trait_type_default()
+}
+
+trait HasItem {
+    type Item
+    const W: usize
+}
+
+const fn item_width<T: HasItem>() -> usize {
+    T::W
+}
+
+// A bound with a binding on a later parameter still provides its trait.
+struct UnderLaterBinding<T, const N: usize = {
+    let _a: [u8; { item_width<T>() + 1 }] = [0; item_width<T>() + 1]
+    item_width<T>()
+}, U = u8>
+where
+    T: HasItem<Item = U>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+// Parameters of the trait and impl around a method's default.
+trait OuterTrait<const A: usize> {
+    fn outer_trait<const N: usize = {
+        let _a: [u8; { A + 1 }] = [0; A + 1]
+        A + 1
+    }>(self) -> usize {
+        N
+    }
+}
+
+struct OuterImpl<const A: usize> {}
+
+impl<const A: usize> OuterImpl<A> {
+    fn outer_impl<const N: usize = {
+        let _a: [u8; { A + 1 }] = [0; A + 1]
+        A + 1
+    }>(self) -> usize {
+        N
+    }
+}
+
+struct S {}
+
+impl InTraitMethod for S {}
+
+impl InTrait<1> for S {}
+
+impl InTraitTypeDefault<1> for S {}
+
+impl HasItem for S {
+    type Item = u8
+    const W: usize = 4
+}
+
+impl OuterTrait<2> for S {}
+
+impl Width for S {
+    const W: usize = 3
+}
+
+#[test]
+fn test_bodies_nested_in_const_defaults() {
+    let in_let = InLet<1> { x: [0; 2] }
+    assert(in_let.x[1] == 0)
+    let in_generic_arg = InGenericArg<1> { x: [0; 3] }
+    assert(in_generic_arg.x[2] == 0)
+    let value = ValueFromNested<3> { x: [0; 7] }
+    assert(value.x[6] == 0)
+    let later = LaterParam<1> { x: [0; 2] }
+    assert(later.x[1] == 0)
+    let from_type_param = FromTypeParam<S> { x: [0; 4], t: S {} }
+    assert(from_type_param.x[3] == 0)
+    let doubly_nested = DoublyNested<1> { x: [0; 3] }
+    assert(doubly_nested.x[2] == 0)
+}
+
+#[test]
+fn test_bodies_nested_in_a_type_default() {
+    let in_type_default = InTypeDefault<1> { x: [0; 2] }
+    assert(in_type_default.x[1] == 0)
+}
+
+#[test]
+fn test_bodies_nested_in_defaults_of_each_owner() {
+    let in_enum = InEnum<1>::V([0; 2])
+    match in_enum {
+        InEnum::V(a) => assert(a[1] == 0)
+    }
+    let in_alias: InAlias<1> = [0; 2]
+    assert(in_alias[1] == 0)
+    assert(in_fn<1>() == 2)
+    let w = W<u8> { t: 1 }
+    assert(w.in_method<1>() == 2)
+    assert(S {}.in_trait_method<1>() == 2)
+}
+
+#[test]
+fn test_bodies_nested_in_defaults_under_bounds() {
+    assert(in_trait_of(S {}) == 2)
+    assert(in_trait_type_default_of(S {}) == 1)
+    let under_later_binding = UnderLaterBinding<S> { x: [0; 4], t: S {} }
+    assert(under_later_binding.x[3] == 0)
+}
+
+#[test]
+fn test_bodies_nested_in_defaults_of_methods_read_outer_params() {
+    assert(S {}.outer_trait() == 3)
+    let outer_impl = OuterImpl<2> {}
+    assert(outer_impl.outer_impl() == 3)
+}
