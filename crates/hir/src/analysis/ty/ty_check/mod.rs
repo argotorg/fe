@@ -5379,20 +5379,6 @@ impl<'db> TypedBody<'db> {
         self.tables.builtin_ops.get(&expr).copied()
     }
 
-    pub fn builtin_unary_op(&self, expr: ExprId) -> Option<UnaryOp> {
-        match self.builtin_op(expr)? {
-            BuiltinOp::Unary(op) => Some(op),
-            BuiltinOp::Binary(_) => None,
-        }
-    }
-
-    pub fn builtin_binary_op(&self, expr: ExprId) -> Option<BinaryOp> {
-        match self.builtin_op(expr)? {
-            BuiltinOp::Binary(op) => Some(op),
-            BuiltinOp::Unary(_) => None,
-        }
-    }
-
     /// Whether the compound assignment `expr`, `x op= y`, assigns the result
     /// of its operator method, `x = x.wrapping_add(y)`, reading and writing
     /// the place once, rather than calling an `*Assign` method.

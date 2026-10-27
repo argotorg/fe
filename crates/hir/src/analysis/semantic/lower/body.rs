@@ -27,7 +27,7 @@ use crate::{
             normalize::normalize_ty,
             shape::{Shape, SumKind, sum_kind},
             ty_check::{
-                BindingAccess, BodyOwner, CallParam, Callable, CodeRegionIntrinsicKind,
+                BindingAccess, BodyOwner, BuiltinOp, CallParam, Callable, CodeRegionIntrinsicKind,
                 ConstIntrinsicKind, ConstRef, ForLoopStep, LocalBinding, PathReadSemantics,
                 RecordInitLowering, RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
                 constructed_variant, infer_body, transparent_newtype_field_ty,
@@ -1294,10 +1294,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     return value;
                 }
                 let value = self.lower_expr_operand(*inner);
-                let expr = match self.typed_body.builtin_unary_op(expr) {
-                    Some(op) => SExpr::Unary { op, value },
+                let expr = match self.typed_body.builtin_op(expr) {
+                    Some(BuiltinOp::Unary(op)) => SExpr::Unary { op, value },
                     // `+x` is `x`.
                     None => SExpr::Forward(value),
+                    Some(BuiltinOp::Binary(op)) => {
+                        panic!("unary operator {expr:?} has binary operation {op:?}")
+                    }
                 };
                 self.emit_expr_with_origin(origin, ty, expr)
             }
@@ -1980,9 +1983,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// The built-in operation of the binary operator `expr`, which the type
     /// checker records for operands it does not call an operator trait for.
     fn builtin_binary_op(&self, expr: ExprId) -> BinaryOp {
-        self.typed_body
-            .builtin_binary_op(expr)
-            .unwrap_or_else(|| panic!("binary operator {expr:?} has no built-in operation"))
+        match self.typed_body.builtin_op(expr) {
+            Some(BuiltinOp::Binary(op)) => op,
+            op => panic!("binary operator {expr:?} has no built-in binary operation: {op:?}"),
+        }
     }
 
     /// Lowers the call input for a parameter of `mode`. A place passed to a view
