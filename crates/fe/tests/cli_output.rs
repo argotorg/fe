@@ -2840,10 +2840,10 @@ fn test_cli_build_from_metadata_warns_on_compiler_commit_mismatch() {
 
 #[test]
 fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
-    // Two modules in the same ingot each define a contract named `Foo`;
-    // `settings.compilationTarget` records which source file the metadata is
-    // for. The rebuild must scope itself to that module instead of failing on
-    // the ambiguous name.
+    // Two modules in the same ingot each define a contract named `Foo`, so
+    // their artifacts are qualified by module path (`lib__a__Foo`,
+    // `lib__b__Foo`). `settings.compilationTarget` records the source file and
+    // the artifact name; the rebuild must produce the contract of that module.
     let temp = tempdir().expect("tempdir");
     let root = temp.path();
     fs::create_dir_all(root.join("app/src")).expect("create app/src");
@@ -2872,12 +2872,12 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
     assert_eq!(exit_code, 0, "original build failed:\n{output}");
 
     let metadata: Value = serde_json::from_str(
-        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+        &fs::read_to_string(out_dir.join("lib__a__Foo.metadata.json")).expect("read metadata"),
     )
     .expect("parse metadata");
     assert_eq!(
         metadata["settings"]["compilationTarget"],
-        serde_json::json!({ "src/a.fe": "Foo" }),
+        serde_json::json!({ "src/a.fe": "lib__a__Foo" }),
         "metadata must record the defining source file"
     );
 
@@ -2887,7 +2887,7 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
         "build",
         "--from-metadata",
         out_dir
-            .join("Foo.metadata.json")
+            .join("lib__a__Foo.metadata.json")
             .to_str()
             .expect("metadata utf8"),
         "--emit",
@@ -2899,8 +2899,8 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
         exit_code, 0,
         "rebuild must honor the recorded source path:\n{output}"
     );
-    let rebuilt_runtime =
-        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+    let rebuilt_runtime = fs::read_to_string(recon_out.join("lib__a__Foo.runtime.bin"))
+        .expect("read rebuilt runtime.bin");
 
     // The rebuilt bytecode must be the `src/a.fe` contract: it must match a
     // reference build of an identical ingot containing only that module.

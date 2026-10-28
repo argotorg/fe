@@ -70,6 +70,12 @@ pub fn verify_runtime_package<'db>(
         .collect::<FxHashSet<_>>();
     let objects = package.objects(db);
     let object_set = objects.iter().copied().collect::<FxHashSet<_>>();
+    let mut seen_object_names = FxHashSet::default();
+    for &object in objects {
+        if !seen_object_names.insert(object.name(db).clone()) {
+            return Err(VerifyError::DuplicateObjectName(object.name(db).clone()));
+        }
+    }
 
     let mut seen_symbols = FxHashSet::default();
     for function in functions {
@@ -408,7 +414,7 @@ fn verify_resolved_code_region<'db>(
         if region.root(db).instance(db) != expected_entry {
             return Err(VerifyError::InvalidCodeRegion(region.region(db)));
         }
-        let expected_symbol = code_region_symbol(db, region.region(db));
+        let expected_symbol = code_region_symbol(db, region.region(db), source.object());
         if *region.symbol(db) != expected_symbol {
             return Err(VerifyError::InvalidCodeRegion(region.region(db)));
         }

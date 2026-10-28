@@ -3,6 +3,7 @@ pub(crate) mod code_region;
 pub mod ir;
 pub mod layout_utils;
 pub mod lower;
+pub(crate) mod object_name;
 pub(crate) mod package;
 pub mod place;
 pub mod pretty;
@@ -13,6 +14,7 @@ pub(crate) mod synthetic;
 pub use ir::*;
 pub use layout_utils::*;
 pub use lower::*;
+pub use object_name::{IngotContract, ingot_contracts};
 pub(crate) use package::runtime_instance_display_name;
 pub use package::{
     LowerError, build_ingot_module_runtime_package, build_native_executable_package,

@@ -43,6 +43,7 @@ pub enum VerifyError<'db> {
         crate::runtime::RuntimeSectionName,
     ),
     DuplicateRuntimeSymbol(String),
+    DuplicateObjectName(String),
     ContractFieldArgumentCountMismatch {
         contract: Contract<'db>,
         expected: usize,
@@ -119,6 +120,7 @@ impl<'db> VerifyError<'db> {
             | VerifyError::UnknownPackageObject(_)
             | VerifyError::InvalidPackageSection(_, _)
             | VerifyError::DuplicateRuntimeSymbol(_)
+            | VerifyError::DuplicateObjectName(_)
             | VerifyError::ContractFieldArgumentCountMismatch { .. }
             | VerifyError::ContractFieldIdentityMismatch { .. }
             | VerifyError::ContractFieldOwnerMismatch { .. }

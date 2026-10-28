@@ -200,6 +200,7 @@ If `path` is omitted, it defaults to `.`.
 - `src/lib.fe` is treated as the ingot’s root module. If it is missing, the CLI behaves as if an empty `src/lib.fe` existed (a “phantom” root module).
 - Contracts are discovered across the ingot’s entire source set (`src/**/*.fe` top-level modules), not only `src/lib.fe`.
 - By default, **all** discovered contracts are built.
+- Contracts in different modules may share a name. A contract whose name is shared is built under its module path joined with `__`, for example `lib__a__C` for `C` in `src/a.fe`; the ingot's name is added only if the module path is not enough. Contracts whose names are not shared keep their own name. This name is the artifact name used below and by `--contract`.
 
 #### Workspace root target
 
@@ -221,8 +222,9 @@ Workspace member selection:
 ### Contract selection: `--contract <name>`
 
 - For standalone files and ingots:
-  - If `<name>` exists, only that contract is built.
-  - If not found, the build errors and prints “Available contracts:” with a list.
+  - If `<name>` is an artifact name, or the source name of exactly one contract, only that contract is built.
+  - If several contracts have the source name `<name>`, the build errors and lists their artifact names and source files; pick one by artifact name.
+  - If not found, the build errors and prints “Available contracts:” with a list of artifact names.
 - For workspace roots:
   - If **exactly one** workspace member contains the contract, that member is built for that contract.
   - If **zero** members contain the contract, it errors.

@@ -1,6 +1,6 @@
 use hir::{
     analysis::semantic::{ManualContractSection, SemanticCodeRegionRef},
-    hir_def::{Contract, Func, ManualContractRootAttr},
+    hir_def::{Func, ManualContractRootAttr},
 };
 
 use crate::{
@@ -37,21 +37,21 @@ pub(crate) fn runtime_code_region_for_manual_root<'db>(
     ))
 }
 
+/// The symbol under which the code of `region` is embedded. Derived from the
+/// name of the object that holds the region, which is unique in a package, so
+/// that same-named contracts do not share a symbol.
 pub(crate) fn code_region_symbol<'db>(
     db: &'db dyn MirDb,
     region: RuntimeCodeRegion<'db>,
+    object_name: &str,
 ) -> String {
     match region.key(db) {
-        RuntimeCodeRegionKey::ContractInit { contract } => {
-            format!("{}_init", contract_name(db, contract))
-        }
-        RuntimeCodeRegionKey::ContractRuntime { contract } => {
-            format!("{}_runtime", contract_name(db, contract))
-        }
+        RuntimeCodeRegionKey::ContractInit { .. } => format!("{object_name}_init"),
+        RuntimeCodeRegionKey::ContractRuntime { .. } => format!("{object_name}_runtime"),
         RuntimeCodeRegionKey::ManualContractRoot { func } => {
             let metadata = manual_contract_root_metadata(db, func)
                 .expect("manual contract root region should resolve manual contract metadata");
-            manual_contract_section_symbol(&metadata.contract_name, metadata.section)
+            manual_contract_section_symbol(object_name, metadata.section)
         }
     }
 }
@@ -88,7 +88,6 @@ pub(crate) fn code_region_runtime_entry<'db>(
 
 #[derive(Clone)]
 struct ManualContractRootMetadata<'db> {
-    contract_name: String,
     section: ManualContractSection,
     entry: RuntimeInstance<'db>,
 }
@@ -97,14 +96,9 @@ fn manual_contract_root_metadata<'db>(
     db: &'db dyn MirDb,
     func: Func<'db>,
 ) -> Option<ManualContractRootMetadata<'db>> {
-    let (contract_name, section) = match func.manual_contract_root_attr(db)? {
-        ManualContractRootAttr::Init { contract_name } => {
-            (contract_name.data(db).clone(), ManualContractSection::Init)
-        }
-        ManualContractRootAttr::Runtime { contract_name } => (
-            contract_name.data(db).to_string(),
-            ManualContractSection::Runtime,
-        ),
+    let section = match func.manual_contract_root_attr(db)? {
+        ManualContractRootAttr::Init { .. } => ManualContractSection::Init,
+        ManualContractRootAttr::Runtime { .. } => ManualContractSection::Runtime,
         ManualContractRootAttr::Error(_) => return None,
     };
     let entry = manual_contract_root_instance(db, func).unwrap_or_else(|err| {
@@ -116,11 +110,7 @@ fn manual_contract_root_metadata<'db>(
                 .unwrap_or_else(|| "<anonymous>".to_string())
         )
     });
-    Some(ManualContractRootMetadata {
-        contract_name,
-        section,
-        entry,
-    })
+    Some(ManualContractRootMetadata { section, entry })
 }
 
 fn manual_contract_section_symbol(contract_name: &str, section: ManualContractSection) -> String {
@@ -130,14 +120,6 @@ fn manual_contract_section_symbol(contract_name: &str, section: ManualContractSe
             format!("__{}_runtime", sanitize_symbol(contract_name))
         }
     }
-}
-
-fn contract_name<'db>(db: &'db dyn MirDb, contract: Contract<'db>) -> String {
-    contract
-        .name(db)
-        .to_opt()
-        .map(|name| sanitize_symbol(name.data(db)))
-        .unwrap_or_else(|| "contract".to_string())
 }
 
 fn sanitize_symbol(value: &str) -> String {

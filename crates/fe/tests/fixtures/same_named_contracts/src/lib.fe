@@ -1,0 +1,4 @@
+pub msg Get {
+    #[selector = sol("get()")]
+    Get -> u256,
+}
