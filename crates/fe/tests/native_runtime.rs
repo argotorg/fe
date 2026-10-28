@@ -2234,6 +2234,59 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_extern_declarations_of_a_symbol_must_agree() {
+    let temp = tempdir().unwrap();
+    // `u64` and `i64` results are the same C type, so those two declarations
+    // share one import.
+    for (name, source, errors) in [
+        (
+            "agree",
+            "mod a {\n    extern { pub fn clock() -> i64 }\n}\nmod b {\n    extern { pub fn clock() -> u64 }\n}\npub fn main() -> i32 {\n    let ticks = unsafe { b::clock() }\n    if unsafe { a::clock() } < 0 || ticks == 0 { 1 } else { 0 }\n}\n",
+            &[][..],
+        ),
+        (
+            "modules",
+            "mod a {\n    extern { pub fn clock() -> i64 }\n}\nmod b {\n    extern { pub fn clock() -> i32 }\n}\npub fn main() -> i32 {\n    let ticks = unsafe { b::clock() }\n    if unsafe { a::clock() } < 0 || ticks < 0 { 1 } else { 0 }\n}\n",
+            &[
+                "conflicting `extern` declarations of `clock`: ",
+                "`fn clock() -> i64` in `modules::a`",
+                "`fn clock() -> i32` in `modules::b`",
+            ][..],
+        ),
+        (
+            "std",
+            "extern { fn clock() -> i32 }\npub fn main() -> i32 {\n    let ticks = std::native::cpu_clock_ticks()\n    if ticks < 0 || unsafe { clock() } < 0 { 1 } else { 0 }\n}\n",
+            &[
+                "conflicting `extern` declarations of `clock`: ",
+                "`fn clock() -> i64` in `std::native`",
+                "`fn clock() -> i32` in `std`",
+            ][..],
+        ),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let out = temp.path().join(format!("out-{name}"));
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["build", "--backend", "native", "--out-dir"])
+            .arg(&out)
+            .arg(&path)
+            .output()
+            .unwrap();
+        let output = String::from_utf8_lossy(&result.stderr);
+        if errors.is_empty() {
+            assert!(result.status.success(), "{name}: {output}");
+            let run = Command::new(out.join(name)).output().unwrap();
+            assert!(run.status.success(), "{name}: {run:?}");
+        } else {
+            assert!(!result.status.success(), "{name}: {result:?}");
+            for error in errors {
+                assert!(output.contains(error), "{name}: {output}");
+            }
+        }
+    }
+}
+
+#[test]
 fn native_extern_declarations_must_match_runtime_imports() {
     let temp = tempdir().unwrap();
     for (name, declaration, call, error) in [

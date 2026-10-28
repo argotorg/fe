@@ -15,6 +15,7 @@ use std::mem;
 use std::sync::Arc;
 
 use common::InputDb;
+use common::ingot::IngotKind;
 use common::origin::OriginExportKey;
 use common::{compilation::Target, layout::StorageLane};
 use driver::DriverDataBase;
@@ -26,7 +27,10 @@ use hir::{
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
-use mir::runtime::RefKind;
+use mir::runtime::{
+    RefKind,
+    stable_key::{ingot_component_for_scope, module_path_components_for_scope},
+};
 use mir::{
     ArrayLayout, ConstNode, ConstRegionId, ConstScalar, FieldPlacement, IntrinsicArithBinOp,
     Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
@@ -477,11 +481,27 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn declare_functions(&mut self) -> Result<(), LowerError> {
-        for &function in self.package.functions(self.db) {
+        let db = self.db;
+        // Every `extern` declaration of a symbol shares its first one's import.
+        let mut imports = FxHashMap::default();
+        for &function in self.package.functions(db) {
             let signature = self.lower_signature(function)?;
-            let func_ref = self.builder.declare_function(signature).map_err(|err| {
-                LowerError::Internal(format!("failed to declare function: {err}"))
-            })?;
+            let symbol = signature.name().to_string();
+            let external = function.linkage(db) == RuntimeLinkage::External;
+            let func_ref = self
+                .builder
+                .declare_function(signature)
+                .map_err(|err| match imports.get(&symbol).filter(|_| external) {
+                    Some(&first) => LowerError::Unsupported(format!(
+                        "conflicting `extern` declarations of `{symbol}`: {} and {}",
+                        describe_extern(db, first),
+                        describe_extern(db, function),
+                    )),
+                    None => LowerError::Internal(format!("failed to declare function: {err}")),
+                })?;
+            if external {
+                imports.entry(symbol).or_insert(function);
+            }
             self.apply_inline_hint(func_ref, function.inline_hint(self.db));
             self.func_map.insert(function.instance(self.db), func_ref);
         }
@@ -1076,6 +1096,30 @@ fn assign_sonatina_function_symbols<'db>(
         .zip(assign_function_symbols(db, &inputs, reserved))
         .map(|(function, symbol)| (function.instance(db), symbol))
         .collect()
+}
+
+/// An `extern` function's declaration and module, as in "`fn clock() -> i64`
+/// in `std::native`".
+fn describe_extern(db: &DriverDataBase, function: RuntimeFunction<'_>) -> String {
+    let instance = function.instance(db);
+    let func = match instance
+        .key(db)
+        .semantic(db)
+        .map(|semantic| semantic.key(db).owner(db))
+    {
+        Some(BodyOwner::Func(func, _)) => func,
+        _ => return describe_runtime_instance(db, instance),
+    };
+    // A module's path starts at its ingot, except in a standalone file.
+    let mut module = module_path_components_for_scope(db, func.scope());
+    if func.top_mod(db).ingot(db).kind(db) != IngotKind::StandAlone {
+        module[0] = ingot_component_for_scope(db, func.scope());
+    }
+    format!(
+        "`{}` in `{}`",
+        func.pretty_print_prototype(db),
+        module.join("::")
+    )
 }
 
 fn describe_runtime_instance<'db>(
