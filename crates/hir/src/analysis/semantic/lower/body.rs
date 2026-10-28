@@ -1372,14 +1372,27 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             // `x op= y` reads `x` once, after `y`, and writes the operation's
             // result back: a built-in operation, or in unchecked code the
             // wrapping operator method (`x = x.wrapping_add(y)`). Otherwise it
-            // calls the `*Assign` method.
+            // calls the `*Assign` method. The method takes `y` at its
+            // parameter's mode, and `x` as the value read out of the place,
+            // which its `own self` takes.
             Expr::AugAssign(dst, src, _) => {
                 let assigns_call = self.typed_body.assigns_operator_result(expr);
-                if !assigns_call && self.typed_body.semantic_expr_lowering(expr).is_some() {
+                let lowering = self.typed_body.semantic_expr_lowering(expr);
+                if !assigns_call && lowering.is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
                 self.prepare_place_root(*dst);
-                let rhs = self.take_expr_operand(*src);
+                let rhs = match lowering {
+                    Some(SemanticExprLowering::Call { callable }) => {
+                        let mode = callable
+                            .params(self.db)
+                            .and_then(|params| params[1].shape.param_mode())
+                            .expect("a wrapping operator method takes its operand at a mode");
+                        let value = self.lower_callable_argument(*src, callable, mode, false);
+                        SOperand::expr(value, *src)
+                    }
+                    _ => self.take_expr_operand(*src),
+                };
                 // A projection's result is read and written through its
                 // access, as an assignment's target is.
                 let projection = self.typed_body.semantic_expr_lowering(*dst).is_some();

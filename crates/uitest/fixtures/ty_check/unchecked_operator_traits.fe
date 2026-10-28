@@ -49,14 +49,14 @@ impl Mul for Scaled {
 
 impl WrappingMul<i8> for Scaled {
     #[arithmetic(unchecked)]
-    fn wrapping_mul(self, _ other: i8) -> Scaled {
+    fn wrapping_mul(own self, _ other: own i8) -> Scaled {
         Scaled { value: self.value * other }
     }
 }
 
 impl WrappingMul<i16> for Scaled {
     #[arithmetic(unchecked)]
-    fn wrapping_mul(self, _ other: i16) -> Scaled {
+    fn wrapping_mul(own self, _ other: own i16) -> Scaled {
         Scaled { value: self.value * other.downcast_truncate() }
     }
 }

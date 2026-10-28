@@ -39,30 +39,31 @@ pub trait Pow<T = Self> {
 // Wrapping arithmetic. In unchecked code, `a + b`, `a - b`, `a * b`, `a ** b`
 // and `-a` on a non-primitive operand whose type implements these traits
 // call them, and `a += b` is `a = a.wrapping_add(b)`. On other types they
-// call the checked traits.
+// call the checked traits. Like those, they take their operands `own`, so an
+// operator moves the same operands in either mode.
 pub trait WrappingAdd<T = Self> {
     type Output = Self
-    fn wrapping_add(self, _ other: T) -> Self::Output
+    fn wrapping_add(own self, _ other: own T) -> Self::Output
 }
 
 pub trait WrappingSub<T = Self> {
     type Output = Self
-    fn wrapping_sub(self, _ other: T) -> Self::Output
+    fn wrapping_sub(own self, _ other: own T) -> Self::Output
 }
 
 pub trait WrappingMul<T = Self> {
     type Output = Self
-    fn wrapping_mul(self, _ other: T) -> Self::Output
+    fn wrapping_mul(own self, _ other: own T) -> Self::Output
 }
 
 pub trait WrappingPow<T = Self> {
     type Output = Self
-    fn wrapping_pow(self, _ other: T) -> Self::Output
+    fn wrapping_pow(own self, _ other: own T) -> Self::Output
 }
 
 pub trait WrappingNeg {
     type Output = Self
-    fn wrapping_neg(self) -> Self::Output
+    fn wrapping_neg(own self) -> Self::Output
 }
 
 pub trait SaturatingAdd<T = Self> {

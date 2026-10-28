@@ -147,11 +147,11 @@ impl Neg for Money {
 }
 impl WrappingAdd for Money {
     #[arithmetic(unchecked)]
-    fn wrapping_add(self, _ other: Money) -> Money { Money { cents: self.cents + other.cents } }
+    fn wrapping_add(own self, _ other: own Money) -> Money { Money { cents: self.cents + other.cents } }
 }
 impl WrappingNeg for Money {
     #[arithmetic(unchecked)]
-    fn wrapping_neg(self) -> Money { Money { cents: -self.cents } }
+    fn wrapping_neg(own self) -> Money { Money { cents: -self.cents } }
 }
 
 fn checked(a: Money, b: Money) -> Money {

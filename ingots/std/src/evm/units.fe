@@ -122,19 +122,19 @@ impl SubAssign for Wei {
 // The operators written in unchecked code.
 
 impl WrappingAdd for Wei {
-    const fn wrapping_add(self, _ other: Wei) -> Wei {
+    const fn wrapping_add(own self, _ other: own Wei) -> Wei {
         Wei { amount: self.amount.wrapping_add(other.amount) }
     }
 }
 
 impl WrappingSub for Wei {
-    const fn wrapping_sub(self, _ other: Wei) -> Wei {
+    const fn wrapping_sub(own self, _ other: own Wei) -> Wei {
         Wei { amount: self.amount.wrapping_sub(other.amount) }
     }
 }
 
 impl WrappingMul<u256> for Wei {
-    const fn wrapping_mul(self, _ other: u256) -> Wei {
+    const fn wrapping_mul(own self, _ other: own u256) -> Wei {
         Wei { amount: self.amount.wrapping_mul(other) }
     }
 }
@@ -242,19 +242,19 @@ impl SubAssign for Duration {
 }
 
 impl WrappingAdd for Duration {
-    const fn wrapping_add(self, _ other: Duration) -> Duration {
+    const fn wrapping_add(own self, _ other: own Duration) -> Duration {
         Duration { secs: self.secs.wrapping_add(other.secs) }
     }
 }
 
 impl WrappingSub for Duration {
-    const fn wrapping_sub(self, _ other: Duration) -> Duration {
+    const fn wrapping_sub(own self, _ other: own Duration) -> Duration {
         Duration { secs: self.secs.wrapping_sub(other.secs) }
     }
 }
 
 impl WrappingMul<u256> for Duration {
-    const fn wrapping_mul(self, _ other: u256) -> Duration {
+    const fn wrapping_mul(own self, _ other: own u256) -> Duration {
         Duration { secs: self.secs.wrapping_mul(other) }
     }
 }
@@ -319,20 +319,20 @@ impl SubAssign<Duration> for Timestamp {
 }
 
 impl WrappingAdd<Duration> for Timestamp {
-    const fn wrapping_add(self, _ other: Duration) -> Timestamp {
+    const fn wrapping_add(own self, _ other: own Duration) -> Timestamp {
         Timestamp { secs: self.secs.wrapping_add(other.secs) }
     }
 }
 
 impl WrappingSub<Duration> for Timestamp {
-    const fn wrapping_sub(self, _ other: Duration) -> Timestamp {
+    const fn wrapping_sub(own self, _ other: own Duration) -> Timestamp {
         Timestamp { secs: self.secs.wrapping_sub(other.secs) }
     }
 }
 
 impl WrappingSub<Timestamp> for Timestamp {
     type Output = Duration
-    const fn wrapping_sub(self, _ other: Timestamp) -> Duration {
+    const fn wrapping_sub(own self, _ other: own Timestamp) -> Duration {
         Duration { secs: self.secs.wrapping_sub(other.secs) }
     }
 }
