@@ -4060,6 +4060,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "tuple_struct",
     "typed_calls",
     "unchecked_signed_negation",
+    "unchecked_storage_compound_assignment",
     "unsafe_splits",
     "vault",
     "voting",
