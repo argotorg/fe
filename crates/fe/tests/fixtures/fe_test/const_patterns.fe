@@ -1,0 +1,91 @@
+// A constant in a pattern matches its value, as a literal does.
+const NEG: i256 = -2
+const NEG8: i8 = -3
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+const ON: bool = true
+
+struct G<const N: u256> {}
+impl<const N: u256> G<N> {
+    const TWICE: u256 = N * 2
+}
+
+// `A::NEG` has type `Self::X` until `X` is known.
+trait Narrow {
+    type X
+    const NEG: Self::X = -3 as i8
+}
+struct A {}
+impl Narrow for A {
+    type X = i8
+}
+
+fn signed(_ x: i256) -> u256 {
+    match x {
+        NEG => 1
+        2 => 2
+        _ => 0
+    }
+}
+
+fn narrow(_ x: i8) -> u256 {
+    match x {
+        NEG8 => 1
+        127 => 2
+        _ => 0
+    }
+}
+
+// Patterns of the same value are tested as one.
+fn same_value(_ x: i8, _ y: u256) -> u256 {
+    match (x, y) {
+        (A::NEG, 1) => 1
+        (NEG8, 2) => 2
+        (253, 3) => 3
+        _ => 0
+    }
+}
+
+fn wrapped(_ x: u8, _ y: u256) -> u256 {
+    match (x, y) {
+        (0, 1) => 1
+        (256, _) => 2
+        _ => 0
+    }
+}
+
+fn unsigned(_ x: u256) -> u256 {
+    match x {
+        MAX => 1
+        G<3>::TWICE => 2
+        _ => 0
+    }
+}
+
+fn flag(_ b: bool) -> u256 {
+    match b {
+        ON => 1
+        false => 0
+    }
+}
+
+#[test]
+fn constant_patterns_match_their_values() {
+    assert!(signed(-2) == 1)
+    assert!(signed(2) == 2)
+    assert!(signed(0) == 0)
+    assert!(narrow(-3) == 1)
+    assert!(narrow(3) == 0)
+    assert!(narrow(127) == 2)
+    assert!(same_value(-3, 1) == 1)
+    assert!(same_value(-3, 2) == 2)
+    assert!(same_value(-3, 3) == 3)
+    assert!(same_value(-3, 4) == 0)
+    assert!(wrapped(0, 1) == 1)
+    assert!(wrapped(0, 2) == 2)
+    assert!(wrapped(1, 2) == 0)
+    assert!(unsigned(MAX) == 1)
+    assert!(unsigned(6) == 2)
+    assert!(unsigned(3) == 0)
+    assert!(flag(true) == 1)
+    assert!(flag(false) == 0)
+}

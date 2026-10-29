@@ -602,15 +602,22 @@ pub(crate) fn abi_struct_field_checks<'db>(
 }
 
 /// Origins of generated ABI code whose failures are reported at the source
-/// struct instead: at its fields, or at its recursive type.
+/// struct or msg variant instead: at its fields, or at its recursive type.
 fn generated_abi_reported_at_source<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> FxHashSet<&'db DesugaredOrigin> {
+    let msg_variants = top_mod.all_structs(db).iter().filter_map(|&struct_| {
+        let HirOrigin::Desugared(origin @ DesugaredOrigin::Msg(_)) = struct_.origin(db) else {
+            return None;
+        };
+        msg_selector::msg_variant_reported_at_source(db, struct_).then_some(origin)
+    });
     non_copy_array_abi_fields(db, top_mod)
         .iter()
         .map(|field| &field.origin)
         .chain(&abi_struct_field_checks(db, top_mod).reported_at_source)
+        .chain(msg_variants)
         .collect()
 }
 
@@ -647,7 +654,6 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             .iter()
             // Generated ABI body failures are diagnosed once at their source declarations.
             .filter(|func| match func.origin(db) {
-                HirOrigin::Desugared(DesugaredOrigin::Msg(_)) => false,
                 HirOrigin::Desugared(origin @ DesugaredOrigin::Event(event)) => {
                     !indexed_dynamic_events.contains(event) && keep(origin)
                 }

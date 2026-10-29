@@ -1620,6 +1620,15 @@ impl<'db> TyChecker<'db> {
                 self.resolve_recv_arm_types(contract, recv_idx, arm_idx, arm, arm_span);
             self.expected = ret_ty;
             self.check_recv_arm_pat(arm.pat, pat_ty);
+            // A message selects its arm by its variant alone, so the arm's
+            // pattern must match every value of that variant.
+            if let Some(root) = self.env.pattern_store().root(arm.pat)
+                && !self.env.pattern_store().is_irrefutable(self.db, root)
+            {
+                self.push_diag(BodyDiag::RefutableRecvArmPattern {
+                    primary: arm.pat.span(self.body()).into(),
+                });
+            }
             self.seed_pat_bindings(arm.pat);
             self.check_arm_effect_names(arm.pat);
             self.env.flush_pending_bindings();
@@ -4325,6 +4334,7 @@ pub enum SmirLoweringIssue {
     InvalidStmt(StmtId),
     IncompleteStmt(StmtId),
     InvalidCond(CondId),
+    InvalidPat(PatId),
 }
 
 impl SmirLoweringIssue {
@@ -4944,6 +4954,29 @@ impl<'db> TypedBody<'db> {
         issues.extend(body.conds(db).iter().filter_map(|(cond, cond_data)| {
             matches!(cond_data, Partial::Absent).then_some(SmirLoweringIssue::InvalidCond(cond))
         }));
+        // Lowering tests and binds a whole pattern, one no other pattern
+        // holds, through its checked form. Checking leaves none for a pattern
+        // it rejects, so the body is never lowered.
+        let mut sub_pats = FxHashSet::default();
+        for (_, pat) in body.pats(db).iter() {
+            match pat {
+                Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+                    sub_pats.extend(pats.iter().copied())
+                }
+                Partial::Present(Pat::Record(_, fields)) => {
+                    sub_pats.extend(fields.iter().map(|field| field.pat))
+                }
+                Partial::Present(Pat::Or(lhs, rhs)) => sub_pats.extend([*lhs, *rhs]),
+                Partial::Present(Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(..))
+                | Partial::Absent => {}
+            }
+        }
+        issues.extend(
+            body.pats(db)
+                .keys()
+                .filter(|pat| !sub_pats.contains(pat) && self.pattern_root(*pat).is_none())
+                .map(SmirLoweringIssue::InvalidPat),
+        );
         issues
     }
 
@@ -5031,22 +5064,6 @@ impl<'db> TypedBody<'db> {
                 Some(self.missing_place_issue(db, expr, *dst))
             }
             Expr::Match(_, Partial::Absent) => Some(SmirLoweringIssue::InvalidExpr(expr)),
-            Expr::Match(_, Partial::Present(arms)) => {
-                if arms.iter().any(|arm| {
-                    matches!(
-                        self.pattern_status(arm.pat),
-                        PatternAnalysisStatus::Unsupported
-                    )
-                }) {
-                    Some(SmirLoweringIssue::IncompleteExpr(expr))
-                } else if arms.iter().any(|arm| {
-                    matches!(self.pattern_status(arm.pat), PatternAnalysisStatus::Invalid)
-                }) {
-                    Some(SmirLoweringIssue::InvalidExpr(expr))
-                } else {
-                    None
-                }
-            }
             _ => None,
         }
     }
@@ -7583,7 +7600,6 @@ mod smir_lowering_readiness_tests {
     use camino::Utf8PathBuf;
 
     use crate::{
-        analysis::ty::pattern_ir::PatternAnalysisStatus,
         hir_def::{Expr, ItemKind, Partial},
         test_db::HirAnalysisTestDb,
     };
@@ -7627,9 +7643,10 @@ fn target() -> u256 {
             !diags.is_empty(),
             "fixture must have an unrelated type error"
         );
+        // The error leaves `wrong` unchecked, which alone blocks lowering.
         assert_eq!(
             checked.smir_lowering_readiness(&db),
-            SmirLoweringReadiness::Ready
+            SmirLoweringReadiness::BlockedByInvalidProgram
         );
 
         let mut incomplete = checked.clone();
@@ -7648,64 +7665,5 @@ fn target() -> u256 {
             incomplete.smir_lowering_readiness(&db),
             SmirLoweringReadiness::IncompletePlan
         );
-    }
-
-    #[test]
-    fn incomplete_match_pattern_dominates_invalid_pattern_in_any_arm_order() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("smir_match_readiness.fe"),
-            r#"
-enum Choice {
-    First,
-    Second,
-}
-
-fn target(choice: Choice) -> u256 {
-    match choice {
-        Choice::First => 0,
-        Choice::Second => 1,
-    }
-}
-"#,
-        );
-        let (top_mod, _) = db.top_mod(file);
-        let target = top_mod
-            .all_items(&db)
-            .iter()
-            .find_map(|item| match item {
-                ItemKind::Func(func)
-                    if func
-                        .name(&db)
-                        .to_opt()
-                        .is_some_and(|name| name.data(&db) == "target") =>
-                {
-                    Some(*func)
-                }
-                _ => None,
-            })
-            .expect("target function");
-        let (_, checked) = check_func_body(&db, target);
-        let body = checked.body().expect("target body");
-        let arms = body
-            .exprs(&db)
-            .iter()
-            .find_map(|(_, data)| match data {
-                Partial::Present(Expr::Match(_, Partial::Present(arms))) => Some(arms),
-                _ => None,
-            })
-            .expect("target match");
-        assert_eq!(arms.len(), 2);
-
-        for (invalid, unsupported) in [(0, 1), (1, 0)] {
-            let mut mixed = checked.clone();
-            mixed.tables_mut().pattern_status[arms[invalid].pat] = PatternAnalysisStatus::Invalid;
-            mixed.tables_mut().pattern_status[arms[unsupported].pat] =
-                PatternAnalysisStatus::Unsupported;
-            assert_eq!(
-                mixed.smir_lowering_readiness(&db),
-                SmirLoweringReadiness::IncompletePlan
-            );
-        }
     }
 }

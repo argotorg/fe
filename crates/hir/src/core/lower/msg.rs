@@ -375,9 +375,10 @@ fn emit_msg_decode_from_fields<'db>(
     field_names: &[IdentId<'db>],
     decode_input: DecodeInputBindings<'db>,
 ) {
-    for (idx, (name, ty)) in fields.iter().copied().enumerate() {
+    for (idx, (_, ty)) in fields.iter().copied().enumerate() {
         let head_pos = build_decode_head_pos_expr(body, decode_input.base_ident, &fields[..idx]);
-        body.decode_from_into(name, ty, decode_input, head_pos);
+        let local = body.field_local(idx);
+        body.decode_from_into(local, ty, decode_input, head_pos);
     }
     body.return_record_self(field_names);
 }
@@ -416,8 +417,9 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             Some(builder.self_ty()),
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
-                for (name, ty) in fields.iter().copied() {
-                    body.decode_into(name, ty, [decoder_ident, input_ident], payload_tys);
+                for (idx, (_, ty)) in fields.iter().copied().enumerate() {
+                    let local = body.field_local(idx);
+                    body.decode_into(local, ty, [decoder_ident, input_ident], payload_tys);
                 }
                 body.return_record_self(&field_names);
             },

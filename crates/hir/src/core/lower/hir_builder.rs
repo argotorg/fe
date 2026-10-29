@@ -652,6 +652,13 @@ where
         fresh_ident(self.db(), &self.reserved, name)
     }
 
+    /// The local that holds field `index` while a value is encoded or
+    /// decoded. Unlike the field's own name, it can't capture a name that a
+    /// field type refers to.
+    pub(super) fn field_local(&self, index: usize) -> IdentId<'db> {
+        self.generated_ident(&format!("field_{index}"))
+    }
+
     pub(super) fn roots(&self) -> LibRoots<'db> {
         self.roots
     }
@@ -819,7 +826,7 @@ where
         self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero), None));
 
         for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
-            let field_ident = self.generated_ident(&format!("field_{index}"));
+            let field_ident = self.field_local(index);
             let field_pat = self.push_pat(Pat::Path(
                 Partial::Present(PathId::from_ident(db, field_ident)),
                 BindingMarker::Plain,
@@ -1001,15 +1008,18 @@ where
         self.emit_stmt(Stmt::Let(bind_pat, Some(u256_ty), Some(len_call), None));
     }
 
+    /// `return Self { a: __fe_field_0, b: __fe_field_1, .. }`, from the
+    /// fields' locals (see [`Self::field_local`]).
     pub(super) fn return_record_self(&mut self, fields: &[IdentId<'db>]) {
         let db = self.db();
         let self_path = Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db)));
         let fields = fields
             .iter()
             .copied()
-            .map(|field_name| crate::hir_def::Field {
+            .enumerate()
+            .map(|(index, field_name)| crate::hir_def::Field {
                 label: Some(field_name),
-                expr: self.ident_expr(field_name),
+                expr: self.ident_expr(self.field_local(index)),
             })
             .collect();
         let record_expr = self.push_expr(Expr::RecordInit(self_path, fields));

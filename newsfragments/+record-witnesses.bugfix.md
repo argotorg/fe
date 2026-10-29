@@ -1,0 +1,1 @@
+A non-exhaustive `match` on a record variant or struct now shows which fields the uncovered values have, such as ``Not covered: `Shape::Rect { wide: false, .. }` ``, instead of only `Shape::Rect { .. }`.

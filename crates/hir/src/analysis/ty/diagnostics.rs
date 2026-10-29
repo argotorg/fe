@@ -526,7 +526,7 @@ pub enum BodyDiag<'db> {
 
     UnitVariantExpected {
         primary: DynLazySpan<'db>,
-        kind_name: String,
+        kind_name: Option<String>,
         hint: Option<String>,
     },
 
@@ -952,6 +952,29 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// A recv arm's pattern that may not match every value of its variant.
+    RefutableRecvArmPattern {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// A pattern naming a constant of type `ty`, which is not an integer or
+    /// `bool`.
+    ConstPatternType {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// A pattern naming a constant whose value depends on generic parameters.
+    GenericConstPattern {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// A pattern naming a constant that fails to evaluate without a fault of
+    /// its own: its definition is invalid, or depends on the pattern.
+    InvalidConstPattern {
+        primary: DynLazySpan<'db>,
+    },
+
     /// A loop's driver, of type `driver` over `base`, that drives no
     /// collection of the chain: `receiver`, the collection the chain starts
     /// from, is of another type, or there is none.
@@ -1322,10 +1345,16 @@ impl<'db> BodyDiag<'db> {
     pub(super) fn unit_variant_expected(
         db: &'db dyn HirAnalysisDb,
         primary: DynLazySpan<'db>,
-        record_like: RecordLike<'db>,
+        record_like: Option<RecordLike<'db>>,
     ) -> Self {
-        let kind_name = record_like.kind_name(db);
-        let hint = record_like.initializer_hint(db);
+        let (kind_name, hint) = if let Some(record_like) = record_like {
+            (
+                Some(record_like.kind_name(db)),
+                record_like.initializer_hint(db),
+            )
+        } else {
+            (None, None)
+        };
 
         Self::UnitVariantExpected {
             primary,
@@ -1471,6 +1500,10 @@ impl<'db> BodyDiag<'db> {
             Self::MaybeMutWithoutMode { .. } => 130,
             Self::RefutableParamPattern { .. } => 133,
             Self::RefutableLoopPattern { .. } => 148,
+            Self::RefutableRecvArmPattern { .. } => 153,
+            Self::ConstPatternType { .. } => 154,
+            Self::GenericConstPattern { .. } => 155,
+            Self::InvalidConstPattern { .. } => 156,
             Self::LoopDriverBase { .. } => 149,
             Self::ProductArgExpected { .. } => 135,
             Self::ProductArgTooWeak { .. } => 150,

@@ -1,0 +1,1 @@
+An ambiguous value, such as a constant `X` that two glob imports bring into scope, is now reported as ambiguous instead of not found, including when it is used as a type's generic argument like `W<X>`.

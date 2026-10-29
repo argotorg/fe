@@ -1,0 +1,1 @@
+Integer patterns now match by their value in the matched type. A negative constant matched its magnitude: with `const NEG: i256 = -2`, the pattern `NEG` matched `2` and not `-2`. Two patterns of the same value, like `0` and `256` at `u8`, could send a `match` to the wrong arm: `match (x, y) { (0, 1) => 1, (256, _) => 2, _ => 0 }` gave `0` for `(0, 2)`.

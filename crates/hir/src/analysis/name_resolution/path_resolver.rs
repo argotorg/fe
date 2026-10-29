@@ -1655,14 +1655,20 @@ fn resolve_segment<'db>(
     };
 
     let bucket = resolve_query(db, make_query(db, path, parent_scope));
-    let res = if is_tail
-        && resolve_tail_as_value
-        && let Ok(res) = bucket.pick(NameDomain::VALUE)
-    {
-        *decided_by_value = true;
-        res.clone()
-    } else {
-        pick_type_domain_from_bucket(parent_res, bucket, path)?
+    // A value that is found decides a value tail. One that is ambiguous gives
+    // way to a type of the same name, but is the error when there's none.
+    let res = match bucket.pick(NameDomain::VALUE) {
+        Ok(res) if is_tail && resolve_tail_as_value => {
+            *decided_by_value = true;
+            res.clone()
+        }
+        Err(err @ NameResolutionError::Ambiguous(_)) if is_tail && resolve_tail_as_value => {
+            pick_type_domain_from_bucket(parent_res, bucket, path).map_err(|_| {
+                *decided_by_value = true;
+                PathResError::from_name_res_error(err.clone(), path)
+            })?
+        }
+        _ => pick_type_domain_from_bucket(parent_res, bucket, path)?,
     };
     resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx)
 }

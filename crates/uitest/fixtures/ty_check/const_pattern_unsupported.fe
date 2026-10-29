@@ -1,0 +1,119 @@
+// A pattern compares against a constant's value only if it is an integer or
+// a `bool` known where the pattern is checked.
+#[abi]
+pub struct Pair {
+    pub n: u256,
+    pub flag: bool,
+}
+impl Copy for Pair {}
+
+enum E {
+    X,
+    Y,
+}
+
+trait Tr {
+    const C: u256
+}
+struct A {}
+impl Tr for A {
+    const C: u256 = 3
+}
+
+struct G<const N: u256> {}
+impl<const N: u256> G<N> {
+    const INV: u256 = 1 / N
+}
+
+const FIXED: Pair = Pair { n: 1, flag: true }
+const EX: E = E::X
+const S: String<5> = "hello"
+const LIMIT: u256 = 10
+const BAD: u256 = 1 / 0
+
+msg M {
+    #[selector = 0x01]
+    V { pair: Pair } -> u256,
+    #[selector = 0x02]
+    W { value: u256 } -> u256,
+}
+
+pub contract C {
+    recv M {
+        V { pair: FIXED } -> u256 { 1 }
+        W { value: G<0>::INV } -> u256 { 2 }
+    }
+}
+
+fn aggregate(_ p: Pair) -> u256 {
+    let FIXED = p
+    match p {
+        FIXED => 1
+    }
+}
+
+fn enum_and_string(_ e: E, _ s: String<5>) -> u256 {
+    match e {
+        EX => 1
+        _ => match s {
+            S => 2
+            _ => 0
+        }
+    }
+}
+
+fn generic<T: Tr>(_ x: u256) -> u256 {
+    match x {
+        T::C => 1
+        A::C => 2
+        LIMIT => 3
+        _ => 0
+    }
+}
+
+// A failed constant is reported at each pattern that uses it: `BAD` fails
+// wherever it is used, and `G<0>::INV` only for the argument its use gives.
+fn failed(_ x: u256) -> u256 {
+    let G<0>::INV = x
+    match x {
+        BAD => 1
+        G<0>::INV => 2
+        _ => 0
+    }
+}
+
+// A default that fails only once its type is known, and a constant whose
+// value depends on its own pattern, are reported at the pattern.
+trait Typed {
+    type X
+    const D: Self::X = 1 / 0
+}
+impl Typed for A {
+    type X = u256
+}
+
+const SELF: u256 = match 1 {
+    SELF => 1
+    _ => 2
+}
+
+fn defaults(_ x: u256) -> u256 {
+    match x {
+        A::D => 1
+        SELF => 2
+        _ => 0
+    }
+}
+
+// A constant that an impl omits has no value, even in a generic function.
+trait Omitted {
+    const O: u256
+}
+impl Omitted for A {}
+
+fn omitted<T: Tr>(_ x: u256) -> u256 {
+    match x {
+        A::O => 1
+        _ => 0
+    }
+}

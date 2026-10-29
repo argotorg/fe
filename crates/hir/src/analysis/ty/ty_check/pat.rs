@@ -1,29 +1,40 @@
 use std::ops::Range;
 
 use crate::core::hir_def::{
-    BindingMarker, IdentId, LitKind, Partial, Pat, PatId, PathId, TupleTypeId, VariantKind,
+    BindingMarker, Func, IdentId, IntegerId, ItemKind, LitKind, Partial, Pat, PatId, PathId,
+    TupleTypeId, VariantKind, scope_graph::ScopeId,
 };
+use crate::span::{DynLazySpan, HirOrigin};
 use either::Either;
 
-use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
+use super::{
+    BodyOwner, ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker,
+};
 use crate::analysis::{
-    name_resolution::{ExpectedPathKind, PathRes, ResolvedVariant},
-    semantic::{
-        SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
-        instance::resolve_semantic_const_ref,
+    HirAnalysisDb,
+    name_resolution::{
+        ExpectedPathKind, NameDomain, NameRes, NameResolutionError, PathRes, PathResError,
+        ResolvedVariant, resolve_ident_to_bucket,
     },
-    ty::adt_def::{AdtRef, instantiate_adt_field_shape},
+    semantic::{
+        EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
+        instance::resolve_semantic_const_ref, normalize_int_to_shape,
+    },
+    ty::adt_def::instantiate_adt_field_shape,
     ty::{
         assoc_const::{AssocConstUse, InherentConstUse},
-        const_ty::{LoweringContext, instantiate_inherent_const_decl_ty},
-        diagnostics::{BodyDiag, TraitConstraintDiag, TyDiagCollection},
+        const_ty::{
+            LoweringContext, instantiate_inherent_const_decl_ty, invalid_cause_from_eval_failure,
+        },
+        diagnostics::{BodyDiag, RevealedBy, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
         fold::TyFoldable,
         pattern_ir::{
             BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPat, ValidatedPatKind,
         },
         trait_def::TraitInstId,
         trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
-        ty_def::{InvalidCause, Kind, TyId, TyVarSort},
+        ty_def::{InvalidCause, Kind, TyFlags, TyId, TyVarSort},
+        visitor::collect_flags,
     },
 };
 
@@ -32,7 +43,6 @@ enum TupleVariantResolution<'db> {
     /// A tuple struct type, e.g. `Month` in `Month(m)`.
     TupleStruct(TyId<'db>),
     Invalid,
-    UnresolvedPath,
 }
 
 struct UnpackedRestPat<'db> {
@@ -44,6 +54,14 @@ struct UnpackedRestPat<'db> {
 pub(super) struct PatCheckResult<'db> {
     pub(super) ty: TyId<'db>,
     pub(super) analysis: PatternAnalysisStatus,
+}
+
+/// Whether `func` is generated from a declaration, like a msg variant's
+/// `decode_payload`. Checking a body depends on this rather than on `func`'s
+/// origin, which moves with the source text.
+#[salsa::tracked(returns(copy))]
+fn is_generated_func<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> bool {
+    matches!(func.origin(db), HirOrigin::Desugared(_))
 }
 
 impl<'db> TyChecker<'db> {
@@ -159,20 +177,13 @@ impl<'db> TyChecker<'db> {
         &self,
         statuses: impl IntoIterator<Item = PatternAnalysisStatus>,
     ) -> Result<Vec<crate::analysis::ty::pattern_ir::ValidatedPatId>, PatternAnalysisStatus> {
-        let mut roots = Vec::new();
-        let mut unsupported = false;
-        for status in statuses {
-            match status {
-                PatternAnalysisStatus::Ready(root) => roots.push(root),
-                PatternAnalysisStatus::Invalid => return Err(PatternAnalysisStatus::Invalid),
-                PatternAnalysisStatus::Unsupported => unsupported = true,
-            }
-        }
-        if unsupported {
-            Err(PatternAnalysisStatus::Unsupported)
-        } else {
-            Ok(roots)
-        }
+        statuses
+            .into_iter()
+            .map(|status| match status {
+                PatternAnalysisStatus::Ready(root) => Ok(root),
+                PatternAnalysisStatus::Invalid => Err(PatternAnalysisStatus::Invalid),
+            })
+            .collect()
     }
 
     fn binding_ref(&self, pat: PatId, name: IdentId<'db>) -> BindingRef<'db> {
@@ -217,41 +228,94 @@ impl<'db> TyChecker<'db> {
         self.ready_constructor(ty, ConstructorKind::Literal(lit, ty), Vec::new())
     }
 
-    fn eval_const_pattern_literal(
-        &self,
+    /// The analysis of `pat`, which names the constant `cref` of type `ty`: a
+    /// literal, for an integer or `bool`. A pattern can't compare against any
+    /// other value, nor against one that depends on generic parameters.
+    fn const_pattern_status(
+        &mut self,
+        pat: PatId,
         cref: ConstRef<'db>,
+        ty: TyId<'db>,
         expected: TyId<'db>,
-    ) -> Option<LitKind<'db>> {
-        let expected = expected
+    ) -> PatternAnalysisStatus {
+        let value_ty = expected
             .as_capability(self.db)
             .map_or(expected, |(_, inner)| inner);
-        let cref = resolve_semantic_const_ref(self.db, cref, expected, SemOrigin::Synthetic)?;
-        match eval_const_ref(self.db, cref).into_ready()?.value(self.db) {
-            SemConstValue::Scalar {
-                value: SemConstScalar::Int { value },
-                ..
-            } => {
-                let (_, bytes) = value.to_bytes_be();
-                Some(LitKind::Int(crate::hir_def::IntegerId::new(
-                    self.db,
-                    num_bigint::BigUint::from_bytes_be(&bytes),
-                )))
+        let primary: DynLazySpan<'db> = pat.span(self.body()).into();
+        let lit = match resolve_semantic_const_ref(self.db, cref, value_ty, SemOrigin::Synthetic)
+            .map(|cref| {
+                let owner = cref.instance(self.db).owner(self.db);
+                (owner, eval_const_ref(self.db, cref))
+            }) {
+            Some((_, EvalOutcome::Ready(value))) => match value.value(self.db) {
+                SemConstValue::Scalar {
+                    value: SemConstScalar::Int { value },
+                    ..
+                } => {
+                    // A literal holds an unsigned integer, so a negative value
+                    // is held as its two's complement in 256 bits, the widest
+                    // integer type. The pattern store narrows it to its type.
+                    let (_, bits) = normalize_int_to_shape(value.clone(), 256, false).into_parts();
+                    LitKind::Int(IntegerId::new(self.db, bits))
+                }
+                SemConstValue::Scalar {
+                    value: SemConstScalar::Bool(flag),
+                    ..
+                } => LitKind::Bool(*flag),
+                SemConstValue::Unit
+                | SemConstValue::Description(..)
+                | SemConstValue::Tuple { .. }
+                | SemConstValue::Struct { .. }
+                | SemConstValue::Array { .. }
+                | SemConstValue::Enum { .. }
+                | SemConstValue::Scalar {
+                    value: SemConstScalar::Bytes(_),
+                    ..
+                } => {
+                    self.push_diag(BodyDiag::ConstPatternType { primary, ty });
+                    return PatternAnalysisStatus::Invalid;
+                }
+            },
+            Some((owner, EvalOutcome::Failed(failure))) => {
+                // Reported here even if the declaration reports it too: a
+                // failure can depend on the generic arguments of this use,
+                // as `G<0>::C` does with `const C: u256 = 1 / N`.
+                let cause = invalid_cause_from_eval_failure(self.db, owner, failure);
+                match TyId::invalid(self.db, cause).emit_diag(self.db, primary.clone()) {
+                    Some(fault) => {
+                        self.push_diag(TyDiagCollection::from(TyLowerDiag::RevealedConstFault {
+                            site: primary,
+                            revealed_by: RevealedBy::Evaluation,
+                            fault: Box::new(fault),
+                        }))
+                    }
+                    None => self.push_diag(BodyDiag::InvalidConstPattern { primary }),
+                }
+                return PatternAnalysisStatus::Invalid;
             }
-            SemConstValue::Scalar {
-                value: SemConstScalar::Bool(flag),
-                ..
-            } => Some(LitKind::Bool(*flag)),
-            SemConstValue::Unit
-            | SemConstValue::Description(..)
-            | SemConstValue::Tuple { .. }
-            | SemConstValue::Struct { .. }
-            | SemConstValue::Array { .. }
-            | SemConstValue::Enum { .. }
-            | SemConstValue::Scalar {
-                value: SemConstScalar::Bytes(_),
-                ..
-            } => None,
-        }
+            Some((_, EvalOutcome::Blocked(_))) => {
+                self.push_diag(BodyDiag::GenericConstPattern { primary });
+                return PatternAnalysisStatus::Invalid;
+            }
+            // No value to evaluate: the use's generic parameters would select
+            // it, or there is none, as for a constant that an impl omits.
+            None => {
+                let generic = match cref {
+                    ConstRef::Const(_) => false,
+                    ConstRef::TraitConst { use_, .. } => {
+                        collect_flags(self.db, use_.inst()).contains(TyFlags::HAS_PARAM)
+                    }
+                    ConstRef::InherentConst(use_) => use_.receiver_ty().has_param(self.db),
+                };
+                self.push_diag(if generic {
+                    BodyDiag::GenericConstPattern { primary }
+                } else {
+                    BodyDiag::InvalidConstPattern { primary }
+                });
+                return PatternAnalysisStatus::Invalid;
+            }
+        };
+        self.literal_constructor_status(expected, lit)
     }
 
     fn consume_rest_pat(&mut self, pat: PatId, ty: TyId<'db>) {
@@ -384,6 +448,96 @@ impl<'db> TyChecker<'db> {
         };
 
         let span = pat.span(self.body()).into_path_pat();
+
+        // A bare identifier is a local binding unless it names something a
+        // pattern matches, like a constant or a unit variant; a function,
+        // module, or trait of its name is shadowed. One that is ambiguous
+        // among things a pattern matches is an error. A generated function's
+        // bindings are fresh names, which bind whatever else is in scope: its
+        // declaration avoids only the names it mentions.
+        if let Some(name) = path.as_ident(self.db) {
+            let generated = matches!(
+                self.env.owner(),
+                BodyOwner::Func(func, _) if is_generated_func(self.db, func)
+            );
+            let shadowed = |res: &NameRes<'db>| {
+                matches!(
+                    res.scope(),
+                    Some(
+                        ScopeId::Item(
+                            ItemKind::Func(_)
+                                | ItemKind::Mod(_)
+                                | ItemKind::TopMod(_)
+                                | ItemKind::Trait(_)
+                        ) | ScopeId::FuncParam(..)
+                    )
+                )
+            };
+            let named = if generated {
+                None
+            } else {
+                let bucket = resolve_ident_to_bucket(self.db, *path, self.env.scope());
+                [NameDomain::VALUE, NameDomain::TYPE]
+                    .into_iter()
+                    .find_map(|domain| match bucket.pick(domain) {
+                        Ok(res) => Some(Ok(res)),
+                        Err(err @ NameResolutionError::Ambiguous(cands))
+                            if !cands.iter().all(shadowed) =>
+                        {
+                            Some(Err(err))
+                        }
+                        Err(_) => None,
+                    })
+            };
+            match named {
+                Some(Err(err)) => {
+                    let err = PathResError::from_name_res_error(err.clone(), *path);
+                    if let Some(diag) =
+                        err.into_diag(self.db, *path, span.clone().path(), ExpectedPathKind::Pat)
+                    {
+                        self.push_diag(diag);
+                    }
+                    let invalid = TyId::invalid(self.db, InvalidCause::Other);
+                    return self.finish_pat_check(
+                        pat,
+                        expected,
+                        invalid,
+                        PatternAnalysisStatus::Invalid,
+                    );
+                }
+                Some(Ok(res)) if !shadowed(res) => {}
+                _ => {
+                    let binding = LocalBinding::local(
+                        pat,
+                        matches!(
+                            self.binding_marker(pat, *marker),
+                            BindingMarker::Var | BindingMarker::Mut
+                        ),
+                    );
+                    let mut is_valid = true;
+                    if let Some(LocalBinding::Local {
+                        pat: conflict_with, ..
+                    }) = self.env.register_pending_binding(name, binding)
+                    {
+                        let diag = BodyDiag::DuplicatedBinding {
+                            primary: span.into(),
+                            conflicat_with: conflict_with.span(self.body()).into(),
+                            name,
+                        };
+                        self.push_diag(diag);
+                        is_valid = false;
+                    }
+                    let actual = self.fresh_ty();
+                    let analysis = if is_valid {
+                        self.ready_wildcard(expected, Some(self.binding_ref(pat, name)))
+                    } else {
+                        PatternAnalysisStatus::Invalid
+                    };
+                    return self.finish_pat_check(pat, expected, actual, analysis);
+                }
+            }
+        }
+
         let lowering_cx = LoweringContext::new();
         let res = self.resolve_path(
             *path,
@@ -392,48 +546,6 @@ impl<'db> TyChecker<'db> {
             span.clone().into(),
             &lowering_cx,
         );
-
-        // Bare identifiers that don't resolve to a type/variant are local bindings.
-        if let Some(name) = path.as_ident(self.db)
-            && matches!(
-                res,
-                Err(_)
-                    | Ok(PathRes::Trait(_)
-                        | PathRes::Mod(_)
-                        | PathRes::Func(_)
-                        | PathRes::TraitMethod(..)
-                        | PathRes::Method(..)
-                        | PathRes::FuncParam(..))
-            )
-        {
-            let binding = LocalBinding::local(
-                pat,
-                matches!(
-                    self.binding_marker(pat, *marker),
-                    BindingMarker::Var | BindingMarker::Mut
-                ),
-            );
-            let mut is_valid = true;
-            if let Some(LocalBinding::Local {
-                pat: conflict_with, ..
-            }) = self.env.register_pending_binding(name, binding)
-            {
-                let diag = BodyDiag::DuplicatedBinding {
-                    primary: span.into(),
-                    conflicat_with: conflict_with.span(self.body()).into(),
-                    name,
-                };
-                self.push_diag(diag);
-                is_valid = false;
-            }
-            let actual = self.fresh_ty();
-            let analysis = if is_valid {
-                self.ready_wildcard(expected, Some(self.binding_ref(pat, name)))
-            } else {
-                PatternAnalysisStatus::Invalid
-            };
-            return self.finish_pat_check(pat, expected, actual, analysis);
-        }
 
         let (actual, analysis) = match res {
             Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => {
@@ -454,10 +566,7 @@ impl<'db> TyChecker<'db> {
 
             Ok(PathRes::Const(const_def, ty)) => (
                 ty,
-                self.eval_const_pattern_literal(ConstRef::Const(const_def), expected)
-                    .map_or(PatternAnalysisStatus::Unsupported, |lit| {
-                        self.literal_constructor_status(expected, lit)
-                    }),
+                self.const_pattern_status(pat, ConstRef::Const(const_def), ty, expected),
             ),
 
             Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
@@ -513,13 +622,7 @@ impl<'db> TyChecker<'db> {
                         evidence: None,
                         bound_evidence: None,
                     };
-                    (
-                        ty,
-                        self.eval_const_pattern_literal(cref, expected)
-                            .map_or(PatternAnalysisStatus::Unsupported, |lit| {
-                                self.literal_constructor_status(expected, lit)
-                            }),
-                    )
+                    (ty, self.const_pattern_status(pat, cref, ty, expected))
                 } else {
                     (
                         TyId::invalid(self.db, InvalidCause::Other),
@@ -543,13 +646,7 @@ impl<'db> TyChecker<'db> {
                         recv_ty,
                         name,
                     ));
-                    (
-                        ty,
-                        self.eval_const_pattern_literal(cref, expected)
-                            .map_or(PatternAnalysisStatus::Unsupported, |lit| {
-                                self.literal_constructor_status(expected, lit)
-                            }),
-                    )
+                    (ty, self.const_pattern_status(pat, cref, ty, expected))
                 } else {
                     (
                         TyId::invalid(self.db, InvalidCause::Other),
@@ -611,10 +708,15 @@ impl<'db> TyChecker<'db> {
                 )
             }
 
-            Ok(PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..)) => (
-                TyId::invalid(self.db, InvalidCause::Other),
-                PatternAnalysisStatus::Invalid,
-            ),
+            Ok(PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..)) => {
+                let diag =
+                    BodyDiag::unit_variant_expected(self.db, pat.span(self.body()).into(), None);
+                self.push_diag(diag);
+                (
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    PatternAnalysisStatus::Invalid,
+                )
+            }
 
             Err(err) => {
                 if let Some(diag) =
@@ -637,8 +739,11 @@ impl<'db> TyChecker<'db> {
         pat: PatId,
         record_like: RecordLike<'db>,
     ) -> TyId<'db> {
-        let diag =
-            BodyDiag::unit_variant_expected(self.db, pat.span(self.body()).into(), record_like);
+        let diag = BodyDiag::unit_variant_expected(
+            self.db,
+            pat.span(self.body()).into(),
+            Some(record_like),
+        );
         self.push_diag(diag);
         TyId::invalid(self.db, InvalidCause::Other)
     }
@@ -658,127 +763,103 @@ impl<'db> TyChecker<'db> {
             );
         };
 
-        let (variant, expected_elems) = match self.resolve_tuple_variant_pat(pat, *path) {
-            TupleVariantResolution::Resolved(variant, expected_elems) => (variant, expected_elems),
-            TupleVariantResolution::TupleStruct(ty) => {
-                return self.check_tuple_struct_pat(pat, ty, elems, expected);
+        let pat_span: crate::span::DynLazySpan<'db> = pat.span(self.body()).into();
+        match self.resolve_tuple_variant_pat(pat, *path) {
+            TupleVariantResolution::Resolved(variant, expected_elems) => {
+                let (semantic_ty, variant_ty) =
+                    self.equate_nominal_pat_ty(variant.ty, expected, pat_span);
+                let elem_tys =
+                    self.instantiate_tuple_variant_elem_tys(variant, variant_ty, expected_elems);
+                let ctor = ConstructorKind::Variant(variant.variant, semantic_ty);
+                self.check_tuple_like_pat_fields(
+                    pat,
+                    elems,
+                    expected,
+                    (semantic_ty, variant_ty),
+                    elem_tys,
+                    ctor,
+                    true,
+                )
+            }
+            TupleVariantResolution::TupleStruct(struct_ty) => {
+                let fields_visible =
+                    self.check_tuple_struct_fields_visible(struct_ty, pat_span.clone());
+                let (semantic_ty, struct_ty) =
+                    self.equate_nominal_pat_ty(struct_ty, expected, pat_span);
+                let ctor = self.type_constructor_kind(struct_ty, semantic_ty);
+                let elem_tys = ctor.field_types(self.db);
+                self.check_tuple_like_pat_fields(
+                    pat,
+                    elems,
+                    expected,
+                    (semantic_ty, struct_ty),
+                    elem_tys,
+                    ctor,
+                    fields_visible,
+                )
             }
             TupleVariantResolution::Invalid => {
                 self.check_tuple_like_pattern_elems(elems, &[], Range::default(), None);
-                return self.finish_pat_check(
-                    pat,
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    PatternAnalysisStatus::Invalid,
-                );
+                let invalid = TyId::invalid(self.db, InvalidCause::Other);
+                self.finish_pat_check(pat, invalid, invalid, PatternAnalysisStatus::Invalid)
             }
-            TupleVariantResolution::UnresolvedPath => {
-                self.check_tuple_like_pattern_elems(elems, &[], Range::default(), None);
-                return self.finish_pat_check(
-                    pat,
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    PatternAnalysisStatus::Invalid,
-                );
-            }
-        };
-
-        let semantic_ty = self.equate_ty(variant.ty, expected, pat.span(self.body()).into());
-        let semantic_ty = if semantic_ty.has_invalid(self.db) {
-            semantic_ty
-        } else {
-            self.canonical_nominal_ty_from_expected(semantic_ty, expected)
-        };
-        let variant_ty = if semantic_ty.has_invalid(self.db) {
-            self.canonical_nominal_ty_from_expected(variant.ty, expected)
-        } else {
-            semantic_ty
-        };
-        let expected_len = expected_elems.len(self.db);
-        let UnpackedRestPat {
-            elem_tys: actual_elems,
-            rest_range,
-            is_valid,
-        } = self.unpack_rest_pat(elems, Some(expected_len));
-        let elem_tys = self.instantiate_tuple_variant_elem_tys(variant, variant_ty, expected_elems);
-        let fields =
-            self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(variant_ty));
-        if actual_elems.len() != expected_len {
-            let diag = BodyDiag::MismatchedFieldCount {
-                primary: pat.span(self.body()).into(),
-                expected: expected_len,
-                given: actual_elems.len(),
-            };
-
-            self.push_diag(diag);
-            return self.finish_pat_check(
-                pat,
-                expected,
-                semantic_ty,
-                PatternAnalysisStatus::Invalid,
-            );
         }
-
-        let analysis = if semantic_ty.has_invalid(self.db) || !is_valid {
-            PatternAnalysisStatus::Invalid
-        } else {
-            self.ready_constructor(
-                semantic_ty,
-                ConstructorKind::Variant(variant.variant, semantic_ty),
-                fields,
-            )
-        };
-        self.finish_pat_check(pat, expected, semantic_ty, analysis)
     }
 
-    fn check_tuple_struct_pat(
+    /// The type a pattern of the nominal type `nominal_ty` has against
+    /// `expected`, and the nominal type its fields are instantiated from:
+    /// both the canonical unified type, or `nominal_ty` canonicalized alone
+    /// when it doesn't unify.
+    fn equate_nominal_pat_ty(
         &mut self,
-        pat: PatId,
-        struct_ty: TyId<'db>,
-        elems: &[PatId],
+        nominal_ty: TyId<'db>,
         expected: TyId<'db>,
-    ) -> PatCheckResult<'db> {
-        let pat_span: crate::span::DynLazySpan<'db> = pat.span(self.body()).into();
-        let fields_visible = self.check_tuple_struct_fields_visible(struct_ty, pat_span.clone());
-
-        let semantic_ty = self.equate_ty(struct_ty, expected, pat_span.clone());
+        span: crate::span::DynLazySpan<'db>,
+    ) -> (TyId<'db>, TyId<'db>) {
+        let semantic_ty = self.equate_ty(nominal_ty, expected, span);
         let semantic_ty = if semantic_ty.has_invalid(self.db) {
             semantic_ty
         } else {
             self.canonical_nominal_ty_from_expected(semantic_ty, expected)
         };
-        let struct_ty = if semantic_ty.has_invalid(self.db) {
-            self.canonical_nominal_ty_from_expected(struct_ty, expected)
+        if semantic_ty.has_invalid(self.db) {
+            let nominal_ty = self.canonical_nominal_ty_from_expected(nominal_ty, expected);
+            (semantic_ty, nominal_ty)
         } else {
-            semantic_ty
-        };
-        let ctor = self.type_constructor_kind(struct_ty, semantic_ty);
-        let elem_tys = ctor.field_types(self.db);
-        let expected_len = elem_tys.len();
-        let UnpackedRestPat {
-            elem_tys: actual_elems,
-            rest_range,
-            is_valid,
-        } = self.unpack_rest_pat(elems, Some(expected_len));
-        let fields =
-            self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(struct_ty));
-        if actual_elems.len() != expected_len {
-            let diag = BodyDiag::MismatchedFieldCount {
-                primary: pat_span,
-                expected: expected_len,
-                given: actual_elems.len(),
-            };
-
-            self.push_diag(diag);
-            return self.finish_pat_check(
-                pat,
-                expected,
-                semantic_ty,
-                PatternAnalysisStatus::Invalid,
-            );
+            (semantic_ty, semantic_ty)
         }
+    }
 
-        let analysis = if semantic_ty.has_invalid(self.db) || !is_valid || !fields_visible {
+    /// Checks the elements `elems` of a tuple variant or tuple struct pattern
+    /// of type `semantic_ty` against its fields `elem_tys`.
+    #[allow(clippy::too_many_arguments)]
+    fn check_tuple_like_pat_fields(
+        &mut self,
+        pat: PatId,
+        elems: &[PatId],
+        expected: TyId<'db>,
+        (semantic_ty, nominal_ty): (TyId<'db>, TyId<'db>),
+        elem_tys: Vec<TyId<'db>>,
+        ctor: ConstructorKind<'db>,
+        is_valid: bool,
+    ) -> PatCheckResult<'db> {
+        let expected_len = elem_tys.len();
+        let unpacked = self.unpack_rest_pat(elems, Some(expected_len));
+        let fields = self.check_tuple_like_pattern_elems(
+            elems,
+            &elem_tys,
+            unpacked.rest_range,
+            Some(nominal_ty),
+        );
+        let given = unpacked.elem_tys.len();
+        let analysis = if given != expected_len {
+            self.push_diag(BodyDiag::MismatchedFieldCount {
+                primary: pat.span(self.body()).into(),
+                expected: expected_len,
+                given,
+            });
+            PatternAnalysisStatus::Invalid
+        } else if semantic_ty.has_invalid(self.db) || !unpacked.is_valid || !is_valid {
             PatternAnalysisStatus::Invalid
         } else {
             self.ready_constructor(semantic_ty, ctor, fields)
@@ -849,13 +930,12 @@ impl<'db> TyChecker<'db> {
                 }
             },
             Err(err) => {
-                if !path.is_bare_ident(self.db)
-                    && let Some(diag) =
-                        err.into_diag(self.db, path, span.clone().path(), ExpectedPathKind::Pat)
+                if let Some(diag) =
+                    err.into_diag(self.db, path, span.clone().path(), ExpectedPathKind::Pat)
                 {
                     self.push_diag(diag);
                 }
-                TupleVariantResolution::UnresolvedPath
+                TupleVariantResolution::Invalid
             }
         }
     }
@@ -948,156 +1028,81 @@ impl<'db> TyChecker<'db> {
         };
 
         let span = pat.span(self.body()).into_record_pat();
+        let pat_span: crate::span::DynLazySpan<'db> = pat.span(self.body()).into();
+        let invalid = TyId::invalid(self.db, InvalidCause::Other);
 
+        // The record the pattern names, with its type, or the diagnostic for
+        // a path that names no record.
         let lowering_cx = LoweringContext::new();
-        let (actual, analysis) = match self.resolve_path(
+        let (actual, record_like) = match self.resolve_path(
             *path,
             true,
             span.clone().path(),
             span.clone().into(),
             &lowering_cx,
         ) {
-            Ok(reso) => match reso {
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty)
-                    if RecordLike::from_ty(ty).is_record(self.db) =>
-                {
-                    let semantic_ty = self.equate_ty(ty, expected, pat.span(self.body()).into());
-                    let semantic_ty = if semantic_ty.has_invalid(self.db) {
-                        semantic_ty
-                    } else {
-                        self.canonical_nominal_ty_from_expected(semantic_ty, expected)
-                    };
-                    let record_like = if semantic_ty.has_invalid(self.db) {
-                        RecordLike::Type(ty)
-                    } else {
-                        RecordLike::Type(semantic_ty)
-                    };
-                    (
-                        semantic_ty,
-                        self.check_record_pat_fields(record_like, pat, semantic_ty),
-                    )
-                }
-
-                PathRes::Ty(ty)
-                | PathRes::TyAlias(_, ty)
-                | PathRes::Func(ty)
-                | PathRes::Const(_, ty)
-                | PathRes::TraitConst(ty, ..)
-                | PathRes::InherentConst(ty, ..) => {
-                    let diag = BodyDiag::record_expected(
-                        self.db,
-                        pat.span(self.body()).into(),
-                        Some(RecordLike::Type(ty)),
-                    );
-                    self.push_diag(diag);
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
-
-                PathRes::Trait(trait_) => {
-                    let diag = BodyDiag::NotValue {
+            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty))
+                if RecordLike::from_ty(ty).is_record(self.db) =>
+            {
+                let (semantic_ty, record_ty) = self.equate_nominal_pat_ty(ty, expected, pat_span);
+                (semantic_ty, Some(RecordLike::Type(record_ty)))
+            }
+            Ok(PathRes::EnumVariant(variant))
+                if RecordLike::from_variant(variant).is_record(self.db) =>
+            {
+                let (semantic_ty, ty) = self.equate_nominal_pat_ty(variant.ty, expected, pat_span);
+                (
+                    semantic_ty,
+                    Some(RecordLike::EnumVariant(ResolvedVariant { ty, ..variant })),
+                )
+            }
+            Ok(reso) => {
+                let diag = match reso {
+                    PathRes::Trait(trait_) => BodyDiag::NotValue {
                         primary: span.into(),
                         given: Either::Left(trait_.def(self.db).into()),
-                    };
-                    self.push_diag(diag);
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
-
-                PathRes::EnumVariant(variant) => {
-                    let ty = variant.ty;
-                    let record_like = RecordLike::from_variant(variant);
-                    if record_like.is_record(self.db) {
-                        let semantic_ty =
-                            self.equate_ty(ty, expected, pat.span(self.body()).into());
-                        let semantic_ty = if semantic_ty.has_invalid(self.db) {
-                            semantic_ty
-                        } else {
-                            self.canonical_nominal_ty_from_expected(semantic_ty, expected)
-                        };
-                        let record_like = if semantic_ty.has_invalid(self.db) {
-                            record_like
-                        } else {
-                            RecordLike::EnumVariant(ResolvedVariant {
-                                ty: semantic_ty,
-                                ..variant
-                            })
-                        };
-                        (
-                            semantic_ty,
-                            self.check_record_pat_fields(record_like, pat, semantic_ty),
-                        )
-                    } else {
-                        let diag = BodyDiag::record_expected(
-                            self.db,
-                            pat.span(self.body()).into(),
-                            Some(record_like),
-                        );
-                        self.push_diag(diag);
-                        (
-                            TyId::invalid(self.db, InvalidCause::Other),
-                            PatternAnalysisStatus::Invalid,
-                        )
-                    }
-                }
-                PathRes::Mod(scope) => {
-                    let diag = BodyDiag::NotValue {
+                    },
+                    PathRes::Mod(scope) => BodyDiag::NotValue {
                         primary: span.into(),
                         given: Either::Left(scope.item()),
-                    };
-                    self.push_diag(diag);
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
-
-                PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
-                    let diag =
-                        BodyDiag::record_expected(self.db, pat.span(self.body()).into(), None);
-                    self.push_diag(diag);
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
-            },
-            Err(err) => {
-                // Check if expected type is a struct from a desugared msg module
-                // that matches the pattern path
-                if let Some(adt_def) = expected.adt_def(self.db)
-                    && let AdtRef::Struct(struct_) = adt_def.adt_ref(self.db)
-                {
-                    // Check if the path matches the struct name
-                    if let Some(struct_name) = struct_.name(self.db).to_opt()
-                        && path.as_ident(self.db) == Some(struct_name)
-                    {
-                        // The pattern matches the expected struct type
-                        let record_like = RecordLike::from_ty(expected);
-                        if record_like.is_record(self.db) {
-                            let analysis = self.check_record_pat_fields(record_like, pat, expected);
-                            return self.finish_pat_check(pat, expected, expected, analysis);
-                        }
+                    },
+                    PathRes::EnumVariant(variant) => BodyDiag::record_expected(
+                        self.db,
+                        pat_span,
+                        Some(RecordLike::from_variant(variant)),
+                    ),
+                    PathRes::Ty(ty)
+                    | PathRes::TyAlias(_, ty)
+                    | PathRes::Func(ty)
+                    | PathRes::Const(_, ty)
+                    | PathRes::TraitConst(ty, ..)
+                    | PathRes::InherentConst(ty, ..) => {
+                        BodyDiag::record_expected(self.db, pat_span, Some(RecordLike::Type(ty)))
                     }
-                }
-
-                if !path.is_bare_ident(self.db)
-                    && let Some(diag) =
-                        err.into_diag(self.db, *path, span.clone().path(), ExpectedPathKind::Pat)
+                    PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
+                        BodyDiag::record_expected(self.db, pat_span, None)
+                    }
+                };
+                self.push_diag(diag);
+                (invalid, None)
+            }
+            Err(err) => {
+                if let Some(diag) =
+                    err.into_diag(self.db, *path, span.clone().path(), ExpectedPathKind::Pat)
                 {
                     self.push_diag(diag);
                 }
-                (
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    PatternAnalysisStatus::Invalid,
-                )
+                (invalid, None)
             }
         };
 
+        let analysis = match record_like {
+            Some(record_like) => self.check_record_pat_fields(record_like, pat, actual),
+            None => {
+                self.check_unknown_record_pat_fields(pat);
+                PatternAnalysisStatus::Invalid
+            }
+        };
         self.finish_pat_check(pat, expected, actual, analysis)
     }
 
@@ -1129,21 +1134,34 @@ impl<'db> TyChecker<'db> {
                 expected,
                 self.check_record_pat_fields(record_like, pat, expected),
             ),
-            Partial::Present(Pat::Record(_, fields)) => {
-                // The fields still bind their names, as values of an unknown
-                // type.
-                for field in fields {
-                    if field.pat.is_rest(self.db, self.body()) {
-                        self.consume_rest_pat(field.pat, invalid);
-                    } else {
-                        self.check_pat(field.pat, invalid);
-                    }
-                }
+            Partial::Present(Pat::Record(..)) => {
+                self.check_unknown_record_pat_fields(pat);
+                (invalid, PatternAnalysisStatus::Invalid)
+            }
+            // The parser rejects a tuple pattern in a recv arm.
+            Partial::Present(Pat::PathTuple(_, elems)) => {
+                self.check_tuple_like_pattern_elems(elems, &[], Range::default(), None);
                 (invalid, PatternAnalysisStatus::Invalid)
             }
             _ => return self.check_pat(pat, expected),
         };
         self.finish_pat_check(pat, expected, actual, analysis)
+    }
+
+    /// Checks the fields of the record pattern `pat`, whose path names no
+    /// record, against an invalid type, so that they still bind their names.
+    fn check_unknown_record_pat_fields(&mut self, pat: PatId) {
+        let Partial::Present(Pat::Record(_, fields)) = pat.data(self.db, self.body()) else {
+            unreachable!()
+        };
+        let invalid = TyId::invalid(self.db, InvalidCause::Other);
+        for field in fields {
+            if field.pat.is_rest(self.db, self.body()) {
+                self.consume_rest_pat(field.pat, invalid);
+            } else {
+                self.check_pat(field.pat, invalid);
+            }
+        }
     }
 
     fn check_record_pat_fields(
