@@ -37,7 +37,7 @@ use crate::{
         RuntimeTypeEnv, provider_class_for_target_in_env, top_level_class_for_ty_in_env,
         validate_runtime_array_extents_in_env,
     },
-    runtime::object_name::{ObjectId, assign_object_names, sanitize_object_name},
+    runtime::object_name::{ObjectId, assign_object_names},
     runtime::root_effects::{
         EntryEffectContext, entry_semantic_args_plan, target_root_provider_materialization,
     },
@@ -380,11 +380,7 @@ fn build_standalone_main_package<'db>(
         db,
         top_mod,
         package_roots,
-        vec![(
-            ObjectId::Fixed(sanitize_object_name("main")),
-            RuntimeSectionName::Main,
-            root,
-        )],
+        vec![(ObjectId::Main, RuntimeSectionName::Main, root)],
     )?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
@@ -467,7 +463,7 @@ pub fn build_test_runtime_package<'db>(
     top_mod: TopLevelMod<'db>,
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    build_test_package(db, &[top_mod], filter, |_, name| sanitize_object_name(name))
+    build_test_package(db, &[top_mod], filter)
 }
 
 /// Build one reachable runtime graph for every selected native test in a suite.
@@ -478,9 +474,7 @@ pub fn build_native_test_runtime_package<'db>(
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     require_target(db, Target::Native)?;
-    build_test_package(db, top_mods, filter, |index, name| {
-        format!("__native_test_{index}_{}", sanitize_object_name(name))
-    })
+    build_test_package(db, top_mods, filter)
 }
 
 /// Rejects building a package for another machine than the compilation's:
@@ -500,7 +494,6 @@ fn build_test_package<'db>(
     db: &'db dyn MirDb,
     top_mods: &[TopLevelMod<'db>],
     filter: Option<&str>,
-    object_name: impl Fn(usize, &str) -> String,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     let &top_mod = top_mods.first().ok_or_else(|| {
         LowerError::Unsupported("test runtime package needs a source module".into())
@@ -545,7 +538,7 @@ fn build_test_package<'db>(
             );
             roots.push(root);
             objects.push((
-                ObjectId::Fixed(object_name(objects.len(), &name)),
+                ObjectId::Test(func),
                 vec![(RuntimeSectionName::Test(name), root)],
             ));
         }
@@ -613,10 +606,7 @@ pub fn build_native_executable_package<'db>(
         db,
         top_mod,
         vec![instance],
-        vec![(
-            ObjectId::Fixed(sanitize_object_name("main")),
-            vec![(RuntimeSectionName::Main, instance)],
-        )],
+        vec![(ObjectId::Main, vec![(RuntimeSectionName::Main, instance)])],
     )?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid native package: {err:?}")))?;
@@ -2534,7 +2524,10 @@ fn collect_const_regions<'db>(
     regions
 }
 
-fn contract_name<'db>(db: &'db dyn MirDb, contract: hir::hir_def::Contract<'db>) -> String {
+pub(crate) fn contract_name<'db>(
+    db: &'db dyn MirDb,
+    contract: hir::hir_def::Contract<'db>,
+) -> String {
     contract
         .name(db)
         .to_opt()
@@ -2542,7 +2535,7 @@ fn contract_name<'db>(db: &'db dyn MirDb, contract: hir::hir_def::Contract<'db>)
         .unwrap_or_else(|| "contract".to_string())
 }
 
-fn sanitize_symbol(value: &str) -> String {
+pub(crate) fn sanitize_symbol(value: &str) -> String {
     value
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })

@@ -403,3 +403,62 @@ fn a_single_file_with_a_nested_module_qualifies_clashing_names() {
         "{output}"
     );
 }
+
+#[test]
+fn contracts_with_the_same_identity_get_distinct_names() {
+    // Floating modules (`src/x/baz.fe` without `src/x.fe`) have the same
+    // module path, so their contracts share every candidate name. They are
+    // numbered once for the whole ingot, so the module packages agree.
+    let dir = tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("fe.toml"),
+        "[ingot]\nname = \"floating\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/lib.fe"), "").unwrap();
+    for (module, value) in [("x", 1), ("y", 2)] {
+        fs::create_dir_all(dir.path().join("src").join(module)).unwrap();
+        fs::write(
+            dir.path().join("src").join(module).join("baz.fe"),
+            format!(
+                "pub msg Get {{\n    #[selector = sol(\"get()\")]\n    Get -> u256,\n}}\n\n\
+                 pub contract C {{\n    recv Get {{\n        Get -> u256 {{\n            {value}\n        }}\n    }}\n}}\n"
+            ),
+        )
+        .unwrap();
+    }
+    let out = dir.path().join("out");
+    let (output, code) = run_fe(
+        &[
+            "build",
+            "--emit",
+            "runtime-bytecode",
+            "--out-dir",
+            out.to_str().unwrap(),
+        ],
+        &[dir.path()],
+    );
+    assert_eq!(code, 0, "fe build failed:\n{output}");
+    let files = file_names(&out);
+    let [first, second] = files.iter().collect::<Vec<_>>()[..] else {
+        panic!("expected two artifacts, found {files:?}");
+    };
+    assert_ne!(read(&out.join(first)), read(&out.join(second)));
+}
+
+#[test]
+fn same_named_tests_each_run_their_own_code() {
+    let dir = tempdir().expect("tempdir");
+    let file = dir.path().join("tests.fe");
+    // If `b::t` ran the code of `a::t`, it would not revert.
+    fs::write(
+        &file,
+        "mod a {\n    #[test]\n    fn t() {\n        assert!(true)\n    }\n}\n\n\
+         mod b {\n    #[test(should_revert)]\n    fn t() {\n        assert!(false)\n    }\n}\n",
+    )
+    .unwrap();
+    let (output, code) = run_fe(&["test"], &[&file]);
+    assert_eq!(code, 0, "fe test failed:\n{output}");
+    assert!(output.contains("2 passed"), "{output}");
+}

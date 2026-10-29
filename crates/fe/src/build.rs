@@ -1016,7 +1016,12 @@ fn analyze_ingot_build_artifacts(
     }
 
     let contract_names = collect_workspace_contract_names(db, ingot);
-    let source_names = collect_workspace_source_names(db, ingot);
+    let source_names = mir::ingot_contracts(db, ingot)
+        .iter()
+        .map(|contract| contract.source_name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
 
     let abi_artifact_names = if include_abi_artifact_names {
         collect_ingot_abi_artifact_names(db, ingot).map_err(|err| {
@@ -1669,18 +1674,9 @@ fn module_defines_contract(db: &DriverDataBase, top_mod: TopLevelMod<'_>, name: 
 /// The artifact names of the contracts `ingot` declares.
 fn collect_workspace_contract_names(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> Vec<String> {
     mir::ingot_contracts(db, ingot)
-        .into_iter()
-        .map(|contract| contract.name)
+        .iter()
+        .map(|contract| contract.name.clone())
         .collect()
-}
-
-/// The names written in the source for the contracts `ingot` declares.
-fn collect_workspace_source_names(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> Vec<String> {
-    let names: BTreeSet<_> = mir::ingot_contracts(db, ingot)
-        .into_iter()
-        .map(|contract| contract.source_name)
-        .collect();
-    names.into_iter().collect()
 }
 
 /// The members whose names include `name`.
@@ -1701,11 +1697,11 @@ fn collect_ingot_abi_artifact_names(
 ) -> Result<Vec<String>, String> {
     let mut names = BTreeSet::new();
     for declared in mir::ingot_contracts(db, ingot) {
-        let Some(contract) = declared.contract else {
+        let Some(contract) = declared.contract() else {
             continue;
         };
         if crate::abi::generate_contract_abi(db, contract)?.entry_count > 0 {
-            names.insert(declared.name);
+            names.insert(declared.name.clone());
         }
     }
 
@@ -1808,7 +1804,7 @@ fn write_abi_artifacts(
         let Some(contract) = contracts
             .iter()
             .find(|candidate| candidate.name == *name)
-            .and_then(|candidate| candidate.contract)
+            .and_then(|candidate| candidate.contract())
         else {
             continue;
         };
@@ -2082,7 +2078,7 @@ fn write_metadata_artifacts(
     }
 
     // Map each root contract's artifact name to its source path and declaration.
-    let mut name_to_loc: BTreeMap<String, (String, mir::IngotContract<'_>)> = BTreeMap::new();
+    let mut name_to_loc: BTreeMap<&str, (&str, &mir::IngotContract<'_>)> = BTreeMap::new();
     for declared in mir::ingot_contracts(db, ingot) {
         let Some((path_key, _)) = root_sources
             .iter()
@@ -2090,7 +2086,7 @@ fn write_metadata_artifacts(
         else {
             continue;
         };
-        name_to_loc.insert(declared.name.clone(), (path_key.clone(), declared));
+        name_to_loc.insert(&declared.name, (path_key, declared));
     }
 
     // `sources` object (shared across this ingot's contracts), with keccak256 + content.
@@ -2160,12 +2156,12 @@ fn write_metadata_artifacts(
     let compiler = serde_json::Value::Object(compiler);
 
     for name in names_to_build {
-        let Some((source_path, declared)) = name_to_loc.get(name) else {
+        let Some(&(source_path, declared)) = name_to_loc.get(name.as_str()) else {
             continue;
         };
 
         let abi_value = match declared
-            .contract
+            .contract()
             .map(|contract| crate::abi::generate_contract_abi(db, contract))
         {
             Some(Ok(result)) => {
@@ -2184,7 +2180,10 @@ fn write_metadata_artifacts(
         };
 
         let mut compilation_target = serde_json::Map::new();
-        compilation_target.insert(source_path.clone(), serde_json::Value::String(name.clone()));
+        compilation_target.insert(
+            source_path.to_string(),
+            serde_json::Value::String(name.clone()),
+        );
 
         let value = serde_json::json!({
             "version": 1,
