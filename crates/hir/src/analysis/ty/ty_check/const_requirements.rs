@@ -22,8 +22,10 @@ use crate::semantic::{constraints_for, param_env};
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PredicateKey<'db> {
     ty: TyId<'db>,
-    arithmetic: crate::hir_def::attr::ArithmeticMode,
     operation: Option<Callable<'db>>,
+    /// The built-in operation of an operator on primitive operands, which
+    /// says whether its arithmetic is checked.
+    builtin: Option<BuiltinOp>,
     term: PredicateTerm<'db>,
 }
 
@@ -87,7 +89,6 @@ fn predicate_key<'db>(
         body: predicate,
         typed,
         subst,
-        arithmetic: BodyOwner::const_predicate(db, predicate).arithmetic_mode(db),
     }
     .key(predicate.expr(db))
 }
@@ -98,8 +99,6 @@ struct PredicateKeyBuilder<'a, 'db> {
     body: Body<'db>,
     typed: &'a TypedBody<'db>,
     subst: &'a CompleteSubst<'db>,
-    /// The predicate's arithmetic mode, which each node's key records.
-    arithmetic: crate::hir_def::attr::ArithmeticMode,
 }
 
 impl<'db> PredicateKeyBuilder<'_, 'db> {
@@ -176,10 +175,10 @@ impl<'db> PredicateKeyBuilder<'_, 'db> {
         };
         Ok(Some(PredicateKey {
             ty: self.instantiate(typed.expr_ty(db, expr))?,
-            arithmetic: self.arithmetic,
             operation: callable
                 .map(|callable| self.instantiate(callable.clone()))
                 .transpose()?,
+            builtin: typed.builtin_op(expr),
             term,
         }))
     }

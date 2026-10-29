@@ -6,7 +6,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, SBlockId, SConst, SExpr, SLocalId, SOperand, SPlace, SStmtKind,
+            BinaryOp, FieldIndex, SBlockId, SConst, SExpr, SLocalId, SOperand, SPlace, SStmtKind,
             STerminatorKind, SValueId, SemOrigin, VariantIndex, bool_const, bytes_const, int_const,
         },
         ty::{
@@ -26,10 +26,7 @@ use crate::{
             ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{
-        LitKind, MatchArm, PatId,
-        expr::{BinOp, CompBinOp},
-    },
+    hir_def::{LitKind, MatchArm, PatId, expr::CompBinOp},
 };
 
 use super::body::SmirLowerCtxt;
@@ -863,7 +860,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                             ConstructorKind::Literal(lit, ty) => {
                                 let rhs = self.literal_pattern_value(*ty, *lit);
                                 SExpr::Binary {
-                                    op: BinOp::Comp(CompBinOp::Eq),
+                                    op: BinaryOp::Comp(CompBinOp::Eq),
                                     lhs: SOperand::synthetic(occurrence.value),
                                     rhs: SOperand::synthetic(rhs),
                                 }

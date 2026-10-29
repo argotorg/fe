@@ -10,7 +10,10 @@ use crate::{
             ty_def::{BorrowKind, TyId},
         },
     },
-    hir_def::{BinOp, ExprId, Func, PatId, StmtId, StringId, UnOp},
+    hir_def::{
+        ArithBinOp, BinOp, CompBinOp, ExprId, Func, PatId, StmtId, StringId, UnOp,
+        attr::ArithmeticMode,
+    },
     projection::{IndexSource, Projection, ProjectionPath},
     semantic::ProviderBinding,
 };
@@ -465,6 +468,136 @@ impl SOperand {
     }
 }
 
+/// What an arithmetic operation does when its exact result is outside its
+/// type's range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum Overflow {
+    /// Panics with `Panic(0x11)`.
+    Checked,
+    /// Keeps the low bits of the result, in two's complement.
+    Wrapping,
+}
+
+impl From<ArithmeticMode> for Overflow {
+    fn from(mode: ArithmeticMode) -> Self {
+        match mode {
+            ArithmeticMode::Checked => Self::Checked,
+            ArithmeticMode::Unchecked => Self::Wrapping,
+        }
+    }
+}
+
+/// A built-in operation on a value of a primitive type: an integer or `bool`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum UnaryOp {
+    /// `-x` on a signed integer.
+    Neg(Overflow),
+    /// `!x` on a `bool`.
+    Not,
+    /// `~x` or `!x` on an integer: its bits inverted.
+    BitNot,
+}
+
+impl UnaryOp {
+    /// The source operator.
+    pub fn un_op(self) -> UnOp {
+        match self {
+            Self::Neg(_) => UnOp::Minus,
+            Self::Not => UnOp::Not,
+            Self::BitNot => UnOp::BitNot,
+        }
+    }
+
+    pub fn overflow(self) -> Option<Overflow> {
+        match self {
+            Self::Neg(overflow) => Some(overflow),
+            Self::Not | Self::BitNot => None,
+        }
+    }
+}
+
+/// A built-in operation on two values of one primitive type: an integer or
+/// `bool`. The operations whose exact result can be out of range say what
+/// happens then. Division and remainder by zero panic with `Panic(0x12)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum BinaryOp {
+    Add(Overflow),
+    Sub(Overflow),
+    Mul(Overflow),
+    /// Rounds towards zero. Only a signed `MIN / -1` overflows.
+    Div(Overflow),
+    /// Has the dividend's sign, and never overflows.
+    Rem,
+    Pow(Overflow),
+    Shl,
+    Shr,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Comp(CompBinOp),
+}
+
+impl BinaryOp {
+    /// The operation the operator `op` names, with `overflow` if it can
+    /// overflow; `None` for an operator that is not one (`..`, `[]`, `&&`
+    /// and `||`).
+    pub fn new(op: BinOp, overflow: Overflow) -> Option<Self> {
+        Some(match op {
+            BinOp::Arith(op) => match op {
+                ArithBinOp::Add => Self::Add(overflow),
+                ArithBinOp::Sub => Self::Sub(overflow),
+                ArithBinOp::Mul => Self::Mul(overflow),
+                ArithBinOp::Div => Self::Div(overflow),
+                ArithBinOp::Rem => Self::Rem,
+                ArithBinOp::Pow => Self::Pow(overflow),
+                ArithBinOp::LShift => Self::Shl,
+                ArithBinOp::RShift => Self::Shr,
+                ArithBinOp::BitAnd => Self::BitAnd,
+                ArithBinOp::BitOr => Self::BitOr,
+                ArithBinOp::BitXor => Self::BitXor,
+                ArithBinOp::Range => return None,
+            },
+            BinOp::Comp(op) => Self::Comp(op),
+            BinOp::Logical(_) | BinOp::Index => return None,
+        })
+    }
+
+    /// The source operator.
+    pub fn bin_op(self) -> BinOp {
+        BinOp::Arith(match self {
+            Self::Add(_) => ArithBinOp::Add,
+            Self::Sub(_) => ArithBinOp::Sub,
+            Self::Mul(_) => ArithBinOp::Mul,
+            Self::Div(_) => ArithBinOp::Div,
+            Self::Rem => ArithBinOp::Rem,
+            Self::Pow(_) => ArithBinOp::Pow,
+            Self::Shl => ArithBinOp::LShift,
+            Self::Shr => ArithBinOp::RShift,
+            Self::BitAnd => ArithBinOp::BitAnd,
+            Self::BitOr => ArithBinOp::BitOr,
+            Self::BitXor => ArithBinOp::BitXor,
+            Self::Comp(op) => return BinOp::Comp(op),
+        })
+    }
+
+    pub fn overflow(self) -> Option<Overflow> {
+        match self {
+            Self::Add(overflow)
+            | Self::Sub(overflow)
+            | Self::Mul(overflow)
+            | Self::Div(overflow)
+            | Self::Pow(overflow) => Some(overflow),
+            Self::Rem
+            | Self::Shl
+            | Self::Shr
+            | Self::BitAnd
+            | Self::BitOr
+            | Self::BitXor
+            | Self::Comp(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SExpr<'db> {
     /// Passes a value on as it is, copying it: never the read of a
@@ -485,11 +618,11 @@ pub enum SExpr<'db> {
     },
     Const(SConst<'db>),
     Unary {
-        op: UnOp,
+        op: UnaryOp,
         value: SOperand,
     },
     Binary {
-        op: BinOp,
+        op: BinaryOp,
         lhs: SOperand,
         rhs: SOperand,
     },

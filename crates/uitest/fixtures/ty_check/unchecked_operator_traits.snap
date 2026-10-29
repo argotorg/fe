@@ -1,0 +1,33 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unchecked_operator_traits.fe
+---
+error[8-0016]: `core::ops::WrappingMul` trait is not implemented
+   ┌─ unchecked_operator_traits.fe:66:5
+   │
+66 │     x * y
+   │     ^^^^^
+   │     │
+   │     `*` can't be applied to `Scaled`
+   │     Try implementing `core::ops::WrappingMul` for `Scaled`
+   │
+   = arithmetic is unchecked here, so `*` wraps on overflow, which calls `core::ops::WrappingMul`
+
+error[8-0016]: `core::ops::Sub` trait is not implemented
+   ┌─ unchecked_operator_traits.fe:74:22
+   │
+74 │     let difference = x - y
+   │                      ^^^^^
+   │                      │
+   │                      `-` can't be applied to `Plain`
+   │                      Try implementing `core::ops::Sub` for `Plain`
+
+error[8-0016]: `core::ops::Neg` trait is not implemented
+   ┌─ unchecked_operator_traits.fe:80:5
+   │
+80 │     -x
+   │     ^^
+   │     │
+   │     `-` can't be applied to `u8`
+   │     Try implementing `core::ops::Neg` for `u8`

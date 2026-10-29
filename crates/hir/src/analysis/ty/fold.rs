@@ -323,29 +323,14 @@ where
                 args: invocation.args.clone().fold_with(db, folder),
             }),
         ),
-        ConstExpr::ArithBinOp { op, mode, lhs, rhs } => {
+        ConstExpr::ArithBinOp { op, lhs, rhs } => {
             let lhs = folder.fold_ty(db, *lhs);
             let rhs = folder.fold_ty(db, *rhs);
-            ConstExprId::new(
-                db,
-                ConstExpr::ArithBinOp {
-                    op: *op,
-                    mode: *mode,
-                    lhs,
-                    rhs,
-                },
-            )
+            ConstExprId::new(db, ConstExpr::ArithBinOp { op: *op, lhs, rhs })
         }
-        ConstExpr::UnOp { op, mode, expr } => {
+        ConstExpr::UnOp { op, expr } => {
             let expr = folder.fold_ty(db, *expr);
-            ConstExprId::new(
-                db,
-                ConstExpr::UnOp {
-                    op: *op,
-                    mode: *mode,
-                    expr,
-                },
-            )
+            ConstExprId::new(db, ConstExpr::UnOp { op: *op, expr })
         }
         ConstExpr::Cast { expr, to } => {
             let expr = folder.fold_ty(db, *expr);

@@ -11,13 +11,13 @@ impl MarkerA for Both {}
 impl MarkerB for Both {}
 
 impl<T: MarkerA> WrappingAdd for T {
-    fn wrapping_add(self, _ other: T) -> Self {
+    fn wrapping_add(own self, _ other: own T) -> Self {
         self
     }
 }
 
 impl<T: MarkerB> WrappingAdd for T {
-    fn wrapping_add(self, _ other: T) -> Self {
+    fn wrapping_add(own self, _ other: own T) -> Self {
         other
     }
 }

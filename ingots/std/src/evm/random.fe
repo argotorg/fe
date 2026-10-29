@@ -30,8 +30,6 @@
 //! or a VRF for that.
 use core::ptr::MemSlice
 use super::crypto::keccak_words
-use super::effects::revert_error
-use super::panic::{PANIC_DIVISION_BY_ZERO, Panic}
 
 /// A source of pseudorandom 256-bit words.
 pub trait Rng {
@@ -44,10 +42,6 @@ pub trait Rng {
     /// zero.
     #[arithmetic(unchecked)]
     fn uniform(mut self, _ upper: u256) -> u256 {
-        // The unchecked `%` below would give 0 for a zero bound.
-        if upper == 0 {
-            revert_error(Panic::from(PANIC_DIVISION_BY_ZERO))
-        }
         let threshold = (0 - upper) % upper
         var word = self.next()
         while word < threshold {

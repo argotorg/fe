@@ -16,7 +16,7 @@ error[5-0004]: external trait blanket impl is not anchored by a sealed local mar
    ┌─ local_bound_blanket_foreign_trait_impl_diagnostics.fe:11:1
    │
 11 │ ╭ impl<T: Copy> WrappingMul for T {
-12 │ │     fn wrapping_mul(self, _ other: T) -> Self {
+12 │ │     fn wrapping_mul(own self, _ other: own T) -> Self {
 13 │ │         self
 14 │ │     }
 15 │ │ }

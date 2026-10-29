@@ -756,7 +756,8 @@ fn mutated_scalar_locals_stay_rooted() {
         r#"
 fn bump(size: u256) -> u256 {
     var value: u256 = size
-    value += 1
+    let counter = mut value
+    counter += 1
     value
 }
 
@@ -790,7 +791,13 @@ fn entry() -> u256 {
                     } if place.root == PlaceRoot::Slot(rooted_scalar) => Some(*dst),
                     _ => None,
                 })
-                .map(|rooted_ptr| transported_local_from_param(&body, rooted_ptr))
+                // The address and the copies the access binding makes of it.
+                .flat_map(|rooted_ptr| {
+                    std::iter::successors(Some(rooted_ptr), |&ptr| {
+                        let next = transported_local_from_param(&body, ptr);
+                        (next != ptr).then_some(next)
+                    })
+                })
                 .collect::<Vec<_>>();
             assert!(
                 !rooted_ptrs.is_empty(),
@@ -1077,7 +1084,8 @@ fn mutating_mut_own_aggregate_receiver_stays_rooted() {
 
 impl Pair {
     fn bump(var own self) -> Pair {
-        self.left += 1
+        let left = mut self.left
+        left += 1
         self
     }
 }

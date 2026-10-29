@@ -665,43 +665,52 @@ impl<'db> TopLevelMod<'db> {
 impl<'db> Mod<'db> {
     // Note: semantic child iteration and module-scoped diagnostics can be
     // added here if direct `scope_graph` traversal in analysis becomes noisy.
-    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> Option<ArithmeticMode> {
-        self.attributes(db).arithmetic_mode(db)
+}
+
+impl<'db> ScopeId<'db> {
+    /// The arithmetic mode of the code in this scope, which is lexical: the
+    /// innermost `#[arithmetic]` on an enclosing function or module, then the
+    /// file's `#![arithmetic]`, then the ingot's, and otherwise checked. A
+    /// function's covers its body, including the closures and constant
+    /// expressions there, but not the constants in its signature, such as
+    /// its `where` conditions.
+    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> ArithmeticMode {
+        let mut inner = None;
+        let mut scope = Some(self);
+        while let Some(current) = scope
+            && !matches!(current, ScopeId::Item(ItemKind::TopMod(_)))
+        {
+            let attrs = match current {
+                ScopeId::Item(ItemKind::Func(func))
+                    if inner.is_none_or(|inner| {
+                        func.body(db).is_some_and(|body| inner == body.scope())
+                    }) =>
+                {
+                    Some(func.attributes(db))
+                }
+                ScopeId::Item(ItemKind::Mod(mod_)) => Some(mod_.attributes(db)),
+                _ => None,
+            };
+            if let Some(mode) = attrs.and_then(|attrs| attrs.arithmetic_mode(db)) {
+                return mode;
+            }
+            inner = Some(current);
+            scope = current.parent(db);
+        }
+        let top_mod = self.top_mod(db);
+        top_mod
+            .attributes(db)
+            .arithmetic_mode(db)
+            .unwrap_or_else(|| match top_mod.ingot(db).arithmetic_mode(db) {
+                Some(common::config::ArithmeticMode::Unchecked) => ArithmeticMode::Unchecked,
+                Some(common::config::ArithmeticMode::Checked) | None => ArithmeticMode::Checked,
+            })
     }
 }
 
 // Function items ------------------------------------------------------------
 
 impl<'db> Func<'db> {
-    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> ArithmeticMode {
-        if let Some(mode) = self.attributes(db).arithmetic_mode(db) {
-            return mode;
-        }
-
-        let mut scope = self.scope().parent_module(db);
-        while let Some(module_scope) = scope {
-            if let ItemKind::Mod(mod_) = module_scope.item()
-                && let Some(mode) = mod_.attributes(db).arithmetic_mode(db)
-            {
-                return mode;
-            }
-            scope = module_scope.parent_module(db);
-        }
-
-        if let Some(mode) = self.top_mod(db).attributes(db).arithmetic_mode(db) {
-            return mode;
-        }
-
-        if let Some(mode) = self.top_mod(db).ingot(db).arithmetic_mode(db) {
-            return match mode {
-                common::config::ArithmeticMode::Checked => ArithmeticMode::Checked,
-                common::config::ArithmeticMode::Unchecked => ArithmeticMode::Unchecked,
-            };
-        }
-
-        ArithmeticMode::Checked
-    }
-
     /// Semantic predicate list (assumptions) for this function.
     pub(crate) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         constraints_for(db, self.into())

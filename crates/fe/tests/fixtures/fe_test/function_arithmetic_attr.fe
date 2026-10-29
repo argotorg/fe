@@ -22,11 +22,26 @@ fn unchecked_aug_assign_wraps_u8() {
 }
 
 #[arithmetic(unchecked)]
-#[test]
-fn unchecked_div_zero_u8_returns_zero() {
+#[test(should_revert, panic = 0x12)]
+fn unchecked_div_zero_u8_panics() {
     let x: u8 = 1
     let y: u8 = x / 0
-    assert!(y == 0)
+}
+
+#[arithmetic(unchecked)]
+#[test(should_revert, panic = 0x12)]
+fn unchecked_rem_zero_i8_panics() {
+    let x: i8 = -1
+    let y: i8 = x % 0
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn unchecked_signed_div_overflow_wraps_i8() {
+    let x: i8 = -128
+    let y: i8 = x / -1
+    assert!(y == -128)
+    assert!(x % -1 == 0)
 }
 
 #[arithmetic(unchecked)]

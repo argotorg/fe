@@ -50,17 +50,14 @@ func private %__Book_recv_0_0(v0.i256) {
 
 func private %__Book_recv_0_1(v0.i64, v1.i256) {
     block0:
-        v2.objref<i64> = obj.alloc i64;
         jump block1;
 
     block1:
-        v4.i256 = evm_sload v1;
-        v6.i256 = shr 128.i256 v4;
-        v7.i64 = trunc v6 i64;
-        obj.store v2 v7;
-        v8.i64 = obj.load v2;
-        (v10.i64, v11.i1) = uaddo v8 v0;
-        br v11 block2 block3;
+        v3.i256 = evm_sload v1;
+        v5.i256 = shr 128.i256 v3;
+        v6.i64 = trunc v5 i64;
+        (v8.i64, v9.i1) = uaddo v6 v0;
+        br v9 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -68,15 +65,13 @@ func private %__Book_recv_0_1(v0.i64, v1.i256) {
         evm_revert 0.i256 36.i256;
 
     block3:
-        obj.store v2 v10;
-        v18.i64 = obj.load v2;
-        v20.i256 = zext v18 i256;
-        v22.i256 = and v20 18446744073709551615.i256;
-        v23.i256 = shl 128.i256 v22;
-        v24.i256 = evm_sload v1;
-        v26.i256 = and v24 -6277101735386680763495507056286727952638980837032266301441.i256;
-        v27.i256 = or v26 v23;
-        evm_sstore v1 v27;
+        v16.i256 = zext v8 i256;
+        v18.i256 = and v16 18446744073709551615.i256;
+        v19.i256 = shl 128.i256 v18;
+        v20.i256 = evm_sload v1;
+        v22.i256 = and v20 -6277101735386680763495507056286727952638980837032266301441.i256;
+        v23.i256 = or v22 v19;
+        evm_sstore v1 v23;
         return;
 }
 
@@ -251,8 +246,8 @@ func inline(always) private %checked_frame_end(v0.i256, v1.i256, v2.i256) -> i25
         return v8;
 
     block5:
-        v11.i256 = sub v2 v0;
-        v13.i1 = gt v1 v11;
+        v12.i256 = sub v2 v0;
+        v13.i1 = gt v1 v12;
         br v13 block2 block3;
 }
 
@@ -261,8 +256,8 @@ func inline(always) private %checked_tail(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v5.i256 = sub -1.i256 v0;
-        v7.i1 = gt v1 v5;
+        v6.i256 = sub -1.i256 v0;
+        v7.i1 = gt v1 v6;
         br v7 block2 block3;
 
     block2:
@@ -1137,8 +1132,8 @@ func inline(always) private %slice(v0.@layout_6, v1.i256, v2.i256) -> @layout_6 
         jump block1;
 
     block1:
-        v5.i256 = extract_value v0 1.i256;
-        v7.i1 = gt v1 v5;
+        v6.i256 = extract_value v0 1.i256;
+        v7.i1 = gt v1 v6;
         br v7 block2 block5;
 
     block2:
@@ -1156,9 +1151,9 @@ func inline(always) private %slice(v0.@layout_6, v1.i256, v2.i256) -> @layout_6 
         return v16;
 
     block5:
-        v18.i256 = extract_value v0 1.i256;
-        v20.i256 = sub v18 v1;
-        v22.i1 = gt v2 v20;
+        v19.i256 = extract_value v0 1.i256;
+        v21.i256 = sub v19 v1;
+        v22.i1 = gt v2 v21;
         br v22 block2 block3;
 }
 
@@ -1188,8 +1183,8 @@ func inline(always) private %tail(v0.@layout_6, v1.i256) -> @layout_6 {
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 1.i256;
-        v6.i1 = gt v1 v4;
+        v5.i256 = extract_value v0 1.i256;
+        v6.i1 = gt v1 v5;
         br v6 block2 block3;
 
     block2:

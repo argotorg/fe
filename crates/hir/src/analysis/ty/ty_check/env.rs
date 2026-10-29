@@ -1,8 +1,8 @@
 use crate::{
     analysis::place::{Place, is_grant_place_expr, is_pointer_place_expr},
     hir_def::{
-        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, ModeMarker, Partial, Pat, PatId, Stmt,
-        StmtId, TypeId as HirTypeId, UnOp, scope_graph::ScopeId,
+        Body, Contract, Expr, ExprId, Func, IdentId, ModeMarker, Partial, Pat, PatId, Stmt, StmtId,
+        TypeId as HirTypeId, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -19,7 +19,7 @@ use thin_vec::ThinVec;
 use super::effect_env as keyed_effect_env;
 use super::owner::BodyOwner;
 use super::{
-    Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
+    BuiltinOp, Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
     TypedBodyTables, ValuePathRef, stmt::ForLoopPlan,
 };
 use crate::analysis::ty::pattern_ir::{
@@ -207,6 +207,11 @@ pub(crate) struct TyCheckEnv<'db> {
     product_args: FxHashSet<ExprId>,
     /// The calls `f(..)` of callable values, whose callee is the receiver.
     value_calls: FxHashSet<ExprId>,
+    /// The operators on primitive operands, by their built-in operation.
+    builtin_ops: FxHashMap<ExprId, BuiltinOp>,
+    /// The compound assignments that assign their operator method's result
+    /// (`x = x.wrapping_add(y)`) rather than call an `*Assign` method.
+    operator_assigns: FxHashSet<ExprId>,
     covered_providers: FxHashSet<ExprId>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
@@ -335,6 +340,8 @@ impl<'db> TyCheckEnv<'db> {
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
+            builtin_ops: FxHashMap::default(),
+            operator_assigns: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
@@ -966,6 +973,14 @@ impl<'db> TyCheckEnv<'db> {
         self.place_entries.insert(expr);
     }
 
+    pub(super) fn register_builtin_op(&mut self, expr: ExprId, op: BuiltinOp) {
+        self.builtin_ops.insert(expr, op);
+    }
+
+    pub(super) fn register_operator_assign(&mut self, expr: ExprId) {
+        self.operator_assigns.insert(expr);
+    }
+
     pub(super) fn record_unsafe_split(&mut self, tuple: ExprId) {
         self.unsafe_splits.insert(tuple);
     }
@@ -1514,8 +1529,8 @@ impl<'db> TyCheckEnv<'db> {
         })
     }
 
-    pub(super) fn register_pending_primitive_op(&mut self, pending: PendingPrimitiveOp) {
-        self.deferred.push(DeferredTask::PrimitiveOp(pending))
+    pub(super) fn register_pending_negation(&mut self, pending: PendingNegation) {
+        self.deferred.push(DeferredTask::Negation(pending))
     }
 
     pub(super) fn register_type_equality(&mut self, equality: TypeEquality<'db>) {
@@ -1657,6 +1672,8 @@ impl<'db> TyCheckEnv<'db> {
             unsafe_splits: self.unsafe_splits,
             product_args: self.product_args,
             value_calls: self.value_calls,
+            builtin_ops: self.builtin_ops,
+            operator_assigns: self.operator_assigns,
             matched_places: self.matched_places,
             inspected_places: self.inspected_places,
             covered_providers: self.covered_providers,
@@ -2577,34 +2594,18 @@ pub(super) struct PendingMethodCandidate<'db> {
     pub needs_confirmation: bool,
 }
 
-#[derive(Debug, Clone)]
-pub(super) enum PendingPrimitiveOp {
-    Unary {
-        expr: ExprId,
-        inner: ExprId,
-        op: UnOp,
-    },
-    Binary {
-        expr: ExprId,
-        lhs: ExprId,
-        rhs: ExprId,
-        op: BinOp,
-    },
-}
-
-impl PendingPrimitiveOp {
-    pub(super) fn expr(&self) -> ExprId {
-        match self {
-            Self::Unary { expr, .. } | Self::Binary { expr, .. } => *expr,
-        }
-    }
+/// `-inner`, at `expr`, on an integer whose type is not yet known.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PendingNegation {
+    pub expr: ExprId,
+    pub inner: ExprId,
 }
 
 #[derive(Debug, Clone)]
 pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
     Method(PendingMethod<'db>),
-    PrimitiveOp(PendingPrimitiveOp),
+    Negation(PendingNegation),
     TypeEquality(TypeEquality<'db>),
 }
 

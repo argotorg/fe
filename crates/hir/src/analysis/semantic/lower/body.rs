@@ -11,11 +11,11 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, LayoutBackingSource, Mutability, SBlock, SBlockId, SConst,
-            SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind, STerminator,
-            STerminatorKind, SValueId, SemConstId, SemConstValue, SemOrigin, SemanticBody,
-            SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const, bytes_const,
-            consts::instantiate_const_template, int_const, reify_runtime_const_for_ty,
+            BinaryOp, CallSiteId, FieldIndex, LayoutBackingSource, Mutability, SBlock, SBlockId,
+            SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
+            STerminator, STerminatorKind, SValueId, SemConstId, SemConstValue, SemOrigin,
+            SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const,
+            bytes_const, consts::instantiate_const_template, int_const, reify_runtime_const_for_ty,
             runtime_size_bytes, sem_const_from_ty, struct_const, unit_const,
         },
         ty::{
@@ -27,7 +27,7 @@ use crate::{
             normalize::normalize_ty,
             shape::{Shape, SumKind, sum_kind},
             ty_check::{
-                BindingAccess, BodyOwner, CallParam, Callable, CodeRegionIntrinsicKind,
+                BindingAccess, BodyOwner, BuiltinOp, CallParam, Callable, CodeRegionIntrinsicKind,
                 ConstIntrinsicKind, ConstRef, ForLoopStep, LocalBinding, PathReadSemantics,
                 RecordInitLowering, RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
                 constructed_variant, infer_body, transparent_newtype_field_ty,
@@ -1290,7 +1290,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     return value;
                 }
                 let value = self.lower_expr_operand(*inner);
-                self.emit_expr_with_origin(origin, ty, SExpr::Unary { op: *op, value })
+                let expr = match self.typed_body.builtin_op(expr) {
+                    Some(BuiltinOp::Unary(op)) => SExpr::Unary { op, value },
+                    // `+x` is `x`.
+                    None => SExpr::Forward(value),
+                    Some(BuiltinOp::Binary(op)) => {
+                        panic!("unary operator {expr:?} has binary operation {op:?}")
+                    }
+                };
+                self.emit_expr_with_origin(origin, ty, expr)
             }
             Expr::Bin(lhs, rhs, BinOp::Arith(ArithBinOp::Range)) => {
                 let ty = self.expr_ty(expr);
@@ -1324,9 +1332,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if matches!(op, BinOp::Logical(_)) {
                     return self.lower_logical_expr(expr);
                 }
+                let op = self.builtin_binary_op(expr);
                 let lhs = self.take_expr_operand(*lhs);
                 let rhs = self.lower_expr_operand(*rhs);
-                self.emit_expr_with_origin(origin, ty, SExpr::Binary { op: *op, lhs, rhs })
+                self.emit_expr_with_origin(origin, ty, SExpr::Binary { op, lhs, rhs })
             }
             Expr::Cast(value, _) => {
                 let from = self.expr_ty(*value);
@@ -1356,38 +1365,71 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 self.unit_value()
             }
-            Expr::AugAssign(dst, src, op) => {
-                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+            // `x op= y` reads `x` once, after `y`, and writes the operation's
+            // result back: a built-in operation, or in unchecked code the
+            // wrapping operator method (`x = x.wrapping_add(y)`). Otherwise it
+            // calls the `*Assign` method. The method takes `y` at its
+            // parameter's mode, and `x` as the value read out of the place,
+            // which its `own self` takes.
+            Expr::AugAssign(dst, src, _) => {
+                let assigns_call = self.typed_body.assigns_operator_result(expr);
+                let lowering = self.typed_body.semantic_expr_lowering(expr);
+                if !assigns_call && lowering.is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
                 self.prepare_place_root(*dst);
-                let rhs = self.take_expr_operand(*src);
-                let dst_place = self.lower_place(*dst);
-                let lhs = if dst_place.path.is_empty() {
-                    self.lower_expr_operand(*dst)
+                let rhs = match lowering {
+                    Some(SemanticExprLowering::Call { callable }) => {
+                        let mode = callable
+                            .params(self.db)
+                            .and_then(|params| params[1].shape.param_mode())
+                            .expect("a wrapping operator method takes its operand at a mode");
+                        let value = self.lower_callable_argument(*src, callable, mode, false);
+                        SOperand::expr(value, *src)
+                    }
+                    _ => self.take_expr_operand(*src),
+                };
+                // A projection's result is read and written through its
+                // access, as an assignment's target is.
+                let projection = self.typed_body.semantic_expr_lowering(*dst).is_some();
+                let dst_place = if projection {
+                    SPlace::new(self.lower_access(*dst))
                 } else {
-                    SOperand::expr(
-                        self.emit_expr_with_origin(
-                            SemOrigin::Expr(*dst),
-                            self.expr_ty(*dst),
-                            SExpr::ReadPlace {
-                                place: dst_place.clone(),
-                            },
-                        ),
-                        *dst,
-                    )
+                    self.lower_place(*dst)
+                };
+                let read = if projection {
+                    Some(SExpr::UseValue(SOperand::expr(dst_place.local, *dst)))
+                } else {
+                    (!dst_place.path.is_empty()).then(|| SExpr::ReadPlace {
+                        place: dst_place.clone(),
+                    })
+                };
+                let lhs = match read {
+                    Some(read) => {
+                        let ty = self.expr_ty(*dst);
+                        let value = self.emit_expr_with_origin(SemOrigin::Expr(*dst), ty, read);
+                        SOperand::expr(value, *dst)
+                    }
+                    None => self.lower_expr_operand(*dst),
                 };
                 let dst_ty = self.projectable_place_ty(self.expr_ty(*dst));
-                let sum = self.emit_expr_with_origin(
-                    origin,
-                    dst_ty,
-                    SExpr::Binary {
-                        op: BinOp::Arith(*op),
-                        lhs,
-                        rhs,
-                    },
-                );
-                self.push_place_write(origin, dst_place, SOperand::inherited(sum));
+                let result = SOperand::inherited(if assigns_call {
+                    self.emit_call(expr, dst_ty, vec![lhs, rhs])
+                } else {
+                    let op = self.builtin_binary_op(expr);
+                    self.emit_expr_with_origin(origin, dst_ty, SExpr::Binary { op, lhs, rhs })
+                });
+                if projection {
+                    self.push_stmt(
+                        origin,
+                        SStmtKind::Store {
+                            dst: dst_place,
+                            src: result,
+                        },
+                    );
+                } else {
+                    self.push_place_write(origin, dst_place, result);
+                }
                 self.unit_value()
             }
             Expr::Block(stmts, _) => self.lower_block_expr(stmts),
@@ -1889,34 +1931,44 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     fields: values.into_boxed_slice(),
                 },
             ),
-            CallableDef::Func(_) => {
-                let call_site = self
-                    .call_sites
-                    .get(expr.index())
-                    .and_then(|site| site.as_ref())
-                    .unwrap_or_else(|| {
-                        panic!("call lowering plan missing semantic callee for {expr:?}")
-                    });
-                let callee = call_site
-                    .callee
-                    .unwrap_or_else(|| panic!("call lowering plan missing callee for {expr:?}"));
-                // A function item called through a callable shape is not
-                // passed: the function takes the operands after it.
-                if call_site.drops_receiver {
-                    values.remove(0);
-                }
-                let effect_args = self.lower_effect_arg_slice(&call_site.effect_args);
-                self.emit_expr_with_origin(
-                    SemOrigin::Expr(expr),
-                    ty,
-                    SExpr::Call {
-                        call_site: CallSiteId::Expr(expr),
-                        callee,
-                        args: values.into_boxed_slice(),
-                        effect_args,
-                    },
-                )
-            }
+            CallableDef::Func(_) => self.emit_call(expr, ty, values),
+        }
+    }
+
+    /// Emits the function call `expr` resolved to, with its inputs `args`.
+    fn emit_call(&mut self, expr: ExprId, ty: TyId<'db>, mut args: Vec<SOperand>) -> SValueId {
+        let call_site = self
+            .call_sites
+            .get(expr.index())
+            .and_then(|site| site.as_ref())
+            .unwrap_or_else(|| panic!("call lowering plan missing semantic callee for {expr:?}"));
+        let callee = call_site
+            .callee
+            .unwrap_or_else(|| panic!("call lowering plan missing callee for {expr:?}"));
+        // A function item called through a callable shape is not passed: the
+        // function takes the operands after it.
+        if call_site.drops_receiver {
+            args.remove(0);
+        }
+        let effect_args = self.lower_effect_arg_slice(&call_site.effect_args);
+        self.emit_expr_with_origin(
+            SemOrigin::Expr(expr),
+            ty,
+            SExpr::Call {
+                call_site: CallSiteId::Expr(expr),
+                callee,
+                args: args.into_boxed_slice(),
+                effect_args,
+            },
+        )
+    }
+
+    /// The built-in operation of the binary operator `expr`, which the type
+    /// checker records for operands it does not call an operator trait for.
+    fn builtin_binary_op(&self, expr: ExprId) -> BinaryOp {
+        match self.typed_body.builtin_op(expr) {
+            Some(BuiltinOp::Binary(op)) => op,
+            op => panic!("binary operator {expr:?} has no built-in binary operation: {op:?}"),
         }
     }
 

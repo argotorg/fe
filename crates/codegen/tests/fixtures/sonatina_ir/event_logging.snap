@@ -348,8 +348,8 @@ func inline(always) private %slice(v0.@layout_3, v1.i256, v2.i256) -> @layout_3 
         jump block1;
 
     block1:
-        v5.i256 = extract_value v0 1.i256;
-        v7.i1 = gt v1 v5;
+        v6.i256 = extract_value v0 1.i256;
+        v7.i1 = gt v1 v6;
         br v7 block2 block5;
 
     block2:
@@ -367,9 +367,9 @@ func inline(always) private %slice(v0.@layout_3, v1.i256, v2.i256) -> @layout_3 
         return v16;
 
     block5:
-        v18.i256 = extract_value v0 1.i256;
-        v20.i256 = sub v18 v1;
-        v22.i1 = gt v2 v20;
+        v19.i256 = extract_value v0 1.i256;
+        v21.i256 = sub v19 v1;
+        v22.i1 = gt v2 v21;
         br v22 block2 block3;
 }
 
@@ -399,8 +399,8 @@ func inline(always) private %tail(v0.@layout_3, v1.i256) -> @layout_3 {
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 1.i256;
-        v6.i1 = gt v1 v4;
+        v5.i256 = extract_value v0 1.i256;
+        v6.i1 = gt v1 v5;
         br v6 block2 block3;
 
     block2:

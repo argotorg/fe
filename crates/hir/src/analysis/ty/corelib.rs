@@ -17,8 +17,8 @@ use crate::{
         },
     },
     hir_def::{
-        ArithBinOp, BinOp, CallableDef, CompBinOp, Func, FuncParamMode, IdentId, ItemKind, PathId,
-        Trait, UnOp, scope_graph::ScopeId,
+        ArithBinOp, CallableDef, CompBinOp, Func, FuncParamMode, IdentId, PathId, Trait,
+        scope_graph::ScopeId,
     },
     semantic::EffectRequirementKey,
 };
@@ -271,7 +271,6 @@ pub(crate) enum NumericExternIntrinsic {
     Comparison(CompBinOp),
     BoolBinary(ArithBinOp),
     CheckedNeg,
-    WrappingNeg,
     BitNot,
     BoolNot,
 }
@@ -385,8 +384,6 @@ pub(crate) fn numeric_extern_intrinsic(name: &str) -> Option<NumericExternIntrin
                 NumericExternIntrinsic::Comparison(CompBinOp::Gt)
             } else if suffix("__ge_").is_some() {
                 NumericExternIntrinsic::Comparison(CompBinOp::GtEq)
-            } else if suffix("__neg_").is_some() {
-                NumericExternIntrinsic::WrappingNeg
             } else if suffix("__bitnot_").is_some() {
                 NumericExternIntrinsic::BitNot
             } else {
@@ -616,106 +613,6 @@ fn runtime_builtin_func_path<'db>(
         segments.remove(0);
     }
     Some(segments)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrimitiveWrapperCallKind {
-    Unary(UnOp),
-    Binary(BinOp),
-    Assign(BinOp),
-}
-
-pub fn core_primitive_wrapper_call_kind<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-    result_ty: TyId<'db>,
-) -> Option<PrimitiveWrapperCallKind> {
-    if func.top_mod(db).ingot(db).kind(db) != IngotKind::Core {
-        return None;
-    }
-    let Some(ItemKind::ImplTrait(impl_trait)) = func.scope().parent_item(db) else {
-        return None;
-    };
-    // Core also defines operators for aggregates (for example String, arrays,
-    // and tuples). Their method bodies carry the comparison semantics and must
-    // not be bypassed just because the trait and method names match.
-    let self_ty = impl_trait.ty(db);
-    if !self_ty.is_integral(db) && !self_ty.is_bool(db) && self_ty.as_ptr(db).is_none() {
-        return None;
-    }
-    let method = func.name(db).to_opt()?.data(db);
-    let matches_trait = |segments: &[&str]| {
-        impl_trait.trait_def(db) == resolve_core_trait(db, func.scope(), segments)
-    };
-    Some(if method == "add" && matches_trait(&["ops", "Add"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::Add))
-    } else if method == "sub" && matches_trait(&["ops", "Sub"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::Sub))
-    } else if method == "mul" && matches_trait(&["ops", "Mul"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::Mul))
-    } else if method == "div" && matches_trait(&["ops", "Div"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::Div))
-    } else if method == "rem" && matches_trait(&["ops", "Rem"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::Rem))
-    } else if method == "pow" && matches_trait(&["ops", "Pow"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::Pow))
-    } else if method == "shl" && matches_trait(&["ops", "Shl"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::LShift))
-    } else if method == "shr" && matches_trait(&["ops", "Shr"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::RShift))
-    } else if method == "bitand" && matches_trait(&["ops", "BitAnd"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::BitAnd))
-    } else if method == "bitor" && matches_trait(&["ops", "BitOr"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::BitOr))
-    } else if method == "bitxor" && matches_trait(&["ops", "BitXor"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Arith(ArithBinOp::BitXor))
-    } else if method == "eq" && matches_trait(&["ops", "Eq"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Comp(CompBinOp::Eq))
-    } else if method == "ne" && matches_trait(&["ops", "Eq"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Comp(CompBinOp::NotEq))
-    } else if method == "lt" && matches_trait(&["ops", "Ord"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Comp(CompBinOp::Lt))
-    } else if method == "le" && matches_trait(&["ops", "Ord"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Comp(CompBinOp::LtEq))
-    } else if method == "gt" && matches_trait(&["ops", "Ord"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Comp(CompBinOp::Gt))
-    } else if method == "ge" && matches_trait(&["ops", "Ord"]) {
-        PrimitiveWrapperCallKind::Binary(BinOp::Comp(CompBinOp::GtEq))
-    } else if method == "neg" && matches_trait(&["ops", "Neg"]) {
-        PrimitiveWrapperCallKind::Unary(UnOp::Minus)
-    } else if method == "bit_not" && matches_trait(&["ops", "BitNot"]) {
-        PrimitiveWrapperCallKind::Unary(UnOp::BitNot)
-    } else if method == "not" && matches_trait(&["ops", "Not"]) {
-        PrimitiveWrapperCallKind::Unary(if result_ty == TyId::bool(db) {
-            UnOp::Not
-        } else {
-            UnOp::BitNot
-        })
-    } else if method == "add_assign" && matches_trait(&["ops", "AddAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::Add))
-    } else if method == "sub_assign" && matches_trait(&["ops", "SubAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::Sub))
-    } else if method == "mul_assign" && matches_trait(&["ops", "MulAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::Mul))
-    } else if method == "div_assign" && matches_trait(&["ops", "DivAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::Div))
-    } else if method == "rem_assign" && matches_trait(&["ops", "RemAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::Rem))
-    } else if method == "pow_assign" && matches_trait(&["ops", "PowAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::Pow))
-    } else if method == "shl_assign" && matches_trait(&["ops", "ShlAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::LShift))
-    } else if method == "shr_assign" && matches_trait(&["ops", "ShrAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::RShift))
-    } else if method == "bitand_assign" && matches_trait(&["ops", "BitAndAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::BitAnd))
-    } else if method == "bitor_assign" && matches_trait(&["ops", "BitOrAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::BitOr))
-    } else if method == "bitxor_assign" && matches_trait(&["ops", "BitXorAssign"]) {
-        PrimitiveWrapperCallKind::Assign(BinOp::Arith(ArithBinOp::BitXor))
-    } else {
-        return None;
-    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

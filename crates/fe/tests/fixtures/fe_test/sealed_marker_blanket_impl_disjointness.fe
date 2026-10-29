@@ -32,13 +32,13 @@ impl RightWide for Y {}
 impl RightWide for Z {}
 
 impl<T: LeftWide + LeftNarrow + Copy> WrappingAdd for T {
-    fn wrapping_add(self, _ other: T) -> Self {
+    fn wrapping_add(own self, _ other: own T) -> Self {
         self
     }
 }
 
 impl<T: RightWide + Copy> WrappingAdd for T {
-    fn wrapping_add(self, _ other: T) -> Self {
+    fn wrapping_add(own self, _ other: own T) -> Self {
         other
     }
 }
@@ -55,13 +55,13 @@ impl Copy for Full {}
 impl FullMarker for Full {}
 
 impl<T: EmptyMarker + Copy> WrappingSub for T {
-    fn wrapping_sub(self, _ other: T) -> Self {
+    fn wrapping_sub(own self, _ other: own T) -> Self {
         self
     }
 }
 
 impl<T: FullMarker + Copy> WrappingSub for T {
-    fn wrapping_sub(self, _ other: T) -> Self {
+    fn wrapping_sub(own self, _ other: own T) -> Self {
         other
     }
 }
@@ -89,13 +89,13 @@ impl RightOnly for Right {}
 impl Common for Right {}
 
 impl<T: LeftOnly + Common + Copy> WrappingMul for T {
-    fn wrapping_mul(self, _ other: T) -> Self {
+    fn wrapping_mul(own self, _ other: own T) -> Self {
         self
     }
 }
 
 impl<T: RightOnly + Common + Copy> WrappingMul for T {
-    fn wrapping_mul(self, _ other: T) -> Self {
+    fn wrapping_mul(own self, _ other: own T) -> Self {
         other
     }
 }

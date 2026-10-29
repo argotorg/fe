@@ -6,7 +6,7 @@ use fe_hir::test_db::{HirAnalysisTestDb, find_func};
 use fe_hir::{
     analysis::{
         semantic::{
-            CtfeError, EvalFailure, EvalOutcome, GenericSubst, SConst, SExpr, SStmtKind,
+            BinaryOp, CtfeError, EvalFailure, EvalOutcome, GenericSubst, SConst, SExpr, SStmtKind,
             SemConstId, SemConstScalar, SemConstValue, SemanticInstance,
             canonicalize_semantic_consts, eval_body_owner_const, eval_body_owner_const_with_args,
             identity_semantic_instance_key, reify_runtime_const_for_ty,
@@ -1261,9 +1261,14 @@ fn canonicalize_invalidates_const_facts_for_mutating_calls() {
         "semantic_ctfe.fe".into(),
         r#"
 #[arithmetic(unchecked)]
-fn wraps_after_aug_assign() -> bool {
-    var x: u8 = 255
+fn increment(_ x: mut u8) {
     x += 1
+}
+
+#[arithmetic(unchecked)]
+fn wraps_after_mutating_call() -> bool {
+    var x: u8 = 255
+    increment(mut x)
     x == 0
 }
 "#,
@@ -1273,9 +1278,9 @@ fn wraps_after_aug_assign() -> bool {
         .all_funcs(&db)
         .iter()
         .find(|func| {
-            matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "wraps_after_aug_assign")
+            matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "wraps_after_mutating_call")
         })
-        .expect("expected wraps_after_aug_assign function");
+        .expect("expected wraps_after_mutating_call function");
 
     let semantic = SemanticInstance::new(
         &db,
@@ -1284,7 +1289,7 @@ fn wraps_after_aug_assign() -> bool {
     let body = canonicalize_semantic_consts(&db, semantic)
         .expect("valid semantic body should be canonicalizable");
 
-    let mut saw_bool_call = false;
+    let mut saw_comparison = false;
     let mut saw_const_false = false;
     for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
         let SStmtKind::Assign { dst, expr } = &stmt.kind else {
@@ -1293,7 +1298,13 @@ fn wraps_after_aug_assign() -> bool {
         if !body.locals[dst.index()].ty.is_bool(&db) {
             continue;
         }
-        saw_bool_call |= matches!(expr, SExpr::Call { .. });
+        saw_comparison |= matches!(
+            expr,
+            SExpr::Binary {
+                op: BinaryOp::Comp(_),
+                ..
+            }
+        );
         saw_const_false |= matches!(
             expr,
             SExpr::Const(SConst::Value(value))
@@ -1308,7 +1319,7 @@ fn wraps_after_aug_assign() -> bool {
     }
 
     assert!(
-        saw_bool_call,
+        saw_comparison,
         "expected the post-call comparison to stay dynamic in canonicalized semantic body"
     );
     assert!(
@@ -1519,7 +1530,10 @@ fn probe(index: usize) -> bool {{
                             }
                         );
                     }
-                    SExpr::Call { .. } => dynamic_comparison = true,
+                    SExpr::Binary {
+                        op: BinaryOp::Comp(_),
+                        ..
+                    } => dynamic_comparison = true,
                     _ => {}
                 }
             }

@@ -3844,6 +3844,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 ty,
                 op,
                 trait_path,
+                wraps,
             } => {
                 let sub_diagnostics = vec![
                     SubDiagnostic {
@@ -3863,11 +3864,20 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     },
                 ];
 
+                let notes = if *wraps {
+                    vec![format!(
+                        "arithmetic is unchecked here, so `{}` wraps on overflow, which calls `{}`",
+                        op.data(db),
+                        trait_path.pretty_print(db)
+                    )]
+                } else {
+                    vec![]
+                };
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!("`{}` trait is not implemented", trait_path.pretty_print(db)),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes,
                     error_code,
                 }
             }

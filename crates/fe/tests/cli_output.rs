@@ -838,13 +838,11 @@ fn checked_rem(value: i{bits}, divisor: i{bits}) -> i{bits} {{
 
 pub fn main() -> i32 {{
     let min: i{bits} = 1 << {sign_bit}
-    if !signed(value: -17, divisor: 0, quotient: 0, remainder: 0) {{ return 1 }}
-    if !unsigned(value: 17, divisor: 0, quotient: 0, remainder: 0) {{ return 2 }}
-    if !signed(value: min, divisor: -1, quotient: min, remainder: 0) {{ return 3 }}
-    if !signed(value: -17, divisor: 5, quotient: -3, remainder: -2) {{ return 4 }}
-    if !signed(value: 17, divisor: -5, quotient: -3, remainder: 2) {{ return 5 }}
-    if !unsigned(value: 17, divisor: 5, quotient: 3, remainder: 2) {{ return 6 }}
-    if checked_rem(value: min, divisor: -1) != 0 {{ return 7 }}
+    if !signed(value: min, divisor: -1, quotient: min, remainder: 0) {{ return 1 }}
+    if !signed(value: -17, divisor: 5, quotient: -3, remainder: -2) {{ return 2 }}
+    if !signed(value: 17, divisor: -5, quotient: -3, remainder: 2) {{ return 3 }}
+    if !unsigned(value: 17, divisor: 5, quotient: 3, remainder: 2) {{ return 4 }}
+    if checked_rem(value: min, divisor: -1) != 0 {{ return 5 }}
     0
 }}
 "#
@@ -867,19 +865,24 @@ pub fn main() -> i32 {{
     )
 ))]
 #[test]
-fn test_cli_build_native_checked_arithmetic_still_traps() {
+fn test_cli_build_native_arithmetic_traps() {
     let mut cases = Vec::new();
     for bits in [8, 128, 256] {
         let sign_bit = bits - 1;
         let min = format!("1 << {sign_bit}");
-        for (prefix, op, value, rhs) in [
-            ("u", "/", "17", "0"),
-            ("u", "%", "17", "0"),
-            ("i", "/", "-17", "0"),
-            ("i", "%", "-17", "0"),
-            ("i", "/", min.as_str(), "-1"),
+        for (mode, prefix, op, value, rhs) in [
+            ("checked", "u", "/", "17", "0"),
+            ("checked", "u", "%", "17", "0"),
+            ("checked", "i", "/", "-17", "0"),
+            ("checked", "i", "%", "-17", "0"),
+            ("checked", "i", "/", min.as_str(), "-1"),
+            ("unchecked", "u", "/", "17", "0"),
+            ("unchecked", "u", "%", "17", "0"),
+            ("unchecked", "i", "/", "-17", "0"),
+            ("unchecked", "i", "%", "-17", "0"),
         ] {
             cases.push((
+                mode,
                 format!("{prefix}{bits}"),
                 op,
                 value.to_owned(),
@@ -888,6 +891,7 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
         }
         for (prefix, base, exponent) in [("u", 2, bits), ("i", 2, sign_bit), ("i", 3, -1)] {
             cases.push((
+                "checked",
                 format!("{prefix}{bits}"),
                 "**",
                 base.to_string(),
@@ -895,12 +899,12 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
             ));
         }
     }
-    assert_eq!(cases.len(), 24);
+    assert_eq!(cases.len(), 36);
 
     let mut source = String::from("use std::native::Args\n");
-    for (index, (ty, op, _, _)) in cases.iter().enumerate() {
+    for (index, (mode, ty, op, _, _)) in cases.iter().enumerate() {
         source.push_str(&format!(
-            "fn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
+            "#[arithmetic({mode})]\nfn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
         ));
     }
     source.push_str(
@@ -916,7 +920,7 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
     let selectors: Vec<_> = cases
         .iter()
         .enumerate()
-        .map(|(index, (_, _, value, rhs))| {
+        .map(|(index, (_, _, _, value, rhs))| {
             let selector = b'A' + u8::try_from(index).expect("case selector fits u8");
             source.push_str(&format!(
                 "    if selector == {selector} {{ if calculate_{index}(value: {value}, rhs: {rhs}) == 0 {{ return 0 }} else {{ return 1 }} }}\n"
@@ -924,7 +928,7 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
             char::from(selector).to_string()
         })
         .collect();
-    source.push_str("    if selector == 89 { 0 } else { 97 }\n}\n");
+    source.push_str("    if selector == 48 { 0 } else { 97 }\n}\n");
 
     // Each exceptional input still runs in a separate process, sharing one
     // compiled executable per optimization level instead of rebuilding it.
@@ -933,8 +937,8 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
         let executable = build_native_program(&source, level, temp.path());
         for (args, expected) in [
             (&[][..], 97),
-            (&["Y"][..], 0),
-            (&["Z"][..], 97),
+            (&["0"][..], 0),
+            (&["1"][..], 97),
             (&[""][..], 97),
         ] {
             assert_eq!(
@@ -943,11 +947,11 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
                 "native arithmetic selector control {args:?} failed at O{level}"
             );
         }
-        for ((ty, op, value, rhs), selector) in cases.iter().zip(&selectors) {
+        for ((mode, ty, op, value, rhs), selector) in cases.iter().zip(&selectors) {
             assert_eq!(
                 native_program_exit_code(&executable, &[selector], level),
                 None,
-                "checked {ty} {value} {op} {rhs} did not trap at O{level}"
+                "{mode} {ty} {value} {op} {rhs} did not trap at O{level}"
             );
         }
     }
@@ -3844,7 +3848,9 @@ fn test_cli_test_profile_selects_ingot_arithmetic() {
     assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
     assert!(
         test_output.contains("PASS  [<time>] arithmetic_profile_ingot_wraps_in_test_profile")
-            && test_output.contains("1 passed"),
+            && test_output
+                .contains("PASS  [<time>] arithmetic_profile_ingot_wraps_wei_in_test_profile")
+            && test_output.contains("2 passed"),
         "expected test profile to run unchecked arithmetic:\n{test_output}"
     );
 
@@ -3855,7 +3861,7 @@ fn test_cli_test_profile_selects_ingot_arithmetic() {
         "expected release profile test failure:\n{release_output}"
     );
     assert!(
-        release_output.contains("1 failed"),
+        release_output.contains("2 failed"),
         "expected checked arithmetic failure in release profile:\n{release_output}"
     );
 }

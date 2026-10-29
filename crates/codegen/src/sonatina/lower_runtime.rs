@@ -5733,9 +5733,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
-    /// The single arithmetic lowering. `checked` selects overflow/zero-divisor
-    /// reverts for Add/Sub/Mul/Div/Rem/Pow; shift and bitwise ops ignore it.
-    /// Operands must already be cast to `ty`.
+    /// The single arithmetic lowering. `checked` selects overflow reverts for
+    /// Add/Sub/Mul/Div/Pow; shift and bitwise ops ignore it. Division and
+    /// remainder by zero revert with `Panic(0x12)` either way. Operands must
+    /// already be cast to `ty`.
     fn lower_arith(
         &mut self,
         op: ArithBinOp,
@@ -5745,30 +5746,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         ty: Type,
         signed: bool,
     ) -> Result<ValueId, LowerError> {
-        // Fe defines unchecked division and remainder by zero as zero. Native
-        // instructions may trap, so skip the operation on that edge entirely.
-        let zero_divisor_result = if !checked
-            && self.module.is_native_target()
-            && matches!(op, ArithBinOp::Div | ArithBinOp::Rem)
-        {
-            let zero = self.fb.make_imm_value(Immediate::zero(ty));
-            let is_zero = self
-                .fb
-                .insert_inst(IsZero::new(self.module.inst_set(), rhs), Type::I1);
-            let entry = self
-                .fb
-                .current_block()
-                .expect("arithmetic requires a block");
-            let nonzero = self.fb.append_block();
-            let done = self.fb.append_block();
-            self.fb
-                .insert_inst_no_result(Br::new(self.module.inst_set(), is_zero, done, nonzero));
-            self.fb.switch_to_block(nonzero);
-            Some((zero, entry, done))
-        } else {
-            None
-        };
-        let result = match op {
+        Ok(match op {
             ArithBinOp::Add if checked => {
                 let [raw, overflow] = if signed {
                     self.fb.insert_saddo(lhs, rhs)
@@ -5805,14 +5783,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             ArithBinOp::Mul => self
                 .fb
                 .insert_inst(Mul::new(self.module.inst_set(), lhs, rhs), ty),
-            ArithBinOp::Div if checked => {
+            ArithBinOp::Div => {
                 self.emit_division_by_zero_revert(rhs, ty)?;
-                if self.module.is_native_target() {
-                    if signed {
-                        self.emit_signed_div_overflow_revert(lhs, rhs, ty)?;
-                    }
-                    self.lower_unchecked_div(lhs, rhs, ty, signed)?
-                } else {
+                if checked && !self.module.is_native_target() {
                     let [raw, overflow] = if signed {
                         self.fb.insert_evm_sdivo(lhs, rhs)
                     } else {
@@ -5820,13 +5793,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     };
                     self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
                     raw
+                } else {
+                    if checked && signed {
+                        self.emit_signed_div_overflow_revert(lhs, rhs, ty)?;
+                    }
+                    self.lower_unchecked_div(lhs, rhs, ty, signed)?
                 }
             }
-            ArithBinOp::Div => self.lower_unchecked_div(lhs, rhs, ty, signed)?,
             ArithBinOp::Rem => {
-                if checked {
-                    self.emit_division_by_zero_revert(rhs, ty)?;
-                }
+                self.emit_division_by_zero_revert(rhs, ty)?;
                 self.lower_unchecked_rem(lhs, rhs, ty, signed)?
             }
             ArithBinOp::Pow if checked || self.module.is_native_target() => {
@@ -5862,24 +5837,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     "range is not a runtime arithmetic op".to_string(),
                 ));
             }
-        };
-        Ok(if let Some((zero, entry, done)) = zero_divisor_result {
-            let nonzero = self
-                .fb
-                .current_block()
-                .expect("arithmetic requires a block");
-            self.fb
-                .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
-            self.fb.switch_to_block(done);
-            self.fb.insert_inst(
-                Phi::new(
-                    self.module.inst_set(),
-                    smallvec![(zero, entry), (result, nonzero)],
-                ),
-                ty,
-            )
-        } else {
-            result
         })
     }
 

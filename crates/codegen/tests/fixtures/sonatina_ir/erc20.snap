@@ -728,8 +728,8 @@ func inline(always) private %checked_frame_end(v0.i256, v1.i256, v2.i256) -> i25
         return v8;
 
     block5:
-        v11.i256 = sub v2 v0;
-        v13.i1 = gt v1 v11;
+        v12.i256 = sub v2 v0;
+        v13.i1 = gt v1 v12;
         br v13 block2 block3;
 }
 
@@ -738,8 +738,8 @@ func inline(always) private %checked_tail(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v5.i256 = sub -1.i256 v0;
-        v7.i1 = gt v1 v5;
+        v6.i256 = sub -1.i256 v0;
+        v7.i1 = gt v1 v6;
         br v7 block2 block3;
 
     block2:
@@ -3126,19 +3126,19 @@ func private %standalone_erc20__erc20__mint__g5a03_2a84(v0.@layout_0, v1.i256, v
 
     block6:
         evm_sstore v2 v18;
-        v26.i256 = add v2 1.i256;
-        v28.i256 = call %get__g5cd5 v26 v0;
-        (v30.i256, v31.i1) = uaddo v28 v1;
-        br v31 block5 block7;
+        v25.i256 = add v2 1.i256;
+        v27.i256 = call %get__g5cd5 v25 v0;
+        (v29.i256, v30.i1) = uaddo v27 v1;
+        br v30 block5 block7;
 
     block7:
-        v33.i256 = add v2 1.i256;
-        call %set__g5cd5 v33 v0 v30;
-        v36.@layout_0 = call %zero;
-        v39.@layout_4 = insert_value undef.@layout_4 0.i256 v36;
-        v40.@layout_4 = insert_value v39 1.i256 v0;
-        v42.@layout_4 = insert_value v40 2.i256 v1;
-        call %emit__g4c3d v42;
+        v32.i256 = add v2 1.i256;
+        call %set__g5cd5 v32 v0 v29;
+        v35.@layout_0 = call %zero;
+        v38.@layout_4 = insert_value undef.@layout_4 0.i256 v35;
+        v39.@layout_4 = insert_value v38 1.i256 v0;
+        v41.@layout_4 = insert_value v39 2.i256 v1;
+        call %emit__g4c3d v41;
         return;
 }
 
@@ -3174,19 +3174,19 @@ func private %standalone_erc20__erc20__mint__g5a03_4dba(v0.@layout_0, v1.i256, v
 
     block6:
         evm_sstore v2 v18;
-        v26.i256 = add v2 1.i256;
-        v28.i256 = call %get__g5cd5 v26 v0;
-        (v30.i256, v31.i1) = uaddo v28 v1;
-        br v31 block5 block7;
+        v25.i256 = add v2 1.i256;
+        v27.i256 = call %get__g5cd5 v25 v0;
+        (v29.i256, v30.i1) = uaddo v27 v1;
+        br v30 block5 block7;
 
     block7:
-        v33.i256 = add v2 1.i256;
-        call %set__g5cd5 v33 v0 v30;
-        v36.@layout_0 = call %zero;
-        v39.@layout_4 = insert_value undef.@layout_4 0.i256 v36;
-        v40.@layout_4 = insert_value v39 1.i256 v0;
-        v42.@layout_4 = insert_value v40 2.i256 v1;
-        call %emit__g4c3d v42;
+        v32.i256 = add v2 1.i256;
+        call %set__g5cd5 v32 v0 v29;
+        v35.@layout_0 = call %zero;
+        v38.@layout_4 = insert_value undef.@layout_4 0.i256 v35;
+        v39.@layout_4 = insert_value v38 1.i256 v0;
+        v41.@layout_4 = insert_value v39 2.i256 v1;
+        call %emit__g4c3d v41;
         return;
 }
 
@@ -4114,8 +4114,8 @@ func inline(always) private %slice(v0.@layout_2, v1.i256, v2.i256) -> @layout_2 
         jump block1;
 
     block1:
-        v5.i256 = extract_value v0 1.i256;
-        v7.i1 = gt v1 v5;
+        v6.i256 = extract_value v0 1.i256;
+        v7.i1 = gt v1 v6;
         br v7 block2 block5;
 
     block2:
@@ -4133,9 +4133,9 @@ func inline(always) private %slice(v0.@layout_2, v1.i256, v2.i256) -> @layout_2 
         return v16;
 
     block5:
-        v18.i256 = extract_value v0 1.i256;
-        v20.i256 = sub v18 v1;
-        v22.i1 = gt v2 v20;
+        v19.i256 = extract_value v0 1.i256;
+        v21.i256 = sub v19 v1;
+        v22.i1 = gt v2 v21;
         br v22 block2 block3;
 }
 
@@ -4206,8 +4206,8 @@ func inline(always) private %tail(v0.@layout_2, v1.i256) -> @layout_2 {
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 1.i256;
-        v6.i1 = gt v1 v4;
+        v5.i256 = extract_value v0 1.i256;
+        v6.i1 = gt v1 v5;
         br v6 block2 block3;
 
     block2:

@@ -4,8 +4,8 @@ use std::mem::size_of;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        DropFlagPoint, EvalOutcome, FieldIndex, RuntimeSizeError, SConst, SLocalId, SStmtId,
-        SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef,
+        BinaryOp, DropFlagPoint, EvalOutcome, FieldIndex, Overflow, RuntimeSizeError, SConst,
+        SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef,
         SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance,
         SemanticInstanceKey, SemanticLocalRole, VariantIndex, core_method_callee_key,
         eval_const_ref, generated_callee_key,
@@ -20,8 +20,7 @@ use hir::analysis::{
         const_expr::ConstExpr,
         const_ty::ConstTyData,
         corelib::{
-            PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, concrete_usize,
-            core_primitive_wrapper_call_kind, resolve_core_trait, resolve_lib_func_path,
+            RuntimeBuiltinFuncKind, concrete_usize, resolve_core_trait, resolve_lib_func_path,
             resolve_lib_type_path, runtime_builtin_func_kind,
         },
         trait_def::TraitInstId,
@@ -32,10 +31,7 @@ use hir::analysis::{
         ty_def::{BorrowKind, TyId},
     },
 };
-use hir::hir_def::{
-    ArithBinOp, BinOp, CompBinOp, Expr, Func, Partial, UnOp, attr::ArithmeticMode,
-    scope_graph::ScopeId,
-};
+use hir::hir_def::{ArithBinOp, BinOp, CompBinOp, Expr, Func, Partial, UnOp, scope_graph::ScopeId};
 use hir::projection::IndexSource;
 use rustc_hash::FxHashMap;
 
@@ -418,30 +414,19 @@ fn trait_goal_satisfied<'db>(
 fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
     match expr {
         NExpr::ArrayRepeat { .. } => false,
-        NExpr::Unary {
-            op: UnOp::Minus, ..
+        // An operation that can panic runs even when its result is unused.
+        NExpr::Unary { op, .. } => op.overflow() == Some(Overflow::Checked),
+        NExpr::Binary { op, .. } => {
+            matches!(op, BinaryOp::Div(_) | BinaryOp::Rem)
+                || op.overflow() == Some(Overflow::Checked)
         }
-        | NExpr::Binary {
-            op:
-                BinOp::Arith(
-                    ArithBinOp::Add
-                    | ArithBinOp::Sub
-                    | ArithBinOp::Mul
-                    | ArithBinOp::Div
-                    | ArithBinOp::Rem
-                    | ArithBinOp::Pow,
-                ),
-            ..
-        }
-        | NExpr::Call { .. } => true,
+        NExpr::Call { .. } => true,
         NExpr::Forward { .. }
         | NExpr::ProjectValue { .. }
         | NExpr::StructuralRepack { .. }
         | NExpr::CodeRegionRef { .. }
         | NExpr::Load { .. }
         | NExpr::Const(_)
-        | NExpr::Unary { .. }
-        | NExpr::Binary { .. }
         | NExpr::PointerCast { .. }
         | NExpr::ScalarCast { .. }
         | NExpr::AggregateMake { .. }
@@ -1294,24 +1279,42 @@ impl<'db> RmirEmitter<'db> {
             }
             NExpr::Unary { op, value } => {
                 let value = self.read_semantic_operand(bb, *value);
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Unary { op: *op, value },
-                    },
-                );
+                let RuntimeClass::Scalar(class) = &dst_class else {
+                    panic!("a unary operation has a scalar result");
+                };
+                let expr = self
+                    .lower_unary_expr_for_mode(
+                        bb,
+                        op.un_op(),
+                        op.overflow() == Some(Overflow::Checked),
+                        value,
+                        self.locals[dst.index()].semantic_ty,
+                        class,
+                    )
+                    .expect("a built-in unary operation lowers");
+                self.push_stmt(bb, RStmt::Assign { dst, expr });
             }
             NExpr::Binary { op, lhs, rhs } => {
                 let lhs = self.read_semantic_operand(bb, *lhs);
                 let rhs = self.read_semantic_operand(bb, *rhs);
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Binary { op: *op, lhs, rhs },
-                    },
-                );
+                let expr = match op.bin_op() {
+                    BinOp::Arith(arith) => {
+                        let RuntimeClass::Scalar(class) = &dst_class else {
+                            panic!("an arithmetic operation has a scalar result");
+                        };
+                        self.lower_arith_expr_for_mode(
+                            bb,
+                            arith,
+                            op.overflow() == Some(Overflow::Checked),
+                            lhs,
+                            rhs,
+                            class,
+                        )
+                        .expect("a built-in arithmetic operation lowers")
+                    }
+                    op => RExpr::Binary { op, lhs, rhs },
+                };
+                self.push_stmt(bb, RStmt::Assign { dst, expr });
             }
             NExpr::ScalarCast { value, .. } | NExpr::PointerCast { value, .. } => {
                 let value = self.read_semantic_operand(bb, *value);
@@ -2818,12 +2821,6 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn current_arithmetic_mode(&self) -> ArithmeticMode {
-        self.current_semantic_key()
-            .owner(self.db)
-            .arithmetic_mode(self.db)
-    }
-
     fn alloc_zero_scalar(
         &mut self,
         bb: RBlockId,
@@ -2951,171 +2948,6 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn lower_core_primitive_wrapper_call(
-        &mut self,
-        bb: RBlockId,
-        semantic: SemanticInstance<'db>,
-        args: &[NOperand],
-    ) -> Option<RLocalId> {
-        let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
-            return None;
-        };
-        let ret_ty = semantic_return_ty(self.db, semantic);
-        let kind = core_primitive_wrapper_call_kind(self.db, func, ret_ty)?;
-        let checked = self.current_arithmetic_mode() == ArithmeticMode::Checked;
-        let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            &self.semantic_body,
-            semantic,
-            self.env,
-            &[],
-            &mut boundary_sites,
-        );
-        let (runtime_args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
-
-        match kind {
-            PrimitiveWrapperCallKind::Unary(op) => {
-                let [value] = runtime_args.as_slice() else {
-                    return None;
-                };
-                let RuntimeClass::Scalar(class) =
-                    self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?
-                else {
-                    return None;
-                };
-                let ret = self.alloc_runtime_temp(
-                    ret_ty,
-                    RuntimeCarrier::Value(RuntimeClass::Scalar(class.clone())),
-                );
-                let expr =
-                    self.lower_unary_expr_for_mode(bb, op, checked, *value, ret_ty, &class)?;
-                self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
-                Some(ret)
-            }
-            PrimitiveWrapperCallKind::Binary(op) => {
-                let [lhs, rhs] = runtime_args.as_slice() else {
-                    return None;
-                };
-                let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
-                if matches!(op, BinOp::Comp(_))
-                    && runtime_args.iter().any(|arg| {
-                        matches!(self.value_class(*arg), Some(RuntimeClass::RawAddr { .. }))
-                    })
-                {
-                    let word = RuntimeClass::Scalar(word_scalar_class());
-                    let lhs = self.coerce_value(bb, *lhs, &word);
-                    let rhs = self.coerce_value(bb, *rhs, &word);
-                    let ret =
-                        self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
-                    self.push_stmt(
-                        bb,
-                        RStmt::Assign {
-                            dst: ret,
-                            expr: RExpr::Binary { op, lhs, rhs },
-                        },
-                    );
-                    return Some(ret);
-                }
-                if let BinOp::Arith(op @ (ArithBinOp::Add | ArithBinOp::Sub)) = op
-                    && runtime_args.iter().any(|arg| {
-                        matches!(self.value_class(*arg), Some(RuntimeClass::RawAddr { .. }))
-                    })
-                {
-                    let word = RuntimeClass::Scalar(word_scalar_class());
-                    let lhs = self.coerce_value(bb, *lhs, &word);
-                    let rhs = self.coerce_value(bb, *rhs, &word);
-                    let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(word.clone()));
-                    let RuntimeClass::Scalar(class) = &word else {
-                        unreachable!("word runtime class should be scalar")
-                    };
-                    let expr = self.lower_arith_expr_for_mode(bb, op, checked, lhs, rhs, class)?;
-                    self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
-                    return Some(if ret_class == word {
-                        ret
-                    } else {
-                        self.coerce_value(bb, ret, &ret_class)
-                    });
-                }
-                let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
-                let expr = match op {
-                    BinOp::Arith(op) => {
-                        let RuntimeClass::Scalar(class) = &ret_class else {
-                            return None;
-                        };
-                        self.lower_arith_expr_for_mode(bb, op, checked, *lhs, *rhs, class)?
-                    }
-                    BinOp::Comp(_) | BinOp::Logical(_) => RExpr::Binary {
-                        op,
-                        lhs: *lhs,
-                        rhs: *rhs,
-                    },
-                    BinOp::Index => return None,
-                };
-                self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
-                Some(ret)
-            }
-            PrimitiveWrapperCallKind::Assign(op) => {
-                let [dst_addr, rhs] = runtime_args.as_slice() else {
-                    return None;
-                };
-                let place = self.runtime_place_from_addr_value(*dst_addr)?;
-                let target = self.project_place_class(&place);
-                let target_ty = self.semantic_operand_ty(args[0]);
-                let lhs = self.alloc_runtime_temp(target_ty, RuntimeCarrier::Value(target.clone()));
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: lhs,
-                        expr: RExpr::Load {
-                            place: place.clone(),
-                        },
-                    },
-                );
-                let result = match target.clone() {
-                    RuntimeClass::Scalar(class) => {
-                        let result = self
-                            .alloc_runtime_temp(target_ty, RuntimeCarrier::Value(target.clone()));
-                        let expr = match op {
-                            BinOp::Arith(op) => {
-                                self.lower_arith_expr_for_mode(bb, op, checked, lhs, *rhs, &class)?
-                            }
-                            BinOp::Comp(_) | BinOp::Logical(_) | BinOp::Index => return None,
-                        };
-                        self.push_stmt(bb, RStmt::Assign { dst: result, expr });
-                        result
-                    }
-                    RuntimeClass::RawAddr { .. } => {
-                        let BinOp::Arith(op @ (ArithBinOp::Add | ArithBinOp::Sub)) = op else {
-                            return None;
-                        };
-                        let word = RuntimeClass::Scalar(word_scalar_class());
-                        let lhs = self.coerce_value(bb, lhs, &word);
-                        let rhs = self.coerce_value(bb, *rhs, &word);
-                        let result_word =
-                            self.alloc_runtime_temp(target_ty, RuntimeCarrier::Value(word.clone()));
-                        let RuntimeClass::Scalar(class) = &word else {
-                            unreachable!("word runtime class should be scalar")
-                        };
-                        let expr =
-                            self.lower_arith_expr_for_mode(bb, op, checked, lhs, rhs, class)?;
-                        self.push_stmt(
-                            bb,
-                            RStmt::Assign {
-                                dst: result_word,
-                                expr,
-                            },
-                        );
-                        self.coerce_value(bb, result_word, &target)
-                    }
-                    RuntimeClass::Ref { .. } | RuntimeClass::AggregateValue { .. } => return None,
-                };
-                self.write_value_to_place(bb, place, result, &target);
-                Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased))
-            }
-        }
-    }
-
     fn lower_call(
         &mut self,
         bb: RBlockId,
@@ -3125,9 +2957,6 @@ impl<'db> RmirEmitter<'db> {
         effect_args: &[NEffectArg<'db>],
     ) -> RLocalId {
         let semantic = SemanticInstance::new(self.db, callee.key);
-        if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, args) {
-            return ret;
-        }
         if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
             return ret;
         }
@@ -3750,13 +3579,6 @@ impl<'db> RmirEmitter<'db> {
                 let [value] = args else { return None };
                 RExpr::Unary {
                     op: UnOp::Not,
-                    value: *value,
-                }
-            }
-            "neg" => {
-                let [value] = args else { return None };
-                RExpr::Unary {
-                    op: UnOp::Minus,
                     value: *value,
                 }
             }

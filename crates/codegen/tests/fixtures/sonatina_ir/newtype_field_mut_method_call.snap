@@ -26,7 +26,9 @@ func private %bump(v0.objref<@layout_1>) {
         evm_revert 0.i256 36.i256;
 
     block3:
-        obj.store v5 v7;
+        v14.objref<@layout_0> = obj.proj v0 0.i256;
+        v15.objref<i256> = obj.proj v14 0.i256;
+        obj.store v15 v7;
         return;
 }
 

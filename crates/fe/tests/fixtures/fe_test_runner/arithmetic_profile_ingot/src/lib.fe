@@ -5,3 +5,9 @@ fn arithmetic_profile_ingot_wraps_in_test_profile() {
     let y: u8 = x + 1
     assert!(y == 0)
 }
+
+#[test]
+fn arithmetic_profile_ingot_wraps_wei_in_test_profile() {
+    let max = std::evm::wei(u256::max())
+    assert!((max + std::evm::wei(1)) == Wei::zero())
+}

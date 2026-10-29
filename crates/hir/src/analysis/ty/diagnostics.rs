@@ -757,6 +757,9 @@ pub enum BodyDiag<'db> {
         ty: String,
         op: IdentId<'db>,
         trait_path: PathId<'db>,
+        /// The operator is written in unchecked code, so it calls a
+        /// wrapping trait.
+        wraps: bool,
     },
     UnsupportedUnaryPlus(DynLazySpan<'db>),
     UnsupportedMacroCall(DynLazySpan<'db>),
@@ -1384,6 +1387,7 @@ impl<'db> BodyDiag<'db> {
             ty,
             op,
             trait_path,
+            wraps: ops.wraps(),
         }
     }
 

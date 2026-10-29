@@ -1,5 +1,8 @@
 use core::num::Abs
-use core::ops::{SaturatingAdd, SaturatingMul, SaturatingSub, WrappingAdd, WrappingMul, WrappingSub}
+use core::ops::{
+    SaturatingAdd, SaturatingMul, SaturatingSub, WrappingAdd, WrappingMul, WrappingNeg, WrappingPow,
+    WrappingSub,
+}
 use std::evm::ops::{byte, signextend}
 
 // These operations resolve to core implementations, including their
@@ -13,6 +16,10 @@ const SATURATING_MUL: i8 = (64 as i8).saturating_mul(4)
 const WRAPPING_ADD: u8 = (255 as u8).wrapping_add(2)
 const WRAPPING_SUB: u8 = (0 as u8).wrapping_sub(1)
 const WRAPPING_MUL: u8 = (16 as u8).wrapping_mul(16)
+const WRAPPING_POW: u8 = (2 as u8).wrapping_pow(9)
+const WRAPPING_SIGNED_POW: i8 = (-3 as i8).wrapping_pow(5)
+const WRAPPING_NEG_MIN: i8 = ((-127 as i8) - 1).wrapping_neg()
+const WRAPPING_NEG_WIDE: i256 = (7 as i256).wrapping_neg()
 const WRAPPING_SHL: u8 = (1 as u8) << 8
 const WRAPPING_SIGNED_SHR: i8 = ((-127 as i8) - 1) >> 7
 const WRAPPING_SIGNED_SHR_255: i8 = (-1 as i8) >> (-1 as i8)
@@ -43,6 +50,10 @@ fn const_numeric_extern_intrinsics() {
     assert!(WRAPPING_ADD == 1)
     assert!(WRAPPING_SUB == 255)
     assert!(WRAPPING_MUL == 0)
+    assert!(WRAPPING_POW == 0)
+    assert!(WRAPPING_SIGNED_POW == 13)
+    assert!(WRAPPING_NEG_MIN == -128)
+    assert!(WRAPPING_NEG_WIDE == -7)
     assert!(WRAPPING_SHL == 0)
     assert!(WRAPPING_SIGNED_SHR == -1)
     assert!(WRAPPING_SIGNED_SHR_255 == -1)
@@ -78,4 +89,16 @@ fn const_numeric_extern_intrinsics() {
     assert!(byte(pos: 32, value: word) == 0)
     assert!(signextend(byte: 0, value: 0x7f) == 0x7f)
     assert!(signextend(byte: 0, value: 0xff) == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+}
+
+#[test]
+fn runtime_wrapping_pow_and_neg() {
+    let two: u8 = 2
+    let minus_three: i8 = -3
+    let min: i8 = -128
+    let seven: i256 = 7
+    assert!(two.wrapping_pow(9) == 0)
+    assert!(minus_three.wrapping_pow(5) == 13)
+    assert!(min.wrapping_neg() == -128)
+    assert!(seven.wrapping_neg() == -7)
 }

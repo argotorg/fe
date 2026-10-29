@@ -77,7 +77,8 @@ A concrete condition is evaluated with ordinary compile-time evaluation and its
 limits. A generic caller discharges a condition only by stating the same
 condition itself: after substituting the call's arguments, the two resolved,
 typed expressions must be identical. Parameter names do not matter; declaration
-identities, parameter positions, operations and arithmetic mode do. Forwarded
+identities, parameter positions and operations do, including whether an
+operation's arithmetic is checked or wrapping. Forwarded
 expressions may use literals, const paths, unary and binary operations, casts
 and calls to const functions. This is exact forwarding, not implication:
 `N > 1` does not establish `N > 0`. Blocks and control flow can be evaluated

@@ -5,9 +5,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemConstScalar, SemConstValue,
-            SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget,
-            SemanticInstance, VariantIndex,
+            BinaryOp, CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemConstScalar,
+            SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
+            SemanticCodeRegionTarget, SemanticInstance, UnaryOp, VariantIndex,
         },
         ty::{
             provider::AddressSpace,
@@ -15,7 +15,7 @@ use crate::{
             ty_def::{BorrowKind, TyId},
         },
     },
-    hir_def::{BinOp, ExprId, StringId, UnOp},
+    hir_def::{ExprId, StringId},
     semantic::ProviderBinding,
 };
 
@@ -429,11 +429,11 @@ pub enum NExpr<'db> {
     },
     Const(SConst<'db>),
     Unary {
-        op: UnOp,
+        op: UnaryOp,
         value: NOperand,
     },
     Binary {
-        op: BinOp,
+        op: BinaryOp,
         lhs: NOperand,
         rhs: NOperand,
     },

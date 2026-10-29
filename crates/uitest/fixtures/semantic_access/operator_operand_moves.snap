@@ -1,0 +1,60 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/operator_operand_moves.fe
+---
+error[16-0002]: move conflict in `fn add_checked`
+   ┌─ operator_operand_moves.fe:47:5
+   │
+46 │     let z = x + y
+   │             - value is moved here
+47 │     x.value
+   │     ^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn add_unchecked`
+   ┌─ operator_operand_moves.fe:55:5
+   │
+54 │     let z = x + y
+   │             - value is moved here
+55 │     x.value
+   │     ^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn neg_checked`
+   ┌─ operator_operand_moves.fe:62:5
+   │
+61 │     let z = -x
+   │              - value is moved here
+62 │     x.value
+   │     ^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn neg_unchecked`
+   ┌─ operator_operand_moves.fe:69:5
+   │
+68 │     let z = -x
+   │              - value is moved here
+69 │     x.value
+   │     ^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn add_assign_checked`
+   ┌─ operator_operand_moves.fe:77:5
+   │
+76 │     x += y
+   │          - value is moved here
+77 │     y.value
+   │     ^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn add_assign_unchecked`
+   ┌─ operator_operand_moves.fe:85:5
+   │
+84 │     x += y
+   │          - value is moved here
+85 │     y.value
+   │     ^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn wrapping_add_call`
+   ┌─ operator_operand_moves.fe:94:5
+   │
+93 │     x = x.wrapping_add(y)
+   │                        - value is moved here
+94 │     y.value
+   │     ^^^^^^^ cannot use a value after it was moved

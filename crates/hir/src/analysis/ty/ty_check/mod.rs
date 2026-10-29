@@ -43,10 +43,10 @@ use crate::hir_def::{
 };
 use crate::{
     hir_def::{
-        BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
-        GenericParam, GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId,
-        PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
-        TypeKind, UnOp, WhereClauseOwner,
+        ArithBinOp, BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr,
+        ExprId, Func, GenericParam, GenericParamOwner, LitKind, ManualContractRootAttr, Partial,
+        Pat, PatId, PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId,
+        TypeId as HirTyId, TypeKind, UnOp, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -107,11 +107,12 @@ use super::{
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{
-    BlockedInfo, ConstDependency, ConstUsePolicy, CtfeConfig, CtfeError, EffectProviderSubst,
-    EvalFailure, EvalOutcome, GenericSubst, ImplEnv, RuntimeSizeError, SemConstId, SemConstScalar,
-    SemConstValue, SemOrigin, SemanticInstance, SemanticInstanceKey,
-    const_computation_for_instance, describe_const_computation, eval_body_owner_const,
-    eval_const_instance, reify_runtime_const_for_ty, runtime_size_bytes_with_source,
+    BinaryOp, BlockedInfo, ConstDependency, ConstUsePolicy, CtfeConfig, CtfeError,
+    EffectProviderSubst, EvalFailure, EvalOutcome, GenericSubst, ImplEnv, Overflow,
+    RuntimeSizeError, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
+    SemanticInstanceKey, UnaryOp, const_computation_for_instance, describe_const_computation,
+    eval_body_owner_const, eval_const_instance, reify_runtime_const_for_ty,
+    runtime_size_bytes_with_source,
 };
 use crate::analysis::ty::ty_def::{ClosureDef, ClosureTy, TyBase, TyData};
 use crate::analysis::ty::{
@@ -1463,6 +1464,8 @@ fn typed_body_for_bodyless_func<'db>(
         unsafe_splits: FxHashSet::default(),
         product_args: FxHashSet::default(),
         value_calls: FxHashSet::default(),
+        builtin_ops: FxHashMap::default(),
+        operator_assigns: FxHashSet::default(),
         matched_places: FxHashSet::default(),
         inspected_places: FxHashSet::default(),
         covered_providers: FxHashSet::default(),
@@ -1537,6 +1540,9 @@ pub struct TyChecker<'db> {
     /// Set once deferred work is resolved for the last time, after which type
     /// equalities are decided rather than retained.
     final_pass: bool,
+    /// What the arithmetic operators written in the body do on overflow, by
+    /// its arithmetic mode. They wrap in unchecked code.
+    overflow: Overflow,
 }
 
 pub(crate) struct TyCheckerSnapshot<'db> {
@@ -2533,8 +2539,8 @@ impl<'db> TyChecker<'db> {
                         });
                     }
                 }
-                env::DeferredTask::PrimitiveOp(pending) => {
-                    let _ = self.resolve_pending_primitive_op(&pending);
+                env::DeferredTask::Negation(pending) => {
+                    self.check_pending_negation(pending);
                 }
             }
         }
@@ -2757,15 +2763,9 @@ impl<'db> TyChecker<'db> {
                             self.env.register_pending_method(pending);
                         }
                     }
-                    env::DeferredTask::PrimitiveOp(pending) => {
-                        match self.resolve_pending_primitive_op(&pending) {
-                            expr::PendingPrimitiveOpResolution::Pending => {
-                                self.env.register_pending_primitive_op(pending);
-                            }
-                            expr::PendingPrimitiveOpResolution::Resolved => {
-                                progressed = true;
-                            }
-                            expr::PendingPrimitiveOpResolution::Done => {}
+                    env::DeferredTask::Negation(pending) => {
+                        if !self.check_pending_negation(pending) {
+                            self.env.register_pending_negation(pending);
                         }
                     }
                 }
@@ -2897,7 +2897,6 @@ impl<'db> TyChecker<'db> {
             .any(|stmt| matches!(stmt, Partial::Present(crate::hir_def::Stmt::Yield(_))));
         Self {
             db,
-            env,
             table,
             expected,
             projection_shape,
@@ -2916,6 +2915,8 @@ impl<'db> TyChecker<'db> {
             split_reads: Vec::new(),
             diags: Vec::new(),
             final_pass: false,
+            overflow: env.owner().scope().arithmetic_mode(db).into(),
+            env,
         }
     }
 
@@ -4410,6 +4411,12 @@ mod typed_body_tables {
         /// The calls `f(..)` of callable values: the callee is the receiver
         /// of a callable trait's method.
         pub(super) value_calls: FxHashSet<ExprId>,
+        /// The operators on primitive operands, by their built-in operation.
+        pub(super) builtin_ops: FxHashMap<ExprId, BuiltinOp>,
+        /// The compound assignments that assign their operator method's
+        /// result (`x = x.wrapping_add(y)`) rather than call an `*Assign`
+        /// method.
+        pub(super) operator_assigns: FxHashSet<ExprId>,
         /// The places a pattern is matched against, which bind each
         /// component where it lies.
         pub(super) matched_places: FxHashSet<ExprId>,
@@ -4571,6 +4578,15 @@ pub enum CodeRegionIntrinsicKind {
 pub enum ConstIntrinsicKind {
     SizeOf,
     StorageSlots,
+}
+
+/// The operation an operator expression on primitive operands performs,
+/// which the language defines: no operator trait is called. Its overflow
+/// behavior is the arithmetic mode of the body the operator is written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum BuiltinOp {
+    Unary(UnaryOp),
+    Binary(BinaryOp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
@@ -4991,6 +5007,17 @@ impl<'db> TypedBody<'db> {
             {
                 missing_plan()
             }
+            // An operator calls an operator method or performs a built-in
+            // operation.
+            Expr::Bin(_, _, BinOp::Arith(_) | BinOp::Comp(_))
+            | Expr::Un(_, UnOp::Minus | UnOp::Not | UnOp::BitNot)
+            | Expr::AugAssign(..)
+                if !matches!(expr_data, Expr::Bin(_, _, BinOp::Arith(ArithBinOp::Range)))
+                    && self.semantic_expr_lowering(expr).is_none()
+                    && self.builtin_op(expr).is_none() =>
+            {
+                missing_plan()
+            }
             Expr::UnsupportedMacroCall => Some(SmirLoweringIssue::InvalidExpr(expr)),
             Expr::Assert(_) | Expr::Cast(..) if expr_ty.has_invalid(db) => {
                 Some(SmirLoweringIssue::InvalidExpr(expr))
@@ -5024,7 +5051,8 @@ impl<'db> TypedBody<'db> {
                 Some(self.missing_place_issue(db, expr, *dst))
             }
             Expr::AugAssign(dst, _, _)
-                if self.semantic_expr_lowering(expr).is_none()
+                if (self.semantic_expr_lowering(expr).is_none()
+                    || self.assigns_operator_result(expr))
                     && !self.has_lowerable_place(db, *dst) =>
             {
                 Some(self.missing_place_issue(db, expr, *dst))
@@ -5160,6 +5188,17 @@ impl<'db> TypedBody<'db> {
     /// whose elements are places (`core::ops::StateIndex`), a path step.
     pub fn is_place_entry(&self, expr: ExprId) -> bool {
         self.tables.place_entries.contains(&expr)
+    }
+
+    pub fn builtin_op(&self, expr: ExprId) -> Option<BuiltinOp> {
+        self.tables.builtin_ops.get(&expr).copied()
+    }
+
+    /// Whether the compound assignment `expr`, `x op= y`, assigns the result
+    /// of its operator method, `x = x.wrapping_add(y)`, reading and writing
+    /// the place once, rather than calling an `*Assign` method.
+    pub fn assigns_operator_result(&self, expr: ExprId) -> bool {
+        self.tables.operator_assigns.contains(&expr)
     }
 
     /// Whether `expr` is a place a pattern is matched against: its bindings
@@ -6810,6 +6849,8 @@ impl<'db> TypedBody<'db> {
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
+            builtin_ops: FxHashMap::default(),
+            operator_assigns: FxHashSet::default(),
             matched_places: FxHashSet::default(),
             inspected_places: FxHashSet::default(),
             covered_providers: FxHashSet::default(),

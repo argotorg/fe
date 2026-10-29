@@ -45,52 +45,52 @@ func private %test_ref_is_not_a_copy() {
         jump block11;
 
     block4:
-        v6.i256 = const.load v21;
-        v7.i1 = eq v6 20.i256;
+        v6.i256 = const.load v20;
         jump block13;
 
     block5:
         jump block7;
 
     block6:
-        v10.*i8 = evm_malloc 64.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        mstore v11 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        v15.i256 = add v11 32.i256;
-        mstore v15 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v11 36.i256;
+        v9.*i8 = evm_malloc 64.i256;
+        v10.i256 = ptr_to_int v9 i256;
+        mstore v10 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        v14.i256 = add v10 32.i256;
+        mstore v14 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v10 36.i256;
 
     block7:
         return;
 
     block8:
-        obj.store v0 v29;
-        v19.constref<i256> = extract_value v29 0.i256;
-        v21.constref<i256> = extract_value v29 1.i256;
-        v22.i256 = const.load v19;
-        v23.i1 = eq v22 10.i256;
-        br v23 block2 block3;
+        obj.store v0 v28;
+        v18.constref<i256> = extract_value v28 0.i256;
+        v20.constref<i256> = extract_value v28 1.i256;
+        v21.i256 = const.load v18;
+        v22.i1 = eq v21 10.i256;
+        br v22 block2 block3;
 
     block9:
-        v25.constref<i256> = const.proj v4 0.i256;
-        v26.constref<i256> = const.proj v4 1.i256;
-        v28.@layout_1 = insert_value undef.@layout_1 0.i256 v25;
-        v29.@layout_1 = insert_value v28 1.i256 v26;
+        v24.constref<i256> = const.proj v4 0.i256;
+        v25.constref<i256> = const.proj v4 1.i256;
+        v27.@layout_1 = insert_value undef.@layout_1 0.i256 v24;
+        v28.@layout_1 = insert_value v27 1.i256 v25;
         jump block8;
 
     block10:
-        v30.*i8 = evm_malloc 64.i256;
-        v31.i256 = ptr_to_int v30 i256;
-        mstore v31 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        v32.i256 = add v31 32.i256;
-        mstore v32 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v31 36.i256;
+        v29.*i8 = evm_malloc 64.i256;
+        v30.i256 = ptr_to_int v29 i256;
+        mstore v30 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        v31.i256 = add v30 32.i256;
+        mstore v31 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v30 36.i256;
 
     block11:
         jump block10;
 
     block12:
-        br v7 block5 block6;
+        v34.i1 = eq v6 20.i256;
+        br v34 block5 block6;
 
     block13:
         jump block12;

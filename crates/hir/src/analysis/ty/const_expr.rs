@@ -3,9 +3,9 @@ use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::{corelib::ctfe_extern_intrinsic_kind, ty_check::BodyOwner};
 use crate::analysis::{
     HirAnalysisDb,
-    semantic::{ImplEnv, SemanticInstanceKey},
+    semantic::{BinaryOp, ImplEnv, SemanticInstanceKey, UnaryOp},
 };
-use crate::hir_def::{ArithBinOp, CompBinOp, HirIngot, UnOp, attr::ArithmeticMode};
+use crate::hir_def::{CompBinOp, HirIngot, UnOp};
 use salsa::SalsaValue;
 
 #[salsa::interned]
@@ -17,15 +17,14 @@ pub struct ConstExprId<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstExpr<'db> {
     Invocation(ConstInvocation<'db>),
+    /// An arithmetic operation: `+`, `-`, `*`, `/`, `%` or `**`.
     ArithBinOp {
-        op: ArithBinOp,
-        mode: ArithmeticMode,
+        op: BinaryOp,
         lhs: TyId<'db>,
         rhs: TyId<'db>,
     },
     UnOp {
-        op: UnOp,
-        mode: ArithmeticMode,
+        op: UnaryOp,
         expr: TyId<'db>,
     },
     Cast {
@@ -117,16 +116,16 @@ impl<'db> ConstExprId<'db> {
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         match self.data(db) {
             ConstExpr::Invocation(invocation) => pretty_print_const_fn_call(db, invocation),
-            ConstExpr::ArithBinOp { op, lhs, rhs, .. } => {
+            ConstExpr::ArithBinOp { op, lhs, rhs } => {
                 format!(
                     "({} {} {})",
                     lhs.pretty_print(db),
-                    op.pretty_print(),
+                    op.bin_op().pretty_print(),
                     rhs.pretty_print(db)
                 )
             }
-            ConstExpr::UnOp { op, expr, .. } => {
-                pretty_print_un_op(*op, expr.pretty_print(db).to_string())
+            ConstExpr::UnOp { op, expr } => {
+                pretty_print_un_op(op.un_op(), expr.pretty_print(db).to_string())
             }
             ConstExpr::Cast { expr, to } => {
                 format!("({} as {})", expr.pretty_print(db), to.pretty_print(db))
