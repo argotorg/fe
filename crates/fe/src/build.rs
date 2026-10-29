@@ -502,11 +502,11 @@ pub fn build_from_metadata(
     let contract = contract
         .map(str::to_string)
         .or_else(|| recorded_target.as_ref().map(|(_, name)| name.clone()));
-    // The recorded source path pins which module defines the target, in case
-    // another module defines a same-named contract; it only applies while
-    // building the recorded contract. Standalone-target metadata keys its
-    // source by bare file basename, which `reconstruct_project` materializes
-    // under `src/`; mirror that so the path resolves in the rebuilt ingot.
+    // The recorded source path and the contract's path in that file identify
+    // the target; they only apply while building the recorded contract.
+    // Standalone-target metadata keys its source by bare file basename, which
+    // `reconstruct_project` materializes under `src/`; mirror that so the path
+    // resolves in the rebuilt ingot.
     let target_source = recorded_target
         .filter(|(_, name)| contract.as_deref() == Some(name))
         .map(|(path, _)| {
@@ -1275,13 +1275,15 @@ fn build_ingot(
         }
     };
 
-    // `--from-metadata` records the contract's defining source file in
-    // `settings.compilationTarget`; scope emission to that module so a
-    // same-named contract in another module cannot make the target ambiguous.
-    // A recorded target that doesn't resolve is an error, never a fallback to
-    // ingot-wide resolution: that could silently rebuild the wrong source.
-    let target_mod = match (target_source, contract) {
-        (Some(key), Some(name)) => {
+    // `--from-metadata` records the contract as its source file and its path in
+    // that file (`settings.compilationTarget`). Neither depends on the other
+    // contracts or on how the file was built, so they find the contract in the
+    // rebuilt ingot. Scope emission to that module and build the contract's
+    // artifact. A recorded target that doesn't resolve is an error, never a
+    // fallback to ingot-wide resolution: that could silently rebuild the wrong
+    // source.
+    let (target_mod, contract) = match (target_source, contract) {
+        (Some(key), Some(path)) => {
             let mut sources = BTreeMap::new();
             collect_ingot_sources_prefixed(db, ingot, None, &mut sources);
             let Some((top_mod, _)) = sources.get(key) else {
@@ -1291,16 +1293,19 @@ fn build_ingot(
                 );
                 return BuildSummary { had_errors: true };
             };
-            if !module_defines_contract(db, *top_mod, name) {
+            let Some(declared) = mir::ingot_contracts(db, ingot)
+                .iter()
+                .find(|declared| declared.top_mod == *top_mod && declared.path_in_file == path)
+            else {
                 eprintln!(
-                    "Error: `{key}` does not define the contract `{name}` recorded in \
+                    "Error: `{key}` does not define the contract `{path}` recorded in \
                      `settings.compilationTarget`"
                 );
                 return BuildSummary { had_errors: true };
-            }
-            Some(*top_mod)
+            };
+            (Some(*top_mod), Some(declared.name.as_str()))
         }
-        _ => None,
+        _ => (None, contract),
     };
 
     if contract_names.is_empty() {
@@ -1667,15 +1672,6 @@ fn collect_ingot_contract_names(
     let mut names: Vec<_> = names.into_iter().collect();
     names.sort();
     Ok(names)
-}
-
-/// Whether `top_mod` defines the contract or manual contract root whose
-/// artifact is named `name` — the same definitions `write_metadata_artifacts`
-/// records in `compilationTarget`.
-fn module_defines_contract(db: &DriverDataBase, top_mod: TopLevelMod<'_>, name: &str) -> bool {
-    mir::ingot_contracts(db, top_mod.ingot(db))
-        .iter()
-        .any(|contract| contract.top_mod == top_mod && contract.name == name)
 }
 
 /// The artifact names of the contracts `ingot` declares.
@@ -2177,10 +2173,12 @@ fn write_metadata_artifacts(
             }
         };
 
+        // The source file and the contract's path in it, which identify the
+        // contract wherever the file is built.
         let mut compilation_target = serde_json::Map::new();
         compilation_target.insert(
             source_path.to_string(),
-            serde_json::Value::String(name.clone()),
+            serde_json::Value::String(declared.path_in_file.clone()),
         );
 
         let value = serde_json::json!({

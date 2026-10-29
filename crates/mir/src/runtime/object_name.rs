@@ -147,6 +147,10 @@ pub struct IngotContract<'db> {
     pub name: String,
     /// The name written in the source, which another contract may share.
     pub source_name: String,
+    /// The path of the contract in its source file, such as `inner::C`. Unlike
+    /// `name`, it depends neither on the other contracts nor on where the file
+    /// sits in an ingot.
+    pub path_in_file: String,
     /// The module that declares the contract.
     pub top_mod: TopLevelMod<'db>,
     pub(crate) id: ObjectId<'db>,
@@ -204,14 +208,33 @@ pub fn ingot_contracts<'db>(db: &'db dyn MirDb, ingot: Ingot<'db>) -> Vec<IngotC
         .into_iter()
         .zip(select_names(&slots).into_iter().skip(1))
     {
-        let top_mod = match &id {
-            ObjectId::Contract(contract) => contract.scope().top_mod(db),
-            ObjectId::ManualContract { top_mod, .. } => *top_mod,
+        let (top_mod, mut path) = match &id {
+            ObjectId::Contract(contract) => {
+                let mut modules = Vec::new();
+                let mut current = contract.scope().parent_module(db);
+                while let Some(scope) = current
+                    && let ItemKind::Mod(module) = scope.item()
+                {
+                    modules.push(
+                        module
+                            .name(db)
+                            .to_opt()
+                            .map_or_else(|| "mod".to_string(), |name| name.data(db).to_string()),
+                    );
+                    current = scope.parent_module(db);
+                }
+                modules.reverse();
+                (contract.scope().top_mod(db), modules)
+            }
+            ObjectId::ManualContract { top_mod, .. } => (*top_mod, Vec::new()),
             ObjectId::Main | ObjectId::Test(_) => unreachable!("declared objects are contracts"),
         };
+        let source_name = id.base_name(db);
+        path.push(source_name.clone());
         contracts.push(IngotContract {
             name,
-            source_name: id.base_name(db),
+            source_name,
+            path_in_file: path.join("::"),
             top_mod,
             id,
         });

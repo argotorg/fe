@@ -2843,7 +2843,8 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
     // Two modules in the same ingot each define a contract named `Foo`, so
     // their artifacts are qualified by module path (`lib__a__Foo`,
     // `lib__b__Foo`). `settings.compilationTarget` records the source file and
-    // the artifact name; the rebuild must produce the contract of that module.
+    // the contract's path in it; the rebuild must produce the contract of that
+    // module.
     let temp = tempdir().expect("tempdir");
     let root = temp.path();
     fs::create_dir_all(root.join("app/src")).expect("create app/src");
@@ -2877,7 +2878,7 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
     .expect("parse metadata");
     assert_eq!(
         metadata["settings"]["compilationTarget"],
-        serde_json::json!({ "src/a.fe": "lib__a__Foo" }),
+        serde_json::json!({ "src/a.fe": "Foo" }),
         "metadata must record the defining source file"
     );
 

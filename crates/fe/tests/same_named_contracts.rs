@@ -103,18 +103,18 @@ fn fe_build_qualifies_only_the_artifacts_whose_names_clash() {
         "the three contracts have different code"
     );
 
-    // The metadata target is the source file and the artifact name.
-    for (stem, source) in [
-        ("lib__a__C", "src/a.fe"),
-        ("lib__a__inner__C", "src/a.fe"),
-        ("lib__b__C", "src/b.fe"),
+    // The metadata target is the source file and the contract's path in it.
+    for (stem, source, path) in [
+        ("lib__a__C", "src/a.fe", "C"),
+        ("lib__a__inner__C", "src/a.fe", "inner::C"),
+        ("lib__b__C", "src/b.fe", "C"),
     ] {
         let metadata: Value =
             serde_json::from_str(&read(&out.path().join(format!("{stem}.metadata.json"))))
                 .expect("metadata json");
         assert_eq!(
             metadata["settings"]["compilationTarget"],
-            serde_json::json!({ source: stem })
+            serde_json::json!({ source: path })
         );
     }
 }
@@ -445,6 +445,63 @@ fn a_single_file_with_a_nested_module_qualifies_clashing_names() {
         output.contains("Contract \"C\" is defined more than once"),
         "{output}"
     );
+}
+
+#[test]
+fn a_single_file_rebuilds_from_metadata() {
+    let dir = tempdir().expect("tempdir");
+    let file = dir.path().join("shared.fe");
+    fs::write(
+        &file,
+        "pub msg Get {\n    #[selector = sol(\"get()\")]\n    Get -> u256,\n}\n\n\
+         pub contract C {\n    recv Get {\n        Get -> u256 {\n            1\n        }\n    }\n}\n\n\
+         pub mod inner {\n    use super::Get\n\n    pub contract C {\n        recv Get {\n            \
+         Get -> u256 {\n                2\n            }\n        }\n    }\n}\n",
+    )
+    .unwrap();
+    let out = dir.path().join("out");
+    let (output, code) = run_fe(
+        &[
+            "build",
+            "--emit",
+            "runtime-bytecode,metadata",
+            "--out-dir",
+            out.to_str().unwrap(),
+        ],
+        &[&file],
+    );
+    assert_eq!(code, 0, "fe build failed:\n{output}");
+    assert_ne!(
+        read(&out.join("shared__C.runtime.bin")),
+        read(&out.join("shared__inner__C.runtime.bin"))
+    );
+
+    // The rebuild puts the file in an ingot, where the artifact is named after
+    // the ingot's module path, but it is the same contract.
+    for stem in ["shared__C", "shared__inner__C"] {
+        let rebuilt = tempdir().expect("tempdir");
+        let (output, code) = run_fe(
+            &[
+                "build",
+                "--emit",
+                "runtime-bytecode",
+                "--out-dir",
+                rebuilt.path().to_str().unwrap(),
+                "--from-metadata",
+            ],
+            &[&out.join(format!("{stem}.metadata.json"))],
+        );
+        assert_eq!(code, 0, "rebuild of {stem} failed:\n{output}");
+        let files = file_names(rebuilt.path());
+        let [rebuilt_file] = files.iter().collect::<Vec<_>>()[..] else {
+            panic!("expected one artifact, found {files:?}");
+        };
+        assert_eq!(
+            read(&rebuilt.path().join(rebuilt_file)),
+            read(&out.join(format!("{stem}.runtime.bin"))),
+            "rebuilt {stem} differs from the original"
+        );
+    }
 }
 
 #[test]

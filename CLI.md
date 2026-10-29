@@ -276,7 +276,7 @@ The `metadata.json` artifact follows the Solidity Contract Metadata schema (`ver
     "<source path>": { "keccak256": "0x...", "content": "..." }, ...
   },
   "settings": {
-    "compilationTarget": { "<source path>": "<ContractName>" },
+    "compilationTarget": { "<source path>": "<contract path>" },
     "optimizer": { "level": "0|1|2|s" },
     "arithmetic": "checked|unchecked",
     "dependencyArithmetic": "defer|checked|unchecked",
@@ -294,12 +294,14 @@ The `metadata.json` artifact follows the Solidity Contract Metadata schema (`ver
 ```
 
 `<source path>` is the file's path relative to its owning ingot root (e.g. `src/counter.fe`); for a
-standalone `.fe` target, it is the file's basename. `sources` contains every `.fe` file of the
-contract's owning ingot **plus all transitive dependency ingots**, the latter namespaced by the
-ingot's dependency alias (e.g. `mylib/src/lib.fe`). The bundled `core` and `std` are excluded
-because they are pinned to `compiler.version` (a verifier re-runs the same compiler, which ships
-them). `settings.ingots[]` records, per non-builtin ingot, what a verifier needs to regenerate its
-`fe.toml` and `src/` layout.
+standalone `.fe` target, it is the file's basename. `<contract path>` is the contract's path inside
+that file: its name, preceded by any inline modules (e.g. `Counter`, or `inner::Counter`). Unlike
+the artifact name, it does not depend on other contracts or on how the file is built. `sources`
+contains every `.fe` file of the contract's owning ingot **plus all transitive dependency
+ingots**, the latter namespaced by the ingot's dependency alias (e.g. `mylib/src/lib.fe`). The
+bundled `core` and `std` are excluded because they are pinned to `compiler.version` (a verifier
+re-runs the same compiler, which ships them). `settings.ingots[]` records, per non-builtin ingot,
+what a verifier needs to regenerate its `fe.toml` and `src/` layout.
 
 The on-screen output is per-artifact:
 
