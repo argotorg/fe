@@ -222,11 +222,12 @@ Workspace member selection:
 ### Contract selection: `--contract <name>`
 
 - For standalone files and ingots:
-  - If `<name>` is an artifact name, or the source name of exactly one contract, only that contract is built.
-  - If several contracts have the source name `<name>`, the build errors and lists their artifact names and source files; pick one by artifact name.
+  - `<name>` selects the contracts whose artifact name or source name it is. If it selects exactly one, only that contract is built.
+  - If it selects several (contracts that share the source name `<name>`), the build errors and lists their artifact names and source files; pick one by artifact name.
   - If not found, the build errors and prints “Available contracts:” with a list of artifact names.
 - For workspace roots:
-  - If **exactly one** workspace member contains the contract, that member is built for that contract.
+  - A member contains the contract when one of its contracts has `<name>` as its artifact or source name.
+  - If **exactly one** workspace member contains the contract, that member is built for that contract, selected as above.
   - If **zero** members contain the contract, it errors.
     - It also prints “Available contracts:” for the workspace (unique contract names), capped at `50`, followed by `... and N more` if applicable.
   - If **multiple** members contain the contract, it errors and prints a “Matches:” list and a hint to build a specific member by name or path.

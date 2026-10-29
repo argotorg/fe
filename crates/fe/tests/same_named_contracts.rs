@@ -293,6 +293,49 @@ fn a_workspace_root_passes_contract_names_on_to_the_member() {
 }
 
 #[test]
+fn a_workspace_root_reports_a_source_name_shared_across_members() {
+    let workspace = tempdir().expect("tempdir");
+    fs::write(
+        workspace.path().join("fe.toml"),
+        "[workspace]\nname = \"shared_workspace\"\nversion = \"0.1.0\"\nmembers = [\"ingots/*\"]\n",
+    )
+    .unwrap();
+    copy_dir(
+        &fixture("same_named_contracts"),
+        &workspace.path().join("ingots/shared"),
+    );
+    // A member whose only `C` keeps its bare artifact name.
+    let single = workspace.path().join("ingots/single");
+    fs::create_dir_all(single.join("src")).unwrap();
+    fs::write(
+        single.join("fe.toml"),
+        "[ingot]\nname = \"single\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(single.join("src/lib.fe"), "pub contract C {}\n").unwrap();
+    let out = tempdir().expect("tempdir");
+
+    let (output, code) = run_fe(
+        &[
+            "build",
+            "--contract",
+            "C",
+            "--out-dir",
+            out.path().to_str().unwrap(),
+        ],
+        &[workspace.path()],
+    );
+    assert_eq!(code, 1, "expected failure:\n{output}");
+    assert!(
+        output.contains("Contract \"C\" is defined in multiple workspace members")
+            && output.contains("- same_named_contracts (")
+            && output.contains("- single ("),
+        "{output}"
+    );
+    assert!(file_names(out.path()).is_empty());
+}
+
+#[test]
 fn from_metadata_rebuilds_a_qualified_contract() {
     let out = build_fixture();
     for stem in ["lib__a__inner__C", "lib__b__C"] {

@@ -873,13 +873,20 @@ fn build_workspace(
     }
 
     if let Some(contract) = contract {
-        // An artifact name selects the members that build it. Failing that, a
-        // source name selects the members that declare a contract of that name;
-        // the member then decides between its contracts.
-        let mut matches = members_declaring(&contract_names_by_member, contract);
-        if matches.is_empty() {
-            matches = members_declaring(&source_names_by_member, contract);
-        }
+        // A member matches when one of its contracts has `contract` as its
+        // artifact or source name. A single matching member then resolves the
+        // name among its own contracts.
+        let matches: Vec<_> = contract_names_by_member
+            .iter()
+            .zip(&source_names_by_member)
+            .filter(|((_, names), (_, source_names))| {
+                names
+                    .iter()
+                    .chain(source_names)
+                    .any(|name| name == contract)
+            })
+            .map(|((member, _), _)| member)
+            .collect();
 
         match matches.len() {
             0 => {
@@ -1679,18 +1686,6 @@ fn collect_workspace_contract_names(db: &DriverDataBase, ingot: hir::Ingot<'_>) 
         .collect()
 }
 
-/// The members whose names include `name`.
-fn members_declaring<'a>(
-    names_by_member: &'a [(WorkspaceMemberRecord, Vec<String>)],
-    name: &str,
-) -> Vec<&'a WorkspaceMemberRecord> {
-    names_by_member
-        .iter()
-        .filter(|(_, names)| names.iter().any(|candidate| candidate == name))
-        .map(|(member, _)| member)
-        .collect()
-}
-
 fn collect_ingot_abi_artifact_names(
     db: &DriverDataBase,
     ingot: hir::Ingot<'_>,
@@ -1720,8 +1715,8 @@ fn workspace_member_ir_out_dir(
 /// The artifact names to build for `--contract`, or all of `contract_names`
 /// without it.
 ///
-/// Artifact names are unique in an ingot. `--contract` takes one, or a source
-/// name that only one contract has. A source name several contracts share is
+/// `--contract` selects the contracts whose artifact name or source name it
+/// is, and must select exactly one. A source name several contracts share is
 /// ambiguous: the contracts are listed so one can be picked by artifact name.
 fn resolve_names_to_build(
     db: &DriverDataBase,
@@ -1734,30 +1729,33 @@ fn resolve_names_to_build(
         return Ok(contract_names);
     };
 
-    if contract_names.iter().any(|candidate| candidate == name) {
-        return Ok(vec![name.to_string()]);
-    }
     let contracts = mir::ingot_contracts(db, ingot);
-    let same_source_name: Vec<_> = contracts
+    let declaration =
+        |candidate: &str| contracts.iter().find(|declared| declared.name == candidate);
+    let matches: Vec<_> = contract_names
         .iter()
         .filter(|candidate| {
-            candidate.source_name == name && contract_names.contains(&candidate.name)
+            *candidate == name
+                || declaration(candidate).is_some_and(|declared| declared.source_name == name)
         })
         .collect();
-    match same_source_name.as_slice() {
+    match matches.as_slice() {
         [] => {}
-        [only] => return Ok(vec![only.name.clone()]),
+        [only] => return Ok(vec![only.to_string()]),
         several => {
             eprintln!("Error: Contract \"{name}\" is defined more than once");
             eprintln!("Select one by its artifact name:");
             let mut sources = BTreeMap::new();
             collect_ingot_sources_prefixed(db, ingot, None, &mut sources);
             for candidate in several {
-                let path = sources
-                    .iter()
-                    .find(|(_, (top_mod, _))| *top_mod == candidate.top_mod)
-                    .map_or("<unknown source>", |(path, _)| path.as_str());
-                eprintln!("  - {} ({path})", candidate.name);
+                match declaration(candidate).and_then(|declared| {
+                    sources
+                        .iter()
+                        .find(|(_, (top_mod, _))| *top_mod == declared.top_mod)
+                }) {
+                    Some((path, _)) => eprintln!("  - {candidate} ({path})"),
+                    None => eprintln!("  - {candidate}"),
+                }
             }
             return Err(BuildSummary { had_errors: true });
         }
