@@ -188,14 +188,6 @@ impl<'db> TyChecker<'db> {
             }
         } else {
             let ascription = ascription.unwrap_or_else(|| self.fresh_ty());
-            if let Some(diag) = ascription.emit_wf_diag(
-                self.db,
-                TraitSolveCx::new(self.db, self.env.scope()),
-                self.env.assumptions(),
-                span.ty().into(),
-            ) {
-                self.push_diag(diag);
-            }
             self.check_pat(*pat, ascription);
         }
         self.env.flush_pending_bindings();

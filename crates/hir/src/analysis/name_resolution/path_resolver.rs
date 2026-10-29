@@ -23,7 +23,7 @@ use super::{
     method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
     name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query,
-    traits_in_scope::traits_available_for_selection,
+    traits_in_scope::{traits_available_for_selection, visible_candidates},
     visibility_checker::is_ty_visible_from,
 };
 use crate::analysis::{
@@ -1520,7 +1520,7 @@ fn resolve_segment<'db>(
             }
 
             // Find raw associated types, then dedup by normalized result here.
-            let assoc_tys = match find_associated_type_in_mode(
+            let assoc_tys = match find_associated_type(
                 db,
                 scope,
                 Canonicalized::new(db, ty),
@@ -1674,7 +1674,7 @@ enum AssocConstSelection<'db> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FindAssociatedTypeError {
+enum FindAssociatedTypeError {
     InfiniteBoundRecursion,
 }
 
@@ -2065,25 +2065,14 @@ fn select_assoc_const_candidate<'db>(
         }
     });
 
-    // Like method selection: a sole applicable candidate is used, but among
-    // several only traits in scope and the impl `scope` is in count, so an
-    // unrelated trait elsewhere (even in another ingot) can't make the path
-    // ambiguous.
-    let candidates = if matches.len() > 1 {
-        let available = traits_available_for_selection(
-            db,
-            scope,
-            assumptions.list(db).iter().map(|pred| pred.def(db)),
-        );
-        let visible: IndexSet<TraitInstId<'db>> = matches
-            .iter()
-            .copied()
-            .filter(|inst| enclosing.contains(inst) || available.contains(&inst.def(db)))
-            .collect();
-        if visible.is_empty() { matches } else { visible }
-    } else {
-        matches
-    };
+    let candidates = visible_trait_candidates(
+        db,
+        scope,
+        assumptions,
+        &enclosing,
+        matches.into_iter().collect(),
+        |inst| *inst,
+    );
     // A candidate whose trait arguments are unknown can't be selected.
     match candidates.first() {
         None => AssocConstSelection::NotFound,
@@ -2092,6 +2081,31 @@ fn select_assoc_const_candidate<'db>(
         }
         Some(_) => AssocConstSelection::Ambiguous(candidates.into_iter().collect()),
     }
+}
+
+/// The candidates a `Type::Item` path in `scope` chooses among (see
+/// [`visible_candidates`]): among several, those of a trait in scope or of the
+/// impl `scope` is in, or all of them if there are none.
+fn visible_trait_candidates<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    enclosing: &IndexSet<TraitInstId<'db>>,
+    candidates: Vec<T>,
+    inst: impl Fn(&T) -> TraitInstId<'db>,
+) -> Vec<T> {
+    visible_candidates(candidates, || {
+        let available = traits_available_for_selection(
+            db,
+            scope,
+            assumptions.list(db).iter().map(|pred| pred.def(db)),
+        );
+        move |candidate: &T| {
+            let inst = inst(candidate);
+            enclosing.contains(&inst) || available.contains(&inst.def(db))
+        }
+    })
+    .unwrap_or_else(|all| all)
 }
 
 /// Whether `implementor` is the trait impl that `scope` is in. Its items are
@@ -2104,16 +2118,6 @@ fn is_enclosing_impl<'db>(
 ) -> bool {
     matches!(implementor.origin(db), ImplementorOrigin::Hir(impl_trait)
         if scope.is_transitive_child_of(db, impl_trait.scope()))
-}
-
-pub(crate) fn find_associated_type<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    ty: Canonicalized<'db, TyId<'db>>,
-    name: IdentId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
-    find_associated_type_in_mode(db, scope, ty, name, assumptions, ConstBodyLowering::Eager)
 }
 
 /// The bounds implied by a trait's own `Self: Trait` predicate.
@@ -2193,7 +2197,7 @@ fn assoc_at_mode_arg<'db>(
     })
 }
 
-fn find_associated_type_in_mode<'db>(
+fn find_associated_type<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: Canonicalized<'db, TyId<'db>>,
@@ -2401,26 +2405,21 @@ fn find_associated_type_in_mode<'db>(
     let mut seen = IndexSet::new();
     candidates.retain(|candidate| seen.insert(*candidate));
 
-    // Implementations of a concrete type: like method selection and associated
-    // consts, only traits in scope and the impl `scope` is in count among
-    // several candidates, so an unrelated trait elsewhere can't make the path
-    // ambiguous.
-    if candidates.len() > 1
-        && !matches!(
-            original_ty.data(db),
-            TyData::TyParam(_) | TyData::AssocTy(_)
-        )
-    {
-        let available = traits_available_for_selection(
+    // The implementations of a concrete type are narrowed as associated
+    // consts are; the candidates of a parameter come from its bounds.
+    if !matches!(
+        original_ty.data(db),
+        TyData::TyParam(_) | TyData::AssocTy(_)
+    ) {
+        candidates = visible_trait_candidates(
             db,
             scope,
-            assumptions.list(db).iter().map(|pred| pred.def(db)),
-        );
-        let visible =
-            |inst: &TraitInstId<'db>| enclosing.contains(inst) || available.contains(&inst.def(db));
-        if candidates.iter().any(|(inst, _)| visible(inst)) {
-            candidates.retain(|(inst, _)| visible(inst));
-        }
+            assumptions,
+            &enclosing,
+            candidates.into_vec(),
+            |(inst, _)| *inst,
+        )
+        .into();
     }
 
     Ok(candidates)

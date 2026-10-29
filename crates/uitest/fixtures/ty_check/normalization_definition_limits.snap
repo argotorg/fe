@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/normalization_definition_limits.fe
+---
+error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_definition_limits.fe:14:16
+   │
+14 │     type Out = <Own as Tr>::Out
+   │                ^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_definition_limits.fe:19:16
+   │
+19 │     type Out = <Mutual as Tr2>::Out
+   │                ^^^^^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_definition_limits.fe:22:16
+   │
+22 │     type Out = <Mutual as Tr>::Out
+   │                ^^^^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_definition_limits.fe:29:16
+   │
+29 │     type Out = (<Fan<(T, u8)> as Tr>::Out, <Fan<(T, u16)> as Tr>::Out)
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_definition_limits.fe:35:16
+   │
+35 │     type Out = <Own as Tr>::Out
+   │                ^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit

@@ -34,10 +34,10 @@ error[6-0003]: trait bound is not satisfied
    │           ^^^^^ `T` doesn't implement `Hashable`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ inherent_impl_ill_formed_receiver.fe:27:27
+   ┌─ inherent_impl_ill_formed_receiver.fe:27:16
    │
 27 │     let cache: Cache<T> = todo()
-   │                           ^^^^^^ `T` doesn't implement `Hashable`
+   │                ^^^^^^^^ `T` doesn't implement `Hashable`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ inherent_impl_ill_formed_receiver.fe:28:11

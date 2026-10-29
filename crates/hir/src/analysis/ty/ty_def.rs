@@ -29,13 +29,13 @@ use super::{
         ConstCaptureEnv, ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy,
         const_ty_from_sem_const,
     },
-    diagnostics::{TraitConstraintDiag, TyDiagCollection},
+    diagnostics::TyDiagCollection,
     effects::{place_effect_provider_param_index_map, rows::RowComponent},
     fold::{TyFoldable, TyFolder},
     normalize::normalize_ty,
     shape::Shape,
     trait_def::{TraitInstId, TraitRefId},
-    trait_resolution::{PredicateListId, WellFormedness},
+    trait_resolution::PredicateListId,
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
     visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty},
@@ -44,12 +44,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::PathRes,
     semantic::int_const,
-    ty::{
-        adt_def::AdtRef,
-        provider::AddressSpace,
-        trait_resolution::{TraitSolveCx, check_ty_wf},
-        ty_error::emit_invalid_ty_error,
-    },
+    ty::{adt_def::AdtRef, provider::AddressSpace, ty_error::emit_invalid_ty_error},
 };
 use crate::hir_def::CallableDef;
 
@@ -912,30 +907,6 @@ impl<'db> TyId<'db> {
         emit_invalid_ty_error(db, self, span)
     }
 
-    pub(super) fn emit_wf_diag(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        solve_cx: TraitSolveCx<'db>,
-        assumptions: PredicateListId<'db>,
-        span: DynLazySpan<'db>,
-    ) -> Option<TyDiagCollection<'db>> {
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, solve_cx.with_assumptions(assumptions), self)
-        {
-            Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span,
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            )
-        } else {
-            None
-        }
-    }
-
     pub(super) fn ty_var(
         db: &'db dyn HirAnalysisDb,
         sort: TyVarSort,
@@ -1561,6 +1532,10 @@ pub enum InvalidCause<'db> {
     /// than the normalizer allows.
     TypeNormalizationLimit,
 
+    /// A projection resolved through an impl whose definition of it can't be
+    /// normalized within the limits; reported at the impl.
+    DivergentAssocTy,
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -1753,6 +1728,7 @@ impl InvalidCause<'_> {
             InvalidCause::ConstEvalRecursiveConst { .. } => "ConstEvalRecursiveConst".into(),
             InvalidCause::TypeLoweringCycle => "TypeLoweringCycle".into(),
             InvalidCause::TypeNormalizationLimit => "TypeNormalizationLimit".into(),
+            InvalidCause::DivergentAssocTy => "DivergentAssocTy".into(),
         }
     }
 }

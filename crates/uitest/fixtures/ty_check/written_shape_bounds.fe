@@ -1,0 +1,27 @@
+// A shape written in a signature has its bounds checked where it is
+// written, like a type: the trait of an associated shape must hold.
+trait Foo {}
+impl Foo for u8 {}
+
+trait Driver {
+    shape Step
+}
+
+struct W<T> { t: T }
+impl<T: Foo> Driver for W<T> {
+    shape Step = mut? T
+}
+
+fn param<D>(_ s: <D as Driver>::Step<ref>) {}
+
+fn product<D>(_ (i, s): (own usize, <D as Driver>::Step<ref>)) {}
+
+trait Returns {
+    fn ret(_ s: own u16) -> <W<u16> as Driver>::Step<ref>
+    fn tuple_ret<D>(_ d: own D) -> (own usize, <D as Driver>::Step<ref>)
+}
+
+struct Z {}
+impl Driver for Z {
+    shape Step = (own u8, <W<u16> as Driver>::Step)
+}

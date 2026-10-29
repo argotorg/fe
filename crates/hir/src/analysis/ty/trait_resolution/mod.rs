@@ -123,6 +123,9 @@ pub enum Selection<T> {
 pub struct TraitSolveCx<'db> {
     origin_ingot: Ingot<'db>,
     assumptions: PredicateListId<'db>,
+    /// Whether goals normalize their projections through impls, and not only
+    /// through the assumptions.
+    resolve_impls: bool,
 }
 
 impl<'db> TraitSolveCx<'db> {
@@ -130,6 +133,7 @@ impl<'db> TraitSolveCx<'db> {
         Self {
             origin_ingot: scope.ingot(db),
             assumptions: PredicateListId::empty_list(db),
+            resolve_impls: true,
         }
     }
 
@@ -138,6 +142,19 @@ impl<'db> TraitSolveCx<'db> {
             assumptions,
             ..self
         }
+    }
+
+    /// Solves without resolving projections through impls, so that solving
+    /// can't ask for the projection whose impl is being chosen.
+    pub(crate) fn without_impl_normalization(self) -> Self {
+        Self {
+            resolve_impls: false,
+            ..self
+        }
+    }
+
+    pub(crate) fn resolve_impls(self) -> bool {
+        self.resolve_impls
     }
 
     pub fn assumptions(self) -> PredicateListId<'db> {
@@ -154,7 +171,13 @@ impl<'db> TraitSolveCx<'db> {
         inst: TraitInstId<'db>,
     ) -> Selection<ImplementorId<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
-        let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions);
+        let inst = normalize_trait_inst_preserving_validity(
+            db,
+            inst,
+            scope,
+            self.assumptions,
+            self.resolve_impls,
+        );
         // An assumption proves a bound; it is not a second implementation.
         // Keep inference goals on the ordinary proof query: an assumption may
         // select a different substitution from the implementations in scope.
@@ -259,8 +282,13 @@ pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
     inst: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    resolve_impls: bool,
 ) -> TraitInstId<'db> {
-    let normalized = inst.normalize(db, scope, assumptions);
+    let normalized = if resolve_impls {
+        inst.normalize(db, scope, assumptions)
+    } else {
+        normalize_from_assumptions(db, inst, scope, assumptions)
+    };
     let original_has_invalid = inst.args(db).iter().copied().any(|ty| ty.has_invalid(db))
         || inst
             .assoc_type_bindings(db)
@@ -289,12 +317,13 @@ fn is_query_satisfiable<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: Ingot<'db>,
     query: Canonical<TraitSolverQuery<'db>>,
+    resolve_impls: bool,
 ) -> GoalSatisfiability<'db> {
     if query.flags(db).contains(TyFlags::HAS_INVALID) {
         return GoalSatisfiability::ContainsInvalid;
     };
 
-    solve(db, origin_ingot, query)
+    solve(db, origin_ingot, query, resolve_impls)
 }
 
 fn is_query_satisfiable_cycle_initial<'db>(
@@ -302,6 +331,7 @@ fn is_query_satisfiable_cycle_initial<'db>(
     _: salsa::Id,
     _origin_ingot: Ingot<'db>,
     _query: Canonical<TraitSolverQuery<'db>>,
+    _resolve_impls: bool,
 ) -> GoalSatisfiability<'db> {
     // A cycle can arise while collecting an impl whose constraints contain an associated-type
     // projection: resolving the projection needs the trait environment that is currently being
@@ -379,7 +409,13 @@ pub fn is_goal_query_satisfiable<'db>(
     solve_cx: TraitSolveCx<'db>,
     query: &CanonicalGoalQuery<'db>,
 ) -> GoalSatisfiability<'db> {
-    is_query_satisfiable(db, solve_cx.origin_ingot(), query.canonical()).clone()
+    is_query_satisfiable(
+        db,
+        solve_cx.origin_ingot(),
+        query.canonical(),
+        solve_cx.resolve_impls,
+    )
+    .clone()
 }
 
 pub fn is_goal_satisfiable<'db>(
@@ -829,6 +865,9 @@ pub enum TraitSolveCompletion {
     PendingWorkLimit { limit: usize },
     /// Fe's bounded-type-growth guard stopped the search.
     MaximumTypeDepth,
+    /// A goal names a projection that only an impl could resolve, in a search
+    /// that doesn't resolve projections through impls.
+    UnresolvedProjection,
     /// Salsa is iterating a recursive query to a fixpoint.
     Cycle,
 }

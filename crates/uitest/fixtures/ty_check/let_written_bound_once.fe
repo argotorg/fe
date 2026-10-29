@@ -1,0 +1,14 @@
+// A bound is reported once where a type is written in a statement, not again
+// for the statement's initializer, while another statement whose expression
+// has the same bound still reports it.
+trait Marker {}
+struct NotMarked {}
+struct Foo<T: Marker> { t: T }
+
+fn mk<T>() -> T { todo() }
+
+fn f(c: bool) {
+    let _a: Foo<NotMarked> = mk()
+    let _b = Foo { t: NotMarked {} }
+    let _c: Foo<NotMarked> = if c { mk() } else { { mk() } }
+}

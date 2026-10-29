@@ -1,0 +1,33 @@
+// Every written type has its bounds checked where it is written, including
+// the trait of a projection in it.
+trait Foo {}
+trait Ty {
+    type A
+}
+struct W<T> { t: T }
+impl<T: Foo> Ty for W<T> {
+    type A = T
+}
+
+fn const_param<const N: <W<u16> as Ty>::A>() {}
+
+trait Consts {
+    const C: <W<u16> as Ty>::A
+}
+
+struct Z {}
+impl Z {
+    const C: <W<u16> as Ty>::A = 1
+}
+
+impl Consts for Z {
+    const C: <W<u16> as Ty>::A = 1
+}
+
+trait Defaults {
+    type B = <W<u16> as Ty>::A
+    type M = Missing
+}
+
+trait Bar {}
+impl Bar for <W<u16> as Ty>::A {}

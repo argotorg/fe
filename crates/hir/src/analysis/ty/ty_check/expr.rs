@@ -71,8 +71,8 @@ use crate::analysis::ty::{
     normalize::normalize_with_trait_evidence,
     provider::{ProviderTransport, provider_semantics_for_specialized_call},
     shape::{
-        Shape, SumKind, is_param_product, lower_opaque_param, lower_param_product, may_name_shape,
-        param_product_diags, sum_kind,
+        Shape, SumKind, check_param_product, is_param_product, lower_opaque_param,
+        lower_param_product, may_name_shape, sum_kind,
     },
     trait_def::TraitInstId,
     trait_lower::{complete_impl_trait, lower_impl_trait},
@@ -935,7 +935,7 @@ impl<'db> TyChecker<'db> {
             }
             Some(ty) if is_param_product(db, ty) => {
                 let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
-                let diags = param_product_diags(db, ty, scope, span, assumptions);
+                let diags = check_param_product(db, ty, scope, span, assumptions, None).errors;
                 if !diags.is_empty() {
                     diags.into_iter().for_each(|diag| self.push_diag(diag));
                     return Shape::Owned(TyId::invalid(db, InvalidCause::Other));
