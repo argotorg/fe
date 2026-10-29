@@ -389,6 +389,39 @@ fn a_dependency_contract_does_not_rename_the_ingots_own_contract() {
 }
 
 #[test]
+fn a_dependency_contract_deploys_the_code_it_has_in_its_own_ingot() {
+    // `lib::Factory` embeds `lib::A` and `lib::B`. Building `app`, which has an
+    // `A` of its own, renames `lib::A`, but the code of `lib::Factory` that
+    // `app::Deployer` deploys stays the code `lib` builds for it.
+    let fixture = fixture("same_named_contracts_embedded_dependency");
+    let build = |ingot: &str, emit: &str| {
+        let out = tempdir().expect("tempdir");
+        let (output, code) = run_fe(
+            &[
+                "build",
+                "--ingot",
+                ingot,
+                "--emit",
+                emit,
+                "--out-dir",
+                out.path().to_str().unwrap(),
+            ],
+            &[&fixture],
+        );
+        assert_eq!(code, 0, "fe build of {ingot} failed:\n{output}");
+        out
+    };
+    let lib = build("lib", "bytecode");
+    let app = build("app", "runtime-bytecode");
+    let factory = read(&lib.path().join("Factory.bin"));
+    let deployer = read(&app.path().join("Deployer.runtime.bin"));
+    assert!(
+        deployer.trim().contains(factory.trim()),
+        "`Deployer` does not embed the code of `Factory`"
+    );
+}
+
+#[test]
 fn contracts_written_as_manual_roots_are_qualified_like_the_others() {
     let out = tempdir().expect("tempdir");
     let (output, code) = run_fe(

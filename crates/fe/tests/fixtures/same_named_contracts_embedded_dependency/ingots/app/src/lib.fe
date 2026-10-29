@@ -1,0 +1,17 @@
+use std::evm::Create
+
+pub msg Deploy {
+    #[selector = 0x22222222]
+    DeployFactory { salt: u256 } -> Address,
+}
+
+// Shares a name with `lib::A`, which is renamed in this ingot's packages.
+pub contract A {}
+
+pub contract Deployer {
+    recv Deploy {
+        DeployFactory { salt } -> Address uses (create: mut Create) {
+            create.create2<lib::Factory>(value: Wei::zero(), args: (), salt: salt)
+        }
+    }
+}

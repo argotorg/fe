@@ -1,0 +1,37 @@
+use std::evm::Create
+
+pub msg Make {
+    #[selector = 0x11111111]
+    MakeBoth { salt: u256 } -> Address,
+}
+
+pub msg Get {
+    #[selector = sol("get()")]
+    Get -> u256,
+}
+
+pub contract A {
+    recv Get {
+        Get -> u256 {
+            1
+        }
+    }
+}
+
+pub contract B {
+    recv Get {
+        Get -> u256 {
+            2
+        }
+    }
+}
+
+// Embeds the code of `A` and `B`.
+pub contract Factory {
+    recv Make {
+        MakeBoth { salt } -> Address uses (create: mut Create) {
+            create.create2<A>(value: Wei::zero(), args: (), salt: salt)
+            create.create2<B>(value: Wei::zero(), args: (), salt: salt + 1)
+        }
+    }
+}

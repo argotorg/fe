@@ -1288,6 +1288,17 @@ fn collect_region_embeds<'db>(
                 continue;
             }
             let as_symbol = code_region_symbol(db, region, source.object());
+            let order = match region.key(db) {
+                RuntimeCodeRegionKey::ContractInit { contract } => {
+                    (item_identity(db, contract.into()), 0)
+                }
+                RuntimeCodeRegionKey::ContractRuntime { contract } => {
+                    (item_identity(db, contract.into()), 1)
+                }
+                RuntimeCodeRegionKey::ManualContractRoot { func } => {
+                    (item_identity(db, func.into()), 0)
+                }
+            };
             let source = if source.object() == current_object {
                 RuntimeSectionRef::Local {
                     object: source.object().to_string(),
@@ -1299,11 +1310,14 @@ fn collect_region_embeds<'db>(
                     section: source.section().clone(),
                 }
             };
-            embeds.push(crate::runtime::RuntimeEmbed { source, as_symbol });
+            embeds.push((order, crate::runtime::RuntimeEmbed { source, as_symbol }));
         }
     }
-    embeds.sort_by(|lhs, rhs| lhs.as_symbol.cmp(&rhs.as_symbol));
-    embeds
+    // Embedded code is laid out in this order. Order it by what each region is
+    // built from, so that object names, which another package may choose
+    // differently for a dependency's contract, cannot change the bytes.
+    embeds.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+    embeds.into_iter().map(|(_, embed)| embed).collect()
 }
 
 fn collect_reachable_from_entry<'db>(
