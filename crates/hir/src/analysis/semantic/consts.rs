@@ -1,4 +1,4 @@
-use common::layout::enum_tag_bits;
+use common::layout::{EnumMemoryLayout, MemoryLayout, PlacedFields, enum_tag_bits};
 use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
@@ -971,29 +971,42 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             .transpose()
     }
 
-    fn sum_fields<'db>(
+    /// `fields` placed like a struct's, if every field has a layout.
+    fn place_fields<'db>(
         db: &'db dyn HirAnalysisDb,
         fields: impl IntoIterator<Item = ConcreteTypeView<'db>>,
         visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> Result<Option<u64>, RuntimeSizeError<'db>> {
-        fields.into_iter().try_fold(Some(0u64), |size, field| {
-            let field_size = inner(db, field.canonical, field.source, visiting)?;
-            match (size, field_size) {
-                (Some(size), Some(field_size)) => size
-                    .checked_add(field_size)
-                    .map(Some)
-                    .ok_or(RuntimeSizeError::Overflow),
-                _ => Ok(None),
-            }
-        })
+    ) -> Result<Option<PlacedFields>, RuntimeSizeError<'db>> {
+        let mut layouts = Vec::new();
+        for field in fields {
+            let Some(layout) = inner(db, field.canonical, field.source, visiting)? else {
+                return Ok(None);
+            };
+            layouts.push(layout);
+        }
+        PlacedFields::new(layouts)
+            .map(Some)
+            .ok_or(RuntimeSizeError::Overflow)
     }
+
+    fn struct_layout<'db>(
+        db: &'db dyn HirAnalysisDb,
+        fields: impl IntoIterator<Item = ConcreteTypeView<'db>>,
+        visiting: &mut FxHashSet<TyId<'db>>,
+    ) -> Result<Option<MemoryLayout>, RuntimeSizeError<'db>> {
+        place_fields(db, fields, visiting)?
+            .map(|fields| fields.struct_layout().ok_or(RuntimeSizeError::Overflow))
+            .transpose()
+    }
+
+    const EMPTY: MemoryLayout = MemoryLayout { size: 0, align: 1 };
 
     fn inner<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         source: TyId<'db>,
         visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> Result<Option<u64>, RuntimeSizeError<'db>> {
+    ) -> Result<Option<MemoryLayout>, RuntimeSizeError<'db>> {
         if !visiting.insert(ty) {
             return Ok(None);
         }
@@ -1010,7 +1023,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         } else if let TyData::TyParam(param) = ty.data(db)
             && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
         {
-            Some(0)
+            Some(EMPTY)
         } else if ty.has_param(db) {
             None
         } else if ty.is_tuple(db) || ty.as_closure(db).is_some() {
@@ -1019,7 +1032,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             if canonical_fields.len() != source_fields.len() {
                 return Err(RuntimeSizeError::UnavailableConcrete);
             }
-            sum_fields(
+            struct_layout(
                 db,
                 canonical_fields
                     .into_iter()
@@ -1031,7 +1044,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             ty.base_ty(db).data(db),
             TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_))
         ) {
-            Some(0)
+            Some(EMPTY)
         } else if ty.is_array(db) {
             if !source.is_array(db) {
                 return Err(RuntimeSizeError::UnavailableConcrete);
@@ -1042,54 +1055,61 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
                 (Some(elem), Some(len)) => {
                     let source_elem = source_args.first().copied().unwrap_or(elem);
                     inner(db, elem, source_elem, visiting)?
-                        .map(|stride| len.checked_mul(stride).ok_or(RuntimeSizeError::Overflow))
+                        .map(|elem| {
+                            len.checked_mul(elem.size)
+                                .map(|size| MemoryLayout {
+                                    size,
+                                    align: elem.align,
+                                })
+                                .ok_or(RuntimeSizeError::Overflow)
+                        })
                         .transpose()?
                 }
                 _ => None,
             }
         } else if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
             match prim {
-                PrimTy::Bool => Some(1),
+                PrimTy::Bool => Some(target.scalar_memory_layout(1)),
                 // A memory address or a reference is a `usize`; a state
                 // pointer is its slot word.
                 PrimTy::Ptr(AddressSpace::Memory)
                 | PrimTy::View
                 | PrimTy::BorrowMut
-                | PrimTy::BorrowRef => Some(target.usize_bits() as u64 / 8),
-                PrimTy::String | PrimTy::Ptr(_) => Some(WORD_SIZE_BYTES),
+                | PrimTy::BorrowRef => Some(target.pointer_memory_layout()),
+                PrimTy::String | PrimTy::Ptr(_) => Some(MemoryLayout {
+                    size: WORD_SIZE_BYTES,
+                    align: target.scalar_memory_layout(256).align,
+                }),
                 PrimTy::Array | PrimTy::Tuple(_) => None,
-                _ => prim_int_bits(*prim, target).map(|bits| bits as u64 / 8),
+                _ => prim_int_bits(*prim, target)
+                    .map(|bits| target.scalar_memory_layout(bits as u16)),
             }
         } else if ty.is_struct(db) {
             let adt = ty.adt_def(db).expect("struct has an ADT definition");
-            sum_fields(
+            struct_layout(
                 db,
                 adt_variant_field_views(db, adt, 0, ty, source)?,
                 visiting,
             )?
         } else if let Some(enum_) = ty.as_enum(db) {
             let adt = enum_.as_adt(db);
-            let tag_size = u64::from(enum_tag_bits(enum_.len_variants(db)).div_ceil(8));
-            let max_payload =
-                (0..adt.fields(db).len()).try_fold(Some(0u64), |max_payload, variant_idx| {
-                    let payload = sum_fields(
-                        db,
-                        adt_variant_field_views(db, adt, variant_idx, ty, source)?,
-                        visiting,
-                    )?;
-                    Ok(match (max_payload, payload) {
-                        (Some(max_payload), Some(payload)) => Some(max_payload.max(payload)),
-                        _ => None,
-                    })
-                })?;
-            match max_payload {
-                Some(max_payload) => Some(
-                    tag_size
-                        .checked_add(max_payload)
-                        .ok_or(RuntimeSizeError::Overflow)?,
-                ),
-                None => None,
+            let mut variants = Vec::new();
+            for variant_idx in 0..adt.fields(db).len() {
+                let fields = adt_variant_field_views(db, adt, variant_idx, ty, source)?;
+                match place_fields(db, fields, visiting)? {
+                    Some(fields) => variants.push(fields),
+                    None => {
+                        visiting.remove(&ty);
+                        return Ok(None);
+                    }
+                }
             }
+            let tag = target.scalar_memory_layout(enum_tag_bits(enum_.len_variants(db)));
+            Some(
+                EnumMemoryLayout::new(tag, &variants)
+                    .ok_or(RuntimeSizeError::Overflow)?
+                    .layout,
+            )
         } else {
             None
         };
@@ -1098,11 +1118,11 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         Ok(result)
     }
 
-    let size = inner(db, view.canonical, view.source, &mut FxHashSet::default())?;
-    if size.is_none() && ty_is_fully_ground(db, view.canonical) {
+    let layout = inner(db, view.canonical, view.source, &mut FxHashSet::default())?;
+    if layout.is_none() && ty_is_fully_ground(db, view.canonical) {
         return Err(RuntimeSizeError::UnavailableConcrete);
     }
-    Ok(size)
+    Ok(layout.map(|layout| layout.size))
 }
 
 /// The first evaluation fault in the layout of `ty`: in the type itself, in

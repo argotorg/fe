@@ -6,7 +6,7 @@ struct Frame { value: u64, words: [u256; 4], memory: MemBuffer }
 // Mode 1: the frame stack cannot be allocated. Mode 2: a frame's memory
 // cannot be allocated. Nothing here frees memory: destruction does.
 pub fn main(argc: i32, argv: **u8) -> i32 {
-    core::assert(core::size_of<Frame>() == 160)
+    core::assert(core::size_of<Frame>() == 176)
     let args = unsafe { Args::new(argc, argv) }
     let mode = if args.len() == 1 { 0 } else { args.get(1).byte_at(0) - 48 }
     var stack = match MemVec<Frame>::try_with_capacity(3) {

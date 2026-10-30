@@ -170,6 +170,94 @@ pub fn storage_fields_layout(
     })
 }
 
+/// The bytes a value takes in memory and the alignment of its address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MemoryLayout {
+    pub size: u64,
+    pub align: u64,
+}
+
+/// Fields placed like a C struct's, each at the next multiple of its
+/// alignment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlacedFields {
+    pub offsets: Vec<u64>,
+    /// The end of the last field.
+    pub end: u64,
+    /// The largest alignment of any field, at least 1.
+    pub align: u64,
+}
+
+impl PlacedFields {
+    /// Places `fields`, or `None` if an offset overflows.
+    pub fn new(fields: impl IntoIterator<Item = MemoryLayout>) -> Option<Self> {
+        let mut end = 0u64;
+        let mut align = 1u64;
+        let offsets = fields
+            .into_iter()
+            .map(|field| {
+                let offset = end.checked_next_multiple_of(field.align)?;
+                end = offset.checked_add(field.size)?;
+                align = align.max(field.align);
+                Some(offset)
+            })
+            .collect::<Option<_>>()?;
+        Some(Self {
+            offsets,
+            end,
+            align,
+        })
+    }
+
+    /// The layout of a struct of these fields: their end rounded to their
+    /// alignment.
+    pub fn struct_layout(&self) -> Option<MemoryLayout> {
+        Some(MemoryLayout {
+            size: self.end.checked_next_multiple_of(self.align)?,
+            align: self.align,
+        })
+    }
+}
+
+/// An enum in memory: the tag at offset zero, then every variant's fields
+/// placed like a struct's from one payload offset aligned for all of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnumMemoryLayout {
+    pub payload_offset: u64,
+    pub layout: MemoryLayout,
+}
+
+impl EnumMemoryLayout {
+    /// The layout of an enum with a `tag` and `variants`' placed fields, or
+    /// `None` on overflow.
+    pub fn new<'a>(
+        tag: MemoryLayout,
+        variants: impl IntoIterator<Item = &'a PlacedFields> + Clone,
+    ) -> Option<Self> {
+        let payload_align = variants
+            .clone()
+            .into_iter()
+            .map(|fields| fields.align)
+            .fold(1, u64::max);
+        let extent = variants
+            .into_iter()
+            .map(|fields| fields.end)
+            .max()
+            .unwrap_or(0);
+        let payload_offset = tag.size.checked_next_multiple_of(payload_align)?;
+        let align = tag.align.max(payload_align);
+        Some(Self {
+            payload_offset,
+            layout: MemoryLayout {
+                size: payload_offset
+                    .checked_add(extent)?
+                    .checked_next_multiple_of(align)?,
+                align,
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

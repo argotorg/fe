@@ -2,7 +2,10 @@ use super::bytes::PackedBytes
 
 /// Backend-agnostic compiler intrinsics.
 extern {
-    /// Return the byte size of a type at compile time.
+    /// The bytes a value of `T` takes in memory, at compile time. EVM memory
+    /// packs fields one after another. Native memory lays them out as C does,
+    /// each scalar aligned to its size up to 16 bytes, and an enum as its tag
+    /// followed by every variant's fields from one aligned payload offset.
     pub const fn size_of<T>() -> usize
 
     /// The storage slots a value of `T` takes, as the contract layout places

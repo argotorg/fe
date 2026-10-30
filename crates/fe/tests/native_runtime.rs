@@ -332,10 +332,75 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_boxed_values_move_whole_where_raw_and_native_layouts_agree() {
-    // A box stores its value packed. `words` follows a one-byte bool, so the
-    // frame's raw layout differs from its native one and moves field by
-    // field, but `words`, `small` and `pair` each move in one load and store.
+fn native_records_and_enums_take_aligned_layout() {
+    // Native memory lays fields out as a Sonatina object does: each at its
+    // alignment, little-endian, and an enum's variants from one payload
+    // offset after the tag.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("aligned.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr::MemArray
+
+struct Inner { code: u16, ready: bool }
+struct Packet { tag: u8, inner: Inner, samples: [u16; 3], tail: u8 }
+enum Choice { Small(u8), Wide(u64, u16) }
+
+impl Copy for Inner {}
+impl Copy for Packet {}
+impl Copy for Choice {}
+
+pub fn main() -> i32 {
+    assert!(core::size_of<Inner>() == 4)
+    assert!(core::size_of<Packet>() == 14)
+    assert!(core::size_of<Choice>() == 24)
+    var packets = MemArray<Packet>::new_zeroed(2)
+    assert!(packets.byte_len() == 2 * core::size_of<Packet>())
+    packets[1] = Packet {
+        tag: 0xa1,
+        inner: Inner { code: 0x1234, ready: true },
+        samples: [0x5678, 0x9abc, 0xdef0],
+        tail: 0x7e,
+    }
+    let bytes = packets.span()
+    // The tag, then `inner` at its two-byte alignment, `samples` and `tail`.
+    let offsets: [usize; 9] = [0, 2, 3, 4, 6, 7, 8, 11, 12]
+    let expected: [u8; 9] = [0xa1, 0x34, 0x12, 1, 0x78, 0x56, 0xbc, 0xde, 0x7e]
+    var i: usize = 0
+    while i < 9 {
+        assert!(bytes[14 + offsets[i]] == expected[i])
+        i += 1
+    }
+    var choices = MemArray<Choice>::new_zeroed(2)
+    assert!(choices.byte_len() == 2 * core::size_of<Choice>())
+    choices[0] = Choice::Wide(0x0102030405060708, 0x0a0b)
+    choices[1] = Choice::Small(0x5c)
+    let bytes = choices.span()
+    // Both payloads start at the u64's eight-byte alignment.
+    assert!(bytes[0] == 1 && bytes[8] == 0x08 && bytes[15] == 0x01 && bytes[16] == 0x0b)
+    assert!(bytes[24] == 0 && bytes[32] == 0x5c)
+    match choices[0] {
+        Choice::Wide(word, half) => assert!(word == 0x0102030405060708 && half == 0x0a0b)
+        Choice::Small(_) => assert!(false)
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("aligned")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_boxed_structs_move_whole() {
+    // A box stores its value in the aligned layout of a Sonatina object, so
+    // the frame moves in one load and store despite the padding after `flag`.
     let temp = tempdir().unwrap();
     let source = temp.path().join("boxed.fe");
     fs::write(
@@ -381,14 +446,19 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
         if level == "0" {
             let ir = fs::read_to_string(out.join("boxed.native.sona")).unwrap();
-            for ty in ["[i256; 64]", "[i8; 3]"] {
-                for op in ["= mload", "mstore"] {
-                    assert!(
-                        ir.lines()
-                            .any(|line| line.contains(op) && line.ends_with(&format!(" {ty};"))),
-                        "{op} {ty}\n{ir}"
-                    );
-                }
+            let frame = ir
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("type ")?
+                        .strip_suffix(" = {i1, [i256; 64], i64, [i8; 3], @layout_1};")
+                })
+                .unwrap_or_else(|| panic!("no frame type\n{ir}"));
+            for op in ["= mload", "mstore"] {
+                assert!(
+                    ir.lines()
+                        .any(|line| line.contains(op) && line.ends_with(&format!(" {frame};"))),
+                    "{op} {frame}\n{ir}"
+                );
             }
         }
     }
