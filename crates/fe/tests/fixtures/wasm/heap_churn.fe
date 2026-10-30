@@ -1,0 +1,42 @@
+// Blocks that are allocated and then dropped are reused: the memory of the module
+// does not grow with the number of rounds.
+use core::ptr::{MemArray, MemVec}
+
+// Allocates a zeroed block of `n` words each round, writes the round number to its
+// first word and drops it. Returns how many rounds wrote an odd number.
+pub fn churn(rounds: u32, n: u32) -> u32 {
+    var odd: u32 = 0
+    var r: u32 = 0
+    while r < rounds {
+        var a: MemArray<u32> = MemArray::new_zeroed(n as usize)
+        a.set(0, r)
+        odd += a[0] & 1
+        r += 1
+    }
+    odd
+}
+
+// Builds a vector of 20 words each round, which grows by reallocation, and drops it.
+pub fn vec_churn(rounds: u32) -> u32 {
+    var total: u32 = 0
+    var r: u32 = 0
+    while r < rounds {
+        var v: MemVec<u32> = MemVec::new()
+        var i: u32 = 0
+        while i < 20 {
+            v.push(i)
+            i += 1
+        }
+        total += i
+        r += 1
+    }
+    total
+}
+
+// A fallible allocation that no module can meet returns nothing instead of trapping.
+pub fn try_huge() -> u32 {
+    match unsafe { MemArray<u8>::try_new_uninit(3000000000) } {
+        Option::Some(_) => 1,
+        Option::None => 0,
+    }
+}

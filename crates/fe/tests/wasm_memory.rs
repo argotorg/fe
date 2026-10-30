@@ -1322,3 +1322,84 @@ program_test!(vec_arena, "vec_arena", {
         ),
     ]
 });
+
+// ---------------------------------------------------------------------------
+// Freed memory is reused.
+// ---------------------------------------------------------------------------
+
+program_test!(heap_churn, "heap_churn", {
+    vec![
+        // Half of the rounds write an odd number; an empty block has no first word
+        // to write, so it traps.
+        Export::new("churn", &[("rounds", U32), ("n", U32)], U32).product(
+            &[vec![0, 1, 2, 7, 1000], vec![0, 1, 4, 100]],
+            |a| {
+                if a[1] == 0 && a[0] > 0 {
+                    None
+                } else {
+                    Some(a[0] / 2)
+                }
+            },
+        ),
+        Export::new("vec_churn", &[("rounds", U32)], U32)
+            .product(&[vec![0, 1, 2, 100, 1000]], |a| u32c(a[0] * 20)),
+    ]
+});
+
+/// The pages of the memory of the instance.
+fn memory_pages(running: &mut Running) -> u64 {
+    let memory = running
+        .instance
+        .get_memory(&mut running.store, "memory")
+        .expect("the module exports its memory");
+    memory.size(&running.store)
+}
+
+#[test]
+fn memory_does_not_grow_with_the_rounds_of_a_loop_that_allocates_and_drops() {
+    let source = fixture_path("heap_churn");
+    let temp = tempfile::tempdir().unwrap();
+    for level in ["0", "1", "2", "s"] {
+        let bytes = build_wasm(&source, level, &temp.path().join(format!("o{level}")));
+        for (rounds, words) in [(100_000i128, 100i128), (100_000, 1000)] {
+            let churn = Export::new("churn", &[("rounds", U32), ("n", U32)], U32);
+            let mut running = Running::new(&bytes);
+            running.call(&churn, &[1, words]).unwrap();
+            let after_one = memory_pages(&mut running);
+            let odd = running.call(&churn, &[rounds, words]).unwrap();
+            assert_eq!(odd, rounds / 2, "O{level}");
+            // Before the heap reused freed blocks, 100,000 rounds of 400 bytes
+            // grew the memory by 38 MiB (600 pages), and of 4,000 bytes by 381 MiB.
+            assert!(
+                memory_pages(&mut running) <= after_one + 1,
+                "O{level}: {} pages after one round, {} after {rounds}",
+                after_one,
+                memory_pages(&mut running)
+            );
+        }
+        let vec_churn = Export::new("vec_churn", &[("rounds", U32)], U32);
+        let mut running = Running::new(&bytes);
+        running.call(&vec_churn, &[1]).unwrap();
+        let after_one = memory_pages(&mut running);
+        assert_eq!(running.call(&vec_churn, &[50_000]).unwrap(), 1_000_000);
+        assert!(
+            memory_pages(&mut running) <= after_one + 1,
+            "O{level}: a vector that grows and is dropped leaks"
+        );
+    }
+}
+
+#[test]
+fn a_fallible_allocation_that_cannot_be_met_is_none_and_not_a_trap() {
+    let source = fixture_path("heap_churn");
+    let temp = tempfile::tempdir().unwrap();
+    for level in ["0", "2"] {
+        let bytes = build_wasm(&source, level, &temp.path().join(format!("o{level}")));
+        let mut running = Running::new(&bytes);
+        let try_huge = Export::new("try_huge", &[], U32);
+        assert_eq!(running.call(&try_huge, &[]), Ok(0), "O{level}");
+        // The failed request left the instance usable.
+        let churn = Export::new("churn", &[("rounds", U32), ("n", U32)], U32);
+        assert_eq!(running.call(&churn, &[10, 10]), Ok(5), "O{level}");
+    }
+}
