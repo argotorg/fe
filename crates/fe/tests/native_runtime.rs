@@ -399,8 +399,8 @@ pub fn main() -> i32 {
 
 #[test]
 fn native_boxed_structs_move_whole() {
-    // A box stores its value in the aligned layout of a Sonatina object, so
-    // the frame moves in one load and store despite the padding after `flag`.
+    // A box's value is a Sonatina object in place, so the frame moves in one
+    // object load and store despite the padding after `flag`.
     let temp = tempdir().unwrap();
     let source = temp.path().join("boxed.fe");
     fs::write(
@@ -453,13 +453,81 @@ pub fn main() -> i32 {
                         .strip_suffix(" = {i1, [i256; 64], i64, [i8; 3], @layout_1};")
                 })
                 .unwrap_or_else(|| panic!("no frame type\n{ir}"));
-            for op in ["= mload", "mstore"] {
-                assert!(
-                    ir.lines()
-                        .any(|line| line.contains(op) && line.ends_with(&format!(" {frame};"))),
-                    "{op} {frame}\n{ir}"
-                );
-            }
+            let views: Vec<_> = ir
+                .lines()
+                .filter_map(|line| {
+                    let (view, rest) = line.trim().split_once(&format!(".objref<{frame}> = "))?;
+                    rest.starts_with("obj.from_ptr ").then_some(view)
+                })
+                .collect();
+            let through_view = |op: &str| {
+                ir.lines().any(|line| {
+                    views
+                        .iter()
+                        .any(|view| line.contains(&format!("{op} {view}")))
+                })
+            };
+            assert!(
+                through_view("obj.load") && through_view("obj.store"),
+                "{frame}\n{ir}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_boxed_and_local_values_share_methods() {
+    // A value behind a pointer is an object in place, like a local, so a
+    // method called on both compiles once and keeps `noalias`.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("shared.fe");
+    fs::write(
+        &source,
+        r#"
+use core::{Box, Result}
+
+struct Counter {
+    tag: u8,
+    total: u64,
+    last: u256,
+}
+
+impl Counter {
+    fn bump(mut self, by: u64) {
+        self.total += by
+        self.last = self.total as u256
+    }
+}
+
+pub fn main() -> i32 {
+    var local = Counter { tag: 1, total: 0, last: 0 }
+    local.bump(by: 3)
+    var boxed = match Box::try_new(Counter { tag: 2, total: 0, last: 0 }) {
+        Result::Ok(boxed) => boxed,
+        Result::Err(_) => return 1,
+    }
+    boxed.get().bump(by: 4)
+    let inner = boxed.into_inner()
+    if local.total == 3 && inner.total == 4 && inner.last == 4 { 0 } else { 2 }
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("shared")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        if level == "0" {
+            let ir = fs::read_to_string(out.join("shared.native.sona")).unwrap();
+            let bumps: Vec<_> = ir
+                .lines()
+                .filter(|line| line.starts_with("func") && line.contains("bump"))
+                .collect();
+            assert!(
+                matches!(bumps[..], [bump] if bump.contains("(noalias v0.objref<")),
+                "{bumps:?}"
+            );
         }
     }
 }

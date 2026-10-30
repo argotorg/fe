@@ -1,3 +1,4 @@
+use common::compilation::Target;
 use hir::analysis::ty::AddressSpace;
 use hir::analysis::ty::ty_def::TyId;
 
@@ -46,6 +47,9 @@ pub(crate) enum RuntimeConversionStep<'db> {
         space: AddressSpace,
     },
     ProviderRefToRaw {
+        class: RuntimeClass<'db>,
+    },
+    ObjectFromRaw {
         class: RuntimeClass<'db>,
     },
     WordToRawAddr {
@@ -218,6 +222,13 @@ fn emit_runtime_conversion_step<'db>(
             class,
             RExpr::ProviderRefToRaw { value: src },
         ),
+        RuntimeConversionStep::ObjectFromRaw { class } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::ObjectFromRaw { raw: src },
+        ),
         RuntimeConversionStep::WordToRawAddr { class, space } => assign_runtime_conversion_temp(
             emitter,
             bb,
@@ -348,6 +359,39 @@ impl<'db> RuntimeConversionPlanner<'db> {
             {
                 steps.push(RuntimeConversionStep::UseAs { class: target });
                 Ok(())
+            }
+            // Native raw memory has the object layout, so the object at an
+            // address is that memory, not a copy of it.
+            (
+                RuntimeClass::RawAddr {
+                    space: AddressSpace::Memory,
+                    pointee: Some(raw_pointee),
+                },
+                RuntimeClass::Ref {
+                    pointee,
+                    kind: RefKind::Object,
+                    view: RefView::Whole,
+                },
+            ) if self.db.compilation_settings().target(self.db) == Target::Native
+                && raw_pointee.target(self.db) == &**pointee =>
+            {
+                steps.push(RuntimeConversionStep::ObjectFromRaw { class: target });
+                Ok(())
+            }
+            (
+                RuntimeClass::Scalar(scalar),
+                RuntimeClass::Ref {
+                    pointee,
+                    kind: RefKind::Object,
+                    view: RefView::Whole,
+                },
+            ) if self.db.compilation_settings().target(self.db) == Target::Native
+                && *scalar == pointer_class(self.db, AddressSpace::Memory) =>
+            {
+                let raw =
+                    RuntimeClass::raw_addr(self.db, AddressSpace::Memory, (**pointee).clone());
+                self.convert(source, raw.clone(), steps)?;
+                self.convert(raw, target, steps)
             }
             (
                 RuntimeClass::Ref {
@@ -609,7 +653,9 @@ fn is_plain_word_scalar(scalar: &ScalarClass<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use common::InputDb;
     use driver::DriverDataBase;
+    use salsa::Setter;
 
     use super::*;
     use crate::runtime::{EnumLayoutKey, EnumVariantLayout, LayoutKey, RawPointeeId, StructLayout};
@@ -839,6 +885,37 @@ mod tests {
             RuntimeConversionPlanner::plan(&db, source, target),
             Err(RuntimeConversionError::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn raw_memory_is_an_object_in_place_only_natively() {
+        for target_kind in [Target::Evm, Target::Native] {
+            let mut db = DriverDataBase::default();
+            db.compilation_settings()
+                .set_target(&mut db)
+                .to(target_kind);
+            let layout = test_struct_layout(&db);
+            let source = RuntimeClass::raw_addr(
+                &db,
+                AddressSpace::Memory,
+                RuntimeClass::AggregateValue { layout },
+            );
+            let target = RuntimeClass::object_ref(layout);
+            let plan = RuntimeConversionPlanner::plan(&db, source, target.clone()).unwrap();
+            if target_kind == Target::Native {
+                assert_eq!(
+                    plan.steps.as_ref(),
+                    &[RuntimeConversionStep::ObjectFromRaw { class: target }]
+                );
+            } else {
+                // EVM objects and raw memory lay a struct out differently: the
+                // object is a copy.
+                assert!(matches!(
+                    plan.steps.last(),
+                    Some(RuntimeConversionStep::AllocObjectCopy { .. })
+                ));
+            }
+        }
     }
 
     #[test]

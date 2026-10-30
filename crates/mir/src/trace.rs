@@ -367,6 +367,7 @@ fn runtime_expr_display(expr: &RExpr<'_>) -> String {
             provider_ty,
             space,
         } => format!("provider_ref_from_raw {raw:?}, {provider_ty:?}, {space:?}"),
+        RExpr::ObjectFromRaw { raw } => format!("object_from_raw {raw:?}"),
         RExpr::WordToRawAddr { value, space } => {
             format!("word_to_raw_addr {value:?}, {space:?}")
         }
