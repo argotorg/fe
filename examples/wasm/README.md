@@ -300,14 +300,12 @@ cargo test -p fe --all-features \
   one stack frame of the function that made the call stays reserved. Each such error
   reserves one frame for the life of the instance. A trap that happens inside the
   module, with no host call before it, reserves nothing.
-- **`==` on `DynString` and `Bytes` is wrong on little-endian targets**, which includes
-  WebAssembly and the native backend. `core::abi::payload_eq` compares the last,
-  partial word as if loads were big-endian, so two strings of the same length can
-  compare equal when they differ (any two strings shorter than 32 bytes, for
-  example). Compare bytes one by one until this is fixed.
 - **Memory.** Calls use a stack of 1 MiB in the module's memory (no option sets it
-  yet) and a call that does not fit traps. Dynamic allocation grows the memory and
-  never frees; `arena_release` frees what a call allocated. A module with text
+  yet) and a call that does not fit traps. Dynamic allocation comes from a heap
+  of size classes with free lists: a block that is freed is reused, a fallible
+  allocation returns `None` when the request cannot be met, any other allocation
+  traps, and the memory grows with `memory.grow` and is never given back.
+  `arena_release` frees what a call allocated. A module with text
   parameters starts with 18 pages (about 1.2 MB). The host limits a text to 65,536
   bytes, a limit of `host.mjs` and not of the compiler.
 - **Traps.** The engine reports a trap without a function name or a source location,

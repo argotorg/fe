@@ -28,7 +28,7 @@ extern {
     fn try_alloc_raw(_ size: usize) -> *u8
 
     /// Releases an allocation that `alloc_raw` or `try_alloc_raw` made. Native
-    /// hosts free it; EVM memory is never reclaimed.
+    /// hosts and WebAssembly modules free it; EVM memory is never reclaimed.
     unsafe fn dealloc_raw(_ ptr: *u8)
 
     /// Copies `len` bytes between linear-memory regions.
