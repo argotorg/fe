@@ -1946,7 +1946,7 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
         | EffectParamSite::ContractRecvArm { contract, .. } => {
             let field_provider_idx = contract
                 .storage_layout(db)
-                .values()
+                .valid_fields()
                 .enumerate()
                 .map(|(provider_idx, field)| (field.field.index, provider_idx as u32))
                 .collect::<IndexMap<_, _>>();
@@ -2006,11 +2006,10 @@ fn provisional_provider_binding_for_effect<'db>(
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
-            if let Some((_, field)) = contract
+            if let Some(field) = contract
                 .storage_layout(db)
-                .values()
-                .enumerate()
-                .find(|(idx, _)| *idx as u32 == provider_idx)
+                .valid_fields()
+                .nth(provider_idx as usize)
             {
                 let provider_ty = field.declared;
                 return Some(ProviderBinding {

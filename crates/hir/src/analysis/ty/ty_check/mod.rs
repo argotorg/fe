@@ -1909,6 +1909,17 @@ impl<'db> TyChecker<'db> {
                         });
                     }
                 }
+                // A field whose layout failed has reported its own error.
+                _ if key_ty
+                    .as_path(self.db)
+                    .filter(|path| path.len(self.db) == 1)
+                    .and_then(|path| path.ident(self.db).to_opt())
+                    .is_some_and(|name| {
+                        contract
+                            .storage_layout(self.db)
+                            .field_errors(&name)
+                            .is_some()
+                    }) => {}
                 _ => {
                     self.push_diag(BodyDiag::InvalidEffectKey {
                         owner,

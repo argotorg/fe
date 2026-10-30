@@ -43,7 +43,7 @@ use crate::{
             ty_error::{emit_invalid_ty_error, path_generic_arg_diags},
         },
     },
-    core::semantic::FieldStorageLayout,
+    core::semantic::ValidatedFieldLayoutPlan,
     hir_def::{
         Body, Contract, ContractRecvArm, FieldParent, IdentId, ItemKind, Mod, Partial, Pat, PathId,
         PathKind, Struct, scope_graph::ScopeId,
@@ -952,10 +952,10 @@ pub fn check_contract_field_address_spaces<'db>(
 fn valid_contract_fields<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
-) -> impl Iterator<Item = &'db FieldStorageLayout<'db>> + 'db {
+) -> impl Iterator<Item = &'db ValidatedFieldLayoutPlan<'db>> + 'db {
     contract
         .storage_layout(db)
-        .values()
+        .valid_fields()
         .filter(|field| !field.declared.has_invalid(db))
         .filter(move |field| {
             FieldView {
