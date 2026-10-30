@@ -16,6 +16,8 @@ mod test;
 mod trace;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
+#[cfg(feature = "wasm")]
+mod wasm_manifest;
 mod workspace_ingot;
 
 use std::fs;
@@ -62,6 +64,7 @@ pub enum BuildEmit {
     /// A native static library of the `#[unsafe(export)]` functions (`lib<name>.a`).
     Staticlib,
     Elf,
+    Wasm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -74,6 +77,9 @@ pub enum BuildBackend {
     #[cfg(feature = "sp1")]
     /// RV64IM SP1 guest IR or ELF executables.
     Sp1,
+    #[cfg(feature = "wasm")]
+    /// WebAssembly modules with a build manifest, or their wasm32 IR.
+    Wasm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -81,6 +87,9 @@ pub enum TestBackend {
     Sonatina,
     #[cfg(feature = "cranelift")]
     Native,
+    #[cfg(feature = "wasm")]
+    /// Each test is built into a WebAssembly module and run in Node.js.
+    Wasm,
 }
 
 impl From<TestBackend> for BuildBackend {
@@ -89,6 +98,8 @@ impl From<TestBackend> for BuildBackend {
             TestBackend::Sonatina => Self::Sonatina,
             #[cfg(feature = "cranelift")]
             TestBackend::Native => Self::Native,
+            #[cfg(feature = "wasm")]
+            TestBackend::Wasm => Self::Wasm,
         }
     }
 }
@@ -114,6 +125,8 @@ impl BuildBackend {
             Self::Native => "native",
             #[cfg(feature = "sp1")]
             Self::Sp1 => "sp1",
+            #[cfg(feature = "wasm")]
+            Self::Wasm => "wasm",
         }
     }
 
@@ -125,6 +138,8 @@ impl BuildBackend {
             Self::Native => Target::Native,
             #[cfg(feature = "sp1")]
             Self::Sp1 => Target::Native,
+            #[cfg(feature = "wasm")]
+            Self::Wasm => Target::Wasm,
         }
     }
 
@@ -142,6 +157,14 @@ impl BuildBackend {
         false
     }
 
+    pub fn is_wasm(self) -> bool {
+        #[cfg(feature = "wasm")]
+        if matches!(self, Self::Wasm) {
+            return true;
+        }
+        false
+    }
+
     fn default_emit(self) -> Vec<BuildEmit> {
         match self {
             Self::Sonatina => vec![
@@ -153,6 +176,8 @@ impl BuildBackend {
             Self::Native => vec![BuildEmit::Executable],
             #[cfg(feature = "sp1")]
             Self::Sp1 => vec![BuildEmit::Elf],
+            #[cfg(feature = "wasm")]
+            Self::Wasm => vec![BuildEmit::Wasm],
         }
     }
 }
