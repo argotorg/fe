@@ -1,0 +1,41 @@
+msg PingMsg {
+    #[selector = 0x01]
+    Ping -> u256,
+    #[selector = 0x02]
+    Pong -> u256,
+}
+
+// A msg variant without fields is matched without `{}`, by its bare name in a
+// named recv block or by its path.
+pub contract Named {
+    recv PingMsg {
+        PingMsg::Ping -> u256 {
+            1
+        }
+        Pong -> u256 {
+            2
+        }
+    }
+}
+
+pub contract Bare {
+    recv {
+        PingMsg::Ping -> u256 {
+            3
+        }
+        PingMsg::Pong {} -> u256 {
+            4
+        }
+    }
+}
+
+#[test]
+fn test_fieldless_variant_paths() uses (evm: mut Evm) {
+    let named = evm.create2<Named>(value: Wei::zero(), args: (), salt: 0)
+    let bare = evm.create2<Bare>(value: Wei::zero(), args: (), salt: 0)
+
+    assert(evm.call(addr: named, gas: 100000, value: Wei::zero(), message: PingMsg::Ping {}) == 1)
+    assert(evm.call(addr: named, gas: 100000, value: Wei::zero(), message: PingMsg::Pong {}) == 2)
+    assert(evm.call(addr: bare, gas: 100000, value: Wei::zero(), message: PingMsg::Ping {}) == 3)
+    assert(evm.call(addr: bare, gas: 100000, value: Wei::zero(), message: PingMsg::Pong {}) == 4)
+}
