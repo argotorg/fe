@@ -480,6 +480,7 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
             provider_ty.pretty_print(db),
             format_space(*space),
         ),
+        RExpr::ObjectFromRaw { raw } => format!("object_from_raw {}", format_local_id(*raw)),
         RExpr::WordToRawAddr { value, space } => format!(
             "word_to_raw {} {}",
             format_local_id(*value),

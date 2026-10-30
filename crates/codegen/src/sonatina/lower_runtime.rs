@@ -51,8 +51,8 @@ use sonatina_ir::{
             Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
             EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, MemAllocDynamic,
-            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj,
-            ObjStore, SymAddr, SymSize, SymbolRef,
+            Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
+            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         downcast,
         evm::{
@@ -199,6 +199,7 @@ define_lowering_inst_set!(
     ObjIndex,
     ObjLoad,
     ObjMaterializeStack,
+    ObjFromPtr,
     ObjProj,
     ObjStore,
     SymAddr,
@@ -1998,6 +1999,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     ));
                 }
                 value
+            }
+            RExpr::ObjectFromRaw { raw } => {
+                let class = dst
+                    .and_then(|dst| self.body.value_class(dst))
+                    .cloned()
+                    .ok_or_else(|| {
+                        LowerError::Internal("object view requires a destination class".into())
+                    })?;
+                let RuntimeClass::Ref { pointee, .. } = class else {
+                    return Err(LowerError::Internal(
+                        "object view destination is not a reference".into(),
+                    ));
+                };
+                let pointee_ty = self.module.ty_for_class(&pointee)?;
+                let raw = self.local_value(*raw)?;
+                let ptr_ty = self.fb.ptr_type(pointee_ty);
+                let ptr = self.coerce_value_to_ty(raw, ptr_ty)?;
+                self.fb.insert_inst(
+                    ObjFromPtr::new(self.module.inst_set(), ptr),
+                    self.fb.module_builder.objref_type(pointee_ty),
+                )
             }
             RExpr::WordToRawAddr { value, .. } => self.local_value(*value)?,
             RExpr::ProviderRefToRaw { value } => self.local_value(*value)?,
