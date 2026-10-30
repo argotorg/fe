@@ -33,7 +33,7 @@ jobs:
       # The runner context is only available to steps, not job-level env.
       - name: Locate the Succinct toolchain directory
         run: echo "SONATINA_SP1_TOOLCHAIN=$RUNNER_TEMP/sonatina-sp1-toolchain" >> "$GITHUB_ENV"
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install rust
@@ -61,7 +61,7 @@ jobs:
       - name: Build Fe with SP1 support
         run: cargo build --locked --release -p fe --features sp1
       - name: Check out the pinned Sonatina toolchain installer
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: fe-lang/sonatina
           persist-credentials: false
@@ -103,7 +103,7 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: .github/scripts
