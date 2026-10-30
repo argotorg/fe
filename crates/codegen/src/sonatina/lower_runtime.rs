@@ -2426,6 +2426,40 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 ));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
+            RuntimeBuiltin::ZeroState { space, slot, len } => {
+                let inst_set = self.module.inst_set();
+                let slot = self.local_value(*slot)?;
+                let len = self.local_value(*len)?;
+                // The slots wrap around the slot space like the stores of an
+                // unrolled clear, so the loop stops at `slot + len` exactly.
+                let end = self
+                    .fb
+                    .insert_inst(Add::new(inst_set, slot, len), Type::I256);
+                let entry = self
+                    .fb
+                    .current_block()
+                    .expect("a state clear requires a block");
+                let header = self.fb.append_block();
+                let body = self.fb.append_block();
+                let done = self.fb.append_block();
+                self.fb.insert_inst_no_result(Jump::new(inst_set, header));
+                self.fb.switch_to_block(header);
+                let at = self
+                    .fb
+                    .insert_inst(Phi::new(inst_set, smallvec![(slot, entry)]), Type::I256);
+                let more = self.fb.insert_inst(Ne::new(inst_set, at, end), Type::I1);
+                self.fb
+                    .insert_inst_no_result(Br::new(inst_set, more, body, done));
+                self.fb.switch_to_block(body);
+                let zero = self.fb.make_imm_value(I256::zero());
+                self.store_word(at, *space, zero)?;
+                let one = self.fb.make_imm_value(I256::one());
+                let next = self.fb.insert_inst(Add::new(inst_set, at, one), Type::I256);
+                self.fb.append_phi_arg(at, next, body);
+                self.fb.insert_inst_no_result(Jump::new(inst_set, header));
+                self.fb.switch_to_block(done);
+                zero_for_type(&mut self.fb, Type::Unit)
+            }
             RuntimeBuiltin::CallValue => self.fb.insert_inst(
                 EvmCallValue::new(self.module.required_inst::<EvmCallValue>()?),
                 Type::I256,

@@ -439,6 +439,14 @@ fn builtin_result_class<'db>(
             verify_word_value(body, *value)?;
             Ok(None)
         }
+        RuntimeBuiltin::ZeroState { space, slot, len } => {
+            if !matches!(space, AddressSpace::Storage | AddressSpace::Transient) {
+                return Err(VerifyError::InvalidExprClass(*slot));
+            }
+            verify_address_operand(body, *slot, *space)?;
+            verify_word_value(body, *len)?;
+            Ok(None)
+        }
         RuntimeBuiltin::CallDataLoad { offset } => {
             verify_word_value(body, *offset)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
