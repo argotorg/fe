@@ -4728,10 +4728,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     tag_word,
                 )?,
                 ReferentLayout::Object => {
-                    let ty = self
-                        .native_class_layout(&RuntimeClass::AggregateValue { layout })?
-                        .tag_type()
-                        .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                    let ty = self.native_tag_ty(layout)?;
                     let value = self.cast_scalar(tag_word, ty)?;
                     self.fb.insert_inst_no_result(Mstore::new(
                         self.module.inst_set(),
@@ -5159,10 +5156,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let tag = match memory {
             ReferentLayout::Raw(space) => self.load_scalar(addr, space, &data.tag)?,
             ReferentLayout::Object => {
-                let ty = self
-                    .native_class_layout(&RuntimeClass::AggregateValue { layout })?
-                    .tag_type()
-                    .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                let ty = self.native_tag_ty(layout)?;
                 self.fb
                     .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty)
             }
