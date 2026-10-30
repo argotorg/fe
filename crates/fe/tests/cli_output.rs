@@ -362,7 +362,7 @@ fn type_size<T>() -> usize {
 }
 
 fn trigger() -> usize {
-    type_size<[u256; 0x8000000000000000]>()
+    type_size<[[u256; 0x80000000]; 0x80000000]>()
 }
 "#,
     )

@@ -1142,7 +1142,7 @@ async fn mock_lsp_hover_shows_indexed_layouts_and_transactional_failures() {
 
     let invalid_code = r#"pub contract C {
   mut good: u256
-  bad: [u256; 576460752303423488]
+  bad: [[u256; 0x80000000]; 0x10000000]
 }
 "#;
     client.did_change(&uri, 711, invalid_code);
