@@ -377,8 +377,9 @@ structs, is an error that names the function and the type. Inside functions, str
 tuples, enums, arrays, constants, `usize` and the dynamic arrays of `core::ptr` work.
 Overflow, division by zero, a failed `assert!` and an index outside an array trap, as
 they do in native executables. Calls use a stack of 1 MiB in the module's memory, and
-a call that does not fit traps; dynamic allocation grows the memory without a limit
-of the module's own and traps when the host refuses to grow it. 128-bit integers and
+a call that does not fit traps; dynamic allocation comes from a heap that reuses
+freed blocks and grows the memory without a limit of the module's own; an allocation
+traps when the host refuses to grow it, and a fallible one returns `None`. 128-bit integers and
 the EVM built-ins are not supported and are errors that name the function and the
 instruction. The default output is `<out>/<file>.wasm`; `--emit ir` writes
 `<out>/<file>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
@@ -415,8 +416,8 @@ in bytes of text that the host placed in the module's memory, valid for the call
 A `Reply` is one `i64`: the tag in the low 32 bits and the payload in the high 32 bits,
 where tag 0 is success with a value and any other tag is an error number of the contract
 (the payload is then 0). A module with a `HostText` parameter also exports an allocator:
-`alloc(size) -> address` returns zeroed memory, `arena_mark() -> address` reads the arena
-top, and `arena_release(mark)` frees everything allocated after `mark` and clears it. A
+`alloc(size) -> address` returns zeroed memory, `arena_mark() -> address` reads the top of
+the heap, and `arena_release(mark)` frees everything allocated at or above `mark` and clears it. A
 host places the texts with `alloc`, makes the call, reads what it needs, and calls
 `arena_release` with the mark it took first. The three names are then reserved. Safe Fe
 code cannot make a `HostText`; only the host and the generated wrapper of the export do.

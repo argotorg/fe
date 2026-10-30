@@ -131,8 +131,10 @@ impl HostFunction {
 }
 
 // The native address of every zero-size allocation, which takes nothing from
-// the host. It is aligned for any value and lies in the unmapped first page,
-// so no host allocation has it.
+// the host. It is aligned for any value and lies in the unmapped first page, so
+// no host allocation has it. In a WebAssembly module it is the address of the
+// first global variable, which is not a block of the heap, and `free` is not
+// called for it.
 const NATIVE_EMPTY_ALLOCATION: i64 = 16;
 
 const PANIC_OVERFLOW: u64 = 0x11;
@@ -648,13 +650,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     /// ignores their operands.
     fn traps_on_panic(&self) -> bool {
         self.is_native_target() && self.panics == NativePanics::Trap
-    }
-
-    /// Whether the module is linked against the host C library, as native
-    /// code is. A WebAssembly module carries its own memory and imports nothing
-    /// for it.
-    fn has_host_libc(&self) -> bool {
-        self.is_native_target() && !self.is_wasm_target()
     }
 
     fn is_wasm_target(&self) -> bool {
@@ -2509,11 +2504,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
-    /// Allocates `size` bytes from the native host. When the host is out of
-    /// memory, a `fallible` allocation is null and any other traps, as does
-    /// every allocation of a WebAssembly module. A zero size
-    /// is `NATIVE_EMPTY_ALLOCATION` instead, so empty owners never reach the
-    /// host.
+    /// Allocates `size` bytes from the native host, or from the heap of a
+    /// WebAssembly module, whose backend defines `malloc` and `free` itself. When
+    /// the host is out of memory, a `fallible` allocation is null and any other
+    /// traps. A zero size is `NATIVE_EMPTY_ALLOCATION` instead, so empty owners
+    /// never reach the host or the heap.
     fn lower_native_allocation(
         &mut self,
         size: ValueId,
@@ -2533,7 +2528,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         self.fb
             .insert_inst_no_result(Br::new(inst_set, is_empty, done, allocate));
         self.fb.switch_to_block(allocate);
-        let allocated = if fallible && self.module.has_host_libc() {
+        let allocated = if fallible {
             let malloc = self.module.host_function(HostFunction::Malloc)?;
             // Callers bound the size to the address width.
             let size =
@@ -3138,9 +3133,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 }
             }
             RuntimeBuiltin::Free { ptr } => {
-                // EVM memory is never reclaimed, nor is the memory arena of a
-                // WebAssembly module.
-                if self.module.has_host_libc() {
+                // EVM memory is never reclaimed. A native target frees through the
+                // C library, and a WebAssembly module through the `free` that its
+                // backend defines.
+                if self.module.is_native_target() {
                     let inst_set = self.module.inst_set();
                     let free = self.module.host_function(HostFunction::Free)?;
                     let ptr = self.local_value(*ptr)?;
