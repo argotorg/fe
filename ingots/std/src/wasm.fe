@@ -1,0 +1,131 @@
+//! Scalar host operations for WebAssembly modules.
+//!
+//! Each operation is an import from the module `env`. A host that instantiates
+//! the module must supply every import that the program reaches. Values cross
+//! by value as WebAssembly `i32` and `i64`; the operations in this file give the
+//! host no access to Fe memory.
+//!
+//! The operations are effects. A program selects the provider where it starts:
+//! `host()` calls the imports, and `mock()` is a pure Fe stand-in for tests and
+//! for builds that have no host.
+//!
+//! The submodule `files` is a contract for text, handles and errors, and
+//! `HostText` and `Reply` are the shapes that an exported function may take and
+//! return besides numbers.
+
+pub use boundary::{Reply, HostText}
+pub use files::{self}
+
+extern {
+    // Adapters that the host supplies. They change host state, and their
+    // scalar-only signatures give them no access to Fe-managed memory.
+    fn sys_wasm_log_i32(_ value: i32)
+    fn sys_wasm_log_u64(_ value: u64)
+    fn sys_wasm_now_ms() -> u64
+    fn sys_wasm_abort(_ code: u32) -> !
+}
+
+/// Reports a number to the host, for example to a console.
+pub trait Log {
+    fn log_i32(mut self, value: i32)
+    fn log_u64(mut self, value: u64)
+}
+
+/// Wall-clock time in milliseconds since the Unix epoch.
+pub trait Clock {
+    fn now_ms(mut self) -> u64
+}
+
+/// Ends the program. The code identifies the reason to the host.
+pub trait Abort {
+    fn abort(mut self, code: u32) -> !
+}
+
+/// The provider that calls the imports of the host.
+pub struct Host {}
+
+pub fn host() -> Host {
+    Host {}
+}
+
+impl Log for Host {
+    fn log_i32(mut self, value: i32) {
+        sys_wasm_log_i32(value)
+    }
+    fn log_u64(mut self, value: u64) {
+        sys_wasm_log_u64(value)
+    }
+}
+
+impl Clock for Host {
+    fn now_ms(mut self) -> u64 {
+        sys_wasm_now_ms()
+    }
+}
+
+impl Abort for Host {
+    fn abort(mut self, code: u32) -> ! {
+        // The host is expected to trap. The call is followed by `unreachable`,
+        // so the program ends even if the host returns.
+        sys_wasm_abort(code)
+    }
+}
+
+/// A provider written in Fe: no imports are needed.
+///
+/// The clock starts at `now` and advances by `step` milliseconds each time it
+/// is read. Logged values are counted in the fields, so a test can check them.
+/// `abort` traps with the instruction `unreachable`.
+pub struct Mock {
+    pub now: u64,
+    pub step: u64,
+    pub i32_count: u32,
+    pub i32_sum: i64,
+    pub u64_count: u32,
+    pub u64_last: u64,
+}
+
+pub fn mock(_ now: u64, _ step: u64) -> Mock {
+    Mock { now, step, i32_count: 0, i32_sum: 0, u64_count: 0, u64_last: 0 }
+}
+
+impl Log for Mock {
+    fn log_i32(mut self, value: i32) {
+        self.i32_count += 1
+        self.i32_sum += value as i64
+    }
+    fn log_u64(mut self, value: u64) {
+        self.u64_count += 1
+        self.u64_last = value
+    }
+}
+
+impl Clock for Mock {
+    fn now_ms(mut self) -> u64 {
+        let reading = self.now
+        self.now += self.step
+        reading
+    }
+}
+
+impl Abort for Mock {
+    fn abort(mut self, code: u32) -> ! {
+        core::panic()
+    }
+}
+
+pub fn log_i32(_ value: i32) uses (log: mut Log) {
+    log.log_i32(value)
+}
+
+pub fn log_u64(_ value: u64) uses (log: mut Log) {
+    log.log_u64(value)
+}
+
+pub fn now_ms() -> u64 uses (clock: mut Clock) {
+    clock.now_ms()
+}
+
+pub fn abort(_ code: u32) -> ! uses (abort: mut Abort) {
+    abort.abort(code)
+}
