@@ -1,0 +1,33 @@
+pub fn count_primes_below(n: u32) -> u32 {
+    var composite: [bool; 64] = [false; 64]
+    var count: u32 = 0
+    var i: usize = 2
+    while i < (n as usize) {
+        if !composite[i] {
+            count += 1
+            var j: usize = i + i
+            while j < 64 {
+                composite[j] = true
+                j += i
+            }
+        }
+        i += 1
+    }
+    count
+}
+
+pub fn is_prime(n: u32) -> bool {
+    var composite: [bool; 64] = [false; 64]
+    var i: usize = 2
+    while i < 64 {
+        if !composite[i] {
+            var j: usize = i + i
+            while j < 64 {
+                composite[j] = true
+                j += i
+            }
+        }
+        i += 1
+    }
+    n >= 2 && !composite[n as usize]
+}

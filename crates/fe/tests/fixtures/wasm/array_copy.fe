@@ -1,0 +1,37 @@
+fn bump_all(a: [i32; 4], by: i32) -> [i32; 4] {
+    var b = a
+    var i: usize = 0
+    while i < 4 {
+        b[i] += by
+        i += 1
+    }
+    b
+}
+
+fn add_in_place(a: mut [i32; 4], by: i32) {
+    var i: usize = 0
+    while i < 4 {
+        a[i] += by
+        i += 1
+    }
+}
+
+pub fn value_semantics(x: i32) -> i32 {
+    let original: [i32; 4] = [x, x + 1, x + 2, x + 3]
+    let bumped = bump_all(a: original, by: 10)
+    original[0] * 1000 + bumped[0] * 10 + bumped[3] - original[3]
+}
+
+pub fn in_place(x: i32) -> i32 {
+    var a: [i32; 4] = [x, x + 1, x + 2, x + 3]
+    let before = a
+    add_in_place(a: mut a, by: 5)
+    a[0] * 1000 + before[0] * 100 + a[3] - before[3]
+}
+
+pub fn chosen(flag: bool, x: i32) -> i32 {
+    let a: [i32; 4] = [x, 1, 2, 3]
+    let b: [i32; 4] = [4, 5, 6, x]
+    let c = if flag { a } else { b }
+    c[0] * 100 + c[3]
+}

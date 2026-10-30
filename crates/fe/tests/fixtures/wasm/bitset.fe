@@ -1,0 +1,51 @@
+struct BitSet {
+    words: [u64; 4],
+}
+
+fn set(b: mut BitSet, bit: u32) {
+    let word: usize = (bit / 64) as usize
+    let mask: u64 = 1 << ((bit % 64) as u64)
+    b.words[word] = b.words[word] | mask
+}
+
+fn clear(b: mut BitSet, bit: u32) {
+    let word: usize = (bit / 64) as usize
+    let mask: u64 = 1 << ((bit % 64) as u64)
+    b.words[word] = b.words[word] & (mask ^ 0xffffffffffffffff)
+}
+
+fn test(b: BitSet, bit: u32) -> bool {
+    let word: usize = (bit / 64) as usize
+    let mask: u64 = 1 << ((bit % 64) as u64)
+    (b.words[word] & mask) != 0
+}
+
+fn popcount(b: BitSet) -> u32 {
+    var total: u32 = 0
+    var w: usize = 0
+    while w < 4 {
+        var x = b.words[w]
+        while x != 0 {
+            x = x & (x - 1)
+            total += 1
+        }
+        w += 1
+    }
+    total
+}
+
+pub fn count_after(a: u32, b: u32, c: u32, d: u32) -> u32 {
+    var s = BitSet { words: [0; 4] }
+    set(b: mut s, bit: a)
+    set(b: mut s, bit: b)
+    set(b: mut s, bit: c)
+    clear(b: mut s, bit: d)
+    popcount(b: s)
+}
+
+pub fn has(a: u32, b: u32, q: u32) -> bool {
+    var s = BitSet { words: [0; 4] }
+    set(b: mut s, bit: a)
+    set(b: mut s, bit: b)
+    test(b: s, bit: q)
+}

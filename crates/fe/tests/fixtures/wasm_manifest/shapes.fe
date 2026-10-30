@@ -1,0 +1,33 @@
+// A module with every kind of export and import that a manifest describes:
+// scalars of several widths, a function without a result, a text parameter, a
+// reply result, an import of the log operation and imports of the files
+// contract.
+use std::wasm::{HostText, Log, Reply, host as log_host, log_i32}
+use std::wasm::files::{Files, close, host, open}
+
+pub fn add(_ a: u32, _ b: u64) -> u64 {
+    a as u64 + b
+}
+
+pub fn is_even(_ x: i8) -> bool {
+    x % 2 == 0
+}
+
+pub fn ping(_ value: i32) {
+    with (Log = log_host()) {
+        log_i32(value)
+    }
+}
+
+pub fn has_file(_ name: HostText) -> Reply {
+    var files = host()
+    with (Files = files) {
+        match open(name.copy()) {
+            Result::Ok(handle) => {
+                close(handle)
+                Reply::ok(1)
+            }
+            Result::Err(error) => Reply::error(error.code())
+        }
+    }
+}

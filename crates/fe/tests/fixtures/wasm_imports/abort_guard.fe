@@ -1,0 +1,28 @@
+use std::wasm::{Abort, abort}
+
+//host: fn provider() -> std::wasm::Host { std::wasm::host() }
+//mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
+
+fn checked(_ x: i32) -> i32 uses (a: mut Abort) {
+    if x > 100 {
+        abort(7)
+    }
+    if x < 0 {
+        abort(8)
+    }
+    x * 2
+}
+
+pub fn checked_double(x: i32) -> i32 {
+    var p = provider()
+    with (Abort = p) {
+        checked(x)
+    }
+}
+
+pub fn abort_with(code: u32) -> u32 {
+    var p = provider()
+    with (Abort = p) {
+        abort(code)
+    }
+}

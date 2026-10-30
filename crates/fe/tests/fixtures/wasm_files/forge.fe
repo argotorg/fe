@@ -1,0 +1,44 @@
+// A module that breaks the contract of std::wasm::files, which safe code of the
+// standard library cannot do: it declares the imports itself and passes handles
+// and addresses it made up. The host must refuse each case with an error that
+// names the problem.
+use std::wasm::{HostText, Reply}
+use std::wasm::files::FileError
+
+extern {
+    fn sys_wasm_files_open(_ addr: u32, _ len: u32) -> u64
+    fn sys_wasm_files_size(_ handle: u32) -> u64
+    fn sys_wasm_files_read_byte(_ handle: u32, _ index: u32) -> u64
+    fn sys_wasm_files_close(_ handle: u32)
+}
+
+// The reply word of an honest `open`, so that a test learns a real handle.
+pub fn open_text(name: HostText) -> u64 {
+    unsafe { sys_wasm_files_open(name.addr(), name.len()) }
+}
+
+pub fn open_raw(addr: u32, len: u32) -> u64 {
+    unsafe { sys_wasm_files_open(addr, len) }
+}
+
+pub fn size_raw(handle: u32) -> u64 {
+    unsafe { sys_wasm_files_size(handle) }
+}
+
+pub fn read_byte_raw(handle: u32, index: u32) -> u64 {
+    unsafe { sys_wasm_files_read_byte(handle, index) }
+}
+
+pub fn close_raw(handle: u32) {
+    unsafe { sys_wasm_files_close(handle) }
+}
+
+// Replies that a module can make up, since the fields of `Reply` are public.
+pub fn made_up_reply(tag: u32, payload: u32) -> Reply {
+    Reply { tag, payload }
+}
+
+// The program side of the closed set of errors: a number outside it is a fault.
+pub fn error_of(code: u32) -> Reply {
+    Reply::error(FileError::from_code(code).code())
+}

@@ -1,0 +1,21 @@
+//host: extern {
+//host:     fn host_mul(_ a: i32, _ b: i32) -> i32
+//host:     fn host_neg(_ a: i64) -> i64
+//host:     fn host_zero() -> i32
+//host: }
+//mock: fn host_mul(_ a: i32, _ b: i32) -> i32 { a.wrapping_mul(b) }
+//mock: fn host_neg(_ a: i64) -> i64 { let zero: i64 = 0
+//mock:     zero.wrapping_sub(a) }
+//mock: fn host_zero() -> i32 { 0 }
+
+pub fn product(a: i32, b: i32) -> i32 {
+    unsafe { host_mul(a, b) }
+}
+
+pub fn negated(a: i64) -> i64 {
+    unsafe { host_neg(a) }
+}
+
+pub fn combined(a: i32, b: i32, c: i32) -> i32 {
+    unsafe { host_mul(host_mul(a, b), c) + host_zero() }
+}

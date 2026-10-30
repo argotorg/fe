@@ -1,0 +1,9 @@
+// A module whose import is not part of `std::wasm`: a host that does not know
+// it must refuse the module and name the import.
+extern {
+    fn custom_import(_ value: u32) -> u32
+}
+
+pub fn run(_ value: u32) -> u32 {
+    unsafe { custom_import(value) }
+}

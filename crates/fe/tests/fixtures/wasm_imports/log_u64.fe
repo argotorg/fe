@@ -1,0 +1,38 @@
+use std::wasm::{Log, log_i32, log_u64}
+
+//host: fn provider() -> std::wasm::Host { std::wasm::host() }
+//mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
+
+fn collatz(_ start: u64) -> u32 uses (log: mut Log) {
+    var n = start
+    var steps: u32 = 0
+    while n != 1 && n != 0 {
+        log_u64(n)
+        if n % 2 == 0 {
+            n = n / 2
+        } else {
+            n = 3 * n + 1
+        }
+        steps += 1
+    }
+    log_u64(n)
+    steps
+}
+
+pub fn collatz_steps(start: u64) -> u32 {
+    var p = provider()
+    with (Log = p) {
+        collatz(start)
+    }
+}
+
+pub fn log_wide(x: u64) -> u64 {
+    var p = provider()
+    with (Log = p) {
+        log_u64(x)
+        log_u64(18446744073709551615 - x)
+        log_i32(-2147483648)
+        log_i32(2147483647)
+        x
+    }
+}

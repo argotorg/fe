@@ -1,0 +1,54 @@
+// Lines that start with `//host:` or `//mock:` belong to one build only. The
+// test removes the marker from its own lines and drops the other ones.
+use std::wasm::{Log, log_i32}
+
+//host: fn provider() -> std::wasm::Host { std::wasm::host() }
+//mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
+
+fn emit(_ a: i32, _ b: i32) -> i32 uses (log: mut Log) {
+    log_i32(a)
+    log_i32(b)
+    let sum = a + b
+    log_i32(sum)
+    sum
+}
+
+pub fn log_three(a: i32, b: i32) -> i32 {
+    var p = provider()
+    with (Log = p) {
+        emit(a, b)
+    }
+}
+
+fn squares(_ n: i32) -> i32 uses (log: mut Log) {
+    var i: i32 = 0
+    var total: i32 = 0
+    while i < n {
+        log_i32(i * i)
+        total += i * i
+        i += 1
+    }
+    total
+}
+
+pub fn log_squares(n: i32) -> i32 {
+    var p = provider()
+    with (Log = p) {
+        squares(n)
+    }
+}
+
+//mock: pub fn mock_count(n: i32) -> u32 {
+//mock:     var p = provider()
+//mock:     with (Log = p) {
+//mock:         squares(n)
+//mock:     }
+//mock:     p.i32_count
+//mock: }
+//mock: pub fn mock_sum(n: i32) -> i64 {
+//mock:     var p = provider()
+//mock:     with (Log = p) {
+//mock:         squares(n)
+//mock:     }
+//mock:     p.i32_sum
+//mock: }

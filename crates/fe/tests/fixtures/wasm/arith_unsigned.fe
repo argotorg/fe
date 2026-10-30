@@ -1,0 +1,23 @@
+pub fn add32(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+pub fn sub32(a: u32, b: u32) -> u32 {
+    a - b
+}
+
+pub fn mul32(a: u32, b: u32) -> u32 {
+    a * b
+}
+
+pub fn add64(a: u64, b: u64) -> u64 {
+    a + b
+}
+
+pub fn mul64(a: u64, b: u64) -> u64 {
+    a * b
+}
+
+pub fn sub64(a: u64, b: u64) -> u64 {
+    a - b
+}

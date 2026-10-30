@@ -1,0 +1,24 @@
+fn fib_recursive(n: u32) -> u32 {
+    if n < 2 {
+        n
+    } else {
+        fib_recursive(n: n - 1) + fib_recursive(n: n - 2)
+    }
+}
+
+pub fn fib_iter(n: u32) -> u64 {
+    var a: u64 = 0
+    var b: u64 = 1
+    var i: u32 = 0
+    while i < n {
+        let next = a + b
+        a = b
+        b = next
+        i = i + 1
+    }
+    a
+}
+
+pub fn fib(n: u32) -> u32 {
+    fib_recursive(n)
+}

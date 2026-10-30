@@ -1,0 +1,33 @@
+pub fn is_power_of_two(x: u32) -> bool {
+    x != 0 && x & (x - 1) == 0
+}
+
+pub fn next_power_of_two(x: u32) -> u32 {
+    var p: u32 = 1
+    while p < x {
+        p = p << 1
+    }
+    p
+}
+
+pub fn reverse_bits(x: u32) -> u32 {
+    var v = x
+    var out: u32 = 0
+    var i: u32 = 0
+    while i < 32 {
+        out = (out << 1) | (v & 1)
+        v = v >> 1
+        i = i + 1
+    }
+    out
+}
+
+pub fn parity(x: u64) -> bool {
+    var v = x
+    var odd = false
+    while v != 0 {
+        odd = !odd
+        v = v & (v - 1)
+    }
+    odd
+}

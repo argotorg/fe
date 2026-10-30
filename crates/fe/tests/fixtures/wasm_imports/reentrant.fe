@@ -1,0 +1,43 @@
+// The host calls back into an export while the caller holds values in its frame.
+//host: extern {
+//host:     fn host_callback(_ x: i32) -> i32
+//host: }
+//mock: fn host_callback(_ x: i32) -> i32 { inner(x) }
+
+pub fn inner(x: i32) -> i32 {
+    var scratch: [i32; 16] = [0; 16]
+    var i: usize = 0
+    var k: i32 = 0
+    while i < 16 {
+        scratch[i] = x + k
+        i += 1
+        k += 1
+    }
+    scratch[3] + scratch[15]
+}
+
+struct Held {
+    a: i32,
+    b: i32,
+    c: i32,
+}
+
+pub fn outer(x: i32) -> i32 {
+    var table: [i32; 8] = [0; 8]
+    var i: usize = 0
+    var k: i32 = 0
+    while i < 8 {
+        table[i] = x * k
+        i += 1
+        k += 1
+    }
+    let held = Held { a: x, b: x + 1, c: x + 2 }
+    let reply = unsafe { host_callback(x) }
+    var sum = reply + held.a + held.b + held.c
+    i = 0
+    while i < 8 {
+        sum += table[i]
+        i += 1
+    }
+    sum
+}

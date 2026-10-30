@@ -1,0 +1,35 @@
+const SORTED: [i32; 8] = [-20, -3, 0, 4, 9, 15, 15, 42]
+
+pub fn binary_search(key: i32) -> i32 {
+    var lo: usize = 0
+    var hi: usize = 8
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2
+        if SORTED[mid] < key {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    if lo < 8 && SORTED[lo] == key {
+        let found: i32 = lo.downcast_unchecked()
+        return found
+    }
+    return -1
+}
+
+pub fn count_equal(key: i32) -> u32 {
+    var n: u32 = 0
+    for x in SORTED {
+        if x == key {
+            n += 1
+        }
+    }
+    n
+}
+
+pub fn middle_pair_sum(shift: i32) -> i32 {
+    let local: [i32; 6] = [1 + shift, 2 + shift, 3 + shift, 4 + shift, 5 + shift, 6 + shift]
+    let mid = local.len() / 2
+    local[mid - 1] + local[mid]
+}

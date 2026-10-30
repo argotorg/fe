@@ -1,0 +1,61 @@
+// Tests that use the host operations of `std::wasm`. They run with
+// `fe test --backend wasm`; the test host answers `Log` and `Clock`, has no
+// files, and ends a test that calls `abort`.
+use std::wasm::{Abort, Clock, Log, abort, host, log_i32, log_u64, mock, now_ms}
+use std::wasm::files::{Files, FileError, host as files_host, mock as files_mock, open}
+
+extern {
+    // A handle that the host never issued.
+    fn sys_wasm_files_close(_ handle: u32)
+}
+
+#[test]
+fn logs_numbers_and_reads_the_clock() {
+    with (Log = host(), Clock = host()) {
+        log_i32(-5)
+        log_u64(1234567890123)
+        assert(now_ms() > 1000000)
+    }
+}
+
+#[test]
+fn a_missing_file_is_not_found() {
+    with (Files = files_host()) {
+        match open("nope") {
+            Result::Ok(_) => { assert(false) }
+            Result::Err(error) => { assert(error.code() == 1) }
+        }
+    }
+}
+
+#[test]
+fn mock_files_need_no_host() {
+    var files = files_mock()
+    files.add("a", "x")
+    with (Files = files) {
+        match open("a") {
+            Result::Ok(handle) => { std::wasm::files::close(handle) }
+            Result::Err(_) => { assert(false) }
+        }
+    }
+}
+
+#[test]
+fn aborts_with_a_code() {
+    with (Abort = host()) {
+        abort(7)
+    }
+}
+
+#[test]
+fn the_mock_abort_traps() {
+    var p = mock(0, 1)
+    with (Abort = p) {
+        abort(1)
+    }
+}
+
+#[test]
+fn a_forged_handle_is_refused_by_the_host() {
+    unsafe { sys_wasm_files_close(77) }
+}

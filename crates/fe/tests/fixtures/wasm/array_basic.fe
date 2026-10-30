@@ -1,0 +1,35 @@
+pub fn sum5(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
+    let arr: [u32; 5] = [a, b, c, d, e]
+    var i: usize = 0
+    var s: u32 = 0
+    while i < 5 {
+        s += arr[i]
+        i += 1
+    }
+    s
+}
+
+pub fn pick(i: u32) -> u32 {
+    let arr: [u32; 4] = [10, 20, 30, 40]
+    arr[i as usize]
+}
+
+pub fn squares(n: u32) -> u32 {
+    var arr: [u32; 8] = [0; 8]
+    var i: usize = 0
+    while i < 8 {
+        let k: u32 = i.downcast_unchecked()
+        arr[i] = k * k + n
+        i += 1
+    }
+    arr[3] + arr[7]
+}
+
+pub fn for_sum(n: u32) -> u32 {
+    let arr: [u32; 6] = [1, 2, 3, 4, 5, 6]
+    var s: u32 = 0
+    for x in arr {
+        s += x * n
+    }
+    s
+}
