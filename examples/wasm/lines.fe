@@ -1,0 +1,51 @@
+// Counts the lines of a file that the host provides, using the files contract
+// of std::wasm::files. Build it with
+//
+//   fe build --backend wasm examples/wasm/lines.fe
+//
+// and run it with `node examples/wasm/lines.mjs lines.wasm <file>`. The reply is
+// the number of line feeds, plus one if the file does not end with one; an empty
+// file has no lines.
+use std::wasm::{HostText, Reply}
+use std::wasm::files::{Files, close, host, open, read_byte, size}
+
+fn count(_ name: HostText) -> Reply uses (files: mut Files) {
+    let handle = match open(name.copy()) {
+        Result::Ok(handle) => handle
+        Result::Err(error) => { return Reply::error(error.code()) }
+    }
+    var lines: u32 = 0
+    var last: u8 = 10
+    var failure: u32 = 0
+    match size(handle) {
+        Result::Ok(length) => {
+            var index: u32 = 0
+            while index < length {
+                match read_byte(handle, index) {
+                    Result::Ok(byte) => {
+                        if byte == 10 {
+                            lines += 1
+                        }
+                        last = byte
+                    }
+                    Result::Err(error) => { failure = error.code() }
+                }
+                index += 1
+            }
+        }
+        Result::Err(error) => { failure = error.code() }
+    }
+    close(handle)
+    if failure != 0 {
+        return Reply::error(failure)
+    }
+    // A last line without a line feed still counts.
+    Reply::ok(if last == 10 { lines } else { lines + 1 })
+}
+
+pub fn lines(name: HostText) -> Reply {
+    var provider = host()
+    with (Files = provider) {
+        count(name)
+    }
+}

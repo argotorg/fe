@@ -7,3 +7,4 @@ pub use native
 pub use process
 pub use core::text
 pub use sp1
+pub use wasm

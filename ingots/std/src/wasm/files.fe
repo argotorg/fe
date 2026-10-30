@@ -1,0 +1,251 @@
+//! A small host contract for text, handles and errors: read-only files.
+//!
+//! Four operations, each synchronous:
+//!
+//! - `open(name)` finds the file called `name` and returns a handle to it.
+//! - `size(handle)` is the length of the file in bytes.
+//! - `read_byte(handle, index)` is the byte at `index`.
+//! - `close(handle)` ends the use of the handle. It takes the handle by value,
+//!   so a closed handle cannot be used again.
+//!
+//! The operations are the trait `Files`. `host()` calls imports of the module
+//! `env`; `mock()` is a provider written in Fe that holds files in memory and
+//! behaves the same way, for tests and for builds with no host.
+//!
+//! Transport, for the imports (all scalars, so Fe memory is not reachable from
+//! the host except through the address and length of a name):
+//!
+//! | Import | Parameters | Result |
+//! | --- | --- | --- |
+//! | `sys_wasm_files_open` | name address `i32`, name length `i32` | reply word `i64` |
+//! | `sys_wasm_files_size` | handle `i32` | reply word `i64` |
+//! | `sys_wasm_files_read_byte` | handle `i32`, index `i32` | reply word `i64` |
+//! | `sys_wasm_files_close` | handle `i32` | none |
+//!
+//! The reply word is described in `std::wasm::Reply`. A handle is one word that
+//! the host chose; its value means nothing to the program. The name is valid
+//! for the call only, and a host that keeps it copies it. The error numbers
+//! are in `FileError`.
+use core::abi::DynString
+use core::ptr::MemVec
+use super::boundary::Reply
+
+extern {
+    fn sys_wasm_files_open(_ addr: u32, _ len: u32) -> u64
+    fn sys_wasm_files_size(_ handle: u32) -> u64
+    fn sys_wasm_files_read_byte(_ handle: u32, _ index: u32) -> u64
+    fn sys_wasm_files_close(_ handle: u32)
+}
+
+/// Why an operation failed. The numbers are part of the contract and never
+/// change; a host and a program that disagree on the set of errors are not
+/// compatible.
+pub enum FileError {
+    /// There is no file with this name (error 1).
+    NotFound,
+    /// The index is not below the size of the file (error 2).
+    OutOfRange,
+    /// The host does not accept the name; an empty name is refused (error 3).
+    BadName,
+}
+
+impl Copy for FileError {}
+
+impl FileError {
+    pub fn code(self) -> u32 {
+        match self {
+            FileError::NotFound => 1
+            FileError::OutOfRange => 2
+            FileError::BadName => 3
+        }
+    }
+
+    /// The error with this number. A number outside the contract is a fault of
+    /// the host and ends the program.
+    pub fn from_code(_ code: u32) -> FileError {
+        match code {
+            1 => FileError::NotFound
+            2 => FileError::OutOfRange
+            3 => FileError::BadName
+            _ => core::panic()
+        }
+    }
+}
+
+/// The reply that carries the outcome of an operation with a number as its
+/// value (`size`, or `read_byte` after widening) to the host.
+pub fn reply(_ outcome: own Result<FileError, u32>) -> Reply {
+    match outcome {
+        Result::Ok(value) => Reply::ok(value)
+        Result::Err(error) => Reply::error(error.code())
+    }
+}
+
+/// An open file. A program cannot make a handle, copy one or use one after
+/// `close` took it. Dropping a handle without closing it leaks it on the host;
+/// the compiler does not yet report that, and the host counts open handles.
+pub struct Handle {
+    unsafe id: u32,
+}
+
+/// The four operations.
+pub trait Files {
+    fn open(mut self, _ name: DynString) -> Result<FileError, Handle>
+    fn size(mut self, _ handle: Handle) -> Result<FileError, u32>
+    fn read_byte(mut self, _ handle: Handle, _ index: u32) -> Result<FileError, u8>
+    fn close(mut self, _ handle: own Handle)
+}
+
+/// The provider that calls the imports of the host.
+pub struct HostFiles {}
+
+pub fn host() -> HostFiles {
+    HostFiles {}
+}
+
+fn checked(_ reply: Reply) -> Result<FileError, u32> {
+    if reply.tag == 0 {
+        Result::Ok(reply.payload)
+    } else {
+        Result::Err(FileError::from_code(reply.tag))
+    }
+}
+
+impl Files for HostFiles {
+    fn open(mut self, _ name: DynString) -> Result<FileError, Handle> {
+        let bytes = name.payload_span()
+        let addr: u32 = (bytes.ptr() as usize).downcast().unwrap()
+        let len: u32 = bytes.len().downcast().unwrap()
+        match checked(Reply::from_word(sys_wasm_files_open(addr, len))) {
+            Result::Ok(id) => Result::Ok(unsafe { Handle { id } })
+            Result::Err(error) => Result::Err(error)
+        }
+    }
+
+    fn size(mut self, _ handle: Handle) -> Result<FileError, u32> {
+        checked(Reply::from_word(sys_wasm_files_size(handle.id)))
+    }
+
+    fn read_byte(mut self, _ handle: Handle, _ index: u32) -> Result<FileError, u8> {
+        match checked(Reply::from_word(sys_wasm_files_read_byte(handle.id, index))) {
+            Result::Ok(byte) => Result::Ok(byte.downcast().unwrap())
+            Result::Err(error) => Result::Err(error)
+        }
+    }
+
+    fn close(mut self, _ handle: own Handle) {
+        sys_wasm_files_close(handle.id)
+    }
+}
+
+pub fn open(_ name: DynString) -> Result<FileError, Handle> uses (files: mut Files) {
+    files.open(name)
+}
+
+pub fn size(_ handle: Handle) -> Result<FileError, u32> uses (files: mut Files) {
+    files.size(handle)
+}
+
+pub fn read_byte(_ handle: Handle, _ index: u32) -> Result<FileError, u8> uses (files: mut Files) {
+    files.read_byte(handle, index)
+}
+
+pub fn close(_ handle: own Handle) uses (files: mut Files) {
+    files.close(handle)
+}
+
+/// A provider written in Fe: files held in memory, no imports needed.
+///
+/// It follows the host's rules: names are compared as bytes, an empty name is
+/// refused, handle numbers count up from 1 and are never reused, and the
+/// counters say how many handles were opened and closed.
+pub struct MemFiles {
+    names: MemVec<DynString>,
+    contents: MemVec<DynString>,
+    // The file of the handle numbered `i + 1`, plus one; 0 after it is closed.
+    sessions: MemVec<u32>,
+    pub opened: u32,
+    pub closed: u32,
+}
+
+/// A provider with no files. Add them with `MemFiles::add`.
+pub fn mock() -> MemFiles {
+    MemFiles {
+        names: MemVec::new(),
+        contents: MemVec::new(),
+        sessions: MemVec::new(),
+        opened: 0,
+        closed: 0,
+    }
+}
+
+// Names are compared byte by byte. `==` on `DynString` compares the words that
+// hold the last bytes as if they were big-endian, which is wrong on targets
+// where a word is read little-endian: there two strings of equal length
+// compare equal whenever they are shorter than a word.
+fn same_bytes(_ a: DynString, _ b: DynString) -> bool {
+    if a.len() != b.len() {
+        return false
+    }
+    var i: usize = 0
+    while i < a.len() {
+        if a.byte_at(i) != b.byte_at(i) {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+impl MemFiles {
+    /// Adds a file. A later file with the same name is never found.
+    pub fn add(mut self, _ name: own DynString, _ contents: own DynString) {
+        self.names.push(name)
+        self.contents.push(contents)
+    }
+
+    /// Handles that were opened and not closed.
+    pub fn open_handles(self) -> u32 {
+        self.opened - self.closed
+    }
+
+    fn file_of(self, _ handle: Handle) -> usize {
+        let session = self.sessions[(handle.id - 1) as usize]
+        (session - 1) as usize
+    }
+}
+
+impl Files for MemFiles {
+    fn open(mut self, _ name: DynString) -> Result<FileError, Handle> {
+        if name.is_empty() {
+            return Result::Err(FileError::BadName)
+        }
+        var i: usize = 0
+        while i < self.names.len() {
+            if same_bytes(self.names[i], name) {
+                self.sessions.push((i + 1).downcast().unwrap())
+                self.opened += 1
+                return Result::Ok(unsafe { Handle { id: self.opened } })
+            }
+            i += 1
+        }
+        Result::Err(FileError::NotFound)
+    }
+
+    fn size(mut self, _ handle: Handle) -> Result<FileError, u32> {
+        Result::Ok(self.contents[self.file_of(handle)].len().downcast().unwrap())
+    }
+
+    fn read_byte(mut self, _ handle: Handle, _ index: u32) -> Result<FileError, u8> {
+        let file = self.file_of(handle)
+        if index as usize >= self.contents[file].len() {
+            return Result::Err(FileError::OutOfRange)
+        }
+        Result::Ok(self.contents[file].byte_at(index as usize))
+    }
+
+    fn close(mut self, _ handle: own Handle) {
+        self.sessions[(handle.id - 1) as usize] = 0
+        self.closed += 1
+    }
+}

@@ -1,0 +1,60 @@
+// Tests for `fe test --backend wasm`. Every test is built into its own
+// WebAssembly module and run in Node.js:
+//
+//   fe test --backend wasm examples/wasm/tests.fe
+//
+// The tests use only the language, so the native backend gives the same
+// results: `fe test --backend native examples/wasm/tests.fe`.
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+enum Shape {
+    Dot,
+    Line(i32),
+    Rect(i32, i32),
+}
+
+fn sum_to(_ n: u32) -> u32 {
+    var total: u32 = 0
+    var i: u32 = 0
+    while i < n {
+        total += i
+        i += 1
+    }
+    total
+}
+
+fn area(_ shape: Shape) -> i32 {
+    match shape {
+        Shape::Dot => 0
+        Shape::Line(length) => length
+        Shape::Rect(width, height) => width * height
+    }
+}
+
+#[test]
+fn sums_a_loop() {
+    assert(sum_to(10) == 45)
+}
+
+#[test]
+fn structs_are_passed_by_value() {
+    let p = Point { x: 3, y: -4 }
+    assert(p.x * p.x + p.y * p.y == 25)
+}
+
+#[test]
+fn enums_are_matched() {
+    assert(area(Shape::Dot) == 0)
+    assert(area(Shape::Line(7)) == 7)
+    assert(area(Shape::Rect(3, 4)) == 12)
+}
+
+#[test]
+fn wide_integers_work_inside_a_function() {
+    let big: u256 = (1 as u256) << 200
+    assert(big + 1 > big)
+    assert((big >> 199) == 2)
+}
