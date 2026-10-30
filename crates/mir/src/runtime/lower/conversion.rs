@@ -1,4 +1,3 @@
-use common::compilation::Target;
 use hir::analysis::ty::AddressSpace;
 use hir::analysis::ty::ty_def::TyId;
 
@@ -372,7 +371,11 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     kind: RefKind::Object,
                     view: RefView::Whole,
                 },
-            ) if self.db.compilation_settings().target(self.db) == Target::Native
+            ) if self
+                .db
+                .compilation_settings()
+                .target(self.db)
+                .memory_has_object_layout()
                 && raw_pointee.target(self.db) == &**pointee =>
             {
                 steps.push(RuntimeConversionStep::ObjectFromRaw { class: target });
@@ -385,7 +388,11 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     kind: RefKind::Object,
                     view: RefView::Whole,
                 },
-            ) if self.db.compilation_settings().target(self.db) == Target::Native
+            ) if self
+                .db
+                .compilation_settings()
+                .target(self.db)
+                .memory_has_object_layout()
                 && *scalar == pointer_class(self.db, AddressSpace::Memory) =>
             {
                 let raw =
@@ -653,7 +660,7 @@ fn is_plain_word_scalar(scalar: &ScalarClass<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use common::InputDb;
+    use common::{InputDb, compilation::Target};
     use driver::DriverDataBase;
     use salsa::Setter;
 
@@ -888,8 +895,8 @@ mod tests {
     }
 
     #[test]
-    fn raw_memory_is_an_object_in_place_only_natively() {
-        for target_kind in [Target::Evm, Target::Native] {
+    fn raw_memory_is_an_object_in_place_except_on_evm() {
+        for target_kind in Target::ALL {
             let mut db = DriverDataBase::default();
             db.compilation_settings()
                 .set_target(&mut db)
@@ -902,7 +909,7 @@ mod tests {
             );
             let target = RuntimeClass::object_ref(layout);
             let plan = RuntimeConversionPlanner::plan(&db, source, target.clone()).unwrap();
-            if target_kind == Target::Native {
+            if target_kind.memory_has_object_layout() {
                 assert_eq!(
                     plan.steps.as_ref(),
                     &[RuntimeConversionStep::ObjectFromRaw { class: target }]

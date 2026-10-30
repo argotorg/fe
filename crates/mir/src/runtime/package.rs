@@ -16,7 +16,10 @@ use hir::{
             ty_def::{TyData, TyId},
         },
     },
-    hir_def::{Contract, Func, HirIngot, IdentId, InlineHint, ManualContractRootAttr, TopLevelMod},
+    hir_def::{
+        Contract, Func, HirIngot, IdentId, InlineHint, ItemKind, ManualContractRootAttr,
+        TopLevelMod, params::FuncParamMode,
+    },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -50,10 +53,10 @@ use crate::{
         EntryEffectArgPlan, EntrySemanticArgsPlan, InitArgsPlan, LayoutId, LayoutKey, RawPointeeId,
         RefKind, RefView, ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion,
         RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
-        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
-        RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
-        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
-        TargetRootProviderMaterialization,
+        RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLinkage, RuntimeObject, RuntimePackage,
+        RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
+        RuntimeSectionRef, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
+        TargetRootProviderBinding, TargetRootProviderMaterialization,
     },
     verify::verify_runtime_package,
 };
@@ -342,7 +345,7 @@ pub fn build_test_runtime_package<'db>(
     top_mod: TopLevelMod<'db>,
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    build_test_package(db, &[top_mod], filter)
+    build_test_package(db, top_mod, &collect_test_funcs(db, &[top_mod], filter))
 }
 
 /// Build one reachable runtime graph for every selected native test in a suite.
@@ -353,7 +356,10 @@ pub fn build_native_test_runtime_package<'db>(
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     require_target(db, Target::Native)?;
-    build_test_package(db, top_mods, filter)
+    let &top_mod = top_mods.first().ok_or_else(|| {
+        LowerError::Unsupported("test runtime package needs a source module".into())
+    })?;
+    build_test_package(db, top_mod, &collect_test_funcs(db, top_mods, filter))
 }
 
 /// Rejects building a package for another machine than the compilation's:
@@ -369,16 +375,22 @@ fn require_target(db: &dyn MirDb, target: Target) -> Result<(), LowerError> {
     }
 }
 
-fn build_test_package<'db>(
+/// A function marked `#[test]` that a run selected, with the name it is
+/// reported under.
+#[derive(Clone, Debug)]
+pub struct TestFunc<'db> {
+    pub func: Func<'db>,
+    pub name: String,
+}
+
+/// The `#[test]` functions of `top_mods` whose names contain `filter`, in the
+/// order of the modules and of the functions in each.
+pub fn collect_test_funcs<'db>(
     db: &'db dyn MirDb,
     top_mods: &[TopLevelMod<'db>],
     filter: Option<&str>,
-) -> Result<RuntimePackage<'db>, LowerError> {
-    let &top_mod = top_mods.first().ok_or_else(|| {
-        LowerError::Unsupported("test runtime package needs a source module".into())
-    })?;
-    let mut roots = Vec::new();
-    let mut objects = Vec::new();
+) -> Vec<TestFunc<'db>> {
+    let mut tests = Vec::new();
     for &module in top_mods {
         for &func in module.all_funcs(db) {
             if func.top_mod(db) != module || !func.is_test(db) {
@@ -395,26 +407,48 @@ fn build_test_package<'db>(
             {
                 continue;
             }
-
-            let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
-            let entry_args =
-                entry_semantic_args_plan(db, EntryEffectContext::TestFunc { func }, semantic)?;
-            let runtime_root = runtime_instance_for_semantic(db, semantic);
-            let root = synthetic_instance(
-                db,
-                RuntimeSyntheticSpec::TestRoot {
-                    name: name.clone(),
-                    callee: runtime_root,
-                    entry_args,
-                },
-                Vec::new(),
-            );
-            roots.push(root);
-            objects.push((
-                ObjectId::Test(func),
-                vec![(RuntimeSectionName::Test(name), root)],
-            ));
+            tests.push(TestFunc { func, name });
         }
+    }
+    tests
+}
+
+/// Build the package of one test of a WebAssembly test run: a module with the
+/// test and what it reaches, and nothing else.
+pub fn build_wasm_test_runtime_package<'db>(
+    db: &'db dyn MirDb,
+    test: &TestFunc<'db>,
+) -> Result<RuntimePackage<'db>, LowerError> {
+    require_target(db, Target::Wasm)?;
+    build_test_package(db, test.func.top_mod(db), std::slice::from_ref(test))
+}
+
+fn build_test_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+    tests: &[TestFunc<'db>],
+) -> Result<RuntimePackage<'db>, LowerError> {
+    let mut roots = Vec::new();
+    let mut objects = Vec::new();
+    for &TestFunc { func, ref name } in tests {
+        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
+        let entry_args =
+            entry_semantic_args_plan(db, EntryEffectContext::TestFunc { func }, semantic)?;
+        let runtime_root = runtime_instance_for_semantic(db, semantic);
+        let root = synthetic_instance(
+            db,
+            RuntimeSyntheticSpec::TestRoot {
+                name: name.clone(),
+                callee: runtime_root,
+                entry_args,
+            },
+            Vec::new(),
+        );
+        roots.push(root);
+        objects.push((
+            ObjectId::Test(func),
+            vec![(RuntimeSectionName::Test(name.clone()), root)],
+        ));
     }
     let package = build_sectioned_package(db, top_mod, roots, objects)?;
     verify_runtime_package(db, package)
@@ -523,6 +557,433 @@ pub fn build_native_package<'db>(
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid native package: {err:?}")))?;
     Ok(package)
+}
+
+/// The name of the linear memory that every WebAssembly module exports. A
+/// function cannot be exported under it.
+pub const WASM_MEMORY_EXPORT: &str = "memory";
+
+/// The names of the exports that give the host an allocator. A module has them
+/// when an export takes text, and no function of the module may use them.
+pub const WASM_ALLOCATOR_EXPORTS: [&str; 3] = ["alloc", "arena_mark", "arena_release"];
+
+/// How a parameter of an export crosses the WebAssembly boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WasmParamShape {
+    /// `bool` or an integer of at most 64 bits, by value.
+    Scalar,
+    /// `std::wasm::HostText`: an address and a length, two `i32` parameters.
+    Text,
+}
+
+/// How the result of an export crosses the WebAssembly boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WasmResultShape {
+    /// No result.
+    Unit,
+    /// `bool` or an integer of at most 64 bits, by value.
+    Scalar,
+    /// `std::wasm::Reply`: the tag in the low half and the payload in the high
+    /// half of one `i64`.
+    Reply,
+}
+
+/// A function the host can call by name.
+#[derive(Clone, Debug)]
+pub struct WasmExport<'db> {
+    /// The name the host calls.
+    pub name: String,
+    pub func: Func<'db>,
+    pub instance: RuntimeInstance<'db>,
+    pub params: Vec<WasmParamShape>,
+    pub result: WasmResultShape,
+}
+
+impl WasmExport<'_> {
+    /// Whether the exported signature differs from the signature of the Fe
+    /// function, so that a wrapper converts between them.
+    pub fn needs_adapter(&self) -> bool {
+        self.params.contains(&WasmParamShape::Text) || self.result == WasmResultShape::Reply
+    }
+
+    pub fn takes_text(&self) -> bool {
+        self.params.contains(&WasmParamShape::Text)
+    }
+}
+
+#[derive(Debug)]
+pub struct WasmExportPackage<'db> {
+    pub package: RuntimePackage<'db>,
+    /// In name order.
+    pub exports: Vec<WasmExport<'db>>,
+}
+
+/// Build the package of a WebAssembly module. Its exports are the `pub fn`
+/// items of the root scope that are not generic, not `extern` and not tests.
+/// Each is rooted with its own signature, which must consist of `bool` and
+/// integers of at most 64 bits. An export that is not scalar is an error that
+/// names it, and so is a module with no exports.
+pub fn build_wasm_export_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<WasmExportPackage<'db>, LowerError> {
+    require_target(db, Target::Wasm)?;
+    let mut exports = Vec::new();
+    for item in top_mod.children_non_nested(db) {
+        let ItemKind::Func(func) = item else {
+            continue;
+        };
+        if func.is_extern(db)
+            || func.is_associated_func(db)
+            || func.is_test(db)
+            || !func.vis(db).is_pub()
+        {
+            continue;
+        }
+        if let Some(export) = wasm_export_for_func(db, func)? {
+            exports.push(export);
+        }
+    }
+    exports.sort_by_cached_key(|export| func_display_name(db, export.func));
+    if exports.is_empty() {
+        return Err(LowerError::Unsupported(
+            "WebAssembly output needs at least one exported function: a non-generic `pub fn` in the root of the file".to_string(),
+        ));
+    }
+
+    if exports.iter().any(WasmExport::takes_text) {
+        for export in &exports {
+            let name = func_display_name(db, export.func);
+            if WASM_ALLOCATOR_EXPORTS.contains(&name.as_str()) {
+                return Err(LowerError::Unsupported(format!(
+                    "cannot export `{name}` to WebAssembly: the name is reserved for the allocator that a module with text parameters exports (`{}`)",
+                    WASM_ALLOCATOR_EXPORTS.join("`, `")
+                )));
+            }
+        }
+    }
+
+    let sections = exports
+        .iter()
+        .map(|export| {
+            (
+                RuntimeSectionName::Export(export.name.clone()),
+                export.instance,
+            )
+        })
+        .collect::<Vec<_>>();
+    let package = build_sectioned_package(
+        db,
+        top_mod,
+        sections.iter().map(|(_, instance)| *instance).collect(),
+        vec![(ObjectId::Main, sections)],
+    )?;
+    verify_runtime_package(db, package)
+        .map_err(|err| LowerError::Unsupported(format!("invalid WebAssembly package: {err:?}")))?;
+    check_wasm_imports(db, &package)?;
+    Ok(WasmExportPackage { package, exports })
+}
+
+/// The imports of a module are the `extern` functions that its exports reach.
+/// Their signatures cross the boundary by value, so they follow the rule for
+/// exports: `bool` and integers of at most 64 bits.
+fn check_wasm_imports<'db>(
+    db: &'db dyn MirDb,
+    package: &RuntimePackage<'db>,
+) -> Result<(), LowerError> {
+    for function in package.functions(db) {
+        let instance = function.instance(db);
+        if function.linkage(db) != RuntimeLinkage::External || !instance.is_external_declaration(db)
+        {
+            continue;
+        }
+        let Some(func) =
+            instance
+                .key(db)
+                .semantic(db)
+                .and_then(|semantic| match semantic.key(db).owner(db) {
+                    BodyOwner::Func(func, _) => Some(func),
+                    _ => None,
+                })
+        else {
+            continue;
+        };
+        let name = func_display_name(db, func);
+        let signature = instance.interface_signature(db);
+        let scalar = vec![WasmParamShape::Scalar; signature.params.len()];
+        let result = if signature.ret.is_some() {
+            WasmResultShape::Scalar
+        } else {
+            WasmResultShape::Unit
+        };
+        if let Some(reason) =
+            wasm_signature_rejection(db, func, signature, WasmBoundary::Import, &scalar, result)
+        {
+            return Err(LowerError::Unsupported(format!(
+                "cannot import `{name}` from the WebAssembly host: {reason}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Which side of the module a signature belongs to, for the message.
+#[derive(Clone, Copy)]
+enum WasmBoundary {
+    Export,
+    Import,
+}
+
+impl WasmBoundary {
+    /// What the boundary accepts, for the end of a message.
+    fn rule(self) -> String {
+        match self {
+            Self::Import => "imports take only `bool` and integers of at most 64 bits".to_string(),
+            Self::Export => "exports take `bool` and integers of at most 64 bits, `std::wasm::HostText` parameters and a `std::wasm::Reply` result".to_string(),
+        }
+    }
+}
+
+/// The two types of `std::wasm` that cross the boundary besides numbers.
+struct WasmBoundaryTypes<'db> {
+    text: Option<TyId<'db>>,
+    reply: Option<TyId<'db>>,
+}
+
+impl<'db> WasmBoundaryTypes<'db> {
+    fn resolve(db: &'db dyn MirDb, func: Func<'db>) -> Self {
+        let scope = func.scope();
+        Self {
+            text: resolve_lib_type_path(db, scope, "std::wasm::HostText"),
+            reply: resolve_lib_type_path(db, scope, "std::wasm::Reply"),
+        }
+    }
+
+    fn is_text(&self, ty: TyId<'db>) -> bool {
+        self.text == Some(ty)
+    }
+
+    fn is_reply(&self, ty: TyId<'db>) -> bool {
+        self.reply == Some(ty)
+    }
+}
+
+/// Why the signature of `func` cannot cross the WebAssembly boundary, naming
+/// the first parameter or the result that breaks the rule. On the export side
+/// the parameters in `text_params` and a result that `reply_result` marks are
+/// the shapes the rule allows besides numbers.
+fn wasm_signature_rejection<'db>(
+    db: &'db dyn MirDb,
+    func: Func<'db>,
+    signature: &RuntimeInterfaceSignature<'db>,
+    boundary: WasmBoundary,
+    shapes: &[WasmParamShape],
+    result: WasmResultShape,
+) -> Option<String> {
+    let hir_params = func.params(db).count();
+    let types = WasmBoundaryTypes::resolve(db, func);
+    // Fe holds a raw pointer in a 256-bit integer, which would be reported as
+    // a wide integer. The host sees no Fe memory, so name it for what it is.
+    let pointer_reason = || format!("is a pointer into Fe memory; {}", boundary.rule());
+    for (idx, param) in signature.params.iter().enumerate() {
+        let declared = (signature.params.len() == hir_params)
+            .then(|| func.arg_ty(db, idx))
+            .flatten()
+            .map(|ty| ty.instantiate_identity());
+        let rejection = if shapes.get(idx) == Some(&WasmParamShape::Text) {
+            None
+        } else if declared.is_some_and(|ty| ty.as_ptr(db).is_some()) {
+            Some(pointer_reason())
+        } else if declared.is_some_and(|ty| types.is_text(ty)) {
+            Some(match boundary {
+                WasmBoundary::Export => format!(
+                    "is a `HostText` that is not passed by value (a `mut` parameter cannot be built from an address and a length); {}",
+                    boundary.rule()
+                ),
+                WasmBoundary::Import => format!(
+                    "is a `HostText`, which only an export can take (pass an address and a length as two `u32`); {}",
+                    boundary.rule()
+                ),
+            })
+        } else if declared.is_some_and(|ty| types.is_reply(ty)) {
+            Some(format!(
+                "is a `Reply`, which can only be the result of an export; {}",
+                boundary.rule()
+            ))
+        } else {
+            wasm_scalar_rejection(&param.class, boundary)
+        };
+        if let Some(reason) = rejection {
+            let what = if signature.params.len() == hir_params {
+                let param_name = func
+                    .params(db)
+                    .nth(idx)
+                    .and_then(|view| view.name(db))
+                    .map_or_else(|| format!("{idx}"), |ident| ident.data(db).to_string());
+                let ty = func.arg_ty(db, idx).map_or_else(String::new, |ty| {
+                    format!(": {}", ty.instantiate_identity().pretty_print(db))
+                });
+                format!("parameter `{param_name}{ty}`")
+            } else {
+                format!("parameter {idx}")
+            };
+            return Some(format!("{what} {reason}"));
+        }
+    }
+    let ret_class = signature.ret.as_ref()?;
+    let return_ty = func.return_ty(db);
+    let reason = if result == WasmResultShape::Reply {
+        return None;
+    } else if return_ty.as_ptr(db).is_some() {
+        pointer_reason()
+    } else if types.is_text(return_ty) {
+        format!(
+            "is a `HostText`, which can only be a parameter of an export; {}",
+            boundary.rule()
+        )
+    } else if types.is_reply(return_ty) {
+        format!(
+            "is a `Reply`, which only an export can return (an import returns the reply word as a `u64`); {}",
+            boundary.rule()
+        )
+    } else {
+        wasm_scalar_rejection(ret_class, boundary)?
+    };
+    Some(format!(
+        "the result type `{}` {reason}",
+        return_ty.pretty_print(db)
+    ))
+}
+
+/// The shapes of the parameters and the result of an export, as far as the
+/// types say. `HostText` and `Reply` are the types of `std::wasm`; a `HostText` must be
+/// a plain view or owned parameter, which the wrapper can build.
+fn wasm_export_shapes<'db>(
+    db: &'db dyn MirDb,
+    func: Func<'db>,
+    signature: &RuntimeInterfaceSignature<'db>,
+) -> (Vec<WasmParamShape>, WasmResultShape) {
+    let types = WasmBoundaryTypes::resolve(db, func);
+    let by_hir = signature.params.len() == func.params(db).count();
+    let params = signature
+        .params
+        .iter()
+        .enumerate()
+        .map(|(idx, param)| {
+            let is_text = by_hir
+                && func
+                    .arg_ty(db, idx)
+                    .is_some_and(|ty| types.is_text(ty.instantiate_identity()))
+                && !func
+                    .params(db)
+                    .nth(idx)
+                    .and_then(|view| view.hir(db))
+                    .is_some_and(|param| param.mode == FuncParamMode::Mut);
+            // An entry function reads a view of a struct through a reference
+            // to memory; `own` takes the struct itself.
+            let by_value = match &param.class {
+                RuntimeClass::AggregateValue { .. } => true,
+                RuntimeClass::Ref { pointee, .. } => {
+                    matches!(**pointee, RuntimeClass::AggregateValue { .. })
+                }
+                _ => false,
+            };
+            if is_text && by_value {
+                WasmParamShape::Text
+            } else {
+                WasmParamShape::Scalar
+            }
+        })
+        .collect();
+    let result = match &signature.ret {
+        None => WasmResultShape::Unit,
+        Some(RuntimeClass::AggregateValue { .. }) if types.is_reply(func.return_ty(db)) => {
+            WasmResultShape::Reply
+        }
+        Some(_) => WasmResultShape::Scalar,
+    };
+    (params, result)
+}
+
+fn wasm_export_for_func<'db>(
+    db: &'db dyn MirDb,
+    func: Func<'db>,
+) -> Result<Option<WasmExport<'db>>, LowerError> {
+    let name = func_display_name(db, func);
+    let semantic = match root_semantic_instance_key(db, BodyOwner::Func(func, None)) {
+        Ok(key) => SemanticInstance::new(db, key),
+        // A generic function has no WebAssembly form until a caller picks
+        // its arguments, so it is not an export.
+        Err(RootSemanticInstanceError::UnsupportedGenericParam { offending_ty, .. })
+            if !is_implicit_layout_const_param(db, offending_ty) =>
+        {
+            return Ok(None);
+        }
+        Err(err) => {
+            return Err(LowerError::Unsupported(
+                format_root_semantic_instance_rejection(db, &name, &err),
+            ));
+        }
+    };
+    if name == WASM_MEMORY_EXPORT {
+        return Err(LowerError::Unsupported(format!(
+            "cannot export `{name}` to WebAssembly: the name is reserved for the linear memory"
+        )));
+    }
+    let entry_args =
+        entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)
+            .map_err(|err| {
+                LowerError::Unsupported(format!("cannot export `{name}` to WebAssembly: {err}"))
+            })?;
+    if !entry_args.effects.is_empty() {
+        return Err(LowerError::Unsupported(format!(
+            "cannot export `{name}` to WebAssembly: it needs effect providers (`uses`) that the host cannot supply"
+        )));
+    }
+
+    let instance = runtime_instance_for_semantic(db, semantic);
+    let signature = instance.interface_signature(db);
+    let (params, result) = wasm_export_shapes(db, func, signature);
+    if let Some(reason) =
+        wasm_signature_rejection(db, func, signature, WasmBoundary::Export, &params, result)
+    {
+        return Err(LowerError::Unsupported(format!(
+            "cannot export `{name}` to WebAssembly: {reason}"
+        )));
+    }
+    Ok(Some(WasmExport {
+        name,
+        func,
+        instance,
+        params,
+        result,
+    }))
+}
+
+/// Why `class` cannot cross the WebAssembly boundary by value, or `None` for
+/// `bool` and the integers of at most 64 bits.
+fn wasm_scalar_rejection(class: &RuntimeClass<'_>, boundary: WasmBoundary) -> Option<String> {
+    let rule = boundary.rule();
+    match class {
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Bool,
+            ..
+        }) => None,
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int { bits, .. },
+            ..
+        }) if *bits <= 64 => None,
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int { bits, .. },
+            ..
+        }) => Some(format!("is a {bits}-bit integer; {rule}")),
+        RuntimeClass::Scalar(_) => Some(format!("is a fixed-size byte value or address; {rule}")),
+        RuntimeClass::AggregateValue { .. }
+        | RuntimeClass::Ref { .. }
+        | RuntimeClass::RawAddr { .. } => Some(format!(
+            "is not a scalar (a struct, tuple, array, enum, reference or pointer); {rule}"
+        )),
+    }
 }
 
 fn manual_contract_objects<'db>(

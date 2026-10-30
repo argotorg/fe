@@ -83,6 +83,7 @@ fn cfg_selects_items() {
     for (target, os, kept) in [
         (Target::Evm, None, &["evm"][..]),
         (Target::Native, None, &["native", "native_mod"]),
+        (Target::Wasm, None, &["wasm"]),
         (
             Target::Native,
             Some(Os::Linux),

@@ -10,7 +10,7 @@ use crate::{
     core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*},
 };
 
-const CFG_EXPECTED: &str = "`#[cfg(target = \"evm\")]`, `#[cfg(target = \"native\")]`, `#[cfg(target_os = \"linux\")]`, `#[cfg(target_os = \"macos\")]`, or `#[cfg(target_family = \"unix\")]`";
+const CFG_EXPECTED: &str = "`#[cfg(target = \"evm\")]`, `#[cfg(target = \"native\")]`, `#[cfg(target = \"wasm\")]`, `#[cfg(target_os = \"linux\")]`, `#[cfg(target_os = \"macos\")]`, or `#[cfg(target_family = \"unix\")]`";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrMisuseError {

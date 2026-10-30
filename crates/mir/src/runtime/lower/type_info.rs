@@ -1,4 +1,3 @@
-use common::compilation::Target;
 use hir::analysis::{
     semantic::SemanticInstance,
     ty::{
@@ -524,7 +523,10 @@ pub(crate) fn deref_transport_class_in_env<'db>(
             // Native memory has the object layout, so an aggregate there is
             // an object in place, like a local's.
             RuntimeClass::AggregateValue { layout }
-                if db.compilation_settings().target(db) == Target::Native =>
+                if db
+                    .compilation_settings()
+                    .target(db)
+                    .memory_has_object_layout() =>
             {
                 RuntimeClass::object_ref(layout)
             }

@@ -33,12 +33,7 @@ use mir::runtime::{
 };
 use mir::{
     ArrayLayout, ConstNode, ConstRegionId, ConstScalar, FieldPlacement, IntrinsicArithBinOp,
-    Layout, LayoutId, NativeRuntimeFunc, RBlockId, RExpr, RLocalId, RStmt, RTerminator,
-    ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass,
-    RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot,
-    RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp,
-    ScalarClass, ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
-    runtime_param_accesses, scalar_raw_memory_size_bytes,
+    Layout, LayoutId, NativeRuntimeFunc, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr, VariantId, WasmParamShape, WasmResultShape, instance::RuntimeInstanceSource, resolve_runtime_place, runtime_param_accesses, scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
@@ -214,6 +209,12 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
 }
 
 fn is_native_architecture(architecture: Architecture) -> bool {
+    // WebAssembly is lowered like the native targets: one linear memory, no
+    // revert data and no EVM instructions.
+    #[cfg(feature = "wasm")]
+    if architecture == Architecture::Wasm32 {
+        return true;
+    }
     matches!(
         architecture,
         Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv64im
@@ -232,12 +233,82 @@ where
     I: Isa,
     I::InstSet: LoweringInstSet,
 {
+    compile_package_with_adapters(
+        db,
+        package,
+        isa,
+        declare_objects,
+        fixed_symbols,
+        panics,
+        &[],
+    )
+}
+
+/// An exported function whose parameters or result are not all scalars. The
+/// function itself becomes private, under another symbol, and a public wrapper
+/// with the scalar signature of the WebAssembly boundary takes its name.
+pub(super) struct WasmAdapter<'db> {
+    pub(super) instance: RuntimeInstance<'db>,
+    /// The name the host calls.
+    pub(super) name: String,
+    pub(super) params: Vec<WasmParamShape>,
+    pub(super) result: WasmResultShape,
+}
+
+/// Lowers the package, and adds the wrapper of each adapter. `exports` are the
+/// exports of the boundary's own signature, public under their names.
+#[cfg(feature = "wasm")]
+pub(super) fn compile_wasm_package_sonatina<'db, I>(
+    db: &'db DriverDataBase,
+    package: &RuntimePackage<'db>,
+    isa: &I,
+    exports: &[(RuntimeInstance<'db>, &str)],
+    adapters: &[WasmAdapter<'db>],
+) -> Result<Module, LowerError>
+where
+    I: Isa,
+    I::InstSet: LoweringInstSet,
+{
+    let (module, functions) = compile_package_with_adapters(
+        db,
+        package,
+        isa,
+        false,
+        exports,
+        NativePanics::Trap,
+        adapters,
+    )?;
+    for (instance, _) in exports {
+        let func = functions
+            .get(instance)
+            .copied()
+            .ok_or_else(|| LowerError::Internal("wasm export was not lowered".into()))?;
+        module.ctx.update_func_linkage(func, Linkage::Public);
+    }
+    Ok(module)
+}
+
+fn compile_package_with_adapters<'db, I>(
+    db: &'db DriverDataBase,
+    package: &RuntimePackage<'db>,
+    isa: &I,
+    declare_objects: bool,
+    fixed_symbols: &[(RuntimeInstance<'db>, &str)],
+    panics: NativePanics,
+    adapters: &[WasmAdapter<'db>],
+) -> Result<(Module, FxHashMap<RuntimeInstance<'db>, FuncRef>), LowerError>
+where
+    I: Isa,
+    I::InstSet: LoweringInstSet,
+{
     let builder = ModuleBuilder::new(ModuleCtx::new(isa));
     let mut lowerer =
         ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbols, panics)?;
+    lowerer.adapt_exports(adapters);
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
+    lowerer.lower_wasm_adapters(adapters)?;
     if declare_objects {
         lowerer.declare_objects()?;
     }
@@ -261,6 +332,8 @@ struct ModuleLowerer<'db, 'a, I: 'static> {
     external_code: FxHashMap<(String, mir::RuntimeSectionName), GlobalVariableRef>,
     /// The constant byte strings code copies, one global each.
     const_bytes: FxHashMap<Box<[u8]>, GlobalVariableRef>,
+    /// Exports that a wrapper stands in for: private, under their own symbol.
+    adapted: FxHashSet<mir::RuntimeInstance<'db>>,
     panics: NativePanics,
 }
 
@@ -313,8 +386,136 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             explicit_code_region_sections: FxHashSet::default(),
             external_code: FxHashMap::default(),
             const_bytes: FxHashMap::default(),
+            adapted: FxHashSet::default(),
             panics,
         })
+    }
+
+    /// Gives each adapted export the symbol of its body, so that the wrapper
+    /// can take the name of the export.
+    fn adapt_exports(&mut self, adapters: &[WasmAdapter<'db>]) {
+        for adapter in adapters {
+            self.func_symbols
+                .insert(adapter.instance, format!("{}$export", adapter.name));
+            self.adapted.insert(adapter.instance);
+        }
+    }
+
+    /// The public function of each adapter: it takes the parameters of the
+    /// WebAssembly boundary, builds the arguments of the exported function, calls
+    /// it and converts the result.
+    fn lower_wasm_adapters(&mut self, adapters: &[WasmAdapter<'db>]) -> Result<(), LowerError> {
+        for adapter in adapters {
+            self.lower_wasm_adapter(adapter)?;
+        }
+        Ok(())
+    }
+
+    fn lower_wasm_adapter(&mut self, adapter: &WasmAdapter<'db>) -> Result<(), LowerError> {
+        let body_ref = self.func_ref(adapter.instance)?;
+        let (body_params, body_ret) = self.builder.ctx.func_sig(body_ref, |sig| {
+            (sig.args().to_vec(), sig.ret_tys().first().copied())
+        });
+        let internal = |detail: &str| {
+            LowerError::Internal(format!(
+                "WebAssembly adapter of `{}`: {detail}",
+                adapter.name
+            ))
+        };
+        if adapter.params.len() != body_params.len() {
+            return Err(internal("the parameters do not match the function"));
+        }
+        let mut params = Vec::new();
+        for (shape, ty) in adapter.params.iter().zip(&body_params) {
+            match shape {
+                WasmParamShape::Scalar => params.push(*ty),
+                WasmParamShape::Text => params.extend([Type::I32, Type::I32]),
+            }
+        }
+        let ret = match adapter.result {
+            WasmResultShape::Unit => None,
+            WasmResultShape::Scalar => body_ret,
+            WasmResultShape::Reply => Some(Type::I64),
+        };
+        let signature = match ret {
+            Some(ret) => Signature::new_single(&adapter.name, Linkage::Public, &params, ret),
+            None => Signature::new_unit(&adapter.name, Linkage::Public, &params),
+        };
+        let wrapper = self
+            .builder
+            .declare_function(signature)
+            .map_err(|err| LowerError::Internal(format!("failed to declare function: {err}")))?;
+
+        let object_pointee = |ty: Type| match ty.resolve_compound(&self.builder.ctx) {
+            Some(CompoundType::ObjRef(inner)) => Some(inner),
+            _ => None,
+        };
+        let text_types = body_params
+            .iter()
+            .map(|ty| (object_pointee(*ty), *ty))
+            .collect::<Vec<_>>();
+        let ret_pointee = body_ret.and_then(object_pointee);
+        let is = self.inst_set;
+        let mut fb = self.builder.func_builder::<InstInserter>(wrapper);
+        let block = fb.append_block();
+        fb.switch_to_block(block);
+        let incoming = fb.func.arg_values.to_vec();
+        let mut incoming = incoming.into_iter();
+        let mut args = SmallVec::new();
+        for (shape, (pointee, ty)) in adapter.params.iter().zip(text_types) {
+            let mut next = || incoming.next().ok_or_else(|| internal("missing parameter"));
+            match shape {
+                WasmParamShape::Scalar => args.push(next()?),
+                WasmParamShape::Text => {
+                    // A `HostText` is a struct of the address and the length, held
+                    // in an object when the function takes it by reference.
+                    let value_ty = pointee.unwrap_or(ty);
+                    let mut text = fb.make_undef_value(value_ty);
+                    for field in 0..2u64 {
+                        let part = next()?;
+                        let index = fb.make_imm_value(I256::from(field));
+                        text = fb.insert_inst(InsertValue::new(is, text, index, part), value_ty);
+                    }
+                    if pointee.is_some() {
+                        let object = fb.insert_inst(ObjAlloc::new(is, value_ty), ty);
+                        fb.insert_inst_no_result(ObjStore::new(is, object, text));
+                        args.push(object);
+                    } else {
+                        args.push(text);
+                    }
+                }
+            }
+        }
+        match (body_ret, adapter.result) {
+            (None, _) => {
+                fb.insert_inst_no_result(Call::new(is, body_ref, args));
+                fb.insert_inst_no_result(Return::new_unit(is));
+            }
+            (Some(ret_ty), WasmResultShape::Reply) => {
+                let mut reply = fb.insert_inst(Call::new(is, body_ref, args), ret_ty);
+                if let Some(inner) = ret_pointee {
+                    reply = fb.insert_inst(ObjLoad::new(is, reply), inner);
+                }
+                // The reply is a struct of the tag and the payload, both `u32`.
+                let mut words = Vec::new();
+                for field in 0..2u64 {
+                    let index = fb.make_imm_value(I256::from(field));
+                    let word = fb.insert_inst(ExtractValue::new(is, reply, index), Type::I32);
+                    words.push(fb.insert_inst(Zext::new(is, word, Type::I64), Type::I64));
+                }
+                let shift = fb.make_imm_value(Immediate::I64(32));
+                let high = fb.insert_inst(Shl::new(is, shift, words[1]), Type::I64);
+                let packed = fb.insert_inst(Or::new(is, words[0], high), Type::I64);
+                fb.insert_inst_no_result(Return::new_single(is, packed));
+            }
+            (Some(ret_ty), _) => {
+                let value = fb.insert_inst(Call::new(is, body_ref, args), ret_ty);
+                fb.insert_inst_no_result(Return::new_single(is, value));
+            }
+        }
+        fb.seal_all();
+        fb.finish();
+        Ok(())
     }
 
     fn finish(self) -> (Module, FxHashMap<RuntimeInstance<'db>, FuncRef>) {
@@ -327,16 +528,40 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 
     fn required_inst<T: InstExt>(&self) -> Result<&'static dyn HasInst<T>, LowerError> {
         T::belongs_to(self.inst_set).ok_or_else(|| {
+            let path = std::any::type_name::<T>();
+            let name = path.rsplit("::").next().unwrap_or(path);
+            let note = if path.contains("::evm::") {
+                " (an EVM-only instruction)"
+            } else {
+                ""
+            };
             LowerError::Unsupported(format!(
-                "target `{}` does not support instruction `{}`",
+                "target `{}` does not support instruction `{name}`{note}",
                 self.builder.ctx.triple,
-                std::any::type_name::<T>()
             ))
         })
     }
 
     fn is_native_target(&self) -> bool {
         is_native_architecture(self.builder.ctx.triple.architecture)
+    }
+
+    /// Whether the module is linked against the host C library, as native
+    /// code is. A WebAssembly module carries its own memory and imports nothing
+    /// for it.
+    fn has_host_libc(&self) -> bool {
+        self.is_native_target() && !self.is_wasm_target()
+    }
+
+    fn is_wasm_target(&self) -> bool {
+        #[cfg(feature = "wasm")]
+        {
+            self.builder.ctx.triple.architecture == Architecture::Wasm32
+        }
+        #[cfg(not(feature = "wasm"))]
+        {
+            false
+        }
     }
 
     /// An address in `space`: a byte pointer for native memory, and otherwise
@@ -437,16 +662,28 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 "extern symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
             )));
         }
-        if function.linkage(self.db) == RuntimeLinkage::External
-            && (!self.is_native_target()
+        if function.linkage(self.db) == RuntimeLinkage::External {
+            if self.is_wasm_target() {
+                // The host sees `bool` and narrow integers as an `i32` holding
+                // the zero-extended value. The package builder has already
+                // named any other type.
+                if args.iter().chain(ret.iter()).any(|ty| {
+                    !matches!(ty, Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64)
+                }) {
+                    return Err(LowerError::Unsupported(format!(
+                        "extern function `{symbol}` requires bool and integer ABI values of at most 64 bits on WebAssembly"
+                    )));
+                }
+            } else if !self.is_native_target()
                 || args
                     .iter()
                     .chain(ret.iter())
-                    .any(|ty| !is_c_abi_value(ty, &self.builder.ctx)))
-        {
-            return Err(LowerError::Unsupported(format!(
-                "extern function `{symbol}` requires a native target and i32/i64 or raw-pointer ABI values"
-            )));
+                    .any(|ty| !is_c_abi_value(ty, &self.builder.ctx))
+            {
+                return Err(LowerError::Unsupported(format!(
+                    "extern function `{symbol}` requires a native target and i32/i64 or raw-pointer ABI values"
+                )));
+            }
         }
         // Sonatina may add an out pointer for a compound return value. Reserve
         // that slot before its aggregate ABI legalization runs.
@@ -460,7 +697,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             self.argument_packs.insert(instance, pack);
             args = vec![self.builder.objref_type(pack)];
         }
-        let linkage = if host_state.is_some() {
+        let linkage = if host_state.is_some() || self.adapted.contains(&instance) {
             Linkage::Private
         } else {
             linkage_for_runtime(function.linkage(self.db))
@@ -991,13 +1228,17 @@ fn assign_sonatina_function_symbols<'db>(
                     let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
                         return None;
                     };
-                    func.is_extern(db).then(|| {
-                        func.name(db)
-                            .to_opt()
-                            .expect("extern name")
-                            .data(db)
-                            .to_string()
-                    })
+                    // A host calls an exported function and resolves an
+                    // extern one by its source name.
+                    (func.is_extern(db) || function.linkage(db) == RuntimeLinkage::Internal).then(
+                        || {
+                            func.name(db)
+                                .to_opt()
+                                .expect("function name")
+                                .data(db)
+                                .to_string()
+                        },
+                    )
                 }),
             fallback_symbol: function.symbol(db).clone(),
             variant_suffix: String::new(),
@@ -1319,7 +1560,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             self.fb
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
-            for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+            let lowered_stmts = if self.module.traps_on_panic() {
+                &block.stmts[..revert_payload_start(block)]
+            } else {
+                &block.stmts[..]
+            };
+            for (stmt_idx, stmt) in lowered_stmts.iter().enumerate() {
                 let block_id = RBlockId::from_u32(idx as u32);
                 let watermark = self.inst_watermark();
                 let lowered = self.lower_stmt(stmt).map_err(|err| {
@@ -2387,12 +2633,18 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         .insert_inst_no_result(Br::new(inst_set, empty, done, copy));
                     self.fb.switch_to_block(copy);
                     // Reject a byte range that wraps the address space.
-                    let max = self.fb.make_imm_value(u64::MAX);
+                    let usize_ty = self.module.address_int_ty(AddressSpace::Memory);
+                    let max = if usize_ty == Type::I32 {
+                        self.fb.make_imm_value(u32::MAX)
+                    } else {
+                        self.fb.make_imm_value(u64::MAX)
+                    };
+                    let len = self.coerce_value_to_ty(len, usize_ty)?;
                     for address in [dst, src] {
-                        let address = self.coerce_value_to_ty(address, Type::I64)?;
+                        let address = self.coerce_value_to_ty(address, usize_ty)?;
                         let available = self
                             .fb
-                            .insert_inst(Sub::new(inst_set, max, address), Type::I64);
+                            .insert_inst(Sub::new(inst_set, max, address), usize_ty);
                         let invalid = self
                             .fb
                             .insert_inst(Gt::new(inst_set, len, available), Type::I1);
@@ -3288,6 +3540,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 if self.module.is_native_target() {
                     self.insert_native_panic(NativePanic::Revert, &[offset, len])?;
                 } else {
+                    let offset = self.local_value(*offset)?;
+                    let len = self.local_value(*len)?;
                     self.fb.insert_inst_no_result(EvmRevert::new(
                         self.module.required_inst::<EvmRevert>()?,
                         offset,
@@ -6751,6 +7005,44 @@ impl<T> Pipe for T {}
 /// `#[unsafe(export)]` functions.
 pub(super) fn is_c_abi_value(ty: &Type, ctx: &ModuleCtx) -> bool {
     matches!(ty, Type::I32 | Type::I64) || ty.is_pointer(ctx)
+}
+
+/// Where the statements that only build the data of a revert begin, or the
+/// length of the block when it does not end in a revert.
+///
+/// Native and WebAssembly targets have no revert data: the revert is lowered
+/// to a trap, which ignores its operands. The statements before it that
+/// compute the payload, a run of constants, allocations and stores, then do
+/// nothing the program can observe, and they are not lowered. This keeps a
+/// failed assertion from needing an allocation. The run ends at the first
+/// statement that can do anything else, so a call or a load before the revert
+/// keeps everything up to and including it.
+fn revert_payload_start(block: &RBlock<'_>) -> usize {
+    if !matches!(
+        block.terminator,
+        RTerminator::Revert { .. } | RTerminator::RevertEmpty
+    ) {
+        return block.stmts.len();
+    }
+    let is_payload_stmt = |stmt: &RStmt<'_>| {
+        matches!(
+            stmt,
+            RStmt::Assign {
+                expr: RExpr::ConstScalar(_)
+                    | RExpr::Builtin(
+                        RuntimeBuiltin::Malloc { .. }
+                            | RuntimeBuiltin::Mstore { .. }
+                            | RuntimeBuiltin::StoreConstBytes { .. }
+                    ),
+                ..
+            }
+        )
+    };
+    block
+        .stmts
+        .iter()
+        .rposition(|stmt| !is_payload_stmt(stmt))
+        .map_or(0, |last| last + 1)
 }
 
 fn linkage_for_runtime(linkage: RuntimeLinkage) -> Linkage {
