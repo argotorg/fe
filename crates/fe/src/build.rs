@@ -73,6 +73,7 @@ struct EmitSelection {
     object: bool,
     staticlib: bool,
     elf: bool,
+    wasm: bool,
 }
 
 impl EmitSelection {
@@ -88,6 +89,7 @@ impl EmitSelection {
             object: false,
             staticlib: false,
             elf: false,
+            wasm: false,
         };
         for emit in requested {
             match emit {
@@ -101,6 +103,7 @@ impl EmitSelection {
                 BuildEmit::Object => selection.object = true,
                 BuildEmit::Staticlib => selection.staticlib = true,
                 BuildEmit::Elf => selection.elf = true,
+                BuildEmit::Wasm => selection.wasm = true,
             }
         }
         selection
@@ -141,7 +144,7 @@ fn validate_build_request(
     emit: EmitSelection,
     link: NativeLink<'_>,
 ) -> Result<(), String> {
-    #[cfg(not(feature = "sp1"))]
+    #[cfg(not(any(feature = "sp1", feature = "wasm")))]
     let _ = ingot;
     #[cfg(not(feature = "cranelift"))]
     let _ = contract;
@@ -154,6 +157,9 @@ fn validate_build_request(
             "`--link` and `--link-lib` require `--backend native` and `--emit executable`"
                 .to_string(),
         );
+    }
+    if emit.wasm && backend.name() != "wasm" {
+        return Err("`--emit wasm` requires `--backend wasm`".to_string());
     }
 
     match backend {
@@ -205,6 +211,22 @@ fn validate_build_request(
         }
         #[cfg(feature = "sp1")]
         BuildBackend::Sp1 => Ok(()),
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm if ingot.is_some() || contract.is_some() => {
+            Err("WebAssembly output does not support `--ingot` or `--contract`".to_string())
+        }
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm
+            if emit.writes_any_bytecode()
+                || emit.abi
+                || emit.metadata
+                || emit.executable
+                || emit.elf =>
+        {
+            Err("WebAssembly backend only supports `--emit wasm` and `--emit ir`".to_string())
+        }
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm => Ok(()),
     }
 }
 
@@ -404,6 +426,11 @@ pub fn build(
         #[cfg(feature = "sp1")]
         CliTarget::Directory(_) if matches!(backend, BuildBackend::Sp1) => {
             eprintln!("Error: sp1 executable output only supports standalone `.fe` files");
+            true
+        }
+        #[cfg(feature = "wasm")]
+        CliTarget::Directory(_) if matches!(backend, BuildBackend::Wasm) => {
+            eprintln!("Error: WebAssembly output only supports standalone `.fe` files");
             true
         }
         CliTarget::Directory(dir_path) => build_directory(
@@ -1530,6 +1557,25 @@ fn build_top_mod(
         };
     }
 
+    #[cfg(feature = "wasm")]
+    if matches!(backend, BuildBackend::Wasm) {
+        let result = build_wasm_top_mod(
+            db,
+            top_mod,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir.map(Utf8PathBuf::as_path),
+        );
+        if let Err(err) = &result {
+            eprintln!("Error: Failed to compile WebAssembly output: {err}");
+        }
+        return BuildSummary {
+            had_errors: result.is_err(),
+        };
+    }
+
     if report_evm_exports(db, top_mod) {
         return BuildSummary { had_errors: true };
     }
@@ -1748,6 +1794,61 @@ fn build_sp1_top_mod(
     Ok(())
 }
 
+#[cfg(feature = "wasm")]
+fn build_wasm_top_mod(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8Path>,
+) -> Result<(), String> {
+    let artifacts = codegen::emit_module_wasm_artifacts(
+        db,
+        top_mod,
+        opt_level,
+        codegen::WasmOutputSelection {
+            ir: emit.ir,
+            wasm: emit.wasm,
+        },
+    )
+    .map_err(|err| err.to_string())?;
+    // Nothing is written unless compilation succeeded.
+    ensure_output_dirs(emit, out_dir, out_dir)?;
+    if let Some(ir) = artifacts.ir {
+        write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "wasm.sona", &ir)?;
+    }
+    if let Some(wasm) = artifacts.wasm {
+        let stem = sanitize_name_with_default(ir_file_stem, "main");
+        let name = format!("{stem}.wasm");
+        let manifest = crate::wasm_manifest::render(&crate::wasm_manifest::ManifestInput {
+            module_file: &name,
+            module: &wasm,
+            optimization: &opt_level.to_string(),
+            compiler: &format!("fe {}", crate::cli_version()),
+            exports: &artifacts.exports,
+        })
+        .map_err(|err| format!("Failed to describe the WebAssembly module: {err}"))?;
+        let file = out_dir.join(&name);
+        fs::write(&file, &wasm)
+            .map_err(|err| format!("Failed to write WebAssembly module {file}: {err}"))?;
+        if let Some(report_dir) = report_dir {
+            let _ = fs::write(report_dir.join(&name), &wasm);
+        }
+        println!("Wrote {file}");
+        let manifest_name = format!("{stem}.manifest.json");
+        let manifest_file = out_dir.join(&manifest_name);
+        fs::write(&manifest_file, &manifest)
+            .map_err(|err| format!("Failed to write build manifest {manifest_file}: {err}"))?;
+        if let Some(report_dir) = report_dir {
+            let _ = fs::write(report_dir.join(&manifest_name), &manifest);
+        }
+        println!("Wrote {manifest_file}");
+    }
+    Ok(())
+}
+
 fn collect_contract_names(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -1890,6 +1991,7 @@ fn ensure_output_dirs(
         || emit.executable
         || emit.library()
         || emit.elf
+        || emit.wasm
     {
         fs::create_dir_all(out_dir.as_std_path())
             .map_err(|err| format!("Failed to create output directory {out_dir}: {err}"))?;
@@ -2459,6 +2561,9 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     if emit.elf {
         parts.push("elf");
     }
+    if emit.wasm {
+        parts.push("wasm");
+    }
     parts.join(",")
 }
 
@@ -2638,6 +2743,7 @@ mod tests {
             object: false,
             staticlib: false,
             elf: false,
+            wasm: false,
         };
         assert_eq!(describe_emit_selection(emit), "abi");
     }

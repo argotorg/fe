@@ -9,6 +9,7 @@ doc-server = ["dep:tokio", "dep:axum"]
 lsp = ["dep:language-server", "dep:tokio"]
 cranelift = ["codegen/cranelift", "dep:libc"]
 sp1 = ["cranelift", "codegen/sp1", "dep:sonatina-sp1"]
+wasm = ["codegen/wasm", "dep:sha2"]
 
 [dependencies]
 clap.workspace = true
@@ -39,6 +40,7 @@ solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
 fe-web = { path = "../fe-web" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
+sha2 = { version = "0.10", optional = true }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 fmt.workspace = true
 walkdir = "2"
@@ -66,6 +68,9 @@ dir-test.workspace = true
 test-utils.workspace = true
 semantic-indexing.workspace = true
 sha2 = "0.10"
+# Runs the WebAssembly modules that `--backend wasm` writes. Only the tests
+# in `tests/wasm_backend.rs` use it.
+wasmtime = { version = "44.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }
 
 [build-dependencies]
 gix = { workspace = true, features = ["sha1"] }

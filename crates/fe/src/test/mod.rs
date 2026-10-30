@@ -5,6 +5,8 @@
 
 #[cfg(feature = "cranelift")]
 mod native;
+#[cfg(feature = "wasm")]
+mod wasm;
 
 use crate::dependency_diagnostics::CompilationDiagnostics;
 use crate::report::{
@@ -166,6 +168,8 @@ enum CompiledTest {
     Evm(Box<TestMetadata>),
     #[cfg(feature = "cranelift")]
     Native(native::NativeTestCase),
+    #[cfg(feature = "wasm")]
+    Wasm(wasm::WasmTestCase),
 }
 
 #[derive(Debug)]
@@ -781,6 +785,24 @@ pub fn run_tests(
 ) -> Result<bool, String> {
     if backend.is_native() && (show_logs || debug.trace_evm || call_trace) {
         return Err("native tests do not support EVM logs or tracing options".to_string());
+    }
+    #[cfg(feature = "wasm")]
+    if backend.is_wasm() {
+        if show_logs || debug.trace_evm || call_trace || debug.debug_dir.is_some() {
+            return Err(
+                "WebAssembly tests do not support EVM logs, tracing options or `--debug-dir`"
+                    .to_string(),
+            );
+        }
+        if emit.contains(&TestEmit::Rmir) {
+            return Err("`--emit rmir` is not available with `--backend wasm`".to_string());
+        }
+        if report_out.is_some() || report_dir.is_some() {
+            return Err(
+                "`--report` and `--report-dir` are not available with `--backend wasm`".to_string(),
+            );
+        }
+        wasm::require_node()?;
     }
     if !backend.is_native() && (native_timeout_secs.is_some() || native_output_limit_kib.is_some())
     {
@@ -1577,6 +1599,8 @@ fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> Singl
         ),
         #[cfg(feature = "cranelift")]
         CompiledTest::Native(case) => case.run(report_ctx.as_ref(), shared.native_limits),
+        #[cfg(feature = "wasm")]
+        CompiledTest::Wasm(case) => case.run(),
     };
     let elapsed = outcome.elapsed;
     let mut output = String::new();
@@ -1793,6 +1817,20 @@ fn prepare_tests_single_file(
     }
     #[cfg(not(feature = "cranelift"))]
     let _ = backend;
+    #[cfg(feature = "wasm")]
+    if backend.is_wasm() {
+        return wasm::prepare_tests(
+            db,
+            vec![top_mod],
+            file_path,
+            suite,
+            suite_key,
+            filter,
+            opt_level,
+            emit,
+            output,
+        );
+    }
 
     maybe_write_suite_ir(db, top_mod, opt_level, report);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1985,6 +2023,14 @@ fn prepare_tests_ingot(
     }
     #[cfg(not(feature = "cranelift"))]
     let _ = backend;
+    #[cfg(feature = "wasm")]
+    if backend.is_wasm() {
+        let mut top_mods = ingot.all_modules(db).to_vec();
+        top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
+        return wasm::prepare_tests(
+            db, top_mods, dir_path, suite, suite_key, filter, opt_level, emit, output,
+        );
+    }
 
     maybe_write_suite_ir(db, root_mod, opt_level, report);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
