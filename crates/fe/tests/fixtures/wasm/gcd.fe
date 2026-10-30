@@ -1,0 +1,17 @@
+pub fn gcd(a: u32, b: u32) -> u32 {
+    var x = a
+    var y = b
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    x
+}
+
+pub fn lcm(a: u32, b: u32) -> u32 {
+    if a == 0 || b == 0 {
+        return 0
+    }
+    a / gcd(a: a, b: b) * b
+}

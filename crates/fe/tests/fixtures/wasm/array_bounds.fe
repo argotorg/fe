@@ -1,0 +1,30 @@
+pub fn read(i: u32) -> u8 {
+    let arr: [u8; 4] = [11, 22, 33, 44]
+    arr[i as usize]
+}
+
+pub fn write_then_sum(i: u32, v: u8) -> u32 {
+    var arr: [u8; 6] = [1, 2, 3, 4, 5, 6]
+    arr[i as usize] = v
+    var s: u32 = 0
+    var k: usize = 0
+    while k < 6 {
+        s = s * 3 + (arr[k] as u32)
+        k += 1
+    }
+    s
+}
+
+pub fn read_at_end() -> u32 {
+    let arr: [u32; 3] = [5, 6, 7]
+    let n: usize = 3
+    arr[n] as u32
+}
+
+pub fn neighbors_untouched(i: u32) -> u32 {
+    var a: [u32; 3] = [100, 200, 300]
+    var b: [u32; 3] = [1000, 2000, 3000]
+    a[i as usize] = 9
+    b[i as usize] = 8
+    a[0] + a[1] + a[2] + b[0] + b[1] + b[2]
+}

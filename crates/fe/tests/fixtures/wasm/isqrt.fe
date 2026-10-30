@@ -1,0 +1,13 @@
+pub fn isqrt(n: u64) -> u64 {
+    var lo: u64 = 0
+    var hi: u64 = 4294967296
+    while lo + 1 < hi {
+        let mid = lo + (hi - lo) / 2
+        if mid * mid <= n {
+            lo = mid
+        } else {
+            hi = mid
+        }
+    }
+    lo
+}

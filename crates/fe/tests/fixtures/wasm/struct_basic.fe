@@ -1,0 +1,52 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Rect {
+    min: Point,
+    max: Point,
+}
+
+impl Copy for Point {}
+
+impl Point {
+    fn add(self, other: Point) -> Point {
+        Point { x: self.x + other.x, y: self.y + other.y }
+    }
+
+    fn dot(self, other: Point) -> i32 {
+        self.x * other.x + self.y * other.y
+    }
+}
+
+fn rect(x0: i32, y0: i32, x1: i32, y1: i32) -> Rect {
+    Rect { min: Point { x: x0, y: y0 }, max: Point { x: x1, y: y1 } }
+}
+
+fn width(r: Rect) -> i32 {
+    r.max.x - r.min.x
+}
+
+fn height(r: Rect) -> i32 {
+    r.max.y - r.min.y
+}
+
+pub fn area(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let r = rect(x0: x0, y0: y0, x1: x1, y1: y1)
+    width(r: r) * height(r: r)
+}
+
+pub fn dot_sum(ax: i32, ay: i32, bx: i32, by: i32) -> i32 {
+    let a = Point { x: ax, y: ay }
+    let b = Point { x: bx, y: by }
+    let c = a.add(other: b)
+    c.dot(other: a) + a.dot(other: b)
+}
+
+pub fn copies(x: i32) -> i32 {
+    var a = Point { x, y: 1 }
+    let b = a
+    a.x = a.x + 100
+    b.x * 1000 + a.x
+}

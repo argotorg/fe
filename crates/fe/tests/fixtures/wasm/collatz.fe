@@ -1,0 +1,13 @@
+pub fn collatz_steps(start: u64) -> u32 {
+    var n = start
+    var steps: u32 = 0
+    while n != 1 {
+        if n % 2 == 0 {
+            n = n / 2
+        } else {
+            n = 3 * n + 1
+        }
+        steps = steps + 1
+    }
+    steps
+}

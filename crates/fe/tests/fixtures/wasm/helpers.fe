@@ -1,0 +1,27 @@
+fn double(x: u32) -> u32 {
+    x * 2
+}
+
+fn add_one(x: u32) -> u32 {
+    x + 1
+}
+
+fn compose(x: u32) -> u32 {
+    add_one(x: double(x: x))
+}
+
+fn max_of(a: i32, b: i32) -> i32 {
+    if a > b { a } else { b }
+}
+
+pub fn run(x: u32) -> u32 {
+    compose(x: compose(x: x))
+}
+
+pub fn max3(a: i32, b: i32, c: i32) -> i32 {
+    max_of(a: max_of(a: a, b: b), b: c)
+}
+
+pub fn abs_diff(a: i32, b: i32) -> i32 {
+    if a > b { a - b } else { b - a }
+}

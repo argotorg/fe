@@ -1,0 +1,46 @@
+struct Complex {
+    re: i64,
+    im: i64,
+}
+
+impl Copy for Complex {}
+
+fn mul(a: Complex, b: Complex) -> Complex {
+    Complex { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re }
+}
+
+fn add(a: Complex, b: Complex) -> Complex {
+    Complex { re: a.re + b.re, im: a.im + b.im }
+}
+
+fn pow(base: Complex, n: u32) -> Complex {
+    var result = Complex { re: 1, im: 0 }
+    var i: u32 = 0
+    while i < n {
+        result = mul(a: result, b: base)
+        i += 1
+    }
+    result
+}
+
+pub fn power_re(re: i64, im: i64, n: u32) -> i64 {
+    pow(base: Complex { re, im }, n: n).re
+}
+
+pub fn power_im(re: i64, im: i64, n: u32) -> i64 {
+    pow(base: Complex { re, im }, n: n).im
+}
+
+pub fn mandel_steps(cre: i64, cim: i64, limit: u32) -> u32 {
+    var z = Complex { re: 0, im: 0 }
+    let c = Complex { re: cre, im: cim }
+    var steps: u32 = 0
+    while steps < limit {
+        if z.re * z.re + z.im * z.im > 4 {
+            return steps
+        }
+        z = add(a: mul(a: z, b: z), b: c)
+        steps += 1
+    }
+    steps
+}

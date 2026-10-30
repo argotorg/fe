@@ -1,0 +1,29 @@
+use std::wasm::{Clock, now_ms}
+
+//host: fn provider() -> std::wasm::Host { std::wasm::host() }
+//mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
+
+fn next(_ seed: u64) -> u64 {
+    (seed * 1103515245 + 12345) % 2147483648
+}
+
+fn roll(_ sides: u32) -> u32 uses (clock: mut Clock) {
+    let seed = now_ms()
+    let first = next(seed)
+    let second = next(first)
+    ((second % (sides as u64))).downcast_truncate()
+}
+
+pub fn roll_die(sides: u32) -> u32 {
+    var p = provider()
+    with (Clock = p) {
+        roll(sides)
+    }
+}
+
+pub fn two_rolls(sides: u32) -> u32 {
+    var p = provider()
+    with (Clock = p) {
+        roll(sides) * 100 + roll(sides)
+    }
+}

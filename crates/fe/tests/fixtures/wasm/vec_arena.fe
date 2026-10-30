@@ -1,0 +1,90 @@
+// Dynamic arrays allocate from the arena of the module; growing a vector
+// allocates a larger block and copies the elements.
+use core::ptr::{MemArray, MemVec}
+
+pub fn vec_sum(n: u32) -> u32 {
+    var v: MemVec<u32> = MemVec::new()
+    var i: u32 = 0
+    while i < n {
+        v.push(i * 3)
+        i += 1
+    }
+    var s: u32 = 0
+    var j: usize = 0
+    while j < v.len() {
+        s += v[j]
+        j += 1
+    }
+    s
+}
+
+pub fn vec_pop_all(n: u32) -> u32 {
+    var v: MemVec<u32> = MemVec::new()
+    var i: u32 = 0
+    while i < n {
+        v.push(i + 1)
+        i += 1
+    }
+    var weighted: u32 = 0
+    var k: u32 = 1
+    while v.len() > 0 {
+        match v.pop() {
+            Option::Some(x) => { weighted += x * k },
+            Option::None => { return 0 },
+        }
+        k += 1
+    }
+    weighted
+}
+
+pub fn zeroed_then_filled(n: u32, at: u32) -> u32 {
+    var a: MemArray<u32> = MemArray::new_zeroed(8)
+    a.set(at as usize, n)
+    var s: u32 = 0
+    var i: usize = 0
+    while i < 8 {
+        s = s * 2 + a[i]
+        i += 1
+    }
+    s
+}
+
+// Three live blocks, each written with its own value, then all read back: a
+// block that overlapped another would show the other's value.
+pub fn live_blocks_keep_their_contents(a: u32, b: u32, c: u32) -> u32 {
+    var x: MemArray<u32> = MemArray::new_zeroed(10)
+    var y: MemArray<u32> = MemArray::new_zeroed(20)
+    var z: MemArray<u32> = MemArray::new_zeroed(30)
+    var i: usize = 0
+    while i < 10 {
+        x.set(i, a)
+        i += 1
+    }
+    i = 0
+    while i < 20 {
+        y.set(i, b)
+        i += 1
+    }
+    i = 0
+    while i < 30 {
+        z.set(i, c)
+        i += 1
+    }
+    var sum: u32 = 0
+    i = 0
+    while i < 10 {
+        sum += x[i]
+        i += 1
+    }
+    i = 0
+    while i < 20 {
+        sum += y[i]
+        i += 1
+    }
+    i = 0
+    while i < 30 {
+        sum += z[i]
+        i += 1
+    }
+    sum
+}

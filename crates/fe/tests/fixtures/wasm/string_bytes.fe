@@ -1,0 +1,32 @@
+use core::ops::{WrappingAdd, WrappingMul}
+
+const GREETING: [u8; 5] = "hello"
+
+fn fnv(a: u8, b: u8, c: u8, d: u8, e: u8) -> u32 {
+    var h: u32 = 2166136261
+    let bytes: [u8; 5] = [a, b, c, d, e]
+    for x in bytes {
+        h = (h ^ (x as u32)).wrapping_mul(16777619)
+    }
+    h
+}
+
+pub fn hello_hash() -> u32 {
+    fnv(a: GREETING[0], b: GREETING[1], c: GREETING[2], d: GREETING[3], e: GREETING[4])
+}
+
+pub fn literal_bytes(i: u32) -> u8 {
+    let word: [u8; 7] = "fe-wasm"
+    word[i as usize]
+}
+
+pub fn count_byte(target: u8) -> u32 {
+    let text: [u8; 11] = "mississippi"
+    var n: u32 = 0
+    for b in text {
+        if b == target {
+            n += 1
+        }
+    }
+    n
+}

@@ -1,0 +1,20 @@
+pub fn positive(x: i32) -> i32 {
+    assert!(x > 0)
+    x
+}
+
+pub fn small(x: u8) -> u8 {
+    assert!(x < 100, "x must be below 100")
+    x
+}
+
+pub fn guarded_sum(n: u32) -> u32 {
+    var total: u32 = 0
+    var i: u32 = 0
+    while i < n {
+        assert!(i < 10)
+        total = total + i
+        i = i + 1
+    }
+    total
+}

@@ -1,0 +1,19 @@
+pub fn factorial(n: u64) -> u64 {
+    var result: u64 = 1
+    var i: u64 = 2
+    while i <= n {
+        result = result * i
+        i = i + 1
+    }
+    result
+}
+
+pub fn sum_to(n: u32) -> u64 {
+    var total: u64 = 0
+    var i: u32 = 0
+    while i <= n {
+        total = total + i as u64
+        i = i + 1
+    }
+    total
+}

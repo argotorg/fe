@@ -1,0 +1,192 @@
+// Operations of the files contract (std::wasm::files), exported with text
+// parameters and a reply result. Lines that start with `//host:` belong to the
+// build that calls the imports of the host; lines that start with `//mock:`
+// belong to the build with files held in Fe, which has no imports.
+use std::wasm::{HostText, Reply}
+use std::wasm::files::{Files, close, open, read_byte, reply, size}
+
+//host: use std::wasm::files::{HostFiles, host}
+//host: fn provider() -> HostFiles { host() }
+//mock: use std::wasm::files::{MemFiles, mock}
+//mock: fn provider() -> MemFiles {
+//mock:     var files = mock()
+//mock:     files.add("hello.txt", "Hello, world")
+//mock:     files.add("digits", "0123456789")
+//mock:     files.add("empty", "")
+//mock:     files.add("grüß", "grüß")
+//mock:     files
+//mock: }
+
+fn byte_at_impl(_ name: HostText, _ index: u32) -> Reply uses (files: mut Files) {
+    match open(name.copy()) {
+        Result::Ok(handle) => {
+            let byte = read_byte(handle, index)
+            close(handle)
+            match byte {
+                Result::Ok(b) => Reply::ok(b as u32)
+                Result::Err(e) => Reply::error(e.code())
+            }
+        }
+        Result::Err(e) => Reply::error(e.code())
+    }
+}
+
+fn size_of_impl(_ name: HostText) -> Reply uses (files: mut Files) {
+    match open(name.copy()) {
+        Result::Ok(handle) => {
+            let n = size(handle)
+            close(handle)
+            reply(n)
+        }
+        Result::Err(e) => Reply::error(e.code())
+    }
+}
+
+fn checksum_impl(_ name: HostText) -> Reply uses (files: mut Files) {
+    match open(name.copy()) {
+        Result::Ok(handle) => {
+            let total = match size(handle) {
+                Result::Ok(n) => {
+                    var sum: u32 = 0
+                    var i: u32 = 0
+                    while i < n {
+                        match read_byte(handle, i) {
+                            Result::Ok(b) => { sum += b as u32 }
+                            Result::Err(_) => { core::panic() }
+                        }
+                        i += 1
+                    }
+                    Reply::ok(sum)
+                }
+                Result::Err(e) => Reply::error(e.code())
+            }
+            close(handle)
+            total
+        }
+        Result::Err(e) => Reply::error(e.code())
+    }
+}
+
+fn open_n_impl(_ name: HostText, _ n: u32) -> Reply uses (files: mut Files) {
+    var i: u32 = 0
+    while i < n {
+        match open(name.copy()) {
+            Result::Ok(handle) => { close(handle) }
+            Result::Err(e) => { return Reply::error(e.code()) }
+        }
+        i += 1
+    }
+    Reply::ok(n)
+}
+
+// Two handles are live at once and are closed in the opposite order.
+fn sizes_two_impl(_ first: HostText, _ second: HostText) -> Reply uses (files: mut Files) {
+    let a = match open(first.copy()) {
+        Result::Ok(handle) => handle
+        Result::Err(e) => { return Reply::error(e.code()) }
+    }
+    let b = match open(second.copy()) {
+        Result::Ok(handle) => handle
+        Result::Err(e) => {
+            close(a)
+            return Reply::error(e.code())
+        }
+    }
+    let total = match size(a) {
+        Result::Ok(x) => match size(b) {
+            Result::Ok(y) => Reply::ok(x + y)
+            Result::Err(e) => Reply::error(e.code())
+        }
+        Result::Err(e) => Reply::error(e.code())
+    }
+    close(b)
+    close(a)
+    total
+}
+
+// Opens a file and does not close it. The compiler does not report the leak;
+// the host counts it.
+fn leak_impl(_ name: HostText) -> Reply uses (files: mut Files) {
+    match open(name.copy()) {
+        Result::Ok(handle) => Reply::ok(0)
+        Result::Err(e) => Reply::error(e.code())
+    }
+}
+
+pub fn byte_at(name: HostText, index: u32) -> Reply {
+    var p = provider()
+    with (Files = p) { byte_at_impl(name, index) }
+}
+
+pub fn size_of(name: HostText) -> Reply {
+    var p = provider()
+    with (Files = p) { size_of_impl(name) }
+}
+
+pub fn checksum(name: HostText) -> Reply {
+    var p = provider()
+    with (Files = p) { checksum_impl(name) }
+}
+
+pub fn open_n(name: HostText, n: u32) -> Reply {
+    var p = provider()
+    with (Files = p) { open_n_impl(name, n) }
+}
+
+pub fn sizes_two(first: HostText, second: HostText) -> Reply {
+    var p = provider()
+    with (Files = p) { sizes_two_impl(first, second) }
+}
+
+pub fn leak(name: HostText) -> Reply {
+    var p = provider()
+    with (Files = p) { leak_impl(name) }
+}
+
+// An export with a text parameter and no result.
+pub fn touch(name: HostText) {
+    var p = provider()
+    with (Files = p) {
+        match open(name.copy()) {
+            Result::Ok(handle) => { close(handle) }
+            Result::Err(_) => {}
+        }
+    }
+}
+
+// Text alone: no host call.
+pub fn text_len(name: HostText) -> Reply {
+    Reply::ok(name.len())
+}
+
+pub fn text_byte(name: HostText, index: u32) -> Reply {
+    let copy = name.copy()
+    if index as usize >= copy.len() {
+        return Reply::error(2)
+    }
+    Reply::ok(copy.byte_at(index as usize) as u32)
+}
+
+// Numbers on both sides of a text.
+pub fn mixed(a: u32, name: HostText, b: u64) -> Reply {
+    Reply::ok(a + name.len() + b.downcast_truncate())
+}
+
+pub fn plain(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+//mock: // How many handles a call leaves open, for the calls that the mock can
+//mock: // count. `which` selects the operation as in the tests.
+//mock: pub fn open_after(which: u32, a: HostText, b: HostText, n: u32) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) {
+//mock:         if which == 0 { byte_at_impl(a, n) }
+//mock:         else if which == 1 { size_of_impl(a) }
+//mock:         else if which == 2 { checksum_impl(a) }
+//mock:         else if which == 3 { open_n_impl(a, n) }
+//mock:         else if which == 4 { sizes_two_impl(a, b) }
+//mock:         else { leak_impl(a) }
+//mock:     }
+//mock:     Reply::ok(p.open_handles())
+//mock: }

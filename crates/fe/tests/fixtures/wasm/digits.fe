@@ -1,0 +1,32 @@
+pub fn digit_sum(n: u64) -> u64 {
+    var v = n
+    var total: u64 = 0
+    while v > 0 {
+        total = total + v % 10
+        v = v / 10
+    }
+    total
+}
+
+pub fn reverse_digits(n: u64) -> u64 {
+    var v = n
+    var out: u64 = 0
+    while v > 0 {
+        out = out * 10 + v % 10
+        v = v / 10
+    }
+    out
+}
+
+pub fn digit_count(n: u64) -> u32 {
+    if n == 0 {
+        return 1
+    }
+    var v = n
+    var count: u32 = 0
+    while v > 0 {
+        count = count + 1
+        v = v / 10
+    }
+    count
+}

@@ -1,0 +1,49 @@
+struct Rgb {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+struct Entry {
+    key: u16,
+    color: Rgb,
+    scale: i32,
+}
+
+impl Copy for Rgb {}
+impl Copy for Entry {}
+
+const ORIGIN: Rgb = Rgb { r: 0, g: 0, b: 0 }
+const TABLE: [Entry; 3] = [
+    Entry { key: 7, color: Rgb { r: 255, g: 128, b: 0 }, scale: -2 },
+    Entry { key: 9, color: Rgb { r: 1, g: 2, b: 3 }, scale: 10 },
+    Entry { key: 300, color: Rgb { r: 10, g: 20, b: 30 }, scale: 1000 },
+]
+const GRID: [[u8; 3]; 2] = [[1, 2, 3], [4, 5, 6]]
+
+pub fn find_scale(key: u16) -> i32 {
+    var i: usize = 0
+    while i < 3 {
+        if TABLE[i].key == key {
+            return TABLE[i].scale
+        }
+        i += 1
+    }
+    0
+}
+
+pub fn brightness(i: u32) -> u32 {
+    let e = TABLE[i as usize]
+    (e.color.r as u32) + (e.color.g as u32) + (e.color.b as u32)
+}
+
+pub fn origin_distance(r: u8, g: u8, b: u8) -> u32 {
+    let d1: u32 = if r > ORIGIN.r { (r - ORIGIN.r) as u32 } else { 0 }
+    let d2: u32 = if g > ORIGIN.g { (g - ORIGIN.g) as u32 } else { 0 }
+    let d3: u32 = if b > ORIGIN.b { (b - ORIGIN.b) as u32 } else { 0 }
+    d1 + d2 + d3
+}
+
+pub fn grid(row: u32, col: u32) -> u8 {
+    GRID[row as usize][col as usize]
+}

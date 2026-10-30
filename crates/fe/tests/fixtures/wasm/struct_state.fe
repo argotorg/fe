@@ -1,0 +1,48 @@
+struct Pair {
+    a: u64,
+    b: u64,
+}
+
+impl Copy for Pair {}
+
+fn step(p: Pair) -> Pair {
+    Pair { a: p.b, b: p.a + p.b }
+}
+
+fn pick(flag: bool, x: Pair, y: Pair) -> Pair {
+    if flag { x } else { y }
+}
+
+pub fn fib(n: u32) -> u64 {
+    var state = Pair { a: 0, b: 1 }
+    var i: u32 = 0
+    while i < n {
+        state = step(p: state)
+        i += 1
+    }
+    state.a
+}
+
+pub fn lucas_or_fib(n: u32, lucas: bool) -> u64 {
+    var state = pick(flag: lucas, x: Pair { a: 2, b: 1 }, y: Pair { a: 0, b: 1 })
+    var i: u32 = 0
+    while i < n {
+        state = step(p: state)
+        i += 1
+    }
+    state.a
+}
+
+pub fn alternate(n: u32) -> u64 {
+    var left = Pair { a: 1, b: 2 }
+    var right = Pair { a: 10, b: 20 }
+    var i: u32 = 0
+    while i < n {
+        let t = left
+        left = right
+        right = t
+        left = step(p: left)
+        i += 1
+    }
+    left.a * 1000 + right.a
+}

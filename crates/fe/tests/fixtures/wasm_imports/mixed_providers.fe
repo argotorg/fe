@@ -1,0 +1,29 @@
+// The log is a pure Fe provider in both builds; only the clock changes.
+use std::wasm::{Clock, Log, log_i32, mock, now_ms}
+
+//host: fn provider() -> std::wasm::Host { std::wasm::host() }
+//mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
+
+fn stamp_and_log(_ x: i32) -> u64 uses (log: mut Log, clock: mut Clock) {
+    log_i32(x)
+    let t = now_ms()
+    log_i32(x + 1)
+    t
+}
+
+pub fn stamp(x: i32) -> u64 {
+    var clock = provider()
+    var log = mock(0, 0)
+    with (Log = log, Clock = clock) {
+        stamp_and_log(x)
+    }
+}
+
+pub fn stamp_count(x: i32) -> u32 {
+    var clock = provider()
+    var log = mock(0, 0)
+    with (Log = log, Clock = clock) {
+        stamp_and_log(x)
+    }
+    log.i32_count
+}
