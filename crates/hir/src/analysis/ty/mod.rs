@@ -961,7 +961,8 @@ pub fn resolve_contract_root_effect_ty<'db>(
 }
 
 /// The type `main` and tests take their target capabilities from:
-/// `std::native::Host` for native code, else the contracts' root effect.
+/// `std::native::Host` for native code, the contracts' root effect on the
+/// EVM, and none on WebAssembly.
 pub fn resolve_func_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -970,6 +971,7 @@ pub fn resolve_func_root_effect_ty<'db>(
     match db.compilation_settings().target(db) {
         Target::Native => resolve_ty_path(db, NATIVE_ROOT_EFFECT_TY_PATH, scope, assumptions),
         Target::Evm => resolve_contract_root_effect_ty(db, scope, assumptions),
+        Target::Wasm => None,
     }
 }
 
