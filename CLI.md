@@ -265,6 +265,73 @@ writes both. ELF linking requires the pinned Succinct toolchain configured throu
 `SONATINA_SP1_TOOLCHAIN`. See the [SP1 guide](tests/sp1/README.md) for installation,
 guest input and public values, and proof verification tests.
 
+### Native output
+
+With the optional `cranelift` Cargo feature, `fe build --backend native` compiles for the host
+(x86-64 Linux or AArch64 macOS). `--emit` selects:
+
+- `executable` (the default): `<out>/<name>`, entered at the root module's
+  `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`, whose result is the
+  exit status.
+- `object`: `<out>/<name>.o`, the object of the `#[export]` functions in the file or ingot.
+- `staticlib`: `<out>/lib<name>.a`, a static library holding that object.
+- `ir`: `<out>/<name>.native.sona`, the Sonatina IR of the executable or, with `object` or
+  `staticlib`, of the library.
+
+`object` and `staticlib` build a library, which needs no `main` and cannot be combined with
+`executable`. A workspace build selects the members with a `main`, or for a library, the members
+with an `#[export]` function.
+
+#### Exported functions
+
+`#[export]` on a free `pub fn` defines it in native output under its own name, with the
+platform's C calling convention, even when no Fe code calls it:
+
+```fe
+#[export]
+pub fn add(_ a: i64, _ b: i64) -> i64 {
+    a + b
+}
+
+#[export]
+pub fn fill(_ data: *u8, _ len: usize, _ byte: u32) {
+    for i in 0..len {
+        unsafe { *core::ptr::offset_bytes(data, i) = byte.downcast_truncate() }
+    }
+}
+```
+
+An exported function cannot be generic or take `uses` effects, and its parameters and result
+must be `i32`, `u32`, `i64`, `u64`, `usize`, `isize` or raw pointers, which C declares as
+`int32_t`, `uint32_t`, `int64_t`, `uint64_t`, `size_t`, `ptrdiff_t` and pointers. Its symbol must
+be unique, must not start with `__fe_`, and must not be a C library function native code calls
+itself (`malloc`, `free`, `memmove`, `write`, `fflush` or `abort`). An executable defines its
+exported functions too. EVM builds and SP1 guests reject `#[export]`.
+
+#### Linking a native library
+
+A library needs only the C library: native code calls `malloc`, `free`, `memmove`, `write`,
+`fflush` and `abort`, and the `extern` functions its Fe code calls, such as `std`'s `getchar`,
+`putchar` and `clock`. C and Rust programs link the C library by default, so a C program needs
+only the Fe library:
+
+```
+fe build --backend native --emit staticlib --out-dir out mylib.fe
+cc main.c -Lout -lmylib -o main
+```
+
+A Rust program declares the functions in an `unsafe extern "C"` block and links the library,
+for example from its `build.rs`:
+
+```rust
+println!("cargo:rustc-link-search=native=path/to/out");
+println!("cargo:rustc-link-lib=static=mylib");
+```
+
+A panic in an exported function reports on stderr and aborts the whole process, as in a Fe
+executable. A library's other functions are local symbols, so two Fe libraries can be linked into
+one program as long as their exported symbols differ.
+
 The `metadata.json` artifact follows the Solidity Contract Metadata schema (`version: 1`), adapted to Fe. It is a complete, deterministic recompilation input: rebuilding with the same compiler version, `sources`, and `settings` reproduces the same bytecode. Its shape:
 
 ```

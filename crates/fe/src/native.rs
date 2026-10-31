@@ -3,15 +3,27 @@ use std::{path::Path, process::Command};
 pub(crate) fn link_executable(inputs: &[&Path], executable: &Path) -> Result<(), String> {
     // The C compiler driver supplies the platform startup objects and linker
     // configuration for both ordinary executables and test dispatchers.
-    let output = Command::new("cc")
-        .args(inputs)
-        .arg("-o")
-        .arg(executable)
+    run_host_tool(
+        Command::new("cc").args(inputs).arg("-o").arg(executable),
+        "linker `cc`",
+    )
+}
+
+/// Archives `objects` into the static library `archive`, with a symbol index.
+pub(crate) fn archive_objects(objects: &[&Path], archive: &Path) -> Result<(), String> {
+    run_host_tool(
+        Command::new("ar").arg("rcs").arg(archive).args(objects),
+        "archiver `ar`",
+    )
+}
+
+fn run_host_tool(command: &mut Command, tool: &str) -> Result<(), String> {
+    let output = command
         .output()
-        .map_err(|err| format!("failed to run host linker `cc`: {err}"))?;
+        .map_err(|err| format!("failed to run host {tool}: {err}"))?;
     if !output.status.success() {
         return Err(format!(
-            "host linker failed\nstdout:\n{}\nstderr:\n{}",
+            "host {tool} failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         ));

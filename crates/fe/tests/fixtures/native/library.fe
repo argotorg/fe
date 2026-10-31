@@ -1,0 +1,12 @@
+// A library of exported functions, without `main`.
+#[export]
+pub fn add(_ a: i64, _ b: i64) -> i64 {
+    a + b
+}
+
+#[export]
+pub fn fill(_ data: *u8, _ len: usize, _ byte: u32) {
+    for i in 0..len {
+        unsafe { *core::ptr::offset_bytes(data, i) = byte.downcast_truncate() }
+    }
+}

@@ -725,7 +725,7 @@ math = true
     .unwrap();
     fs::write(
         root.join("math/src/lib.fe"),
-        "pub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
+        "#[export]\npub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
     )
     .unwrap();
     fs::write(
@@ -748,6 +748,25 @@ math = true
         assert!(!ir.contains("unused"));
         build(root, &out, level, &[]);
         assert!(!out.join("math").exists());
+        // A library build selects the members that export functions.
+        let library = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args([
+                "build",
+                "--backend",
+                "native",
+                "--emit",
+                "staticlib",
+                "-O",
+                level,
+            ])
+            .arg("--out-dir")
+            .arg(&out)
+            .arg(root)
+            .output()
+            .unwrap();
+        assert!(library.status.success(), "{library:?}");
+        assert!(out.join("libmath.a").is_file());
+        assert!(!out.join("libapp.a").exists());
         build(&root.join("app"), &out, level, &[]);
         for (selection, expected_count) in [(&["--ingot", "app"][..], 2), (&[][..], 3)] {
             let result = Command::new(env!("CARGO_BIN_EXE_fe"))
@@ -1631,6 +1650,57 @@ fn native_exports_are_callable_from_c() {
         assert!(linked.status.success(), "{linked:?}");
         let result = Command::new(&executable).output().unwrap();
         assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_static_libraries_link_into_c_programs() {
+    // The library's panic aborts its host.
+    test_utils::skip_crash_reports();
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let built = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["build", "--backend", "native", "--emit", "object,staticlib"])
+            .args(["-O", level, "--out-dir"])
+            .arg(&out)
+            .arg(fixtures.join("library.fe"))
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "O{level}: {built:?}");
+        let mut library = OsString::from("-L");
+        library.push(&out);
+        for (form, inputs) in [
+            ("archive", vec![library, OsString::from("-llibrary")]),
+            ("object", vec![out.join("library.o").into_os_string()]),
+        ] {
+            let executable = out.join(format!("host-{form}"));
+            let linked = Command::new("cc")
+                .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+                .arg(fixtures.join("library_host.c"))
+                .args(&inputs)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap();
+            assert!(linked.status.success(), "O{level} {form}: {linked:?}");
+            let result = Command::new(&executable).output().unwrap();
+            assert!(result.status.success(), "O{level} {form}: {result:?}");
+            assert_eq!(result.stdout, b"42 zzz\n", "O{level} {form}: {result:?}");
+            // A panic aborts the host process, after flushing its output.
+            let panicked = Command::new(&executable).arg("x").output().unwrap();
+            assert_eq!(
+                panicked.status.signal(),
+                Some(libc::SIGABRT),
+                "O{level} {form}: {panicked:?}"
+            );
+            assert_eq!(panicked.stdout, b"42 zzz\n", "O{level} {form}");
+            assert_eq!(
+                panicked.stderr, b"panicked: arithmetic overflow\n",
+                "O{level} {form}"
+            );
+        }
     }
 }
 

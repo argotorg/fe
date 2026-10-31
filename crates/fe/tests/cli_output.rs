@@ -1153,7 +1153,7 @@ fn test_cli_build_native_rejects_executable_on_unsupported_host() {
     assert_eq!(exit_code, 1, "expected native host rejection:\n{output}");
     assert!(
         output.contains(
-            "native executable output currently requires an x86-64 Linux or AArch64 macOS host"
+            "native executable and library output currently require an x86-64 Linux or AArch64 macOS host"
         ),
         "unexpected output:\n{output}"
     );
@@ -1176,9 +1176,53 @@ fn test_cli_build_native_rejects_evm_artifacts() {
     ]);
     assert_eq!(exit_code, 1, "expected native build rejection:\n{output}");
     assert!(
-        output.contains("native backend only supports `--emit executable` and `--emit ir`"),
+        output.contains(
+            "native backend only supports `--emit executable`, `--emit object`, `--emit staticlib` and `--emit ir`"
+        ),
         "unexpected output:\n{output}"
     );
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_library_needs_exports_and_no_executable() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("library.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write native source");
+    let out_dir = temp.path().join("out");
+    for (emit, error) in [
+        (
+            "executable,staticlib",
+            "`--emit executable` cannot be combined with `--emit object` or `--emit staticlib`, which build a library without `main`",
+        ),
+        (
+            "staticlib",
+            "native library output requires an `#[export]` function",
+        ),
+    ] {
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--backend",
+            "native",
+            "--emit",
+            emit,
+            "--out-dir",
+            out_dir.to_str().expect("UTF-8 out path"),
+            source.to_str().expect("UTF-8 source path"),
+        ]);
+        assert_eq!(exit_code, 1, "{emit}: expected rejection:\n{output}");
+        assert!(
+            output.contains(error),
+            "{emit}: unexpected output:\n{output}"
+        );
+        assert!(!out_dir.join("liblibrary.a").exists(), "{emit}");
+    }
 }
 
 #[test]
@@ -1201,6 +1245,26 @@ fn test_cli_build_sonatina_rejects_executable_emit() {
         output.contains("`--emit executable` requires `--backend native`"),
         "unexpected output:\n{output}"
     );
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_library_emits() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("library.fe");
+    fs::write(&source, "#[export]\npub fn answer() -> i64 { 42 }\n").expect("write source");
+    for emit in ["object", "staticlib"] {
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--emit",
+            emit,
+            source.to_str().expect("UTF-8 source path"),
+        ]);
+        assert_eq!(exit_code, 1, "{emit}: expected rejection:\n{output}");
+        assert!(
+            output.contains("`--emit object` and `--emit staticlib` require `--backend native`"),
+            "{emit}: unexpected output:\n{output}"
+        );
+    }
 }
 
 #[test]
