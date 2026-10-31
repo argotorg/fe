@@ -735,7 +735,7 @@ math = true
     .unwrap();
     fs::write(
         root.join("app/src/helper.fe"),
-        "use std::io::{Stdout, print}\npub fn answer() -> i32 uses (out: mut Stdout) {\n print(\"A\")\n math::answer()\n}\n#[test]\nfn nested_test() uses (out: mut Stdout) { core::assert(answer() == 42) }\n",
+        "use std::io::Stdout\npub fn answer() -> i32 uses (out: mut Stdout) {\n print!(\"A\")\n math::answer()\n}\n#[test]\nfn nested_test() uses (out: mut Stdout) { core::assert(answer() == 42) }\n",
     )
     .unwrap();
     for level in ["0", "1"] {
@@ -852,15 +852,15 @@ fn native_host_io_and_assertions_execute_at_o0_and_o1() {
         &source,
         r#"
 use core::MemBuffer
-use std::io::{Stdin, Stdout, print, println, read_to_end}
+use std::io::{Stdin, Stdout, read_to_end}
 pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
-    println("ready")
+    println!("ready")
     var data = MemBuffer::empty()
     read_to_end(mut data)
     core::assert(data.len() == 1 && data[0] == 65)
     var reply = MemBuffer::empty()
     reply.push(data[0] + 1)
-    print(reply.span())
+    print!(reply.span())
     0
 }
 
@@ -901,37 +901,37 @@ fn native_standard_streams_print_and_read() {
         &source,
         r#"
 use core::MemBuffer
-use std::io::{Stderr, Stdio, StdinReader, Stdout, eprint, eprintln, print, println}
+use std::io::{Stderr, Stdio, StdinReader, Stdout}
 
 fn report(_ count: usize) uses (out: mut Stdout) {
-    println(("lines: ", count))
+    println!("lines: ", count)
 }
 
 // `Stdio` provides each stream, here two at once.
 fn both() uses (out: mut Stdout, err: mut Stderr) {
-    print("no newline")
-    println("")
-    eprint("to ")
-    eprintln("stderr")
+    print!("no newline")
+    println!()
+    eprint!("to ")
+    eprintln!("stderr")
 }
 
 pub fn main() -> i32 uses (io: mut Stdio) {
-    println((0 as u8, " ", 255 as u8, " ", 65535 as u16, " ", 4294967295 as u32))
-    println((18446744073709551615 as u64, " ", 340282366920938463463374607431768211455 as u128))
-    println(115792089237316195423570985008687907853269984665640564039457584007913129639935 as u256)
+    println!(0 as u8, " ", 255 as u8, " ", 65535 as u16, " ", 4294967295 as u32)
+    println!(18446744073709551615 as u64, " ", 340282366920938463463374607431768211455 as u128)
+    println!(115792089237316195423570985008687907853269984665640564039457584007913129639935 as u256)
     let small: i8 = -128
     let half: i16 = -32768
     let word: i32 = -2147483648
-    println((small, " ", 127 as i8, " ", half, " ", word))
+    println!(small, " ", 127 as i8, " ", half, " ", word)
     let long: i64 = -9223372036854775808
     let wide: i128 = -170141183460469231731687303715884105728
-    println((long, " ", wide))
+    println!(long, " ", wide)
     let widest: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
-    println(widest)
+    println!(widest)
     let minus: isize = -1
-    println((0 as usize, " ", minus, " ", true, " ", false))
+    println!(0 as usize, " ", minus, " ", true, " ", false)
     let padded: String<8> = "ab"
-    println((padded, "|", "a literal longer than thirty-one bytes"))
+    println!(padded, "|", "a literal longer than thirty-one bytes")
     both()
 
     var reader = StdinReader::new()
@@ -940,15 +940,14 @@ pub fn main() -> i32 uses (io: mut Stdio) {
     var count: usize = 0
     while reader.read_line(mut line) {
         count += 1
-        print("[")
-        print(line.span())
-        println("]")
+        println!("[", line.span(), "]")
         line.clear()
     }
     report(count)
     var reply = MemBuffer::empty()
     reply.push(first)
-    println(reply)
+    let first = format!("first byte: ", reply.span())
+    println!(first, ", ", first.len(), " bytes")
     0
 }
 "#,
@@ -986,7 +985,7 @@ pub fn main() -> i32 uses (io: mut Stdio) {
                  0 -1 true false\n\
                  ab|a literal longer than thirty-one bytes\n\
                  no newline\n\
-                 [first]\n[]\n[last {long}]\nlines: 3\n@\n"
+                 [first]\n[]\n[last {long}]\nlines: 3\nfirst byte: @, 13 bytes\n"
             )
         );
         assert_eq!(result.stderr, b"to stderr\n");
@@ -998,11 +997,11 @@ pub fn main() -> i32 uses (io: mut Stdio) {
         &source,
         r#"
 use core::MemBuffer
-use std::io::{Stdin, Stdout, print, read_to_end}
+use std::io::{Stdin, Stdout, read_to_end}
 pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
     var data = MemBuffer::empty()
     read_to_end(mut data)
-    print(data.span())
+    print!(data.span())
     0
 }
 "#,
@@ -1181,14 +1180,14 @@ fn native_runner_bounds_time_and_combined_output() {
     fs::write(
         &source,
         r#"
-use std::io::{Stdout, print}
+use std::io::Stdout
 #[test]
 fn spin() { while true {} }
 #[test]
 fn noisy() uses (out: mut Stdout) {
     var i: u32 = 0
     while i < 2048 {
-        print("A")
+        print!("A")
         i += 1
     }
 }
@@ -1417,7 +1416,7 @@ fn native_process_clock_preserves_borrows_and_host_io() {
         &source,
         r#"
 use core::MemBuffer
-use std::io::{Stdin, StdinReader, Stdout, print}
+use std::io::{Stdin, StdinReader, Stdout}
 use std::native::cpu_clock_ticks
 pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
     var reader = StdinReader::new()
@@ -1429,7 +1428,7 @@ pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
     core::assert(start >= 0 && end >= start)
     var reply = MemBuffer::empty()
     reply.push(value)
-    print(reply.span())
+    print!(reply.span())
     0
 }
 "#,
@@ -1458,7 +1457,7 @@ fn native_arguments_preserve_bytes_bounds_and_internal_entry_calls() {
         &source,
         r#"
 use core::MemBuffer
-use std::io::{Stdout, print}
+use std::io::Stdout
 use std::native::Args
 fn __fe_native_main() -> i32 { 42 }
 pub fn main(argc: i32, argv: **u8) -> i32 uses (out: mut Stdout) {
@@ -1483,7 +1482,7 @@ pub fn main(argc: i32, argv: **u8) -> i32 uses (out: mut Stdout) {
         text.push(124)
         i += 1
     }
-    print(text.span())
+    print!(text.span())
     0
 }
 "#,
@@ -1518,7 +1517,7 @@ fn native_modular_arithmetic_matches_full_precision_runtime_inputs() {
         &source,
         r#"
 use core::MemBuffer
-use std::io::{Stdin, StdinReader, Stdout, print}
+use std::io::{Stdin, StdinReader, Stdout}
 use std::evm::crypto::{addmod, mulmod}
 fn read_word(_ reader: mut StdinReader) -> u256 uses (input: mut Stdin) {
     var value: u256 = 0
@@ -1553,7 +1552,7 @@ pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
             Option::None => break
         }
     }
-    print(text.span())
+    print!(text.span())
     0
 }
 "#,
@@ -1644,7 +1643,7 @@ fn native_bit_counts_match_runtime_inputs() {
         r#"
 use core::MemBuffer
 use core::num::{leading_zeros, trailing_zeros}
-use std::io::{Stdin, StdinReader, Stdout, print}
+use std::io::{Stdin, StdinReader, Stdout}
 fn read_word(_ reader: mut StdinReader) -> u256 uses (input: mut Stdin) {
     var value: u256 = 0
     var i: u256 = 0
@@ -1676,7 +1675,7 @@ pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
             Option::None => break
         }
     }
-    print(text.span())
+    print!(text.span())
     0
 }
 "#,

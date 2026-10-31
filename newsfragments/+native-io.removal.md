@@ -1,1 +1,1 @@
-`std::io`'s character I/O is gone: `HostIo`, `host()`, the `Read` and `Write` traits, `read_char`, `write_char`, `write_bytes`, `write` and `writeln`. Use the `Stdout`, `Stderr` and `Stdin` effects and `print`, `println` or `StdinReader` instead.
+`std::io`'s character I/O is gone: `HostIo`, `host()`, the `Read` and `Write` traits, `read_char`, `write_char`, `write_bytes`, `write` and `writeln`. Use the `Stdout`, `Stderr` and `Stdin` effects with `print!`, `println!` or `StdinReader` instead.

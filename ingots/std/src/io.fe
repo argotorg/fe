@@ -4,8 +4,12 @@
 /// `main` and tests receive the streams they declare, as in
 /// `pub fn main() -> i32 uses (out: mut Stdout)`, and a function that prints
 /// declares the stream it writes. `Stdio` provides all three:
-/// `uses (io: mut Stdio)`. Output is unbuffered: each print is one write to
-/// the stream, so a later panic loses nothing.
+/// `uses (io: mut Stdio)`.
+///
+/// `print!(a, b, ..)`, `println!`, `eprint!` and `eprintln!` write the text
+/// of each `Display` argument in order, the `ln` forms then a newline, and
+/// `format!` returns that text in a `MemBuffer`. Output is unbuffered: each
+/// print is one write to the stream, so a later panic loses nothing.
 use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes}
 use core::abi::DynString
 use core::num::{IntWord, UnsignedAbs}
@@ -73,41 +77,22 @@ fn write_all(fd: i32, _ bytes: MemSpan) -> bool {
     true
 }
 
-/// A value with a text form, which `print` and its relatives write.
+/// A value with a text form, which `format!`, `print!` and their relatives
+/// write.
 pub trait Display {
     /// Appends the value's text to `out`.
     fn fmt(self, _ out: mut MemBuffer)
 }
 
-/// Writes `value`'s text to standard output. Panics if the stream fails.
-pub fn print<T: Display>(_ value: T) uses (out: mut Stdout) {
-    var text = MemBuffer::empty()
-    value.fmt(mut text)
+/// Writes `text` to standard output, as `print!` and `println!` do. Panics
+/// if the stream fails.
+pub fn print_buffer(_ text: MemBuffer) uses (out: mut Stdout) {
     assert!(out.write_stdout(text.span()), "failed writing to stdout")
 }
 
-/// Writes `value`'s text and a newline to standard output. Panics if the
-/// stream fails.
-pub fn println<T: Display>(_ value: T) uses (out: mut Stdout) {
-    var text = MemBuffer::empty()
-    value.fmt(mut text)
-    text.push(10)
-    assert!(out.write_stdout(text.span()), "failed writing to stdout")
-}
-
-/// Writes `value`'s text to standard error. Panics if the stream fails.
-pub fn eprint<T: Display>(_ value: T) uses (err: mut Stderr) {
-    var text = MemBuffer::empty()
-    value.fmt(mut text)
-    assert!(err.write_stderr(text.span()), "failed writing to stderr")
-}
-
-/// Writes `value`'s text and a newline to standard error. Panics if the
-/// stream fails.
-pub fn eprintln<T: Display>(_ value: T) uses (err: mut Stderr) {
-    var text = MemBuffer::empty()
-    value.fmt(mut text)
-    text.push(10)
+/// Writes `text` to standard error, as `eprint!` and `eprintln!` do. Panics
+/// if the stream fails.
+pub fn eprint_buffer(_ text: MemBuffer) uses (err: mut Stderr) {
     assert!(err.write_stderr(text.span()), "failed writing to stderr")
 }
 
@@ -332,97 +317,4 @@ impl<const N: usize> Display for PackedBytes<N> {
 /// The bytes themselves.
 impl Display for MemBuffer {
     fn fmt(self, _ out: mut MemBuffer) { out.extend_from(self.span()) }
-}
-
-impl<T0: Display> Display for (T0,) {
-    fn fmt(self, _ out: mut MemBuffer) {
-        self.0.fmt(mut out)
-    }
-}
-impl<T0: Display, T1: Display> Display for (T0, T1) {
-    fn fmt(self, _ out: mut MemBuffer) {
-        self.0.fmt(mut out)
-        self.1.fmt(mut out)
-    }
-}
-impl<T0: Display, T1: Display, T2: Display> Display for (T0, T1, T2) {
-    fn fmt(self, _ out: mut MemBuffer) {
-        self.0.fmt(mut out)
-        self.1.fmt(mut out)
-        self.2.fmt(mut out)
-    }
-}
-impl<T0: Display, T1: Display, T2: Display, T3: Display> Display for (T0, T1, T2, T3) {
-    fn fmt(self, _ out: mut MemBuffer) {
-        self.0.fmt(mut out)
-        self.1.fmt(mut out)
-        self.2.fmt(mut out)
-        self.3.fmt(mut out)
-    }
-}
-impl<T0: Display, T1: Display, T2: Display, T3: Display, T4: Display> Display for (T0, T1, T2, T3, T4) {
-    fn fmt(self, _ out: mut MemBuffer) {
-        self.0.fmt(mut out)
-        self.1.fmt(mut out)
-        self.2.fmt(mut out)
-        self.3.fmt(mut out)
-        self.4.fmt(mut out)
-    }
-}
-impl<T0: Display, T1: Display, T2: Display, T3: Display, T4: Display, T5: Display> Display for (
-    T0,
-    T1,
-    T2,
-    T3,
-    T4,
-    T5,
-) {
-    fn fmt(self, _ out: mut MemBuffer) {
-        self.0.fmt(mut out)
-        self.1.fmt(mut out)
-        self.2.fmt(mut out)
-        self.3.fmt(mut out)
-        self.4.fmt(mut out)
-        self.5.fmt(mut out)
-    }
-}
-impl<T0: Display, T1: Display, T2: Display, T3: Display, T4: Display, T5: Display, T6: Display> Display for (
-    T0,
-    T1,
-    T2,
-    T3,
-    T4,
-    T5,
-    T6,
-) {
-    fn fmt(self, _ out: mut MemBuffer) {
-        self.0.fmt(mut out)
-        self.1.fmt(mut out)
-        self.2.fmt(mut out)
-        self.3.fmt(mut out)
-        self.4.fmt(mut out)
-        self.5.fmt(mut out)
-        self.6.fmt(mut out)
-    }
-}
-impl<
-    T0: Display,
-    T1: Display,
-    T2: Display,
-    T3: Display,
-    T4: Display,
-    T5: Display,
-    T6: Display,
-    T7: Display,
-> Display for (T0, T1, T2, T3, T4, T5, T6, T7) {
-    fn fmt(self, _ out: mut MemBuffer) {
-        self.0.fmt(mut out)
-        self.1.fmt(mut out)
-        self.2.fmt(mut out)
-        self.3.fmt(mut out)
-        self.4.fmt(mut out)
-        self.5.fmt(mut out)
-        self.6.fmt(mut out)
-        self.7.fmt(mut out)
-    }
 }

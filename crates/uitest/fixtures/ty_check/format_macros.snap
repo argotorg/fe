@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/format_macros.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ format_macros.fe:22:24
+   │
+22 │     format!("point: ", Point { x: 1 })
+   │                        ^^^^^^^^^^^^^^ `Point` doesn't implement `Display`
+
+error[8-0031]: type annotation is needed
+   ┌─ format_macros.fe:26:13
+   │
+26 │     format!(7)
+   │             ^
+   │             │
+   │             type annotation is needed
+   │             consider giving `: fn fmt<{integer}>` here
+
+error[8-0036]: missing effect `Stdout` required by `print_buffer`
+   ┌─ format_macros.fe:18:5
+   │
+18 │     println!("hi")
+   │     ^^^^^^^^^^^^^^ `print_buffer` requires effect `Stdout` to be in scope
+   │
+   = require it in this function's signature with `uses (out: mut Stdout)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Stdout = value) { .. }`
