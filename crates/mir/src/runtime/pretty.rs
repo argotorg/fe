@@ -352,6 +352,7 @@ fn format_section_name(name: &RuntimeSectionName) -> String {
         RuntimeSectionName::Runtime => "runtime".to_string(),
         RuntimeSectionName::Main => "main".to_string(),
         RuntimeSectionName::Test(name) => format!("test({name})"),
+        RuntimeSectionName::Export(symbol) => format!("export({symbol})"),
     }
 }
 

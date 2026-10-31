@@ -1612,6 +1612,28 @@ fn native_fallible_allocation_reports_failure_and_releases_blocks() {
     }
 }
 
+#[test]
+fn native_exports_are_callable_from_c() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let object = build_native_object(&fixtures.join("exports.fe"), &out, level);
+        let executable = out.join("call_exports");
+        let linked = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+            .arg(&object)
+            .arg(fixtures.join("call_exports.c"))
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(linked.status.success(), "{linked:?}");
+        let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
 /// Runs a native fixture under an allocator that requires every allocation to
 /// be freed exactly once, and reports its counts on stderr. `defines`
 /// configure the allocator.

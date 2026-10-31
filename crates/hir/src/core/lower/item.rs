@@ -121,6 +121,7 @@ const MUST_USE_TARGETS: &str = "functions, structs, and enums";
 const VIEW_TARGETS: &str = "structs and enums";
 const RAW_PLACE_TARGETS: &str = "functions";
 const PAYABLE_TARGETS: &str = "init blocks and recv arms";
+const EXPORT_TARGETS: &str = "free functions";
 const INDEXED_TARGETS: &str = "event fields";
 const POINTER_TARGETS: &str = "type aliases in `core`";
 
@@ -144,6 +145,7 @@ fn validate_mod_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
     );
@@ -166,24 +168,42 @@ pub(super) fn validate_module_inner_attrs<'db>(
     );
 }
 
+/// Where a function is declared, which decides the attributes it takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FuncKind {
+    Free,
+    Associated,
+    Extern,
+}
+
 fn validate_func_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
-    kind: &'static str,
+    kind: FuncKind,
     name: Option<String>,
-    arithmetic_supported: bool,
 ) {
-    let arithmetic = if arithmetic_supported {
-        AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED)
-    } else {
+    let arithmetic = if kind == FuncKind::Extern {
         AttrRule::unsupported("arithmetic", ARITHMETIC_TARGETS)
+    } else {
+        AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED)
+    };
+    let export = if kind == FuncKind::Free {
+        AttrRule::supported("export", BARE_FORM, "`#[export]`")
+    } else {
+        AttrRule::unsupported("export", EXPORT_TARGETS)
+    };
+    let target_kind = if kind == FuncKind::Extern {
+        "extern fn"
+    } else {
+        "fn"
     };
     validate_attr_rules(
         ctxt,
         attrs,
-        target(kind, name),
+        target(target_kind, name),
         &[
             arithmetic,
+            export,
             AttrRule::supported("inline", INLINE_FORM, INLINE_EXPECTED),
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::supported("raw_place", BARE_FORM, "`#[raw_place]`"),
@@ -213,6 +233,7 @@ fn validate_struct_attrs<'db>(
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::supported("view", BARE_FORM, "`#[view]`"),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
     );
@@ -235,6 +256,7 @@ fn validate_enum_attrs<'db>(
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::supported("view", BARE_FORM, "`#[view]`"),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
     );
@@ -264,6 +286,7 @@ fn validate_type_alias_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
     );
@@ -286,6 +309,7 @@ fn validate_unsupported_item_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
     );
@@ -371,9 +395,8 @@ impl<'db> ItemKind<'db> {
                 validate_func_attrs(
                     ctxt,
                     fn_.attr_list(),
-                    "fn",
+                    FuncKind::Free,
                     fn_.sig().name().map(|name| name.text().to_string()),
-                    true,
                 );
                 Func::lower_ast(ctxt, fn_);
             }
@@ -465,9 +488,8 @@ impl<'db> ItemKind<'db> {
                         validate_func_attrs(
                             ctxt,
                             fn_.attr_list(),
-                            "extern fn",
+                            FuncKind::Extern,
                             fn_.sig().name().map(|name| name.text().to_string()),
-                            false,
                         );
                         Func::lower_ast_extern(ctxt, fn_);
                     }
@@ -762,9 +784,8 @@ impl<'db> Impl<'db> {
                         validate_func_attrs(
                             ctxt,
                             func.attr_list(),
-                            "fn",
+                            FuncKind::Associated,
                             func.sig().name().map(|name| name.text().to_string()),
-                            true,
                         );
                         Func::lower_ast(ctxt, func);
                     }
@@ -827,9 +848,8 @@ impl<'db> Trait<'db> {
                         validate_func_attrs(
                             ctxt,
                             func.attr_list(),
-                            "fn",
+                            FuncKind::Associated,
                             func.sig().name().map(|name| name.text().to_string()),
-                            true,
                         );
                         Func::lower_ast(ctxt, func);
                     }
@@ -983,9 +1003,8 @@ impl<'db> ImplTrait<'db> {
                         validate_func_attrs(
                             ctxt,
                             func.attr_list(),
-                            "fn",
+                            FuncKind::Associated,
                             func.sig().name().map(|name| name.text().to_string()),
-                            true,
                         );
                         Func::lower_ast(ctxt, func);
                     }

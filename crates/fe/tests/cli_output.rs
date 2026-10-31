@@ -1203,6 +1203,32 @@ fn test_cli_build_sonatina_rejects_executable_emit() {
     );
 }
 
+#[test]
+fn test_cli_build_sonatina_rejects_exported_functions() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("exports.fe");
+    fs::write(
+        &source,
+        "#[export]\npub fn answer() -> i64 { 42 }\ncontract Counter {}\n",
+    )
+    .expect("write source");
+    let out_dir = temp.path().join("out");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--out-dir",
+        out_dir.to_str().expect("UTF-8 out path"),
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 1, "expected export rejection:\n{output}");
+    assert!(
+        output
+            .contains("`#[export]` requires `--backend native`, but `exports::answer` is exported"),
+        "unexpected output:\n{output}"
+    );
+    assert!(!out_dir.exists(), "a rejected build must write nothing");
+}
+
 #[cfg(feature = "sp1")]
 #[test]
 fn test_cli_build_sp1_ir_needs_no_toolchain_and_elf_preflights_it() {

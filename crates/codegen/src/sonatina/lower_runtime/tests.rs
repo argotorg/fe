@@ -21,8 +21,8 @@ use mir::{
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 use mir::{
-    Layout, RuntimeLinkage, RuntimeMemoryLayout, ScalarClass, ScalarRole, VariantId,
-    build_native_executable_package,
+    Layout, NativeOutputKind, RuntimeMemoryLayout, ScalarClass, ScalarRole, VariantId,
+    build_native_package,
 };
 #[cfg(all(
     feature = "cranelift",
@@ -59,33 +59,29 @@ fn native_extern_must_match_the_memory_copy_import() {
         Some(
             r#"
 use core::ptr
-use std::io::{Write, host, write_char}
+// Another signature than the one native copies call.
+extern {
+    fn memmove(_ dest: *u8, _ src: *u8, _ len: i32) -> *u8
+}
 pub fn main() -> i32 {
     let data = ptr::alloc_bytes(1)
     ptr::copy_raw(dest: data, source: data, len: 1)
-    with (Write = host()) { write_char(65) }
+    let _ = unsafe { memmove(data, data, 1) }
     0
 }
 "#
             .into(),
         ),
     );
-    let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
-    let host_import = package
-        .functions(&db)
-        .iter()
-        .copied()
-        .find(|function| function.linkage(&db) == RuntimeLinkage::External)
-        .expect("reachable host import");
-    // Model a host import of `memmove` with another signature than the one
-    // native copies call.
+    let package =
+        build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
     let isa = crate::sonatina::create_native_isa().unwrap();
     let mut lowerer = ModuleLowerer::new(
         &db,
         ModuleBuilder::new(ModuleCtx::new(&isa)),
         isa.inst_set(),
         &package,
-        Some((host_import.instance(&db), "memmove")),
+        &[],
         NativePanics::Abort,
     )
     .unwrap();
@@ -122,7 +118,7 @@ fn backend_addresses_must_be_as_wide_as_the_target_usize() {
         ModuleBuilder::new(ModuleCtx::new(&isa)),
         isa.inst_set(),
         &package,
-        None,
+        &[],
         NativePanics::Abort,
     ) else {
         panic!("a native backend must not lower an EVM compilation");
@@ -160,7 +156,8 @@ pub fn main() -> i32 {
             .into(),
         ),
     );
-    let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
+    let package =
+        build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
     let target = package
         .functions(&db)
         .iter()
@@ -245,7 +242,7 @@ pub fn main() -> i32 {
         ModuleBuilder::new(ModuleCtx::new(&isa)),
         isa.inst_set(),
         &package,
-        None,
+        &[],
         NativePanics::Abort,
     )
     .unwrap();
@@ -324,14 +321,15 @@ pub fn main() -> i32 {
             .into(),
         ),
     );
-    let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
+    let package =
+        build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
     let isa = crate::sonatina::create_native_isa().unwrap();
     let mut lowerer = ModuleLowerer::new(
         &db,
         ModuleBuilder::new(ModuleCtx::new(&isa)),
         isa.inst_set(),
         &package,
-        None,
+        &[],
         NativePanics::Abort,
     )
     .unwrap();
@@ -554,7 +552,7 @@ pub contract SlotContract {
             ModuleBuilder::new(ModuleCtx::new(&isa)),
             isa.inst_set(),
             &package,
-            None,
+            &[],
             NativePanics::Trap,
         )
         .unwrap();

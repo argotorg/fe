@@ -1238,6 +1238,9 @@ fn build_ingot_url(
     #[cfg(not(feature = "cranelift"))]
     let _ = backend;
 
+    if report_evm_exports(db, ingot.root_mod(db)) {
+        return BuildSummary { had_errors: true };
+    }
     build_ingot(
         db,
         ingot,
@@ -1447,6 +1450,9 @@ fn build_top_mod(
         };
     }
 
+    if report_evm_exports(db, top_mod) {
+        return BuildSummary { had_errors: true };
+    }
     let contract_names = match collect_contract_names(db, top_mod) {
         Ok(names) => names,
         Err(err) => {
@@ -1536,6 +1542,19 @@ fn build_top_mod(
     BuildSummary { had_errors }
 }
 
+/// Reports `top_mod`'s ingot's `#[export]` functions, which only native
+/// objects define, rather than dropping them from an EVM build.
+fn report_evm_exports(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
+    let exports = mir::native_exports(db, top_mod);
+    for func in &exports {
+        eprintln!(
+            "Error: `#[export]` requires `--backend native`, but `{}` is exported",
+            func.scope().pretty_path(db).unwrap_or_default()
+        );
+    }
+    !exports.is_empty()
+}
+
 #[cfg(feature = "cranelift")]
 fn build_native_top_mod(
     db: &DriverDataBase,
@@ -1555,6 +1574,7 @@ fn build_native_top_mod(
         db,
         top_mod,
         codegen::NativeTarget::Host,
+        codegen::NativeOutputKind::Executable,
         opt_level,
         codegen::NativeOutputSelection {
             ir: emit.ir,
@@ -1604,6 +1624,7 @@ fn build_sp1_top_mod(
         db,
         top_mod,
         codegen::NativeTarget::Sp1,
+        codegen::NativeOutputKind::Executable,
         opt_level,
         codegen::NativeOutputSelection {
             ir: emit.ir,
