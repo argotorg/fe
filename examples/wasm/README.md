@@ -78,8 +78,9 @@ results are limited to:
   bits and a payload in the high 32 bits (tag 0 is success with a value; any
   other tag is an error number of the contract and the payload is 0).
 
-Any other type, including `usize`, `u128`, `u256`, structs and pointers, is an
-error that names the function and the parameter. Exports cannot declare `uses`
+`usize` and `isize` have 32 bits in a module and cross as an `i32`. Any other
+type, including `u128`, `u256`, structs and pointers, is an error that names the
+function and the parameter. Exports cannot declare `uses`
 effects; a provider is chosen inside the function with `with`, as `lines.fe` does.
 Inside functions, structs, tuples, enums, arrays, constants, `usize` (32 bits, the
 width of an address in a module) and 256-bit integers work. Overflow, division by
@@ -282,9 +283,8 @@ cargo test -p fe --all-features \
 ## Known limits
 
 - **Types.** Floats do not exist in Fe yet. 128-bit integers and the EVM built-ins are
-  not supported, and `core::hint::black_box` is rejected. 256-bit integers and
-  `usize` work inside functions (as four 64-bit limbs; `usize` is 256 bits wide in
-  Fe) but cannot cross the boundary. Exports cannot return text or aggregates.
+  not supported, and `core::hint::black_box` is rejected. 256-bit integers work
+  inside functions (as four 64-bit limbs) but cannot cross the boundary. Exports cannot return text or aggregates.
 - **Programs.** One standalone file per module. Contracts and EVM features are not
   available. `fe check` and the language server do not know the export rule.
 - **Imports.** The module is always `env`; no attribute names another module. Imports
