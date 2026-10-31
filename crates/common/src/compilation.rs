@@ -45,6 +45,17 @@ impl Target {
         }
     }
 
+    /// The width of a size in bytes of a value in memory: that of `usize`, at
+    /// most 64 bits.
+    pub fn memory_size_bits(self) -> usize {
+        self.usize_bits().min(64)
+    }
+
+    /// The largest size in bytes of a value in memory.
+    pub fn max_memory_size(self) -> u64 {
+        u64::MAX >> (64 - self.memory_size_bits())
+    }
+
     /// The memory layout of an address or reference, a `usize`.
     pub fn pointer_memory_layout(self) -> MemoryLayout {
         self.scalar_memory_layout(self.usize_bits() as u16)

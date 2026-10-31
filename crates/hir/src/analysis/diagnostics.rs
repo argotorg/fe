@@ -3670,8 +3670,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 severity,
                 "type is too large",
                 format!(
-                    "`{}` exceeds the supported 64-bit raw-memory layout size",
-                    ty.pretty_print(db)
+                    "`{}` exceeds the supported {}-bit raw-memory layout size",
+                    ty.pretty_print(db),
+                    db.compilation_settings().target(db).memory_size_bits()
                 ),
                 primary.resolve(db),
                 error_code,
