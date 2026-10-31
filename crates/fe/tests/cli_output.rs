@@ -1268,6 +1268,40 @@ fn test_cli_build_sonatina_rejects_library_emits() {
 }
 
 #[test]
+fn test_cli_build_link_inputs_need_native_executables() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("host.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    let mut requests = vec![
+        vec!["build", "--link", "host.o", source],
+        vec!["build", "--link-lib", "host", source],
+    ];
+    if cfg!(feature = "cranelift") {
+        requests.push(vec![
+            "build",
+            "--backend",
+            "native",
+            "--emit",
+            "staticlib",
+            "--link",
+            "host.o",
+            source,
+        ]);
+    }
+    for args in requests {
+        let (output, exit_code) = run_fe_main(&args);
+        assert_eq!(exit_code, 1, "{args:?}: expected rejection:\n{output}");
+        assert!(
+            output.contains(
+                "`--link` and `--link-lib` require `--backend native` and `--emit executable`"
+            ),
+            "{args:?}: unexpected output:\n{output}"
+        );
+    }
+}
+
+#[test]
 fn test_cli_build_sonatina_rejects_exported_functions() {
     let temp = tempdir().expect("tempdir");
     let source = temp.path().join("exports.fe");

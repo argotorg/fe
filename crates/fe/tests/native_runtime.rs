@@ -1704,6 +1704,48 @@ fn native_static_libraries_link_into_c_programs() {
     }
 }
 
+#[test]
+fn native_executables_link_host_objects_and_libraries() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    // An object, and a library the C compiler finds on `LIBRARY_PATH`.
+    let host = temp.path().join("host");
+    fs::create_dir_all(&host).unwrap();
+    for name in ["host_apply", "host_offset"] {
+        let compiled = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"])
+            .arg(fixtures.join(format!("{name}.c")))
+            .arg("-o")
+            .arg(host.join(format!("{name}.o")))
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+    }
+    let archived = Command::new("ar")
+        .arg("rcs")
+        .arg(host.join("libhost_offset.a"))
+        .arg(host.join("host_offset.o"))
+        .output()
+        .unwrap();
+    assert!(archived.status.success(), "{archived:?}");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let built = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["build", "--backend", "native", "-O", level, "--out-dir"])
+            .arg(&out)
+            .arg("--link")
+            .arg(host.join("host_apply.o"))
+            .args(["--link-lib", "host_offset"])
+            .arg(fixtures.join("host_calls.fe"))
+            .env("LIBRARY_PATH", &host)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "O{level}: {built:?}");
+        let result = Command::new(out.join("host_calls")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
 /// Runs a native fixture under an allocator that requires every allocation to
 /// be freed exactly once, and reports its counts on stderr. `defines`
 /// configure the allocator.

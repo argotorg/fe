@@ -116,6 +116,20 @@ impl EmitSelection {
     }
 }
 
+/// Host code linked into native executables: object files and archives by
+/// path, and libraries by name, as the C compiler's `-l<name>`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NativeLink<'a> {
+    pub paths: &'a [Utf8PathBuf],
+    pub libraries: &'a [String],
+}
+
+impl NativeLink<'_> {
+    fn is_empty(self) -> bool {
+        self.paths.is_empty() && self.libraries.is_empty()
+    }
+}
+
 fn create_build_report_staging() -> Result<ReportStaging, String> {
     create_report_staging_root("target/fe-build-report-staging", "fe-build-report")
 }
@@ -125,6 +139,7 @@ fn validate_build_request(
     ingot: Option<&str>,
     contract: Option<&str>,
     emit: EmitSelection,
+    link: NativeLink<'_>,
 ) -> Result<(), String> {
     #[cfg(not(feature = "sp1"))]
     let _ = ingot;
@@ -133,6 +148,12 @@ fn validate_build_request(
 
     if emit.elf && backend.name() != "sp1" {
         return Err("`--emit elf` requires `--backend sp1`".to_string());
+    }
+    if !link.is_empty() && !(backend.is_native() && emit.executable) {
+        return Err(
+            "`--link` and `--link-lib` require `--backend native` and `--emit executable`"
+                .to_string(),
+        );
     }
 
     match backend {
@@ -256,6 +277,7 @@ pub fn build(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: &[BuildEmit],
+    link: NativeLink<'_>,
     out_dir: Option<&Utf8PathBuf>,
     profile: &str,
     report_out: Option<&Utf8PathBuf>,
@@ -263,7 +285,7 @@ pub fn build(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(backend, ingot, contract, emit) {
+    if let Err(err) = validate_build_request(backend, ingot, contract, emit, link) {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -375,6 +397,7 @@ pub fn build(
             backend,
             opt_level,
             emit,
+            link,
             out_dir,
             report_ctx.as_ref(),
         ),
@@ -392,6 +415,7 @@ pub fn build(
             backend,
             opt_level,
             emit,
+            link,
             out_dir,
             report_ctx.as_ref(),
         ),
@@ -444,7 +468,13 @@ pub fn build_from_metadata(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(BuildBackend::Sonatina, None, contract, emit) {
+    if let Err(err) = validate_build_request(
+        BuildBackend::Sonatina,
+        None,
+        contract,
+        emit,
+        NativeLink::default(),
+    ) {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -586,6 +616,7 @@ pub fn build_from_metadata(
         BuildBackend::Sonatina,
         opt_level,
         emit,
+        NativeLink::default(),
         Some(&out_dir),
         None,
     );
@@ -605,6 +636,7 @@ fn build_file(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -679,6 +711,7 @@ fn build_file(
         backend,
         opt_level,
         emit,
+        link,
         &out_dir,
         &out_dir,
         ir_file_stem.as_str(),
@@ -698,6 +731,7 @@ fn build_directory(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -740,7 +774,7 @@ fn build_directory(
 
     match config {
         Config::Workspace(_) => build_workspace(
-            db, &canonical, url, ingot, contract, backend, opt_level, emit, out_dir, report,
+            db, &canonical, url, ingot, contract, backend, opt_level, emit, link, out_dir, report,
         ),
         Config::Ingot(_) => {
             if ingot.is_some() {
@@ -766,6 +800,7 @@ fn build_directory(
                 backend,
                 opt_level,
                 emit,
+                link,
                 &out_dir,
                 None,
                 None,
@@ -787,6 +822,7 @@ fn build_workspace(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -873,6 +909,7 @@ fn build_workspace(
                 backend,
                 opt_level,
                 emit,
+                link,
                 &out_dir,
                 None,
                 Some(member.name.as_str()),
@@ -957,6 +994,7 @@ fn build_workspace(
                     backend,
                     opt_level,
                     emit,
+                    link,
                     &out_dir,
                     workspace_member_ir_out_dir(emit, &out_dir, matches[0].name.as_str()),
                     Some(matches[0].name.as_str()),
@@ -1011,6 +1049,7 @@ fn build_workspace(
             backend,
             opt_level,
             emit,
+            link,
             &out_dir,
             workspace_member_ir_out_dir(emit, &out_dir, member.name.as_str()),
             Some(member.name.as_str()),
@@ -1223,6 +1262,7 @@ fn build_ingot_url(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: &Utf8Path,
     ir_out_dir: Option<Utf8PathBuf>,
     ir_file_stem: Option<&str>,
@@ -1267,13 +1307,14 @@ fn build_ingot_url(
             ingot.root_mod(db),
             opt_level,
             emit,
+            link,
             out_dir,
             &ir_file_stem,
             report_dir,
         );
     }
     #[cfg(not(feature = "cranelift"))]
-    let _ = backend;
+    let _ = (backend, link);
 
     if report_evm_exports(db, ingot.root_mod(db)) {
         return BuildSummary { had_errors: true };
@@ -1446,6 +1487,7 @@ fn build_top_mod(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
     ir_file_stem: &str,
@@ -1453,7 +1495,7 @@ fn build_top_mod(
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
     #[cfg(not(feature = "cranelift"))]
-    let _ = backend;
+    let _ = (backend, link);
 
     #[cfg(feature = "cranelift")]
     if matches!(backend, BuildBackend::Native) {
@@ -1462,6 +1504,7 @@ fn build_top_mod(
             top_mod,
             opt_level,
             emit,
+            link,
             out_dir,
             ir_file_stem,
             report_dir,
@@ -1593,11 +1636,13 @@ fn report_evm_exports(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
 }
 
 #[cfg(feature = "cranelift")]
+#[allow(clippy::too_many_arguments)]
 fn build_native_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: &Utf8Path,
     ir_file_stem: &str,
     report_dir: Option<&Utf8PathBuf>,
@@ -1638,7 +1683,7 @@ fn build_native_top_mod(
     }
     if let Some(object) = artifacts.object
         && let Err(err) = if emit.executable {
-            link_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object)
+            link_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object, link)
         } else {
             write_native_library_artifacts(out_dir, report_dir, ir_file_stem, &object, emit)
         }
@@ -2423,6 +2468,7 @@ fn link_native_executable_artifact(
     report_dir: Option<&Utf8Path>,
     file_stem: &str,
     object: &[u8],
+    link: NativeLink<'_>,
 ) -> Result<(), String> {
     let base = sanitize_name_with_default(file_stem, "main");
     let executable_name = base.clone();
@@ -2432,7 +2478,13 @@ fn link_native_executable_artifact(
     let linked_path = temp.path().join(&executable_name);
     fs::write(&object_path, object)
         .map_err(|err| format!("Failed to write temporary native object: {err}"))?;
-    link_executable(&[&object_path], &linked_path)?;
+    // The host code follows the Fe object, whose calls into it an archive
+    // resolves.
+    let inputs = [object_path.as_path()]
+        .into_iter()
+        .chain(link.paths.iter().map(|path| path.as_std_path()))
+        .collect::<Vec<_>>();
+    link_executable(&inputs, link.libraries, &linked_path)?;
 
     let executable_path = out_dir.join(&executable_name);
     fs::copy(&linked_path, executable_path.as_std_path())

@@ -308,6 +308,40 @@ be unique, must not start with `__fe_`, and must not be a C library function nat
 itself (`malloc`, `free`, `memmove`, `write`, `fflush` or `abort`). An executable defines its
 exported functions too. EVM builds and SP1 guests reject `#[export]`.
 
+#### Linking host code
+
+`--link <PATH>` links an object file or archive into a native executable, and
+`--link-lib <NAME>` links a library as the C compiler's `-l<NAME>`, found on its library path
+(such as `LIBRARY_PATH`). Both repeat, and both apply only to `--emit executable`. They let C or
+Rust code implement a Fe `extern` function, and call the executable's `#[export]` functions back:
+
+```fe
+extern {
+    fn host_apply(_ x: i64) -> i64
+}
+
+#[export]
+pub fn twice(_ x: i64) -> i64 {
+    x * 2
+}
+
+pub fn main() -> i32 {
+    if unsafe { host_apply(21) } == 42 { 0 } else { 1 }
+}
+```
+
+```
+cc -c host.c -o host.o
+fe build --backend native --link host.o main.fe
+```
+
+A Rust `staticlib` links with its `native-static-libs` (from `rustc --print native-static-libs`)
+as `--link-lib` options:
+
+```
+fe build --backend native --link target/release/libhost.a --link-lib gcc_s --link-lib m main.fe
+```
+
 #### Linking a native library
 
 A library needs only the C library: native code calls `malloc`, `free`, `memmove`, `write`,

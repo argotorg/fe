@@ -1,0 +1,1 @@
+`fe build --backend native` links host code into an executable: `--link <PATH>` adds an object file or archive, and `--link-lib <NAME>` a library as `-l<NAME>`. A Fe `extern` function can now be implemented in C or Rust, which can call the executable's `#[export]` functions back.

@@ -1,10 +1,19 @@
 use std::{path::Path, process::Command};
 
-pub(crate) fn link_executable(inputs: &[&Path], executable: &Path) -> Result<(), String> {
+/// Links `inputs` and the `libraries` named as `-l<name>` into `executable`.
+pub(crate) fn link_executable(
+    inputs: &[&Path],
+    libraries: &[String],
+    executable: &Path,
+) -> Result<(), String> {
     // The C compiler driver supplies the platform startup objects and linker
     // configuration for both ordinary executables and test dispatchers.
     run_host_tool(
-        Command::new("cc").args(inputs).arg("-o").arg(executable),
+        Command::new("cc")
+            .args(inputs)
+            .args(libraries.iter().map(|library| format!("-l{library}")))
+            .arg("-o")
+            .arg(executable),
         "linker `cc`",
     )
 }
