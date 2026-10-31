@@ -179,24 +179,6 @@ pub fn mock() -> MemFiles {
     }
 }
 
-// Names are compared byte by byte. `==` on `DynString` compares the words that
-// hold the last bytes as if they were big-endian, which is wrong on targets
-// where a word is read little-endian: there two strings of equal length
-// compare equal whenever they are shorter than a word.
-fn same_bytes(_ a: DynString, _ b: DynString) -> bool {
-    if a.len() != b.len() {
-        return false
-    }
-    var i: usize = 0
-    while i < a.len() {
-        if a.byte_at(i) != b.byte_at(i) {
-            return false
-        }
-        i += 1
-    }
-    true
-}
-
 impl MemFiles {
     /// Adds a file. A later file with the same name is never found.
     pub fn add(mut self, _ name: own DynString, _ contents: own DynString) {
@@ -222,7 +204,7 @@ impl Files for MemFiles {
         }
         var i: usize = 0
         while i < self.names.len() {
-            if same_bytes(self.names[i], name) {
+            if self.names[i] == name {
                 self.sessions.push((i + 1).downcast().unwrap())
                 self.opened += 1
                 return Result::Ok(unsafe { Handle { id: self.opened } })
