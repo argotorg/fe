@@ -3797,8 +3797,8 @@ fn test_fe_test(fixture: Fixture<&str>) {
         all(target_arch = "aarch64", target_os = "macos")
     )
 ))]
-/// `fe_test` fixtures that need the EVM: contracts, storage or EVM
-/// instructions. Sorted.
+/// `fe_test` fixtures that need the EVM: contracts, storage, EVM
+/// instructions or EVM effects. Sorted.
 const EVM_ONLY_FE_TESTS: &[&str] = &[
     "abi_array_overflow_revert",
     "abi_array_view",
@@ -4035,7 +4035,8 @@ fn test_fe_test_native(fixture: Fixture<&str>) {
         assert!(
             exit_code != 0
                 && (output.contains("needs the Evm compilation target")
-                    || output.contains("does not support instruction")),
+                    || output.contains("does not support instruction")
+                    || output.contains("the root effect `Host` does not provide")),
             "{name} no longer needs the EVM; remove it from EVM_ONLY_FE_TESTS:\n{output}"
         );
         return;

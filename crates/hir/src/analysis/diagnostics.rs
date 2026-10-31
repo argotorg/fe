@@ -3206,6 +3206,31 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::EntryEffectNotProvided {
+                owner,
+                key,
+                idx,
+                root_ty,
+            } => {
+                let root = root_ty.pretty_print(db);
+                CompleteDiagnostic {
+                    severity,
+                    message: "unsupported entry effect".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "the root effect `{root}` does not provide `{}`",
+                            key.pretty_print(db)
+                        ),
+                        span: owner.effect_param_ty_span(db, *idx).resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "a test or `main` receives its effects from the target's root effect, `{root}`"
+                    )],
+                    error_code,
+                }
+            }
+
             Self::ContractRootEffectTypeNotZeroSized {
                 owner,
                 key,

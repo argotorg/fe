@@ -616,6 +616,15 @@ pub enum BodyDiag<'db> {
         given: TyId<'db>,
     },
 
+    /// An effect of a test or `main` that the target's root effect, which
+    /// supplies it, does not provide.
+    EntryEffectNotProvided {
+        owner: EffectParamOwner<'db>,
+        key: HirTypeId<'db>,
+        idx: usize,
+        root_ty: TyId<'db>,
+    },
+
     /// A call's missing effect, which the call needs at `mode`: `mut?` when
     /// each body of a `mut?` caller needs it at its own mode. `in_drop`: the
     /// caller is a `drop`, which declares no effects.
@@ -1427,6 +1436,7 @@ impl<'db> BodyDiag<'db> {
             Self::InvalidEffectKey { .. } => 51,
             Self::ContractRootEffectTraitNotImplemented { .. } => 53,
             Self::ContractRootEffectTypeNotZeroSized { .. } => 54,
+            Self::EntryEffectNotProvided { .. } => 153,
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
             Self::EffectTypeMismatch { .. } => 38,

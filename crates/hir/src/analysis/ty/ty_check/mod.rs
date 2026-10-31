@@ -38,7 +38,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty};
 use crate::hir_def::{
-    CallArg, CallableDef, FieldParent, GenericArgListId, ImplTrait, ModeMarker, Trait,
+    CallArg, CallableDef, FieldParent, GenericArgListId, ImplTrait, ItemKind, ModeMarker, Trait,
     params::FuncParamMode, scope_graph::ScopeId,
 };
 use crate::{
@@ -125,6 +125,7 @@ use crate::analysis::ty::{
     pattern_ir::{
         ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
     },
+    registered_root_providers,
     ty_error::{
         collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause,
         normalization_limit_diag, path_arg_diags, qualified_path_wf_diags,
@@ -1725,6 +1726,24 @@ impl<'db> TyChecker<'db> {
         func: Func<'db>,
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
+        // A test or a top-level `pub fn main` has no caller: the target's
+        // root effect supplies its effects.
+        let is_entry = ItemKind::from(func)
+            .attrs(self.db)
+            .is_some_and(|attrs| attrs.get_attr(self.db, "test").is_some())
+            || (func.vis(self.db).is_pub()
+                && func
+                    .name(self.db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(self.db) == "main")
+                && matches!(func.scope().parent_item(self.db), Some(ItemKind::TopMod(_))));
+        let root_ty = if is_entry {
+            registered_root_providers(self.db, EffectParamSite::Func(func, None))
+                .first()
+                .map(|registration| registration.provider_ty)
+        } else {
+            None
+        };
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
             let Some(key_ty) = effect.key_ty.to_opt() else {
                 continue;
@@ -1750,6 +1769,43 @@ impl<'db> TyChecker<'db> {
                 TraitSolveCx::new(self.db, func.scope()).with_assumptions(self.env.assumptions()),
             ) {
                 self.push_diag(diag);
+            } else if let Some(root_ty) = root_ty {
+                // The root provides a trait it implements, and a type key
+                // only as its own type: on a native target, `Host` is no
+                // `Evm`.
+                let provided = match key {
+                    ResolvedEffectKey::Trait(schema) => !matches!(
+                        is_goal_satisfiable(
+                            self.db,
+                            TraitSolveCx::new(self.db, func.scope()),
+                            instantiate_trait_self(
+                                self.db,
+                                schema.into_trait_inst(self.db),
+                                root_ty
+                            ),
+                        ),
+                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                    ),
+                    ResolvedEffectKey::Type(schema) => {
+                        normalize_ty(
+                            self.db,
+                            schema.carrier,
+                            func.scope(),
+                            self.env.assumptions(),
+                        ) == root_ty
+                    }
+                    ResolvedEffectKey::Row(_)
+                    | ResolvedEffectKey::Invalid
+                    | ResolvedEffectKey::Other => true,
+                };
+                if !provided {
+                    self.push_diag(BodyDiag::EntryEffectNotProvided {
+                        owner: EffectParamOwner::Func(func),
+                        key: key_ty,
+                        idx,
+                        root_ty,
+                    });
+                }
             }
         }
     }

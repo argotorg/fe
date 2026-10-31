@@ -1,6 +1,18 @@
 /// Interfaces to the native host runtime.
 use core::ptr
 
+/// The native root effect. `main` and tests receive the host's capabilities,
+/// such as `std::io::Stdout`, from it by declaring them in `uses`; nothing
+/// else can create one.
+pub struct Host { unsafe seal: Private }
+
+struct Private {}
+
+/// Seals the host capabilities, so that only `Host` provides them.
+pub(ingot) trait HostCapabilitySeal {}
+
+impl HostCapabilitySeal for Host {}
+
 extern {
     // Host process accounting. The scalar-only signature gives it no access to Fe memory.
     fn clock() -> i64

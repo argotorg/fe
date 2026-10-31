@@ -892,6 +892,29 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_entries_take_only_host_effects() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("evm_effect.fe");
+    fs::write(
+        &source,
+        "use std::evm::{Ctx, Evm}\n#[test]\nfn reads() uses (evm: mut Evm) {}\n#[test]\nfn chain() uses (ctx: Ctx) {}\n",
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["test", "--backend", "native"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(!result.status.success());
+    assert!(
+        output.contains("the root effect `Host` does not provide `Evm`")
+            && output.contains("the root effect `Host` does not provide `Ctx`"),
+        "{output}"
+    );
+}
+
+#[test]
 fn native_assert_message_and_panic_code_trap() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("traps.fe");
