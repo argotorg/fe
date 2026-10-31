@@ -45,6 +45,11 @@ extern {
 
     /// All `len` bytes at `ptr` must lie in a live allocation.
     unsafe fn zero_mem(_ ptr: *u8, _ len: usize)
+
+    /// The 32-byte big-endian word at `ptr`, with every byte from `len` on
+    /// read as zero, as calldata reads past its end. Reads only the first
+    /// `min(len, 32)` bytes, which must lie in a live allocation.
+    pub(ingot) unsafe fn read_padded_word(_ ptr: *u8, _ len: usize) -> u256
 }
 
 /// A dynamically sized array in linear memory.

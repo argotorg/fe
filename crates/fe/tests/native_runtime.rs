@@ -1955,6 +1955,32 @@ fn native_executables_link_host_objects_and_libraries() {
     }
 }
 
+#[test]
+fn native_partial_words_stay_in_their_allocations() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    let allocator = temp.path().join("guarded_allocator.o");
+    let compiled = Command::new("cc")
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"])
+        .arg(fixtures.join("guarded_allocator.c"))
+        .arg("-o")
+        .arg(&allocator)
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(
+            &fixtures.join("partial_words.fe"),
+            &out,
+            level,
+            &["--link", allocator.to_str().unwrap()],
+        );
+        let result = Command::new(out.join("partial_words")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
 /// Runs a native fixture under an allocator that requires every allocation to
 /// be freed exactly once, and reports its counts on stderr. `defines`
 /// configure the allocator.

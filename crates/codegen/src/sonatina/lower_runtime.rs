@@ -2456,6 +2456,97 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     .insert_inst_no_result(Memzero::new(self.module.inst_set(), dst, len));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
+            RuntimeBuiltin::ReadPaddedWord { ptr, len } => {
+                let ptr = self.local_value(*ptr)?;
+                let len = self.local_value(*len)?;
+                let inst_set = self.module.inst_set();
+                let word_len = self.fb.make_imm_value(Immediate::from_i256(
+                    I256::from(32u64),
+                    self.fb.type_of(len),
+                ));
+                let partial = self.fb.append_block();
+                let done = self.fb.append_block();
+                let incoming = if self.module.is_native_target() {
+                    // Native reads stop at `len` bytes, copied over a zeroed
+                    // word.
+                    let full = self.fb.append_block();
+                    let copy = self.fb.append_block();
+                    let short = self
+                        .fb
+                        .insert_inst(Lt::new(inst_set, len, word_len), Type::I1);
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, short, partial, full));
+                    self.fb.switch_to_block(full);
+                    let word = self
+                        .fb
+                        .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256);
+                    let word = self.fb.insert_inst(Bswap::new(inst_set, word), Type::I256);
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    // An empty read does not access `ptr`, which may be null.
+                    self.fb.switch_to_block(partial);
+                    let empty = self.fb.insert_inst(IsZero::new(inst_set, len), Type::I1);
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, empty, done, copy));
+                    self.fb.switch_to_block(copy);
+                    let scratch_ty = self.fb.ptr_type(Type::I256);
+                    let scratch = self
+                        .fb
+                        .insert_inst(Alloca::new(inst_set, Type::I256), scratch_ty);
+                    let zero = self.fb.make_imm_value(I256::zero());
+                    self.fb
+                        .insert_inst_no_result(Mstore::new(inst_set, scratch, zero, Type::I256));
+                    let pointer = self.fb.ptr_type(Type::I8);
+                    let memmove = self.module.host_function(HostFunction::Memmove)?;
+                    let dst = self.coerce_value_to_ty(scratch, pointer)?;
+                    let src = self.coerce_value_to_ty(ptr, pointer)?;
+                    let len = self.coerce_value_to_ty(
+                        len,
+                        self.module.address_int_ty(AddressSpace::Memory),
+                    )?;
+                    self.fb.insert_inst(
+                        Call::new(inst_set, memmove, smallvec![dst, src, len]),
+                        pointer,
+                    );
+                    let copied = self
+                        .fb
+                        .insert_inst(Mload::new(inst_set, scratch, Type::I256), Type::I256);
+                    let copied = self
+                        .fb
+                        .insert_inst(Bswap::new(inst_set, copied), Type::I256);
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    smallvec![(word, full), (zero, partial), (copied, copy)]
+                } else {
+                    // EVM reads past an allocation are defined: read the whole
+                    // word and clear the bytes from `len` on.
+                    let word = self
+                        .fb
+                        .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256);
+                    let short = self
+                        .fb
+                        .insert_inst(Lt::new(inst_set, len, word_len), Type::I1);
+                    let entry = self.fb.current_block().expect("read requires a block");
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, short, partial, done));
+                    self.fb.switch_to_block(partial);
+                    let three = self.fb.make_imm_value(I256::from(3u64));
+                    let bits = self
+                        .fb
+                        .insert_inst(Shl::new(inst_set, three, len), Type::I256);
+                    let ones = self.fb.make_imm_value(Immediate::all_one(Type::I256));
+                    let tail = self
+                        .fb
+                        .insert_inst(Shr::new(inst_set, bits, ones), Type::I256);
+                    let mask = self.fb.insert_inst(Not::new(inst_set, tail), Type::I256);
+                    let masked = self
+                        .fb
+                        .insert_inst(And::new(inst_set, word, mask), Type::I256);
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    smallvec![(word, entry), (masked, partial)]
+                };
+                self.fb.switch_to_block(done);
+                self.fb
+                    .insert_inst(Phi::new(inst_set, incoming), Type::I256)
+            }
             RuntimeBuiltin::Msize => self.fb.insert_inst(
                 EvmMsize::new(self.module.required_inst::<EvmMsize>()?),
                 Type::I256,
