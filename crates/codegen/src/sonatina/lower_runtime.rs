@@ -83,6 +83,10 @@ use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 // Sonatina's EVM calling convention can carry at most 16 arguments.
 const MAX_DIRECT_CALL_ARGS: usize = 16;
 
+/// The C routines the WebAssembly backend implements itself, so a module
+/// can't export them.
+const WASM_RUNTIME_ROUTINES: [&str; 4] = ["malloc", "free", "memmove", "memcpy"];
+
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
 
@@ -357,6 +361,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 builder.ctx.triple.architecture,
             )));
         }
+        #[cfg(feature = "wasm")]
+        let wasm = builder.ctx.triple.architecture == Architecture::Wasm32;
+        #[cfg(not(feature = "wasm"))]
+        let wasm = false;
         for &(_, symbol) in fixed_symbols {
             if symbol.starts_with(COMPILER_SYMBOL_PREFIX) {
                 return Err(LowerError::Unsupported(format!(
@@ -369,6 +377,25 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     "exported symbol `{symbol}` is reserved: native code reads the C library's `{symbol}` variable"
                 )));
             }
+            if wasm && WASM_RUNTIME_ROUTINES.contains(&symbol) {
+                return Err(LowerError::Unsupported(format!(
+                    "cannot export `{symbol}`: the name is reserved for a runtime routine"
+                )));
+            }
+        }
+        let func_symbols = assign_sonatina_function_symbols(db, package, fixed_symbols);
+        // Sonatina merges functions declared under one name, so on WebAssembly
+        // an import of an export's name would replace it.
+        for &(instance, symbol) in fixed_symbols {
+            if wasm
+                && func_symbols
+                    .iter()
+                    .any(|(other, other_symbol)| *other != instance && other_symbol == symbol)
+            {
+                return Err(LowerError::Unsupported(format!(
+                    "cannot export `{symbol}`: the module imports an `extern` function of that name"
+                )));
+            }
         }
         Ok(Self {
             db,
@@ -377,7 +404,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             package,
             func_map: FxHashMap::default(),
             argument_packs: FxHashMap::default(),
-            func_symbols: assign_sonatina_function_symbols(db, package, fixed_symbols),
+            func_symbols,
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
             layout_names: FxHashMap::default(),
