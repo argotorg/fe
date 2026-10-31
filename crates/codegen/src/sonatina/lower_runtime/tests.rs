@@ -655,3 +655,39 @@ pub contract SlotContract {
         assert_eq!(result.return_data, expected, "{opt:?}, replace={replace}");
     }
 }
+
+#[test]
+fn a_trapping_revert_drops_only_stores_into_its_own_allocations() {
+    let local = RLocalId::from_u32;
+    let constant = |dst| RStmt::Assign {
+        dst: local(dst),
+        expr: RExpr::ConstScalar(ConstScalar::Int {
+            words: vec![0],
+            bits: 64,
+            signed: false,
+        }),
+    };
+    let malloc = |dst, size| RStmt::Assign {
+        dst: local(dst),
+        expr: RExpr::Builtin(mir::RuntimeBuiltin::Malloc { size: local(size) }),
+    };
+    let mstore = |dst, addr, value| RStmt::Assign {
+        dst: local(dst),
+        expr: RExpr::Builtin(mir::RuntimeBuiltin::Mstore {
+            addr: local(addr),
+            value: local(value),
+        }),
+    };
+    let start = |stmts, terminator| super::revert_payload_start(&RBlock { stmts, terminator });
+
+    // A payload written into a fresh allocation is not lowered.
+    let payload = vec![constant(1), malloc(2, 1), mstore(3, 2, 1)];
+    assert_eq!(start(payload.clone(), RTerminator::RevertEmpty), 0);
+    assert_eq!(start(payload, RTerminator::Return(None)), 3);
+    // A store through the parameter `0` is observable after the trap, and so
+    // is everything before it.
+    let through_parameter = vec![constant(1), malloc(2, 1), mstore(3, 0, 1), mstore(4, 2, 1)];
+    assert_eq!(start(through_parameter, RTerminator::RevertEmpty), 4);
+    let before_payload = vec![constant(1), mstore(2, 0, 1), malloc(3, 1), mstore(4, 3, 1)];
+    assert_eq!(start(before_payload, RTerminator::RevertEmpty), 2);
+}

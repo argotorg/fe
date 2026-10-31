@@ -7052,11 +7052,13 @@ pub(super) fn is_c_abi_value(ty: &Type, ctx: &ModuleCtx) -> bool {
 ///
 /// Native and WebAssembly targets have no revert data: the revert is lowered
 /// to a trap, which ignores its operands. The statements before it that
-/// compute the payload, a run of constants, allocations and stores, then do
-/// nothing the program can observe, and they are not lowered. This keeps a
-/// failed assertion from needing an allocation. The run ends at the first
-/// statement that can do anything else, so a call or a load before the revert
-/// keeps everything up to and including it.
+/// compute the payload, a run of constants, allocations and stores into those
+/// allocations, then do nothing the program can observe, and they are not
+/// lowered. This keeps a failed assertion from needing an allocation. The run
+/// ends at the first statement that can do anything else, so a call, a load or
+/// a store to other memory before the revert keeps everything up to and
+/// including it. A WebAssembly instance outlives a trap, so such a store must
+/// stay.
 fn revert_payload_start(block: &RBlock<'_>) -> usize {
     if !matches!(
         block.terminator,
@@ -7078,11 +7080,39 @@ fn revert_payload_start(block: &RBlock<'_>) -> usize {
             }
         )
     };
-    block
+    let mut start = block
         .stmts
         .iter()
         .rposition(|stmt| !is_payload_stmt(stmt))
-        .map_or(0, |last| last + 1)
+        .map_or(0, |last| last + 1);
+    loop {
+        let run = &block.stmts[start..];
+        let allocations = run
+            .iter()
+            .filter_map(|stmt| match stmt {
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::Builtin(RuntimeBuiltin::Malloc { .. }),
+                } => Some(*dst),
+                _ => None,
+            })
+            .collect::<FxHashSet<_>>();
+        let Some(store) = run.iter().rposition(|stmt| {
+            matches!(
+                stmt,
+                RStmt::Assign {
+                    expr: RExpr::Builtin(
+                        RuntimeBuiltin::Mstore { addr: dst, .. }
+                            | RuntimeBuiltin::StoreConstBytes { dst, .. }
+                    ),
+                    ..
+                } if !allocations.contains(dst)
+            )
+        }) else {
+            return start;
+        };
+        start += store + 1;
+    }
 }
 
 fn linkage_for_runtime(linkage: RuntimeLinkage) -> Linkage {
