@@ -1,3 +1,4 @@
+use common::compilation::Target;
 use hir::analysis::{
     semantic::SemanticInstance,
     ty::{
@@ -519,11 +520,16 @@ pub(crate) fn deref_transport_class_in_env<'db>(
 ) -> Option<RuntimeClass<'db>> {
     let (target, space) = runtime_repr_ty_in_env(db, env, pointer_ty).as_ptr(db)?;
     Some(match space {
-        AddressSpace::Memory => RuntimeClass::raw_addr(
-            db,
-            AddressSpace::Memory,
-            stored_class_for_ty_in_env(db, env, target),
-        ),
+        AddressSpace::Memory => match stored_class_for_ty_in_env(db, env, target) {
+            // Native memory has the object layout, so an aggregate there is
+            // an object in place, like a local's.
+            RuntimeClass::AggregateValue { layout }
+                if db.compilation_settings().target(db) == Target::Native =>
+            {
+                RuntimeClass::object_ref(layout)
+            }
+            stored => RuntimeClass::raw_addr(db, AddressSpace::Memory, stored),
+        },
         space => provider_class_for_target_in_env(db, env, Some(target), space),
     })
 }

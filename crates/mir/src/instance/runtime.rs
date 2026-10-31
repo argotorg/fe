@@ -148,7 +148,6 @@ fn lower_runtime_body<'db>(
                 check_projection_result_spaces(db, semantic, body.signature.ret.as_ref())?;
             }
             inline_projections(db, &mut body)?;
-            body.elide_proven_variant_asserts();
             body
         }
         RuntimeInstanceSource::Synthetic(synthetic) => {
