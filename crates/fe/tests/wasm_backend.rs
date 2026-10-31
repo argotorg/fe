@@ -1047,6 +1047,22 @@ fn an_i256_parameter_is_a_named_error() {
 }
 
 #[test]
+fn a_type_larger_than_the_address_space_is_an_error() {
+    // 2**32 bytes, one more than the largest `usize`: the size would wrap to
+    // zero and the array would overlap the module's data.
+    rejected(
+        "huge_array",
+        "use core::ptr::MemArray\n\npub fn poke(i: u32, v: u8) -> u32 {\n    var a: MemArray<[[u8; 0x10000]; 0x10000]> = MemArray::new_zeroed(1)\n    a[0][0][i as usize] = v\n    1\n}\n",
+        &["exceeds the supported 32-bit raw-memory layout size"],
+    );
+    rejected(
+        "huge_size_of",
+        "use core::intrinsic::size_of\n\npub fn size() -> usize {\n    size_of<[u64; 0x20000001]>()\n}\n",
+        &["exceeds the supported 32-bit raw-memory layout size"],
+    );
+}
+
+#[test]
 fn usize_is_a_32_bit_integer_of_the_module() {
     let temp = tempdir().unwrap();
     let source = write_source(

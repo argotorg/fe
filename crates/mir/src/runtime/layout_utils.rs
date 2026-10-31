@@ -51,7 +51,7 @@ impl From<RuntimeMemoryLayoutError> for LowerError {
     fn from(error: RuntimeMemoryLayoutError) -> Self {
         match error {
             RuntimeMemoryLayoutError::Overflow => LowerError::Unsupported(
-                "runtime memory layout exceeds the supported 64-bit size".to_string(),
+                "runtime memory layout exceeds the target's largest size".to_string(),
             ),
             RuntimeMemoryLayoutError::Recursive => {
                 LowerError::Unsupported("recursive runtime memory layout".to_string())
@@ -361,7 +361,13 @@ impl<'db> RuntimeMemoryLayout<'db> {
             Layout::Enum(data) => self
                 .enum_memory_layout(&data, visiting)
                 .map(|layout| layout.layout),
-        };
+        }
+        .and_then(|memory_layout| {
+            // A part is never larger than its whole, so this bounds every part.
+            (memory_layout.size <= self.target().max_memory_size())
+                .then_some(memory_layout)
+                .ok_or(RuntimeMemoryLayoutError::Overflow)
+        });
         visiting.remove(&layout);
         memory_layout
     }
