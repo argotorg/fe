@@ -597,16 +597,19 @@ fn runtime_transport_sensitive_aggregate_cycle_initial<'db>(
 
 #[cfg(test)]
 mod tests {
-    use common::InputDb;
+    use common::{InputDb, compilation::Target};
     use driver::DriverDataBase;
     use hir::{
-        analysis::semantic::root_semantic_instance_key, analysis::ty::ty_check::BodyOwner,
+        analysis::semantic::{root_semantic_instance_key, runtime_size_bytes},
+        analysis::ty::ty_check::BodyOwner,
         hir_def::TopLevelMod,
     };
+    use salsa::Setter;
     use url::Url;
 
     use crate::runtime::{
-        BorrowAccess, Layout, LayoutId, LayoutKey, RuntimeBoundarySpec, StructLayout,
+        BorrowAccess, Layout, LayoutId, LayoutKey, RuntimeBoundarySpec, RuntimeMemoryLayout,
+        StructLayout,
     };
 
     use super::super::boundary::boundary_spec_for_ty_in_env;
@@ -841,11 +844,50 @@ fn second(_ p: *Node, _ bytes: *u8, _ words: [u8; 2]) {}
 fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
 "#;
 
-    fn with_source<T>(f: impl for<'db> FnOnce(&'db DriverDataBase, TopLevelMod<'db>) -> T) -> T {
+    const LAYOUT_SOURCE: &str = r#"
+use core::option::Option
+use core::ptr::StorPtr
+use core::result::Result
+
+struct Flags { a: bool, b: bool, c: u8 }
+enum Three { A, B(bool, u16), C(u128) }
+enum Nested { X(Three), Y(Flags, u32) }
+struct Empty {}
+struct Spaced { e: Empty, x: u8, f: Empty, y: u16 }
+struct Overaligned { a: u8, none: [u256; 0] }
+enum EmptyPayload { A(u8), B([u256; 0]) }
+
+struct Zoo {
+    flags: Flags,
+    three: Three,
+    nested: Nested,
+    spaced: Spaced,
+    overaligned: Overaligned,
+    empty_payload: EmptyPayload,
+    tuple: (u8, u256, i16, bool),
+    options: [Option<u16>; 3],
+    bools: [bool; 3],
+    word: Option<u256>,
+    result: Result<u8, u128>,
+    text: String<5>,
+    node: *Zoo,
+    slot: StorPtr<u8>,
+    size: usize,
+}
+
+fn zoo(_ zoo: Zoo) {}
+"#;
+
+    fn with_source<T>(
+        source: &str,
+        target: Target,
+        f: impl for<'db> FnOnce(&'db DriverDataBase, TopLevelMod<'db>) -> T,
+    ) -> T {
         let mut db = DriverDataBase::default();
-        let url = Url::parse("file:///recursive_raw_pointees.fe").unwrap();
+        db.compilation_settings().set_target(&mut db).to(target);
+        let url = Url::parse("file:///runtime_type_info.fe").unwrap();
         db.workspace()
-            .touch(&mut db, url.clone(), Some(RECURSIVE_SOURCE.to_string()));
+            .touch(&mut db, url.clone(), Some(source.to_string()));
         let file = db
             .workspace()
             .get(&db, &url)
@@ -895,8 +937,29 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
     }
 
     #[test]
+    fn size_of_agrees_with_raw_memory_layout() {
+        // `size_of` sizes allocations and MIR places values in them, so the
+        // two must agree on every target.
+        for target in Target::ALL {
+            with_source(LAYOUT_SOURCE, target, |db, top_mod| {
+                let (zoo, env) = param(db, top_mod, "zoo", 0);
+                let raw = RuntimeMemoryLayout::raw(db);
+                for ty in zoo.field_types(db).into_iter().chain([zoo]) {
+                    let stored = stored_class_for_ty_in_env(db, env, ty);
+                    assert_eq!(
+                        runtime_size_bytes(db, ty),
+                        Ok(raw.class_size(&stored).ok()),
+                        "{target:?} {}",
+                        ty.pretty_print(db)
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
     fn recursive_pointer_fields_are_pointers() {
-        with_source(|db, top_mod| {
+        with_source(RECURSIVE_SOURCE, Target::Evm, |db, top_mod| {
             let (ptr_ty, env) = param(db, top_mod, "first", 0);
             let node = deref_transport_class_in_env(db, env, ptr_ty)
                 .and_then(|transport| transport.deref_target(db))
