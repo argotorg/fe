@@ -453,18 +453,23 @@ pub fn main() -> i32 {
                         .strip_suffix(" = {i1, [i256; 64], i64, [i8; 3], @layout_1};")
                 })
                 .unwrap_or_else(|| panic!("no frame type\n{ir}"));
-            let views: Vec<_> = ir
-                .lines()
-                .filter_map(|line| {
-                    let (view, rest) = line.trim().split_once(&format!(".objref<{frame}> = "))?;
-                    rest.starts_with("obj.from_ptr ").then_some(view)
-                })
-                .collect();
+            // Value names are per function, and the object operand is the
+            // whole token after `op`: `v5` must not match `v57`.
             let through_view = |op: &str| {
-                ir.lines().any(|line| {
-                    views
-                        .iter()
-                        .any(|view| line.contains(&format!("{op} {view}")))
+                ir.split("\nfunc ").any(|function| {
+                    let views: Vec<_> = function
+                        .lines()
+                        .filter_map(|line| {
+                            let (view, rest) =
+                                line.trim().split_once(&format!(".objref<{frame}> = "))?;
+                            rest.starts_with("obj.from_ptr ").then_some(view)
+                        })
+                        .collect();
+                    function.lines().any(|line| {
+                        line.split_once(&format!("{op} "))
+                            .and_then(|(_, operands)| operands.split([' ', ';']).next())
+                            .is_some_and(|object| views.contains(&object))
+                    })
                 })
             };
             assert!(
