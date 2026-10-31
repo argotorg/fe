@@ -3885,7 +3885,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
 const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[(
     "raw_record_layout",
     &["0", "2"],
-    "packed record fields are little-endian natively and big-endian on EVM",
+    "EVM memory packs record fields big-endian; native memory aligns them little-endian",
 )];
 
 #[cfg(all(
