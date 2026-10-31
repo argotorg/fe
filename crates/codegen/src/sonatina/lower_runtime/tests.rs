@@ -10,7 +10,7 @@ use driver::DriverDataBase;
     feature = "cranelift",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-use hir::analysis::ty::AddressSpace;
+use hir::analysis::{semantic::FieldIndex, ty::AddressSpace};
 use mir::{
     ConstScalar, MirDb, PlaceRoot, RBlock, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind,
     RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimePlace, build_runtime_package,
@@ -20,7 +20,10 @@ use mir::{
     feature = "cranelift",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-use mir::{RuntimeLinkage, ScalarClass, ScalarRole, build_native_executable_package};
+use mir::{
+    Layout, RuntimeLinkage, RuntimeMemoryLayout, ScalarClass, ScalarRole, VariantId,
+    build_native_executable_package,
+};
 #[cfg(all(
     feature = "cranelift",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -260,6 +263,134 @@ pub fn main() -> i32 {
     // The slot, its store and its load all take a 64-bit pointer.
     assert!(function.contains("alloca *i8"), "{function}");
     assert!(!function.contains("i256"), "{function}");
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn native_raw_memory_layouts_match_sonatina_objects() {
+    // Fe lays out native raw memory itself, and Sonatina lays out the objects
+    // it views that memory as: every size and offset must agree.
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///native_layouts.fe").unwrap(),
+        Some(
+            r#"
+use core::option::Option
+use core::ptr::{self, StorPtr}
+use core::result::Result
+
+struct Flags { a: bool, b: bool, c: u8 }
+enum Three { A, B(bool, u16), C(u128) }
+enum Nested { X(Three), Y(Flags, u32) }
+struct Empty {}
+struct Spaced { e: Empty, x: u8, f: Empty, y: u16 }
+struct Overaligned { a: u8, none: [u256; 0] }
+enum EmptyPayload { A(u8), B([u256; 0]) }
+
+struct Zoo {
+    flags: Flags,
+    three: Three,
+    nested: Nested,
+    spaced: Spaced,
+    overaligned: Overaligned,
+    empty_payload: EmptyPayload,
+    tuple: (u8, u256, i16, bool),
+    options: [Option<u16>; 3],
+    bools: [bool; 3],
+    word: Option<u256>,
+    result: Result<u8, u128>,
+    text: String<5>,
+    node: *Zoo,
+    slot: StorPtr<u8>,
+    size: usize,
+}
+
+#[inline(never)]
+fn keep(_ zoo: Zoo) -> u8 { zoo.flags.c }
+
+pub fn main() -> i32 {
+    let zoo = ptr::alloc<Zoo>()
+    let _ = keep(unsafe { *zoo })
+    0
+}
+"#
+            .into(),
+        ),
+    );
+    let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
+    let isa = crate::sonatina::create_native_isa().unwrap();
+    let mut lowerer = ModuleLowerer::new(
+        &db,
+        ModuleBuilder::new(ModuleCtx::new(&isa)),
+        isa.inst_set(),
+        &package,
+        None,
+        NativePanics::Abort,
+    )
+    .unwrap();
+    lowerer.declare_functions().unwrap();
+    lowerer.lower_bodies().unwrap();
+    // Lowering `Zoo` lowers the type of every field in it.
+    assert!(
+        lowerer.type_cache.keys().any(|layout| matches!(
+            layout.data(&db),
+            Layout::Struct(data) if data.fields.len() == 15
+        )),
+        "`Zoo` was not lowered"
+    );
+    let raw = RuntimeMemoryLayout::raw(&db);
+    let ctx = &lowerer.builder.ctx;
+    let offset = |offset: Option<(usize, _)>| offset.map(|(offset, _)| offset as u64);
+    for (&layout, &ty) in &lowerer.type_cache {
+        let data = layout.data(&db);
+        assert_eq!(
+            raw.layout_size(layout).ok(),
+            ctx.size_of(ty).ok().map(|size| size as u64),
+            "{data:?}"
+        );
+        match &data {
+            Layout::Struct(record) => {
+                for (field, _) in record.fields.iter().enumerate() {
+                    assert_eq!(
+                        raw.struct_field_offset(record, field).ok(),
+                        offset(ctx.aggregate_elem_offset(ty, field)),
+                        "{data:?} field {field}"
+                    );
+                }
+            }
+            Layout::Array(array) => {
+                if array.len > 1 {
+                    assert_eq!(
+                        raw.array_element_offset(array, 1).ok(),
+                        offset(ctx.aggregate_elem_offset(ty, 1)),
+                        "{data:?}"
+                    );
+                }
+            }
+            Layout::Enum(choice) => {
+                for (index, variant) in choice.variants.iter().enumerate() {
+                    for (field, _) in variant.fields.iter().enumerate() {
+                        let id = VariantId {
+                            enum_layout: layout,
+                            index: index as u16,
+                        };
+                        assert_eq!(
+                            raw.variant_field_offset(id, FieldIndex(field as u16)).ok(),
+                            offset(ctx.enum_variant_field_offset(ty, index, field)),
+                            "{data:?} variant {index} field {field}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]
