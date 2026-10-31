@@ -950,8 +950,6 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
     db: &'db dyn HirAnalysisDb,
     view: ConcreteTypeView<'db>,
 ) -> Result<Option<u64>, RuntimeSizeError<'db>> {
-    const WORD_SIZE_BYTES: u64 = 32;
-
     fn array_len<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
@@ -977,16 +975,12 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         fields: impl IntoIterator<Item = ConcreteTypeView<'db>>,
         visiting: &mut FxHashSet<TyId<'db>>,
     ) -> Result<Option<PlacedFields>, RuntimeSizeError<'db>> {
-        let mut layouts = Vec::new();
-        for field in fields {
-            let Some(layout) = inner(db, field.canonical, field.source, visiting)? else {
-                return Ok(None);
-            };
-            layouts.push(layout);
-        }
-        PlacedFields::new(layouts)
-            .map(Some)
-            .ok_or(RuntimeSizeError::Overflow)
+        fields
+            .into_iter()
+            .map(|field| inner(db, field.canonical, field.source, visiting))
+            .collect::<Result<Option<Vec<_>>, _>>()?
+            .map(|layouts| PlacedFields::new(layouts).ok_or(RuntimeSizeError::Overflow))
+            .transpose()
     }
 
     fn struct_layout<'db>(
@@ -1076,10 +1070,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
                 | PrimTy::View
                 | PrimTy::BorrowMut
                 | PrimTy::BorrowRef => Some(target.pointer_memory_layout()),
-                PrimTy::String | PrimTy::Ptr(_) => Some(MemoryLayout {
-                    size: WORD_SIZE_BYTES,
-                    align: target.scalar_memory_layout(256).align,
-                }),
+                PrimTy::String | PrimTy::Ptr(_) => Some(target.scalar_memory_layout(256)),
                 PrimTy::Array | PrimTy::Tuple(_) => None,
                 _ => prim_int_bits(*prim, target)
                     .map(|bits| target.scalar_memory_layout(bits as u16)),
@@ -1093,23 +1084,19 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             )?
         } else if let Some(enum_) = ty.as_enum(db) {
             let adt = enum_.as_adt(db);
-            let mut variants = Vec::new();
-            for variant_idx in 0..adt.fields(db).len() {
-                let fields = adt_variant_field_views(db, adt, variant_idx, ty, source)?;
-                match place_fields(db, fields, visiting)? {
-                    Some(fields) => variants.push(fields),
-                    None => {
-                        visiting.remove(&ty);
-                        return Ok(None);
-                    }
-                }
-            }
             let tag = target.scalar_memory_layout(enum_tag_bits(enum_.len_variants(db)));
-            Some(
-                EnumMemoryLayout::new(tag, &variants)
-                    .ok_or(RuntimeSizeError::Overflow)?
-                    .layout,
-            )
+            (0..adt.fields(db).len())
+                .map(|variant_idx| {
+                    let fields = adt_variant_field_views(db, adt, variant_idx, ty, source)?;
+                    place_fields(db, fields, visiting)
+                })
+                .collect::<Result<Option<Vec<_>>, _>>()?
+                .map(|variants| {
+                    EnumMemoryLayout::new(tag, &variants)
+                        .map(|layout| layout.layout)
+                        .ok_or(RuntimeSizeError::Overflow)
+                })
+                .transpose()?
         } else {
             None
         };

@@ -416,18 +416,6 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))
     }
 
-    pub(super) fn native_size(&mut self, class: &RuntimeClass<'db>) -> Result<u64, LowerError> {
-        let ty = self.module.ty_for_class(class)?;
-        self.fb
-            .module_builder
-            .ctx
-            .size_of(ty)
-            .map(|size| size as u64)
-            .map_err(|err| {
-                LowerError::Unsupported(format!("unrepresentable native memory layout: {err:?}"))
-            })
-    }
-
     pub(super) fn referent_field_address(
         &mut self,
         addr: ValueId,
@@ -568,7 +556,12 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             }
             ResolvedPlaceElem::Index { index, class } => {
                 let index = self.checked_index_value(base, index)?;
-                let native = self.native_size(class)?;
+                let ty = self.module.ty_for_class(class)?;
+                let native = self.fb.module_builder.ctx.size_of(ty).map_err(|err| {
+                    LowerError::Unsupported(format!(
+                        "unrepresentable native memory layout: {err:?}"
+                    ))
+                })? as u64;
                 let stride = self.memory_layout_offset(
                     reference.layout,
                     raw.index_stride(base)?,

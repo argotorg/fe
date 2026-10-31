@@ -230,20 +230,9 @@ pub struct EnumMemoryLayout {
 impl EnumMemoryLayout {
     /// The layout of an enum with a `tag` and `variants`' placed fields, or
     /// `None` on overflow.
-    pub fn new<'a>(
-        tag: MemoryLayout,
-        variants: impl IntoIterator<Item = &'a PlacedFields> + Clone,
-    ) -> Option<Self> {
-        let payload_align = variants
-            .clone()
-            .into_iter()
-            .map(|fields| fields.align)
-            .fold(1, u64::max);
-        let extent = variants
-            .into_iter()
-            .map(|fields| fields.end)
-            .max()
-            .unwrap_or(0);
+    pub fn new(tag: MemoryLayout, variants: &[PlacedFields]) -> Option<Self> {
+        let payload_align = variants.iter().map(|fields| fields.align).fold(1, u64::max);
+        let extent = variants.iter().map(|fields| fields.end).max().unwrap_or(0);
         let payload_offset = tag.size.checked_next_multiple_of(payload_align)?;
         let align = tag.align.max(payload_align);
         Some(Self {
