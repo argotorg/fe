@@ -13,7 +13,7 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{
-    TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+    ExportIssue, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
 };
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
 use crate::analysis::ty::method_cmp::{ConstraintEntailment, classify_constraint_entailment};
@@ -388,6 +388,25 @@ impl<'db> Func<'db> {
             diags.push(TyLowerDiag::MaybeMutWithoutResult(span).into());
         }
         diags
+    }
+
+    /// An `#[export]` function is public, and a C caller supplies it no
+    /// generic arguments or effects.
+    pub fn diags_export(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        if !self.is_exported(db) {
+            return Vec::new();
+        }
+        [
+            (!self.vis(db).is_pub()).then(|| (self.span().name().into(), ExportIssue::NotPub)),
+            (GenericParamOwner::Func(self).params(db).next().is_some())
+                .then(|| (self.span().generic_params().into(), ExportIssue::Generic)),
+            (!self.declared_effects(db).data(db).is_empty())
+                .then(|| (self.span().effects().into(), ExportIssue::Effects)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(span, issue)| TyLowerDiag::InvalidExport { span, issue }.into())
+        .collect()
     }
 
     /// A row's components carry their own modes, so a `uses` entry naming a
@@ -2272,6 +2291,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         out.extend(self.diags_param_types(db));
         out.extend(self.diags_return(db));
         out.extend(self.diags_effects(db));
+        out.extend(self.diags_export(db));
         out.extend(self.diags_view_types(db));
         out.extend(self.diags_state_only_types(db));
 

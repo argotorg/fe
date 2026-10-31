@@ -1,0 +1,76 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/export_attr.fe
+---
+error[12-0001]: unsupported `#[export]` attribute on fn `method`
+   ┌─ export_attr.fe:27:5
+   │
+27 │     #[export]
+   │     ^^^^^^^^^ `#[export]` is only supported on free functions
+
+error[12-0001]: unsupported `#[export]` attribute on fn `get`
+   ┌─ export_attr.fe:32:5
+   │
+32 │     #[export]
+   │     ^^^^^^^^^ `#[export]` is only supported on free functions
+
+error[12-0001]: unsupported `#[export]` attribute on extern fn `puts`
+   ┌─ export_attr.fe:37:5
+   │
+37 │     #[export]
+   │     ^^^^^^^^^ `#[export]` is only supported on free functions
+
+error[12-0001]: unsupported `#[export]` attribute on struct `Exported`
+   ┌─ export_attr.fe:41:1
+   │
+41 │ #[export]
+   │ ^^^^^^^^^ `#[export]` is only supported on free functions
+
+error[12-0001]: unsupported `#[export]` attribute on mod `exported_mod`
+   ┌─ export_attr.fe:44:1
+   │
+44 │ #[export]
+   │ ^^^^^^^^^ `#[export]` is only supported on free functions
+
+error[12-0002]: invalid `#[export]` attribute form on fn `bad_form`
+   ┌─ export_attr.fe:19:1
+   │
+19 │ #[export(name)]
+   │ ^^^^^^^^^^^^^^^ expected `#[export]`
+
+error[12-0003]: duplicate `#[export]` attribute on fn `duplicate`
+   ┌─ export_attr.fe:23:1
+   │
+23 │ #[export]
+   │ ^^^^^^^^^ remove the extra `#[export]` attribute
+
+error[3-0088]: an `#[export]` function must be `pub`
+  ┌─ export_attr.fe:6:4
+  │
+6 │ fn private() {}
+  │    ^^^^^^^ this function is not `pub`
+
+error[3-0088]: an `#[export]` function cannot be generic
+  ┌─ export_attr.fe:9:15
+  │
+9 │ pub fn generic<T>(_ x: own T) {}
+  │               ^^^ generic parameters
+  │
+  = a C caller supplies no generic arguments: export a function for each one
+
+error[3-0088]: an `#[export]` function cannot be generic
+   ┌─ export_attr.fe:12:13
+   │
+12 │ pub fn sized<const N: usize>() -> usize { N }
+   │             ^^^^^^^^^^^^^^^^ generic parameters
+   │
+   = a C caller supplies no generic arguments: export a function for each one
+
+error[3-0088]: an `#[export]` function cannot take effects
+   ┌─ export_attr.fe:17:25
+   │
+17 │ pub fn effects() -> i64 uses (counter: Counter) { counter.n }
+   │                         ^^^^^^^^^^^^^^^^^^^^^^^ effects
+   │
+   = a C caller provides no effects: provide them in the body with `with`

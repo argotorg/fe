@@ -1,0 +1,15 @@
+// C implements the `extern` functions: `host_apply` in an object, which calls
+// back the exported `twice`, and `host_offset` in a library.
+extern {
+    fn host_apply(_ x: i64) -> i64
+    fn host_offset() -> i64
+}
+
+#[export]
+pub fn twice(_ x: i64) -> i64 {
+    x * 2
+}
+
+pub fn main() -> i32 {
+    if unsafe { host_apply(21) + host_offset() } == 43 { 0 } else { 1 }
+}

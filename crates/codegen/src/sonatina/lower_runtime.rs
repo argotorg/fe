@@ -221,7 +221,7 @@ pub(super) fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
-    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, None, NativePanics::Trap)
+    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, &[], NativePanics::Trap)
         .map(|(module, _)| module)
 }
 
@@ -246,7 +246,7 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
         builder,
         isa.inst_set(),
         package,
-        None,
+        &[],
         NativePanics::Trap,
     )?;
     lowerer.declare_functions()?;
@@ -269,7 +269,7 @@ pub(super) fn compile_runtime_package_sonatina_for_isa<'db, I>(
     package: &RuntimePackage<'db>,
     isa: &I,
     declare_objects: bool,
-    fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+    fixed_symbols: &[(RuntimeInstance<'db>, &str)],
     panics: NativePanics,
 ) -> Result<(Module, FxHashMap<RuntimeInstance<'db>, FuncRef>), LowerError>
 where
@@ -278,7 +278,7 @@ where
 {
     let builder = ModuleBuilder::new(ModuleCtx::new(isa));
     let mut lowerer =
-        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol, panics)?;
+        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbols, panics)?;
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
@@ -315,7 +315,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         builder: ModuleBuilder,
         inst_set: &'static I,
         package: &'a RuntimePackage<'db>,
-        fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+        fixed_symbols: &[(RuntimeInstance<'db>, &str)],
         panics: NativePanics,
     ) -> Result<Self, LowerError> {
         // HIR and MIR lay memory out with the compilation target's `usize`,
@@ -330,6 +330,22 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             )));
         }
         let native = is_native_architecture(builder.ctx.triple.architecture);
+        // A function defining a symbol native code imports would replace it.
+        for &(_, symbol) in fixed_symbols {
+            if symbol.starts_with(COMPILER_SYMBOL_PREFIX) {
+                return Err(LowerError::Unsupported(format!(
+                    "exported symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
+                )));
+            }
+            if HostFunction::ALL
+                .map(HostFunction::symbol)
+                .contains(&symbol)
+            {
+                return Err(LowerError::Unsupported(format!(
+                    "exported symbol `{symbol}` is reserved: native code calls the C library's `{symbol}`"
+                )));
+            }
+        }
         Ok(Self {
             db,
             builder,
@@ -340,7 +356,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             func_symbols: assign_sonatina_function_symbols(
                 db,
                 package,
-                fixed_symbol,
+                fixed_symbols,
                 &if native {
                     HostFunction::ALL
                         .map(HostFunction::symbol)
@@ -480,9 +496,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         }
         if function.linkage(self.db) == RuntimeLinkage::External
             && (!self.is_native_target()
-                || args.iter().chain(ret.iter()).any(|ty| {
-                    !matches!(ty, Type::I32 | Type::I64) && !ty.is_pointer(&self.builder.ctx)
-                }))
+                || args
+                    .iter()
+                    .chain(ret.iter())
+                    .any(|ty| !is_c_abi_value(ty, &self.builder.ctx)))
         {
             return Err(LowerError::Unsupported(format!(
                 "extern function `{symbol}` requires a native target and i32/i64 or raw-pointer ABI values"
@@ -1004,7 +1021,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 fn assign_sonatina_function_symbols<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
-    fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+    fixed_symbols: &[(RuntimeInstance<'db>, &str)],
     reserved: &[&str],
 ) -> FxHashMap<mir::RuntimeInstance<'db>, String> {
     let functions = package.functions(db);
@@ -1012,8 +1029,9 @@ fn assign_sonatina_function_symbols<'db>(
         .iter()
         .map(|function| FunctionSymbolInput {
             owner: function.owner(db).clone(),
-            fixed_symbol: fixed_symbol
-                .filter(|(instance, _)| *instance == function.instance(db))
+            fixed_symbol: fixed_symbols
+                .iter()
+                .find(|(instance, _)| *instance == function.instance(db))
                 .map(|(_, symbol)| symbol.to_string())
                 .or_else(|| {
                     let semantic = function.instance(db).key(db).semantic(db)?;
@@ -6632,6 +6650,13 @@ trait Pipe: Sized {
 }
 
 impl<T> Pipe for T {}
+
+/// Whether C passes `ty` as Fe does: an `i32`, an `i64` or a pointer. Only
+/// these cross between Fe and C, through `extern` declarations and
+/// `#[export]` functions.
+pub(super) fn is_c_abi_value(ty: &Type, ctx: &ModuleCtx) -> bool {
+    matches!(ty, Type::I32 | Type::I64) || ty.is_pointer(ctx)
+}
 
 fn linkage_for_runtime(linkage: RuntimeLinkage) -> Linkage {
     match linkage {

@@ -2,7 +2,9 @@
 
 use common::{InputDb, compilation::Target};
 use driver::DriverDataBase;
-use fe_codegen::{NativeOutputSelection, NativeTarget, OptLevel, emit_module_native_artifacts};
+use fe_codegen::{
+    NativeOutputKind, NativeOutputSelection, NativeTarget, OptLevel, emit_module_native_artifacts,
+};
 use salsa::Setter;
 use url::Url;
 
@@ -23,6 +25,7 @@ fn sp1_guest_io_emits_rv64_object_with_external_adapters() {
             &db,
             top_mod,
             NativeTarget::Sp1,
+            NativeOutputKind::Executable,
             level,
             NativeOutputSelection {
                 ir: true,
@@ -83,6 +86,7 @@ fn sp1_memory_copy_reserves_the_runtime_symbol() {
             &db,
             db.top_mod(file),
             NativeTarget::Sp1,
+            NativeOutputKind::Executable,
             level,
             NativeOutputSelection {
                 ir: true,
@@ -102,6 +106,7 @@ fn sp1_memory_copy_reserves_the_runtime_symbol() {
             &db,
             db.top_mod(file),
             NativeTarget::Sp1,
+            NativeOutputKind::Executable,
             level,
             NativeOutputSelection {
                 ir: false,
@@ -133,6 +138,7 @@ fn sp1_rejects_host_argv_entry() {
         &db,
         db.top_mod(file),
         NativeTarget::Sp1,
+        NativeOutputKind::Executable,
         OptLevel::O0,
         NativeOutputSelection {
             ir: true,
@@ -144,6 +150,37 @@ fn sp1_rejects_host_argv_entry() {
         error
             .to_string()
             .contains("SP1 executable `main` must have signature `pub fn main() -> i32`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn sp1_rejects_exported_functions() {
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///sp1_export.fe").unwrap(),
+        Some("#[export]\npub fn answer() -> i64 { 42 }\npub fn main() -> i32 { 0 }\n".to_string()),
+    );
+    let error = emit_module_native_artifacts(
+        &db,
+        db.top_mod(file),
+        NativeTarget::Sp1,
+        NativeOutputKind::Executable,
+        OptLevel::O0,
+        NativeOutputSelection {
+            ir: true,
+            object: true,
+        },
+    )
+    .expect_err("an SP1 guest exports nothing");
+    assert!(
+        error
+            .to_string()
+            .contains("SP1 guests export no functions, but `sp1_export::answer` is `#[export]`"),
         "{error}"
     );
 }
@@ -165,6 +202,7 @@ fn sp1_keeps_entry_identity_when_helpers_are_named_main() {
         &db,
         db.top_mod(file),
         NativeTarget::Sp1,
+        NativeOutputKind::Executable,
         OptLevel::O0,
         NativeOutputSelection {
             ir: true,

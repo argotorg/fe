@@ -16,9 +16,9 @@ use driver::DriverDataBase;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
-use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 #[cfg(feature = "cranelift")]
-use mir::{RuntimeSectionName, build_native_executable_package, native_executable_entry};
+use mir::{NativeOutputKind, RuntimeSectionName, build_native_package, native_executable_entry};
+use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
@@ -627,6 +627,7 @@ fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::Sect
         mir::RuntimeSectionName::Runtime => "runtime".into(),
         mir::RuntimeSectionName::Main => "main".into(),
         mir::RuntimeSectionName::Test(name) => format!("test_{name}").into(),
+        mir::RuntimeSectionName::Export(symbol) => format!("export_{symbol}").into(),
     }
 }
 
@@ -746,42 +747,82 @@ pub fn compile_runtime_package_sonatina(
     lower_runtime::compile_runtime_package_sonatina(db, package)
 }
 
+/// Lowers `top_mod` as a native `kind`, with each exported function public
+/// under its own name. Returns the module and an executable's `main`, which
+/// `prepare_native_main` exports.
 #[cfg(feature = "cranelift")]
-fn compile_executable_sonatina_native(
+fn compile_native_module(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     target: NativeTarget,
-) -> Result<(Module, FuncRef), LowerError> {
-    let package = build_native_executable_package(db, top_mod)?;
-    let entry = package
-        .primary_object(db)
-        .and_then(|object| {
-            object
-                .sections(db)
-                .iter()
-                .find(|section| section.name == RuntimeSectionName::Main)
-        })
-        .ok_or_else(|| LowerError::Internal("native package is missing its main section".into()))?
-        .entry
-        .instance(db);
+    kind: NativeOutputKind,
+) -> Result<(Module, Option<FuncRef>), LowerError> {
     // SP1 guests have no stderr; a failed execution is their report.
     let (isa, panics) = match target {
         NativeTarget::Host => (create_native_isa()?, NativePanics::Abort),
         #[cfg(feature = "sp1")]
-        NativeTarget::Sp1 => (Native::new(TargetTriple::SP1), NativePanics::Trap),
+        NativeTarget::Sp1 => {
+            if let Some(func) = mir::native_exports(db, top_mod).first() {
+                return Err(LowerError::Unsupported(format!(
+                    "SP1 guests export no functions, but `{}` is `#[export]`",
+                    func.scope().pretty_path(db).unwrap_or_default()
+                )));
+            }
+            (Native::new(TargetTriple::SP1), NativePanics::Trap)
+        }
     };
+    let package = build_native_package(db, top_mod, kind)?;
+    let sections = package
+        .primary_object(db)
+        .ok_or_else(|| LowerError::Internal("native package is missing its object".into()))?
+        .sections(db);
+    let entries = sections
+        .iter()
+        .filter_map(|section| {
+            let symbol = match &section.name {
+                RuntimeSectionName::Main => "main",
+                RuntimeSectionName::Export(symbol) => symbol.as_str(),
+                _ => return None,
+            };
+            Some((section.entry.instance(db), symbol))
+        })
+        .collect::<Vec<_>>();
     let (module, functions) = lower_runtime::compile_runtime_package_sonatina_for_isa(
-        db,
-        &package,
-        &isa,
-        false,
-        Some((entry, "main")),
-        panics,
+        db, &package, &isa, false, &entries, panics,
     )?;
-    let main = functions
-        .get(&entry)
-        .copied()
-        .ok_or_else(|| LowerError::Internal("native main was not lowered".into()))?;
+    let mut main = None;
+    for section in sections {
+        let func = functions
+            .get(&section.entry.instance(db))
+            .copied()
+            .ok_or_else(|| LowerError::Internal("native entry was not lowered".into()))?;
+        match &section.name {
+            RuntimeSectionName::Main => main = Some(func),
+            RuntimeSectionName::Export(symbol) => {
+                module.ctx.func_sig(func, |signature| {
+                    if signature
+                        .args()
+                        .iter()
+                        .chain(signature.ret_tys())
+                        .all(|ty| lower_runtime::is_c_abi_value(ty, &module.ctx))
+                    {
+                        Ok(())
+                    } else {
+                        let ret = match signature.ret_tys() {
+                            [] => String::new(),
+                            ret => format!(" -> {}", format_native_types(ret, &module)),
+                        };
+                        Err(LowerError::Unsupported(format!(
+                            "exported function `{symbol}` must take and return i32/i64 or raw-pointer ABI values, found lowered `{symbol}({}){ret}`",
+                            format_native_types(signature.args(), &module),
+                        )))
+                    }
+                })?;
+                module.ctx.update_func_linkage(func, Linkage::Public);
+            }
+            _ => {}
+        }
+    }
     Ok((module, main))
 }
 
@@ -813,6 +854,7 @@ pub fn emit_module_native_object(
         db,
         top_mod,
         NativeTarget::Host,
+        NativeOutputKind::Executable,
         opt_level,
         NativeOutputSelection {
             ir: false,
@@ -836,6 +878,7 @@ pub fn emit_module_native_ir(
         db,
         top_mod,
         NativeTarget::Host,
+        NativeOutputKind::Executable,
         opt_level,
         NativeOutputSelection {
             ir: true,
@@ -850,11 +893,15 @@ pub fn emit_module_native_artifacts(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     target: NativeTarget,
+    kind: NativeOutputKind,
     opt_level: OptLevel,
     outputs: NativeOutputSelection,
 ) -> Result<NativeArtifacts, LowerError> {
-    let (module, main) = compile_executable_sonatina_native(db, top_mod, target)?;
-    let module = prepare_native_main(db, top_mod, target, module, main)?;
+    let (module, main) = compile_native_module(db, top_mod, target, kind)?;
+    let module = match main {
+        Some(main) => prepare_native_main(db, top_mod, target, module, main)?,
+        None => module,
+    };
 
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
@@ -2131,9 +2178,16 @@ mod tests {
             .touch(&mut db, temp_fixture_url(name), Some(source.to_string()));
         let top_mod = db.top_mod(file);
         // Keep pointer inputs dynamic by testing before executable ABI validation.
-        let (module, main) = compile_executable_sonatina_native(&db, top_mod, NativeTarget::Host)
-            .expect("native pointer fixture should lower");
-        module.ctx.update_func_linkage(main, Linkage::Public);
+        let (module, main) = compile_native_module(
+            &db,
+            top_mod,
+            NativeTarget::Host,
+            NativeOutputKind::Executable,
+        )
+        .expect("native pointer fixture should lower");
+        module
+            .ctx
+            .update_func_linkage(main.expect("an executable has a main"), Linkage::Public);
         let mut compile = Compile::new(module, CraneliftObjectBackend::new())
             .with_opt_level(SonatinaOptLevel::O0);
         compile.optimize();

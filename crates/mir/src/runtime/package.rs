@@ -16,7 +16,10 @@ use hir::{
             ty_def::{TyData, TyId},
         },
     },
-    hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
+    hir_def::{
+        Contract, Func, HirIngot, IdentId, InlineHint, ItemKind, ManualContractRootAttr,
+        TopLevelMod,
+    },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -588,25 +591,79 @@ pub fn native_executable_entry<'db>(
         .find(|func| func.vis(db).is_pub() && is_main_func(db, *func))
 }
 
-/// Build a target-neutral executable package rooted at a public top-level
-/// `main` function while preserving its ordinary function signature.
-pub fn build_native_executable_package<'db>(
+/// The `#[export]` functions of `top_mod`'s ingot, which a native object
+/// defines under their own names.
+pub fn native_exports<'db>(db: &'db dyn MirDb, top_mod: TopLevelMod<'db>) -> Vec<Func<'db>> {
+    top_mod
+        .ingot(db)
+        .all_funcs(db)
+        .iter()
+        .copied()
+        .filter(|func| func.is_exported(db))
+        .collect()
+}
+
+/// What a native package is built for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeOutputKind {
+    /// An executable, entered at the public top-level `main`, that also
+    /// defines the exported functions.
+    Executable,
+    /// A library of the exported functions.
+    Library,
+}
+
+/// Build a target-neutral native package of one object, `main`, whose
+/// sections are the exported functions and, for an executable, the public
+/// top-level `main`. Each keeps its ordinary function signature.
+pub fn build_native_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
+    kind: NativeOutputKind,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     require_target(db, Target::Native)?;
-    let main = native_executable_entry(db, top_mod).ok_or_else(|| {
-        LowerError::Unsupported(
-            "native executable output requires `pub fn main() -> i32`".to_string(),
-        )
-    })?;
-    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(main, None))?;
-    let instance = runtime_instance_for_semantic(db, semantic);
+    let root = |func| {
+        semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))
+            .map(|semantic| runtime_instance_for_semantic(db, semantic))
+    };
+    let mut sections = Vec::new();
+    // The function each exported symbol names. An executable's entry is
+    // exported as `main`.
+    let mut symbols = FxHashMap::default();
+    if kind == NativeOutputKind::Executable {
+        let main = native_executable_entry(db, top_mod).ok_or_else(|| {
+            LowerError::Unsupported(
+                "native executable output requires `pub fn main() -> i32`".to_string(),
+            )
+        })?;
+        symbols.insert("main".to_string(), main);
+        sections.push((RuntimeSectionName::Main, root(main)?));
+    }
+    for func in native_exports(db, top_mod) {
+        let symbol = func_display_name(db, func);
+        match symbols.insert(symbol.clone(), func) {
+            Some(other) if other == func => continue,
+            Some(other) => {
+                let path = |func: Func<'db>| func.scope().pretty_path(db).unwrap_or_default();
+                return Err(LowerError::Unsupported(format!(
+                    "`{}` and `{}` both define the native symbol `{symbol}`",
+                    path(other),
+                    path(func),
+                )));
+            }
+            None => sections.push((RuntimeSectionName::Export(symbol), root(func)?)),
+        }
+    }
+    if sections.is_empty() {
+        return Err(LowerError::Unsupported(
+            "native library output requires an `#[export]` function".to_string(),
+        ));
+    }
     let package = build_sectioned_package(
         db,
         top_mod,
-        vec![instance],
-        vec![(ObjectId::Main, vec![(RuntimeSectionName::Main, instance)])],
+        sections.iter().map(|(_, instance)| *instance).collect(),
+        vec![(ObjectId::Main, sections)],
     )?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid native package: {err:?}")))?;
@@ -1236,7 +1293,9 @@ fn resolved_section_region<'db>(
                     contract: *contract,
                 },
             )),
-            RuntimeSectionName::Main | RuntimeSectionName::Test(_) => None,
+            RuntimeSectionName::Main
+            | RuntimeSectionName::Test(_)
+            | RuntimeSectionName::Export(_) => None,
         },
         RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ManualContractRoot {
             func, ..
@@ -2585,7 +2644,8 @@ pub fn main() -> i32 {
                 .to_string(),
             ),
         );
-        let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
+        let package =
+            build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
         let imports = package
             .functions(&db)
             .iter()

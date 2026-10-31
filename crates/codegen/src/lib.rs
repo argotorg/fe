@@ -10,6 +10,8 @@ pub use backend::OptLevel;
 pub use debug::{
     BytecodeDebugError, BytecodePcRange, BytecodeSourceMapEntry, BytecodeSourceMapEntryKind,
 };
+#[cfg(feature = "cranelift")]
+pub use mir::NativeOutputKind;
 pub use sonatina::{
     LowerError, SonatinaContractBytecode, SonatinaTestOptions, compile_runtime_package_sonatina,
     emit_ingot_sonatina_bytecode, emit_ingot_sonatina_bytecode_with_observability,

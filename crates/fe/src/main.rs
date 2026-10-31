@@ -21,7 +21,7 @@ mod workspace_ingot;
 use std::fs;
 use std::sync::OnceLock;
 
-use build::build;
+use build::{NativeLink, build};
 use camino::Utf8PathBuf;
 use check::check;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -56,6 +56,10 @@ pub enum BuildEmit {
     /// Code bytes of each function in a contract (`<Contract>.sizes.txt`).
     Sizes,
     Executable,
+    /// A native object of the `#[export]` functions (`<name>.o`).
+    Object,
+    /// A native static library of the `#[export]` functions (`lib<name>.a`).
+    Staticlib,
     Elf,
 }
 
@@ -63,7 +67,8 @@ pub enum BuildEmit {
 pub enum BuildBackend {
     Sonatina,
     #[cfg(feature = "cranelift")]
-    /// Host-native IR, or executables on x86-64 Linux and AArch64 macOS.
+    /// Host-native IR, or executables and libraries on x86-64 Linux and
+    /// AArch64 macOS.
     Native,
     #[cfg(feature = "sp1")]
     /// RV64IM SP1 guest IR or ELF executables.
@@ -214,7 +219,7 @@ pub enum Command {
         #[arg(
             long,
             value_name = "PATH",
-            conflicts_with_all = ["path", "ingot", "standalone", "report"]
+            conflicts_with_all = ["path", "ingot", "standalone", "report", "link", "link_lib"]
         )]
         from_metadata: Option<Utf8PathBuf>,
         /// Build a specific contract by name (defaults to all contracts in the target).
@@ -234,6 +239,14 @@ pub enum Command {
         /// Comma-delimited artifacts to emit.
         #[arg(long, short = 'e', value_enum, value_delimiter = ',')]
         emit: Vec<BuildEmit>,
+        /// Link an object file or archive into a native executable, to
+        /// implement `extern` functions. Repeatable.
+        #[arg(long, value_name = "PATH")]
+        link: Vec<Utf8PathBuf>,
+        /// Link the library `NAME` into a native executable, as the C
+        /// compiler's `-l<NAME>`. Repeatable.
+        #[arg(long, value_name = "NAME")]
+        link_lib: Vec<String>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).
         #[arg(long)]
         report: bool,
@@ -690,6 +703,8 @@ pub fn run(opts: &Options) {
             out_dir,
             profile,
             emit,
+            link,
+            link_lib,
             report,
             report_out,
             report_failed_only,
@@ -731,6 +746,10 @@ pub fn run(opts: &Options) {
                 *backend,
                 opt_level,
                 &emit,
+                NativeLink {
+                    paths: link,
+                    libraries: link_lib,
+                },
                 out_dir.as_ref(),
                 profile,
                 (*report).then_some(report_out),

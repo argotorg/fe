@@ -14,7 +14,7 @@ use crate::analysis::{
         closure::func_item_callable_inst,
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
-            FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
+            ExportIssue, FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
             ReadOnlyProvider, RevealedBy, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection,
             TyLowerDiag,
         },
@@ -1782,6 +1782,37 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 notes: vec!["name the parameter instead: `_ x: T`".to_string()],
                 error_code,
             },
+
+            Self::InvalidExport { span, issue } => {
+                let (message, label, note) = match issue {
+                    ExportIssue::NotPub => (
+                        "an `#[export]` function must be `pub`",
+                        "this function is not `pub`",
+                        None,
+                    ),
+                    ExportIssue::Generic => (
+                        "an `#[export]` function cannot be generic",
+                        "generic parameters",
+                        Some("a C caller supplies no generic arguments: export a function for each one"),
+                    ),
+                    ExportIssue::Effects => (
+                        "an `#[export]` function cannot take effects",
+                        "effects",
+                        Some("a C caller provides no effects: provide them in the body with `with`"),
+                    ),
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: message.to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: label.to_string(),
+                        span: span.resolve(db),
+                    }],
+                    notes: note.into_iter().map(str::to_string).collect(),
+                    error_code,
+                }
+            }
 
             Self::MaybeMutBound(span) => primary_diag(
                 Severity::Error,
