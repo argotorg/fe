@@ -412,6 +412,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             )));
         }
         let native = is_native_architecture(builder.ctx.triple.architecture);
+        #[cfg(feature = "wasm")]
+        let wasm = builder.ctx.triple.architecture == Architecture::Wasm32;
+        #[cfg(not(feature = "wasm"))]
+        let wasm = false;
         // A function defining a symbol native code imports would replace it.
         for &(_, symbol) in fixed_symbols {
             if symbol.starts_with(COMPILER_SYMBOL_PREFIX) {
@@ -423,8 +427,40 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 .map(HostFunction::symbol)
                 .contains(&symbol)
             {
+                return Err(LowerError::Unsupported(if wasm {
+                    format!("cannot export `{symbol}`: the name is reserved for a runtime routine")
+                } else {
+                    format!(
+                        "exported symbol `{symbol}` is reserved: native code calls the C library's `{symbol}`"
+                    )
+                }));
+            }
+        }
+        let func_symbols = assign_sonatina_function_symbols(
+            db,
+            package,
+            fixed_symbols,
+            &if native {
+                HostFunction::ALL
+                    .map(HostFunction::symbol)
+                    .into_iter()
+                    .chain(NativePanic::ALL.map(NativePanic::symbol))
+                    .chain(HostState::ALL.map(HostState::accessor))
+                    .chain(HostState::ALL.map(HostState::global))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        );
+        // Sonatina merges functions declared under one name, so an import of
+        // an export's name would replace it.
+        for &(instance, symbol) in fixed_symbols {
+            if func_symbols
+                .iter()
+                .any(|(other, other_symbol)| *other != instance && other_symbol == symbol)
+            {
                 return Err(LowerError::Unsupported(format!(
-                    "exported symbol `{symbol}` is reserved: native code calls the C library's `{symbol}`"
+                    "cannot export `{symbol}`: the module imports an `extern` function of that name"
                 )));
             }
         }
@@ -435,22 +471,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             package,
             func_map: FxHashMap::default(),
             argument_packs: FxHashMap::default(),
-            func_symbols: assign_sonatina_function_symbols(
-                db,
-                package,
-                fixed_symbols,
-                &if native {
-                    HostFunction::ALL
-                        .map(HostFunction::symbol)
-                        .into_iter()
-                        .chain(NativePanic::ALL.map(NativePanic::symbol))
-                        .chain(HostState::ALL.map(HostState::accessor))
-                        .chain(HostState::ALL.map(HostState::global))
-                        .collect()
-                } else {
-                    Vec::new()
-                },
-            ),
+            func_symbols,
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
             layout_names: FxHashMap::default(),
