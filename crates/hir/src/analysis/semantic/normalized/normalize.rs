@@ -1412,6 +1412,41 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 ty,
                 origin,
             }
+        } else if !self.local_has_place(raw.local)
+            && let Some(deref) = raw
+                .path
+                .iter()
+                .position(|projection| matches!(projection, Projection::Deref))
+        {
+            // A value local has no place to project from. Project the pointer
+            // out of its value and dereference that.
+            let mut prefix = crate::analysis::semantic::SemanticProjectionPath::new();
+            for projection in projections.by_ref().take(deref) {
+                prefix.push(projection.clone());
+            }
+            projections.next();
+            let value = self.read_operand(block, origin, SOperand::inherited(raw.local), None)?;
+            let path = self.normalize_path(block, origin, &prefix)?;
+            let pointer_ty = project_path_ty(
+                self.db,
+                self.instance,
+                &self.values,
+                self.values[value.value.index()].ty,
+                &path,
+            )
+            .map_err(|_| NormalizeError::InvalidProjection)?;
+            let (ty, _) = pointer_ty
+                .as_ptr(self.db)
+                .ok_or(NormalizeError::InvalidProjection)?;
+            let pointer =
+                self.normalize_value_projection(block, origin, raw.local, value, path, pointer_ty)?;
+            let pointer = self.emit_define(block, None, origin, pointer_ty, raw.local, pointer)?;
+            NPlace {
+                base: NPlaceBase::Deref { pointer },
+                path: NDataPath::empty(),
+                ty,
+                origin,
+            }
         } else {
             self.place_for_local(block, origin, raw.local)?
         };

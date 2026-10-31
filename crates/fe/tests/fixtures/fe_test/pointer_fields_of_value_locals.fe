@@ -1,0 +1,57 @@
+struct Node {
+    value: u256,
+}
+
+struct Holder {
+    node: *Node,
+}
+
+struct Outer {
+    tag: u256,
+    holder: Holder,
+}
+
+struct Pair {
+    nodes: [*Node; 2],
+}
+
+fn new_node(_ value: u256) -> *Node {
+    let node = core::ptr::alloc<Node>()
+    unsafe { node.value = value }
+    node
+}
+
+fn make(_ node: *Node) -> Holder {
+    Holder { node }
+}
+
+fn pass(_ holder: own Holder) -> Holder {
+    holder
+}
+
+#[test]
+fn test_reads_through_pointer_fields_of_locals() {
+    let holder = Holder { node: new_node(7) }
+    unsafe { assert(holder.node.value == 7) }
+    let made = make(new_node(8))
+    unsafe { assert(made.node.value == 8) }
+    let passed = pass(made)
+    unsafe { assert(passed.node.value == 8) }
+    let outer = Outer { tag: 1, holder: Holder { node: new_node(9) } }
+    unsafe { assert(outer.holder.node.value + outer.tag == 10) }
+    let pair = Pair { nodes: [new_node(3), new_node(4)] }
+    var i: usize = 1
+    unsafe { assert(pair.nodes[0].value + pair.nodes[i].value == 7) }
+    let tuple: (*Node, u256) = (new_node(5), 1)
+    unsafe { assert(tuple.0.value == 5) }
+}
+
+#[test]
+fn test_writes_and_reads_through_pointer_fields_of_locals() {
+    let holder = make(new_node(1))
+    unsafe { holder.node.value = 3 }
+    unsafe { assert(holder.node.value == 3) }
+    let alias = holder.node
+    unsafe { alias.value += 1 }
+    unsafe { assert(holder.node.value == 4) }
+}
