@@ -13,8 +13,8 @@ use std::mem;
 use std::sync::Arc;
 
 use common::InputDb;
-use common::layout::StorageLane;
 use common::origin::OriginExportKey;
+use common::{compilation::Target, layout::StorageLane};
 use driver::DriverDataBase;
 use hir::{
     analysis::{
@@ -4582,7 +4582,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     }
                 }
             }
-            RuntimeClass::AggregateValue { .. } if self.memory_matches_value(memory, class)? => {
+            RuntimeClass::AggregateValue { .. } if self.memory_matches_value(memory, class) => {
                 let ty = self.module.ty_for_class(class)?;
                 self.fb
                     .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, src, ty));
@@ -4728,10 +4728,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     tag_word,
                 )?,
                 ReferentLayout::Object => {
-                    let ty = self
-                        .native_class_layout(&RuntimeClass::AggregateValue { layout })?
-                        .tag_type()
-                        .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                    let ty = self.native_tag_ty(layout)?;
                     let value = self.cast_scalar(tag_word, ty)?;
                     self.fb.insert_inst_no_result(Mstore::new(
                         self.module.inst_set(),
@@ -4973,76 +4970,32 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     /// Whether `class` has the same bytes in `memory` as a Sonatina value of
-    /// its type, so it moves between them in one load or store. Raw memory
-    /// packs fields without alignment, which matches only where no field is
-    /// padded; enums and handles keep encodings of their own.
-    fn memory_matches_value(
-        &mut self,
-        memory: ReferentLayout,
-        class: &RuntimeClass<'db>,
-    ) -> Result<bool, LowerError> {
-        if !self.module.is_native_target() {
-            return Ok(false);
+    /// its type, so it moves between them in one load or store. Natively raw
+    /// memory takes Sonatina's layout; references and addresses keep raw
+    /// encodings of their own.
+    fn memory_matches_value(&self, memory: ReferentLayout, class: &RuntimeClass<'db>) -> bool {
+        self.module.is_native_target()
+            && match memory {
+                ReferentLayout::Object => true,
+                ReferentLayout::Raw(AddressSpace::Memory) => !self.holds_handle(class),
+                ReferentLayout::Raw(_) => false,
+            }
+    }
+
+    /// Whether `class` is or contains a reference or address.
+    fn holds_handle(&self, class: &RuntimeClass<'db>) -> bool {
+        let RuntimeClass::AggregateValue { layout } = class else {
+            return !matches!(class, RuntimeClass::Scalar(_));
+        };
+        match layout.data(self.module.db) {
+            Layout::Struct(data) => data.fields.iter().any(|field| self.holds_handle(field)),
+            Layout::Array(data) => self.holds_handle(&data.elem),
+            Layout::Enum(data) => data
+                .variants
+                .iter()
+                .flat_map(|variant| &variant.fields)
+                .any(|field| self.holds_handle(field)),
         }
-        let raw = match memory {
-            ReferentLayout::Object => None,
-            ReferentLayout::Raw(AddressSpace::Memory) => {
-                Some(RuntimeMemoryLayout::raw(self.module.db))
-            }
-            ReferentLayout::Raw(_) => return Ok(false),
-        };
-        let ty = self.module.ty_for_class(class)?;
-        let size = self.fb.module_builder.ctx.size_of(ty).ok();
-        let offset = |lowerer: &Self, idx: usize| {
-            lowerer
-                .fb
-                .module_builder
-                .ctx
-                .aggregate_elem_offset(ty, idx)
-                .map(|(offset, _)| offset as u64)
-        };
-        let layout = match class {
-            RuntimeClass::Scalar(scalar) => {
-                return Ok(
-                    raw.is_none() || size == Some(scalar_raw_memory_size_bytes(scalar) as usize)
-                );
-            }
-            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => return Ok(raw.is_none()),
-            RuntimeClass::AggregateValue { layout } => *layout,
-        };
-        let fields = match layout.data(self.module.db) {
-            Layout::Enum(_) => return Ok(false),
-            Layout::Struct(data) => {
-                let mut offsets = Vec::with_capacity(data.fields.len());
-                for (idx, field) in data.fields.iter().enumerate() {
-                    if !self.memory_matches_value(memory, field)? {
-                        return Ok(false);
-                    }
-                    if let Some(raw) = raw {
-                        offsets.push((raw.struct_field_offset(&data, idx)?, idx));
-                    }
-                }
-                offsets
-            }
-            Layout::Array(data) => {
-                if !self.memory_matches_value(memory, &data.elem)? {
-                    return Ok(false);
-                }
-                match raw {
-                    Some(raw) if data.len > 1 => vec![(raw.array_element_offset(&data, 1)?, 1)],
-                    _ => Vec::new(),
-                }
-            }
-        };
-        Ok(match raw {
-            None => true,
-            Some(raw) => {
-                size == Some(raw.layout_size(layout)? as usize)
-                    && fields
-                        .into_iter()
-                        .all(|(raw_offset, idx)| offset(self, idx) == Some(raw_offset))
-            }
-        })
     }
 
     fn load_aggregate_from_ptr(
@@ -5052,7 +5005,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         layout: LayoutId<'db>,
     ) -> Result<ValueId, LowerError> {
         let class = RuntimeClass::AggregateValue { layout };
-        if self.memory_matches_value(memory, &class)? {
+        if self.memory_matches_value(memory, &class) {
             let ty = self.module.ty_for_layout(layout)?;
             return Ok(self
                 .fb
@@ -5159,10 +5112,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let tag = match memory {
             ReferentLayout::Raw(space) => self.load_scalar(addr, space, &data.tag)?,
             ReferentLayout::Object => {
-                let ty = self
-                    .native_class_layout(&RuntimeClass::AggregateValue { layout })?
-                    .tag_type()
-                    .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                let ty = self.native_tag_ty(layout)?;
                 self.fb
                     .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty)
             }
@@ -5280,7 +5230,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         }
         let word = self.load_word(addr, space)?;
         let value = if space.is_byte_addressed() {
-            let width = scalar_raw_memory_size_bytes(scalar);
+            let width = scalar_raw_memory_size_bytes(Target::Evm, scalar);
             if width < 32 {
                 let shift = self.index_value((32 - width) * 8);
                 self.fb
@@ -5363,7 +5313,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         match space {
             AddressSpace::Memory => match class {
                 RuntimeClass::Scalar(scalar)
-                    if !native_memory && scalar_raw_memory_size_bytes(scalar) < 32 =>
+                    if !native_memory && scalar_raw_memory_size_bytes(Target::Evm, scalar) < 32 =>
                 {
                     self.store_memory_scalar_bytes(addr, scalar, value)?
                 }
@@ -5424,7 +5374,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         scalar: &ScalarClass<'db>,
         value: ValueId,
     ) -> Result<(), LowerError> {
-        let width = scalar_raw_memory_size_bytes(scalar);
+        let width = scalar_raw_memory_size_bytes(Target::Evm, scalar);
         for byte_idx in 0..width {
             let shift = (width - 1 - byte_idx) * 8;
             let shifted = if shift == 0 {

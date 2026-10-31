@@ -1,4 +1,4 @@
-// Counts the frame stack's allocation (3 frames of 160 bytes) and the frames'
+// Counts the frame stack's allocation (3 frames of 176 bytes) and the frames'
 // buffers, failing the chosen attempt. The buffers start empty, which must not
 // reach the host.
 #define _DEFAULT_SOURCE
@@ -22,7 +22,7 @@ typedef union {
 } Header;
 void *malloc(size_t size) {
     empties += size <= 1;
-    if (size == 480 && ++stack_attempts == FAIL_STACK) { failures++; return NULL; }
+    if (size == 528 && ++stack_attempts == FAIL_STACK) { failures++; return NULL; }
     if (size == 8192 && ++buffer_attempts == FAIL_BUFFER) { failures++; return NULL; }
     if (size > SIZE_MAX - sizeof(Header)) return NULL;
     size_t extent = sizeof(Header) + size;
@@ -31,7 +31,7 @@ void *malloc(size_t size) {
     if (header == MAP_FAILED) return NULL;
     header->info.extent = extent;
     header->info.size = size;
-    stacks += size == 480;
+    stacks += size == 528;
     buffers += size == 8192;
     memset(header + 1, 0xa5, size);
     return header + 1;
@@ -39,7 +39,7 @@ void *malloc(size_t size) {
 void free(void *pointer) {
     if (!pointer) return;
     Header *header = (Header *)pointer - 1;
-    stack_frees += header->info.size == 480;
+    stack_frees += header->info.size == 528;
     buffer_frees += header->info.size == 8192;
     // Unmapping makes any later use of the allocation fault.
     munmap(header, header->info.extent);
