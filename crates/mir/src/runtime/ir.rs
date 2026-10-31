@@ -1566,6 +1566,11 @@ pub enum RExpr<'db> {
         provider_ty: TyId<'db>,
         space: AddressSpace,
     },
+    /// The object at a raw memory address, which native targets lay out as
+    /// objects.
+    ObjectFromRaw {
+        raw: RValueId,
+    },
     WordToRawAddr {
         value: RValueId,
         space: AddressSpace,
@@ -1968,6 +1973,7 @@ impl<'db> RExpr<'db> {
             | Self::MaterializeToObject { src: value }
             | Self::NativeRef { value }
             | Self::ProviderRefFromRaw { raw: value, .. }
+            | Self::ObjectFromRaw { raw: value }
             | Self::WordToRawAddr { value, .. }
             | Self::ProviderRefToRaw { value }
             | Self::RetagRef { value }
@@ -2012,6 +2018,7 @@ impl<'db> RExpr<'db> {
             | Self::MaterializeToObject { .. }
             | Self::NativeRef { .. }
             | Self::ProviderRefFromRaw { .. }
+            | Self::ObjectFromRaw { .. }
             | Self::WordToRawAddr { .. }
             | Self::ProviderRefToRaw { .. }
             | Self::RetagRef { .. }
