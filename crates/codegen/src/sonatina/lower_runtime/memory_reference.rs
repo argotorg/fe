@@ -4,7 +4,6 @@ use mir::{
     Layout, LayoutId, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout, ScalarClass,
     ScalarRepr, VariantId,
 };
-use sonatina_codegen::transform::aggregate::EnumLoweredLayout;
 use sonatina_ir::{
     Type, ValueId,
     inst::{
@@ -15,7 +14,7 @@ use sonatina_ir::{
         data::{ConstLoad, InsertValue, ObjAlloc, ObjLoad, ObjMaterializeStack, ObjStore},
         logic::{And, Not, Or},
     },
-    types::CompoundType,
+    types::{CompoundType, EnumData},
 };
 
 use super::{CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet};
@@ -370,15 +369,50 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         self.retype_value_for_class(value, &class, target)
     }
 
-    pub(super) fn native_class_layout(
+    // Stored references address the original Sonatina allocation, so offsets
+    // and sizes in it are the target's layout of the unlegalized types.
+    pub(super) fn native_field_offset(
         &mut self,
         class: &RuntimeClass<'db>,
-    ) -> Result<EnumLoweredLayout, LowerError> {
+        field: usize,
+    ) -> Result<u64, LowerError> {
         let ty = self.module.ty_for_class(class)?;
-        // Stored references address the original Sonatina allocation. Its enum
-        // products and target padding must match the eventual legalization,
-        // without rewriting types while this module is still being emitted.
-        Ok(EnumLoweredLayout::new(&self.fb.module_builder.ctx, ty))
+        let (offset, _) = self
+            .fb
+            .module_builder
+            .ctx
+            .aggregate_elem_offset(ty, field)
+            .ok_or_else(|| LowerError::Unsupported("unrepresentable native field offset".into()))?;
+        Ok(offset as u64)
+    }
+
+    pub(super) fn native_variant_field_offset(
+        &mut self,
+        variant: VariantId<'db>,
+        field: usize,
+    ) -> Result<u64, LowerError> {
+        let ty = self.module.ty_for_layout(variant.enum_layout)?;
+        let (offset, _) = self
+            .fb
+            .module_builder
+            .ctx
+            .enum_variant_field_offset(ty, variant.index as usize, field)
+            .ok_or_else(|| {
+                LowerError::Unsupported("unrepresentable native variant offset".into())
+            })?;
+        Ok(offset as u64)
+    }
+
+    /// The integer type of the tag that a native enum holds at offset zero.
+    pub(super) fn native_enum_tag_ty(&mut self, layout: LayoutId<'db>) -> Result<Type, LowerError> {
+        let Type::Compound(enum_ty) = self.module.ty_for_layout(layout)? else {
+            return Err(LowerError::Internal("enum tag layout missing".into()));
+        };
+        self.fb
+            .module_builder
+            .ctx
+            .with_ty_store(|store| store.enum_data(enum_ty).map(EnumData::tag_ty))
+            .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))
     }
 
     pub(super) fn referent_field_address(
@@ -389,12 +423,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         index: usize,
     ) -> Result<ValueId, LowerError> {
         let offset = match memory {
-            ReferentLayout::Object => self
-                .native_class_layout(class)?
-                .field_offset(index)
-                .ok_or_else(|| {
-                    LowerError::Unsupported("unrepresentable native field offset".into())
-                })? as u64,
+            ReferentLayout::Object => self.native_field_offset(class, index)?,
             ReferentLayout::Raw(space) => {
                 let layout = class
                     .aggregate_layout()
@@ -420,14 +449,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         field: usize,
     ) -> Result<ValueId, LowerError> {
         let offset = match memory {
-            ReferentLayout::Object => self
-                .native_class_layout(&RuntimeClass::AggregateValue {
-                    layout: variant.enum_layout,
-                })?
-                .variant_field_offset(variant.index as usize, field)
-                .ok_or_else(|| {
-                    LowerError::Unsupported("unrepresentable native variant offset".into())
-                })? as u64,
+            ReferentLayout::Object => self.native_variant_field_offset(variant, field)?,
             ReferentLayout::Raw(space) => RuntimeMemoryLayout::for_space(self.module.db, space)
                 .variant_field_offset(variant, FieldIndex(field as u16))?,
         };
@@ -520,17 +542,12 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                         );
                     }
                 }
-                let native = self
-                    .native_class_layout(base)?
-                    .field_offset(field.0 as usize)
-                    .ok_or_else(|| {
-                        LowerError::Unsupported("unrepresentable native field offset".into())
-                    })?;
+                let native = self.native_field_offset(base, field.0 as usize)?;
                 (
                     self.memory_layout_offset(
                         reference.layout,
                         raw.field_offset(base, *field)?,
-                        native as u64,
+                        native,
                         placement.offset,
                     ),
                     class,
@@ -538,7 +555,8 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             }
             ResolvedPlaceElem::Index { index, class } => {
                 let index = self.checked_index_value(base, index)?;
-                let native = self.native_class_layout(class)?.size().map_err(|err| {
+                let ty = self.module.ty_for_class(class)?;
+                let native = self.fb.module_builder.ctx.size_of(ty).map_err(|err| {
                     LowerError::Unsupported(format!(
                         "unrepresentable native memory layout: {err:?}"
                     ))
@@ -560,17 +578,12 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                 field,
                 class,
             } => {
-                let native = self
-                    .native_class_layout(base)?
-                    .variant_field_offset(variant.index as usize, field.0 as usize)
-                    .ok_or_else(|| {
-                        LowerError::Unsupported("unrepresentable native variant offset".into())
-                    })?;
+                let native = self.native_variant_field_offset(*variant, field.0 as usize)?;
                 (
                     self.memory_layout_offset(
                         reference.layout,
                         raw.variant_field_offset(*variant, *field)?,
-                        native as u64,
+                        native,
                         words.variant_field_offset(*variant, *field)?,
                     ),
                     class,
