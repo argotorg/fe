@@ -2636,9 +2636,11 @@ mod tests {
             &mut db,
             Url::parse("file:///native_extern.fe").unwrap(),
             Some(
-                r#"use std::io::{Write, host, write_char}
+                r#"extern {
+    fn putchar(_ c: i32) -> i32
+}
 pub fn main() -> i32 {
-    with (Write = host()) { write_char(65) }
+    let _ = unsafe { putchar(65) }
     0
 }"#
                 .to_string(),

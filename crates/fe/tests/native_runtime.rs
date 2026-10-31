@@ -730,12 +730,12 @@ math = true
     .unwrap();
     fs::write(
         root.join("app/src/lib.fe"),
-        "pub fn main() -> i32 { helper::answer() }\n#[test]\nfn root_test() { core::assert(main() == 42) }\n",
+        "use std::io::Stdout\npub fn main() -> i32 uses (out: mut Stdout) { helper::answer() }\n#[test]\nfn root_test() uses (out: mut Stdout) { core::assert(main() == 42) }\n",
     )
     .unwrap();
     fs::write(
         root.join("app/src/helper.fe"),
-        "use std::io::{Write, host, write_char}\npub fn answer() -> i32 {\n with (Write = host()) { write_char(65) }\n math::answer()\n}\n#[test]\nfn nested_test() { core::assert(answer() == 42) }\n",
+        "use std::io::{Stdout, print}\npub fn answer() -> i32 uses (out: mut Stdout) {\n print(\"A\")\n math::answer()\n}\n#[test]\nfn nested_test() uses (out: mut Stdout) { core::assert(answer() == 42) }\n",
     )
     .unwrap();
     for level in ["0", "1"] {
@@ -851,14 +851,16 @@ fn native_host_io_and_assertions_execute_at_o0_and_o1() {
     fs::write(
         &source,
         r#"
-use std::io::{Read, Write, host, read_char, write_char, writeln}
-pub fn main() -> i32 {
-    with (Read = host(), Write = host()) {
-        writeln("ready")
-        let c = read_char()
-        core::assert(c == 65)
-        write_char(c + 1)
-    }
+use core::MemBuffer
+use std::io::{Stdin, Stdout, print, println, read_to_end}
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    println("ready")
+    var data = MemBuffer::empty()
+    read_to_end(mut data)
+    core::assert(data.len() == 1 && data[0] == 65)
+    var reply = MemBuffer::empty()
+    reply.push(data[0] + 1)
+    print(reply.span())
     0
 }
 
@@ -889,6 +891,130 @@ pub fn main() -> i32 {
             "failed assertion must trap"
         );
     }
+}
+
+#[test]
+fn native_standard_streams_print_and_read() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("streams.fe");
+    fs::write(
+        &source,
+        r#"
+use core::MemBuffer
+use std::io::{Stderr, Stdin, StdinReader, Stdout, eprint, eprintln, print, println, read_to_end}
+
+fn report(_ count: usize) uses (out: mut Stdout) {
+    println(("lines: ", count))
+}
+
+pub fn main() -> i32 uses (out: mut Stdout, err: mut Stderr, input: mut Stdin) {
+    println((0 as u8, " ", 255 as u8, " ", 65535 as u16, " ", 4294967295 as u32))
+    println((18446744073709551615 as u64, " ", 340282366920938463463374607431768211455 as u128))
+    println(115792089237316195423570985008687907853269984665640564039457584007913129639935 as u256)
+    let small: i8 = -128
+    let half: i16 = -32768
+    let word: i32 = -2147483648
+    println((small, " ", 127 as i8, " ", half, " ", word))
+    let long: i64 = -9223372036854775808
+    let wide: i128 = -170141183460469231731687303715884105728
+    println((long, " ", wide))
+    let widest: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    println(widest)
+    let minus: isize = -1
+    println((0 as usize, " ", minus, " ", true, " ", false))
+    let padded: String<8> = "ab"
+    println((padded, "|", "a literal longer than thirty-one bytes"))
+    print("no newline")
+    println("")
+    eprint("to ")
+    eprintln("stderr")
+
+    var reader = StdinReader::new()
+    let first = reader.read_byte().unwrap()
+    var line = MemBuffer::empty()
+    var count: usize = 0
+    while reader.read_line(mut line) {
+        count += 1
+        print("[")
+        print(line.span())
+        println("]")
+        line.clear()
+    }
+    report(count)
+    var reply = MemBuffer::empty()
+    reply.push(first)
+    println(reply)
+    0
+}
+"#,
+    )
+    .unwrap();
+    // Lines longer than the reader's 4 KiB reads span several of them.
+    let long = "x".repeat(10_000);
+    let input = format!("@first\n\nlast {long}");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let mut child = Command::new(out.join("streams"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            format!(
+                "0 255 65535 4294967295\n\
+                 18446744073709551615 340282366920938463463374607431768211455\n\
+                 115792089237316195423570985008687907853269984665640564039457584007913129639935\n\
+                 -128 127 -32768 -2147483648\n\
+                 -9223372036854775808 -170141183460469231731687303715884105728\n\
+                 -57896044618658097711785492504343953926634992332820282019728792003956564819968\n\
+                 0 -1 true false\n\
+                 ab|a literal longer than thirty-one bytes\n\
+                 no newline\n\
+                 [first]\n[]\n[last {long}]\nlines: 3\n@\n"
+            )
+        );
+        assert_eq!(result.stderr, b"to stderr\n");
+    }
+
+    // `read_to_end` keeps every byte, including zeros.
+    let source = temp.path().join("echo.fe");
+    fs::write(
+        &source,
+        r#"
+use core::MemBuffer
+use std::io::{Stdin, Stdout, print, read_to_end}
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    var data = MemBuffer::empty()
+    read_to_end(mut data)
+    print(data.span())
+    0
+}
+"#,
+    )
+    .unwrap();
+    let input = (0..20_000u32).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+    let out = temp.path().join("echo-out");
+    build(&source, &out, "1", &[]);
+    let mut child = Command::new(out.join("echo"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&input).unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, input);
 }
 
 #[test]
@@ -1050,17 +1176,15 @@ fn native_runner_bounds_time_and_combined_output() {
     fs::write(
         &source,
         r#"
-use std::io::{Write, host, write_char}
+use std::io::{Stdout, print}
 #[test]
 fn spin() { while true {} }
 #[test]
-fn noisy() {
-    with (Write = host()) {
-        var i: u32 = 0
-        while i < 2048 {
-            write_char(65)
-            i += 1
-        }
+fn noisy() uses (out: mut Stdout) {
+    var i: u32 = 0
+    while i < 2048 {
+        print("A")
+        i += 1
     }
 }
 "#,
@@ -1287,19 +1411,20 @@ fn native_process_clock_preserves_borrows_and_host_io() {
     fs::write(
         &source,
         r#"
-use std::io::{HostIo, Read, Write, host}
+use core::MemBuffer
+use std::io::{Stdin, StdinReader, Stdout, print}
 use std::native::cpu_clock_ticks
-pub fn main() -> i32 {
-    var input = host()
-    var output = host()
-    var value: i32 = 0
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    var reader = StdinReader::new()
+    var value: u8 = 0
     let borrowed = mut value
     let start = cpu_clock_ticks()
-    borrowed = input.read_char()
+    borrowed = reader.read_byte().unwrap()
     let end = cpu_clock_ticks()
     core::assert(start >= 0 && end >= start)
-    output.write_char(c: value)
-    core::assert(!output.failed())
+    var reply = MemBuffer::empty()
+    reply.push(value)
+    print(reply.span())
     0
 }
 "#,
@@ -1327,10 +1452,11 @@ fn native_arguments_preserve_bytes_bounds_and_internal_entry_calls() {
     fs::write(
         &source,
         r#"
-use std::io::{Write, host, write_char}
+use core::MemBuffer
+use std::io::{Stdout, print}
 use std::native::Args
 fn __fe_native_main() -> i32 { 42 }
-pub fn main(argc: i32, argv: **u8) -> i32 {
+pub fn main(argc: i32, argv: **u8) -> i32 uses (out: mut Stdout) {
     if argc == 0 { return __fe_native_main() }
     let args = unsafe { Args::new(argc, argv) }
     core::assert(args.len() == argc.downcast_unchecked())
@@ -1340,19 +1466,19 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
         arg.byte_at(arg.len())
     }
     core::assert(main(argc: 0, argv) == 42)
-    with (Write = host()) {
-        var i: usize = 1
-        while i < args.len() {
-            let arg = args.get(i)
-            var j: usize = 0
-            while j < arg.len() {
-                write_char(arg.byte_at(j) as i32)
-                j += 1
-            }
-            write_char(124)
-            i += 1
+    var text = MemBuffer::empty()
+    var i: usize = 1
+    while i < args.len() {
+        let arg = args.get(i)
+        var j: usize = 0
+        while j < arg.len() {
+            text.push(arg.byte_at(j))
+            j += 1
         }
+        text.push(124)
+        i += 1
     }
+    print(text.span())
     0
 }
 "#,
@@ -1386,41 +1512,43 @@ fn native_modular_arithmetic_matches_full_precision_runtime_inputs() {
     fs::write(
         &source,
         r#"
-use std::io::{HostIo, Read, Write, host, read_char}
+use core::MemBuffer
+use std::io::{Stdin, StdinReader, Stdout, print}
 use std::evm::crypto::{addmod, mulmod}
-fn read_word() -> u256 uses (input: mut Read) {
+fn read_word(_ reader: mut StdinReader) -> u256 uses (input: mut Stdin) {
     var value: u256 = 0
     var i: u256 = 0
     while i < 32 {
-        let byte = read_char()
-        core::assert(byte >= 0)
-        let bits: u256 = byte.downcast_unchecked()
+        let bits: u256 = reader.read_byte().unwrap() as u256
         value = value | (bits << (i * 8))
         i += 1
     }
     value
 }
-fn write_word(_ value: u256) uses (output: mut HostIo) {
+fn write_word(_ text: mut MemBuffer, _ value: u256) {
     var i: u256 = 0
     while i < 32 {
-        output.write_char(c: ((value >> (i * 8)) & 255).downcast_unchecked())
-        core::assert(!output.failed())
+        text.push(((value >> (i * 8)) & 255).downcast_unchecked())
         i += 1
     }
 }
-pub fn main() -> i32 {
-    with (Read = host(), HostIo = host()) {
-        var marker = read_char()
-        while marker != -1 {
-            core::assert(marker == 64)
-            let lhs = read_word()
-            let rhs = read_word()
-            let modulus = read_word()
-            write_word(addmod(lhs, rhs, modulus))
-            write_word(mulmod(lhs, rhs, modulus))
-            marker = read_char()
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    var reader = StdinReader::new()
+    var text = MemBuffer::empty()
+    while true {
+        match reader.read_byte() {
+            Option::Some(marker) => {
+                core::assert(marker == 64)
+                let lhs = read_word(mut reader)
+                let rhs = read_word(mut reader)
+                let modulus = read_word(mut reader)
+                write_word(mut text, addmod(lhs, rhs, modulus))
+                write_word(mut text, mulmod(lhs, rhs, modulus))
+            }
+            Option::None => break
         }
     }
+    print(text.span())
     0
 }
 "#,
@@ -1509,39 +1637,41 @@ fn native_bit_counts_match_runtime_inputs() {
     fs::write(
         &source,
         r#"
-use std::io::{HostIo, Read, Write, host, read_char}
+use core::MemBuffer
 use core::num::{leading_zeros, trailing_zeros}
-fn read_word() -> u256 uses (input: mut Read) {
+use std::io::{Stdin, StdinReader, Stdout, print}
+fn read_word(_ reader: mut StdinReader) -> u256 uses (input: mut Stdin) {
     var value: u256 = 0
     var i: u256 = 0
     while i < 32 {
-        let byte = read_char()
-        core::assert(byte >= 0)
-        let bits: u256 = byte.downcast_unchecked()
+        let bits: u256 = reader.read_byte().unwrap() as u256
         value = value | (bits << (i * 8))
         i += 1
     }
     value
 }
-fn write_word(_ value: u256) uses (output: mut HostIo) {
+fn write_word(_ text: mut MemBuffer, _ value: u256) {
     var i: u256 = 0
     while i < 32 {
-        output.write_char(c: ((value >> (i * 8)) & 255).downcast_unchecked())
-        core::assert(!output.failed())
+        text.push(((value >> (i * 8)) & 255).downcast_unchecked())
         i += 1
     }
 }
-pub fn main() -> i32 {
-    with (Read = host(), HostIo = host()) {
-        var marker = read_char()
-        while marker != -1 {
-            core::assert(marker == 64)
-            let value = read_word()
-            write_word(leading_zeros(value))
-            write_word(trailing_zeros(value))
-            marker = read_char()
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    var reader = StdinReader::new()
+    var text = MemBuffer::empty()
+    while true {
+        match reader.read_byte() {
+            Option::Some(marker) => {
+                core::assert(marker == 64)
+                let value = read_word(mut reader)
+                write_word(mut text, leading_zeros(value))
+                write_word(mut text, trailing_zeros(value))
+            }
+            Option::None => break
         }
     }
+    print(text.span())
     0
 }
 "#,

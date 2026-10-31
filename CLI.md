@@ -345,9 +345,9 @@ fe build --backend native --link target/release/libhost.a --link-lib gcc_s --lin
 #### Linking a native library
 
 A library needs only the C library: native code calls `malloc`, `free`, `memmove`, `write`,
-`fflush` and `abort`, and the `extern` functions its Fe code calls, such as `std`'s `getchar`,
-`putchar` and `clock`. C and Rust programs link the C library by default, so a C program needs
-only the Fe library:
+`fflush` and `abort`, and the `extern` functions its Fe code calls, such as `clock` for
+`std::native::cpu_clock_ticks`. C and Rust programs link the C library by default, so a C program
+needs only the Fe library:
 
 ```
 fe build --backend native --emit staticlib --out-dir out mylib.fe

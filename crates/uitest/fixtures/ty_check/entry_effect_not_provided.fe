@@ -1,0 +1,18 @@
+use std::evm::{Ctx, Evm}
+use std::io::{Stdout, println}
+
+// A test or a top-level `pub fn main` takes its effects from the target's
+// root effect, which on the EVM is `Evm`.
+#[test]
+fn prints() uses (out: mut Stdout) {
+    println("hi")
+}
+
+pub fn main() -> i32 uses (out: mut Stdout, ctx: Ctx, evm: Evm) {
+    0
+}
+
+// Other functions take theirs from their callers.
+fn helper() uses (out: mut Stdout) {
+    println("hi")
+}

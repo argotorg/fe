@@ -166,10 +166,12 @@ fn native_import_symbols_are_reserved_from_local_helpers() {
     let ir = with_top_mod_for_source(
         "native_import_collision.fe",
         r#"
-use std::io::{Write, host, write_char}
+extern {
+    fn putchar(_ c: i32) -> i32
+}
 mod local { pub fn putchar(value: i32) -> i32 { value + 1 } }
 pub fn main() -> i32 {
-    with (Write = host()) { write_char(65) }
+    let _ = unsafe { putchar(65) }
     local::putchar(value: 41)
 }
 "#,
@@ -323,16 +325,17 @@ fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
 #[test]
 fn native_external_functions_remain_declarations_with_exact_symbols() {
     let source = r#"
-use std::io::{Read, Write, host, read_char, write_char}
+extern {
+    fn getchar() -> i32
+    fn putchar(_ c: i32) -> i32
+}
 
 mod helpers {
     pub fn getchar() -> i32 { 7 }
 }
 
 pub fn main() -> i32 {
-    with (Read = host(), Write = host()) {
-        write_char(read_char() + helpers::getchar())
-    }
+    let _ = unsafe { putchar(getchar() + helpers::getchar()) }
     0
 }
 "#;
