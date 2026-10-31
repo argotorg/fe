@@ -3,8 +3,9 @@
 /// Each stream is a capability of the native root effect, `std::native::Host`.
 /// `main` and tests receive the streams they declare, as in
 /// `pub fn main() -> i32 uses (out: mut Stdout)`, and a function that prints
-/// declares the stream it writes. Output is unbuffered: each print is one
-/// write to the stream, so a later panic loses nothing.
+/// declares the stream it writes. `Stdio` provides all three:
+/// `uses (io: mut Stdio)`. Output is unbuffered: each print is one write to
+/// the stream, so a later panic loses nothing.
 use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes}
 use core::abi::DynString
 use core::num::{IntWord, UnsignedAbs}
@@ -34,6 +35,12 @@ pub trait Stdin: HostCapabilitySeal {
     /// read, zero at the end of input, or `None` if the stream fails.
     fn read_stdin(mut self, _ buf: mut MemSpan) -> Option<usize>
 }
+
+/// Standard input, output and error together: an effect keyed by `Stdio`
+/// provides `Stdout`, `Stderr` and `Stdin`.
+pub trait Stdio: Stdout + Stderr + Stdin {}
+
+impl Stdio for Host {}
 
 impl Stdout for Host {
     fn write_stdout(mut self, _ bytes: MemSpan) -> bool {

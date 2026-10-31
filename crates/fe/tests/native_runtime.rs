@@ -901,13 +901,21 @@ fn native_standard_streams_print_and_read() {
         &source,
         r#"
 use core::MemBuffer
-use std::io::{Stderr, Stdin, StdinReader, Stdout, eprint, eprintln, print, println, read_to_end}
+use std::io::{Stderr, Stdio, StdinReader, Stdout, eprint, eprintln, print, println}
 
 fn report(_ count: usize) uses (out: mut Stdout) {
     println(("lines: ", count))
 }
 
-pub fn main() -> i32 uses (out: mut Stdout, err: mut Stderr, input: mut Stdin) {
+// `Stdio` provides each stream, here two at once.
+fn both() uses (out: mut Stdout, err: mut Stderr) {
+    print("no newline")
+    println("")
+    eprint("to ")
+    eprintln("stderr")
+}
+
+pub fn main() -> i32 uses (io: mut Stdio) {
     println((0 as u8, " ", 255 as u8, " ", 65535 as u16, " ", 4294967295 as u32))
     println((18446744073709551615 as u64, " ", 340282366920938463463374607431768211455 as u128))
     println(115792089237316195423570985008687907853269984665640564039457584007913129639935 as u256)
@@ -924,10 +932,7 @@ pub fn main() -> i32 uses (out: mut Stdout, err: mut Stderr, input: mut Stdin) {
     println((0 as usize, " ", minus, " ", true, " ", false))
     let padded: String<8> = "ab"
     println((padded, "|", "a literal longer than thirty-one bytes"))
-    print("no newline")
-    println("")
-    eprint("to ")
-    eprintln("stderr")
+    both()
 
     var reader = StdinReader::new()
     let first = reader.read_byte().unwrap()
