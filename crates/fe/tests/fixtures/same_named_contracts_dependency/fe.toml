@@ -1,0 +1,4 @@
+[workspace]
+name = "same_named_contracts_dependency"
+version = "0.1.0"
+members = ["ingots/*"]

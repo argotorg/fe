@@ -20,7 +20,7 @@ use common::{
 };
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
-use hir::hir_def::{HirIngot, ManualContractRootAttr, TopLevelMod};
+use hir::hir_def::{HirIngot, TopLevelMod};
 use hir::lower::map_file_to_mod;
 use mir::build_runtime_package;
 use salsa::Setter;
@@ -56,6 +56,8 @@ struct BuildReportContext {
 #[derive(Debug, Default)]
 struct IngotBuildAnalysis {
     contract_names: Vec<String>,
+    /// The names written in the source, which `--contract` also accepts.
+    source_names: Vec<String>,
     abi_artifact_names: Vec<String>,
 }
 
@@ -500,11 +502,11 @@ pub fn build_from_metadata(
     let contract = contract
         .map(str::to_string)
         .or_else(|| recorded_target.as_ref().map(|(_, name)| name.clone()));
-    // The recorded source path pins which module defines the target, in case
-    // another module defines a same-named contract; it only applies while
-    // building the recorded contract. Standalone-target metadata keys its
-    // source by bare file basename, which `reconstruct_project` materializes
-    // under `src/`; mirror that so the path resolves in the rebuilt ingot.
+    // The recorded source path and the contract's path in that file identify
+    // the target; they only apply while building the recorded contract.
+    // Standalone-target metadata keys its source by bare file basename, which
+    // `reconstruct_project` materializes under `src/`; mirror that so the path
+    // resolves in the rebuilt ingot.
     let target_source = recorded_target
         .filter(|(_, name)| contract.as_deref() == Some(name))
         .map(|(path, _)| {
@@ -848,6 +850,7 @@ fn build_workspace(
     let abi_collision_check_needs_filtering =
         emit.abi && !emit.writes_any_bytecode() && contract.is_none();
     let mut contract_names_by_member = Vec::with_capacity(selected_member_paths.len());
+    let mut source_names_by_member = Vec::with_capacity(selected_member_paths.len());
     let mut abi_artifact_names_by_member = Vec::with_capacity(selected_member_paths.len());
     for member in members {
         let member_path = workspace_root.join(member.path.as_str());
@@ -863,16 +866,26 @@ fn build_workspace(
             Err(()) => return true,
         };
         contract_names_by_member.push((member.clone(), analysis.contract_names));
+        source_names_by_member.push((member.clone(), analysis.source_names));
         if abi_collision_check_needs_filtering {
             abi_artifact_names_by_member.push((member, analysis.abi_artifact_names));
         }
     }
 
     if let Some(contract) = contract {
+        // A member matches when one of its contracts has `contract` as its
+        // artifact or source name. A single matching member then resolves the
+        // name among its own contracts.
         let matches: Vec<_> = contract_names_by_member
             .iter()
-            .filter(|(_, names)| names.iter().any(|name| name == contract))
-            .map(|(member, _)| member)
+            .zip(&source_names_by_member)
+            .filter(|((_, names), (_, source_names))| {
+                names
+                    .iter()
+                    .chain(source_names)
+                    .any(|name| name == contract)
+            })
+            .map(|((member, _), _)| member)
             .collect();
 
         match matches.len() {
@@ -1010,6 +1023,12 @@ fn analyze_ingot_build_artifacts(
     }
 
     let contract_names = collect_workspace_contract_names(db, ingot);
+    let source_names = mir::ingot_contracts(db, ingot)
+        .iter()
+        .map(|contract| contract.source_name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
 
     let abi_artifact_names = if include_abi_artifact_names {
         collect_ingot_abi_artifact_names(db, ingot).map_err(|err| {
@@ -1021,6 +1040,7 @@ fn analyze_ingot_build_artifacts(
 
     Ok(IngotBuildAnalysis {
         contract_names,
+        source_names,
         abi_artifact_names,
     })
 }
@@ -1255,13 +1275,15 @@ fn build_ingot(
         }
     };
 
-    // `--from-metadata` records the contract's defining source file in
-    // `settings.compilationTarget`; scope emission to that module so a
-    // same-named contract in another module cannot make the target ambiguous.
-    // A recorded target that doesn't resolve is an error, never a fallback to
-    // ingot-wide resolution: that could silently rebuild the wrong source.
-    let target_mod = match (target_source, contract) {
-        (Some(key), Some(name)) => {
+    // `--from-metadata` records the contract as its source file and its path in
+    // that file (`settings.compilationTarget`). Neither depends on the other
+    // contracts or on how the file was built, so they find the contract in the
+    // rebuilt ingot. Scope emission to that module and build the contract's
+    // artifact. A recorded target that doesn't resolve is an error, never a
+    // fallback to ingot-wide resolution: that could silently rebuild the wrong
+    // source.
+    let (target_mod, contract) = match (target_source, contract) {
+        (Some(key), Some(path)) => {
             let mut sources = BTreeMap::new();
             collect_ingot_sources_prefixed(db, ingot, None, &mut sources);
             let Some((top_mod, _)) = sources.get(key) else {
@@ -1271,16 +1293,19 @@ fn build_ingot(
                 );
                 return BuildSummary { had_errors: true };
             };
-            if !module_defines_contract(db, *top_mod, name) {
+            let Some(declared) = mir::ingot_contracts(db, ingot)
+                .iter()
+                .find(|declared| declared.top_mod == *top_mod && declared.path_in_file == path)
+            else {
                 eprintln!(
-                    "Error: `{key}` does not define the contract `{name}` recorded in \
+                    "Error: `{key}` does not define the contract `{path}` recorded in \
                      `settings.compilationTarget`"
                 );
                 return BuildSummary { had_errors: true };
-            }
-            Some(*top_mod)
+            };
+            (Some(*top_mod), Some(declared.name.as_str()))
         }
-        _ => None,
+        _ => (None, contract),
     };
 
     if contract_names.is_empty() {
@@ -1288,11 +1313,18 @@ fn build_ingot(
         return BuildSummary { had_errors: true };
     }
 
-    let names_to_build =
-        match resolve_names_to_build(contract_names, contract, missing_contract_is_error) {
-            Ok(names) => names,
-            Err(summary) => return summary,
-        };
+    let names_to_build = match resolve_names_to_build(
+        db,
+        ingot,
+        contract_names,
+        contract,
+        missing_contract_is_error,
+    ) {
+        Ok(names) => names,
+        Err(summary) => return summary,
+    };
+    // `--contract` may give a source name; codegen selects by artifact name.
+    let contract = contract.and_then(|_| names_to_build.first().map(String::as_str));
     if let Err(err) = ensure_output_dirs(emit, out_dir, ir_out_dir) {
         eprintln!("Error: {err}");
         return BuildSummary { had_errors: true };
@@ -1355,14 +1387,7 @@ fn build_ingot(
     }
 
     if emit.abi {
-        // For ingot builds, generate ABI from each top-level module
-        use hir::hir_def::HirIngot;
-        for top_mod in ingot.all_modules(db) {
-            if target_mod.is_some_and(|target| *top_mod != target) {
-                continue;
-            }
-            had_errors |= write_abi_artifacts(db, *top_mod, &names_to_build, out_dir, report_dir);
-        }
+        had_errors |= write_abi_artifacts(db, ingot, &names_to_build, out_dir, report_dir);
     }
 
     if emit.metadata {
@@ -1435,11 +1460,18 @@ fn build_top_mod(
         return BuildSummary { had_errors: true };
     }
 
-    let names_to_build =
-        match resolve_names_to_build(contract_names, contract, missing_contract_is_error) {
-            Ok(names) => names,
-            Err(summary) => return summary,
-        };
+    let names_to_build = match resolve_names_to_build(
+        db,
+        top_mod.ingot(db),
+        contract_names,
+        contract,
+        missing_contract_is_error,
+    ) {
+        Ok(names) => names,
+        Err(summary) => return summary,
+    };
+    // `--contract` may give a source name; codegen selects by artifact name.
+    let contract = contract.and_then(|_| names_to_build.first().map(String::as_str));
     if let Err(err) = ensure_output_dirs(emit, out_dir, ir_out_dir) {
         eprintln!("Error: {err}");
         return BuildSummary { had_errors: true };
@@ -1491,7 +1523,8 @@ fn build_top_mod(
     }
 
     if emit.abi {
-        had_errors |= write_abi_artifacts(db, top_mod, &names_to_build, out_dir, report_dir);
+        had_errors |=
+            write_abi_artifacts(db, top_mod.ingot(db), &names_to_build, out_dir, report_dir);
     }
 
     if emit.metadata {
@@ -1641,71 +1674,25 @@ fn collect_ingot_contract_names(
     Ok(names)
 }
 
-/// Whether `top_mod` defines `name` as a contract or manual contract root — the
-/// same definitions `write_metadata_artifacts` records in `compilationTarget`.
-fn module_defines_contract(db: &DriverDataBase, top_mod: TopLevelMod<'_>, name: &str) -> bool {
-    if top_mod.all_contracts(db).iter().any(|contract| {
-        contract
-            .name(db)
-            .to_opt()
-            .is_some_and(|n| n.data(db) == name)
-    }) {
-        return true;
-    }
-    top_mod.all_funcs(db).iter().any(|&func| {
-        func.top_mod(db) == top_mod
-            && match func.manual_contract_root_attr(db) {
-                Some(ManualContractRootAttr::Init { contract_name })
-                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
-                    contract_name.data(db) == name
-                }
-                Some(ManualContractRootAttr::Error(_)) | None => false,
-            }
-    })
-}
-
+/// The artifact names of the contracts `ingot` declares.
 fn collect_workspace_contract_names(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> Vec<String> {
-    let mut names = BTreeSet::new();
-    for &top_mod in ingot.all_modules(db) {
-        for contract in top_mod.all_contracts(db) {
-            if let Some(name) = contract.name(db).to_opt() {
-                names.insert(name.data(db).to_string());
-            }
-        }
-        for &func in top_mod.all_funcs(db) {
-            if func.top_mod(db) != top_mod {
-                continue;
-            }
-            match func.manual_contract_root_attr(db) {
-                Some(ManualContractRootAttr::Init { contract_name })
-                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
-                    names.insert(contract_name.data(db).to_string());
-                }
-                Some(ManualContractRootAttr::Error(_)) | None => {}
-            }
-        }
-    }
-    names.into_iter().collect()
+    mir::ingot_contracts(db, ingot)
+        .iter()
+        .map(|contract| contract.name.clone())
+        .collect()
 }
 
 fn collect_ingot_abi_artifact_names(
     db: &DriverDataBase,
     ingot: hir::Ingot<'_>,
 ) -> Result<Vec<String>, String> {
-    use hir::hir_def::HirIngot;
-
     let mut names = BTreeSet::new();
-    for top_mod in ingot.all_modules(db) {
-        for contract in top_mod.all_contracts(db) {
-            let Some(name) = contract.name(db).to_opt().map(|name| name.data(db).clone()) else {
-                continue;
-            };
-            let Some(result) = crate::abi::generate_contract_abi(db, *top_mod, &name)? else {
-                continue;
-            };
-            if result.entry_count > 0 {
-                names.insert(name);
-            }
+    for declared in mir::ingot_contracts(db, ingot) {
+        let Some(contract) = declared.contract() else {
+            continue;
+        };
+        if crate::abi::generate_contract_abi(db, contract)?.entry_count > 0 {
+            names.insert(declared.name.clone());
         }
     }
 
@@ -1721,7 +1708,15 @@ fn workspace_member_ir_out_dir(
         .then(|| out_dir.join(sanitize_filename(member_name)))
 }
 
+/// The artifact names to build for `--contract`, or all of `contract_names`
+/// without it.
+///
+/// `--contract` selects the contracts whose artifact name or source name it
+/// is, and must select exactly one. A source name several contracts share is
+/// ambiguous: the contracts are listed so one can be picked by artifact name.
 fn resolve_names_to_build(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
     contract_names: Vec<String>,
     contract: Option<&str>,
     missing_contract_is_error: bool,
@@ -1730,8 +1725,36 @@ fn resolve_names_to_build(
         return Ok(contract_names);
     };
 
-    if contract_names.iter().any(|candidate| candidate == name) {
-        return Ok(vec![name.to_string()]);
+    let contracts = mir::ingot_contracts(db, ingot);
+    let declaration =
+        |candidate: &str| contracts.iter().find(|declared| declared.name == candidate);
+    let matches: Vec<_> = contract_names
+        .iter()
+        .filter(|candidate| {
+            *candidate == name
+                || declaration(candidate).is_some_and(|declared| declared.source_name == name)
+        })
+        .collect();
+    match matches.as_slice() {
+        [] => {}
+        [only] => return Ok(vec![only.to_string()]),
+        several => {
+            eprintln!("Error: Contract \"{name}\" is defined more than once");
+            eprintln!("Select one by its artifact name:");
+            let mut sources = BTreeMap::new();
+            collect_ingot_sources_prefixed(db, ingot, None, &mut sources);
+            for candidate in several {
+                match declaration(candidate).and_then(|declared| {
+                    sources
+                        .iter()
+                        .find(|(_, (top_mod, _))| *top_mod == declared.top_mod)
+                }) {
+                    Some((path, _)) => eprintln!("  - {candidate} ({path})"),
+                    None => eprintln!("  - {candidate}"),
+                }
+            }
+            return Err(BuildSummary { had_errors: true });
+        }
     }
     if missing_contract_is_error {
         eprintln!("Error: Contract \"{name}\" not found");
@@ -1763,15 +1786,24 @@ fn ensure_output_dirs(
 
 fn write_abi_artifacts(
     db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
+    ingot: hir::Ingot<'_>,
     names_to_build: &[String],
     out_dir: &Utf8Path,
     report_dir: Option<&Utf8Path>,
 ) -> bool {
     let mut had_errors = false;
+    let contracts = mir::ingot_contracts(db, ingot);
     for name in names_to_build {
-        match crate::abi::generate_contract_abi(db, top_mod, name) {
-            Ok(Some(result)) => {
+        // Manual contract roots and `main` have no ABI.
+        let Some(contract) = contracts
+            .iter()
+            .find(|candidate| candidate.name == *name)
+            .and_then(|candidate| candidate.contract())
+        else {
+            continue;
+        };
+        match crate::abi::generate_contract_abi(db, contract) {
+            Ok(result) => {
                 for warning in &result.warnings {
                     eprintln!("Warning: {warning}");
                 }
@@ -1801,7 +1833,6 @@ fn write_abi_artifacts(
                     println!("Wrote {out_dir}/{base}.abi.json");
                 }
             }
-            Ok(None) => {} // Contract not in this module, skip
             Err(err) => {
                 eprintln!("Error: Failed to generate ABI for {name}: {err}");
                 had_errors = true;
@@ -2040,30 +2071,16 @@ fn write_metadata_artifacts(
         collect_ingot_sources_prefixed(db, dep, Some(&ns), &mut all_sources);
     }
 
-    // Map each root contract name to its source path and defining module.
-    let mut name_to_loc: BTreeMap<String, (String, TopLevelMod<'_>)> = BTreeMap::new();
-    for (path_key, (top_mod, _)) in &root_sources {
-        for contract in top_mod.all_contracts(db) {
-            if let Some(name) = contract.name(db).to_opt() {
-                name_to_loc
-                    .entry(name.data(db).to_string())
-                    .or_insert_with(|| (path_key.clone(), *top_mod));
-            }
-        }
-        for &func in top_mod.all_funcs(db) {
-            if func.top_mod(db) != *top_mod {
-                continue;
-            }
-            match func.manual_contract_root_attr(db) {
-                Some(ManualContractRootAttr::Init { contract_name })
-                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
-                    name_to_loc
-                        .entry(contract_name.data(db).to_string())
-                        .or_insert_with(|| (path_key.clone(), *top_mod));
-                }
-                Some(ManualContractRootAttr::Error(_)) | None => {}
-            }
-        }
+    // Map each root contract's artifact name to its source path and declaration.
+    let mut name_to_loc: BTreeMap<&str, (&str, &mir::IngotContract<'_>)> = BTreeMap::new();
+    for declared in mir::ingot_contracts(db, ingot) {
+        let Some((path_key, _)) = root_sources
+            .iter()
+            .find(|(_, (top_mod, _))| *top_mod == declared.top_mod)
+        else {
+            continue;
+        };
+        name_to_loc.insert(&declared.name, (path_key, declared));
     }
 
     // `sources` object (shared across this ingot's contracts), with keccak256 + content.
@@ -2133,28 +2150,36 @@ fn write_metadata_artifacts(
     let compiler = serde_json::Value::Object(compiler);
 
     for name in names_to_build {
-        let Some((source_path, top_mod)) = name_to_loc.get(name) else {
+        let Some(&(source_path, declared)) = name_to_loc.get(name.as_str()) else {
             continue;
         };
 
-        let abi_value = match crate::abi::generate_contract_abi(db, *top_mod, name) {
-            Ok(Some(result)) => {
+        let abi_value = match declared
+            .contract()
+            .map(|contract| crate::abi::generate_contract_abi(db, contract))
+        {
+            Some(Ok(result)) => {
                 for warning in &result.warnings {
                     eprintln!("Warning: {warning}");
                 }
                 serde_json::from_str::<serde_json::Value>(&result.json)
                     .unwrap_or_else(|_| serde_json::json!([]))
             }
-            Ok(None) => serde_json::json!([]),
-            Err(err) => {
+            None => serde_json::json!([]),
+            Some(Err(err)) => {
                 eprintln!("Error: Failed to generate ABI for {name}: {err}");
                 had_errors = true;
                 serde_json::json!([])
             }
         };
 
+        // The source file and the contract's path in it, which identify the
+        // contract wherever the file is built.
         let mut compilation_target = serde_json::Map::new();
-        compilation_target.insert(source_path.clone(), serde_json::Value::String(name.clone()));
+        compilation_target.insert(
+            source_path.to_string(),
+            serde_json::Value::String(declared.path_in_file.clone()),
+        );
 
         let value = serde_json::json!({
             "version": 1,
@@ -2461,7 +2486,8 @@ mod tests {
         fs::create_dir_all(report_dir.as_std_path()).expect("create report dir");
 
         let names = vec!["Foo".to_string()];
-        let had_errors = write_abi_artifacts(&db, top_mod, &names, &out_dir, Some(&report_dir));
+        let had_errors =
+            write_abi_artifacts(&db, top_mod.ingot(&db), &names, &out_dir, Some(&report_dir));
         assert!(!had_errors, "unexpected ABI write error");
 
         let out_abi = out_dir.join("Foo.abi.json");
@@ -2506,7 +2532,7 @@ mod tests {
         let names = vec!["Foo".to_string()];
         let had_errors = write_abi_artifacts(
             &first_db,
-            first_top_mod,
+            first_top_mod.ingot(&first_db),
             &names,
             &out_dir,
             Some(&report_dir),
@@ -2540,7 +2566,7 @@ pub contract Foo {
         let second_top_mod = second_db.top_mod(second_file);
         let had_errors = write_abi_artifacts(
             &second_db,
-            second_top_mod,
+            second_top_mod.ingot(&second_db),
             &names,
             &out_dir,
             Some(&report_dir),

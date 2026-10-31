@@ -14,7 +14,7 @@ pub use origin::{
 };
 pub use runtime::{
     ArrayLayout, BorrowAccess, BorrowTransportSet, ConstNode, ConstRegion, ConstRegionId,
-    ConstScalar, ContractFieldSlot, EnumLayout, EnumVariantLayout, FieldPlacement,
+    ConstScalar, ContractFieldSlot, EnumLayout, EnumVariantLayout, FieldPlacement, IngotContract,
     IntrinsicArithBinOp, Layout, LayoutId, LowerError, LoweredRuntimeBody, PlaceElem, PlaceRoot,
     RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RValueId, RefKind, RefView,
     ResolvedCodeRegion, ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace,
@@ -27,9 +27,9 @@ pub use runtime::{
     ScalarRepr, ScalarRole, StructLayout, VariantId, build_ingot_module_runtime_package,
     build_native_executable_package, build_native_test_runtime_package, build_runtime_package,
     build_test_runtime_package, format_runtime_body, format_runtime_body_excerpt,
-    format_runtime_package, format_runtime_verify_failure, native_executable_entry,
-    runtime_instance_stable_key, runtime_instance_symbol_key, runtime_param_accesses,
-    scalar_raw_memory_size_bytes, serialize_const_region_bytes,
+    format_runtime_package, format_runtime_verify_failure, ingot_contracts,
+    native_executable_entry, runtime_instance_stable_key, runtime_instance_symbol_key,
+    runtime_param_accesses, scalar_raw_memory_size_bytes, serialize_const_region_bytes,
 };
 pub use verify::{
     VerifyError, resolve_runtime_place, resolve_runtime_place_address_class, verify_const_region,

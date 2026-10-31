@@ -1,0 +1,34 @@
+use ingot::{Get, a, b}
+
+#[test]
+fn each_contract_keeps_its_own_code() uses (evm: mut Evm) {
+    let first = evm.create2<a::C>(value: Wei::zero(), args: (), salt: 0)
+    let second = evm.create2<b::C>(value: Wei::zero(), args: (), salt: 1)
+    let third = evm.create2<a::inner::C>(value: Wei::zero(), args: (), salt: 2)
+    assert!(first != second)
+    assert!(second != third)
+    let first_reply: u256 = evm
+        .call(
+            addr: first,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Get::Get {},
+        )
+    let second_reply: u256 = evm
+        .call(
+            addr: second,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Get::Get {},
+        )
+    let third_reply: u256 = evm
+        .call(
+            addr: third,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Get::Get {},
+        )
+    assert!(first_reply == 1)
+    assert!(second_reply == 2)
+    assert!(third_reply == 3)
+}

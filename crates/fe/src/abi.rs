@@ -18,7 +18,7 @@ use hir::{
         },
     },
     hir_def::{
-        FieldDefListId, Func, GenericParamOwner, IdentId, PathId, Struct, TopLevelMod, Trait,
+        Contract, FieldDefListId, Func, GenericParamOwner, IdentId, PathId, Struct, Trait,
         scope_graph::ScopeId,
     },
 };
@@ -95,28 +95,11 @@ enum RecvArmAbiEmission {
     Skip(String),
 }
 
-/// Generate an Ethereum-compatible JSON ABI for a given contract inside `top_mod`.
-///
-/// Returns `Ok(None)` if the contract is not found in this module (useful for
-/// ingot builds where a contract may live in a different module).
+/// Generate an Ethereum-compatible JSON ABI for `contract`.
 pub fn generate_contract_abi(
     db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
-    contract_name: &str,
-) -> Result<Option<AbiResult>, String> {
-    let Some(contract) = top_mod
-        .all_contracts(db)
-        .iter()
-        .find(|c| {
-            c.name(db)
-                .to_opt()
-                .is_some_and(|n| n.data(db).as_str() == contract_name)
-        })
-        .copied()
-    else {
-        return Ok(None);
-    };
-
+    contract: Contract<'_>,
+) -> Result<AbiResult, String> {
     let mut entries = Vec::new();
     let mut warnings = Vec::new();
 
@@ -178,11 +161,11 @@ pub fn generate_contract_abi(
     let entry_count = entries.len();
     let json = serde_json::to_string_pretty(&entries)
         .map_err(|e| format!("JSON serialization error: {e}"))?;
-    Ok(Some(AbiResult {
+    Ok(AbiResult {
         json,
         entry_count,
         warnings,
-    }))
+    })
 }
 
 fn recv_arm_to_abi_entry(
@@ -845,8 +828,17 @@ mod tests {
         let mut db = DriverDataBase::default();
         let file = db.workspace().touch(&mut db, url, Some(code.to_string()));
         let top_mod = db.top_mod(file);
-        generate_contract_abi(&db, top_mod, contract_name)?
-            .ok_or_else(|| format!("contract `{contract_name}` not found"))
+        let contract = top_mod
+            .all_contracts(&db)
+            .iter()
+            .copied()
+            .find(|c| {
+                c.name(&db)
+                    .to_opt()
+                    .is_some_and(|n| n.data(&db).as_str() == contract_name)
+            })
+            .ok_or_else(|| format!("contract `{contract_name}` not found"))?;
+        generate_contract_abi(&db, contract)
     }
 
     fn generate_test_abi(code: &str, contract_name: &str) -> Result<String, String> {
