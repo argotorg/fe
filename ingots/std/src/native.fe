@@ -1,9 +1,8 @@
 /// Interfaces to the native host runtime.
-use core::ptr
 
 /// The native root effect. `main` and tests receive the host's capabilities,
-/// such as `std::io::Stdout`, from it by declaring them in `uses`; nothing
-/// else can create one.
+/// such as `std::io::Stdout`, `std::env::Args` and `std::process::Exit`,
+/// from it by declaring them in `uses`; nothing else can create one.
 pub struct Host { unsafe seal: Private }
 
 struct Private {}
@@ -27,44 +26,4 @@ extern {
 /// as i64: the C failure sentinel is -1, and counts beyond i64::MAX are negative.
 pub fn cpu_clock_ticks() -> i64 {
     clock()
-}
-
-/// Read-only view of the process argument vector supplied to native main.
-/// The entry bridge translates C pointer slots into ordinary Fe pointer slots.
-/// Construct this only from that argc/argv pair, or equivalent valid raw parts.
-pub struct Args { unsafe argc: i32, unsafe argv: **u8 }
-
-/// A process argument, including empty strings and arbitrary nonzero bytes.
-pub struct Arg { unsafe ptr: *u8, unsafe len: usize }
-
-impl Args {
-    /// The caller must ensure that `argv` points to `argc` pointers to
-    /// NUL-terminated strings that stay live while the arguments are read.
-    pub unsafe fn new(_ argc: i32, _ argv: **u8) -> Self {
-        core::assert(argc >= 0)
-        Self { argc, argv }
-    }
-    pub fn len(self) -> usize {
-        self.argc.downcast_unchecked()
-    }
-    pub fn get(self, _ index: usize) -> Arg {
-        core::assert(index < self.len())
-        let bytes = unsafe { *ptr::offset(self.argv, index) }
-        var len: usize = 0
-        while unsafe { *ptr::offset(bytes, len) } != 0 {
-            len += 1
-        }
-        // `bytes` is a live argument string of `len` bytes before its NUL.
-        unsafe { Arg { ptr: bytes, len } }
-    }
-}
-
-impl Arg {
-    pub fn len(self) -> usize {
-        self.len
-    }
-    pub fn byte_at(self, _ index: usize) -> u8 {
-        core::assert(index < self.len)
-        unsafe { *ptr::offset(self.ptr, index) }
-    }
 }

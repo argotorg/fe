@@ -1,0 +1,20 @@
+/// Ending the process, a capability of the native root effect,
+/// `std::native::Host`: `pub fn main() -> i32 uses (proc: Exit)`.
+use super::native::{Host, HostCapabilitySeal}
+
+extern {
+    // The C library's `exit`.
+    fn exit(_ status: i32) -> !
+}
+
+/// Ending the process.
+pub trait Exit: HostCapabilitySeal {
+    /// Ends the process with `status` at once; destructors do not run.
+    fn exit(self, _ status: i32) -> !
+}
+
+impl Exit for Host {
+    fn exit(self, _ status: i32) -> ! {
+        unsafe { exit(status) }
+    }
+}

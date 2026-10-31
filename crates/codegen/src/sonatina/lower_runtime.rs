@@ -1,9 +1,11 @@
+mod host_state;
 mod memory_reference;
 mod native_panic;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use host_state::HostState;
 use memory_reference::{MemoryReference, ReferentLayout};
 pub(super) use native_panic::NativePanics;
 use native_panic::{COMPILER_SYMBOL_PREFIX, NativePanic};
@@ -362,6 +364,8 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                         .map(HostFunction::symbol)
                         .into_iter()
                         .chain(NativePanic::ALL.map(NativePanic::symbol))
+                        .chain(HostState::ALL.map(HostState::accessor))
+                        .chain(HostState::ALL.map(HostState::global))
                         .collect()
                 } else {
                     Vec::new()
@@ -487,8 +491,12 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let instance = function.instance(self.db);
         let (mut args, ret) = self.signature_tys(instance)?;
         let symbol = self.function_symbol(instance);
+        // The compiler defines the host state accessors that `std::env`
+        // declares, privately to the module.
+        let host_state = HostState::from_accessor(&symbol).filter(|_| self.is_native_target());
         if function.linkage(self.db) == RuntimeLinkage::External
             && symbol.starts_with(COMPILER_SYMBOL_PREFIX)
+            && host_state.is_none()
         {
             return Err(LowerError::Unsupported(format!(
                 "extern symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
@@ -517,18 +525,14 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             self.argument_packs.insert(instance, pack);
             args = vec![self.builder.objref_type(pack)];
         }
+        let linkage = if host_state.is_some() {
+            Linkage::Private
+        } else {
+            linkage_for_runtime(function.linkage(self.db))
+        };
         Ok(match ret {
-            Some(ret) => Signature::new_single(
-                &symbol,
-                linkage_for_runtime(function.linkage(self.db)),
-                &args,
-                ret,
-            ),
-            None => Signature::new_unit(
-                &symbol,
-                linkage_for_runtime(function.linkage(self.db)),
-                &args,
-            ),
+            Some(ret) => Signature::new_single(&symbol, linkage, &args, ret),
+            None => Signature::new_unit(&symbol, linkage, &args),
         })
     }
 
@@ -708,6 +712,13 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
         for &function in self.package.functions(self.db) {
             if function.linkage(self.db) == RuntimeLinkage::External {
+                let instance = function.instance(self.db);
+                if self.is_native_target()
+                    && let Some(state) = HostState::from_accessor(&self.function_symbol(instance))
+                {
+                    let func = self.func_ref(instance)?;
+                    self.define_host_state_accessor(func, state)?;
+                }
                 continue;
             }
             let instance = function.instance(self.db);

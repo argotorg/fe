@@ -1022,6 +1022,65 @@ pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
 }
 
 #[test]
+fn native_environment_and_exit() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("environment.fe");
+    fs::write(
+        &source,
+        r#"
+use core::Option
+use std::env::Env
+use std::io::Stdout
+use std::process::Exit
+pub fn main() -> i32 uses (out: mut Stdout, env: Env, proc: Exit) {
+    match env.lookup("FE_NATIVE_VALUE") {
+        Option::Some(value) => print!("[", value, "]"),
+        Option::None => print!("unset"),
+    }
+    // Any `Display` value names a variable.
+    let name = format!("FE_NATIVE", "_VALUE")
+    core::assert(env.lookup(name.span()).is_some() == env.lookup("FE_NATIVE_VALUE").is_some())
+    proc.exit(7)
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("environment");
+        for (value, expected) in [
+            (Some("a=b c"), &b"[a=b c]"[..]),
+            (Some(""), b"[]"),
+            (None, b"unset"),
+        ] {
+            let mut command = Command::new(&executable);
+            match value {
+                Some(value) => command.env("FE_NATIVE_VALUE", value),
+                None => command.env_remove("FE_NATIVE_VALUE"),
+            };
+            let result = command.output().unwrap();
+            assert_eq!(result.status.code(), Some(7), "{result:?}");
+            assert_eq!(result.stdout, expected);
+        }
+    }
+
+    // A test is not an executable's entry, so it has no arguments.
+    let source = temp.path().join("tests.fe");
+    fs::write(
+        &source,
+        "use std::env::Args\n#[test]\nfn no_arguments() uses (args: Args) { core::assert(args.count() == 0) }\n",
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["test", "--backend", "native"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
+
+#[test]
 fn native_entries_take_only_host_effects() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("evm_effect.fe");
@@ -1450,39 +1509,32 @@ pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
 }
 
 #[test]
-fn native_arguments_preserve_bytes_bounds_and_internal_entry_calls() {
+fn native_arguments_preserve_bytes_bounds_and_the_entry_name() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("arguments.fe");
     fs::write(
         &source,
         r#"
 use core::MemBuffer
+use std::env::Args
 use std::io::Stdout
-use std::native::Args
+// The entry's internal name is free for a Fe function.
 fn __fe_native_main() -> i32 { 42 }
-pub fn main(argc: i32, argv: **u8) -> i32 uses (out: mut Stdout) {
-    if argc == 0 { return __fe_native_main() }
-    let args = unsafe { Args::new(argc, argv) }
-    core::assert(args.len() == argc.downcast_unchecked())
-    if argc == 1 { args.get(args.len()) }
-    if argc == 2 {
+pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
+    core::assert(__fe_native_main() == 42)
+    if args.count() == 1 { let _ = args.get(args.count()) }
+    if args.count() == 2 {
         let arg = args.get(1)
-        arg.byte_at(arg.len())
+        let _ = arg.span()[arg.len()]
     }
-    core::assert(main(argc: 0, argv) == 42)
     var text = MemBuffer::empty()
     var i: usize = 1
-    while i < args.len() {
-        let arg = args.get(i)
-        var j: usize = 0
-        while j < arg.len() {
-            text.push(arg.byte_at(j))
-            j += 1
-        }
+    while i < args.count() {
+        text.extend_from(args.get(i).span())
         text.push(124)
         i += 1
     }
-    print!(text.span())
+    print!(text)
     0
 }
 "#,

@@ -9,9 +9,9 @@ error[2-0003]: `seal` is not visible
 15 │     Host { seal: Fake {} }
    │            ^^^^^^^^^^^^^ `seal` is not visible
    │
-   ┌─ src/native.fe:7:26
+   ┌─ src/native.fe:6:26
    │
- 7 │ pub struct Host { unsafe seal: Private }
+ 6 │ pub struct Host { unsafe seal: Private }
    │                          ---- `seal` is defined here
 
 error[6-0003]: trait bound is not satisfied

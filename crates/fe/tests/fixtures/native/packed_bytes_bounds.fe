@@ -1,7 +1,8 @@
 use core::{AsBytes, PackedBytes}
+use std::env::Args
 
-pub fn main(argc: i32, argv: **u8) -> i32 {
-    let _ = argv
+pub fn main() -> i32 uses (args: Args) {
+    let argc = args.count()
     if argc == 1 {
         let empty = PackedBytes::from_array([0 as u8; 0])
         assert!(empty[0] == 0)

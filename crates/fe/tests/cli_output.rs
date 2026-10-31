@@ -992,7 +992,7 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
     }
     assert_eq!(cases.len(), 24);
 
-    let mut source = String::from("use std::native::Args\n");
+    let mut source = String::from("use std::env::Args\n");
     for (index, (ty, op, _, _)) in cases.iter().enumerate() {
         source.push_str(&format!(
             "fn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
@@ -1000,12 +1000,11 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
     }
     source.push_str(
         r#"
-pub fn main(argc: i32, argv: **u8) -> i32 {
-    let args = unsafe { Args::new(argc, argv) }
-    if args.len() != 2 { return 97 }
+pub fn main() -> i32 uses (args: Args) {
+    if args.count() != 2 { return 97 }
     let arg = args.get(1)
     if arg.len() != 1 { return 97 }
-    let selector = arg.byte_at(0)
+    let selector = arg.span()[0]
 "#,
     );
     let selectors: Vec<_> = cases
