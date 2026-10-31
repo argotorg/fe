@@ -866,7 +866,9 @@ impl<'db> TyChecker<'db> {
             && let Some(forwarder) =
                 seed_forwarder_from_requirement(self, &req, provided, scope, assumptions)
         {
-            self.env.effect_env_mut().insert_base_forwarder(forwarder);
+            self.env
+                .effect_env_mut()
+                .insert_base_forwarder(self.db, forwarder, scope, assumptions);
         }
     }
 
@@ -1830,7 +1832,14 @@ impl<'db> TyChecker<'db> {
                                     self.insert_effect_barrier(barrier);
                                     continue;
                                 }
-                                self.env.effect_env_mut().insert_witness(self.db, witness);
+                                let (scope, assumptions) =
+                                    (self.env.scope(), self.env.assumptions());
+                                self.env.effect_env_mut().insert_witness(
+                                    self.db,
+                                    witness,
+                                    scope,
+                                    assumptions,
+                                );
                             }
                             Err(barrier) => {
                                 self.insert_effect_barrier(*barrier);
