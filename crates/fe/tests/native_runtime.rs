@@ -538,6 +538,63 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_object_views_and_raw_accesses_see_each_other() {
+    // An object view and raw pointers address the same memory: a write
+    // through either is seen through the other, in the same function and
+    // across calls.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("views.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr::{self, cast, offset_bytes}
+
+struct Pair { a: u64, b: u64 }
+
+impl Pair {
+    fn bump(mut self) {
+        self.a += 1
+        self.b += 2
+    }
+}
+
+#[inline(never)]
+fn bump_at(_ pair: *Pair) {
+    unsafe { (*pair).bump() }
+}
+
+#[inline(never)]
+fn poke(_ pair: *Pair, b: u64) {
+    unsafe { *offset_bytes(cast<Pair, u64>(pair), 8) = b }
+}
+
+pub fn main() -> i32 {
+    let pair = ptr::alloc<Pair>()
+    let first = cast<Pair, u64>(pair)
+    let second = offset_bytes(first, 8)
+    unsafe { *pair = Pair { a: 1, b: 2 } }
+    if unsafe { *first } != 1 || unsafe { *second } != 2 { return 1 }
+    unsafe { *first = 10 }
+    if unsafe { (*pair).a } != 10 { return 2 }
+    bump_at(pair)
+    if unsafe { *first } != 11 || unsafe { *second } != 4 { return 3 }
+    let before = unsafe { (*pair).b }
+    poke(pair, b: 40)
+    if before != 4 || unsafe { (*pair).b } != 40 { return 4 }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("views")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_long_string_literals_hold_their_bytes() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("long_strings.fe");
