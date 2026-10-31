@@ -372,8 +372,9 @@ a standalone `.fe` file to a WebAssembly module (32-bit pointers, one linear mem
 Every non-generic `pub fn` in the root of the file is exported under its own name,
 and the module also exports its memory as `memory`. Parameters and results must be
 `bool` or integers of at most 64 bits, with two exceptions described below (text
-parameters and a reply result); any other type, including `usize`, `u256` and
-structs, is an error that names the function and the type. Inside functions, structs,
+parameters and a reply result). `usize` and `isize` have 32 bits on this target
+and cross as an `i32`. Any other type, including `u256` and structs, is an error
+that names the function and the type. Inside functions, structs,
 tuples, enums, arrays, constants, `usize` and the dynamic arrays of `core::ptr` work.
 Overflow, division by zero, a failed `assert!` and an index outside an array trap, as
 they do in native executables. Calls use a stack of 1 MiB in the module's memory, and
