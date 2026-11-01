@@ -1,0 +1,18 @@
+use ingot::helper::Greeting
+
+struct Hello {}
+
+impl Greeting for Hello {
+    fn greet(self) -> u256 {
+        1
+    }
+}
+
+pub fn call_helper() -> u256 {
+    with (Greeting = Hello {}) {
+        helper::main()
+    }
+}
+
+// The entry: the target's root effect does not provide `Greeting`.
+pub fn main() uses (greeting: Greeting) {}
