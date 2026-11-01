@@ -25,3 +25,26 @@ fn not_displayable() -> MemBuffer {
 fn untyped_integer() -> MemBuffer {
     format!(7)
 }
+
+// `write!` appends to a buffer written as a `mut` argument, here an effect.
+fn append(_ count: u64) uses (text: mut MemBuffer) {
+    write!(mut text, "count: ", count)
+    writeln!(mut text)
+}
+
+fn unmarked_buffer() uses (text: mut MemBuffer) {
+    write!(text, "a")
+}
+
+fn immutable_buffer(_ text: MemBuffer) {
+    writeln!(mut text, "a")
+}
+
+fn not_a_buffer() {
+    var count: u64 = 0
+    write!(mut count, "a", "b")
+}
+
+fn no_buffer() {
+    write!()
+}

@@ -3938,7 +3938,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::UnsupportedMacroCall(primary) => primary_diag(
                 Severity::Error,
                 "unsupported macro call",
-                "the macros are `assert!`, `format!`, `print!`, `println!`, `eprint!` and `eprintln!`",
+                "the macros are `assert!`, `format!`, `write!`, `writeln!`, `print!`, `println!`, `eprint!` and `eprintln!`",
                 primary.resolve(db),
                 error_code,
             ),

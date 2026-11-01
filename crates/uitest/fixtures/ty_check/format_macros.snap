@@ -9,6 +9,23 @@ error[6-0003]: trait bound is not satisfied
 22 │     format!("point: ", Point { x: 1 })
    │                        ^^^^^^^^^^^^^^ `Point` doesn't implement `Display`
 
+error[8-0000]: type mismatch
+   ┌─ format_macros.fe:45:12
+   │
+45 │     write!(mut count, "a", "b")
+   │            ^^^^^^^^^ expected `MemBuffer`, but `u64` is given
+
+error[8-0023]: argument number mismatch
+     ┌─ format_macros.fe:49:5
+     │
+  49 │     write!()
+     │     ^^^^^^^^ expected 2 arguments, but 1 given
+     │
+     ┌─ src/ptr.fe:1035:12
+     │
+1035 │     pub fn extend_from(mut self, _ source: MemSpan) {
+     │            ----------- function defined here
+
 error[8-0031]: type annotation is needed
    ┌─ format_macros.fe:26:13
    │
@@ -26,3 +43,19 @@ error[8-0036]: missing effect `Stdout` required by `print_buffer`
    │
    = require it in this function's signature with `uses (out: mut Stdout)`, so that its callers provide it
    = or provide it to a block of this function with `with (Stdout = value) { .. }`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ format_macros.fe:40:14
+   │
+39 │ fn immutable_buffer(_ text: MemBuffer) {
+   │                       ---- `text` does not provide mutable access
+40 │     writeln!(mut text, "a")
+   │              ^^^^^^^^ cannot borrow as `mut`
+
+error[8-0069]: explicit borrow required
+   ┌─ format_macros.fe:36:12
+   │
+36 │     write!(text, "a")
+   │            ^^^^ this argument must be explicitly borrowed as `mut`
+   │
+   = help: try `mut text`
