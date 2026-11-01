@@ -24,7 +24,7 @@ use super::{
             collect_candidate_constraints, collect_constraints, collect_func_decl_constraints,
         },
     },
-    ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
+    ty_def::{InvalidCause, Kind, TyBase, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{
     NameDomain, NameResKind, PathRes, TypePosition, path_resolver::PathResolutionResult,
@@ -829,6 +829,127 @@ impl<'db> TyAlias<'db> {
             Err(cause) => TyId::invalid(db, cause),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ProtocolArgumentRole {
+    Trait,
+    Goal,
+}
+
+/// Only resolved canonical protocol declarations may issue descriptors. An
+/// ordinary user trait/type with the same spelling keeps ordinary arguments.
+pub(crate) fn protocol_argument_role<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: crate::hir_def::ItemKind<'db>,
+) -> Option<ProtocolArgumentRole> {
+    use super::corelib::{resolve_lib_func_path, resolve_lib_trait_path, resolve_lib_type_path};
+    use crate::hir_def::ItemKind;
+    let scope = owner.scope();
+    match owner {
+        ItemKind::Trait(trait_) if resolve_lib_trait_path(db, scope, "core::derive::Derive") == Some(trait_) => Some(ProtocolArgumentRole::Trait),
+        ItemKind::Struct(_) if ["core::permits::PermitAuthority", "core::permits::ImplPermit"].iter().any(|path| {
+            resolve_lib_type_path(db, scope, path).is_some_and(|ty| {
+                matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Adt(adt)) if adt.adt_ref(db).as_item() == owner)
+            })
+        }) => Some(ProtocolArgumentRole::Goal),
+        ItemKind::Func(func) if resolve_lib_func_path(db, scope, "core::permits::impl_permit") == Some(func) => Some(ProtocolArgumentRole::Goal),
+        _ => None,
+    }
+}
+
+pub(crate) fn lower_protocol_descriptor<'db>(
+    db: &'db dyn HirAnalysisDb,
+    arg: &GenericArg<'db>,
+    role: ProtocolArgumentRole,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    lowering_cx: &LoweringContext<'db>,
+) -> Option<TyId<'db>> {
+    use crate::hir_def::{ItemKind, PathKind, TraitRefId};
+    let GenericArg::Type(argument) = arg else {
+        return None;
+    };
+    let HirTyKind::Path(path) = argument.ty.to_opt()?.data(db) else {
+        return None;
+    };
+    let path = path.to_opt()?;
+    let NameResKind::Scope(ScopeId::Item(ItemKind::Trait(trait_))) =
+        crate::analysis::name_resolution::resolve_type_path_definition(db, path, scope)?
+    else {
+        return None;
+    };
+    let ty = match role {
+        ProtocolArgumentRole::Trait
+            if path.generic_args(db).data(db).is_empty() && !path.generic_args(db).is_given(db) =>
+        {
+            TyId::new(db, TyData::TyBase(TyBase::TraitDescriptor(trait_)))
+        }
+        ProtocolArgumentRole::Trait => TyId::invalid(db, InvalidCause::Other),
+        ProtocolArgumentRole::Goal => {
+            let (GenericArg::Type(subject), rest) = path.generic_args(db).data(db).split_first()?
+            else {
+                return None;
+            };
+            let subject = lower_opt_hir_ty_impl(db, subject.ty, scope, assumptions, lowering_cx);
+            let reference = PathId::new(
+                db,
+                PathKind::Ident {
+                    ident: path.ident(db),
+                    generic_args: GenericArgListId::given(db, rest.to_vec()),
+                },
+                path.parent(db),
+            );
+            let goal = super::trait_lower::lower_trait_ref_with_minter(
+                db,
+                subject,
+                TraitRefId::new(db, Partial::Present(reference)),
+                scope,
+                assumptions,
+                None,
+                lowering_cx,
+            )
+            .ok()?;
+            TyId::new(db, TyData::GoalDescriptor(goal))
+        }
+    };
+    lowering_cx.record_resolution(path, &PathRes::Ty(ty));
+    Some(ty)
+}
+
+pub(crate) fn lower_protocol_generic_arg_list<'db>(
+    db: &'db dyn HirAnalysisDb,
+    args: GenericArgListId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    lowering_cx: &LoweringContext<'db>,
+    owner: crate::hir_def::ItemKind<'db>,
+) -> Vec<TyId<'db>> {
+    // Avoid canonical declaration lookup for nullary definitions while resolving
+    // the protocol declaration itself.
+    let role = (!args.data(db).is_empty())
+        .then(|| protocol_argument_role(db, owner))
+        .flatten();
+    args.data(db)
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            if index == 0
+                && let Some(role) = role
+                && let Some(descriptor) =
+                    lower_protocol_descriptor(db, arg, role, scope, assumptions, lowering_cx)
+            {
+                return descriptor;
+            }
+            lower_generic_arg_list(
+                db,
+                GenericArgListId::given(db, vec![arg.clone()]),
+                scope,
+                assumptions,
+                lowering_cx,
+            )[0]
+        })
+        .collect()
 }
 
 pub(crate) fn lower_generic_arg_list<'db>(

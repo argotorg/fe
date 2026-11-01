@@ -437,6 +437,7 @@ pub(crate) fn ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>)
         | TyData::QualifiedTy(_)
         | TyData::Invalid(_) => false,
         TyData::TyApp(abs, arg) => ty_is_fully_ground(db, *abs) && ty_is_fully_ground(db, *arg),
+        TyData::GoalDescriptor(goal) => trait_inst_is_fully_ground(db, *goal),
         TyData::ConstTy(const_ty) => const_ty_is_fully_ground(db, *const_ty),
         TyData::TyBase(_) | TyData::Never => true,
     }
@@ -1303,6 +1304,10 @@ pub fn canonicalize_ty_for_mode<'db>(
             TyData::QualifiedTy(trait_inst) => TyId::qualified_ty(
                 db,
                 canonicalize_trait_inst_for_mode(db, *trait_inst, env, mode),
+            ),
+            TyData::GoalDescriptor(goal) => TyId::new(
+                db,
+                TyData::GoalDescriptor(canonicalize_trait_inst_for_mode(db, *goal, env, mode)),
             ),
             TyData::TyVar(_)
             | TyData::TyParam(_)

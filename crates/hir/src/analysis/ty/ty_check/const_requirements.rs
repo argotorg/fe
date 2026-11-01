@@ -542,6 +542,253 @@ fn adt_declaration<'db>(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroundBoundAdmissionCause {
+    UnsupportedInput,
+    UnsupportedConditions,
+    ConditionsNotAdmitted,
+    NotProven,
+    Incomplete,
+}
+
+/// Validate declaration requirements of the proof already selected by the
+/// evidence engine. This never selects an implementation or replaces a proof.
+pub(crate) fn retained_bound_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    proof: crate::analysis::ty::evidence::EvidenceId<'db>,
+    goal: TraitInstId<'db>,
+    origin: ScopeId<'db>,
+    span: DynLazySpan<'db>,
+) -> Result<(), (GroundBoundAdmissionCause, Vec<FuncBodyDiag<'db>>)> {
+    use crate::analysis::ty::{evidence::Evidence, trait_def::ImplementorOrigin};
+    for &argument in goal
+        .args(db)
+        .iter()
+        .chain(goal.assoc_type_bindings(db).values())
+    {
+        if let Some(unmet) = check_type_requirements(db, argument, origin, &FxHashSet::default()) {
+            return Err((
+                GroundBoundAdmissionCause::ConditionsNotAdmitted,
+                vec![unmet_requirement_diag(
+                    span.clone(),
+                    unmet.predicate,
+                    unmet.failure,
+                    Some(unmet.ty),
+                )],
+            ));
+        }
+    }
+    // Provisional codec evidence must be completed at the shared instance boundary.
+    // It cannot establish admission or justify reconstructing a selected parent.
+    if matches!(proof.data(db), Evidence::DeferredSolCodec { .. }) {
+        return Err((GroundBoundAdmissionCause::Incomplete, Vec::new()));
+    }
+    let Some(resolved) = proof.answering(db, goal) else {
+        return Err((GroundBoundAdmissionCause::UnsupportedInput, Vec::new()));
+    };
+    if let ImplementorOrigin::Hir(implementation) = resolved.selected().origin(db) {
+        let diagnostics =
+            check_where_const_predicates(db, WhereClauseOwner::ImplTrait(implementation));
+        if !diagnostics.is_empty() {
+            return Err((
+                GroundBoundAdmissionCause::ConditionsNotAdmitted,
+                diagnostics,
+            ));
+        }
+    }
+    if let Evidence::Impl { conds, .. } = proof.data(db) {
+        let conditions = resolved.instantiated_constraints(db);
+        if conditions.list(db).len() != conds.len() {
+            return Err((GroundBoundAdmissionCause::Incomplete, Vec::new()));
+        }
+        for (&condition, &proof) in conditions.list(db).iter().zip(conds) {
+            retained_bound_requirements(db, proof, condition, origin, span.clone())?;
+        }
+    }
+    Ok(())
+}
+
+/// Why a ground application could not enter a compiler client. The original
+/// ordinary diagnostics remain available; a category is not a proof receipt.
+#[derive(Debug)]
+pub enum GroundTypeAdmissionKind<'db> {
+    UnsupportedInput,
+    Declaration,
+    Requirement,
+    Bound {
+        goal: TraitInstId<'db>,
+        cause: GroundBoundAdmissionCause,
+    },
+}
+
+#[derive(Debug)]
+pub struct GroundTypeAdmissionError<'db> {
+    pub kind: GroundTypeAdmissionKind<'db>,
+    pub diagnostics: Vec<FuncBodyDiag<'db>>,
+}
+
+impl<'db> GroundTypeAdmissionError<'db> {
+    pub fn vouchers(&self) -> Vec<Box<dyn crate::analysis::diagnostics::DiagnosticVoucher + 'db>> {
+        self.diagnostics
+            .iter()
+            .map(FuncBodyDiag::to_voucher)
+            .collect()
+    }
+
+    pub fn description(&self) -> &'static str {
+        use GroundBoundAdmissionCause as E;
+        match &self.kind {
+            GroundTypeAdmissionKind::UnsupportedInput => "target is not a fully ground valid type",
+            GroundTypeAdmissionKind::Declaration => "target declaration is not admitted",
+            GroundTypeAdmissionKind::Requirement => "target type requirement is not admitted",
+            GroundTypeAdmissionKind::Bound {
+                cause: E::UnsupportedConditions,
+                ..
+            } => "target bound has unsupported conditional nominal requirements",
+            GroundTypeAdmissionKind::Bound {
+                cause: E::Incomplete,
+                ..
+            } => "target bound proof is incomplete or ambiguous",
+            GroundTypeAdmissionKind::Bound {
+                cause: E::ConditionsNotAdmitted,
+                ..
+            } => "target bound declaration conditions are not admitted",
+            GroundTypeAdmissionKind::Bound {
+                cause: E::NotProven,
+                ..
+            } => "target bound is not proven",
+            GroundTypeAdmissionKind::Bound { .. } => {
+                "target bound application is unsupported or unresolved"
+            }
+        }
+    }
+}
+
+/// Admit a fully ground type at an authored application before a compiler
+/// client executes. Initial bound proof has no target/self premises. Reuses
+/// ordinary declaration and use diagnostics; it neither proves the generated
+/// trait impl nor introduces a new proof or field-graph policy.
+pub fn admit_ground_type_application<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    origin: ItemKind<'db>,
+    span: DynLazySpan<'db>,
+) -> Result<(), GroundTypeAdmissionError<'db>> {
+    use crate::analysis::ty::trait_resolution::{
+        TraitSolveCx, WellFormedness, check_ty_wf, constraint::ty_constraints,
+    };
+    use crate::semantic::diagnostics::Diagnosable;
+    if !ty.is_star_kind(db)
+        || ty.has_invalid(db)
+        || !crate::analysis::ty::const_ty::ty_is_fully_ground(db, ty)
+    {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::UnsupportedInput,
+            diagnostics: Vec::new(),
+        });
+    }
+    let context = TraitSolveCx::new(db, origin.scope());
+    let mut declarations = FxHashSet::default();
+    visit_type_applications(db, ty, &mut |application| {
+        if let Some(declaration) = adt_declaration(db, application)
+            && declarations.insert(declaration)
+        {
+            let adt = application.adt_def(db).expect("nominal application");
+            let mut diagnostics: Vec<FuncBodyDiag<'db>> = adt
+                .adt_ref(db)
+                .diags(db)
+                .into_iter()
+                .map(FuncBodyDiag::from)
+                .collect();
+            if let Some(cycle) = crate::analysis::ty::adt_cycle_diagnostic(db, adt) {
+                diagnostics.push(TyDiagCollection::from(cycle).into());
+            }
+            diagnostics.extend(check_where_const_predicates(db, declaration));
+            diagnostics.extend(written_type_check(db, declaration.into()).iter().cloned());
+            if !diagnostics.is_empty() {
+                return Err(GroundTypeAdmissionError {
+                    kind: GroundTypeAdmissionKind::Declaration,
+                    diagnostics,
+                });
+            }
+        }
+        for &bound in ty_constraints(db, application).list(db) {
+            let goal = bound.normalize(db, origin.scope(), context.assumptions());
+            let admitted = crate::analysis::ty::evidence::prove(db, context, goal)
+                .ok_or((GroundBoundAdmissionCause::NotProven, Vec::new()))
+                .and_then(|proof| {
+                    retained_bound_requirements(db, proof, goal, origin.scope(), span.clone())
+                });
+            if let Err((cause, mut diagnostics)) = admitted {
+                if diagnostics.is_empty() {
+                    diagnostics.push(
+                        TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
+                            span: span.clone(),
+                            primary_goal: goal,
+                            unsat_subgoal: None,
+                            required_by: None,
+                        })
+                        .into(),
+                    );
+                }
+                return Err(GroundTypeAdmissionError {
+                    kind: GroundTypeAdmissionKind::Bound { goal, cause },
+                    diagnostics,
+                });
+            }
+        }
+        Ok(())
+    })?;
+    if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, context, ty) {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::Requirement,
+            diagnostics: vec![
+                TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
+                    span: span.clone(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                })
+                .into(),
+            ],
+        });
+    }
+    // Existing written-position ownership includes nested anonymous constants
+    // and aliases. Ground declaration failures were already checked above.
+    let diagnostics = written_type_check(db, origin).clone();
+    if !diagnostics.is_empty() {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::Requirement,
+            diagnostics,
+        });
+    }
+    if let Some(unmet) = check_type_requirements(db, ty, origin.scope(), &FxHashSet::default()) {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::Requirement,
+            diagnostics: vec![unmet_requirement_diag(
+                span,
+                unmet.predicate,
+                unmet.failure,
+                None,
+            )],
+        });
+    }
+    Ok(())
+}
+
+/// Shared postorder traversal of existing type applications. This follows
+/// type arguments only; ADT field-graph policy belongs to declaration checks.
+fn visit_type_applications<'db, E>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    visit: &mut impl FnMut(TyId<'db>) -> Result<(), E>,
+) -> Result<(), E> {
+    for &arg in ty.decompose_ty_app(db).1 {
+        visit_type_applications(db, arg, visit)?;
+    }
+    visit(ty)
+}
+
 /// The conditions of each fully applied record or enum in `ty`, instantiated
 /// with its arguments.
 fn type_conditions<'db>(
@@ -549,39 +796,40 @@ fn type_conditions<'db>(
     ty: TyId<'db>,
     conditions: &mut Vec<(Body<'db>, CompleteSubst<'db>)>,
 ) -> Result<(), SubstError<'db>> {
-    let (_, args) = ty.decompose_ty_app(db);
-    for &arg in args {
-        type_conditions(db, arg, conditions)?;
-    }
-    let Some(declaration) = adt_declaration(db, ty) else {
-        return Ok(());
-    };
-    let predicates = declaration.where_clause(db).const_predicates(db);
-    if predicates.is_empty() {
-        return Ok(());
-    }
-    let subst = requirement_subst(db, declaration, args)?;
-    conditions.extend(
-        predicates
-            .iter()
-            .map(|&predicate| (predicate, subst.clone())),
-    );
-    Ok(())
+    visit_type_applications(db, ty, &mut |ty| {
+        let (_, args) = ty.decompose_ty_app(db);
+        let Some(declaration) = adt_declaration(db, ty) else {
+            return Ok(());
+        };
+        let predicates = declaration.where_clause(db).const_predicates(db);
+        if predicates.is_empty() {
+            return Ok(());
+        }
+        let subst = requirement_subst(db, declaration, args)?;
+        conditions.extend(
+            predicates
+                .iter()
+                .map(|&predicate| (predicate, subst.clone())),
+        );
+        Ok(())
+    })
 }
 
 /// A condition of a record or enum in `ty`, if any.
 fn first_condition<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Body<'db>> {
-    ty.decompose_ty_app(db)
-        .1
-        .iter()
-        .find_map(|&arg| first_condition(db, arg))
-        .or_else(|| {
-            adt_declaration(db, ty)?
+    visit_type_applications(db, ty, &mut |ty| match adt_declaration(db, ty).and_then(
+        |declaration| {
+            declaration
                 .where_clause(db)
                 .const_predicates(db)
                 .first()
                 .copied()
-        })
+        },
+    ) {
+        Some(predicate) => Err(predicate),
+        None => Ok(()),
+    })
+    .err()
 }
 
 /// Checks the requirements of the types and callees that enter a typed body.
@@ -1550,12 +1798,19 @@ fn check_type_requirements<'db>(
     scope: ScopeId<'db>,
     reported: &FxHashSet<TyId<'db>>,
 ) -> Option<TypeRequirementFailure<'db>> {
+    visit_type_applications(db, ty, &mut |ty| {
+        check_own_type_requirements(db, ty, scope, reported).map_or(Ok(()), Err)
+    })
+    .err()
+}
+
+fn check_own_type_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    reported: &FxHashSet<TyId<'db>>,
+) -> Option<TypeRequirementFailure<'db>> {
     let (base, args) = ty.decompose_ty_app(db);
-    for &arg in args {
-        if let Some(failure) = check_type_requirements(db, arg, scope, reported) {
-            return Some(failure);
-        }
-    }
     if reported.contains(&ty) {
         return None;
     }

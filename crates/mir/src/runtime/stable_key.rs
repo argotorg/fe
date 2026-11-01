@@ -634,7 +634,7 @@ fn ty_mentions_effect_provider_param<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
     match ty.data(db) {
         TyData::TyParam(param) => param.is_effect_provider(),
         TyData::AssocTy(assoc) => trait_ref_mentions_effect_provider_param(db, assoc.trait_),
-        TyData::QualifiedTy(trait_inst) => {
+        TyData::QualifiedTy(trait_inst) | TyData::GoalDescriptor(trait_inst) => {
             trait_inst_mentions_effect_provider_param(db, *trait_inst)
         }
         TyData::TyVar(_)
@@ -712,6 +712,9 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
 
     match ty.data(db) {
         TyData::TyBase(base) => match base {
+            TyBase::TraitDescriptor(def) => {
+                format!("trait_descriptor${}", item_identity(db, (*def).into()))
+            }
             TyBase::Prim(prim) => format!("prim${prim:?}"),
             TyBase::Shape(con) => format!("shape${con:?}"),
             TyBase::Adt(adt) => format!("adt${}", item_identity(db, adt.adt_ref(db).as_item())),
@@ -780,6 +783,7 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
             assoc.mode
         ),
         TyData::QualifiedTy(trait_inst) => format!("qualified${}", trait_identity(db, *trait_inst)),
+        TyData::GoalDescriptor(goal) => format!("goal_descriptor${}", trait_identity(db, *goal)),
         TyData::ConstTy(const_ty) => {
             format!(
                 "const_ty${}",

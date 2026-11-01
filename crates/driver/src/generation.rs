@@ -5,17 +5,14 @@ use common::{InputDb, file::File, ingot::IngotKind};
 use hir::{
     analysis::{
         diagnostics::DiagnosticVoucher,
-        semantic::{
-            CtfeError, EvalFailure, EvalOutcome, GenericSubst, SemConstId, SemConstValue,
-            SemOrigin, eval_body_owner_const_with_args,
-        },
+        semantic::{CtfeError, EvalFailure, EvalOutcome, SemConstValue, SemOrigin},
         ty::{
             corelib::resolve_lib_type_path,
             ty_check::{BodyOwner, check_func_body},
             ty_def::TyId,
         },
     },
-    core::meta::{MetaValue, RecordInput},
+    core::meta::RecordInput,
     hir_def::CallableDef,
     span::LazySpan,
 };
@@ -200,14 +197,25 @@ pub fn prepare_file(
     if !root
         .syntax()
         .descendants()
-        .filter_map(ast::NormalAttr::cast)
-        .any(|attr| {
-            attr.is_named("generate")
-                && !attr
+        .filter_map(ast::ImplTrait::cast)
+        .any(|request| {
+            request.derive_provider().is_some()
+                && !request
                     .syntax()
                     .ancestors()
                     .any(|node| ast::QuoteExpr::cast(node).is_some())
         })
+        && !root
+            .syntax()
+            .descendants()
+            .filter_map(ast::NormalAttr::cast)
+            .any(|attr| {
+                attr.is_named("generate")
+                    && !attr
+                        .syntax()
+                        .ancestors()
+                        .any(|node| ast::QuoteExpr::cast(node).is_some())
+            })
     {
         return Ok(None);
     }
@@ -298,192 +306,173 @@ pub fn prepare_file(
                     "generation provider is not visible from the request".into(),
                 ));
             }
-            if !provider.is_const(db)
-                || provider.body(db).is_none()
-                || !CallableDef::Func(provider).params(db).is_empty()
-            {
-                return Err(error(
-                    range,
-                    "provider must be an authored nongeneric const function".into(),
-                ));
-            }
-            let carrier = resolve_lib_type_path(db, provider.scope(), "core::meta::Record")
-                .ok_or_else(|| error(range, "missing Record carrier".into()))?;
-            let code = resolve_lib_type_path(db, provider.scope(), "core::meta::Code")
-                .ok_or_else(|| error(range, "missing Code carrier".into()))?;
-            let item_marker = resolve_lib_type_path(db, provider.scope(), "core::meta::Item")
-                .ok_or_else(|| error(range, "missing Item kind".into()))?;
-            let arguments = provider.arg_tys(db);
-            if arguments.len() != 1
-                || arguments[0]
-                    .instantiate_identity()
-                    .as_view(db)
-                    .unwrap_or(arguments[0].instantiate_identity())
-                    != carrier
-                || provider
-                    .return_ty(db)
-                    .as_view(db)
-                    .unwrap_or(provider.return_ty(db))
-                    != TyId::app(db, code, item_marker)
-            {
-                return Err(error(
-                    range,
-                    format!(
-                        "provider signature must be const fn(Record) -> Code<Item>: args={:?}, result={}, expected={}",
-                        arguments
-                            .iter()
-                            .map(|a| a.instantiate_identity().pretty_print(db))
-                            .collect::<Vec<_>>(),
-                        provider.return_ty(db).pretty_print(db),
-                        TyId::app(db, code, item_marker).pretty_print(db)
-                    ),
-                ));
-            }
-            let diagnostics = &check_func_body(db, provider).0;
-            if !body_errors(db, provider).is_empty() {
-                for diagnostic in diagnostics {
-                    if let hir::analysis::ty::diagnostics::FuncBodyDiag::Body(
-                        hir::analysis::ty::diagnostics::BodyDiag::UndefinedVariable(span, name, _),
-                    ) = diagnostic
-                        && let Some(span) = span.resolve(db)
-                    {
-                        return Err(GenerationError {
-                            file: span.file.url(db).unwrap_or(url.clone()),
-                            range: span.range,
-                            cause: format!(
-                                "authored provider references undefined variable `{}`; generated output is not authored input",
-                                name.data(db)
-                            ),
-                        });
-                    }
-                }
-                let complete = diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.to_complete(db))
-                    .collect::<Vec<_>>();
-                return Err(diagnostic_error(
-                    db,
-                    &complete,
-                    error(range, "authored provider body diagnostics".into()),
-                ));
-            }
             let input = RecordInput::for_authored_item(db, module, &item).map_err(|cause| {
                 error(
                     range,
                     format!("cannot issue concrete authored record: {cause:?}"),
                 )
             })?;
-            let argument = SemConstId::new(
-                db,
-                SemConstValue::Meta {
-                    ty: carrier,
-                    value: MetaValue::Record(input),
-                },
-            );
-            let owner = BodyOwner::Func(provider, None);
-            let instance = hir::analysis::semantic::SemanticInstance::new(
-                db,
-                hir::analysis::semantic::identity_semantic_instance_key(db, owner),
-            );
-            let mut validation_diagnostics = Vec::new();
-            let mut unresolved = Vec::new();
-            {
-                use hir::analysis::semantic::access::SemanticAccessCheckResult;
-                let mut pending = vec![instance];
-                let mut seen = std::collections::HashSet::new();
-                while let Some(current) = pending.pop() {
-                    if !seen.insert(current) {
-                        continue;
-                    }
-                    match hir::analysis::semantic::access::semantic_access_check_query(db, current)
-                    {
-                        SemanticAccessCheckResult::Ok { .. } => {}
-                        SemanticAccessCheckResult::Err(diagnostic) => {
-                            let diagnostic = diagnostic.diag(db);
-                            let origin_owner = diagnostic.instance.key(db).owner(db);
-                            let errors = match origin_owner {
-                                BodyOwner::Func(function, _) => body_errors(db, function),
-                                _ => Vec::new(),
-                            };
-                            if !errors.is_empty() {
-                                validation_diagnostics.extend(errors);
-                            } else {
-                                validation_diagnostics.push(diagnostic.to_complete(db));
-                            }
-                        }
-                        SemanticAccessCheckResult::Blocked(cause) => {
-                            let origin_owner = current.key(db).owner(db);
-                            let errors = match origin_owner {
-                                BodyOwner::Func(function, _) => body_errors(db, function),
-                                _ => Vec::new(),
-                            };
-                            if !errors.is_empty() {
-                                validation_diagnostics.extend(errors);
-                            } else {
-                                unresolved.push(format!("Blocked: {cause:?}"));
-                            }
-                        }
-                    }
-                    for callee in current.callees(db) {
-                        pending.push(hir::analysis::semantic::SemanticInstance::new(
-                            db, callee.key,
-                        ));
-                    }
+            let (target_item, target_span) = match input.declaration() {
+                hir::analysis::ty::adt_def::AdtRef::Struct(record) => {
+                    (hir::hir_def::ItemKind::Struct(record), record.span().into())
                 }
-            }
-            if !validation_diagnostics.is_empty() {
-                return Err(diagnostic_error(
+                hir::analysis::ty::adt_def::AdtRef::Enum(enumeration) => (
+                    hir::hir_def::ItemKind::Enum(enumeration),
+                    enumeration.span().into(),
+                ),
+            };
+            if !input.ty().has_param(db) {
+                hir::analysis::ty::ty_check::admit_ground_type_application(
                     db,
-                    &validation_diagnostics,
+                    input.ty(),
+                    target_item,
+                    target_span,
+                )
+                .map_err(|failure| {
+                    let diagnostics = failure
+                        .vouchers()
+                        .iter()
+                        .map(|voucher| voucher.to_complete(db))
+                        .collect::<Vec<_>>();
+                    diagnostic_error(
+                        db,
+                        &diagnostics,
+                        error(
+                            range,
+                            format!(
+                                "generation target admission failed: {}",
+                                failure.description()
+                            ),
+                        ),
+                    )
+                })?;
+            }
+            requests.push(evaluate_provider(db, file, provider, input, range)?);
+        }
+    }
+    for request_ast in root.syntax().descendants().filter_map(ast::ImplTrait::cast) {
+        let Some(path) = request_ast.derive_provider() else {
+            continue;
+        };
+        let range = request_ast.syntax().text_range();
+        if request_ast
+            .syntax()
+            .ancestors()
+            .any(|node| ast::QuoteExpr::cast(node).is_some())
+        {
+            continue;
+        }
+        // Nested declarations are a documented pending interface, never ignored.
+        if !root
+            .items()
+            .into_iter()
+            .flatten()
+            .any(|item| item.syntax().text_range() == range)
+        {
+            return Err(error(
+                range,
+                "bounded native derive currently requires a root declaration".into(),
+            ));
+        }
+        let request = hir::core::meta::authored_derive_request(db, module, &request_ast)
+            .ok_or_else(|| {
+                error(
+                    range,
+                    "cannot recover authored derive header identity".into(),
+                )
+            })?;
+        let segments = path.segments().map(|segment| {
+            if segment.generic_args().is_some() || segment.qualified_type().is_some() {
+                return Err(error(segment.syntax().text_range(), "bounded native derive provider path does not support generic or qualified segments".into()));
+            }
+            segment.ident().map(|token| token.text().to_string())
+                .ok_or_else(|| error(segment.syntax().text_range(), "invalid native derive provider path segment".into()))
+        }).collect::<Result<Vec<_>, _>>()?;
+        let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
+        let resolved = hir::analysis::name_resolution::resolve_path(
+            db,
+            hir::hir_def::PathId::from_segments(db, &segments),
+            request.scope(),
+            hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
+            true,
+        )
+        .map_err(|_| {
+            error(
+                path.syntax().text_range(),
+                "cannot resolve native derive provider type".into(),
+            )
+        })?;
+        if let hir::analysis::name_resolution::PathRes::TyAlias(alias, _) = &resolved
+            && !hir::analysis::name_resolution::is_scope_visible_from(
+                db,
+                alias.alias.scope(),
+                request.scope(),
+            )
+        {
+            return Err(error(
+                path.syntax().text_range(),
+                "native derive provider alias is not visible".into(),
+            ));
+        }
+        let (hir::analysis::name_resolution::PathRes::Ty(provider_ty)
+        | hir::analysis::name_resolution::PathRes::TyAlias(_, provider_ty)) = resolved
+        else {
+            return Err(error(
+                path.syntax().text_range(),
+                "native derive provider must name a type implementing Derive<G>".into(),
+            ));
+        };
+        if let Some(scope) = provider_ty.as_scope(db)
+            && !hir::analysis::name_resolution::is_scope_visible_from(db, scope, request.scope())
+        {
+            return Err(error(
+                path.syntax().text_range(),
+                "native derive provider type is not visible".into(),
+            ));
+        }
+        let (provider, input) = hir::core::meta::native_derive_provider(db, request, provider_ty)
+            .map_err(|cause| match cause {
+            hir::core::meta::NativeDeriveProviderError::Message(message) => error(range, message),
+            hir::core::meta::NativeDeriveProviderError::Provider(failure) => {
+                let diagnostics = failure
+                    .vouchers()
+                    .iter()
+                    .map(|voucher| voucher.to_complete(db))
+                    .collect::<Vec<_>>();
+                diagnostic_error(
+                    db,
+                    &diagnostics,
                     error(
                         range,
-                        "authored provider ownership/capability validation failed".into(),
+                        format!(
+                            "provider application not admitted: {}",
+                            failure.description()
+                        ),
                     ),
-                ));
+                )
             }
-            if !unresolved.is_empty() {
-                // Pending and Blocked are not a ready provider and are never
-                // replaced with a successful quotation or an empty output.
-                return Err(error(
-                    range,
-                    format!(
-                        "authored provider validation unresolved: {}",
-                        unresolved.join("; ")
-                    ),
-                ));
-            }
-            let value = match eval_body_owner_const_with_args(
-                db,
-                owner,
-                GenericSubst::for_body_owner(db, owner, vec![]),
-                vec![argument],
-            ) {
-                EvalOutcome::Ready(value) => value,
-                EvalOutcome::Failed(cause) => {
-                    let fallback = error(range, format!("provider evaluation failed: {cause:?}"));
-                    return Err(match &cause {
-                        EvalFailure::Ctfe(cause) => evaluation_error(db, owner, cause, fallback),
-                        _ => fallback,
-                    });
-                }
-                EvalOutcome::Blocked(cause) => {
-                    return Err(error(
+            hir::core::meta::NativeDeriveProviderError::Target(failure) => {
+                let diagnostics = failure
+                    .vouchers()
+                    .iter()
+                    .map(|voucher| voucher.to_complete(db))
+                    .collect::<Vec<_>>();
+                diagnostic_error(
+                    db,
+                    &diagnostics,
+                    error(
                         range,
-                        format!("provider evaluation blocked: {cause:?}"),
-                    ));
-                }
-            };
-            let SemConstValue::ItemCode { code, .. } = value.value(db) else {
-                return Err(error(
-                    range,
-                    "provider returned an ordinary value rather than checked item code".into(),
-                ));
-            };
-            requests.push(
-                code.freeze_request(db, file)
-                    .map_err(|cause| error(range, cause.into()))?,
-            );
-        }
+                        format!(
+                            "native derive target admission failed: {}",
+                            failure.description()
+                        ),
+                    ),
+                )
+            }
+        })?;
+        let mut plan = evaluate_provider_instance(db, file, provider, input, range)?;
+        plan.request_impl = Some(range);
+        requests.push(plan);
     }
     for attribute in root
         .syntax()
@@ -555,4 +544,222 @@ pub fn prepare_file(
     // Source providers remain in the output source view, but no provider has
     // been re-evaluated and no generated declaration is used as authored input.
     Ok(Some(output))
+}
+
+fn evaluate_provider<'db>(
+    db: &'db DriverDataBase,
+    file: File,
+    provider: hir::hir_def::Func<'db>,
+    input: RecordInput<'db>,
+    range: parser::TextRange,
+) -> Result<common::generation::FrozenGenerationRequest, GenerationError> {
+    let key = hir::analysis::semantic::generated_callee_key(
+        db,
+        input.scope(),
+        hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
+        provider,
+        None,
+        &[],
+    )
+    .map_err(|_| GenerationError {
+        file: file.url(db).expect("indexed generation input"),
+        range,
+        cause: "provider function could not be admitted".into(),
+    })?;
+    evaluate_provider_instance(db, file, key, input, range)
+}
+
+fn evaluate_provider_instance<'db>(
+    db: &'db DriverDataBase,
+    file: File,
+    provider_key: hir::analysis::semantic::SemanticInstanceKey<'db>,
+    input: RecordInput<'db>,
+    range: parser::TextRange,
+) -> Result<common::generation::FrozenGenerationRequest, GenerationError> {
+    let BodyOwner::Func(provider, _) = provider_key.owner(db) else {
+        return Err(GenerationError {
+            file: file.url(db).unwrap(),
+            range,
+            cause: "provider is not a function instance".into(),
+        });
+    };
+    let url = file.url(db).expect("indexed generation input");
+    let error = |range, cause| GenerationError {
+        file: url.clone(),
+        range,
+        cause,
+    };
+    if !provider.is_const(db)
+        || provider.body(db).is_none()
+        || !CallableDef::Func(provider).params(db).is_empty()
+    {
+        return Err(error(
+            range,
+            "provider must be an authored nongeneric const function".into(),
+        ));
+    }
+    let carrier = resolve_lib_type_path(db, provider.scope(), "core::meta::Record")
+        .ok_or_else(|| error(range, "missing Record carrier".into()))?;
+    let code = resolve_lib_type_path(db, provider.scope(), "core::meta::Code")
+        .ok_or_else(|| error(range, "missing Code carrier".into()))?;
+    let item = resolve_lib_type_path(db, provider.scope(), "core::meta::Item")
+        .ok_or_else(|| error(range, "missing Item kind".into()))?;
+    let arguments = provider.arg_tys(db);
+    if arguments.len() != 1
+        || arguments[0]
+            .instantiate_identity()
+            .as_view(db)
+            .unwrap_or(arguments[0].instantiate_identity())
+            != carrier
+        || provider
+            .return_ty(db)
+            .as_view(db)
+            .unwrap_or(provider.return_ty(db))
+            != TyId::app(db, code, item)
+    {
+        return Err(error(
+            range,
+            format!(
+                "provider signature must be const fn(Record) -> Code<Item>: args={:?}, result={}, expected={}",
+                arguments
+                    .iter()
+                    .map(|a| a.instantiate_identity().pretty_print(db))
+                    .collect::<Vec<_>>(),
+                provider.return_ty(db).pretty_print(db),
+                TyId::app(db, code, item).pretty_print(db)
+            ),
+        ));
+    }
+    let diagnostics = &check_func_body(db, provider).0;
+    if !body_errors(db, provider).is_empty() {
+        for diagnostic in diagnostics {
+            if let hir::analysis::ty::diagnostics::FuncBodyDiag::Body(
+                hir::analysis::ty::diagnostics::BodyDiag::UndefinedVariable(span, name, _),
+            ) = diagnostic
+                && let Some(span) = span.resolve(db)
+            {
+                return Err(GenerationError {
+                    file: span.file.url(db).unwrap_or(url.clone()),
+                    range: span.range,
+                    cause: format!(
+                        "authored provider references undefined variable `{}`; generated output is not authored input",
+                        name.data(db)
+                    ),
+                });
+            }
+        }
+        let complete = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(db))
+            .collect::<Vec<_>>();
+        return Err(diagnostic_error(
+            db,
+            &complete,
+            error(range, "authored provider body diagnostics".into()),
+        ));
+    }
+    let owner = provider_key.owner(db);
+    let instance = hir::analysis::semantic::SemanticInstance::new(db, provider_key);
+    let mut validation_diagnostics = Vec::new();
+    let mut unresolved = Vec::new();
+    {
+        use hir::analysis::semantic::access::SemanticAccessCheckResult;
+        let mut pending = std::collections::VecDeque::from([instance]);
+        let mut seen = std::collections::HashSet::new();
+        while let Some(current) = pending.pop_front() {
+            if !seen.insert(current) {
+                continue;
+            }
+            match hir::analysis::semantic::access::semantic_access_check_query(db, current) {
+                SemanticAccessCheckResult::Ok { .. } => {
+                    for callee in current.callees(db) {
+                        pending.push_back(hir::analysis::semantic::SemanticInstance::new(
+                            db, callee.key,
+                        ));
+                    }
+                }
+                SemanticAccessCheckResult::Err(diagnostic) => {
+                    let diagnostic = diagnostic.diag(db);
+                    let origin_owner = diagnostic.instance.key(db).owner(db);
+                    let errors = match origin_owner {
+                        BodyOwner::Func(function, _) => body_errors(db, function),
+                        _ => Vec::new(),
+                    };
+                    if !errors.is_empty() {
+                        validation_diagnostics.extend(errors);
+                    } else {
+                        validation_diagnostics.push(diagnostic.to_complete(db));
+                    }
+                }
+                SemanticAccessCheckResult::Blocked(cause) => {
+                    let origin_owner = current.key(db).owner(db);
+                    let errors = match origin_owner {
+                        BodyOwner::Func(function, _) => body_errors(db, function),
+                        _ => Vec::new(),
+                    };
+                    if !errors.is_empty() {
+                        validation_diagnostics.extend(errors);
+                    } else {
+                        unresolved.push(format!("Blocked: {cause:?}"));
+                    }
+                }
+            }
+        }
+    }
+    if !validation_diagnostics.is_empty() {
+        return Err(diagnostic_error(
+            db,
+            &validation_diagnostics,
+            error(
+                range,
+                "authored provider ownership/capability validation failed".into(),
+            ),
+        ));
+    }
+    if !unresolved.is_empty() {
+        // Pending and Blocked are not a ready provider and are never
+        // replaced with a successful quotation or an empty output.
+        return Err(error(
+            range,
+            format!(
+                "authored provider validation unresolved: {}",
+                unresolved.join("; ")
+            ),
+        ));
+    }
+    let value = match hir::analysis::semantic::ctfe::force_const_computation(
+        db,
+        hir::analysis::semantic::ctfe::const_computation_for_instance(
+            db,
+            provider_key,
+            vec![
+                hir::core::meta::record_input_argument(db, input, owner.scope())
+                    .map_err(|cause| error(range, cause.into()))?,
+            ],
+        ),
+        hir::analysis::semantic::ctfe::CtfeConfig::default(),
+    ) {
+        EvalOutcome::Ready(value) => value.value(),
+        EvalOutcome::Failed(cause) => {
+            let fallback = error(range, format!("provider evaluation failed: {cause:?}"));
+            return Err(match &cause {
+                EvalFailure::Ctfe(cause) => evaluation_error(db, owner, cause, fallback),
+                _ => fallback,
+            });
+        }
+        EvalOutcome::Blocked(cause) => {
+            return Err(error(
+                range,
+                format!("provider evaluation blocked: {cause:?}"),
+            ));
+        }
+    };
+    let SemConstValue::ItemCode { code, .. } = value.value(db) else {
+        return Err(error(
+            range,
+            "provider returned an ordinary value rather than checked item code".into(),
+        ));
+    };
+    code.freeze_request(db, file)
+        .map_err(|cause| error(range, cause.into()))
 }

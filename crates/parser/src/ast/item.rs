@@ -545,8 +545,18 @@ impl super::WhereClauseOwner for ImplTrait {}
 impl super::AttrListOwner for ImplTrait {}
 impl super::ItemModifierOwner for ImplTrait {}
 impl ImplTrait {
+    /// Explicit RD84 header-only request; no authored impl body.
+    pub fn derive_provider(&self) -> Option<super::Path> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|node| node.into_token())
+            .find(|token| token.kind() == SK::Ident && token.text() == "with")?;
+        support::child(self.syntax())
+    }
+
     /// A named alternative introduced by `as Name` after the subject type.
     pub fn selection_name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::AsKw)?;
         support::token(self.syntax(), SK::Ident)
     }
 

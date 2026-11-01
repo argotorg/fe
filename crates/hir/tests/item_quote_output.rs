@@ -11,6 +11,7 @@ use fe_hir::{
         },
     },
     core::meta::{MetaValue, RecordInput},
+    hir_def::ItemKind,
     test_db::{HirAnalysisTestDb, find_func},
 };
 use salsa::Setter;
@@ -204,5 +205,80 @@ fn generated_negative_signed_scalar_keeps_minimum_value() {
     };
     assert!(
         matches!(value.value(&output), SemConstValue::Scalar { value: SemConstScalar::Int { value }, .. } if value.to_string() == "-128")
+    );
+}
+
+#[test]
+fn frozen_item_request_publishes_const() {
+    let source = r#"use core::meta::{Code, Item}
+const fn make() -> Code<Item> {
+    quote {
+        const GENERATED: u256 = 7
+    }
+}
+"#;
+    let mut input = HirAnalysisTestDb::default();
+    let file = input.new_stand_alone("generated-const.fe".into(), source);
+    let (module, _) = input.top_mod(file);
+    input.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&input, module, "make"), None);
+    let EvalOutcome::Ready(value) = eval_body_owner_const(
+        &input,
+        owner,
+        GenericSubst::for_body_owner(&input, owner, vec![]),
+    ) else {
+        panic!("item quote evaluation failed");
+    };
+    let SemConstValue::ItemCode { code, .. } = value.value(&input) else {
+        panic!("provider did not return item code");
+    };
+    let request = code.freeze_request(&input, file).unwrap();
+
+    let mut output = HirAnalysisTestDb::default();
+    let file = output.new_stand_alone("generated-const.fe".into(), source);
+    output
+        .generation_inputs()
+        .set_requests(&mut output)
+        .to(vec![request]);
+    let (module, _) = output.top_mod(file);
+    output.assert_no_diags(module);
+
+    let generated_const = module
+        .children_non_nested(&output)
+        .find(|item| {
+            matches!(item, ItemKind::Const(_))
+                && item
+                    .name(&output)
+                    .is_some_and(|name| name.data(&output) == "GENERATED")
+        })
+        .expect("generated const was not published");
+    let ItemKind::Const(generated_const) = generated_const else {
+        unreachable!()
+    };
+    let result = eval_body_owner_const(
+        &output,
+        BodyOwner::Const(generated_const),
+        GenericSubst::for_body_owner(&output, BodyOwner::Const(generated_const), vec![]),
+    );
+    let EvalOutcome::Ready(value) = result else {
+        panic!("generated const did not evaluate: {result:?}");
+    };
+    assert!(
+        matches!(value.value(&output), SemConstValue::Scalar { value: SemConstScalar::Int { value }, .. } if value.to_string() == "7")
+    );
+}
+
+#[test]
+fn quoted_type_alias_is_explicitly_rejected_before_freezing() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "unsupported-quoted-alias.fe".into(),
+        "use core::meta::{Code, Item}\nconst fn make() -> Code<Item> { quote { type Generated = u256 } }\n",
+    );
+    let (module, _) = db.top_mod(file);
+    let rendered = fe_hir::test_db::format_diagnostics(&db, &db.run_on_top_mod(module));
+    assert!(
+        rendered.contains("only functions, constants and impls can be quoted"),
+        "{rendered}"
     );
 }

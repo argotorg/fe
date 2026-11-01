@@ -580,6 +580,19 @@ pub(crate) fn check_ty_wf<'db>(
                 return wf;
             }
         }
+        TyData::GoalDescriptor(goal) => {
+            // A descriptor names a goal; it does not assert the goal holds.
+            for &argument in goal
+                .args(db)
+                .iter()
+                .chain(goal.assoc_type_bindings(db).values())
+            {
+                let wf = check_ty_wf(db, solve_cx, argument);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+        }
         TyData::ConstTy(const_ty) => {
             let wf = check_const_ty_wf(db, solve_cx, *const_ty);
             if !wf.is_wf() {
@@ -1201,7 +1214,7 @@ fn ty_has_recursive_assoc_projection<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
                     has_cycle
                 }
             }
-            TyData::QualifiedTy(trait_inst) => {
+            TyData::QualifiedTy(trait_inst) | TyData::GoalDescriptor(trait_inst) => {
                 let args_have_cycle = trait_inst
                     .args(db)
                     .iter()

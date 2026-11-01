@@ -114,7 +114,7 @@ pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {
         .generation_inputs()
         .requests(db)
         .iter()
-        .filter(|request| request.target_file == url)
+        .filter(|request| request.target_file == url && request.request_impl.is_none())
         .cloned()
         .collect::<Vec<_>>();
     for request in requests {
@@ -161,7 +161,7 @@ fn lower_quoted_ast_item<'db>(
         _ => {
             ctxt.record_generation_error(
                 item.syntax().text_range(),
-                "item quotation supports function, constant, impl, and trait impl declarations",
+                "item quotation supports function, const, impl, and trait impl declarations",
             );
             None
         }
@@ -262,6 +262,85 @@ pub(super) fn lower_generated_item_code<'db>(ctxt: &mut FileLowerCtxt<'db>, code
             ctxt.record_generation_error(range, "item-level quotation splice requires Code<Item>");
         }
     }
+}
+
+/// Lower the bounded explicit-derive function inside its authored impl header.
+pub(super) fn lower_derive_method<'db>(ctxt: &mut FileLowerCtxt<'db>, code: &FrozenCode) {
+    let FrozenCode::Template {
+        kind: FrozenCodeKind::Item,
+        quote_file,
+        quote_range,
+        producer_module,
+        producer_block,
+        holes,
+    } = code
+    else {
+        ctxt.record_generation_error(
+            parser::TextRange::empty(0.into()),
+            "bounded derive requires one function template",
+        );
+        return;
+    };
+    let (quote, frame) = ctxt.resolve_quote_template(
+        quote_file,
+        *quote_range,
+        *producer_module,
+        *producer_block,
+        false,
+        holes.clone(),
+    );
+    let quote_top_mod = frame.quote_top_mod;
+    // Admission covers the complete output, not just the children that happen
+    // to cast to items. In particular, a sibling item hole must not disappear
+    // before the bounded single-function check.
+    let items = quote
+        .item_list()
+        .map(|list| {
+            list.syntax()
+                .children()
+                .map(ast::Item::cast)
+                .collect::<Option<Vec<_>>>()
+        })
+        .or_else(|| {
+            quote.body().map(|block| {
+                block
+                    .syntax()
+                    .children()
+                    .map(ast::Item::cast)
+                    .collect::<Option<Vec<_>>>()
+            })
+        })
+        .flatten()
+        .unwrap_or_default();
+    let [item] = items.as_slice() else {
+        ctxt.record_generation_error(
+            *quote_range,
+            "bounded derive requires one function template",
+        );
+        return;
+    };
+    let Some(ast::ItemKind::Func(function)) = item.kind() else {
+        ctxt.record_generation_error(
+            *quote_range,
+            "bounded derive requires one function template",
+        );
+        return;
+    };
+    ctxt.quote_frames.push(frame);
+    super::item::validate_func_attrs(
+        ctxt,
+        function.attr_list(),
+        super::item::FuncKind::Associated,
+        function.sig().name().map(|name| name.text().to_string()),
+    );
+    let generated = Func::lower_ast(ctxt, function);
+    ctxt.pop_quote_frame();
+    ctxt.builder.defer_quoted_item_origin(
+        generated.into(),
+        quote_top_mod,
+        *producer_module,
+        *producer_block,
+    );
 }
 
 /// Copy members into the already-entered destination declaration. A nested

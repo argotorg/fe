@@ -183,8 +183,16 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 ) -> Result<(), CallGenericArgUnifyError<'db>> {
     let db = tc.db;
     let lowering_cx = LoweringContext::new();
-    let given_args = args.is_given(db).then(|| {
-        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx)
+    let given_args = args.is_given(db).then(|| match callable.callable_def {
+        CallableDef::Func(func) => super::super::ty_lower::lower_protocol_generic_arg_list(
+            db,
+            args,
+            tc.env.scope(),
+            tc.env.assumptions(),
+            &lowering_cx,
+            func.into(),
+        ),
+        _ => lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx),
     });
     let given_count = given_args.as_ref().map_or(0, Vec::len);
     let offset = callable.callable_def.offset_to_explicit_params_position(db);

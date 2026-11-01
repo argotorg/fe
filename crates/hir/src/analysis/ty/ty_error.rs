@@ -42,6 +42,90 @@ pub(crate) fn path_generic_args<'db>(
         .map(move |(idx, arg)| (arg, spans.clone().arg(idx)))
 }
 
+fn protocol_argument_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    arg: &GenericArg<'db>,
+    role: super::ty_lower::ProtocolArgumentRole,
+    span: LazyGenericArgSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<Vec<TyDiagCollection<'db>>> {
+    let descriptor = super::ty_lower::lower_protocol_descriptor(
+        db,
+        arg,
+        role,
+        scope,
+        assumptions,
+        &LoweringContext::new(),
+    )?;
+    let GenericArg::Type(argument) = arg else {
+        return None;
+    };
+    let TypeKind::Path(path) = argument.ty.to_opt()?.data(db) else {
+        return None;
+    };
+    let path = path.to_opt()?;
+    let trait_ = match descriptor.data(db) {
+        TyData::GoalDescriptor(goal) => goal.def(db),
+        TyData::TyBase(super::ty_def::TyBase::TraitDescriptor(trait_)) => *trait_,
+        TyData::Invalid(cause) => {
+            return Some(
+                diag_from_invalid_cause(span.into(), cause)
+                    .into_iter()
+                    .collect(),
+            );
+        }
+        _ => return None,
+    };
+    let mut diagnostics = Vec::new();
+    let path_span = span.into_type_arg().ty().into_path_type().path();
+    if !crate::analysis::name_resolution::is_scope_visible_from(db, trait_.scope(), scope) {
+        diagnostics.push(
+            PathResDiag::Invisible(
+                path_span
+                    .clone()
+                    .segment(path.segment_index(db))
+                    .ident()
+                    .into(),
+                path.ident(db).unwrap(),
+                trait_.scope().name_span(db),
+            )
+            .into(),
+        );
+    }
+    for (arg, span) in path_generic_args(db, path, path_span) {
+        if let GenericArg::Type(argument) = arg
+            && let Some(ty) = argument.ty.to_opt()
+        {
+            diagnostics.extend(collect_hir_ty_diags(
+                db,
+                scope,
+                ty,
+                span.into_type_arg().ty(),
+                assumptions,
+            ));
+        }
+    }
+    Some(diagnostics)
+}
+
+fn canonical_protocol_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+) -> Option<crate::hir_def::ItemKind<'db>> {
+    if path.generic_args(db).is_empty(db) {
+        return None;
+    }
+    let crate::analysis::name_resolution::NameResKind::Scope(ScopeId::Item(owner)) =
+        crate::analysis::name_resolution::resolve_type_path_definition(db, path, scope)?
+    else {
+        return None;
+    };
+    super::ty_lower::protocol_argument_role(db, owner)?;
+    Some(owner)
+}
+
 /// Diagnostics for the types a trait reference writes as generic arguments,
 /// each at its own span. The reference's own checks cover the
 /// well-formedness of the arguments it lowers.
@@ -94,6 +178,14 @@ pub(crate) fn path_arg_diags<'db>(
     path_generic_args(db, path, path_span.clone())
         .enumerate()
         .flat_map(|(idx, (arg, span))| {
+            if idx == 0
+                && let Some(owner) = canonical_protocol_owner(db, path, scope)
+                && let Some(role) = super::ty_lower::protocol_argument_role(db, owner)
+                && let Some(diagnostics) =
+                    protocol_argument_diags(db, arg, role, span.clone(), scope, assumptions)
+            {
+                return diagnostics;
+            }
             if let Some(diag) =
                 trait_arg_path_diag(db, path, path_span.clone(), idx, scope, assumptions)
             {
@@ -117,6 +209,7 @@ pub(crate) fn path_arg_diags<'db>(
                         assumptions,
                         diags: Vec::new(),
                         const_bodies: ConstBodyLowering::Eager,
+                        protocol_arguments: None,
                     };
                     vis.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
                     vis.diags
@@ -229,6 +322,7 @@ pub(crate) fn path_generic_arg_diags<'db>(
         assumptions,
         diags: Vec::new(),
         const_bodies: ConstBodyLowering::Eager,
+        protocol_arguments: None,
     };
     walk_path(&mut vis, &mut VisitorCtxt::new(db, scope, path_span), path);
     vis.diags
@@ -372,6 +466,7 @@ fn collect_ty_lower_errors_in_mode<'db>(
         assumptions,
         diags: Vec::new(),
         const_bodies,
+        protocol_arguments: None,
     };
     let mut ctxt = VisitorCtxt::new(db, scope, span);
     vis.visit_ty(&mut ctxt, hir_ty);
@@ -383,6 +478,10 @@ struct HirTyErrVisitor<'db> {
     diags: Vec<TyDiagCollection<'db>>,
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
+    protocol_arguments: Option<(
+        crate::hir_def::GenericArgListId<'db>,
+        super::ty_lower::ProtocolArgumentRole,
+    )>,
 }
 
 impl<'db> HirTyErrVisitor<'db> {
@@ -398,6 +497,33 @@ impl<'db> HirTyErrVisitor<'db> {
 }
 
 impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
+    fn visit_generic_arg_list(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, crate::span::params::LazyGenericArgListSpan<'db>>,
+        args: crate::hir_def::GenericArgListId<'db>,
+    ) {
+        for (index, arg) in args.data(self.db).iter().enumerate() {
+            let mut argument_ctxt =
+                VisitorCtxt::new(self.db, ctxt.scope(), ctxt.span().unwrap().arg(index));
+            if index == 0
+                && let Some((expected, role)) = self.protocol_arguments
+                && expected == args
+                && let Some(diagnostics) = protocol_argument_diags(
+                    self.db,
+                    arg,
+                    role,
+                    argument_ctxt.span().unwrap(),
+                    argument_ctxt.scope(),
+                    self.assumptions,
+                )
+            {
+                self.diags.extend(diagnostics);
+                continue;
+            }
+            self.visit_generic_arg(&mut argument_ctxt, arg);
+        }
+    }
+
     fn visit_generic_arg(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyGenericArgSpan<'db>>,
@@ -603,7 +729,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             self.diags.push(diag.into());
         }
 
+        let saved = self.protocol_arguments;
+        self.protocol_arguments = canonical_protocol_owner(self.db, path, ctxt.scope())
+            .and_then(|owner| super::ty_lower::protocol_argument_role(self.db, owner))
+            .map(|role| (path.generic_args(self.db), role));
         walk_path(self, ctxt, path);
+        self.protocol_arguments = saved;
     }
 
     fn visit_trait_ref(

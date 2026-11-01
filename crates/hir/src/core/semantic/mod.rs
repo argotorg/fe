@@ -4508,6 +4508,7 @@ pub fn scope_qualified_path<'db>(
 pub(crate) enum ImplTraitLowerError<'db> {
     ParseError,
     TraitRef(TraitRefLowerError<'db>),
+    Permit(&'static str),
     Conflict {
         primary: ImplTrait<'db>,
         conflict: ImplTrait<'db>,
@@ -4594,6 +4595,9 @@ impl<'db> ImplTrait<'db> {
             Ok(inst) => inst,
             Err(err) => return Err(ImplTraitLowerError::TraitRef(err)),
         };
+
+        crate::analysis::ty::permits::establishment_for_goal(db, self, trait_inst)
+            .map_err(ImplTraitLowerError::Permit)?;
 
         // Build implementor view
         let params = self.impl_params(db);
@@ -4786,6 +4790,9 @@ impl<'db> ImplTrait<'db> {
         impl_trait: ImplTrait<'db>,
         marker: Trait<'db>,
     ) -> bool {
+        if crate::core::meta::is_unfulfilled_derive_request(db, impl_trait) {
+            return false;
+        }
         let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() else {
             return false;
         };
@@ -4867,7 +4874,11 @@ impl<'db> ImplTrait<'db> {
         Self::impl_trait_local_nominal_root(db, impl_trait).is_some_and(|root| match root {
             TyBase::Adt(adt) => adt.ingot(db) == impl_trait_ingot,
             TyBase::Contract(contract) => contract.top_mod(db).ingot(db) == impl_trait_ingot,
-            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::Shape(_) => false,
+            TyBase::Prim(_)
+            | TyBase::Func(_)
+            | TyBase::Closure(_)
+            | TyBase::TraitDescriptor(_)
+            | TyBase::Shape(_) => false,
         })
     }
 
@@ -5118,6 +5129,15 @@ impl<'db> ImplTrait<'db> {
                 let mut diags = Vec::new();
                 match err {
                     ImplTraitLowerError::ParseError => {}
+                    ImplTraitLowerError::Permit(reason) => {
+                        diags.push(
+                            TraitLowerDiag::CanonicalEstablishment {
+                                primary: self,
+                                reason,
+                            }
+                            .into(),
+                        );
+                    }
                     ImplTraitLowerError::TraitRef(lower_err) => match lower_err {
                         // The header's argument diagnostics report a path
                         // written in an argument that names no type.

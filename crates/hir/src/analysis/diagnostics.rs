@@ -71,12 +71,14 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
                     .scope()
                     .pretty_path(db)
                     .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-                TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::Shape(_) => {
-                    ty.pretty_print(db).to_string()
-                }
+                TyBase::Prim(_)
+                | TyBase::Func(_)
+                | TyBase::Closure(_)
+                | TyBase::TraitDescriptor(_)
+                | TyBase::Shape(_) => ty.pretty_print(db).to_string(),
             }
         }
-        TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
+        TyData::ConstTy(_) | TyData::GoalDescriptor(_) => ty.pretty_print(db).to_string(),
         TyData::Never => "!".to_string(),
         TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
     }
@@ -2816,6 +2818,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 "type mismatch",
                 format_type_mismatch_message(db, *expected, *given),
                 span.resolve(db),
+                error_code,
+            ),
+            Self::PermitConstruction { primary, reason } => primary_diag(
+                severity,
+                *reason,
+                "this carrier may only be issued by its designated compiler protocol",
+                primary.resolve(db),
                 error_code,
             ),
             Self::CompileTimePhase { primary, message } => primary_diag(
@@ -5800,6 +5809,20 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
         let error_code =
             GlobalErrorCode::new(DiagnosticPass::ImplTraitDefinition, self.local_code());
         match self {
+            Self::CanonicalEstablishment { primary, reason } => primary_diag(
+                Severity::Error,
+                "canonical root establishment failed",
+                reason.to_string(),
+                primary.span().resolve(db),
+                error_code,
+            ),
+            Self::NamedCanonicalImplementation { primary } => primary_diag(
+                Severity::Error,
+                "a canonical-only trait does not admit named alternatives",
+                "use the ordinary home implementation",
+                primary.span().resolve(db),
+                error_code,
+            ),
             Self::NamedFieldQuery { primary } => primary_diag(
                 Severity::Error,
                 "FieldQuery requires an ordinary implementation",
@@ -6166,6 +6189,14 @@ impl DiagnosticVoucher for ImplDiag<'_> {
         let severity = Severity::Error;
 
         match self {
+            Self::UnfulfilledDeriveRequest { primary } => primary_diag(
+                severity,
+                "native derive request was not prepared",
+                "explicit native derive currently requires standalone authored-input preparation",
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::ConflictMethodImpl {
                 primary,
                 conflict_with,

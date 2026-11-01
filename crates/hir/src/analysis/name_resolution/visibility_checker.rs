@@ -93,6 +93,7 @@ pub(crate) fn is_ty_visible_from(db: &dyn HirAnalysisDb, ty: TyId, from_scope: S
             TyBase::Adt(adt) => is_scope_visible_from(db, adt.scope(db), from_scope),
             TyBase::Contract(c) => is_scope_visible_from(db, c.scope(), from_scope),
             TyBase::Func(func) => is_scope_visible_from(db, func.scope(), from_scope),
+            TyBase::TraitDescriptor(def) => is_scope_visible_from(db, def.scope(), from_scope),
         },
         TyData::TyParam(param) => is_scope_visible_from(db, param.scope(db), from_scope),
         // Associated type projections (e.g., `T::Assoc`, `<T as Trait>::Assoc`) are
@@ -113,6 +114,14 @@ pub(crate) fn is_ty_visible_from(db: &dyn HirAnalysisDb, ty: TyId, from_scope: S
             }
         },
         TyData::TyVar(_) | TyData::Never | TyData::Invalid(_) => true,
+        TyData::GoalDescriptor(goal) => {
+            is_scope_visible_from(db, goal.def(db).scope(), from_scope)
+                && goal
+                    .args(db)
+                    .iter()
+                    .chain(goal.assoc_type_bindings(db).values())
+                    .all(|&argument| is_ty_visible_from(db, argument, from_scope))
+        }
         TyData::QualifiedTy(trait_inst) => {
             is_scope_visible_from(db, trait_inst.def(db).scope(), from_scope)
         }

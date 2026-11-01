@@ -174,6 +174,7 @@ pub(crate) fn scope_graph_impl<'db>(
         item::validate_module_inner_attrs(&mut ctxt, items.inner_attr_list());
         lower_module_items(&mut ctxt, items);
     }
+    ctxt.builder.apply_quoted_function_origins();
     generated::append_functions(&mut ctxt);
     ctxt.leave_item_scope(top_mod);
 

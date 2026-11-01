@@ -1,0 +1,6 @@
+use ingot::meta::{Record, Code, Item}
+
+/// Authored structural input, checked output through the ordinary establish gate.
+pub trait Derive<G> {
+    const fn derive(_ record: Record) -> Code<Item>
+}
