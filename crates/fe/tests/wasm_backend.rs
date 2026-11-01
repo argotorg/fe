@@ -1192,20 +1192,6 @@ fn an_evm_builtin_is_a_named_error() {
 }
 
 #[test]
-fn sixteen_byte_integers_inside_a_body_are_named_errors() {
-    // 256-bit integers work; 128-bit ones do not.
-    rejected(
-        "wide_128",
-        "pub fn widen(a: u32) -> u32 {\n\
-         \x20   let x: u128 = a as u128\n\
-         \x20   let y: u128 = x * x\n\
-         \x20   y.downcast_truncate()\n\
-         }\n",
-        &["i128"],
-    );
-}
-
-#[test]
 fn a_function_named_memory_is_refused() {
     rejected(
         "reserved_name",

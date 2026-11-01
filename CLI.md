@@ -380,9 +380,8 @@ Overflow, division by zero, a failed `assert!` and an index outside an array tra
 they do in native executables. Calls use a stack of 1 MiB in the module's memory, and
 a call that does not fit traps; dynamic allocation comes from a heap that reuses
 freed blocks and grows the memory without a limit of the module's own; an allocation
-traps when the host refuses to grow it, and a fallible one returns `None`. 128-bit integers and
-the EVM built-ins are not supported and are errors that name the function and the
-instruction. The default output is `<out>/<file>.wasm`; `--emit ir` writes
+traps when the host refuses to grow it, and a fallible one returns `None`. The EVM built-ins
+are not supported and are errors that name the function and the instruction. The default output is `<out>/<file>.wasm`; `--emit ir` writes
 `<out>/<file>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
 written, `<out>/<file>.manifest.json` is written with it. The manifest records the
 module's file name, SHA-256 and size, its initial memory in pages, the imports (module,

@@ -175,7 +175,7 @@ pub fn main() -> i32 {{
 
 #[test]
 fn unchecked_div_rem_match_every_width() {
-    for bits in [8, 16, 32, 64, 256] {
+    for bits in [8, 16, 32, 64, 128, 256] {
         let sign_bit = bits - 1;
         let source = format!(
             r#"
@@ -213,7 +213,7 @@ pub fn main() -> i32 {{
 #[test]
 fn checked_arithmetic_traps() {
     let mut cases = Vec::new();
-    for bits in [8, 256] {
+    for bits in [8, 128, 256] {
         let sign_bit = bits - 1;
         let min = format!("1 << {sign_bit}");
         for (prefix, op, value, rhs) in [
