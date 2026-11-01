@@ -8,6 +8,7 @@ enum TokenType {
   BLOCK_COMMENT_END,
   GENERIC_OPEN,
   COMPARISON_LT,
+  QUOTE_KEYWORD,
 };
 
 void *tree_sitter_fe_external_scanner_create(void) { return NULL; }
@@ -348,6 +349,64 @@ static bool can_follow_generic_path_expr(TSLexer *lexer) {
   return true;
 }
 
+static bool is_ident_char(int32_t c) {
+  return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9');
+}
+
+// Consumes `word` when it is the whole identifier at the lookahead.
+static bool scan_word(TSLexer *lexer, const char *word) {
+  for (const char *c = word; *c; c++) {
+    if (lexer->lookahead != *c) return false;
+    advance(lexer);
+  }
+  return !is_ident_char(lexer->lookahead);
+}
+
+// Lookahead after mark_end must never skip: skipping would move the start of
+// the already marked quote/generic token. The opening /* is consumed here.
+static bool advance_quote_block_comment(TSLexer *lexer) {
+  int depth = 1;
+  while (depth > 0 && !lexer->eof(lexer)) {
+    if (lexer->lookahead == '*') {
+      advance(lexer);
+      if (lexer->lookahead == '/') { advance(lexer); depth--; }
+    } else if (lexer->lookahead == '/') {
+      advance(lexer);
+      if (lexer->lookahead == '*') { advance(lexer); depth++; }
+    } else {
+      advance(lexer);
+    }
+  }
+  return depth == 0;
+}
+
+// Ignore trivia tokens, but not a standalone newline, just like the Rust
+// parser's current_kind_same_line. A newline inside a block comment remains
+// part of that single comment token.
+static bool skip_quote_trivia(TSLexer *lexer, bool allow_newlines) {
+  for (;;) {
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\t' || lexer->lookahead == '\r' || (allow_newlines && lexer->lookahead == '\n')) advance(lexer);
+    if (lexer->lookahead != '/') return allow_newlines || lexer->lookahead != '\n';
+    advance(lexer);
+    if (lexer->lookahead == '/') {
+      while (!lexer->eof(lexer) && lexer->lookahead != '\n') advance(lexer);
+      if (!allow_newlines) return false;
+      continue;
+    }
+    if (lexer->lookahead != '*') return false; // A division operator is not trivia.
+    advance(lexer);
+    if (!advance_quote_block_comment(lexer)) return false;
+  }
+}
+
+static bool scan_quote_keyword(TSLexer *lexer) {
+  if (!scan_word(lexer, "quote")) return false;
+  lexer->mark_end(lexer);
+  return skip_quote_trivia(lexer, false) && lexer->lookahead == '{';
+}
+
+
 bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
                                           const bool *valid_symbols) {
   (void)payload;
@@ -369,6 +428,18 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
     }
     // Automatic semicolon not needed -- fall through to check other tokens
   }
+
+  if (valid_symbols[QUOTE_KEYWORD]) {
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
+           lexer->lookahead == '\r' || lexer->lookahead == '\n') {
+      skip(lexer);
+    }
+    if (lexer->lookahead == 'q') {
+      lexer->result_symbol = QUOTE_KEYWORD;
+      return scan_quote_keyword(lexer);
+    }
+  }
+
 
   // Disambiguate '<': generic open vs comparison less-than.
   // When both are valid, try generic first (lookahead for matching '>').

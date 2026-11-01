@@ -670,6 +670,17 @@ fn build_file(
         return true;
     };
 
+    match driver::generation::prepare_file(db, file) {
+        Ok(Some(prepared)) => {
+            *db = prepared;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("{error}");
+            return true;
+        }
+    }
+    let file = db.workspace().get(db, &url).expect("prepared source file");
     let top_mod = db.top_mod(file);
     let diagnostics = CompilationDiagnostics::for_top_mod(db, top_mod, &url);
     let mut has_errors = false;

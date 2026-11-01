@@ -1,10 +1,11 @@
 use async_lsp::ClientSocket;
+use common::{InputDb, ingot::IngotKind};
 use driver::DriverDataBase;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use url::Url;
 
@@ -39,9 +40,15 @@ impl std::fmt::Display for WorkerError {
 
 impl std::error::Error for WorkerError {}
 
+type PreparedViews =
+    FxHashMap<Url, Result<Option<DriverDataBase>, driver::generation::GenerationError>>;
+
 pub struct Backend {
     pub(super) client: ClientSocket,
     pub(super) db: DriverDataBase,
+    /// Prepared views are private to each standalone file. The authored `db`
+    /// continues to index every file in the workspace and receives edits.
+    prepared_views: Mutex<PreparedViews>,
     pub(super) workers: tokio::runtime::Runtime,
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
@@ -77,6 +84,7 @@ impl Backend {
         Self {
             client,
             db,
+            prepared_views: Mutex::new(FxHashMap::default()),
             workers,
             virtual_files,
             readonly_warnings: FxHashSet::default(),
@@ -136,6 +144,45 @@ impl Backend {
         self.virtual_files.as_mut()
     }
 
+    /// Return the checked output view for a generated standalone file, or the
+    /// authored workspace for an ordinary file. Generation failures are kept
+    /// for diagnostics; semantic requests can use the authored view while an
+    /// edit is incomplete.
+    pub fn try_analysis_db_for_url(
+        &self,
+        url: &Url,
+    ) -> Result<DriverDataBase, driver::generation::GenerationError> {
+        if let Some(view) = self.prepared_views.lock().unwrap().get(url) {
+            return (*view)
+                .clone()
+                .map(|prepared| prepared.unwrap_or_else(|| self.db.clone()));
+        }
+        let Some(file) = self.db.workspace().get(&self.db, url) else {
+            return Ok(self.db.clone());
+        };
+        if file
+            .containing_ingot(&self.db)
+            .is_none_or(|ingot| ingot.kind(&self.db) != IngotKind::StandAlone)
+        {
+            return Ok(self.db.clone());
+        }
+        let result = driver::generation::prepare_file(&self.db, file);
+        self.prepared_views
+            .lock()
+            .unwrap()
+            .insert(url.clone(), result.clone());
+        result.map(|prepared| prepared.unwrap_or_else(|| self.db.clone()))
+    }
+
+    pub fn analysis_db_for_url(&self, url: &Url) -> DriverDataBase {
+        self.try_analysis_db_for_url(url)
+            .unwrap_or_else(|_| self.db.clone())
+    }
+
+    pub fn invalidate_analysis_views(&self) {
+        self.prepared_views.lock().unwrap().clear();
+    }
+
     pub fn supports_definition_link(&self) -> bool {
         self.definition_link_support
     }
@@ -163,8 +210,19 @@ impl Backend {
         F: FnOnce(&DriverDataBase) -> T + Send + 'static,
         T: Send + 'static,
     {
+        self.spawn_on_workers_with_db(self.db.clone(), f)
+    }
+
+    pub fn spawn_on_workers_with_db<F, T>(
+        &self,
+        db: DriverDataBase,
+        f: F,
+    ) -> impl std::future::Future<Output = Result<T, WorkerError>> + 'static
+    where
+        F: FnOnce(&DriverDataBase) -> T + Send + 'static,
+        T: Send + 'static,
+    {
         let (tx, rx) = futures::channel::oneshot::channel();
-        let db = self.db.clone();
         self.workers.handle().spawn_blocking(move || {
             // catch_unwind the actual work so a panic inside `f` becomes a
             // logged, observable error instead of a dropped tx that looks like

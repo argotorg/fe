@@ -278,6 +278,9 @@ impl<'db> RuntimeSemanticBody<'db> {
         demand: &mut RuntimeRootDemand,
     ) {
         match expr {
+            NExpr::ItemQuote { .. } => {
+                unreachable!("compile-time quotation passed runtime phase admission")
+            }
             NExpr::Load { place, .. } => {
                 if self.place_source(place) == Some(local) {
                     demand.read_by_place = true;

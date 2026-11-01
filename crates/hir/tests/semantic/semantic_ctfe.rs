@@ -1161,7 +1161,9 @@ fn signed_mul_no_overflow_i8_neg_neg() {
 fn sem_const_has_type_level_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) -> bool {
     match value.value(db) {
         SemConstValue::Unit | SemConstValue::Scalar { .. } => false,
-        SemConstValue::Description(..) => true,
+        SemConstValue::Description(..)
+        | SemConstValue::Meta { .. }
+        | SemConstValue::ItemCode { .. } => true,
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems
             .iter()
             .copied()
@@ -1176,6 +1178,12 @@ fn sem_const_has_type_level_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) 
 fn sem_const_has_abstract_scalar_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) -> bool {
     match value.value(db) {
         SemConstValue::Unit | SemConstValue::Description(..) => false,
+        SemConstValue::Meta { .. } => false,
+        SemConstValue::ItemCode { code, .. } => code
+            .holes()
+            .iter()
+            .copied()
+            .any(|hole| sem_const_has_abstract_scalar_leaf(db, hole)),
         SemConstValue::Scalar { ty, .. } => ty.pretty_print(db) == "{integer}",
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems
             .iter()
@@ -1688,4 +1696,43 @@ const fn answer() -> u32 {
         panic!("expected scalar");
     };
     assert_eq!(value.to_usize(), Some(5));
+}
+
+#[test]
+fn signed_literal_casts_keep_minimum_values_before_generation() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "signed_scalar_prerequisite.fe".into(),
+        "const fn minimum() -> i8 { (-128) as i8 }\nconst fn positive() -> u8 { 255 as u8 }\n",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [("minimum", "-128"), ("positive", "255")] {
+        let owner = BodyOwner::Func(find_func(&db, module, name), None);
+        let result =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let EvalOutcome::Ready(value) = result else {
+            panic!("{result:?}")
+        };
+        assert_eq!(value.pretty_print(&db), expected);
+    }
+}
+
+#[test]
+fn signed_literal_casts_refuse_negative_unsigned_and_out_of_range_values() {
+    for (value, target) in [("-1", "u8"), ("-129", "i8")] {
+        let source = format!("fn invalid() -> {target} {{ ({value}) as {target} }}");
+        let (_, errors) = parser::parse_source_file(&source, parser::RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "fixture must parse: {errors:?}");
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("invalid_scalar_cast.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        let (diags, _) = check_func_body(&db, find_func(&db, module, "invalid"));
+        assert!(
+            diags
+                .iter()
+                .any(|diag| matches!(diag, FuncBodyDiag::Body(BodyDiag::InvalidCast { .. }))),
+            "{value} as {target} must fail with an invalid-cast diagnostic: {diags:?}"
+        );
+    }
 }

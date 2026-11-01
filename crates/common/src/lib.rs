@@ -5,6 +5,7 @@ pub mod config;
 pub mod dependencies;
 pub mod diagnostics;
 pub mod file;
+pub mod generation;
 pub mod graph;
 pub mod indexmap;
 pub mod ingot;
@@ -50,6 +51,7 @@ impl SalsaEventCounters {
 #[salsa::db]
 // Each database must implement InputDb explicitly with its own storage mechanism
 pub trait InputDb: salsa::Database {
+    fn generation_inputs(&self) -> generation::GenerationInputs;
     fn workspace(&self) -> Workspace;
     fn dependency_graph(&self) -> DependencyGraph;
     fn compiler_options(&self) -> CompilerOptions;
@@ -66,6 +68,9 @@ macro_rules! impl_input_db {
     ($db_type:ty) => {
         #[salsa::db]
         impl $crate::InputDb for $db_type {
+            fn generation_inputs(&self) -> $crate::generation::GenerationInputs {
+                self.generation.expect("Generation inputs not initialized")
+            }
             fn workspace(&self) -> $crate::file::Workspace {
                 self.index.clone().expect("Workspace not initialized")
             }
@@ -125,6 +130,7 @@ macro_rules! impl_db_default {
                     graph: None,
                     options: None,
                     settings: None,
+                    generation: None,
                 };
                 let index = $crate::file::Workspace::default(&db);
                 db.index = Some(index);
@@ -134,6 +140,7 @@ macro_rules! impl_db_default {
                 db.options = Some(options);
                 let settings = $crate::compilation::CompilationSettings::default(&db);
                 db.settings = Some(settings);
+                db.generation = Some($crate::generation::GenerationInputs::new(&db, vec![]));
                 $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
                 $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
                 db
@@ -154,6 +161,7 @@ macro_rules! define_input_db {
             graph: Option<$crate::dependencies::DependencyGraph>,
             options: Option<$crate::options::CompilerOptions>,
             settings: Option<$crate::compilation::CompilationSettings>,
+            generation: Option<$crate::generation::GenerationInputs>,
         }
 
         #[salsa::db]

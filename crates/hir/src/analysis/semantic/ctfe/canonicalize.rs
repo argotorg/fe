@@ -286,7 +286,9 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
                             vec![place.local]
                         }
                         SExpr::Field { base, .. } | SExpr::Index { base, .. } => vec![base.value],
-                        SExpr::AggregateMake { fields, .. } | SExpr::EnumMake { fields, .. } => {
+                        SExpr::ItemQuote { holes: fields, .. }
+                        | SExpr::AggregateMake { fields, .. }
+                        | SExpr::EnumMake { fields, .. } => {
                             fields.iter().map(|field| field.value).collect()
                         }
                         SExpr::Call {
@@ -493,7 +495,10 @@ fn canonicalize_const_value<'db>(
     value: SemConstId<'db>,
 ) -> SemConstId<'db> {
     match value.value(db) {
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => value,
+        SemConstValue::Unit
+        | SemConstValue::Scalar { .. }
+        | SemConstValue::ItemCode { .. }
+        | SemConstValue::Meta { .. } => value,
         SemConstValue::Description(term) => {
             let evaluated = evaluate_type_level_const_ty(db, *term, Some(term.ty(db)));
             let Some(evaluated) = sem_const_from_ty(db, TyId::const_ty(db, evaluated)) else {

@@ -8,6 +8,8 @@ use crate::{HirDb, span::expr::LazyExprSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Expr<'db> {
+    /// Authored item template; holes are evaluated in the producer body.
+    ItemQuote(Vec<ExprId>),
     Lit(LitKind<'db>),
     Block(Vec<StmtId>, BlockKind),
     /// `|params| -> ret_ty body`. An omitted parameter type lowers to an absent

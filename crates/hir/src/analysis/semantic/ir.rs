@@ -467,6 +467,10 @@ impl SOperand {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SExpr<'db> {
+    ItemQuote {
+        expression: ExprId,
+        holes: Box<[SOperand]>,
+    },
     /// Passes a value on as it is, copying it: never the read of a
     /// non-`Copy` binding by value, which `UseValue` is, so it forwards values
     /// a read already took, such as a join's branch values.
@@ -576,7 +580,9 @@ impl SExpr<'_> {
                 locals.push(lhs.value);
                 locals.push(rhs.value);
             }
-            Self::AggregateMake { fields, .. } | Self::EnumMake { fields, .. } => {
+            Self::ItemQuote { holes: fields, .. }
+            | Self::AggregateMake { fields, .. }
+            | Self::EnumMake { fields, .. } => {
                 locals.extend(fields.iter().map(|field| field.value));
             }
             Self::Call {

@@ -170,13 +170,13 @@ pub(super) fn validate_module_inner_attrs<'db>(
 
 /// Where a function is declared, which decides the attributes it takes.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FuncKind {
+pub(super) enum FuncKind {
     Free,
     Associated,
     Extern,
 }
 
-fn validate_func_attrs<'db>(
+pub(super) fn validate_func_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
     kind: FuncKind,
@@ -212,6 +212,7 @@ fn validate_func_attrs<'db>(
             AttrRule::unsupported("error", ERROR_TARGETS),
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("generate", "structs"),
         ],
     );
 }
@@ -554,10 +555,11 @@ impl<'db> Func<'db> {
         let modifiers = FuncModifiers::new(vis, is_unsafe, is_const, is_extern);
         // A body that declares items is lowered with the module, which resolves
         // their imports and collects their impls. Other bodies are lowered when
-        // first needed (`Func::body`).
+        // first needed (`Func::body`). A generated function is lowered with the
+        // module too: its splice values are known only there.
         let eager_body = ast
             .body()
-            .filter(ast::BlockExpr::declares_items)
+            .filter(|body| body.declares_items() || ctxt.lowering_generated_function)
             .map(|body| Body::lower_func_body(ctxt, &ast, body));
         let origin = HirOrigin::raw(&ast);
         let top_mod = ctxt.top_mod();

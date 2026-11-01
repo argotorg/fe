@@ -74,6 +74,9 @@ pub enum SyntaxKind {
     /// `#`
     #[token("#")]
     Pound,
+    /// Scalar/typed splice introducer in a quotation.
+    #[token("$")]
+    Dollar,
     /// `// Comment`
     #[regex(r"//[^\n\r]*")]
     Comment,
@@ -272,6 +275,10 @@ pub enum SyntaxKind {
     BlockExpr,
     /// `|x: u8| -> u8 { x }`
     ClosureExpr,
+    /// Authored checked item template.
+    QuoteExpr,
+    /// A provider expression embedded in a template.
+    QuoteHoleExpr,
     /// `x + 1`
     BinExpr,
     /// `!x`
@@ -633,6 +640,9 @@ impl SyntaxKind {
             SyntaxKind::String => "string literal",
             SyntaxKind::LParen => "`(`",
             SyntaxKind::RParen => "`)`",
+            SyntaxKind::Dollar => "`$`",
+            SyntaxKind::QuoteExpr => "quotation",
+            SyntaxKind::QuoteHoleExpr => "quotation hole",
             SyntaxKind::LBrace => "`{`",
             SyntaxKind::RBrace => "`}`",
             SyntaxKind::LBracket => "`[`",

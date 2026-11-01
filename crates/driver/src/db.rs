@@ -172,7 +172,7 @@ impl DiagnosticsCollection<'_> {
         trim_trailing_line_whitespace(std::str::from_utf8(buffer.as_slice()).unwrap())
     }
 
-    fn finalize(&self, db: &DriverDataBase) -> Vec<CompleteDiagnostic> {
+    pub(crate) fn finalize(&self, db: &DriverDataBase) -> Vec<CompleteDiagnostic> {
         let mut diags: Vec<_> = self.0.iter().map(|d| d.as_ref().to_complete(db)).collect();
         sort_and_dedup_complete_diagnostics(&mut diags);
         diags

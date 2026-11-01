@@ -11,6 +11,7 @@ use async_lsp::{
 };
 
 use common::InputDb;
+use common::{file::IngotFileKind, ingot::IngotKind};
 use driver::init_ingot;
 use resolver::{
     ResolutionHandler, Resolver,
@@ -450,6 +451,9 @@ pub async fn handle_file_change(
         .and_then(|name| name.to_str())
         .is_some_and(|name| name == "fe.toml");
 
+    // A provider can depend on another file in the indexed workspace, so any
+    // authored edit invalidates every prepared per-file view.
+    backend.invalidate_analysis_views();
     match message.kind {
         ChangeKind::Open(contents) => {
             debug!("file opened: {:?}", &path_str);
@@ -665,6 +669,29 @@ pub async fn handle_files_need_diagnostics(
         // and all subsequent LSP requests fail with SendError.
         use crate::lsp_diagnostics::LspDiagnostics;
         let diagnostics_map = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let standalone_url = if ingot.kind(&backend.db) == IngotKind::StandAlone {
+                ingot
+                    .files(&backend.db)
+                    .iter()
+                    .find(|(_, file)| matches!(file.kind(&backend.db), Some(IngotFileKind::Source)))
+                    .map(|(url, _)| url.clone())
+            } else {
+                None
+            };
+            if let Some(url) = standalone_url {
+                return match backend.try_analysis_db_for_url(&url) {
+                    Ok(db) => {
+                        let prepared_ingot = db
+                            .workspace()
+                            .containing_ingot(&db, url)
+                            .expect("prepared standalone file remains indexed");
+                        db.diagnostics_for_ingot(prepared_ingot)
+                    }
+                    Err(error) => {
+                        crate::lsp_diagnostics::generation_error_diagnostics(&backend.db, error)
+                    }
+                };
+            }
             backend.db.diagnostics_for_ingot(ingot)
         })) {
             Ok(map) => map,
@@ -790,13 +817,14 @@ pub async fn handle_hover_request(
             .uri
             .clone(),
     );
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let analysis_db = backend.analysis_db_for_url(&url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         warn!("handle_hover_request failed to get file for url: `{url}`");
         return Ok(None);
     };
 
     debug!("handling hover request in file: {:?}", file);
-    let (response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let (response, doc_path) = hover_helper(&analysis_db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
         (None, None)
     });

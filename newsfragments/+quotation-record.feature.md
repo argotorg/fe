@@ -1,0 +1,1 @@
+Generate functions from compile-time Fe templates that inspect struct fields. Generated names retain their defining scope, and standalone editor checks use the same generated view as command-line checks.

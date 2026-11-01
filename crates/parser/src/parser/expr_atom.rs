@@ -23,7 +23,7 @@ use crate::{
 pub(super) fn is_expr_atom_head(kind: SyntaxKind) -> bool {
     use SyntaxKind::*;
     match kind {
-        IfKw | MatchKw | UnsafeKw | LBrace | LParen | LBracket | Pipe | Pipe2 => true,
+        IfKw | MatchKw | UnsafeKw | LBrace | LParen | LBracket | Pipe | Pipe2 | Dollar => true,
         kind if lit::is_lit(kind) => true,
         kind if path::is_path_segment(kind) => true,
         _ => false,
@@ -41,7 +41,29 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
         Some(MatchKw) => parser.parse_cp(MatchExprScope::default(), None),
         Some(UnsafeKw) => parser.parse_cp(UnsafeExprScope::default(), None),
         Some(Pipe | Pipe2) => parser.parse_cp(ClosureExprScope::default(), None),
+        Some(SyntaxKind::Dollar) => {
+            if parser
+                .parents
+                .iter()
+                .any(|entry| entry.kind == SyntaxKind::QuoteExpr)
+            {
+                parser.parse_cp(QuoteHoleScope::default(), None)
+            } else {
+                parser
+                    .error_and_recover("quotation holes are only allowed inside quote")
+                    .map(|_| parser.checkpoint())
+            }
+        }
         Some(SyntaxKind::Ident) => {
+            let is_quote = parser.is_ident("quote")
+                && parser.dry_run(|p| {
+                    p.bump_expected(SyntaxKind::Ident);
+                    p.current_kind_same_line() == Some(SyntaxKind::LBrace)
+                });
+            if is_quote {
+                return parser.parse_cp(QuoteExprScope::default(), None);
+            }
+
             // Contextual 'with': only treat as with-block when:
             // ident text is "with" AND we can parse a WithParamList AND next is '{'
             let is_with = parser.current_token().is_some_and(|t| t.text() == "with")
@@ -128,8 +150,19 @@ impl super::Parse for BlockExprScope {
                 break;
             }
 
+            let in_quote_body = parser
+                .parents
+                .iter()
+                .rev()
+                .nth(1)
+                .is_some_and(|entry| entry.kind == SyntaxKind::QuoteExpr);
             // `unsafe {` starts an `unsafe` block, not an `unsafe fn` item.
-            if parser.current_kind().is_some_and(SyntaxKind::is_item_head)
+            if (parser.current_kind().is_some_and(SyntaxKind::is_item_head)
+                || (in_quote_body
+                    && matches!(
+                        parser.current_kind(),
+                        Some(SyntaxKind::Pound | SyntaxKind::DocComment)
+                    )))
                 && !matches!(
                     parser.peek_n_non_trivia(2).as_slice(),
                     [SyntaxKind::UnsafeKw, SyntaxKind::LBrace]
@@ -505,6 +538,29 @@ impl super::Parse for ArrayScope {
         )? {
             parser.bump();
         }
+        Ok(())
+    }
+}
+
+define_scope! { QuoteExprScope, QuoteExpr }
+impl super::Parse for QuoteExprScope {
+    type Error = Recovery<ErrProof>;
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::Ident);
+        parser.parse(BlockExprScope::default())?;
+        Ok(())
+    }
+}
+define_scope! { QuoteHoleScope, QuoteHoleExpr }
+impl super::Parse for QuoteHoleScope {
+    type Error = Recovery<ErrProof>;
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::Dollar);
+        parser.expect(&[SyntaxKind::LBrace], None)?;
+        parser.bump_if(SyntaxKind::LBrace);
+        parse_expr(parser)?;
+        parser.expect(&[SyntaxKind::RBrace], None)?;
+        parser.bump_if(SyntaxKind::RBrace);
         Ok(())
     }
 }

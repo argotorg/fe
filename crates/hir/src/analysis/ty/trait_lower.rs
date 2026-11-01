@@ -94,7 +94,7 @@ fn raw_impl_self_key<'db>(
             },
             HirTyKind::Tuple(tuple) => Some(ImplSelfKey::Prim(PrimTy::Tuple(tuple.data(db).len()))),
             HirTyKind::Array(..) => Some(ImplSelfKey::Prim(PrimTy::Array)),
-            HirTyKind::Never => None,
+            HirTyKind::Primitive(_) | HirTyKind::Never => None,
         }
     }
 

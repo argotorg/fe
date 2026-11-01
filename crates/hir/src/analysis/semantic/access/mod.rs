@@ -358,6 +358,13 @@ fn body_check_cycle_initial<'db>(
     }
 }
 
+pub fn semantic_access_check_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> &'db SemanticAccessCheckResult<'db> {
+    body_check(db, instance)
+}
+
 pub fn check_semantic_accesses<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     instance: SemanticInstance<'db>,

@@ -81,6 +81,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         expr: &SExpr<'db>,
     ) -> SemanticLocalRole<'db> {
         match expr {
+            SExpr::ItemQuote { .. } => ordinary_direct_value_role(),
             SExpr::Forward(value) => self.classify_forward_role(dst_ty, value.value),
             SExpr::UseValue(_) | SExpr::Borrow { .. } | SExpr::Call { .. } => {
                 self.fallback_local_role(dst_ty)
@@ -133,6 +134,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn classify_expr_snapshot_source(&self, expr: &SExpr<'db>) -> Option<PlaceProvenance<'db>> {
         match expr {
+            SExpr::ItemQuote { .. } => None,
             SExpr::Forward(value) | SExpr::UseValue(value) => {
                 self.locals[value.value.index()].snapshot_source.clone()
             }
@@ -177,6 +179,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         expr: &SExpr<'db>,
     ) -> Vec<LayoutBackingSource<'db>> {
         match expr {
+            SExpr::ItemQuote { .. } => Vec::new(),
             SExpr::Forward(value) | SExpr::UseValue(value) => {
                 self.local_layout_backing_sources(value.value)
             }

@@ -1207,7 +1207,7 @@ fn find_written_path<'db, R>(
                 }
             })
         }
-        TypeKind::Never => None,
+        TypeKind::Primitive(_) | TypeKind::Never => None,
     }
 }
 

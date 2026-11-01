@@ -86,6 +86,9 @@ pub async fn handle_execute_command(
     let uri = Url::parse(uri_str)
         .map_err(|e| ResponseError::new(ErrorCode::INVALID_PARAMS, format!("invalid URI: {e}")))?;
     let internal_uri = backend.map_client_uri_to_internal(uri.clone());
+    let analysis_db = backend
+        .try_analysis_db_for_url(&internal_uri)
+        .map_err(|error| ResponseError::new(ErrorCode::INVALID_REQUEST, error.to_string()))?;
 
     // Derive a relative source path for the output filename
     let source_path = uri.path().rsplit('/').next().unwrap_or("output");
@@ -98,10 +101,9 @@ pub async fn handle_execute_command(
 
     // Generate codegen content (borrows db immutably)
     let content = {
-        let file = backend
-            .db
+        let file = analysis_db
             .workspace()
-            .get(&backend.db, &internal_uri)
+            .get(&analysis_db, &internal_uri)
             .ok_or_else(|| {
                 ResponseError::new(
                     ErrorCode::INVALID_PARAMS,
@@ -109,8 +111,8 @@ pub async fn handle_execute_command(
                 )
             })?;
 
-        let top_mod = map_file_to_mod(&backend.db, file);
-        match generate_codegen_string(&backend.db, top_mod, &kind) {
+        let top_mod = map_file_to_mod(&analysis_db, file);
+        match generate_codegen_string(&analysis_db, top_mod, &kind) {
             Ok(content) => content,
             Err(e) => {
                 let _ = backend.client.clone().show_message(ShowMessageParams {

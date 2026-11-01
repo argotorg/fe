@@ -955,6 +955,87 @@ fn hover_text(hover: &Hover) -> String {
     }
 }
 
+#[tokio::test]
+async fn standalone_generation_updates_diagnostics_and_hover_after_edits() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+    let other_uri = Url::parse("file:///tmp/fe-lsp-other-standalone.fe").unwrap();
+    let other_source = "fn other() -> u256 { 3 }\n";
+    client.did_open(&other_uri, other_source);
+    client.wait_for_text(&other_uri, other_source).await;
+    let uri = Url::parse("file:///tmp/fe-lsp-record-generation.fe").unwrap();
+    let source = "use core::meta::{Code, Item, Record}\n\
+pub const fn make(_ record: Record) -> Code<Item> { quote { fn generated() -> u256 { 42 } } }\n\
+#[generate(make)]\n\
+struct Pair { first: u256 }\n\
+fn call_generated() -> u256 { generated() }\n";
+    client.did_open(&uri, source);
+    client.clear_diagnostics();
+    client.analyze(&uri, source).await;
+    assert!(client.wait_for_diagnostics(|d| d.uri == uri).await);
+    let diagnostics = client.diagnostics();
+    assert!(diagnostics.iter().any(|d| d.uri == uri));
+    assert!(
+        diagnostics
+            .iter()
+            .filter(|d| d.uri == uri)
+            .flat_map(|d| &d.diagnostics)
+            .all(|d| d.severity != Some(DiagnosticSeverity::ERROR)),
+        "{diagnostics:?}"
+    );
+    let hover = hover_at(&mut client, &uri, 4, 33).await;
+    assert!(hover_text(&hover).contains("generated"), "{hover:?}");
+    client.wait_for_text(&other_uri, other_source).await;
+
+    let invalid_output = source.replace("{ 42 }", "{ true }");
+    client.clear_diagnostics();
+    client.did_change(&uri, 2, &invalid_output);
+    client.analyze(&uri, &invalid_output).await;
+    assert!(
+        client
+            .wait_for_diagnostics(|d| {
+                d.uri == uri
+                    && d.diagnostics
+                        .iter()
+                        .any(|d| d.message.contains("generated output admission failed"))
+            })
+            .await,
+        "{:?}",
+        client.diagnostics()
+    );
+
+    let without_generation = source.replace("#[generate(make)]", "");
+    client.clear_diagnostics();
+    client.did_change(&uri, 3, &without_generation);
+    client.analyze(&uri, &without_generation).await;
+    assert!(
+        client
+            .wait_for_diagnostics(|d| {
+                d.uri == uri
+                    && d.diagnostics
+                        .iter()
+                        .any(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+            })
+            .await
+    );
+    let diagnostics = client.diagnostics();
+    assert!(
+        diagnostics
+            .iter()
+            .filter(|d| d.uri == uri)
+            .flat_map(|d| &d.diagnostics)
+            .any(|d| d.severity == Some(DiagnosticSeverity::ERROR)),
+        "{diagnostics:?}"
+    );
+    assert!(
+        client
+            .hover(&uri, 4, 33)
+            .await
+            .expect("hover failed")
+            .is_none()
+    );
+}
+
 async fn hover_at(client: &mut MockLspClient, uri: &Url, line: u32, character: u32) -> Hover {
     client
         .hover(uri, line, character)

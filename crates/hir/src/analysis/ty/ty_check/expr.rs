@@ -359,6 +359,26 @@ impl<'db> TyChecker<'db> {
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
+            Expr::ItemQuote(holes) => {
+                for &hole in holes {
+                    self.check_expr_unknown(hole);
+                }
+                let code = crate::analysis::ty::corelib::resolve_lib_type_path(
+                    self.db,
+                    self.env.scope(),
+                    "core::meta::Code",
+                );
+                let item = crate::analysis::ty::corelib::resolve_lib_type_path(
+                    self.db,
+                    self.env.scope(),
+                    "core::meta::Item",
+                );
+                match (code, item) {
+                    (Some(code), Some(item)) => ExprProp::new(TyId::app(self.db, code, item), true),
+                    _ => ExprProp::invalid(self.db),
+                }
+            }
+
             Expr::Lit(LitKind::String(string_id)) => {
                 ExprProp::new(self.string_literal_ty(*string_id, expected), true)
             }
@@ -426,6 +446,23 @@ impl<'db> TyChecker<'db> {
 
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
         self.report_normalization_limit(expr, actual.ty, expected);
+        let compile_time = match self.env.owner() {
+            BodyOwner::Func(function, _) => function.is_const(self.db),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
+            _ => false,
+        };
+        if !compile_time
+            && let Some(meta) = crate::core::meta::ty_contains_meta_carrier(self.db, actual.ty)
+        {
+            self.push_diag(BodyDiag::CompileTimePhase {
+                primary: expr.span(self.body()).into(),
+                message: format!(
+                    "`{}` is compile-time-only in a runtime expression",
+                    meta.pretty_print(self.db)
+                ),
+            });
+            actual = ExprProp::invalid(self.db);
+        }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         actual
@@ -1179,17 +1216,32 @@ impl<'db> TyChecker<'db> {
             return ExprProp::new(to, true);
         }
 
-        if let Partial::Present(Expr::Lit(LitKind::Int(int_id))) =
-            inner_expr.data(self.db, self.body())
-        {
+        let literal = match inner_expr.data(self.db, self.body()) {
+            Partial::Present(Expr::Lit(LitKind::Int(integer))) => Some((*integer, false)),
+            Partial::Present(Expr::Un(inner, UnOp::Minus)) => {
+                match inner.data(self.db, self.body()) {
+                    Partial::Present(Expr::Lit(LitKind::Int(integer))) => Some((*integer, true)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some((int_id, negative)) = literal {
             let value = int_id.data(self.db);
             let leaf = self.peel_transparent_newtypes(to);
-            if to.is_string(self.db) && self.int_literal_fits_in_ty(value, TyId::u256(self.db)) {
+            if !negative
+                && to.is_string(self.db)
+                && self.int_literal_fits_in_ty(value, TyId::u256(self.db))
+            {
                 let _ = self.table.unify(from, TyId::u256(self.db));
                 return ExprProp::new(to, true);
             }
 
-            if self.int_literal_fits_in_ty(value, to) {
+            if if negative {
+                self.negated_int_literal_fits_in_ty(value, to)
+            } else {
+                self.int_literal_fits_in_ty(value, to)
+            } {
                 // Unify the literal's type variable with the target leaf type
                 // so it doesn't remain unresolved.
                 let _ = self.table.unify(from, leaf);
@@ -1203,7 +1255,8 @@ impl<'db> TyChecker<'db> {
                 from,
                 to,
                 hint: Some(format!(
-                    "integer literal `{}` is not representable in `{}`",
+                    "integer literal `{}{}` is not representable in `{}`",
+                    if negative { "-" } else { "" },
                     value,
                     leaf.pretty_print(self.db),
                 )),

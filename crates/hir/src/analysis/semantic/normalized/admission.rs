@@ -131,6 +131,23 @@ fn runtime_admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    if let Some((index, _)) = raw
+        .locals
+        .iter()
+        .enumerate()
+        .find(|(_, local)| crate::core::meta::ty_contains_meta_carrier(db, local.ty).is_some())
+    {
+        let diagnostic = SemanticDiagnostic::new(
+            instance,
+            crate::analysis::semantic::diagnostics::SemanticDiagnosticKind::CompileTimePhase,
+            "compile-time metadata and quotations have no runtime representation".into(),
+            crate::analysis::semantic::diagnostics::SemanticDiagnosticSpan::LocalSourceOrBody {
+                instance,
+                local: crate::analysis::semantic::SLocalId::new(index),
+            },
+        );
+        return SemanticBodyAdmission::Rejected(SemanticDiagnosticId::new(db, diagnostic));
+    }
     // Folding evaluates values of the body's types, so they must be valid.
     if let Some(diag) = instance.concrete_layout_diagnostic(db, LayoutDemandBody::Admitted) {
         return SemanticBodyAdmission::Rejected(diag);
