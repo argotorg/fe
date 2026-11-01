@@ -280,7 +280,7 @@ impl Display for isize {
 
 impl Display for bool {
     fn fmt(self, _ out: mut MemBuffer) {
-        if self { "true".fmt(mut out) } else { "false".fmt(mut out) }
+        write!(mut out, if self { "true" } else { "false" })
     }
 }
 
