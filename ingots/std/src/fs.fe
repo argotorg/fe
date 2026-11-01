@@ -1,0 +1,460 @@
+#![cfg(target_family = "unix")]
+/// Files and directories of the native host.
+///
+/// `Fs` is a capability of the native root effect, `std::native::Host`: a
+/// function that reads files declares `uses (fs: Fs)`, and one that changes
+/// them `uses (fs: mut Fs)`. A path is the text of a `Display` value, such as
+/// a string literal, an `Arg` or a `MemBuffer`. An operation that fails
+/// returns the host's reason as an `Error`.
+use core::{MemBuffer, MemSlice, MemSpan, MemVec, Result, ptr}
+use super::env::c_string_len
+use super::io::Display
+use super::native::{Host, HostCapabilitySeal}
+
+extern {
+    // C stdio reads and writes file contents. Its calls take fixed
+    // arguments, while `open` takes its mode as a variadic argument, which
+    // AArch64 macOS passes on the stack.
+    fn fopen(_ path: *u8, _ mode: *u8) -> *u8
+    fn fread(_ buf: *u8, _ size: usize, _ count: usize, _ file: *u8) -> usize
+    fn fwrite(_ buf: *u8, _ size: usize, _ count: usize, _ file: *u8) -> usize
+    fn ferror(_ file: *u8) -> i32
+    fn fclose(_ file: *u8) -> i32
+    // POSIX file system calls. `mode_t` is 16 bits on macOS, where the
+    // caller extends it to 32 bits, so a 32-bit mode passes the same.
+    fn mkdir(_ path: *u8, _ mode: u32) -> i32
+    fn stat(_ path: *u8, _ buf: *u8) -> i32
+    fn lstat(_ path: *u8, _ buf: *u8) -> i32
+    fn opendir(_ path: *u8) -> *u8
+    fn readdir(_ dir: *u8) -> *u8
+    fn closedir(_ dir: *u8) -> i32
+    fn realpath(_ path: *u8, _ resolved: *u8) -> *u8
+    fn strerror(_ code: i32) -> *u8
+}
+
+// The `errno` values every supported host shares.
+const EPERM: i32 = 1
+const ENOENT: i32 = 2
+const EACCES: i32 = 13
+const EEXIST: i32 = 17
+const ENOTDIR: i32 = 20
+const EISDIR: i32 = 21
+const EINVAL: i32 = 22
+
+// File types in a `stat` mode, and in a `dirent`.
+const S_IFMT: u32 = 0o170000
+const S_IFDIR: u32 = 0o040000
+const S_IFREG: u32 = 0o100000
+const S_IFLNK: u32 = 0o120000
+const DT_UNKNOWN: u8 = 0
+const DT_DIR: u8 = 4
+const DT_REG: u8 = 8
+const DT_LNK: u8 = 10
+
+// The bytes of a `struct stat` on every supported host.
+const STAT_SIZE: usize = 144
+
+// `/` and `.`.
+const SLASH: u8 = 47
+const DOT: u8 = 46
+
+/// The host's files and directories.
+pub trait Fs: HostCapabilitySeal {
+    /// The contents of the file at `path`.
+    fn read<P: Display>(self, _ path: P) -> Result<Error, MemBuffer>
+    /// Replaces the contents of the file at `path` with `bytes`, creating
+    /// the file if it doesn't exist.
+    fn write<P: Display>(mut self, _ path: P, _ bytes: MemSpan) -> Result<Error, ()>
+    /// Appends `bytes` to the file at `path`, creating the file if it
+    /// doesn't exist.
+    fn append<P: Display>(mut self, _ path: P, _ bytes: MemSpan) -> Result<Error, ()>
+    /// Creates the directory at `path` and any of its missing parents. An
+    /// existing directory is no error.
+    fn create_dir_all<P: Display>(mut self, _ path: P) -> Result<Error, ()>
+    /// The type and size of the file at `path`, following symbolic links.
+    fn metadata<P: Display>(self, _ path: P) -> Result<Error, Metadata>
+    /// The entries of the directory at `path`, except `.` and `..`, in no
+    /// particular order.
+    fn read_dir<P: Display>(self, _ path: P) -> Result<Error, MemVec<DirEntry>>
+    /// The absolute form of `path`, without symbolic links, `.` or `..`.
+    fn canonicalize<P: Display>(self, _ path: P) -> Result<Error, MemBuffer>
+}
+
+/// Why a file system operation failed: the host's `errno`.
+pub struct Error { code: i32 }
+
+impl Copy for Error {}
+
+impl Error {
+    /// The host's error number.
+    pub fn code(self) -> i32 {
+        self.code
+    }
+
+    /// What went wrong, in terms every host shares.
+    pub fn kind(self) -> ErrorKind {
+        let code = self.code
+        if code == EPERM || code == EACCES {
+            ErrorKind::PermissionDenied
+        } else if code == ENOENT {
+            ErrorKind::NotFound
+        } else if code == EEXIST {
+            ErrorKind::AlreadyExists
+        } else if code == ENOTDIR {
+            ErrorKind::NotADirectory
+        } else if code == EISDIR {
+            ErrorKind::IsADirectory
+        } else if code == EINVAL {
+            ErrorKind::InvalidInput
+        } else {
+            ErrorKind::Other
+        }
+    }
+}
+
+/// The host's description of the error, such as `No such file or directory`.
+impl Display for Error {
+    fn fmt(self, _ out: mut MemBuffer) {
+        let text = unsafe { strerror(self.code) }
+        out.extend_from(unsafe { MemSlice::from_raw_parts(ptr: text, len: c_string_len(text)) })
+    }
+}
+
+/// The kinds of `Error`.
+pub enum ErrorKind {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    NotADirectory,
+    IsADirectory,
+    /// A path holds a NUL byte, or an argument is invalid.
+    InvalidInput,
+    Other,
+}
+
+impl Copy for ErrorKind {}
+
+/// The type of a file.
+pub enum FileType {
+    File,
+    Dir,
+    Symlink,
+    /// A device, pipe or socket.
+    Other,
+}
+
+impl Copy for FileType {}
+
+/// A file's type and size.
+pub struct Metadata { file_type: FileType, len: u64 }
+
+impl Copy for Metadata {}
+
+impl Metadata {
+    pub fn file_type(self) -> FileType {
+        self.file_type
+    }
+
+    pub fn is_file(self) -> bool {
+        match self.file_type {
+            FileType::File => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_dir(self) -> bool {
+        match self.file_type {
+            FileType::Dir => true,
+            _ => false,
+        }
+    }
+
+    /// The size of the file in bytes.
+    pub fn len(self) -> u64 {
+        self.len
+    }
+}
+
+/// An entry of a directory: a file name, and the type of its file, which a
+/// symbolic link doesn't lead to.
+pub struct DirEntry { name: MemBuffer, file_type: FileType }
+
+impl DirEntry {
+    /// The file name, without the directory.
+    pub fn name(self) -> ref MemSpan {
+        self.name.span()
+    }
+
+    pub fn file_type(self) -> FileType {
+        self.file_type
+    }
+}
+
+impl Fs for Host {
+    fn read<P: Display>(self, _ path: P) -> Result<Error, MemBuffer> {
+        let file = open(c_path(path)?, mode: "r")?
+        var contents = MemBuffer::empty()
+        while true {
+            contents.reserve(4096)
+            let len = contents.len()
+            let spare = contents.capacity() - len
+            let count = unsafe { fread(ptr::offset_bytes(contents.ptr(), len), 1, spare, file) }
+            unsafe { contents.set_len(len + count) }
+            // A short read is the end of the file or a failure.
+            if count < spare {
+                break
+            }
+        }
+        let failed = unsafe { ferror(file) } != 0
+        let error = last_error()
+        unsafe { fclose(file) }
+        if failed { Result::Err(error) } else { Result::Ok(contents) }
+    }
+
+    fn write<P: Display>(mut self, _ path: P, _ bytes: MemSpan) -> Result<Error, ()> {
+        write_file(open(c_path(path)?, mode: "w")?, bytes)
+    }
+
+    fn append<P: Display>(mut self, _ path: P, _ bytes: MemSpan) -> Result<Error, ()> {
+        write_file(open(c_path(path)?, mode: "a")?, bytes)
+    }
+
+    fn create_dir_all<P: Display>(mut self, _ path: P) -> Result<Error, ()> {
+        var path = c_path(path)?
+        let len = path.len() - 1
+        make_dirs(mut path, len)
+    }
+
+    fn metadata<P: Display>(self, _ path: P) -> Result<Error, Metadata> {
+        stat_path(c_path(path)?, follow: true)
+    }
+
+    fn read_dir<P: Display>(self, _ path: P) -> Result<Error, MemVec<DirEntry>> {
+        let path = c_path(path)?
+        let dir = unsafe { opendir(path.ptr()) }
+        if dir as usize == 0 {
+            return Result::Err(last_error())
+        }
+        var entries = MemVec::new()
+        var code: i32 = 0
+        while code == 0 {
+            // `readdir` returns null at the end and on a failure, which
+            // alone sets `errno`.
+            unsafe { *sys::errno_location() = 0 }
+            let entry = unsafe { readdir(dir) }
+            if entry as usize == 0 {
+                code = errno()
+                break
+            }
+            let name_ptr = ptr::offset_bytes(entry, sys::DIRENT_NAME)
+            let name = unsafe { MemSlice::from_raw_parts(ptr: name_ptr, len: c_string_len(name_ptr)) }
+            if is_dot_or_dot_dot(name) {
+                continue
+            }
+            match dir_entry(path, name, unsafe { *ptr::offset_bytes(entry, sys::DIRENT_TYPE) }) {
+                Result::Ok(entry) => entries.push(entry),
+                Result::Err(error) => code = error.code,
+            }
+        }
+        unsafe { closedir(dir) }
+        if code != 0 { Result::Err(Error { code }) } else { Result::Ok(entries) }
+    }
+
+    fn canonicalize<P: Display>(self, _ path: P) -> Result<Error, MemBuffer> {
+        let path = c_path(path)?
+        // At least `PATH_MAX`: 4096 on Linux, 1024 on macOS.
+        var resolved = MemBuffer::alloc(4096)
+        if unsafe { realpath(path.ptr(), resolved.ptr()) } as usize == 0 {
+            return Result::Err(last_error())
+        }
+        resolved.truncate(c_string_len(resolved.ptr()))
+        Result::Ok(resolved)
+    }
+}
+
+// The calling thread's `errno`.
+fn errno() -> i32 {
+    unsafe { *sys::errno_location() }
+}
+
+fn last_error() -> Error {
+    Error { code: errno() }
+}
+
+// `path`'s text and a NUL, or an `EINVAL` error if the text holds a NUL.
+fn c_path<P: Display>(_ path: P) -> Result<Error, MemBuffer> {
+    var text = MemBuffer::empty()
+    path.fmt(mut text)
+    for byte in text.span() {
+        if byte == 0 {
+            return Result::Err(Error { code: EINVAL })
+        }
+    }
+    text.push(0)
+    Result::Ok(text)
+}
+
+// Opens the file at the C string `path` with the stdio `mode`.
+fn open(_ path: MemBuffer, mode: String<1>) -> Result<Error, *u8> {
+    var mode_text = MemBuffer::empty()
+    mode.fmt(mut mode_text)
+    mode_text.push(0)
+    let file = unsafe { fopen(path.ptr(), mode_text.ptr()) }
+    if file as usize == 0 { Result::Err(last_error()) } else { Result::Ok(file) }
+}
+
+// Writes `bytes` to `file`, then closes it.
+fn write_file(_ file: *u8, _ bytes: MemSpan) -> Result<Error, ()> {
+    let short = unsafe { fwrite(bytes.ptr(), 1, bytes.len(), file) } < bytes.len()
+    let error = last_error()
+    // Closing flushes what stdio buffered, which can fail too.
+    if unsafe { fclose(file) } != 0 && !short {
+        return Result::Err(last_error())
+    }
+    if short { Result::Err(error) } else { Result::Ok(()) }
+}
+
+// Creates the directory named by the first `len` bytes of `path`, which a
+// NUL ends, and its missing parents.
+fn make_dirs(_ path: mut MemBuffer, _ len: usize) -> Result<Error, ()> {
+    let made = make_dir(path)
+    let missing_parent = match made {
+        Result::Ok(_) => false,
+        Result::Err(error) => error.code == ENOENT,
+    }
+    // The parent ends before the last name's `/`, past trailing slashes.
+    var end = len
+    while end > 0 && path[end - 1] == SLASH {
+        end -= 1
+    }
+    while end > 0 && path[end - 1] != SLASH {
+        end -= 1
+    }
+    if !missing_parent || end <= 1 {
+        return made
+    }
+    path.span().set(end - 1, 0)
+    let parent = make_dirs(mut path, end - 1)
+    path.span().set(end - 1, SLASH)
+    parent?
+    make_dir(path)
+}
+
+// Creates the directory at the C string `path`, unless it is one already.
+fn make_dir(_ path: MemBuffer) -> Result<Error, ()> {
+    if unsafe { mkdir(path.ptr(), 0o777) } == 0 {
+        return Result::Ok(())
+    }
+    let error = last_error()
+    let is_dir = error.code == EEXIST
+        && match stat_path(path, follow: true) {
+            Result::Ok(metadata) => metadata.is_dir(),
+            Result::Err(_) => false,
+        }
+    if is_dir { Result::Ok(()) } else { Result::Err(error) }
+}
+
+// The entry `name` of the directory at the C string `dir`, whose `dirent`
+// gives the type `d_type`.
+fn dir_entry(_ dir: MemBuffer, _ name: MemSpan, _ d_type: u8) -> Result<Error, DirEntry> {
+    let file_type = if d_type == DT_DIR {
+        FileType::Dir
+    } else if d_type == DT_REG {
+        FileType::File
+    } else if d_type == DT_LNK {
+        FileType::Symlink
+    } else if d_type != DT_UNKNOWN {
+        FileType::Other
+    } else {
+        // Some file systems don't record types in directories.
+        var path = MemBuffer::from_span(dir.span().head(dir.len() - 1))
+        path.push(SLASH)
+        path.extend_from(name)
+        path.push(0)
+        stat_path(path, follow: false)?.file_type
+    }
+    Result::Ok(DirEntry { name: MemBuffer::from_span(name), file_type })
+}
+
+// The metadata of the file at the C string `path`, or of the symbolic link
+// itself unless `follow`.
+fn stat_path(_ path: MemBuffer, follow: bool) -> Result<Error, Metadata> {
+    let buf = MemBuffer::alloc(STAT_SIZE)
+    let status = if follow {
+        unsafe { stat(path.ptr(), buf.ptr()) }
+    } else {
+        unsafe { lstat(path.ptr(), buf.ptr()) }
+    }
+    if status != 0 {
+        return Result::Err(last_error())
+    }
+    Result::Ok(Metadata { file_type: mode_type(sys::stat_mode(buf.span())), len: sys::stat_size(buf.span()) })
+}
+
+fn mode_type(_ mode: u32) -> FileType {
+    let format = mode & S_IFMT
+    if format == S_IFDIR {
+        FileType::Dir
+    } else if format == S_IFREG {
+        FileType::File
+    } else if format == S_IFLNK {
+        FileType::Symlink
+    } else {
+        FileType::Other
+    }
+}
+
+fn is_dot_or_dot_dot(_ name: MemSpan) -> bool {
+    name.len() <= 2 && name[0] == DOT && (name.len() == 1 || name[1] == DOT)
+}
+
+// The layouts and values that differ between hosts.
+#[cfg(target_os = "linux")]
+mod sys {
+    use core::MemSpan
+
+    extern {
+        fn __errno_location() -> *i32
+    }
+
+    pub fn errno_location() -> *i32 {
+        unsafe { __errno_location() }
+    }
+
+    // glibc's x86-64 `struct stat` and `struct dirent`.
+    pub fn stat_mode(_ stat: MemSpan) -> u32 {
+        stat.read_le<u32>(24)
+    }
+
+    pub fn stat_size(_ stat: MemSpan) -> u64 {
+        stat.read_le<u64>(48)
+    }
+
+    pub const DIRENT_TYPE: usize = 18
+    pub const DIRENT_NAME: usize = 19
+}
+
+#[cfg(target_os = "macos")]
+mod sys {
+    use core::MemSpan
+
+    extern {
+        fn __error() -> *i32
+    }
+
+    pub fn errno_location() -> *i32 {
+        unsafe { __error() }
+    }
+
+    // AArch64 macOS's `struct stat` and `struct dirent`, with 64-bit inodes.
+    pub fn stat_mode(_ stat: MemSpan) -> u32 {
+        stat.read_le<u16>(4) as u32
+    }
+
+    pub fn stat_size(_ stat: MemSpan) -> u64 {
+        stat.read_le<u64>(96)
+    }
+
+    pub const DIRENT_TYPE: usize = 20
+    pub const DIRENT_NAME: usize = 21
+}

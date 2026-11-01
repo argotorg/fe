@@ -1,3 +1,4 @@
+use common::compilation::{Os, Target};
 use parser::{
     TextRange,
     ast::{self, prelude::*},
@@ -5,6 +6,8 @@ use parser::{
 
 use super::FileLowerCtxt;
 use crate::core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*};
+
+const CFG_EXPECTED: &str = "`#[cfg(target = \"evm\")]`, `#[cfg(target = \"native\")]`, `#[cfg(target_os = \"linux\")]`, `#[cfg(target_os = \"macos\")]`, or `#[cfg(target_family = \"unix\")]`";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrMisuseError {
@@ -234,6 +237,59 @@ pub(super) fn validate_attr_rules<'db>(
             }
         }
     }
+}
+
+/// Whether every `cfg` attribute in `attrs` holds for the compilation's
+/// target and operating system. A malformed one is an error and doesn't hold.
+pub(super) fn cfg_holds<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    target: AttrTarget,
+) -> bool {
+    let db = ctxt.db();
+    let settings = db.compilation_settings();
+    let (machine, os) = (settings.target(db), settings.os(db));
+    named_attr_specs(attrs, "cfg")
+        .into_iter()
+        .fold(true, |holds, spec| {
+            let predicate = match &spec.args[..] {
+                [
+                    AstAttrArgSpec {
+                        key: Some(key),
+                        value: Some(ast::AttrArgValueKind::Lit(lit)),
+                    },
+                ] if spec.value.is_none() => match lit.kind() {
+                    ast::LitKind::String(value) => value.value().ok().map(|value| (key, value)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let held = predicate.and_then(|(key, value)| match key.as_str() {
+                "target" => Target::ALL
+                    .iter()
+                    .any(|target| target.name() == value)
+                    .then(|| machine.name() == value),
+                "target_os" => Os::ALL
+                    .iter()
+                    .any(|os| os.name() == value)
+                    .then(|| os.is_some_and(|os| os.name() == value)),
+                "target_family" => (value == "unix")
+                    .then(|| os.is_some_and(|os| matches!(os, Os::Linux | Os::Macos))),
+                _ => None,
+            });
+            if held.is_none() {
+                report_attr_misuse(
+                    ctxt,
+                    spec.range,
+                    "cfg".to_string(),
+                    target.clone(),
+                    AttrMisuseErrorKind::InvalidForm {
+                        expected_form: CFG_EXPECTED,
+                    },
+                );
+            }
+            holds && held == Some(true)
+        })
 }
 
 pub(super) fn validate_unknown_attrs_in_restricted_context<'db>(

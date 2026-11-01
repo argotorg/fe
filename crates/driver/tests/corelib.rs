@@ -1,6 +1,7 @@
 //! Analysis of the builtin core and std ingots through the driver.
 
 use common::InputDb;
+use common::compilation::{Os, Target};
 use common::indexmap::IndexMap;
 use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
 use fe_driver::{DriverDataBase, db::DiagnosticsCollection};
@@ -33,17 +34,31 @@ fn analyze_corelib() {
     assert_builtin_clean(&db, core, core_diags, "core");
 }
 
+// Std is checked for each target and operating system, since `#[cfg]`
+// selects its items by them.
 #[test]
 fn analyze_stdlib() {
-    let db = DriverDataBase::default();
-    let std_ingot = db.builtin_std();
-    assert!(
-        std_ingot.files(&db).iter().next().is_some(),
-        "builtin std ingot should not be empty"
-    );
+    let configs = [(Target::Evm, None), (Target::Native, None)]
+        .into_iter()
+        .chain(Os::ALL.map(|os| (Target::Native, Some(os))));
+    for (target, os) in configs {
+        let mut db = DriverDataBase::default();
+        db.compilation_settings().set_target(&mut db).to(target);
+        db.compilation_settings().set_os(&mut db).to(os);
+        let std_ingot = db.builtin_std();
+        assert!(
+            std_ingot.files(&db).iter().next().is_some(),
+            "builtin std ingot should not be empty"
+        );
 
-    let std_diags = db.run_on_ingot(std_ingot);
-    assert_builtin_clean(&db, std_ingot, std_diags, "std");
+        let std_diags = db.run_on_ingot(std_ingot);
+        assert_builtin_clean(
+            &db,
+            std_ingot,
+            std_diags,
+            &format!("std ({target:?}, {os:?})"),
+        );
+    }
 }
 
 fn assert_builtin_clean(

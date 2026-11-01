@@ -95,7 +95,7 @@ impl<'db> Contract<'db> {
         let recvs = {
             let mut data = Vec::new();
             for (recv_idx, r) in ast.recvs().enumerate() {
-                super::item::report_payable_on_unsupported_target(
+                super::item::report_unsupported_member_attrs(
                     ctxt,
                     r.attr_list(),
                     "recv block",
@@ -156,7 +156,7 @@ fn lower_contract_field_def<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     ast: ast::RecordFieldDef,
 ) -> FieldDef<'db> {
-    super::item::report_payable_on_unsupported_target(ctxt, ast.attr_list(), "field", None);
+    super::item::report_unsupported_member_attrs(ctxt, ast.attr_list(), "field", None);
     let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
     let name = IdentId::lower_token_partial(ctxt, ast.name());
     let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());

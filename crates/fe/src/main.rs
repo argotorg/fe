@@ -26,7 +26,7 @@ use camino::Utf8PathBuf;
 use check::check;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
-use common::compilation::Target;
+use common::compilation::{Os, Target};
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
@@ -112,6 +112,12 @@ impl BuildBackend {
             #[cfg(feature = "sp1")]
             Self::Sp1 => Target::Native,
         }
+    }
+
+    /// The operating system this backend's code runs on: the host's for
+    /// native executables, none for EVM code and SP1 guests.
+    pub fn os(self) -> Option<Os> {
+        if self.is_native() { Os::host() } else { None }
     }
 
     pub fn is_native(self) -> bool {
@@ -773,7 +779,7 @@ pub fn run(opts: &Options) {
                 path,
                 ingot.as_deref(),
                 *standalone,
-                backend.target(),
+                *backend,
                 profile,
                 *dump_mir,
                 (*report).then_some(report_out),

@@ -1,0 +1,26 @@
+// Each kept function reports its undefined `*_kept` name.
+
+#[cfg(target = "evm")]
+fn evm() { evm_kept }
+
+#[cfg(target = "native")]
+fn native() { native_kept }
+
+#[cfg(target_os = "linux")]
+fn linux() { linux_kept }
+
+#[cfg(target_os = "macos")]
+fn macos() { macos_kept }
+
+#[cfg(target_family = "unix")]
+fn unix() { unix_kept }
+
+#[cfg(target = "native")]
+#[cfg(target_os = "linux")]
+fn native_linux() { native_linux_kept }
+
+mod native_only {
+    #![cfg(target = "native")]
+
+    fn f() { native_mod_kept }
+}

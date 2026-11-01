@@ -9,6 +9,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use codegen::{OptLevel, SonatinaContractBytecode};
 #[cfg(feature = "sp1")]
 use common::cache::cache_dir;
+#[cfg(feature = "cranelift")]
+use common::compilation::Os;
 use common::{
     InputDb,
     config::{
@@ -180,7 +182,7 @@ fn validate_build_request(
         ),
         #[cfg(feature = "cranelift")]
         BuildBackend::Native
-            if (emit.executable || emit.library()) && !native_object_host_supported() =>
+            if (emit.executable || emit.library()) && Os::host().is_none() =>
         {
             Err(
                 "native executable and library output currently require an x86-64 Linux or AArch64 macOS host"
@@ -206,14 +208,6 @@ fn validate_build_request(
         #[cfg(feature = "sp1")]
         BuildBackend::Sp1 => Ok(()),
     }
-}
-
-#[cfg(feature = "cranelift")]
-fn native_object_host_supported() -> bool {
-    cfg!(any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    ))
 }
 
 fn write_report_file(report: &BuildReportContext, rel: &str, contents: &str) {
@@ -299,6 +293,7 @@ pub fn build(
     db.compilation_settings()
         .set_target(&mut db)
         .to(backend.target());
+    db.compilation_settings().set_os(&mut db).to(backend.os());
 
     let report_root = match report_out
         .map(|out| -> Result<_, String> {
