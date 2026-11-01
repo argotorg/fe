@@ -1,4 +1,4 @@
-use core::MemBuffer
+use core::{MemBuffer, MemVec}
 
 fn buffer<const N: usize>(_ bytes: [u8; N]) -> MemBuffer {
     var buf = MemBuffer::empty()
@@ -25,4 +25,23 @@ fn spans_equal_string_text() {
     let longest = buffer("0123456789012345678901234567890")
     assert!(longest.span() == "0123456789012345678901234567890")
     assert!(longest.span() != "0123456789012345678901234567899")
+}
+
+#[test]
+fn spans_equal_spans() {
+    let serve = buffer("serve")
+    let served = buffer("served")
+    assert!(serve.span() == served.span().head(5))
+    assert!(serve.span() != served.span())
+    assert!(serve.span().tail(1) != served.span().slice(offset: 1, len: 4).head(3))
+    assert!(serve.span().tail(5) == MemBuffer::empty().span())
+    var words: MemVec<u256> = MemVec::new()
+    var more: MemVec<u256> = MemVec::new()
+    for word in [1, 2, 3] {
+        words.push(word)
+        more.push(word)
+    }
+    more.push(4)
+    assert!(words.as_slice() == more.as_slice().head(3))
+    assert!(words.as_slice() != more.as_slice().tail(1))
 }
