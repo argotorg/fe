@@ -1,6 +1,7 @@
 use common::indexmap::IndexMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
+use std::iter;
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::effects::{
@@ -14,12 +15,8 @@ use crate::analysis::ty::effects::{
 };
 
 use super::{TyChecker, env::ProvidedEffect};
-use crate::analysis::ty::{
-    trait_def::{AssocBinding, TraitInstId},
-    trait_resolution::PredicateListId,
-    ty_def::TyId,
-};
-use crate::hir_def::{ModeMarker, Trait, scope_graph::ScopeId};
+use crate::analysis::ty::{trait_def::TraitInstId, trait_resolution::PredicateListId};
+use crate::hir_def::{ModeMarker, scope_graph::ScopeId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameLookupResult<'db> {
@@ -120,42 +117,93 @@ impl<'db> EffectFrame<'db> {
         (entries, barrier_reason)
     }
 
-    fn insert_forwarder(
+    /// Adds `entry` and, for a trait key, the supertraits the trait implies
+    /// of its provider, as the trait solver elaborates them. `scope` and
+    /// `assumptions` are those the key was resolved in, which normalize the
+    /// supertraits' keys: with `trait Derived<T: HasItem>: Base<T::Item>`,
+    /// `Derived<Concrete>` implies `Base<u8>`, not `Base<Concrete::Item>`.
+    fn insert(
         &mut self,
         db: &'db dyn HirAnalysisDb,
-        forwarder: EffectForwarder<'db, ProvidedEffect<'db>>,
+        entry: KeyedEffectEntry<'db, ProvidedEffect<'db>>,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) {
-        if let ForwardedEffectKey::Trait(key) = &forwarder.key {
-            for inst in super_trait_insts(
-                db,
-                key.def,
-                &key.args_no_self,
-                &key.assoc_bindings,
-                forwarder.provider.ty,
-                scope,
-                assumptions,
-            ) {
-                let def = inst.def(db);
-                self.implied_by_family
-                    .entry(effect_family_for_trait(def))
-                    .or_default()
-                    .push(KeyedEffectEntry::Forwarder(EffectForwarder {
-                        key: ForwardedEffectKey::Trait(ForwardedTraitKey {
-                            def,
-                            args_no_self: inst.args(db)[1..].iter().copied().collect(),
-                            assoc_bindings: inst.assoc_ty_bindings(db).into_iter().collect(),
-                            family: effect_family_for_trait(def),
+        let (family, trait_key) = match &entry {
+            KeyedEffectEntry::Witness(witness) => (
+                witness.key.clone().family(),
+                match &witness.key {
+                    StoredEffectKey::Trait(key) => Some((
+                        key.def,
+                        &key.args_no_self,
+                        &key.assoc_bindings,
+                        witness.provider,
+                    )),
+                    StoredEffectKey::Type(_) => None,
+                },
+            ),
+            KeyedEffectEntry::Forwarder(forwarder) => (
+                forwarder.key.clone().family(),
+                match &forwarder.key {
+                    ForwardedEffectKey::Trait(key) => Some((
+                        key.def,
+                        &key.args_no_self,
+                        &key.assoc_bindings,
+                        forwarder.provider,
+                    )),
+                    ForwardedEffectKey::Type(_) => None,
+                },
+            ),
+            KeyedEffectEntry::Barrier(barrier) => (barrier.pattern.clone().family(), None),
+        };
+        if let Some((def, args_no_self, assoc_bindings, provider)) = trait_key {
+            let args: Vec<_> = iter::once(provider.ty)
+                .chain(args_no_self.iter().copied())
+                .collect();
+            let bindings: IndexMap<_, _> = assoc_bindings.iter().copied().collect();
+            let key = TraitInstId::new(db, def, args, bindings, ModeMarker::None);
+            let implied = PredicateListId::new(db, vec![key])
+                .extend_all_bounds(db)
+                .list(db)
+                .iter()
+                .filter(|inst| **inst != key && inst.self_ty(db) == provider.ty)
+                .map(|inst| {
+                    let inst = normalize_effect_identity_trait(db, *inst, scope, assumptions, None);
+                    let def = inst.def(db);
+                    let args_no_self = inst.args(db)[1..].iter().copied().collect();
+                    let assoc_bindings = inst.assoc_ty_bindings(db).into_iter().collect();
+                    let family = effect_family_for_trait(def);
+                    let entry = match &entry {
+                        KeyedEffectEntry::Witness(_) => KeyedEffectEntry::Witness(EffectWitness {
+                            key: StoredEffectKey::Trait(StoredTraitKey {
+                                def,
+                                args_no_self,
+                                assoc_bindings,
+                                family,
+                            }),
+                            provider,
                         }),
-                        provider: forwarder.provider,
-                    }));
+                        _ => KeyedEffectEntry::Forwarder(EffectForwarder {
+                            key: ForwardedEffectKey::Trait(ForwardedTraitKey {
+                                def,
+                                args_no_self,
+                                assoc_bindings,
+                                family,
+                            }),
+                            provider,
+                        }),
+                    };
+                    (family, entry)
+                })
+                .collect::<Vec<_>>();
+            for (family, entry) in implied {
+                self.implied_by_family
+                    .entry(family)
+                    .or_default()
+                    .push(entry);
             }
         }
-        self.keyed_by_family
-            .entry(forwarder.key.clone().family())
-            .or_default()
-            .push(KeyedEffectEntry::Forwarder(forwarder));
+        self.keyed_by_family.entry(family).or_default().push(entry);
     }
 }
 
@@ -206,7 +254,12 @@ impl<'db> EffectEnv<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) {
-        self.frames[0].insert_forwarder(db, forwarder, scope, assumptions);
+        self.frames[0].insert(
+            db,
+            KeyedEffectEntry::Forwarder(forwarder),
+            scope,
+            assumptions,
+        );
     }
 
     fn current_frame_mut(&mut self) -> &mut EffectFrame<'db> {
@@ -231,38 +284,8 @@ impl<'db> EffectEnv<'db> {
                 debug_assert!(stored_trait_key_is_rigid(db, key.clone()))
             }
         }
-        let frame = self.current_frame_mut();
-        if let StoredEffectKey::Trait(key) = &witness.key {
-            for inst in super_trait_insts(
-                db,
-                key.def,
-                &key.args_no_self,
-                &key.assoc_bindings,
-                witness.provider.ty,
-                scope,
-                assumptions,
-            ) {
-                let def = inst.def(db);
-                frame
-                    .implied_by_family
-                    .entry(effect_family_for_trait(def))
-                    .or_default()
-                    .push(KeyedEffectEntry::Witness(EffectWitness {
-                        key: StoredEffectKey::Trait(StoredTraitKey {
-                            def,
-                            args_no_self: inst.args(db)[1..].iter().copied().collect(),
-                            assoc_bindings: inst.assoc_ty_bindings(db).into_iter().collect(),
-                            family: effect_family_for_trait(def),
-                        }),
-                        provider: witness.provider,
-                    }));
-            }
-        }
-        frame
-            .keyed_by_family
-            .entry(witness.key.clone().family())
-            .or_default()
-            .push(KeyedEffectEntry::Witness(witness));
+        self.current_frame_mut()
+            .insert(db, KeyedEffectEntry::Witness(witness), scope, assumptions);
     }
 
     /// Adds `forwarder` to the innermost frame. `scope` and `assumptions`
@@ -283,8 +306,12 @@ impl<'db> EffectEnv<'db> {
                 debug_assert!(forwarded_trait_key_is_well_formed(db, key.clone()))
             }
         }
-        self.current_frame_mut()
-            .insert_forwarder(db, forwarder, scope, assumptions);
+        self.current_frame_mut().insert(
+            db,
+            KeyedEffectEntry::Forwarder(forwarder),
+            scope,
+            assumptions,
+        );
     }
 
     pub fn insert_barrier(
@@ -366,41 +393,4 @@ impl<'db> EffectEnv<'db> {
         }
         out
     }
-}
-
-/// The supertraits of the trait key `def` with `args_no_self` and
-/// `assoc_bindings`, which `provider_ty` provides, and theirs in turn. Each
-/// is normalized as an effect key in `scope` under `assumptions`, with its
-/// subtrait as evidence: with `trait Derived<T: HasItem>: Base<T::Item>`,
-/// `Derived<Concrete>` implies `Base<u8>`, not `Base<Concrete::Item>`.
-fn super_trait_insts<'db>(
-    db: &'db dyn HirAnalysisDb,
-    def: Trait<'db>,
-    args_no_self: &[TyId<'db>],
-    assoc_bindings: &[(AssocBinding<'db>, TyId<'db>)],
-    provider_ty: TyId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> FxHashSet<TraitInstId<'db>> {
-    let args: Vec<_> = std::iter::once(provider_ty)
-        .chain(args_no_self.iter().copied())
-        .collect();
-    let bindings: IndexMap<_, _> = assoc_bindings.iter().copied().collect();
-    let mut worklist = vec![TraitInstId::new(db, def, args, bindings, ModeMarker::None)];
-    let mut supers = FxHashSet::default();
-    while let Some(inst) = worklist.pop() {
-        for super_trait in inst.def(db).super_traits(db) {
-            let super_inst = normalize_effect_identity_trait(
-                db,
-                super_trait.instantiate(db, inst.args(db)),
-                scope,
-                assumptions,
-                Some(inst),
-            );
-            if supers.insert(super_inst) {
-                worklist.push(super_inst);
-            }
-        }
-    }
-    supers
 }
