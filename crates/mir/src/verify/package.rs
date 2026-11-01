@@ -299,6 +299,7 @@ fn verify_synthetic_function<'db>(
             }
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
+            | RuntimeSyntheticSpec::ExportRoot { .. }
             | RuntimeSyntheticSpec::ManualContractRoot { .. }
             | RuntimeSyntheticSpec::ContractInitAbi { .. } => Ok(()),
         },

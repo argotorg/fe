@@ -1066,7 +1066,7 @@ fn a_type_larger_than_the_address_space_is_an_error() {
 fn an_export_named_like_an_import_or_a_runtime_routine_is_an_error() {
     rejected(
         "export_import",
-        "use std::wasm::{Clock, host, now_ms}\n\npub fn sys_wasm_now_ms() -> u64 {\n    5\n}\n\npub fn elapsed() -> u64 {\n    with (Clock = host()) {\n        now_ms()\n    }\n}\n",
+        "use std::wasm::{Clock, now_ms}\n\npub fn sys_wasm_now_ms() -> u64 {\n    5\n}\n\npub fn elapsed() -> u64 uses (clock: mut Clock) {\n    now_ms()\n}\n",
         &[
             "cannot export `sys_wasm_now_ms`",
             "imports an `extern` function of that name",

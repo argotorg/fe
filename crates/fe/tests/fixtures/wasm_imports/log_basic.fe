@@ -2,7 +2,6 @@
 // test removes the marker from its own lines and drops the other ones.
 use std::wasm::{Log, log_i32}
 
-//host: fn provider() -> std::wasm::Host { std::wasm::host() }
 //mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
 
 fn emit(_ a: i32, _ b: i32) -> i32 uses (log: mut Log) {
@@ -13,11 +12,12 @@ fn emit(_ a: i32, _ b: i32) -> i32 uses (log: mut Log) {
     sum
 }
 
-pub fn log_three(a: i32, b: i32) -> i32 {
-    var p = provider()
-    with (Log = p) {
+//host: pub fn log_three(a: i32, b: i32) -> i32 uses (log: mut Log) {
+//mock: pub fn log_three(a: i32, b: i32) -> i32 {
+//mock:     var p = provider()
+//mock:     with (Log = p) {
         emit(a, b)
-    }
+//mock:     }
 }
 
 fn squares(_ n: i32) -> i32 uses (log: mut Log) {
@@ -31,11 +31,12 @@ fn squares(_ n: i32) -> i32 uses (log: mut Log) {
     total
 }
 
-pub fn log_squares(n: i32) -> i32 {
-    var p = provider()
-    with (Log = p) {
+//host: pub fn log_squares(n: i32) -> i32 uses (log: mut Log) {
+//mock: pub fn log_squares(n: i32) -> i32 {
+//mock:     var p = provider()
+//mock:     with (Log = p) {
         squares(n)
-    }
+//mock:     }
 }
 
 //mock: pub fn mock_count(n: i32) -> u32 {

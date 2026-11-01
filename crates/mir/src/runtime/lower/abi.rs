@@ -23,7 +23,7 @@ pub(crate) fn runtime_declaration_signature<'db>(
         let RuntimeInstanceSource::Synthetic(synthetic) = key.source(db) else {
             unreachable!()
         };
-        return runtime_synthetic_interface_signature(synthetic.spec(db).clone());
+        return runtime_synthetic_interface_signature(db, synthetic.spec(db).clone());
     };
     semantic_runtime_signature(db, key, declaration_runtime_return_class(db, key))
 }

@@ -851,6 +851,13 @@ pub enum RuntimeSyntheticSpec<'db> {
         callee: RuntimeInstance<'db>,
         entry_args: EntrySemanticArgsPlan<'db>,
     },
+    /// A WebAssembly export that takes effects: it takes the parameters of
+    /// `callee`, provides its effects from the root effect, and returns its
+    /// result.
+    ExportRoot {
+        callee: RuntimeInstance<'db>,
+        entry_args: EntrySemanticArgsPlan<'db>,
+    },
     ContractInitAbi {
         plan: ContractInitAbiPlan<'db>,
     },

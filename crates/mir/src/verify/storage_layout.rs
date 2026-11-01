@@ -51,6 +51,7 @@ pub(super) fn verify_contract_storage_seam<'db>(
         | RuntimeFunctionOwner::Synthetic(
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
+            | RuntimeSyntheticSpec::ExportRoot { .. }
             | RuntimeSyntheticSpec::ManualContractRoot { .. }
             | RuntimeSyntheticSpec::ContractInitRoot { .. }
             | RuntimeSyntheticSpec::ContractRuntimeRoot { .. },

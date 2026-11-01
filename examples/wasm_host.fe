@@ -1,27 +1,24 @@
-use std::wasm::{Abort, Clock, Log, abort, host, log_i32, now_ms}
+use std::wasm::{Abort, Clock, Log, abort, log_i32, now_ms}
 
 // Logs 0, 1, ... n - 1 through the host and returns how many milliseconds the
 // host's clock advanced meanwhile. Each operation is an import of the module
-// `env`: sys_wasm_log_i32 and sys_wasm_now_ms.
-pub fn count_up(n: i32) -> u64 {
-    with (Log = host(), Clock = host()) {
-        let started = now_ms()
-        var i: i32 = 0
-        while i < n {
-            log_i32(i)
-            i += 1
-        }
-        now_ms() - started
+// `env`: sys_wasm_log_i32 and sys_wasm_now_ms. The export takes both from
+// the root effect, `std::wasm::Host`.
+pub fn count_up(n: i32) -> u64 uses (log: mut Log, clock: mut Clock) {
+    let started = now_ms()
+    var i: i32 = 0
+    while i < n {
+        log_i32(i)
+        i += 1
     }
+    now_ms() - started
 }
 
 // Returns x, or ends the program through the host (sys_wasm_abort) with the
 // code 1 when x is negative.
-pub fn non_negative(x: i32) -> i32 {
-    with (Abort = host()) {
-        if x < 0 {
-            abort(1)
-        }
-        x
+pub fn non_negative(x: i32) -> i32 uses (a: mut Abort) {
+    if x < 0 {
+        abort(1)
     }
+    x
 }

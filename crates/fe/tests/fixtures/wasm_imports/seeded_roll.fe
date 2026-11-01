@@ -1,6 +1,5 @@
 use std::wasm::{Clock, now_ms}
 
-//host: fn provider() -> std::wasm::Host { std::wasm::host() }
 //mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
 
 fn next(_ seed: u64) -> u64 {
@@ -14,16 +13,18 @@ fn roll(_ sides: u32) -> u32 uses (clock: mut Clock) {
     ((second % (sides as u64))).downcast_truncate()
 }
 
-pub fn roll_die(sides: u32) -> u32 {
-    var p = provider()
-    with (Clock = p) {
+//host: pub fn roll_die(sides: u32) -> u32 uses (clock: mut Clock) {
+//mock: pub fn roll_die(sides: u32) -> u32 {
+//mock:     var p = provider()
+//mock:     with (Clock = p) {
         roll(sides)
-    }
+//mock:     }
 }
 
-pub fn two_rolls(sides: u32) -> u32 {
-    var p = provider()
-    with (Clock = p) {
+//host: pub fn two_rolls(sides: u32) -> u32 uses (clock: mut Clock) {
+//mock: pub fn two_rolls(sides: u32) -> u32 {
+//mock:     var p = provider()
+//mock:     with (Clock = p) {
         roll(sides) * 100 + roll(sides)
-    }
+//mock:     }
 }
