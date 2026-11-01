@@ -7,34 +7,34 @@ error[8-0089]: unsupported macro call
   ┌─ unsupported_macro_call.fe:2:5
   │
 2 │     funsig!(x)
-  │     ^^^^^^^^^^ the macros are `assert!`, `format!`, `print!`, `println!`, `eprint!` and `eprintln!`
+  │     ^^^^^^^^^^ the macros are `assert!`, `format!`, `write!`, `writeln!`, `print!`, `println!`, `eprint!` and `eprintln!`
 
 error[8-0089]: unsupported macro call
   ┌─ unsupported_macro_call.fe:8:5
   │
 8 │     existing_function!()
-  │     ^^^^^^^^^^^^^^^^^^^^ the macros are `assert!`, `format!`, `print!`, `println!`, `eprint!` and `eprintln!`
+  │     ^^^^^^^^^^^^^^^^^^^^ the macros are `assert!`, `format!`, `write!`, `writeln!`, `print!`, `println!`, `eprint!` and `eprintln!`
 
 error[8-0089]: unsupported macro call
    ┌─ unsupported_macro_call.fe:12:5
    │
 12 │     core::assert!(true)
-   │     ^^^^^^^^^^^^^^^^^^^ the macros are `assert!`, `format!`, `print!`, `println!`, `eprint!` and `eprintln!`
+   │     ^^^^^^^^^^^^^^^^^^^ the macros are `assert!`, `format!`, `write!`, `writeln!`, `print!`, `println!`, `eprint!` and `eprintln!`
 
 error[8-0089]: unsupported macro call
    ┌─ unsupported_macro_call.fe:16:12
    │
 16 │     return funsig!(x)
-   │            ^^^^^^^^^^ the macros are `assert!`, `format!`, `print!`, `println!`, `eprint!` and `eprintln!`
+   │            ^^^^^^^^^^ the macros are `assert!`, `format!`, `write!`, `writeln!`, `print!`, `println!`, `eprint!` and `eprintln!`
 
 error[8-0089]: unsupported macro call
    ┌─ unsupported_macro_call.fe:19:21
    │
 19 │ const VALUE: u256 = funsig!(x)
-   │                     ^^^^^^^^^^ the macros are `assert!`, `format!`, `print!`, `println!`, `eprint!` and `eprintln!`
+   │                     ^^^^^^^^^^ the macros are `assert!`, `format!`, `write!`, `writeln!`, `print!`, `println!`, `eprint!` and `eprintln!`
 
 error[8-0089]: unsupported macro call
    ┌─ unsupported_macro_call.fe:22:5
    │
 22 │     funsig!(x)
-   │     ^^^^^^^^^^ the macros are `assert!`, `format!`, `print!`, `println!`, `eprint!` and `eprintln!`
+   │     ^^^^^^^^^^ the macros are `assert!`, `format!`, `write!`, `writeln!`, `print!`, `println!`, `eprint!` and `eprintln!`

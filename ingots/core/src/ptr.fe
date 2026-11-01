@@ -1491,6 +1491,21 @@ impl<T> Len for MemSlice<T> {
     }
 }
 
+/// Slices are equal when they hold equal elements.
+impl<T: Eq> Eq for MemSlice<T> {
+    fn eq(self, _ other: MemSlice<T>) -> bool {
+        if self.len != other.len {
+            return false
+        }
+        for i in 0..self.len {
+            if self[i] != other[i] {
+                return false
+            }
+        }
+        true
+    }
+}
+
 impl Index<usize> for MemBuffer {
     type Output = u8
 

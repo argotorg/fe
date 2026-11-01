@@ -1,0 +1,47 @@
+const SLASH: u8 = b'/'
+
+// The value of a hex digit, or 255 for any other byte.
+fn hex_digit(_ c: u8) -> u8 {
+    match c {
+        b'x' | b'X' => 255
+        b'\0' => 255
+        _ => if c >= b'0' && c <= b'9' {
+            c - b'0'
+        } else if c >= b'a' && c <= b'f' {
+            c - b'a' + 10
+        } else if c >= b'A' && c <= b'F' {
+            c - b'A' + 10
+        } else {
+            255
+        }
+    }
+}
+
+#[test]
+fn byte_literals() {
+    assert!(b'0' == 48)
+    assert!(b'x' == 120)
+    assert!(b'X' == 88)
+    assert!(b'\n' == 10)
+    assert!(b'\r' == 13)
+    assert!(b'\t' == 9)
+    assert!(b'\0' == 0)
+    assert!(b'\\' == 92)
+    assert!(b'\'' == 39)
+    assert!(b'"' == 34)
+    assert!(b'\"' == 34)
+    assert!(b'\x7f' == 127)
+    assert!(b'\xff' == 255)
+    assert!(b'\xAb' == 171)
+    assert!(SLASH == 47)
+    assert!(hex_digit(b'7') == 7)
+    assert!(hex_digit(b'c') == 12)
+    assert!(hex_digit(b'C') == 12)
+    assert!(hex_digit(b'x') == 255)
+    assert!(hex_digit(b'g') == 255)
+    assert!(hex_digit(0) == 255)
+    assert!(b'a' as u256 == 97)
+    let bytes: [u8; 3] = [b'a', b'b', b'c']
+    let abc: [u8; 3] = "abc"
+    assert!(bytes == abc)
+}

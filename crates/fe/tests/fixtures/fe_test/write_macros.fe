@@ -1,0 +1,46 @@
+use core::MemBuffer
+
+struct Log {
+    text: MemBuffer,
+    lines: u32,
+}
+
+impl Log {
+    // A field is a buffer, written while another field is read.
+    fn line(mut self, _ name: MemBuffer) {
+        writeln!(mut self.text, self.lines, ": ", name.span())
+        self.lines += 1
+    }
+}
+
+// An effect is a buffer, as for code that writes its output a piece at a
+// time.
+fn outcome(_ status: u8, _ gas: u64) uses (text: mut MemBuffer) {
+    write!(mut text, "{\"status\":", status, ",\"gas\":", gas)
+    writeln!(mut text, "}")
+}
+
+#[test]
+fn writes_append_to_buffers() {
+    // A local is a buffer, and an argument may be a view.
+    var text = format!("a")
+    let name = format!("name")
+    write!(mut text, "b", name.span(), true, -1 as i8)
+    write!(mut text)
+    assert!(text.span() == "abnametrue-1")
+    writeln!(mut text)
+    assert!(text.span() == "abnametrue-1\n")
+
+    var log = Log { text: MemBuffer::empty(), lines: 0 }
+    log.line(format!("x"))
+    log.line(format!("y"))
+    assert!(log.text.span() == "0: x\n1: y\n")
+
+    var json = MemBuffer::empty()
+    with (mut json) {
+        outcome(0, 21000)
+        outcome(1, 0)
+    }
+    assert!(json.slice(offset: 0, len: 25) == "{\"status\":0,\"gas\":21000}\n")
+    assert!(json.span().tail(25) == "{\"status\":1,\"gas\":0}\n")
+}

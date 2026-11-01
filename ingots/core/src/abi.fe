@@ -1197,6 +1197,29 @@ impl Eq for DynString {
     }
 }
 
+/// Whether the span holds the string's bytes, so a span compares with a
+/// literal longer than a `String<N>` holds.
+impl Eq<DynString> for ptr::MemSpan {
+    fn eq(self, _ other: DynString) -> bool {
+        self == other.payload_span()
+    }
+}
+
+/// Whether the span holds the string's bytes, so a literal of any length
+/// compares with a span: `"<32 bytes or more>" == arg.span()`.
+impl Eq<ptr::MemSpan> for DynString {
+    fn eq(self, _ other: ptr::MemSpan) -> bool {
+        other == self
+    }
+}
+
+/// Whether the buffer holds the string's bytes, as for a span.
+impl Eq<DynString> for ptr::MemBuffer {
+    fn eq(self, _ other: DynString) -> bool {
+        self.span() == other
+    }
+}
+
 // The word's first byte, at `offset` from `base`, must lie in a live
 // allocation. Callers that read the last word of a span or payload let its
 // other bytes run up to 31 bytes past the allocation and mask them off: EVM

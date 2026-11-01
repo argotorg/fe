@@ -1,10 +1,11 @@
+use common::ingot::IngotKind;
 use parser::ast::{self, SyntaxNodePtr, prelude::*};
 
 use super::body::BodyCtxt;
 use crate::{
     hir_def::{
         BindingMarker, Body, FuncParamListId, GenericArgListId, IdentId, IntegerId, ItemKind,
-        LitKind, Partial, Pat, PathId, Stmt, StmtId, StringId, TypeId, expr::*,
+        LitKind, Partial, Pat, PathId, Stmt, StmtId, StringId, TypeId, TypeKind, expr::*,
     },
     span::HirOrigin,
 };
@@ -341,11 +342,13 @@ fn builtin_macro_name(call: &ast::MacroCallExpr) -> Option<String> {
     Some(ident.text().to_string())
 }
 
-/// The builtin macros that format their arguments: `format!` and the
-/// `print!` family.
+/// The builtin macros that format their arguments: `format!`, `write!` and
+/// the `print!` family.
 #[derive(Clone, Copy)]
 enum FormatMacro {
     Format,
+    Write,
+    Writeln,
     Print,
     Println,
     Eprint,
@@ -356,6 +359,8 @@ impl FormatMacro {
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "format" => Self::Format,
+            "write" => Self::Write,
+            "writeln" => Self::Writeln,
             "print" => Self::Print,
             "println" => Self::Println,
             "eprint" => Self::Eprint,
@@ -372,6 +377,13 @@ impl<'db> Expr<'db> {
     /// view. `print!` passes the text to `std::io::print_buffer` instead,
     /// `eprint!` to `std::io::eprint_buffer`, and their `ln` forms add a
     /// newline first.
+    ///
+    /// `write!(mut buf, a, b)` formats into `buf` itself, bound once as
+    /// `let %text: core::MemBuffer = mut buf`, and `writeln!` adds a newline.
+    /// A buffer written otherwise, or none, takes the text `format!` builds
+    /// through `core::MemBuffer::extend_from(buf, %text.span())`, a call that
+    /// checks it as the `mut` argument it must be, so `write!(buf, a)` asks
+    /// for `mut buf`.
     fn lower_format_macro(
         ctxt: &mut BodyCtxt<'_, 'db>,
         ast: &ast::Expr,
@@ -380,37 +392,74 @@ impl<'db> Expr<'db> {
     ) -> ExprId {
         let db = ctxt.f_ctxt.db();
         let ptr = SyntaxNodePtr::new(ast.syntax());
-        let path = |ctxt: &mut BodyCtxt<'_, 'db>, path: PathId<'db>| {
-            ctxt.push_expr(Self::Path(Partial::Present(path)), HirOrigin::Expanded(ptr))
-        };
         let text = PathId::from_ident(db, IdentId::new(db, "%text".to_owned()));
+        // `core` and `std` are `ingot` within themselves, so std can use the
+        // macros.
+        let buffer_ty = ctxt
+            .f_ctxt
+            .builtin_ingot_path(IngotKind::Core, "core")
+            .push_str(db, "MemBuffer");
+        let io = ctxt
+            .f_ctxt
+            .builtin_ingot_path(IngotKind::Std, "std")
+            .push_str(db, "io");
+        let text_path = |ctxt: &mut BodyCtxt<'_, 'db>| {
+            ctxt.push_expr(Self::Path(Partial::Present(text)), HirOrigin::Expanded(ptr))
+        };
+        let call_path = |ctxt: &mut BodyCtxt<'_, 'db>, callee, args: Vec<ExprId>, ptr| {
+            let callee = ctxt.push_expr(
+                Self::Path(Partial::Present(callee)),
+                HirOrigin::Expanded(ptr),
+            );
+            let args = args
+                .into_iter()
+                .map(|expr| CallArg { label: None, expr })
+                .collect();
+            ctxt.push_expr(Self::Call(callee, args), HirOrigin::Expanded(ptr))
+        };
+        let mut args = call.args().into_iter().flatten();
 
         ctxt.f_ctxt.enter_block_scope();
+        // `write!`'s buffer, if given, and the span its errors point at.
+        let buffer = matches!(format, FormatMacro::Write | FormatMacro::Writeln).then(|| {
+            args.next().map_or((None, ptr), |arg| {
+                let buffer = Self::push_to_body_opt(ctxt, arg.expr());
+                (Some(buffer), SyntaxNodePtr::new(arg.syntax()))
+            })
+        });
+        let access = buffer.and_then(|(buffer, _)| buffer).filter(|&buffer| {
+            matches!(ctxt.exprs[buffer], Partial::Present(Self::Un(_, UnOp::Mut)))
+        });
+        let (marker, ty, init) = match access {
+            Some(buffer) => {
+                let ty = TypeId::new(db, TypeKind::Path(Partial::Present(buffer_ty)));
+                (BindingMarker::Plain, Some(ty), buffer)
+            }
+            None => {
+                let empty = call_path(ctxt, buffer_ty.push_str(db, "empty"), Vec::new(), ptr);
+                (BindingMarker::Var, None, empty)
+            }
+        };
         let pat = ctxt.push_pat(
-            Pat::Path(Partial::Present(text), BindingMarker::Var),
+            Pat::Path(Partial::Present(text), marker),
             HirOrigin::Expanded(ptr),
         );
-        let empty = path(
-            ctxt,
-            PathId::from_segments(db, &["core", "MemBuffer", "empty"]),
-        );
-        let init = ctxt.push_expr(Self::Call(empty, Vec::new()), HirOrigin::Expanded(ptr));
         let mut stmts = vec![ctxt.push_stmt(
-            Stmt::Let(pat, None, Some(init), None),
+            Stmt::Let(pat, ty, Some(init), None),
             HirOrigin::Expanded(ptr),
         )];
         // Each argument's call has the argument's span, which its errors
         // point at.
-        let mut values = call
-            .args()
-            .into_iter()
-            .flatten()
+        let mut values = args
             .map(|arg| {
                 let ptr = SyntaxNodePtr::new(arg.syntax());
                 (Self::push_to_body_opt(ctxt, arg.expr()), ptr)
             })
             .collect::<Vec<_>>();
-        if matches!(format, FormatMacro::Println | FormatMacro::Eprintln) {
+        if matches!(
+            format,
+            FormatMacro::Writeln | FormatMacro::Println | FormatMacro::Eprintln
+        ) {
             let newline = ctxt.push_expr(
                 Self::Lit(LitKind::String(StringId::from_str(db, "\n"))),
                 HirOrigin::Expanded(ptr),
@@ -418,56 +467,44 @@ impl<'db> Expr<'db> {
             values.push((newline, ptr));
         }
         for (value, ptr) in values {
-            let fmt = ctxt.push_expr(
-                Self::Path(Partial::Present(PathId::from_segments(
-                    db,
-                    &["std", "io", "Display", "fmt"],
-                ))),
-                HirOrigin::Expanded(ptr),
-            );
-            let target = path(ctxt, text);
+            let target = text_path(ctxt);
             let target = ctxt.push_expr(Self::Un(target, UnOp::Mut), HirOrigin::Expanded(ptr));
-            let call = ctxt.push_expr(
-                Self::Call(
-                    fmt,
-                    vec![
-                        CallArg {
-                            label: None,
-                            expr: value,
-                        },
-                        CallArg {
-                            label: None,
-                            expr: target,
-                        },
-                    ],
-                ),
-                HirOrigin::Expanded(ptr),
-            );
+            let fmt = io.push_str(db, "Display").push_str(db, "fmt");
+            let call = call_path(ctxt, fmt, vec![value, target], ptr);
             stmts.push(ctxt.push_stmt(Stmt::Expr(call), HirOrigin::Expanded(ptr)));
         }
-        let sink = match format {
-            FormatMacro::Format => None,
-            FormatMacro::Print | FormatMacro::Println => Some("print_buffer"),
-            FormatMacro::Eprint | FormatMacro::Eprintln => Some("eprint_buffer"),
-        };
-        let tail = path(ctxt, text);
-        let tail = match sink {
-            None => tail,
-            Some(sink) => {
-                let sink = path(ctxt, PathId::from_segments(db, &["std", "io", sink]));
-                ctxt.push_expr(
-                    Self::Call(
-                        sink,
-                        vec![CallArg {
-                            label: None,
-                            expr: tail,
-                        }],
-                    ),
-                    HirOrigin::Expanded(ptr),
-                )
+        let tail = match format {
+            FormatMacro::Format => Some(text_path(ctxt)),
+            FormatMacro::Write | FormatMacro::Writeln => {
+                buffer.filter(|_| access.is_none()).map(|(buffer, ptr)| {
+                    let text = text_path(ctxt);
+                    let span = ctxt.push_expr(
+                        Self::MethodCall(
+                            text,
+                            Partial::Present(IdentId::new(db, "span".to_owned())),
+                            GenericArgListId::none(db),
+                            Vec::new(),
+                        ),
+                        HirOrigin::Expanded(ptr),
+                    );
+                    let args = buffer.into_iter().chain([span]).collect();
+                    call_path(ctxt, buffer_ty.push_str(db, "extend_from"), args, ptr)
+                })
+            }
+            FormatMacro::Print
+            | FormatMacro::Println
+            | FormatMacro::Eprint
+            | FormatMacro::Eprintln => {
+                let sink = if matches!(format, FormatMacro::Print | FormatMacro::Println) {
+                    "print_buffer"
+                } else {
+                    "eprint_buffer"
+                };
+                let text = text_path(ctxt);
+                Some(call_path(ctxt, io.push_str(db, sink), vec![text], ptr))
             }
         };
-        stmts.push(ctxt.push_stmt(Stmt::Expr(tail), HirOrigin::Expanded(ptr)));
+        stmts.extend(tail.map(|tail| ctxt.push_stmt(Stmt::Expr(tail), HirOrigin::Expanded(ptr))));
         let block = ctxt.push_expr(
             Self::Block(stmts, BlockKind::Normal),
             HirOrigin::Expanded(ptr),

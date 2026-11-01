@@ -1,0 +1,1 @@
+A byte span (`MemSpan`), a `MemBuffer` or a command-line argument (`std::env::Arg`) compares with a string, such as a literal: `args.get(1) == "serve"` checks a command-line argument. Slices (`MemSlice<T>`) compare with each other element by element.

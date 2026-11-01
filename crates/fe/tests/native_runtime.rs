@@ -812,6 +812,33 @@ fn aggregate_fixtures_run_at_every_level() {
 }
 
 #[test]
+fn text_fixtures_run_at_every_level() {
+    for (name, expected_count) in [
+        ("string_literal_eq.fe", 1),
+        ("span_string_eq.fe", 4),
+        ("byte_literals.fe", 1),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(name);
+        for backend in ["sonatina", "native"] {
+            for level in ["0", "1", "2"] {
+                let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+                    .args(["test", "--backend", backend, "--jobs", "1", "-O", level])
+                    .arg(&fixture)
+                    .output()
+                    .unwrap();
+                assert!(
+                    String::from_utf8_lossy(&result.stdout)
+                        .contains(&format!("{expected_count} passed; 0 failed")),
+                    "{name} {backend} -O{level}: {result:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn reference_holders_and_joins_run_natively_at_every_level() {
     // Products and shapes hold references to frame objects in other objects,
     // and joins of raw-pointer and object places export an object's address.
@@ -1516,6 +1543,7 @@ fn native_arguments_preserve_bytes_bounds_and_the_entry_name() {
         &source,
         r#"
 use core::MemBuffer
+use core::ops::Eq
 use std::env::Args
 use std::io::Stdout
 // The entry's internal name is free for a Fe function.
@@ -1530,7 +1558,15 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
     var text = MemBuffer::empty()
     var i: usize = 1
     while i < args.count() {
-        text.extend_from(args.get(i).span())
+        let arg = args.get(i)
+        text.extend_from(arg.span())
+        // An argument compares with a literal's text.
+        if arg == "Fe"
+            || arg.span() == "λ"
+            || !arg.eq("Fee") && arg == "an argument of thirty-two bytes!"
+        {
+            text.push(33)
+        }
         text.push(124)
         i += 1
     }
@@ -1545,12 +1581,15 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
         build(&source, &out, level, &[]);
         let executable = out.join("arguments");
         let result = Command::new(&executable)
-            .args(["", "Fe", "λ"])
+            .args(["", "Fe", "λ", "Fee", "an argument of thirty-two bytes!"])
             .arg(OsString::from_vec(vec![0x80, 0xff]))
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
-        assert_eq!(result.stdout, b"|Fe|\xce\xbb|\x80\xff|");
+        assert_eq!(
+            result.stdout,
+            b"|Fe!|\xce\xbb!|Fee|an argument of thirty-two bytes!!|\x80\xff|"
+        );
         for args in [&[][..], &[""][..], &["bounds"][..]] {
             let result = Command::new(&executable).args(args).output().unwrap();
             assert!(

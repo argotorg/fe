@@ -67,3 +67,26 @@ fn string_literal_printing_roundtrips_decoded_values() {
         assert_eq!(printed.matches(canonical).count(), 3, "{printed:?}");
     }
 }
+
+#[test]
+fn byte_literal_printing_roundtrips_every_byte() {
+    let db = HirAnalysisTestDb::default();
+    for byte in 0..=u8::MAX {
+        let printed = LitKind::Byte(byte).pretty_print(&db);
+        let source = format!("fn literal() {{ let byte = {printed} }}");
+        let (green, errors) = parse_source_file(&source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source:?}: {errors:?}");
+        let values: Vec<_> = SyntaxNode::new_root(green)
+            .descendants()
+            .filter_map(ast::Lit::cast)
+            .filter_map(|lit| match lit.kind() {
+                ast::LitKind::Byte(lit) => Some(lit.value().unwrap()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values, [byte], "{printed}");
+    }
+    assert_eq!(LitKind::Byte(b'a').pretty_print(&db), "b'a'");
+    assert_eq!(LitKind::Byte(b'\'').pretty_print(&db), r"b'\''");
+    assert_eq!(LitKind::Byte(0).pretty_print(&db), r"b'\x00'");
+}

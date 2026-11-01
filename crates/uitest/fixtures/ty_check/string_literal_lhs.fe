@@ -1,0 +1,17 @@
+use core::MemSpan
+use core::abi::DynString
+
+// A string literal on the left of an operator takes the type its impl
+// needs: an inline `String` while it fits one, else a `DynString`.
+fn fixed(_ s: String<5>) -> bool {
+    "x" == s && "serve" != s && "x" == "xy"
+}
+
+fn dynamic(_ s: DynString) -> bool {
+    "x" == s && "a literal of thirty-two bytes!!!" != s
+}
+
+// A literal of any length compares with a span.
+fn span(_ bytes: MemSpan) -> bool {
+    "serve" == bytes && "a literal of thirty-two bytes!!!" != bytes
+}

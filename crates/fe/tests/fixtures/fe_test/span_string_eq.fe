@@ -1,0 +1,86 @@
+use core::{MemBuffer, MemVec}
+use core::abi::DynString
+
+fn buffer<const N: usize>(_ bytes: [u8; N]) -> MemBuffer {
+    var buf = MemBuffer::empty()
+    for byte in bytes {
+        buf.push(byte)
+    }
+    buf
+}
+
+#[test]
+fn spans_equal_string_text() {
+    let serve = buffer("serve")
+    assert!(serve.span() == "serve")
+    assert!(serve.span().head(4) == "serv")
+    assert!(serve.span() != "serv")
+    assert!(serve.span() != "serves")
+    assert!(serve.span() != "sErve")
+    assert!(serve == "serve")
+    assert!(serve != "serv")
+    assert!(MemBuffer::empty() == "")
+    assert!(MemBuffer::empty().span() == "")
+    assert!(serve.span() != "")
+    // A string's text is its bytes after the zero padding.
+    let padded: String<8> = "ab"
+    assert!(buffer("ab").span() == padded)
+    assert!(buffer([0, 97, 98]).span() != padded)
+    let longest = buffer("0123456789012345678901234567890")
+    assert!(longest.span() == "0123456789012345678901234567890")
+    assert!(longest.span() != "0123456789012345678901234567899")
+}
+
+#[test]
+fn string_text_equals_spans() {
+    let serve = buffer("serve")
+    assert!("serve" == serve.span())
+    assert!("serv" != serve.span())
+    assert!("" != serve.span())
+    assert!("" == MemBuffer::empty().span())
+    let padded: String<8> = "serve"
+    assert!(padded == serve.span())
+    assert!(padded != serve.span().head(4))
+    let long = buffer("a literal of thirty-two bytes!!!")
+    assert!("a literal of thirty-two bytes!!!" == long.span())
+    assert!("a literal of thirty-two bytes!!?" != long.span())
+    assert!("a literal of thirty-two bytes!!!!" != long.span())
+    assert!(DynString::from_payload(source: long.span()) == long.span())
+}
+
+#[test]
+fn spans_equal_spans() {
+    let serve = buffer("serve")
+    let served = buffer("served")
+    assert!(serve.span() == served.span().head(5))
+    assert!(serve.span() != served.span())
+    assert!(serve.span().tail(1) != served.span().slice(offset: 1, len: 4).head(3))
+    assert!(serve.span().tail(5) == MemBuffer::empty().span())
+    var words: MemVec<u256> = MemVec::new()
+    var more: MemVec<u256> = MemVec::new()
+    for word in [1, 2, 3] {
+        words.push(word)
+        more.push(word)
+    }
+    more.push(4)
+    assert!(words.as_slice() == more.as_slice().head(3))
+    assert!(words.as_slice() != more.as_slice().tail(1))
+}
+
+#[test]
+fn spans_equal_long_text() {
+    let long = buffer("a literal of thirty-two bytes!!!")
+    assert!(long.span() == "a literal of thirty-two bytes!!!")
+    assert!(long.span() != "a literal of thirty-two bytes!!?")
+    assert!(long.span() != "a literal of thirty-two bytes!!!!")
+    assert!(long.span().head(31) == "a literal of thirty-two bytes!!")
+    assert!(long == "a literal of thirty-two bytes!!!")
+    assert!(long != "a literal of thirty-two bytes!!?")
+    let text = DynString::from_payload(source: long.span())
+    assert!(long.span() == text)
+    assert!(long.span().head(4) != text)
+    // The EVM copies a literal this long from the code.
+    let copied = buffer("a literal of more than ninety-six bytes, which the EVM copies from code instead of a word at a time")
+    assert!(copied.span() == "a literal of more than ninety-six bytes, which the EVM copies from code instead of a word at a time")
+    assert!(copied.span() != "a literal of more than ninety-six bytes, which the EVM copies from code instead of a word at a tim!")
+}

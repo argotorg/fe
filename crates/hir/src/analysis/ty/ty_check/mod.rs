@@ -1558,6 +1558,16 @@ enum Viability {
     ReturnTypeMismatch,
 }
 
+/// How a candidate fits a deferred method call, probed without committing
+/// to it.
+struct CandidateFit<'db> {
+    viability: Viability,
+    /// Whether the call's open string literals keep their default types.
+    keeps_literal_defaults: bool,
+    /// The candidate's return type, if the receiver and arguments fix it.
+    ret_ty: Option<TyId<'db>>,
+}
+
 /// Whether a projection or const computation in `ty` still waits on inference.
 fn depends_on_type_inference<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     struct Computation<'db> {
@@ -2550,9 +2560,7 @@ impl<'db> TyChecker<'db> {
                         continue;
                     }
 
-                    let Some((receiver, generic_args, call_args)) =
-                        pending_call_parts(db, body, &self.env, pending.expr)
-                    else {
+                    let Some(parts) = pending_call_parts(db, body, &self.env, pending.expr) else {
                         continue;
                     };
 
@@ -2561,16 +2569,9 @@ impl<'db> TyChecker<'db> {
                         .iter()
                         .copied()
                         .filter(|&candidate| {
-                            let viability = self.method_viability(
-                                &pending,
-                                recv_ty,
-                                expr_ty,
-                                receiver,
-                                generic_args,
-                                call_args,
-                                candidate,
-                            );
-                            !matches!(viability, Viability::Incompatible)
+                            let fit =
+                                self.method_viability(&pending, recv_ty, expr_ty, parts, candidate);
+                            !matches!(fit.viability, Viability::Incompatible)
                         })
                         .collect();
                     let viable = self.dedup_equivalent_pending_method_candidates(viable);
@@ -2604,7 +2605,6 @@ impl<'db> TyChecker<'db> {
         let db = self.db;
         let body = self.env.body();
         let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
 
         // Fixed-point pass over deferred tasks.
         let mut fallback = false;
@@ -2638,8 +2638,7 @@ impl<'db> TyChecker<'db> {
                         self.env.register_pending_method(pending);
                     }
                     env::DeferredTask::Method(pending) => {
-                        let Some((receiver, generic_args, call_args)) =
-                            pending_call_parts(db, body, &self.env, pending.expr)
+                        let Some(parts) = pending_call_parts(db, body, &self.env, pending.expr)
                         else {
                             continue;
                         };
@@ -2659,145 +2658,18 @@ impl<'db> TyChecker<'db> {
                             continue;
                         }
 
-                        let (strict, soft): (Vec<_>, Vec<_>) = pending
-                            .candidates
-                            .iter()
-                            .copied()
-                            .filter_map(|candidate| {
-                                let viability = self.method_viability(
-                                    &pending,
-                                    recv_ty,
-                                    expr_ty,
-                                    receiver,
-                                    generic_args,
-                                    call_args,
-                                    candidate,
-                                );
-                                if matches!(viability, Viability::Incompatible) {
-                                    None
-                                } else {
-                                    Some((candidate, viability))
-                                }
-                            })
-                            .partition(|(_, viability)| matches!(viability, Viability::Viable));
-                        let viable = if strict.is_empty() {
-                            soft.into_iter().map(|(candidate, _)| candidate).collect()
-                        } else {
-                            strict.into_iter().map(|(candidate, _)| candidate).collect()
-                        };
-                        let viable = self.dedup_equivalent_pending_method_candidates(viable);
-
+                        let viable = self
+                            .viable_pending_candidates(&pending, recv_ty, expr_ty, parts, fallback);
                         if let [candidate] = viable.as_slice() {
                             if self.env.callable_expr(pending.expr).is_none() {
                                 self.env.enter_call_site(&pending.site);
-                                'resolve: {
-                                    let call_span = pending.expr.span(body);
-                                    let inst = candidate.inst;
-
-                                    let receiver_prop = self
-                                        .env
-                                        .typed_expr(receiver)
-                                        .unwrap_or_else(|| ExprProp::invalid(db));
-
-                                    let func_ty = self.instantiate_trait_method_to_term(
-                                        candidate.method,
-                                        recv_ty,
-                                        inst,
-                                    );
-
-                                    let mut callable = match Callable::new(
-                                        db,
-                                        func_ty,
-                                        receiver.span(body).into(),
-                                        Some(inst),
-                                    ) {
-                                        Ok(callable) => callable,
-                                        Err(diag) => {
-                                            self.push_diag(diag);
-                                            break 'resolve;
-                                        }
-                                    };
-
-                                    if candidate.needs_confirmation {
-                                        self.env.register_trait_obligation(env::TraitObligation {
-                                            goal: inst,
-                                            origin: env::TraitObligationOrigin::GenericConfirmation,
-                                            span: call_span.clone().into(),
-                                        });
-                                    }
-
-                                    // A value call `f(..)` has no explicit generic
-                                    // arguments of its own.
-                                    let args_span = if self.env.is_value_call(pending.expr) {
-                                        call_span.into_call_expr().args()
-                                    } else {
-                                        let call_span = call_span.into_method_call_expr();
-                                        if !callable.unify_generic_args(
-                                            self,
-                                            generic_args,
-                                            call_span.clone().generic_args(),
-                                        ) {
-                                            break 'resolve;
-                                        }
-                                        call_span.args()
-                                    };
-
-                                    callable.check_args(
-                                        self,
-                                        call_args,
-                                        args_span,
-                                        Some((receiver, receiver_prop)),
-                                        true,
-                                    );
-
-                                    callable.process_constraints(
-                                        self,
-                                        pending.expr,
-                                        pending.span.clone(),
-                                    );
-
-                                    let ret_ty = self.normalize_ty(callable.ret_ty(db));
-                                    match self.table.unify(expr_prop.ty, ret_ty) {
-                                        Ok(()) => {}
-                                        Err(UnificationError::TypeMismatch) => {
-                                            self.push_diag(BodyDiag::TypeMismatch {
-                                                span: pending.expr.span(body).into(),
-                                                expected: expr_prop.ty,
-                                                given: ret_ty,
-                                            });
-                                            break 'resolve;
-                                        }
-                                        Err(UnificationError::OccursCheckFailed) => {
-                                            let span = pending.expr.span(body).into();
-                                            self.push_diag(BodyDiag::InfiniteOccurrence(span));
-                                            break 'resolve;
-                                        }
-                                    }
-
-                                    self.check_callable_effects(pending.expr, &mut callable);
-
-                                    if let Some(kind) =
-                                        self.code_region_method_kind(recv_ty, pending.method_name)
-                                        && call_args.len() == 1
-                                        && self.env.typed_expr(call_args[0].expr).is_some_and(
-                                            |prop| {
-                                                ty_may_be_code_region_token(
-                                                    db,
-                                                    normalize_ty(db, prop.ty, scope, assumptions),
-                                                )
-                                            },
-                                        )
-                                    {
-                                        self.env.register_code_region_intrinsic(
-                                            pending.expr,
-                                            callable,
-                                            call_args[0].expr,
-                                            kind,
-                                        );
-                                    } else {
-                                        self.env.register_semantic_call(pending.expr, callable);
-                                    }
-                                }
+                                self.resolve_pending_method(
+                                    &pending,
+                                    *candidate,
+                                    recv_ty,
+                                    expr_prop.ty,
+                                    parts,
+                                );
                                 self.env.leave_call_site();
                             }
 
@@ -2822,25 +2694,176 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// The candidates of the deferred call `pending` that fit its receiver
+    /// type `recv_ty` and its arguments: those that also fit its type
+    /// `expr_ty`, if any do. With `literal_defaults`, several candidates
+    /// narrow to those under which its open string literals take their
+    /// default types, as an operator's do.
+    fn viable_pending_candidates(
+        &mut self,
+        pending: &env::PendingMethod<'db>,
+        recv_ty: TyId<'db>,
+        expr_ty: TyId<'db>,
+        parts: PendingCallParts<'db>,
+        literal_defaults: bool,
+    ) -> Vec<env::PendingMethodCandidate<'db>> {
+        let (strict, soft): (Vec<_>, Vec<_>) = pending
+            .candidates
+            .iter()
+            .copied()
+            .filter_map(|candidate| {
+                let fit = self.method_viability(pending, recv_ty, expr_ty, parts, candidate);
+                (!matches!(fit.viability, Viability::Incompatible)).then_some((
+                    candidate,
+                    fit.viability,
+                    fit.keeps_literal_defaults,
+                ))
+            })
+            .partition(|(_, viability, _)| matches!(viability, Viability::Viable));
+        let viable: Vec<_> = if strict.is_empty() { soft } else { strict }
+            .into_iter()
+            .map(|(candidate, _, keeps_defaults)| (candidate, keeps_defaults || !literal_defaults))
+            .collect();
+        let viable = prefer_literal_defaults(viable);
+        self.dedup_equivalent_pending_method_candidates(viable)
+    }
+
+    /// Resolves the deferred call `pending`, typed `expr_ty`, to `candidate`
+    /// at the current call site.
+    fn resolve_pending_method(
+        &mut self,
+        pending: &env::PendingMethod<'db>,
+        candidate: env::PendingMethodCandidate<'db>,
+        recv_ty: TyId<'db>,
+        expr_ty: TyId<'db>,
+        (receiver, generic_args, call_args): PendingCallParts<'db>,
+    ) {
+        let db = self.db;
+        let body = self.env.body();
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let call_span = pending.expr.span(body);
+        let inst = candidate.inst;
+
+        let receiver_prop = self
+            .env
+            .typed_expr(receiver)
+            .unwrap_or_else(|| ExprProp::invalid(db));
+
+        let func_ty = self.instantiate_trait_method_to_term(candidate.method, recv_ty, inst);
+
+        let mut callable = match Callable::new(db, func_ty, receiver.span(body).into(), Some(inst))
+        {
+            Ok(callable) => callable,
+            Err(diag) => {
+                self.push_diag(diag);
+                return;
+            }
+        };
+
+        if candidate.needs_confirmation {
+            self.env.register_trait_obligation(env::TraitObligation {
+                goal: inst,
+                origin: env::TraitObligationOrigin::GenericConfirmation,
+                span: call_span.clone().into(),
+            });
+        }
+
+        // A value call `f(..)` has no explicit generic arguments of its own.
+        let args_span = if self.env.is_value_call(pending.expr) {
+            call_span.into_call_expr().args()
+        } else {
+            let call_span = call_span.into_method_call_expr();
+            if !callable.unify_generic_args(self, generic_args, call_span.clone().generic_args()) {
+                return;
+            }
+            call_span.args()
+        };
+
+        callable.check_args(
+            self,
+            call_args,
+            args_span,
+            Some((receiver, receiver_prop)),
+            true,
+        );
+
+        callable.process_constraints(self, pending.expr, pending.span.clone());
+
+        let ret_ty = self.normalize_ty(callable.ret_ty(db));
+        match self.table.unify(expr_ty, ret_ty) {
+            Ok(()) => {}
+            Err(UnificationError::TypeMismatch) => {
+                self.push_diag(BodyDiag::TypeMismatch {
+                    span: pending.expr.span(body).into(),
+                    expected: expr_ty,
+                    given: ret_ty,
+                });
+                return;
+            }
+            Err(UnificationError::OccursCheckFailed) => {
+                let span = pending.expr.span(body).into();
+                self.push_diag(BodyDiag::InfiniteOccurrence(span));
+                return;
+            }
+        }
+
+        self.check_callable_effects(pending.expr, &mut callable);
+
+        if let Some(kind) = self.code_region_method_kind(recv_ty, pending.method_name)
+            && call_args.len() == 1
+            && self.env.typed_expr(call_args[0].expr).is_some_and(|prop| {
+                ty_may_be_code_region_token(db, normalize_ty(db, prop.ty, scope, assumptions))
+            })
+        {
+            self.env.register_code_region_intrinsic(
+                pending.expr,
+                callable,
+                call_args[0].expr,
+                kind,
+            );
+        } else {
+            self.env.register_semantic_call(pending.expr, callable);
+        }
+    }
+
+    /// Whether each open string literal among `operands`, as unified so far,
+    /// keeps its default type: an inline `String` while it fits one, else a
+    /// `DynString`.
+    fn keeps_literal_defaults(&mut self, operands: impl IntoIterator<Item = TyId<'db>>) -> bool {
+        operands.into_iter().all(|operand| {
+            let TyData::TyVar(var) = operand.data(self.db) else {
+                return true;
+            };
+            let TyVarSort::String { fallback, .. } = var.sort else {
+                return true;
+            };
+            let operand = operand.fold_with(self.db, &mut self.table);
+            match fallback {
+                StringFallback::Fixed => !operand.is_core_dyn_string(self.db),
+                StringFallback::Dynamic => !operand.is_string(self.db),
+            }
+        })
+    }
+
     /// How `candidate` fits the deferred method call `pending` on a receiver
-    /// of type `recv_ty`, typed `expr_ty`, probed without committing to it.
-    #[allow(clippy::too_many_arguments)]
+    /// of type `recv_ty`, typed `expr_ty`.
     fn method_viability(
         &mut self,
         pending: &env::PendingMethod<'db>,
         recv_ty: TyId<'db>,
         expr_ty: TyId<'db>,
-        receiver: ExprId,
-        generic_args: GenericArgListId<'db>,
-        call_args: &[CallArg<'db>],
+        (receiver, generic_args, call_args): PendingCallParts<'db>,
         candidate: env::PendingMethodCandidate<'db>,
-    ) -> Viability {
+    ) -> CandidateFit<'db> {
         let db = self.db;
         let body = self.env.body();
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
         let snap = self.snapshot_state();
 
+        let mut keeps_literal_defaults = false;
+        let mut fixed_ret_ty = None;
         let viability = (|| {
             let inst = candidate.inst;
             let inst_self = self.table.instantiate_to_term(inst.self_ty(db));
@@ -2909,6 +2932,7 @@ impl<'db> TyChecker<'db> {
                     return Viability::Incompatible;
                 }
             }
+            keeps_literal_defaults = self.keeps_literal_defaults(all_arg_tys);
 
             callable.process_constraints(self, pending.expr, pending.span.clone());
 
@@ -2918,6 +2942,7 @@ impl<'db> TyChecker<'db> {
                 scope,
                 assumptions,
             );
+            fixed_ret_ty = (!ret_ty.has_var(db)).then_some(ret_ty);
 
             if self.table.unify(expr_ty, ret_ty).is_ok() {
                 Viability::Viable
@@ -2926,7 +2951,11 @@ impl<'db> TyChecker<'db> {
             }
         })();
         self.rollback_state(snap);
-        viability
+        CandidateFit {
+            viability,
+            keeps_literal_defaults,
+            ret_ty: fixed_ret_ty,
+        }
     }
 
     fn new_internal(db: &'db dyn HirAnalysisDb, env: TyCheckEnv<'db>, expected: TyId<'db>) -> Self {
@@ -3078,6 +3107,7 @@ impl<'db> TyChecker<'db> {
     fn lit_ty(&mut self, lit: &LitKind<'db>) -> TyId<'db> {
         match lit {
             LitKind::Bool(_) => TyId::bool(self.db),
+            LitKind::Byte(_) => TyId::u8(self.db),
             LitKind::Int(_) => self.table.new_var(TyVarSort::Integral, &Kind::Star),
             LitKind::String(s) => {
                 let len_bytes = s.len_bytes(self.db);
@@ -4561,12 +4591,27 @@ fn func_return_provenance_cycle_initial<'db>(
 /// The receiver, explicit generic arguments and arguments of the deferred
 /// method call `expr`: a method call, or a call `f(..)` of a callable value,
 /// whose callee is the receiver.
+/// A deferred call's receiver, explicit generic arguments and arguments.
+type PendingCallParts<'db> = (ExprId, GenericArgListId<'db>, &'db [CallArg<'db>]);
+
+/// Of several candidates, each paired with whether it keeps every open string
+/// literal at its default type, those that do, if any.
+fn prefer_literal_defaults<T>(mut candidates: Vec<(T, bool)>) -> Vec<T> {
+    if candidates.len() > 1 && candidates.iter().any(|(_, keeps_defaults)| *keeps_defaults) {
+        candidates.retain(|(_, keeps_defaults)| *keeps_defaults);
+    }
+    candidates
+        .into_iter()
+        .map(|(candidate, _)| candidate)
+        .collect()
+}
+
 fn pending_call_parts<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     env: &TyCheckEnv<'db>,
     expr: ExprId,
-) -> Option<(ExprId, GenericArgListId<'db>, &'db [CallArg<'db>])> {
+) -> Option<PendingCallParts<'db>> {
     match expr.data(db, body) {
         Partial::Present(Expr::MethodCall(receiver, _, generic_args, args)) => {
             Some((*receiver, *generic_args, args.as_slice()))

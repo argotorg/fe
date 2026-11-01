@@ -121,6 +121,7 @@
 ; === Literals ===
 
 (string_literal) @string
+(byte_literal) @string
 (escape_sequence) @string.escape
 (integer_literal) @number
 (boolean_literal) @constant
