@@ -66,16 +66,7 @@ func private %cast(v0.i256) -> i256 {
         return v0;
 }
 
-func private %main_root() {
-    block0:
-        jump block1;
-
-    block1:
-        call %pointer_field_aggregate;
-        evm_stop;
-}
-
-func private %pointer_field_aggregate() {
+func private %main() {
     block0:
         v0.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
@@ -95,6 +86,15 @@ func private %pointer_field_aggregate() {
         v13.i256 = obj.load v12;
         call %bump v13;
         return;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        call %main;
+        evm_stop;
 }
 
 

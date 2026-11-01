@@ -1,4 +1,4 @@
 // Test: Max inline string literal (31 bytes) should lower as one word.
-pub fn large_string() -> String<31> {
+pub fn main() -> String<31> {
     "abcdefghijklmnopqrstuvwxyzabcde"
 }

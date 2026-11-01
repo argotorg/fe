@@ -38,8 +38,8 @@ use crate::analysis::ty::trait_resolution::constraint::{
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty};
 use crate::hir_def::{
-    CallArg, CallableDef, FieldParent, GenericArgListId, HirIngot, ImplTrait, ItemKind, ModeMarker,
-    Trait, params::FuncParamMode, scope_graph::ScopeId,
+    CallArg, CallableDef, FieldParent, GenericArgListId, ImplTrait, ModeMarker, Trait,
+    params::FuncParamMode, scope_graph::ScopeId,
 };
 use crate::{
     hir_def::{
@@ -1726,23 +1726,9 @@ impl<'db> TyChecker<'db> {
         func: Func<'db>,
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
-        // A test or the ingot root module's `pub fn main()` has no caller:
-        // the target's root effect supplies its effects. A `main` in another
-        // module or with parameters is an ordinary function.
-        let is_entry = ItemKind::from(func)
-            .attrs(self.db)
-            .is_some_and(|attrs| attrs.get_attr(self.db, "test").is_some())
-            || (func.vis(self.db).is_pub()
-                && func
-                    .name(self.db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(self.db) == "main")
-                && func.params(self.db).next().is_none()
-                && matches!(
-                    func.scope().parent_item(self.db),
-                    Some(ItemKind::TopMod(top_mod))
-                        if top_mod == top_mod.ingot(self.db).root_mod(self.db)
-                ));
+        // An entry has no caller: the target's root effect supplies its
+        // effects.
+        let is_entry = func.is_test(self.db) || func.is_main_entry(self.db);
         let root_ty = if is_entry {
             registered_root_providers(self.db, EffectParamSite::Func(func, None))
                 .first()

@@ -17,7 +17,7 @@ use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
 #[cfg(feature = "cranelift")]
-use mir::{NativeOutputKind, RuntimeSectionName, build_native_package, native_executable_entry};
+use mir::{NativeOutputKind, RuntimeSectionName, build_native_package};
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
@@ -931,7 +931,8 @@ fn prepare_native_main(
     module: Module,
     main: FuncRef,
 ) -> Result<Module, LowerError> {
-    let func = native_executable_entry(db, top_mod)
+    let func = top_mod
+        .main_entry(db)
         .ok_or_else(|| LowerError::Internal("native entry disappeared after lowering".into()))?;
     let i32_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::I32)));
     let valid = func.return_ty(db) == i32_ty;

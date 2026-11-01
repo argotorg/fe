@@ -1,4 +1,4 @@
-pub fn borrow_handles_readback() -> u256 {
+pub fn main() -> u256 {
     var x: u256 = 0
     let p = mut x
     p = 5

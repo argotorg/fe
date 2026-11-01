@@ -2,6 +2,6 @@ pub fn add_one(_ x: u64) -> u64 {
     x + 1
 }
 
-pub fn call_add_one() -> u64 {
+pub fn main() -> u64 {
     add_one(5)
 }

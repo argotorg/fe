@@ -18,7 +18,7 @@ impl<T> Foo<u32, u32> for S<T> {
     }
 }
 
-pub fn call() -> (u64, u64) {
+pub fn main() -> (u64, u64) {
     let s: S<u64> = S { t: 10 }
     s.foo()
 }

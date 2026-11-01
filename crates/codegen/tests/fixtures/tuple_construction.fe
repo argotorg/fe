@@ -7,3 +7,8 @@ pub fn access_tuple() -> u256 {
     let t: (u256, u256, u256) = (1, 2, 3)
     t.1
 }
+
+pub fn main() {
+    let _ = make_tuple()
+    let _ = access_tuple()
+}

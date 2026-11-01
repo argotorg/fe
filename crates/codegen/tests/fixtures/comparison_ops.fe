@@ -1,4 +1,4 @@
-pub fn comparison_ops() -> (bool, bool, bool, bool, bool, bool) {
+pub fn main() -> (bool, bool, bool, bool, bool, bool) {
     // TODO: 1u256 syntax
     let one: u256 = 1
     let two: u256 = 2

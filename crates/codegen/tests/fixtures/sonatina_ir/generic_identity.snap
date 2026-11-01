@@ -39,12 +39,22 @@ func private %identity__g6338(v0.i32) -> i32 {
         return v0;
 }
 
+func private %main() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i32 = call %call_identity_u32;
+        v1.i1 = call %call_identity_bool;
+        return;
+}
+
 func private %main_root() {
     block0:
         jump block1;
 
     block1:
-        v0.i1 = call %call_identity_bool;
+        call %main;
         evm_stop;
 }
 

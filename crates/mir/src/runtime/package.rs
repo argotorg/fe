@@ -16,10 +16,7 @@ use hir::{
             ty_def::{TyData, TyId},
         },
     },
-    hir_def::{
-        Contract, Func, HirIngot, IdentId, InlineHint, ItemKind, ManualContractRootAttr,
-        TopLevelMod,
-    },
+    hir_def::{Contract, Func, HirIngot, IdentId, InlineHint, ManualContractRootAttr, TopLevelMod},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -96,25 +93,6 @@ type ObjectSpecWithRoots<'db> = (
 
 /// An object to build, named once all objects of the package are known.
 type ObjectSpec<'db> = (ObjectId<'db>, ObjectSections<'db>);
-
-#[derive(Debug)]
-enum RuntimeRootCandidate<'db> {
-    Root(Func<'db>),
-    NotRoot,
-    Rejected(RuntimeRootRejection<'db>),
-}
-
-#[derive(Debug)]
-struct RuntimeRootRejection<'db> {
-    func: Func<'db>,
-    reason: RuntimeRootRejectionReason<'db>,
-}
-
-#[derive(Debug)]
-enum RuntimeRootRejectionReason<'db> {
-    RootSemanticInstance(RootSemanticInstanceError<'db>),
-    UnsupportedEntryEffect(String),
-}
 
 #[derive(Debug, Clone)]
 struct RuntimeGraphNode<'db> {
@@ -282,107 +260,54 @@ impl<'db> RuntimeGraphBuilder<'db> {
     }
 }
 
+/// Build the runtime package of a single-module build: its contracts, or the
+/// executable its `main` entry makes, if any.
 pub fn build_runtime_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    if !top_mod.all_contracts(db).is_empty()
-        || !discover_manual_contract_roots(db, top_mod)?.is_empty()
-    {
-        return build_contract_package(db, top_mod);
-    }
-
-    let funcs = top_mod
-        .all_funcs(db)
-        .iter()
-        .copied()
-        .filter(|func| func.top_mod(db) == top_mod)
-        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
-        .collect::<Vec<_>>();
-    let mut funcs = funcs;
-    funcs.sort_by_key(|func| {
-        func.name(db)
-            .to_opt()
-            .map(|name| name.data(db).to_string())
-            .unwrap_or_default()
-    });
-    let mut entry_funcs = Vec::new();
-    let mut rejections = Vec::new();
-    for func in funcs.iter().copied() {
-        match runtime_root_candidate(db, func)? {
-            RuntimeRootCandidate::Root(func) => entry_funcs.push(func),
-            RuntimeRootCandidate::NotRoot => {}
-            RuntimeRootCandidate::Rejected(rejection) => rejections.push(rejection),
-        }
-    }
-    if let Some(rejection) = rejections
-        .iter()
-        .find(|rejection| is_main_func(db, rejection.func))
-    {
-        return Err(LowerError::Unsupported(format_runtime_root_rejection(
-            db, rejection,
-        )));
-    }
-    if entry_funcs.is_empty() {
-        if let Some(rejection) = rejections.first() {
-            return Err(LowerError::Unsupported(format_runtime_root_rejection(
-                db, rejection,
-            )));
-        }
-        return Ok(RuntimePackage::new(
+    match build_ingot_module_runtime_package(db, top_mod)? {
+        Some(package) => Ok(package),
+        None => Ok(RuntimePackage::new(
             db,
             top_mod,
             Vec::new(),
             RuntimePackagePlan::new(db, Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
-        ));
+        )),
     }
-
-    build_standalone_main_package(db, top_mod, &entry_funcs)
 }
 
-/// Build the executable `main` object for a non-contract module, given the
-/// free functions to keep alive as standalone runtime roots. `entry_funcs` must
-/// be non-empty; the `main` function (or, failing that, the first root) is used
-/// as the program entry point.
-fn build_standalone_main_package<'db>(
+/// Build the executable `main` object entered at `main`, the module's entry,
+/// with the target's root effect.
+fn build_main_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
-    entry_funcs: &[Func<'db>],
+    main: Func<'db>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    let mut roots = Vec::new();
-    for &func in entry_funcs {
-        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
-        let entry_args =
-            entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)?;
-        roots.push((
-            func,
-            runtime_instance_for_semantic(db, semantic),
-            entry_args,
-        ));
-    }
-    let entry = roots
-        .iter()
-        .find(|(func, _, _)| is_main_func(db, *func))
-        .or_else(|| roots.first())
-        .map(|(_, instance, entry_args)| (*instance, entry_args.clone()))
-        .expect("entry root candidates should include the chosen entry function");
+    let semantic = root_semantic_instance_key(db, BodyOwner::Func(main, None))
+        .map(|key| SemanticInstance::new(db, key))
+        .map_err(|err| {
+            let name = func_display_name(db, main);
+            LowerError::Unsupported(format_root_semantic_instance_rejection(db, &name, &err))
+        })?;
+    let entry_args = entry_semantic_args_plan(
+        db,
+        EntryEffectContext::StandaloneFunc { func: main },
+        semantic,
+    )?;
+    let instance = runtime_instance_for_semantic(db, semantic);
     let root = synthetic_instance(
         db,
         RuntimeSyntheticSpec::MainRoot {
-            callee: entry.0,
-            entry_args: entry.1,
+            callee: instance,
+            entry_args,
         },
         Vec::new(),
     );
-    let mut package_roots = roots
-        .into_iter()
-        .map(|(_, instance, _)| instance)
-        .collect::<Vec<_>>();
-    package_roots.push(root);
     let package = build_non_contract_package(
         db,
         top_mod,
-        package_roots,
+        vec![instance, root],
         vec![(ObjectId::Main, RuntimeSectionName::Main, root)],
     )?;
     verify_runtime_package(db, package)
@@ -393,18 +318,10 @@ fn build_standalone_main_package<'db>(
 /// Build the runtime package contributed by `top_mod` as part of an *ingot*
 /// build, or `None` when the module contributes nothing deployable.
 ///
-/// An ingot is a package of contracts. Contracts (and manual contract roots) are
-/// deployable wherever they live. The only non-contract artifact an ingot
-/// produces is the root module's `main` executable, when the root module defines
-/// a `main` function (a script-style ingot).
-///
-/// Crucially, library/re-export modules are *not* built as standalone executable
-/// modules here. Their free functions are not entry points: they are lowered as
-/// dependencies of the contracts that call them. Running standalone-root
-/// construction on them (as [`build_runtime_package`] does for a single-module
-/// build) is wrong - it both invents an object named `main` per module (so
-/// multi-module ingots collide) and rejects ordinary helpers that declare `uses`
-/// effect parameters, since a standalone root has no caller to supply them.
+/// Contracts (and manual contract roots) are deployable wherever they live.
+/// The only other artifact is the executable of the ingot's entry, the root
+/// module's `pub fn main()`. Other modules' free functions are not entries:
+/// they are lowered as dependencies of what calls them.
 pub fn build_ingot_module_runtime_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
@@ -414,51 +331,10 @@ pub fn build_ingot_module_runtime_package<'db>(
     {
         return Ok(Some(build_contract_package(db, top_mod)?));
     }
-    match ingot_root_main_func(db, top_mod)? {
-        Some(main_func) => Ok(Some(build_standalone_main_package(
-            db,
-            top_mod,
-            &[main_func],
-        )?)),
-        None => Ok(None),
-    }
-}
-
-/// Returns the root module's `main` function when it is a valid standalone
-/// executable entry - the only place an ingot may build a `main` object.
-///
-/// This applies the same validation [`build_runtime_package`] uses for a
-/// single-module build: `extern`/`#[test]` functions are skipped, a `main` with
-/// ordinary parameters (or an associated `main`) is not an executable and yields
-/// `None`, and a malformed `main` is a hard error. Because only the function
-/// literally named `main` is ever inspected, library helpers (including
-/// effectful ones, even when defined in the root module) are never
-/// standalone-validated.
-fn ingot_root_main_func<'db>(
-    db: &'db dyn MirDb,
-    top_mod: TopLevelMod<'db>,
-) -> Result<Option<Func<'db>>, LowerError> {
-    use hir::hir_def::HirIngot;
-    if top_mod != top_mod.ingot(db).root_mod(db) {
-        return Ok(None);
-    }
-    let Some(main_func) = top_mod
-        .all_funcs(db)
-        .iter()
-        .copied()
-        .filter(|func| func.top_mod(db) == top_mod)
-        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
-        .find(|func| is_main_func(db, *func))
-    else {
-        return Ok(None);
-    };
-    match runtime_root_candidate(db, main_func)? {
-        RuntimeRootCandidate::Root(func) => Ok(Some(func)),
-        RuntimeRootCandidate::NotRoot => Ok(None),
-        RuntimeRootCandidate::Rejected(rejection) => Err(LowerError::Unsupported(
-            format_runtime_root_rejection(db, &rejection),
-        )),
-    }
+    top_mod
+        .main_entry(db)
+        .map(|main| build_main_package(db, top_mod, main))
+        .transpose()
 }
 
 pub fn build_test_runtime_package<'db>(
@@ -505,13 +381,7 @@ fn build_test_package<'db>(
     let mut objects = Vec::new();
     for &module in top_mods {
         for &func in module.all_funcs(db) {
-            if func.top_mod(db) != module {
-                continue;
-            }
-            let Some(attrs) = ItemKind::from(func).attrs(db) else {
-                continue;
-            };
-            if attrs.get_attr(db, "test").is_none() {
+            if func.top_mod(db) != module || !func.is_test(db) {
                 continue;
             }
 
@@ -576,24 +446,6 @@ fn build_contract_package<'db>(
     Ok(package)
 }
 
-/// Find a public native entry in the root scope, without lowering library
-/// helpers. A `main` with parameters is a helper, as for EVM entries.
-pub fn native_executable_entry<'db>(
-    db: &'db dyn MirDb,
-    top_mod: TopLevelMod<'db>,
-) -> Option<Func<'db>> {
-    top_mod
-        .children_non_nested(db)
-        .filter_map(|item| match item {
-            ItemKind::Func(func) => Some(func),
-            _ => None,
-        })
-        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
-        .find(|func| {
-            func.vis(db).is_pub() && is_main_func(db, *func) && func.params(db).next().is_none()
-        })
-}
-
 /// The `#[export]` functions of `top_mod`'s ingot, which a native object
 /// defines under their own names.
 pub fn native_exports<'db>(db: &'db dyn MirDb, top_mod: TopLevelMod<'db>) -> Vec<Func<'db>> {
@@ -634,7 +486,7 @@ pub fn build_native_package<'db>(
     // exported as `main`.
     let mut symbols = FxHashMap::default();
     if kind == NativeOutputKind::Executable {
-        let main = native_executable_entry(db, top_mod).ok_or_else(|| {
+        let main = top_mod.main_entry(db).ok_or_else(|| {
             LowerError::Unsupported(
                 "native executable output requires `pub fn main() -> i32`".to_string(),
             )
@@ -1494,63 +1346,11 @@ fn contract_object_spec<'db>(
     ))
 }
 
-fn is_test_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
-    ItemKind::from(func)
-        .attrs(db)
-        .is_some_and(|attrs| attrs.get_attr(db, "test").is_some())
-}
-
-fn runtime_root_candidate<'db>(
-    db: &'db dyn MirDb,
-    func: Func<'db>,
-) -> Result<RuntimeRootCandidate<'db>, LowerError> {
-    if func.is_associated_func(db) || func.params(db).next().is_some() {
-        return Ok(RuntimeRootCandidate::NotRoot);
-    }
-    let semantic = match root_semantic_instance_key(db, BodyOwner::Func(func, None)) {
-        Ok(key) => SemanticInstance::new(db, key),
-        Err(err) => {
-            return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
-                func,
-                reason: RuntimeRootRejectionReason::RootSemanticInstance(err),
-            }));
-        }
-    };
-    if let Err(err) =
-        entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)
-    {
-        return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
-            func,
-            reason: RuntimeRootRejectionReason::UnsupportedEntryEffect(err.to_string()),
-        }));
-    }
-    Ok(RuntimeRootCandidate::Root(func))
-}
-
-fn is_main_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
-    func.name(db)
-        .to_opt()
-        .is_some_and(|name| name.data(db) == "main")
-}
-
 fn func_display_name<'db>(db: &'db dyn MirDb, func: Func<'db>) -> String {
     func.name(db)
         .to_opt()
         .map(|name| name.data(db).to_string())
         .unwrap_or_else(|| "<anonymous>".to_string())
-}
-
-fn format_runtime_root_rejection<'db>(
-    db: &'db dyn MirDb,
-    rejection: &RuntimeRootRejection<'db>,
-) -> String {
-    let name = func_display_name(db, rejection.func);
-    match &rejection.reason {
-        RuntimeRootRejectionReason::RootSemanticInstance(err) => {
-            format_root_semantic_instance_rejection(db, &name, err)
-        }
-        RuntimeRootRejectionReason::UnsupportedEntryEffect(message) => message.clone(),
-    }
 }
 
 fn format_root_semantic_instance_rejection<'db>(

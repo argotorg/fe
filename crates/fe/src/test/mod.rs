@@ -32,7 +32,7 @@ use common::{
 use contract_harness::{EvmTraceOptions, ExecutionOptions, RuntimeInstance, U256};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use driver::DriverDataBase;
-use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
+use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{build_runtime_package, build_test_runtime_package, format_runtime_package};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Setter;
@@ -2684,20 +2684,12 @@ fn expand_workspace_test_paths(
 }
 
 fn has_test_functions(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
-    top_mod.all_funcs(db).iter().any(|func| {
-        ItemKind::from(*func)
-            .attrs(db)
-            .is_some_and(|attrs| attrs.has_attr(db, "test"))
-    })
+    top_mod.all_funcs(db).iter().any(|func| func.is_test(db))
 }
 
 /// Like [`has_test_functions`] but checks all modules in the ingot, not just one.
 fn ingot_has_test_functions(db: &DriverDataBase, ingot: Ingot<'_>) -> bool {
-    ingot.all_funcs(db).iter().any(|func| {
-        ItemKind::from(*func)
-            .attrs(db)
-            .is_some_and(|attrs| attrs.has_attr(db, "test"))
-    })
+    ingot.all_funcs(db).iter().any(|func| func.is_test(db))
 }
 
 fn create_run_report_staging() -> Result<ReportStaging, String> {

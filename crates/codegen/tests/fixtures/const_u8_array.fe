@@ -31,3 +31,11 @@ pub fn big_copy_first() -> u8 {
     let y: [u8; 40] = BIG
     y[0]
 }
+
+pub fn main() {
+    let _ = index_direct()
+    let _ = alias_then_index()
+    let _ = pass_then_index()
+    let _ = big_index()
+    let _ = big_copy_first()
+}

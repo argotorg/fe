@@ -6,6 +6,6 @@ const BALANCES_SLOT: u256 = {
     )
 }
 
-fn main() -> u256 {
+pub fn main() -> u256 {
     BALANCES_SLOT
 }

@@ -1,5 +1,5 @@
 const C: [[u8; 2]; 2] = [[1, 2], [3, 4]]
 
-pub fn const_nested_u8_array() -> u8 {
+pub fn main() -> u8 {
     C[1][0]
 }

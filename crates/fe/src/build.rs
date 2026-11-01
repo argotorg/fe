@@ -878,7 +878,7 @@ fn build_workspace(
             let has_roots = if emit.library() {
                 !mir::native_exports(db, root_mod).is_empty()
             } else {
-                mir::native_executable_entry(db, root_mod).is_some()
+                root_mod.main_entry(db).is_some()
             };
             if ingot.is_none() && !has_roots {
                 continue;
