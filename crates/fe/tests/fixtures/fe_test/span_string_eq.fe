@@ -41,6 +41,11 @@ fn string_text_equals_spans() {
     let padded: String<8> = "serve"
     assert!(padded == serve.span())
     assert!(padded != serve.span().head(4))
+    let long = buffer("a literal of thirty-two bytes!!!")
+    assert!("a literal of thirty-two bytes!!!" == long.span())
+    assert!("a literal of thirty-two bytes!!?" != long.span())
+    assert!("a literal of thirty-two bytes!!!!" != long.span())
+    assert!(DynString::from_payload(source: long.span()) == long.span())
 }
 
 #[test]

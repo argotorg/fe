@@ -1205,6 +1205,14 @@ impl Eq<DynString> for ptr::MemSpan {
     }
 }
 
+/// Whether the span holds the string's bytes, so a literal of any length
+/// compares with a span: `"<32 bytes or more>" == arg.span()`.
+impl Eq<ptr::MemSpan> for DynString {
+    fn eq(self, _ other: ptr::MemSpan) -> bool {
+        other == self
+    }
+}
+
 /// Whether the buffer holds the string's bytes, as for a span.
 impl Eq<DynString> for ptr::MemBuffer {
     fn eq(self, _ other: DynString) -> bool {
