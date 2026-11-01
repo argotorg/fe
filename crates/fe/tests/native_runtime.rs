@@ -1530,7 +1530,12 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
     var text = MemBuffer::empty()
     var i: usize = 1
     while i < args.count() {
-        text.extend_from(args.get(i).span())
+        let arg = args.get(i)
+        text.extend_from(arg.span())
+        // An argument compares with a literal's text.
+        if arg.span() == "Fe" || arg.span() == "λ" {
+            text.push(33)
+        }
         text.push(124)
         i += 1
     }
@@ -1545,12 +1550,12 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
         build(&source, &out, level, &[]);
         let executable = out.join("arguments");
         let result = Command::new(&executable)
-            .args(["", "Fe", "λ"])
+            .args(["", "Fe", "λ", "Fee"])
             .arg(OsString::from_vec(vec![0x80, 0xff]))
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
-        assert_eq!(result.stdout, b"|Fe|\xce\xbb|\x80\xff|");
+        assert_eq!(result.stdout, b"|Fe!|\xce\xbb!|Fee|\x80\xff|");
         for args in [&[][..], &[""][..], &["bounds"][..]] {
             let result = Command::new(&executable).args(args).output().unwrap();
             assert!(

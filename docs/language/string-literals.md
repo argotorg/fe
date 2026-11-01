@@ -50,6 +50,10 @@ including leading zero padding. Bytes are indexed from the most significant
 byte; bits above the string's capacity are ignored. `len()` counts bytes after
 leading zero padding, including any interior zero bytes.
 
+A byte span (`MemSpan`) equals a `String<N>` whose `len()` bytes it holds, so
+`arg.span() == "serve"` compares bytes with a literal of up to 31 bytes. A
+longer literal is a `DynString`, which a span does not compare with.
+
 `AsBytes` also supports `u256`, ordinary byte arrays, packed bytes and tuples
 whose components implement the trait. Tuples concatenate component encodings in
 order into one checked destination. Custom implementations declare `N` and

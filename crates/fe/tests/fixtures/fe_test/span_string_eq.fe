@@ -1,0 +1,28 @@
+use core::MemBuffer
+
+fn buffer<const N: usize>(_ bytes: [u8; N]) -> MemBuffer {
+    var buf = MemBuffer::empty()
+    for byte in bytes {
+        buf.push(byte)
+    }
+    buf
+}
+
+#[test]
+fn spans_equal_string_text() {
+    let serve = buffer("serve")
+    assert!(serve.span() == "serve")
+    assert!(serve.span().head(4) == "serv")
+    assert!(serve.span() != "serv")
+    assert!(serve.span() != "serves")
+    assert!(serve.span() != "sErve")
+    assert!(MemBuffer::empty().span() == "")
+    assert!(serve.span() != "")
+    // A string's text is its bytes after the zero padding.
+    let padded: String<8> = "ab"
+    assert!(buffer("ab").span() == padded)
+    assert!(buffer([0, 97, 98]).span() != padded)
+    let longest = buffer("0123456789012345678901234567890")
+    assert!(longest.span() == "0123456789012345678901234567890")
+    assert!(longest.span() != "0123456789012345678901234567899")
+}
