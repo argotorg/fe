@@ -13,6 +13,7 @@ use std::{
     io::Write,
     os::unix::{
         ffi::OsStringExt,
+        fs::symlink,
         process::{CommandExt, ExitStatusExt},
     },
     path::{Path, PathBuf},
@@ -2895,4 +2896,60 @@ fn keep_beta() {
             .any(|line| line.ends_with("/tests.o")),
         "no selected tests must not create a native object"
     );
+}
+
+#[test]
+fn native_fs_reads_writes_and_lists_files() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/fs.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let dir = temp.path().join(format!("files-{level}"));
+        fs::create_dir(&dir).unwrap();
+        symlink("a/b/c/file", dir.join("link")).unwrap();
+        let result = Command::new(out.join("fs")).arg(&dir).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        // Directory entries come in no particular order.
+        let stdout = String::from_utf8(result.stdout).unwrap();
+        let mut lines = stdout.lines().collect::<Vec<_>>();
+        for entries in lines.chunk_by_mut(|a, b| a.starts_with("  ") && b.starts_with("  ")) {
+            entries.sort();
+        }
+        let canonical = fs::canonicalize(&dir).unwrap();
+        let expected = format!(
+            r#"create_dir_all a/b/c: ok
+create_dir_all a/b/c/: ok
+write a/b/c/file: ok
+append a/b/c/file: ok
+append a/new: ok
+write a/empty: ok
+read a/b/c/file: 11 bytes "hello world"
+read a/new: 3 bytes "new"
+read a/empty: 0 bytes ""
+read link: 11 bytes "hello world"
+metadata a: dir
+metadata a/b/c/file: file of 11 bytes
+metadata link: file of 11 bytes
+read_dir .: 2 entries
+  a dir
+  link symlink
+read_dir a: 3 entries
+  b dir
+  empty file
+  new file
+canonicalize a/b/../b/./c/file: {}/a/b/c/file
+read missing: NotFound (No such file or directory)
+read a: IsADirectory (Is a directory)
+write a: IsADirectory (Is a directory)
+create_dir_all a/empty: AlreadyExists (File exists)
+create_dir_all a/empty/x: NotADirectory (Not a directory)
+metadata missing: NotFound (No such file or directory)
+read_dir a/empty: NotADirectory (Not a directory)
+read a\0: InvalidInput (Invalid argument)"#,
+            canonical.display()
+        );
+        assert_eq!(lines.join("\n"), expected, "O{level}");
+        assert_eq!(fs::read(dir.join("a/b/c/file")).unwrap(), b"hello world");
+    }
 }

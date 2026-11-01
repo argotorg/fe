@@ -79,7 +79,7 @@ module.exports = grammar({
     [$._expression, $._condition_let_value],
     [$._condition_atom, $._condition_no_or_no_let],
     // attribute name can be identifier or path (path starts with path_segment which is identifier)
-    [$.path_segment, $.attribute],
+    [$.path_segment, $._attribute_body],
     // recv arm pattern name can be identifier or path
     [$.recv_arm_pattern, $.path_segment],
     // an attribute argument can be a key or an expression
@@ -93,7 +93,10 @@ module.exports = grammar({
     // A statement at the top level is read as one only when nothing else
     // reads its tokens, so a block after a function reads as the function's
     // body or a braced `where` condition first.
-    source_file: $ => repeat(choice($._item, prec.dynamic(-1, $._statement))),
+    source_file: $ => seq(
+      optional($.inner_attribute_list),
+      repeat(choice($._item, prec.dynamic(-1, $._statement))),
+    ),
 
     // Statement terminator: either an explicit ';' or an automatic one
     // inserted by the external scanner at newline boundaries.
@@ -573,6 +576,7 @@ module.exports = grammar({
       'mod',
       field('name', $.identifier),
       '{',
+      optional($.inner_attribute_list),
       repeat($._item),
       '}',
     ),
@@ -1498,16 +1502,21 @@ module.exports = grammar({
 
     attribute_list: $ => repeat1(choice($.attribute, $.doc_comment)),
 
-    attribute: $ => seq(
-      '#',
-      '[',
+    attribute: $ => seq('#', '[', $._attribute_body, ']'),
+
+    // Attributes of the enclosing module, at the start of a file or `mod`
+    // body: #![cfg(target_os = "linux")]
+    inner_attribute_list: $ => repeat1($.inner_attribute),
+
+    inner_attribute: $ => seq('#!', '[', $._attribute_body, ']'),
+
+    _attribute_body: $ => seq(
       field('name', choice(prec(2, $.identifier), $.path)),
       optional(choice(
         $.attribute_arg_list,
         // Direct key = value form: #[selector = 0x01] or #[selector = sol("...")]
         seq(choice('=', ':'), field('value', $._attribute_value)),
       )),
-      ']',
     ),
 
     attribute_arg_list: $ => seq(
