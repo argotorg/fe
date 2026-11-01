@@ -5,7 +5,10 @@ use crate::core::hir_def::{
 };
 use either::Either;
 
-use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
+use super::{
+    ConstRef, RecordLike, TyChecker, contract::implements_msg_variant, env::LocalBinding,
+    path::RecordInitChecker,
+};
 use crate::analysis::{
     name_resolution::{ExpectedPathKind, PathRes, ResolvedVariant},
     semantic::{
@@ -438,8 +441,17 @@ impl<'db> TyChecker<'db> {
         let (actual, analysis) = match res {
             Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => {
                 let record_like = RecordLike::from_ty(ty);
-                // Tuple structs must be destructured with `Name(..)`.
-                if record_like.is_record(self.db) || ty.as_tuple_struct(self.db).is_some() {
+                // Records must be destructured with `Name { .. }` and tuple
+                // structs with `Name(..)`, except a msg variant without
+                // fields, which is declared and matched like a unit variant.
+                let fieldless_msg_variant = ty.field_types(self.db).is_empty()
+                    && ty.adt_def(self.db).is_some_and(|adt_def| {
+                        matches!(adt_def.adt_ref(self.db), AdtRef::Struct(struct_)
+                            if implements_msg_variant(self.db, struct_))
+                    });
+                if (record_like.is_record(self.db) && !fieldless_msg_variant)
+                    || ty.as_tuple_struct(self.db).is_some()
+                {
                     (
                         self.emit_unit_variant_expected(pat, record_like),
                         PatternAnalysisStatus::Invalid,

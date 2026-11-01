@@ -54,7 +54,10 @@ use crate::{
 use common::ingot::IngotKind;
 
 /// Returns true if a struct implements the core MsgVariant trait.
-fn implements_msg_variant<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> bool {
+pub(super) fn implements_msg_variant<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: Struct<'db>,
+) -> bool {
     let Some(msg_variant_trait) =
         resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])
     else {
