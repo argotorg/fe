@@ -1,6 +1,5 @@
 use std::wasm::{Clock, now_ms}
 
-//host: fn provider() -> std::wasm::Host { std::wasm::host() }
 //mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
 
 fn ticks(_ deadline: u64) -> u32 uses (clock: mut Clock) {
@@ -11,9 +10,10 @@ fn ticks(_ deadline: u64) -> u32 uses (clock: mut Clock) {
     n
 }
 
-pub fn ticks_until(deadline: u64) -> u32 {
-    var p = provider()
-    with (Clock = p) {
+//host: pub fn ticks_until(deadline: u64) -> u32 uses (clock: mut Clock) {
+//mock: pub fn ticks_until(deadline: u64) -> u32 {
+//mock:     var p = provider()
+//mock:     with (Clock = p) {
         ticks(deadline)
-    }
+//mock:     }
 }

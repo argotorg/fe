@@ -7,7 +7,7 @@
 // the number of line feeds, plus one if the file does not end with one; an empty
 // file has no lines.
 use std::wasm::{HostText, Reply}
-use std::wasm::files::{Files, close, host, open, read_byte, size}
+use std::wasm::files::{Files, close, open, read_byte, size}
 
 fn count(_ name: HostText) -> Reply uses (files: mut Files) {
     let handle = match open(name.copy()) {
@@ -43,9 +43,7 @@ fn count(_ name: HostText) -> Reply uses (files: mut Files) {
     Reply::ok(if last == 10 { lines } else { lines + 1 })
 }
 
-pub fn lines(name: HostText) -> Reply {
-    var provider = host()
-    with (Files = provider) {
-        count(name)
-    }
+// The files come from the root effect, `std::wasm::Host`.
+pub fn lines(name: HostText) -> Reply uses (files: mut Files) {
+    count(name)
 }

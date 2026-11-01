@@ -1,6 +1,5 @@
 use std::wasm::{Clock, now_ms}
 
-//host: fn provider() -> std::wasm::Host { std::wasm::host() }
 //mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
 
 fn timed(_ work: u32) -> u64 uses (clock: mut Clock) {
@@ -15,11 +14,12 @@ fn timed(_ work: u32) -> u64 uses (clock: mut Clock) {
     finished - started + (acc as u64)
 }
 
-pub fn elapsed(work: u32) -> u64 {
-    var p = provider()
-    with (Clock = p) {
+//host: pub fn elapsed(work: u32) -> u64 uses (clock: mut Clock) {
+//mock: pub fn elapsed(work: u32) -> u64 {
+//mock:     var p = provider()
+//mock:     with (Clock = p) {
         timed(work)
-    }
+//mock:     }
 }
 
 fn three() -> u64 uses (clock: mut Clock) {
@@ -29,9 +29,10 @@ fn three() -> u64 uses (clock: mut Clock) {
     a + b * 2 + c * 3
 }
 
-pub fn three_reads() -> u64 {
-    var p = provider()
-    with (Clock = p) {
+//host: pub fn three_reads() -> u64 uses (clock: mut Clock) {
+//mock: pub fn three_reads() -> u64 {
+//mock:     var p = provider()
+//mock:     with (Clock = p) {
         three()
-    }
+//mock:     }
 }

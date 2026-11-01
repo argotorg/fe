@@ -95,8 +95,9 @@ foreign function outside `core` and `std`. Its parameters and result follow the
 same rule as for exports, without `HostText` and `Reply`. `bool` and integers of up to 32
 bits arrive as an `i32` that holds the value zero-extended (an `i8` of -1 arrives
 as 255); 64-bit integers are `i64`. The module `std::wasm` declares the standard
-imports as effects with a host provider (`host()`) and a provider written in Fe
-that needs no host (`mock()`):
+imports as effects. The root effect, `std::wasm::Host`, calls the imports: an export
+or a test takes its capabilities in `uses`, and nothing else can create one. `mock()`
+is a provider written in Fe that needs no host:
 
 | Import | Parameters | Result | Effect |
 | --- | --- | --- | --- |

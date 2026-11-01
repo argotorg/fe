@@ -8,9 +8,10 @@
 //! - `close(handle)` ends the use of the handle. It takes the handle by value,
 //!   so a closed handle cannot be used again.
 //!
-//! The operations are the trait `Files`. `host()` calls imports of the module
-//! `env`; `mock()` is a provider written in Fe that holds files in memory and
-//! behaves the same way, for tests and for builds with no host.
+//! The operations are the trait `Files`. The root effect `std::wasm::Host`
+//! calls imports of the module `env`; `mock()` is a provider written in Fe that
+//! holds files in memory and behaves the same way, for tests and for builds
+//! with no host.
 //!
 //! Transport, for the imports (all scalars, so Fe memory is not reachable from
 //! the host except through the address and length of a name):
@@ -28,6 +29,7 @@
 //! are in `FileError`.
 use core::abi::DynString
 use core::ptr::MemVec
+use super::Host
 use super::boundary::Reply
 
 extern {
@@ -96,13 +98,6 @@ pub trait Files {
     fn close(mut self, _ handle: own Handle)
 }
 
-/// The provider that calls the imports of the host.
-pub struct HostFiles {}
-
-pub fn host() -> HostFiles {
-    HostFiles {}
-}
-
 fn checked(_ reply: Reply) -> Result<FileError, u32> {
     if reply.tag == 0 {
         Result::Ok(reply.payload)
@@ -111,7 +106,7 @@ fn checked(_ reply: Reply) -> Result<FileError, u32> {
     }
 }
 
-impl Files for HostFiles {
+impl Files for Host {
     fn open(mut self, _ name: DynString) -> Result<FileError, Handle> {
         let bytes = name.payload_span()
         let addr: u32 = (bytes.ptr() as usize).downcast().unwrap()

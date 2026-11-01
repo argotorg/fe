@@ -1,8 +1,9 @@
 // Tests that use the host operations of `std::wasm`. They run with
 // `fe test --backend wasm`; the test host answers `Log` and `Clock`, has no
-// files, and ends a test that calls `abort`.
-use std::wasm::{Abort, Clock, Log, abort, host, log_i32, log_u64, mock, now_ms}
-use std::wasm::files::{Files, FileError, host as files_host, mock as files_mock, open}
+// files, and ends a test that calls `abort`. A test takes the host's
+// operations from the root effect, `std::wasm::Host`.
+use std::wasm::{Abort, Clock, Log, abort, log_i32, log_u64, mock, now_ms}
+use std::wasm::files::{Files, FileError, mock as files_mock, open}
 
 extern {
     // A handle that the host never issued.
@@ -10,21 +11,17 @@ extern {
 }
 
 #[test]
-fn logs_numbers_and_reads_the_clock() {
-    with (Log = host(), Clock = host()) {
-        log_i32(-5)
-        log_u64(1234567890123)
-        assert(now_ms() > 1000000)
-    }
+fn logs_numbers_and_reads_the_clock() uses (log: mut Log, clock: mut Clock) {
+    log_i32(-5)
+    log_u64(1234567890123)
+    assert(now_ms() > 1000000)
 }
 
 #[test]
-fn a_missing_file_is_not_found() {
-    with (Files = files_host()) {
-        match open("nope") {
-            Result::Ok(_) => { assert(false) }
-            Result::Err(error) => { assert(error.code() == 1) }
-        }
+fn a_missing_file_is_not_found() uses (files: mut Files) {
+    match open("nope") {
+        Result::Ok(_) => { assert(false) }
+        Result::Err(error) => { assert(error.code() == 1) }
     }
 }
 
@@ -41,10 +38,8 @@ fn mock_files_need_no_host() {
 }
 
 #[test]
-fn aborts_with_a_code() {
-    with (Abort = host()) {
-        abort(7)
-    }
+fn aborts_with_a_code() uses (a: mut Abort) {
+    abort(7)
 }
 
 #[test]

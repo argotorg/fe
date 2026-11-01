@@ -1,6 +1,5 @@
 use std::wasm::{Log, log_i32, log_u64}
 
-//host: fn provider() -> std::wasm::Host { std::wasm::host() }
 //mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
 
 fn collatz(_ start: u64) -> u32 uses (log: mut Log) {
@@ -19,20 +18,22 @@ fn collatz(_ start: u64) -> u32 uses (log: mut Log) {
     steps
 }
 
-pub fn collatz_steps(start: u64) -> u32 {
-    var p = provider()
-    with (Log = p) {
+//host: pub fn collatz_steps(start: u64) -> u32 uses (log: mut Log) {
+//mock: pub fn collatz_steps(start: u64) -> u32 {
+//mock:     var p = provider()
+//mock:     with (Log = p) {
         collatz(start)
-    }
+//mock:     }
 }
 
-pub fn log_wide(x: u64) -> u64 {
-    var p = provider()
-    with (Log = p) {
+//host: pub fn log_wide(x: u64) -> u64 uses (log: mut Log) {
+//mock: pub fn log_wide(x: u64) -> u64 {
+//mock:     var p = provider()
+//mock:     with (Log = p) {
         log_u64(x)
         log_u64(18446744073709551615 - x)
         log_i32(-2147483648)
         log_i32(2147483647)
         x
-    }
+//mock:     }
 }

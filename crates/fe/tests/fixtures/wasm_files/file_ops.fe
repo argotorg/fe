@@ -5,8 +5,6 @@
 use std::wasm::{HostText, Reply}
 use std::wasm::files::{Files, close, open, read_byte, reply, size}
 
-//host: use std::wasm::files::{HostFiles, host}
-//host: fn provider() -> HostFiles { host() }
 //mock: use std::wasm::files::{MemFiles, mock}
 //mock: fn provider() -> MemFiles {
 //mock:     var files = mock()
@@ -113,45 +111,58 @@ fn leak_impl(_ name: HostText) -> Reply uses (files: mut Files) {
     }
 }
 
-pub fn byte_at(name: HostText, index: u32) -> Reply {
-    var p = provider()
-    with (Files = p) { byte_at_impl(name, index) }
+//host: pub fn byte_at(name: HostText, index: u32) -> Reply uses (files: mut Files) {
+//host:     byte_at_impl(name, index)
+//mock: pub fn byte_at(name: HostText, index: u32) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) { byte_at_impl(name, index) }
 }
 
-pub fn size_of(name: HostText) -> Reply {
-    var p = provider()
-    with (Files = p) { size_of_impl(name) }
+//host: pub fn size_of(name: HostText) -> Reply uses (files: mut Files) {
+//host:     size_of_impl(name)
+//mock: pub fn size_of(name: HostText) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) { size_of_impl(name) }
 }
 
-pub fn checksum(name: HostText) -> Reply {
-    var p = provider()
-    with (Files = p) { checksum_impl(name) }
+//host: pub fn checksum(name: HostText) -> Reply uses (files: mut Files) {
+//host:     checksum_impl(name)
+//mock: pub fn checksum(name: HostText) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) { checksum_impl(name) }
 }
 
-pub fn open_n(name: HostText, n: u32) -> Reply {
-    var p = provider()
-    with (Files = p) { open_n_impl(name, n) }
+//host: pub fn open_n(name: HostText, n: u32) -> Reply uses (files: mut Files) {
+//host:     open_n_impl(name, n)
+//mock: pub fn open_n(name: HostText, n: u32) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) { open_n_impl(name, n) }
 }
 
-pub fn sizes_two(first: HostText, second: HostText) -> Reply {
-    var p = provider()
-    with (Files = p) { sizes_two_impl(first, second) }
+//host: pub fn sizes_two(first: HostText, second: HostText) -> Reply uses (files: mut Files) {
+//host:     sizes_two_impl(first, second)
+//mock: pub fn sizes_two(first: HostText, second: HostText) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) { sizes_two_impl(first, second) }
 }
 
-pub fn leak(name: HostText) -> Reply {
-    var p = provider()
-    with (Files = p) { leak_impl(name) }
+//host: pub fn leak(name: HostText) -> Reply uses (files: mut Files) {
+//host:     leak_impl(name)
+//mock: pub fn leak(name: HostText) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) { leak_impl(name) }
 }
 
 // An export with a text parameter and no result.
-pub fn touch(name: HostText) {
-    var p = provider()
-    with (Files = p) {
+//host: pub fn touch(name: HostText) uses (files: mut Files) {
+//mock: pub fn touch(name: HostText) {
+//mock:     var p = provider()
+//mock:     with (Files = p) {
         match open(name.copy()) {
             Result::Ok(handle) => { close(handle) }
             Result::Err(_) => {}
         }
-    }
+//mock:     }
 }
 
 // Text alone: no host call.

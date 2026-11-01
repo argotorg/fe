@@ -5,9 +5,10 @@
 //! by value as WebAssembly `i32` and `i64`; the operations in this file give the
 //! host no access to Fe memory.
 //!
-//! The operations are effects. A program selects the provider where it starts:
-//! `host()` calls the imports, and `mock()` is a pure Fe stand-in for tests and
-//! for builds that have no host.
+//! The operations are effects with two providers. `Host`, the WebAssembly root
+//! effect, calls the imports: exports and tests receive its capabilities by
+//! declaring them in `uses`, and nothing else can create one. `mock()` is a
+//! pure Fe stand-in for tests and for builds that have no host.
 //!
 //! The submodule `files` is a contract for text, handles and errors, and
 //! `HostText` and `Reply` are the shapes that an exported function may take and
@@ -41,12 +42,12 @@ pub trait Abort {
     fn abort(mut self, code: u32) -> !
 }
 
-/// The provider that calls the imports of the host.
-pub struct Host {}
+/// The WebAssembly root effect, which calls the imports of the host. Exports
+/// and tests receive its capabilities, `Log`, `Clock`, `Abort` and
+/// `files::Files`, by declaring them in `uses`; nothing else can create one.
+pub struct Host { unsafe seal: Private }
 
-pub fn host() -> Host {
-    Host {}
-}
+struct Private {}
 
 impl Log for Host {
     fn log_i32(mut self, value: i32) {

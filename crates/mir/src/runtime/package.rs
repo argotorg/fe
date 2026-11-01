@@ -935,13 +935,18 @@ fn wasm_export_for_func<'db>(
             .map_err(|err| {
                 LowerError::Unsupported(format!("cannot export `{name}` to WebAssembly: {err}"))
             })?;
-    if !entry_args.effects.is_empty() {
-        return Err(LowerError::Unsupported(format!(
-            "cannot export `{name}` to WebAssembly: it needs effect providers (`uses`) that the host cannot supply"
-        )));
-    }
-
-    let instance = runtime_instance_for_semantic(db, semantic);
+    // An export's effects come from the root effect, `std::wasm::Host`, which
+    // a root provides before calling it.
+    let callee = runtime_instance_for_semantic(db, semantic);
+    let instance = if entry_args.effects.is_empty() {
+        callee
+    } else {
+        synthetic_instance(
+            db,
+            RuntimeSyntheticSpec::ExportRoot { callee, entry_args },
+            Vec::new(),
+        )
+    };
     let signature = instance.interface_signature(db);
     let (params, result) = wasm_export_shapes(db, func, signature);
     if let Some(reason) =
@@ -1628,6 +1633,7 @@ fn resolved_section_region<'db>(
         RuntimeFunctionOwner::Synthetic(
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
+            | RuntimeSyntheticSpec::ExportRoot { .. }
             | RuntimeSyntheticSpec::ContractInitAbi { .. }
             | RuntimeSyntheticSpec::ContractRecvAbi { .. },
         ) => None,
@@ -1758,6 +1764,7 @@ fn materialized_contracts_for_roots<'db>(
                 | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => Some(*contract),
                 RuntimeSyntheticSpec::MainRoot { .. }
                 | RuntimeSyntheticSpec::TestRoot { .. }
+                | RuntimeSyntheticSpec::ExportRoot { .. }
                 | RuntimeSyntheticSpec::ManualContractRoot { .. }
                 | RuntimeSyntheticSpec::ContractInitAbi { .. }
                 | RuntimeSyntheticSpec::ContractRecvAbi { .. } => None,
@@ -2352,6 +2359,11 @@ fn runtime_synthetic_spec_key<'db>(
             instance_key(callee),
             entry_semantic_args_sort_key(db, &entry_args)
         ),
+        RuntimeSyntheticSpec::ExportRoot { callee, entry_args } => format!(
+            "__synthetic:export_root:{}:{}",
+            instance_key(callee),
+            entry_semantic_args_sort_key(db, &entry_args)
+        ),
         RuntimeSyntheticSpec::ManualContractRoot {
             func,
             callee,
@@ -2770,6 +2782,9 @@ fn symbol_base_for_runtime_instance<'db>(
 ) -> String {
     match spec {
         RuntimeSyntheticSpec::MainRoot { .. } => "main_root".to_string(),
+        RuntimeSyntheticSpec::ExportRoot { callee, .. } => {
+            format!("export_root_{}", runtime_instance_display_name(db, *callee))
+        }
         RuntimeSyntheticSpec::TestRoot { name, .. } => {
             format!("test_root_{}", sanitize_symbol(name))
         }

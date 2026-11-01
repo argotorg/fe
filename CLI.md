@@ -402,12 +402,12 @@ as an `i32` that holds the value zero-extended (an `i8` of -1 arrives as 255) an
 ignores bits above the width in what it returns (a `bool` is the lowest bit); 64-bit
 integers are `i64`. There is
 no attribute for another module name yet. The module `std::wasm` declares host
-operations as effects (`Log`, `Clock` and `Abort`) with two providers: `host()` calls
-the imports `sys_wasm_log_i32`, `sys_wasm_log_u64`, `sys_wasm_now_ms` and
-`sys_wasm_abort`, and `mock(now, step)` is Fe code that needs no host. A program picks
-the provider where it starts, for example
-`with (Log = host(), Clock = host()) { ... }` inside an exported function, since an
-export cannot itself need effects. If the host does not supply an import, the engine
+operations as effects (`Log`, `Clock` and `Abort`) with two providers. The root
+effect, `std::wasm::Host`, calls the imports `sys_wasm_log_i32`, `sys_wasm_log_u64`,
+`sys_wasm_now_ms` and `sys_wasm_abort`: an export or a test receives its capabilities by
+declaring them, as in `pub fn stamp() -> u64 uses (clock: mut Clock)`, and nothing else
+can create one. `mock(now, step)` is Fe code that needs no host, provided with
+`with (Clock = provider) { ... }`. If the host does not supply an import, the engine
 refuses to instantiate the module and names it.
 
 An export may also take `std::wasm::HostText` parameters and return a
@@ -427,7 +427,7 @@ code cannot make a `HostText`; only the host and the generated wrapper of the ex
 (the name is borrowed text), `size(handle)`, `read_byte(handle, index)` and
 `close(handle)`, which takes the handle by value, so the compiler rejects a second use.
 Each can fail with `NotFound` (1), `OutOfRange` (2) or `BadName` (3); no other number is
-valid. `host()` calls the imports `sys_wasm_files_open(addr, len)`, `sys_wasm_files_size`,
+valid. `Host` provides `Files` by calling the imports `sys_wasm_files_open(addr, len)`, `sys_wasm_files_size`,
 `sys_wasm_files_read_byte` and `sys_wasm_files_close`, which return a reply word (close
 returns nothing), and `mock()` is Fe code that holds files in memory. The compiler does not
 require a handle to be closed; the host counts the handles that stay open. The module
