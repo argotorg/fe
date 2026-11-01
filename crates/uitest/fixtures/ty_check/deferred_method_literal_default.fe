@@ -8,7 +8,29 @@ fn texts(_ s: MemSpan, _ buf: MemBuffer, _ arg: Arg) -> bool {
     s.eq("serve") && buf.eq("a literal of thirty-two bytes!!!") && arg.eq("x")
 }
 
-// An operator needs the call's type before the literal takes its default.
-fn negated(_ s: MemSpan) -> bool {
-    !s.eq("serve")
+// Every impl returns `bool`, so the call is typed before the literal picks
+// one, as an operator needs.
+fn negated(_ s: MemSpan, _ buf: MemBuffer, _ arg: Arg) -> bool {
+    !s.eq("serve") && !buf.eq("x") && !arg.eq("a literal of thirty-two bytes!!!")
+}
+
+trait Convert<T> {
+    fn convert(self) -> T
+}
+
+impl Convert<u8> for MemBuffer {
+    fn convert(self) -> u8 {
+        0
+    }
+}
+
+impl Convert<bool> for MemBuffer {
+    fn convert(self) -> bool {
+        false
+    }
+}
+
+// Impls that return different types leave the call's type open.
+fn unknown(_ buf: MemBuffer) -> bool {
+    !buf.convert()
 }

@@ -2119,11 +2119,25 @@ impl<'db> TyChecker<'db> {
         // for an operator applied to it: `!s.eq(t)`.
         if let Some(parts) = super::pending_call_parts(self.db, self.body(), &self.env, expr) {
             let recv_ty = receiver_ty.fold_with(self.db, &mut self.table);
-            if let [candidate] =
-                self.viable_pending_candidates(&pending, recv_ty, typed.ty, parts, false)[..]
-            {
+            let viable = self.viable_pending_candidates(&pending, recv_ty, typed.ty, parts, false);
+            if let [candidate] = viable[..] {
                 self.resolve_pending_method(&pending, candidate, recv_ty, typed.ty, parts);
                 return typed;
+            }
+            // For the same reason, a type all fitting candidates return is
+            // the call's: `!s.eq("serve")` is a `bool` whichever impl the
+            // literal picks.
+            let ret_tys: Option<Vec<_>> = viable
+                .iter()
+                .map(|&candidate| {
+                    self.method_viability(&pending, recv_ty, typed.ty, parts, candidate)
+                        .ret_ty
+                })
+                .collect();
+            if let Some([ret_ty, rest @ ..]) = ret_tys.as_deref()
+                && rest.iter().all(|ty| ty == ret_ty)
+            {
+                self.equate_ty(typed.ty, *ret_ty, pending.span.clone());
             }
         }
         self.env.register_pending_method(pending);
