@@ -1,0 +1,1 @@
+A byte span (`MemSpan`) compares with a string of up to 31 bytes, such as a literal: `arg.span() == "serve"` checks a command-line argument.

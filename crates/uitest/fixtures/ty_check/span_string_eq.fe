@@ -1,0 +1,12 @@
+use core::MemSpan
+
+// A span compares with a string's text, which a `String<N>` holds up to 31
+// bytes of.
+fn short(_ bytes: MemSpan) -> bool {
+    bytes == "a literal of thirty-one bytes!!" && bytes != "serve"
+}
+
+// A longer literal is a `DynString`.
+fn long(_ bytes: MemSpan) -> bool {
+    bytes == "a literal of thirty-two bytes!!!"
+}
