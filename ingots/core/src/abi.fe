@@ -1193,6 +1193,21 @@ impl Eq for DynString {
     }
 }
 
+/// Whether the span holds the string's bytes, so a span compares with a
+/// literal longer than a `String<N>` holds.
+impl Eq<DynString> for ptr::MemSpan {
+    fn eq(self, _ other: DynString) -> bool {
+        self == other.payload_span()
+    }
+}
+
+/// Whether the buffer holds the string's bytes, as for a span.
+impl Eq<DynString> for ptr::MemBuffer {
+    fn eq(self, _ other: DynString) -> bool {
+        self.span() == other
+    }
+}
+
 // The 32 bytes from `offset` past `base` on must all lie in a live
 // allocation; `ptr::read_padded_word` reads a word that may run past one.
 #[inline(always)]

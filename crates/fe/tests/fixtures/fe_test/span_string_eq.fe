@@ -1,4 +1,5 @@
 use core::{MemBuffer, MemVec}
+use core::abi::DynString
 
 fn buffer<const N: usize>(_ bytes: [u8; N]) -> MemBuffer {
     var buf = MemBuffer::empty()
@@ -47,4 +48,22 @@ fn spans_equal_spans() {
     more.push(4)
     assert!(words.as_slice() == more.as_slice().head(3))
     assert!(words.as_slice() != more.as_slice().tail(1))
+}
+
+#[test]
+fn spans_equal_long_text() {
+    let long = buffer("a literal of thirty-two bytes!!!")
+    assert!(long.span() == "a literal of thirty-two bytes!!!")
+    assert!(long.span() != "a literal of thirty-two bytes!!?")
+    assert!(long.span() != "a literal of thirty-two bytes!!!!")
+    assert!(long.span().head(31) == "a literal of thirty-two bytes!!")
+    assert!(long == "a literal of thirty-two bytes!!!")
+    assert!(long != "a literal of thirty-two bytes!!?")
+    let text = DynString::from_payload(source: long.span())
+    assert!(long.span() == text)
+    assert!(long.span().head(4) != text)
+    // The EVM copies a literal this long from the code.
+    let copied = buffer("a literal of more than ninety-six bytes, which the EVM copies from code instead of a word at a time")
+    assert!(copied.span() == "a literal of more than ninety-six bytes, which the EVM copies from code instead of a word at a time")
+    assert!(copied.span() != "a literal of more than ninety-six bytes, which the EVM copies from code instead of a word at a tim!")
 }

@@ -813,7 +813,7 @@ fn aggregate_fixtures_run_at_every_level() {
 
 #[test]
 fn text_comparisons_run_at_every_level() {
-    for (name, expected_count) in [("string_literal_eq.fe", 1), ("span_string_eq.fe", 2)] {
+    for (name, expected_count) in [("string_literal_eq.fe", 1), ("span_string_eq.fe", 3)] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")
             .join(name);
@@ -1556,7 +1556,7 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
         let arg = args.get(i)
         text.extend_from(arg.span())
         // An argument compares with a literal's text.
-        if arg == "Fe" || arg.span() == "λ" {
+        if arg == "Fe" || arg.span() == "λ" || arg == "an argument of thirty-two bytes!" {
             text.push(33)
         }
         text.push(124)
@@ -1573,12 +1573,15 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
         build(&source, &out, level, &[]);
         let executable = out.join("arguments");
         let result = Command::new(&executable)
-            .args(["", "Fe", "λ", "Fee"])
+            .args(["", "Fe", "λ", "Fee", "an argument of thirty-two bytes!"])
             .arg(OsString::from_vec(vec![0x80, 0xff]))
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
-        assert_eq!(result.stdout, b"|Fe!|\xce\xbb!|Fee|\x80\xff|");
+        assert_eq!(
+            result.stdout,
+            b"|Fe!|\xce\xbb!|Fee|an argument of thirty-two bytes!!|\x80\xff|"
+        );
         for args in [&[][..], &[""][..], &["bounds"][..]] {
             let result = Command::new(&executable).args(args).output().unwrap();
             assert!(

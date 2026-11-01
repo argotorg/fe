@@ -7,7 +7,7 @@ fn short(_ bytes: MemSpan) -> bool {
     bytes == "a literal of thirty-one bytes!!" && bytes != "serve"
 }
 
-// A longer literal is a `DynString`.
+// A longer literal is a `DynString`, which a span compares with too.
 fn long(_ bytes: MemSpan) -> bool {
     bytes == "a literal of thirty-two bytes!!!"
 }
@@ -20,4 +20,5 @@ fn spans(_ a: MemSpan, _ b: MemSpan) -> bool {
 // Buffers and arguments compare with a string's text too.
 fn owners(_ arg: Arg, _ buf: MemBuffer) -> bool {
     arg == "serve" && buf != "a literal of thirty-one bytes!!"
+        && arg != "a literal of thirty-two bytes!!!" && buf == "a literal of thirty-two bytes!!!"
 }
