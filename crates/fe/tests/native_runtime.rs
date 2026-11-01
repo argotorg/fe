@@ -1556,7 +1556,7 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
         let arg = args.get(i)
         text.extend_from(arg.span())
         // An argument compares with a literal's text.
-        if arg.span() == "Fe" || arg.span() == "λ" {
+        if arg == "Fe" || arg.span() == "λ" {
             text.push(33)
         }
         text.push(124)

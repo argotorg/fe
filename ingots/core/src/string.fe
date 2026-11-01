@@ -1,6 +1,6 @@
 use super::ops::Eq
 use super::bytes::{AsBytes, PackedBytes}
-use super::ptr::MemSlice
+use super::ptr::{MemBuffer, MemSlice}
 
 /// Fixed-size string utilities.
 ///
@@ -88,5 +88,12 @@ impl<const N: usize> Eq<String<N>> for MemSlice<u8> {
             word = (word << 8) | (self[i] as u256)
         }
         word == padded_word(other)
+    }
+}
+
+/// Whether the buffer holds the string's text, as for a span.
+impl<const N: usize> Eq<String<N>> for MemBuffer {
+    fn eq(self, _ other: String<N>) -> bool {
+        self.span() == other
     }
 }

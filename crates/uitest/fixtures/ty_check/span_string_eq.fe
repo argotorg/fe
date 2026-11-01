@@ -1,4 +1,5 @@
-use core::MemSpan
+use core::{MemBuffer, MemSpan}
+use std::env::Arg
 
 // A span compares with a string's text, which a `String<N>` holds up to 31
 // bytes of.
@@ -14,4 +15,9 @@ fn long(_ bytes: MemSpan) -> bool {
 // Spans compare element by element.
 fn spans(_ a: MemSpan, _ b: MemSpan) -> bool {
     a == b && a != b.head(1)
+}
+
+// Buffers and arguments compare with a string's text too.
+fn owners(_ arg: Arg, _ buf: MemBuffer) -> bool {
+    arg == "serve" && buf != "a literal of thirty-one bytes!!"
 }
