@@ -1,0 +1,50 @@
+use core::abi::AbiSize
+use core::meta::{Code, FieldQuery, Item, Record, field, field_count, field_type, query_field, type_is}
+use std::derive::{AbiHeadSize, AbiIsDynamic, fold_fields}
+
+struct AbiFacts<T> {}
+impl<T: AbiSize> FieldQuery<(u256, bool)> for AbiFacts<T> {
+    const fn evaluate() -> (u256, bool) {
+        (<T as AbiSize>::HEAD_SIZE, <T as AbiSize>::IS_DYNAMIC)
+    }
+}
+
+pub const fn inspect_abi(_ record: Record) -> Code<Item> {
+    let n = field_count(record)
+    var head_bytes: u256 = 0
+    var u256_fields: u256 = 0
+    var i: usize = 0
+    while i < n {
+        let f = field(record, i)
+        let ty = field_type(f)
+        let (field_head, _field_dyn) = query_field<AbiFacts, (u256, bool)>(ty)
+        head_bytes += field_head
+        if type_is<u256>(ty) {
+            u256_fields += 1
+        }
+        i += 1
+    }
+    let head_expr = fold_fields<AbiHeadSize>(record)
+    let dynamic_expr = fold_fields<AbiIsDynamic>(record)
+    quote {
+        const fn record_abi_summary() -> (u256, u256, u256, bool) {
+            (${head_bytes}, ${u256_fields}, ${head_expr}, ${dynamic_expr})
+        }
+    }
+}
+
+#[generate(inspect_abi)]
+struct Packet {
+    id: u256,
+    ok: bool,
+    amount: u256,
+}
+
+const fn check_summary() -> u256 {
+    let (queried_bytes, u256_count, folded_bytes, dynamic) = record_abi_summary()
+    if !dynamic && queried_bytes == folded_bytes {
+        queried_bytes + u256_count
+    } else {
+        0
+    }
+}

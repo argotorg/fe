@@ -1,0 +1,65 @@
+use core::meta::{Code, Expr, Field, Item, Record, field, field_count, field_type}
+use core::ops::Ord
+use std::derive::{FieldStep, fold_fields}
+
+struct WithinStep {}
+impl FieldStep for WithinStep {
+    const fn unit() -> Code<Expr> {
+        quote { true }
+    }
+
+    const fn step(_ acc: Code<Expr>, _ f: Field) -> Code<Expr> {
+        quote(min, max) {
+            ${acc} && self.${f} >= min && self.${f} <= max
+        }
+    }
+}
+
+pub const fn within(_ record: Record) -> Code<Item> {
+    let _ = field_count(record)
+    let ty = field_type(field(record, 0))
+    let body = fold_fields<WithinStep>(record)
+    quote(min, max) {
+        impl ${record} {
+            pub fn within(self, _ min: ${ty}, _ max: ${ty}) -> bool {
+                ${body}
+            }
+        }
+    }
+}
+
+pub const fn const_within(_ record: Record) -> Code<Item> {
+    let ty = field_type(field(record, 0))
+    let body = fold_fields<WithinStep>(record)
+    quote(min, max) {
+        impl ${record} {
+            pub const fn is_within(self, _ min: ${ty}, _ max: ${ty}) -> bool {
+                ${body}
+            }
+        }
+    }
+}
+
+#[generate(within)]
+struct Box2<T: Ord> {
+    width: T,
+    height: T,
+}
+
+#[generate(const_within)]
+struct U256Box {
+    width: u256,
+    height: u256,
+}
+
+fn check_generic_within() -> bool {
+    let ok = Box2 { width: 10 as u256, height: 20 as u256 }.within(5, 25)
+    let bad = Box2 { width: 10 as u256, height: 30 as u256 }.within(5, 25)
+    ok && !bad
+}
+
+const fn check_within() -> bool {
+    let ok = U256Box { width: 10, height: 20 }.is_within(5, 25)
+    let bad = U256Box { width: 10, height: 30 }.is_within(5, 25)
+    ok && !bad
+}

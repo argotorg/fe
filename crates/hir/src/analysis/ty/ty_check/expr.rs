@@ -360,21 +360,82 @@ impl<'db> TyChecker<'db> {
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
             Expr::ItemQuote(holes) => {
-                for &hole in holes {
-                    self.check_expr_unknown(hole);
-                }
+                let hole_tys = holes
+                    .iter()
+                    .map(|&hole| self.check_expr_unknown(hole).ty)
+                    .collect::<Vec<_>>();
+                let expected_resolved = expected.fold_with(self.db, &mut self.table);
+                let kind = crate::core::meta::code_kind_from_ty(self.db, expected_resolved)
+                    .unwrap_or_else(|| {
+                        use common::generation::FrozenCodeKind;
+                        use parser::ast::{self, prelude::*};
+                        let body = self.env.body();
+                        if let crate::span::HirOrigin::Raw(ptr) =
+                            body.source_map(self.db).expr_map.node_to_source(expr)
+                        {
+                            let root = crate::lower::top_mod_ast(self.db, body.top_mod(self.db));
+                            if let ast::ExprKind::Quote(quote) = ptr.to_node(root.syntax()).kind() {
+                                if quote.pattern().is_some() {
+                                    return FrozenCodeKind::Pat;
+                                }
+                                if quote.item_list().is_some() {
+                                    return FrozenCodeKind::Item;
+                                }
+                                if quote.where_clause().is_some() {
+                                    return FrozenCodeKind::Where;
+                                }
+                                if quote.arm_list().is_some() {
+                                    return FrozenCodeKind::Arm;
+                                }
+                                if let Some(block) = quote.body() {
+                                    let stmts = block.stmts().collect::<Vec<_>>();
+                                    if stmts.is_empty() && block.items().next().is_some() {
+                                        return FrozenCodeKind::Item;
+                                    }
+                                    if !stmts.is_empty()
+                                        && block.items().next().is_none()
+                                        && stmts.iter().all(|stmt| {
+                                            matches!(
+                                                stmt.kind(),
+                                                ast::StmtKind::Expr(inner)
+                                                    if inner.expr().is_some_and(|e| matches!(e.kind(), ast::ExprKind::QuoteHole(_)))
+                                            )
+                                        })
+                                        && !hole_tys.is_empty()
+                                        && let Some(hole_kind) =
+                                            crate::core::meta::code_kind_from_ty(
+                                                self.db,
+                                                hole_tys[0].fold_with(self.db, &mut self.table),
+                                            )
+                                    {
+                                        return hole_kind;
+                                    }
+                                }
+                            }
+                        }
+                        FrozenCodeKind::Expr
+                    });
+                let marker_path = match kind {
+                    common::generation::FrozenCodeKind::Item => "core::meta::Item",
+                    common::generation::FrozenCodeKind::Expr => "core::meta::Expr",
+                    common::generation::FrozenCodeKind::Pat => "core::meta::Pat",
+                    common::generation::FrozenCodeKind::Arm => "core::meta::Arm",
+                    common::generation::FrozenCodeKind::Where => "core::meta::Where",
+                };
                 let code = crate::analysis::ty::corelib::resolve_lib_type_path(
                     self.db,
                     self.env.scope(),
                     "core::meta::Code",
                 );
-                let item = crate::analysis::ty::corelib::resolve_lib_type_path(
+                let marker = crate::analysis::ty::corelib::resolve_lib_type_path(
                     self.db,
                     self.env.scope(),
-                    "core::meta::Item",
+                    marker_path,
                 );
-                match (code, item) {
-                    (Some(code), Some(item)) => ExprProp::new(TyId::app(self.db, code, item), true),
+                match (code, marker) {
+                    (Some(code), Some(marker)) => {
+                        ExprProp::new(TyId::app(self.db, code, marker), true)
+                    }
                     _ => ExprProp::invalid(self.db),
                 }
             }
@@ -6069,6 +6130,8 @@ fn resolve_ident_expr<'db>(
     lowering_cx: &LoweringContext<'db>,
 ) -> ResolvedPathInBody<'db> {
     let ident = path.ident(db).unwrap();
+    let local_ident = path.local_ident(db).unwrap_or(ident);
+    let hygiene_scope = path.hygiene_scope(db);
 
     let resolve_bucket = |bucket: &NameResBucket<'db>, scope| {
         // First, surface any ambiguity/conflict in the bucket as a dedicated
@@ -6102,6 +6165,16 @@ fn resolve_ident_expr<'db>(
         let Ok(res) = bucket.pick_any(&[NameDomain::VALUE, NameDomain::TYPE]) else {
             return ResolvedPathInBody::Invalid;
         };
+        if path.hygiene_scope(db).is_some()
+            && matches!(
+                res.kind,
+                crate::analysis::name_resolution::NameResKind::Scope(
+                    ScopeId::FuncParam(..) | ScopeId::GenericParam(ItemKind::Func(_), _)
+                )
+            )
+        {
+            return ResolvedPathInBody::Invalid;
+        }
         let Ok(reso) =
             resolve_name_res_with_minter(db, res, path, scope, env.assumptions(), lowering_cx)
         else {
@@ -6114,31 +6187,33 @@ fn resolve_ident_expr<'db>(
 
     loop {
         let block = env.get_block(current_idx);
-        if let Some(binding) = block.lookup_var(ident) {
+        if let Some(binding) = block.lookup_var(local_ident) {
             return ResolvedPathInBody::Binding(binding);
         }
 
-        let scope = block.scope;
-        let directive = QueryDirective::for_scope(db, scope).disallow_lex();
-        let query = EarlyNameQueryId::new(db, ident, scope, directive);
-        let bucket = resolve_query(db, query);
-
-        let resolved = resolve_bucket(bucket, scope);
-        if matches!(resolved, ResolvedPathInBody::Invalid) {
-            if current_idx == 0 {
-                break;
+        // A spliced quote keeps its producer's free names. Only its hygienic
+        // local binders may resolve in the enclosing generated body.
+        if hygiene_scope.is_none() {
+            let scope = block.scope;
+            let directive = QueryDirective::for_scope(db, scope).disallow_lex();
+            let query = EarlyNameQueryId::new(db, ident, scope, directive);
+            let bucket = resolve_query(db, query);
+            let resolved = resolve_bucket(bucket, scope);
+            if !matches!(resolved, ResolvedPathInBody::Invalid) {
+                return resolved;
             }
-            current_idx -= 1;
-        } else {
-            return resolved;
         }
+        if current_idx == 0 {
+            break;
+        }
+        current_idx -= 1;
     }
 
-    let body_scope = env.body().scope();
+    let body_scope = hygiene_scope.unwrap_or_else(|| env.body().scope());
     let directive = QueryDirective::for_scope(db, body_scope);
     let query = EarlyNameQueryId::new(db, ident, body_scope, directive);
     let bucket = resolve_query(db, query);
-    match resolve_bucket(bucket, env.scope()) {
+    match resolve_bucket(bucket, hygiene_scope.unwrap_or_else(|| env.scope())) {
         ResolvedPathInBody::Invalid => ResolvedPathInBody::NewBinding(ident),
         r => r,
     }

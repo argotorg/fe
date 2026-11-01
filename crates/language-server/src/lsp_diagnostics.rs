@@ -74,6 +74,7 @@ impl LspDiagnostics for DriverDataBase {
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>> {
         if ingot.kind(self) == IngotKind::StandAlone
             && self.generation_inputs().functions(self).is_empty()
+            && self.generation_inputs().requests(self).is_empty()
         {
             for (url, file) in ingot.files(self).iter() {
                 if !matches!(file.kind(self), Some(IngotFileKind::Source)) {

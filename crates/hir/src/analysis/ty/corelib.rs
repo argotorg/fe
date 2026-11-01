@@ -97,6 +97,17 @@ pub fn resolve_lib_trait_path<'db>(
     resolve_lib_trait(db, scope, path_id)
 }
 
+/// Field queries are evaluated without a lexical named opening. Their canonical
+/// protocol therefore has only ordinary implementations; unrelated user traits
+/// with the same spelling retain the usual named-implementation behavior.
+pub(crate) fn is_ordinary_field_query_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> bool {
+    trait_.scope().top_mod(db).ingot(db).kind(db) == IngotKind::Core
+        && resolve_lib_trait_path(db, trait_.scope(), "core::meta::FieldQuery") == Some(trait_)
+}
+
 /// Returns `true` if `func` is the library function at the fully-qualified
 /// `core::...` or `std::...` path.
 ///
@@ -284,6 +295,13 @@ pub(crate) enum CtfeExternIntrinsic {
     MetaFieldCount,
     MetaField,
     MetaFieldType,
+    MetaBinders,
+    MetaBinderAt,
+    MetaVariantCount,
+    MetaVariant,
+    MetaTypeIs,
+    MetaQueryField,
+    MetaEmpty,
     SizeOf,
     StorageSlots,
     Keccak256,
@@ -318,6 +336,20 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(CtfeExternIntrinsic::MetaField)
     } else if lib_func_matches(db, func, "core::meta::field_type") {
         Some(CtfeExternIntrinsic::MetaFieldType)
+    } else if lib_func_matches(db, func, "core::meta::binders") {
+        Some(CtfeExternIntrinsic::MetaBinders)
+    } else if lib_func_matches(db, func, "core::meta::binder_at") {
+        Some(CtfeExternIntrinsic::MetaBinderAt)
+    } else if lib_func_matches(db, func, "core::meta::variant_count") {
+        Some(CtfeExternIntrinsic::MetaVariantCount)
+    } else if lib_func_matches(db, func, "core::meta::variant") {
+        Some(CtfeExternIntrinsic::MetaVariant)
+    } else if lib_func_matches(db, func, "core::meta::type_is") {
+        Some(CtfeExternIntrinsic::MetaTypeIs)
+    } else if lib_func_matches(db, func, "core::meta::query_field") {
+        Some(CtfeExternIntrinsic::MetaQueryField)
+    } else if lib_func_matches(db, func, "core::meta::empty") {
+        Some(CtfeExternIntrinsic::MetaEmpty)
     } else if lib_func_matches(db, func, "core::intrinsic::size_of") {
         Some(CtfeExternIntrinsic::SizeOf)
     } else if lib_func_matches(db, func, "core::intrinsic::storage_slots") {

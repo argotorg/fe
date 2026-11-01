@@ -5049,6 +5049,14 @@ impl<'db> ImplTrait<'db> {
             Ok(implementor) => {
                 let mut diags = Vec::new();
                 if self.selection_name(db).is_some()
+                    && crate::analysis::ty::corelib::is_ordinary_field_query_trait(
+                        db,
+                        implementor.trait_def(db),
+                    )
+                {
+                    diags.push(TraitLowerDiag::NamedFieldQuery { primary: self }.into());
+                }
+                if self.selection_name(db).is_some()
                     && let Some(mismatch) =
                         crate::analysis::ty::trait_def::named_output_mismatch(db, self, implementor)
                 {

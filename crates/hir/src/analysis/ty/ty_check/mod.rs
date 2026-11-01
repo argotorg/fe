@@ -1295,9 +1295,15 @@ fn const_body_ctfe_diags_with_context<'db>(
                     && crate::analysis::semantic::consts::verify_sem_const_shape(db, value).is_ok();
                 // A completely verified compile-time token is a known constant;
                 // it is intentionally never reified into a runtime seal value.
-                if (has_meta_carrier && !checked_metadata)
-                    || (!has_meta_carrier
-                        && reify_runtime_const_for_ty(db, semantic, expected, value).is_none())
+                if has_meta_carrier && !checked_metadata {
+                    push_const_eval_diag(
+                        &mut diags,
+                        body,
+                        context,
+                        "compile-time metadata token must be compiler-issued",
+                    );
+                } else if !checked_metadata
+                    && reify_runtime_const_for_ty(db, semantic, expected, value).is_none()
                 {
                     push_const_eval_diag(
                         &mut diags,
@@ -3964,7 +3970,7 @@ impl<'db> TyChecker<'db> {
                 let Some(LocalBinding::Local { .. }) = self.env.pat_binding(pat) else {
                     return;
                 };
-                if let Some(ident) = path.as_ident(self.db) {
+                if let Some(ident) = path.local_ident(self.db) {
                     let current = self.env.current_block_idx();
                     if self.env.get_block(current).lookup_var(ident).is_none() {
                         let binding = LocalBinding::local(
@@ -4110,7 +4116,8 @@ impl<'db> TyChecker<'db> {
             if invisible.is_some() {
                 return;
             }
-            if !reso.is_visible_from(self.db, scope) {
+            let vis_scope = path.hygiene_scope(self.db).unwrap_or(scope);
+            if !reso.is_visible_from(self.db, vis_scope) {
                 invisible = Some((path, reso.name_span(self.db)));
             }
         };

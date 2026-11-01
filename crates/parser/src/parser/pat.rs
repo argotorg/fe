@@ -38,6 +38,10 @@ pub(crate) fn parse_pat_operand<S: TokenStream>(
         Some(Dot2) => parser
             .parse_cp(RestPatScope::default(), Some(checkpoint))
             .unwrap(),
+        Some(Dollar) => parser.parse_cp(
+            super::expr_atom::QuoteHolePatScope::default(),
+            Some(checkpoint),
+        )?,
         Some(LParen) => parser.parse_cp(TuplePatScope::default(), Some(checkpoint))?,
         Some(kind) if is_lit(kind) => parser
             .parse_cp(LitPatScope::default(), Some(checkpoint))
@@ -61,7 +65,7 @@ fn bump_binding_marker<S: TokenStream>(parser: &mut Parser<S>) {
         return;
     };
     match token.syntax_kind() {
-        Underscore | Dot2 | LParen => {}
+        Underscore | Dot2 | LParen | Dollar => {}
         kind if is_lit(kind) => {}
         MutKw | MaybeMutKw | RefKw | VarKw => {
             parser.error_msg_on_current_token(&format!(

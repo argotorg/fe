@@ -15,6 +15,7 @@ ast_node! {
     | SK::PathTuplePat
     | SK::RecordPat
     | SK::OrPat
+    | SK::QuoteHolePat
 }
 impl Pat {
     /// Returns the specific kind of the pattern.
@@ -30,6 +31,7 @@ impl Pat {
             }
             SK::RecordPat => PatKind::Record(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::OrPat => PatKind::Or(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::QuoteHolePat => PatKind::QuoteHole(AstNode::cast(self.syntax().clone()).unwrap()),
             _ => unreachable!(),
         }
     }
@@ -176,6 +178,17 @@ impl OrPat {
     }
 }
 
+ast_node! {
+    /// `${pat}` in pattern position.
+    pub struct QuoteHolePat,
+    SK::QuoteHolePat,
+}
+impl QuoteHolePat {
+    pub fn expr(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
+}
+
 /// A specific pattern kind.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum PatKind {
@@ -187,6 +200,7 @@ pub enum PatKind {
     PathTuple(PathTuplePat),
     Record(RecordPat),
     Or(OrPat),
+    QuoteHole(QuoteHolePat),
 }
 
 #[cfg(test)]

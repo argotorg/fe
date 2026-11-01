@@ -137,6 +137,12 @@ impl super::Parse for ItemScope {
             parser.error(&error_msg);
         }
 
+        if at_quoted_item_root(parser)
+            && !matches!(parser.current_kind(), Some(FnKw | ConstKw | ImplKw))
+        {
+            parser.error_msg_on_current_token("only functions, constants and impls can be quoted");
+        }
+
         parser.expect(
             &[
                 ModKw,
@@ -158,7 +164,7 @@ impl super::Parse for ItemScope {
 
         match parser.current_kind() {
             Some(ModKw) => parser.parse_cp(ModScope::default(), checkpoint),
-            Some(FnKw) => parser.parse_cp(FuncScope::default(), checkpoint),
+            Some(FnKw) => parser.parse_cp(FuncScope::new(quoted_fn_scope(parser)), checkpoint),
             Some(StructKw) => parser.parse_cp(super::struct_::StructScope::default(), checkpoint),
             Some(ContractKw) => parser.parse_cp(ContractScope::default(), checkpoint),
             Some(MsgKw) => parser.parse_cp(MsgScope::default(), checkpoint),
@@ -171,7 +177,7 @@ impl super::Parse for ItemScope {
             Some(UseKw) => parser.parse_cp(UseScope::default(), checkpoint),
             Some(ConstKw) => {
                 if is_fn_item_head(parser) {
-                    parser.parse_cp(FuncScope::default(), checkpoint)
+                    parser.parse_cp(FuncScope::new(quoted_fn_scope(parser)), checkpoint)
                 } else {
                     parser.parse_cp(ConstScope::default(), checkpoint)
                 }
@@ -183,6 +189,30 @@ impl super::Parse for ItemScope {
         }?;
 
         Ok(())
+    }
+}
+
+/// A quoted function may become a method where it is spliced, so it may take
+/// `self`.
+/// Only the immediate output items have the bounded Code<Item> whitelist.
+/// Bodies of those items contain ordinary Fe declarations, just like authored
+/// function bodies; being a descendant of a quote does not change that grammar.
+fn at_quoted_item_root<S: TokenStream>(parser: &Parser<S>) -> bool {
+    let mut parents = parser.parents.iter().rev().skip(1);
+    match parents.next().map(|entry| entry.kind) {
+        Some(SyntaxKind::QuoteItemList) => true,
+        Some(SyntaxKind::BlockExpr) => parents
+            .next()
+            .is_some_and(|entry| entry.kind == SyntaxKind::QuoteExpr),
+        _ => false,
+    }
+}
+
+fn quoted_fn_scope<S: TokenStream>(parser: &Parser<S>) -> FuncDefScope {
+    if at_quoted_item_root(parser) {
+        FuncDefScope::Impl
+    } else {
+        FuncDefScope::Normal
     }
 }
 
@@ -823,7 +853,10 @@ impl super::Parse for TraitConstItemScope {
 
         parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Colon, SyntaxKind::Eq]);
 
-        if parser.find_and_pop(
+        if parser.at_quote_hole() {
+            parser.pop_recovery_stack();
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+        } else if parser.find_and_pop(
             SyntaxKind::Ident,
             ExpectedKind::Name(SyntaxKind::TraitConstItem),
         )? {
@@ -961,7 +994,10 @@ impl super::Parse for ConstScope {
         parser.set_newline_as_trivia(false);
         parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Colon, SyntaxKind::Eq]);
 
-        if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Const))? {
+        if parser.at_quote_hole() {
+            parser.pop_recovery_stack();
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+        } else if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Const))? {
             parser.bump();
         }
         if parser.find_and_pop(
@@ -1076,6 +1112,11 @@ fn parse_fn_item_block<S: TokenStream>(
             break;
         }
 
+        if parser.at_quote_hole() {
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+            continue;
+        }
+
         let mut checkpoint = attr::parse_attr_list(parser)?;
         let modifiers = parse_item_modifiers(parser, &mut checkpoint);
 
@@ -1114,6 +1155,11 @@ fn parse_trait_item_block<S: TokenStream>(
         parser.set_newline_as_trivia(true);
         if matches!(parser.current_kind(), Some(SyntaxKind::RBrace) | None) {
             break;
+        }
+
+        if parser.at_quote_hole() {
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+            continue;
         }
 
         let mut checkpoint = attr::parse_attr_list(parser)?;

@@ -990,11 +990,13 @@ impl DiagnosticVoucher for DefConflictError<'_> {
 
 impl DiagnosticVoucher for FuncBodyDiag<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        match self {
+        let mut diagnostic = match self {
             Self::Ty(diag) => diag.to_complete(db),
             Self::Body(diag) => diag.to_complete(db),
             Self::NameRes(diag) => diag.to_complete(db),
-        }
+        };
+        diagnostic.severity = self.severity();
+        diagnostic
     }
 }
 
@@ -1246,6 +1248,10 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     PathKind::Ident { ident, .. } => ident
                         .to_opt()
                         .map_or_else(|| segment.pretty_print(db), |id| id.data(db).to_owned()),
+                    PathKind::BoundIngot { display, .. } => display.data(db).to_owned(),
+                    PathKind::BoundItem { display, .. } | PathKind::InScope { display, .. } => {
+                        display.pretty_print(db)
+                    }
                     PathKind::QualifiedType { type_, trait_ } => {
                         let ty = type_.pretty_print(db);
                         let trait_name = trait_.pretty_print(db);
@@ -5794,6 +5800,13 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
         let error_code =
             GlobalErrorCode::new(DiagnosticPass::ImplTraitDefinition, self.local_code());
         match self {
+            Self::NamedFieldQuery { primary } => primary_diag(
+                Severity::Error,
+                "FieldQuery requires an ordinary implementation",
+                "field queries run outside lexical implementation openings",
+                primary.span().resolve(db),
+                error_code,
+            ),
             Self::NamedOutputsNeedOrdinary { primary } => primary_diag(
                 Severity::Error,
                 "named associated outputs require an ordinary implementation",

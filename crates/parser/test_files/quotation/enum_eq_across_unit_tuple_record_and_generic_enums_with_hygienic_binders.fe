@@ -1,0 +1,148 @@
+use core::meta::{Arm, Code, Expr, Item, Record, Where, binders, empty, field, field_count, field_type, variant, variant_count}
+use core::ops::Eq
+
+pub const fn enum_eq(_ record: Record) -> Code<Item> {
+    let n = variant_count(record)
+
+    var arms = empty<Arm>()
+    var bounds = empty<Where>()
+    var i: usize = 0
+    while i < n {
+        let v = variant(record, i)
+        let lhs = binders(v, 0)
+        let rhs = binders(v, 1)
+        let m = field_count(v)
+
+        var eq: Code<Expr> = quote { true }
+        var j: usize = 0
+        while j < m {
+            let f = field(v, j)
+            let part = quote { ${lhs.at(f)} == ${rhs.at(f)} }
+            eq = quote { ${eq} && ${part} }
+            bounds = quote { where ${bounds}, ${field_type(f)}: Eq }
+            j += 1
+        }
+
+        arms = quote(other) {
+            ${arms}
+            ${lhs} => match other {
+                ${rhs} => ${eq}
+                _ => false
+            }
+        }
+        i += 1
+    }
+
+    quote(other) {
+        impl Eq for ${record} where ${bounds} {
+            fn eq(self, _ other: Self) -> bool {
+                match self {
+                    ${arms}
+                }
+            }
+        }
+    }
+}
+
+pub const fn const_enum_eq(_ record: Record) -> Code<Item> {
+    let n = variant_count(record)
+
+    var arms = empty<Arm>()
+    var i: usize = 0
+    while i < n {
+        let v = variant(record, i)
+        let lhs = binders(v, 0)
+        let rhs = binders(v, 1)
+        let m = field_count(v)
+
+        var eq: Code<Expr> = quote { true }
+        var j: usize = 0
+        while j < m {
+            let f = field(v, j)
+            let part = quote { ${lhs.at(f)} == ${rhs.at(f)} }
+            eq = quote { ${eq} && ${part} }
+            j += 1
+        }
+
+        arms = quote(other) {
+            ${arms}
+            ${lhs} => match other {
+                ${rhs} => ${eq}
+                _ => false
+            }
+        }
+        i += 1
+    }
+
+    quote(other) {
+        impl ${record} {
+            pub const fn is_eq(self, _ other: Self) -> bool {
+                match self {
+                    ${arms}
+                }
+            }
+        }
+    }
+}
+
+#[generate(enum_eq)]
+#[generate(const_enum_eq)]
+enum Direction {
+    North,
+    South,
+}
+
+#[generate(enum_eq)]
+#[generate(const_enum_eq)]
+enum Shape {
+    Unit,
+    Scale(u256),
+    Box { w: u256, h: u256 },
+    Pair { other: u256, x: u256 },
+}
+
+#[generate(enum_eq)]
+enum Envelope<T: Eq> {
+    Empty,
+    Value(T),
+    Pair { other: T, x: T },
+}
+
+#[generate(enum_eq)]
+enum Opt<T> {
+    Nothing,
+    Just(T),
+}
+
+fn check_generic_enums() -> bool {
+    let p1 = Envelope::Pair { other: 10 as u256, x: 20 as u256 }
+    let p2 = Envelope::Pair { other: 10 as u256, x: 20 as u256 }
+    let p3 = Envelope::Pair { other: 99 as u256, x: 20 as u256 }
+    let e1 = p1 == p2
+    let e2 = p1 != p3
+    let j1: Opt<u256> = Opt::Just(7)
+    let j2: Opt<u256> = Opt::Just(7)
+    let n1: Opt<u256> = Opt::Nothing
+    let o1 = j1 == j2
+    let o2 = j1 != n1
+    e1 && e2 && o1 && o2
+}
+
+const fn check_enums() -> bool {
+    let d1 = Direction::North.is_eq(Direction::North)
+    let d2 = !Direction::North.is_eq(Direction::South)
+    let s1 = Shape::Scale(7).is_eq(Shape::Scale(7))
+    let s2 = !Shape::Scale(7).is_eq(Shape::Scale(8))
+    let b1 = Shape::Box { w: 3, h: 4 }
+    let b2 = Shape::Box { w: 3, h: 4 }
+    let b3 = Shape::Box { w: 3, h: 4 }
+    let s3 = b1.is_eq(b2)
+    let s4 = !b3.is_eq(Shape::Unit)
+    let sp1 = Shape::Pair { other: 10, x: 20 }
+    let sp2 = Shape::Pair { other: 10, x: 20 }
+    let sp3 = Shape::Pair { other: 10, x: 20 }
+    let sp4 = Shape::Pair { other: 99, x: 20 }
+    let s5 = sp1.is_eq(sp2)
+    let s6 = !sp3.is_eq(sp4)
+    d1 && d2 && s1 && s2 && s3 && s4 && s5 && s6
+}

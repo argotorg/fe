@@ -210,16 +210,50 @@ fn test_borrow_bypass_executes() {
     );
     assert!(error.range.start() > 0.into());
 
-    let valid_twin = source
-        .replace(
-            "let second = consume(x)",
-            "let second = consume(NonCopy { v: 20 })",
-        )
-        .replace(
-            "var base: u256 = 0\n    let bumped = alias_bump(mut base, mut base)",
-            "var base: u256 = 0\n    var other: u256 = 0\n    let bumped = alias_bump(mut base, mut other)",
-        );
-    let (db, file) = input(&valid_twin);
+    let (db, file) = input(
+        r#"use core::meta::{Code, Item, Record, field_count}
+
+struct NonCopy {
+    v: u256,
+}
+
+const fn consume(_ x: own NonCopy) -> u256 {
+    x.v
+}
+
+const fn alias_bump(_ a: mut u256, _ b: mut u256) -> u256 {
+    a = a + b
+    a
+}
+
+pub const fn inspect(_ r: Record) -> Code<Item> {
+    let x = NonCopy { v: 20 }
+    let first = consume(x)
+    let second = consume(NonCopy { v: 20 })
+    var base: u256 = 0
+    var other: u256 = 0
+    let bumped = alias_bump(mut base, mut other)
+    let words: usize = (first + second + bumped).downcast_unchecked()
+    let total: usize = words + field_count(r)
+    quote {
+        fn generated() -> usize {
+            ${total}
+        }
+    }
+}
+
+#[generate(inspect)]
+pub struct Pair {
+    pub a: u256,
+    pub b: u256,
+}
+
+#[test]
+fn test_borrow_bypass_executes() {
+    assert(generated() == 42)
+}
+"#,
+    );
     assert!(prepare_file(&db, file).unwrap().is_some());
 }
 
@@ -312,7 +346,22 @@ fn runtime_metadata_refuses_and_compile_time_quotes_stay_valid() {
         assert!(!diagnostics.contains("16-0004"), "{diagnostics}");
     }
     for source in [
-        "use core::meta::{Code, Item}\nconst fn helper_with_local_quote() -> usize {\n    let _q: Code<Item> = quote {\n        fn generated() -> usize {\n            1\n        }\n    }\n    1\n}\n#[test]\nfn test_helper() {\n    assert(helper_with_local_quote() == 1)\n}\n",
+        r#"use core::meta::{Code, Item}
+
+const fn helper_with_local_quote() -> usize {
+    let _q: Code<Item> = quote {
+        fn generated() -> usize {
+            1
+        }
+    }
+    1
+}
+
+#[test]
+fn test_helper() {
+    assert(helper_with_local_quote() == 1)
+}
+"#,
         "use core::meta::{Code, Item, Record}\nconst fn compile_time_tuple(_ value: (Record, usize)) -> usize { let _q: Code<Item> = quote { fn generated() -> usize { 1 } }\n value.1 }\n",
         "use core::meta::{Code, Item}\nconst Q: Code<Item> = quote { fn generated() -> usize { 1 } }\n",
     ] {
@@ -525,6 +574,974 @@ struct Pair {
         ),
         "expected 2 + (30 + 40) + 10 = 82, got {value:?}"
     );
+}
+
+#[test]
+fn generic_struct_within_with_fold_fields_and_field_type_splice() {
+    let source = r#"use core::meta::{Code, Expr, Field, Item, Record, field, field_count, field_type}
+use core::ops::Ord
+use std::derive::{FieldStep, fold_fields}
+
+struct WithinStep {}
+impl FieldStep for WithinStep {
+    const fn unit() -> Code<Expr> {
+        quote { true }
+    }
+
+    const fn step(_ acc: Code<Expr>, _ f: Field) -> Code<Expr> {
+        quote(min, max) {
+            ${acc} && self.${f} >= min && self.${f} <= max
+        }
+    }
+}
+
+pub const fn within(_ record: Record) -> Code<Item> {
+    let _ = field_count(record)
+    let ty = field_type(field(record, 0))
+    let body = fold_fields<WithinStep>(record)
+    quote(min, max) {
+        impl ${record} {
+            pub fn within(self, _ min: ${ty}, _ max: ${ty}) -> bool {
+                ${body}
+            }
+        }
+    }
+}
+
+pub const fn const_within(_ record: Record) -> Code<Item> {
+    let ty = field_type(field(record, 0))
+    let body = fold_fields<WithinStep>(record)
+    quote(min, max) {
+        impl ${record} {
+            pub const fn is_within(self, _ min: ${ty}, _ max: ${ty}) -> bool {
+                ${body}
+            }
+        }
+    }
+}
+
+#[generate(within)]
+struct Box2<T: Ord> {
+    width: T,
+    height: T,
+}
+
+#[generate(const_within)]
+struct U256Box {
+    width: u256,
+    height: u256,
+}
+
+fn check_generic_within() -> bool {
+    let ok = Box2 { width: 10 as u256, height: 20 as u256 }.within(5, 25)
+    let bad = Box2 { width: 10 as u256, height: 30 as u256 }.within(5, 25)
+    ok && !bad
+}
+
+const fn check_within() -> bool {
+    let ok = U256Box { width: 10, height: 20 }.is_within(5, 25)
+    let bad = U256Box { width: 10, height: 30 }.is_within(5, 25)
+    ok && !bad
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file).unwrap().unwrap();
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    let diags = output.run_on_top_mod(module);
+    assert!(diags.is_empty(), "{}", diags.format_diags(&output));
+    let function = module
+        .all_funcs(&output)
+        .iter()
+        .find(|f| {
+            f.name(&output)
+                .to_opt()
+                .is_some_and(|name| name.data(&output) == "check_within")
+        })
+        .unwrap();
+    let owner = BodyOwner::Func(*function, None);
+    let result = eval_body_owner_const(
+        &output,
+        owner,
+        GenericSubst::for_body_owner(&output, owner, vec![]),
+    );
+    let EvalOutcome::Ready(value) = result else {
+        panic!("{result:?}")
+    };
+    assert!(matches!(
+        value.value(&output),
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(true),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn enum_eq_across_unit_tuple_record_and_generic_enums_with_hygienic_binders() {
+    let source = r#"use core::meta::{Arm, Code, Expr, Item, Record, Where, binders, empty, field, field_count, field_type, variant, variant_count}
+use core::ops::Eq
+
+pub const fn enum_eq(_ record: Record) -> Code<Item> {
+    let n = variant_count(record)
+
+    var arms = empty<Arm>()
+    var bounds = empty<Where>()
+    var i: usize = 0
+    while i < n {
+        let v = variant(record, i)
+        let lhs = binders(v, 0)
+        let rhs = binders(v, 1)
+        let m = field_count(v)
+
+        var eq: Code<Expr> = quote { true }
+        var j: usize = 0
+        while j < m {
+            let f = field(v, j)
+            let part = quote { ${lhs.at(f)} == ${rhs.at(f)} }
+            eq = quote { ${eq} && ${part} }
+            bounds = quote { where ${bounds}, ${field_type(f)}: Eq }
+            j += 1
+        }
+
+        arms = quote(other) {
+            ${arms}
+            ${lhs} => match other {
+                ${rhs} => ${eq}
+                _ => false
+            }
+        }
+        i += 1
+    }
+
+    quote(other) {
+        impl Eq for ${record} where ${bounds} {
+            fn eq(self, _ other: Self) -> bool {
+                match self {
+                    ${arms}
+                }
+            }
+        }
+    }
+}
+
+pub const fn const_enum_eq(_ record: Record) -> Code<Item> {
+    let n = variant_count(record)
+
+    var arms = empty<Arm>()
+    var i: usize = 0
+    while i < n {
+        let v = variant(record, i)
+        let lhs = binders(v, 0)
+        let rhs = binders(v, 1)
+        let m = field_count(v)
+
+        var eq: Code<Expr> = quote { true }
+        var j: usize = 0
+        while j < m {
+            let f = field(v, j)
+            let part = quote { ${lhs.at(f)} == ${rhs.at(f)} }
+            eq = quote { ${eq} && ${part} }
+            j += 1
+        }
+
+        arms = quote(other) {
+            ${arms}
+            ${lhs} => match other {
+                ${rhs} => ${eq}
+                _ => false
+            }
+        }
+        i += 1
+    }
+
+    quote(other) {
+        impl ${record} {
+            pub const fn is_eq(self, _ other: Self) -> bool {
+                match self {
+                    ${arms}
+                }
+            }
+        }
+    }
+}
+
+#[generate(enum_eq)]
+#[generate(const_enum_eq)]
+enum Direction {
+    North,
+    South,
+}
+
+#[generate(enum_eq)]
+#[generate(const_enum_eq)]
+enum Shape {
+    Unit,
+    Scale(u256),
+    Box { w: u256, h: u256 },
+    Pair { other: u256, x: u256 },
+}
+
+#[generate(enum_eq)]
+enum Envelope<T: Eq> {
+    Empty,
+    Value(T),
+    Pair { other: T, x: T },
+}
+
+#[generate(enum_eq)]
+enum Opt<T> {
+    Nothing,
+    Just(T),
+}
+
+fn check_generic_enums() -> bool {
+    let p1 = Envelope::Pair { other: 10 as u256, x: 20 as u256 }
+    let p2 = Envelope::Pair { other: 10 as u256, x: 20 as u256 }
+    let p3 = Envelope::Pair { other: 99 as u256, x: 20 as u256 }
+    let e1 = p1 == p2
+    let e2 = p1 != p3
+    let j1: Opt<u256> = Opt::Just(7)
+    let j2: Opt<u256> = Opt::Just(7)
+    let n1: Opt<u256> = Opt::Nothing
+    let o1 = j1 == j2
+    let o2 = j1 != n1
+    e1 && e2 && o1 && o2
+}
+
+const fn check_enums() -> bool {
+    let d1 = Direction::North.is_eq(Direction::North)
+    let d2 = !Direction::North.is_eq(Direction::South)
+    let s1 = Shape::Scale(7).is_eq(Shape::Scale(7))
+    let s2 = !Shape::Scale(7).is_eq(Shape::Scale(8))
+    let b1 = Shape::Box { w: 3, h: 4 }
+    let b2 = Shape::Box { w: 3, h: 4 }
+    let b3 = Shape::Box { w: 3, h: 4 }
+    let s3 = b1.is_eq(b2)
+    let s4 = !b3.is_eq(Shape::Unit)
+    let sp1 = Shape::Pair { other: 10, x: 20 }
+    let sp2 = Shape::Pair { other: 10, x: 20 }
+    let sp3 = Shape::Pair { other: 10, x: 20 }
+    let sp4 = Shape::Pair { other: 99, x: 20 }
+    let s5 = sp1.is_eq(sp2)
+    let s6 = !sp3.is_eq(sp4)
+    d1 && d2 && s1 && s2 && s3 && s4 && s5 && s6
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file).unwrap().unwrap();
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    let diags = output.run_on_top_mod(module);
+    assert!(diags.is_empty(), "{}", diags.format_diags(&output));
+    let function = module
+        .all_funcs(&output)
+        .iter()
+        .find(|f| {
+            f.name(&output)
+                .to_opt()
+                .is_some_and(|name| name.data(&output) == "check_enums")
+        })
+        .unwrap();
+    let owner = BodyOwner::Func(*function, None);
+    let result = eval_body_owner_const(
+        &output,
+        owner,
+        GenericSubst::for_body_owner(&output, owner, vec![]),
+    );
+    let EvalOutcome::Ready(value) = result else {
+        panic!("{result:?}")
+    };
+    assert!(matches!(
+        value.value(&output),
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(true),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn field_type_queries_and_abi_derive_helpers_evaluate_in_provider() {
+    let source = r#"use core::abi::AbiSize
+use core::meta::{Code, FieldQuery, Item, Record, field, field_count, field_type, query_field, type_is}
+use std::derive::{AbiHeadSize, AbiIsDynamic, fold_fields}
+
+struct AbiFacts<T> {}
+impl<T: AbiSize> FieldQuery<(u256, bool)> for AbiFacts<T> {
+    const fn evaluate() -> (u256, bool) {
+        (<T as AbiSize>::HEAD_SIZE, <T as AbiSize>::IS_DYNAMIC)
+    }
+}
+
+pub const fn inspect_abi(_ record: Record) -> Code<Item> {
+    let n = field_count(record)
+    var head_bytes: u256 = 0
+    var u256_fields: u256 = 0
+    var i: usize = 0
+    while i < n {
+        let f = field(record, i)
+        let ty = field_type(f)
+        let (field_head, _field_dyn) = query_field<AbiFacts, (u256, bool)>(ty)
+        head_bytes += field_head
+        if type_is<u256>(ty) {
+            u256_fields += 1
+        }
+        i += 1
+    }
+    let head_expr = fold_fields<AbiHeadSize>(record)
+    let dynamic_expr = fold_fields<AbiIsDynamic>(record)
+    quote {
+        const fn record_abi_summary() -> (u256, u256, u256, bool) {
+            (${head_bytes}, ${u256_fields}, ${head_expr}, ${dynamic_expr})
+        }
+    }
+}
+
+#[generate(inspect_abi)]
+struct Packet {
+    id: u256,
+    ok: bool,
+    amount: u256,
+}
+
+const fn check_summary() -> u256 {
+    let (queried_bytes, u256_count, folded_bytes, dynamic) = record_abi_summary()
+    if !dynamic && queried_bytes == folded_bytes {
+        queried_bytes + u256_count
+    } else {
+        0
+    }
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file).unwrap().unwrap();
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    assert!(output.run_on_top_mod(module).is_empty());
+    let function = module
+        .all_funcs(&output)
+        .iter()
+        .find(|f| {
+            f.name(&output)
+                .to_opt()
+                .is_some_and(|name| name.data(&output) == "check_summary")
+        })
+        .unwrap();
+    let owner = BodyOwner::Func(*function, None);
+    let result = eval_body_owner_const(
+        &output,
+        owner,
+        GenericSubst::for_body_owner(&output, owner, vec![]),
+    );
+    let EvalOutcome::Ready(value) = result else {
+        panic!("{result:?}")
+    };
+    assert!(
+        matches!(
+            value.value(&output),
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } if value.to_string() == "98"
+        ),
+        "expected 3 * 32 + 2 = 98, got {value:?}"
+    );
+}
+
+#[test]
+fn quote_binder_hygiene_rejects_sibling_arm_after_match_nested_group_and_foreign_field() {
+    let sibling_arm = r#"use core::meta::{Code, Item, Record, binders, field, variant}
+
+pub const fn bad(_ record: Record) -> Code<Item> {
+    let v = variant(record, 0)
+    let lhs = binders(v, 0)
+    let f = field(v, 0)
+    quote {
+        impl ${record} {
+            pub fn check(self) -> bool {
+                match self {
+                    ${lhs} => true,
+                    _ => ${lhs.at(f)} == 0
+                }
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+enum Choice {
+    One(u256),
+    Two,
+}
+"#;
+    let after_match = r#"use core::meta::{Code, Item, Record, binders, field, variant}
+
+pub const fn bad(_ record: Record) -> Code<Item> {
+    let v = variant(record, 0)
+    let lhs = binders(v, 0)
+    let f = field(v, 0)
+    quote {
+        impl ${record} {
+            pub fn check(self) -> bool {
+                let matched = match self {
+                    ${lhs} => true,
+                    _ => false
+                }
+                matched && ${lhs.at(f)} == 0
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+enum Choice {
+    One(u256),
+    Two,
+}
+"#;
+    let same_group_nested = r#"use core::meta::{Code, Item, Record, binders, field, variant}
+
+pub const fn bad(_ record: Record) -> Code<Item> {
+    let v = variant(record, 0)
+    let outer = binders(v, 0)
+    let inner = binders(v, 0)
+    let f = field(v, 0)
+    quote(other) {
+        impl ${record} {
+            pub fn check(self, _ other: Self) -> bool {
+                match self {
+                    ${outer} => match other {
+                        ${inner} => ${outer.at(f)} == 0,
+                        _ => false
+                    },
+                    _ => false
+                }
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+enum Choice {
+    One(u256),
+    Two,
+}
+"#;
+    let foreign_field = r#"use core::meta::{Code, Item, Record, binders, field, variant}
+
+pub const fn bad(_ record: Record) -> Code<Item> {
+    let v0 = variant(record, 0)
+    let v1 = variant(record, 1)
+    let lhs = binders(v0, 0)
+    let foreign = field(v1, 0)
+    let bad_expr = lhs.at(foreign)
+    quote {
+        impl ${record} {
+            pub fn check(self) -> bool {
+                match self {
+                    ${lhs} => ${bad_expr} == 0,
+                    _ => false
+                }
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+enum Choice {
+    One(u256),
+    Two(u256),
+}
+"#;
+
+    for (source, expected) in [
+        (sibling_arm, "binder group is not bound in this scope"),
+        (after_match, "binder group is not bound in this scope"),
+        (
+            same_group_nested,
+            "binder group already bound in an enclosing pattern",
+        ),
+        (
+            foreign_field,
+            "`.at` field belongs to another owner or variant",
+        ),
+    ] {
+        let (db, file) = input(source);
+        let error = prepare_file(&db, file)
+            .err()
+            .expect("expected binder hygiene refusal");
+        assert!(
+            error.cause.contains(expected),
+            "expected `{expected}`, got `{}`",
+            error.cause
+        );
+    }
+}
+
+#[test]
+fn sub_quote_hygiene_and_cross_module_field_type_and_generic_bounds_resolution() {
+    let source = r#"use core::meta::{Code, Expr, Field, Item, Record, field, field_type}
+
+mod helper_mod {
+    use core::meta::{Code, Expr}
+
+    const fn secret_offset() -> u256 {
+        40
+    }
+
+    pub const fn make_sub_expr() -> Code<Expr> {
+        quote(extra) {
+            secret_offset() + extra
+        }
+    }
+}
+
+mod provider_mod {
+    use core::meta::{Code, Expr, Field, Item, Record, field, field_type}
+    use super::helper_mod::make_sub_expr
+
+    pub const fn generate_impl(_ record: Record) -> Code<Item> {
+        let f0: Field = field(record, 0)
+        let ty0 = field_type(f0)
+        let sub: Code<Expr> = make_sub_expr()
+        quote(extra) {
+            impl ${record} {
+                pub const fn first_val(self) -> ${ty0} {
+                    self.${f0}
+                }
+
+                pub const fn compute(self, _ extra: u256) -> u256 {
+                    ${sub}
+                }
+            }
+        }
+    }
+}
+
+fn secret_offset() -> u256 {
+    999
+}
+
+trait LocalTrait {
+    const fn tag(self) -> u256
+}
+
+struct LocalField {
+    v: u256,
+}
+
+impl LocalTrait for u256 {
+    const fn tag(self) -> u256 {
+        self
+    }
+}
+
+#[generate(provider_mod::generate_impl)]
+struct TargetRecord<T: LocalTrait> {
+    first: LocalField,
+    second: T,
+}
+
+const fn verify_hygiene() -> u256 {
+    let rec = TargetRecord {
+        first: LocalField { v: 2 },
+        second: 10 as u256,
+    }
+    rec.first_val().v + rec.compute(0)
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file).unwrap().unwrap();
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    let diags = output.run_on_top_mod(module);
+    assert!(diags.is_empty(), "{}", diags.format_diags(&output));
+    let function = module
+        .all_funcs(&output)
+        .iter()
+        .find(|f| {
+            f.name(&output)
+                .to_opt()
+                .is_some_and(|name| name.data(&output) == "verify_hygiene")
+        })
+        .unwrap();
+    let owner = BodyOwner::Func(*function, None);
+    let result = eval_body_owner_const(
+        &output,
+        owner,
+        GenericSubst::for_body_owner(&output, owner, vec![]),
+    );
+    let EvalOutcome::Ready(value) = result else {
+        panic!("{result:?}")
+    };
+    assert!(
+        matches!(
+            value.value(&output),
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } if value.to_string() == "42"
+        ),
+        "expected 2 + 40 = 42, got {value:?}"
+    );
+
+    let unbound_open = r#"use core::meta::{Code, Item, Record}
+
+pub const fn bad_open(_ record: Record) -> Code<Item> {
+    quote(missing_binder) {
+        impl ${record} {
+            pub fn check(self) -> u256 {
+                missing_binder
+            }
+        }
+    }
+}
+
+#[generate(bad_open)]
+struct Pair {
+    a: u256,
+}
+"#;
+    let (db, file) = input(unbound_open);
+    let error = prepare_file(&db, file)
+        .err()
+        .expect("unbound open name must be refused");
+    assert!(
+        error
+            .cause
+            .contains("quoted open name `missing_binder` has no enclosing binder"),
+        "{}",
+        error.cause
+    );
+}
+
+#[test]
+fn binder_hygiene_avoids_user_ident_collision_and_scopes_let_if_let_and_logical_or() {
+    let no_collision = r#"use core::meta::{Code, Item, Record, binders, field, variant}
+
+pub const fn make_check(_ record: Record) -> Code<Item> {
+    let v = variant(record, 0)
+    let lhs = binders(v, 0)
+    let f = field(v, 0)
+    quote {
+        impl ${record} {
+            pub const fn extract(self) -> u256 {
+                let __fe_binder_0_0: u256 = 100
+                match self {
+                    ${lhs} => ${lhs.at(f)} + __fe_binder_0_0,
+                    _ => 0
+                }
+            }
+        }
+    }
+}
+
+#[generate(make_check)]
+enum CollisionEnum {
+    Val { __fe_binder_0_0: u256 },
+    Empty,
+}
+
+const fn check_collision() -> u256 {
+    let v = CollisionEnum::Val { __fe_binder_0_0: 42 }
+    v.extract()
+}
+"#;
+    let (db, file) = input(no_collision);
+    let output = prepare_file(&db, file).unwrap().unwrap();
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    let diags = output.run_on_top_mod(module);
+    assert!(diags.is_empty(), "{}", diags.format_diags(&output));
+
+    let let_init_leak = r#"use core::meta::{Code, Item, Record, binders, field, variant}
+
+pub const fn bad(_ record: Record) -> Code<Item> {
+    let v = variant(record, 0)
+    let lhs = binders(v, 0)
+    let f = field(v, 0)
+    quote {
+        impl ${record} {
+            pub fn check(self) -> bool {
+                let ${lhs} = ${lhs.at(f)}
+                true
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+enum Single {
+    One(u256),
+}
+"#;
+    let if_let_else_leak = r#"use core::meta::{Code, Item, Record, binders, field, variant}
+
+pub const fn bad(_ record: Record) -> Code<Item> {
+    let v = variant(record, 0)
+    let lhs = binders(v, 0)
+    let f = field(v, 0)
+    quote {
+        impl ${record} {
+            pub fn check(self) -> bool {
+                if let ${lhs} = self {
+                    ${lhs.at(f)} == 0
+                } else {
+                    ${lhs.at(f)} == 0
+                }
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+enum Choice {
+    One(u256),
+    Two,
+}
+"#;
+    let while_let_after_leak = r#"use core::meta::{Code, Item, Record, binders, field, variant}
+
+pub const fn bad(_ record: Record) -> Code<Item> {
+    let v = variant(record, 0)
+    let lhs = binders(v, 0)
+    let f = field(v, 0)
+    quote {
+        impl ${record} {
+            pub fn check(self) -> bool {
+                while let ${lhs} = self {
+                    break
+                }
+                ${lhs.at(f)} == 0
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+enum Choice {
+    One(u256),
+    Two,
+}
+"#;
+    for source in [let_init_leak, if_let_else_leak, while_let_after_leak] {
+        let (db, file) = input(source);
+        let error = prepare_file(&db, file)
+            .err()
+            .expect("expected binder scope refusal");
+        assert!(
+            error
+                .cause
+                .contains("binder group is not bound in this scope"),
+            "got `{}`",
+            error.cause
+        );
+    }
+}
+
+#[test]
+fn query_field_evaluate_and_transitive_callee_enforce_access_checks() {
+    let bad_query_field = r#"use core::meta::{Code, FieldQuery, Item, Record, field, field_type, query_field}
+
+struct NonCopy {
+    v: u256,
+}
+
+const fn consume(_ x: own NonCopy) -> u256 {
+    x.v
+}
+
+struct BadQuery<T> {}
+impl<T> FieldQuery<u256> for BadQuery<T> {
+    const fn evaluate() -> u256 {
+        let x = NonCopy { v: 1 }
+        let a = consume(x)
+        let b = consume(x)
+        a + b
+    }
+}
+
+pub const fn inspect(_ r: Record) -> Code<Item> {
+    let ty = field_type(field(r, 0))
+    let v = query_field<BadQuery, u256>(ty)
+    quote {
+        const fn out() -> u256 {
+            ${v}
+        }
+    }
+}
+
+#[generate(inspect)]
+struct Pair {
+    a: u256,
+}
+"#;
+    let (db, file) = input(bad_query_field);
+    let error = prepare_file(&db, file)
+        .err()
+        .expect("FieldQuery::evaluate with move conflict must be refused");
+    assert!(
+        error
+            .cause
+            .contains("invalid body in const evaluation context")
+            || error.cause.contains("move conflict"),
+        "{}",
+        error.cause
+    );
+
+    let bad_transitive_helper = r#"use core::meta::{Code, Item, Record, field_count}
+
+struct NonCopy {
+    v: usize,
+}
+
+const fn consume(_ x: own NonCopy) -> usize {
+    x.v
+}
+
+const fn transitive_bad() -> usize {
+    let x = NonCopy { v: 1 }
+    consume(x) + consume(x)
+}
+
+pub const fn inspect(_ r: Record) -> Code<Item> {
+    let n = field_count(r) + transitive_bad()
+    quote {
+        const fn out() -> usize {
+            ${n}
+        }
+    }
+}
+
+#[generate(inspect)]
+struct Pair {
+    a: u256,
+}
+"#;
+    let (db, file) = input(bad_transitive_helper);
+    let error = prepare_file(&db, file)
+        .err()
+        .expect("transitive callee with move conflict must be refused");
+    assert!(
+        error.cause.contains("move conflict") && error.cause.contains("16-0002"),
+        "{}",
+        error.cause
+    );
+}
+
+#[test]
+fn mismatched_splice_kinds_and_recursive_generate_attribute_are_refused() {
+    let field_in_type_hole = r#"use core::meta::{Code, Item, Record, field}
+
+pub const fn bad(_ r: Record) -> Code<Item> {
+    let f = field(r, 0)
+    quote {
+        fn generated(_ x: ${f}) -> u256 {
+            0
+        }
+    }
+}
+
+#[generate(bad)]
+struct Pair {
+    a: u256,
+}
+"#;
+    let expr_in_where_hole = r#"use core::meta::{Code, Expr, Item, Record}
+
+pub const fn bad(_ r: Record) -> Code<Item> {
+    let e: Code<Expr> = quote { true }
+    quote {
+        impl ${r} where ${e} {
+            pub fn check(self) -> bool {
+                true
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+struct Pair {
+    a: u256,
+}
+"#;
+    let expr_in_arm_hole = r#"use core::meta::{Code, Expr, Item, Record}
+
+pub const fn bad(_ r: Record) -> Code<Item> {
+    let e: Code<Expr> = quote { true }
+    quote {
+        impl ${r} {
+            pub fn check(self) -> bool {
+                match self {
+                    ${e}
+                }
+            }
+        }
+    }
+}
+
+#[generate(bad)]
+struct Pair {
+    a: u256,
+}
+"#;
+    let recursive_generate = r#"use core::meta::{Code, Item, Record}
+
+pub const fn loop_gen(_ r: Record) -> Code<Item> {
+    quote {
+        #[generate(loop_gen)]
+        fn generated() -> u256 {
+            1
+        }
+    }
+}
+
+#[generate(loop_gen)]
+struct Pair {
+    a: u256,
+}
+"#;
+    for (source, expected) in [
+        (
+            field_in_type_hole,
+            "type quotation hole requires Type<T> or FieldType<T, F> splice",
+        ),
+        (
+            expr_in_where_hole,
+            "where-clause quotation hole requires Code<Where> splice",
+        ),
+        (
+            expr_in_arm_hole,
+            "match-arm quotation hole requires Code<Arm> splice",
+        ),
+        (recursive_generate, "cannot carry #[generate] attributes"),
+    ] {
+        let (db, file) = input(source);
+        let error = prepare_file(&db, file)
+            .err()
+            .expect("expected splice/attribute refusal");
+        assert!(
+            error.cause.contains(expected),
+            "expected `{expected}`, got `{}`",
+            error.cause
+        );
+    }
 }
 
 #[test]
@@ -796,6 +1813,109 @@ fn generation_provider_path_trivia_preserves_identity() {
 }
 
 #[test]
+fn quoted_impl_same_name_generic_bounds_are_preserved() {
+    let source = r#"use core::meta::{Code, Item, Record}
+trait Extra { const fn value() -> u256 }
+trait Mark { const fn mark() -> u256 }
+struct HasExtra {}
+struct NoExtra {}
+impl Extra for HasExtra { const fn value() -> u256 { 7 } }
+pub const fn make(_ record: Record) -> Code<Item> {
+    quote {
+        impl<T: Extra> Mark for ${record} {
+            const fn mark() -> u256 { <T as Extra>::value() }
+        }
+    }
+}
+#[generate(make)]
+struct Box<T> { value: T }
+const fn observe() -> u256 { <Box<HasExtra> as Mark>::mark() }
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file).unwrap().unwrap();
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    let function = module
+        .all_funcs(&output)
+        .iter()
+        .find(|function| {
+            function
+                .name(&output)
+                .to_opt()
+                .is_some_and(|name| name.data(&output) == "observe")
+        })
+        .copied()
+        .unwrap();
+    let owner = BodyOwner::Func(function, None);
+    let result = eval_body_owner_const(
+        &output,
+        owner,
+        GenericSubst::for_body_owner(&output, owner, vec![]),
+    );
+    let EvalOutcome::Ready(value) = result else {
+        panic!("{result:?}")
+    };
+    assert!(matches!(value.value(&output), SemConstValue::Scalar {
+        value: SemConstScalar::Int { value }, ..
+    } if value.to_string() == "7"));
+    let invalid = source.replace("Box<HasExtra>", "Box<NoExtra>");
+    let (db, file) = input(&invalid);
+    let error = prepare_file(&db, file)
+        .err()
+        .expect("missing Extra must prevent Mark application");
+    assert!(
+        error.cause.contains("Extra") || error.cause.contains("Mark"),
+        "{error}"
+    );
+}
+
+#[test]
+fn quoted_impl_incompatible_same_name_generic_kind_is_refused() {
+    let source = r#"use core::meta::{Code, Item, Record}
+pub const fn make(_ record: Record) -> Code<Item> {
+    quote { impl<const T: usize> ${record} {} }
+}
+#[generate(make)]
+struct Box<T> { value: T }
+"#;
+    let (db, file) = input(source);
+    let error = prepare_file(&db, file)
+        .err()
+        .expect("type/const binder conflict must refuse");
+    assert!(
+        error
+            .cause
+            .contains("incompatible type or const declaration"),
+        "{error}"
+    );
+}
+
+#[test]
+fn reflected_field_query_family_rejects_named_implementations() {
+    let (db, file) = input(
+        r#"
+use core::meta::FieldQuery
+struct Query<T> {}
+impl<T> FieldQuery<u256> for Query<T> as Alternate {
+    const fn evaluate() -> u256 { 7 }
+}
+"#,
+    );
+    let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+    assert!(
+        diagnostics.contains("error[5-0007]: FieldQuery requires an ordinary implementation"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("field queries run outside lexical implementation openings"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
 fn output_warnings_remain_diagnostics_without_refusing_generation() {
     // This warning is emitted by the same HIR pass used for output admission.
     let source = format!(
@@ -826,6 +1946,79 @@ fn output_warnings_remain_diagnostics_without_refusing_generation() {
         .expect("actual errors still refuse output");
     assert!(error.cause.contains("type mismatch"), "{}", error.cause);
     assert!(db.generation_inputs().functions(&db).is_empty());
+}
+
+#[test]
+fn quotation_provider_preserves_master_destructured_function_parameters() {
+    let source = SOURCE.replace(
+        "const fn boost(_ n: usize) -> u256 { n as u256 + 40 }",
+        "const fn sum(_ (left, right): (usize, usize)) -> usize { left + right }\n const fn boost(_ n: usize) -> u256 { sum((n, 40)) as u256 }",
+    );
+    let (db, file) = input(&source);
+    let prepared = prepare_file(&db, file).unwrap().unwrap();
+    let prepared_file = prepared
+        .workspace()
+        .get(&prepared, &file.url(&db).unwrap())
+        .unwrap();
+    let module = prepared.top_mod(prepared_file);
+    assert!(prepared.run_on_top_mod(module).is_empty());
+    let function = module
+        .all_funcs(&prepared)
+        .iter()
+        .find(|function| {
+            function
+                .name(&prepared)
+                .to_opt()
+                .is_some_and(|name| name.data(&prepared) == "generated_count")
+        })
+        .unwrap();
+    let owner = BodyOwner::Func(*function, None);
+    let result = eval_body_owner_const(
+        &prepared,
+        owner,
+        GenericSubst::for_body_owner(&prepared, owner, vec![]),
+    );
+    let EvalOutcome::Ready(value) = result else {
+        panic!("{result:?}")
+    };
+    assert!(matches!(
+        value.value(&prepared),
+        SemConstValue::Scalar { value: SemConstScalar::Int { value }, .. }
+        if value.to_string() == "42"
+    ));
+}
+
+#[test]
+fn canonical_field_queries_allow_only_ordinary_implementations() {
+    let prefix = "struct Family<T> {}\n";
+    for (header, expected_error) in [
+        ("impl core::meta::FieldQuery<usize> for Family<u256>", false),
+        (
+            "impl core::meta::FieldQuery<usize> for Family<u256> as Named",
+            true,
+        ),
+    ] {
+        let (db, file) = input(&format!(
+            "{prefix}{header} {{ const fn evaluate() -> usize {{ 42 }} }}"
+        ));
+        let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+        if expected_error {
+            assert!(
+                diagnostics.contains("FieldQuery requires an ordinary implementation"),
+                "{diagnostics}"
+            );
+        } else {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        }
+    }
+    let (db, file) = input(
+        "mod core { pub mod meta { pub trait FieldQuery<R> { const fn evaluate() -> R } } }\nstruct Family {}\nimpl ingot::core::meta::FieldQuery<usize> for Family as Named { const fn evaluate() -> usize { 42 } }\n",
+    );
+    let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+    assert!(
+        diagnostics.is_empty(),
+        "a same-spelling user trait remains eligible: {diagnostics}"
+    );
 }
 
 #[test]
@@ -864,5 +2057,58 @@ const fn make(_ record: Record) -> Code<Item> {
         .err()
         .expect("real body error refuses provider");
     assert!(error.cause.contains("type mismatch"), "{}", error.cause);
+    assert!(db.generation_inputs().functions(&db).is_empty());
+}
+
+#[test]
+fn field_query_body_warnings_remain_nonfatal_but_errors_refuse() {
+    let source = r#"use core::meta::{Record, Code, Item, FieldQuery, field, field_type, query_field}
+struct Cell { word: u256 }
+impl Cell { const fn get_mut(mut self) -> mut u256 { mut self.word } }
+struct Query<T> {}
+impl<T> FieldQuery<u256> for Query<T> {
+    const fn evaluate() -> u256 {
+        var cell = Cell { word: 0 }
+        var w = cell.get_mut()
+        w += 1
+        7
+    }
+}
+#[generate(make)]
+struct Target { word: u256 }
+const fn make(_ record: Record) -> Code<Item> {
+    let n = query_field<Query, u256>(field_type(field(record, 0)))
+    quote { const fn value() -> u256 { ${n} } }
+}
+"#;
+    for source in [
+        source.to_owned(),
+        source.replace("var w = cell.get_mut()", "let w = mut cell.get_mut()"),
+    ] {
+        let (db, file) = input(&source);
+        let output = prepare_file(&db, file)
+            .expect("lawful query body must evaluate")
+            .unwrap();
+        let output_file = output
+            .workspace()
+            .get(&output, &file.url(&db).unwrap())
+            .unwrap();
+        let diagnostics = output.run_on_top_mod(output.top_mod(output_file));
+        assert!(!diagnostics.has_errors(&output));
+        if source.contains("var w") {
+            assert!(
+                diagnostics
+                    .format_diags(&output)
+                    .contains("warning[8-0121]")
+            );
+        }
+        assert_generated_integer(&output, output_file, "value", "7");
+    }
+    let invalid = source.replace("word: 0", "word: true");
+    let (db, file) = input(&invalid);
+    assert!(
+        prepare_file(&db, file).is_err(),
+        "query body errors must refuse evaluation"
+    );
     assert!(db.generation_inputs().functions(&db).is_empty());
 }

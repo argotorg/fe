@@ -286,6 +286,70 @@ fn compiler_library_identity_ignores_local_core_module() {
 }
 
 #[test]
+fn forged_field_and_field_type_carriers_are_refused_by_reflection_intrinsics() {
+    use fe_hir::analysis::{
+        semantic::{GenericSubst, SemConstId, SemConstValue, eval_body_owner_const_with_args},
+        ty::ty_check::BodyOwner,
+    };
+    use fe_hir::test_db::find_func;
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "forged-field-carriers.fe".into(),
+        r#"use core::meta::{Field, FieldQuery, FieldType, type_is, query_field, field_type}
+struct Ask<T> {}
+impl<T> FieldQuery<usize> for Ask<T> {
+    const fn evaluate() -> usize { 1 }
+}
+const fn check_ft(_ f: Field) -> FieldType { field_type(f) }
+const fn check_ti(_ ft: FieldType) -> bool { type_is<u256>(ft) }
+const fn check_qf(_ ft: FieldType) -> usize { query_field<Ask, usize>(ft) }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let seal = fe_hir::analysis::semantic::bool_const(&db, false);
+    for (fn_name, carrier_path, expected) in [
+        (
+            "check_ft",
+            "core::meta::Field",
+            "field_type requires a compiler-issued Field",
+        ),
+        (
+            "check_ti",
+            "core::meta::FieldType",
+            "type_is requires a compiler-issued FieldType",
+        ),
+        (
+            "check_qf",
+            "core::meta::FieldType",
+            "query_field requires a compiler-issued FieldType",
+        ),
+    ] {
+        let func = find_func(&db, module, fn_name);
+        let carrier = resolve_lib_type_path(&db, func.scope(), carrier_path).unwrap();
+        let forged = SemConstId::new(
+            &db,
+            SemConstValue::Struct {
+                ty: carrier,
+                fields: vec![seal].into_boxed_slice(),
+            },
+        );
+        let owner = BodyOwner::Func(func, None);
+        let refusal = eval_body_owner_const_with_args(
+            &db,
+            owner,
+            GenericSubst::for_body_owner(&db, owner, vec![]),
+            vec![forged],
+        );
+        assert!(
+            format!("{refusal:?}").contains(expected),
+            "expected `{expected}`, got `{refusal:?}`"
+        );
+    }
+}
+
+#[test]
 fn canonical_trait_identity_does_not_require_instantiating_its_parameters() {
     use fe_hir::analysis::ty::corelib::{resolve_core_trait, resolve_lib_trait_path};
     let mut db = HirAnalysisTestDb::default();

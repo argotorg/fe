@@ -441,7 +441,8 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                         if invisible.is_some() {
                             return;
                         }
-                        if !reso.is_visible_from(self.db, scope) {
+                        let vis_scope = path.hygiene_scope(self.db).unwrap_or(scope);
+                        if !reso.is_visible_from(self.db, vis_scope) {
                             invisible = Some((path, reso.name_span(self.db)));
                         }
                     };
@@ -561,7 +562,8 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             if invisible.is_some() {
                 return;
             }
-            if !reso.is_visible_from(self.db, scope) {
+            let vis_scope = path.hygiene_scope(self.db).unwrap_or(scope);
+            if !reso.is_visible_from(self.db, vis_scope) {
                 invisible = Some((path, reso.name_span(self.db)));
             }
         };
@@ -622,7 +624,8 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 if invisible.is_some() {
                     return;
                 }
-                if !reso.is_visible_from(self.db, scope) {
+                let vis_scope = p.hygiene_scope(self.db).unwrap_or(scope);
+                if !reso.is_visible_from(self.db, vis_scope) {
                     invisible = Some((p, reso.name_span(self.db)));
                 }
             };

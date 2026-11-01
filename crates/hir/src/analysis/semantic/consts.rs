@@ -292,14 +292,7 @@ fn verify_sem_const_shape_impl<'db>(
 ) -> Result<(), &'static str> {
     match value.value(db) {
         SemConstValue::ItemCode { ty, code } => {
-            let scope = code.producer().owner(db).scope();
-            let base =
-                crate::analysis::ty::corelib::resolve_lib_type_path(db, scope, "core::meta::Code")
-                    .ok_or("missing Code carrier")?;
-            let item =
-                crate::analysis::ty::corelib::resolve_lib_type_path(db, scope, "core::meta::Item")
-                    .ok_or("missing Item kind")?;
-            if *ty != TyId::app(db, base, item) {
+            if crate::core::meta::code_kind_from_ty(db, *ty) != Some(code.kind()) {
                 return Err("item code has a different declared carrier kind");
             }
             code.validate(db)
@@ -307,16 +300,21 @@ fn verify_sem_const_shape_impl<'db>(
         SemConstValue::Meta { ty, value } => {
             if crate::analysis::ty::corelib::resolve_lib_type_path(
                 db,
-                value.input().declaration().scope(),
+                value.input().scope(),
                 value.carrier_path(),
             ) != Some(*ty)
             {
                 return Err("record input payload has a different declared carrier type");
             }
-            if crate::core::meta::RecordInput::for_authored_type(db, value.input().ty())
-                != Ok(value.input())
-            {
-                return Err("record input no longer identifies its authored concrete type");
+            value.input().validate(db)?;
+            match value {
+                crate::core::meta::MetaValue::Record(_) => {}
+                crate::core::meta::MetaValue::Field(field)
+                | crate::core::meta::MetaValue::FieldType(field) => {
+                    if field.index() >= field.record().field_count(db) {
+                        return Err("field index outside record");
+                    }
+                }
             }
             Ok(())
         }

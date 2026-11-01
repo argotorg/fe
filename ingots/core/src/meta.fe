@@ -1,6 +1,7 @@
 use ingot::Copy
 
-// Compiler-issued structural inputs; private seals are not issuance authority.
+/// An owner-authorized structural input or selected enum payload.
+/// These handles are issued by elaboration, not constructed by Fe code.
 pub struct Record { seal: bool }
 pub struct Field { seal: bool }
 pub struct FieldType { seal: bool }
@@ -8,13 +9,64 @@ impl Copy for Record {}
 impl Copy for Field {}
 impl Copy for FieldType {}
 
-// Checked syntax, with no runtime representation in this generation slice.
+/// Fe syntax held as a compile-time value, built by `quote { .. }`. `K` is its
+/// kind: `Expr`, `Pat`, `Arm`, `Item` or `Where`. A code value has no runtime
+/// representation; generation copies it into ordinary checked code.
 pub struct Code<K> { seal: bool }
 impl<K> Copy for Code<K> {}
+
+/// A pattern fragment, including compiler-issued variant binders.
+pub struct Pat {}
+/// A list of match arms, spliced into a quoted match.
+pub struct Arm {}
+
+impl Code<Pat> {
+    /// Reference a field bound by this pattern, within the arm that binds it.
+    pub const fn at(self, _ field: Field) -> Code<Expr> { binder_at(self, field) }
+}
+
+/// An expression fragment.
+pub struct Expr {}
+/// A list of items: functions, constants and impls.
 pub struct Item {}
+/// A list of where predicates.
+pub struct Where {}
+
+/// A Fe-authored query family applies this trait to each reflected field type.
+/// Only ordinary implementations are supported: field queries run outside the
+/// caller's `with` choices, and their ordinary prerequisites must hold.
+pub trait FieldQuery<R> {
+    const fn evaluate() -> R
+}
 
 extern {
+    /// Make a variant pattern that binds its complete payload. The group index
+    /// distinguishes binder sets for the same variant (for example left and
+    /// right operands). The compiler rejects binding the same group within an
+    /// enclosing group scope and rejects field references outside its arm.
+    pub const fn binders(_ payload: Record, _ group: usize) -> Code<Pat>
+    const fn binder_at(_ pattern: Code<Pat>, _ field: Field) -> Code<Expr>
+    /// Count variants of a whole compiler-issued enum input. Structs and
+    /// already selected payloads reject.
+    pub const fn variant_count(_ record: Record) -> usize
+    /// Select a variant payload in declaration order. It uses the same field
+    /// operations as a struct and retains its enum owner and variant index.
+    pub const fn variant(_ record: Record, _ index: usize) -> Record
+    /// Reflection accepts only compiler-issued struct inputs or selected enum
+    /// payloads. Whole enums reject until a payload is selected.
     pub const fn field_count(_ record: Record) -> usize
     pub const fn field(_ record: Record, _ index: usize) -> Field
     pub const fn field_type(_ field: Field) -> FieldType
+    /// Test for bool, u64 or u256 (including aliases). Other candidate types
+    /// are unsupported, not false. This is not general reflected equality.
+    pub const fn type_is<T>(_ ty: FieldType) -> bool
+    /// Apply F to the actual field type and evaluate its checked FieldQuery<R>
+    /// implementation. This operation grants no new reflection authority.
+    pub const fn query_field<F: * -> *, R>(_ ty: FieldType) -> R
+}
+
+extern {
+    /// The empty fragment of kind `K`, the seed of a fold over items, arms or
+    /// where predicates.
+    pub const fn empty<K>() -> Code<K>
 }

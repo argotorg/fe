@@ -700,6 +700,14 @@ impl super::Parse for WhereClauseScope {
         loop {
             parser.set_newline_as_trivia(true);
             match parser.current_kind() {
+                // `where ${w}` splices predicates; `where ${t}: Tr` bounds a type.
+                Some(SyntaxKind::Dollar)
+                    if !parser.dry_run(|p| {
+                        parse_type(p, None).is_ok() && p.current_kind() == Some(SyntaxKind::Colon)
+                    }) =>
+                {
+                    parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+                }
                 Some(SyntaxKind::LBrace) if self.brace_opens_predicate(parser, pred_count == 0) => {
                     parser.parse(WhereConstPredicateScope::default())?;
                 }
