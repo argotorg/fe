@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/deferred_method_literal_default.fe
+---
+error[8-0014]: type must be known
+   ┌─ deferred_method_literal_default.fe:13:6
+   │
+13 │     !s.eq("serve")
+   │      ^^^^^^^^^^^^^ type must be known here
