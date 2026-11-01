@@ -934,7 +934,7 @@ fn prepare_native_main(
     let func = native_executable_entry(db, top_mod)
         .ok_or_else(|| LowerError::Internal("native entry disappeared after lowering".into()))?;
     let i32_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::I32)));
-    let valid = func.return_ty(db) == i32_ty && func.arg_tys(db).is_empty();
+    let valid = func.return_ty(db) == i32_ty;
     module.ctx.func_sig(main, |signature| {
         if valid && signature.args().is_empty() && signature.ret_tys() == [Type::I32] {
             Ok(())
@@ -2163,17 +2163,10 @@ mod tests {
             .workspace()
             .touch(&mut db, temp_fixture_url(name), Some(source.to_string()));
         let top_mod = db.top_mod(file);
-        // Keep pointer inputs dynamic by testing before executable ABI validation.
-        let (module, main) = compile_native_module(
-            &db,
-            top_mod,
-            NativeTarget::Host,
-            NativeOutputKind::Executable,
-        )
-        .expect("native pointer fixture should lower");
-        module
-            .ctx
-            .update_func_linkage(main.expect("an executable has a main"), Linkage::Public);
+        // An exported function keeps its pointer inputs dynamic.
+        let (module, _) =
+            compile_native_module(&db, top_mod, NativeTarget::Host, NativeOutputKind::Library)
+                .expect("native pointer fixture should lower");
         let mut compile = Compile::new(module, CraneliftObjectBackend::new())
             .with_opt_level(SonatinaOptLevel::O0);
         compile.optimize();
@@ -2200,9 +2193,9 @@ fn zero_buffer(ptr: *u8, len: usize) {
     unsafe { core::ptr::zero_bytes(ptr, len) }
 }
 
-pub fn main(ptr: *u8, len: own usize) -> i32 {
+#[export]
+pub fn zero(_ ptr: *u8, _ len: usize) {
     zero_buffer(ptr, len)
-    0
 }
 "#,
         );
@@ -2231,8 +2224,9 @@ fn replace_byte(ptr: *u8, value: u8) -> u8 {
     previous
 }
 
-pub fn main(ptr: *u8, value: own u8) -> i32 {
-    replace_byte(ptr, value) as i32
+#[export]
+pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
+    replace_byte(ptr, value.downcast_truncate()) as u32
 }
 "#,
         );

@@ -1726,9 +1726,9 @@ impl<'db> TyChecker<'db> {
         func: Func<'db>,
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
-        // A test or the ingot root module's `pub fn main` has no caller: the
-        // target's root effect supplies its effects. A `main` in another
-        // module is an ordinary function.
+        // A test or the ingot root module's `pub fn main()` has no caller:
+        // the target's root effect supplies its effects. A `main` in another
+        // module or with parameters is an ordinary function.
         let is_entry = ItemKind::from(func)
             .attrs(self.db)
             .is_some_and(|attrs| attrs.get_attr(self.db, "test").is_some())
@@ -1737,6 +1737,7 @@ impl<'db> TyChecker<'db> {
                     .name(self.db)
                     .to_opt()
                     .is_some_and(|name| name.data(self.db) == "main")
+                && func.params(self.db).next().is_none()
                 && matches!(
                     func.scope().parent_item(self.db),
                     Some(ItemKind::TopMod(top_mod))

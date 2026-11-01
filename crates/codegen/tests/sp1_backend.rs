@@ -149,7 +149,7 @@ fn sp1_rejects_host_argv_entry() {
     assert!(
         error
             .to_string()
-            .contains("SP1 executable `main` must have signature `pub fn main() -> i32`"),
+            .contains("native executable output requires `pub fn main() -> i32`"),
         "{error}"
     );
 }

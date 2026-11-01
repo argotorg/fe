@@ -314,25 +314,33 @@ fn native_entry_keeps_its_arguments_for_std_env() {
 
 #[test]
 fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
-    for signature in [
-        "(argc: i32, argv: **u8) -> i32",
-        "(argc: i32) -> i32",
-        "() -> u32",
+    // A `main` with parameters is no entry, even with an effect `Host` does
+    // not provide; one returning `u32` is an entry whose Fe type the lowered
+    // `i32` must not hide.
+    for (signature, expected) in [
+        (
+            "(argc: i32, argv: **u8) -> i32",
+            "native executable output requires `pub fn main() -> i32`",
+        ),
+        (
+            "(argc: i32) -> i32",
+            "native executable output requires `pub fn main() -> i32`",
+        ),
+        (
+            "(argc: i32) -> i32 uses (greeting: Greeting)",
+            "native executable output requires `pub fn main() -> i32`",
+        ),
+        ("() -> u32", "native executable `main` must have signature"),
     ] {
         let error = with_top_mod_for_source(
             "invalid_native_argv.fe",
-            &format!("pub fn main{signature} {{ 0 }}"),
+            &format!("trait Greeting {{}}\npub fn main{signature} {{ 0 }}"),
             |db, top_mod| {
                 fe_codegen::emit_module_native_object(db, top_mod, fe_codegen::OptLevel::O0)
             },
         )
         .expect_err("Fe type distinctions must survive entry validation");
-        assert!(
-            error
-                .to_string()
-                .contains("native executable `main` must have signature"),
-            "{signature}: {error}"
-        );
+        assert!(error.to_string().contains(expected), "{signature}: {error}");
     }
 }
 

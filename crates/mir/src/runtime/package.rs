@@ -576,7 +576,8 @@ fn build_contract_package<'db>(
     Ok(package)
 }
 
-/// Find a public native entry in the root scope, without lowering library helpers.
+/// Find a public native entry in the root scope, without lowering library
+/// helpers. A `main` with parameters is a helper, as for EVM entries.
 pub fn native_executable_entry<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
@@ -588,7 +589,9 @@ pub fn native_executable_entry<'db>(
             _ => None,
         })
         .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
-        .find(|func| func.vis(db).is_pub() && is_main_func(db, *func))
+        .find(|func| {
+            func.vis(db).is_pub() && is_main_func(db, *func) && func.params(db).next().is_none()
+        })
 }
 
 /// The `#[export]` functions of `top_mod`'s ingot, which a native object
