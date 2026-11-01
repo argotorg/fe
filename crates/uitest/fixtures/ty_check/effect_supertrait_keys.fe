@@ -76,6 +76,13 @@ fn from_generic<T: HasItem>() uses (d: Derived<T>) {
     base_item<T>()
 }
 
+// Supertraits that normalize to one key provide it once.
+trait DerivedTwice<T: HasItem>: Base<T::Item> + Base<u8> {}
+
+fn from_derived_twice() uses (d: DerivedTwice<Concrete>) {
+    base_u8()
+}
+
 // An effect's own entry shadows an implied one only when it matches: with
 // `T` to infer, `Pair<u16, u64>` does not hide the `Pair<u8, u32>` that
 // `BytePair` implies, but `Pair<u8, u64>` does.

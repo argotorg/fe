@@ -1,4 +1,4 @@
-use common::indexmap::IndexMap;
+use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use std::iter;
@@ -162,45 +162,44 @@ impl<'db> EffectFrame<'db> {
                 .collect();
             let bindings: IndexMap<_, _> = assoc_bindings.iter().copied().collect();
             let key = TraitInstId::new(db, def, args, bindings, ModeMarker::None);
-            let implied = PredicateListId::new(db, vec![key])
+            // Distinct supertraits can normalize to one key, as
+            // `Base<T::Item> + Base<u8>` with `T::Item = u8` does.
+            let implied: IndexSet<_> = PredicateListId::new(db, vec![key])
                 .extend_all_bounds(db)
                 .list(db)
                 .iter()
                 .filter(|inst| **inst != key && inst.self_ty(db) == provider.ty)
-                .map(|inst| {
-                    let inst = normalize_effect_identity_trait(db, *inst, scope, assumptions, None);
-                    let def = inst.def(db);
-                    let args_no_self = inst.args(db)[1..].iter().copied().collect();
-                    let assoc_bindings = inst.assoc_ty_bindings(db).into_iter().collect();
-                    let family = effect_family_for_trait(def);
-                    let entry = match &entry {
-                        KeyedEffectEntry::Witness(_) => KeyedEffectEntry::Witness(EffectWitness {
-                            key: StoredEffectKey::Trait(StoredTraitKey {
-                                def,
-                                args_no_self,
-                                assoc_bindings,
-                                family,
-                            }),
-                            provider,
+                .map(|inst| normalize_effect_identity_trait(db, *inst, scope, assumptions, None))
+                .collect();
+            for inst in implied {
+                let def = inst.def(db);
+                let args_no_self = inst.args(db)[1..].iter().copied().collect();
+                let assoc_bindings = inst.assoc_ty_bindings(db).into_iter().collect();
+                let family = effect_family_for_trait(def);
+                let implied_entry = match &entry {
+                    KeyedEffectEntry::Witness(_) => KeyedEffectEntry::Witness(EffectWitness {
+                        key: StoredEffectKey::Trait(StoredTraitKey {
+                            def,
+                            args_no_self,
+                            assoc_bindings,
+                            family,
                         }),
-                        _ => KeyedEffectEntry::Forwarder(EffectForwarder {
-                            key: ForwardedEffectKey::Trait(ForwardedTraitKey {
-                                def,
-                                args_no_self,
-                                assoc_bindings,
-                                family,
-                            }),
-                            provider,
+                        provider,
+                    }),
+                    _ => KeyedEffectEntry::Forwarder(EffectForwarder {
+                        key: ForwardedEffectKey::Trait(ForwardedTraitKey {
+                            def,
+                            args_no_self,
+                            assoc_bindings,
+                            family,
                         }),
-                    };
-                    (family, entry)
-                })
-                .collect::<Vec<_>>();
-            for (family, entry) in implied {
+                        provider,
+                    }),
+                };
                 self.implied_by_family
                     .entry(family)
                     .or_default()
-                    .push(entry);
+                    .push(implied_entry);
             }
         }
         self.keyed_by_family.entry(family).or_default().push(entry);
