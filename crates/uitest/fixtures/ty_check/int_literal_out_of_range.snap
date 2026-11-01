@@ -4,27 +4,15 @@ expression: diags
 input_file: fixtures/ty_check/int_literal_out_of_range.fe
 ---
 error[3-0087]: integer literal out of range
-   ┌─ int_literal_out_of_range.fe:39:27
+   ┌─ int_literal_out_of_range.fe:28:30
    │
-39 │ fn array_length(_ a: [u8; 0x10000000000000001]) {}
-   │                           ^^^^^^^^^^^^^^^^^^^ `18446744073709551617` is not representable in `usize`
-
-error[3-0087]: integer literal out of range
-   ┌─ int_literal_out_of_range.fe:41:32
-   │
-41 │ fn length_arithmetic(_ a: [u8; 0x10000000000000001 - 1]) {}
-   │                                ^^^^^^^^^^^^^^^^^^^ `18446744073709551617` is not representable in `usize`
-
-error[3-0087]: integer literal out of range
-   ┌─ int_literal_out_of_range.fe:43:30
-   │
-43 │ fn const_argument(_ s: Small<256>) {}
+28 │ fn const_argument(_ s: Small<256>) {}
    │                              ^^^ `256` is not representable in `u8`
 
 error[3-0087]: integer literal out of range
-   ┌─ int_literal_out_of_range.fe:45:41
+   ┌─ int_literal_out_of_range.fe:30:41
    │
-45 │ fn negated_const_argument(_ s: Signed<{ -129 }>) {}
+30 │ fn negated_const_argument(_ s: Signed<{ -129 }>) {}
    │                                         ^^^^ `-129` is not representable in `i8`
 
 error[8-0074]: integer literal out of range
@@ -44,21 +32,3 @@ error[8-0074]: integer literal out of range
    │
 12 │         256 => true
    │         ^^^ `256` is not representable in `u8`
-
-error[8-0074]: integer literal out of range
-   ┌─ int_literal_out_of_range.fe:19:5
-   │
-19 │     0x10000000000000000
-   │     ^^^^^^^^^^^^^^^^^^^ `18446744073709551616` is not representable in `usize`
-
-error[8-0074]: integer literal out of range
-   ┌─ int_literal_out_of_range.fe:23:5
-   │
-23 │     0x8000000000000000
-   │     ^^^^^^^^^^^^^^^^^^ `9223372036854775808` is not representable in `isize`
-
-error[8-0074]: integer literal out of range
-   ┌─ int_literal_out_of_range.fe:27:5
-   │
-27 │     0x100000000
-   │     ^^^^^^^^^^^ `4294967296` is not representable in `usize`

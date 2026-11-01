@@ -7509,7 +7509,7 @@ impl<'db> TyCheckerFinalizer<'db> {
         }
     }
 
-    /// A literal must fit its type on every target.
+    /// A literal must fit its type on the compilation target.
     fn check_int_literal_range(
         &mut self,
         int: IntegerId<'db>,
@@ -7519,7 +7519,12 @@ impl<'db> TyCheckerFinalizer<'db> {
         let value = int.data(self.db);
         if let Some(prim) = ty.as_prim(self.db)
             && prim.is_integral()
-            && !int_literal_fits_prim(prim, value, false)
+            && !int_literal_fits_prim(
+                self.db.compilation_settings().target(self.db),
+                prim,
+                value,
+                false,
+            )
         {
             self.diags.push(
                 BodyDiag::IntLiteralOutOfRange {
