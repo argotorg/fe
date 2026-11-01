@@ -78,7 +78,7 @@ use crate::analysis::ty::{
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{
-        BorrowKind, ClosureDef, ClosureTy, PrimTy, StringFallback, TyBase, TyData, TyVarSort,
+        BorrowKind, ClosureDef, ClosureTy, PrimTy, TyBase, TyData, TyVarSort,
         int_literal_fits_prim, prim_int_bits,
     },
     ty_error::{diag_from_invalid_cause, first_invalid_ty_cause},
@@ -2120,7 +2120,7 @@ impl<'db> TyChecker<'db> {
         if let Some(parts) = super::pending_call_parts(self.db, self.body(), &self.env, expr) {
             let recv_ty = receiver_ty.fold_with(self.db, &mut self.table);
             if let [candidate] =
-                self.viable_pending_candidates(&pending, recv_ty, typed.ty, parts)[..]
+                self.viable_pending_candidates(&pending, recv_ty, typed.ty, parts, false)[..]
             {
                 self.resolve_pending_method(&pending, candidate, recv_ty, typed.ty, parts);
                 return typed;
@@ -5274,19 +5274,7 @@ impl<'db> TyChecker<'db> {
                         let func_ty = self.table.instantiate_to_term(func_ty);
                         let expected_rhs = self.instantiated_ops_rhs_ty(func_ty, inst)?;
                         self.table.unify(rhs.ty, expected_rhs).ok()?;
-                        Some([lhs_ty, rhs.ty].into_iter().all(|operand| {
-                            let TyData::TyVar(var) = operand.data(self.db) else {
-                                return true;
-                            };
-                            let TyVarSort::String { fallback, .. } = var.sort else {
-                                return true;
-                            };
-                            let operand = operand.fold_with(self.db, &mut self.table);
-                            match fallback {
-                                StringFallback::Fixed => !operand.is_core_dyn_string(self.db),
-                                StringFallback::Dynamic => !operand.is_string(self.db),
-                            }
-                        }))
+                        Some(self.keeps_literal_defaults([lhs_ty, rhs.ty]))
                     })();
                     self.rollback_state(snapshot);
                     if let Some(keeps_defaults) = keeps_defaults {
@@ -5295,10 +5283,7 @@ impl<'db> TyChecker<'db> {
                 }
                 // An open string literal takes its default type when that
                 // settles the impl: `span == "x"` compares with a `String<1>`.
-                if viable.len() > 1 && viable.iter().any(|(_, keeps_defaults)| *keeps_defaults) {
-                    viable.retain(|(_, keeps_defaults)| *keeps_defaults);
-                }
-                viable.into_iter().map(|(candidate, _)| candidate).collect()
+                super::prefer_literal_defaults(viable)
             };
 
             match viable.len() {

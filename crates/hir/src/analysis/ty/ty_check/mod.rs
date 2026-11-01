@@ -2559,7 +2559,7 @@ impl<'db> TyChecker<'db> {
                         .iter()
                         .copied()
                         .filter(|&candidate| {
-                            let viability =
+                            let (viability, _) =
                                 self.method_viability(&pending, recv_ty, expr_ty, parts, candidate);
                             !matches!(viability, Viability::Incompatible)
                         })
@@ -2648,8 +2648,8 @@ impl<'db> TyChecker<'db> {
                             continue;
                         }
 
-                        let viable =
-                            self.viable_pending_candidates(&pending, recv_ty, expr_ty, parts);
+                        let viable = self
+                            .viable_pending_candidates(&pending, recv_ty, expr_ty, parts, fallback);
                         if let [candidate] = viable.as_slice() {
                             if self.env.callable_expr(pending.expr).is_none() {
                                 self.env.enter_call_site(&pending.site);
@@ -2686,27 +2686,36 @@ impl<'db> TyChecker<'db> {
 
     /// The candidates of the deferred call `pending` that fit its receiver
     /// type `recv_ty` and its arguments: those that also fit its type
-    /// `expr_ty`, if any do.
+    /// `expr_ty`, if any do. With `literal_defaults`, several candidates
+    /// narrow to those under which its open string literals take their
+    /// default types, as an operator's do.
     fn viable_pending_candidates(
         &mut self,
         pending: &env::PendingMethod<'db>,
         recv_ty: TyId<'db>,
         expr_ty: TyId<'db>,
         parts: PendingCallParts<'db>,
+        literal_defaults: bool,
     ) -> Vec<env::PendingMethodCandidate<'db>> {
         let (strict, soft): (Vec<_>, Vec<_>) = pending
             .candidates
             .iter()
             .copied()
             .filter_map(|candidate| {
-                let viability = self.method_viability(pending, recv_ty, expr_ty, parts, candidate);
-                (!matches!(viability, Viability::Incompatible)).then_some((candidate, viability))
+                let (viability, keeps_defaults) =
+                    self.method_viability(pending, recv_ty, expr_ty, parts, candidate);
+                (!matches!(viability, Viability::Incompatible)).then_some((
+                    candidate,
+                    viability,
+                    keeps_defaults,
+                ))
             })
-            .partition(|(_, viability)| matches!(viability, Viability::Viable));
-        let viable = if strict.is_empty() { soft } else { strict }
+            .partition(|(_, viability, _)| matches!(viability, Viability::Viable));
+        let viable: Vec<_> = if strict.is_empty() { soft } else { strict }
             .into_iter()
-            .map(|(candidate, _)| candidate)
+            .map(|(candidate, _, keeps_defaults)| (candidate, keeps_defaults || !literal_defaults))
             .collect();
+        let viable = prefer_literal_defaults(viable);
         self.dedup_equivalent_pending_method_candidates(viable)
     }
 
@@ -2809,8 +2818,29 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// Whether each open string literal among `operands`, as unified so far,
+    /// keeps its default type: an inline `String` while it fits one, else a
+    /// `DynString`.
+    fn keeps_literal_defaults(&mut self, operands: impl IntoIterator<Item = TyId<'db>>) -> bool {
+        operands.into_iter().all(|operand| {
+            let TyData::TyVar(var) = operand.data(self.db) else {
+                return true;
+            };
+            let TyVarSort::String { fallback, .. } = var.sort else {
+                return true;
+            };
+            let operand = operand.fold_with(self.db, &mut self.table);
+            match fallback {
+                StringFallback::Fixed => !operand.is_core_dyn_string(self.db),
+                StringFallback::Dynamic => !operand.is_string(self.db),
+            }
+        })
+    }
+
     /// How `candidate` fits the deferred method call `pending` on a receiver
-    /// of type `recv_ty`, typed `expr_ty`, probed without committing to it.
+    /// of type `recv_ty`, typed `expr_ty`, probed without committing to it,
+    /// and whether it keeps the call's open string literals at their default
+    /// types.
     fn method_viability(
         &mut self,
         pending: &env::PendingMethod<'db>,
@@ -2818,13 +2848,14 @@ impl<'db> TyChecker<'db> {
         expr_ty: TyId<'db>,
         (receiver, generic_args, call_args): PendingCallParts<'db>,
         candidate: env::PendingMethodCandidate<'db>,
-    ) -> Viability {
+    ) -> (Viability, bool) {
         let db = self.db;
         let body = self.env.body();
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
         let snap = self.snapshot_state();
 
+        let mut keeps_defaults = false;
         let viability = (|| {
             let inst = candidate.inst;
             let inst_self = self.table.instantiate_to_term(inst.self_ty(db));
@@ -2893,6 +2924,7 @@ impl<'db> TyChecker<'db> {
                     return Viability::Incompatible;
                 }
             }
+            keeps_defaults = self.keeps_literal_defaults(all_arg_tys);
 
             callable.process_constraints(self, pending.expr, pending.span.clone());
 
@@ -2910,7 +2942,7 @@ impl<'db> TyChecker<'db> {
             }
         })();
         self.rollback_state(snap);
-        viability
+        (viability, keeps_defaults)
     }
 
     fn new_internal(db: &'db dyn HirAnalysisDb, env: TyCheckEnv<'db>, expected: TyId<'db>) -> Self {
@@ -4548,6 +4580,18 @@ fn func_return_provenance_cycle_initial<'db>(
 /// whose callee is the receiver.
 /// A deferred call's receiver, explicit generic arguments and arguments.
 type PendingCallParts<'db> = (ExprId, GenericArgListId<'db>, &'db [CallArg<'db>]);
+
+/// Of several candidates, each paired with whether it keeps every open string
+/// literal at its default type, those that do, if any.
+fn prefer_literal_defaults<T>(mut candidates: Vec<(T, bool)>) -> Vec<T> {
+    if candidates.len() > 1 && candidates.iter().any(|(_, keeps_defaults)| *keeps_defaults) {
+        candidates.retain(|(_, keeps_defaults)| *keeps_defaults);
+    }
+    candidates
+        .into_iter()
+        .map(|(candidate, _)| candidate)
+        .collect()
+}
 
 fn pending_call_parts<'db>(
     db: &'db dyn HirAnalysisDb,

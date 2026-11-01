@@ -1,0 +1,14 @@
+use core::{MemBuffer, MemSpan}
+use core::ops::Eq
+use std::env::Arg
+
+// A literal fits both `Eq<String<N>>` and `Eq<DynString>`. Once nothing
+// else fixes its type, it takes its default and so picks one impl.
+fn texts(_ s: MemSpan, _ buf: MemBuffer, _ arg: Arg) -> bool {
+    s.eq("serve") && buf.eq("a literal of thirty-two bytes!!!") && arg.eq("x")
+}
+
+// An operator needs the call's type before the literal takes its default.
+fn negated(_ s: MemSpan) -> bool {
+    !s.eq("serve")
+}
