@@ -2,7 +2,7 @@
 //! run in its own Node.js process, with the host of `examples/wasm/host.mjs`.
 //!
 //! A module holds one test and what it reaches. A test that uses something the
-//! WebAssembly backend does not support (a 256-bit integer, an EVM built-in,
+//! WebAssembly backend does not support (a 128-bit integer, an EVM built-in,
 //! `should_revert`) fails with an error that names it; no test is skipped
 //! silently. A trap, a failed assertion or a call of `abort` fails the test with
 //! the engine's message. Node.js is required: when `node` is missing or too old

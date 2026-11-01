@@ -1193,7 +1193,7 @@ fn an_evm_builtin_is_a_named_error() {
 
 #[test]
 fn sixteen_byte_integers_inside_a_body_are_named_errors() {
-    // 256-bit integers work (they are what `usize` is); 128-bit ones do not.
+    // 256-bit integers work; 128-bit ones do not.
     rejected(
         "wide_128",
         "pub fn widen(a: u32) -> u32 {\n\
