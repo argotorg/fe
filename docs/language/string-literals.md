@@ -54,12 +54,11 @@ including leading zero padding. Bytes are indexed from the most significant
 byte; bits above the string's capacity are ignored. `len()` counts bytes after
 leading zero padding, including any interior zero bytes.
 
-A byte span (`MemSpan`) equals a `String<N>` whose `len()` bytes it holds, so
-`arg.span() == "serve"` compares bytes with a literal of up to 31 bytes. A
-longer literal is a `DynString`, which a span does not compare with. A
-`MemBuffer` and a process argument (`std::env::Arg`) compare with strings the
-same way: `args.get(1) == "serve"`. Spans (`MemSlice<T>`) compare with each
-other element by element.
+A byte span (`MemSpan`) equals a `String<N>` whose `len()` bytes it holds and a
+`DynString` whose bytes it holds, so `arg.span() == "serve"` compares bytes with
+a literal of any length. A `MemBuffer` and a process argument
+(`std::env::Arg`) compare with strings the same way: `args.get(1) == "serve"`.
+Spans (`MemSlice<T>`) compare with each other element by element.
 
 `AsBytes` also supports `u256`, ordinary byte arrays, packed bytes and tuples
 whose components implement the trait. Tuples concatenate component encodings in
