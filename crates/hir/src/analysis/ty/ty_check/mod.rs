@@ -3078,6 +3078,7 @@ impl<'db> TyChecker<'db> {
     fn lit_ty(&mut self, lit: &LitKind<'db>) -> TyId<'db> {
         match lit {
             LitKind::Bool(_) => TyId::bool(self.db),
+            LitKind::Byte(_) => TyId::u8(self.db),
             LitKind::Int(_) => self.table.new_var(TyVarSort::Integral, &Kind::Star),
             LitKind::String(s) => {
                 let len_bytes = s.len_bytes(self.db);

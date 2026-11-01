@@ -73,3 +73,15 @@ and `.to_array()`. `String<N>::from_bytes()` accepts `PackedBytes<N>`; for an
 ordinary array, use `String<N>::from_bytes(PackedBytes::from_array(array))`.
 Packed bytes expose no mutable byte references. `core::keccak(value)` hashes the
 exact fixed-width encoding of an `AsBytes` value at compile time or on EVM.
+
+## Byte literals
+
+A byte literal, `b'x'`, is a `u8`: the byte of one ASCII character, or of an
+escape. It accepts the string escapes and `\'`, `\0` for a zero byte and `\xNN`
+for any byte, such as `b'\xff'`. In a pattern, a byte literal matches its value.
+
+```fe
+fn digit(_ c: u8) -> u8 {
+    c - b'0'
+}
+```

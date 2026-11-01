@@ -26,6 +26,9 @@ pub enum SyntaxKind {
     /// "MyString"
     #[regex(r#""([^"\\]|\\.)*""#)]
     String,
+    /// b'x'
+    #[regex(r"b'([^'\\\n\r]|\\[^\n\r])*'")]
+    Byte,
     /// `(`
     #[token("(")]
     LParen,
@@ -578,7 +581,11 @@ impl SyntaxKind {
     pub fn is_literal_leaf(self) -> bool {
         matches!(
             self,
-            SyntaxKind::Int | SyntaxKind::String | SyntaxKind::TrueKw | SyntaxKind::FalseKw
+            SyntaxKind::Int
+                | SyntaxKind::String
+                | SyntaxKind::Byte
+                | SyntaxKind::TrueKw
+                | SyntaxKind::FalseKw
         )
     }
 
@@ -631,6 +638,7 @@ impl SyntaxKind {
             SyntaxKind::Ident => "identifier",
             SyntaxKind::Int => "integer",
             SyntaxKind::String => "string literal",
+            SyntaxKind::Byte => "byte literal",
             SyntaxKind::LParen => "`(`",
             SyntaxKind::RParen => "`)`",
             SyntaxKind::LBrace => "`{`",
@@ -868,6 +876,7 @@ impl SyntaxKind {
                 | SyntaxKind::Ident
                 | SyntaxKind::Int
                 | SyntaxKind::String
+                | SyntaxKind::Byte
                 | SyntaxKind::LParen
                 | SyntaxKind::RParen
                 | SyntaxKind::LBrace

@@ -246,7 +246,8 @@ impl<'db, 'a> ConstFnChecker<'db, 'a> {
             Expr::Lit(
                 crate::hir_def::LitKind::Int(_)
                 | crate::hir_def::LitKind::Bool(_)
-                | crate::hir_def::LitKind::String(_),
+                | crate::hir_def::LitKind::String(_)
+                | crate::hir_def::LitKind::Byte(_),
             )
             | Expr::Path(_) => {}
 

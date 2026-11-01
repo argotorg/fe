@@ -1,9 +1,11 @@
 use std::ops::Range;
 
 use crate::core::hir_def::{
-    BindingMarker, IdentId, LitKind, Partial, Pat, PatId, PathId, TupleTypeId, VariantKind,
+    BindingMarker, IdentId, IntegerId, LitKind, Partial, Pat, PatId, PathId, TupleTypeId,
+    VariantKind,
 };
 use either::Either;
+use num_bigint::BigUint;
 
 use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::analysis::{
@@ -298,7 +300,15 @@ impl<'db> TyChecker<'db> {
         match lit {
             Partial::Present(lit) => {
                 let lit_ty = self.lit_ty(lit);
-                let analysis = self.literal_constructor_status(expected, *lit);
+                // A byte literal is the integer constructor of its value, so
+                // `b'0'` and `48` are the same pattern.
+                let ctor = match *lit {
+                    LitKind::Byte(byte) => {
+                        LitKind::Int(IntegerId::new(self.db, BigUint::from(byte)))
+                    }
+                    lit => lit,
+                };
+                let analysis = self.literal_constructor_status(expected, ctor);
                 self.finish_pat_check(pat, expected, lit_ty, analysis)
             }
             Partial::Absent => self.finish_pat_check(

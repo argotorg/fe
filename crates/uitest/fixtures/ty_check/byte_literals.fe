@@ -1,0 +1,13 @@
+// A byte literal is a `u8`.
+fn widen(_ x: u256) -> bool {
+    x == b'a' || x == b'a' as u256
+}
+
+// As a pattern, a byte literal is its value.
+fn duplicate(_ x: u8) -> u256 {
+    match x {
+        b'a' => 1
+        97 => 2
+        _ => 3
+    }
+}

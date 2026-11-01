@@ -812,8 +812,12 @@ fn aggregate_fixtures_run_at_every_level() {
 }
 
 #[test]
-fn text_comparisons_run_at_every_level() {
-    for (name, expected_count) in [("string_literal_eq.fe", 1), ("span_string_eq.fe", 3)] {
+fn text_fixtures_run_at_every_level() {
+    for (name, expected_count) in [
+        ("string_literal_eq.fe", 1),
+        ("span_string_eq.fe", 3),
+        ("byte_literals.fe", 1),
+    ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")
             .join(name);

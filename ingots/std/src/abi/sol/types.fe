@@ -60,7 +60,7 @@ impl<const LEN: usize> AsBytes for SolArraySuffix<LEN> {
 
     #[inline(always)]
     const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
-        out.push_byte(91)
+        out.push_byte(b'[')
         var remaining = LEN
         var divisor: usize = 1
         while remaining >= 10 {
@@ -73,7 +73,7 @@ impl<const LEN: usize> AsBytes for SolArraySuffix<LEN> {
             remaining %= divisor
             divisor /= 10
         }
-        out.push_byte(93)
+        out.push_byte(b']')
     }
 }
 

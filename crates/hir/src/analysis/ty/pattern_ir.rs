@@ -165,7 +165,10 @@ impl<'db> PatternStore<'db> {
                 ConstructorKind::Variant(..) | ConstructorKind::Type(_) => fields
                     .iter()
                     .find_map(|field| self.mir_unsupported_reason(*field)),
-                ConstructorKind::Literal(LitKind::Int(_) | LitKind::Bool(_), _) => fields
+                ConstructorKind::Literal(
+                    LitKind::Int(_) | LitKind::Bool(_) | LitKind::Byte(_),
+                    _,
+                ) => fields
                     .iter()
                     .find_map(|field| self.mir_unsupported_reason(*field)),
                 ConstructorKind::Literal(LitKind::String(_), _) => {

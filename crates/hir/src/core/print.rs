@@ -180,6 +180,7 @@ impl<'db> LitKind<'db> {
                 literal
             }
             LitKind::Bool(b) => if b { "true" } else { "false" }.to_string(),
+            LitKind::Byte(byte) => format!("b'{}'", byte.escape_ascii()),
         }
     }
 }
