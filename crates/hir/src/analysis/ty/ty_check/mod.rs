@@ -1558,6 +1558,16 @@ enum Viability {
     ReturnTypeMismatch,
 }
 
+/// How a candidate fits a deferred method call, probed without committing
+/// to it.
+struct CandidateFit<'db> {
+    viability: Viability,
+    /// Whether the call's open string literals keep their default types.
+    keeps_literal_defaults: bool,
+    /// The candidate's return type, if the receiver and arguments fix it.
+    ret_ty: Option<TyId<'db>>,
+}
+
 /// Whether a projection or const computation in `ty` still waits on inference.
 fn depends_on_type_inference<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     struct Computation<'db> {
@@ -2559,9 +2569,9 @@ impl<'db> TyChecker<'db> {
                         .iter()
                         .copied()
                         .filter(|&candidate| {
-                            let (viability, _) =
+                            let fit =
                                 self.method_viability(&pending, recv_ty, expr_ty, parts, candidate);
-                            !matches!(viability, Viability::Incompatible)
+                            !matches!(fit.viability, Viability::Incompatible)
                         })
                         .collect();
                     let viable = self.dedup_equivalent_pending_method_candidates(viable);
@@ -2702,12 +2712,11 @@ impl<'db> TyChecker<'db> {
             .iter()
             .copied()
             .filter_map(|candidate| {
-                let (viability, keeps_defaults) =
-                    self.method_viability(pending, recv_ty, expr_ty, parts, candidate);
-                (!matches!(viability, Viability::Incompatible)).then_some((
+                let fit = self.method_viability(pending, recv_ty, expr_ty, parts, candidate);
+                (!matches!(fit.viability, Viability::Incompatible)).then_some((
                     candidate,
-                    viability,
-                    keeps_defaults,
+                    fit.viability,
+                    fit.keeps_literal_defaults,
                 ))
             })
             .partition(|(_, viability, _)| matches!(viability, Viability::Viable));
@@ -2838,9 +2847,7 @@ impl<'db> TyChecker<'db> {
     }
 
     /// How `candidate` fits the deferred method call `pending` on a receiver
-    /// of type `recv_ty`, typed `expr_ty`, probed without committing to it,
-    /// and whether it keeps the call's open string literals at their default
-    /// types.
+    /// of type `recv_ty`, typed `expr_ty`.
     fn method_viability(
         &mut self,
         pending: &env::PendingMethod<'db>,
@@ -2848,14 +2855,15 @@ impl<'db> TyChecker<'db> {
         expr_ty: TyId<'db>,
         (receiver, generic_args, call_args): PendingCallParts<'db>,
         candidate: env::PendingMethodCandidate<'db>,
-    ) -> (Viability, bool) {
+    ) -> CandidateFit<'db> {
         let db = self.db;
         let body = self.env.body();
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
         let snap = self.snapshot_state();
 
-        let mut keeps_defaults = false;
+        let mut keeps_literal_defaults = false;
+        let mut fixed_ret_ty = None;
         let viability = (|| {
             let inst = candidate.inst;
             let inst_self = self.table.instantiate_to_term(inst.self_ty(db));
@@ -2924,7 +2932,7 @@ impl<'db> TyChecker<'db> {
                     return Viability::Incompatible;
                 }
             }
-            keeps_defaults = self.keeps_literal_defaults(all_arg_tys);
+            keeps_literal_defaults = self.keeps_literal_defaults(all_arg_tys);
 
             callable.process_constraints(self, pending.expr, pending.span.clone());
 
@@ -2934,6 +2942,7 @@ impl<'db> TyChecker<'db> {
                 scope,
                 assumptions,
             );
+            fixed_ret_ty = (!ret_ty.has_var(db)).then_some(ret_ty);
 
             if self.table.unify(expr_ty, ret_ty).is_ok() {
                 Viability::Viable
@@ -2942,7 +2951,11 @@ impl<'db> TyChecker<'db> {
             }
         })();
         self.rollback_state(snap);
-        (viability, keeps_defaults)
+        CandidateFit {
+            viability,
+            keeps_literal_defaults,
+            ret_ty: fixed_ret_ty,
+        }
     }
 
     fn new_internal(db: &'db dyn HirAnalysisDb, env: TyCheckEnv<'db>, expected: TyId<'db>) -> Self {

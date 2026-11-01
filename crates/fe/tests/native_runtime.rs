@@ -1543,6 +1543,7 @@ fn native_arguments_preserve_bytes_bounds_and_the_entry_name() {
         &source,
         r#"
 use core::MemBuffer
+use core::ops::Eq
 use std::env::Args
 use std::io::Stdout
 // The entry's internal name is free for a Fe function.
@@ -1560,7 +1561,10 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
         let arg = args.get(i)
         text.extend_from(arg.span())
         // An argument compares with a literal's text.
-        if arg == "Fe" || arg.span() == "λ" || arg == "an argument of thirty-two bytes!" {
+        if arg == "Fe"
+            || arg.span() == "λ"
+            || !arg.eq("Fee") && arg == "an argument of thirty-two bytes!"
+        {
             text.push(33)
         }
         text.push(124)

@@ -43,4 +43,7 @@ fn spans_compare_by_method() {
     assert!(buf.span().eq("s"))
     assert!(buf.eq("s"))
     assert!(!buf.span().eq(MemBuffer::empty().span()))
+    assert!(!buf.span().eq("t"))
+    assert!(!buf.eq("a literal of thirty-two bytes!!!"))
+    assert!(!!buf.eq("s"))
 }

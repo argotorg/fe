@@ -4,7 +4,26 @@ expression: diags
 input_file: fixtures/ty_check/deferred_method_literal_default.fe
 ---
 error[8-0014]: type must be known
-   ┌─ deferred_method_literal_default.fe:13:6
+   ┌─ deferred_method_literal_default.fe:35:6
    │
-13 │     !s.eq("serve")
+35 │     !buf.convert()
    │      ^^^^^^^^^^^^^ type must be known here
+
+error[8-0026]: multiple trait candidates found
+   ┌─ deferred_method_literal_default.fe:35:10
+   │
+35 │     !buf.convert()
+   │          ^^^^^^^
+   │          │
+   │          `convert` is ambiguous
+   │          candidate: `Convert<u8>::convert`
+   │          candidate: `Convert<bool>::convert`
+
+error[8-0031]: type annotation is needed
+   ┌─ deferred_method_literal_default.fe:35:6
+   │
+35 │     !buf.convert()
+   │      ^^^^^^^^^^^^^
+   │      │
+   │      type annotation is needed
+   │      consider giving `: Type` here
