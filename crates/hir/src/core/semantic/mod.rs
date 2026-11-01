@@ -2213,16 +2213,15 @@ impl<'db> Contract<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> IndexMap<IdentId<'db>, ContractFieldInfo<'db>> {
         self.storage_layout(db)
-            .semantic_fields()
-            .into_iter()
-            .map(|(name, field, is_mut, declared)| {
+            .valid_fields()
+            .map(|field| {
                 (
-                    name,
+                    field.name,
                     ContractFieldInfo {
-                        index: field.index,
-                        name,
-                        declared,
-                        is_mut,
+                        index: field.field.index,
+                        name: field.name,
+                        declared: field.declared,
+                        is_mut: field.is_mut,
                     },
                 )
             })
@@ -2565,16 +2564,11 @@ fn contract_scoped_effect_requirements_canonical<'db>(
 
         if key_path.len(db) == 1
             && let Some(name) = key_path.ident(db).to_opt()
-            && fields.contains_key(&name)
+            && let Some(field) = fields.get(&name)
         {
-            let key = match contract.storage_layout(db).field(&name) {
-                Some(layout) => EffectRequirementKey::Type(layout.declared),
-                None => EffectRequirementKey::Other,
-            };
-
             out.push(EffectRequirement {
                 binding_name: name,
-                key,
+                key: EffectRequirementKey::Type(field.declared),
                 is_mut: effect.is_mut(),
                 binding_site: list_site,
                 binding_idx: idx as u32,
@@ -2626,8 +2620,7 @@ fn contract_provider_bindings_canonical<'db>(
     let is_init_site = matches!(site, EffectParamSite::ContractInit { .. });
     let mut providers = contract
         .storage_layout(db)
-        .values()
-        .cloned()
+        .valid_fields()
         .enumerate()
         .map(|(idx, field)| {
             let provider_ty = field.declared;

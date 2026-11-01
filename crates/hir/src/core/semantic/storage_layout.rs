@@ -250,14 +250,15 @@ impl ContractLayoutError<'_> {
 /// space, the slots it spans and the parts that take them.
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ValidatedFieldLayoutPlan<'db> {
-    field: ContractFieldId<'db>,
-    name: IdentId<'db>,
-    is_mut: bool,
-    address_space: AddressSpace,
-    declared: TyId<'db>,
+    pub field: ContractFieldId<'db>,
+    pub name: IdentId<'db>,
+    pub is_mut: bool,
+    pub address_space: AddressSpace,
+    /// The field's declared type.
+    pub declared: TyId<'db>,
     /// The slot `#[slot(e)]` places the field at.
     explicit_slot: Option<U256>,
-    slot_count: usize,
+    pub slot_count: usize,
     /// The spaces the field's slot numbers are taken in: its own, when a
     /// part of it lies outside a pinned type, and those its pinned types are
     /// pinned to, which keep their contents at their own slot numbers there
@@ -338,18 +339,14 @@ impl<'db> ContractStorageLayoutResult<'db> {
             .flat_map(|layout| layout.fields.values())
     }
 
-    /// The fields whose layout is valid, by name: index, `is_mut` and
-    /// declared type.
-    pub(crate) fn semantic_fields(
-        &self,
-    ) -> Vec<(IdentId<'db>, ContractFieldId<'db>, bool, TyId<'db>)> {
+    /// The fields whose layout is valid, in declaration order: the
+    /// contract's fields and effect providers to the checker. A field that
+    /// fails layout is left out, and the others still resolve, although the
+    /// contract is not allocated.
+    pub fn valid_fields(&self) -> impl Iterator<Item = &ValidatedFieldLayoutPlan<'db>> {
         self.field_results
             .iter()
-            .filter_map(|field| {
-                let plan = field.result.as_ref().ok()?;
-                Some((field.name, plan.field, plan.is_mut, plan.declared))
-            })
-            .collect()
+            .filter_map(|field| field.result.as_ref().ok())
     }
 }
 
