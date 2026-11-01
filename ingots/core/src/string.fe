@@ -91,6 +91,14 @@ impl<const N: usize> Eq<String<N>> for MemSlice<u8> {
     }
 }
 
+/// Whether the span holds the string's text, so a literal compares with a
+/// span: `"serve" == arg.span()`.
+impl<const N: usize> Eq<MemSlice<u8>> for String<N> {
+    fn eq(self, _ other: MemSlice<u8>) -> bool {
+        other == self
+    }
+}
+
 /// Whether the buffer holds the string's text, as for a span.
 impl<const N: usize> Eq<String<N>> for MemBuffer {
     fn eq(self, _ other: String<N>) -> bool {

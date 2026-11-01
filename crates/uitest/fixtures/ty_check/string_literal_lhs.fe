@@ -11,7 +11,7 @@ fn dynamic(_ s: DynString) -> bool {
     "x" == s && "a literal of thirty-two bytes!!!" != s
 }
 
-// Neither compares with a span.
+// A literal of up to 31 bytes compares with a span, a longer one does not.
 fn span(_ bytes: MemSpan) -> bool {
-    "serve" == bytes
+    "serve" == bytes && "a literal of thirty-two bytes!!!" != bytes
 }

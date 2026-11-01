@@ -56,7 +56,8 @@ leading zero padding, including any interior zero bytes.
 
 A byte span (`MemSpan`) equals a `String<N>` whose `len()` bytes it holds and a
 `DynString` whose bytes it holds, so `arg.span() == "serve"` compares bytes with
-a literal of any length. A `MemBuffer` and a process argument
+a literal of any length. A `String<N>` compares with a span too, so a literal of
+up to 31 bytes may stand on the left: `"serve" == arg.span()`. A `MemBuffer` and a process argument
 (`std::env::Arg`) compare with strings the same way: `args.get(1) == "serve"`.
 Spans (`MemSlice<T>`) compare with each other element by element.
 

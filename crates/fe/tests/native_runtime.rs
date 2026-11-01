@@ -815,7 +815,7 @@ fn aggregate_fixtures_run_at_every_level() {
 fn text_fixtures_run_at_every_level() {
     for (name, expected_count) in [
         ("string_literal_eq.fe", 1),
-        ("span_string_eq.fe", 3),
+        ("span_string_eq.fe", 4),
         ("byte_literals.fe", 1),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))

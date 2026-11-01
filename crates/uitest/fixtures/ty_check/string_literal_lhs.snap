@@ -4,10 +4,10 @@ expression: diags
 input_file: fixtures/ty_check/string_literal_lhs.fe
 ---
 error[8-0016]: `core::ops::Eq` trait is not implemented
-   ┌─ string_literal_lhs.fe:16:5
+   ┌─ string_literal_lhs.fe:16:25
    │
-16 │     "serve" == bytes
-   │     ^^^^^^^^^^^^^^^^
-   │     │
-   │     `==` can't be applied to `String<5>`
-   │     Try implementing `core::ops::Eq` for `String<5>`
+16 │     "serve" == bytes && "a literal of thirty-two bytes!!!" != bytes
+   │                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │                         │
+   │                         `!=` can't be applied to `DynString(32)`
+   │                         Try implementing `core::ops::Eq` for `DynString(32)`

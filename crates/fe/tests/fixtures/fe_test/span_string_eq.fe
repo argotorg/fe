@@ -32,6 +32,18 @@ fn spans_equal_string_text() {
 }
 
 #[test]
+fn string_text_equals_spans() {
+    let serve = buffer("serve")
+    assert!("serve" == serve.span())
+    assert!("serv" != serve.span())
+    assert!("" != serve.span())
+    assert!("" == MemBuffer::empty().span())
+    let padded: String<8> = "serve"
+    assert!(padded == serve.span())
+    assert!(padded != serve.span().head(4))
+}
+
+#[test]
 fn spans_equal_spans() {
     let serve = buffer("serve")
     let served = buffer("served")
