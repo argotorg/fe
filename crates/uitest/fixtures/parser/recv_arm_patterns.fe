@@ -2,7 +2,8 @@
 // Parser-level restrictions:
 // - Only path patterns (e.g., `Baz`) or record patterns (e.g., `Bar { a, b }`) allowed
 // - Tuple patterns like `Foo(a, b)` are rejected at parse time
-// - Record field patterns allow destructuring but reject literal patterns (constraints)
+// - Record field patterns may be any patterns; type checking rejects literal
+//   ones, which may not match every value of the variant
 
 msg TestMsg {
     #[selector = 0x01]
@@ -124,42 +125,42 @@ pub contract BadContract3 {
     }
 }
 
-// Invalid: Literal patterns (constraints) are not allowed
+// Valid parses: literal field patterns, which type checking rejects
 pub contract BadContract4 {
     data: u64,
 
     recv TestMsg {
         Simple {}
 
-        // Error: Literal pattern not allowed in record field
+        // Literal pattern in a record field
         WithFields { a: 42, b } -> bool {
             true
         }
     }
 }
 
-// Invalid: Nested literal in tuple destructuring
+// Valid parse: nested literal in tuple destructuring
 pub contract BadContract5 {
     data: u64,
 
     recv TestMsg {
         Simple {}
 
-        // Error: Literal pattern not allowed inside tuple destructuring
+        // Literal pattern inside tuple destructuring
         WithFields { a: (42, y), b } -> bool {
             true
         }
     }
 }
 
-// Invalid: Nested literal in record destructuring
+// Valid parse: nested literal in record destructuring
 pub contract BadContract6 {
     data: u64,
 
     recv TestMsg {
         Simple {}
 
-        // Error: Literal pattern not allowed inside nested record
+        // Literal pattern inside a nested record
         WithFields { a: Foo { x: 42 }, b } -> bool {
             true
         }

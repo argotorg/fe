@@ -4178,7 +4178,7 @@ impl<'db> TyChecker<'db> {
                             BodyDiag::unit_variant_expected(
                                 self.db,
                                 path_expr_span.clone().into(),
-                                record_like,
+                                Some(record_like),
                             )
                         } else {
                             BodyDiag::NotValue {
@@ -4237,7 +4237,7 @@ impl<'db> TyChecker<'db> {
                             let diag = BodyDiag::unit_variant_expected(
                                 self.db,
                                 expr.span(self.body()).into(),
-                                record_like,
+                                Some(record_like),
                             );
                             self.push_diag(diag);
 

@@ -2898,7 +2898,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let mut labels = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: format!("expected unit variant here, but found {kind_name}"),
+                    message: if let Some(kind_name) = kind_name {
+                        format!("expected unit variant here, but found {kind_name}")
+                    } else {
+                        "expected unit variant here".to_string()
+                    },
                     span: primary.resolve(db),
                 }];
 
@@ -4401,6 +4405,41 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 Severity::Error,
                 "refutable pattern in `for`",
                 "this pattern may not match every step",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::RefutableRecvArmPattern { primary } => primary_diag(
+                Severity::Error,
+                "refutable pattern in a recv arm",
+                "this pattern may not match every value of its variant",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstPatternType { primary, ty } => primary_diag(
+                Severity::Error,
+                "unsupported constant pattern",
+                format!(
+                    "a constant pattern must be an integer or `bool`, but this has type `{}`",
+                    ty.pretty_print(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::GenericConstPattern { primary } => primary_diag(
+                Severity::Error,
+                "unsupported constant pattern",
+                "a constant pattern can't depend on generic parameters",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::InvalidConstPattern { primary } => primary_diag(
+                Severity::Error,
+                "failed to evaluate constant pattern",
+                "this constant's definition is invalid or depends on this pattern",
                 primary.resolve(db),
                 error_code,
             ),

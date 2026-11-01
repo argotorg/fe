@@ -9,7 +9,7 @@ use crate::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path,
+        ExpectedPathKind, PathRes, PathResErrorKind, diagnostics::PathResDiag, resolve_path,
         resolve_path_with_minter, resolve_path_with_observer_and_minter,
         resolve_trait_path_with_observer_and_minter, trait_arg_path_diag,
     },
@@ -410,22 +410,26 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             && let Some(hir_ty) = type_arg.ty.to_opt()
             && let TypeKind::Path(path_partial) = hir_ty.data(self.db)
             && let Some(path) = path_partial.to_opt()
-            && let Ok(resolved) = resolve_path_with_minter(
+        {
+            let resolved = resolve_path_with_minter(
                 self.db,
                 path,
                 ctxt.scope(),
                 self.assumptions,
                 true,
                 &self.path_context(),
-            )
-        {
+            );
+            // An ambiguous value is reported as such, not as a missing type.
             let is_const_like = match resolved {
-                PathRes::Const(..) | PathRes::TraitConst(..) | PathRes::InherentConst(..) => true,
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                Ok(PathRes::Const(..) | PathRes::TraitConst(..) | PathRes::InherentConst(..)) => {
+                    true
+                }
+                Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
                     matches!(ty.data(self.db), TyData::ConstTy(_))
                 }
-                PathRes::EnumVariant(v) => v.ty.is_unit_variant_only_enum(self.db),
-                _ => false,
+                Ok(PathRes::EnumVariant(v)) => v.ty.is_unit_variant_only_enum(self.db),
+                Ok(_) => false,
+                Err(err) => matches!(err.kind, PathResErrorKind::Ambiguous(_)),
             };
 
             if is_const_like {

@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unit_pat_method_path.fe
+---
+error[8-0004]: expected unit variant
+   ┌─ unit_pat_method_path.fe:16:9
+   │
+16 │         S::m => 0
+   │         ^^^^ expected unit variant here
+
+error[8-0004]: expected unit variant
+   ┌─ unit_pat_method_path.fe:23:9
+   │
+23 │         Tr::tm => 0
+   │         ^^^^^^ expected unit variant here

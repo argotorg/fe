@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_tuple_pat.fe
+---
+error[1-0001]: tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead
+   ┌─ recv_arm_tuple_pat.fe:13:10
+   │
+13 │         V(n) -> u256 { n }
+   │          ^ tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead
+
+error[1-0001]: tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead
+   ┌─ recv_arm_tuple_pat.fe:14:13
+   │
+14 │         M::W(n) -> u256 { n }
+   │             ^ tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead
+
+error[1-0001]: tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead
+   ┌─ recv_arm_tuple_pat.fe:20:13
+   │
+20 │         M::V(n) -> u256 { n }
+   │             ^ tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead

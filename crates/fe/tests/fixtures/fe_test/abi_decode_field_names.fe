@@ -1,0 +1,61 @@
+// Decoded fields named like constants in scope, one of them ambiguous,
+// hold the decoded values, and so do the locals of generated encode and
+// decode bodies named like constants their declarations don't mention.
+use core::abi::Decode
+use std::abi::{Sol, sol}
+use std::evm::{Evm, encode_abi_payload}
+use a::*
+use b::*
+
+mod a {
+    pub const m: u256 = 10
+}
+mod b {
+    pub const m: u256 = 20
+}
+
+const n: u256 = 30
+
+const __fe_field_0: u256 = 40
+const __fe_field_1: u256 = 50
+const __fe_tails: u256 = 60
+const __fe_head_pos: u256 = 70
+const __fe_end: u256 = 80
+const __fe_msg_decode_input_len: u256 = 90
+const __fe_abi_struct_input_len: u256 = 100
+
+#[abi]
+pub struct P {
+    pub n: u256,
+    pub m: u256,
+}
+
+#[error]
+pub struct Failed {
+    pub code: u256,
+}
+
+msg M {
+    #[selector = 0x01]
+    V { n: u256, m: u256 } -> u256,
+    #[selector = 0x02]
+    Get { p: P } -> u256,
+}
+
+pub contract C {
+    recv M {
+        V { n: x, m: y } -> u256 { x * 100 + y }
+        Get { p } -> u256 { p.n * 100 + p.m }
+    }
+}
+
+#[test]
+fn decoded_fields_are_not_constants() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    assert(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::V { n: 1, m: 2 }) == 102)
+    assert(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Get { p: P { n: 3, m: 4 } }) == 304)
+    let encoded = encode_abi_payload(P { n: 5, m: 6 })
+    let decoded = <P as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, encoded.len() as u256)
+    assert(decoded.n == 5)
+    assert(decoded.m == 6)
+}

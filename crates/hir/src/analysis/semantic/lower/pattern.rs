@@ -82,7 +82,7 @@ fn assigned_pattern_child_carrier_ty<'db>(
 ) -> TyId<'db> {
     let (container_ty, parent_mode) = destructure_pattern_source(db, parent_carrier_ty);
     let projected_source = project_pattern_child_source_ty(db, container_ty, projection);
-    let assigned_match = pattern_store.node(child).match_ty().raw();
+    let assigned_match = pattern_store.node(child).match_ty();
     let assigned_carrier = with_source_carriers(db, projected_source, assigned_match);
     apply_pattern_borrow_mode(db, parent_mode, assigned_carrier)
 }
@@ -316,20 +316,22 @@ fn switch_first_arm(switch: &SwitchNode<'_>) -> Option<usize> {
 }
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
-    fn validated_pattern_is_irrefutable(&self, pat: ValidatedPatId) -> bool {
-        self.typed_body.pattern_store().is_irrefutable(self.db, pat)
+    /// The checked form of the whole pattern `pat`. A body with a pattern that
+    /// checking rejected isn't lowered.
+    fn validated_root(&self, pat: PatId) -> ValidatedPatId {
+        self.typed_body
+            .pattern_root(pat)
+            .expect("lowering requires checked patterns")
     }
 
     pub(super) fn pattern_is_irrefutable(&self, pat: PatId) -> bool {
         self.typed_body
-            .pattern_root(pat)
-            .is_none_or(|root| self.validated_pattern_is_irrefutable(root))
+            .pattern_store()
+            .is_irrefutable(self.db, self.validated_root(pat))
     }
 
     pub(super) fn bind_pattern(&mut self, pat: PatId, source: PatternSource<'db>) {
-        let Some(root) = self.typed_body.pattern_root(pat) else {
-            return;
-        };
+        let root = self.validated_root(pat);
         match source {
             PatternSource::Value(value) => self.bind_validated_pattern(root, value),
             PatternSource::Place {
@@ -355,10 +357,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         then_bb: SBlockId,
         else_bb: SBlockId,
     ) {
-        let Some(root) = self.typed_body.pattern_root(pat) else {
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
-            return;
-        };
+        let root = self.validated_root(pat);
         let pattern_store = self.typed_body.pattern_store();
         let tree = build_pattern_branch_decision_tree(self.db, pattern_store, root);
         let mut projections =
@@ -689,11 +688,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         join_bb: SBlockId,
         arms: &[MatchArm],
     ) -> SValueId {
-        let roots = arms
+        let roots: Vec<_> = arms
             .iter()
-            .map(|arm| self.typed_body.pattern_root(arm.pat))
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_else(|| panic!("decision-tree match lowering requires validated patterns"));
+            .map(|arm| self.validated_root(arm.pat))
+            .collect();
         let tree = build_decision_tree(self.db, self.typed_body.pattern_store(), &roots);
         let mut projections = DecisionTreeProjectionCache::new(
             self.db,
@@ -841,6 +839,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if idx > 0 {
                     self.switch_to(dispatch_bb);
                 }
+                // A switch's cases cover every value, so the last one needs no
+                // test.
                 let is_last = idx + 1 == case_blocks.len();
                 match case {
                     Case::Default | Case::Constructor(ConstructorKind::Type(_)) => {
@@ -850,8 +850,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         );
                         break;
                     }
-                    Case::Constructor(ctor) if is_last => {
-                        let _ = ctor;
+                    Case::Constructor(_) if is_last => {
                         self.set_synthetic_terminator(
                             self.current,
                             STerminatorKind::Goto(*case_bb),

@@ -19,7 +19,7 @@ use crate::analysis::ty::trait_resolution::{
     GoalSatisfiability, TraitSolveCx, is_goal_satisfiable,
 };
 use crate::analysis::ty::ty_check::eval_msg_variant_selector;
-use crate::analysis::ty::ty_def::TyId;
+use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::analysis::ty::ty_error::diag_from_invalid_cause;
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
@@ -116,6 +116,95 @@ fn check_msg_mod<'db>(
     diags
 }
 
+/// Why a msg variant's field fails the requirements of the variant's
+/// generated impls.
+enum FieldAbiFailure<'db> {
+    /// An invalid or recursive type, which is reported where it is written.
+    ReportedElsewhere,
+    /// A const in the type's ABI shape that failed evaluation.
+    InvalidConst {
+        cause: InvalidCause<'db>,
+        message: String,
+    },
+    /// A type with no ABI representation.
+    Unsupported(String),
+    /// The codec traits the type doesn't implement.
+    MissingTraits(Vec<&'static str>),
+}
+
+/// The fields of the msg variant `struct_` that fail the requirements of its
+/// generated impls, with their indices and types.
+fn field_abi_failures<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: Struct<'db>,
+) -> Vec<(usize, TyId<'db>, FieldAbiFailure<'db>)> {
+    let (Some(sol_ty), Some(abi_size_trait), Some(encode_trait), Some(decode_trait)) = (
+        resolve_lib_type_path(db, struct_.scope(), "std::abi::Sol"),
+        resolve_core_trait(db, struct_.scope(), &["abi", "AbiSize"]),
+        resolve_core_trait(db, struct_.scope(), &["abi", "Encode"]),
+        resolve_core_trait(db, struct_.scope(), &["abi", "Decode"]),
+    ) else {
+        return Vec::new();
+    };
+
+    let solve_cx = TraitSolveCx::new(db, struct_.scope());
+    let adt = AdtRef::from(struct_).as_adt(db);
+    struct_
+        .field_tys(db)
+        .into_iter()
+        .map(|ty| ty.instantiate_identity())
+        .enumerate()
+        .filter_map(|(idx, field_ty)| {
+            if field_ty.has_invalid(db) {
+                return Some((idx, field_ty, FieldAbiFailure::ReportedElsewhere));
+            }
+            let source = instantiate_adt_field_source_for_concrete_demand(db, adt, 0, idx, &[]);
+            let failure = match semantic_ty_to_abi_desc_with_source(
+                db,
+                ConcreteTypeView::new(field_ty, source),
+            ) {
+                Err(AbiTypeError::Recursive(_)) => FieldAbiFailure::ReportedElsewhere,
+                Err(AbiTypeError::InvalidConst { cause, message }) => {
+                    FieldAbiFailure::InvalidConst { cause, message }
+                }
+                Err(AbiTypeError::Unsupported(reason)) => FieldAbiFailure::Unsupported(reason),
+                Ok(_) => {
+                    let traits: Vec<_> = [
+                        ("AbiSize", abi_size_trait, vec![field_ty]),
+                        ("Encode<Sol>", encode_trait, vec![field_ty, sol_ty]),
+                        ("Decode<Sol>", decode_trait, vec![field_ty, sol_ty]),
+                    ]
+                    .into_iter()
+                    .filter(|(_, trait_, args)| {
+                        let goal = TraitInstId::new_simple(db, *trait_, args.clone());
+                        matches!(
+                            is_goal_satisfiable(db, solve_cx, goal),
+                            GoalSatisfiability::UnSat(_)
+                                | GoalSatisfiability::NeedsConfirmation { .. }
+                        )
+                    })
+                    .map(|(name, ..)| name)
+                    .collect();
+                    if traits.is_empty() {
+                        return None;
+                    }
+                    FieldAbiFailure::MissingTraits(traits)
+                }
+            };
+            Some((idx, field_ty, failure))
+        })
+        .collect()
+}
+
+/// Whether the generated impls of the msg variant `struct_` go undiagnosed,
+/// because its fields are reported instead.
+pub(crate) fn msg_variant_reported_at_source<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: Struct<'db>,
+) -> bool {
+    !field_abi_failures(db, struct_).is_empty()
+}
+
 fn check_variant_field_abi_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -124,70 +213,26 @@ fn check_variant_field_abi_requirements<'db>(
     diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
     ty_diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
-    let (Some(sol_ty), Some(abi_size_trait), Some(encode_trait), Some(decode_trait)) = (
-        resolve_lib_type_path(db, struct_.scope(), "std::abi::Sol"),
-        resolve_core_trait(db, struct_.scope(), &["abi", "AbiSize"]),
-        resolve_core_trait(db, struct_.scope(), &["abi", "Encode"]),
-        resolve_core_trait(db, struct_.scope(), &["abi", "Decode"]),
-    ) else {
-        return;
-    };
-
-    let solve_cx = TraitSolveCx::new(db, struct_.scope());
-    let adt = AdtRef::from(struct_).as_adt(db);
-    for (idx, field_ty) in struct_
-        .field_tys(db)
-        .into_iter()
-        .map(|ty| ty.instantiate_identity())
-        .enumerate()
-    {
-        if field_ty.has_invalid(db) {
-            continue;
-        }
-
-        let source = instantiate_adt_field_source_for_concrete_demand(db, adt, 0, idx, &[]);
-        let kind = match semantic_ty_to_abi_desc_with_source(
-            db,
-            ConcreteTypeView::new(field_ty, source),
-        ) {
-            Err(AbiTypeError::Recursive(_)) => continue,
-            Err(AbiTypeError::InvalidConst { cause, message }) => {
+    for (idx, field_ty, failure) in field_abi_failures(db, struct_) {
+        let ty = field_ty.pretty_print(db).to_string();
+        let kind = match failure {
+            FieldAbiFailure::ReportedElsewhere => continue,
+            FieldAbiFailure::InvalidConst { cause, message } => {
                 let span = struct_.span().fields().field(idx).ty().into();
                 if let Some(diag) = diag_from_invalid_cause(span, &cause) {
                     ty_diags.push(diag.into());
                     continue;
                 }
                 MsgDiagnosticKind::UnsupportedAbiField {
-                    ty: field_ty.pretty_print(db).to_string(),
+                    ty,
                     reason: message,
                 }
             }
-            Err(AbiTypeError::Unsupported(reason)) => MsgDiagnosticKind::UnsupportedAbiField {
-                ty: field_ty.pretty_print(db).to_string(),
-                reason,
-            },
-            Ok(_) => {
-                let mut traits = Vec::new();
-                for (name, trait_, args) in [
-                    ("AbiSize", abi_size_trait, vec![field_ty]),
-                    ("Encode<Sol>", encode_trait, vec![field_ty, sol_ty]),
-                    ("Decode<Sol>", decode_trait, vec![field_ty, sol_ty]),
-                ] {
-                    let goal = TraitInstId::new_simple(db, trait_, args);
-                    if matches!(
-                        is_goal_satisfiable(db, solve_cx, goal),
-                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
-                    ) {
-                        traits.push(name);
-                    }
-                }
-                if traits.is_empty() {
-                    continue;
-                }
-                MsgDiagnosticKind::MissingAbiTraits {
-                    ty: field_ty.pretty_print(db).to_string(),
-                    traits,
-                }
+            FieldAbiFailure::Unsupported(reason) => {
+                MsgDiagnosticKind::UnsupportedAbiField { ty, reason }
+            }
+            FieldAbiFailure::MissingTraits(traits) => {
+                MsgDiagnosticKind::MissingAbiTraits { ty, traits }
             }
         };
 

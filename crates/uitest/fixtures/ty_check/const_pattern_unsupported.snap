@@ -1,0 +1,115 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_pattern_unsupported.fe
+---
+error[3-0025]: division by zero in const context
+   ┌─ const_pattern_unsupported.fe:32:19
+   │
+32 │ const BAD: u256 = 1 / 0
+   │                   ^^^^^ cannot divide by zero
+
+error[3-0073]: division by zero in const context
+   ┌─ const_pattern_unsupported.fe:44:20
+   │
+25 │     const INV: u256 = 1 / N
+   │                       ----- cannot divide by zero
+   ·
+44 │         W { value: G<0>::INV } -> u256 { 2 }
+   │                    ^^^^^^^^^ while evaluating this
+
+error[3-0073]: division by zero in const context
+   ┌─ const_pattern_unsupported.fe:77:9
+   │
+25 │     const INV: u256 = 1 / N
+   │                       ----- cannot divide by zero
+   ·
+77 │     let G<0>::INV = x
+   │         ^^^^^^^^^ while evaluating this
+
+error[3-0073]: division by zero in const context
+   ┌─ const_pattern_unsupported.fe:79:9
+   │
+32 │ const BAD: u256 = 1 / 0
+   │                   ----- cannot divide by zero
+   ·
+79 │         BAD => 1
+   │         ^^^ while evaluating this
+
+error[3-0073]: division by zero in const context
+   ┌─ const_pattern_unsupported.fe:80:9
+   │
+25 │     const INV: u256 = 1 / N
+   │                       ----- cannot divide by zero
+   ·
+80 │         G<0>::INV => 2
+   │         ^^^^^^^^^ while evaluating this
+
+error[3-0073]: division by zero in const context
+    ┌─ const_pattern_unsupported.fe:102:9
+    │
+ 89 │     const D: Self::X = 1 / 0
+    │                        ----- cannot divide by zero
+    ·
+102 │         A::D => 1
+    │         ^^^^ while evaluating this
+
+error[6-0015]: missing associated const in trait implementation
+    ┌─ const_pattern_unsupported.fe:112:18
+    │
+112 │ impl Omitted for A {}
+    │                  ^ missing associated const `O` from trait `Omitted`
+
+error[8-0154]: unsupported constant pattern
+   ┌─ const_pattern_unsupported.fe:43:19
+   │
+43 │         V { pair: FIXED } -> u256 { 1 }
+   │                   ^^^^^ a constant pattern must be an integer or `bool`, but this has type `Pair`
+
+error[8-0154]: unsupported constant pattern
+   ┌─ const_pattern_unsupported.fe:49:9
+   │
+49 │     let FIXED = p
+   │         ^^^^^ a constant pattern must be an integer or `bool`, but this has type `Pair`
+
+error[8-0154]: unsupported constant pattern
+   ┌─ const_pattern_unsupported.fe:51:9
+   │
+51 │         FIXED => 1
+   │         ^^^^^ a constant pattern must be an integer or `bool`, but this has type `Pair`
+
+error[8-0154]: unsupported constant pattern
+   ┌─ const_pattern_unsupported.fe:57:9
+   │
+57 │         EX => 1
+   │         ^^ a constant pattern must be an integer or `bool`, but this has type `E`
+
+error[8-0154]: unsupported constant pattern
+   ┌─ const_pattern_unsupported.fe:59:13
+   │
+59 │             S => 2
+   │             ^ a constant pattern must be an integer or `bool`, but this has type `String<5>`
+
+error[8-0155]: unsupported constant pattern
+   ┌─ const_pattern_unsupported.fe:67:9
+   │
+67 │         T::C => 1
+   │         ^^^^ a constant pattern can't depend on generic parameters
+
+error[8-0156]: failed to evaluate constant pattern
+   ┌─ const_pattern_unsupported.fe:96:5
+   │
+96 │     SELF => 1
+   │     ^^^^ this constant's definition is invalid or depends on this pattern
+
+error[8-0156]: failed to evaluate constant pattern
+    ┌─ const_pattern_unsupported.fe:103:9
+    │
+103 │         SELF => 2
+    │         ^^^^ this constant's definition is invalid or depends on this pattern
+
+error[8-0156]: failed to evaluate constant pattern
+    ┌─ const_pattern_unsupported.fe:116:9
+    │
+116 │         A::O => 1
+    │         ^^^^ this constant's definition is invalid or depends on this pattern
