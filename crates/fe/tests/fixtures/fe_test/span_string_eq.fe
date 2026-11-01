@@ -16,6 +16,9 @@ fn spans_equal_string_text() {
     assert!(serve.span() != "serv")
     assert!(serve.span() != "serves")
     assert!(serve.span() != "sErve")
+    assert!(serve == "serve")
+    assert!(serve != "serv")
+    assert!(MemBuffer::empty() == "")
     assert!(MemBuffer::empty().span() == "")
     assert!(serve.span() != "")
     // A string's text is its bytes after the zero padding.

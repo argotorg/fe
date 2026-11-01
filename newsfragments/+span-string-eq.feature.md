@@ -1,1 +1,1 @@
-A byte span (`MemSpan`) compares with a string of up to 31 bytes, such as a literal: `arg.span() == "serve"` checks a command-line argument. Slices (`MemSlice<T>`) compare with each other element by element.
+A byte span (`MemSpan`), a `MemBuffer` or a command-line argument (`std::env::Arg`) compares with a string of up to 31 bytes, such as a literal: `args.get(1) == "serve"` checks a command-line argument. Slices (`MemSlice<T>`) compare with each other element by element.
