@@ -1,3 +1,4 @@
+use common::ingot::IngotKind;
 use parser::ast::{self, SyntaxNodePtr, prelude::*};
 
 use super::body::BodyCtxt;
@@ -392,8 +393,16 @@ impl<'db> Expr<'db> {
         let db = ctxt.f_ctxt.db();
         let ptr = SyntaxNodePtr::new(ast.syntax());
         let text = PathId::from_ident(db, IdentId::new(db, "%text".to_owned()));
-        let buffer_ty = PathId::from_segments(db, &["core", "MemBuffer"]);
-        let io = PathId::from_segments(db, &["std", "io"]);
+        // `core` and `std` are `ingot` within themselves, so std can use the
+        // macros.
+        let buffer_ty = ctxt
+            .f_ctxt
+            .builtin_ingot_path(IngotKind::Core, "core")
+            .push_str(db, "MemBuffer");
+        let io = ctxt
+            .f_ctxt
+            .builtin_ingot_path(IngotKind::Std, "std")
+            .push_str(db, "io");
         let text_path = |ctxt: &mut BodyCtxt<'_, 'db>| {
             ctxt.push_expr(Self::Path(Partial::Present(text)), HirOrigin::Expanded(ptr))
         };
