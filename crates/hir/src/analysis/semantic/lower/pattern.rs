@@ -1075,6 +1075,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 bytes_const(self.db, ty, bytes)
             }
             LitKind::Bool(value) => bool_const(self.db, value),
+            LitKind::Byte(byte) => int_const(self.db, ty, BigInt::from(byte)),
         };
         self.emit_expr(
             ty,

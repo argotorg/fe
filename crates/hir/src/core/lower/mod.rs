@@ -432,6 +432,8 @@ impl<'db> LitKind<'db> {
                 // their source spelling as a valid semantic string.
                 Self::String(StringId::new(ctxt.db(), string.value().ok()?))
             }
+            // Parsing diagnosed invalid byte literals.
+            ast::LitKind::Byte(byte) => Self::Byte(byte.value().ok()?),
             ast::LitKind::Bool(bool) => match bool.token().text() {
                 "true" => Self::Bool(true),
                 "false" => Self::Bool(false),

@@ -1,0 +1,18 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/byte_literals.fe
+---
+error[8-0000]: type mismatch
+  ┌─ byte_literals.fe:3:10
+  │
+3 │     x == b'a' || x == b'a' as u256
+  │          ^^^^ expected `u256`, but `u8` is given
+
+error[8-0035]: unreachable pattern
+   ┌─ byte_literals.fe:10:9
+   │
+10 │         97 => 2
+   │         ^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values

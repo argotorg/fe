@@ -1395,6 +1395,7 @@ module.exports = grammar({
     literal_pattern: $ => choice(
       $.integer_literal,
       $.string_literal,
+      $.byte_literal,
       $.boolean_literal,
       seq('-', $.integer_literal),
     ),
@@ -1534,6 +1535,7 @@ module.exports = grammar({
       $.identifier,
       $.integer_literal,
       $.string_literal,
+      $.byte_literal,
       $.boolean_literal,
       // Function call in attribute: sol("...") or std::abi::sol("...")
       $.attribute_call_expression,
@@ -1564,6 +1566,7 @@ module.exports = grammar({
     literal: $ => choice(
       $.integer_literal,
       $.string_literal,
+      $.byte_literal,
       $.boolean_literal,
     ),
 
@@ -1588,6 +1591,17 @@ module.exports = grammar({
     escape_sequence: $ => token.immediate(seq(
       '\\',
       /[\\"nrt]/,
+    )),
+
+    // `b'x'`: one ASCII character or an escape, a `u8`.
+    byte_literal: $ => token(seq(
+      "b'",
+      choice(
+        /[^'\\\n\r]/,
+        /\\[nrt0\\'"]/,
+        /\\x[0-9a-fA-F]{2}/,
+      ),
+      "'",
     )),
 
     boolean_literal: $ => choice('true', 'false'),
