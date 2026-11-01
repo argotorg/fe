@@ -189,6 +189,43 @@ fn test_cli_check_uses_the_backend_target() {
     assert!(output.contains("static assertion failed"), "{output}");
 }
 
+// A module's `#![cfg(..)]` drops the modules in its directory too.
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_check_module_cfg_drops_submodules() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    let pointer_bytes =
+        |bytes| format!("pub fn f() {{\n    static_assert(core::size_of<*u8>() == {bytes})\n}}\n");
+    for (path, content) in [
+        (
+            "fe.toml",
+            "[ingot]\nname = \"cfg_tree\"\nversion = \"0.1.0\"\n".to_string(),
+        ),
+        ("src/lib.fe", String::new()),
+        (
+            "src/native.fe",
+            "#![cfg(target = \"native\")]\n".to_string(),
+        ),
+        ("src/native/word.fe", pointer_bytes(8)),
+        ("src/native/word/inner.fe", pointer_bytes(8)),
+        ("src/evm.fe", "#![cfg(target = \"evm\")]\n".to_string()),
+        ("src/evm/word.fe", pointer_bytes(32)),
+    ] {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+        fs::write(path, content).expect("write fixture");
+    }
+    let root = root.to_str().expect("UTF-8 ingot path");
+    for args in [
+        &["check", root][..],
+        &["check", "--backend", "native", root],
+    ] {
+        let (output, exit_code) = run_fe_main(args);
+        assert_eq!(exit_code, 0, "{args:?}:\n{output}");
+    }
+}
+
 #[test]
 fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");

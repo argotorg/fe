@@ -156,11 +156,31 @@ pub(crate) fn scope_graph_impl<'db>(
 
     if let Some(items) = ast.items() {
         item::validate_module_inner_attrs(&mut ctxt, items.inner_attr_list());
-        lower_module_items(&mut ctxt, items);
+        if enclosing_cfg_holds_impl(db, top_mod) {
+            lower_module_items(&mut ctxt, items);
+        }
     }
     ctxt.leave_item_scope(top_mod);
 
     ctxt.build()
+}
+
+/// Whether the `#![cfg(..)]` attributes of every file module enclosing
+/// `top_mod` hold, so that a module's `cfg` drops the modules in its
+/// directory along with its own items.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn enclosing_cfg_holds_impl<'db>(db: &'db dyn HirDb, top_mod: TopLevelMod<'db>) -> bool {
+    top_mod.parent(db).is_none_or(|parent| {
+        enclosing_cfg_holds_impl(db, parent)
+            && attr::named_attr_specs(
+                top_mod_ast(db, parent)
+                    .items()
+                    .and_then(|items| items.inner_attr_list()),
+                "cfg",
+            )
+            .iter()
+            .all(|spec| attr::cfg_spec_holds(db, spec) == Some(true))
+    })
 }
 
 /// Returns the scope graph of the body of `func`, lowered on its own, or `None`

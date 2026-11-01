@@ -2624,6 +2624,7 @@ dependencies = [
  "fe-fmt",
  "fe-hir",
  "fe-test-utils",
+ "salsa",
  "url",
  "wasm-bindgen-test",
 ]

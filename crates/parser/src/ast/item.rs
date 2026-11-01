@@ -50,6 +50,11 @@ impl Item {
             .or_else(|| support::child(self.syntax()).map(ItemKind::Use))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Extern))
     }
+
+    /// The attributes of the item, whatever its kind.
+    pub fn attr_list(&self) -> Option<super::AttrList> {
+        support::child(&self.syntax().first_child()?)
+    }
 }
 
 ast_node! {
