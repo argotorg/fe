@@ -4442,7 +4442,9 @@ impl<'db> Impl<'db> {
             TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
             ty,
         ) {
-            WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
+            WellFormedness::WellFormed | WellFormedness::Pending(_) => {
+                InherentImplAdmissibility::Admissible { ty }
+            }
             WellFormedness::IllFormed { goal, subgoal } => {
                 InherentImplAdmissibility::IllFormed { ty, goal, subgoal }
             }

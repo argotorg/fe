@@ -1,0 +1,1610 @@
+use common::InputDb;
+use fe_driver::{DriverDataBase, generation::prepare_file};
+use hir::analysis::{
+    semantic::{EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const},
+    ty::ty_check::BodyOwner,
+};
+use url::Url;
+
+fn input(source: &str) -> (DriverDataBase, common::file::File) {
+    let mut db = DriverDataBase::default();
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap(),
+        Some(source.into()),
+    );
+    (db, file)
+}
+
+fn prepare(source: &str) -> Result<DriverDataBase, String> {
+    let (db, file) = input(source);
+    let result = prepare_file(&db, file)
+        .map_err(|e| e.cause)?
+        .ok_or_else(|| "expected generation output database".to_string())?;
+    assert!(db.generation_inputs().functions(&db).is_empty());
+    assert_eq!(file.text(&db).as_str(), source);
+    Ok(result)
+}
+
+fn prepare_err(source: &str) -> String {
+    match prepare(source) {
+        Ok(_) => panic!("expected prepare_file to fail, but it succeeded"),
+        Err(err) => err,
+    }
+}
+
+fn eval_const_fn_u256(db: &DriverDataBase, fn_name: &str) -> String {
+    let url = Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap();
+    let file = db.workspace().get(db, &url).unwrap();
+    let module = db.top_mod(file);
+    let function = module
+        .all_funcs(db)
+        .iter()
+        .copied()
+        .find(|f| {
+            f.name(db)
+                .to_opt()
+                .is_some_and(|name| name.data(db) == fn_name)
+        })
+        .unwrap_or_else(|| panic!("missing function `{fn_name}`"));
+    let owner = BodyOwner::Func(function, None);
+    let outcome = eval_body_owner_const(
+        db,
+        owner,
+        GenericSubst::for_body_owner(db, owner, Vec::new()),
+    );
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("expected Ready for `{fn_name}`, got {outcome:?}");
+    };
+    let SemConstValue::Scalar {
+        value: SemConstScalar::Int { value },
+        ..
+    } = value.value(db)
+    else {
+        panic!("expected Int scalar for `{fn_name}`");
+    };
+    value.to_string()
+}
+
+#[test]
+fn derive_on_demand_in_with_block_for_struct_and_enum() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item, field_count, variant_count}
+
+trait Score {
+    const fn score() -> u256
+}
+
+trait ItemScore {
+    const fn item_score(self) -> u256
+}
+
+pub struct Pair {
+    pub a: u256,
+    pub b: u256,
+}
+
+pub enum Choice {
+    One,
+    Two,
+    Three,
+}
+
+struct FieldCountScore {}
+impl Derive<Score> for FieldCountScore {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote {
+            const fn score() -> u256 { 20 + ${n} }
+        }
+    }
+}
+impl Derive<ItemScore> for FieldCountScore {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote {
+            const fn item_score(self) -> u256 { 30 + ${n} }
+        }
+    }
+}
+
+struct VariantCountScore {}
+impl Derive<Score> for VariantCountScore {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = variant_count(record) as u256
+        quote {
+            const fn score() -> u256 { 40 + ${n} }
+        }
+    }
+}
+
+const fn check_type_and_method_calls() -> u256 {
+    let p = Pair { a: 1, b: 2 }
+    let a = with (FieldCountScore) {
+        Pair::score() + p.item_score()
+    }
+    let b = with (VariantCountScore {}) {
+        Choice::score()
+    }
+    a + b
+}
+
+const fn Helper<T: Score + ItemScore>(_ x: T) -> u256 {
+    T::score() + x.item_score()
+}
+
+const fn check_generic_bound_delivery() -> u256 {
+    let p = Pair { a: 1, b: 2 }
+    with (FieldCountScore) {
+        Helper(p)
+    }
+}
+"#;
+    let output = prepare(source).expect("scoped on-demand derive should succeed");
+    // Pair has 2 fields -> score() = 22, item_score() = 32; Choice has 3 variants -> score() = 43.
+    // Total = 22 + 32 + 43 = 97.
+    assert_eq!(
+        eval_const_fn_u256(&output, "check_type_and_method_calls"),
+        "97"
+    );
+    // Helper(p) -> 22 + 32 = 54.
+    assert_eq!(
+        eval_const_fn_u256(&output, "check_generic_bound_delivery"),
+        "54"
+    );
+
+    // Each opening retains its selected behavior, and prepared output cannot
+    // be submitted as a new authored generation input.
+    let url = Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap();
+    let output_file = output.workspace().get(&output, &url).unwrap();
+    let second_pass_err = prepare_file(&output, output_file)
+        .err()
+        .expect("second generation pass on output DB must be refused");
+    assert!(
+        second_pass_err.cause.contains("authored input view"),
+        "{}",
+        second_pass_err.cause
+    );
+}
+
+#[test]
+fn derive_on_demand_outside_block_and_unparameterized_callee_do_not_leak() {
+    let outside_block = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+pub struct Pair {
+    pub a: u256,
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const fn score() -> u256 { 42 }
+        }
+    }
+}
+
+const fn inside() -> u256 {
+    with (Provider) {
+        Pair::score()
+    }
+}
+
+const fn outside() -> u256 {
+    Pair::score()
+}
+"#;
+    let err = prepare_err(outside_block);
+    assert!(err.contains("generated output admission failed"), "{err}");
+
+    let callee_body = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+pub struct Pair {
+    pub a: u256,
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const fn score() -> u256 { 42 }
+        }
+    }
+}
+
+const fn unparameterized_callee() -> u256 {
+    Pair::score()
+}
+
+const fn caller() -> u256 {
+    with (Provider) {
+        let a = Pair::score()
+        a + unparameterized_callee()
+    }
+}
+"#;
+    let callee_err = prepare_err(callee_body);
+    assert!(
+        callee_err.contains("generated output admission failed"),
+        "{callee_err}"
+    );
+}
+
+#[test]
+fn closer_wins_over_ordinary_impl_and_nested_with_frames() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item, field_count}
+
+trait Score {
+    const fn score(self) -> u256
+}
+
+pub struct Pair {
+    pub a: u256,
+    pub b: u256,
+}
+
+impl Score for Pair {
+    const fn score(self) -> u256 { 10 }
+}
+
+impl Score for Pair as NamedScore {
+    const fn score(self) -> u256 { 90 }
+}
+
+struct ProviderA {}
+impl Derive<Score> for ProviderA {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote {
+            const fn score(self) -> u256 { 20 + ${n} }
+        }
+    }
+}
+
+struct ProviderB {}
+impl Derive<Score> for ProviderB {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote {
+            const fn score(self) -> u256 { 100 + ${n} }
+        }
+    }
+}
+
+const fn ordinary_then_scoped_then_restored() -> u256 {
+    let p = Pair { a: 1, b: 2 }
+    let before = p.score()
+    let during = with (ProviderA) {
+        p.score()
+    }
+    let after = p.score()
+    before * 10000 + during * 100 + after
+}
+
+const fn nested_named_and_providers() -> u256 {
+    let p = Pair { a: 1, b: 2 }
+    let a = with (NamedScore) {
+        let outer_named = p.score()
+        let inner_prov = with (ProviderA) {
+            p.score()
+        }
+        let restored_named = p.score()
+        outer_named + inner_prov + restored_named
+    }
+    let b = with (ProviderA) {
+        let outer_prov = p.score()
+        let inner_named = with (NamedScore) {
+            p.score()
+        }
+        let inner_prov_b = with (ProviderB) {
+            p.score()
+        }
+        let restored_prov = p.score()
+        outer_prov + inner_named + inner_prov_b + restored_prov
+    }
+    a * 1000 + b
+}
+"#;
+    let output = prepare(source).expect("closer-wins scoped derive should succeed");
+    // before = 10; during = 22; after = 10 -> 102210
+    assert_eq!(
+        eval_const_fn_u256(&output, "ordinary_then_scoped_then_restored"),
+        "102210"
+    );
+    // a = 90 + 22 + 90 = 202
+    // b = 22 + 90 + 102 + 22 = 236
+    // a * 1000 + b = 202236
+    assert_eq!(
+        eval_const_fn_u256(&output, "nested_named_and_providers"),
+        "202236"
+    );
+}
+
+#[test]
+fn same_header_ambiguity_and_canonical_trait_refuse_before_provider_ctfe() {
+    let provider_and_named = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+pub struct Pair {}
+
+impl Score for Pair as NamedScore {
+    const fn score() -> u256 { 90 }
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote {
+            const fn score() -> u256 { ${fault} }
+        }
+    }
+}
+
+const fn conflict() -> u256 {
+    with (Provider, NamedScore) {
+        Pair::score()
+    }
+}
+"#;
+    let rendered = prepare_err(provider_and_named);
+    assert!(
+        rendered
+            .contains("one `with` header gives a derive provider and a choice for the same trait")
+            && !rendered.contains("division by zero"),
+        "{rendered}"
+    );
+
+    let two_providers = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+pub struct Pair {}
+
+struct ProviderA {}
+impl Derive<Score> for ProviderA {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${fault} } }
+    }
+}
+
+struct ProviderB {}
+impl Derive<Score> for ProviderB {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { 2 } }
+    }
+}
+
+const fn conflict() -> u256 {
+    with (ProviderA, ProviderB) {
+        Pair::score()
+    }
+}
+"#;
+    for source in [
+        two_providers.to_owned(),
+        two_providers.replace("ProviderA, ProviderB", "ProviderB, ProviderA"),
+    ] {
+        let rendered2 = prepare_err(&source);
+        assert!(
+            rendered2.contains("one `with` header gives two derive providers for the same trait")
+                && !rendered2.contains("division by zero"),
+            "{rendered2}"
+        );
+    }
+
+    let canonical_scoped = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+#[canonical]
+trait CanonicalScore {
+    const fn score() -> u256
+}
+
+pub struct Pair {}
+
+struct Provider {}
+impl Derive<CanonicalScore> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote {
+            const fn score() -> u256 { ${fault} }
+        }
+    }
+}
+
+const fn forbidden() -> u256 {
+    with (Provider) {
+        Pair::score()
+    }
+}
+"#;
+    let rendered3 = prepare_err(canonical_scoped);
+    assert!(
+        rendered3.contains(
+            "scoped derive of canonical or library goals requires a separate authority API"
+        ) && !rendered3.contains("division by zero"),
+        "{rendered3}"
+    );
+}
+
+#[test]
+fn preflight_admission_refuses_false_provider_and_ill_formed_nominals_before_ctfe() {
+    let false_provider_cond = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+pub struct Pair {}
+
+struct BadProvider {}
+impl Derive<Score> for BadProvider where false {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote {
+            const fn score() -> u256 { ${fault} }
+        }
+    }
+}
+
+const fn run() -> u256 {
+    with (BadProvider) {
+        Pair::score()
+    }
+}
+"#;
+    let err = prepare_err(false_provider_cond);
+    assert!(
+        err.contains("provider application not admitted")
+            && err.contains("const where predicate failed")
+            && !err.contains("division by zero"),
+        "{err}"
+    );
+
+    let ill_formed_provider_nominal = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+pub struct Pair {}
+
+struct BadProvider where false {}
+impl Derive<Score> for BadProvider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote {
+            const fn score() -> u256 { ${fault} }
+        }
+    }
+}
+
+const fn run() -> u256 {
+    with (BadProvider) {
+        Pair::score()
+    }
+}
+"#;
+    let err2 = prepare_err(ill_formed_provider_nominal);
+    assert!(
+        err2.contains("const where predicate failed")
+            && err2.contains("BadProvider")
+            && !err2.contains("division by zero"),
+        "{err2}"
+    );
+
+    let ill_formed_target_nominal = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+pub struct BadTarget where false {}
+
+struct FaultingProvider {}
+impl Derive<Score> for FaultingProvider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote {
+            const fn score() -> u256 { ${fault} }
+        }
+    }
+}
+
+const fn run() -> u256 {
+    with (FaultingProvider) {
+        BadTarget::score()
+    }
+}
+"#;
+    let err3 = prepare_err(ill_formed_target_nominal);
+    assert!(
+        err3.contains("const where predicate failed")
+            && err3.contains("BadTarget")
+            && !err3.contains("division by zero"),
+        "{err3}"
+    );
+
+    let generic_target = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+struct FaultingProvider {}
+impl Derive<Score> for FaultingProvider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote {
+            const fn score() -> u256 { ${fault} }
+        }
+    }
+}
+
+const fn generic_caller<T>(_ x: T) -> u256 {
+    with (FaultingProvider) {
+        T::score()
+    }
+}
+"#;
+    let err4 = prepare_err(generic_target);
+    assert!(
+        err4.contains("scoped derive requires a concrete authored record")
+            && !err4.contains("division by zero"),
+        "{err4}"
+    );
+}
+
+#[test]
+fn written_types_refuse_provider_choices_while_ordinary_layout_stays_valid() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> usize
+}
+
+pub struct Pair {}
+
+impl Score for Pair {
+    const fn score() -> usize { 2 }
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const fn score() -> usize { 4 }
+        }
+    }
+}
+
+const fn array_len_under_provider() -> usize {
+    with (Provider) {
+        let xs: [u256; Pair::score()] = [0; 2]
+        Pair::score()
+    }
+}
+"#;
+    let err = prepare_err(source);
+    assert!(
+        err.contains("8-0138") && err.contains("this written type reads a chosen implementation"),
+        "{err}"
+    );
+    let ordinary = source.replace("with (Provider) {", "{");
+    let (db, file) = input(&ordinary);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    let diagnostics = db.run_on_top_mod(db.top_mod(file));
+    assert!(
+        !diagnostics.has_errors(&db),
+        "ordinary layout must remain valid"
+    );
+    assert_eq!(eval_const_fn_u256(&db, "array_len_under_provider"), "2");
+}
+
+#[test]
+fn non_derivable_targets_under_with_provider_refuse_instead_of_falling_back() {
+    let primitive_method = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score(self) -> u256
+}
+
+impl Score for u256 {
+    const fn score(self) -> u256 { 10 }
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote {
+            const fn score(self) -> u256 { ${fault} }
+        }
+    }
+}
+
+const fn run() -> u256 {
+    let x: u256 = 5
+    with (Provider) {
+        x.score()
+    }
+}
+"#;
+    let err1 = prepare_err(primitive_method);
+    assert!(
+        err1.contains("scoped derive requires a concrete authored record")
+            && !err1.contains("division by zero"),
+        "{err1}"
+    );
+
+    let primitive_bound_call = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score(self) -> u256
+}
+
+impl Score for u256 {
+    const fn score(self) -> u256 { 10 }
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const fn score(self) -> u256 { 42 }
+        }
+    }
+}
+
+const fn score_of<T: Score>(_ x: T) -> u256 {
+    x.score()
+}
+
+const fn run() -> u256 {
+    let x: u256 = 5
+    with (Provider) {
+        score_of(x)
+    }
+}
+"#;
+    let err2 = prepare_err(primitive_bound_call);
+    assert!(
+        err2.contains("scoped derive requires a concrete authored record"),
+        "{err2}"
+    );
+
+    let generic_bound_fallback = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score(self) -> u256
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const fn score(self) -> u256 { 42 }
+        }
+    }
+}
+
+const fn generic_caller<T: Score>(_ x: T) -> u256 {
+    with (Provider) {
+        x.score()
+    }
+}
+"#;
+    let err4 = prepare_err(generic_bound_fallback);
+    assert!(
+        err4.contains("scoped derive requires a concrete authored record"),
+        "{err4}"
+    );
+}
+
+#[test]
+fn unmaterialized_scoped_derive_demand_fails_closed() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score(self) -> u256
+}
+
+pub struct Pair {
+    pub a: u256,
+}
+
+impl Score for Pair {
+    const fn score(self) -> u256 { 10 }
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const fn score(self) -> u256 { 42 }
+        }
+    }
+}
+
+const fn run() -> u256 {
+    let p = Pair { a: 1 }
+    with (Provider) {
+        p.score()
+    }
+}
+"#;
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///unmaterialized_scoped_derive.fe").unwrap();
+    let file = db.workspace().touch(&mut db, url, Some(source.to_owned()));
+    let top_mod = db.top_mod(file);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| func.name(&db).to_opt().map(|id| id.data(&db).as_str()) == Some("run"))
+        .expect("expected `run` function");
+    let (diags, typed) = hir::analysis::ty::ty_check::check_func_body(&db, func);
+    assert!(
+        typed
+            .generation_demands()
+            .iter()
+            .any(|request| request.demand.is_ok()),
+        "raw checking must preserve the actual preparation request"
+    );
+    assert!(
+        diags.iter().any(|diag| matches!(
+            diag,
+            hir::analysis::ty::diagnostics::FuncBodyDiag::Body(
+                hir::analysis::ty::diagnostics::BodyDiag::CompileTimePhase { message, .. }
+            ) if message.contains("prepared generated implementation")
+        )),
+        "expected unfulfilled scoped derive diagnostic when checking without prepare_file, got: {diags:#?}"
+    );
+
+    let pass2_generated_demand = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Score {
+    const fn score() -> u256
+}
+
+pub struct Seed {}
+
+pub struct LateTarget {}
+
+impl Score for LateTarget {
+    const fn score() -> u256 { 10 }
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const fn score() -> u256 { 42 }
+        }
+    }
+}
+
+const fn gen_fn(_ record: Record) -> Code<Item> {
+    quote {
+        const fn late_caller() -> u256 {
+            with (Provider) {
+                LateTarget::score()
+            }
+        }
+    }
+}
+
+#[generate(gen_fn)]
+pub struct Trigger {
+    pub seed: Seed,
+}
+"#;
+    let err = prepare_err(pass2_generated_demand);
+    assert!(
+        err.contains("generated output admission failed")
+            && err.contains("generated openings need a portable generated-owner identity"),
+        "{err}"
+    );
+}
+
+#[test]
+fn scoped_derive_demands_in_contract_and_assoc_const_bodies_are_materialized() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item, field_count}
+
+trait Score {
+    const fn score() -> u256
+}
+
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote {
+            const fn score() -> u256 { 100 + ${n} }
+        }
+    }
+}
+
+pub struct InImplConst {
+    pub a: u256,
+}
+
+pub struct InImplTraitConst {
+    pub a: u256,
+    pub b: u256,
+}
+
+pub struct InContractRecv {
+    pub a: u256,
+    pub b: u256,
+    pub c: u256,
+}
+
+pub struct Holder {}
+
+impl Holder {
+    const C: u256 = with (Provider) {
+        InImplConst::score()
+    }
+}
+
+trait HasConst {
+    const TC: u256
+}
+
+impl HasConst for Holder {
+    const TC: u256 = with (Provider) {
+        InImplTraitConst::score()
+    }
+}
+
+msg AppMsg {
+    #[selector = 0x01]
+    Ping -> u256,
+}
+
+pub contract App {
+    recv AppMsg {
+        Ping -> u256 {
+            with (Provider) {
+                InContractRecv::score()
+            }
+        }
+    }
+}
+
+const fn total() -> u256 {
+    Holder::C + <Holder as HasConst>::TC
+}
+"#;
+    let output = prepare(source).expect("contract and assoc-const scoped derive should succeed");
+    let url = Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap();
+    let file = output.workspace().get(&output, &url).unwrap();
+    let top_mod = output.top_mod(file);
+    use hir::span::LazySpan;
+    let contract_target = top_mod
+        .all_structs(&output)
+        .iter()
+        .copied()
+        .find(|record| {
+            record
+                .name(&output)
+                .to_opt()
+                .is_some_and(|name| name.data(&output) == "InContractRecv")
+        })
+        .expect("the authored contract target exists");
+    let target_range = contract_target.span().resolve(&output).unwrap().range;
+    assert!(
+        output
+            .generation_inputs()
+            .requests(&output)
+            .iter()
+            .any(
+                |request| request.scoped_impl.as_ref().is_some_and(|scoped| scoped
+                    .demand
+                    .target
+                    .target_file
+                    == url
+                    && scoped.demand.target.target_range == target_range)
+            ),
+        "contract receive preparation must retain its exact target declaration"
+    );
+
+    assert_eq!(eval_const_fn_u256(&output, "total"), "203");
+}
+
+#[test]
+fn scoped_derive_selection_name_avoids_module_delimiter_collision() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item, field_count}
+
+pub trait Score {
+    const fn score() -> u256
+}
+
+pub struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote {
+            const fn score() -> u256 { 10 + ${n} }
+        }
+    }
+}
+
+pub struct a_Pair {
+    pub x: u256,
+}
+
+mod a {
+    pub struct Pair {
+        pub x: u256,
+        pub y: u256,
+    }
+}
+
+const fn check_both() -> u256 {
+    with (Provider) {
+        a_Pair::score() * 100 + a::Pair::score()
+    }
+}
+"#;
+    let output = prepare(source).expect("distinct module paths should not collide");
+    assert_eq!(eval_const_fn_u256(&output, "check_both"), "1112");
+}
+
+#[test]
+fn scoped_derive_preserves_private_producer_helper_and_refuses_generic_targets() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+trait Value { const fn value() -> u256 }
+struct Pair {}
+mod author {
+    use super::Value
+    use core::derive::Derive
+    use core::meta::{Code, Item, Record}
+    const fn helper() -> u256 { 7 }
+    pub struct Provider {}
+    impl Derive<Value> for Provider {
+        const fn derive(_ record: Record) -> Code<Item> {
+            quote { const fn value() -> u256 { helper() } }
+        }
+    }
+}
+const fn helper() -> u256 { 99 }
+const fn observe() -> u256 {
+    with (author::Provider) { Pair::value() }
+}
+"#;
+    let output = prepare(source).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "observe"), "7");
+    for target in ["Box<u8>", "Box<u256>"] {
+        let generic = source
+            .replace("struct Pair {}", "struct Box<T> { value: T }")
+            .replace("Pair::value()", &format!("<{target} as Value>::value()"));
+        let error = prepare_err(&generic);
+        assert!(
+            error.contains("scoped derive cannot yet preserve concrete generic target arguments"),
+            "{target}: {error}"
+        );
+    }
+}
+
+#[test]
+fn scoped_derive_refuses_generic_provider_aliases_before_materialization() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+trait Value { const fn value() -> u256 }
+struct Pair {}
+struct Provider<T> {}
+impl Derive<Value> for Provider<u8> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn value() -> u256 { 1 } }
+    }
+}
+impl Derive<Value> for Provider<u256> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn value() -> u256 { 2 } }
+    }
+}
+type P8 = Provider<u8>
+type P256 = Provider<u256>
+const fn observe() -> u256 {
+    with (P8) { Pair::value() } + with (P256) { Pair::value() }
+}
+"#;
+    let error = prepare_err(source);
+    assert!(
+        error.contains(
+            "bounded scoped derive does not yet admit concrete generic provider applications"
+        ),
+        "{error}"
+    );
+    // A nongeneric alias still denotes a valid ordinary provider.
+    let positive = source
+        .replace("struct Provider<T> {}", "struct Provider {}")
+        .replace("Provider<u8>", "Provider");
+    let positive = positive[..positive
+        .find("impl Derive<Value> for Provider<u256>")
+        .unwrap()]
+        .to_string()
+        + "type P = Provider\nconst fn observe() -> u256 { with (P) { Pair::value() } }\n";
+    let output = prepare(&positive).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "observe"), "1");
+}
+
+#[test]
+fn ordinary_named_choice_does_not_require_generation() {
+    let (db, file) = input(
+        r#"
+trait Score { const fn score() -> u256 }
+struct Pair {}
+impl Score for Pair as Named { const fn score() -> u256 { 7 } }
+const fn run() -> u256 { with (Named) { Pair::score() } }
+"#,
+    );
+    assert!(prepare_file(&db, file).unwrap().is_none());
+}
+
+#[test]
+fn provider_dependency_is_prepared_before_its_body_executes() {
+    let output = prepare(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Seed { const fn seed() -> u256 }
+struct Pair {}
+struct Token {}
+struct A {}
+struct B {}
+impl Derive<Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = helper()
+        quote { const fn score() -> u256 { ${n} } }
+    }
+}
+const fn helper() -> u256 { with (B) { Token::seed() } }
+impl Derive<Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 42 } }
+    }
+}
+const fn run() -> u256 { with (A) { Pair::score() } }
+"#,
+    )
+    .expect("provider dependencies should prepare before evaluation");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn provider_constant_dependency_is_prepared_before_its_body_executes() {
+    let output = prepare(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Seed { const fn seed() -> u256 }
+struct Pair {}
+struct Token {}
+struct A {}
+struct B {}
+impl Derive<Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = SEEDED
+        quote { const fn score() -> u256 { ${n} } }
+    }
+}
+const SEEDED: u256 = with (B) { Token::seed() }
+impl Derive<Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 42 } }
+    }
+}
+const fn run() -> u256 { with (A) { Pair::score() } }
+"#,
+    )
+    .expect("a constant a provider reads is prepared before the provider executes");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn cyclic_provider_dependency_refuses_before_execution() {
+    let cause = prepare_err(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct Pair {}
+struct A {}
+impl Derive<Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = with (A) { Pair::score() }
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${n} + ${fault} } }
+    }
+}
+const fn run() -> u256 { with (A) { Pair::score() } }
+"#,
+    );
+    assert!(cause.contains("cannot make progress"), "{cause}");
+    assert!(!cause.contains("division by zero"), "{cause}");
+}
+
+#[test]
+fn invalid_generated_body_refuses_before_dependent_provider_execution() {
+    let cause = prepare_err(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Value { const fn value() -> u256 }
+struct Pair {}
+struct Out {}
+struct A {}
+struct B {}
+impl Derive<Score> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { missing_generated_value } }
+    }
+}
+impl Derive<Value> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = with (B) { Pair::score() }
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn value() -> u256 { ${n} + ${fault} } }
+    }
+}
+const fn run() -> u256 { with (A) { Out::value() } }
+"#,
+    );
+    assert!(cause.contains("missing_generated_value"), "{cause}");
+    assert!(!cause.contains("division by zero"), "{cause}");
+}
+
+#[test]
+fn provider_literals_refuse_field_evaluation_without_losing_empty_literal_support() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct Pair {}
+impl Score for Pair { const fn score() -> u256 { 100 } }
+struct Provider { n: u256 }
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { 42 } }
+    }
+}
+const fn field_fault() -> u256 { let zero: u256 = 0
+ 1 / zero }
+const fn run() -> u256 { with (Provider { n: field_fault() }) { Pair::score() } }
+"#;
+    let cause = prepare_err(source);
+    assert!(
+        cause.contains("provider literals must have no fields"),
+        "{cause}"
+    );
+    assert!(!cause.contains("division by zero"), "{cause}");
+    let positive = source
+        .replace("struct Provider { n: u256 }", "struct Provider {}")
+        .replace("Provider { n: field_fault() }", "Provider {}");
+    let output = prepare(&positive).expect("empty literals remain valid provider operands");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn scoped_generation_in_static_assert_uses_its_checked_body_owner() {
+    let output = prepare(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct Pair {}
+impl Score for Pair { const fn score() -> u256 { 100 } }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { 42 } }
+    }
+}
+static_assert(with (Provider) { Pair::score() == 42 })
+"#,
+    )
+    .expect("static assertions must rebind the same checked opening as preparation");
+    assert!(
+        output
+            .generation_inputs()
+            .requests(&output)
+            .iter()
+            .any(|request| request.scoped_impl.is_some())
+    );
+}
+
+#[test]
+fn provider_condition_prepares_its_generated_prerequisite_before_admission() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> usize }
+trait Seed { const fn seed() -> usize }
+pub struct Pair {}
+pub struct Token {}
+struct B {}
+impl Derive<Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> usize { 42 } }
+    }
+}
+struct A {}
+impl Derive<Score> for A where { with (B) { Token::seed() == 42 } } {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> usize { 42 } }
+    }
+}
+const fn run() -> usize { with (A) { Pair::score() } }
+"#;
+    let output = prepare(source).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+    let false_condition = source
+        .replace("Token::seed() == 42", "Token::seed() == 41")
+        .replace(
+            "quote { const fn score() -> usize { 42 } }",
+            "let zero: usize = 0\n let fault = 1 / zero\n quote { const fn score() -> usize { ${fault} } }",
+        );
+    let error = prepare_err(&false_condition);
+    assert!(error.contains("const where predicate failed"), "{error}");
+    assert!(!error.contains("requires a prepared"), "{error}");
+    assert!(!error.contains("division by zero"), "{error}");
+}
+
+#[test]
+fn provider_condition_prepares_prerequisites_of_the_helpers_it_calls() {
+    // The generated prerequisite is opened inside helpers that the provider's
+    // condition calls. Preparation must serve it before admission whatever the
+    // order of the declarations, so the program below is valid with the use
+    // declared before or after its helpers.
+    let template = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> usize }
+trait Seed { const fn seed() -> usize }
+pub struct Pair {}
+pub struct Token {}
+struct B {}
+impl Derive<Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> usize { 42 } }
+    }
+}
+struct A {}
+impl Derive<Score> for A where { condition() } {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> usize { 42 } }
+    }
+}
+const fn run() -> usize { with (A) { Pair::score() } }
+const fn condition() -> bool { inner() }
+const fn inner() -> bool { with (B) { Token::seed() == 42 } }
+"#;
+    let run = "const fn run() -> usize { with (A) { Pair::score() } }\n";
+    let helpers = "const fn condition() -> bool { inner() }\nconst fn inner() -> bool { with (B) { Token::seed() == 42 } }\n";
+    for source in [
+        template.to_owned(),
+        template
+            .replace(run, "")
+            .replace(helpers, &format!("{helpers}{run}")),
+        // The condition is the target type's rather than the provider's.
+        template
+            .replace(
+                "pub struct Pair {}",
+                "pub struct Pair where { condition() } {}",
+            )
+            .replace("for A where { condition() }", "for A"),
+    ] {
+        let output = prepare(&source).unwrap();
+        assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+        let false_condition = source.replace("Token::seed() == 42", "Token::seed() == 41");
+        let error = prepare_err(&false_condition);
+        assert!(error.contains("const where predicate failed"), "{error}");
+    }
+}
+
+#[test]
+fn scoped_provider_type_respects_lexical_value_shadowing() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+pub struct Pair {}
+impl Score for Pair { const fn score() -> u256 { 100 } }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ r: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { 42 } }
+    }
+}
+const fn local(_ Provider: ()) -> u256 { let Provider = ()
+    with (Provider) { Pair::score() }
+}
+const fn run() -> u256 { local(()) }
+const fn parameter(_ Provider: ()) -> u256 { with (Provider) { Pair::score() } }
+const fn parameter_run() -> u256 { parameter(()) }
+"#;
+    let (db, file) = input(source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(eval_const_fn_u256(&db, "run"), "100");
+    assert_eq!(eval_const_fn_u256(&db, "parameter_run"), "100");
+    // A bare name matching an existing struct is a constructor pattern, not
+    // a new binding. The parameter supplies a lawful value binding so the
+    // nested let can exercise local rebinding of the same provider spelling.
+    let source = source
+        .replace(
+            "const fn local(_ Provider: ())",
+            "const fn local(_ unused: ())",
+        )
+        .replace("let Provider = ()", "let other = ()");
+    let output = prepare(&source).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn scoped_provider_alias_requires_its_own_visibility() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+pub struct Pair {}
+mod author {
+    use super::Score
+    use core::derive::Derive
+    use core::meta::{Record, Code, Item}
+    pub struct Provider {}
+    type Alias = Provider
+    impl Derive<Score> for Provider {
+        const fn derive(_ r: Record) -> Code<Item> {
+            quote { const fn score() -> u256 { 42 } }
+        }
+    }
+}
+const fn run() -> u256 { with (author::Alias) { Pair::score() } }
+"#;
+    let error = prepare_err(source);
+    assert!(error.contains("provider path is not visible"), "{error}");
+    let output = prepare(&source.replace("type Alias", "pub type Alias")).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
+
+#[test]
+fn scoped_external_target_is_refused_before_provider_execution() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${fault} } }
+    }
+}
+const fn run() -> u256 { with (Provider) { core::iter::Identity<u256>::score() } }
+"#;
+    let error = prepare_err(source);
+    assert!(
+        error.contains("target declared in the requesting ingot"),
+        "{error}"
+    );
+    assert!(!error.contains("division by zero"), "{error}");
+}
+
+#[test]
+fn ordinary_choice_in_an_ingot_does_not_trigger_standalone_generation_restriction() {
+    let mut db = DriverDataBase::default();
+    db.workspace().touch(
+        &mut db,
+        Url::parse("file:///tmp/ordinary-choice-ingot/fe.toml").unwrap(),
+        Some("[ingot]\nname = \"ordinary-choice\"\nversion = \"0.1.0\"\n".into()),
+    );
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///tmp/ordinary-choice-ingot/src/lib.fe").unwrap(),
+        Some(
+            r#"
+trait Score { const fn score() -> u256 }
+struct Pair {}
+impl Score for Pair as Named { const fn score() -> u256 { 7 } }
+const fn run() -> u256 { with (Named) { Pair::score() } }
+"#
+            .into(),
+        ),
+    );
+    assert_eq!(
+        file.containing_ingot(&db).unwrap().kind(&db),
+        common::ingot::IngotKind::Local
+    );
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert!(!db.run_on_top_mod(db.top_mod(file)).has_errors(&db));
+}
+
+#[test]
+fn deferred_closure_effect_rows_preserve_pending_generation_outcomes() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { fn score(self) -> u256 }
+pub struct Pair {}
+impl Score for Pair { fn score(self) -> u256 { 100 } }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn score(self) -> u256 { 42 } }
+    }
+}
+fn charge() -> u256 uses (p: Score) { p.score() }
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+fn run() -> u256 {
+    let f = || charge()
+    with (Provider, Score = Pair {}) { apply(f) }
+}
+"#;
+    let (db, file) = input(source);
+    let module = db.top_mod(file);
+    let demands = hir::analysis::ty::trait_resolution::generation::preparation_demands(&db, module);
+    assert!(
+        !demands.is_empty(),
+        "the substituted effect row must request generation"
+    );
+    assert!(demands.iter().all(|d| d.demand.is_ok()));
+    let diagnostics = db.run_on_top_mod(module).format_diags(&db);
+    assert!(diagnostics.contains("error[8-0137]"), "{diagnostics}");
+    assert!(!diagnostics.contains("error[8-0031]"), "{diagnostics}");
+    let output = prepare(source).unwrap();
+    let file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    assert!(
+        !output
+            .run_on_top_mod(output.top_mod(file))
+            .has_errors(&output)
+    );
+}
+
+#[test]
+fn scoped_derive_refuses_sibling_item_holes_without_dropping_output() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Value { const fn value() -> u256 }
+struct Key {}
+struct Provider {}
+impl Derive<Value> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let extra = quote { const fn ignored() -> bool { missing } }
+        quote {
+            const fn value() -> u256 { 7 }
+            ${extra}
+        }
+    }
+}
+const fn run() -> u256 { with (Provider) { Key::value() } }
+const RESULT: u256 = run()
+"#;
+    for rejected in [
+        source.to_owned(),
+        source.replace("${extra}", "const fn ignored() -> bool { missing }"),
+    ] {
+        let (db, file) = input(&rejected);
+        let error = prepare_file(&db, file)
+            .err()
+            .expect("every sibling output node must be admitted or refused");
+        assert!(
+            error
+                .cause
+                .contains("bounded derive requires one function template"),
+            "{error}"
+        );
+        assert!(db.generation_inputs().functions(&db).is_empty());
+        assert!(db.generation_inputs().requests(&db).is_empty());
+        assert_eq!(file.text(&db).as_str(), rejected);
+    }
+    let source = source
+        .replace(
+            "        let extra = quote { const fn ignored() -> bool { missing } }\n",
+            "        let answer: u256 = 7\n",
+        )
+        .replace("            ${extra}\n", "")
+        .replace(
+            "const fn value() -> u256 { 7 }",
+            "const fn value() -> u256 { ${answer} }",
+        );
+    let output = prepare(&source).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "run"), "7");
+}
+
+#[test]
+fn ambiguous_implementation_operand_refuses_before_provider_execution() {
+    for header in ["Collision, Provider", "Provider, Collision"] {
+        let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Pick { const fn pick() -> u256 }
+struct Pair {}
+struct Provider {}
+impl Pick for Pair as Collision { const fn pick() -> u256 { 7 } }
+const Collision: u256 = 99
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${fault} } }
+    }
+}
+const fn run() -> u256 { with (HEADER) { Pair::score() } }
+"#
+        .replace("HEADER", header);
+        let cause = prepare_err(&source);
+        assert!(cause.contains("ambiguous"), "{cause}");
+        assert!(!cause.contains("division by zero"), "{cause}");
+    }
+}

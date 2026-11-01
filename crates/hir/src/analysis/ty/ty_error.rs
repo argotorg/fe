@@ -21,7 +21,9 @@ use super::{
     diagnostics::{ImplDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     normalize::normalize_ty,
     shape::{lower_shape_list, lower_shape_value, param_product_diags, shape_value_diags},
-    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
+    trait_resolution::{
+        PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf, generation::GenerationRequest,
+    },
     ty_def::{InvalidCause, Kind, ShapeMode, TyData, TyId},
     ty_lower::{lower_hir_ty, lower_hir_ty_in_mode, lower_kind_in_bounds},
 };
@@ -824,6 +826,9 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
 /// Resolving the projection replaces the qualified path with the associated
 /// type's definition, so a later check of the resolved type never sees these
 /// types. Each ill-formed one is reported at its own span.
+///
+/// `solve_cx` carries no lexical choices here, so no check can wait for a
+/// generated implementation.
 pub(crate) fn qualified_path_wf_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -832,7 +837,34 @@ pub(crate) fn qualified_path_wf_diags<'db>(
     assumptions: PredicateListId<'db>,
     solve_cx: TraitSolveCx<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    struct QualifiedPathWf<'db> {
+    debug_assert!(solve_cx.choices().is_none());
+    let mut pending = Vec::new();
+    let diags = qualified_path_wf_diags_under_choices(
+        db,
+        scope,
+        hir_ty,
+        span,
+        assumptions,
+        solve_cx,
+        &mut pending,
+    );
+    debug_assert!(pending.is_empty());
+    diags
+}
+
+/// [`qualified_path_wf_diags`] under the lexical choices of a body. A check
+/// that stops on a generation request reports no diagnostic and leaves the
+/// request in `pending`: the type is judged once preparation has served it.
+pub(crate) fn qualified_path_wf_diags_under_choices<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    solve_cx: TraitSolveCx<'db>,
+    pending: &mut Vec<GenerationRequest<'db>>,
+) -> Vec<TyDiagCollection<'db>> {
+    struct QualifiedPathWf<'db, 'a> {
         db: &'db dyn HirAnalysisDb,
         /// Assumptions for lowering the written types.
         assumptions: PredicateListId<'db>,
@@ -840,28 +872,32 @@ pub(crate) fn qualified_path_wf_diags<'db>(
         /// How many qualified paths enclose the current type.
         qualified_depth: usize,
         diags: Vec<TyDiagCollection<'db>>,
+        pending: &'a mut Vec<GenerationRequest<'db>>,
     }
 
-    impl<'db> Visitor<'db> for QualifiedPathWf<'db> {
+    impl<'db> Visitor<'db> for QualifiedPathWf<'db, '_> {
         fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
             if self.qualified_depth > 0
                 && let Some(span) = ctxt.span()
             {
                 let ty = lower_hir_ty(self.db, hir_ty, ctxt.scope(), self.assumptions);
-                if !ty.has_invalid(self.db)
-                    && let WellFormedness::IllFormed { goal, subgoal } =
-                        check_ty_wf(self.db, self.solve_cx, ty)
-                {
-                    self.diags.push(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: span.into(),
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
+                if !ty.has_invalid(self.db) {
+                    match check_ty_wf(self.db, self.solve_cx, ty) {
+                        WellFormedness::IllFormed { goal, subgoal } => {
+                            self.diags.push(
+                                TraitConstraintDiag::TraitBoundNotSat {
+                                    span: span.into(),
+                                    primary_goal: goal,
+                                    unsat_subgoal: subgoal,
+                                    required_by: None,
+                                }
+                                .into(),
+                            );
+                            return;
                         }
-                        .into(),
-                    );
-                    return;
+                        WellFormedness::Pending(request) => self.pending.push(request),
+                        WellFormedness::WellFormed => {}
+                    }
                 }
             }
             walk_type(self, ctxt, hir_ty);
@@ -890,6 +926,7 @@ pub(crate) fn qualified_path_wf_diags<'db>(
         solve_cx,
         qualified_depth: 0,
         diags: Vec::new(),
+        pending,
     };
     let mut ctxt = VisitorCtxt::new(db, scope, span);
     visitor.visit_ty(&mut ctxt, hir_ty);

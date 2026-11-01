@@ -4,6 +4,37 @@
 use parser::TextRange;
 use url::Url;
 
+/// One authored lexical provider operand. Ranges belong to unchanged source
+/// text in a preparation transaction; semantic IDs never cross database views.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ScopedDeriveOpeningKey {
+    pub file: Url,
+    pub binding_range: TextRange,
+}
+
+/// An exact authored trait declaration, never a path to resolve by spelling.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FrozenTraitRef {
+    pub file: Url,
+    pub range: TextRange,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScopedDeriveMode {
+    Ref,
+    Mut,
+}
+
+/// Candidate availability requested by the ordinary evidence engine. Provider
+/// identity is retained by the checked opening in the current database view.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ScopedDeriveDemand {
+    pub mode: ScopedDeriveMode,
+    pub opening: ScopedDeriveOpeningKey,
+    pub trait_ref: FrozenTraitRef,
+    pub target: FrozenRecordRef,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FrozenScalar {
     Bool(bool),
@@ -85,9 +116,18 @@ pub enum FrozenCode {
     },
 }
 
+/// A checked scoped output binds one lexical opening and ground goal to a
+/// compiler-private named implementation in this immutable output view.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FrozenScopedImpl {
+    pub demand: ScopedDeriveDemand,
+    pub selection_name: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FrozenGenerationRequest {
     pub target_file: Url,
+    pub scoped_impl: Option<FrozenScopedImpl>,
     /// Authored derive header receiving this generated method.
     pub request_impl: Option<TextRange>,
     pub code: FrozenCode,

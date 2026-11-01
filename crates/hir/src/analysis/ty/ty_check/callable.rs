@@ -25,7 +25,7 @@ use crate::analysis::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         evidence::{
             BoundEvidence, BoundOwner, BoundSchemaId, EvidenceId, EvidenceList, ProofOutcome,
-            RowEvidence, UseEvidence, declared_bound_evidence, instantiated_selection,
+            RowEvidence, UseEvidence, declared_bound_evidence_with_pending, instantiated_selection,
             prove_outcome,
         },
         fold::{TyFoldable, TyFolder},
@@ -35,6 +35,7 @@ use crate::analysis::{
         trait_def::{AssocBinding, ResolvedMethodInstance, TraitInstId},
         trait_resolution::{
             TraitSolveCx, check_trait_inst_wf, constraint::collect_func_decl_constraints,
+            generation::GenerationRequest,
         },
         ty_def::{
             BorrowKind, InvalidCause, Kind, ShapeCon, StringFallback, TyBase, TyData, TyFlags,
@@ -442,19 +443,20 @@ impl<'db> Callable<'db> {
     /// Proves, in the checked body's context `solve_cx`, the bounds the
     /// callee's body declares, instantiated for this call, as
     /// `declared_bound_evidence` records them.
+    /// Returns the generation requests the producer met.
     pub(crate) fn record_bound_evidence(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         solve_cx: TraitSolveCx<'db>,
-    ) {
+    ) -> Vec<GenerationRequest<'db>> {
         let CallableDef::Func(func) = self.callable_def else {
-            return;
+            return Vec::new();
         };
         let mode = BodyOwner::func_at(db, func, self.mode).mode();
         let Ok(subst) = CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()) else {
-            return;
+            return Vec::new();
         };
-        let evidence = declared_bound_evidence(
+        let (evidence, mut pending) = declared_bound_evidence_with_pending(
             db,
             func_declared_bounds(db, func, mode),
             func_signature(db, func, mode),
@@ -487,6 +489,7 @@ impl<'db> Callable<'db> {
                 let goal =
                     super::super::instantiate_trait_self(db, goal, provider.provider.provider_ty);
                 let outcome = prove_outcome(db, solve_cx, goal);
+                pending.extend(outcome.request());
                 Some(RowEvidence {
                     path: component.path.clone(),
                     goal,
@@ -503,6 +506,7 @@ impl<'db> Callable<'db> {
             ),
             entries: evidence,
         });
+        pending
     }
 
     /// Missing dictionaries cannot be reconstructed ordinarily after a lexical

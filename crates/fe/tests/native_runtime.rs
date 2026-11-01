@@ -2940,3 +2940,41 @@ fn native_named_closures_transport_captured_and_row_evidence() {
         );
     }
 }
+
+#[test]
+fn scoped_generated_trait_methods_execute_on_both_backends() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/scoped_on_demand_derive.fe");
+    for backend in ["native", "sonatina"] {
+        for level in ["0", "1"] {
+            let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+                .args([
+                    "test",
+                    "--backend",
+                    backend,
+                    "--jobs",
+                    "1",
+                    "--color",
+                    "never",
+                    "-O",
+                    level,
+                ])
+                .arg(&source)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            assert!(
+                result.status.success(),
+                "{backend} O{level}:\n{stdout}\n{stderr}"
+            );
+            assert!(
+                stdout.contains("generated_choice_runs_and_crosses_declared_bounds")
+                    && stdout.contains("3 passed; 0 failed")
+                    && stdout.contains("closure_retains_its_generated_choice")
+                    && stdout.contains("generated_choice_fills_a_deferred_closure_effect_row"),
+                "{backend} O{level} did not execute the expected test:\n{stdout}\n{stderr}"
+            );
+        }
+    }
+}

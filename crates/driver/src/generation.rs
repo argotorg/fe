@@ -1,4 +1,4 @@
-//! One authored input pass, then one ordinary output checking pass.
+//! Authored providers and cumulative immutable output admission.
 //! This bounded adapter supports explicit providers on concrete root records.
 use crate::DriverDataBase;
 use common::{InputDb, file::File, ingot::IngotKind};
@@ -194,17 +194,31 @@ pub fn prepare_file(
     let (green, parse_errors) =
         parser::parse_source_file(file.text(db), parser::RecoveryMode::Recover);
     let root = ast::Root::cast(parser::SyntaxNode::new_root(green)).unwrap();
-    if !root
+    let has_scoped_syntax = root
         .syntax()
         .descendants()
-        .filter_map(ast::ImplTrait::cast)
-        .any(|request| {
-            request.derive_provider().is_some()
-                && !request
-                    .syntax()
-                    .ancestors()
-                    .any(|node| ast::QuoteExpr::cast(node).is_some())
-        })
+        .any(|node| ast::WithExpr::cast(node).is_some());
+    // Ordinary lexical implementation choices do not require preparation or
+    // the standalone generation adapter. Only actual provider demands do.
+    let has_scoped_opening = has_scoped_syntax
+        && parse_errors.is_empty()
+        && !hir::analysis::ty::trait_resolution::generation::preparation_demands(
+            db,
+            db.top_mod(file),
+        )
+        .is_empty();
+    if !has_scoped_opening
+        && !root
+            .syntax()
+            .descendants()
+            .filter_map(ast::ImplTrait::cast)
+            .any(|request| {
+                request.derive_provider().is_some()
+                    && !request
+                        .syntax()
+                        .ancestors()
+                        .any(|node| ast::QuoteExpr::cast(node).is_some())
+            })
         && !root
             .syntax()
             .descendants()
@@ -492,17 +506,260 @@ pub fn prepare_file(
             ));
         }
     }
-    if requests.is_empty() {
+    if requests.is_empty() && !has_scoped_opening {
         return Err(error(
             parser::TextRange::empty(0.into()),
             "generation request requires an authored concrete root record".into(),
         ));
     }
+    let mut completed = std::collections::HashSet::new();
+    // Every retry starts from unchanged authored text and the cumulative plan.
+    // A bounded transaction never recursively treats generated output as input.
+    for _ in 0..128 {
+        let output = prepared_view(db, file, &requests);
+        let output_file = output.workspace().get(&output, &url).unwrap();
+        let output_module = output.top_mod(output_file);
+        let _ = output_module.scope_graph(&output);
+        let lowering_errors = hir::lower::generation_lowering_errors(&output, output_module);
+        if let Some(first) = lowering_errors.first() {
+            return Err(GenerationError {
+                file: first.file.url(&output).unwrap_or_else(|| url.clone()),
+                range: first.primary_range,
+                cause: first.message.clone(),
+            });
+        }
+        // A generated header is not eligible merely because it was lowered.
+        // Validate conformance before retrying any goal against the new plan.
+        use hir::diagnosable::Diagnosable;
+        for scoped in requests
+            .iter()
+            .filter_map(|request| request.scoped_impl.as_ref())
+        {
+            let implementation = output_module
+                .all_impl_traits(&output)
+                .iter()
+                .copied()
+                .find(|implementation| {
+                    implementation
+                        .selection_name(&output)
+                        .is_some_and(|name| name.data(&output) == &scoped.selection_name)
+                })
+                .ok_or_else(|| {
+                    error(
+                        scoped.demand.opening.binding_range,
+                        "generated scoped implementation was not constructed".into(),
+                    )
+                })?;
+            let mut complete = implementation
+                .diags(&output)
+                .into_iter()
+                .map(|diagnostic| diagnostic.to_complete(&output))
+                .collect::<Vec<_>>();
+            for method in implementation.methods(&output) {
+                complete.extend(
+                    method
+                        .diags(&output)
+                        .into_iter()
+                        .map(|diagnostic| diagnostic.to_complete(&output)),
+                );
+            }
+            if complete
+                .iter()
+                .any(|diagnostic| diagnostic.severity == common::diagnostics::Severity::Error)
+            {
+                return Err(diagnostic_error(
+                    &output,
+                    &complete,
+                    error(
+                        scoped.demand.opening.binding_range,
+                        "generated implementation admission failed".into(),
+                    ),
+                ));
+            }
+        }
+        let pending = hir::analysis::ty::trait_resolution::generation::preparation_demands(
+            &output,
+            output_module,
+        );
+        if !pending.is_empty() {
+            let mut new_requests = Vec::new();
+            let mut batch = std::collections::HashSet::new();
+            // Reject every invalid opening before any provider can run; the
+            // order in which demands were found must never grant authority to
+            // an earlier entry.
+            let pending = pending
+                .into_iter()
+                .map(|pending| {
+                    pending
+                        .demand
+                        .map_err(|cause| error(pending.opening.binding_range, cause))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            // Admission can itself depend on generated const-condition bodies.
+            // Discover every such request and invalid opening before any CTFE.
+            let mut pending = std::collections::VecDeque::from(pending);
+            let mut ready = Vec::new();
+            while let Some(demand) = pending.pop_front() {
+                let range = demand.opening.binding_range;
+                if !batch.insert(demand.clone()) {
+                    continue;
+                }
+                if completed.contains(&demand) {
+                    return Err(error(
+                        range,
+                        "generated implementation did not discharge its preparation dependency"
+                            .into(),
+                    ));
+                }
+                let request = hir::core::meta::rebind_generation_request(&output, &demand)
+                    .map_err(|cause| error(range, cause))?;
+                let dependencies =
+                    hir::analysis::ty::trait_resolution::generation::admission_demands(
+                        &output, request,
+                    );
+                let blocked = !dependencies.is_empty();
+                for dependency in &dependencies {
+                    pending.push_back(
+                        dependency
+                            .demand
+                            .clone()
+                            .map_err(|cause| error(dependency.opening.binding_range, cause))?,
+                    );
+                }
+                if !blocked {
+                    ready.push((demand, request));
+                }
+            }
+            for (demand, request) in ready {
+                let range = demand.opening.binding_range;
+                let opening = request.opening(&output);
+                let origin = opening.scope(&output).item();
+                let (key, input) = hir::core::meta::scoped_derive_provider(
+                    &output,
+                    opening,
+                    request.goal(&output),
+                    origin,
+                    origin.span().into(),
+                )
+                .map_err(|cause| {
+                    scoped_provider_error(
+                        &output,
+                        cause,
+                        error(range, "scoped derive provider admission failed".into()),
+                    )
+                })?;
+                if provider_needs_generation(&output, key) {
+                    continue;
+                }
+                let mut plan = evaluate_provider_instance(&output, output_file, key, input, range)?;
+                completed.insert(demand.clone());
+                plan.scoped_impl = Some(common::generation::FrozenScopedImpl {
+                    selection_name: scoped_selection_name(&demand),
+                    demand,
+                });
+                new_requests.push(plan);
+                // Publish one ready dependency before considering its dependents.
+                break;
+            }
+            if new_requests.is_empty() {
+                return Err(error(root.syntax().text_range(),
+                    "scoped derive dependencies cannot make progress (cyclic or unresolved provider bodies)".into()));
+            }
+            requests.extend(new_requests);
+            continue;
+        }
+        let diagnostics = output.run_on_top_mod(output_module);
+        if diagnostics.has_errors(&output) {
+            return Err(diagnostic_error(
+                &output,
+                &diagnostics.finalize(&output),
+                error(
+                    root.syntax().text_range(),
+                    "generated output admission failed".into(),
+                ),
+            ));
+        }
+        drop(diagnostics);
+        return Ok(Some(output));
+    }
+    Err(error(
+        root.syntax().text_range(),
+        "scoped generation preparation limit exceeded".into(),
+    ))
+}
+
+/// Whether the provider instance `key`, or anything its evaluation runs, waits
+/// for a generated implementation.
+fn provider_needs_generation<'db>(
+    db: &'db DriverDataBase,
+    key: hir::analysis::semantic::SemanticInstanceKey<'db>,
+) -> bool {
+    !hir::analysis::ty::trait_resolution::generation::evaluation_demands(db, key).is_empty()
+}
+
+fn scoped_selection_name(demand: &common::generation::ScopedDeriveDemand) -> String {
+    // Length-prefixed identity is injective; the NUL prefix is unspellable in
+    // authored identifiers. No implementation authority comes from this name.
+    let mut name = String::from("\0scoped-derive");
+    for component in [
+        demand.opening.file.as_str().to_owned(),
+        format!("{:?}", demand.opening.binding_range),
+        demand.trait_ref.file.as_str().to_owned(),
+        format!("{:?}", demand.trait_ref.range),
+        demand.target.target_file.as_str().to_owned(),
+        format!("{:?}", demand.target.target_range),
+        format!("{:?}", demand.mode),
+    ] {
+        use std::fmt::Write;
+        write!(&mut name, ":{}:{}", component.len(), component).unwrap();
+    }
+    name
+}
+
+fn scoped_provider_error(
+    db: &DriverDataBase,
+    cause: hir::core::meta::NativeDeriveProviderError<'_>,
+    fallback: GenerationError,
+) -> GenerationError {
+    let (failure, label) = match cause {
+        hir::core::meta::NativeDeriveProviderError::Message(message) => {
+            return GenerationError {
+                cause: message,
+                ..fallback
+            };
+        }
+        hir::core::meta::NativeDeriveProviderError::Provider(failure) => {
+            (failure, "provider application not admitted")
+        }
+        hir::core::meta::NativeDeriveProviderError::Target(failure) => {
+            (failure, "scoped derive target admission failed")
+        }
+    };
+    let complete = failure
+        .vouchers()
+        .iter()
+        .map(|voucher| voucher.to_complete(db))
+        .collect::<Vec<_>>();
+    diagnostic_error(
+        db,
+        &complete,
+        GenerationError {
+            cause: format!("{label}: {}", failure.description()),
+            ..fallback
+        },
+    )
+}
+
+fn prepared_view(
+    db: &DriverDataBase,
+    file: File,
+    requests: &[common::generation::FrozenGenerationRequest],
+) -> DriverDataBase {
+    let url = file.url(db).expect("indexed generation input");
     let mut output = DriverDataBase::default();
-    let output_file =
-        output
-            .workspace()
-            .touch(&mut output, url.clone(), Some(file.text(db).clone()));
+    output
+        .workspace()
+        .touch(&mut output, url.clone(), Some(file.text(db).clone()));
     output
         .compiler_options()
         .set_recovery_mode(&mut output)
@@ -518,32 +775,8 @@ pub fn prepare_file(
     output
         .generation_inputs()
         .set_requests(&mut output)
-        .to(requests);
-    let output_module = output.top_mod(output_file);
-    let _ = output_module.scope_graph(&output);
-    let lowering_errors = hir::lower::generation_lowering_errors(&output, output_module);
-    if let Some(first) = lowering_errors.first() {
-        return Err(GenerationError {
-            file: first.file.url(&output).unwrap_or(url),
-            range: first.primary_range,
-            cause: first.message.clone(),
-        });
-    }
-    let diagnostics = output.run_on_top_mod(output_module);
-    if diagnostics.has_errors(&output) {
-        return Err(diagnostic_error(
-            &output,
-            &diagnostics.finalize(&output),
-            error(
-                root.syntax().text_range(),
-                "generated output admission failed".into(),
-            ),
-        ));
-    }
-    drop(diagnostics);
-    // Source providers remain in the output source view, but no provider has
-    // been re-evaluated and no generated declaration is used as authored input.
-    Ok(Some(output))
+        .to(requests.to_vec());
+    output
 }
 
 fn evaluate_provider<'db>(

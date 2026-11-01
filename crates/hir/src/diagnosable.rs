@@ -257,7 +257,7 @@ impl<'db> WherePredicateBoundView<'db> {
                             .with_assumptions(param_env(db, owner_item)),
                         inst,
                     ) {
-                        WellFormedness::WellFormed => {}
+                        WellFormedness::WellFormed | WellFormedness::Pending(_) => {}
                         WellFormedness::IllFormed { goal, .. } => {
                             out.push(
                                 TraitConstraintDiag::TraitBoundNotSat {
@@ -763,7 +763,7 @@ impl<'db> Trait<'db> {
                     .with_assumptions(param_env(db, self.into())),
                 inst,
             ) {
-                WellFormedness::WellFormed => {}
+                WellFormedness::WellFormed | WellFormedness::Pending(_) => {}
                 WellFormedness::IllFormed { goal, subgoal } => {
                     diags.push(
                         TraitConstraintDiag::TraitBoundNotSat {
@@ -1722,7 +1722,8 @@ impl<'db> ImplTrait<'db> {
         let is_satisfied = |goal, span: DynLazySpan<'db>, out: &mut Vec<_>| {
             match trait_resolution::is_goal_satisfiable(db, solve_cx, goal) {
                 GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
-                GoalSatisfiability::NeedsConfirmation { .. } => {}
+                GoalSatisfiability::NeedsConfirmation { .. }
+                | GoalSatisfiability::NeedsGeneration(_) => {}
                 GoalSatisfiability::UnSat(_) => {
                     out.push(
                         TraitConstraintDiag::TraitBoundNotSat {
@@ -1877,7 +1878,7 @@ impl<'db> VariantView<'db> {
                 TraitSolveCx::new(db, scope).with_assumptions(param_env(db, enum_.into())),
                 ty,
             ) {
-                WellFormedness::WellFormed => {}
+                WellFormedness::WellFormed | WellFormedness::Pending(_) => {}
                 WellFormedness::IllFormed { goal, subgoal } => {
                     out.push(
                         TraitConstraintDiag::TraitBoundNotSat {
@@ -2203,7 +2204,7 @@ impl<'db> GenericParamOwner<'db> {
                                 .with_assumptions(param_env(db, self.into())),
                             inst,
                         ) {
-                            WellFormedness::WellFormed => {}
+                            WellFormedness::WellFormed | WellFormedness::Pending(_) => {}
                             WellFormedness::IllFormed { goal, .. } => out.push(
                                 TraitConstraintDiag::TraitBoundNotSat {
                                     span: span.into(),

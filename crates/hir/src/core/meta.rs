@@ -1067,6 +1067,7 @@ impl<'db> ItemCode<'db> {
             return Err("generation request requires Code<Item>");
         }
         Ok(common::generation::FrozenGenerationRequest {
+            scoped_impl: None,
             target_file: target
                 .url(db)
                 .ok_or("generation target has no source URL")?,
@@ -1396,12 +1397,6 @@ pub fn native_derive_provider<'db>(
     ),
     NativeDeriveProviderError<'db>,
 > {
-    use crate::analysis::ty::{
-        corelib::resolve_core_trait,
-        trait_def::TraitInstId,
-        trait_resolution::PredicateListId,
-        ty_def::{TyBase, TyData},
-    };
     if !request.impl_params(db).is_empty() || !request.where_clause(db).predicates(db).is_empty() {
         return Err(
             "bounded native derive requires a concrete header without binders or where conditions"
@@ -1416,6 +1411,38 @@ pub fn native_derive_provider<'db>(
     // No establishment receipt or old-database proof enters the output template.
     crate::analysis::ty::permits::establishment_for_goal(db, request, goal)
         .map_err(|cause| format!("canonical root establishment failed: {cause}"))?;
+    finalized_derive_provider(
+        db,
+        goal,
+        provider_ty,
+        request.into(),
+        request.scope(),
+        (request.span().ty().into(), request.span().into()),
+    )
+}
+
+/// Validate a concrete request and finalize its ordinary provider call once.
+/// The explicit/scoped entry owns its authority check before calling this helper.
+fn finalized_derive_provider<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: crate::analysis::ty::trait_def::TraitInstId<'db>,
+    provider_ty: TyId<'db>,
+    origin: crate::hir_def::ItemKind<'db>,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    spans: (crate::span::DynLazySpan<'db>, crate::span::DynLazySpan<'db>),
+) -> Result<
+    (
+        crate::analysis::semantic::SemanticInstanceKey<'db>,
+        RecordInput<'db>,
+    ),
+    NativeDeriveProviderError<'db>,
+> {
+    use crate::analysis::ty::{
+        corelib::resolve_core_trait,
+        trait_def::TraitInstId,
+        trait_resolution::PredicateListId,
+        ty_def::{TyBase, TyData},
+    };
     if goal.args(db).len() != 1
         || !goal.assoc_type_bindings(db).is_empty()
         || !goal.def(db).types(db).is_empty()
@@ -1426,22 +1453,24 @@ pub fn native_derive_provider<'db>(
                 .into(),
         );
     }
-    if goal.def(db).ingot(db) != request.top_mod(db).ingot(db) {
+    if goal.def(db).ingot(db) != scope.top_mod(db).ingot(db) {
         return Err("library/canonical goal establishment is pending the permits owner API".into());
     }
-    let input = RecordInput::for_authored_type_from(db, goal.args(db)[0], request.scope())
-        .map_err(|cause| match cause {
+    let input =
+        RecordInput::for_authored_type_from(db, goal.args(db)[0], scope).map_err(|cause| {
+            match cause {
             RecordInputError::InvisibleField => {
                 "native derive requires every target field to be visible from the requesting scope"
                     .to_string()
             }
             _ => format!("native derive requires a concrete authored record: {cause:?}"),
+        }
         })?;
     crate::analysis::ty::ty_check::admit_ground_type_application(
         db,
         input.ty(),
-        request.into(),
-        request.span().ty().into(),
+        origin,
+        spans.0.clone(),
     )
     .map_err(NativeDeriveProviderError::Target)?;
     if provider_ty.has_param(db) || provider_ty.has_invalid(db) || !provider_ty.is_star_kind(db) {
@@ -1450,11 +1479,11 @@ pub fn native_derive_provider<'db>(
     crate::analysis::ty::ty_check::admit_ground_type_application(
         db,
         provider_ty,
-        request.into(),
-        request.span().into(),
+        origin,
+        spans.1.clone(),
     )
     .map_err(NativeDeriveProviderError::Target)?;
-    let derive = resolve_core_trait(db, request.scope(), &["derive", "Derive"])
+    let derive = resolve_core_trait(db, scope, &["derive", "Derive"])
         .ok_or("missing canonical Derive protocol")?;
     let constructor = TyId::new(db, TyData::TyBase(TyBase::TraitDescriptor(goal.def(db))));
     let inst = TraitInstId::new_simple(db, derive, vec![provider_ty, constructor]);
@@ -1465,7 +1494,7 @@ pub fn native_derive_provider<'db>(
         .ok_or("canonical Derive protocol has no derive method")?;
     let finalized = crate::analysis::semantic::generated_callee(
         db,
-        request.scope(),
+        scope,
         PredicateListId::empty_list(db),
         derive_method,
         Some(inst),
@@ -1483,8 +1512,8 @@ pub fn native_derive_provider<'db>(
         db,
         proof,
         inst,
-        request.scope(),
-        request.span().into(),
+        scope,
+        spans.1.clone(),
     )
     .map_err(|(cause, diagnostics)| {
         NativeDeriveProviderError::Provider(
@@ -1498,6 +1527,259 @@ pub fn native_derive_provider<'db>(
         )
     })?;
     Ok((finalized.key, input))
+}
+
+/// Freeze an elaboration dependency without evaluating metadata or selecting a provider.
+pub fn freeze_generation_request<'db>(
+    db: &'db dyn HirAnalysisDb,
+    request: crate::analysis::ty::trait_resolution::generation::GenerationRequest<'db>,
+) -> Result<common::generation::ScopedDeriveDemand, String> {
+    use crate::hir_def::ItemKind;
+    let goal = request.goal(db);
+    let opening = request.opening(db);
+    let mode = match goal.mode(db) {
+        crate::hir_def::ModeMarker::None => common::generation::ScopedDeriveMode::Ref,
+        crate::hir_def::ModeMarker::Mut => common::generation::ScopedDeriveMode::Mut,
+        crate::hir_def::ModeMarker::MaybeMut => {
+            return Err("scoped derive requires a settled trait access mode".into());
+        }
+    };
+    if goal.def(db) != opening.offered_trait(db) {
+        return Err("scoped derive request does not match its advertised trait".into());
+    }
+    if goal.args(db).len() != 1
+        || !goal.assoc_type_bindings(db).is_empty()
+        || !goal.def(db).types(db).is_empty()
+        || !goal.def(db).consts(db).is_empty()
+    {
+        return Err(
+            "scoped derive requires an unparameterized goal without associated outputs".into(),
+        );
+    }
+    if goal.def(db).ingot(db) != opening.scope(db).top_mod(db).ingot(db)
+        || ItemKind::Trait(goal.def(db))
+            .attrs(db)
+            .is_some_and(|attrs| attrs.has_attr(db, "canonical"))
+    {
+        return Err(
+            "scoped derive of canonical or library goals requires a separate authority API".into(),
+        );
+    }
+    // Solver discovery freezes declarations only. RecordInput validates and
+    // instantiates fields, so it belongs to admission outside solver queries.
+    let (base, _) = goal.self_ty(db).decompose_ty_app(db);
+    let crate::analysis::ty::ty_def::TyData::TyBase(crate::analysis::ty::ty_def::TyBase::Adt(adt)) =
+        base.data(db)
+    else {
+        return Err("scoped derive requires a concrete authored record".into());
+    };
+    if !goal.self_ty(db).is_star_kind(db) {
+        return Err("scoped derive requires a fully applied authored record".into());
+    }
+    let target_item = adt.adt_ref(db).as_item();
+    let target_module = target_item.scope().top_mod(db);
+    if target_module.ingot(db) != opening.scope(db).top_mod(db).ingot(db) {
+        return Err(
+            "scoped derive currently requires a target declared in the requesting ingot".into(),
+        );
+    }
+    let target_root = crate::lower::top_mod_ast(db, target_module);
+    let (owner_kind, target_range) = match adt.adt_ref(db) {
+        crate::analysis::ty::adt_def::AdtRef::Struct(record) => {
+            let HirOrigin::Raw(pointer) = record.origin(db) else {
+                return Err("scoped target is not authored".into());
+            };
+            (
+                common::generation::FrozenRecordOwnerKind::Struct,
+                pointer.to_node(target_root.syntax()).syntax().text_range(),
+            )
+        }
+        crate::analysis::ty::adt_def::AdtRef::Enum(record) => {
+            let HirOrigin::Raw(pointer) = record.origin(db) else {
+                return Err("scoped target is not authored".into());
+            };
+            (
+                common::generation::FrozenRecordOwnerKind::Enum,
+                pointer.to_node(target_root.syntax()).syntax().text_range(),
+            )
+        }
+    };
+    if !goal.self_ty(db).decompose_ty_app(db).1.is_empty() {
+        return Err("scoped derive cannot yet preserve concrete generic target arguments".into());
+    }
+    if !opening.provider_ty(db).decompose_ty_app(db).1.is_empty() {
+        return Err(
+            "bounded scoped derive does not yet admit concrete generic provider applications"
+                .into(),
+        );
+    }
+    let trait_ = goal.def(db);
+    let module = trait_.top_mod(db);
+    let root = crate::lower::top_mod_ast(db, module);
+    let HirOrigin::Raw(pointer) = trait_.origin(db) else {
+        return Err("scoped derive requires an authored trait declaration".into());
+    };
+    Ok(common::generation::ScopedDeriveDemand {
+        mode,
+        opening: opening.key(db).clone(),
+        trait_ref: common::generation::FrozenTraitRef {
+            file: module
+                .file(db)
+                .url(db)
+                .ok_or("trait declaration has no source URL")?,
+            range: pointer.to_node(root.syntax()).syntax().text_range(),
+        },
+        target: common::generation::FrozenRecordRef {
+            owner_kind,
+            target_file: target_module
+                .file(db)
+                .url(db)
+                .ok_or("target declaration has no source URL")?,
+            target_range,
+            variant_index: None,
+        },
+    })
+}
+
+/// Rebind an accumulated dependency through exact declarations and the checked
+/// opening table. Provider type and proofs are never reconstructed from text.
+pub fn rebind_generation_request<'db>(
+    db: &'db dyn HirAnalysisDb,
+    demand: &common::generation::ScopedDeriveDemand,
+) -> Result<crate::analysis::ty::trait_resolution::generation::GenerationRequest<'db>, String> {
+    use crate::analysis::ty::{
+        adt_def::AdtRef,
+        trait_def::TraitInstId,
+        trait_resolution::generation::{GenerationRequest, provider_opening_at},
+    };
+    let trait_file = db
+        .workspace()
+        .get(db, &demand.trait_ref.file)
+        .ok_or("requested trait file is missing")?;
+    let trait_module = crate::lower::map_file_to_mod_impl(db, trait_file);
+    let trait_root = crate::lower::top_mod_ast(db, trait_module);
+    let trait_ = trait_module
+        .all_traits(db)
+        .iter()
+        .copied()
+        .find(|trait_| {
+            let HirOrigin::Raw(pointer) = trait_.origin(db) else {
+                return false;
+            };
+            pointer.to_node(trait_root.syntax()).syntax().text_range() == demand.trait_ref.range
+        })
+        .ok_or("requested trait declaration is missing")?;
+    let target_file = db
+        .workspace()
+        .get(db, &demand.target.target_file)
+        .ok_or("requested target file is missing")?;
+    let target_module = crate::lower::map_file_to_mod_impl(db, target_file);
+    let target_root = crate::lower::top_mod_ast(db, target_module);
+    let target = match demand.target.owner_kind {
+        common::generation::FrozenRecordOwnerKind::Struct => target_module
+            .all_structs(db)
+            .iter()
+            .copied()
+            .find(|target| {
+                let HirOrigin::Raw(pointer) = target.origin(db) else {
+                    return false;
+                };
+                pointer.to_node(target_root.syntax()).syntax().text_range()
+                    == demand.target.target_range
+            })
+            .map(AdtRef::Struct),
+        common::generation::FrozenRecordOwnerKind::Enum => target_module
+            .all_enums(db)
+            .iter()
+            .copied()
+            .find(|target| {
+                let HirOrigin::Raw(pointer) = target.origin(db) else {
+                    return false;
+                };
+                pointer.to_node(target_root.syntax()).syntax().text_range()
+                    == demand.target.target_range
+            })
+            .map(AdtRef::Enum),
+    }
+    .ok_or("requested target declaration is missing")?;
+    let opening = provider_opening_at(db, &demand.opening, trait_)
+        .ok_or("request has no unique checked authored provider opening")?;
+    let mode = match demand.mode {
+        common::generation::ScopedDeriveMode::Ref => crate::hir_def::ModeMarker::None,
+        common::generation::ScopedDeriveMode::Mut => crate::hir_def::ModeMarker::Mut,
+    };
+    let goal = TraitInstId::new_simple(db, trait_, vec![TyId::adt(db, target.as_adt(db))])
+        .with_mode(db, mode);
+    let request = GenerationRequest::new(db, opening, goal);
+    if freeze_generation_request(db, request)? != *demand {
+        return Err("requested identities changed while preparing unchanged source".into());
+    }
+    Ok(request)
+}
+
+/// Translate one immutable prepared binding to its admitted named candidate.
+/// No proof or database-local item ID crosses between preparation views.
+#[salsa::tracked(returns(copy))]
+pub fn scoped_derive_implementation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    opening: crate::analysis::ty::trait_resolution::generation::ProviderOpening<'db>,
+    goal: crate::analysis::ty::trait_def::TraitInstId<'db>,
+) -> Option<crate::analysis::ty::trait_def::ImplementorId<'db>> {
+    use crate::analysis::ty::trait_resolution::generation::GenerationRequest;
+    let demand = freeze_generation_request(db, GenerationRequest::new(db, opening, goal)).ok()?;
+    let scoped = db
+        .generation_inputs()
+        .requests(db)
+        .iter()
+        .find_map(|request| {
+            request
+                .scoped_impl
+                .as_ref()
+                .filter(|scoped| scoped.demand == demand)
+        })?;
+    let file = db.workspace().get(db, &demand.opening.file)?;
+    let module = crate::lower::map_file_to_mod_impl(db, file);
+    let name = IdentId::new(db, scoped.selection_name.clone());
+    let mut implementations = module
+        .all_impl_traits(db)
+        .iter()
+        .copied()
+        .filter(|implementation| {
+            implementation.selection_name(db) == Some(name)
+                && matches!(implementation.origin(db), HirOrigin::Synthetic)
+        });
+    let implementation = implementations.next()?;
+    if implementations.next().is_some() {
+        return None;
+    }
+    crate::analysis::ty::trait_lower::lower_impl_trait(db, implementation)
+}
+
+/// Scoped requests use the same finalized ordinary provider boundary as explicit requests.
+pub fn scoped_derive_provider<'db>(
+    db: &'db dyn HirAnalysisDb,
+    opening: crate::analysis::ty::trait_resolution::generation::ProviderOpening<'db>,
+    goal: crate::analysis::ty::trait_def::TraitInstId<'db>,
+    origin: crate::hir_def::ItemKind<'db>,
+    span: crate::span::DynLazySpan<'db>,
+) -> Result<
+    (
+        crate::analysis::semantic::SemanticInstanceKey<'db>,
+        RecordInput<'db>,
+    ),
+    NativeDeriveProviderError<'db>,
+> {
+    use crate::analysis::ty::trait_resolution::generation::GenerationRequest;
+    freeze_generation_request(db, GenerationRequest::new(db, opening, goal))
+        .map_err(NativeDeriveProviderError::Message)?;
+    finalized_derive_provider(
+        db,
+        goal,
+        opening.provider_ty(db),
+        origin,
+        opening.scope(db),
+        (span.clone(), span),
+    )
 }
 
 /// Recover the exact authored header, never a first-by-name implementation.

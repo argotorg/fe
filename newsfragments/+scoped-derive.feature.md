@@ -1,0 +1,1 @@
+Choose a Fe derive provider within a block, generating implementations only for requested goals. Generated choices pass through declared trait bounds and remain local to the block; cyclic preparation and unsupported targets are diagnosed before provider execution.

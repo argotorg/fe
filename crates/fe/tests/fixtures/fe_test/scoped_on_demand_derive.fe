@@ -1,0 +1,52 @@
+use core::derive::Derive
+use core::meta::{Record, Code, Item, field_count}
+
+trait Score { fn score() -> u256 }
+pub struct Pair { pub a: u256, pub b: u256 }
+impl Score for Pair { fn score() -> u256 { 100 } }
+impl Score for Pair as Named { fn score() -> u256 { 7 } }
+struct Provider {}
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote { fn score() -> u256 { 40 + ${n} } }
+    }
+}
+fn read<T: Score>() -> u256 { T::score() }
+
+#[test]
+fn generated_choice_runs_and_crosses_declared_bounds() {
+    assert!(Pair::score() == 100)
+    with (Provider) {
+        assert!(Pair::score() == 42)
+        assert!(read<Pair>() == 42)
+        with (Named) { assert!(Pair::score() == 7) }
+        assert!(Pair::score() == 42)
+    }
+    assert!(Pair::score() == 100)
+}
+
+#[test]
+fn closure_retains_its_generated_choice() {
+    let f = || { with (Provider) { Pair::score() } }
+    assert!(f() == 42)
+}
+
+trait RowScore { fn row_score(self) -> u256 }
+impl RowScore for Pair { fn row_score(self) -> u256 { 100 } }
+struct RowProvider {}
+impl Derive<RowScore> for RowProvider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn row_score(self) -> u256 { 42 } }
+    }
+}
+fn row_charge() -> u256 uses (p: RowScore) { p.row_score() }
+fn row_apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+
+#[test]
+fn generated_choice_fills_a_deferred_closure_effect_row() {
+    let ordinary = || row_charge()
+    with (RowScore = Pair { a: 0, b: 0 }) { assert!(row_apply(ordinary) == 100) }
+    let generated = || row_charge()
+    with (RowProvider, RowScore = Pair { a: 0, b: 0 }) { assert!(row_apply(generated) == 42) }
+}

@@ -222,6 +222,16 @@ pub fn eval_body_owner_const<'db>(
     owner: BodyOwner<'db>,
     subst: GenericSubst<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
+    eval_const_instance(db, const_body_instance(db, owner, subst))
+}
+
+/// The instance that `eval_body_owner_const` evaluates for `owner` with
+/// `subst`.
+pub fn const_body_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    subst: GenericSubst<'db>,
+) -> SemanticInstance<'db> {
     let key = SemanticInstanceKey::of(
         db,
         owner,
@@ -230,7 +240,7 @@ pub fn eval_body_owner_const<'db>(
         ImplEnv::empty(db, owner.scope()),
         EvidenceList::none(db),
     );
-    eval_const_instance(db, SemanticInstance::new(db, key))
+    SemanticInstance::new(db, key)
 }
 
 fn eval_body_owner_const_cycle_initial<'db>(
