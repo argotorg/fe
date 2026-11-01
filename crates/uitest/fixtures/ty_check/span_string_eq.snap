@@ -3,8 +3,11 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/span_string_eq.fe
 ---
-error[8-0000]: type mismatch
-   ┌─ span_string_eq.fe:11:14
+error[8-0016]: `core::ops::Eq` trait is not implemented
+   ┌─ span_string_eq.fe:11:5
    │
 11 │     bytes == "a literal of thirty-two bytes!!!"
-   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `String<_>`, but `DynString(32)` is given
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │     │
+   │     `==` can't be applied to `MemSlice<u8>`
+   │     Try implementing `core::ops::Eq` for `MemSlice<u8>`

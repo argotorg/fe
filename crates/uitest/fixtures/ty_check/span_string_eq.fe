@@ -10,3 +10,8 @@ fn short(_ bytes: MemSpan) -> bool {
 fn long(_ bytes: MemSpan) -> bool {
     bytes == "a literal of thirty-two bytes!!!"
 }
+
+// Spans compare element by element.
+fn spans(_ a: MemSpan, _ b: MemSpan) -> bool {
+    a == b && a != b.head(1)
+}
