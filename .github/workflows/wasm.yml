@@ -1,0 +1,73 @@
+name: WebAssembly
+
+# Main CI's all-feature jobs already build, lint, and test the WebAssembly
+# compiler path on pull requests. This workflow runs the target end to end with a
+# release build of `fe`: it builds the programs, validates every module with
+# wasm-tools, checks the modules against their manifests and that builds are
+# reproducible, runs the Node.js host tests, and runs `fe test --backend wasm`.
+# `examples/wasm/check.sh` runs the same steps on a developer machine.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    paths:
+      - .github/workflows/wasm.yml
+      - examples/wasm/**
+      - examples/wasm_host.fe
+      - ingots/std/src/wasm.fe
+      - ingots/std/src/wasm/**
+      - crates/codegen/**
+      - crates/mir/**
+      - crates/fe/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wasm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: Generate tree-sitter parser
+        working-directory: crates/tree-sitter-fe
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild tree-sitter-cli
+          npx tree-sitter generate --abi=14
+      - name: Install wasm-tools
+        uses: taiki-e/install-action@badb8c3638e0b773c6c17a6025c2306a8f1c4303 # nextest
+        with:
+          tool: wasm-tools@1.247.0
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      - name: Build Fe with WebAssembly support
+        run: cargo build --locked --release -p fe --features wasm,cranelift
+      - name: Build, validate, verify and test the programs
+        run: examples/wasm/check.sh target/release/fe
+      - name: Run the WebAssembly tests of the compiler
+        run: >-
+          cargo test --locked --profile test-release -p fe --all-features
+          --test wasm_backend --test wasm_memory --test wasm_imports --test wasm_files
+          --test wasm_manifest --test wasm_reproducible --test wasm_test_command

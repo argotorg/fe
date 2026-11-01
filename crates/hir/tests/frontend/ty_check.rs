@@ -275,7 +275,7 @@ fn oversized_type_size_is_rejected() {
         "oversized_type_size_is_rejected.fe".into(),
         r#"
 fn trigger() -> u256 {
-    core::size_of<[u256; 0x8000000000000000]>()
+    core::size_of<[[u256; 0x80000000]; 0x80000000]>()
 }
 "#,
     );

@@ -1,0 +1,69 @@
+pub fn for_in_sum(a: i32, b: i32, c: i32) -> i32 {
+    let xs: [i32; 5] = [a, b, c, 4, 5]
+    var s: i32 = 0
+    for x in xs {
+        s += x
+    }
+    s
+}
+
+pub fn for_in_nested(n: u32) -> u32 {
+    let xs: [u32; 3] = [1, 2, 3]
+    let ys: [u32; 3] = [10, 20, 30]
+    var s: u32 = 0
+    for x in xs {
+        for y in ys {
+            s += x * y + n
+        }
+    }
+    s
+}
+
+pub fn prefix_max_and_sum(a: i32, b: i32, c: i32, d: i32) -> i32 {
+    let xs: [i32; 4] = [a, b, c, d]
+    var sums: [i32; 4] = [0; 4]
+    var maxes: [i32; 4] = [0; 4]
+    var run: i32 = 0
+    var peak: i32 = a
+    var i: usize = 0
+    while i < 4 {
+        run += xs[i]
+        if xs[i] > peak {
+            peak = xs[i]
+        }
+        sums[i] = run
+        maxes[i] = peak
+        i += 1
+    }
+    sums[3] * 1000 + maxes[1] * 100 + maxes[2] * 10 + sums[0]
+}
+
+pub fn first_negative(a: i32, b: i32, c: i32, d: i32) -> i32 {
+    let xs: [i32; 4] = [a, b, c, d]
+    var i: usize = 0
+    while i < 4 {
+        if xs[i] < 0 {
+            return i.downcast_unchecked()
+        }
+        i += 1
+    }
+    -1
+}
+
+pub fn skip_and_stop(limit: u32) -> u32 {
+    let xs: [u32; 8] = [5, 6, 7, 8, 9, 10, 11, 12]
+    var s: u32 = 0
+    var i: usize = 0
+    while i < 8 {
+        let x = xs[i]
+        i += 1
+        if x % 2 == 0 {
+            continue
+        }
+        if x > limit {
+            break
+        }
+        s += x
+    }
+    s
+}

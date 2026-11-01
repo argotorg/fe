@@ -80,6 +80,7 @@ pub use provider::{
 
 const EVM_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
 const NATIVE_ROOT_EFFECT_TY_PATH: &[&str] = &["std", "native", "Host"];
+const WASM_ROOT_EFFECT_TY_PATH: &[&str] = &["std", "wasm", "Host"];
 
 pub fn ty_is_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -960,8 +961,9 @@ pub fn resolve_contract_root_effect_ty<'db>(
     ))
 }
 
-/// The type `main` and tests take their target capabilities from:
-/// `std::native::Host` for native code, else the contracts' root effect.
+/// The type entries take their target capabilities from: `std::native::Host`
+/// for native `main` and tests, `std::wasm::Host` for WebAssembly exports and
+/// tests, else the contracts' root effect.
 pub fn resolve_func_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -970,6 +972,7 @@ pub fn resolve_func_root_effect_ty<'db>(
     match db.compilation_settings().target(db) {
         Target::Native => resolve_ty_path(db, NATIVE_ROOT_EFFECT_TY_PATH, scope, assumptions),
         Target::Evm => resolve_contract_root_effect_ty(db, scope, assumptions),
+        Target::Wasm => resolve_ty_path(db, WASM_ROOT_EFFECT_TY_PATH, scope, assumptions),
     }
 }
 

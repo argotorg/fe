@@ -1,0 +1,15 @@
+pub fn mean_i16(a: i16, b: i16) -> i16 {
+    (a + b) / 2
+}
+
+pub fn offset_u16(a: u16, b: u16) -> u16 {
+    if a > b { a - b } else { b - a }
+}
+
+pub fn scale_i8(a: i8) -> i16 {
+    a as i16 * 3
+}
+
+pub fn lerp(a: i64, b: i64, t: i64) -> i64 {
+    a + (b - a) * t / 100
+}

@@ -1,0 +1,27 @@
+pub fn and32(a: u32, b: u32) -> u32 {
+    a & b
+}
+
+pub fn or32(a: u32, b: u32) -> u32 {
+    a | b
+}
+
+pub fn xor32(a: u32, b: u32) -> u32 {
+    a ^ b
+}
+
+pub fn not32(a: u32) -> u32 {
+    !a
+}
+
+pub fn xor64(a: u64, b: u64) -> u64 {
+    a ^ b
+}
+
+pub fn not64(a: u64) -> u64 {
+    !a
+}
+
+pub fn andnot_i32(a: i32, b: i32) -> i32 {
+    a & !b
+}

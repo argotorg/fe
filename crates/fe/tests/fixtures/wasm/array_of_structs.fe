@@ -1,0 +1,70 @@
+struct Item {
+    weight: u32,
+    value: u32,
+}
+
+impl Copy for Item {}
+
+fn items(n: u32) -> [Item; 4] {
+    [
+        Item { weight: 3, value: n },
+        Item { weight: 4, value: n * 2 },
+        Item { weight: 5, value: n + 7 },
+        Item { weight: 2, value: 40 },
+    ]
+}
+
+pub fn total_value(n: u32) -> u32 {
+    let list = items(n: n)
+    var s: u32 = 0
+    var i: usize = 0
+    while i < 4 {
+        s += list[i].value
+        i += 1
+    }
+    s
+}
+
+pub fn best_ratio_index(n: u32) -> u32 {
+    let list = items(n: n)
+    var best: usize = 0
+    var i: usize = 1
+    while i < 4 {
+        if list[i].value * list[best].weight > list[best].value * list[i].weight {
+            best = i
+        }
+        i += 1
+    }
+    best.downcast_unchecked()
+}
+
+pub fn update_one(n: u32, which: u32, delta: u32) -> u32 {
+    var list = items(n: n)
+    list[which as usize].value += delta
+    list[0].value * 1000000 + list[1].value * 10000 + list[2].value * 100 + list[3].value
+}
+
+pub fn knapsack(cap: u32) -> u32 {
+    let list = items(n: 10)
+    var best: u32 = 0
+    var mask: u32 = 0
+    while mask < 16 {
+        var w: u32 = 0
+        var v: u32 = 0
+        var i: usize = 0
+        while i < 4 {
+            let shift: u32 = i.downcast_unchecked()
+            let bit: u32 = 1 << shift
+            if (mask & bit) != 0 {
+                w += list[i].weight
+                v += list[i].value
+            }
+            i += 1
+        }
+        if w <= cap && v > best {
+            best = v
+        }
+        mask += 1
+    }
+    best
+}

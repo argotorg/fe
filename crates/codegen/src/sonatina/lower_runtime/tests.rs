@@ -1,32 +1,51 @@
 use common::InputDb;
-#[cfg(all(
-    feature = "cranelift",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+#[cfg(any(
+    feature = "wasm",
+    all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 use common::compilation::Target;
 use contract_harness::{ExecutionOptions, RuntimeInstance as EvmRuntime};
 use driver::DriverDataBase;
+#[cfg(any(
+    feature = "wasm",
+    all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+use hir::analysis::semantic::FieldIndex;
 #[cfg(all(
     feature = "cranelift",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-use hir::analysis::{semantic::FieldIndex, ty::AddressSpace};
+use hir::analysis::ty::AddressSpace;
 use mir::{
     ConstScalar, MirDb, PlaceRoot, RBlock, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind,
     RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimePlace, build_runtime_package,
     verify_runtime_body,
 };
+#[cfg(any(
+    feature = "wasm",
+    all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+use mir::{Layout, RuntimeMemoryLayout, RuntimePackage, VariantId};
 #[cfg(all(
     feature = "cranelift",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-use mir::{
-    Layout, NativeOutputKind, RuntimeMemoryLayout, ScalarClass, ScalarRole, VariantId,
-    build_native_package,
-};
-#[cfg(all(
-    feature = "cranelift",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+use mir::{NativeOutputKind, ScalarClass, ScalarRole, build_native_package};
+#[cfg(any(
+    feature = "wasm",
+    all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 use salsa::Setter;
 #[cfg(all(
@@ -262,23 +281,14 @@ pub fn main() -> i32 {
     assert!(!function.contains("i256"), "{function}");
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+#[cfg(any(
+    feature = "wasm",
+    all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
-#[test]
-fn native_raw_memory_layouts_match_sonatina_objects() {
-    // Fe lays out native raw memory itself, and Sonatina lays out the objects
-    // it views that memory as: every size and offset must agree.
-    let mut db = DriverDataBase::default();
-    db.compilation_settings()
-        .set_target(&mut db)
-        .to(Target::Native);
-    let file = db.workspace().touch(
-        &mut db,
-        Url::parse("file:///native_layouts.fe").unwrap(),
-        Some(
-            r#"
+const LAYOUT_ZOO: &str = r#"
 use core::option::Option
 use core::ptr::{self, StorPtr}
 use core::result::Result
@@ -317,18 +327,31 @@ pub fn main() -> i32 {
     let _ = keep(unsafe { *zoo })
     0
 }
-"#
-            .into(),
-        ),
-    );
-    let package =
-        build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
-    let isa = crate::sonatina::create_native_isa().unwrap();
+"#;
+
+/// Fe lays out raw memory itself, and Sonatina lays out the objects it views
+/// that memory as: every size and offset of the types `package` lowers must
+/// agree under `isa`.
+#[cfg(any(
+    feature = "wasm",
+    all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+fn assert_raw_memory_layouts_match_objects<I>(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    isa: &I,
+) where
+    I: Isa,
+    I::InstSet: super::LoweringInstSet,
+{
     let mut lowerer = ModuleLowerer::new(
-        &db,
-        ModuleBuilder::new(ModuleCtx::new(&isa)),
+        db,
+        ModuleBuilder::new(ModuleCtx::new(isa)),
         isa.inst_set(),
-        &package,
+        package,
         &[],
         NativePanics::Abort,
     )
@@ -338,16 +361,16 @@ pub fn main() -> i32 {
     // Lowering `Zoo` lowers the type of every field in it.
     assert!(
         lowerer.type_cache.keys().any(|layout| matches!(
-            layout.data(&db),
+            layout.data(db),
             Layout::Struct(data) if data.fields.len() == 15
         )),
         "`Zoo` was not lowered"
     );
-    let raw = RuntimeMemoryLayout::raw(&db);
+    let raw = RuntimeMemoryLayout::raw(db);
     let ctx = &lowerer.builder.ctx;
     let offset = |offset: Option<(usize, _)>| offset.map(|(offset, _)| offset as u64);
     for (&layout, &ty) in &lowerer.type_cache {
-        let data = layout.data(&db);
+        let data = layout.data(db);
         assert_eq!(
             raw.layout_size(layout).ok(),
             ctx.size_of(ty).ok().map(|size| size as u64),
@@ -389,6 +412,47 @@ pub fn main() -> i32 {
             }
         }
     }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn native_raw_memory_layouts_match_sonatina_objects() {
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///native_layouts.fe").unwrap(),
+        Some(LAYOUT_ZOO.into()),
+    );
+    let package =
+        build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
+    let isa = crate::sonatina::create_native_isa().unwrap();
+    assert_raw_memory_layouts_match_objects(&db, &package, &isa);
+}
+
+#[cfg(feature = "wasm")]
+#[test]
+fn wasm_raw_memory_layouts_match_sonatina_objects() {
+    // Pointers, references and `usize` take 4 bytes here.
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Wasm);
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///wasm_layouts.fe").unwrap(),
+        Some(LAYOUT_ZOO.into()),
+    );
+    let package = mir::build_wasm_export_package(&db, db.top_mod(file))
+        .unwrap()
+        .package;
+    let isa = crate::sonatina::wasm::create_wasm32_isa();
+    assert_raw_memory_layouts_match_objects(&db, &package, &isa);
 }
 
 #[test]
@@ -590,4 +654,40 @@ pub contract SlotContract {
         expected[31] = if replace { 73 } else { 37 };
         assert_eq!(result.return_data, expected, "{opt:?}, replace={replace}");
     }
+}
+
+#[test]
+fn a_trapping_revert_drops_only_stores_into_its_own_allocations() {
+    let local = RLocalId::from_u32;
+    let constant = |dst| RStmt::Assign {
+        dst: local(dst),
+        expr: RExpr::ConstScalar(ConstScalar::Int {
+            words: vec![0],
+            bits: 64,
+            signed: false,
+        }),
+    };
+    let malloc = |dst, size| RStmt::Assign {
+        dst: local(dst),
+        expr: RExpr::Builtin(mir::RuntimeBuiltin::Malloc { size: local(size) }),
+    };
+    let mstore = |dst, addr, value| RStmt::Assign {
+        dst: local(dst),
+        expr: RExpr::Builtin(mir::RuntimeBuiltin::Mstore {
+            addr: local(addr),
+            value: local(value),
+        }),
+    };
+    let start = |stmts, terminator| super::revert_payload_start(&RBlock { stmts, terminator });
+
+    // A payload written into a fresh allocation is not lowered.
+    let payload = vec![constant(1), malloc(2, 1), mstore(3, 2, 1)];
+    assert_eq!(start(payload.clone(), RTerminator::RevertEmpty), 0);
+    assert_eq!(start(payload, RTerminator::Return(None)), 3);
+    // A store through the parameter `0` is observable after the trap, and so
+    // is everything before it.
+    let through_parameter = vec![constant(1), malloc(2, 1), mstore(3, 0, 1), mstore(4, 2, 1)];
+    assert_eq!(start(through_parameter, RTerminator::RevertEmpty), 4);
+    let before_payload = vec![constant(1), mstore(2, 0, 1), malloc(3, 1), mstore(4, 3, 1)];
+    assert_eq!(start(before_payload, RTerminator::RevertEmpty), 2);
 }

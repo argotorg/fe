@@ -1,0 +1,42 @@
+enum Shape {
+    Circle(u32),
+    Rect(u32, u32),
+    Empty,
+}
+
+fn area(s: Shape) -> u32 {
+    match s {
+        Shape::Circle(r) => 3 * r * r,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0,
+    }
+}
+
+fn pick(kind: u32, a: u32, b: u32) -> Shape {
+    if kind == 0 {
+        Shape::Circle(a)
+    } else if kind == 1 {
+        Shape::Rect(a, b)
+    } else {
+        Shape::Empty
+    }
+}
+
+pub fn area_of(kind: u32, a: u32, b: u32) -> u32 {
+    area(s: pick(kind: kind, a: a, b: b))
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let shapes: [Shape; 3] = [Shape::Circle(a), Shape::Rect(a, b), Shape::Empty]
+    var s: u32 = 0
+    var i: usize = 0
+    while i < 3 {
+        match shapes[i] {
+            Shape::Circle(r) => { s += 3 * r * r },
+            Shape::Rect(w, h) => { s += w * h },
+            Shape::Empty => { s += 1000 },
+        }
+        i += 1
+    }
+    s
+}

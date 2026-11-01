@@ -1,0 +1,44 @@
+const PRIMES: [u32; 8] = [2, 3, 5, 7, 11, 13, 17, 19]
+const SQUARES: [u64; 6] = [0, 1, 4, 9, 16, 25]
+const SIGNS: [i8; 4] = [1, -1, 1, -1]
+const LIMIT: u32 = 8
+
+pub fn prime(i: u32) -> u32 {
+    PRIMES[i as usize]
+}
+
+pub fn square(i: u32) -> u64 {
+    SQUARES[i as usize]
+}
+
+pub fn sign_sum(n: u32) -> i32 {
+    var s: i32 = 0
+    var i: usize = 0
+    while i < (n as usize) {
+        s += SIGNS[i & 3] as i32
+        i += 1
+    }
+    s
+}
+
+pub fn sum_primes(n: u32) -> u32 {
+    var i: usize = 0
+    var s: u32 = 0
+    while i < (n as usize) {
+        s += PRIMES[i]
+        i += 1
+    }
+    s
+}
+
+pub fn largest_below(x: u32) -> u32 {
+    var best: u32 = 0
+    var i: usize = 0
+    while i < (LIMIT as usize) {
+        if PRIMES[i] < x {
+            best = PRIMES[i]
+        }
+        i += 1
+    }
+    best
+}

@@ -1,0 +1,11 @@
+pub fn weighted(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32) -> i32 {
+    a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g
+}
+
+pub fn mixed_widths(a: u8, b: i16, c: u32, d: i64, e: bool) -> i64 {
+    if e {
+        a as i64 + b as i64 + c as i64 + d
+    } else {
+        d
+    }
+}

@@ -1,0 +1,12 @@
+extern {
+    fn never_called(_ a: i32) -> i32
+    fn also_unused(_ a: u64)
+}
+
+pub fn double(x: i32) -> i32 {
+    x * 2
+}
+
+fn helper(x: i32) -> i32 {
+    unsafe { never_called(x) }
+}

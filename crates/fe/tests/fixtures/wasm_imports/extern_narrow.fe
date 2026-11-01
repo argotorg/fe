@@ -1,0 +1,31 @@
+//host: extern {
+//host:     fn host_inc_u8(_ a: u8) -> u8
+//host:     fn host_negate_i8(_ a: i8) -> i8
+//host:     fn host_swap_bool(_ a: bool) -> bool
+//host:     fn host_add_u16_i16(_ a: u16, _ b: i16) -> i16
+//host: }
+//mock: fn host_inc_u8(_ a: u8) -> u8 { a.wrapping_add(1) }
+//mock: fn host_negate_i8(_ a: i8) -> i8 { let zero: i8 = 0
+//mock:     zero.wrapping_sub(a) }
+//mock: fn host_swap_bool(_ a: bool) -> bool { !a }
+//mock: fn host_add_u16_i16(_ a: u16, _ b: i16) -> i16 { b.wrapping_add(a.downcast_truncate()) }
+
+pub fn inc(a: u8) -> u8 {
+    unsafe { host_inc_u8(a) }
+}
+
+pub fn negate(a: i8) -> i8 {
+    unsafe { host_negate_i8(a) }
+}
+
+pub fn swap(a: bool) -> bool {
+    unsafe { host_swap_bool(a) }
+}
+
+pub fn add_mixed(a: u16, b: i16) -> i16 {
+    unsafe { host_add_u16_i16(a, b) }
+}
+
+pub fn widened(a: u8) -> u32 {
+    (unsafe { host_inc_u8(a) } as u32) + 1000
+}

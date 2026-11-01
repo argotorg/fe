@@ -196,6 +196,7 @@ define_runtime_intrinsics! {
     Mstore8 => (Std, ["evm", "ops", "mstore8"]),
     Mcopy => (Core, ["ptr", "copy_mem"]),
     ZeroMem => (Core, ["ptr", "zero_mem"]),
+    ReadPaddedWord => (Core, ["ptr", "read_padded_word"]),
     Msize => (Std, ["evm", "ops", "msize"]),
     Sload => (Std, ["evm", "ops", "sload"]),
     Sstore => (Std, ["evm", "ops", "sstore"]),

@@ -365,6 +365,81 @@ A panic in an exported function reports on stderr and aborts the whole process, 
 executable. A library's other functions are local symbols, so two Fe libraries can be linked into
 one program as long as their exported symbols differ.
 
+### WebAssembly output
+
+With the optional `wasm` Cargo feature, `fe build --backend wasm <file.fe>` compiles
+a standalone `.fe` file to a WebAssembly module (32-bit pointers, one linear memory).
+Every non-generic `pub fn` in the root of the file is exported under its own name,
+and the module also exports its memory as `memory`. Parameters and results must be
+`bool` or integers of at most 64 bits, with two exceptions described below (text
+parameters and a reply result). `usize` and `isize` have 32 bits on this target
+and cross as an `i32`. Any other type, including `u256` and structs, is an error
+that names the function and the type. Inside functions, structs,
+tuples, enums, arrays, constants, `usize` and the dynamic arrays of `core::ptr` work.
+Overflow, division by zero, a failed `assert!` and an index outside an array trap, as
+they do in native executables. Calls use a stack of 1 MiB in the module's memory, and
+a call that does not fit traps; dynamic allocation comes from a heap that reuses
+freed blocks and grows the memory without a limit of the module's own; an allocation
+traps when the host refuses to grow it, and a fallible one returns `None`. The EVM built-ins
+are not supported and are errors that name the function and the instruction. The default output is `<out>/<file>.wasm`; `--emit ir` writes
+`<out>/<file>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
+written, `<out>/<file>.manifest.json` is written with it. The manifest records the
+module's file name, SHA-256 and size, its initial memory in pages, the imports (module,
+name, WebAssembly parameter and result types), the exports (for the program's functions
+the Fe parameter names and types, with `HostText` and `Reply` as named by `std::wasm`,
+and the WebAssembly types they become), the version of the host contract, the
+optimization level and the compiler version. It contains nothing that depends on the
+machine, the time or the location of the sources. Two builds of one program with one
+compiler give identical bytes for the module, its IR and its manifest, at every
+optimization level (`examples/wasm/reproducible.sh` checks this).
+
+An `extern` function that an export reaches becomes an import of the module `env`,
+under the function's name; an `extern` function that nothing reaches is not imported.
+Its parameters and result follow the rule for exports (`bool` and integers of at most
+64 bits; pointers are not allowed). The host sees `bool` and integers of up to 32 bits
+as an `i32` that holds the value zero-extended (an `i8` of -1 arrives as 255) and
+ignores bits above the width in what it returns (a `bool` is the lowest bit); 64-bit
+integers are `i64`. There is
+no attribute for another module name yet. The module `std::wasm` declares host
+operations as effects (`Log`, `Clock` and `Abort`) with two providers. The root
+effect, `std::wasm::Host`, calls the imports `sys_wasm_log_i32`, `sys_wasm_log_u64`,
+`sys_wasm_now_ms` and `sys_wasm_abort`: an export or a test receives its capabilities by
+declaring them, as in `pub fn stamp() -> u64 uses (clock: mut Clock)`, and nothing else
+can create one. `mock(now, step)` is Fe code that needs no host, provided with
+`with (Clock = provider) { ... }`. If the host does not supply an import, the engine
+refuses to instantiate the module and names it.
+
+An export may also take `std::wasm::HostText` parameters and return a
+`std::wasm::Reply`; nothing else beyond the scalars is accepted, and each other type is
+an error that names it. A `HostText` is two `i32` parameters, the address and the length
+in bytes of text that the host placed in the module's memory, valid for the call only.
+A `Reply` is one `i64`: the tag in the low 32 bits and the payload in the high 32 bits,
+where tag 0 is success with a value and any other tag is an error number of the contract
+(the payload is then 0). A module with a `HostText` parameter also exports an allocator:
+`alloc(size) -> address` returns zeroed memory, `arena_mark() -> address` reads the top of
+the heap, and `arena_release(mark)` frees everything allocated at or above `mark` and clears it. A
+host places the texts with `alloc`, makes the call, reads what it needs, and calls
+`arena_release` with the mark it took first. The three names are then reserved. Safe Fe
+code cannot make a `HostText`; only the host and the generated wrapper of the export do.
+
+`std::wasm::files` is a contract built on these shapes, with four operations: `open(name)`
+(the name is borrowed text), `size(handle)`, `read_byte(handle, index)` and
+`close(handle)`, which takes the handle by value, so the compiler rejects a second use.
+Each can fail with `NotFound` (1), `OutOfRange` (2) or `BadName` (3); no other number is
+valid. `Host` provides `Files` by calling the imports `sys_wasm_files_open(addr, len)`, `sys_wasm_files_size`,
+`sys_wasm_files_read_byte` and `sys_wasm_files_close`, which return a reply word (close
+returns nothing), and `mock()` is Fe code that holds files in memory. The compiler does not
+require a handle to be closed; the host counts the handles that stay open. The module
+`examples/wasm/host.mjs` is a host for Node with no dependencies: it supplies the imports,
+places texts, decodes replies, and refuses a forged or closed handle, text outside the
+memory or longer than 64 KiB, and an unknown error number, each with an error that names
+the problem. The host also supplies the log, clock and abort imports of `std::wasm`, and
+given the manifest of a module it refuses the module, naming the cause, when the SHA-256
+differs, when the imports or exports differ from the manifest's, or when the host lacks an
+import. `examples/wasm/lines.fe` and `examples/wasm/lines.mjs` are a small program and a
+script that runs it, `examples/wasm/verify.mjs` checks a module against its manifest, and
+`examples/wasm/README.md` describes the whole target.
+
 The `metadata.json` artifact follows the Solidity Contract Metadata schema (`version: 1`), adapted to Fe. It is a complete, deterministic recompilation input: rebuilding with the same compiler version, `sources`, and `settings` reproduces the same bytecode. Its shape:
 
 ```
@@ -615,7 +690,7 @@ Runs Fe tests via the test harness (revm-based execution).
 ### Synopsis
 
 ```
-fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--optimize <level>] [--trace-evm] [--trace-evm-keep <n>] [--trace-evm-stack-n <n>] [--debug-dir <dir>] [--report [--report-out <out>]] [--report-dir <dir> [--report-failed-only]] [--call-trace] [path]...
+fe test [--backend <sonatina|native|wasm>] [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--optimize <level>] [--trace-evm] [--trace-evm-keep <n>] [--trace-evm-stack-n <n>] [--debug-dir <dir>] [--report [--report-out <out>]] [--report-dir <dir> [--report-failed-only]] [--call-trace] [path]...
 ```
 
 ### Inputs
@@ -649,6 +724,24 @@ fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--optimize 
 - `--show-logs` prints EVM logs (when available).
 - A summary is printed if at least one test ran.
 - If a suite has no tests, it prints `Warning: No tests found in <path>` and continues (exit code is still `0` if there are no failures elsewhere).
+
+### Backends: `--backend`
+
+- `sonatina` (the default) runs tests on the EVM.
+- `native` (with the `cranelift` feature) runs each test as a host process.
+- `wasm` (with the `wasm` feature) builds each test into its own WebAssembly module and
+  runs it in its own Node.js process (version 20 or later; `node` must be on `PATH`, and
+  the run ends with an error if it is not). The host is `examples/wasm/host.mjs`: it
+  answers the `Log`, `Clock`, `Abort` and `Files` operations of `std::wasm` (there are no
+  files). A test passes if it returns. A failed assertion, an overflow, a division by zero
+  and an index outside an array trap, which fails the test with `trap: unreachable`; a call
+  of `abort` fails it with the code; a call that breaks the host contract fails it with
+  the host's message. A test that uses something the backend cannot build (an EVM
+  built-in, `should_revert`, `balance`) fails with `cannot build <name> for WebAssembly`
+  and the reason; no test is skipped silently. A test that runs for more than 60 seconds
+  fails. `--emit ir` writes `<suite>.wasm.<test>.test.sona` for each test. `--show-logs`,
+  the tracing options, `--debug-dir`, `--emit rmir`, `--report` and `--report-dir` are
+  errors with this backend.
 
 ### Reports: `--report` and `--report-dir`
 

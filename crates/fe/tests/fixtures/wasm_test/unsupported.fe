@@ -1,0 +1,19 @@
+// One test that passes next to tests that the WebAssembly backend cannot
+// build. Each of those fails with a message that names the reason.
+use std::evm::ops::byte
+
+#[test]
+fn builds_and_passes() {
+    let two: u32 = 1 + 1
+    assert(two == 2)
+}
+
+#[test]
+fn uses_an_evm_builtin() {
+    assert(byte(pos: 31, value: 0x1234) == 0x34)
+}
+
+#[test(should_revert)]
+fn expects_an_evm_revert() {
+    assert(false)
+}

@@ -1,0 +1,60 @@
+struct Ring {
+    items: [u32; 4],
+    head: usize,
+    len: usize,
+}
+
+fn push(r: mut Ring, value: u32) -> bool {
+    if r.len == 4 {
+        return false
+    }
+    var tail: usize = r.head + r.len
+    if tail >= 4 {
+        tail -= 4
+    }
+    r.items[tail] = value
+    r.len += 1
+    true
+}
+
+fn pop(r: mut Ring) -> u32 {
+    let value = r.items[r.head]
+    r.head += 1
+    if r.head == 4 {
+        r.head = 0
+    }
+    r.len -= 1
+    value
+}
+
+pub fn script(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
+    var r = Ring { items: [0; 4], head: 0, len: 0 }
+    push(r: mut r, value: a)
+    push(r: mut r, value: b)
+    let x = pop(r: mut r)
+    push(r: mut r, value: c)
+    push(r: mut r, value: d)
+    let rejected = !push(r: mut r, value: e)
+    push(r: mut r, value: e)
+    let y = pop(r: mut r)
+    let z = pop(r: mut r)
+    x * 1000000 + y * 10000 + z * 100 + (if rejected { 1 } else { 0 })
+}
+
+pub fn underflow() -> u32 {
+    var r = Ring { items: [0; 4], head: 0, len: 0 }
+    pop(r: mut r)
+}
+
+pub fn wraps(n: u32) -> u32 {
+    var r = Ring { items: [0; 4], head: 0, len: 0 }
+    var i: u32 = 0
+    var total: u32 = 0
+    while i < n {
+        push(r: mut r, value: i + 1)
+        total += pop(r: mut r) * (i + 1)
+        i += 1
+    }
+    let head: u32 = r.head.downcast_unchecked()
+    total + head
+}

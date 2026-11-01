@@ -1,0 +1,43 @@
+fn load(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> [i32; 6] {
+    [a, b, c, d, e, f]
+}
+
+fn bubble(v: [i32; 6]) -> [i32; 6] {
+    var w = v
+    var pass: usize = 0
+    while pass < 6 {
+        var i: usize = 0
+        while i + 1 < 6 {
+            if w[i] > w[i + 1] {
+                let t = w[i]
+                w[i] = w[i + 1]
+                w[i + 1] = t
+            }
+            i += 1
+        }
+        pass += 1
+    }
+    w
+}
+
+pub fn kth(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, k: u32) -> i32 {
+    let sorted = bubble(v: load(a: a, b: b, c: c, d: d, e: e, f: f))
+    sorted[k as usize]
+}
+
+pub fn is_sorted_after(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> bool {
+    let s = bubble(v: load(a: a, b: b, c: c, d: d, e: e, f: f))
+    var i: usize = 0
+    while i + 1 < 6 {
+        if s[i] > s[i + 1] {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+pub fn padded_third(a: i32, b: i32, c: i32) -> i32 {
+    let s = bubble(v: load(a: a, b: b, c: c, d: c, e: c, f: c))
+    s[2]
+}

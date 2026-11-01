@@ -969,6 +969,7 @@ fn synthetic_context_instances<'db>(spec: RuntimeSyntheticSpec<'db>) -> Vec<Runt
     match spec {
         RuntimeSyntheticSpec::MainRoot { callee, .. }
         | RuntimeSyntheticSpec::TestRoot { callee, .. }
+        | RuntimeSyntheticSpec::ExportRoot { callee, .. }
         | RuntimeSyntheticSpec::ManualContractRoot { callee, .. } => vec![callee],
         RuntimeSyntheticSpec::ContractInitAbi { plan } => plan.user_init.into_iter().collect(),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => vec![plan.user_recv],

@@ -772,18 +772,6 @@ func private %impl_MemBuffer__len(v0.@layout_1) -> i256 {
         return v3;
 }
 
-func inline(always) private %mem_word_at(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = call %word_to_usize v1;
-        v5.i256 = add v0 v3;
-        v6.i256 = call %cast v5;
-        v7.i256 = mload v6 i256;
-        return v7;
-}
-
 func private %payload_size__ge513(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -1060,26 +1048,25 @@ func inline(always) private %word_at(noalias v0.objref<@layout_3>, v1.i256) -> i
         jump block4;
 
     block4:
-        v9.i256 = call %ptr__g79ff v0;
-        v11.i256 = call %mem_word_at v9 v1;
-        v13.i256 = sub v3 v1;
-        v15.i1 = lt v13 32.i256;
-        v16.i1 = is_zero v15;
-        br v16 block5 block6;
+        v10.i256 = sub v3 v1;
+        v11.i256 = call %word_to_usize v10;
+        v13.i256 = call %ptr__g79ff v0;
+        v14.i256 = call %word_to_usize v1;
+        v15.i256 = add v13 v14;
+        v17.i256 = mload v15 i256;
+        v18.i1 = lt v11 32.i256;
+        br v18 block5 block6;
 
     block5:
-        jump block7;
+        v20.i256 = shl 3.i256 v11;
+        v22.i256 = shr v20 -1.i256;
+        v23.i256 = not v22;
+        v24.i256 = and v17 v23;
+        jump block6;
 
     block6:
-        v21.i256 = mul v13 8.i256;
-        v22.i256 = shr v21 -1.i256;
-        v23.i256 = not v22;
-        v25.i256 = and v11 v23;
-        jump block7;
-
-    block7:
-        v26.i256 = phi (v11 block5) (v25 block6);
-        return v26;
+        v25.i256 = phi (v17 block4) (v24 block5);
+        return v25;
 }
 
 func inline(always) private %word_to_usize(v0.i256) -> i256 {

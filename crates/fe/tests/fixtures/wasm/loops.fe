@@ -1,0 +1,40 @@
+pub fn triangle(n: u32) -> u32 {
+    var total: u32 = 0
+    var i: u32 = 0
+    while i < n {
+        var j: u32 = 0
+        while j <= i {
+            total = total + 1
+            j = j + 1
+        }
+        i = i + 1
+    }
+    total
+}
+
+pub fn count_odd(n: u32) -> u32 {
+    var i: u32 = 0
+    var c: u32 = 0
+    while i < n {
+        i = i + 1
+        if i % 2 == 0 {
+            continue
+        }
+        c = c + 1
+        if c >= 50 {
+            break
+        }
+    }
+    c
+}
+
+pub fn first_multiple(of: u32, above: u32) -> u32 {
+    var n = above + 1
+    while true {
+        if n % of == 0 {
+            return n
+        }
+        n = n + 1
+    }
+    0
+}

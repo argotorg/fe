@@ -9,9 +9,9 @@ error[6-0003]: trait bound is not satisfied
   7 │     buffers.into_bytes()
     │             ^^^^^^^^^^ `MemBuffer` doesn't implement `Copy`
     │
-    ┌─ src/ptr.fe:217:18
+    ┌─ src/ptr.fe:222:18
     │
-217 │         where T: Copy
+222 │         where T: Copy
     │                  ---- required by this bound on `into_bytes`
 
 error[6-0003]: trait bound is not satisfied
@@ -20,9 +20,9 @@ error[6-0003]: trait bound is not satisfied
  11 │     buffers.into_buffer()
     │             ^^^^^^^^^^^ `MemBuffer` doesn't implement `Copy`
     │
-    ┌─ src/ptr.fe:241:18
+    ┌─ src/ptr.fe:246:18
     │
-241 │         where T: Copy
+246 │         where T: Copy
     │                  ---- required by this bound on `into_buffer`
 
 error[6-0003]: trait bound is not satisfied
@@ -31,7 +31,7 @@ error[6-0003]: trait bound is not satisfied
  16 │     values.into_buffer()
     │            ^^^^^^^^^^^ `T` doesn't implement `Copy`
     │
-    ┌─ src/ptr.fe:241:18
+    ┌─ src/ptr.fe:246:18
     │
-241 │         where T: Copy
+246 │         where T: Copy
     │                  ---- required by this bound on `into_buffer`

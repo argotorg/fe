@@ -1,0 +1,21 @@
+use std::wasm::{Log, log_i32}
+
+//mock: fn provider() -> std::wasm::Mock { std::wasm::mock(1000, 10) }
+
+fn walk(_ depth: i32) -> i32 uses (log: mut Log) {
+    log_i32(depth)
+    if depth == 0 {
+        return 0
+    }
+    let below = walk(depth - 1)
+    log_i32(0 - depth)
+    below + depth
+}
+
+//host: pub fn walk_down(depth: i32) -> i32 uses (log: mut Log) {
+//mock: pub fn walk_down(depth: i32) -> i32 {
+//mock:     var p = provider()
+//mock:     with (Log = p) {
+        walk(depth)
+//mock:     }
+}

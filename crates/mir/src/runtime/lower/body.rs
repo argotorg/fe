@@ -199,8 +199,9 @@ pub(super) fn check_runtime_body_supported<'db>(
                 };
                 if let Some(ty) = oversized_size_of_ty(db, key, value) {
                     return Err(LowerError::Unsupported(format!(
-                        "type `{}` exceeds the supported 64-bit raw-memory layout size",
-                        ty.pretty_print(db)
+                        "type `{}` exceeds the supported {}-bit raw-memory layout size",
+                        ty.pretty_print(db),
+                        db.compilation_settings().target(db).memory_size_bits()
                     )));
                 }
                 let expected_ty = body.normalized.values[dst.index()].ty;
@@ -3898,6 +3899,16 @@ impl<'db> RmirEmitter<'db> {
                         len: *len,
                     },
                     None,
+                )
+            }
+            RuntimeBuiltinFuncKind::ReadPaddedWord => {
+                let [ptr, len] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::ReadPaddedWord {
+                        ptr: *ptr,
+                        len: *len,
+                    },
+                    Some(word.clone()),
                 )
             }
             RuntimeBuiltinFuncKind::Msize => {

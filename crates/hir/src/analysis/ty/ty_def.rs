@@ -2494,21 +2494,21 @@ pub fn prim_int_bits(prim: PrimTy, target: Target) -> Option<usize> {
 }
 
 /// Whether the primitive integer type `prim` holds the literal `value`, or
-/// `-value` if `negated`, on every target.
-pub fn int_literal_fits_prim(prim: PrimTy, value: &BigUint, negated: bool) -> bool {
-    Target::ALL.into_iter().all(|target| {
-        prim_int_bits(prim, target).is_some_and(|bits| {
-            if prim.is_signed_int() {
-                let min_magnitude = BigUint::from(1u8) << (bits - 1);
-                if negated {
-                    value <= &min_magnitude
-                } else {
-                    value < &min_magnitude
-                }
+/// `-value` if `negated`, on `target`. As in Rust, a literal is checked
+/// against the width `usize` has on the target being compiled for, while a
+/// lossless cast must be lossless on every target.
+pub fn int_literal_fits_prim(target: Target, prim: PrimTy, value: &BigUint, negated: bool) -> bool {
+    prim_int_bits(prim, target).is_some_and(|bits| {
+        if prim.is_signed_int() {
+            let min_magnitude = BigUint::from(1u8) << (bits - 1);
+            if negated {
+                value <= &min_magnitude
             } else {
-                !negated && value.bits() <= bits as u64
+                value < &min_magnitude
             }
-        })
+        } else {
+            !negated && value.bits() <= bits as u64
+        }
     })
 }
 

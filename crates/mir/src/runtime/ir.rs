@@ -851,6 +851,13 @@ pub enum RuntimeSyntheticSpec<'db> {
         callee: RuntimeInstance<'db>,
         entry_args: EntrySemanticArgsPlan<'db>,
     },
+    /// A WebAssembly export that takes effects: it takes the parameters of
+    /// `callee`, provides its effects from the root effect, and returns its
+    /// result.
+    ExportRoot {
+        callee: RuntimeInstance<'db>,
+        entry_args: EntrySemanticArgsPlan<'db>,
+    },
     ContractInitAbi {
         plan: ContractInitAbiPlan<'db>,
     },
@@ -1197,6 +1204,12 @@ pub enum RuntimeBuiltin<'db> {
     },
     ZeroMem {
         dst: RValueId,
+        len: RValueId,
+    },
+    /// The big-endian word at `ptr`, reading only its first `len` bytes and
+    /// zeros for the rest.
+    ReadPaddedWord {
+        ptr: RValueId,
         len: RValueId,
     },
     /// Writes `bytes` into memory from `dst` on, zero-padded to whole words.
@@ -1672,6 +1685,7 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::Log4 { .. } => true,
             Self::IntrinsicArith { checked, .. } => *checked,
             Self::Mload { .. }
+            | Self::ReadPaddedWord { .. }
             | Self::Msize
             | Self::Sload { .. }
             | Self::CallValue
@@ -1738,6 +1752,7 @@ impl<'db> RuntimeBuiltin<'db> {
             Self::Mstore { addr: a, value: b }
             | Self::Mstore8 { addr: a, value: b }
             | Self::ZeroMem { dst: a, len: b }
+            | Self::ReadPaddedWord { ptr: a, len: b }
             | Self::Sstore { slot: a, value: b }
             | Self::Keccak256 { offset: a, len: b }
             | Self::Byte { pos: a, value: b }

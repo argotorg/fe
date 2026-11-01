@@ -326,7 +326,7 @@ fn layout_extent_overflow_rejects_without_panicking() {
         top_mod,
         r#"
 contract C {
-    huge: [u256; 576460752303423488],
+    huge: [[u256; 0x80000000]; 0x10000000],
 }
 "#,
     );
