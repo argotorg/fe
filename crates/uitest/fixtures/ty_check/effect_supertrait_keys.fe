@@ -76,6 +76,22 @@ fn from_generic<T: HasItem>() uses (d: Derived<T>) {
     base_item<T>()
 }
 
+// An effect's own entry shadows an implied one only when it matches: with
+// `T` to infer, `Pair<u16, u64>` does not hide the `Pair<u8, u32>` that
+// `BytePair` implies, but `Pair<u8, u64>` does.
+trait Pair<A, B> {}
+trait BytePair: Pair<u8, u32> {}
+
+fn need_pair<T>() uses (p: Pair<u8, T>) {}
+
+fn infer_from_implied() uses (b: BytePair, q: Pair<u16, u64>) {
+    need_pair()
+}
+
+fn infer_from_own() uses (b: BytePair, q: Pair<u8, u64>) {
+    need_pair()
+}
+
 // A supertrait does not provide its subtraits.
 fn from_ping() uses (p: Ping) {
     both()

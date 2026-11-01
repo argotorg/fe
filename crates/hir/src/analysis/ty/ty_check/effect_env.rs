@@ -32,7 +32,7 @@ pub enum FrameLookupResult<'db> {
         barrier_reason: Option<BarrierReason<'db>>,
     },
     KeyedFamily {
-        entries: Box<SmallVec<[FamilyKeyedEntry<'db>; 2]>>,
+        entries: Box<SmallVec<[MatchedKeyedEntry<'db>; 2]>>,
         providers: Box<SmallVec<[ProvidedEffect<'db>; 2]>>,
     },
 }
@@ -55,12 +55,6 @@ pub enum MatchedKeyedEntry<'db> {
     Forwarder(MatchedForwarder<'db>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FamilyKeyedEntry<'db> {
-    Witness(EffectWitness<'db, ProvidedEffect<'db>>),
-    Forwarder(EffectForwarder<'db, ProvidedEffect<'db>>),
-}
-
 type KeyedEntries<'db> =
     FxHashMap<EffectFamily<'db>, SmallVec<[KeyedEffectEntry<'db, ProvidedEffect<'db>>; 2]>>;
 
@@ -75,6 +69,57 @@ pub struct EffectFrame<'db> {
 }
 
 impl<'db> EffectFrame<'db> {
+    /// The frame's keyed entries that match `query`, and the reason of a
+    /// barrier among them that blocks it. The frame's own entries shadow the
+    /// supertraits it implies: those match only when none of its own does.
+    fn match_keyed(
+        &self,
+        query: &EffectQuery<'db>,
+        tc: &mut TyChecker<'db>,
+    ) -> (
+        SmallVec<[MatchedKeyedEntry<'db>; 2]>,
+        Option<BarrierReason<'db>>,
+    ) {
+        let family = query.key.clone().family();
+        let mut entries = SmallVec::new();
+        let mut barrier_reason = None;
+        for family_entries in [&self.keyed_by_family, &self.implied_by_family] {
+            for entry in family_entries.get(&family).into_iter().flatten().cloned() {
+                match entry {
+                    KeyedEffectEntry::Witness(witness) => {
+                        if let Some(key_commit) =
+                            query_matches_witness(tc, &query.key, &witness.key, witness.provider.ty)
+                        {
+                            entries.push(MatchedKeyedEntry::Witness(MatchedWitness {
+                                witness,
+                                key_commit,
+                            }));
+                        }
+                    }
+                    KeyedEffectEntry::Forwarder(forwarder) => {
+                        if let Some(key_commit) =
+                            query_matches_forwarder(tc, &query.key, &forwarder.key)
+                        {
+                            entries.push(MatchedKeyedEntry::Forwarder(MatchedForwarder {
+                                forwarder,
+                                key_commit,
+                            }));
+                        }
+                    }
+                    KeyedEffectEntry::Barrier(barrier) => {
+                        if patterns_overlap(tc.db, &query.key, &barrier.pattern) {
+                            barrier_reason = Some(barrier.reason);
+                        }
+                    }
+                }
+            }
+            if !entries.is_empty() || barrier_reason.is_some() {
+                break;
+            }
+        }
+        (entries, barrier_reason)
+    }
+
     fn insert_forwarder(
         &mut self,
         db: &'db dyn HirAnalysisDb,
@@ -265,7 +310,7 @@ impl<'db> EffectEnv<'db> {
     ) -> Vec<FrameLookupResult<'db>> {
         match query.mode {
             EffectQueryMode::Precise => self.lookup_precise(query, tc),
-            EffectQueryMode::FamilyFallback => self.lookup_family_fallback(query),
+            EffectQueryMode::FamilyFallback => self.lookup_family_fallback(query, tc),
         }
     }
 
@@ -280,55 +325,12 @@ impl<'db> EffectEnv<'db> {
             "precise effect lookup requires a fully resolved query",
         );
         let mut out = Vec::new();
-        let family = query.key.clone().family();
         for frame in self.frames.iter().rev() {
-            let mut entries = SmallVec::new();
-            let mut blocked_by_barrier = false;
-            let mut barrier_reason = None;
-            for family_entries in [&frame.keyed_by_family, &frame.implied_by_family] {
-                for entry in family_entries.get(&family).into_iter().flatten().cloned() {
-                    match entry {
-                        KeyedEffectEntry::Witness(witness) => {
-                            if let Some(key_commit) = query_matches_witness(
-                                tc,
-                                &query.key,
-                                &witness.key,
-                                witness.provider.ty,
-                            ) {
-                                entries.push(MatchedKeyedEntry::Witness(MatchedWitness {
-                                    witness,
-                                    key_commit,
-                                }));
-                            }
-                        }
-                        KeyedEffectEntry::Forwarder(forwarder) => {
-                            if let Some(key_commit) =
-                                query_matches_forwarder(tc, &query.key, &forwarder.key)
-                            {
-                                entries.push(MatchedKeyedEntry::Forwarder(MatchedForwarder {
-                                    forwarder,
-                                    key_commit,
-                                }));
-                            }
-                        }
-                        KeyedEffectEntry::Barrier(barrier) => {
-                            if patterns_overlap(tc.db, &query.key, &barrier.pattern) {
-                                blocked_by_barrier = true;
-                                barrier_reason = Some(barrier.reason.clone());
-                            }
-                        }
-                    }
-                }
-                // The frame's own entries shadow the supertraits it implies.
-                if !entries.is_empty() || blocked_by_barrier {
-                    break;
-                }
-            }
-
-            if !entries.is_empty() || blocked_by_barrier {
+            let (entries, barrier_reason) = frame.match_keyed(query, tc);
+            if !entries.is_empty() || barrier_reason.is_some() {
                 out.push(FrameLookupResult::KeyedMatched {
                     entries: Box::new(entries),
-                    blocked_by_barrier,
+                    blocked_by_barrier: barrier_reason.is_some(),
                     barrier_reason,
                 });
                 break;
@@ -343,34 +345,18 @@ impl<'db> EffectEnv<'db> {
         out
     }
 
-    fn lookup_family_fallback(&self, query: &EffectQuery<'db>) -> Vec<FrameLookupResult<'db>> {
+    /// Each frame's keyed entries that match `query`, which is not fully
+    /// resolved, and its unkeyed providers. Unlike `lookup_precise`, a
+    /// barrier does not end the lookup.
+    fn lookup_family_fallback(
+        &self,
+        query: &EffectQuery<'db>,
+        tc: &mut TyChecker<'db>,
+    ) -> Vec<FrameLookupResult<'db>> {
         let mut out = Vec::new();
-        let family = query.key.clone().family();
         for frame in self.frames.iter().rev() {
-            let family_entries = |entries: &KeyedEntries<'db>| {
-                entries
-                    .get(&family)
-                    .into_iter()
-                    .flatten()
-                    .cloned()
-                    .filter_map(|entry| match entry {
-                        KeyedEffectEntry::Witness(witness) => {
-                            Some(FamilyKeyedEntry::Witness(witness))
-                        }
-                        KeyedEffectEntry::Forwarder(forwarder) => {
-                            Some(FamilyKeyedEntry::Forwarder(forwarder))
-                        }
-                        KeyedEffectEntry::Barrier(_) => None,
-                    })
-                    .collect::<SmallVec<[FamilyKeyedEntry<'db>; 2]>>()
-            };
-            // The frame's own entries shadow the supertraits it implies.
-            let mut entries = family_entries(&frame.keyed_by_family);
-            if entries.is_empty() {
-                entries = family_entries(&frame.implied_by_family);
-            }
+            let (entries, _) = frame.match_keyed(query, tc);
             let providers = frame.unkeyed.clone();
-
             if !entries.is_empty() || !providers.is_empty() {
                 out.push(FrameLookupResult::KeyedFamily {
                     entries: Box::new(entries),

@@ -18,9 +18,7 @@ use crate::span::{DynLazySpan, types::LazyTySpan};
 use super::{
     BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike, RowArg, Typeable,
     ValuePathRef,
-    effect_env::{
-        FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
-    },
+    effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
         ParamSite, PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin,
@@ -59,8 +57,7 @@ use crate::analysis::ty::{
         instantiate_trait_effect_key,
         match_::{
             KeyMatchCommit, apply_key_match_commit, instantiate_trait_pattern_in,
-            instantiate_trait_pattern_in_with_bindings, query_matches_forwarder,
-            query_matches_witness,
+            instantiate_trait_pattern_in_with_bindings,
         },
         normalize_effect_identity_trait, place_effect_provider_param_index_map,
         rows::{RowExpansion, RowKey, RowPath, expand_rows},
@@ -2712,10 +2709,7 @@ impl<'db> TyChecker<'db> {
                 }
                 FrameLookupResult::KeyedFamily { entries, providers } => {
                     let mut family_viable = SmallVec::new();
-                    for entry in entries.iter().cloned() {
-                        let Some(matched) = self.match_family_keyed_entry(&query.key, entry) else {
-                            continue;
-                        };
+                    for matched in entries.iter().cloned() {
                         if let Some(evidence) = self.evaluate_keyed_entry(matched) {
                             family_viable.push(evidence);
                         }
@@ -2758,30 +2752,6 @@ impl<'db> TyChecker<'db> {
             }
         }
         EffectResolution::Missing
-    }
-
-    fn match_family_keyed_entry(
-        &mut self,
-        query: &EffectPatternKey<'db>,
-        entry: FamilyKeyedEntry<'db>,
-    ) -> Option<MatchedKeyedEntry<'db>> {
-        match entry {
-            FamilyKeyedEntry::Witness(witness) => {
-                let key_commit =
-                    query_matches_witness(self, query, &witness.key, witness.provider.ty)?;
-                Some(MatchedKeyedEntry::Witness(MatchedWitness {
-                    witness,
-                    key_commit,
-                }))
-            }
-            FamilyKeyedEntry::Forwarder(forwarder) => {
-                let key_commit = query_matches_forwarder(self, query, &forwarder.key)?;
-                Some(MatchedKeyedEntry::Forwarder(MatchedForwarder {
-                    forwarder,
-                    key_commit,
-                }))
-            }
-        }
     }
 
     fn choose_effect_evidence(

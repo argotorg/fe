@@ -4,9 +4,9 @@ expression: diags
 input_file: fixtures/ty_check/effect_supertrait_keys.fe
 ---
 error[8-0036]: missing effect `Both` required by `both`
-   ┌─ effect_supertrait_keys.fe:81:5
+   ┌─ effect_supertrait_keys.fe:97:5
    │
-81 │     both()
+97 │     both()
    │     ^^^^^^ `both` requires effect `Both` to be in scope
    │
    = require it in this function's signature with `uses (b: Both)`, so that its callers provide it
