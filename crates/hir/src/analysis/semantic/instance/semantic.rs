@@ -98,10 +98,9 @@ pub struct SemanticInstanceKey<'db> {
 impl<'db> SemanticInstanceKey<'db> {
     /// The key for `owner`'s instance with `subst`, given the proofs a use
     /// supplies of the assumptions its body is checked under. One with
-    /// closed arguments carries none: its instance proves every assumption
-    /// itself (`instance_evidence`), so the keys for one body and
-    /// substitution are the same however they are made, and a key never
-    /// holds a proof whose types can hold the key.
+    /// closed arguments retains only non-ordinary proof trees. Ordinary
+    /// assumptions can be reconstructed by `instance_evidence`; chosen
+    /// dictionaries must survive specialization to concrete types.
     pub fn of(
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
@@ -111,7 +110,15 @@ impl<'db> SemanticInstanceKey<'db> {
         supplied: EvidenceList<'db>,
     ) -> Self {
         let evidence = if is_ground(collect_flags(db, subst.generic_args(db))) {
-            EvidenceList::none(db)
+            EvidenceList::of(
+                db,
+                supplied
+                    .entries(db)
+                    .iter()
+                    .map(|entry| entry.filter(|proof| proof.has_named_impl(db)))
+                    .collect(),
+            )
+            .with_rows(db, supplied.rows(db).clone())
         } else {
             supplied
         };
@@ -317,34 +324,146 @@ pub fn instantiated_typed_body<'db>(
         let (scope, assumptions) = (env.normalization_scope(db), env.assumptions(db));
         body = body.with_known_params(db, |shape| normalize_ty(db, shape, scope, assumptions));
     }
+    let raw_goals = if matches!(key.owner(db), BodyOwner::Closure { .. }) {
+        body.assumptions()
+    } else {
+        body.signature()
+    };
+    let row_owner = match key.owner(db) {
+        BodyOwner::Closure { def, .. } => Some((def.body.scope(), Some(def.expr))),
+        BodyOwner::Func(func, _) => func.body(db).map(|body| (body.scope(), None)),
+        _ => None,
+    };
+    // This declaration-side expansion cannot call key.typed_body(): that would
+    // make dictionary transport depend on the result it is constructing.
+    let row_paths = if let Some(site) = effect_param_site(key.owner(db)) {
+        let requirements = EffectEnvView::new(site)
+            .requirements(db)
+            .into_iter()
+            .map(|requirement| {
+                let key_ty = key
+                    .subst(db)
+                    .mapping(db)
+                    .as_ref()
+                    .and_then(|subst| substitute_complete(db, requirement.key.clone(), subst).ok())
+                    .unwrap_or_else(|| requirement.key.clone());
+                EffectRequirement {
+                    key: key_ty,
+                    ..requirement
+                }
+            })
+            .collect::<Vec<_>>();
+        expand_rows(db, &requirements, key.owner(db).scope(), body.assumptions())
+    } else {
+        RowExpansion::default()
+    };
+    if let Some(owner) = row_owner {
+        body = body.fold_with(
+            db,
+            &mut RowProviderSubst {
+                owner,
+                providers: key.effect_providers(db).providers(db),
+            },
+        );
+    }
+    let goals = if matches!(key.owner(db), BodyOwner::Closure { .. }) {
+        body.assumptions()
+    } else {
+        body.signature()
+    };
+    let mut entries = key.evidence(db).entries(db).clone();
+    entries.resize(goals.list(db).len(), None);
+    for (index, &raw_goal) in raw_goals.list(db).iter().enumerate() {
+        let TyData::TyParam(param) = raw_goal.self_ty(db).data(db) else {
+            continue;
+        };
+        if param.row_effect_provider_of() != row_owner || row_owner.is_none() {
+            continue;
+        }
+        let path = row_paths
+            .components
+            .iter()
+            .find(|component| component.requirement.binding_idx as usize == param.idx)
+            .map(|component| component.path.clone())
+            .or_else(|| {
+                matches!(key.owner(db), BodyOwner::Closure { .. })
+                    .then(|| crate::analysis::ty::effects::rows::RowPath::entry(param.idx as u32))
+            });
+        let Some(row) = path.and_then(|path| {
+            key.evidence(db)
+                .rows(db)
+                .iter()
+                .find(|row| row.path == path)
+        }) else {
+            continue;
+        };
+        let goal = goals.list(db)[index];
+        entries[index] = row.proof.and_then(|proof| {
+            if row.goal == goal {
+                Some(proof)
+            } else {
+                crate::analysis::ty::evidence::implied_bound_evidence(
+                    db,
+                    proof,
+                    goal,
+                    body.assumptions(),
+                )
+            }
+        });
+    }
+    let supplied = EvidenceList::of(db, entries).with_rows(db, key.evidence(db).rows(db).clone());
     let evidence = instance_evidence(
         db,
-        body.signature(),
-        key.evidence(db),
+        goals,
+        supplied,
         TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
     );
-    body.bind_evidence(db, evidence);
-    // A body's row provider parameters are the providers its call binds.
-    let owner = match key.owner(db) {
-        BodyOwner::Closure { def, .. } => (def.body.scope(), Some(def.expr)),
-        BodyOwner::Func(func, mode)
-            if let Some(func_body) = func.body(db)
-                && func
-                    .effect_requirements(db, mode)
-                    .iter()
-                    .any(|requirement| requirement.key.key_row().is_some()) =>
-        {
-            (func_body.scope(), None)
-        }
-        _ => return body,
+    let bound = crate::analysis::ty::evidence::BoundEvidence {
+        schema: body.bound_schema(),
+        entries: evidence,
     };
-    body.fold_with(
-        db,
-        &mut RowProviderSubst {
-            owner,
-            providers: key.effect_providers(db).providers(db),
-        },
-    )
+    body.bind_evidence(db, bound);
+    if let Some(defining_body) = body.body() {
+        body = body.fold_with(
+            db,
+            &mut CaptureClosureEvidence {
+                defining_body,
+                bound,
+            },
+        );
+    }
+    body
+}
+
+struct CaptureClosureEvidence<'db> {
+    defining_body: crate::hir_def::Body<'db>,
+    bound: crate::analysis::ty::evidence::BoundEvidence<'db>,
+}
+
+impl<'db> TyFolder<'db> for CaptureClosureEvidence<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let ty = ty.super_fold_with(db, self);
+        let Some(closure) = ty.as_closure(db).filter(|closure| {
+            closure.def(db).body == self.defining_body && closure.bound_evidence(db).is_none()
+        }) else {
+            return ty;
+        };
+        TyId::closure(
+            db,
+            crate::analysis::ty::ty_def::ClosureTy::new(
+                db,
+                closure.def(db),
+                crate::analysis::ty::ty_def::ClosureContext {
+                    args: closure.parent_args(db).clone(),
+                    evidence: Some(self.bound),
+                },
+                closure.captures(db).clone(),
+                closure.params(db).clone(),
+                closure.ret_ty(db),
+                closure.effects(db).clone(),
+            ),
+        )
+    }
 }
 
 struct RowProviderSubst<'a, 'db> {
@@ -388,8 +507,11 @@ fn provisional_call_sites<'db>(
     );
 
     for (expr, _) in body.exprs(db).iter() {
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
-        else {
+        let callable = match typed_body.semantic_expr_lowering(expr) {
+            Some(SemanticExprLowering::Call { callable }) => Some(callable),
+            _ => typed_body.place_entry_callable(expr),
+        };
+        let Some(callable) = callable else {
             continue;
         };
         if regions.expr(expr) != region {
@@ -530,6 +652,20 @@ fn expand_row_args<'db>(
             else {
                 continue;
             };
+            if let Some(row) = key
+                .evidence(db)
+                .rows(db)
+                .iter()
+                .find(|row| row.path == caller.path)
+            {
+                callable.supply_row_evidence(
+                    db,
+                    crate::analysis::ty::evidence::RowEvidence {
+                        path: callee.path.clone(),
+                        ..row.clone()
+                    },
+                );
+            }
             let slot = caller.requirement.binding_idx;
             let binding = LocalBinding::EffectParam {
                 site: caller.requirement.binding_site,
@@ -761,8 +897,11 @@ fn finalize_call_sites<'db>(
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
             continue;
         };
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
-        else {
+        let callable = match typed_body.semantic_expr_lowering(expr) {
+            Some(SemanticExprLowering::Call { callable }) => Some(callable),
+            _ => typed_body.place_entry_callable(expr),
+        };
+        let Some(callable) = callable else {
             continue;
         };
         finalize_call_site(
@@ -1392,6 +1531,81 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
+    /// Codec calls belonging to one checked entry. A codec is only required
+    /// after the ordinary associated layout says this entry is packed. The
+    /// callable may defer an obligation that becomes closed on substitution;
+    /// the shared callee finalizer owns that obligation, as for written calls.
+    #[salsa::tracked(returns(copy))]
+    pub fn entry_codec_callees(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+    ) -> Result<[SemanticInstanceKey<'db>; 2], SemanticDiagnosticId<'db>> {
+        let calls = self
+            .key(db)
+            .typed_body(db)
+            .place_entry_calls(expr)
+            .ok_or_else(|| {
+                method_arg_map_diagnostic(
+                    db,
+                    self,
+                    MethodArgMapError::MissingBody,
+                    SemOrigin::Expr(expr),
+                )
+            })?;
+        if calls.codec_choice_failed {
+            let goal = calls.codec[0]
+                .trait_inst()
+                .expect("a checked codec has its trait goal");
+            return Err(SemanticDiagnosticId::new(
+                db,
+                SemanticDiagnostic::new(
+                    self,
+                    SemanticDiagnosticKind::StorageViolation,
+                    format!(
+                        "trait bound `{}` is not satisfied under the implementation choices at this indexing operation",
+                        goal.pretty_print(db, true)
+                    ),
+                    SemanticDiagnosticSpan::Origin {
+                        owner: self.key(db).owner(db),
+                        origin: SemOrigin::Expr(expr),
+                    },
+                ),
+            ));
+        }
+        let finalize = || {
+            let one = |callable: &Callable<'db>| {
+                let mut callable = callable.clone();
+                if callable.evidence().is_none() {
+                    // A codec's layout obligation can first become decidable
+                    // here. Produce its proof once, including prerequisites,
+                    // before applying the ordinary shared call finalizer.
+                    // Existing named or bound proofs are never replaced.
+                    callable.record_evidence(
+                        db,
+                        TraitSolveCx::new(db, self.normalization_scope(db))
+                            .with_assumptions(self.assumptions(db)),
+                    );
+                }
+                let callee = semantic_callee_key_with_effect_providers(
+                    db,
+                    self.key(db),
+                    &callable,
+                    &[],
+                    &[],
+                )?
+                .ok_or(MethodArgMapError::MissingBody)?;
+                if !callee.concrete_dispatch {
+                    return Err(MethodArgMapError::MissingBody);
+                }
+                Ok(callee.key)
+            };
+            Ok([one(&calls.codec[0])?, one(&calls.codec[1])?])
+        };
+        finalize()
+            .map_err(|error| method_arg_map_diagnostic(db, self, error, SemOrigin::Expr(expr)))
+    }
+
     /// How `ty` packs its elements into lanes when its elements are places
     /// (`core::ops::StateIndex`), in this instance.
     #[salsa::tracked(returns(copy))]
@@ -1621,7 +1835,17 @@ impl<'db> SemanticInstance<'db> {
         }
 
         if let Some(body) = typed_body.body() {
+            let regions = closure_regions(db, body);
+            let region = self.key(db).owner(db).closure_region();
             for (expr, _) in body.exprs(db).iter() {
+                if regions.expr(expr) == region
+                    && let Some(calls) = typed_body.place_entry_calls(expr)
+                    && let Some(goal) = calls.locate.trait_inst()
+                    && self.state_index_lanes(db, goal.self_ty(db)).is_some()
+                    && let Err(error) = self.entry_codec_callees(db, expr)
+                {
+                    return Err(SemanticBodyAdmissionError::CallSiteFinalization(error));
+                }
                 let Some(SemanticExprLowering::ConstIntrinsic { callable, kind }) =
                     typed_body.semantic_expr_lowering(expr)
                 else {

@@ -5747,6 +5747,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
 
+            BodyDiag::ChosenTypeRead { primary, goal } => primary_diag(
+                Severity::Error,
+                "this written type reads a chosen implementation",
+                format!("`{}` requires type normalization through evidence, which is not supported yet", goal.pretty_print(db, true)),
+                primary.resolve(db), error_code,
+            ),
             BodyDiag::UnsafeCallRequiresUnsafe { primary, callee } => {
                 let name = callee
                     .name(db)
@@ -5781,6 +5787,109 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
         let error_code =
             GlobalErrorCode::new(DiagnosticPass::ImplTraitDefinition, self.local_code());
         match self {
+            Self::NamedOutputsNeedOrdinary { primary } => primary_diag(
+                Severity::Error,
+                "named associated outputs require an ordinary implementation",
+                "types normalize through ordinary implementations until normalization consumes evidence",
+                primary.span().resolve(db),
+                error_code,
+            ),
+            Self::NamedAssociatedConstMismatch {
+                primary,
+                with,
+                name,
+            } => {
+                let mut diag = primary_diag(
+                    Severity::Error,
+                    "named implementation changes a type-readable associated constant",
+                    format!(
+                        "`{}` must agree across implementations of this slot",
+                        name.data(db)
+                    ),
+                    primary.span().resolve(db),
+                    error_code,
+                );
+                if let Some(span) = with.span().resolve(db) {
+                    diag.sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        "the other implementation".to_string(),
+                        Some(span),
+                    ));
+                }
+                diag
+            }
+            Self::NamedAssociatedTypeMismatch {
+                primary,
+                name,
+                expected,
+                given,
+            } => primary_diag(
+                Severity::Error,
+                "named implementation changes an ordinary associated type",
+                format!(
+                    "`{}` must remain `{}`, but this implementation defines `{}`",
+                    name.data(db),
+                    expected.pretty_print(db),
+                    given.pretty_print(db)
+                ),
+                primary.span().resolve(db),
+                error_code,
+            ),
+            Self::NamedAssociatedTypeDisagreement {
+                primary,
+                with,
+                name,
+                expected,
+                given,
+            } => {
+                let mut diag = primary_diag(
+                    Severity::Error,
+                    "named implementations of one slot give different associated types",
+                    format!(
+                        "`{}` is `{}` in another implementation of this slot, but this implementation defines `{}`",
+                        name.data(db),
+                        expected.pretty_print(db),
+                        given.pretty_print(db)
+                    ),
+                    primary.span().resolve(db),
+                    error_code,
+                );
+                if let Some(span) = with.span().resolve(db) {
+                    diag.sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        "the other implementation".to_string(),
+                        Some(span),
+                    ));
+                }
+                diag
+            }
+            Self::NamedAssociatedRowMismatch {
+                primary,
+                with,
+                ordinary,
+                name,
+            } => {
+                let mut diag = primary_diag(
+                    Severity::Error,
+                    "named implementation changes an associated effect row or result space",
+                    format!(
+                        "`{}` must be what the {} implementation of this slot gives",
+                        name.data(db),
+                        if *ordinary { "ordinary" } else { "other named" }
+                    ),
+                    primary.span().resolve(db),
+                    error_code,
+                );
+                if let Some(span) = with.span().resolve(db) {
+                    diag.sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        "the other implementation".to_string(),
+                        Some(span),
+                    ));
+                }
+                diag
+            }
+
             Self::ExternalTraitForExternalType(impl_trait) => primary_diag(
                 Severity::Error,
                 "external trait cannot be implemented for external type",

@@ -370,6 +370,7 @@ impl<'db> TyChecker<'db> {
             && func.containing_trait(self.db).is_some()
         {
             let obligation = TraitObligation {
+                choices: self.env.choices,
                 goal: inst.mut_goal(self.db),
                 origin: TraitObligationOrigin::GenericConfirmation,
                 span,

@@ -1,0 +1,112 @@
+struct Item {}
+trait Pick { fn value() -> u256 }
+impl Pick for Item { fn value() -> u256 { 100 } }
+impl Pick for Item as Discount { fn value() -> u256 { 70 } }
+impl Pick for Item as Tiny { fn value() -> u256 { 3 } }
+impl Pick for Item as Markup {
+    fn value() -> u256 { with (<Item as Pick>) { Item::value() + 1 } }
+}
+
+fn read<T: Pick>() -> u256 { T::value() }
+fn relay<T: Pick>() -> u256 { read<T>() }
+fn concrete() -> u256 { Item::value() }
+fn both<T: Pick>() -> (u256, u256) { (T::value(), Item::value()) }
+
+struct Box<T> { value: T }
+trait Total { fn total() -> u256 }
+impl<T: Pick> Total for Box<T> { fn total() -> u256 { T::value() } }
+
+trait Sub: Pick { fn extra() -> u256 { Self::value() + 1 } }
+impl Sub for Item {}
+fn via_sub<T: Sub>() -> (u256, u256) { (T::value(), T::extra()) }
+
+struct Other {}
+struct Arg {}
+trait Value { fn amount() -> u256 }
+impl Value for Arg { fn amount() -> u256 { 7 } }
+impl Value for Other { fn amount() -> u256 { 9 } }
+impl<T: Value> Pick for Item as Chosen {
+    fn value() -> u256 { T::amount() }
+}
+impl<const N: u256> Pick for Item as Number {
+    fn value() -> u256 { N }
+}
+fn captured<T: Value>() -> u256 {
+    impl Pick for Item as Local where T: Value {
+        fn value() -> u256 { T::amount() }
+    }
+    with (Local) { read<Item>() }
+}
+
+fn local<T: Pick>() -> u256 {
+    impl Pick for Other as Local where T: Pick { fn value() -> u256 { T::value() } }
+    with (Local) { Other::value() }
+}
+
+trait Price { fn amount(self) -> u256 }
+impl Price for Item { fn amount(self) -> u256 { 100 } }
+impl Price for Item as Wholesale { fn amount(self) -> u256 { 70 } }
+fn charge() -> u256 uses (p: Price) { p.amount() }
+fn relay_charge() -> u256 uses (p: Price) { charge() }
+fn ordinary_charge() -> u256 { with (Price = Item {}) { charge() } }
+
+impl<T: Pick> Pick for Box<T> { fn value() -> u256 { T::value() } }
+trait Left: Pick {}
+trait Right: Pick {}
+impl<T: Pick> Left for Box<T> {}
+impl<T: Pick> Right for Box<T> {}
+trait Diamond: Left + Right { const N: u256 = 1 }
+impl<T: Left + Right> Diamond for T {}
+fn via_diamond<T: Diamond>() -> u256 { T::value() }
+fn forward_diamond<T: Diamond>() -> u256 { via_diamond<T>() }
+struct Wrap<T> { value: T }
+impl<T: Diamond> Total for Wrap<T> as Through {
+    fn total() -> u256 { T::value() }
+}
+
+fn exercise() {
+    assert!(forward_diamond<Box<Item>>() == 100)
+    with (Discount, Through) {
+        assert!(forward_diamond<Box<Item>>() == 70)
+        assert!(<Wrap<Box<Item>> as Total>::total() == 70)
+        assert!(Box<Item>::N == 1)
+    }
+    assert!(ordinary_charge() == 100)
+    with (Wholesale, Price = Item {}) {
+        assert!(charge() == 70)
+        assert!(relay_charge() == 70)
+        assert!(ordinary_charge() == 100)
+    }
+    with (Wholesale) { with (Price = Item {}) { assert!(charge() == 70) } }
+    with (Price = Item {}) { with (Wholesale) { assert!(charge() == 70) } }
+    with (Chosen<Arg>) { assert!(read<Item>() == 7) }
+    with (Chosen<Other>) { assert!(read<Item>() == 9) }
+    with (Number<7>) { assert!(read<Item>() == 7) }
+    with (Number<9>) { assert!(read<Item>() == 9) }
+    assert!(captured<Arg>() == 7)
+    assert!(captured<Other>() == 9)
+    assert!(relay<Item>() == 100)
+    assert!(local<Item>() == 100)
+    with (Discount) {
+        assert!(relay<Item>() == 70)
+        assert!(local<Item>() == 70)
+        assert!(concrete() == 100)
+        let split = both<Item>()
+        assert!(split.0 == 70 && split.1 == 100)
+        assert!(Box<Item>::total() == 70)
+        let implied = via_sub<Item>()
+        assert!(implied.0 == 100 && implied.1 == 101)
+        with (Tiny) { assert!(relay<Item>() == 3) }
+        assert!(relay<Item>() == 70)
+    }
+    with (Markup) { assert!(relay<Item>() == 101) }
+    assert!(relay<Item>() == 100)
+}
+
+#[test]
+fn lexical_named_evidence() { exercise() }
+
+pub fn main() -> i32 {
+    exercise()
+    0
+}

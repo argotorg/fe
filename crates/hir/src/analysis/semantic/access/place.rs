@@ -2,6 +2,8 @@
 //! carriers to the accesses they hold.
 use smallvec::SmallVec;
 
+use crate::hir_def::ExprId;
+
 use crate::analysis::{
     semantic::normalized::{NDataPath, NDataProjection, NIndex, NRootId, NValueId},
     ty::provider::AddressSpace,
@@ -38,9 +40,18 @@ pub(super) enum Step {
     },
     /// A constant index, or `None` for a dynamic one.
     Index(Option<usize>),
+    /// Distinct keys are separated only under the same locate dictionary.
+    Entry {
+        key: Option<usize>,
+        dispatch: ExprId,
+    },
 }
 
 impl Step {
+    pub(super) fn is_dynamic_index(&self) -> bool {
+        matches!(self, Self::Index(None) | Self::Entry { key: None, .. })
+    }
+
     fn overlaps(self, other: Self) -> bool {
         match (self, other) {
             (Self::Field(lhs), Self::Field(rhs)) => lhs == rhs,
@@ -55,6 +66,16 @@ impl Step {
                 },
             ) => lhs_variant != rhs_variant || lhs_field == rhs_field,
             (Self::Index(Some(lhs)), Self::Index(Some(rhs))) => lhs == rhs,
+            (
+                Self::Entry {
+                    key: Some(lhs),
+                    dispatch: a,
+                },
+                Self::Entry {
+                    key: Some(rhs),
+                    dispatch: b,
+                },
+            ) if a == b => lhs == rhs,
             _ => true,
         }
     }
@@ -73,11 +94,11 @@ pub(super) fn path_of(path: &NDataPath, constant: impl Fn(NValueId) -> Option<us
                 field: field.0,
             },
             NDataProjection::Index(NIndex::Const(index)) => Step::Index(Some(index)),
-            // An entry is an element at a key, `[*]` unless the key is a
-            // literal.
-            NDataProjection::Index(NIndex::Value(value)) | NDataProjection::Entry(value) => {
-                Step::Index(constant(value))
-            }
+            NDataProjection::Index(NIndex::Value(value)) => Step::Index(constant(value)),
+            NDataProjection::Entry(value, dispatch) => Step::Entry {
+                key: constant(value),
+                dispatch,
+            },
         })
         .collect()
 }
@@ -85,7 +106,19 @@ pub(super) fn path_of(path: &NDataPath, constant: impl Fn(NValueId) -> Option<us
 /// Two paths from the same base overlap when neither diverges from the
 /// other.
 pub(super) fn paths_overlap(lhs: &[Step], rhs: &[Step]) -> bool {
-    lhs.iter().zip(rhs).all(|(lhs, rhs)| lhs.overlaps(*rhs))
+    for (&lhs, &rhs) in lhs.iter().zip(rhs) {
+        if let (Step::Entry { dispatch: a, .. }, Step::Entry { dispatch: b, .. }) = (lhs, rhs)
+            && a != b
+        {
+            // Different dictionaries may shift the base by arbitrary amounts;
+            // even distinct later fields cannot establish disjointness.
+            return true;
+        }
+        if !lhs.overlaps(rhs) {
+            return false;
+        }
+    }
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -124,5 +157,29 @@ impl AbsPlace {
             space: space.or(self.space),
             lane: self.lane || lane,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranelift_entity::EntityRef;
+
+    #[test]
+    fn distinct_entry_keys_require_the_same_locate_dictionary() {
+        let entry = |key, dispatch| Step::Entry {
+            key: Some(key),
+            dispatch: ExprId::new(dispatch),
+        };
+        assert!(!paths_overlap(&[entry(1, 0)], &[entry(2, 0)]));
+        assert!(paths_overlap(&[entry(1, 0)], &[entry(2, 1)]));
+        assert!(paths_overlap(
+            &[entry(1, 0), Step::Field(0)],
+            &[entry(2, 1), Step::Field(1)],
+        ));
+        assert!(!paths_overlap(
+            &[entry(1, 0), Step::Field(0)],
+            &[entry(1, 0), Step::Field(1)],
+        ));
     }
 }

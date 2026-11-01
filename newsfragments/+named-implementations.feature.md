@@ -1,0 +1,1 @@
+Add named trait implementations selected with `with (Name)`. Selected proofs propagate through declared bounds and implementation conditions; implied supertraits follow their subtrait proof. Associated outputs must agree with ordinary implementations, and choice-dependent type formation remains deferred.

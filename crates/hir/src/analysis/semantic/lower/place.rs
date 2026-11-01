@@ -64,7 +64,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let mut place = self.try_lower_place_expr(*base, capture)?;
                 let index = self.lower_place_operand(*index, capture);
                 if self.typed_body.is_place_entry(expr) {
-                    place.push_entry(index);
+                    place.push_entry(index, self.entry_call_site(expr));
                 } else {
                     place.push_dynamic_index(index);
                 }
@@ -76,6 +76,35 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             _ => None,
         }
+    }
+
+    /// The checked locate call, canonical among equal closed callees in this
+    /// body. Place identity compares the dispatch as well as the key; it must
+    /// not equate two indexing dictionaries, or separate equal dictionaries
+    /// merely because they were written at different source locations.
+    fn entry_call_site(&self, expr: ExprId) -> ExprId {
+        let callee = self.call_sites[expr.index()]
+            .as_ref()
+            .and_then(|site| site.callee)
+            .expect("an admitted entry has its locate call");
+        let index = self
+            .call_sites
+            .iter()
+            .enumerate()
+            .find_map(|(index, site)| {
+                (site.as_ref().and_then(|site| site.callee) == Some(callee)
+                    && self
+                        .typed_body
+                        .place_entry_calls(ExprId::new(index))
+                        .map(|calls| &calls.codec)
+                        == self
+                            .typed_body
+                            .place_entry_calls(expr)
+                            .map(|calls| &calls.codec))
+                .then_some(index)
+            })
+            .expect("the entry's call site is present");
+        ExprId::new(index)
     }
 
     pub(super) fn lower_place_data(&mut self, source_place: &Place<'db>) -> SPlace<'db> {
@@ -108,9 +137,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     let index = self.lower_place_operand(index_expr, capture);
                     place.push_dynamic_index(index);
                 }
-                PlaceProjection::Entry { key_expr, .. } => {
+                PlaceProjection::Entry {
+                    key_expr,
+                    entry_expr,
+                    ..
+                } => {
                     let key = self.lower_place_operand(key_expr, capture);
-                    place.push_entry(key);
+                    place.push_entry(key, self.entry_call_site(entry_expr));
                 }
             }
             ty = projection.result_ty();

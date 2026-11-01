@@ -73,7 +73,7 @@ pub(super) fn data_path_index_bounds<'db>(
                     .first()
                     .map(|elem| instance.normalized_ty(db, *elem))
             }
-            NDataProjection::Entry(_) => instance
+            NDataProjection::Entry(..) => instance
                 .state_index_tys(db, ty)
                 .map(|(_, element_ty)| element_ty),
         }

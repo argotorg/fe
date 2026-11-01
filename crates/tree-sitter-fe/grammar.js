@@ -537,16 +537,33 @@ module.exports = grammar({
       field('body', $.impl_item_list),
     ),
 
-    impl_trait: $ => seq(
-      optional($.attribute_list),
-      optional('unsafe'),
-      'impl',
-      optional($.generic_param_list),
-      field('trait', $.trait_ref),
-      'for',
-      field('type', $._type),
-      optional($.where_clause),
-      field('body', $.trait_item_list),
+    impl_trait: $ => choice(
+      seq(
+        optional($.attribute_list),
+        optional('unsafe'),
+        'impl',
+        optional($.generic_param_list),
+        field('trait', $.trait_ref),
+        'for',
+        field('type', $._type),
+        optional(seq('as', field('selection_name', $.identifier))),
+        optional($.where_clause),
+        field('body', $.trait_item_list),
+      ),
+      seq(
+        optional($.attribute_list),
+        $.visibility,
+        optional('unsafe'),
+        'impl',
+        optional($.generic_param_list),
+        field('trait', $.trait_ref),
+        'for',
+        field('type', $._type),
+        'as',
+        field('selection_name', $.identifier),
+        optional($.where_clause),
+        field('body', $.trait_item_list),
+      ),
     ),
 
     impl_item_list: $ => seq(
@@ -787,14 +804,14 @@ module.exports = grammar({
       field('value', $._expression),
     )),
 
-    // Qualified path in expression context: <T as Trait>::method(args)
+    // Qualified path, including the ordinary impl operand <T as Trait>.
     qualified_path_expression: $ => prec.right(seq(
       $._generic_open,
       field('type', $._type),
       'as',
       field('trait', $.trait_ref),
       '>',
-      repeat1(seq('::', field('name', $.identifier))),
+      repeat(seq('::', field('name', $.identifier))),
     )),
 
     binary_expression: $ => {

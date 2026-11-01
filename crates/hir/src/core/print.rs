@@ -1667,6 +1667,11 @@ impl<'db> ImplTrait<'db> {
         let ty = unwrap_partial(self.type_ref(db), "ImplTrait::type_ref");
         result.push_str(&ty.pretty_print(db));
 
+        if let Some(name) = self.selection_name(db) {
+            result.push_str(" as ");
+            result.push_str(name.data(db));
+        }
+
         // Where clause
         result.push_str(&self.where_clause(db).pretty_print(db));
 

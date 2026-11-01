@@ -4602,19 +4602,25 @@ impl<'db> ImplTrait<'db> {
             ImplementorId::new(db, trait_inst, params, types, ImplementorOrigin::Hir(self));
 
         // Conflict check
-        let trait_ = implementor.trait_(db);
-        for &cand_view in impls_for_trait_def(db, self.top_mod(db).ingot(db), trait_.def(db)) {
-            let cand_impl_trait = cand_view.hir_impl_trait(db);
-            if cand_impl_trait == self {
-                continue;
-            }
-            if does_impl_trait_conflict(db, cand_view, implementor)
-                && !Self::impl_trait_conflict_is_sealed_marker_disjoint(db, cand_impl_trait, self)
-            {
-                return Err(ImplTraitLowerError::Conflict {
-                    primary: cand_impl_trait,
-                    conflict: self,
-                });
+        if self.selection_name(db).is_none() {
+            let trait_ = implementor.trait_(db);
+            for &cand_view in impls_for_trait_def(db, self.top_mod(db).ingot(db), trait_.def(db)) {
+                let cand_impl_trait = cand_view.hir_impl_trait(db);
+                if cand_impl_trait == self {
+                    continue;
+                }
+                if does_impl_trait_conflict(db, cand_view, implementor)
+                    && !Self::impl_trait_conflict_is_sealed_marker_disjoint(
+                        db,
+                        cand_impl_trait,
+                        self,
+                    )
+                {
+                    return Err(ImplTraitLowerError::Conflict {
+                        primary: cand_impl_trait,
+                        conflict: self,
+                    });
+                }
             }
         }
 
@@ -5040,7 +5046,66 @@ impl<'db> ImplTrait<'db> {
         }
 
         match self.lowered_implementor(db) {
-            Ok(implementor) => (Some(implementor), Vec::new()),
+            Ok(implementor) => {
+                let mut diags = Vec::new();
+                if self.selection_name(db).is_some()
+                    && let Some(mismatch) =
+                        crate::analysis::ty::trait_def::named_output_mismatch(db, self, implementor)
+                {
+                    use crate::analysis::ty::trait_def::NamedOutputMismatch;
+                    diags.push(
+                        match mismatch {
+                            NamedOutputMismatch::NoOrdinaryOutputs => {
+                                TraitLowerDiag::NamedOutputsNeedOrdinary { primary: self }
+                            }
+                            NamedOutputMismatch::AssocType {
+                                ordinary: true,
+                                name,
+                                expected,
+                                given,
+                                ..
+                            } => TraitLowerDiag::NamedAssociatedTypeMismatch {
+                                primary: self,
+                                name,
+                                expected,
+                                given,
+                            },
+                            NamedOutputMismatch::AssocType {
+                                with,
+                                name,
+                                expected,
+                                given,
+                                ..
+                            } => TraitLowerDiag::NamedAssociatedTypeDisagreement {
+                                primary: self,
+                                with,
+                                name,
+                                expected,
+                                given,
+                            },
+                            NamedOutputMismatch::AssocConst { with, name } => {
+                                TraitLowerDiag::NamedAssociatedConstMismatch {
+                                    primary: self,
+                                    with,
+                                    name,
+                                }
+                            }
+                            NamedOutputMismatch::Row {
+                                with,
+                                ordinary,
+                                name,
+                            } => TraitLowerDiag::NamedAssociatedRowMismatch {
+                                primary: self,
+                                with,
+                                ordinary,
+                                name,
+                            },
+                        }
+                        .into(),
+                    );
+                }
+                (Some(implementor), diags)
+            }
             Err(err) => {
                 let mut diags = Vec::new();
                 match err {

@@ -47,7 +47,7 @@ pub struct SStmtId(u32);
 entity_impl!(SStmtId);
 
 pub type SValueId = SLocalId;
-pub type SemanticProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId>;
+pub type SemanticProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId, ExprId>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SemanticBody<'db> {
@@ -143,7 +143,7 @@ pub(crate) fn layout_backing_query<'db>(
             }
             Projection::Deref => continue,
             // An entry lies at a slot computed at runtime.
-            Projection::Discriminant | Projection::Entry(_) => return None,
+            Projection::Discriminant | Projection::Entry(..) => return None,
         };
         target.push(step);
         structural_path.push(projection.clone());
@@ -333,7 +333,7 @@ impl<'db> SPlace<'db> {
 
     pub fn with_projection(
         local: SLocalId,
-        projection: Projection<TyId<'db>, VariantIndex, SLocalId>,
+        projection: Projection<TyId<'db>, VariantIndex, SLocalId, ExprId>,
     ) -> Self {
         let mut place = Self::new(local);
         place.path.push(projection);
@@ -377,8 +377,8 @@ impl<'db> SPlace<'db> {
             .push(Projection::Index(IndexSource::Dynamic(index)));
     }
 
-    pub fn push_entry(&mut self, key: SValueId) {
-        self.path.push(Projection::Entry(key));
+    pub fn push_entry(&mut self, key: SValueId, entry: ExprId) {
+        self.path.push(Projection::Entry(key, entry));
     }
 
     pub fn push_deref(&mut self) {
@@ -391,7 +391,7 @@ impl SPlace<'_> {
     pub fn used_locals(&self) -> Vec<SLocalId> {
         std::iter::once(self.local)
             .chain(self.path.iter().filter_map(|projection| match projection {
-                Projection::Index(IndexSource::Dynamic(index)) | Projection::Entry(index) => {
+                Projection::Index(IndexSource::Dynamic(index)) | Projection::Entry(index, _) => {
                     Some(*index)
                 }
                 Projection::Field(_)

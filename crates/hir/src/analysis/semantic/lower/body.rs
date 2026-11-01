@@ -1477,14 +1477,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // use was checked under, once substituted, may hold only by the bounds
         // of the context the instance was made for.
         let const_ref = match const_ref {
-            ConstRef::TraitConst {
-                use_,
-                evidence,
-                bound_evidence,
-            } => ConstRef::TraitConst {
+            ConstRef::TraitConst { use_, evidence } => ConstRef::TraitConst {
                 use_: use_.with_env(use_.origin_scope(), self.assumptions),
                 evidence,
-                bound_evidence,
             },
             ConstRef::InherentConst(use_) => {
                 ConstRef::InherentConst(use_.with_env(use_.origin_scope(), self.assumptions))

@@ -170,6 +170,13 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                 };
                 let parent_args = fold_tys(closure.parent_args(db));
                 let captures = fold_tys(closure.captures(db));
+                let bound_evidence =
+                    closure
+                        .bound_evidence(db)
+                        .map(|bound| super::evidence::BoundEvidence {
+                            schema: bound.schema,
+                            entries: bound.entries.fold_with(db, folder),
+                        });
                 let params = closure.params(db).clone().fold_with(db, folder);
                 let ret_ty = folder.fold_ty(db, closure.ret_ty(db));
                 let effects = closure.effects(db).clone().fold_with(db, folder);
@@ -178,7 +185,10 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                     ClosureTy::new(
                         db,
                         closure.def(db),
-                        parent_args,
+                        super::ty_def::ClosureContext {
+                            args: parent_args,
+                            evidence: bound_evidence,
+                        },
                         captures,
                         params,
                         ret_ty,
@@ -517,6 +527,16 @@ impl<'db> TyFoldable<'db> for TraitSolverQuery<'db> {
             goal: self.goal.fold_with(db, folder),
             assumptions: self.assumptions.fold_with(db, folder),
             require_impl: self.require_impl,
+            choices: self.choices.map(|choices| {
+                super::trait_resolution::ChosenImpls::new(
+                    db,
+                    choices
+                        .items(db)
+                        .iter()
+                        .map(|item| item.fold_with(db, folder))
+                        .collect::<Vec<_>>(),
+                )
+            }),
         }
     }
 }
@@ -642,9 +662,11 @@ impl<'db> TyFoldable<'db> for PlaceProjection<'db> {
                 result_ty: result_ty.fold_with(db, folder),
             },
             PlaceProjection::Entry {
+                entry_expr,
                 key_expr,
                 result_ty,
             } => PlaceProjection::Entry {
+                entry_expr,
                 key_expr,
                 result_ty: result_ty.fold_with(db, folder),
             },

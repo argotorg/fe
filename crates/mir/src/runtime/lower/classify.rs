@@ -826,7 +826,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         let path = place.path.as_slice();
         let index = path
             .iter()
-            .rposition(|projection| matches!(projection, NDataProjection::Entry(_)))?;
+            .rposition(|projection| matches!(projection, NDataProjection::Entry(..)))?;
         Some((|| {
             let collection_ty = self
                 .body
@@ -858,7 +858,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 NDataProjection::VariantField { variant, field } => {
                     project_variant_field_place_class(self.db, current, *variant, *field)
                 }
-                NDataProjection::Entry(_) => {
+                NDataProjection::Entry(..) => {
                     unreachable!("a place is classified from its last entry")
                 }
             };
