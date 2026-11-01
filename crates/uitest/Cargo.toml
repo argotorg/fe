@@ -18,3 +18,4 @@ hir.workspace = true
 
 [dev-dependencies]
 fmt.workspace = true
+salsa.workspace = true
