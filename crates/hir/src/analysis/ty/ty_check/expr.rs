@@ -2068,8 +2068,9 @@ impl<'db> TyChecker<'db> {
     }
 
     /// Defers a call whose method is one of several trait methods, which
-    /// argument and result types choose once the body is checked. `span` is
-    /// the method's name, or a value call's callee.
+    /// argument and result types choose once the body is checked, unless the
+    /// arguments already leave one. `span` is the method's name, or a value
+    /// call's callee.
     fn defer_method_call(
         &mut self,
         expr: ExprId,
@@ -2104,14 +2105,28 @@ impl<'db> TyChecker<'db> {
                 }
             })
             .collect();
-        self.env.register_pending_method(super::env::PendingMethod {
+        let pending = super::env::PendingMethod {
             expr,
             recv_ty: receiver_ty,
             method_name,
             candidates,
             span,
             site: self.env.call_site(),
-        });
+        };
+        // Inference only narrows the candidates, and the call's type is not
+        // yet constrained, so a single fitting candidate is the one the
+        // deferred call would resolve to. Resolving it now types the call
+        // for an operator applied to it: `!s.eq(t)`.
+        if let Some(parts) = super::pending_call_parts(self.db, self.body(), &self.env, expr) {
+            let recv_ty = receiver_ty.fold_with(self.db, &mut self.table);
+            if let [candidate] =
+                self.viable_pending_candidates(&pending, recv_ty, typed.ty, parts)[..]
+            {
+                self.resolve_pending_method(&pending, candidate, recv_ty, typed.ty, parts);
+                return typed;
+            }
+        }
+        self.env.register_pending_method(pending);
         typed
     }
 

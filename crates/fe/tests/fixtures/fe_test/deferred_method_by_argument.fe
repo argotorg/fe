@@ -1,0 +1,25 @@
+struct Count {}
+
+trait Get<T> {
+    fn get(self, _ x: own T) -> u256
+}
+
+impl Get<u256> for Count {
+    fn get(self, _ x: own u256) -> u256 {
+        1
+    }
+}
+
+impl Get<bool> for Count {
+    fn get(self, _ x: own bool) -> u256 {
+        2
+    }
+}
+
+#[test]
+fn argument_selects_impl() {
+    let c = Count {}
+    assert!(c.get(true) == 2)
+    assert!(c.get(5) == 1)
+    assert!(c.get(5) + c.get(false) == 3)
+}
