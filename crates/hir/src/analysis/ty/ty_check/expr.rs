@@ -1404,13 +1404,27 @@ impl<'db> TyChecker<'db> {
     fn int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {
         self.peel_transparent_newtypes(target_ty)
             .as_prim(self.db)
-            .is_some_and(|prim| int_literal_fits_prim(prim, value, false))
+            .is_some_and(|prim| {
+                int_literal_fits_prim(
+                    self.db.compilation_settings().target(self.db),
+                    prim,
+                    value,
+                    false,
+                )
+            })
     }
 
     fn negated_int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {
         self.peel_transparent_newtypes(target_ty)
             .as_prim(self.db)
-            .is_some_and(|prim| int_literal_fits_prim(prim, value, true))
+            .is_some_and(|prim| {
+                int_literal_fits_prim(
+                    self.db.compilation_settings().target(self.db),
+                    prim,
+                    value,
+                    true,
+                )
+            })
     }
 
     fn check_binary(

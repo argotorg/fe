@@ -189,6 +189,36 @@ fn test_cli_check_uses_the_backend_target() {
     assert!(output.contains("static assertion failed"), "{output}");
 }
 
+#[cfg(all(feature = "cranelift", feature = "wasm"))]
+#[test]
+fn test_cli_check_usize_literals_fit_the_backend_target() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("literals.fe");
+    fs::write(
+        &source,
+        "pub fn beyond_32_bits() -> usize {\n    0x100000000\n}\n\npub fn beyond_64_bits() -> isize {\n    0x8000000000000000\n}\n\npub fn length(_ a: [u8; 0x100000001 - 1]) {}\n",
+    )
+    .expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    let (output, exit_code) = run_fe_main(&["check", source]);
+    assert_eq!(exit_code, 0, "{output}");
+    let (output, exit_code) = run_fe_main(&["check", "--backend", "native", source]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(
+        output.contains("`9223372036854775808` is not representable in `isize`")
+            && !output.contains("`4294967296`")
+            && !output.contains("`4294967297`"),
+        "{output}"
+    );
+    let (output, exit_code) = run_fe_main(&["check", "--backend", "wasm", source]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(
+        output.contains("`4294967296` is not representable in `usize`")
+            && output.contains("`4294967297` is not representable in `usize`"),
+        "{output}"
+    );
+}
+
 #[test]
 fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");

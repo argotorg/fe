@@ -1791,7 +1791,7 @@ fn int_literal_value<'db>(
     if let Some(ty) = expected
         && let Some(prim) = ty.as_prim(db)
         && prim.is_integral()
-        && !int_literal_fits_prim(prim, value, negated)
+        && !int_literal_fits_prim(db.compilation_settings().target(db), prim, value, negated)
     {
         let sign = if negated { "-" } else { "" };
         return Err(ConstIntError::LiteralOutOfRange {
