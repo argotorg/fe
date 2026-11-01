@@ -693,6 +693,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
                 format_local_id(*value)
             )
         }
+        RuntimeBuiltin::ZeroState { space, slot, len } => format!(
+            "zero_state {space:?}, {}, {}",
+            format_local_id(*slot),
+            format_local_id(*len)
+        ),
         RuntimeBuiltin::CallValue => "callvalue".to_string(),
         RuntimeBuiltin::ReturnDataSize => "returndatasize".to_string(),
         RuntimeBuiltin::ReturnDataCopy { dst, offset, len } => format!(

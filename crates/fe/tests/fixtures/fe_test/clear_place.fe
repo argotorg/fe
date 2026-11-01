@@ -6,6 +6,7 @@ use core::intrinsic::clear
 use core::keccak
 use std::evm::{
     Address, Evm, RawStorage, SolArray, SolEnumerableSet, StorPtr, StorageMap, TSlot,
+    storage_at,
 }
 
 struct Pair {
@@ -139,5 +140,43 @@ fn collections_clear_their_elements() uses (evm: mut Evm) {
         assert(!owners.contains(Address::new(10)))
         assert(owners.add(Address::new(11)))
         assert(owners.len() == 1)
+    }
+}
+
+struct Wide {
+    words: [u256; 6],
+}
+
+fn store(_ slot: u256, _ value: u256) uses (storage: mut RawStorage) {
+    unsafe { storage.sstore(slot, value) }
+}
+
+// A place of more words than a clear unrolls is cleared in a loop over its
+// slots, which wraps around the slot space like the unrolled stores.
+#[test]
+fn clear_loops_over_wide_storage_places() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let wides = unsafe { mut StorageMap<u256, Wide>::at(11) }
+        wides[1] = Wide { words: [1, 2, 3, 4, 5, 6] }
+        wides[2] = Wide { words: [7, 8, 9, 10, 11, 12] }
+        wides.remove(1)
+        assert(wides[2].words[0] == 7 && wides[2].words[5] == 12)
+        let entry = keccak((1 as u256, 11 as u256))
+        var i: u256 = 0
+        while i < 6 {
+            assert(load(entry + i) == 0)
+            i += 1
+        }
+
+        let top: u256 = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd
+        store(3, 99)
+        let wrapped = unsafe { mut storage_at<Wide>(top) }
+        wrapped.words = [1, 2, 3, 4, 5, 6]
+        assert(load(0) == 4 && load(2) == 6)
+        let cleared = unsafe { mut storage_at<Wide>(top) }
+        unsafe { clear(mut cleared) }
+        assert(load(top) == 0 && load(top + 2) == 0)
+        assert(load(0) == 0 && load(1) == 0 && load(2) == 0)
+        assert(load(3) == 99)
     }
 }
