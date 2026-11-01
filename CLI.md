@@ -271,8 +271,7 @@ With the optional `cranelift` Cargo feature, `fe build --backend native` compile
 (x86-64 Linux or AArch64 macOS). `--emit` selects:
 
 - `executable` (the default): `<out>/<name>`, entered at the root module's
-  `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`, whose result is the
-  exit status.
+  `pub fn main() -> i32`, whose result is the exit status.
 - `object`: `<out>/<name>.o`, the object of the `#[export]` functions in the file or ingot.
 - `staticlib`: `<out>/lib<name>.a`, a static library holding that object.
 - `ir`: `<out>/<name>.native.sona`, the Sonatina IR of the executable or, with `object` or
@@ -345,9 +344,9 @@ fe build --backend native --link target/release/libhost.a --link-lib gcc_s --lin
 #### Linking a native library
 
 A library needs only the C library: native code calls `malloc`, `free`, `memmove`, `write`,
-`fflush` and `abort`, and the `extern` functions its Fe code calls, such as `std`'s `getchar`,
-`putchar` and `clock`. C and Rust programs link the C library by default, so a C program needs
-only the Fe library:
+`fflush` and `abort`, and the `extern` functions its Fe code calls, such as `clock` for
+`std::native::cpu_clock_ticks`. C and Rust programs link the C library by default, so a C program
+needs only the Fe library:
 
 ```
 fe build --backend native --emit staticlib --out-dir out mylib.fe

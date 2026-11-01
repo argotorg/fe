@@ -19,8 +19,7 @@ pub(crate) use package::runtime_instance_display_name;
 pub use package::{
     LowerError, NativeOutputKind, build_ingot_module_runtime_package, build_native_package,
     build_native_test_runtime_package, build_runtime_package, build_test_runtime_package,
-    native_executable_entry, native_exports, runtime_instance_stable_key,
-    runtime_instance_symbol_key,
+    native_exports, runtime_instance_stable_key, runtime_instance_symbol_key,
 };
 pub use pretty::{
     format_runtime_body, format_runtime_body_excerpt, format_runtime_package,

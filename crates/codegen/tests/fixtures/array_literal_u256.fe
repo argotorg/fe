@@ -1,4 +1,4 @@
-pub fn fixed_u256_array_literal() -> [u256; 4] {
+pub fn main() -> [u256; 4] {
     let arr: [u256; 4] = [1, 2, 3, 4]
     arr
 }

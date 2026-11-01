@@ -1,4 +1,4 @@
-fn main() -> u64 {
+pub fn main() -> u64 {
     let x: u64 = add(10, 20)
     x
 }

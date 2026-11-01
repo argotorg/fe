@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/bool_literal.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %bool_literal() -> i1 {
+func private %main() -> i1 {
     block0:
         jump block1;
 
@@ -18,7 +18,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i1 = call %bool_literal;
+        v0.i1 = call %main;
         evm_stop;
 }
 

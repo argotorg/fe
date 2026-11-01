@@ -1,0 +1,9 @@
+pub trait Greeting {
+    fn greet(self) -> u256
+}
+
+// Not an entry: only the root module's `main` is, so callers provide its
+// effects.
+pub fn main() -> u256 uses (greeting: Greeting) {
+    greeting.greet()
+}

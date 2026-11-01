@@ -11,3 +11,7 @@ pub fn for_array_sum() -> u64 {
     }
     sum
 }
+
+pub fn main() -> u64 {
+    for_array_sum()
+}

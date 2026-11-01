@@ -381,6 +381,10 @@ pub fn pointer_roundtrip() -> u256 {
     unsafe { *ptr = 7 }
     unsafe { *ptr }
 }
+
+pub fn main() -> u256 {
+    pointer_roundtrip()
+}
 "#
         .to_string(),
         |db, package| {
@@ -474,7 +478,7 @@ fn replace(var _ data: own *Data, other: *Data) -> u256 {
     data.value
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let data = core::ptr::alloc<Data>()
     let other = core::ptr::alloc<Data>()
     data.value = 7
@@ -577,7 +581,7 @@ fn repack(wrapper: Wrapper) -> Inner {
     Inner { flag: copy }
 }
 
-fn entry() -> Inner {
+pub fn main() -> Inner {
     repack(Wrapper {
         inner: Inner { flag: Flag::A(42) },
     })
@@ -610,7 +614,7 @@ fn sum_two(i: usize, j: usize) -> u256 {
     VALS[i] + VALS[j]
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_two(i: 0, j: 1)
 }
 "#;
@@ -714,7 +718,7 @@ fn run(_ a: u256) -> u256 {
     sum_view(xs) + sum_own(xs) + sum_calls(xs) + sum_local(a)
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     run(1)
 }
 "#,
@@ -760,7 +764,7 @@ fn bump(size: u256) -> u256 {
     value
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     bump(size: 1)
 }
 "#,
@@ -823,7 +827,7 @@ fn sum_pair(_ pair: own Pair) -> u256 {
     pair.left + pair.right
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_pair(Pair { left: 1, right: 2 })
 }
 "#,
@@ -869,7 +873,7 @@ fn note_size(_ note: own Note) -> u256 {
     note.id + note.body.len() as u256
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     note_size(Note { id: 1, body: Bytes::empty() })
 }
 "#,
@@ -899,6 +903,10 @@ fn buffer_len() -> usize {
     let buffer = MemBuffer::alloc(32)
     unsafe { store_word(ptr: buffer.ptr(), value: 42) }
     buffer.span().len()
+}
+
+pub fn main() -> usize {
+    buffer_len()
 }
 "#,
         |db, package| {
@@ -941,7 +949,7 @@ impl Pair {
     }
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     Pair { left: 1, right: 2 }.sum()
 }
 "#,
@@ -986,7 +994,7 @@ fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
     first.left + second.right
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
 }
 "#,
@@ -1035,7 +1043,7 @@ fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
     consume(first) + consume(second)
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
 }
 "#,
@@ -1082,7 +1090,7 @@ impl Pair {
     }
 }
 
-fn entry() -> Pair {
+pub fn main() -> Pair {
     Pair { left: 1, right: 2 }.bump()
 }
 "#,
@@ -1135,7 +1143,7 @@ impl Table {
     }
 }
 
-fn entry() -> u8 {
+pub fn main() -> u8 {
     Table { used: [1, 2, 3, 4] }.get(2)
 }
 "#,
@@ -1222,7 +1230,7 @@ impl Pair {
     }
 }
 
-pub fn entry() -> bool {
+pub fn main() -> bool {
     Pair { a: 1, b: 2 }.check(1)
 }
 "#,
@@ -1270,7 +1278,7 @@ fn linear_probe_big_struct_keeps_array_projection_reads_place_based() {
         file_url.clone(),
         Some(
             format!(
-                "{}\nfn entry() -> u256 {{\n    var table = Table::empty()\n    table.set(17, 99)\n    table.get(17)\n}}\n",
+                "{}\nfn entry() -> u256 {{\n    var table = Table::empty()\n    table.set(17, 99)\n    table.get(17)\n}}\n\npub fn main() -> u256 {{\n    entry()\n}}\n",
                 include_str!("../../fe/tests/fixtures/fe_test/linear_probe_big_struct.fe")
             ),
         ),
@@ -1396,7 +1404,7 @@ fn materialized_scalar_uses_do_not_keep_rawaddr_runtime_carriers() {
     x
 }
 
-fn entry() -> u8 {
+pub fn main() -> u8 {
     var x: u8 = 2
     bump(mut x)
 }
@@ -1513,7 +1521,7 @@ fn empty_revert_intrinsic_has_no_synthetic_pointer_operand() {
         r#"
 use std::abi::bytes_from_words_prefix
 
-fn trigger() {
+pub fn main() {
     let _ = bytes_from_words_prefix<33, 1>([0])
 }
 "#,
@@ -1598,7 +1606,7 @@ fn select(flag: bool) -> E {
     }
 }
 
-fn entry() -> u8 {
+pub fn main() -> u8 {
     match select(true) {
         E::A => 1,
         E::B => 0,
@@ -1715,14 +1723,14 @@ fn immutable_array_snapshots_retain_their_backing() {
         (
             r#"
 const VALUES: [u256; 3] = [11, 22, 33]
-pub fn entry() -> u256 { forward(VALUES) }
+pub fn main() -> u256 { forward(VALUES) }
 "#,
             "const.load",
         ),
         (
             r#"
 fn read_input() -> u256 uses (values: [u256; 3]) { forward(values) }
-pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
+pub fn main() -> u256 uses (evm: std::evm::RawOps) {
     let data = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
     unsafe { with (*data) { read_input() } }
 }
@@ -1766,7 +1774,7 @@ impl Copy for Input {}
 fn pick(_ input: Input) -> u256 { input.first }
 fn forward(_ input: Input) -> u256 { pick(input) }
 fn read_input() -> u256 uses (input: Input) { forward(input) }
-pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
+pub fn main() -> u256 uses (evm: std::evm::RawOps) {
     let data = unsafe { evm.calldata_ptr<Input>(0) }
     unsafe { with (*data) { read_input() } }
 }
@@ -1793,7 +1801,7 @@ fn pick(values: ref [u256; 4], idx: usize) -> u256 {
     values[idx]
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let values: [u256; 4] = C
     let idx: usize = 2
     pick(values: ref values, idx)
@@ -1810,7 +1818,7 @@ fn pick(values: [u256; 4], idx: usize) -> u256 {
     values[idx]
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let values: [u256; 4] = C
     let idx: usize = 2
     pick(values, idx)
@@ -2042,6 +2050,10 @@ fn borrows_of_aggregate_constant_locals_lower_as_const_refs() {
 fn entry() -> u256 {
     let xs: [u256; 2] = [10, 20]
     first(xs: ref xs)
+}
+
+pub fn main() -> u256 {
+    entry()
 }"#,
         |db, package| {
             let first = package
@@ -2184,6 +2196,10 @@ fn test_add_overflow_u8() {
     let x: u8 = 255
     let y: u8 = x + 1
 }
+
+pub fn main() {
+    test_add_overflow_u8()
+}
 "#,
         |db, package| {
             let func = package
@@ -2268,7 +2284,7 @@ fn return_array_after_projection(xs: [u8; 4]) -> [u8; 4] {
     ys
 }
 
-fn use_returned_array() -> u8 {
+pub fn main() -> u8 {
     var xs: [u8; 4] = [1, 2, 3, 4]
     xs = return_array_after_projection(xs)
     xs[0]
@@ -2327,6 +2343,10 @@ fn use_returned_array() -> u8 {
     var xs: [u8; 4] = [1, 2, 3, 4]
     xs = return_array_after_projection(xs)
     xs[0]
+}
+
+pub fn main() -> u8 {
+    use_returned_array()
 }
 "#,
         |db, package| {
@@ -2435,6 +2455,10 @@ fn use_returned_array() -> u256 {
     var xs: [u256; 3] = [1, 2, 3]
     xs = return_array_after_projection(xs)
     xs[0]
+}
+
+pub fn main() -> u256 {
+    use_returned_array()
 }
 "#,
         |db, package| {

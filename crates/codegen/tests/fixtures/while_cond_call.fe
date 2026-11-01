@@ -2,7 +2,7 @@ fn lt_ten(_ value: u64) -> bool {
     value < 10
 }
 
-pub fn while_cond_call() -> u64 {
+pub fn main() -> u64 {
     var i = 0
     while lt_ten(i) {
         i = i + 1

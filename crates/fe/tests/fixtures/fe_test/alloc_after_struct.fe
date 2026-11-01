@@ -10,7 +10,7 @@ struct Pair {
 }
 
 #[test]
-fn test_alloc_after_struct() uses (evm: Evm) {
+fn test_alloc_after_struct() {
     let p = Pair {
         a: Address::new(0x1111111111111111111111111111111111111111),
         b: Address::new(0x2222222222222222222222222222222222222222),

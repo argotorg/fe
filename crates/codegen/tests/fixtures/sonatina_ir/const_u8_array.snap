@@ -56,12 +56,25 @@ func private %index_direct() -> i8 {
         return 2.i8;
 }
 
+func private %main() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i8 = call %index_direct;
+        v1.i8 = call %alias_then_index;
+        v2.i8 = call %pass_then_index;
+        v3.i8 = call %big_index;
+        v4.i8 = call %big_copy_first;
+        return;
+}
+
 func private %main_root() {
     block0:
         jump block1;
 
     block1:
-        v0.i8 = call %alias_then_index;
+        call %main;
         evm_stop;
 }
 

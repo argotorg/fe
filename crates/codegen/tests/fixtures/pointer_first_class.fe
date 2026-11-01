@@ -7,7 +7,7 @@ struct Holder {
     data: *Data,
 }
 
-pub fn sum_first_class_pointers() -> u256 {
+pub fn main() -> u256 {
     let data = core::ptr::alloc<Data>()
     unsafe { data.a = 5 }
     unsafe { data.b = 8 }

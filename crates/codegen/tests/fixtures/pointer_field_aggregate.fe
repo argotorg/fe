@@ -9,7 +9,7 @@ fn bump() uses (value: mut u256) {
     value += 1
 }
 
-pub fn pointer_field_aggregate() {
+pub fn main() {
     var holder = Holder { ptr: ptr::alloc<u256>(), value: 1 }
     let first = holder.ptr
     unsafe {

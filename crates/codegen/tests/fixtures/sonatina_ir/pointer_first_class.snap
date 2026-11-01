@@ -312,135 +312,7 @@ func private %len(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %main_root() {
-    block0:
-        jump block1;
-
-    block1:
-        v0.i256 = call %sum_first_class_pointers;
-        evm_stop;
-}
-
-func inline(always) private %mem_array_elem(noalias v0.objref<@layout_0>, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.objref<i256> = obj.proj v0 1.i256;
-        v5.i256 = obj.load v4;
-        v7.i1 = lt v1 v5;
-        v8.i1 = is_zero v7;
-        br v8 block2 block3;
-
-    block2:
-        call %index_out_of_bounds;
-        unreachable;
-
-    block3:
-        jump block4;
-
-    block4:
-        v11.objref<i256> = obj.proj v0 0.i256;
-        v12.i256 = obj.load v11;
-        v14.i256 = call %elem v12 v1;
-        return v14;
-}
-
-func private %new_uninit(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        (v3.i256, v4.i1) = umulo v0 32.i256;
-        br v4 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        v10.i256 = call %alloc_bytes v3;
-        v11.i256 = call %cast__g5f1e v10;
-        v14.@layout_0 = insert_value undef.@layout_0 0.i256 v11;
-        v16.@layout_0 = insert_value v14 1.i256 v0;
-        return v16;
-}
-
-func private %new_zeroed(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %new_uninit v0;
-        v4.i256 = extract_value v2 0.i256;
-        v5.i256 = call %cast__g0587 v4;
-        v6.i256 = call %impl_MemArray__byte_len__ge513 v2;
-        call %zero_bytes v5 v6;
-        return v2;
-}
-
-func inline(always) private %next(v0.@layout_1, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %wrapping_add v1 1.i256;
-        return v4;
-}
-
-func private %offset(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        (v4.i256, v5.i1) = umulo v1 32.i256;
-        br v5 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        v12.i256 = add v0 v4;
-        return v12;
-}
-
-func inline(always) private %range_has(v0.i256, v1.i256, v2.i256) -> i1 {
-    block0:
-        jump block1;
-
-    block1:
-        v5.i1 = gt v1 v0;
-        v6.i1 = is_zero v5;
-        br v6 block5 block3;
-
-    block2:
-        jump block4;
-
-    block3:
-        jump block4;
-
-    block4:
-        v9.i1 = phi (1.i1 block2) (0.i1 block3);
-        return v9;
-
-    block5:
-        v12.i1 = lt v0 v2;
-        br v12 block2 block3;
-}
-
-func inline(always) private %start(v0.@layout_1) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 0.i256;
-        return v3;
-}
-
-func private %sum_first_class_pointers() -> i256 {
+func private %main() -> i256 {
     block0:
         v0.objref<@layout_0> = obj.alloc @layout_0;
         v1.objref<@layout_0> = obj.alloc @layout_0;
@@ -687,6 +559,134 @@ func private %sum_first_class_pointers() -> i256 {
 
     block49:
         return v160;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %main;
+        evm_stop;
+}
+
+func inline(always) private %mem_array_elem(noalias v0.objref<@layout_0>, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 1.i256;
+        v5.i256 = obj.load v4;
+        v7.i1 = lt v1 v5;
+        v8.i1 = is_zero v7;
+        br v8 block2 block3;
+
+    block2:
+        call %index_out_of_bounds;
+        unreachable;
+
+    block3:
+        jump block4;
+
+    block4:
+        v11.objref<i256> = obj.proj v0 0.i256;
+        v12.i256 = obj.load v11;
+        v14.i256 = call %elem v12 v1;
+        return v14;
+}
+
+func private %new_uninit(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        (v3.i256, v4.i1) = umulo v0 32.i256;
+        br v4 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        v10.i256 = call %alloc_bytes v3;
+        v11.i256 = call %cast__g5f1e v10;
+        v14.@layout_0 = insert_value undef.@layout_0 0.i256 v11;
+        v16.@layout_0 = insert_value v14 1.i256 v0;
+        return v16;
+}
+
+func private %new_zeroed(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@layout_0 = call %new_uninit v0;
+        v4.i256 = extract_value v2 0.i256;
+        v5.i256 = call %cast__g0587 v4;
+        v6.i256 = call %impl_MemArray__byte_len__ge513 v2;
+        call %zero_bytes v5 v6;
+        return v2;
+}
+
+func inline(always) private %next(v0.@layout_1, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %wrapping_add v1 1.i256;
+        return v4;
+}
+
+func private %offset(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        (v4.i256, v5.i1) = umulo v1 32.i256;
+        br v5 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        v12.i256 = add v0 v4;
+        return v12;
+}
+
+func inline(always) private %range_has(v0.i256, v1.i256, v2.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i1 = gt v1 v0;
+        v6.i1 = is_zero v5;
+        br v6 block5 block3;
+
+    block2:
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v9.i1 = phi (1.i1 block2) (0.i1 block3);
+        return v9;
+
+    block5:
+        v12.i1 = lt v0 v2;
+        br v12 block2 block3;
+}
+
+func inline(always) private %start(v0.@layout_1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
 }
 
 func private %wrapping_add(v0.i256, v1.i256) -> i256 {

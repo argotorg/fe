@@ -39,7 +39,7 @@ const NEGATIVE_TRUNCATED_DOWNCAST: u8 = const_negative_truncated_downcast()
 const NEGATIVE_SATURATED_DOWNCAST: u8 = const_negative_saturated_downcast()
 
 #[test]
-fn test_int_downcast() uses (evm: mut Evm) {
+fn test_int_downcast() {
     let x: u256 = 256
     let y: Option<u8> = x.downcast()
     assert!(y.is_none())
@@ -66,7 +66,7 @@ fn test_int_downcast() uses (evm: mut Evm) {
 }
 
 #[test]
-fn test_const_int_downcast() uses (evm: mut Evm) {
+fn test_const_int_downcast() {
     match CHECKED_DOWNCAST {
         Option::Some(value) => assert!(value == 200)
         Option::None => assert!(false)

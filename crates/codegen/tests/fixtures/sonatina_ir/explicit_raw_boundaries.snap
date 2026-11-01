@@ -99,7 +99,7 @@ func private %cast__gf772(v0.i256) -> i256 {
         return v0;
 }
 
-func private %explicit_raw_boundaries() {
+func private %main() {
     block0:
         jump block1;
 
@@ -116,7 +116,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        call %explicit_raw_boundaries;
+        call %main;
         evm_stop;
 }
 

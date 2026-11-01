@@ -28,12 +28,22 @@ func private %long_string() -> @layout_0 {
         return v10;
 }
 
-func private %main_root() {
+func private %main() {
     block0:
         jump block1;
 
     block1:
         v0.@layout_0 = call %long_string;
+        v1.@layout_0 = call %two_word_string;
+        return;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        call %main;
         evm_stop;
 }
 

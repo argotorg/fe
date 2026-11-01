@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/host_capability_sealed.fe
+---
+error[2-0003]: `seal` is not visible
+   ┌─ host_capability_sealed.fe:15:12
+   │
+15 │     Host { seal: Fake {} }
+   │            ^^^^^^^^^^^^^ `seal` is not visible
+   │
+   ┌─ src/native.fe:6:26
+   │
+ 6 │ pub struct Host { unsafe seal: Private }
+   │                          ---- `seal` is defined here
+
+error[6-0003]: trait bound is not satisfied
+  ┌─ host_capability_sealed.fe:8:17
+  │
+8 │ impl Stdout for Fake {
+  │                 ^^^^ `Fake` doesn't implement `HostCapabilitySeal`
+
+error[8-0126]: initializing an `unsafe` field requires an `unsafe` block
+   ┌─ host_capability_sealed.fe:15:12
+   │
+15 │     Host { seal: Fake {} }
+   │            ^^^^^^^^^^^^^ `seal` is an `unsafe` field
+   │
+   = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise

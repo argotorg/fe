@@ -17,7 +17,7 @@ use crate::{
     hir_def::{Contract, Func, IdentId, ImplTrait, scope_graph::ScopeId},
 };
 
-use super::resolve_default_root_effect_ty;
+use super::{resolve_contract_root_effect_ty, resolve_func_root_effect_ty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub enum AddressSpace {
@@ -165,7 +165,15 @@ fn registered_root_providers_for_scope<'db>(
     scope: ScopeId<'db>,
 ) -> Vec<RootProviderRegistration<'db>> {
     let assumptions = PredicateListId::empty_list(db);
-    let Some(provider_ty) = resolve_default_root_effect_ty(db, scope, assumptions) else {
+    let provider_ty = match site_kind {
+        RootProviderSiteKind::Func => resolve_func_root_effect_ty(db, scope, assumptions),
+        RootProviderSiteKind::Contract
+        | RootProviderSiteKind::ContractInit
+        | RootProviderSiteKind::ContractRecvArm => {
+            resolve_contract_root_effect_ty(db, scope, assumptions)
+        }
+    };
+    let Some(provider_ty) = provider_ty else {
         return Vec::new();
     };
     vec![RootProviderRegistration {

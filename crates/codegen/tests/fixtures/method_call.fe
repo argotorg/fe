@@ -17,3 +17,7 @@ impl Foo {
 pub fn call_method(foo: Foo) -> u64 {
     foo.return_value()
 }
+
+pub fn main() -> u64 {
+    call_method(foo: Foo {})
+}

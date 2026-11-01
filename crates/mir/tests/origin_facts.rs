@@ -74,7 +74,7 @@ fn mir_trace_emitter_covers_statements_and_terminators() {
         file_url,
         Some(
             r#"
-fn main() -> u256 {
+pub fn main() -> u256 {
     let x: u256 = 1
     x
 }
@@ -161,7 +161,7 @@ fn mir_trace_emits_cfg_and_natural_loop_facts() {
         file_url,
         Some(
             r#"
-fn main() -> u32 {
+pub fn main() -> u32 {
     var i: u32 = 0
     while i < 4 {
         i = i + 1
@@ -302,7 +302,7 @@ fn pick<T>(x: T) -> T {
     x
 }
 
-fn main() -> u256 {
+pub fn main() -> u256 {
     let a: u256 = pick(1)
     let b: u8 = pick(2)
     a
@@ -378,7 +378,7 @@ impl Bar {
     }
 }
 
-fn main() -> u256 {
+pub fn main() -> u256 {
     let foo: Foo = Foo {}
     let bar: Bar = Bar {}
     foo.get() + bar.get()

@@ -1,5 +1,5 @@
 const BIG: String<31> = "abcdefghijklmnopqrstuvwxyzabcde"
 
-pub fn large_string_const() -> String<31> {
+pub fn main() -> String<31> {
     BIG
 }

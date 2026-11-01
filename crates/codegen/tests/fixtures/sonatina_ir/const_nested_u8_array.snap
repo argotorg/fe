@@ -8,7 +8,7 @@ target = "evm-ethereum-osaka"
 global private const [[i8; 2]; 2] $const_region_0 = [[1, 2], [3, 4]];
 global private const [i8; 2] $const_region_1 = [3, 4];
 
-func private %const_nested_u8_array() -> i8 {
+func private %main() -> i8 {
     block0:
         jump block1;
 
@@ -23,7 +23,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i8 = call %const_nested_u8_array;
+        v0.i8 = call %main;
         evm_stop;
 }
 

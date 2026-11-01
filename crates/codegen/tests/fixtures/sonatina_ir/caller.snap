@@ -22,7 +22,7 @@ func private %main() -> @layout_0 {
         jump block1;
 
     block1:
-        v0.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_e286;
+        v0.@layout_0 = call %who_called;
         return v0;
 }
 
@@ -35,16 +35,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %standalone_caller__caller__who_called__gcd5c_d2d6() -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v0.@layout_0 = call %caller;
-        return v0;
-}
-
-func private %standalone_caller__caller__who_called__gcd5c_e286() -> @layout_0 {
+func private %who_called() -> @layout_0 {
     block0:
         jump block1;
 

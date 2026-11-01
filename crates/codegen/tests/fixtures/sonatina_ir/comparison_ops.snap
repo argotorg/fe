@@ -9,7 +9,7 @@ type @layout_0 = {i1, i1, i1, i1, i1, i1};
 
 global private const @layout_0 $const_region_0 = {1, 1, 1, 1, 1, 1};
 
-func private %comparison_ops() -> @layout_0 {
+func private %main() -> @layout_0 {
     block0:
         jump block1;
 
@@ -24,7 +24,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.@layout_0 = call %comparison_ops;
+        v0.@layout_0 = call %main;
         evm_stop;
 }
 

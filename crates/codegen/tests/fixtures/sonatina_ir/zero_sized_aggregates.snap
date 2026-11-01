@@ -25,12 +25,24 @@ func private %empty_field_assign() {
         return;
 }
 
+func private %main() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %tuple_with_empty;
+        call %tuple_only_empty;
+        v2.i256 = call %struct_with_empty;
+        call %empty_field_assign;
+        return;
+}
+
 func private %main_root() {
     block0:
         jump block1;
 
     block1:
-        call %empty_field_assign;
+        call %main;
         evm_stop;
 }
 

@@ -8,7 +8,7 @@ pub use native_tests::{NativeTestEntry, NativeTestSuite, emit_test_suite_native}
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 #[cfg(feature = "cranelift")]
-use lower_runtime::NativePanics;
+use lower_runtime::{HostState, NativePanics};
 
 use common::ingot::Ingot;
 use driver::DriverDataBase;
@@ -17,7 +17,7 @@ use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
 #[cfg(feature = "cranelift")]
-use mir::{NativeOutputKind, RuntimeSectionName, build_native_package, native_executable_entry};
+use mir::{NativeOutputKind, RuntimeSectionName, build_native_package};
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
@@ -49,7 +49,7 @@ use sonatina_ir::{
     inst::{
         cast::Bitcast,
         control_flow::{Call, Return},
-        data::{ObjAlloc, ObjStore},
+        data::Mstore,
     },
     ir_writer::IrWrite,
     isa::{Isa, native::Native},
@@ -931,55 +931,34 @@ fn prepare_native_main(
     module: Module,
     main: FuncRef,
 ) -> Result<Module, LowerError> {
-    let func = native_executable_entry(db, top_mod)
+    let func = top_mod
+        .main_entry(db)
         .ok_or_else(|| LowerError::Internal("native entry disappeared after lowering".into()))?;
     let i32_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::I32)));
-    let argv_ty = TyId::ptr_to(db, TyId::ptr_to(db, TyId::u8(db)));
-    let args = func
-        .arg_tys(db)
-        .iter()
-        .map(|arg| {
-            let ty = arg.instantiate_identity();
-            ty.as_view(db).unwrap_or(ty)
-        })
-        .collect::<Vec<_>>();
-    let with_args = matches!(target, NativeTarget::Host) && args == [i32_ty, argv_ty];
-    let valid = func.return_ty(db) == i32_ty && (args.is_empty() || with_args);
-    let expected_entry = match target {
-        NativeTarget::Host => {
-            "native executable `main` must have signature `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`"
-        }
-        #[cfg(feature = "sp1")]
-        NativeTarget::Sp1 => "SP1 executable `main` must have signature `pub fn main() -> i32`",
-    };
-    let argc_ref = Type::I32.to_obj_ref(&module.ctx);
-    let byte_ptr = Type::I8.to_ptr(&module.ctx);
-    let argc_by_ref = module.ctx.func_sig(main, |signature| {
-        signature.args().first() == Some(&argc_ref)
-    });
+    let valid = func.return_ty(db) == i32_ty;
     module.ctx.func_sig(main, |signature| {
-        let expected = if with_args {
-            vec![if argc_by_ref { argc_ref } else { Type::I32 }, byte_ptr]
-        } else {
-            vec![]
-        };
-        if valid && signature.args() == expected && signature.ret_tys() == [Type::I32] {
+        if valid && signature.args().is_empty() && signature.ret_tys() == [Type::I32] {
             Ok(())
         } else {
+            let executable = match target {
+                NativeTarget::Host => "native",
+                #[cfg(feature = "sp1")]
+                NativeTarget::Sp1 => "SP1",
+            };
             Err(LowerError::Unsupported(format!(
-                "{expected_entry}, found lowered `main({}) -> {}`",
+                "{executable} executable `main` must have signature `pub fn main() -> i32`, found lowered `main({}) -> {}`",
                 format_native_types(signature.args(), &module),
                 format_native_types(signature.ret_tys(), &module)
             )))
         }
     })?;
-    if !with_args {
+    if !matches!(target, NativeTarget::Host) {
         module.ctx.update_func_linkage(main, Linkage::Public);
         return Ok(module);
     }
 
-    // Preserve ordinary Fe calls to the entry. The exported C entry takes the
-    // host's typed pointer vector, which is a `**u8` as Fe lays it out.
+    // The exported C entry keeps its arguments for `std::env`, then calls
+    // the Fe entry, which keeps ordinary Fe calls to it.
     let names = module
         .funcs()
         .into_iter()
@@ -993,13 +972,22 @@ fn prepare_native_main(
         Signature::new(&name, Linkage::Private, sig.args(), sig.ret_tys())
     });
     module.ctx.declared_funcs.insert(main, signature);
+    let globals = HostState::ALL.map(|state| {
+        module
+            .ctx
+            .with_gv_store(|store| store.lookup_gv(state.global()))
+            .map(|global| {
+                let ty = module.ctx.with_gv_store(|store| store.gv_data(global).ty);
+                (global, ty)
+            })
+    });
     let builder = ModuleBuilder::from_module(module);
-    let argv_ptr = builder.ptr_type(byte_ptr);
+    let argv_ty = builder.ptr_type(builder.ptr_type(Type::I8));
     let wrapper = builder
         .declare_function(Signature::new_single(
             "main",
             Linkage::Public,
-            &[Type::I32, argv_ptr],
+            &[Type::I32, argv_ty],
             Type::I32,
         ))
         .map_err(|err| LowerError::Internal(format!("failed to declare native main: {err}")))?;
@@ -1008,20 +996,19 @@ fn prepare_native_main(
     let mut fb = builder.func_builder::<InstInserter>(wrapper);
     let entry = fb.append_block();
     fb.switch_to_block(entry);
-    let argc = fb.func.arg_values[0];
-    let argv = fb.func.arg_values[1];
-    let argc = if argc_by_ref {
-        let object = fb.insert_inst(ObjAlloc::new(inst_set, Type::I32), argc_ref);
-        fb.insert_inst_no_result(ObjStore::new(inst_set, object, argc));
-        object
-    } else {
-        argc
-    };
-    let argv = fb.insert_inst(Bitcast::new(inst_set, argv, byte_ptr), byte_ptr);
-    let result = fb.insert_inst(
-        Call::new(inst_set, main, vec![argc, argv].into()),
-        Type::I32,
-    );
+    for (value, global) in fb.func.arg_values.clone().into_iter().zip(globals) {
+        let Some((global, ty)) = global else {
+            continue;
+        };
+        let value = if fb.type_of(value) == ty {
+            value
+        } else {
+            fb.insert_inst(Bitcast::new(inst_set, value, ty), ty)
+        };
+        let address = fb.make_global_value(global);
+        fb.insert_inst_no_result(Mstore::new(inst_set, address, value, ty));
+    }
+    let result = fb.insert_inst(Call::new(inst_set, main, vec![].into()), Type::I32);
     fb.insert_inst_no_result(Return::new_single(inst_set, result));
     fb.seal_all();
     fb.finish();
@@ -2177,17 +2164,10 @@ mod tests {
             .workspace()
             .touch(&mut db, temp_fixture_url(name), Some(source.to_string()));
         let top_mod = db.top_mod(file);
-        // Keep pointer inputs dynamic by testing before executable ABI validation.
-        let (module, main) = compile_native_module(
-            &db,
-            top_mod,
-            NativeTarget::Host,
-            NativeOutputKind::Executable,
-        )
-        .expect("native pointer fixture should lower");
-        module
-            .ctx
-            .update_func_linkage(main.expect("an executable has a main"), Linkage::Public);
+        // An exported function keeps its pointer inputs dynamic.
+        let (module, _) =
+            compile_native_module(&db, top_mod, NativeTarget::Host, NativeOutputKind::Library)
+                .expect("native pointer fixture should lower");
         let mut compile = Compile::new(module, CraneliftObjectBackend::new())
             .with_opt_level(SonatinaOptLevel::O0);
         compile.optimize();
@@ -2214,9 +2194,9 @@ fn zero_buffer(ptr: *u8, len: usize) {
     unsafe { core::ptr::zero_bytes(ptr, len) }
 }
 
-pub fn main(ptr: *u8, len: own usize) -> i32 {
+#[export]
+pub fn zero(_ ptr: *u8, _ len: usize) {
     zero_buffer(ptr, len)
-    0
 }
 "#,
         );
@@ -2245,8 +2225,9 @@ fn replace_byte(ptr: *u8, value: u8) -> u8 {
     previous
 }
 
-pub fn main(ptr: *u8, value: own u8) -> i32 {
-    replace_byte(ptr, value) as i32
+#[export]
+pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
+    replace_byte(ptr, value.downcast_truncate()) as u32
 }
 "#,
         );

@@ -66,8 +66,12 @@ fn native_entry_symbol_is_reserved_when_reachable_helpers_are_named_main() {
     .expect("native entry should retain its symbol when reachable helpers are named main");
 
     assert!(
-        ir.contains("func public %main() -> i32"),
+        ir.contains("func public %main(v0.i32, v1.**i8) -> i32"),
         "missing exported C main:\n{ir}"
+    );
+    assert!(
+        ir.contains("func private %__fe_native_main() -> i32"),
+        "missing Fe entry:\n{ir}"
     );
     assert_eq!(
         ir.lines()
@@ -166,10 +170,12 @@ fn native_import_symbols_are_reserved_from_local_helpers() {
     let ir = with_top_mod_for_source(
         "native_import_collision.fe",
         r#"
-use std::io::{Write, host, write_char}
+extern {
+    fn putchar(_ c: i32) -> i32
+}
 mod local { pub fn putchar(value: i32) -> i32 { value + 1 } }
 pub fn main() -> i32 {
-    with (Write = host()) { write_char(65) }
+    let _ = unsafe { putchar(65) }
     local::putchar(value: 41)
 }
 "#,
@@ -251,7 +257,7 @@ pub fn main() -> i32 {
     )
     .expect("native provider IR");
     let main = ir
-        .split_once("func public %main()")
+        .split_once("func private %__fe_native_main()")
         .expect("main function")
         .1
         .split_once("\n}")
@@ -277,62 +283,81 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_argv_entry_has_a_host_pointer_bridge() {
-    for mode in ["", "own "] {
-        let ir = with_top_mod_for_source(
-            "native_argv.fe",
-            &format!("pub fn main(argc: {mode}i32, argv: **u8) -> i32 {{ argc }}"),
-            |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
-        )
-        .unwrap();
-        assert!(ir.contains("func public %main("), "{ir}");
-        // The host vector is a `**u8` as Fe lays it out, so it passes as is.
-        assert!(ir.contains("**i8"), "{ir}");
-        assert!(ir.contains("bitcast"), "{ir}");
-        assert!(!ir.contains("ptr_to_int"), "{ir}");
-        assert!(!ir.contains("mem.alloc_dynamic"), "{ir}");
-    }
+fn native_entry_keeps_its_arguments_for_std_env() {
+    let ir = with_top_mod_for_source(
+        "native_args.fe",
+        "use std::env::Args\npub fn main() -> i32 uses (args: Args) {\n    args.get(args.count() - 1).len().downcast_unchecked()\n}\n",
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .unwrap();
+    assert!(
+        ir.contains("func public %main(v0.i32, v1.**i8) -> i32"),
+        "{ir}"
+    );
+    assert!(ir.contains("global private i32 $__fe_argc;"), "{ir}");
+    assert!(ir.contains("mstore $__fe_argc v0 i32;"), "{ir}");
+    assert!(ir.contains("$__fe_argv"), "{ir}");
+
+    // A program that reads no arguments keeps none.
+    let ir = with_top_mod_for_source(
+        "native_no_args.fe",
+        "pub fn main() -> i32 { 0 }",
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .unwrap();
+    assert!(
+        ir.contains("func public %main(v0.i32, v1.**i8) -> i32"),
+        "{ir}"
+    );
+    assert!(!ir.contains("__fe_argc"), "{ir}");
 }
 
 #[test]
 fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
-    for signature in [
-        "(argc: i32, argv: u256) -> i32",
-        "(argc: u32, argv: **u8) -> i32",
-        "(argc: i32, argv: *u8) -> i32",
-        "(argc: i32, argv: **u16) -> i32",
-        "() -> u32",
+    // A `main` with parameters is no entry, even with an effect `Host` does
+    // not provide; one returning `u32` is an entry whose Fe type the lowered
+    // `i32` must not hide.
+    for (signature, expected) in [
+        (
+            "(argc: i32, argv: **u8) -> i32",
+            "native executable output requires `pub fn main() -> i32`",
+        ),
+        (
+            "(argc: i32) -> i32",
+            "native executable output requires `pub fn main() -> i32`",
+        ),
+        (
+            "(argc: i32) -> i32 uses (greeting: Greeting)",
+            "native executable output requires `pub fn main() -> i32`",
+        ),
+        ("() -> u32", "native executable `main` must have signature"),
     ] {
         let error = with_top_mod_for_source(
             "invalid_native_argv.fe",
-            &format!("pub fn main{signature} {{ 0 }}"),
+            &format!("trait Greeting {{}}\npub fn main{signature} {{ 0 }}"),
             |db, top_mod| {
                 fe_codegen::emit_module_native_object(db, top_mod, fe_codegen::OptLevel::O0)
             },
         )
         .expect_err("Fe type distinctions must survive entry validation");
-        assert!(
-            error
-                .to_string()
-                .contains("native executable `main` must have signature"),
-            "{signature}: {error}"
-        );
+        assert!(error.to_string().contains(expected), "{signature}: {error}");
     }
 }
 
 #[test]
 fn native_external_functions_remain_declarations_with_exact_symbols() {
     let source = r#"
-use std::io::{Read, Write, host, read_char, write_char}
+extern {
+    fn getchar() -> i32
+    fn putchar(_ c: i32) -> i32
+}
 
 mod helpers {
     pub fn getchar() -> i32 { 7 }
 }
 
 pub fn main() -> i32 {
-    with (Read = host(), Write = host()) {
-        write_char(read_char() + helpers::getchar())
-    }
+    let _ = unsafe { putchar(getchar() + helpers::getchar()) }
     0
 }
 "#;
@@ -484,7 +509,7 @@ pub fn main() -> i32 {
             "{level:?}:\n{ir}"
         );
         assert!(
-            ir.contains("func public %main() -> i32"),
+            ir.contains("func public %main(v0.i32, v1.**i8) -> i32"),
             "{level:?}:\n{ir}"
         );
         if level == OptLevel::O0 {

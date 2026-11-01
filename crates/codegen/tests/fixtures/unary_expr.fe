@@ -1,3 +1,3 @@
-pub fn unary_expr() -> i64 {
+pub fn main() -> i64 {
     -(1 + 2)
 }

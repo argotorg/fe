@@ -1041,6 +1041,16 @@ impl MemBuffer {
         }
     }
 
+    /// Append one byte, growing the allocation when necessary.
+    pub fn push(mut self, _ byte: u8) {
+        self.reserve(1)
+        // `reserve` made room for the byte.
+        unsafe {
+            *offset_bytes(self.ptr, self.len) = byte
+            self.len += 1
+        }
+    }
+
     /// Copy bytes into an allocation subrange and extend the logical extent.
     pub fn copy_from(mut self, dest_offset: usize, _ source: MemSpan) {
         if dest_offset > self.capacity || source.len() > self.capacity - dest_offset {

@@ -5,12 +5,39 @@ input_file: crates/codegen/tests/fixtures/method_call.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %main_root() {
+func private %call_method() -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i64 = call %return_value;
+        return v0;
+}
+
+func private %gen_value() -> i64 {
     block0:
         jump block1;
 
     block1:
         v0.i64 = call %make_value;
+        return v0;
+}
+
+func private %main() -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i64 = call %call_method;
+        return v0;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i64 = call %main;
         evm_stop;
 }
 
@@ -20,6 +47,15 @@ func private %make_value() -> i64 {
 
     block1:
         return 42.i64;
+}
+
+func private %return_value() -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i64 = call %gen_value;
+        return v0;
 }
 
 
