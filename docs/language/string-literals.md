@@ -33,6 +33,10 @@ When the context leaves the type open, a literal of up to 31 bytes is a
 must have one type, such as the branches of an `if`, take the type of the
 longest.
 
+An operator's operand takes the type the operator's impl needs, on either side:
+in `"x" == s`, the literal is a `String<N>` when `s` is one and a `DynString`
+when `s` is one. When impls for both types fit, the default above decides.
+
 ```fe
 let short = "hello"                 // String<5>
 let long = "a literal longer than 31 bytes of text"   // DynString

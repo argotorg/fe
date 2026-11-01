@@ -812,6 +812,29 @@ fn aggregate_fixtures_run_at_every_level() {
 }
 
 #[test]
+fn text_comparisons_run_at_every_level() {
+    for (name, expected_count) in [("string_literal_eq.fe", 1), ("span_string_eq.fe", 1)] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(name);
+        for backend in ["sonatina", "native"] {
+            for level in ["0", "1", "2"] {
+                let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+                    .args(["test", "--backend", backend, "--jobs", "1", "-O", level])
+                    .arg(&fixture)
+                    .output()
+                    .unwrap();
+                assert!(
+                    String::from_utf8_lossy(&result.stdout)
+                        .contains(&format!("{expected_count} passed; 0 failed")),
+                    "{name} {backend} -O{level}: {result:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn reference_holders_and_joins_run_natively_at_every_level() {
     // Products and shapes hold references to frame objects in other objects,
     // and joins of raw-pointer and object places export an object's address.

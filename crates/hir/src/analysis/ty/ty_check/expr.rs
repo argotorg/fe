@@ -78,8 +78,8 @@ use crate::analysis::ty::{
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{
-        BorrowKind, ClosureDef, ClosureTy, PrimTy, TyBase, TyData, int_literal_fits_prim,
-        prim_int_bits,
+        BorrowKind, ClosureDef, ClosureTy, PrimTy, StringFallback, TyBase, TyData, TyVarSort,
+        int_literal_fits_prim, prim_int_bits,
     },
     ty_error::{diag_from_invalid_cause, first_invalid_ty_cause},
     unify::UnificationTable,
@@ -1515,8 +1515,11 @@ impl<'db> TyChecker<'db> {
             return lhs;
         }
 
-        // Fail if lhs ty is unknown
-        if lhs.ty.base_ty(self.db).is_ty_var(self.db) {
+        // Fail if lhs ty is unknown. An open string literal's operator is
+        // looked up on the types the literal may take.
+        if let TyData::TyVar(var) = lhs.ty.base_ty(self.db).data(self.db)
+            && !matches!(var.sort, TyVarSort::String { .. })
+        {
             self.check_expr_unknown(rhs_expr);
             let diag = BodyDiag::TypeMustBeKnown(lhs_expr.span(self.body()).into());
             self.push_diag(diag);
@@ -5159,48 +5162,51 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         };
 
-        let lhs_candidates = self.receiver_candidates(lhs_ty);
         let method_assumptions = self.env.assumptions();
         let mut checked_rhs_ty = None;
 
         let (method, inst) = if let Some(rhs_expr) = rhs_expr {
-            let mut selected_lhs_ty = lhs_candidates[0];
-            let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
-            let mut method_candidates = select_trait_method_candidates(
-                self.db,
-                &c_lhs_ty,
-                op.trait_method(self.db),
-                self.env.scope(),
-                method_assumptions,
-                trait_def,
-            );
-            if matches!(
-                method_candidates,
-                Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
-            ) {
-                for &candidate_ty in lhs_candidates.iter().skip(1) {
-                    let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
-                    let fallback = select_trait_method_candidates(
+            // An open string literal on the left may become an inline
+            // `String` or a `DynString`, so the impls of both are candidates.
+            let lhs_candidates = match lhs_ty.data(self.db) {
+                TyData::TyVar(var) if matches!(var.sort, TyVarSort::String { .. }) => {
+                    let string = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::String)));
+                    let mut candidates = vec![self.table.instantiate_to_term(string)];
+                    candidates.extend(resolve_lib_type_path(
                         self.db,
-                        &c_candidate_ty,
-                        op.trait_method(self.db),
                         self.env.scope(),
-                        method_assumptions,
-                        trait_def,
-                    );
-                    if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
-                    {
-                        selected_lhs_ty = candidate_ty;
-                        c_lhs_ty = c_candidate_ty;
-                        method_candidates = fallback;
-                        break;
+                        "core::abi::DynString",
+                    ));
+                    candidates
+                }
+                _ => vec![lhs_ty],
+            };
+            let mut candidates = Vec::new();
+            let mut selection_err = None;
+            for &candidate_ty in &lhs_candidates {
+                let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
+                match select_trait_method_candidates(
+                    self.db,
+                    &c_candidate_ty,
+                    op.trait_method(self.db),
+                    self.env.scope(),
+                    method_assumptions,
+                    trait_def,
+                ) {
+                    Ok(methods) => candidates.extend(
+                        methods
+                            .candidates
+                            .into_iter()
+                            .map(|method| (candidate_ty, c_candidate_ty.clone(), method)),
+                    ),
+                    Err(err) => {
+                        selection_err.get_or_insert(err);
                     }
                 }
             }
 
-            let method_candidates = match method_candidates {
-                Ok(method_candidates) => method_candidates,
-                Err(MethodSelectionError::NotFound) => {
+            match selection_err {
+                Some(MethodSelectionError::NotFound) | None if candidates.is_empty() => {
                     let diag = BodyDiag::ops_trait_not_implemented(
                         self.db,
                         expr.span(self.body()).into(),
@@ -5210,7 +5216,7 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(diag);
                     return ExprProp::invalid(self.db);
                 }
-                Err(err) => {
+                Some(err) if candidates.is_empty() => {
                     let span = expr.span(self.body());
                     let diag = body_diag_from_method_selection_err(
                         self.db,
@@ -5221,7 +5227,8 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(diag);
                     return ExprProp::invalid(self.db);
                 }
-            };
+                _ => {}
+            }
             let rhs = self
                 .env
                 .typed_expr(rhs_expr)
@@ -5230,33 +5237,53 @@ impl<'db> TyChecker<'db> {
                 return ExprProp::invalid(self.db);
             }
 
-            let mut viable = if let [candidate] = method_candidates.candidates.as_slice() {
-                vec![*candidate]
+            let mut viable = if lhs_candidates.len() == 1 && candidates.len() == 1 {
+                candidates
             } else {
                 let mut viable = Vec::new();
-                for candidate in method_candidates.candidates.iter().copied() {
+                for candidate in candidates {
+                    let (candidate_ty, c_candidate_ty, method) = &candidate;
                     let snapshot = self.snapshot_state();
-                    let unifies = (|| {
-                        let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
+                    let keeps_defaults = (|| {
+                        self.table.unify(lhs_ty, *candidate_ty).ok()?;
+                        let inst =
+                            c_candidate_ty.extract_solution(&mut self.table, method.cand.inst);
                         let func_ty = super::try_instantiate_trait_method(
                             self.db,
-                            candidate.cand.method,
+                            method.cand.method,
                             &mut self.table,
-                            selected_lhs_ty,
+                            *candidate_ty,
                             inst,
                         )
                         .ok()?;
                         let func_ty = self.table.instantiate_to_term(func_ty);
                         let expected_rhs = self.instantiated_ops_rhs_ty(func_ty, inst)?;
-                        self.table.unify(rhs.ty, expected_rhs).ok()
-                    })()
-                    .is_some();
+                        self.table.unify(rhs.ty, expected_rhs).ok()?;
+                        Some([lhs_ty, rhs.ty].into_iter().all(|operand| {
+                            let TyData::TyVar(var) = operand.data(self.db) else {
+                                return true;
+                            };
+                            let TyVarSort::String { fallback, .. } = var.sort else {
+                                return true;
+                            };
+                            let operand = operand.fold_with(self.db, &mut self.table);
+                            match fallback {
+                                StringFallback::Fixed => !operand.is_core_dyn_string(self.db),
+                                StringFallback::Dynamic => !operand.is_string(self.db),
+                            }
+                        }))
+                    })();
                     self.rollback_state(snapshot);
-                    if unifies {
-                        viable.push(candidate);
+                    if let Some(keeps_defaults) = keeps_defaults {
+                        viable.push((candidate, keeps_defaults));
                     }
                 }
-                viable
+                // An open string literal takes its default type when that
+                // settles the impl: `span == "x"` compares with a `String<1>`.
+                if viable.len() > 1 && viable.iter().any(|(_, keeps_defaults)| *keeps_defaults) {
+                    viable.retain(|(_, keeps_defaults)| *keeps_defaults);
+                }
+                viable.into_iter().map(|(candidate, _)| candidate).collect()
             };
 
             match viable.len() {
@@ -5271,7 +5298,8 @@ impl<'db> TyChecker<'db> {
                     return ExprProp::invalid(self.db);
                 }
                 1 => {
-                    let candidate = viable.pop().unwrap();
+                    let (selected_lhs_ty, c_lhs_ty, candidate) = viable.pop().unwrap();
+                    self.equate_ty(lhs_ty, selected_lhs_ty, expr.span(self.body()).into());
                     let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
                     if candidate.needs_confirmation {
                         self.env.register_trait_obligation(TraitObligation {
@@ -5297,7 +5325,7 @@ impl<'db> TyChecker<'db> {
                 _ => {
                     let cands = viable
                         .into_iter()
-                        .map(|candidate| {
+                        .map(|(_, c_lhs_ty, candidate)| {
                             c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst)
                         })
                         .collect();
@@ -5310,6 +5338,7 @@ impl<'db> TyChecker<'db> {
                 }
             }
         } else {
+            let lhs_candidates = self.receiver_candidates(lhs_ty);
             let mut selected_lhs_ty = lhs_candidates[0];
             let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
             let mut method_candidate = select_method_candidate(
