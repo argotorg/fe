@@ -1,0 +1,15 @@
+// `P` and `Q` swap targets once the block's `X` and `Y` resolve. There is no
+// cycle, so they settle on `super::Y` and `super::X`.
+mod Unused0 {}
+mod X {}
+mod Y {}
+mod a {
+    pub use super::Y as X
+    pub use super::X as Y
+}
+fn f() {
+    use X as P
+    use Y as Q
+    use a::X
+    use a::Y
+}

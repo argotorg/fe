@@ -1,0 +1,182 @@
+// A `mut?` function has one body per mode. Its callers take it at `ref`
+// unless a use of the result asks for `mut`.
+use core::option::Option
+
+struct Counter {
+    count: u256,
+}
+
+impl Counter {
+    fn bump(mut self) {
+        self.count += 1
+    }
+}
+
+struct Pair {
+    first: Counter,
+    second: Counter,
+}
+
+impl Pair {
+    fn first(mut? self) -> mut? Counter {
+        mut? self.first
+    }
+
+    fn pick(mut? self, _ second: bool) -> mut? Counter {
+        if second {
+            mut? self.second
+        } else {
+            mut? self.first
+        }
+    }
+
+    /// Forwards its mode to another `mut?` method.
+    fn picked(mut? self, _ second: bool) -> mut? Counter {
+        self.pick(second)
+    }
+
+    fn both(mut? self) -> (mut? Counter, mut? Counter) {
+        (mut? self.first, mut? self.second)
+    }
+
+    fn maybe_first(mut? self) -> Option<mut? Counter> {
+        Option::Some(mut? self.first)
+    }
+
+    /// Each mode's body defines its own closure.
+    fn pick_unless(mut? self, _ second: bool) -> mut? Counter {
+        let flip = |b: bool| !b
+        self.pick(flip(second))
+    }
+
+    /// A `mut?` closure parameter is at the function's mode.
+    fn counted(mut? self) -> mut? Counter {
+        let count_of = |c: mut? Counter| -> u256 {
+            c.count
+        }
+        let _ = count_of(mut? self.first)
+        mut? self.first
+    }
+}
+
+/// A `mut?` parameter other than a receiver.
+fn first_of(_ pair: mut? Pair) -> mut? Counter {
+    mut? pair.first
+}
+
+fn new_pair() -> Pair {
+    Pair { first: Counter { count: 1 }, second: Counter { count: 2 } }
+}
+
+#[test]
+fn reads_at_ref() {
+    let pair = new_pair()
+    assert(pair.first().count == 1)
+    assert(pair.pick(true).count == 2)
+    assert(first_of(pair).count == 1)
+}
+
+#[test]
+fn writes_through_a_mut_access() {
+    var pair = new_pair()
+    let first = mut pair.first()
+    first.count = 10
+    assert(pair.first.count == 10)
+}
+
+#[test]
+fn a_mut_receiver_asks_for_mut() {
+    var pair = new_pair()
+    pair.first().bump()
+    pair.pick(true).bump()
+    pair.picked(false).bump()
+    assert(pair.first.count == 3 && pair.second.count == 3)
+}
+
+#[test]
+fn an_assignment_asks_for_mut() {
+    var pair = new_pair()
+    pair.pick(true).count = 7
+    pair.first().count += 1
+    assert(pair.first.count == 2 && pair.second.count == 7)
+}
+
+#[test]
+fn a_mut_pattern_asks_for_mut() {
+    var pair = new_pair()
+    let (mut a, mut b) = pair.both()
+    a.bump()
+    b.count = 9
+    assert(pair.first.count == 2 && pair.second.count == 9)
+}
+
+#[test]
+fn a_mut_argument_passes_mut() {
+    var pair = new_pair()
+    let first = mut first_of(mut pair)
+    first.bump()
+    assert(pair.first.count == 2)
+}
+
+fn bump_first(_ pair: mut Pair) -> Option<()> {
+    let first = mut pair.maybe_first()?
+    first.bump()
+    Option::Some(())
+}
+
+/// Yields the payload of a `mut?` call taken at `mut`.
+fn first_if_any(_ pair: mut Pair) -> Option<mut Counter> {
+    Option::Some(pair.maybe_first()?)
+}
+
+#[test]
+fn demand_reaches_through_try() {
+    var pair = new_pair()
+    assert(bump_first(mut pair).is_some())
+    match first_if_any(mut pair) {
+        Option::Some(mut first) => first.bump()
+        Option::None => {}
+    }
+    assert(pair.first.count == 3)
+}
+
+#[test]
+fn demand_reaches_through_a_block() {
+    var pair = new_pair()
+    let (mut a, mut b) = { pair.both() }
+    a.bump()
+    b.count = 9
+    assert(pair.first.count == 2 && pair.second.count == 9)
+}
+
+#[test]
+fn closures_in_each_mode() {
+    var pair = new_pair()
+    pair.pick_unless(true).bump()
+    assert(pair.first.count == 2)
+    assert(pair.pick_unless(false).count == 2)
+    let first = mut pair.counted()
+    first.count = 7
+    assert(pair.first.count == 7)
+}
+
+struct Cells {
+    a: u256,
+    b: u256,
+}
+
+/// A cell of `cells`: a raw place, so an unsafe split may hold two.
+#[raw_place]
+fn cell(_ cells: mut? Cells, _ first: bool) -> mut? u256 {
+    if first { mut? cells.a } else { mut? cells.b }
+}
+
+#[test]
+fn demand_reaches_an_unsafe_split() {
+    var first = Cells { a: 1, b: 2 }
+    var second = Cells { a: 3, b: 4 }
+    let (mut a, mut b) = unsafe { (cell(mut first, true), cell(mut second, false)) }
+    a += 10
+    b += 20
+    assert(first.a == 11 && second.b == 24)
+}

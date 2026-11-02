@@ -8,4 +8,4 @@ error[16-0010]: invalid concrete type in `fn slots`
   ┌─ storage_slots_instances.fe:4:5
   │
 4 │     storage_slots<T>()
-  │     ^^^^^^^^^^^^^^^^^^ `[u256; 18446744073709551616]` cannot be laid out in storage: layout extent overflowed
+  │     ^^^^^^^^^^^^^^^^^^ `[[u256; 4294967296]; 4294967296]` cannot be laid out in storage: layout extent overflowed

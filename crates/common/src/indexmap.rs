@@ -4,13 +4,16 @@ use std::{
 };
 
 use rustc_hash::FxBuildHasher;
-use salsa::Update;
+use salsa::SalsaValue;
 
 type OrderMap<K, V> = ordermap::OrderMap<K, V, FxBuildHasher>;
 type OrderSet<V> = ordermap::OrderSet<V, FxBuildHasher>;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct IndexMap<K, V>(OrderMap<K, V>);
+#[derive(Debug, Clone, Hash, PartialEq, Eq, SalsaValue)]
+pub struct IndexMap<K, V>(
+    // SAFETY: An `OrderMap` owns its keys and values, and its hasher holds no data.
+    #[salsa_value(unsafe(prove(K: SalsaValue, V: SalsaValue)))] OrderMap<K, V>,
+);
 
 impl<K, V> IndexMap<K, V> {
     pub fn new() -> Self {
@@ -76,7 +79,7 @@ impl<K, V> DerefMut for IndexMap<K, V> {
 
 /// Arc-wrapped IndexMap for use as a salsa input field.
 /// Clone is O(1) (Arc refcount bump). Mutations use Arc::make_mut.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, SalsaValue)]
 pub struct ArcIndexMap<K, V>(pub std::sync::Arc<IndexMap<K, V>>);
 
 impl<K, V> ArcIndexMap<K, V> {
@@ -146,61 +149,11 @@ where
     }
 }
 
-unsafe impl<K, V> Update for ArcIndexMap<K, V>
-where
-    K: Eq + Hash + Clone,
-    V: Clone + PartialEq,
-{
-    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
-        let old = unsafe { &mut *old_pointer };
-        if std::sync::Arc::ptr_eq(&old.0, &new_value.0) {
-            return false;
-        }
-        if *old.0 == *new_value.0 {
-            return false;
-        }
-        *old = new_value;
-        true
-    }
-}
-
-unsafe impl<K, V> Update for IndexMap<K, V>
-where
-    K: Update + Eq + Hash,
-    V: Update,
-{
-    unsafe fn maybe_update(old_pointer: *mut Self, new_map: Self) -> bool {
-        unsafe {
-            let old_map = &mut *old_pointer;
-
-            // Check if the keys in both maps are the same w.r.t the key order.
-            let is_key_same = old_map.len() == new_map.len()
-                && old_map
-                    .keys()
-                    .zip(new_map.keys())
-                    .all(|(old, new)| old == new);
-
-            // If the keys are different, update entire map.
-            if !is_key_same {
-                old_map.clear();
-                old_map.0.extend(new_map.0);
-                return true;
-            }
-
-            // Update values if it's different.
-            let mut changed = false;
-            for (i, new_value) in new_map.0.into_values().enumerate() {
-                let old_value = &mut old_map[i];
-                changed |= V::maybe_update(old_value, new_value);
-            }
-
-            changed
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct IndexSet<V>(OrderSet<V>);
+#[derive(Debug, Clone, SalsaValue)]
+pub struct IndexSet<V>(
+    // SAFETY: An `OrderSet` owns its values, and its hasher holds no data.
+    #[salsa_value(unsafe(prove(V: SalsaValue)))] OrderSet<V>,
+);
 
 impl<V> IndexSet<V> {
     pub fn new() -> Self {
@@ -273,21 +226,5 @@ impl<V> Deref for IndexSet<V> {
 impl<V> DerefMut for IndexSet<V> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
-    }
-}
-
-unsafe impl<V> Update for IndexSet<V>
-where
-    V: Update + Eq + Hash,
-{
-    unsafe fn maybe_update(old_pointer: *mut Self, new_set: Self) -> bool {
-        let old_set = unsafe { &mut *old_pointer };
-        if old_set == &new_set {
-            false
-        } else {
-            old_set.clear();
-            old_set.0.extend(new_set.0);
-            true
-        }
     }
 }

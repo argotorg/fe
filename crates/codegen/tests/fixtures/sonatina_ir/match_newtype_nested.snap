@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/match_newtype_nested.fe
 ---
@@ -21,11 +20,9 @@ func private %f() -> i256 {
         v2.constref<@layout_1> = const.ref $const_region_1;
         v3.constref<@layout_1> = const.ref $const_region_1;
         v4.constref<@layout_1> = const.ref $const_region_1;
-        v5.objref<@layout_1> = obj.alloc @layout_1;
-        obj.init.const v5 v4;
-        v6.@layout_1 = obj.load v5;
-        v7.i256 = call %match_newtype_nested v6;
-        return v7;
+        v5.@layout_1 = const.load v4;
+        v6.i256 = call %match_newtype_nested v5;
+        return v6;
 }
 
 func private %main_root() {

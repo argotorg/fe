@@ -77,13 +77,7 @@ impl ToDoc for ast::ForStmt {
                 None => return attrs.append(alloc.text("for")),
             };
             let iterable = match self.iterable() {
-                Some(i) => match self.driver() {
-                    Some(d) => i
-                        .to_doc(ctx)
-                        .append(alloc.text(" by "))
-                        .append(d.to_doc(ctx)),
-                    None => i.to_doc(ctx),
-                },
+                Some(i) => i.to_doc(ctx),
                 None => return attrs.append(alloc.text("for ")).append(pat),
             };
             let header = attrs
@@ -115,14 +109,6 @@ impl ToDoc for ast::ForStmt {
                     return Some(TokenPiece::new(pat.to_doc(ctx)));
                 }
 
-                if let Some(driver) = ast::ForDriver::cast(node.clone()) {
-                    let doc = driver
-                        .syntax()
-                        .children()
-                        .find_map(ast::Expr::cast)
-                        .map_or_else(|| alloc.nil(), |expr| expr.to_doc(ctx));
-                    return Some(TokenPiece::new(alloc.text("by ").append(doc)).space_after());
-                }
                 let expr = ast::Expr::cast(node)?;
                 expr_count += 1;
                 let piece = TokenPiece::new(expr.to_doc(ctx));

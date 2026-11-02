@@ -1,0 +1,121 @@
+// A `mut?` call raised to `mut` holds its `mut?` effect `mut` while its
+// result is open: it conflicts with other accesses of the provider, as a
+// call of a `mut` effect does.
+struct Counter {
+    n: u256,
+}
+
+impl Counter {
+    fn bump(mut self) {
+        self.n += 1
+    }
+}
+
+struct Store {
+    a: u256,
+    c: Counter,
+}
+
+fn slot() -> mut? u256 uses (store: mut? Store) {
+    mut? store.a
+}
+
+fn cell() -> mut? Counter uses (store: mut? Store) {
+    mut? store.c
+}
+
+fn mut_then_read() -> u256 uses (store: mut Store) {
+    let a = mut slot()
+    let b = slot()
+    a = b
+    b
+}
+
+fn ref_then_write() -> u256 uses (store: mut Store) {
+    let r = ref cell()
+    slot() = 1
+    r.n
+}
+
+fn ref_then_receiver() -> u256 uses (store: mut Store) {
+    let r = ref cell()
+    cell().bump()
+    r.n
+}
+
+fn two_mut_results() uses (store: mut Store) {
+    let a = mut slot()
+    let b = mut slot()
+    a = 1
+    b = 2
+}
+
+fn mut_then_receiver() uses (store: mut Store) {
+    let c = mut cell()
+    cell().bump()
+    c.n = 1
+}
+
+// A `with` provider written while a raised result is open, or read across
+// a raise.
+fn with_write() {
+    var s = Store { a: 0, c: Counter { n: 0 } }
+    with (Store = s) {
+        let a = mut slot()
+        s.a = 5
+        a = 1
+    }
+}
+
+fn with_ref_then_raise() -> u256 {
+    var s = Store { a: 0, c: Counter { n: 0 } }
+    let r = ref s.a
+    with (Store = s) {
+        slot() = 1
+    }
+    r
+}
+
+struct Log {
+    n: u256,
+}
+
+struct Cell {
+    v: u256,
+}
+
+impl Cell {
+    fn slot(mut? self) -> mut? u256 uses (log: mut? Log) {
+        mut? self.v
+    }
+}
+
+// A method's raised effect, held by its result.
+fn method_mut_then_write(_ c: mut Cell) {
+    var log = Log { n: 0 }
+    with (Log = log) {
+        let x = mut c.slot()
+        log.n = 100
+        x += 1
+    }
+}
+
+// At `ref`, the effect is read: a write conflicts and a read does not.
+fn method_ref_then_write(_ c: Cell) -> u256 {
+    var log = Log { n: 0 }
+    with (Log = log) {
+        let x = ref c.slot()
+        log.n = 100
+        x
+    }
+}
+
+// Accepted.
+fn method_ref_then_read(_ c: Cell) -> u256 {
+    var log = Log { n: 7 }
+    with (Log = log) {
+        let x = ref c.slot()
+        let n = log.n
+        x + n
+    }
+}

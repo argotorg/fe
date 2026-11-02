@@ -1,37 +1,43 @@
 # Closures architecture
 
 A closure is sugar for a struct of captures and a function of the callable
-shape traits ([language](../language/closures.md)). The compiler keeps that
-structure without generating items: a closure's type, its implementations of
-the shape traits, and its body's instances are all derived from the closure
-expression.
+traits `Fn` and `FnMut` ([language](../language/closures.md)). The compiler
+keeps that structure without generating items: a closure's type, its
+implementations of the callable traits, and its body's instances are all
+derived from the closure expression.
 
 ## Types
 
 `ClosureTy` (`ty_def`) is interned from the closure's definition (body and
 expression), the parent's generic arguments, the capture types (the
-environment's fields), the parameters' modes and types, the result, and the
-row's components. Closure types unify structurally. A closure environment is
-a product like a tuple (`TyId::is_product`): its fields are its captures.
+environment's fields), the parameters' shapes (a mode and type, or a
+product's parts), the result, and the row's components. Closure types unify
+structurally. A closure environment is a product like a tuple
+(`TyId::is_product`): its fields are its captures. A product parameter's
+inputs are its parts, as a function's are (`TypedBody::for_closure`).
 
-## Shape implementations
+## Callable trait implementations
 
 `ty::closure` is the single home for the relationship between a callable
-value and the shape traits. A callable value (`CallableValue`) is a closure
-or a function item, other than an `unsafe fn`, a projection or a variant
-constructor. `CallableShape::of` recognizes a core shape trait
-(`Fn_<modes>`, `FnMut_<modes>`, `Fn0`, `Fn<T, U>`) by name. The trait solver
-adds a `Callable` clause when a goal's self type is a callable value,
-building an `ImplementorOrigin::Callable` implementor from the goal in the
-goal's own table; the normalizer resolves `Out` to the value's result; the
-row `E` expands to a closure's components or a function's own effects
-(`effects::rows`); method selection adds both shapes' methods as
-candidates, `Fn`'s `call` and `FnMut`'s `call_mut`. A goal whose self type is
-a function item with inference variables still solves: the function is
-known, and the shape determines its generic arguments.
+value and the callable traits. A callable value (`CallableValue`) is a
+closure or a function item, other than an `unsafe fn`, a projection, a
+function with a spread, or a variant constructor.
+`CallableTrait::of` recognizes `core::functional`'s `Fn<shape A>` and
+`FnMut<shape A>`; an instance's parameters are those its shape argument
+lists (`callable_params`). A callable value implements both at
+`TyId::params_shape` of its own parameters, with `Out` its result. The trait
+solver adds a `Callable` clause when a goal's self type is a callable value,
+building an `ImplementorOrigin::Callable` implementor whose shape it unifies
+with the goal's; the normalizer resolves `Out` to the value's result; the row
+`E` expands to a closure's components or a function's own effects
+(`effects::rows`); method selection adds both traits' methods as candidates,
+`Fn`'s `call` and `FnMut`'s `call_mut`. A goal whose self type is a function
+item with inference variables still solves: the function is known, and the
+shape determines its generic arguments. The methods' `..A` spread is
+expanded from the instance's shape like any other (`Callable::params`).
 
 A call `f(x)` whose callee is not a function item is a value call
-(`check_value_call`): method selection restricted to the shape traits
+(`check_value_call`): method selection restricted to the callable traits
 (`select_callable_value_method`) picks `call`, else `call_mut`, and the call
 is checked as that method's call with the callee as the receiver. The typed
 body records value calls (`TypedBody::call_receiver`), so lowering and the
@@ -51,8 +57,9 @@ to implement a trait key's trait for the rest of the body
 the same way where its view expands every row, so a `Bidirectional` method can
 use the components of `Collection`'s row `E`.
 
-An argument's closure expectation comes from the callee's shape bound on the
-parameter (`Callable::closure_arg_expectation`).
+An argument's closure expectation comes from the callee's `Fn` or `FnMut`
+bound on the parameter (`Callable::closure_arg_expectation`), whose shape
+lists the parameters' modes and types.
 
 ## Lowering
 
@@ -64,7 +71,7 @@ parameters are its parameters). `closure_regions` tells which expressions
 belong to which closure body, so each instance resolves only its own call
 sites. Captures are read from the environment's fields.
 
-A shape trait's `call` on a closure resolves to the closure body's instance
+A callable trait's `call` on a closure resolves to the closure body's instance
 (`semantic_callee_key_with_assumptions`): its generic substitution is the
 parent's arguments the closure type carries, and its effects are the
 components of `call`'s row in order, with the providers the call binds;

@@ -7,5 +7,5 @@ trait Bound {
 }
 
 fn bad_let<T>() {
-    let _: <T as Bound>::Item = todo()
+    let _: <T as Bound>::Item = unsafe { todo() }
 }

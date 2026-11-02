@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_variant_path_scope.fe
+---
+error[8-0009]: specified field not found
+   ┌─ recv_arm_variant_path_scope.fe:20:16
+   │
+20 │         M::U { k } -> u256 {
+   │                ^ field `k` not found
+
+error[8-0042]: recv arm pattern is not a variant of the msg type
+   ┌─ recv_arm_variant_path_scope.fe:14:9
+   │
+14 │         self::V { n } -> u256 {
+   │         ^^^^^^^^^^^^^ expected variant of `M`
+
+error[8-0042]: recv arm pattern is not a variant of the msg type
+   ┌─ recv_arm_variant_path_scope.fe:17:9
+   │
+17 │         Nope { x } -> u256 {
+   │         ^^^^^^^^^^ expected variant of `M`
+
+error[8-0045]: recv block missing msg variants
+   ┌─ recv_arm_variant_path_scope.fe:13:10
+   │
+13 │     recv M {
+   │          ^ missing variants: V

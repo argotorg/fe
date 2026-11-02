@@ -1,13 +1,16 @@
-// `for pat in base by d` runs the driver `d` over `base`: `d` is an ordinary
-// value that holds no reference to the base. A method chain rooted at a
-// collection, `for x in xs.reversed().take(2)`, names its base once. A driver
-// yields what it adds beside each element, as `enumerate()` its index; a
-// producer yields owned values.
+// A method chain rooted at a collection, `for x in xs.reversed().take(2)`,
+// runs a driver over its base, which it names once. `for pat in base.by(d)`
+// runs the driver `d`, an ordinary value that names its base's type but
+// holds no reference to it. A driver's step holds what it adds beside each
+// element, as `enumerate()` its index; a producer yields owned values.
 use core::iter::{Collection, Driver, Identity, Producer, Skip, Take}
-use core::iter::{enumerate, reversed, skip, step_by, take}
-use core::option::Option
+use std::evm::Address
 
 struct Account { balance: u256, owner: u256 }
+
+struct Point { x: u256 }
+
+impl Copy for Point {}
 
 struct Holder { items: [u256; 3] }
 
@@ -22,30 +25,35 @@ fn make() -> [u256; 3] {
 }
 
 // Traversal order is a parameter.
-fn sum_by<C: Collection<Item = u256>, D: Driver<C, Item = u256, Extra = ()>>(_ xs: C, _ d: D) -> u256 uses (C::E, D::E) {
+fn sum_by<C: Collection, D: Copy + Driver<Base = C, Step<ref> = ref u256>>(_ xs: C, _ d: D) -> u256 uses (C::E, D::E) {
     var s = 0
-    for x in xs by d {
+    for x in xs.by(d) {
         s += x
     }
     s
 }
 
-fn page(_ offset: usize, _ len: usize) -> Take<Skip<Identity>> {
-    skip(offset).take(len)
+fn page<C: Collection>(_ offset: usize, _ len: usize) -> Take<Skip<Identity<C>>> {
+    Identity<C> {}.skip(offset).take(len)
 }
 
 // Owned accounts, one per balance, numbered from 1.
-struct Open {}
+struct Open<B> {}
 
-impl<B: Collection<Item = u256, Cursor = usize>> Producer<B> for Open {
+impl<B: Collection<Item = u256, Cursor = usize>> Producer for Open<B> {
+    type Base = B
     type State = usize
     type Out = Account
 
-    fn start(self, _ base: B) -> Option<usize> uses B::E {
+    fn start(self, _ base: B) -> usize uses B::E {
         base.start()
     }
 
-    fn next(self, _ base: B, _ s: usize) -> Option<usize> uses B::E {
+    fn has(self, _ base: B, _ s: usize) -> bool uses B::E {
+        base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: usize) -> usize uses B::E {
         base.next(s)
     }
 
@@ -54,21 +62,55 @@ impl<B: Collection<Item = u256, Cursor = usize>> Producer<B> for Open {
     }
 }
 
+// The elements up to the first `stop`, which ends the traversal at its own
+// state, so the loop steps from a state that names no element.
+struct UpTo<B> {
+    stop: u256,
+    end: usize,
+}
+
+impl<B: Collection<Item = u256, Cursor = usize>> Producer for UpTo<B> {
+    type Base = B
+    type State = usize
+    type Out = u256
+
+    fn start(self, _ base: B) -> usize uses B::E {
+        base.start()
+    }
+
+    fn has(self, _ base: B, _ s: usize) -> bool uses B::E {
+        s < self.end && base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: usize) -> usize uses B::E {
+        base.next(s)
+    }
+
+    fn produce(mut self, _ base: B, _ s: usize) -> u256 uses B::E {
+        let x = Collection::at(base, s)
+        if x == self.stop {
+            self.end = s
+        }
+        x
+    }
+}
+
 #[test]
-fn drivers_by_name() {
+fn driver_values() {
     let xs: [u256; 5] = [1, 2, 3, 4, 5]
     var digits = 0
-    for x in xs by reversed() {
+    let d = xs.reversed()
+    for x in xs.by(d) {
         digits = digits * 10 + x
     }
     assert!(digits == 54321)
-    assert!(sum_by(xs, reversed()) == 15)
-    assert!(sum_by(xs, page(1, 2)) == 5)
-    assert!(sum_by(xs, step_by(2)) == 9)
-    assert!(sum_by(xs, take(0)) == 0)
+    assert!(sum_by(xs, xs.reversed()) == 15)
+    assert!(sum_by(xs, page<[u256; 5]>(1, 2)) == 5)
+    assert!(sum_by(xs, xs.step_by(2)) == 9)
+    assert!(sum_by(xs, xs.take(0)) == 0)
 
-    // A driver is a value: bound once, used twice.
-    let d = skip(3)
+    // A `Copy` driver is a value: bound once, used twice.
+    let d = xs.skip(3)
     assert!(sum_by(xs, d) + sum_by(xs, d) == 18)
 }
 
@@ -111,7 +153,7 @@ fn method_chains() {
 fn non_copy_elements() {
     let accounts = [Account { balance: 5, owner: 1 }, Account { balance: 7, owner: 2 }]
     var digits = 0
-    for ref account in accounts by reversed() {
+    for ref account in accounts.reversed() {
         digits = digits * 10 + account.balance
     }
     assert!(digits == 75)
@@ -125,11 +167,11 @@ fn non_copy_elements() {
 #[test]
 fn mutating_through_drivers() {
     var xs: [u256; 4] = [1, 2, 3, 4]
-    for mut x in xs by skip(2) {
+    for mut x in xs.skip(2) {
         x *= 10
     }
     assert!(xs[0] == 1 && xs[1] == 2 && xs[2] == 30 && xs[3] == 40)
-    for (i, mut x) in xs by enumerate().take(3) {
+    for (i, mut x) in xs.enumerate().take(3) {
         x += i as u256
     }
     assert!(xs[0] == 1 && xs[1] == 3 && xs[2] == 32 && xs[3] == 40)
@@ -139,15 +181,42 @@ fn mutating_through_drivers() {
 fn producers() {
     let xs: [u256; 3] = [10, 20, 30]
     var sum = 0
-    for (i, x) in xs by enumerate().copied() {
+    for (i, x) in xs.enumerate() {
         sum += i as u256 + x
     }
     assert!(sum == 63)
 
     let open = Open {}
     var owned = 0
-    for account in xs by open {
+    for account in xs.by(open) {
         owned += account.balance * account.owner
     }
     assert!(owned == 140)
+
+    let up_to = UpTo { stop: 20, end: 10 }
+    var seen = 0
+    for x in xs.by(up_to) {
+        seen += x
+    }
+    assert!(seen == 30)
+}
+
+// Binding an element by value copies it, so it must be `Copy`: `Point`'s
+// implementation is in this ingot and `Address`'s in std, though the driver
+// is core's.
+#[test]
+fn copying_items_of_other_ingots() {
+    let points: [Point; 2] = [Point { x: 1 }, Point { x: 2 }]
+    var sum = 0
+    for (i, p) in points.enumerate() {
+        sum += i as u256 + p.x
+    }
+    assert!(sum == 4)
+
+    let owners: [Address; 2] = [Address::new(1), Address::new(2)]
+    var words = 0
+    for (_, owner) in owners.enumerate() {
+        words += owner.word()
+    }
+    assert!(words == 3)
 }

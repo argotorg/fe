@@ -26,8 +26,8 @@ pub contract C {
 
 #[test]
 fn clearing_zero_sized_state() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    assert(evm.call(addr: c, gas: 1000000, value: 0, message: M::Run {}) == 5)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    assert(evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Run {}) == 5)
 }
 
 #[test]

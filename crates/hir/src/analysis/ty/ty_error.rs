@@ -1,5 +1,7 @@
 use crate::{
-    hir_def::{GenericArg, PathId, PathKind, TypeId, TypeKind, scope_graph::ScopeId},
+    hir_def::{
+        GenericArg, PathId, PathKind, TraitRefId, TypeId, TypeKind, TypeMode, scope_graph::ScopeId,
+    },
     span::{params::LazyGenericArgSpan, path::LazyPathSpan, types::LazyTySpan},
     visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_path, walk_type},
 };
@@ -7,21 +9,254 @@ use crate::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_with_minter,
-        resolve_path_with_observer_and_minter,
+        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path,
+        resolve_path_with_minter, resolve_path_with_observer_and_minter,
+        resolve_trait_path_with_observer_and_minter, trait_arg_path_diag,
     },
     ty::visitor::{TyVisitor, walk_ty},
 };
 
 use super::{
     const_ty::{ConstBodyLowering, ConstTyData, LoweringContext, ty_is_fully_ground},
-    diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
+    diagnostics::{ImplDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     normalize::normalize_ty,
+    shape::{lower_shape_list, lower_shape_value, param_product_diags, shape_value_diags},
     trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
-    ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::{lower_hir_ty, lower_hir_ty_in_mode},
+    ty_def::{InvalidCause, Kind, ShapeMode, TyData, TyId},
+    ty_lower::{lower_hir_ty, lower_hir_ty_in_mode, lower_kind_in_bounds},
 };
+use crate::core::semantic::mut_grant;
 use crate::visitor::prelude::LazyTraitRefSpan;
+
+/// The generic arguments written on `path`'s last segment, with their spans.
+pub(crate) fn path_generic_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    path_span: LazyPathSpan<'db>,
+) -> impl Iterator<Item = (&'db GenericArg<'db>, LazyGenericArgSpan<'db>)> {
+    let spans = path_span.segment(path.segment_index(db)).generic_args();
+    path.generic_args(db)
+        .data(db)
+        .iter()
+        .enumerate()
+        .map(move |(idx, arg)| (arg, spans.clone().arg(idx)))
+}
+
+/// Diagnostics for the types a trait reference writes as generic arguments,
+/// each at its own span. The reference's own checks cover the
+/// well-formedness of the arguments it lowers.
+pub(crate) fn trait_ref_arg_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    tr: TraitRefId<'db>,
+    span: LazyTraitRefSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    tr.path(db).to_opt().map_or_else(Vec::new, |path| {
+        path_arg_diags(db, path, span.path(), scope, assumptions)
+    })
+}
+
+/// Diagnostics for the types `path`'s last segment writes as generic
+/// arguments, each at its own span: a path in one that names no type as
+/// resolving the trait path reports it, and otherwise what lowering the
+/// argument finds, where a path may name a constant as in a type's generic
+/// arguments. An associated-type binding, which lowering never checks,
+/// reports any error.
+pub(crate) fn path_arg_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    path_span: LazyPathSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    // A bound fixes each associated item, at each mode, once.
+    let mut bound: Vec<(_, LazyGenericArgSpan<'db>)> = Vec::new();
+    let mut duplicates = Vec::new();
+    for (arg, span) in path_generic_args(db, path, path_span.clone()) {
+        if let GenericArg::AssocType(binding) = arg
+            && let Some(name) = binding.name.to_opt()
+        {
+            match bound.iter().find(|(key, _)| *key == (name, binding.mode)) {
+                Some((_, first)) => duplicates.push(
+                    TyLowerDiag::DuplicateAssocBinding {
+                        span: span.into_assoc_type_arg().name().into(),
+                        first: first.clone().into_assoc_type_arg().name().into(),
+                        name,
+                        mode: binding.mode,
+                    }
+                    .into(),
+                ),
+                None => bound.push(((name, binding.mode), span)),
+            }
+        }
+    }
+    path_generic_args(db, path, path_span.clone())
+        .enumerate()
+        .flat_map(|(idx, (arg, span))| {
+            if let Some(diag) =
+                trait_arg_path_diag(db, path, path_span.clone(), idx, scope, assumptions)
+            {
+                return vec![diag];
+            }
+            match arg {
+                // A tuple whose parts carry modes or name a shape is a shape,
+                // checked as a product parameter's type is.
+                GenericArg::Type(ty_arg)
+                    if let Some(ty) = ty_arg.ty.to_opt()
+                        && lower_shape_list(db, ty, scope, assumptions).is_some() =>
+                {
+                    let span = span.into_type_arg().ty();
+                    let mut diags = maybe_mut_parts(db, ty, span.clone());
+                    diags.extend(param_product_diags(db, ty, scope, span, assumptions));
+                    diags
+                }
+                GenericArg::Type(_) => {
+                    let mut vis = HirTyErrVisitor {
+                        db,
+                        assumptions,
+                        diags: Vec::new(),
+                        const_bodies: ConstBodyLowering::Eager,
+                    };
+                    vis.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
+                    vis.diags
+                }
+                GenericArg::AssocType(binding) => {
+                    let Some(ty) = binding.ty.to_opt() else {
+                        return Vec::new();
+                    };
+                    let span = span.into_assoc_type_arg();
+                    let decl = binding.name.to_opt().and_then(|name| {
+                        match resolve_path(db, path, scope, assumptions, false) {
+                            Ok(PathRes::Trait(inst)) => inst.def(db).assoc_ty(db, name),
+                            _ => None,
+                        }
+                    });
+                    // An associated shape is bound to a shape at a mode, and
+                    // nothing else is bound at one.
+                    match (decl.is_some_and(|decl| decl.is_shape()), binding.mode) {
+                        (true, Some(mode)) => {
+                            // A bound names concrete modes, and at `ref` no
+                            // access is `mut`.
+                            let span = span.ty();
+                            let diags = maybe_mut_parts(db, ty, span.clone());
+                            if !diags.is_empty() {
+                                return diags;
+                            }
+                            let diags = shape_value_diags(db, ty, scope, span.clone(), assumptions);
+                            if !diags.is_empty() || mode == TypeMode::Mut {
+                                return diags;
+                            }
+                            let value = lower_shape_value(
+                                db,
+                                ty,
+                                scope,
+                                assumptions,
+                                &LoweringContext::new(),
+                            )
+                            .at_shape_mode(db, ShapeMode::Ref)
+                            .as_shape_part(db);
+                            binding
+                                .name
+                                .to_opt()
+                                .zip(mut_grant(db, &value))
+                                .map(|(name, param)| {
+                                    ImplDiag::ShapeGrantsMut {
+                                        primary: span.into(),
+                                        name,
+                                        param,
+                                        bound: true,
+                                    }
+                                    .into()
+                                })
+                                .into_iter()
+                                .collect()
+                        }
+                        (true, None) => {
+                            vec![TyLowerDiag::ShapeWithoutMode(span.name().into()).into()]
+                        }
+                        (false, Some(_)) => {
+                            vec![TyLowerDiag::ModeArgNotShape(span.generic_args().into()).into()]
+                        }
+                        (false, None) => {
+                            let span = span.ty();
+                            let diags =
+                                collect_hir_ty_diags(db, scope, ty, span.clone(), assumptions);
+                            // A type is of its declaration's kind: `*`, unless
+                            // a bound gives another.
+                            let expected = decl
+                                .and_then(|decl| lower_kind_in_bounds(&decl.bounds))
+                                .unwrap_or(Kind::Star);
+                            let given = lower_hir_ty(db, ty, scope, assumptions);
+                            if diags.is_empty()
+                                && !given.has_invalid(db)
+                                && !given.kind(db).does_match(&expected)
+                            {
+                                vec![
+                                    TyLowerDiag::InvalidTypeArgKind {
+                                        span: span.into(),
+                                        expected: Some(expected),
+                                        given,
+                                    }
+                                    .into(),
+                                ]
+                            } else {
+                                diags
+                            }
+                        }
+                    }
+                }
+                GenericArg::Const(_) => Vec::new(),
+                GenericArg::Mode(_) => vec![TyLowerDiag::ModeArgNotShape(span.into()).into()],
+            }
+        })
+        .chain(duplicates)
+        .collect()
+}
+
+/// Diagnostics for the types written as generic arguments of `path`'s
+/// segments, each at its own span, as a written type reports them. `path`
+/// itself isn't resolved: its resolution reports its own segments.
+pub(crate) fn path_generic_arg_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    path_span: LazyPathSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let mut vis = HirTyErrVisitor {
+        db,
+        assumptions,
+        diags: Vec::new(),
+        const_bodies: ConstBodyLowering::Eager,
+    };
+    walk_path(&mut vis, &mut VisitorCtxt::new(db, scope, path_span), path);
+    vis.diags
+}
+
+/// The parts of a shape argument written `mut?`, at any depth: a shape's
+/// modes are concrete, and an argument names no mode `mut?` could take.
+fn maybe_mut_parts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    match ty.data(db) {
+        TypeKind::Mode(TypeMode::MaybeMut, _) => {
+            vec![TyLowerDiag::MaybeMutInShape(span.into()).into()]
+        }
+        TypeKind::Tuple(elems) => elems
+            .data(db)
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, elem)| Some((elem.to_opt()?, idx)))
+            .flat_map(|(elem, idx)| {
+                maybe_mut_parts(db, elem, span.clone().into_tuple_type().elem_ty(idx))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
 
 /// Collect all type-lowering diagnostics for a HIR type.
 ///
@@ -240,7 +475,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                                 path_span.clone(),
                                 ExpectedPathKind::Value,
                             ) {
-                                self.diags.push(diag.into());
+                                self.diags.push(diag);
                             }
                         }
                     }
@@ -347,7 +582,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 if let Some(diag) =
                     err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
                 {
-                    self.diags.push(diag.into());
+                    self.diags.push(diag);
                 }
                 return;
             }
@@ -395,12 +630,11 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // TODO(diags): In the future, refine this to walk only generic args
         // under the trait ref and surface kind/arg mismatches with precise
         // spans when available from semantic lowering.
-        let resolved = resolve_path_with_observer_and_minter(
+        let resolved = resolve_trait_path_with_observer_and_minter(
             self.db,
             path,
             scope,
             self.assumptions,
-            false,
             &mut check_visibility,
             &self.path_context(),
         );
@@ -439,7 +673,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     span.clone().path(),
                     crate::analysis::name_resolution::ExpectedPathKind::Trait,
                 ) {
-                    self.diags.push(diag.into());
+                    self.diags.push(diag);
                 }
             }
         }
@@ -607,29 +841,6 @@ pub(crate) fn demanded_ground_const_cause<'db>(
     visitor.cause
 }
 
-/// Whether `cause` is a fault of evaluating a const.
-pub(crate) fn is_const_eval_fault(cause: &InvalidCause<'_>) -> bool {
-    matches!(
-        cause,
-        InvalidCause::ConstEvalUnsupported { .. }
-            | InvalidCause::ConstEvalAssertionFailed { .. }
-            | InvalidCause::ConstEvalNonConstCall { .. }
-            | InvalidCause::ConstEvalDivisionByZero { .. }
-            | InvalidCause::ConstEvalOutOfBounds { .. }
-            | InvalidCause::ConstEvalInvalidOperation { .. }
-            | InvalidCause::ConstEvalInvalidBorrow { .. }
-            | InvalidCause::ConstEvalInvalidProviderUse { .. }
-            | InvalidCause::ConstEvalVariantMismatch { .. }
-            | InvalidCause::ConstEvalUninitializedLocal { .. }
-            | InvalidCause::ConstEvalInvariant { .. }
-            | InvalidCause::ConstEvalArithmeticOverflow { .. }
-            | InvalidCause::ConstEvalNegativeExponent { .. }
-            | InvalidCause::ConstEvalStepLimitExceeded { .. }
-            | InvalidCause::ConstEvalRecursionLimitExceeded { .. }
-            | InvalidCause::ConstEvalRecursiveConst { .. }
-    )
-}
-
 pub fn emit_invalid_ty_error<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -646,6 +857,8 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         InvalidCause::NotFullyApplied => TyLowerDiag::ExpectedStarKind(span).into(),
 
         InvalidCause::ModeNotType => TyLowerDiag::ModeNotType(span).into(),
+
+        InvalidCause::ModeArgNotShape => TyLowerDiag::ModeArgNotShape(span).into(),
 
         InvalidCause::ViewPart { view } => TyLowerDiag::ViewTypeMode {
             span,
@@ -724,6 +937,12 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         }
         .into(),
 
+        InvalidCause::ConstEvalPanicked { body, expr, code } => TyLowerDiag::ConstEvalPanicked {
+            span: expr.span(body).into(),
+            code,
+        }
+        .into(),
+
         InvalidCause::ConstEvalNonConstCall { body, expr } => {
             TyLowerDiag::ConstEvalNonConstCall(expr.span(body).into()).into()
         }
@@ -779,6 +998,18 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         InvalidCause::ConstEvalNegativeExponent { body, expr } => {
             TyLowerDiag::ConstEvalNegativeExponent(expr.span(body).into()).into()
         }
+
+        InvalidCause::IntLiteralOutOfRange {
+            body,
+            expr,
+            literal,
+            ty,
+        } => TyLowerDiag::IntLiteralOutOfRange {
+            span: expr.span(body).into(),
+            literal,
+            ty,
+        }
+        .into(),
 
         InvalidCause::ConstEvalStepLimitExceeded { body, expr } => {
             TyLowerDiag::ConstEvalStepLimitExceeded(expr.span(body).into()).into()

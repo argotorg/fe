@@ -1,9 +1,8 @@
 // A callable value is called as `f(x)`: a closure, a value of a type that
-// implements a callable shape trait, or a function item. The call runs the
-// shape's `call`, or `call_mut` for an `FnMut` shape. Function items
-// implement the shapes of their parameters' modes, so a named function can
-// be passed where a closure can.
-use core::functional::{Fn_v, Fn_vv}
+// implements `Fn` or `FnMut`, or a function item. The call runs `Fn`'s
+// `call`, or `FnMut`'s `call_mut`. Function items implement both at the
+// shape of their parameters, so a named function can be passed where a
+// closure can.
 use core::iter::Collection
 
 struct Store { n: u256 }
@@ -15,7 +14,7 @@ struct Holder<F> { f: F }
 /// Multiplies by `k`.
 struct Scaler { k: u256 }
 
-impl Fn_v<u256> for Scaler {
+impl Fn(u256) -> _ for Scaler {
     uses E = ()
     type Out = u256
 
@@ -27,7 +26,7 @@ impl Fn_v<u256> for Scaler {
 /// Callable with one argument or two: the arguments choose the shape.
 struct Overloaded {}
 
-impl Fn_v<u256> for Overloaded {
+impl Fn(u256) -> _ for Overloaded {
     uses E = ()
     type Out = u256
 
@@ -36,7 +35,7 @@ impl Fn_v<u256> for Overloaded {
     }
 }
 
-impl Fn_vv<u256, u256> for Overloaded {
+impl Fn(u256, u256) -> _ for Overloaded {
     uses E = ()
     type Out = u256
 

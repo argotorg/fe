@@ -78,9 +78,6 @@ impl core::abi::Decode<std::abi::Sol> for Key {
     }
 }
 
-impl std::abi::StaticAbi for Key where u256: std::abi::StaticAbi, u32: std::abi::StaticAbi {
-}
-
 impl std::abi::SolCompat for Key where u256: std::abi::SolCompat, u32: std::abi::SolCompat {
     type S = (std::abi::SolPunctuation, <u256 as std::abi::SolCompat>::S, std::abi::SolPunctuation, <u32 as std::abi::SolCompat>::S, std::abi::SolPunctuation)
     const SOL_TYPE: Self::S = ("(", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u32 as std::abi::SolCompat>::SOL_TYPE, ")")
@@ -182,9 +179,6 @@ impl core::abi::Decode<std::abi::Sol> for Hop {
     fn decode_from_bounded<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
         return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
     }
-}
-
-impl std::abi::StaticAbi for Hop where Key: std::abi::StaticAbi, Bytes: std::abi::StaticAbi, u256: std::abi::StaticAbi, u256: std::abi::StaticAbi, u256: std::abi::StaticAbi, u256: std::abi::StaticAbi {
 }
 
 impl std::abi::SolCompat for Hop where Key: std::abi::SolCompat, Bytes: std::abi::SolCompat, u256: std::abi::SolCompat, u256: std::abi::SolCompat, u256: std::abi::SolCompat, u256: std::abi::SolCompat {

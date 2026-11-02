@@ -5,11 +5,11 @@ expression: output
 input_file: test_files/module_references/msg_return_types.fe
 ---
 6: `T` -> msg_return_types::Pair::T
-10: `Alpha` -> msg_return_types::Api::Alpha (15 times)
-10: `Alpha` -> type (6 times)
+10: `Alpha` -> msg_return_types::Api::Alpha (11 times)
+10: `Alpha` -> type (3 times)
 10: `Foo` -> msg_return_types::Foo
-12: `Beta` -> msg_return_types::Api::Beta (15 times)
-12: `Beta` -> type (6 times)
+12: `Beta` -> msg_return_types::Api::Beta (11 times)
+12: `Beta` -> type (3 times)
 12: `Pair` -> msg_return_types::Pair
 12: `Foo` -> msg_return_types::Foo
 unresolved span -> msg_return_types

@@ -1,0 +1,48 @@
+// A loop encodes each element of a memory array into a zeroed buffer allocated
+// after the array. The array stays in use across that allocation, so the
+// buffer must not reuse its memory.
+use core::abi::{AbiFrame, encode_field, load_word, store_word}
+use core::ptr::{self, MemArray, MemSlice}
+use std::abi::Sol
+
+#[abi]
+pub struct Entry {
+    pub word: u256,
+    pub byte: u8,
+}
+
+impl Copy for Entry {}
+
+/// The entries' ABI encodings after a length word, in a fresh zeroed buffer.
+fn encode_entries(_ entries: MemSlice<Entry>) -> *u8 {
+    let len = entries.len()
+    let size = 32 + len as u256 * 64
+    let data = ptr::alloc_bytes(size.downcast_saturate())
+    unsafe {
+        ptr::zero_bytes(data, size.downcast_unchecked())
+        store_word(ptr: data, value: len as u256)
+    }
+    let out = unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32), len: size - 32) }
+    var tails = out.tail(len as u256 * 64)
+    var i: usize = 0
+    while i < len {
+        tails = encode_field<Sol, Entry>(entries[i], out, head_pos: i as u256 * 64, tails)
+        i += 1
+    }
+    data
+}
+
+#[test]
+fn elements_survive_the_buffer_allocation() {
+    var entries = unsafe { MemArray<Entry>::new_uninit(2) }
+    entries[0] = Entry { word: 9, byte: 3 }
+    entries[1] = Entry { word: 10, byte: 4 }
+    let data = encode_entries(entries.as_slice())
+    unsafe {
+        assert(load_word(data) == 2)
+        assert(load_word(ptr::offset_bytes(data, 32)) == 9)
+        assert(load_word(ptr::offset_bytes(data, 64)) == 3)
+        assert(load_word(ptr::offset_bytes(data, 96)) == 10)
+        assert(load_word(ptr::offset_bytes(data, 128)) == 4)
+    }
+}

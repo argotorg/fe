@@ -1,0 +1,33 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/trait_method_effects.fe
+---
+trait Source {
+    uses E
+    fn range(self, _ start: u256, _ count: u256) -> DynArray<Bytes32> uses E {
+        DynArray::empty()
+    }
+    fn read_a_long_declaration(self, _ start: u256, _ count: u256) -> u256 uses E
+    fn read_with_bounds<T>(self, _ start: u256, _ count: u256) -> T uses E
+    where T: Copy
+    /// Read through the same effect row.
+    fn read_with_documentation(self, _ start: u256, _ count: u256) -> u256 uses E {
+        0
+    }
+    fn read_a_long_grouped_clause(self, _ start: u256, _ count: u256) -> u256
+    uses (reader: Reader)
+    fn read_a_long_qualified_clause(self, _ start: u256, _ count: u256) -> u256
+    uses Self::E
+    fn read_a_long_mutable_clause(self, _ start: u256, _ count: u256) -> u256
+    uses mut Reader
+}
+impl Source for Adapter {
+    uses E = (reader: Reader)
+    fn short(self) uses E {}
+    fn read_a_long_implementation(self, _ start: u256, _ count: u256) -> u256
+    uses E
+    {
+        0
+    }
+}

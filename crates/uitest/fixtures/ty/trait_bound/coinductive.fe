@@ -4,7 +4,7 @@ struct Vec<T> {
 
 impl<T> Vec<T> {
     fn new() -> Vec<T> {
-        todo()
+        unsafe { todo() }
     }
 }
 

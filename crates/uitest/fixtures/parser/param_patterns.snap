@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/param_patterns.fe
+---
+error[1-0001]: a parameter pattern has no label; write `_` before it: `_ (a, b): T`
+  ┌─ param_patterns.fe:2:13
+  │
+2 │ fn no_label((a, b): (u256, u256)) -> u256 {
+  │             ^ a parameter pattern has no label; write `_` before it: `_ (a, b): T`
+
+error[1-0001]: `var` is not allowed on `(`
+  ┌─ param_patterns.fe:7:17
+  │
+7 │ fn marker(_ var (a, b): (u256, u256)) -> u256 {
+  │                 ^ `var` is not allowed on `(`

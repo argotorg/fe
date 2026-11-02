@@ -1,0 +1,122 @@
+// A `mut?` function's `mut?` effect takes the function's mode: a call reads
+// it at `ref` and writes it where a use of its result asks for `mut`.
+struct Store {
+    n: u256,
+}
+
+fn slot() -> mut? u256 uses (store: mut? Store) {
+    mut? store.n
+}
+
+/// Forwards its mode to `slot`, and so its effect.
+fn forwarded() -> mut? u256 uses (store: mut? Store) {
+    slot()
+}
+
+/// A call at `ref` needs only read authority.
+fn read_only() -> u256 uses (store: Store) {
+    slot()
+}
+
+/// A closure's call at `mut` makes the effect it takes from the function
+/// `mut`.
+fn set_by_closure(_ v: u256) uses (store: mut Store) {
+    let set = |x: u256| { slot() = x }
+    set(v)
+}
+
+#[test]
+fn reads_and_writes() {
+    var s = Store { n: 1 }
+    with (Store = s) {
+        assert(slot() == 1)
+        slot() = 5
+        let n = mut slot()
+        n += 1
+        assert(forwarded() == 6)
+        forwarded() = 8
+        assert(read_only() == 8)
+        set_by_closure(4)
+        assert(read_only() == 4)
+    }
+    assert(s.n == 4)
+}
+
+struct Log {
+    writes: u256,
+}
+
+trait Slot {
+    fn slot(mut? self) -> mut? u256 uses (log: mut? Log)
+}
+
+struct Cell {
+    value: u256,
+}
+
+// Each mode's body takes the trait's effect at that mode.
+impl Slot for Cell {
+    fn slot(self) -> ref u256 uses (log: Log) {
+        ref self.value
+    }
+
+    fn slot(mut self) -> mut u256 uses (log: mut Log) {
+        log.writes += 1
+        mut self.value
+    }
+}
+
+struct Plain {
+    value: u256,
+}
+
+// One body for both modes.
+impl Slot for Plain {
+    fn slot(mut? self) -> mut? u256 uses (log: mut? Log) {
+        mut? self.value
+    }
+}
+
+#[test]
+fn trait_bodies_per_mode() {
+    var log = Log { writes: 0 }
+    var cell = Cell { value: 3 }
+    var plain = Plain { value: 7 }
+    with (Log = log) {
+        assert(cell.slot() == 3)
+        cell.slot() = 4
+        assert(plain.slot() == 7)
+        plain.slot() = 9
+    }
+    assert(cell.value == 4 && plain.value == 9 && log.writes == 1)
+}
+
+struct Row {
+    items: [u256; 3],
+}
+
+fn row() -> mut? [u256; 3] uses (row: mut? Row) {
+    mut? row.items
+}
+
+impl Row {
+    fn entries(mut? self) -> mut? [u256; 3] {
+        mut? self.items
+    }
+}
+
+// A `mut` loop item asks a `mut?` call for `mut`, as the base of a chain
+// too.
+#[test]
+fn loops_ask_for_mut() {
+    var r = Row { items: [1, 2, 3] }
+    with (Row = r) {
+        for mut x in row() {
+            x += 1
+        }
+    }
+    for (i, mut x) in r.entries().enumerate() {
+        x += i as u256 * 10
+    }
+    assert(r.items[0] == 2 && r.items[1] == 13 && r.items[2] == 24)
+}

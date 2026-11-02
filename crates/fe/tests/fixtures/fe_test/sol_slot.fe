@@ -10,8 +10,8 @@ use std::evm::{Address, Evm, RawStorage, SolMapping, SolSlot, keccak256}
 fn packed_fields_round_trip() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         // address currency; uint24 fee; int24 tickSpacing; bool flag; int8 small
-        let slot = unsafe { SolSlot::at(7) }
-        slot.write(offset: 0, value: Address { inner: 0xabc })
+        let slot = unsafe { mut SolSlot::at(7) }
+        slot.write(offset: 0, value: Address::new(0xabc))
         slot.write(offset: 20, value: Uint24 { val: 3000 })
         slot.write(offset: 23, value: Int24 { val: -60 })
         slot.write(offset: 26, value: true)
@@ -24,7 +24,7 @@ fn packed_fields_round_trip() uses (evm: mut Evm) {
         let flag: bool = slot.read(offset: 26)
         let small: i8 = slot.read(offset: 27)
         let tag: Bytes4 = slot.read(offset: 28)
-        assert(currency.inner == 0xabc)
+        assert(currency.word() == 0xabc)
         assert(fee.val == 3000)
         assert(spacing.val == -60)
         assert(flag)
@@ -32,7 +32,7 @@ fn packed_fields_round_trip() uses (evm: mut Evm) {
         assert(tag.val == 0x11223344)
 
         // Overwriting one field keeps the others.
-        slot.write(offset: 0, value: Address { inner: 0 })
+        slot.write(offset: 0, value: Address::new(0))
         let fee_again: Uint24 = slot.read(offset: 20)
         assert(fee_again.val == 3000)
         let word: u256 = unsafe { SolSlot::at(7).read(offset: 0) }
@@ -43,7 +43,7 @@ fn packed_fields_round_trip() uses (evm: mut Evm) {
 #[test]
 fn bytes_and_strings_use_solidity_layout() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let slot = unsafe { SolSlot::at(3) }
+        let slot = unsafe { mut SolSlot::at(3) }
         slot.write_string("short")
         // Short strings live in the slot: data in the high bytes, 2 * len low.
         let head: u256 = slot.read(offset: 0)
@@ -56,7 +56,7 @@ fn bytes_and_strings_use_solidity_layout() uses (evm: mut Evm) {
         let long: DynString = "a string that is longer than thirty-two bytes"
         slot.write_string(long)
         let head: u256 = slot.read(offset: 0)
-        assert(head == long.len() * 2 + 1)
+        assert(head == (long.len() * 2 + 1) as u256)
         let read_back = slot.read_string()
         assert(read_back.len() == long.len())
         assert(read_back.byte_at(0) == 0x61)
@@ -67,7 +67,7 @@ fn bytes_and_strings_use_solidity_layout() uses (evm: mut Evm) {
         slot.write_bytes(Bytes::from_word_prefix(word: 0xabcd << 240, len: 2))
         let second_word: u256 = unsafe { SolSlot::at(hash_words(3, 0, 1) + 1).read(offset: 0) }
         assert(second_word == 0)
-        let slot = unsafe { SolSlot::at(3) }
+        let slot = unsafe { mut SolSlot::at(3) }
         assert(slot.read_bytes().len() == 2)
         assert(slot.read_bytes().byte_at(1) == 0xcd)
     }
@@ -98,13 +98,6 @@ fn noncanonical_fixed_bytes_write_reverts() uses (evm: mut Evm) {
 fn zero_width_fixed_bytes_write_reverts() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         unsafe { SolSlot::at(1).write(offset: 0, value: FixedBytes<0> { val: 0 }) }
-    }
-}
-
-#[test(should_revert)]
-fn noncanonical_address_write_reverts() uses (evm: mut Evm) {
-    with (RawStorage = evm) {
-        unsafe { SolSlot::at(1).write(offset: 0, value: Address { inner: 1 << 160 }) }
     }
 }
 
@@ -156,7 +149,7 @@ fn hash_words(_ a: u256, _ b: u256, _ n: u256) -> u256 {
     let buffer = ptr::alloc_bytes(64)
     unsafe { store_word(ptr: buffer, value: a) }
     unsafe { store_word(ptr: ptr::offset_bytes(buffer, 32), value: b) }
-    unsafe { keccak256(MemSpan::from_raw_parts(ptr: buffer, len: n * 32)) }
+    unsafe { keccak256(MemSpan::from_raw_parts(ptr: buffer, len: (n * 32).downcast_unchecked())) }
 }
 
 #[test]
@@ -167,7 +160,7 @@ fn mapping_slots_follow_solidity() {
     unsafe { assert(SolMapping::at(3).slot_of(Int24 { val: -1 }) == hash_words(u256::max(), 3, 2)) }
     unsafe { assert(SolMapping::at(3).slot_of(-1 as i16) == hash_words(u256::max(), 3, 2)) }
     // mapping(address => mapping(address => V)) at slot 1
-    let a = Address { inner: 0xa }
-    let b = Address { inner: 0xb }
+    let a = Address::new(0xa)
+    let b = Address::new(0xb)
     unsafe { assert(SolMapping::at(1).nested(a).slot_of(b) == hash_words(0xb, hash_words(0xa, 1, 2), 2)) }
 }

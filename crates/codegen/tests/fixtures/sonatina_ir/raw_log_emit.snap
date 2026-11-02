@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/raw_log_emit.fe
 ---
@@ -35,9 +34,9 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.*i8 = evm_malloc v0;
-        v13.i256 = ptr_to_int v12 i256;
-        return v13;
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
 func private %byte_ptr(v0.i256) -> i256 {
@@ -65,7 +64,7 @@ func private %cast__gab97(v0.i256) -> i256 {
         return v0;
 }
 
-func private %len(v0.objref<@layout_0>) -> i256 {
+func private %len(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -75,7 +74,7 @@ func private %len(v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func private %log0(v0.objref<@layout_0>) {
+func private %log0(noalias v0.objref<@layout_0>) {
     block0:
         jump block1;
 
@@ -104,7 +103,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %ptr(v0.objref<@layout_0>) -> i256 {
+func private %ptr(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -131,12 +130,7 @@ func private %raw_emit() {
     block3:
         v9.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
         v12.@layout_0 = insert_value v9 1.i256 32.i256;
-        v13.objref<i256> = obj.proj v0 0.i256;
-        v14.i256 = extract_value v12 0.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v0 1.i256;
-        v16.i256 = extract_value v12 1.i256;
-        obj.store v15 v16;
+        obj.store v0 v12;
         jump block2;
 
     block4:

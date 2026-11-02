@@ -6,6 +6,7 @@ use crate::{
     runtime::{
         LayoutId, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RefKind, RefView, RuntimeClass,
         RuntimePlace, ScalarClass, ScalarRepr, ScalarRole,
+        lower::type_info::{address_int_class, pointer_class},
     },
 };
 
@@ -351,24 +352,6 @@ impl<'db> RuntimeConversionPlanner<'db> {
             (
                 RuntimeClass::Ref {
                     pointee,
-                    kind: RefKind::Const,
-                    view: RefView::Whole,
-                },
-                RuntimeClass::AggregateValue { .. },
-            ) if pointee.aggregate_layout().is_some() => {
-                let loaded = pointee.as_ref().clone();
-                let layout = loaded.aggregate_layout().expect("aggregate const layout");
-                steps.push(RuntimeConversionStep::MaterializeToObject {
-                    class: RuntimeClass::object_ref(layout),
-                });
-                steps.push(RuntimeConversionStep::LoadRef {
-                    class: loaded.clone(),
-                });
-                self.convert(loaded, target, steps)
-            }
-            (
-                RuntimeClass::Ref {
-                    pointee,
                     kind: RefKind::Provider { space, .. },
                     view: RefView::Whole,
                 },
@@ -556,20 +539,15 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     space: raw_space,
                     pointee: raw_pointee,
                 },
-            ) if provider_space == raw_space
+            ) if *provider_space != AddressSpace::Memory
+                && provider_space == raw_space
                 && raw_pointee.is_none_or(|target| target.target(self.db) == &**pointee) =>
             {
                 steps.push(RuntimeConversionStep::ProviderRefToRaw { class: target });
                 Ok(())
             }
-            (RuntimeClass::RawAddr { .. }, RuntimeClass::Scalar(scalar))
-                if matches!(
-                    scalar.repr,
-                    ScalarRepr::Int {
-                        bits: 256,
-                        signed: false
-                    }
-                ) =>
+            (RuntimeClass::RawAddr { space, .. }, RuntimeClass::Scalar(scalar))
+                if scalar.repr == address_int_class(self.db, *space).repr =>
             {
                 steps.push(RuntimeConversionStep::RawAddrToWord {
                     class: target.clone(),
@@ -578,7 +556,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 Ok(())
             }
             (RuntimeClass::Scalar(scalar), RuntimeClass::RawAddr { space, .. })
-                if is_plain_word_scalar(scalar) =>
+                if *scalar == pointer_class(self.db, *space) =>
             {
                 steps.push(RuntimeConversionStep::WordToRawAddr {
                     class: target.clone(),
@@ -747,6 +725,35 @@ mod tests {
     }
 
     #[test]
+    fn memory_provider_cannot_be_reinterpreted_as_raw_memory() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        for pointee in [word_class(), RuntimeClass::AggregateValue { layout }] {
+            let provider = RuntimeClass::Ref {
+                pointee: Box::new(pointee.clone()),
+                kind: RefKind::Provider {
+                    provider_ty: TyId::unit(&db),
+                    space: AddressSpace::Memory,
+                },
+                view: RefView::Whole,
+            };
+            for raw in [
+                RuntimeClass::raw_addr(&db, AddressSpace::Memory, pointee),
+                RuntimeClass::opaque_raw_addr(AddressSpace::Memory),
+            ] {
+                assert!(matches!(
+                    RuntimeConversionPlanner::plan(&db, provider.clone(), raw.clone()),
+                    Err(RuntimeConversionError::Unsupported { .. })
+                ));
+                assert!(matches!(
+                    RuntimeConversionPlanner::plan(&db, raw, provider.clone()),
+                    Err(RuntimeConversionError::Unsupported { .. })
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn provider_to_raw_address_requires_matching_space_and_target() {
         let db = DriverDataBase::default();
         let provider_ty = TyId::unit(&db);
@@ -846,6 +853,22 @@ mod tests {
         assert_eq!(
             plan.steps.as_ref(),
             &[RuntimeConversionStep::MaterializeToObject { class: target }]
+        );
+    }
+
+    #[test]
+    fn const_ref_to_aggregate_value_loads_the_whole_value() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let target = RuntimeClass::AggregateValue { layout };
+
+        let plan =
+            RuntimeConversionPlanner::plan(&db, RuntimeClass::const_ref(layout), target.clone())
+                .unwrap();
+
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[RuntimeConversionStep::LoadRef { class: target }]
         );
     }
 

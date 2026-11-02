@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["tests/sp1"]
 resolver = "2"
 
 [workspace.package]
@@ -44,7 +45,7 @@ num-bigint = "0.4"
 num-traits = "0.2"
 ruint = "1.17.2"
 paste = "1.0.15"
-salsa = "0.20"
+salsa = { version = "0.28.5", default-features = false, features = ["salsa_unstable", "rayon", "macros", "inventory"] }
 smallvec = { version = "2.0.0-alpha.11" }
 smallvec1 = { version = "1", package = "smallvec" }
 thin-vec = "0.2.16"
@@ -56,10 +57,12 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
-sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "566e9e7c3c2b68377b816b4d85d9b4c0fad84194" }
-sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "566e9e7c3c2b68377b816b4d85d9b4c0fad84194" }
-sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "566e9e7c3c2b68377b816b4d85d9b4c0fad84194" }
-sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "566e9e7c3c2b68377b816b4d85d9b4c0fad84194" }
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "92df01a623ec87927452d884131d93589a711c3d" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "92df01a623ec87927452d884131d93589a711c3d" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "92df01a623ec87927452d884131d93589a711c3d" }
+sonatina-cranelift = { git = "https://github.com/fe-lang/sonatina", rev = "92df01a623ec87927452d884131d93589a711c3d" }
+sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "92df01a623ec87927452d884131d93589a711c3d" }
+sonatina-sp1 = { git = "https://github.com/fe-lang/sonatina", rev = "92df01a623ec87927452d884131d93589a711c3d" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
@@ -71,6 +74,13 @@ debug = 0
 
 [profile.release]
 debug = 0
+
+# Release binaries. Whole-program optimization makes the compiler ~10% faster
+# for several times the link time, so tests and local builds skip it.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
 
 # Keep compiler-heavy tests optimized while checking debug invariants.
 [profile.test-release]
@@ -92,6 +102,7 @@ revm-primitives = { opt-level = 3 }
 revm-state = { opt-level = 3 }
 sonatina-ir = { opt-level = 3 }
 sonatina-codegen = { opt-level = 3 }
+sonatina-cranelift = { opt-level = 3 }
 sonatina-verifier = { opt-level = 3 }
 
 [profile.test.package]
@@ -109,4 +120,5 @@ revm-primitives = { opt-level = 3 }
 revm-state = { opt-level = 3 }
 sonatina-ir = { opt-level = 3 }
 sonatina-codegen = { opt-level = 3 }
+sonatina-cranelift = { opt-level = 3 }
 sonatina-verifier = { opt-level = 3 }

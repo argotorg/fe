@@ -1,0 +1,24 @@
+// A bound naming a trait or inherent constant is compared after its caller
+// specializes it. The selected body reads only `N`, so the bound reduces once
+// `N` is known even though `T` stays generic.
+trait Size { const LEN: usize }
+
+trait Has<const N: usize> {}
+
+struct Marker<T, const N: usize> {}
+
+impl<T, const N: usize> Size for Marker<T, N> { const LEN: usize = N + 1 }
+
+impl<T, const N: usize> Marker<T, N> { const WIDTH: usize = N * 2 }
+
+fn need<T, const N: usize, U: Has<{ Marker<T, N>::LEN }>>() {}
+
+fn need_inherent<T, const N: usize, U: Has<{ Marker<T, N>::WIDTH }>>() {}
+
+fn forward<T, U: Has<4>>() { need<T, 3, U>() }
+
+fn forward_inherent<T, U: Has<6>>() { need_inherent<T, 3, U>() }
+
+fn wrong<T, U: Has<5>>() { need<T, 3, U>() }
+
+fn wrong_inherent<T, U: Has<5>>() { need_inherent<T, 3, U>() }

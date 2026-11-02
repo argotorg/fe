@@ -114,7 +114,7 @@ fn test_self_recursive_reads_writes_and_copies() {
     unsafe { assert(slot.value == 10) }
     unsafe { slot.next.value = 22 }
     unsafe { assert(tail.value == 22) }
-    assert(core::size_of<Node>() == 64)
+    assert(core::size_of<Node>() == 32 + core::size_of<*Node>())
 }
 
 #[test]

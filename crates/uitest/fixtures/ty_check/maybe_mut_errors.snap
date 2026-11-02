@@ -1,0 +1,107 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/maybe_mut_errors.fe
+---
+error[1-0001]: expected type
+   ┌─ maybe_mut_errors.fe:90:34
+   │
+90 │ fn unparsed(_ pair: mut? Pair) -> _ {
+   │                                  ^ expected type
+
+error[1-0001]: unexpected syntax while parsing type
+   ┌─ maybe_mut_errors.fe:90:35
+   │
+90 │ fn unparsed(_ pair: mut? Pair) -> _ {
+   │                                   ^ unexpected
+
+error[3-0077]: a `mut?` function's result needs a `mut?` part
+   ┌─ maybe_mut_errors.fe:83:35
+   │
+83 │ fn count_of(_ pair: mut? Pair) -> u256 {
+   │                                   ^^^^ nothing this function returns is `mut?`
+   │
+   = a call is at `mut` only when a use of its result asks for `mut`, so this function's `mut` body would never run
+
+error[3-0077]: a `mut?` function's result needs a `mut?` part
+   ┌─ maybe_mut_errors.fe:87:4
+   │
+87 │ fn reset_both(_ pair: mut? Pair) {}
+   │    ^^^^^^^^^^ nothing this function returns is `mut?`
+   │
+   = a call is at `mut` only when a use of its result asks for `mut`, so this function's `mut` body would never run
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ maybe_mut_errors.fe:27:9
+   │
+26 │     fn reset(mut? self) -> mut? Counter {
+   │                   ---- `self` is `mut?`, which a `mut?` function's `ref` body only reads
+27 │         self.first.count = 0
+   │         ^^^^^^^^^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ maybe_mut_errors.fe:40:9
+   │
+39 │         let (mut? first, _) = self.both()
+   │              ---------- `first` is `mut?`, which a `mut?` function's `ref` body only reads
+40 │         first.count = 0
+   │         ^^^^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ maybe_mut_errors.fe:46:41
+   │
+46 │         let clear = |c: mut? Counter| { c.count = 0 }
+   │                      -                  ^^^^^^^ immutable assignment
+   │                      │
+   │                      `c` is `mut?`, which a `mut?` function's `ref` body only reads
+
+error[8-0037]: effect `Counter` must be mutable when calling `needs_mut_counter`
+    ┌─ maybe_mut_errors.fe:100:9
+    │
+ 99 │     with (Counter = c) {
+    │                     - effect `Counter` is provided here
+100 │         needs_mut_counter()
+    │         ^^^^^^^^^^^^^^^^^^^ `needs_mut_counter` requires `mut Counter`
+    │
+    = `c` is `mut?`, which a `mut?` function's `ref` body only reads
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ maybe_mut_errors.fe:58:21
+   │
+57 │     let pair = Pair { first: Counter { count: 1 }, second: Counter { count: 2 } }
+   │         ---- `pair` does not provide mutable access
+58 │     let first = mut pair.first()
+   │                     ^^^^ cannot borrow as `mut`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ maybe_mut_errors.fe:64:21
+   │
+63 │ fn immutable_through_try(_ pair: Pair) -> Option<()> {
+   │                            ---- `pair` does not provide mutable access
+64 │     let first = mut pair.maybe_first()?
+   │                     ^^^^ cannot borrow as `mut`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ maybe_mut_errors.fe:71:24
+   │
+70 │     let pair = Pair { first: Counter { count: 1 }, second: Counter { count: 2 } }
+   │         ---- `pair` does not provide mutable access
+71 │     let (mut a, b) = { pair.both() }
+   │                        ^^^^ cannot borrow as `mut`
+
+error[8-0069]: explicit borrow required
+   ┌─ maybe_mut_errors.fe:77:30
+   │
+77 │     let first = mut first_of(pair)
+   │                              ^^^^ this argument must be explicitly borrowed as `mut`
+   │
+   = help: try `mut pair`
+
+error[8-0130]: `mut?` outside a `mut?` function
+   ┌─ maybe_mut_errors.fe:33:21
+   │
+33 │         let first = mut? self.first
+   │                     ^^^^^^^^^^^^^^^ `mut?` is the mode of the function it is in
+   │
+   = a function has a mode when its signature writes `mut?`: `mut? self`, `x: mut? T`, `-> mut? T`, `uses (x: mut? T)` or a `mut?` bound

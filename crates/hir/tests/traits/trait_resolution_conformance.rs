@@ -1,14 +1,20 @@
 use std::path::Path;
 
-use dir_test::{Fixture, dir_test};
 use fe_hir::test_db::HirAnalysisTestDb;
+use test_utils::{fixture_shards, fixtures::Fixture};
 
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/test_files/trait_resolution_conformance",
-    glob: "*.fe"
-)]
-fn accepts_trait_resolution_conformance_cases(fixture: Fixture<&str>) {
-    let mut db = HirAnalysisTestDb::default();
+fixture_shards!(
+    accepts_trait_resolution_conformance_cases,
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test_files/trait_resolution_conformance"
+    ),
+    "*.fe",
+    HirAnalysisTestDb::default,
+    accepts_trait_resolution_conformance_cases,
+);
+
+fn accepts_trait_resolution_conformance_cases(db: &mut HirAnalysisTestDb, fixture: &Fixture) {
     let path = Path::new(fixture.path());
     let file_name = path.file_name().and_then(|file| file.to_str()).unwrap();
     let file = db.new_stand_alone(file_name.into(), fixture.content());

@@ -4,15 +4,15 @@ expression: diags
 input_file: fixtures/ty_check/const_where/concrete_calls_discharge_unused_requirements/array_length.fe
 ---
 error[8-0000]: type mismatch
-  ┌─ array_length.fe:2:63
+  ┌─ array_length.fe:2:54
   │
-2 │ fn use_it() { let values: [u256; { bounded<0>() as usize }] = [] }
-  │                                                               ^^ expected `[u256; 42]`, but `[u256; 0]` is given
+2 │ fn use_it() { let values: [u256; { bounded<0>() }] = [] }
+  │                                                      ^^ expected `[u256; 42]`, but `[u256; 0]` is given
 
 error[8-0093]: const requirement is not satisfied
   ┌─ array_length.fe:2:36
   │
-1 │ const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
-  │                                                  ----- required by this predicate
-2 │ fn use_it() { let values: [u256; { bounded<0>() as usize }] = [] }
+1 │ const fn bounded<const N: usize>() -> usize where N > 0 { 42 }
+  │                                                   ----- required by this predicate
+2 │ fn use_it() { let values: [u256; { bounded<0>() }] = [] }
   │                                    ^^^^^^^^^^^^ condition evaluated to `false`

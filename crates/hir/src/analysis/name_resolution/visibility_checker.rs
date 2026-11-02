@@ -89,7 +89,7 @@ pub fn is_scope_visible_from(db: &dyn HirAnalysisDb, scope: ScopeId, from_scope:
 pub(crate) fn is_ty_visible_from(db: &dyn HirAnalysisDb, ty: TyId, from_scope: ScopeId) -> bool {
     match ty.base_ty(db).data(db) {
         TyData::TyBase(base) => match base {
-            TyBase::Prim(_) | TyBase::Closure(_) => true,
+            TyBase::Prim(_) | TyBase::Closure(_) | TyBase::Shape(_) => true,
             TyBase::Adt(adt) => is_scope_visible_from(db, adt.scope(db), from_scope),
             TyBase::Contract(c) => is_scope_visible_from(db, c.scope(), from_scope),
             TyBase::Func(func) => is_scope_visible_from(db, func.scope(), from_scope),

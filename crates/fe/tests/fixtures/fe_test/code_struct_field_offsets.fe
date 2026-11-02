@@ -27,11 +27,11 @@ pub contract StructGap {
 
 #[test]
 fn code_fields_after_a_struct_field_keep_their_offsets() uses (evm: mut Evm) {
-    let c = evm.create2<StructGap>(value: 0, args: (), salt: 0)
+    let c = evm.create2<StructGap>(value: Wei::zero(), args: (), salt: 0)
     let values: (u256, u256) = evm.call(
         addr: c,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: StructGapMsg::Values {},
     )
     assert!(values.0 == 11)

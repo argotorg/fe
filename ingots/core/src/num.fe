@@ -396,6 +396,13 @@ const I64_SIGN_BIT: u256 = 0x8000000000000000
 const I128_SIGN_BIT: u256 = 0x80000000000000000000000000000000
 const I256_SIGN_BIT: u256 = 0x8000000000000000000000000000000000000000000000000000000000000000
 
+/// `word` as a `usize`, which it must fit: on EVM the same word, elsewhere
+/// its low bits.
+#[inline(always)]
+pub(ingot) const fn word_to_usize(_ word: u256) -> usize {
+    __bitcast(word)
+}
+
 pub trait IntDowncast<T> {
     const fn downcast(self) -> Option<T>
     const fn downcast_truncate(self) -> T
@@ -434,9 +441,10 @@ impl Bounded for u256 {
     const fn min() -> u256 { 0 }
     const fn max() -> u256 { 115792089237316195423570985008687907853269984665640564039457584007913129639935 }
 }
+// `usize` and `isize` take the target's width.
 impl Bounded for usize {
     const fn min() -> usize { 0 }
-    const fn max() -> usize { 115792089237316195423570985008687907853269984665640564039457584007913129639935 }
+    const fn max() -> usize { __bitnot_usize(0) }
 }
 impl Bounded for i8 {
     const fn min() -> i8 { -128 }
@@ -463,8 +471,8 @@ impl Bounded for i256 {
     const fn max() -> i256 {  57896044618658097711785492504343953926634992332820282019728792003956564819967 }
 }
 impl Bounded for isize {
-    const fn min() -> isize { -57896044618658097711785492504343953926634992332820282019728792003956564819968 }
-    const fn max() -> isize {  57896044618658097711785492504343953926634992332820282019728792003956564819967 }
+    const fn min() -> isize { __bitnot_isize(isize::max()) }
+    const fn max() -> isize { __bitcast(__shr_usize(__bitnot_usize(0), 1)) }
 }
 
 // Magnitude of a signed integer, returned in the unsigned type of the same
@@ -748,7 +756,7 @@ impl IntWord for u256 {
 }
 
 impl IntWord for usize {
-    const MASK: u256 = U256_MASK
+    const MASK: u256 = __bitnot_usize(0) as u256
     const SIGN_BIT: u256 = 0
     const IS_SIGNED: bool = false
 
@@ -811,8 +819,8 @@ impl IntWord for i256 {
 }
 
 impl IntWord for isize {
-    const MASK: u256 = U256_MASK
-    const SIGN_BIT: u256 = I256_SIGN_BIT
+    const MASK: u256 = __bitnot_usize(0) as u256
+    const SIGN_BIT: u256 = __shr_usize(__bitnot_usize(0), 1) as u256 + 1
     const IS_SIGNED: bool = true
 
     const fn to_word(self) -> u256 { __bitcast(self as i256) }
@@ -979,6 +987,28 @@ extern {
     ///
     /// Lowers to the EVM `CLZ` instruction (EIP-7939).
     pub const fn leading_zeros(_ x: u256) -> u256
+
+    /// The integer whose representation in the target's memory holds `x`'s
+    /// bytes in big-endian order: `x` itself on EVM, whose memory is
+    /// big-endian, and `x` with its bytes reversed on native targets, whose
+    /// memory is little-endian. Store it through a raw `*T` to write `x`
+    /// big-endian.
+    pub fn to_be<T: IntWord>(_ x: T) -> T
+
+    /// The value of an integer loaded through a raw `*T` from big-endian
+    /// bytes; see `to_be`, whose inverse it is.
+    pub fn from_be<T: IntWord>(_ x: T) -> T
+
+    /// As `to_be`, for little-endian order: `x` itself on native targets and
+    /// `x` with its bytes reversed on EVM.
+    pub fn to_le<T: IntWord>(_ x: T) -> T
+
+    /// The value of an integer loaded through a raw `*T` from little-endian
+    /// bytes; see `to_le`, whose inverse it is.
+    pub fn from_le<T: IntWord>(_ x: T) -> T
+
+    /// `x` with the order of its bytes reversed, on every target.
+    pub fn swap_bytes<T: IntWord>(_ x: T) -> T
 }
 
 /// Returns the number of trailing zero bits in `x`, or 256 if `x == 0`.

@@ -3,9 +3,12 @@ mod lower_runtime;
 mod native_tests;
 pub(crate) mod observability;
 #[cfg(feature = "cranelift")]
-pub use native_tests::{NativeTestEntry, NativeTestModule, emit_test_module_native};
+pub use native_tests::{NativeTestEntry, NativeTestSuite, emit_test_suite_native};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+
+#[cfg(feature = "cranelift")]
+use lower_runtime::NativePanics;
 
 use common::ingot::Ingot;
 use driver::DriverDataBase;
@@ -16,11 +19,10 @@ use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 #[cfg(feature = "cranelift")]
 use mir::{RuntimeSectionName, build_native_executable_package, native_executable_entry};
+use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
-use smallvec1::smallvec;
-#[cfg(feature = "cranelift")]
-use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
+use sonatina_codegen::Compile;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     machinst::vcode::{SectionCodeUnitId, VCodeInst},
@@ -30,6 +32,8 @@ use sonatina_codegen::{
         UnmappedReasonCoverage,
     },
 };
+#[cfg(feature = "cranelift")]
+use sonatina_cranelift::CraneliftObjectBackend;
 use sonatina_ir::{
     BlockId, Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -43,11 +47,9 @@ use sonatina_ir::{
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
-        arith::{Add, Mul},
-        cast::{PtrToInt, Zext},
-        cmp::{Lt, Slt},
-        control_flow::{Br, Call, Jump, Phi, Return, Unreachable},
-        data::{Gep, MemAllocDynamic, Mload, Mstore, ObjAlloc, ObjStore},
+        cast::Bitcast,
+        control_flow::{Call, Return},
+        data::{ObjAlloc, ObjStore},
     },
     ir_writer::IrWrite,
     isa::{Isa, native::Native},
@@ -132,12 +134,30 @@ pub struct NativeArtifacts {
     pub object: Option<Vec<u8>>,
 }
 
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, Copy)]
+pub enum NativeTarget {
+    Host,
+    #[cfg(feature = "sp1")]
+    Sp1,
+}
+
 pub(crate) fn create_evm_isa() -> Evm {
     Evm::new(TargetTriple::new(
         Architecture::Evm,
         Vendor::Ethereum,
         OperatingSystem::Evm(EvmVersion::Osaka),
     ))
+}
+
+/// Verifies `module` only in builds with debug assertions: full verification
+/// takes about a fifth of a large native build.
+fn debug_ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
+    if cfg!(debug_assertions) {
+        ensure_module_sonatina_ir_valid(module)
+    } else {
+        Ok(())
+    }
 }
 
 fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
@@ -248,7 +268,7 @@ fn format_object_compile_errors(errors: &[sonatina_codegen::object::ObjectCompil
 }
 
 #[cfg(feature = "cranelift")]
-fn format_cranelift_errors(errors: &[sonatina_codegen::isa::cranelift::CraneliftError]) -> String {
+fn format_cranelift_errors(errors: &[sonatina_cranelift::CraneliftError]) -> String {
     errors
         .iter()
         .map(ToString::to_string)
@@ -280,7 +300,7 @@ fn compile_runtime_objects_with_postopt_trace(
     LowerError,
 > {
     let mut compile = evm_compile(module, opt_level, emit_observability);
-    ensure_module_sonatina_ir_valid(compile.optimize())?;
+    debug_ensure_module_sonatina_ir_valid(compile.optimize())?;
     if emit_observability && let Some(owner) = postopt_trace_owner {
         stamp_postopt_instruction_provenance(owner, &mut compile);
     }
@@ -569,8 +589,9 @@ fn resolve_embedded_section_artifact<'db, 'a>(
     })?;
     let runtime_section = runtime_object
         .sections(db)
-        .into_iter()
+        .iter()
         .find(|section| &section.name == section_name)
+        .cloned()
         .ok_or_else(|| {
             LowerError::Internal(format!(
                 "observability embed cannot resolve runtime section `{object}`/{section_name:?}"
@@ -730,6 +751,7 @@ pub fn compile_runtime_package_sonatina(
 fn compile_executable_sonatina_native(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    target: NativeTarget,
 ) -> Result<(Module, FuncRef), LowerError> {
     let package = build_native_executable_package(db, top_mod)?;
     let entry = package
@@ -737,19 +759,25 @@ fn compile_executable_sonatina_native(
         .and_then(|object| {
             object
                 .sections(db)
-                .into_iter()
+                .iter()
                 .find(|section| section.name == RuntimeSectionName::Main)
         })
         .ok_or_else(|| LowerError::Internal("native package is missing its main section".into()))?
         .entry
         .instance(db);
-    let isa = create_native_isa()?;
+    // SP1 guests have no stderr; a failed execution is their report.
+    let (isa, panics) = match target {
+        NativeTarget::Host => (create_native_isa()?, NativePanics::Abort),
+        #[cfg(feature = "sp1")]
+        NativeTarget::Sp1 => (Native::new(TargetTriple::SP1), NativePanics::Trap),
+    };
     let (module, functions) = lower_runtime::compile_runtime_package_sonatina_for_isa(
         db,
         &package,
         &isa,
         false,
         Some((entry, "main")),
+        panics,
     )?;
     let main = functions
         .get(&entry)
@@ -785,6 +813,7 @@ pub fn emit_module_native_object(
     emit_module_native_artifacts(
         db,
         top_mod,
+        NativeTarget::Host,
         opt_level,
         NativeOutputSelection {
             ir: false,
@@ -807,6 +836,7 @@ pub fn emit_module_native_ir(
     emit_module_native_artifacts(
         db,
         top_mod,
+        NativeTarget::Host,
         opt_level,
         NativeOutputSelection {
             ir: true,
@@ -820,16 +850,17 @@ pub fn emit_module_native_ir(
 pub fn emit_module_native_artifacts(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    target: NativeTarget,
     opt_level: OptLevel,
     outputs: NativeOutputSelection,
 ) -> Result<NativeArtifacts, LowerError> {
-    let (module, main) = compile_executable_sonatina_native(db, top_mod)?;
-    let module = prepare_native_main(db, top_mod, module, main)?;
+    let (module, main) = compile_executable_sonatina_native(db, top_mod, target)?;
+    let module = prepare_native_main(db, top_mod, target, module, main)?;
 
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
     compile.optimize();
-    ensure_module_sonatina_ir_valid(compile.module())?;
+    debug_ensure_module_sonatina_ir_valid(compile.module())?;
     let ir = outputs
         .ir
         .then(|| ModuleWriter::new(compile.module()).dump_string());
@@ -850,6 +881,7 @@ pub fn emit_module_native_artifacts(
 fn prepare_native_main(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    target: NativeTarget,
     module: Module,
     main: FuncRef,
 ) -> Result<Module, LowerError> {
@@ -865,19 +897,31 @@ fn prepare_native_main(
             ty.as_view(db).unwrap_or(ty)
         })
         .collect::<Vec<_>>();
-    let with_args = args == [i32_ty, argv_ty];
+    let with_args = matches!(target, NativeTarget::Host) && args == [i32_ty, argv_ty];
     let valid = func.return_ty(db) == i32_ty && (args.is_empty() || with_args);
+    let expected_entry = match target {
+        NativeTarget::Host => {
+            "native executable `main` must have signature `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`"
+        }
+        #[cfg(feature = "sp1")]
+        NativeTarget::Sp1 => "SP1 executable `main` must have signature `pub fn main() -> i32`",
+    };
     let argc_ref = Type::I32.to_obj_ref(&module.ctx);
+    let byte_ptr = Type::I8.to_ptr(&module.ctx);
     let argc_by_ref = module.ctx.func_sig(main, |signature| {
         signature.args().first() == Some(&argc_ref)
     });
     module.ctx.func_sig(main, |signature| {
-        let expected = if with_args { vec![if argc_by_ref { argc_ref } else { Type::I32 }, Type::I256] } else { vec![] };
+        let expected = if with_args {
+            vec![if argc_by_ref { argc_ref } else { Type::I32 }, byte_ptr]
+        } else {
+            vec![]
+        };
         if valid && signature.args() == expected && signature.ret_tys() == [Type::I32] {
             Ok(())
         } else {
             Err(LowerError::Unsupported(format!(
-                "native executable `main` must have signature `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`, found lowered `main({}) -> {}`",
+                "{expected_entry}, found lowered `main({}) -> {}`",
                 format_native_types(signature.args(), &module),
                 format_native_types(signature.ret_tys(), &module)
             )))
@@ -888,8 +932,8 @@ fn prepare_native_main(
         return Ok(module);
     }
 
-    // Preserve ordinary Fe calls to the entry. Only the exported C entry uses
-    // native pointer widths; Fe raw addresses continue to use the word ABI.
+    // Preserve ordinary Fe calls to the entry. The exported C entry takes the
+    // host's typed pointer vector, which is a `**u8` as Fe lays it out.
     let names = module
         .funcs()
         .into_iter()
@@ -904,7 +948,6 @@ fn prepare_native_main(
     });
     module.ctx.declared_funcs.insert(main, signature);
     let builder = ModuleBuilder::from_module(module);
-    let byte_ptr = builder.ptr_type(Type::I8);
     let argv_ptr = builder.ptr_type(byte_ptr);
     let wrapper = builder
         .declare_function(Signature::new_single(
@@ -918,44 +961,9 @@ fn prepare_native_main(
     let inst_set = isa.inst_set();
     let mut fb = builder.func_builder::<InstInserter>(wrapper);
     let entry = fb.append_block();
-    let invalid = fb.append_block();
-    let allocate = fb.append_block();
-    let copy = fb.append_block();
-    let invoke = fb.append_block();
     fb.switch_to_block(entry);
     let argc = fb.func.arg_values[0];
     let argv = fb.func.arg_values[1];
-    let zero_i32 = fb.make_imm_value(0i32);
-    let negative = fb.insert_inst(Slt::new(inst_set, argc, zero_i32), Type::I1);
-    fb.insert_inst_no_result(Br::new(inst_set, negative, invalid, allocate));
-    fb.switch_to_block(invalid);
-    fb.insert_inst_no_result(Unreachable::new(inst_set));
-    fb.switch_to_block(allocate);
-
-    // Convert the C pointer vector once at the host boundary. Fe pointer slots
-    // occupy a word, so passing the host table unchanged would break ordinary
-    // typed **u8 indexing. Preserve each string's address and the null sentinel.
-    let count = fb.insert_inst(Zext::new(inst_set, argc, Type::I64), Type::I64);
-    let one = fb.make_imm_value(1i64);
-    let count = fb.insert_inst(Add::new(inst_set, count, one), Type::I64);
-    let stride = fb.make_imm_value(32i64);
-    let size = fb.insert_inst(Mul::new(inst_set, count, stride), Type::I64);
-    let table_ty = builder.ptr_type(Type::I256);
-    let table = fb.insert_inst(MemAllocDynamic::new(inst_set, size), table_ty);
-    let zero = fb.make_imm_value(0i64);
-    fb.insert_inst_no_result(Jump::new(inst_set, copy));
-    fb.switch_to_block(copy);
-    let index = fb.insert_inst(Phi::new(inst_set, smallvec![(zero, allocate)]), Type::I64);
-    let source = fb.insert_inst(Gep::new(inst_set, vec![argv, index].into()), argv_ptr);
-    let pointer = fb.insert_inst(Mload::new(inst_set, source, byte_ptr), byte_ptr);
-    let word = fb.insert_inst(PtrToInt::new(inst_set, pointer, Type::I256), Type::I256);
-    let target = fb.insert_inst(Gep::new(inst_set, vec![table, index].into()), table_ty);
-    fb.insert_inst_no_result(Mstore::new(inst_set, target, word, Type::I256));
-    let next = fb.insert_inst(Add::new(inst_set, index, one), Type::I64);
-    fb.append_phi_arg(index, next, copy);
-    let more = fb.insert_inst(Lt::new(inst_set, next, count), Type::I1);
-    fb.insert_inst_no_result(Br::new(inst_set, more, copy, invoke));
-    fb.switch_to_block(invoke);
     let argc = if argc_by_ref {
         let object = fb.insert_inst(ObjAlloc::new(inst_set, Type::I32), argc_ref);
         fb.insert_inst_no_result(ObjStore::new(inst_set, object, argc));
@@ -963,9 +971,9 @@ fn prepare_native_main(
     } else {
         argc
     };
-    let wide = fb.insert_inst(PtrToInt::new(inst_set, table, Type::I256), Type::I256);
+    let argv = fb.insert_inst(Bitcast::new(inst_set, argv, byte_ptr), byte_ptr);
     let result = fb.insert_inst(
-        Call::new(inst_set, main, vec![argc, wide].into()),
+        Call::new(inst_set, main, vec![argc, argv].into()),
         Type::I32,
     );
     fb.insert_inst_no_result(Return::new_single(inst_set, result));
@@ -1058,8 +1066,9 @@ fn root_objects_named<'db>(
 ) -> Vec<mir::RuntimeObject<'db>> {
     package
         .root_objects(db)
-        .into_iter()
-        .filter(|object| object.name(db) == name)
+        .iter()
+        .copied()
+        .filter(|object| object.name(db) == &name)
         .collect()
 }
 
@@ -1073,41 +1082,46 @@ fn filter_runtime_package_to_root_objects<'db>(
         .map(|object| object.name(db))
         .collect::<FxHashSet<_>>();
     let package_objects = package.objects(db);
-    let section_set = reachable_sections(db, &package_objects, roots);
+    let section_set = reachable_sections(db, package_objects, roots);
     let objects = package
         .objects(db)
-        .into_iter()
-        .filter_map(|object| {
+        .iter()
+        .filter_map(|&object| {
             let sections = object
                 .sections(db)
-                .into_iter()
+                .iter()
                 .filter(|section| {
                     section_set.contains(&runtime_section_key(db, object, &section.name))
                 })
+                .cloned()
                 .collect::<Vec<_>>();
-            (!sections.is_empty()).then(|| mir::RuntimeObject::new(db, object.name(db), sections))
+            (!sections.is_empty())
+                .then(|| mir::RuntimeObject::new(db, object.name(db).clone(), sections))
         })
         .collect::<Vec<_>>();
     let function_set = reachable_functions(db, &objects);
     let functions = package
         .functions(db)
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|function| function_set.contains(&function.instance(db)))
         .collect::<Vec<_>>();
     let const_region_set = reachable_const_regions(db, &objects, &functions);
     let const_regions = package
         .const_regions(db)
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|region| const_region_set.contains(region))
         .collect::<Vec<_>>();
     let code_regions = package
         .code_regions(db)
-        .into_iter()
-        .filter(|region| section_set.contains(&section_ref_key(region.source(db))))
+        .iter()
+        .copied()
+        .filter(|region| section_set.contains(&section_ref_key(region.source(db).clone())))
         .collect::<Vec<_>>();
     let root_objects = package
         .objects(db)
-        .into_iter()
+        .iter()
         .filter(|object| root_names.contains(&object.name(db)))
         .filter_map(|object| {
             objects
@@ -1156,33 +1170,36 @@ fn isolate_runtime_package_object<'db>(
         let function_set = reachable_functions(db, &objects);
         package
             .functions(db)
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|function| function_set.contains(&function.instance(db)))
             .collect::<Vec<_>>()
     };
     let const_region_set = reachable_const_regions(db, &objects, &functions);
     let const_regions = package
         .const_regions(db)
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|region| const_region_set.contains(region))
         .collect::<Vec<_>>();
     let embedded_sections = object
         .sections(db)
-        .into_iter()
+        .iter()
         .flat_map(|section| {
             let own = runtime_section_key(db, object, &section.name);
             std::iter::once(own).chain(
                 section
                     .embeds
-                    .into_iter()
-                    .map(|embed| section_ref_key(embed.source)),
+                    .iter()
+                    .map(|embed| section_ref_key(embed.source.clone())),
             )
         })
         .collect::<FxHashSet<_>>();
     let code_regions = package
         .code_regions(db)
-        .into_iter()
-        .filter(|region| embedded_sections.contains(&section_ref_key(region.source(db))))
+        .iter()
+        .copied()
+        .filter(|region| embedded_sections.contains(&section_ref_key(region.source(db).clone())))
         .collect::<Vec<_>>();
     RuntimePackage::new(
         db,
@@ -1210,7 +1227,7 @@ fn reachable_sections<'db>(
         .flat_map(|object| {
             object
                 .sections(db)
-                .into_iter()
+                .iter()
                 .map(|section| runtime_section_key(db, *object, &section.name))
         })
         .collect::<VecDeque<_>>();
@@ -1223,14 +1240,14 @@ fn reachable_sections<'db>(
             .flat_map(|object| {
                 object
                     .sections(db)
-                    .into_iter()
+                    .iter()
                     .map(move |section| (*object, section))
             })
-            .filter(|(object, _)| object.name(db) == object_name)
+            .filter(|(object, _)| *object.name(db) == object_name)
             .filter(|(_, section)| section.name == section_name)
             .map(|(_, section)| section)
         {
-            for embed in section.embeds {
+            for embed in &section.embeds {
                 queue.push_back(section_ref_key(embed.source.clone()));
             }
         }
@@ -1243,7 +1260,7 @@ fn runtime_section_key<'db>(
     object: mir::RuntimeObject<'db>,
     section: &mir::RuntimeSectionName,
 ) -> (String, mir::RuntimeSectionName) {
-    (object.name(db), section.clone())
+    (object.name(db).clone(), section.clone())
 }
 
 fn section_ref_key(section_ref: mir::RuntimeSectionRef) -> (String, mir::RuntimeSectionName) {
@@ -1281,7 +1298,7 @@ fn reachable_const_regions<'db>(
 ) -> FxHashSet<mir::ConstRegionId<'db>> {
     let mut seen = FxHashSet::default();
     for section in objects.iter().flat_map(|object| object.sections(db)) {
-        seen.extend(section.const_regions);
+        seen.extend(section.const_regions.clone());
     }
     for function in functions {
         seen.extend(function.referenced_const_regions(db));
@@ -1306,10 +1323,10 @@ pub fn emit_runtime_package_sonatina_ir_optimized(
 ) -> Result<String, LowerError> {
     ensure_runtime_package_has_roots(db, package, "Sonatina IR")?;
     let module = compile_runtime_package_sonatina(db, package)?;
-    ensure_module_sonatina_ir_valid(&module)?;
+    debug_ensure_module_sonatina_ir_valid(&module)?;
     let mut compile = evm_compile(module, opt_level, false);
     let optimized = compile.optimize();
-    ensure_module_sonatina_ir_valid(optimized)?;
+    debug_ensure_module_sonatina_ir_valid(optimized)?;
     let mut writer = ModuleWriter::new(optimized);
     Ok(writer.dump_string())
 }
@@ -1336,14 +1353,15 @@ fn emit_runtime_package_sonatina_bytecode_with_options(
         opt_level,
         emit_observability,
         compiled: HashMap::new(),
-        in_progress: FxHashSet::default(),
         trace_owner: None,
         trace_facts: BTreeMap::new(),
     };
+    let roots = package.root_objects(db);
+    compiler.precompile(roots);
     let mut out = BTreeMap::new();
-    for object in package.root_objects(db) {
-        let object_name = object.name(db);
-        compiler.compile(&object_name)?;
+    for &object in roots {
+        let object_name = object.name(db).clone();
+        compiler.compile(std::slice::from_ref(&object_name))?;
         let artifact = &compiler.compiled[object_name.as_str()];
         let objects_by_name = HashMap::from([(object_name.clone(), object)]);
         let artifacts_by_name = HashMap::from([(object_name.as_str(), artifact)]);
@@ -1368,43 +1386,189 @@ struct IsolatedObjectCompiler<'db, 'a> {
     opt_level: OptLevel,
     emit_observability: bool,
     compiled: HashMap<String, ObjectArtifact>,
-    in_progress: FxHashSet<String>,
     trace_owner: Option<String>,
-    trace_facts: BTreeMap<String, (String, Vec<trace_facts::TraceFact>)>,
+    trace_facts: BTreeMap<String, ObjectTrace>,
+}
+
+/// An isolated object's trace owner and facts.
+type ObjectTrace = (String, Vec<trace_facts::TraceFact>);
+
+/// An object in the order [`IsolatedObjectCompiler::compile`] compiles them:
+/// after every object it embeds.
+struct OrderedObject {
+    name: String,
+    embeds: Vec<String>,
+}
+
+/// An object lowered to its own Sonatina module.
+struct LoweredObject {
+    name: String,
+    module: Module,
+    trace: Option<ObjectTrace>,
 }
 
 impl<'db> IsolatedObjectCompiler<'db, '_> {
-    /// Compile `object_name` in isolation, after compiling the objects its
-    /// sections embed.
-    fn compile(&mut self, object_name: &str) -> Result<(), LowerError> {
-        if self.compiled.contains_key(object_name) {
+    /// Compiles `roots` together, so that they compile in parallel. A root
+    /// that fails stays uncompiled, and compiling it alone reports why.
+    fn precompile(&mut self, roots: &[mir::RuntimeObject<'db>]) {
+        let names: Vec<_> = roots
+            .iter()
+            .map(|object| object.name(self.db).clone())
+            .collect();
+        let _ = self.compile(&names);
+    }
+
+    /// Compile `object_names` in isolation, each after the objects its
+    /// sections embed. An object's code depends only on its own module, so
+    /// the objects whose embeds are compiled are lowered here and then
+    /// compiled in parallel, a pool's worth at a time. The error, if any, is
+    /// the one compiling the objects one at a time would stop at.
+    fn compile(&mut self, object_names: &[String]) -> Result<(), LowerError> {
+        let mut order = Vec::new();
+        let mut visiting = FxHashSet::default();
+        let order_error = object_names
+            .iter()
+            .try_for_each(|name| self.order_object(name, &mut order, &mut visiting))
+            .err();
+
+        let mut depths: HashMap<&str, usize> = HashMap::new();
+        for object in &order {
+            let depth = object
+                .embeds
+                .iter()
+                .filter_map(|embed| depths.get(embed.as_str()))
+                .map(|depth| depth + 1)
+                .max()
+                .unwrap_or(0);
+            depths.insert(&object.name, depth);
+        }
+        let max_depth = depths.values().copied().max().unwrap_or(0);
+
+        let mut errors: Vec<(usize, LowerError)> = Vec::new();
+        let mut failed: FxHashSet<&str> = FxHashSet::default();
+        for depth in 0..=max_depth {
+            let mut ready = Vec::new();
+            for (index, object) in order.iter().enumerate() {
+                if depths[object.name.as_str()] != depth {
+                    continue;
+                }
+                if object
+                    .embeds
+                    .iter()
+                    .any(|embed| failed.contains(embed.as_str()))
+                {
+                    failed.insert(&object.name);
+                } else {
+                    ready.push(index);
+                }
+            }
+            for chunk in ready.chunks(rayon::current_num_threads()) {
+                let lowered: Vec<_> = chunk
+                    .iter()
+                    .map(|&index| (index, self.lower(&order[index].name)))
+                    .collect();
+                let (opt_level, emit_observability) = (self.opt_level, self.emit_observability);
+                let compile = |(index, lowered): (usize, Result<LoweredObject, LowerError>)| {
+                    (
+                        index,
+                        lowered.and_then(|lowered| {
+                            compile_lowered_object(lowered, opt_level, emit_observability)
+                        }),
+                    )
+                };
+                // A lone object compiles here rather than waking the pool.
+                let results: Vec<_> = if lowered.len() == 1 {
+                    lowered.into_iter().map(compile).collect()
+                } else {
+                    lowered.into_par_iter().map(compile).collect()
+                };
+                for (index, result) in results {
+                    let name = &order[index].name;
+                    match result {
+                        Ok((artifact, trace)) => {
+                            if let Some(trace) = trace {
+                                self.trace_facts.insert(name.clone(), trace);
+                            }
+                            self.compiled.insert(name.clone(), artifact);
+                        }
+                        Err(err) => {
+                            failed.insert(name);
+                            errors.push((index, err));
+                        }
+                    }
+                }
+            }
+        }
+
+        match errors.into_iter().min_by_key(|(index, _)| *index) {
+            Some((_, err)) => Err(err),
+            None => order_error.map_or(Ok(()), Err),
+        }
+    }
+
+    /// Appends `object_name` to `order` after the objects its sections embed.
+    fn order_object(
+        &self,
+        object_name: &str,
+        order: &mut Vec<OrderedObject>,
+        visiting: &mut FxHashSet<String>,
+    ) -> Result<(), LowerError> {
+        if self.compiled.contains_key(object_name)
+            || order.iter().any(|object| object.name == object_name)
+        {
             return Ok(());
         }
-        if !self.in_progress.insert(object_name.to_string()) {
+        if !visiting.insert(object_name.to_string()) {
             return Err(LowerError::Internal(format!(
                 "runtime object `{object_name}` embeds itself"
             )));
         }
-        let object = self
-            .package
+        let object = self.find_object(object_name)?;
+        let mut embeds: Vec<String> = Vec::new();
+        for section in object.sections(self.db) {
+            for embed in &section.embeds {
+                let mir::RuntimeSectionRef::External { object, .. } = &embed.source else {
+                    continue;
+                };
+                self.order_object(object, order, visiting)?;
+                if !embeds.contains(object) {
+                    embeds.push(object.clone());
+                }
+            }
+        }
+        visiting.remove(object_name);
+        order.push(OrderedObject {
+            name: object_name.to_string(),
+            embeds,
+        });
+        Ok(())
+    }
+
+    fn find_object(&self, object_name: &str) -> Result<mir::RuntimeObject<'db>, LowerError> {
+        self.package
             .objects(self.db)
-            .into_iter()
+            .iter()
+            .copied()
             .find(|object| object.name(self.db) == object_name)
             .ok_or_else(|| {
                 LowerError::Internal(format!("runtime object `{object_name}` not found"))
-            })?;
+            })
+    }
 
+    /// Lowers `object_name` to its own Sonatina module, embedding the code of
+    /// the compiled objects its sections embed.
+    fn lower(&self, object_name: &str) -> Result<LoweredObject, LowerError> {
+        let object = self.find_object(object_name)?;
         let mut external_code: Vec<((String, mir::RuntimeSectionName), Vec<u8>)> = Vec::new();
         for section in object.sections(self.db) {
-            for embed in section.embeds {
-                let mir::RuntimeSectionRef::External { object, section } = embed.source else {
+            for embed in &section.embeds {
+                let mir::RuntimeSectionRef::External { object, section } = &embed.source else {
                     continue;
                 };
-                let key = (object, section);
+                let key = (object.clone(), section.clone());
                 if external_code.iter().any(|(existing, _)| *existing == key) {
                     continue;
                 }
-                self.compile(&key.0)?;
                 let bytes = self.compiled[key.0.as_str()]
                     .sections
                     .get(&section_name_for_runtime(&key.1))
@@ -1426,43 +1590,52 @@ impl<'db> IsolatedObjectCompiler<'db, '_> {
             &isolated,
             &external_code,
         )?;
-        ensure_module_sonatina_ir_valid(&module)?;
+        debug_ensure_module_sonatina_ir_valid(&module)?;
         // Each isolated module has its own IDs. Keep pre/post-opt facts and
         // instruction provenance under a distinct owner for that exact module.
-        let owner = self
-            .trace_owner
-            .as_ref()
-            .map(|base| format!("{base}::object:{object_name}"));
-        let mut facts = if let Some(owner) = &owner {
-            crate::trace::emit_sonatina_trace_view_facts(
-                owner,
-                &module,
-                trace_facts::CompilerPhase::SonatinaPreOpt,
-            )?
-        } else {
-            Vec::new()
+        let trace = match &self.trace_owner {
+            Some(base) => {
+                let owner = format!("{base}::object:{object_name}");
+                let facts = crate::trace::emit_sonatina_trace_view_facts(
+                    &owner,
+                    &module,
+                    trace_facts::CompilerPhase::SonatinaPreOpt,
+                )?;
+                Some((owner, facts))
+            }
+            None => None,
         };
-        let (artifacts, postopt) = compile_runtime_objects_with_postopt_trace(
+        Ok(LoweredObject {
+            name: object_name.to_string(),
             module,
-            self.opt_level,
-            self.emit_observability,
-            owner.as_deref(),
-        )?;
-        if let Some(owner) = owner {
-            facts.extend(postopt);
-            self.trace_facts
-                .insert(object_name.to_string(), (owner, facts));
-        }
-        let artifact = artifacts
-            .into_iter()
-            .find(|artifact| artifact.object.0.as_str() == object_name)
-            .ok_or_else(|| {
-                LowerError::Internal(format!("compiled object `{object_name}` not found"))
-            })?;
-        self.in_progress.remove(object_name);
-        self.compiled.insert(object_name.to_string(), artifact);
-        Ok(())
+            trace,
+        })
     }
+}
+
+/// Optimizes and compiles a lowered object, adding its post-optimization
+/// trace facts to its trace.
+fn compile_lowered_object(
+    lowered: LoweredObject,
+    opt_level: OptLevel,
+    emit_observability: bool,
+) -> Result<(ObjectArtifact, Option<ObjectTrace>), LowerError> {
+    let LoweredObject {
+        name,
+        module,
+        mut trace,
+    } = lowered;
+    let owner = trace.as_ref().map(|(owner, _)| owner.as_str());
+    let (artifacts, postopt) =
+        compile_runtime_objects_with_postopt_trace(module, opt_level, emit_observability, owner)?;
+    if let Some((_, facts)) = &mut trace {
+        facts.extend(postopt);
+    }
+    let artifact = artifacts
+        .into_iter()
+        .find(|artifact| artifact.object.0.as_str() == name)
+        .ok_or_else(|| LowerError::Internal(format!("compiled object `{name}` not found")))?;
+    Ok((artifact, trace))
 }
 
 pub(crate) struct TracedContractBytecode {
@@ -1486,14 +1659,15 @@ pub(crate) fn emit_runtime_package_sonatina_bytecode_with_trace(
         opt_level,
         emit_observability: true,
         compiled: HashMap::new(),
-        in_progress: FxHashSet::default(),
         trace_owner: Some(trace_owner.to_string()),
         trace_facts: BTreeMap::new(),
     };
+    let roots = package.root_objects(db);
+    compiler.precompile(roots);
     let mut out = BTreeMap::new();
-    for object in package.root_objects(db) {
-        let name = object.name(db);
-        compiler.compile(&name)?;
+    for &object in roots {
+        let name = object.name(db).clone();
+        compiler.compile(std::slice::from_ref(&name))?;
         let artifact = &compiler.compiled[name.as_str()];
         let bytecode = root_contract_bytecode(
             db,
@@ -1508,7 +1682,7 @@ pub(crate) fn emit_runtime_package_sonatina_bytecode_with_trace(
             .remove(&name)
             .expect("compiled root has trace facts");
         out.insert(
-            name,
+            name.clone(),
             TracedContractBytecode {
                 bytecode,
                 owner,
@@ -1548,11 +1722,11 @@ fn emit_runtime_module_sonatina_bytecode_with_options(
     let package_objects = package.objects(db);
     let objects_by_name = package_objects
         .iter()
-        .map(|object| (object.name(db), *object))
+        .map(|object| (object.name(db).clone(), *object))
         .collect::<std::collections::HashMap<_, _>>();
 
     let mut out = BTreeMap::new();
-    for object in package.root_objects(db) {
+    for &object in package.root_objects(db) {
         let object_name = object.name(db);
         out.insert(
             object_name.clone(),
@@ -1673,7 +1847,7 @@ fn root_contract_bytecode<'db>(
         deploy_observability,
         runtime_observability,
     }
-    .checked(&object_name, emit_observability)
+    .checked(object_name, emit_observability)
 }
 
 pub fn emit_runtime_package_sonatina_bytecode(
@@ -1788,9 +1962,33 @@ pub fn emit_ingot_sonatina_bytecode(
     opt_level: OptLevel,
     contract: Option<&str>,
 ) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_ingot_sonatina_bytecode_with_options(db, ingot, opt_level, contract, false)
+}
+
+pub fn emit_ingot_sonatina_bytecode_with_observability(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_ingot_sonatina_bytecode_with_options(db, ingot, opt_level, contract, true)
+}
+
+fn emit_ingot_sonatina_bytecode_with_options(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+    emit_observability: bool,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
     let mut outputs = BTreeMap::new();
     for package in select_ingot_runtime_packages(db, ingot, contract)? {
-        for (name, bytecode) in emit_runtime_package_sonatina_bytecode(db, &package, opt_level)? {
+        for (name, bytecode) in emit_runtime_package_sonatina_bytecode_with_options(
+            db,
+            &package,
+            opt_level,
+            emit_observability,
+        )? {
             if outputs.insert(name.clone(), bytecode).is_some() {
                 return Err(LowerError::Internal(format!(
                     "duplicate root object `{name}` across ingot modules"
@@ -1826,19 +2024,30 @@ pub fn emit_test_module_sonatina(
         opt_level,
         emit_observability: options.emit_observability || options.explain_failure,
         compiled: HashMap::new(),
-        in_progress: FxHashSet::default(),
         trace_owner: options.explain_failure.then(|| owner.clone()),
         trace_facts: BTreeMap::new(),
     };
+    let roots: Vec<_> = package
+        .root_objects(db)
+        .iter()
+        .copied()
+        .filter(|object| {
+            object
+                .sections(db)
+                .first()
+                .is_some_and(|section| matches!(section.name, mir::RuntimeSectionName::Test(_)))
+        })
+        .collect();
+    compiler.precompile(&roots);
     let debug_info = if options.explain_failure {
         use common::InputDb;
         // Describe every object with facts from the same isolated compilation
         // that produced the executed bytes; dependencies are embedded as data.
         let mut facts = mir::trace::emit_mir_facts(db, package);
         let mut bytecodes = BTreeMap::new();
-        for object in package.objects(db) {
-            let name = object.name(db);
-            compiler.compile(&name)?;
+        for &object in package.objects(db) {
+            let name = object.name(db).clone();
+            compiler.compile(std::slice::from_ref(&name))?;
             let artifact = &compiler.compiled[name.as_str()];
             let bytecode = BTreeMap::from([(
                 name.clone(),
@@ -1887,7 +2096,7 @@ pub fn emit_test_module_sonatina(
                 let immutable_tail_bytes = package
                     .objects(db)
                     .iter()
-                    .find(|object| object.name(db) == name)
+                    .find(|object| object.name(db) == &name)
                     .and_then(|object| {
                         object.sections(db).iter().find_map(|section| {
                             match section.entry.owner(db) {
@@ -1904,7 +2113,7 @@ pub fn emit_test_module_sonatina(
                 let debug_owner = package
                     .objects(db)
                     .iter()
-                    .find(|object| object.name(db) == name)
+                    .find(|object| object.name(db) == &name)
                     .and_then(|object| {
                         object.sections(db).iter().find_map(|section| {
                             use hir::analysis::ty::ty_check::BodyOwner;
@@ -1919,7 +2128,7 @@ pub fn emit_test_module_sonatina(
                                     mir::RuntimeSyntheticSpec::TestRoot { callee, .. },
                                 ) => {
                                     let semantic = callee.key(db).semantic(db)?;
-                                    let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+                                    let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
                                         return None;
                                     };
                                     (func.scope(), "function", func.name(db).to_opt()?)
@@ -1960,15 +2169,10 @@ pub fn emit_test_module_sonatina(
         None
     };
     let mut tests = Vec::new();
-    for object in package.root_objects(db) {
+    for object in roots {
         let sections = object.sections(db);
-        let Some(section) = sections.first() else {
-            continue;
-        };
-        let mir::RuntimeSectionName::Test(_) = &section.name else {
-            continue;
-        };
-        compiler.compile(&object.name(db))?;
+        let section = sections.first().expect("test roots have a test section");
+        compiler.compile(std::slice::from_ref(object.name(db)))?;
         let artifact = &compiler.compiled[object.name(db).as_str()];
         let runtime = artifact
             .sections
@@ -1979,7 +2183,7 @@ pub fn emit_test_module_sonatina(
                     object.name(db)
                 ))
             })?;
-        let metadata = runtime_test_root_metadata(db, &section.entry.owner(db), &section.name)
+        let metadata = runtime_test_root_metadata(db, section.entry.owner(db), &section.name)
             .map_err(|err| match err {
                 TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
                 TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
@@ -2026,7 +2230,17 @@ pub fn emit_test_ingot_sonatina(
 mod tests {
     use super::*;
     use common::InputDb;
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    use common::compilation::Target;
     use driver::DriverDataBase;
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    use salsa::Setter;
     use std::{fs, path::PathBuf};
     use url::Url;
 
@@ -2041,12 +2255,15 @@ mod tests {
     ))]
     fn native_pointer_object_ir(name: &str, source: &str) -> String {
         let mut db = DriverDataBase::default();
+        db.compilation_settings()
+            .set_target(&mut db)
+            .to(Target::Native);
         let file = db
             .workspace()
             .touch(&mut db, temp_fixture_url(name), Some(source.to_string()));
         let top_mod = db.top_mod(file);
         // Keep pointer inputs dynamic by testing before executable ABI validation.
-        let (module, main) = compile_executable_sonatina_native(&db, top_mod)
+        let (module, main) = compile_executable_sonatina_native(&db, top_mod, NativeTarget::Host)
             .expect("native pointer fixture should lower");
         module.ctx.update_func_linkage(main, Linkage::Public);
         let mut compile = Compile::new(module, CraneliftObjectBackend::new())
@@ -2071,11 +2288,11 @@ mod tests {
         let ir = native_pointer_object_ir(
             "native_memzero.fe",
             r#"
-fn zero_buffer(ptr: *u8, len: u256) {
+fn zero_buffer(ptr: *u8, len: usize) {
     unsafe { core::ptr::zero_bytes(ptr, len) }
 }
 
-pub fn main(ptr: *u8, len: own u256) -> i32 {
+pub fn main(ptr: *u8, len: own usize) -> i32 {
     zero_buffer(ptr, len)
     0
 }

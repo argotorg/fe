@@ -4,7 +4,7 @@ expression: diags
 input_file: fixtures/ty_check/trait_const_assumption_arg_mismatch.fe
 ---
 error[6-0003]: trait bound is not satisfied
-   ┌─ trait_const_assumption_arg_mismatch.fe:12:42
+   ┌─ trait_const_assumption_arg_mismatch.fe:12:51
    │
-12 │     let _: Slot<{ <T as HasN<2>>::C }> = todo()
-   │                                          ^^^^^^ `T` doesn't implement `HasN<2>`
+12 │     let _: Slot<{ <T as HasN<2>>::C }> = unsafe { todo() }
+   │                                                   ^^^^^^ `T` doesn't implement `HasN<2>`

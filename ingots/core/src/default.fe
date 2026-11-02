@@ -1,4 +1,4 @@
-use super::abi::{Bytes, DynArray, DynString}
+use super::abi::{Bytes, DynString}
 
 pub trait Default {
     fn default() -> Self
@@ -25,12 +25,6 @@ impl Default for Bytes {
 impl Default for DynString {
     fn default() -> Self {
         DynString::empty()
-    }
-}
-
-impl<T> Default for DynArray<T> {
-    fn default() -> Self {
-        DynArray::empty()
     }
 }
 

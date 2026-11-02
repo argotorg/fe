@@ -39,7 +39,7 @@ impl<T> Level1 for L1<T> {
 }
 
 fn extract_value<T: Level1>() -> T::Middle::Nested::Value {
-    todo()
+    unsafe { todo() }
 }
 
 fn reuse_assoc_type_table() {

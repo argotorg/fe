@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::{GreenNodeData, ast::AstNode};
 
-use super::{GenericArgsOwner, LitInt, ast_node};
+use super::{GenericArgsOwner, LitInt, ast_node, support};
 use crate::{SyntaxKind as SK, SyntaxNode, SyntaxToken};
 
 ast_node! {
@@ -87,6 +87,18 @@ impl BlockExpr {
     /// Returns items declared in the block.
     pub fn items(&self) -> impl Iterator<Item = super::Item> {
         support::children(self.syntax())
+    }
+
+    /// Returns `true` if the block or any block nested in it declares an item.
+    pub fn declares_items(&self) -> bool {
+        fn contains_item(node: &GreenNodeData) -> bool {
+            node.children().any(|child| {
+                child
+                    .into_node()
+                    .is_some_and(|node| node.kind() == SK::Item.into() || contains_item(node))
+            })
+        }
+        contains_item(&self.syntax().green())
     }
 }
 
@@ -674,6 +686,8 @@ pub enum UnOp {
     BitNot(SyntaxToken),
     /// `mut`
     Mut(SyntaxToken),
+    /// `mut?`
+    MaybeMut(SyntaxToken),
     /// `ref`
     Ref(SyntaxToken),
     /// `*`
@@ -687,6 +701,7 @@ impl UnOp {
             UnOp::Not(token) => token.clone(),
             UnOp::BitNot(token) => token.clone(),
             UnOp::Mut(token) => token.clone(),
+            UnOp::MaybeMut(token) => token.clone(),
             UnOp::Ref(token) => token.clone(),
             UnOp::Deref(token) => token.clone(),
         }
@@ -699,6 +714,7 @@ impl UnOp {
             SK::Not => Some(Self::Not(token)),
             SK::Tilde => Some(Self::BitNot(token)),
             SK::MutKw => Some(Self::Mut(token)),
+            SK::MaybeMutKw => Some(Self::MaybeMut(token)),
             SK::RefKw => Some(Self::Ref(token)),
             SK::Star => Some(Self::Deref(token)),
             _ => None,

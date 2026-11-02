@@ -79,9 +79,9 @@ fn keeps_an_aggregate_leaf() {
 
 #[test]
 fn rewraps_pointers() {
-    let addr: u256 = 64
+    let addr: usize = 64
     let mem = MemWrap { p: addr as *u256 } as MemOther
-    assert(mem.q as u256 == 64)
+    assert(mem.q as usize == 64)
     let slot: u256 = 7
     let stor = StorWrap { p: slot as StorPtr<u256> } as StorOther
     assert(stor.q as u256 == 7)
@@ -133,8 +133,8 @@ pub contract Counter {
 
 #[test]
 fn casts_contract_fields() uses (evm: mut Evm) {
-    let c = evm.create2<Counter>(value: 0, args: (), salt: 1)
-    evm.call(addr: c, gas: 200000, value: 0, message: CountMsg::Set { n: 42 })
-    let value: u256 = evm.call(addr: c, gas: 200000, value: 0, message: CountMsg::Get {})
+    let c = evm.create2<Counter>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: CountMsg::Set { n: 42 })
+    let value: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: CountMsg::Get {})
     assert(value == 42)
 }

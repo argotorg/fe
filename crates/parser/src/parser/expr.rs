@@ -284,7 +284,7 @@ pub(super) fn is_expr_start(kind: SyntaxKind) -> bool {
 fn prefix_binding_power(kind: SyntaxKind) -> Option<u8> {
     use SyntaxKind::*;
     match kind {
-        Not | Plus | Minus | Tilde | MutKw | RefKw | Star => Some(145),
+        Not | Plus | Minus | Tilde | MutKw | MaybeMutKw | RefKw | Star => Some(145),
         _ => None,
     }
 }

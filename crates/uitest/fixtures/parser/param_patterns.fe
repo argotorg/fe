@@ -1,0 +1,9 @@
+// A parameter pattern takes no label: a function writes `_` before it.
+fn no_label((a, b): (u256, u256)) -> u256 {
+    a + b
+}
+
+// Markers go on the names a parameter pattern binds.
+fn marker(_ var (a, b): (u256, u256)) -> u256 {
+    a + b
+}

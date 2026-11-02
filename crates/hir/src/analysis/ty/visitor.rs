@@ -110,6 +110,7 @@ where
         TyBase::Contract(c) => visitor.visit_contract(*c),
         TyBase::Func(func) => visitor.visit_func(*func),
         TyBase::Closure(closure) => visitor.visit_closure(*closure),
+        TyBase::Shape(_) => {}
     }
 }
 
@@ -119,7 +120,7 @@ where
 {
     closure.parent_args(visitor.db()).visit_with(visitor);
     closure.captures(visitor.db()).visit_with(visitor);
-    closure.param_tys(visitor.db()).visit_with(visitor);
+    closure.params(visitor.db()).visit_with(visitor);
     closure.ret_ty(visitor.db()).visit_with(visitor);
     closure.effects(visitor.db()).visit_with(visitor);
 }
@@ -158,6 +159,19 @@ where
             ConstExpr::Cast { expr, to } => {
                 expr.visit_with(visitor);
                 to.visit_with(visitor);
+            }
+            ConstExpr::Compare { lhs, rhs, .. } => {
+                lhs.visit_with(visitor);
+                rhs.visit_with(visitor);
+            }
+            ConstExpr::Select {
+                cond,
+                then,
+                otherwise,
+            } => {
+                cond.visit_with(visitor);
+                then.visit_with(visitor);
+                otherwise.visit_with(visitor);
             }
             ConstExpr::ArrayRepeat { value, len } => {
                 value.visit_with(visitor);
@@ -279,6 +293,7 @@ impl<'db> TyVisitable<'db> for SemanticInstanceKey<'db> {
         let env = self.impl_env(db);
         env.assumptions(db).visit_with(visitor);
         env.witnesses(db).visit_with(visitor);
+        self.evidence(db).visit_with(visitor);
     }
 }
 
@@ -374,7 +389,9 @@ impl<'db> TyVisitable<'db> for LocalBinding<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         match self {
-            LocalBinding::Param { ty, .. } => ty.visit_with(visitor),
+            LocalBinding::Param { ty, .. } | LocalBinding::ParamPart { ty, .. } => {
+                ty.visit_with(visitor)
+            }
             LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => {}
         }
     }
@@ -443,6 +460,31 @@ impl<'db> TyVisitable<'db> for ResolvedEffectArg<'db> {
             ty.visit_with(visitor);
         }
     }
+}
+
+/// Whether `v` mentions an effect provider's type parameter, which a call
+/// binds only once its providers are resolved.
+pub(crate) fn mentions_effect_provider<'db, V: TyVisitable<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    v: V,
+) -> bool {
+    struct Finder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: bool,
+    }
+    impl<'db> TyVisitor<'db> for Finder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_param(&mut self, ty_param: &TyParam<'db>) {
+            self.found |= ty_param.is_effect_provider();
+        }
+    }
+
+    let mut finder = Finder { db, found: false };
+    v.visit_with(&mut finder);
+    finder.found
 }
 
 pub fn collect_flags<'db, V: TyVisitable<'db>>(db: &'db dyn HirAnalysisDb, v: V) -> TyFlags {

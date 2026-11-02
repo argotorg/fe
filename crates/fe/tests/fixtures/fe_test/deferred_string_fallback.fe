@@ -1,0 +1,74 @@
+// A deferred method call takes a string literal's fallback type only once
+// nothing else can fix it: not at the end of a closure, whose enclosing body
+// can still constrain the literal, nor while another deferred call can.
+struct W<T> { v: T }
+
+trait Width {
+    fn width(self) -> u256
+}
+
+impl Width for W<String<1>> {
+    fn width(self) -> u256 {
+        1
+    }
+}
+
+impl Width for W<String<8>> {
+    fn width(self) -> u256 {
+        8
+    }
+}
+
+struct P<T> { v: T }
+
+trait Pin {
+    fn pin(self, _ s: String<8>) -> u256
+}
+
+impl Pin for P<u8> {
+    fn pin(self, _ s: String<8>) -> u256 {
+        10
+    }
+}
+
+impl Pin for P<u16> {
+    fn pin(self, _ s: String<8>) -> u256 {
+        20
+    }
+}
+
+fn annotation_after_closure() -> u256 {
+    let x = "a"
+    let g = || W { v: x }.width()
+    let y: String<8> = x
+    g()
+}
+
+fn annotation_before_closure() -> u256 {
+    let x = "a"
+    let y: String<8> = x
+    let g = || W { v: x }.width()
+    g()
+}
+
+// `pin` resolves once `k` is known and makes `x` a `String<8>`, which
+// selects the `width` deferred before it.
+fn deferred_call_fixes_literal() -> u256 {
+    let x = "a"
+    let k = 5
+    let a: u256 = W { v: x }.width()
+    let b: u256 = P { v: k }.pin(x)
+    let z: u8 = k
+    a + b
+}
+
+#[test]
+fn deferred_closure_keeps_outer_string_constraints() {
+    assert!(annotation_after_closure() == 8)
+    assert!(annotation_before_closure() == 8)
+}
+
+#[test]
+fn deferred_call_waits_for_other_deferred_calls() {
+    assert!(deferred_call_fixes_literal() == 18)
+}

@@ -2,7 +2,7 @@ use crate::HirDb;
 
 use super::{IdentId, Partial, PathId, StringId};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum ArithmeticMode {
     Checked,
     Unchecked,
@@ -18,7 +18,7 @@ impl ArithmeticMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum InlineHint {
     Hint,
     Always,
@@ -35,45 +35,45 @@ impl InlineHint {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum InlineAttrErrorKind {
     Duplicate,
     InvalidForm,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum LoopUnrollAttrErrorKind {
     Duplicate,
     InvalidForm,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum MustUseAttrErrorKind {
     Duplicate,
     InvalidForm,
     UnsupportedTarget,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum InlineAttr {
     Hint(InlineHint),
     Error(InlineAttrErrorKind),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum LoopUnrollAttr {
     Hint(bool),
     Error(LoopUnrollAttrErrorKind),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum ManualContractRootAttr<'db> {
     Init { contract_name: StringId<'db> },
     Runtime { contract_name: StringId<'db> },
     Error(ManualContractRootAttrError),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum ManualContractRootAttrError {
     InvalidForm,
     Duplicate,
@@ -273,7 +273,6 @@ fn parse_keyword_attr_spec<T: Copy>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct AttrListId<'db> {
-    #[return_ref]
     pub data: Vec<Attr<'db>>,
 }
 
@@ -512,13 +511,13 @@ impl<'db> NormalAttr<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, salsa::SalsaValue)]
 pub enum Attr<'db> {
     Normal(NormalAttr<'db>),
     DocComment(DocCommentAttr<'db>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NormalAttr<'db> {
     pub path: Partial<PathId<'db>>,
     /// The value after `=` in `#[attr = value]`.
@@ -530,13 +529,13 @@ pub struct NormalAttr<'db> {
     pub args: Vec<AttrArg<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct DocCommentAttr<'db> {
     /// This is the text of the doc comment, excluding the `///` prefix.
     pub text: StringId<'db>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AttrArg<'db> {
     pub key: Partial<PathId<'db>>,
     /// The value after `=` in `#[attr(key = value)]`.
@@ -554,7 +553,7 @@ impl<'db> AttrArg<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum AttrArgValue<'db> {
     Ident(IdentId<'db>),
     Lit(super::LitKind<'db>),

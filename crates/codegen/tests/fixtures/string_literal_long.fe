@@ -1,0 +1,12 @@
+// Test: a string literal longer than a word is a `DynString`. Its bytes are
+// stored a word at a time, or copied from a constant in the code once there
+// are 96 or more.
+use std::abi::DynString
+
+pub fn long_string() -> DynString {
+    "A string literal of ninety-six bytes or more is copied into memory from a constant in the contract code."
+}
+
+pub fn two_word_string() -> DynString {
+    "Two words are stored one constant word at a time."
+}

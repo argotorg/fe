@@ -18,7 +18,7 @@ extern {
 
 impl Clamp<i32> for i64 {
     fn clamp_into(self) -> i32 {
-        clamp_i64_i32(self)
+        unsafe { clamp_i64_i32(self) }
     }
 }
 

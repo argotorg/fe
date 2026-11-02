@@ -1,0 +1,39 @@
+// A trait's signatures name the effect rows of its associated types'
+// bounds, and a caller forwards them.
+trait Bump {
+    uses E
+    fn bump(self) uses E
+}
+
+trait Holds {
+    type Inner: Bump
+
+    fn inner(self) -> Self::Inner
+    fn bump_inner(self) uses Self::Inner::E
+}
+
+fn bump_held<H: Holds>(_ h: H) uses H::Inner::E {
+    h.bump_inner()
+}
+
+// Rejected: the row `bump_inner` requires is not forwarded.
+fn missing<H: Holds>(_ h: H) {
+    h.bump_inner()
+}
+
+struct Wrap<H> {
+    held: H,
+}
+
+// Rejected: the method drops the row its trait method requires.
+impl<H: Holds> Holds for Wrap<H> {
+    type Inner = H::Inner
+
+    fn inner(self) -> H::Inner {
+        self.held.inner()
+    }
+
+    fn bump_inner(self) {
+        self.held.bump_inner()
+    }
+}

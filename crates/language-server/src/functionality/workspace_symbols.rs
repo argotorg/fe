@@ -41,7 +41,7 @@ fn collect_matching_symbols(
     query: &str,
     symbols: &mut Vec<SymbolInformation>,
 ) {
-    let items = top_mod.scope_graph(db).items_dfs(db);
+    let items = top_mod.all_items(db).iter().copied();
 
     for item in items {
         if let Some(symbol) = item_to_workspace_symbol(db, item, query) {

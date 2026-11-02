@@ -2,7 +2,7 @@
 // holds it: the fields of a transient cell are transient as a contract field,
 // as a field of a storage struct, and through a `mut` parameter, and the
 // storage words at the same numbers are untouched.
-use core::marker::Pinned
+use core::marker::{Pinned, Transient}
 use std::evm::{Evm, RawStorage, SolSlot}
 
 struct Cell {
@@ -11,7 +11,7 @@ struct Cell {
 }
 
 impl Pinned for Cell {
-    space S = transient
+    type Space = Transient
 }
 
 struct Guarded {
@@ -61,8 +61,8 @@ pub contract C uses (storage: mut RawStorage) {
 
 #[test]
 fn pinned_fields_keep_their_space() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    let r: (bool, u256, bool, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: 0, message: M::Run {})
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: (bool, u256, bool, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
     assert!(r.0)
     assert!(r.1 == 7)
     assert!(r.2)

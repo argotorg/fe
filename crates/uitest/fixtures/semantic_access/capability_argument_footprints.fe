@@ -32,7 +32,7 @@ trait Pinger {
 
 impl Pinger for Evm {
     fn ping(mut self, _ a: Address) {
-        self.call(addr: a, gas: 1000, value: 0, message: AMsg::Poke { v: a })
+        self.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a })
     }
 }
 
@@ -63,7 +63,7 @@ pub contract V uses (evm: mut Evm) {
     recv VMsg {
         // Rejected: a `mut Evm` passed to a closure calls out.
         ClosureCall { a } uses (mut value, mut evm) {
-            let f = |e: mut Evm| e.call(addr: a, gas: 1000, value: 0, message: AMsg::Poke { v: a })
+            let f = |e: mut Evm| e.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a })
             let held = mut value
             f(mut evm)
             held = 1
@@ -100,7 +100,7 @@ pub contract V uses (evm: mut Evm) {
         // Rejected: an unbounded parameter routed to a callable that calls out.
         Routed { a } uses (mut value, mut evm) {
             let held = mut value
-            apply_with(|e: mut Evm| e.call(addr: a, gas: 1000, value: 0, message: AMsg::Poke { v: a }), mut evm)
+            apply_with(|e: mut Evm| e.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a }), mut evm)
             held = 1
         }
         // Rejected: a user trait implemented for `Evm` calls out.

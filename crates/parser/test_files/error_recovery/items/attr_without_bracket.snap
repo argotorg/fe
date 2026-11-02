@@ -1,0 +1,118 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/attr_without_bracket.fe
+---
+Root@0..114
+  ItemList@0..113
+    Item@0..14
+      Func@0..14
+        AttrList@0..2
+          Attr@0..1
+            Pound@0..1 "#"
+          Newline@1..2 "\n"
+        FnKw@2..4 "fn"
+        WhiteSpace@4..5 " "
+        FuncSignature@5..11
+          Ident@5..9 "bare"
+          FuncParamList@9..11
+            LParen@9..10 "("
+            RParen@10..11 ")"
+        WhiteSpace@11..12 " "
+        BlockExpr@12..14
+          LBrace@12..13 "{"
+          RBrace@13..14 "}"
+    Newline@14..16 "\n\n"
+    Item@16..36
+      Func@16..36
+        AttrList@16..23
+          Attr@16..22
+            Pound@16..17 "#"
+            WhiteSpace@17..18 " "
+            Error@18..22
+              Ident@18..22 "name"
+          Newline@22..23 "\n"
+        FnKw@23..25 "fn"
+        WhiteSpace@25..26 " "
+        FuncSignature@26..33
+          Ident@26..31 "named"
+          FuncParamList@31..33
+            LParen@31..32 "("
+            RParen@32..33 ")"
+        WhiteSpace@33..34 " "
+        BlockExpr@34..36
+          LBrace@34..35 "{"
+          RBrace@35..36 "}"
+    Newline@36..38 "\n\n"
+    Item@38..51
+      Func@38..51
+        FnKw@38..40 "fn"
+        WhiteSpace@40..41 " "
+        FuncSignature@41..48
+          Ident@41..46 "first"
+          FuncParamList@46..48
+            LParen@46..47 "("
+            RParen@47..48 ")"
+        WhiteSpace@48..49 " "
+        BlockExpr@49..51
+          LBrace@49..50 "{"
+          RBrace@50..51 "}"
+    Newline@51..52 "\n"
+    Item@52..76
+      Func@52..76
+        AttrList@52..62
+          Attr@52..61
+            Pound@52..53 "#"
+            Error@53..60
+              Not@53..54 "!"
+              LBracket@54..55 "["
+              Ident@55..60 "inner"
+            Path@60..60
+              PathSegment@60..60
+            RBracket@60..61 "]"
+          Newline@61..62 "\n"
+        FnKw@62..64 "fn"
+        WhiteSpace@64..65 " "
+        FuncSignature@65..73
+          Ident@65..71 "second"
+          FuncParamList@71..73
+            LParen@71..72 "("
+            RParen@72..73 ")"
+        WhiteSpace@73..74 " "
+        BlockExpr@74..76
+          LBrace@74..75 "{"
+          RBrace@75..76 "}"
+    Newline@76..78 "\n\n"
+    Item@78..113
+      Impl@78..113
+        ImplKw@78..82 "impl"
+        WhiteSpace@82..83 " "
+        PathType@83..84
+          Path@83..84
+            PathSegment@83..84
+              Ident@83..84 "S"
+        WhiteSpace@84..85 " "
+        ImplItemList@85..113
+          LBrace@85..86 "{"
+          Newline@86..87 "\n"
+          WhiteSpace@87..91 "    "
+          Func@91..111
+            AttrList@91..93
+              Attr@91..92
+                Pound@91..92 "#"
+              Newline@92..93 "\n"
+            WhiteSpace@93..97 "    "
+            FnKw@97..99 "fn"
+            WhiteSpace@99..100 " "
+            FuncSignature@100..108
+              Ident@100..106 "method"
+              FuncParamList@106..108
+                LParen@106..107 "("
+                RParen@107..108 ")"
+            WhiteSpace@108..109 " "
+            BlockExpr@109..111
+              LBrace@109..110 "{"
+              RBrace@110..111 "}"
+          Newline@111..112 "\n"
+          RBrace@112..113 "}"
+  Newline@113..114 "\n"

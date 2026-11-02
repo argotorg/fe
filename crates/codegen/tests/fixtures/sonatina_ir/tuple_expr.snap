@@ -24,10 +24,8 @@ func private %tuple_expr() -> @layout_0 {
 
     block1:
         v5.constref<@layout_0> = const.ref $const_region_0;
-        v6.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v6 v5;
-        v7.@layout_0 = obj.load v6;
-        return v7;
+        v6.@layout_0 = const.load v5;
+        return v6;
 }
 
 

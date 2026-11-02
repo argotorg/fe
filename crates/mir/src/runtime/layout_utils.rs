@@ -304,9 +304,12 @@ impl<'db> RuntimeMemoryLayout<'db> {
         }
     }
 
+    /// A memory address, or a reference, is a `usize`.
     fn pointer_size(self) -> u64 {
         match self.unit {
-            RuntimeMemoryUnit::Byte => 32,
+            RuntimeMemoryUnit::Byte => {
+                self.db.compilation_settings().target(self.db).usize_bits() as u64 / 8
+            }
             RuntimeMemoryUnit::Word => 1,
         }
     }

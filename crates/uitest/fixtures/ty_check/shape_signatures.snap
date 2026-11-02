@@ -1,0 +1,49 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/shape_signatures.fe
+---
+error[3-0000]: expected `*` kind in this context
+   ┌─ shape_signatures.fe:53:39
+   │
+53 │ fn moded_result<D: Driver>(_ d: D) -> ref D::Step<ref> {
+   │                                       ^^^^^^^^^^^^^^^^ expected `*` kind here
+
+error[3-0084]: an associated shape needs a mode here
+  ┌─ shape_signatures.fe:9:22
+  │
+9 │     fn peek(self) -> Self::Step
+  │                      ^^^^^^^^^^ write `<ref>` or `<mut>` after it, as in `D::Step<ref>`; only a `mut?` item's own signature names one without
+
+error[3-0084]: an associated shape needs a mode here
+   ┌─ shape_signatures.fe:35:24
+   │
+35 │ fn bound<D: Driver, F: Fn(D::Step) -> bool>(_ f: F) {}
+   │                        ^^^^^^^^^^^^^^^^^^^ write `<ref>` or `<mut>` after it, as in `D::Step<ref>`; only a `mut?` item's own signature names one without
+
+error[3-0084]: an associated shape needs a mode here
+   ┌─ shape_signatures.fe:38:14
+   │
+38 │     where F: Fn(D::Step<ref>, D::Step) -> bool
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ write `<ref>` or `<mut>` after it, as in `D::Step<ref>`; only a `mut?` item's own signature names one without
+
+error[3-0084]: an associated shape needs a mode here
+   ┌─ shape_signatures.fe:46:23
+   │
+46 │ fn concrete_bare(_ s: One::Step) {}
+   │                       ^^^^^^^^^ write `<ref>` or `<mut>` after it, as in `D::Step<ref>`; only a `mut?` item's own signature names one without
+
+error[3-0084]: an associated shape needs a mode here
+   ┌─ shape_signatures.fe:49:29
+   │
+49 │ fn bare_result(_ o: One) -> One::Step {
+   │                             ^^^^^^^^^ write `<ref>` or `<mut>` after it, as in `D::Step<ref>`; only a `mut?` item's own signature names one without
+
+error[6-0008]: method `at` has incompatible return type
+   ┌─ shape_signatures.fe:22:8
+   │
+ 6 │     fn at(mut? self) -> Self::Step
+   │        -- trait requires this return type
+   ·
+22 │     fn at(mut? self) -> (mut? u256, own u256) {
+   │        ^^ expected `Self::Step<ref>`, found `(ref u256, u256)`

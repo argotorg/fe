@@ -1,0 +1,63 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/string_literal_long.fe
+---
+target = "evm-ethereum-osaka"
+
+type @layout_0 = {i256, i256, i256};
+
+global private const [i8; 104] $const_bytes_0 = [65, 32, 115, 116, 114, 105, 110, 103, 32, 108, 105, 116, 101, 114, 97, 108, 32, 111, 102, 32, 110, 105, 110, 101, 116, 121, 45, 115, 105, 120, 32, 98, 121, 116, 101, 115, 32, 111, 114, 32, 109, 111, 114, 101, 32, 105, 115, 32, 99, 111, 112, 105, 101, 100, 32, 105, 110, 116, 111, 32, 109, 101, 109, 111, 114, 121, 32, 102, 114, 111, 109, 32, 97, 32, 99, 111, 110, 115, 116, 97, 110, 116, 32, 105, 110, 32, 116, 104, 101, 32, 99, 111, 110, 116, 114, 97, 99, 116, 32, 99, 111, 100, 101, 46];
+
+func private %long_string() -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc 160.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
+        v8.@layout_0 = insert_value v6 1.i256 104.i256;
+        v10.@layout_0 = insert_value v8 2.i256 160.i256;
+        mstore v3 104.i256 i256;
+        v13.i256 = add v3 32.i256;
+        v15.i256 = add v13 96.i256;
+        mstore v15 0.i256 i256;
+        v16.i256 = sym_addr $const_bytes_0;
+        evm_code_copy v13 v16 104.i256;
+        return v10;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.@layout_0 = call %long_string;
+        evm_stop;
+}
+
+func private %two_word_string() -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc 96.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
+        v8.@layout_0 = insert_value v6 1.i256 49.i256;
+        v10.@layout_0 = insert_value v8 2.i256 96.i256;
+        mstore v3 49.i256 i256;
+        v13.i256 = add v3 32.i256;
+        mstore v13 38205301050843800741474601539563000341654913573499389919640238930270514078062.i256 i256;
+        v16.i256 = add v13 32.i256;
+        mstore v16 52525653854147948378556237155255274215818387959128288392797704323672875991040.i256 i256;
+        return v10;
+}
+
+
+object @main {
+    section main {
+        entry %main_root;
+    }
+}

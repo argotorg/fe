@@ -1,21 +1,25 @@
 mod memory_reference;
+mod native_panic;
 
 #[cfg(test)]
 mod tests;
 
 use memory_reference::{MemoryReference, ReferentLayout};
+pub(super) use native_panic::NativePanics;
+use native_panic::{COMPILER_SYMBOL_PREFIX, NativePanic};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::Arc;
 
+use common::InputDb;
 use common::layout::StorageLane;
 use common::origin::OriginExportKey;
 use driver::DriverDataBase;
 use hir::{
     analysis::{
         semantic::FieldIndex,
-        ty::{AddressSpace, ty_check::BodyOwner, ty_def::TyId},
+        ty::{AddressSpace, ty_check::BodyOwner},
     },
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
@@ -27,7 +31,7 @@ use mir::{
     ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
     RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
     RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr,
-    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place, runtime_param_accesses,
     scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -44,11 +48,11 @@ use sonatina_ir::{
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Phi, PhiArgs, Return, Unreachable},
         data::{
-            Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
+            Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, MemAllocDynamic,
-            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjMaterializeHeap,
-            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, MemAllocDynamic,
+            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj,
+            ObjStore, SymAddr, SymSize, SymbolRef,
         },
         downcast,
         evm::{
@@ -63,7 +67,7 @@ use sonatina_ir::{
             EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
             EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
-        logic::{And, Not, Or, Xor},
+        logic::{And, Bswap, Not, Or, Xor},
     },
     isa::Isa,
     module::{FuncRef, ModuleCtx},
@@ -77,6 +81,57 @@ use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 
 // Sonatina's EVM calling convention can carry at most 16 arguments.
 const MAX_DIRECT_CALL_ARGS: usize = 16;
+
+/// A C library function native code calls. A Fe `extern` declaration of the
+/// same symbol shares its import, so it must declare the same signature.
+#[derive(Clone, Copy)]
+enum HostFunction {
+    Malloc,
+    Free,
+    Memmove,
+    Write,
+    Fflush,
+    Abort,
+}
+
+impl HostFunction {
+    const ALL: [Self; 6] = [
+        Self::Malloc,
+        Self::Free,
+        Self::Memmove,
+        Self::Write,
+        Self::Fflush,
+        Self::Abort,
+    ];
+
+    fn symbol(self) -> &'static str {
+        match self {
+            Self::Malloc => "malloc",
+            Self::Free => "free",
+            Self::Memmove => "memmove",
+            Self::Write => "write",
+            Self::Fflush => "fflush",
+            Self::Abort => "abort",
+        }
+    }
+
+    /// The Fe declaration whose import native code shares.
+    fn declaration(self) -> &'static str {
+        match self {
+            Self::Malloc => "fn malloc(_ size: usize) -> *u8",
+            Self::Free => "fn free(_ ptr: *u8)",
+            Self::Memmove => "fn memmove(_ dest: *u8, _ src: *u8, _ len: usize) -> *u8",
+            Self::Write => "fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize",
+            Self::Fflush => "fn fflush(_ stream: *u8) -> i32",
+            Self::Abort => "fn abort()",
+        }
+    }
+}
+
+// The native address of every zero-size allocation, which takes nothing from
+// the host. It is aligned for any value and lies in the unmapped first page,
+// so no host allocation has it.
+const NATIVE_EMPTY_ALLOCATION: i64 = 16;
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
@@ -135,31 +190,37 @@ define_lowering_inst_set!(
     EnumTag,
     EnumWriteVariant,
     ExtractValue,
+    Gep,
     InsertValue,
     Memzero,
     Mload,
     Mstore,
     ObjAlloc,
     ObjIndex,
-    ObjInitConst,
     ObjLoad,
-    ObjMaterializeHeap,
+    ObjMaterializeStack,
     ObjProj,
     ObjStore,
     SymAddr,
     SymSize,
     And,
+    Bswap,
     Not,
     Or,
     Xor,
 );
+
+/// The shortest constant byte string written to memory with one code copy
+/// rather than a store per word. Below three words, word stores are about as
+/// small, and smaller when the words are mostly zeros.
+const MIN_CODE_COPY_BYTES: usize = 96;
 
 pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
-    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, None)
+    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, None, NativePanics::Trap)
         .map(|(module, _)| module)
 }
 
@@ -179,7 +240,14 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
-    let mut lowerer = ModuleLowerer::new(db, builder, isa.inst_set(), package, None);
+    let mut lowerer = ModuleLowerer::new(
+        db,
+        builder,
+        isa.inst_set(),
+        package,
+        None,
+        NativePanics::Trap,
+    )?;
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.declare_external_code(external_code);
@@ -188,22 +256,32 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
     Ok(lowerer.finish().0)
 }
 
+fn is_native_architecture(architecture: Architecture) -> bool {
+    matches!(
+        architecture,
+        Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv64im
+    )
+}
+
 pub(super) fn compile_runtime_package_sonatina_for_isa<'db, I>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
     isa: &I,
     declare_objects: bool,
     fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+    panics: NativePanics,
 ) -> Result<(Module, FxHashMap<RuntimeInstance<'db>, FuncRef>), LowerError>
 where
     I: Isa,
     I::InstSet: LoweringInstSet,
 {
     let builder = ModuleBuilder::new(ModuleCtx::new(isa));
-    let mut lowerer = ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol);
+    let mut lowerer =
+        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol, panics)?;
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
+    lowerer.define_native_panic_functions()?;
     if declare_objects {
         lowerer.declare_objects()?;
     }
@@ -225,6 +303,9 @@ struct ModuleLowerer<'db, 'a, I: 'static> {
     const_names: FxHashMap<ConstRegionId<'db>, String>,
     explicit_code_region_sections: FxHashSet<(String, mir::RuntimeSectionName)>,
     external_code: FxHashMap<(String, mir::RuntimeSectionName), GlobalVariableRef>,
+    /// The constant byte strings code copies, one global each.
+    const_bytes: FxHashMap<Box<[u8]>, GlobalVariableRef>,
+    panics: NativePanics,
 }
 
 impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
@@ -234,12 +315,21 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         inst_set: &'static I,
         package: &'a RuntimePackage<'db>,
         fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
-    ) -> Self {
-        let native = matches!(
-            builder.ctx.triple.architecture,
-            Architecture::X86_64 | Architecture::Aarch64
-        );
-        Self {
+        panics: NativePanics,
+    ) -> Result<Self, LowerError> {
+        // HIR and MIR lay memory out with the compilation target's `usize`,
+        // so the backend's addresses must be as wide.
+        let target = db.compilation_settings().target(db);
+        let address_bits = usize::from(int_bits(builder.ctx.type_layout.pointer_repl()));
+        if address_bits != target.usize_bits() {
+            return Err(LowerError::Unsupported(format!(
+                "the {target:?} compilation target has {}-bit addresses, but the {:?} backend has {address_bits}-bit addresses",
+                target.usize_bits(),
+                builder.ctx.triple.architecture,
+            )));
+        }
+        let native = is_native_architecture(builder.ctx.triple.architecture);
+        Ok(Self {
             db,
             builder,
             inst_set,
@@ -250,7 +340,15 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 db,
                 package,
                 fixed_symbol,
-                if native { &["memmove"] } else { &[] },
+                &if native {
+                    HostFunction::ALL
+                        .map(HostFunction::symbol)
+                        .into_iter()
+                        .chain(NativePanic::ALL.map(NativePanic::symbol))
+                        .collect()
+                } else {
+                    Vec::new()
+                },
             ),
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
@@ -259,7 +357,9 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             const_names: FxHashMap::default(),
             explicit_code_region_sections: FxHashSet::default(),
             external_code: FxHashMap::default(),
-        }
+            const_bytes: FxHashMap::default(),
+            panics,
+        })
     }
 
     fn finish(self) -> (Module, FxHashMap<RuntimeInstance<'db>, FuncRef>) {
@@ -281,10 +381,55 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn is_native_target(&self) -> bool {
-        matches!(
-            self.builder.ctx.triple.architecture,
-            Architecture::X86_64 | Architecture::Aarch64
-        )
+        is_native_architecture(self.builder.ctx.triple.architecture)
+    }
+
+    /// Declares the C library's `host`, sharing the import with a Fe `extern`
+    /// declaration of the same symbol. As in a Fe `extern`, a pointer is an
+    /// `*i8` and a `usize` or `isize` an address-wide integer.
+    fn host_function(&self, host: HostFunction) -> Result<FuncRef, LowerError> {
+        let pointer = self.builder.ptr_type(Type::I8);
+        let size = self.address_int_ty(AddressSpace::Memory);
+        let (args, ret) = match host {
+            HostFunction::Malloc => (vec![size], Some(pointer)),
+            HostFunction::Free => (vec![pointer], None),
+            HostFunction::Memmove => (vec![pointer, pointer, size], Some(pointer)),
+            HostFunction::Write => (vec![Type::I32, pointer, size], Some(size)),
+            HostFunction::Fflush => (vec![pointer], Some(Type::I32)),
+            HostFunction::Abort => (vec![], None),
+        };
+        let signature = match ret {
+            Some(ret) => Signature::new_single(host.symbol(), Linkage::External, &args, ret),
+            None => Signature::new_unit(host.symbol(), Linkage::External, &args),
+        };
+        self.builder.declare_function(signature).map_err(|_| {
+            LowerError::Unsupported(format!(
+                "native code calls the C library's `{}`, so an `extern` declaration of it must be `{}`",
+                host.symbol(),
+                host.declaration(),
+            ))
+        })
+    }
+
+    /// An address in `space`: a byte pointer for native memory, and otherwise
+    /// its integer.
+    fn address_ty(&self, space: AddressSpace) -> Type {
+        if space == AddressSpace::Memory && self.is_native_target() {
+            self.builder.ptr_type(Type::I8)
+        } else {
+            self.address_int_ty(space)
+        }
+    }
+
+    /// An address in `space` as an integer: the backend's pointer integer for
+    /// memory, as wide as the compilation target's `usize`, and a word for the
+    /// EVM's word-addressed spaces.
+    fn address_int_ty(&self, space: AddressSpace) -> Type {
+        if space == AddressSpace::Memory {
+            self.builder.ctx.type_layout.pointer_repl()
+        } else {
+            Type::I256
+        }
     }
 
     fn function_symbol(&self, instance: RuntimeInstance<'db>) -> String {
@@ -294,9 +439,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             .or_else(|| {
                 self.package
                     .functions(self.db)
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .find(|function| function.instance(self.db) == instance)
-                    .map(|function| function.symbol(self.db))
+                    .map(|function| function.symbol(self.db).clone())
             })
             .unwrap_or_else(|| format!("{:?}", instance.key(self.db)))
     }
@@ -309,7 +455,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn declare_functions(&mut self) -> Result<(), LowerError> {
-        for function in self.package.functions(self.db) {
+        for &function in self.package.functions(self.db) {
             let signature = self.lower_signature(function)?;
             let func_ref = self.builder.declare_function(signature).map_err(|err| {
                 LowerError::Internal(format!("failed to declare function: {err}"))
@@ -324,13 +470,12 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let instance = function.instance(self.db);
         let (mut args, ret) = self.signature_tys(instance)?;
         let symbol = self.function_symbol(instance);
-        if self.is_native_target()
-            && function.linkage(self.db) == RuntimeLinkage::External
-            && symbol == "memmove"
+        if function.linkage(self.db) == RuntimeLinkage::External
+            && symbol.starts_with(COMPILER_SYMBOL_PREFIX)
         {
-            return Err(LowerError::Unsupported(
-                "native extern symbol `memmove` is reserved for memory copies".to_string(),
-            ));
+            return Err(LowerError::Unsupported(format!(
+                "extern symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
+            )));
         }
         if function.linkage(self.db) == RuntimeLinkage::External
             && (!self.is_native_target()
@@ -380,7 +525,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn lower_const_regions(&mut self) -> Result<(), LowerError> {
-        for region in self.package.const_regions(self.db) {
+        for &region in self.package.const_regions(self.db) {
             self.lower_const_region(region)?;
         }
         Ok(())
@@ -492,32 +637,49 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         external_code: &[((String, mir::RuntimeSectionName), Vec<u8>)],
     ) {
         for (idx, (key, bytes)) in external_code.iter().enumerate() {
-            let ty = self.builder.declare_array_type(Type::I8, bytes.len());
-            let init = sonatina_ir::global_variable::GvInitializer::make_array(
-                bytes
-                    .iter()
-                    .map(|byte| {
-                        sonatina_ir::global_variable::GvInitializer::make_imm(Immediate::I8(
-                            *byte as i8,
-                        ))
-                    })
-                    .collect(),
-            );
-            let gv = self.builder.declare_gv(GlobalVariableData::constant(
-                format!("external_code_{idx}"),
-                ty,
-                Linkage::Private,
-                init,
-            ));
+            let gv = self.declare_bytes_global(format!("external_code_{idx}"), bytes);
             self.external_code.insert(key.clone(), gv);
         }
+    }
+
+    /// The private constant global holding `bytes`, shared by every copy of
+    /// the same bytes.
+    fn const_bytes_global(&mut self, bytes: &[u8]) -> GlobalVariableRef {
+        if let Some(&gv) = self.const_bytes.get(bytes) {
+            return gv;
+        }
+        let gv =
+            self.declare_bytes_global(format!("const_bytes_{}", self.const_bytes.len()), bytes);
+        self.const_bytes.insert(bytes.into(), gv);
+        gv
+    }
+
+    fn declare_bytes_global(&mut self, name: String, bytes: &[u8]) -> GlobalVariableRef {
+        let ty = self.builder.declare_array_type(Type::I8, bytes.len());
+        let init = sonatina_ir::global_variable::GvInitializer::make_array(
+            bytes
+                .iter()
+                .map(|byte| {
+                    sonatina_ir::global_variable::GvInitializer::make_imm(Immediate::I8(
+                        *byte as i8,
+                    ))
+                })
+                .collect(),
+        );
+        self.builder.declare_gv(GlobalVariableData::constant(
+            name,
+            ty,
+            Linkage::Private,
+            init,
+        ))
     }
 
     fn external_code_symbol(&self, region: mir::RuntimeCodeRegion<'db>) -> Option<SymbolRef> {
         let resolved = self
             .package
             .code_regions(self.db)
-            .into_iter()
+            .iter()
+            .copied()
             .find(|resolved| resolved.region(self.db) == region)?;
         let source = resolved.source(self.db);
         self.external_code
@@ -526,12 +688,12 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
-        for function in self.package.functions(self.db) {
+        for &function in self.package.functions(self.db) {
             if function.linkage(self.db) == RuntimeLinkage::External {
                 continue;
             }
             let instance = function.instance(self.db);
-            let body = instance.body(self.db);
+            let body = instance.body(self.db).clone();
             let func_ref = self.func_ref(instance)?;
             let ctx = FunctionLowerer::new(self, body, func_ref)?;
             ctx.lower()?;
@@ -540,7 +702,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn declare_objects(&mut self) -> Result<(), LowerError> {
-        for object in self.package.objects(self.db) {
+        for &object in self.package.objects(self.db) {
             let mut object_builder = ObjectBuilder::new(object.name(self.db).clone());
             for section in object.sections(self.db) {
                 let section_builder =
@@ -586,14 +748,15 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         section: &mir::RuntimeSectionName,
     ) -> bool {
         self.explicit_code_region_sections
-            .contains(&(object.name(self.db), section.clone()))
+            .contains(&(object.name(self.db).clone(), section.clone()))
     }
 
     fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
         let Some(resolved) = self
             .package
             .code_regions(self.db)
-            .into_iter()
+            .iter()
+            .copied()
             .find(|resolved| resolved.region(self.db) == region)
         else {
             return;
@@ -681,47 +844,22 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         name
     }
 
-    /// The parameter and return types of `instance`. Pointers are address
-    /// words; host calls instead pass a declared pointer as a machine pointer,
-    /// without the native i256 indirect-value ABI.
+    /// The parameter and return types of `instance`.
     fn signature_tys(
         &mut self,
         instance: RuntimeInstance<'db>,
     ) -> Result<(Vec<Type>, Option<Type>), LowerError> {
         let signature = instance.interface_signature(self.db);
-        let host = if self.is_native_target() && instance.is_external_declaration(self.db) {
-            instance
-                .key(self.db)
-                .semantic(self.db)
-                .and_then(|semantic| match semantic.key(self.db).owner(self.db) {
-                    BodyOwner::Func(func) => Some(func),
-                    _ => None,
-                })
-        } else {
-            None
-        };
-        let db = self.db;
-        let declared_pointer = |ty: Option<TyId<'db>>| {
-            ty.is_some_and(|ty| matches!(ty.as_ptr(db), Some((_, AddressSpace::Memory))))
-        };
-        let mut params = Vec::with_capacity(signature.params.len());
-        for (idx, param) in signature.params.iter().enumerate() {
-            let declared = host
-                .and_then(|func| func.arg_ty(db, idx))
-                .map(|ty| ty.instantiate_identity());
-            params.push(if declared_pointer(declared) {
-                self.builder.ptr_type(Type::I8)
-            } else {
-                self.ty_for_class(&param.class)?
-            });
-        }
-        let ret = match &signature.ret {
-            Some(_) if declared_pointer(host.map(|func| func.return_ty(db))) => {
-                Some(self.builder.ptr_type(Type::I8))
-            }
-            Some(class) => Some(self.ty_for_class(class)?),
-            None => None,
-        };
+        let params = signature
+            .params
+            .iter()
+            .map(|param| self.ty_for_class(&param.class))
+            .collect::<Result<_, _>>()?;
+        let ret = signature
+            .ret
+            .as_ref()
+            .map(|class| self.ty_for_class(class))
+            .transpose()?;
         Ok((params, ret))
     }
 
@@ -745,17 +883,27 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     let pointee_ty = self.ty_for_class(pointee)?;
                     self.builder.objref_type(pointee_ty)
                 }
-                RefKind::Native | RefKind::Provider { .. } => Type::I256,
+                RefKind::Native => self.address_ty(AddressSpace::Memory),
+                RefKind::Provider { space, .. } => self.address_ty(*space),
             },
-            RuntimeClass::RawAddr { .. } => Type::I256,
+            RuntimeClass::RawAddr { space, .. } => self.address_ty(*space),
         })
     }
 
     fn scalar_ty(&mut self, scalar: &ScalarClass<'db>) -> Result<Type, LowerError> {
         Ok(match scalar.role {
             mir::ScalarRole::EnumTag { enum_layout } => self.enum_tag_ty(enum_layout)?,
-            _ => scalar_ty(scalar),
+            _ => self.scalar_repr_ty(scalar),
         })
+    }
+
+    /// The type of `scalar`'s representation, which for an enum tag is its
+    /// integer. A memory address is a pointer on native targets.
+    fn scalar_repr_ty(&self, scalar: &ScalarClass<'db>) -> Type {
+        match scalar.role {
+            mir::ScalarRole::Pointer => self.address_ty(AddressSpace::Memory),
+            _ => scalar_ty(scalar),
+        }
     }
 
     fn enum_tag_ty(&mut self, enum_layout: LayoutId<'db>) -> Result<Type, LowerError> {
@@ -796,7 +944,8 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     "const scalar `{scalar:?}` does not fit runtime class `{class:?}`"
                 )));
             }
-            let ty = self.scalar_ty(class)?;
+            // A pointer constant is its address integer.
+            let ty = scalar_ty(class);
             return Ok(match scalar {
                 ConstScalar::Bool(value) => Immediate::from(*value),
                 ConstScalar::Int { signed, words, .. } => {
@@ -867,7 +1016,7 @@ fn assign_sonatina_function_symbols<'db>(
                 .map(|(_, symbol)| symbol.to_string())
                 .or_else(|| {
                     let semantic = function.instance(db).key(db).semantic(db)?;
-                    let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+                    let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
                         return None;
                     };
                     func.is_extern(db).then(|| {
@@ -878,13 +1027,13 @@ fn assign_sonatina_function_symbols<'db>(
                             .to_string()
                     })
                 }),
-            fallback_symbol: function.symbol(db),
+            fallback_symbol: function.symbol(db).clone(),
             variant_suffix: String::new(),
             disambiguator: mir::runtime_instance_symbol_key(db, function.instance(db)),
         })
         .collect::<Vec<_>>();
     functions
-        .into_iter()
+        .iter()
         .zip(assign_function_symbols(db, &inputs, reserved))
         .map(|(function, symbol)| (function.instance(db), symbol))
         .collect()
@@ -899,7 +1048,7 @@ fn describe_runtime_instance<'db>(
         RuntimeInstanceSource::Semantic(semantic) => {
             let owner = semantic.key(db).owner(db);
             let owner_desc = match owner {
-                BodyOwner::Func(func) => func.name(db).to_opt().map_or_else(
+                BodyOwner::Func(func, _) => func.name(db).to_opt().map_or_else(
                     || format!("func {func:?}"),
                     |name| format!("func {}", name.data(db)),
                 ),
@@ -1038,6 +1187,9 @@ struct FunctionLowerer<'ctx, 'db, 'a, I: 'static> {
     shared_helper_index_by_block: FxHashMap<BlockId, usize>,
     /// Helpers requested while lowering the current statement.
     pending_shared_helpers: Vec<usize>,
+    /// Whether the block being lowered ends by returning or reverting with
+    /// memory data.
+    block_ends_with_payload: bool,
 }
 
 /// A bounds check of a runtime index: `block` ends with the branch to the
@@ -1125,6 +1277,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             shared_helpers: Vec::new(),
             shared_helper_index_by_block: FxHashMap::default(),
             pending_shared_helpers: Vec::new(),
+            block_ends_with_payload: false,
         })
     }
 
@@ -1150,6 +1303,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 continue;
             }
             self.checked_indices.clear();
+            self.block_ends_with_payload = matches!(
+                block.terminator,
+                RTerminator::ReturnData { .. }
+                    | RTerminator::Revert { .. }
+                    | RTerminator::Panic { .. }
+            );
             self.fb
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
@@ -1396,7 +1555,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             ..
                         } => {
                             // Native slot borrows can publish their address in a
-                            // descriptor, so they need identity-preserving heap export.
+                            // descriptor, so the slot is an object to export.
                             SlotRoot::Object(
                                 self.fb.insert_inst(
                                     ObjAlloc::new(self.module.inst_set(), class_ty),
@@ -1417,6 +1576,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ),
                     };
                     self.slot_roots.insert(local_id, root);
+                }
+            }
+        }
+
+        // A view, `mut` or effect parameter's object belongs to this call
+        // alone, or nothing writes it during the call.
+        if !self.module.argument_packs.contains_key(&self.body.owner) {
+            let accesses = runtime_param_accesses(self.module.db, self.body.key);
+            for (idx, access) in accesses.into_iter().enumerate() {
+                if access
+                    && let Some(&arg) = self.fb.func.arg_values.get(idx)
+                    && self.fb.type_of(arg).is_obj_ref(&self.fb.module_builder.ctx)
+                {
+                    self.fb.func.set_noalias_arg(arg);
                 }
             }
         }
@@ -1687,7 +1860,22 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     .value_class(*value)
                     .is_some_and(RuntimeClass::is_signed_scalar);
                 let value = self.local_value(*value)?;
-                self.cast_scalar_with_signedness(value, scalar_ty(to), signed)?
+                let ty = self.module.scalar_repr_ty(to);
+                let ctx = &self.fb.module_builder.ctx;
+                let address = self.module.address_int_ty(AddressSpace::Memory);
+                // A pointer converts to and from an integer through its address.
+                match (self.fb.type_of(value).is_pointer(ctx), ty.is_pointer(ctx)) {
+                    (false, false) => self.cast_scalar_with_signedness(value, ty, signed)?,
+                    (true, false) => {
+                        let address = self.coerce_value_to_ty(value, address)?;
+                        self.cast_scalar(address, ty)?
+                    }
+                    (false, true) => {
+                        let address = self.cast_scalar_with_signedness(value, address, signed)?;
+                        self.coerce_value_to_ty(address, ty)?
+                    }
+                    (true, true) => self.coerce_value_to_ty(value, ty)?,
+                }
             }
             RExpr::ConstRef { region, .. } => {
                 let gv = self.module.lower_const_region(*region)?;
@@ -2013,24 +2201,134 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
+    /// Allocates `size` bytes from the native host. When the host is out of
+    /// memory, a `fallible` allocation is null and any other traps. A zero size
+    /// is `NATIVE_EMPTY_ALLOCATION` instead, so empty owners never reach the
+    /// host.
+    fn lower_native_allocation(
+        &mut self,
+        size: ValueId,
+        fallible: bool,
+    ) -> Result<ValueId, LowerError> {
+        let inst_set = self.module.inst_set();
+        let pointer = self.fb.ptr_type(Type::I8);
+        let entry = self
+            .fb
+            .current_block()
+            .expect("allocation requires a block");
+        let allocate = self.fb.append_block();
+        let done = self.fb.append_block();
+        let empty = self.fb.make_imm_value(NATIVE_EMPTY_ALLOCATION);
+        let empty = self.coerce_value_to_ty(empty, pointer)?;
+        let is_empty = self.fb.insert_inst(IsZero::new(inst_set, size), Type::I1);
+        self.fb
+            .insert_inst_no_result(Br::new(inst_set, is_empty, done, allocate));
+        self.fb.switch_to_block(allocate);
+        let allocated = if fallible {
+            let malloc = self.module.host_function(HostFunction::Malloc)?;
+            // Callers bound the size to the address width.
+            let size =
+                self.coerce_value_to_ty(size, self.module.address_int_ty(AddressSpace::Memory))?;
+            self.fb
+                .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer)
+        } else {
+            self.allocate_bytes(size, Type::I8)?
+        };
+        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+        self.fb.switch_to_block(done);
+        Ok(self.fb.insert_inst(
+            Phi::new(inst_set, smallvec![(empty, entry), (allocated, allocate)]),
+            pointer,
+        ))
+    }
+
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
         Ok(match builtin {
+            // The EVM's word loads and stores are big-endian; native ones
+            // swap the bytes of the little-endian word.
             RuntimeBuiltin::Mload { addr } => {
                 let addr = self.local_value(*addr)?;
-                self.fb.insert_inst(
+                let word = self.fb.insert_inst(
                     Mload::new(self.module.inst_set(), addr, Type::I256),
                     Type::I256,
-                )
+                );
+                if self.module.is_native_target() {
+                    self.fb
+                        .insert_inst(Bswap::new(self.module.inst_set(), word), Type::I256)
+                } else {
+                    word
+                }
             }
             RuntimeBuiltin::Mstore { addr, value } => {
                 let addr = self.local_value(*addr)?;
-                let value = self.local_value(*value)?;
+                let mut value = self.local_value(*value)?;
+                if self.module.is_native_target() {
+                    value = self
+                        .fb
+                        .insert_inst(Bswap::new(self.module.inst_set(), value), Type::I256);
+                }
                 self.fb.insert_inst_no_result(Mstore::new(
                     self.module.inst_set(),
                     addr,
                     value,
                     Type::I256,
                 ));
+                zero_for_type(&mut self.fb, Type::Unit)
+            }
+            RuntimeBuiltin::StoreConstBytes { dst, bytes } => {
+                let dst = self.local_value(*dst)?;
+                let code_copy = self.module.required_inst::<EvmCodeCopy>().ok();
+                match code_copy {
+                    // A payload the block then returns or reverts with stays
+                    // word stores: Sonatina keeps such stores out of the
+                    // memory plan, but not a copy, which also reads code.
+                    Some(code_copy)
+                        if bytes.len() >= MIN_CODE_COPY_BYTES && !self.block_ends_with_payload =>
+                    {
+                        // The copy writes the bytes alone; zero the last word
+                        // first for the padding after them.
+                        if bytes.len() % 32 != 0 {
+                            let addr =
+                                self.offset_address_unscaled(dst, (bytes.len() / 32 * 32) as u64)?;
+                            let zero = self.fb.make_imm_value(I256::zero());
+                            self.fb.insert_inst_no_result(Mstore::new(
+                                self.module.inst_set(),
+                                addr,
+                                zero,
+                                Type::I256,
+                            ));
+                        }
+                        let gv = self.module.const_bytes_global(bytes);
+                        let offset = self.fb.insert_inst(
+                            SymAddr::new(self.module.inst_set(), SymbolRef::Global(gv)),
+                            Type::I256,
+                        );
+                        let len = self.index_value(bytes.len() as u64);
+                        self.fb
+                            .insert_inst_no_result(EvmCodeCopy::new(code_copy, dst, offset, len));
+                    }
+                    _ => {
+                        // A word store writes the word big-endian on the EVM,
+                        // and little-endian on the native targets.
+                        let native = self.module.is_native_target();
+                        for (idx, chunk) in bytes.chunks(32).enumerate() {
+                            let mut word = [0; 32];
+                            word[..chunk.len()].copy_from_slice(chunk);
+                            let value = self.fb.make_imm_value(if native {
+                                I256::from_le_bytes(&word)
+                            } else {
+                                I256::from_be_bytes(&word)
+                            });
+                            let addr = self.offset_address_unscaled(dst, 32 * idx as u64)?;
+                            self.fb.insert_inst_no_result(Mstore::new(
+                                self.module.inst_set(),
+                                addr,
+                                value,
+                                Type::I256,
+                            ));
+                        }
+                    }
+                }
                 zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::Mstore8 { addr, value } => {
@@ -2063,43 +2361,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         copy,
                     ));
                     self.fb.switch_to_block(copy);
-                    // Fe raw addresses and lengths are words; native addresses
-                    // are 64 bits. Reject truncation and wrapping byte ranges.
-                    let max = self.fb.make_imm_value(I256::from(u64::MAX));
-                    for value in [dst, src, len] {
-                        let invalid = self
-                            .fb
-                            .insert_inst(Gt::new(self.module.inst_set(), value, max), Type::I1);
-                        self.emit_empty_revert(invalid)?;
-                    }
+                    // Reject a byte range that wraps the address space.
+                    let max = self.fb.make_imm_value(u64::MAX);
                     for address in [dst, src] {
-                        let available = self.fb.insert_inst(
-                            Sub::new(self.module.inst_set(), max, address),
-                            Type::I256,
-                        );
+                        let address = self.coerce_value_to_ty(address, Type::I64)?;
+                        let available = self
+                            .fb
+                            .insert_inst(Sub::new(self.module.inst_set(), max, address), Type::I64);
                         let invalid = self
                             .fb
                             .insert_inst(Gt::new(self.module.inst_set(), len, available), Type::I1);
                         self.emit_empty_revert(invalid)?;
                     }
                     let pointer = self.fb.ptr_type(Type::I8);
-                    let memmove = self
-                        .module
-                        .builder
-                        .declare_function(Signature::new_single(
-                            "memmove",
-                            Linkage::External,
-                            &[pointer, pointer, Type::I64],
-                            pointer,
-                        ))
-                        .map_err(|error| {
-                            LowerError::Internal(format!(
-                                "failed to declare native memmove: {error}"
-                            ))
-                        })?;
+                    let memmove = self.module.host_function(HostFunction::Memmove)?;
                     let dst = self.coerce_value_to_ty(dst, pointer)?;
                     let src = self.coerce_value_to_ty(src, pointer)?;
-                    let len = self.coerce_value_to_ty(len, Type::I64)?;
+                    let len = self.coerce_value_to_ty(
+                        len,
+                        self.module.address_int_ty(AddressSpace::Memory),
+                    )?;
                     self.fb.insert_inst(
                         Call::new(self.module.inst_set(), memmove, smallvec![dst, src, len]),
                         pointer,
@@ -2262,37 +2543,19 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let lhs = self.local_value(*lhs)?;
                 let rhs = self.local_value(*rhs)?;
                 let modulus = self.local_value(*modulus)?;
-                if self.module.is_native_target() {
-                    self.lower_modular_arithmetic(lhs, rhs, modulus, false)
-                } else {
-                    self.fb.insert_inst(
-                        EvmAddMod::new(
-                            self.module.required_inst::<EvmAddMod>()?,
-                            lhs,
-                            rhs,
-                            modulus,
-                        ),
-                        Type::I256,
-                    )
-                }
+                self.fb.insert_inst(
+                    EvmAddMod::new(self.module.required_inst::<EvmAddMod>()?, lhs, rhs, modulus),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::MulMod { lhs, rhs, modulus } => {
                 let lhs = self.local_value(*lhs)?;
                 let rhs = self.local_value(*rhs)?;
                 let modulus = self.local_value(*modulus)?;
-                if self.module.is_native_target() {
-                    self.lower_modular_arithmetic(lhs, rhs, modulus, true)
-                } else {
-                    self.fb.insert_inst(
-                        EvmMulMod::new(
-                            self.module.required_inst::<EvmMulMod>()?,
-                            lhs,
-                            rhs,
-                            modulus,
-                        ),
-                        Type::I256,
-                    )
-                }
+                self.fb.insert_inst(
+                    EvmMulMod::new(self.module.required_inst::<EvmMulMod>()?, lhs, rhs, modulus),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::LeadingZeros { value } => {
                 let value = self.local_value(*value)?;
@@ -2304,6 +2567,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         Type::I256,
                     )
                 }
+            }
+            RuntimeBuiltin::SwapBytes { value } => {
+                let value = self.local_value(*value)?;
+                let ty = self.fb.type_of(value);
+                self.fb
+                    .insert_inst(Bswap::new(self.module.inst_set(), value), ty)
+            }
+            RuntimeBuiltin::BlackBox { value } => {
+                let value = self.local_value(*value)?;
+                let ty = self.fb.type_of(value);
+                self.fb.insert_inst(
+                    BlackBox::new(self.module.required_inst::<BlackBox>()?, value),
+                    ty,
+                )
             }
             RuntimeBuiltin::Byte { pos, value } => {
                 let pos = self.local_value(*pos)?;
@@ -2447,27 +2724,47 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.fb
                     .insert_inst(SymSize::new(self.module.inst_set(), symbol), Type::I256)
             }
-            RuntimeBuiltin::Malloc { size } => {
+            RuntimeBuiltin::Malloc { size } | RuntimeBuiltin::TryMalloc { size } => {
                 let size = self.local_value(*size)?;
-                self.allocate_bytes(size, Type::I8)?
-            }
-            RuntimeBuiltin::NativePtrIsNull { ptr } => {
-                if !self.module.is_native_target() {
-                    return Err(LowerError::Unsupported(
-                        "native pointer null checks require a native target".into(),
-                    ));
+                if self.module.is_native_target() {
+                    let fallible = matches!(builtin, RuntimeBuiltin::TryMalloc { .. });
+                    self.lower_native_allocation(size, fallible)?
+                } else {
+                    // EVM memory runs out only with the gas, so no allocation
+                    // fails with a result.
+                    self.allocate_bytes(size, Type::I8)?
                 }
-                let ptr = self.local_value(*ptr)?;
-                self.fb
-                    .insert_inst(IsZero::new(self.module.inst_set(), ptr), Type::I1)
+            }
+            RuntimeBuiltin::Free { ptr } => {
+                // EVM memory is never reclaimed.
+                if self.module.is_native_target() {
+                    let inst_set = self.module.inst_set();
+                    let free = self.module.host_function(HostFunction::Free)?;
+                    let ptr = self.local_value(*ptr)?;
+                    // A zero-size allocation took nothing from the host.
+                    let address = self.coerce_value_to_ty(ptr, Type::I64)?;
+                    let empty = self.fb.make_imm_value(NATIVE_EMPTY_ALLOCATION);
+                    let is_empty = self
+                        .fb
+                        .insert_inst(Eq::new(inst_set, address, empty), Type::I1);
+                    let release = self.fb.append_block();
+                    let done = self.fb.append_block();
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, is_empty, done, release));
+                    self.fb.switch_to_block(release);
+                    let pointer = self.fb.ptr_type(Type::I8);
+                    let ptr = self.coerce_value_to_ty(ptr, pointer)?;
+                    self.fb
+                        .insert_inst_no_result(Call::new(inst_set, free, smallvec![ptr]));
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    self.fb.switch_to_block(done);
+                }
+                zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
                 let ptr = self.local_value(*ptr)?;
-                let ptr = self.coerce_value_to_ty(ptr, Type::I256)?;
                 let offset = self.local_value(*offset)?;
-                let offset = self.cast_scalar(offset, Type::I256)?;
-                self.fb
-                    .insert_inst(Add::new(self.module.inst_set(), ptr, offset), Type::I256)
+                self.offset_address(ptr, offset)?
             }
             RuntimeBuiltin::Call {
                 gas,
@@ -2766,10 +3063,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 .find(|resolved| resolved.region(self.module.db) == region)
                 .is_some_and(|resolved| {
                     self.current_sections.iter().all(|current_section| {
-                        runtime_section_refs_match(
-                            &resolved.source(self.module.db),
-                            current_section,
-                        )
+                        runtime_section_refs_match(resolved.source(self.module.db), current_section)
                     })
                 })
         {
@@ -2863,9 +3157,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let call = Call::new(self.module.inst_set(), self.module.func_ref(*callee)?, args);
                 // A diverging callee may still declare a return value; the call
                 // must match its signature even though the result is unused.
-                match callee.interface_signature(self.module.db).ret {
+                match &callee.interface_signature(self.module.db).ret {
                     Some(class) => {
-                        let ret_ty = self.module.ty_for_class(&class)?;
+                        let ret_ty = self.module.ty_for_class(class)?;
                         self.fb.insert_inst(call, ret_ty);
                     }
                     None => {
@@ -2884,29 +3178,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     len,
                 ));
             }
-            // Native targets have no revert data; a revert aborts like a trap.
-            RTerminator::Revert { .. } | RTerminator::RevertEmpty
-                if self.module.is_native_target() =>
-            {
-                self.fb
-                    .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
-            }
             RTerminator::Revert { offset, len } => {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
-                self.fb.insert_inst_no_result(EvmRevert::new(
-                    self.module.required_inst::<EvmRevert>()?,
-                    offset,
-                    len,
-                ));
+                if self.module.is_native_target() {
+                    let pointer = self.fb.ptr_type(Type::I8);
+                    let data = self.coerce_value_to_ty(offset, pointer)?;
+                    let len = self.coerce_value_to_ty(len, Type::I64)?;
+                    self.insert_native_panic(NativePanic::Revert, smallvec![data, len]);
+                } else {
+                    self.fb.insert_inst_no_result(EvmRevert::new(
+                        self.module.required_inst::<EvmRevert>()?,
+                        offset,
+                        len,
+                    ));
+                }
             }
-            RTerminator::RevertEmpty => {
-                let zero = self.fb.make_imm_value(I256::zero());
-                self.fb.insert_inst_no_result(EvmRevert::new(
-                    self.module.required_inst::<EvmRevert>()?,
-                    zero,
-                    zero,
-                ));
+            RTerminator::RevertEmpty => self.insert_empty_revert(),
+            RTerminator::Panic { code } => {
+                let code = self.local_value(*code)?;
+                self.insert_panic_revert(code);
             }
             RTerminator::SelfDestruct { beneficiary } => {
                 let beneficiary = self.local_value(*beneficiary)?;
@@ -2917,8 +3208,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RTerminator::Trap => {
                 if self.module.is_native_target() {
-                    self.fb
-                        .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+                    self.insert_native_panic(NativePanic::Trap, smallvec![]);
                 } else {
                     self.fb.insert_inst_no_result(EvmInvalid::new(
                         self.module.required_inst::<EvmInvalid>()?,
@@ -3423,20 +3713,22 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
+                    let address = self.module.address_int_ty(space);
                     let idx = self.checked_index_value(&base_class, index)?;
+                    let idx = self.cast_scalar(idx, address)?;
                     let scale = self.ptr_index_stride_for_space(&base_class, space)?;
                     let scaled = if scale == 1 {
                         idx
                     } else {
-                        let scale = self.index_value(scale);
+                        let scale = self
+                            .fb
+                            .make_imm_value(Immediate::from_i256(I256::from(scale), address));
                         self.fb
-                            .insert_inst(Mul::new(self.module.inst_set(), idx, scale), Type::I256)
+                            .insert_inst(Mul::new(self.module.inst_set(), idx, scale), address)
                     };
+                    let addr = self.coerce_value_to_ty(addr, self.module.address_ty(space))?;
                     PlaceTerminal::Ptr {
-                        addr: self.fb.insert_inst(
-                            Add::new(self.module.inst_set(), addr, scaled),
-                            Type::I256,
-                        ),
+                        addr: self.offset_address(addr, scaled)?,
                         space,
                         class: class.clone(),
                         lane: None,
@@ -3499,26 +3791,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 ObjLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
             ),
-            PlaceTerminal::Const { value, class } if class.aggregate_layout().is_some() => {
-                let layout = class.aggregate_layout().expect("const aggregate layout");
-                let layout_ty = self.module.ty_for_layout(layout)?;
-                let object = self.fb.insert_inst(
-                    ObjAlloc::new(self.module.inst_set(), layout_ty),
-                    self.fb.module_builder.objref_type(layout_ty),
-                );
-                self.copy_source_into_object(
-                    CopySource::Const {
-                        value,
-                        class: class.clone(),
-                    },
-                    &class,
-                    object,
-                )?;
-                self.fb.insert_inst(
-                    ObjLoad::new(self.module.inst_set(), object),
-                    self.module.ty_for_class(&class)?,
-                )
-            }
             PlaceTerminal::Const { value, .. } => self.fb.insert_inst(
                 ConstLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
@@ -3676,11 +3948,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     self.fb.type_of(*value),
                 )));
             }
-            self.fb.insert_inst_no_result(ObjInitConst::new(
-                self.module.inst_set(),
-                object,
-                *value,
-            ));
+            let loaded = self
+                .fb
+                .insert_inst(ConstLoad::new(self.module.inst_set(), *value), class_ty);
+            self.fb
+                .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, loaded));
             return Ok(());
         }
 
@@ -3688,6 +3960,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             let value = self.load_copy_source_leaf(&source, class)?;
             self.fb
                 .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, value));
+            return Ok(());
+        }
+
+        // A value of the object's own type stores whole: copying it field by field
+        // would only extract and store each leaf unchanged.
+        if let CopySource::Value { value, .. } = &source
+            && self.fb.type_of(object)
+                == self.fb.module_builder.objref_type(self.fb.type_of(*value))
+        {
+            self.fb
+                .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, *value));
             return Ok(());
         }
 
@@ -4303,6 +4586,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     }
                 }
             }
+            RuntimeClass::AggregateValue { .. } if self.memory_matches_value(memory, class)? => {
+                let ty = self.module.ty_for_class(class)?;
+                self.fb
+                    .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, src, ty));
+                Ok(())
+            }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.module.db) {
                 Layout::Struct(data) => {
                     // Packed fields of one word are combined and stored once.
@@ -4671,12 +4960,93 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             | RuntimeClass::Ref {
                 kind: RefKind::Native,
                 ..
-            } => self.load_word(addr, space),
+            } => {
+                if self.module.is_native_target() && space == AddressSpace::Memory {
+                    let ty = self.native_memory_ty(class)?;
+                    return Ok(self
+                        .fb
+                        .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+                }
+                self.load_word(addr, space)
+            }
             RuntimeClass::AggregateValue { .. } => unreachable!(),
             RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
             )),
         }
+    }
+
+    /// Whether `class` has the same bytes in `memory` as a Sonatina value of
+    /// its type, so it moves between them in one load or store. Raw memory
+    /// packs fields without alignment, which matches only where no field is
+    /// padded; enums and handles keep encodings of their own.
+    fn memory_matches_value(
+        &mut self,
+        memory: ReferentLayout,
+        class: &RuntimeClass<'db>,
+    ) -> Result<bool, LowerError> {
+        if !self.module.is_native_target() {
+            return Ok(false);
+        }
+        let raw = match memory {
+            ReferentLayout::Object => None,
+            ReferentLayout::Raw(AddressSpace::Memory) => {
+                Some(RuntimeMemoryLayout::raw(self.module.db))
+            }
+            ReferentLayout::Raw(_) => return Ok(false),
+        };
+        let ty = self.module.ty_for_class(class)?;
+        let size = self.fb.module_builder.ctx.size_of(ty).ok();
+        let offset = |lowerer: &Self, idx: usize| {
+            lowerer
+                .fb
+                .module_builder
+                .ctx
+                .aggregate_elem_offset(ty, idx)
+                .map(|(offset, _)| offset as u64)
+        };
+        let layout = match class {
+            RuntimeClass::Scalar(scalar) => {
+                return Ok(
+                    raw.is_none() || size == Some(scalar_raw_memory_size_bytes(scalar) as usize)
+                );
+            }
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => return Ok(raw.is_none()),
+            RuntimeClass::AggregateValue { layout } => *layout,
+        };
+        let fields = match layout.data(self.module.db) {
+            Layout::Enum(_) => return Ok(false),
+            Layout::Struct(data) => {
+                let mut offsets = Vec::with_capacity(data.fields.len());
+                for (idx, field) in data.fields.iter().enumerate() {
+                    if !self.memory_matches_value(memory, field)? {
+                        return Ok(false);
+                    }
+                    if let Some(raw) = raw {
+                        offsets.push((raw.struct_field_offset(&data, idx)?, idx));
+                    }
+                }
+                offsets
+            }
+            Layout::Array(data) => {
+                if !self.memory_matches_value(memory, &data.elem)? {
+                    return Ok(false);
+                }
+                match raw {
+                    Some(raw) if data.len > 1 => vec![(raw.array_element_offset(&data, 1)?, 1)],
+                    _ => Vec::new(),
+                }
+            }
+        };
+        Ok(match raw {
+            None => true,
+            Some(raw) => {
+                size == Some(raw.layout_size(layout)? as usize)
+                    && fields
+                        .into_iter()
+                        .all(|(raw_offset, idx)| offset(self, idx) == Some(raw_offset))
+            }
+        })
     }
 
     fn load_aggregate_from_ptr(
@@ -4686,6 +5056,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         layout: LayoutId<'db>,
     ) -> Result<ValueId, LowerError> {
         let class = RuntimeClass::AggregateValue { layout };
+        if self.memory_matches_value(memory, &class)? {
+            let ty = self.module.ty_for_layout(layout)?;
+            return Ok(self
+                .fb
+                .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+        }
         match layout.data(self.module.db) {
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
@@ -4901,7 +5277,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
         if self.module.is_native_target() && matches!(space, AddressSpace::Memory) {
-            let ty = scalar_ty(scalar);
+            let ty = self.native_memory_ty(&RuntimeClass::Scalar(scalar.clone()))?;
             return Ok(self
                 .fb
                 .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
@@ -4933,7 +5309,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let value = match class {
             RuntimeClass::Scalar(scalar) => {
                 let ty = if native_memory {
-                    scalar_ty(scalar)
+                    self.native_memory_ty(class)?
                 } else {
                     scalar_word_ty(scalar)
                 };
@@ -4971,62 +5347,36 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ..
                     },
                 ..
-            } => self.coerce_value_to_ty(src, Type::I256),
-            RuntimeClass::RawAddr { .. }
+            }
+            | RuntimeClass::RawAddr { .. }
             | RuntimeClass::Ref {
                 kind: RefKind::Native,
                 ..
-            } => self.coerce_value_to_ty(src, Type::I256),
+            } => {
+                let ty = if native_memory {
+                    self.native_memory_ty(class)?
+                } else {
+                    Type::I256
+                };
+                self.coerce_value_to_ty(src, ty)
+            }
             RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => Err(
                 LowerError::Unsupported("aggregate/handle ptr stores require CopyInto".to_string()),
             ),
         }?;
         match space {
             AddressSpace::Memory => match class {
-                RuntimeClass::Scalar(_) if native_memory => {
-                    self.fb.insert_inst_no_result(Mstore::new(
-                        self.module.inst_set(),
-                        addr,
-                        value,
-                        self.fb.type_of(value),
-                    ));
-                }
-                RuntimeClass::Scalar(scalar) if scalar_raw_memory_size_bytes(scalar) < 32 => {
+                RuntimeClass::Scalar(scalar)
+                    if !native_memory && scalar_raw_memory_size_bytes(scalar) < 32 =>
+                {
                     self.store_memory_scalar_bytes(addr, scalar, value)?
                 }
-                RuntimeClass::Scalar(_)
-                | RuntimeClass::RawAddr { .. }
-                | RuntimeClass::Ref {
-                    kind: RefKind::Native,
-                    ..
-                } => {
-                    self.fb.insert_inst_no_result(Mstore::new(
-                        self.module.inst_set(),
-                        addr,
-                        value,
-                        Type::I256,
-                    ));
-                }
-                RuntimeClass::Ref {
-                    kind:
-                        RefKind::Provider {
-                            space:
-                                AddressSpace::Storage
-                                | AddressSpace::Transient
-                                | AddressSpace::Calldata
-                                | AddressSpace::Code,
-                            ..
-                        },
-                    ..
-                } => {
-                    self.fb.insert_inst_no_result(Mstore::new(
-                        self.module.inst_set(),
-                        addr,
-                        value,
-                        Type::I256,
-                    ));
-                }
-                RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => unreachable!(),
+                _ => self.fb.insert_inst_no_result(Mstore::new(
+                    self.module.inst_set(),
+                    addr,
+                    value,
+                    self.fb.type_of(value),
+                )),
             },
             AddressSpace::Storage => self.fb.insert_inst_no_result(EvmSstore::new(
                 self.module.required_inst::<EvmSstore>()?,
@@ -5050,6 +5400,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
         }
         Ok(())
+    }
+
+    /// The type a native memory access of `class` moves: the value's own
+    /// type, which must take as many bytes as the class's MIR layout.
+    fn native_memory_ty(&mut self, class: &RuntimeClass<'db>) -> Result<Type, LowerError> {
+        let ty = match class {
+            RuntimeClass::Scalar(scalar) => self.module.scalar_repr_ty(scalar),
+            _ => self.module.ty_for_class(class)?,
+        };
+        let layout_size = RuntimeMemoryLayout::raw(self.module.db).class_size(class)?;
+        let size =
+            self.fb.module_builder.ctx.size_of(ty).map_err(|err| {
+                LowerError::Internal(format!("`{ty:?}` has no native size: {err:?}"))
+            })?;
+        if size as u64 != layout_size {
+            return Err(LowerError::Internal(format!(
+                "a native memory access of `{class:?}` moves {size} bytes, but its layout has {layout_size}"
+            )));
+        }
+        Ok(ty)
     }
 
     fn store_memory_scalar_bytes(
@@ -5497,7 +5867,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.fb
                     .insert_inst(Not::new(self.module.inst_set(), value), ty)
             }
-            UnOp::Plus | UnOp::Mut | UnOp::Ref | UnOp::Deref => value,
+            UnOp::Plus | UnOp::Mut | UnOp::MaybeMut | UnOp::Ref | UnOp::Deref => value,
         })
     }
 
@@ -5696,38 +6066,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
-    /// Modular addition of reduced operands without losing the carry bit.
-    fn add_reduced(&mut self, lhs: ValueId, rhs: ValueId, modulus: ValueId) -> ValueId {
-        let inst_set = self.module.inst_set();
-        let gap = self
-            .fb
-            .insert_inst(Sub::new(inst_set, modulus, rhs), Type::I256);
-        let below = self.fb.insert_inst(Lt::new(inst_set, lhs, gap), Type::I1);
-        let add = self.fb.append_block();
-        let subtract = self.fb.append_block();
-        let done = self.fb.append_block();
-        self.fb
-            .insert_inst_no_result(Br::new(inst_set, below, add, subtract));
-        self.fb.switch_to_block(add);
-        let sum = self
-            .fb
-            .insert_inst(Add::new(inst_set, lhs, rhs), Type::I256);
-        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-        self.fb.switch_to_block(subtract);
-        let difference = self
-            .fb
-            .insert_inst(Sub::new(inst_set, lhs, gap), Type::I256);
-        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-        self.fb.switch_to_block(done);
-        self.fb.insert_inst(
-            Phi::new(inst_set, smallvec![(sum, add), (difference, subtract)]),
-            Type::I256,
-        )
-    }
-
-    /// Full-width mathematical sum/product modulo m, including m == 0 -> 0.
-    /// Reducing operands first and keeping the accumulator below m preserves
-    /// the high product bits without requiring a target-specific 512-bit type.
     /// Branch-free binary search for the most significant set bit, for targets
     /// without a count-leading-zeros instruction. Returns 256 for zero.
     fn lower_leading_zeros(&mut self, value: ValueId) -> ValueId {
@@ -5767,117 +6105,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst(Zext::new(inst_set, is_zero, Type::I256), Type::I256);
         self.fb
             .insert_inst(Add::new(inst_set, zeros, extra), Type::I256)
-    }
-
-    fn lower_modular_arithmetic(
-        &mut self,
-        lhs: ValueId,
-        rhs: ValueId,
-        modulus: ValueId,
-        multiply: bool,
-    ) -> ValueId {
-        let inst_set = self.module.inst_set();
-        let entry = self
-            .fb
-            .current_block()
-            .expect("modular arithmetic requires a block");
-        let reduce = self.fb.append_block();
-        let done = self.fb.append_block();
-        let zero = self.fb.make_imm_value(I256::zero());
-        let is_zero = self
-            .fb
-            .insert_inst(IsZero::new(inst_set, modulus), Type::I1);
-        self.fb
-            .insert_inst_no_result(Br::new(inst_set, is_zero, done, reduce));
-        self.fb.switch_to_block(reduce);
-        let lhs = self
-            .fb
-            .insert_inst(Umod::new(inst_set, lhs, modulus), Type::I256);
-        let rhs = self
-            .fb
-            .insert_inst(Umod::new(inst_set, rhs, modulus), Type::I256);
-        let result = if multiply {
-            let one = self.fb.make_imm_value(I256::one());
-            let header = self.fb.append_block();
-            let test_bit = self.fb.append_block();
-            let add = self.fb.append_block();
-            let advance = self.fb.append_block();
-            let double = self.fb.append_block();
-            let exit = self.fb.append_block();
-            self.fb.insert_inst_no_result(Jump::new(inst_set, header));
-            self.fb.switch_to_block(header);
-            let result = self
-                .fb
-                .insert_inst(Phi::new(inst_set, smallvec![(zero, reduce)]), Type::I256);
-            let factor = self
-                .fb
-                .insert_inst(Phi::new(inst_set, smallvec![(lhs, reduce)]), Type::I256);
-            let remaining = self
-                .fb
-                .insert_inst(Phi::new(inst_set, smallvec![(rhs, reduce)]), Type::I256);
-            let finished = self
-                .fb
-                .insert_inst(IsZero::new(inst_set, remaining), Type::I1);
-            self.fb
-                .insert_inst_no_result(Br::new(inst_set, finished, exit, test_bit));
-            self.fb.switch_to_block(test_bit);
-            let bit = self
-                .fb
-                .insert_inst(And::new(inst_set, remaining, one), Type::I256);
-            let even = self.fb.insert_inst(IsZero::new(inst_set, bit), Type::I1);
-            self.fb
-                .insert_inst_no_result(Br::new(inst_set, even, advance, add));
-            self.fb.switch_to_block(add);
-            let sum = self.add_reduced(result, factor, modulus);
-            let add_exit = self
-                .fb
-                .current_block()
-                .expect("modular sum requires a block");
-            self.fb.insert_inst_no_result(Jump::new(inst_set, advance));
-            self.fb.switch_to_block(advance);
-            let next_result = self.fb.insert_inst(
-                Phi::new(inst_set, smallvec![(result, test_bit), (sum, add_exit)]),
-                Type::I256,
-            );
-            let next_remaining = self
-                .fb
-                .insert_inst(Shr::new(inst_set, one, remaining), Type::I256);
-            let finished = self
-                .fb
-                .insert_inst(IsZero::new(inst_set, next_remaining), Type::I1);
-            self.fb
-                .insert_inst_no_result(Br::new(inst_set, finished, exit, double));
-            self.fb.switch_to_block(double);
-            let next_factor = self.add_reduced(factor, factor, modulus);
-            let back = self
-                .fb
-                .current_block()
-                .expect("modular doubling requires a block");
-            self.fb.append_phi_arg(result, next_result, back);
-            self.fb.append_phi_arg(factor, next_factor, back);
-            self.fb.append_phi_arg(remaining, next_remaining, back);
-            self.fb.insert_inst_no_result(Jump::new(inst_set, header));
-            self.fb.switch_to_block(exit);
-            self.fb.insert_inst(
-                Phi::new(
-                    inst_set,
-                    smallvec![(result, header), (next_result, advance)],
-                ),
-                Type::I256,
-            )
-        } else {
-            self.add_reduced(lhs, rhs, modulus)
-        };
-        let exit = self
-            .fb
-            .current_block()
-            .expect("modular arithmetic requires a block");
-        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-        self.fb.switch_to_block(done);
-        self.fb.insert_inst(
-            Phi::new(inst_set, smallvec![(zero, entry), (result, exit)]),
-            Type::I256,
-        )
     }
 
     fn lower_pow(
@@ -5997,8 +6224,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         operand: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         let ty = self.module.ty_for_class(operand)?;
-        let lhs = self.cast_scalar(lhs, ty)?;
-        let rhs = self.cast_scalar(rhs, ty)?;
+        let (lhs, rhs) = if ty.is_pointer(&self.fb.module_builder.ctx) {
+            // Pointers compare as their addresses.
+            let address = self.module.address_int_ty(AddressSpace::Memory);
+            (
+                self.coerce_value_to_ty(lhs, address)?,
+                self.coerce_value_to_ty(rhs, address)?,
+            )
+        } else {
+            (self.cast_scalar(lhs, ty)?, self.cast_scalar(rhs, ty)?)
+        };
         let signed = operand.is_signed_scalar();
         Ok(match op {
             CompBinOp::Eq => self
@@ -6067,17 +6302,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 .expect("shared helper requires current block");
             this.fb.switch_to_block(block);
             match kind {
-                SharedHelperKind::EmptyRevert => {
-                    if let Some(has_revert) = EvmRevert::belongs_to(this.module.inst_set()) {
-                        let zero = zero_for_type(&mut this.fb, Type::I256);
-                        this.fb
-                            .insert_inst_no_result(EvmRevert::new(has_revert, zero, zero));
-                    } else {
-                        this.fb
-                            .insert_inst_no_result(Unreachable::new(this.module.inst_set()));
-                    }
+                SharedHelperKind::EmptyRevert => this.insert_empty_revert(),
+                SharedHelperKind::Panic(code) => {
+                    let code = this.fb.make_imm_value(I256::from(code));
+                    this.insert_panic_revert(code);
                 }
-                SharedHelperKind::Panic(code) => this.emit_panic_revert_payload(code),
             }
             this.fb.switch_to_block(current);
             block
@@ -6087,16 +6316,33 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         block
     }
 
-    fn emit_panic_revert_payload(&mut self, code: u64) {
-        let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
+    /// Ends the block at a revert without data.
+    fn insert_empty_revert(&mut self) {
+        let inst_set = self.module.inst_set();
+        if let Some(has_revert) = EvmRevert::belongs_to(inst_set) {
+            let zero = zero_for_type(&mut self.fb, Type::I256);
             self.fb
-                .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+                .insert_inst_no_result(EvmRevert::new(has_revert, zero, zero));
+        } else {
+            let pointer = self.fb.ptr_type(Type::I8);
+            let zero = self.fb.make_imm_value(0i64);
+            let null = self
+                .fb
+                .insert_inst(IntToPtr::new(inst_set, zero, pointer), pointer);
+            self.insert_native_panic(NativePanic::Revert, smallvec![null, zero]);
+        }
+    }
+
+    /// Ends the block at a revert with Solidity `Panic(code)` data for the
+    /// word `code`. On the EVM, the data is in scratch memory at 0.
+    fn insert_panic_revert(&mut self, code: ValueId) {
+        let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
+            self.insert_native_panic(NativePanic::Code, smallvec![code]);
             return;
         };
         let zero = self.fb.make_imm_value(I256::zero());
         let selector = self.fb.make_imm_value(panic_selector_immediate());
         let code_offset = self.fb.make_imm_value(I256::from(4u64));
-        let code = self.fb.make_imm_value(I256::from(code));
         let len = self.fb.make_imm_value(I256::from(36u64));
         self.fb.insert_inst_no_result(Mstore::new(
             self.module.inst_set(),
@@ -6112,6 +6358,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         ));
         self.fb
             .insert_inst_no_result(EvmRevert::new(has_revert, zero, len));
+    }
+
+    /// Ends the block at a native panic through `panic`'s function, or at a
+    /// trap when the module traps.
+    fn insert_native_panic(&mut self, panic: NativePanic, args: SmallVec<[ValueId; 8]>) {
+        if let Some(func) = self.module.native_panic_function(panic) {
+            self.fb
+                .insert_inst_no_result(Call::new(self.module.inst_set(), func, args));
+        }
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
     }
 
     fn emit_empty_revert(&mut self, overflow_flag: ValueId) -> Result<(), LowerError> {
@@ -6273,7 +6530,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         {
             return Ok(self.index_value(constant));
         }
-        let len_value = self.index_value(len);
+        let len_value = self.fb.make_imm_value(Immediate::from_i256(
+            I256::from(len),
+            self.fb.type_of(index),
+        ));
         let in_bounds = self
             .fb
             .insert_inst(Lt::new(self.module.inst_set(), index, len_value), Type::I1);
@@ -6330,11 +6590,37 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         if units == 0 {
             return Ok(base);
         }
-        let base = self.coerce_value_to_ty(base, Type::I256)?;
-        let offset = self.index_value(units);
-        Ok(self
+        let ty = self.fb.type_of(base);
+        let offset_ty = if ty.is_integral() {
+            ty
+        } else {
+            self.module.address_int_ty(AddressSpace::Memory)
+        };
+        let offset = self
             .fb
-            .insert_inst(Add::new(self.module.inst_set(), base, offset), Type::I256))
+            .make_imm_value(Immediate::from_i256(I256::from(units), offset_ty));
+        self.offset_address(base, offset)
+    }
+
+    /// Steps `base` by `offset` bytes, or words in a word-addressed space. An
+    /// integer address keeps its type: an EVM memory address is a `usize` and
+    /// a storage slot a word. A pointer steps as a memory address, with `gep`
+    /// where that is a pointer.
+    fn offset_address(&mut self, base: ValueId, offset: ValueId) -> Result<ValueId, LowerError> {
+        let ty = Some(self.fb.type_of(base))
+            .filter(|ty| ty.is_integral())
+            .unwrap_or_else(|| self.module.address_ty(AddressSpace::Memory));
+        let base = self.coerce_value_to_ty(base, ty)?;
+        let is = self.module.inst_set();
+        Ok(if ty.is_integral() {
+            let offset = self.cast_scalar(offset, ty)?;
+            self.fb.insert_inst(Add::new(is, base, offset), ty)
+        } else {
+            let offset =
+                self.cast_scalar(offset, self.module.address_int_ty(AddressSpace::Memory))?;
+            self.fb
+                .insert_inst(Gep::new(is, smallvec![base, offset]), ty)
+        })
     }
 
     fn offset_ptr_array_elem_address(
@@ -6581,7 +6867,7 @@ fn compute_section_membership<'db>(
 ) -> FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>> {
     let mut membership =
         FxHashMap::<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>>::default();
-    for object in package.objects(db) {
+    for &object in package.objects(db) {
         for section in object.sections(db) {
             let section_ref = mir::RuntimeSectionRef::Local {
                 object: object.name(db).clone(),
@@ -6617,7 +6903,7 @@ fn code_region_symbol<'db>(
         .find(|resolved| resolved.region(db) == region)
         .map_or_else(
             || format!("code_region_{}", stable_hash(&region)),
-            |resolved| resolved.symbol(db),
+            |resolved| resolved.symbol(db).clone(),
         )
 }
 

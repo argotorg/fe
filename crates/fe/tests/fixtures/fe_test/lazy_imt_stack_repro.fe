@@ -84,7 +84,7 @@ impl LazyIMTData {
 
     fn element_get(self, _ level: usize, _ index: usize) -> (bool, u256) {
         let key = LazyIMTData::index_for_element(level, index)
-        var slot = (key % LAZY_MAP_CAPACITY_U256) as usize
+        var slot = (key % LAZY_MAP_CAPACITY_U256).downcast_unchecked()
         var i: usize = 0
 
         while i < LAZY_MAP_CAPACITY {
@@ -108,7 +108,7 @@ impl LazyIMTData {
 
     fn element_set(mut self, _ level: usize, _ index: usize, _ value: u256) -> LazyIMTError {
         let key = LazyIMTData::index_for_element(level, index)
-        var slot = (key % LAZY_MAP_CAPACITY_U256) as usize
+        var slot = (key % LAZY_MAP_CAPACITY_U256).downcast_unchecked()
         var i: usize = 0
 
         while i < LAZY_MAP_CAPACITY {

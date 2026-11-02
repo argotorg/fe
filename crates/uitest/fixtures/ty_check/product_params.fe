@@ -1,0 +1,159 @@
+// A product parameter's parts carry its modes, and its function's body takes
+// it apart.
+use core::ptr::MemSlice
+use std::evm::StorageMap
+
+struct S {
+    a: u256,
+}
+
+fn outer_mode(_ (a, b): own (own u256, ref u256)) -> u256 {
+    a + b
+}
+
+fn named(_ p: (own u256, ref u256)) -> u256 {
+    0
+}
+
+impl S {
+    fn receiver(self: (own u256, ref u256)) {}
+}
+
+// A part takes a `#[view]` type as a parameter does: as a view or `mut`.
+fn own_view_part(_ (s, mut n): (own MemSlice<u256>, mut u256)) {
+    n = 1
+}
+
+// Accepted: a product argument is no value, so a part may be a state-only
+// place, which its `ref` part views.
+fn take_book(_ (ref book, n): (ref StorageMap<u256, u256>, own u256)) {}
+
+pub contract Books {
+    mut book: StorageMap<u256, u256>
+
+    init() uses (book) {
+        take_book((book, 1))
+    }
+}
+
+// Accepted: a declaration without a body names its product parameter.
+trait Absorb {
+    fn absorb(_ parts: (own u256, ref u256)) -> u256
+    fn modes(_ parts: (own u256, mut u256))
+}
+
+impl Absorb for S {
+    fn absorb(_ (a, b): (own u256, ref u256)) -> u256 {
+        a + b
+    }
+
+    fn modes(_ (a, b): (own u256, ref u256)) {}
+}
+
+// An argument is a tuple of the parts, each passed in its part's mode, or a
+// projection's result granting them.
+fn total(_ (a, b): (own u256, ref u256)) -> u256 {
+    a + b
+}
+
+fn bump(_ (mut a, b): (mut u256, ref u256)) {
+    a += b
+}
+
+fn pick(_ (mut? a, mut? b): (mut? u256, mut? u256), _ left: bool) -> mut? u256 {
+    if left { mut? a } else { mut? b }
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Pair {
+    fn views(self) -> (ref u256, ref u256) {
+        (ref self.a, ref self.b)
+    }
+}
+
+fn not_a_tuple() -> u256 {
+    let t: (u256, u256) = (2, 3)
+    total(t)
+}
+
+fn wrong_arity() -> u256 {
+    let x: u256 = 1
+    total((x, x, x))
+}
+
+fn part_mode() {
+    let x: u256 = 1
+    var y: u256 = 2
+    bump((y, ref x))
+}
+
+fn ref_part_at_mut() {
+    var x: u256 = 1
+    var y: u256 = 2
+    let r = mut pick((ref x, mut y), false)
+    r = 3
+}
+
+fn views_at_mut() {
+    var p = Pair { a: 1, b: 2 }
+    let r = mut pick(p.views(), false)
+    r = 9
+}
+
+fn views_for_mut() {
+    var p = Pair { a: 1, b: 2 }
+    bump(p.views())
+}
+
+// A `ref` part is read-only: its mode in the signature, not its binding,
+// would let the body write it.
+fn write_ref_part(_ (mut a, ref b): (mut u256, ref u256)) {
+    b = 3
+}
+
+// A part that is itself a product is taken apart too.
+fn nested_whole(_ (p, c): ((mut u256, mut u256), own u256)) -> u256 {
+    c
+}
+
+fn nested_marked_whole(_ (ref p, c): ((mut u256, mut u256), own u256)) -> u256 {
+    c
+}
+
+// A part that is a product carries its own parts' modes.
+fn mode_on_nested(_ ((a, b), c): (ref (mut u256, bool), own u256)) {}
+
+// A function's product parameter is one of the shape's parameters, of
+// parts: it is no view of a tuple.
+fn apply<F: Fn((u256, u256)) -> u256>(_ f: F) -> u256 uses F::E {
+    f((1, 2))
+}
+
+fn callable_value() -> u256 {
+    apply(total)
+}
+
+// A closure's product parameter carries its modes, and its pattern takes it
+// apart.
+fn closure_product() {
+    let f = |p: (own u256, ref u256)| {}
+    let g = |(a, b): own (own u256, ref u256)| a + b
+}
+
+fn untupled() -> u256 {
+    apply(|a, b| a + b)
+}
+
+fn apply_product<F: Fn((own u256, ref u256)) -> u256>(_ f: F) -> u256 uses F::E {
+    let y: u256 = 2
+    f((1, ref y))
+}
+
+// So is a product's pair.
+fn untupled_product() -> u256 {
+    apply_product(|a, b| a + b)
+}

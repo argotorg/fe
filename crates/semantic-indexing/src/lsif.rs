@@ -320,8 +320,6 @@ pub fn generate_lsif(
 
     // Process each module's items
     for top_mod in ctx.ingot.all_modules(db) {
-        let scope_graph = top_mod.scope_graph(db);
-
         let doc_span = top_mod.span().resolve(db);
         let doc_url = match &doc_span {
             Some(span) => match span.file.url(db) {
@@ -333,7 +331,7 @@ pub fn generate_lsif(
 
         let doc_id = documents[&doc_url].0;
 
-        for item in scope_graph.items_dfs(db) {
+        for &item in top_mod.all_items(db) {
             let scope = ScopeId::from_item(item);
 
             let Some(name_span) = item.name_span() else {

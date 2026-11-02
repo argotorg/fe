@@ -49,12 +49,12 @@ pub contract Words {
 
 #[test]
 fn copied_words_read_declared_state_and_remain_independent() uses (evm: mut Evm) {
-    let target = evm.create2<Words>(value: 0, args: (), salt: 0)
-    evm.call(addr: target, gas: 300000, value: 0, message: WordsMsg::Set {
+    let target = evm.create2<Words>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: target, gas: 300000, value: Wei::zero(), message: WordsMsg::Set {
         value: u256::max(), low: 17, high: 29, temporary: 42,
     })
-    let result = evm.call(addr: target, gas: 300000, value: 0, message: WordsMsg::Read {})
+    let result = evm.call(addr: target, gas: 300000, value: Wei::zero(), message: WordsMsg::Read {})
     assert(result == (u256::max(), 17 | (29 << 128), 42, 0))
-    let snapshot = evm.call(addr: target, gas: 300000, value: 0, message: WordsMsg::SnapshotThenWrite { next: 7 })
+    let snapshot = evm.call(addr: target, gas: 300000, value: Wei::zero(), message: WordsMsg::SnapshotThenWrite { next: 7 })
     assert(snapshot == (u256::max(), 7))
 }

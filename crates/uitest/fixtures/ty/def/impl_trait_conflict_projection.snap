@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/impl_trait_conflict_projection.fe
+---
+error[5-0001]: conflicting trait implementations
+   ┌─ impl_trait_conflict_projection.fe:17:15
+   │
+17 │ impl Copy for <Option<u256> as Get>::Out {}
+   │               ^^^^^^^^^^^^^^^^^^^^^^^^^^ this trait implementation
+18 │ impl Copy for Other {}
+   │               ----- conflicts with this trait implementation
+
+error[5-0001]: conflicting trait implementations
+   ┌─ impl_trait_conflict_projection.fe:20:15
+   │
+20 │ impl Mark for <Local as Get>::Out {}
+   │               ^^^^^^^^^^^^^^^^^^^ this trait implementation
+21 │ impl Mark for Local {}
+   │               ----- conflicts with this trait implementation

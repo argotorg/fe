@@ -46,18 +46,18 @@ pub contract C {
 
 #[test]
 fn each_site_writes_back_its_own_lane() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
-    let b: u256 = evm.call(addr: c, gas: 300000, value: 0, message: Msg::Pick { c: true })
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let b: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Pick { c: true })
     assert!(b == 1042)
-    let a: u256 = evm.call(addr: c, gas: 300000, value: 0, message: Msg::Pick { c: false })
+    let a: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Pick { c: false })
     assert!(a == 42002)
 }
 
 #[test]
 fn an_optional_lane_grant_writes_back() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
-    let some: u256 = evm.call(addr: c, gas: 300000, value: 0, message: Msg::Maybe { c: true })
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let some: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Maybe { c: true })
     assert!(some == 1042)
-    let none: u256 = evm.call(addr: c, gas: 300000, value: 0, message: Msg::Maybe { c: false })
+    let none: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Maybe { c: false })
     assert!(none == 1002)
 }

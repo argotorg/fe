@@ -3,8 +3,11 @@
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 
-use common::InputDb;
+use common::{InputDb, compilation::Target};
 use driver::DriverDataBase;
+use fe_codegen::{NativeOutputSelection, NativeTarget, OptLevel, emit_module_native_artifacts};
+use mir::{build_native_executable_package, runtime::format_runtime_package};
+use salsa::Setter;
 use url::Url;
 
 fn with_top_mod_for_source<T>(
@@ -13,6 +16,9 @@ fn with_top_mod_for_source<T>(
     f: impl for<'db> FnOnce(&'db DriverDataBase, hir::hir_def::TopLevelMod<'db>) -> T,
 ) -> T {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
     let url = Url::parse(&format!("file:///{name}")).expect("test URL should parse");
     let file = db.workspace().touch(&mut db, url, Some(source.to_string()));
     let top_mod = db.top_mod(file);
@@ -68,7 +74,13 @@ fn native_entry_symbol_is_reserved_when_reachable_helpers_are_named_main() {
         3,
         "associated, trait, and module helpers should have qualified symbols:\n{ir}"
     );
-    assert_eq!(ir.matches(" = call %").count(), 3, "missing calls:\n{ir}");
+    assert_eq!(
+        ir.lines()
+            .filter(|line| line.contains(" = call %") && line.contains("__main"))
+            .count(),
+        3,
+        "missing calls:\n{ir}"
+    );
 }
 
 #[test]
@@ -272,9 +284,11 @@ fn native_argv_entry_has_a_host_pointer_bridge() {
         )
         .unwrap();
         assert!(ir.contains("func public %main("), "{ir}");
+        // The host vector is a `**u8` as Fe lays it out, so it passes as is.
         assert!(ir.contains("**i8"), "{ir}");
-        assert!(ir.contains("ptr_to_int"), "{ir}");
-        assert!(ir.contains("zext"), "{ir}");
+        assert!(ir.contains("bitcast"), "{ir}");
+        assert!(!ir.contains("ptr_to_int"), "{ir}");
+        assert!(!ir.contains("mem.alloc_dynamic"), "{ir}");
     }
 }
 
@@ -302,4 +316,133 @@ fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
             "{signature}: {error}"
         );
     }
+}
+
+#[test]
+fn native_external_functions_remain_declarations_with_exact_symbols() {
+    let source = r#"
+use std::io::{Read, Write, host, read_char, write_char}
+
+mod helpers {
+    pub fn getchar() -> i32 { 7 }
+}
+
+pub fn main() -> i32 {
+    with (Read = host(), Write = host()) {
+        write_char(read_char() + helpers::getchar())
+    }
+    0
+}
+"#;
+    with_top_mod_for_source("native_extern.fe", source, |db, top_mod| {
+        let package = build_native_executable_package(db, top_mod)
+            .expect("external declarations should not require runtime bodies");
+        let text = format_runtime_package(db, &package);
+        assert!(
+            text.contains("external") && text.contains("declare () -> int32"),
+            "missing external linkage:\n{text}"
+        );
+        let artifacts = emit_module_native_artifacts(
+            db,
+            top_mod,
+            NativeTarget::Host,
+            OptLevel::O0,
+            NativeOutputSelection {
+                ir: true,
+                object: true,
+            },
+        )
+        .expect("external calls should compile to object relocations");
+        let ir = artifacts.ir.unwrap();
+        assert!(
+            ir.contains("declare external %getchar() -> i32"),
+            "missing input declaration:\n{ir}"
+        );
+        assert!(
+            ir.contains("declare external %putchar(i32) -> i32"),
+            "missing output declaration:\n{ir}"
+        );
+        assert!(
+            ir.contains("helpers__getchar("),
+            "helper must not rename the external symbol:\n{ir}"
+        );
+        assert!(!artifacts.object.unwrap().is_empty());
+    });
+}
+
+#[test]
+fn native_memory_addresses_are_pointers() {
+    let ir = with_top_mod_for_source(
+        "memory_pointers.fe",
+        r#"
+use core::ptr::MemVec
+pub fn main() -> i32 {
+    var values: MemVec<u64> = MemVec::new()
+    values.push(1)
+    values.push(2)
+    if values.len() == 2 { 0 } else { 1 }
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native memory pointer IR");
+    // A vector holds a pointer, and an element's address steps from it.
+    assert!(ir.contains(" = {*i8, i64, i64};"), "{ir}");
+    assert!(ir.contains(" = gep "), "{ir}");
+    // Only constants, such as null, become pointers from integers.
+    for line in ir.lines().filter(|line| line.contains("int_to_ptr")) {
+        assert!(!line.contains("int_to_ptr v"), "{line}\n{ir}");
+    }
+}
+
+#[test]
+fn native_access_parameters_are_noalias() {
+    let ir = with_top_mod_for_source(
+        "noalias_parameters.fe",
+        r#"
+use core::option::Option
+struct Big { a: i32, b: i32, c: i32 }
+struct Ctx { n: i32 }
+impl Big {
+    fn total(self) -> i32 { self.a + self.b + self.c }
+    fn bump(mut self) { self.a += 1 }
+}
+fn tick() uses (ctx: mut Ctx) { ctx.n += 1 }
+fn consume(var _ current: own Option<i32>) -> i32 {
+    var sum = 0
+    while let Option::Some(value) = current {
+        sum += value
+        current = if value == 0 { Option::None } else { Option::Some(value - 1) }
+    }
+    sum
+}
+pub fn main() -> i32 {
+    var big = Big { a: 1, b: 2, c: 3 }
+    big.bump()
+    var ctx = Ctx { n: 0 }
+    with (ctx) { tick() }
+    big.total() + consume(Option::Some(3)) + ctx.n
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native noalias parameter IR");
+    let signature = |name: &str| {
+        ir.lines()
+            .find(|line| line.starts_with("func ") && line.contains(name))
+            .unwrap_or_else(|| panic!("missing {name}:\n{ir}"))
+    };
+    // A view, `mut` or effect parameter is an access of its caller's place.
+    for name in ["total", "bump", "tick"] {
+        assert!(
+            signature(name).contains("(noalias v0.objref<"),
+            "{name}:\n{ir}"
+        );
+    }
+    // An owned parameter is not, even when passed by reference.
+    let consume = signature("consume");
+    assert!(
+        consume.contains("(v0.objref<") && !consume.contains("noalias"),
+        "{ir}"
+    );
 }

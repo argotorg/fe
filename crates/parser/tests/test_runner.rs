@@ -101,7 +101,7 @@ impl TestRunner {
         let lexer = lexer::Lexer::new(input);
         let mut parser = Parser::new(lexer, RecoveryMode::new(self.use_recovery_mode));
 
-        let checkpoint = parser.enter(RootScope::default(), None);
+        let checkpoint = parser.enter::<RootScope>(None);
         (self.f)(&mut parser);
         parser.leave(checkpoint);
 

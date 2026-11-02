@@ -1,5 +1,5 @@
 use parser::ast;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{
     body_source_map, define_lazy_span_node,
@@ -88,7 +88,7 @@ define_lazy_span_node!(
     }
 );
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Update)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, SalsaValue)]
 pub(crate) struct PatRoot<'db> {
     pat: PatId,
     pub(crate) body: Body<'db>,

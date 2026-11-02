@@ -38,6 +38,11 @@ pub fn verify_semantic_body<'db>(body: &SemanticBody<'db>) -> Result<(), Semanti
                         return Err(SemanticVerifyError::MissingSemanticLocal(src.value));
                     }
                 }
+                SStmtKind::Drop { place } => {
+                    if body.local(place.local).is_none() {
+                        return Err(SemanticVerifyError::MissingSemanticLocal(place.local));
+                    }
+                }
                 SStmtKind::End { .. } => {}
             }
         }

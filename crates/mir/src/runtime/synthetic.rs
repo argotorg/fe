@@ -1,3 +1,4 @@
+use common::compilation::Target;
 use cranelift_entity::EntityRef;
 use hir::analysis::semantic::SemOrigin;
 use hir::analysis::ty::AddressSpace;
@@ -42,7 +43,10 @@ use crate::{
             tuple::{
                 RuntimeTupleFieldEmitter, extract_runtime_tuple_fields, memory_fallback_class,
             },
-            type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
+            type_info::{
+                RuntimeTypeEnv, address_int_class, memory_int_const, pointer_class,
+                top_level_class_for_ty_in_env,
+            },
         },
         package::resolve_trait_runtime_instance,
     },
@@ -76,6 +80,17 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
     instance: RuntimeInstance<'db>,
     spec: RuntimeSyntheticSpec<'db>,
 ) -> Result<RuntimeBody<'db>, LowerError> {
+    let target = db.compilation_settings().target(db);
+    if target != Target::Evm
+        && !matches!(
+            spec,
+            RuntimeSyntheticSpec::MainRoot { .. } | RuntimeSyntheticSpec::TestRoot { .. }
+        )
+    {
+        return Err(LowerError::Unsupported(format!(
+            "contract code needs the Evm compilation target, not {target:?}"
+        )));
+    }
     let mut builder = SyntheticBodyBuilder::new(db, instance);
     match spec {
         RuntimeSyntheticSpec::MainRoot { callee, entry_args }
@@ -268,7 +283,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     }
 
     fn finish(self) -> RuntimeBody<'db> {
-        let signature = self.instance.interface_signature(self.db);
+        let signature = self.instance.interface_signature(self.db).clone();
         RuntimeBody {
             owner: self.instance,
             key: self.instance.key(self.db),
@@ -289,7 +304,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         &self,
         callee: RuntimeInstance<'db>,
     ) -> RuntimeInterfaceSignature<'db> {
-        callee.interface_signature(self.db)
+        callee.interface_signature(self.db).clone()
     }
 
     fn build_entry_root(
@@ -616,7 +631,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 len: runtime_len,
             },
         );
-        let immut_dst = self.push_binary_word(entry, ArithBinOp::Add, out_ptr, runtime_len);
+        let immut_dst = self.push_ptr_offset_bytes(entry, out_ptr, runtime_len);
         self.push_side_effect_builtin(
             entry,
             RuntimeBuiltin::Mcopy {
@@ -683,7 +698,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 .expect("a code field's word offset is within the code-space layout");
             let slot_words = self.push_const_word(bb, slot_words);
             let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
-            let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);
+            let dst_addr = self.push_ptr_offset_bytes(bb, buffer_ptr, slot_bytes);
             let dst_raw_class =
                 RuntimeClass::raw_addr(self.db, AddressSpace::Memory, pointee_class.clone());
             let dst_raw_addr = self.push_local(
@@ -1246,8 +1261,17 @@ impl<'db> SyntheticBodyBuilder<'db> {
         self.push_builtin_value(
             bb,
             TyId::ptr_to(self.db, TyId::u8(self.db)),
-            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeClass::Scalar(pointer_class(self.db, AddressSpace::Memory)),
             RuntimeBuiltin::Malloc { size },
+        )
+    }
+
+    fn push_ptr_offset_bytes(&mut self, bb: RBlockId, ptr: RLocalId, offset: RLocalId) -> RLocalId {
+        self.push_builtin_value(
+            bb,
+            TyId::ptr_to(self.db, TyId::u8(self.db)),
+            RuntimeClass::Scalar(pointer_class(self.db, AddressSpace::Memory)),
+            RuntimeBuiltin::PtrOffsetBytes { ptr, offset },
         )
     }
 
@@ -1363,19 +1387,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
         layout: crate::LayoutId<'db>,
     ) -> Result<RLocalId, LowerError> {
         let size = RuntimeMemoryLayout::raw(self.db).layout_size(layout)?;
-        let size = self.push_const_scalar(
+        let size_local = self.push_local(
+            TyId::usize(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(address_int_class(
+                self.db,
+                AddressSpace::Memory,
+            ))),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
             bb,
-            ConstScalar::Int {
-                bits: 256,
-                signed: false,
-                words: size
-                    .to_be_bytes()
-                    .into_iter()
-                    .skip_while(|byte| *byte == 0)
-                    .collect(),
+            RStmt::Assign {
+                dst: size_local,
+                expr: RExpr::ConstScalar(memory_int_const(self.db, size)),
             },
         );
-        let addr = self.push_malloc_bytes(bb, size);
+        let addr = self.push_malloc_bytes(bb, size_local);
         let raw_class = RuntimeClass::raw_addr(
             self.db,
             AddressSpace::Memory,
@@ -1595,7 +1622,7 @@ pub contract ReturnContract {
         let package = build_runtime_package(&db, top_mod).expect("runtime package should build");
         let wrapper = package
             .functions(&db)
-            .into_iter()
+            .iter()
             .find(|function| {
                 matches!(
                     function.owner(&db),
@@ -1621,7 +1648,7 @@ pub contract ReturnContract {
             .semantic(&db)
             .expect("ContractHost::return_value should be semantic");
         let return_value_key = return_value_semantic.key(&db);
-        let BodyOwner::Func(return_value_func) = return_value_key.owner(&db) else {
+        let BodyOwner::Func(return_value_func, _) = return_value_key.owner(&db) else {
             panic!("ContractHost::return_value should be a function")
         };
         assert_eq!(
@@ -1697,7 +1724,7 @@ fn test_raw_storage_root() uses (storage: mut RawStorage) {
             .find(|function| {
                 matches!(
                     function.owner(&db),
-                    RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::TestRoot { ref name, .. })
+                    RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::TestRoot { name, .. })
                         if name == "test_raw_storage_root"
                 )
             })

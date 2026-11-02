@@ -48,7 +48,7 @@ pub fn sum_first_class_pointers() -> u256 {
     array_sum
         + raw_array[0]
         + zeroed[0]
-        + bytes.len()
+        + bytes.len() as u256
         + ptr_distance
         + byte_distance
         + field_sum

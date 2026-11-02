@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/panic_code.fe
+---
+error[3-0073]: panic in const context
+   ┌─ panic_code.fe:12:19
+   │
+ 6 │         core::panic_code(PANIC_OVERFLOW)
+   │         -------------------------------- panics with code 0x11
+   ·
+12 │ const BIG: u256 = checked(256)
+   │                   ^^^^^^^^^^^^ while evaluating this

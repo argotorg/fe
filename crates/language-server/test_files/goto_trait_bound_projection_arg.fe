@@ -1,0 +1,17 @@
+trait HasItem {
+    type Item
+}
+
+trait Sink<T> {}
+
+struct S<T> {}
+
+// A trait reference's argument can name an associated type through another
+// bound, so it resolves under the bounds in scope.
+fn f<T: HasItem, U: Sink<T::Item>>() {}
+
+impl<T: HasItem> Sink<T::Item> for S<T> {}
+
+trait Pipe: HasItem {
+    type Out: Sink<Self::Item>
+}

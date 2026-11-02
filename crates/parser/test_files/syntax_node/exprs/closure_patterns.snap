@@ -1,0 +1,232 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/closure_patterns.fe
+---
+Root@0..137
+  CallExpr@0..17
+    PathExpr@0..1
+      Path@0..1
+        PathSegment@0..1
+          Ident@0..1 "f"
+    CallArgList@1..17
+      LParen@1..2 "("
+      CallArg@2..16
+        ClosureExpr@2..16
+          FuncParamList@2..10
+            Pipe@2..3 "|"
+            FnParam@3..9
+              TuplePat@3..9
+                TuplePatElemList@3..9
+                  LParen@3..4 "("
+                  PathPat@4..5
+                    Path@4..5
+                      PathSegment@4..5
+                        Ident@4..5 "a"
+                  Comma@5..6 ","
+                  WhiteSpace@6..7 " "
+                  PathPat@7..8
+                    Path@7..8
+                      PathSegment@7..8
+                        Ident@7..8 "b"
+                  RParen@8..9 ")"
+            Pipe@9..10 "|"
+          WhiteSpace@10..11 " "
+          BinExpr@11..16
+            PathExpr@11..12
+              Path@11..12
+                PathSegment@11..12
+                  Ident@11..12 "a"
+            WhiteSpace@12..13 " "
+            Plus@13..14 "+"
+            WhiteSpace@14..15 " "
+            PathExpr@15..16
+              Path@15..16
+                PathSegment@15..16
+                  Ident@15..16 "b"
+      RParen@16..17 ")"
+  Newline@17..18 "\n"
+  MethodCallExpr@18..69
+    PathExpr@18..20
+      Path@18..20
+        PathSegment@18..20
+          Ident@18..20 "xs"
+    Dot@20..21 "."
+    Ident@21..25 "fold"
+    CallArgList@25..69
+      LParen@25..26 "("
+      CallArg@26..27
+        LitExpr@26..27
+          Lit@26..27
+            Int@26..27 "0"
+      Comma@27..28 ","
+      WhiteSpace@28..29 " "
+      CallArg@29..68
+        ClosureExpr@29..68
+          FuncParamList@29..56
+            Pipe@29..30 "|"
+            FnParam@30..33
+              Ident@30..33 "acc"
+            Comma@33..34 ","
+            WhiteSpace@34..35 " "
+            FnParam@35..55
+              TuplePat@35..41
+                TuplePatElemList@35..41
+                  LParen@35..36 "("
+                  PathPat@36..37
+                    Path@36..37
+                      PathSegment@36..37
+                        Ident@36..37 "a"
+                  Comma@37..38 ","
+                  WhiteSpace@38..39 " "
+                  PathPat@39..40
+                    Path@39..40
+                      PathSegment@39..40
+                        Ident@39..40 "b"
+                  RParen@40..41 ")"
+              Colon@41..42 ":"
+              WhiteSpace@42..43 " "
+              TupleType@43..55
+                LParen@43..44 "("
+                PathType@44..48
+                  Path@44..48
+                    PathSegment@44..48
+                      Ident@44..48 "u256"
+                Comma@48..49 ","
+                WhiteSpace@49..50 " "
+                PathType@50..54
+                  Path@50..54
+                    PathSegment@50..54
+                      Ident@50..54 "u256"
+                RParen@54..55 ")"
+            Pipe@55..56 "|"
+          WhiteSpace@56..57 " "
+          BinExpr@57..68
+            PathExpr@57..60
+              Path@57..60
+                PathSegment@57..60
+                  Ident@57..60 "acc"
+            WhiteSpace@60..61 " "
+            Plus@61..62 "+"
+            WhiteSpace@62..63 " "
+            BinExpr@63..68
+              PathExpr@63..64
+                Path@63..64
+                  PathSegment@63..64
+                    Ident@63..64 "a"
+              WhiteSpace@64..65 " "
+              Star@65..66 "*"
+              WhiteSpace@66..67 " "
+              PathExpr@67..68
+                Path@67..68
+                  PathSegment@67..68
+                    Ident@67..68 "b"
+      RParen@68..69 ")"
+  Newline@69..70 "\n"
+  CallExpr@70..104
+    PathExpr@70..71
+      Path@70..71
+        PathSegment@70..71
+          Ident@70..71 "f"
+    CallArgList@71..104
+      LParen@71..72 "("
+      CallArg@72..103
+        ClosureExpr@72..103
+          FuncParamList@72..101
+            Pipe@72..73 "|"
+            FnParam@73..87
+              RecordPat@73..87
+                Path@73..78
+                  PathSegment@73..78
+                    Ident@73..78 "Point"
+                WhiteSpace@78..79 " "
+                RecordPatFieldList@79..87
+                  LBrace@79..80 "{"
+                  WhiteSpace@80..81 " "
+                  RecordPatField@81..82
+                    PathPat@81..82
+                      Path@81..82
+                        PathSegment@81..82
+                          Ident@81..82 "x"
+                  Comma@82..83 ","
+                  WhiteSpace@83..84 " "
+                  RecordPatField@84..85
+                    PathPat@84..85
+                      Path@84..85
+                        PathSegment@84..85
+                          Ident@84..85 "y"
+                  WhiteSpace@85..86 " "
+                  RBrace@86..87 "}"
+            Comma@87..88 ","
+            WhiteSpace@88..89 " "
+            FnParam@89..100
+              PathTuplePat@89..100
+                Path@89..93
+                  PathSegment@89..93
+                    Ident@89..93 "Wrap"
+                TuplePatElemList@93..100
+                  LParen@93..94 "("
+                  PathPat@94..99
+                    Path@94..99
+                      PathSegment@94..99
+                        Ident@94..99 "inner"
+                  RParen@99..100 ")"
+            Pipe@100..101 "|"
+          WhiteSpace@101..102 " "
+          PathExpr@102..103
+            Path@102..103
+              PathSegment@102..103
+                Ident@102..103 "x"
+      RParen@103..104 ")"
+  Newline@104..105 "\n"
+  CallExpr@105..136
+    PathExpr@105..106
+      Path@105..106
+        PathSegment@105..106
+          Ident@105..106 "f"
+    CallArgList@106..136
+      LParen@106..107 "("
+      CallArg@107..135
+        ClosureExpr@107..135
+          FuncParamList@107..133
+            Pipe@107..108 "|"
+            FnParam@108..132
+              RecordPat@108..132
+                Path@108..126
+                  PathSegment@108..121
+                    QualifiedType@108..121
+                      Lt@108..109 "<"
+                      PathType@109..110
+                        Path@109..110
+                          PathSegment@109..110
+                            Ident@109..110 "T"
+                      WhiteSpace@110..111 " "
+                      AsKw@111..113 "as"
+                      WhiteSpace@113..114 " "
+                      TraitRef@114..120
+                        Path@114..120
+                          PathSegment@114..120
+                            Ident@114..120 "Shaped"
+                      Gt@120..121 ">"
+                  Colon2@121..123 "::"
+                  PathSegment@123..126
+                    Ident@123..126 "Out"
+                WhiteSpace@126..127 " "
+                RecordPatFieldList@127..132
+                  LBrace@127..128 "{"
+                  WhiteSpace@128..129 " "
+                  RecordPatField@129..130
+                    PathPat@129..130
+                      Path@129..130
+                        PathSegment@129..130
+                          Ident@129..130 "x"
+                  WhiteSpace@130..131 " "
+                  RBrace@131..132 "}"
+            Pipe@132..133 "|"
+          WhiteSpace@133..134 " "
+          PathExpr@134..135
+            Path@134..135
+              PathSegment@134..135
+                Ident@134..135 "x"
+      RParen@135..136 ")"
+  Newline@136..137 "\n"

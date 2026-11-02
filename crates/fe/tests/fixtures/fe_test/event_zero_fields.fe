@@ -44,14 +44,14 @@ fn topic0_paused() {
 
 #[test]
 fn emit_zero_field_event() uses (evm: mut Evm) {
-    let c = evm.create2<Probe>(value: 0, args: (), salt: 0)
-    let r: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::Pause {})
+    let c = evm.create2<Probe>(value: Wei::zero(), args: (), salt: 0)
+    let r: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::Pause {})
     assert!(r == 1)
 }
 
 // cast sig "Unauthorized()"
 #[test(should_revert, selector = 0x82b42900)]
 fn revert_zero_field_error() uses (evm: mut Evm) {
-    let c = evm.create2<Probe>(value: 0, args: (), salt: 0)
-    evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::Fail {})
+    let c = evm.create2<Probe>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::Fail {})
 }

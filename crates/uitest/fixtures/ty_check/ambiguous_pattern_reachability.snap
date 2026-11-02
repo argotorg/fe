@@ -12,7 +12,7 @@ error[2-0004]: `Some` is ambiguous
 16 │     let _ = Some(1)
    │             ^^^^ `Some` is ambiguous
    │
-   ┌─ src/option.fe:11:5
+   ┌─ src/option.fe:12:5
    │
-11 │     Some(T)
+12 │     Some(T)
    │     ---- candidate 1 (from implicit import)

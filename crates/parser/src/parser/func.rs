@@ -4,7 +4,7 @@ use super::{
     param::{ItemBlock, parse_generic_params_opt, parse_where_clause_opt},
     parse_list,
     token_stream::TokenStream,
-    type_::{parse_space_annotation_opt, parse_type},
+    type_::parse_type,
 };
 use crate::{ExpectedKind, ParseError, SyntaxKind, TextRange};
 
@@ -90,6 +90,7 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::ConstKw,
             SyntaxKind::PubKw,
             SyntaxKind::UnsafeKw,
+            SyntaxKind::Pound,
             SyntaxKind::DocComment,
             SyntaxKind::DocCommentAttr,
             SyntaxKind::Newline,
@@ -98,6 +99,10 @@ impl super::Parse for FuncSignatureScope {
         let body = self.fn_def_scope.body();
         if body != ItemBlock::Absent {
             recovery_tokens.push(SyntaxKind::LBrace);
+        }
+        // A bodyless trait method also ends where an associated type begins.
+        if self.fn_def_scope == FuncDefScope::TraitDef {
+            recovery_tokens.push(SyntaxKind::TypeKw);
         }
         parser.set_scope_recovery_stack(&recovery_tokens);
 
@@ -120,7 +125,6 @@ impl super::Parse for FuncSignatureScope {
         parser.expect_and_pop_recovery_stack()?;
         if parser.bump_if(SyntaxKind::Arrow) {
             parse_type(parser, None)?;
-            parse_space_annotation_opt(parser)?;
         }
 
         parser.expect_and_pop_recovery_stack()?;
@@ -220,9 +224,9 @@ impl super::Parse for UsesParamScope {
 
         // Cases to support inside parens:
         // - `Ctx`
-        // - `mut Storage`
+        // - `mut Storage`, `mut? Storage`
         // - `c: Ctx`
-        // - `f: mut Foo`
+        // - `f: mut Foo`, `f: mut? Foo`
         //
         // Legacy typed form `mut f: Foo` is rejected with a targeted parse error.
         let lookahead = parser.peek_n_non_trivia(3);
@@ -277,7 +281,7 @@ impl super::Parse for UsesParamScope {
 }
 
 fn parse_typed_uses_key<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
-    if parser.bump_if(SyntaxKind::MutKw) {
+    if parser.bump_if(SyntaxKind::MutKw) || parser.bump_if(SyntaxKind::MaybeMutKw) {
         parse_type(parser, None)?;
         return Ok(());
     }
@@ -292,7 +296,9 @@ fn parse_typed_uses_key<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Re
             _ => unreachable!(),
         };
         parser.add_error(ParseError::Msg(
-            format!("typed `uses` parameters only support `mut`; remove `{mode}` or use `mut`"),
+            format!(
+                "typed `uses` parameters only support `mut` and `mut?`; remove `{mode}` or use `mut`"
+            ),
             TextRange::empty(pos),
         ));
         return Ok(());

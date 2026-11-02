@@ -101,17 +101,25 @@ error[6-0009]: method has stricter bounds than trait
    │        ^^^^^^ method has stricter bounds than the declared method in the trait: `ctx: Ctx`
 
 error[6-0029]: a type is pinned to a state space
-   ┌─ state_index_pins.fe:29:17
+   ┌─ state_index_pins.fe:30:18
    │
-29 │ impl Pinned for Words {
-   │                 ^^^^^ this space is not `storage` or `transient`
+30 │     type Space = u256
+   │                  ^^^^ this type is not `Storage` or `Transient`
    │
-   = give `space S = storage`, `space S = transient`, or another pinned type's space, `P::S`
+   = give `type Space = Storage` or `type Space = Transient` (`core::marker`), or another pinned type's space, `P::Space`
 
 error[6-0029]: a type is pinned to a state space
-    ┌─ state_index_pins.fe:119:31
+    ┌─ state_index_pins.fe:120:18
     │
-119 │ impl<P: Placement> Pinned for Forwarded<P> {
-    │                               ^^^^^^^^^^^^ this space is not `storage` or `transient`
+120 │     type Space = P::Space
+    │                  ^^^^^^^^ this type is not `Storage` or `Transient`
     │
-    = give `space S = storage`, `space S = transient`, or another pinned type's space, `P::S`
+    = give `type Space = Storage` or `type Space = Transient` (`core::marker`), or another pinned type's space, `P::Space`
+
+error[6-0029]: a type is pinned to a state space
+    ┌─ state_index_pins.fe:179:18
+    │
+179 │     type Space = S
+    │                  ^ this type is not `Storage` or `Transient`
+    │
+    = give `type Space = Storage` or `type Space = Transient` (`core::marker`), or another pinned type's space, `P::Space`

@@ -1,0 +1,47 @@
+// A shape is a callable's parameter list, never the type of a value.
+fn param<shape A>(_ x: A) {}
+
+fn in_tuple<shape A>(_ x: (A, u256)) {}
+
+struct Holder<shape A> {
+    a: A,
+}
+
+enum Wrap<shape A> {
+    Value(A),
+}
+
+trait Make {
+    fn make<shape A>() -> A
+}
+
+// A mode's payload is a value's type, not a shape; a shape alone is a part's
+// shape.
+trait Payloads<shape A> {
+    fn owned(self, _ x: (own A, own u256))
+    fn viewed(self, _ x: (ref A, own u256))
+    fn shaped(self, _ x: (own u256, A))
+}
+
+trait Value {
+    type Out
+}
+
+struct Wrapped<shape A> {}
+
+// An associated type is a value's type, of kind `*`, whether an impl gives
+// it or a bound binds it.
+impl<shape A> Value for Wrapped<A> {
+    type Out = A
+}
+
+fn bound<shape A, V: Value<Out = A>>(_ v: V) {}
+
+// Errors inside the `Fn(..)` form are reported where they are written.
+fn sugar<shape A, F: Fn(own A, Nope) -> A, G: Fn(ref (mut u256, bool))>(_ f: F, _ g: G) {}
+
+// A shape argument names no mode for `mut?` to take.
+fn maybe_mut_shape<F: Fn(mut? u256), G: core::functional::Fn<(own u256, (mut? u256, ref u256))>>(
+    _ f: F,
+    _ g: G,
+) {}

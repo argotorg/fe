@@ -7,6 +7,8 @@ use std::{
 
 use camino::{Utf8Path, Utf8PathBuf};
 use codegen::{OptLevel, SonatinaContractBytecode};
+#[cfg(feature = "sp1")]
+use common::cache::cache_dir;
 use common::{
     InputDb,
     config::{
@@ -23,6 +25,8 @@ use hir::lower::map_file_to_mod;
 use mir::build_runtime_package;
 use salsa::Setter;
 use smol_str::SmolStr;
+#[cfg(feature = "sp1")]
+use sonatina_sp1::{Sp1Runtime, Sp1Toolchain};
 use tiny_keccak::{Hasher, Keccak};
 use url::Url;
 
@@ -62,7 +66,9 @@ struct EmitSelection {
     ir: bool,
     abi: bool,
     metadata: bool,
+    sizes: bool,
     executable: bool,
+    elf: bool,
 }
 
 impl EmitSelection {
@@ -73,7 +79,9 @@ impl EmitSelection {
             ir: false,
             abi: false,
             metadata: false,
+            sizes: false,
             executable: false,
+            elf: false,
         };
         for emit in requested {
             match emit {
@@ -82,14 +90,16 @@ impl EmitSelection {
                 BuildEmit::Ir => selection.ir = true,
                 BuildEmit::Abi => selection.abi = true,
                 BuildEmit::Metadata => selection.metadata = true,
+                BuildEmit::Sizes => selection.sizes = true,
                 BuildEmit::Executable => selection.executable = true,
+                BuildEmit::Elf => selection.elf = true,
             }
         }
         selection
     }
 
     fn writes_any_bytecode(self) -> bool {
-        self.bytecode || self.runtime_bytecode
+        self.bytecode || self.runtime_bytecode || self.sizes
     }
 }
 
@@ -99,11 +109,18 @@ fn create_build_report_staging() -> Result<ReportStaging, String> {
 
 fn validate_build_request(
     backend: BuildBackend,
+    ingot: Option<&str>,
     contract: Option<&str>,
     emit: EmitSelection,
 ) -> Result<(), String> {
+    #[cfg(not(feature = "sp1"))]
+    let _ = ingot;
     #[cfg(not(feature = "cranelift"))]
     let _ = contract;
+
+    if emit.elf && backend.name() != "sp1" {
+        return Err("`--emit elf` requires `--backend sp1`".to_string());
+    }
 
     match backend {
         BuildBackend::Sonatina if emit.executable => {
@@ -125,6 +142,18 @@ fn validate_build_request(
         ),
         #[cfg(feature = "cranelift")]
         BuildBackend::Native => Ok(()),
+        #[cfg(feature = "sp1")]
+        BuildBackend::Sp1 if ingot.is_some() || contract.is_some() => {
+            Err("SP1 output does not support `--ingot` or `--contract`".to_string())
+        }
+        #[cfg(feature = "sp1")]
+        BuildBackend::Sp1
+            if emit.writes_any_bytecode() || emit.abi || emit.metadata || emit.executable =>
+        {
+            Err("SP1 backend only supports `--emit elf` and `--emit ir`".to_string())
+        }
+        #[cfg(feature = "sp1")]
+        BuildBackend::Sp1 => Ok(()),
     }
 }
 
@@ -204,7 +233,7 @@ pub fn build(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(backend, contract, emit) {
+    if let Err(err) = validate_build_request(backend, ingot, contract, emit) {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -215,6 +244,9 @@ pub fn build(
     db.compilation_settings()
         .set_profile(&mut db)
         .to(profile.into());
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(backend.target());
 
     let report_root = match report_out
         .map(|out| -> Result<_, String> {
@@ -316,6 +348,11 @@ pub fn build(
             out_dir,
             report_ctx.as_ref(),
         ),
+        #[cfg(feature = "sp1")]
+        CliTarget::Directory(_) if matches!(backend, BuildBackend::Sp1) => {
+            eprintln!("Error: sp1 executable output only supports standalone `.fe` files");
+            true
+        }
         CliTarget::Directory(dir_path) => build_directory(
             &mut db,
             &dir_path,
@@ -377,7 +414,7 @@ pub fn build_from_metadata(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(BuildBackend::Sonatina, contract, emit) {
+    if let Err(err) = validate_build_request(BuildBackend::Sonatina, None, contract, emit) {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -1286,11 +1323,19 @@ fn build_ingot(
             }
         }
         if emit.writes_any_bytecode() {
-            let bytecode = match target_mod {
-                Some(top_mod) => {
+            let bytecode = match (target_mod, emit.sizes) {
+                (Some(top_mod), false) => {
                     codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
                 }
-                None => codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract),
+                (Some(top_mod), true) => codegen::emit_module_sonatina_bytecode_with_observability(
+                    db, top_mod, opt_level, contract,
+                ),
+                (None, false) => {
+                    codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract)
+                }
+                (None, true) => codegen::emit_ingot_sonatina_bytecode_with_observability(
+                    db, ingot, opt_level, contract,
+                ),
             };
             let bytecode = match bytecode {
                 Ok(bytecode) => bytecode,
@@ -1358,6 +1403,25 @@ fn build_top_mod(
         );
     }
 
+    #[cfg(feature = "sp1")]
+    if matches!(backend, BuildBackend::Sp1) {
+        let result = build_sp1_top_mod(
+            db,
+            top_mod,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir.map(Utf8PathBuf::as_path),
+        );
+        if let Err(err) = &result {
+            eprintln!("Error: Failed to compile SP1 output: {err}");
+        }
+        return BuildSummary {
+            had_errors: result.is_err(),
+        };
+    }
+
     let contract_names = match collect_contract_names(db, top_mod) {
         Ok(names) => names,
         Err(err) => {
@@ -1402,14 +1466,20 @@ fn build_top_mod(
             }
         }
         if emit.writes_any_bytecode() {
-            let bytecode =
-                match codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract) {
-                    Ok(bytecode) => bytecode,
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
-                        return BuildSummary { had_errors: true };
-                    }
-                };
+            let bytecode = if emit.sizes {
+                codegen::emit_module_sonatina_bytecode_with_observability(
+                    db, top_mod, opt_level, contract,
+                )
+            } else {
+                codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
+            };
+            let bytecode = match bytecode {
+                Ok(bytecode) => bytecode,
+                Err(err) => {
+                    eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
+                    return BuildSummary { had_errors: true };
+                }
+            };
             had_errors |= write_sonatina_bytecode_artifacts(
                 &names_to_build,
                 &bytecode,
@@ -1451,6 +1521,7 @@ fn build_native_top_mod(
     let artifacts = match codegen::emit_module_native_artifacts(
         db,
         top_mod,
+        codegen::NativeTarget::Host,
         opt_level,
         codegen::NativeOutputSelection {
             ir: emit.ir,
@@ -1480,6 +1551,59 @@ fn build_native_top_mod(
     BuildSummary { had_errors: false }
 }
 
+#[cfg(feature = "sp1")]
+fn build_sp1_top_mod(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8Path>,
+) -> Result<(), String> {
+    // Locate the toolchain before compiling, and write nothing unless linking succeeds.
+    let toolchain = emit
+        .elf
+        .then(Sp1Toolchain::from_env)
+        .transpose()
+        .map_err(|err| err.to_string())?;
+    let artifacts = codegen::emit_module_native_artifacts(
+        db,
+        top_mod,
+        codegen::NativeTarget::Sp1,
+        opt_level,
+        codegen::NativeOutputSelection {
+            ir: emit.ir,
+            object: emit.elf,
+        },
+    )
+    .map_err(|err| err.to_string())?;
+    let elf = toolchain
+        .map(|toolchain| {
+            let cache = cache_dir("sp1-runtime")
+                .ok_or("no cache directory for the SP1 runtime; set FE_CACHE_DIR")?;
+            let object = artifacts.object.as_deref().expect("SP1 object requested");
+            Sp1Runtime::build(toolchain, cache)
+                .and_then(|runtime| runtime.link_objects(&[object]))
+                .map_err(|err| err.to_string())
+        })
+        .transpose()?;
+    ensure_output_dirs(emit, out_dir, out_dir)?;
+    if let Some(ir) = artifacts.ir {
+        write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "sp1.sona", &ir)?;
+    }
+    if let Some(elf) = elf {
+        let name = format!("{}.elf", sanitize_name_with_default(ir_file_stem, "main"));
+        let file = out_dir.join(&name);
+        fs::write(&file, &elf).map_err(|err| format!("Failed to write SP1 ELF {file}: {err}"))?;
+        if let Some(report_dir) = report_dir {
+            let _ = fs::write(report_dir.join(&name), &elf);
+        }
+        println!("Wrote {file}");
+    }
+    Ok(())
+}
+
 fn collect_contract_names(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -1488,7 +1612,7 @@ fn collect_contract_names(
     let mut names: Vec<_> = package
         .root_objects(db)
         .iter()
-        .map(|object| object.name(db))
+        .map(|object| object.name(db).clone())
         .collect();
     names.sort();
     names.dedup();
@@ -1626,7 +1750,7 @@ fn ensure_output_dirs(
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
 ) -> Result<(), String> {
-    if emit.writes_any_bytecode() || emit.abi || emit.metadata || emit.executable {
+    if emit.writes_any_bytecode() || emit.abi || emit.metadata || emit.executable || emit.elf {
         fs::create_dir_all(out_dir.as_std_path())
             .map_err(|err| format!("Failed to create output directory {out_dir}: {err}"))?;
     }
@@ -1722,7 +1846,11 @@ fn dependency_arithmetic_str(mode: DependencyArithmeticMode) -> &'static str {
 /// human-facing `name` and the *candidate* namespace; see [`assign_namespaces`] for the unique
 /// namespace actually used as a path prefix and dependency-map target.
 fn ingot_namespace(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> String {
-    if let Some(name) = ingot.config(db).and_then(|config| config.metadata.name) {
+    if let Some(name) = ingot
+        .config(db)
+        .as_ref()
+        .and_then(|config| config.metadata.name.as_ref())
+    {
         return name.to_string();
     }
     ingot
@@ -1778,7 +1906,7 @@ fn non_builtin_closure<'db>(
     root: hir::Ingot<'db>,
 ) -> Vec<hir::Ingot<'db>> {
     let mut closure = vec![root];
-    for dep_url in db.dependency_graph().dependency_urls(db, &root.base(db)) {
+    for dep_url in db.dependency_graph().dependency_urls(db, root.base(db)) {
         let Some(dep) = dep_url.ingot(db) else {
             continue;
         };
@@ -1851,7 +1979,7 @@ fn assign_namespaces(
             n += 1;
         }
         used.insert(candidate.clone());
-        map.insert(ing.base(db), candidate);
+        map.insert(ing.base(db).clone(), candidate);
     }
     map
 }
@@ -1870,7 +1998,7 @@ fn ingot_dependencies_json(
             Some(dep) if matches!(dep.kind(db), IngotKind::Std) => "std".to_string(),
             Some(dep) if matches!(dep.kind(db), IngotKind::Core) => "core".to_string(),
             Some(dep) => namespaces
-                .get(&dep.base(db))
+                .get(dep.base(db))
                 .cloned()
                 .unwrap_or_else(|| ingot_namespace(db, dep)),
             None => alias.to_string(),
@@ -1908,7 +2036,7 @@ fn write_metadata_artifacts(
         if dep.base(db) == ingot.base(db) {
             continue;
         }
-        let ns = namespaces.get(&dep.base(db)).cloned().unwrap_or_default();
+        let ns = namespaces.get(dep.base(db)).cloned().unwrap_or_default();
         collect_ingot_sources_prefixed(db, dep, Some(&ns), &mut all_sources);
     }
 
@@ -1964,7 +2092,7 @@ fn write_metadata_artifacts(
     let ingots_arr: Vec<serde_json::Value> = closure
         .iter()
         .map(|&ing| {
-            let namespace = namespaces.get(&ing.base(db)).cloned().unwrap_or_default();
+            let namespace = namespaces.get(ing.base(db)).cloned().unwrap_or_default();
             let dep_arith = resolve_dependency_arithmetic_mode(
                 ing.config(db).as_ref(),
                 ing.workspace_config(db).as_ref(),
@@ -1972,7 +2100,7 @@ fn write_metadata_artifacts(
             );
             serde_json::json!({
                 "name": ingot_namespace(db, ing),
-                "version": ing.version(db).map(|v| v.to_string()),
+                "version": ing.version(db).as_ref().map(|v| v.to_string()),
                 "namespace": namespace,
                 "arithmetic": arithmetic_str(ing.arithmetic_mode(db)),
                 "dependencyArithmetic": dependency_arithmetic_str(dep_arith),
@@ -2108,19 +2236,28 @@ fn write_sonatina_bytecode_artifacts(
 ) -> bool {
     let mut had_errors = false;
     for name in names_to_build {
-        let Some(SonatinaContractBytecode {
-            deploy, runtime, ..
-        }) = bytecode.get(name)
-        else {
+        let Some(contract_bytecode) = bytecode.get(name) else {
             eprintln!("Error: Sonatina did not emit bytecode for contract \"{name}\"");
             had_errors = true;
             continue;
         };
-        let deploy_hex = hex::encode(deploy);
-        let runtime_hex = hex::encode(runtime);
-        if let Err(err) =
-            write_contract_artifacts(out_dir, report_dir, name, &deploy_hex, &runtime_hex, emit)
-        {
+        let deploy_hex = hex::encode(&contract_bytecode.deploy);
+        let runtime_hex = hex::encode(&contract_bytecode.runtime);
+        let sizes = contract_bytecode.size_report();
+        if emit.sizes && sizes.is_none() {
+            eprintln!("Error: Sonatina did not emit code sizes for contract \"{name}\"");
+            had_errors = true;
+            continue;
+        }
+        if let Err(err) = write_contract_artifacts(
+            out_dir,
+            report_dir,
+            name,
+            &deploy_hex,
+            &runtime_hex,
+            sizes.as_deref(),
+            emit,
+        ) {
             eprintln!("Error: {err}");
             had_errors = true;
         } else {
@@ -2133,7 +2270,8 @@ fn write_sonatina_bytecode_artifacts(
 fn derive_ingot_ir_file_stem(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> String {
     if let Some(name) = ingot
         .config(db)
-        .and_then(|config| config.metadata.name)
+        .as_ref()
+        .and_then(|config| config.metadata.name.as_ref())
         .map(|name| name.to_string())
     {
         return sanitize_name_with_default(&name, "module");
@@ -2164,8 +2302,14 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     if emit.metadata {
         parts.push("metadata");
     }
+    if emit.sizes {
+        parts.push("sizes");
+    }
     if emit.executable {
         parts.push("executable");
+    }
+    if emit.elf {
+        parts.push("elf");
     }
     parts.join(",")
 }
@@ -2207,6 +2351,7 @@ fn write_contract_artifacts(
     contract_name: &str,
     bytecode: &str,
     runtime_bytecode: &str,
+    sizes: Option<&str>,
     emit: EmitSelection,
 ) -> Result<(), String> {
     let base = sanitize_filename(contract_name);
@@ -2228,6 +2373,15 @@ fn write_contract_artifacts(
             let _ = fs::write(runtime_path.as_std_path(), runtime_bytecode);
         }
     }
+    if let Some(sizes) = sizes {
+        let sizes_path = out_dir.join(format!("{base}.sizes.txt"));
+        fs::write(sizes_path.as_std_path(), sizes)
+            .map_err(|err| format!("Failed to write {sizes_path}: {err}"))?;
+        if let Some(dir) = report_dir {
+            let sizes_path = dir.join(format!("{base}.sizes.txt"));
+            let _ = fs::write(sizes_path.as_std_path(), sizes);
+        }
+    }
     Ok(())
 }
 
@@ -2238,6 +2392,9 @@ fn print_contract_artifact_paths(out_dir: &Utf8Path, contract_name: &str, emit: 
     }
     if emit.runtime_bytecode {
         println!("Wrote {out_dir}/{base}.runtime.bin");
+    }
+    if emit.sizes {
+        println!("Wrote {out_dir}/{base}.sizes.txt");
     }
 }
 
@@ -2278,7 +2435,9 @@ mod tests {
             ir: false,
             abi: true,
             metadata: false,
+            sizes: false,
             executable: false,
+            elf: false,
         };
         assert_eq!(describe_emit_selection(emit), "abi");
     }

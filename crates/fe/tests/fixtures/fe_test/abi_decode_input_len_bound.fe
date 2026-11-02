@@ -2,9 +2,9 @@
 // payload that would not fit it is a decode error (an empty revert), not an
 // allocation: byte data longer than `2**64 - 64` bytes, or an array in an
 // input longer than `2**64 - 32` bytes.
-use core::abi::{Bytes, Decode, DynArray, DynString}
+use core::abi::{AbiSpan, ByteSource, Bytes, Decode, DynString}
+use std::abi::{DynArray, Sol, decode_input}
 use core::ptr::MemBuffer
-use std::abi::Sol
 use std::evm::Evm
 
 /// One byte past the longest input an array decodes from. `LONG - 32` bytes
@@ -31,26 +31,61 @@ pub contract Decoder {
     recv Probe {
         LongBytes {} -> u256 {
             let b: Bytes = <Bytes as Decode<Sol>>::decode_from_prechecked_head(input(LONG - 32).span(), 0, LONG)
-            b.len()
+            b.len() as u256
         }
         LongString {} -> u256 {
             let s: DynString = <DynString as Decode<Sol>>::decode_from_prechecked_head(input(LONG - 32).span(), 0, LONG)
-            s.len()
+            s.len() as u256
         }
         LongArray {} -> u256 {
             let a: DynArray<u256> = <DynArray<u256> as Decode<Sol>>::decode_from_prechecked_head(input(1 << 58).span(), 0, LONG)
-            a.len()
+            a.len() as u256
         }
     }
 }
 
 #[test]
 fn long_inputs_are_decode_errors() uses (evm: mut Evm) {
-    let target = evm.create2<Decoder>(value: 0, args: (), salt: 0)
-    let bytes = evm.try_call(addr: target, gas: 300000, value: 0, message: Probe::LongBytes {})
+    let target = evm.create2<Decoder>(value: Wei::zero(), args: (), salt: 0)
+    let bytes = evm.try_call(addr: target, gas: 300000, value: Wei::zero(), message: Probe::LongBytes {})
     assert(!bytes.success() && bytes.returndata_len() == 0)
-    let string = evm.try_call(addr: target, gas: 300000, value: 0, message: Probe::LongString {})
+    let string = evm.try_call(addr: target, gas: 300000, value: Wei::zero(), message: Probe::LongString {})
     assert(!string.success() && string.returndata_len() == 0)
-    let array = evm.try_call(addr: target, gas: 300000, value: 0, message: Probe::LongArray {})
+    let array = evm.try_call(addr: target, gas: 300000, value: Wei::zero(), message: Probe::LongArray {})
     assert(!array.success() && array.returndata_len() == 0)
+}
+
+/// An input of `2**64 - 1` bytes, the longest there is, all of whose words
+/// are `word`, without allocating it.
+struct Uniform { word: u256 }
+impl Copy for Uniform {}
+impl ByteSource for Uniform {
+    fn size(self) -> u64 { 0xffffffffffffffff }
+    fn word_at(self, _: u256) -> u256 { self.word }
+    fn byte_at(self, _: u256) -> u8 { 0 }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) { panic() }
+}
+
+#[test]
+fn longest_inputs_decode() {
+    let value: u256 = decode_input(Uniform { word: 7 })
+    assert!(value == 7)
+}
+
+// No input bounds the count of zero-sized elements, so it is limited below
+// `2**64` like any Solidity length word.
+#[test]
+fn zero_sized_element_counts_below_two_64_decode() {
+    let a: DynArray<()> = decode_input(input(0xffffffffffffffff).span())
+    assert!(a.len() as u256 == 0xffffffffffffffff)
+}
+
+#[test(should_revert)]
+fn zero_sized_element_count_of_two_64_is_rejected() {
+    let _: DynArray<()> = decode_input(input(0x10000000000000000).span())
+}
+
+#[test(should_revert)]
+fn zero_sized_element_count_of_two_64_has_no_span() {
+    let _ = <DynArray<()> as AbiSpan<Sol>>::payload_end(input(0x10000000000000000).span(), base: 0, pos: 0)
 }

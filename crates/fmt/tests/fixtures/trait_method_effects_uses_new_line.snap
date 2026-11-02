@@ -1,0 +1,41 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/trait_method_effects_uses_new_line.fe
+---
+// fmt: uses_new_line = true
+trait Source {
+    uses E
+    fn bare(self) uses E
+    fn grouped(self)
+    uses (reader: Reader)
+    fn qualified(self)
+    uses Self::E
+    fn mutable(self)
+    uses mut Reader
+    fn labeled(self)
+    uses reader: Reader
+}
+impl Source for Adapter {
+    uses E = (reader: Reader)
+    fn bare(self)
+    uses E
+    {}
+    fn grouped(self)
+    uses (reader: Reader)
+    {}
+    fn qualified(self)
+    uses Self::E
+    {}
+    fn mutable(self)
+    uses mut Reader
+    {}
+    fn labeled(self)
+    uses reader: Reader
+    {}
+    fn read_a_long_implementation(self, _ start: u256, _ count: u256) -> u256
+    uses E
+    {
+        0
+    }
+}

@@ -1,10 +1,10 @@
-use parser::ast::{self, prelude::*};
+use parser::ast::{self, SyntaxNodePtr, prelude::*};
 
 use super::body::BodyCtxt;
 use crate::{
     hir_def::{
         Body, FuncParamListId, GenericArgListId, IdentId, IntegerId, ItemKind, LitKind, Pat,
-        PathId, Stmt, TypeId, expr::*,
+        PathId, Stmt, StmtId, TypeId, expr::*,
     },
     span::HirOrigin,
 };
@@ -24,7 +24,7 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::Block(block) => {
-                return Self::lower_block(ctxt, &ast, block, BlockKind::Normal);
+                return Self::lower_block(ctxt, &ast, block, BlockKind::Normal, Vec::new());
             }
 
             ast::ExprKind::Closure(closure) => {
@@ -35,7 +35,8 @@ impl<'db> Expr<'db> {
                 let ret_ty = closure
                     .ret_ty()
                     .map(|ret_ty| TypeId::lower_ast(ctxt.f_ctxt, ret_ty));
-                let body = Self::push_to_body_opt(ctxt, closure.body());
+                let lets = ctxt.lower_param_lets(closure.params());
+                let body = Self::lower_ast_after(ctxt, closure.body(), lets);
                 Self::Closure {
                     params,
                     ret_ty,
@@ -45,7 +46,9 @@ impl<'db> Expr<'db> {
 
             ast::ExprKind::Unsafe(unsafe_) => {
                 return match unsafe_.block() {
-                    Some(block) => Self::lower_block(ctxt, &ast, block, BlockKind::Unsafe),
+                    Some(block) => {
+                        Self::lower_block(ctxt, &ast, block, BlockKind::Unsafe, Vec::new())
+                    }
                     None => ctxt.push_invalid_expr(HirOrigin::raw(&ast)),
                 };
             }
@@ -256,17 +259,18 @@ impl<'db> Expr<'db> {
     }
 
     /// Lowers `block` as the expression `ast`, which is the block itself or
-    /// the `unsafe` block wrapping it.
+    /// the `unsafe` block wrapping it, its statements following `leading`.
     fn lower_block(
         ctxt: &mut BodyCtxt<'_, 'db>,
         ast: &ast::Expr,
         block: ast::BlockExpr,
         kind: BlockKind,
+        leading: Vec<StmtId>,
     ) -> ExprId {
         ctxt.f_ctxt.enter_block_scope();
-        let stmts = block
-            .stmts()
-            .map(|stmt| Stmt::push_to_body(ctxt, stmt))
+        let stmts = leading
+            .into_iter()
+            .chain(block.stmts().map(|stmt| Stmt::push_to_body(ctxt, stmt)))
             .collect();
         let expr_id = ctxt.push_expr(Self::Block(stmts, kind), HirOrigin::raw(ast));
 
@@ -284,6 +288,36 @@ impl<'db> Expr<'db> {
         } else {
             ctxt.push_missing_expr()
         }
+    }
+
+    /// `ast` begun by `lets`, the destructuring of its parameters: a block
+    /// takes them before its own statements, and any other expression is
+    /// the tail of a block of them.
+    pub(super) fn lower_ast_after(
+        ctxt: &mut BodyCtxt<'_, 'db>,
+        ast: Option<ast::Expr>,
+        lets: Vec<StmtId>,
+    ) -> ExprId {
+        if lets.is_empty() {
+            return Self::push_to_body_opt(ctxt, ast);
+        }
+        let Some(ast) = ast else {
+            return ctxt.push_missing_expr();
+        };
+        if let ast::ExprKind::Block(block) = ast.kind() {
+            return Self::lower_block(ctxt, &ast, block, BlockKind::Normal, lets);
+        }
+        ctxt.f_ctxt.enter_block_scope();
+        let ptr = SyntaxNodePtr::new(ast.syntax());
+        let tail = Self::lower_ast(ctxt, ast);
+        let tail = ctxt.push_stmt(Stmt::Expr(tail), HirOrigin::Expanded(ptr));
+        let stmts = lets.into_iter().chain([tail]).collect();
+        let block = ctxt.push_expr(
+            Self::Block(stmts, BlockKind::Normal),
+            HirOrigin::Expanded(ptr),
+        );
+        ctxt.f_ctxt.leave_block_scope(block);
+        block
     }
 }
 
@@ -416,6 +450,7 @@ impl UnOp {
             ast::UnOp::Not(_) => Self::Not,
             ast::UnOp::BitNot(_) => Self::BitNot,
             ast::UnOp::Mut(_) => Self::Mut,
+            ast::UnOp::MaybeMut(_) => Self::MaybeMut,
             ast::UnOp::Ref(_) => Self::Ref,
             ast::UnOp::Deref(_) => Self::Deref,
         }

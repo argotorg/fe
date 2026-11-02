@@ -37,10 +37,8 @@ func private %make_tuple() -> @layout_0 {
     block1:
         v2.constref<@layout_0> = const.ref $const_region_1;
         v3.constref<@layout_0> = const.ref $const_region_1;
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v4 v3;
-        v5.@layout_0 = obj.load v4;
-        return v5;
+        v4.@layout_0 = const.load v3;
+        return v4;
 }
 
 

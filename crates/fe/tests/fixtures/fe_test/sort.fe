@@ -2,7 +2,7 @@
 // `MemVec`) and element types (unsigned, signed, `Address`, a user type).
 
 use core::ops::{Eq, Ord}
-use core::ptr::MemArray
+use core::ptr::{MemArray, MemVec}
 use core::sort::{
     binary_search,
     dedup_sorted,
@@ -14,7 +14,7 @@ use core::sort::{
     reverse,
     sort,
 }
-use std::abi::{DynArray, MemVec}
+use std::abi::DynArray
 use std::abi::dyn_array::dyn_array_from
 use std::evm::Address
 
@@ -63,14 +63,14 @@ fn sorts_unsigned_and_signed_arrays() {
 #[test]
 fn sorts_addresses() {
     var signers: [Address; 3] = [
-        Address { inner: 0xc0ffee },
-        Address { inner: 0xa11ce },
-        Address { inner: 0xb0b },
+        Address::new(0xc0ffee),
+        Address::new(0xa11ce),
+        Address::new(0xb0b),
     ]
     assert!(!is_sorted_unique(signers))
     sort(mut signers)
     assert!(
-        signers[0].inner == 0xb0b && signers[1].inner == 0xa11ce && signers[2].inner == 0xc0ffee,
+        signers[0].word() == 0xb0b && signers[1].word() == 0xa11ce && signers[2].word() == 0xc0ffee,
     )
     assert!(is_sorted_unique(signers))
 }
@@ -94,7 +94,7 @@ fn sorts_a_user_type_by_its_own_order() {
 #[test]
 fn sorts_memory_slices_and_arrays() {
     var arr = MemArray<u256>::new_zeroed(4)
-    let slice = arr.as_mut_slice()
+    let slice = mut arr.as_slice()
     slice[0] = 40
     slice[1] = 10
     slice[2] = 30
@@ -119,15 +119,25 @@ fn sorts_memory_slices_and_arrays() {
 #[test]
 fn sorts_a_copy_of_an_abi_array() {
     let input: DynArray<Address> = dyn_array_from(
-        [Address { inner: 3 }, Address { inner: 1 }, Address { inner: 2 }],
+        [Address::new(3), Address::new(1), Address::new(2)],
     )
-    var copy = MemVec::from_dyn_array(input)
+    var copy = input.to_mem_array()
     sort(mut copy)
     assert!(
-        copy.get(0).inner == 1 && copy.get(1).inner == 2 && copy.get(2).inner == 3,
+        copy[0].word() == 1 && copy[1].word() == 2 && copy[2].word() == 3,
     )
-    let sorted: DynArray<Address> = copy.to_dyn_array()
-    assert!(sorted.len() == 3)
+    let sorted = DynArray::from_slice(copy.as_slice())
+    assert!(sorted.len() == 3 && sorted.get(0).word() == 1)
+}
+
+#[test]
+fn sorts_a_mem_vec() {
+    var v = MemVec<i256>::new()
+    for x in [5, -1, 4] {
+        v.push(x)
+    }
+    sort(mut v)
+    assert!(v[0] == -1 && v[1] == 4 && v[2] == 5)
 }
 
 #[test]

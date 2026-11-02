@@ -1,0 +1,401 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/shape_items.fe
+---
+Root@0..454
+  ItemList@0..453
+    Item@0..101
+      Trait@0..101
+        TraitKw@0..5 "trait"
+        WhiteSpace@5..6 " "
+        Ident@6..12 "Driver"
+        WhiteSpace@12..13 " "
+        TraitItemList@13..101
+          LBrace@13..14 "{"
+          Newline@14..15 "\n"
+          WhiteSpace@15..19 "    "
+          TraitTypeItem@19..28
+            TypeKw@19..23 "type"
+            WhiteSpace@23..24 " "
+            Ident@24..28 "Base"
+          Newline@28..29 "\n"
+          WhiteSpace@29..33 "    "
+          TraitShapeItem@33..43
+            Ident@33..38 "shape"
+            WhiteSpace@38..39 " "
+            Ident@39..43 "Step"
+          Newline@43..45 "\n\n"
+          WhiteSpace@45..49 "    "
+          Func@49..99
+            FnKw@49..51 "fn"
+            WhiteSpace@51..52 " "
+            FuncSignature@52..99
+              Ident@52..54 "at"
+              FuncParamList@54..80
+                LParen@54..55 "("
+                FnParam@55..59
+                  SelfKw@55..59 "self"
+                Comma@59..60 ","
+                WhiteSpace@60..61 " "
+                FnParam@61..79
+                  Underscore@61..62 "_"
+                  WhiteSpace@62..63 " "
+                  Ident@63..67 "base"
+                  Colon@67..68 ":"
+                  WhiteSpace@68..69 " "
+                  PathType@69..79
+                    Path@69..79
+                      PathSegment@69..73
+                        SelfTypeKw@69..73 "Self"
+                      Colon2@73..75 "::"
+                      PathSegment@75..79
+                        Ident@75..79 "Base"
+                RParen@79..80 ")"
+              WhiteSpace@80..81 " "
+              Arrow@81..83 "->"
+              WhiteSpace@83..84 " "
+              PathType@84..99
+                Path@84..99
+                  PathSegment@84..88
+                    SelfTypeKw@84..88 "Self"
+                  Colon2@88..90 "::"
+                  PathSegment@90..99
+                    Ident@90..94 "Step"
+                    GenericArgList@94..99
+                      Lt@94..95 "<"
+                      ModeGenericArg@95..98
+                        RefKw@95..98 "ref"
+                      Gt@98..99 ">"
+          Newline@99..100 "\n"
+          RBrace@100..101 "}"
+    Newline@101..103 "\n\n"
+    Item@103..185
+      ImplTrait@103..185
+        ImplKw@103..107 "impl"
+        GenericParamList@107..110
+          Lt@107..108 "<"
+          TypeGenericParam@108..109
+            Ident@108..109 "B"
+          Gt@109..110 ">"
+        WhiteSpace@110..111 " "
+        TraitRef@111..117
+          Path@111..117
+            PathSegment@111..117
+              Ident@111..117 "Driver"
+        WhiteSpace@117..118 " "
+        ForKw@118..121 "for"
+        WhiteSpace@121..122 " "
+        PathType@122..133
+          Path@122..133
+            PathSegment@122..133
+              Ident@122..130 "Identity"
+              GenericArgList@130..133
+                Lt@130..131 "<"
+                TypeGenericArg@131..132
+                  PathType@131..132
+                    Path@131..132
+                      PathSegment@131..132
+                        Ident@131..132 "B"
+                Gt@132..133 ">"
+        WhiteSpace@133..134 " "
+        TraitItemList@134..185
+          LBrace@134..135 "{"
+          Newline@135..136 "\n"
+          WhiteSpace@136..140 "    "
+          TraitTypeItem@140..153
+            TypeKw@140..144 "type"
+            WhiteSpace@144..145 " "
+            Ident@145..149 "Base"
+            WhiteSpace@149..150 " "
+            Eq@150..151 "="
+            WhiteSpace@151..152 " "
+            PathType@152..153
+              Path@152..153
+                PathSegment@152..153
+                  Ident@152..153 "B"
+          Newline@153..154 "\n"
+          WhiteSpace@154..158 "    "
+          TraitShapeItem@158..183
+            Ident@158..163 "shape"
+            WhiteSpace@163..164 " "
+            Ident@164..168 "Step"
+            WhiteSpace@168..169 " "
+            Eq@169..170 "="
+            WhiteSpace@170..171 " "
+            ModeType@171..183
+              MaybeMutKw@171..175 "mut?"
+              WhiteSpace@175..176 " "
+              PathType@176..183
+                Path@176..183
+                  PathSegment@176..177
+                    Ident@176..177 "B"
+                  Colon2@177..179 "::"
+                  PathSegment@179..183
+                    Ident@179..183 "Item"
+          Newline@183..184 "\n"
+          RBrace@184..185 "}"
+    Newline@185..187 "\n\n"
+    Item@187..292
+      ImplTrait@187..292
+        ImplKw@187..191 "impl"
+        GenericParamList@191..202
+          Lt@191..192 "<"
+          TypeGenericParam@192..201
+            Ident@192..193 "D"
+            TypeBoundList@193..201
+              Colon@193..194 ":"
+              WhiteSpace@194..195 " "
+              TypeBound@195..201
+                TraitRef@195..201
+                  Path@195..201
+                    PathSegment@195..201
+                      Ident@195..201 "Driver"
+          Gt@201..202 ">"
+        WhiteSpace@202..203 " "
+        TraitRef@203..209
+          Path@203..209
+            PathSegment@203..209
+              Ident@203..209 "Driver"
+        WhiteSpace@209..210 " "
+        ForKw@210..213 "for"
+        WhiteSpace@213..214 " "
+        PathType@214..226
+          Path@214..226
+            PathSegment@214..226
+              Ident@214..223 "Enumerate"
+              GenericArgList@223..226
+                Lt@223..224 "<"
+                TypeGenericArg@224..225
+                  PathType@224..225
+                    Path@224..225
+                      PathSegment@224..225
+                        Ident@224..225 "D"
+                Gt@225..226 ">"
+        WhiteSpace@226..227 " "
+        TraitItemList@227..292
+          LBrace@227..228 "{"
+          Newline@228..229 "\n"
+          WhiteSpace@229..233 "    "
+          TraitTypeItem@233..252
+            TypeKw@233..237 "type"
+            WhiteSpace@237..238 " "
+            Ident@238..242 "Base"
+            WhiteSpace@242..243 " "
+            Eq@243..244 "="
+            WhiteSpace@244..245 " "
+            PathType@245..252
+              Path@245..252
+                PathSegment@245..246
+                  Ident@245..246 "D"
+                Colon2@246..248 "::"
+                PathSegment@248..252
+                  Ident@248..252 "Base"
+          Newline@252..253 "\n"
+          WhiteSpace@253..257 "    "
+          TraitShapeItem@257..290
+            Ident@257..262 "shape"
+            WhiteSpace@262..263 " "
+            Ident@263..267 "Step"
+            WhiteSpace@267..268 " "
+            Eq@268..269 "="
+            WhiteSpace@269..270 " "
+            TupleType@270..290
+              LParen@270..271 "("
+              ModeType@271..280
+                OwnKw@271..274 "own"
+                WhiteSpace@274..275 " "
+                PathType@275..280
+                  Path@275..280
+                    PathSegment@275..280
+                      Ident@275..280 "usize"
+              Comma@280..281 ","
+              WhiteSpace@281..282 " "
+              PathType@282..289
+                Path@282..289
+                  PathSegment@282..283
+                    Ident@282..283 "D"
+                  Colon2@283..285 "::"
+                  PathSegment@285..289
+                    Ident@285..289 "Step"
+              RParen@289..290 ")"
+          Newline@290..291 "\n"
+          RBrace@291..292 "}"
+    Newline@292..294 "\n\n"
+    Item@294..361
+      Func@294..361
+        FnKw@294..296 "fn"
+        WhiteSpace@296..297 " "
+        FuncSignature@297..358
+          Ident@297..302 "first"
+          GenericParamList@302..342
+            Lt@302..303 "<"
+            TypeGenericParam@303..312
+              Ident@303..304 "D"
+              TypeBoundList@304..312
+                Colon@304..305 ":"
+                WhiteSpace@305..306 " "
+                TypeBound@306..312
+                  TraitRef@306..312
+                    Path@306..312
+                      PathSegment@306..312
+                        Ident@306..312 "Driver"
+            Comma@312..313 ","
+            WhiteSpace@313..314 " "
+            TypeGenericParam@314..341
+              Ident@314..315 "P"
+              TypeBoundList@315..341
+                Colon@315..316 ":"
+                WhiteSpace@316..317 " "
+                TypeBound@317..341
+                  TraitRef@317..341
+                    FnShape@317..341
+                      Ident@317..319 "Fn"
+                      TupleType@319..333
+                        LParen@319..320 "("
+                        PathType@320..332
+                          Path@320..332
+                            PathSegment@320..321
+                              Ident@320..321 "D"
+                            Colon2@321..323 "::"
+                            PathSegment@323..332
+                              Ident@323..327 "Step"
+                              GenericArgList@327..332
+                                Lt@327..328 "<"
+                                ModeGenericArg@328..331
+                                  RefKw@328..331 "ref"
+                                Gt@331..332 ">"
+                        RParen@332..333 ")"
+                      WhiteSpace@333..334 " "
+                      Arrow@334..336 "->"
+                      WhiteSpace@336..337 " "
+                      PathType@337..341
+                        Path@337..341
+                          PathSegment@337..341
+                            Ident@337..341 "bool"
+            Gt@341..342 ">"
+          FuncParamList@342..358
+            LParen@342..343 "("
+            FnParam@343..349
+              Underscore@343..344 "_"
+              WhiteSpace@344..345 " "
+              Ident@345..346 "d"
+              Colon@346..347 ":"
+              WhiteSpace@347..348 " "
+              PathType@348..349
+                Path@348..349
+                  PathSegment@348..349
+                    Ident@348..349 "D"
+            Comma@349..350 ","
+            WhiteSpace@350..351 " "
+            FnParam@351..357
+              Underscore@351..352 "_"
+              WhiteSpace@352..353 " "
+              Ident@353..354 "p"
+              Colon@354..355 ":"
+              WhiteSpace@355..356 " "
+              PathType@356..357
+                Path@356..357
+                  PathSegment@356..357
+                    Ident@356..357 "P"
+            RParen@357..358 ")"
+        WhiteSpace@358..359 " "
+        BlockExpr@359..361
+          LBrace@359..360 "{"
+          RBrace@360..361 "}"
+    Newline@361..363 "\n\n"
+    Item@363..453
+      Func@363..453
+        FnKw@363..365 "fn"
+        WhiteSpace@365..366 " "
+        FuncSignature@366..450
+          Ident@366..369 "sum"
+          GenericParamList@369..442
+            Lt@369..370 "<"
+            TypeGenericParam@370..441
+              Ident@370..371 "D"
+              TypeBoundList@371..441
+                Colon@371..372 ":"
+                WhiteSpace@372..373 " "
+                TypeBound@373..441
+                  TraitRef@373..441
+                    Path@373..441
+                      PathSegment@373..441
+                        Ident@373..379 "Driver"
+                        GenericArgList@379..441
+                          Lt@379..380 "<"
+                          AssocTypeGenericArg@380..396
+                            Ident@380..384 "Base"
+                            WhiteSpace@384..385 " "
+                            Eq@385..386 "="
+                            WhiteSpace@386..387 " "
+                            ArrayType@387..396
+                              LBracket@387..388 "["
+                              PathType@388..392
+                                Path@388..392
+                                  PathSegment@388..392
+                                    Ident@388..392 "u256"
+                              SemiColon@392..393 ";"
+                              WhiteSpace@393..394 " "
+                              LitExpr@394..395
+                                Lit@394..395
+                                  Int@394..395 "3"
+                              RBracket@395..396 "]"
+                          Comma@396..397 ","
+                          WhiteSpace@397..398 " "
+                          AssocTypeGenericArg@398..418
+                            Ident@398..402 "Step"
+                            GenericArgList@402..407
+                              Lt@402..403 "<"
+                              ModeGenericArg@403..406
+                                RefKw@403..406 "ref"
+                              Gt@406..407 ">"
+                            WhiteSpace@407..408 " "
+                            Eq@408..409 "="
+                            WhiteSpace@409..410 " "
+                            ModeType@410..418
+                              RefKw@410..413 "ref"
+                              WhiteSpace@413..414 " "
+                              PathType@414..418
+                                Path@414..418
+                                  PathSegment@414..418
+                                    Ident@414..418 "u256"
+                          Comma@418..419 ","
+                          WhiteSpace@419..420 " "
+                          AssocTypeGenericArg@420..440
+                            Ident@420..424 "Step"
+                            GenericArgList@424..429
+                              Lt@424..425 "<"
+                              ModeGenericArg@425..428
+                                MutKw@425..428 "mut"
+                              Gt@428..429 ">"
+                            WhiteSpace@429..430 " "
+                            Eq@430..431 "="
+                            WhiteSpace@431..432 " "
+                            ModeType@432..440
+                              MutKw@432..435 "mut"
+                              WhiteSpace@435..436 " "
+                              PathType@436..440
+                                Path@436..440
+                                  PathSegment@436..440
+                                    Ident@436..440 "u256"
+                          Gt@440..441 ">"
+            Gt@441..442 ">"
+          FuncParamList@442..450
+            LParen@442..443 "("
+            FnParam@443..449
+              Underscore@443..444 "_"
+              WhiteSpace@444..445 " "
+              Ident@445..446 "d"
+              Colon@446..447 ":"
+              WhiteSpace@447..448 " "
+              PathType@448..449
+                Path@448..449
+                  PathSegment@448..449
+                    Ident@448..449 "D"
+            RParen@449..450 ")"
+        WhiteSpace@450..451 " "
+        BlockExpr@451..453
+          LBrace@451..452 "{"
+          RBrace@452..453 "}"
+  Newline@453..454 "\n"

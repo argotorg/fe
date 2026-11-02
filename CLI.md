@@ -251,8 +251,16 @@ For each built contract, `fe build` writes (depending on `--emit`):
 - `<out>/<contract>.runtime.bin` (runtime bytecode, hex + trailing newline)
 - `<out>/<contract>.abi.json` (Solidity-compatible ABI; only when `--emit abi`)
 - `<out>/<contract>.metadata.json` (Solidity-standard contract metadata for verifiers like Sourcify; only when `--emit metadata`)
+- `<out>/<contract>.sizes.txt` (code bytes of each function in the runtime and init sections, largest first; only when `--emit sizes`)
 
 For the Sonatina backend, `.bin` is the **init section** bytes and `.runtime.bin` is the **runtime section** bytes.
+
+With the optional `sp1` Cargo feature, `fe build --backend sp1 <file.fe>` compiles
+a standalone `pub fn main() -> i32` guest to SP1 RV64IM. The default output is
+`<out>/<file>.elf`; `--emit ir` writes `<out>/<file>.sp1.sona`, and `--emit elf,ir`
+writes both. ELF linking requires the pinned Succinct toolchain configured through
+`SONATINA_SP1_TOOLCHAIN`. See the [SP1 guide](tests/sp1/README.md) for installation,
+guest input and public values, and proof verification tests.
 
 The `metadata.json` artifact follows the Solidity Contract Metadata schema (`version: 1`), adapted to Fe. It is a complete, deterministic recompilation input: rebuilding with the same compiler version, `sources`, and `settings` reproduces the same bytecode. Its shape:
 
@@ -358,7 +366,7 @@ Type-checks and analyzes Fe code (no bytecode output).
 ### Synopsis
 
 ```
-fe check [--standalone] [--dump-mir] [--report [--report-out <out>] [--report-failed-only]] [path]
+fe check [--standalone] [--backend <backend>] [--dump-mir] [--report [--report-out <out>] [--report-failed-only]] [path]
 ```
 
 If `path` is omitted, it defaults to `.`.
@@ -402,6 +410,11 @@ one's grant nothing. Only use counts: an untrusted dependency's safe functions n
 ingot's code that reaches an `unsafe` block or `unsafe fn` body of an untrusted dependency. A call
 reaches what it runs: the functions it calls, the `StateIndex::locate` of a collection it indexes,
 and the bodies of a contract it creates.
+
+### Backend
+
+`--backend` selects the target to check for, as for `fe build` (default `sonatina`, the EVM).
+Integer widths, `size_of` and layouts depend on it: `usize` is 64 bits with `--backend native`.
 
 ### Optional outputs
 

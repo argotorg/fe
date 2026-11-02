@@ -1,13 +1,13 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/pointer_first_class.fe
 ---
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256};
-type @layout_1 = {i256};
+type @layout_1 = {i256, i256};
+type @layout_2 = {i256};
 
 func private %alloc__g36fc() -> i256 {
     block0:
@@ -45,9 +45,9 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.*i8 = evm_malloc v0;
-        v13.i256 = ptr_to_int v12 i256;
-        return v13;
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
 func private %alloc__g8571() -> i256 {
@@ -60,25 +60,7 @@ func private %alloc__g8571() -> i256 {
         return v2;
 }
 
-func private %core__lib__ptr__impl_MemArray_065f__byte_len__ge513_14f0(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 1.i256;
-        (v5.i256, v6.i1) = umulo v3 32.i256;
-        br v6 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v5;
-}
-
-func private %core__lib__ptr__impl_MemArray_065f__byte_len__ge513_a695(v0.objref<@layout_0>) -> i256 {
+func private %impl_MemSlice__byte_len__ge513(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -97,13 +79,22 @@ func private %core__lib__ptr__impl_MemArray_065f__byte_len__ge513_a695(v0.objref
         return v6;
 }
 
-func private %byte_ptr__g36fc(v0.i256) -> i256 {
+func private %impl_MemArray__byte_len__ge513(v0.@layout_0) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %cast__ge428 v0;
-        return v2;
+        v3.i256 = extract_value v0 1.i256;
+        (v5.i256, v6.i1) = umulo v3 32.i256;
+        br v6 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v5;
 }
 
 func private %byte_ptr__g8571(v0.i256) -> i256 {
@@ -115,47 +106,25 @@ func private %byte_ptr__g8571(v0.i256) -> i256 {
         return v2;
 }
 
-func private %cast__g8838(v0.i256) -> i256 {
+func private %byte_ptr__ge513(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        return v0;
+        v2.i256 = call %cast__g0587 v0;
+        return v2;
+}
+
+func private %byte_ptr__g36fc(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %cast__ge428 v0;
+        return v2;
 }
 
 func private %cast__g0587(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %cast__ge428(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %cast__gcc0a(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %cast__g5f1e(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %cast__g5398(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -171,13 +140,144 @@ func private %cast__g4e76(v0.i256) -> i256 {
         return v0;
 }
 
+func private %cast__gcc0a(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__ge428(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__g5398(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__g8838(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__g5f1e(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %drop(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        return;
+}
+
+func private %drop_in_place(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = mload v0 i256;
+        call %drop v2;
+        return;
+}
+
+func private %drop_in_place_n(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        call %drop_range v0 0.i256 v1;
+        return;
+}
+
+func inline(always) private %drop_range(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.objref<i256> = obj.alloc i256;
+        jump block1;
+
+    block1:
+        br 0.i1 block2 block3;
+
+    block2:
+        v9.@layout_1 = insert_value undef.@layout_1 0.i256 v1;
+        v11.@layout_1 = insert_value v9 1.i256 v2;
+        v12.i256 = call %start v11;
+        jump block5;
+
+    block3:
+        jump block4;
+
+    block4:
+        return;
+
+    block5:
+        v14.i256 = phi (v12 block2) (v20 block7);
+        v15.i1 = call %has v11 v14;
+        br v15 block6 block8;
+
+    block6:
+        obj.store v3 v14;
+        jump block10;
+
+    block7:
+        v20.i256 = call %next v11 v14;
+        jump block5;
+
+    block8:
+        jump block4;
+
+    block9:
+        v22.i256 = obj.load v3;
+        jump block12;
+
+    block10:
+        jump block9;
+
+    block11:
+        v25.i256 = call %elem v0 v22;
+        call %drop_in_place v25;
+        jump block7;
+
+    block12:
+        jump block11;
+}
+
 func inline(always) private %elem(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %offset v0 v1;
-        return v4;
+        v4.i256 = call %wrapping_mul v1 32.i256;
+        v6.i256 = add v0 v4;
+        return v6;
+}
+
+func inline(always) private %has(v0.@layout_1, v1.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = extract_value v0 0.i256;
+        v6.i256 = extract_value v0 1.i256;
+        v8.i1 = call %range_has v1 v4 v6;
+        return v8;
 }
 
 func private %index_out_of_bounds() {
@@ -197,7 +297,7 @@ func private %into_bytes(v0.@layout_0) -> @layout_0 {
     block1:
         v3.i256 = extract_value v0 0.i256;
         v4.i256 = call %cast__g0587 v3;
-        v5.i256 = call %core__lib__ptr__impl_MemArray_065f__byte_len__ge513_14f0 v0;
+        v5.i256 = call %impl_MemArray__byte_len__ge513 v0;
         v7.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
         v9.@layout_0 = insert_value v7 1.i256 v5;
         return v9;
@@ -221,14 +321,14 @@ func private %main_root() {
         evm_stop;
 }
 
-func inline(always) private %mem_array_elem(v0.objref<@layout_0>, v1.i256) -> i256 {
+func inline(always) private %mem_array_elem(noalias v0.objref<@layout_0>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v5.objref<i256> = obj.proj v0 1.i256;
-        v6.i256 = obj.load v5;
-        v7.i1 = lt v1 v6;
+        v4.objref<i256> = obj.proj v0 1.i256;
+        v5.i256 = obj.load v4;
+        v7.i1 = lt v1 v5;
         v8.i1 = is_zero v7;
         br v8 block2 block3;
 
@@ -269,20 +369,24 @@ func private %new_uninit(v0.i256) -> @layout_0 {
 
 func private %new_zeroed(v0.i256) -> @layout_0 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v3.@layout_0 = call %new_uninit v0;
-        v5.objref<i256> = obj.proj v1 0.i256;
-        v6.i256 = extract_value v3 0.i256;
-        obj.store v5 v6;
-        v8.objref<i256> = obj.proj v1 1.i256;
-        v9.i256 = extract_value v3 1.i256;
-        obj.store v8 v9;
-        call %zero v1;
-        v11.@layout_0 = obj.load v1;
-        return v11;
+        v2.@layout_0 = call %new_uninit v0;
+        v4.i256 = extract_value v2 0.i256;
+        v5.i256 = call %cast__g0587 v4;
+        v6.i256 = call %impl_MemArray__byte_len__ge513 v2;
+        call %zero_bytes v5 v6;
+        return v2;
+}
+
+func inline(always) private %next(v0.@layout_1, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %wrapping_add v1 1.i256;
+        return v4;
 }
 
 func private %offset(v0.i256, v1.i256) -> i256 {
@@ -301,6 +405,39 @@ func private %offset(v0.i256, v1.i256) -> i256 {
     block3:
         v12.i256 = add v0 v4;
         return v12;
+}
+
+func inline(always) private %range_has(v0.i256, v1.i256, v2.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i1 = gt v1 v0;
+        v6.i1 = is_zero v5;
+        br v6 block5 block3;
+
+    block2:
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v9.i1 = phi (1.i1 block2) (0.i1 block3);
+        return v9;
+
+    block5:
+        v12.i1 = lt v0 v2;
+        br v12 block2 block3;
+}
+
+func inline(always) private %start(v0.@layout_1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
 }
 
 func private %sum_first_class_pointers() -> i256 {
@@ -322,49 +459,44 @@ func private %sum_first_class_pointers() -> i256 {
         br v14 block34 block35;
 
     block2:
-        mstore v65 3.i256 i256;
+        mstore v61 3.i256 i256;
         jump block5;
 
     block3:
-        v65.i256 = call %mem_array_elem v0 0.i256;
+        v61.i256 = call %mem_array_elem v0 0.i256;
         jump block2;
 
     block4:
-        v66.i256 = call %alloc_bytes 1.i256;
-        v68.@layout_0 = call %alloc_array 2.i256;
-        v69.objref<i256> = obj.proj v1 0.i256;
-        v70.i256 = extract_value v68 0.i256;
-        obj.store v69 v70;
-        v71.objref<i256> = obj.proj v1 1.i256;
-        v72.i256 = extract_value v68 1.i256;
-        obj.store v71 v72;
-        v74.i256 = extract_value v55 0.i256;
+        v62.i256 = call %alloc_bytes 1.i256;
+        v64.@layout_0 = call %alloc_array 2.i256;
+        obj.store v1 v64;
+        v66.i256 = extract_value v55 0.i256;
         jump block7;
 
     block5:
         jump block4;
 
     block6:
-        mstore v79 v74 i256;
+        mstore v71 v66 i256;
         jump block9;
 
     block7:
-        v79.i256 = call %mem_array_elem v1 0.i256;
+        v71.i256 = call %mem_array_elem v1 0.i256;
         jump block6;
 
     block8:
-        v81.i256 = extract_value v55 1.i256;
+        v73.i256 = extract_value v55 1.i256;
         jump block11;
 
     block9:
         jump block8;
 
     block10:
-        mstore v86 v81 i256;
+        mstore v78 v73 i256;
         jump block13;
 
     block11:
-        v86.i256 = call %mem_array_elem v1 1.i256;
+        v78.i256 = call %mem_array_elem v1 1.i256;
         jump block10;
 
     block12:
@@ -374,11 +506,11 @@ func private %sum_first_class_pointers() -> i256 {
         jump block12;
 
     block14:
-        v88.i256 = mload v91 i256;
+        v80.i256 = mload v83 i256;
         jump block17;
 
     block15:
-        v91.i256 = call %mem_array_elem v1 0.i256;
+        v83.i256 = call %mem_array_elem v1 0.i256;
         jump block14;
 
     block16:
@@ -388,70 +520,70 @@ func private %sum_first_class_pointers() -> i256 {
         jump block16;
 
     block18:
-        v93.i256 = mload v96 i256;
+        v85.i256 = mload v88 i256;
         jump block21;
 
     block19:
-        v96.i256 = call %mem_array_elem v1 1.i256;
+        v88.i256 = call %mem_array_elem v1 1.i256;
         jump block18;
 
     block20:
-        (v99.i256, v100.i1) = uaddo v88 v93;
-        br v100 block34 block39;
+        (v91.i256, v92.i1) = uaddo v80 v85;
+        br v92 block34 block39;
 
     block21:
         jump block20;
 
     block22:
-        mstore v113 7.i256 i256;
+        mstore v101 7.i256 i256;
         jump block25;
 
     block23:
-        v113.i256 = call %mem_array_elem v2 0.i256;
+        v101.i256 = call %mem_array_elem v2 0.i256;
         jump block22;
 
     block24:
-        call %zero v2;
-        v115.i256 = call %alloc__g36fc;
-        v117.i256 = mul 0.i256 32.i256;
-        v118.i256 = add v115 v117;
-        mstore v118 13.i256 i256;
-        v120.i256 = mul 1.i256 32.i256;
-        v121.i256 = add v115 v120;
-        mstore v121 21.i256 i256;
-        v122.i256 = call %byte_ptr__g36fc v115;
-        v123.i256 = call %cast__g5f1e v122;
+        call %impl_MemArray__zero__ge513 v2;
+        v103.i256 = call %alloc__g36fc;
+        v105.i256 = mul 0.i256 32.i256;
+        v106.i256 = add v103 v105;
+        mstore v106 13.i256 i256;
+        v108.i256 = mul 1.i256 32.i256;
+        v109.i256 = add v103 v108;
+        mstore v109 21.i256 i256;
+        v110.i256 = call %byte_ptr__g36fc v103;
+        v111.i256 = call %cast__g5f1e v110;
         jump block27;
 
     block25:
         jump block24;
 
     block26:
-        v125.i256 = mload v128 i256;
+        v113.i256 = mload v116 i256;
         jump block29;
 
     block27:
-        v128.i256 = call %mem_array_elem v0 0.i256;
+        v116.i256 = call %mem_array_elem v0 0.i256;
         jump block26;
 
     block28:
-        (v131.i256, v132.i1) = uaddo v99 v125;
-        br v132 block34 block40;
+        (v119.i256, v120.i1) = uaddo v91 v113;
+        br v120 block34 block40;
 
     block29:
         jump block28;
 
     block30:
-        v134.i256 = mload v137 i256;
+        v122.i256 = mload v125 i256;
         jump block33;
 
     block31:
-        v137.i256 = call %mem_array_elem v2 0.i256;
+        v125.i256 = call %mem_array_elem v2 0.i256;
         jump block30;
 
     block32:
-        (v140.i256, v141.i1) = uaddo v131 v134;
-        br v141 block34 block41;
+        (v128.i256, v129.i1) = uaddo v119 v122;
+        br v129 block34 block41;
 
     block33:
         jump block32;
@@ -470,7 +602,7 @@ func private %sum_first_class_pointers() -> i256 {
         br v26 block34 block36;
 
     block36:
-        v29.@layout_1 = insert_value undef.@layout_1 0.i256 v3;
+        v29.@layout_2 = insert_value undef.@layout_2 0.i256 v3;
         v30.i256 = extract_value v29 0.i256;
         v31.i256 = mload v30 i256;
         v32.i256 = extract_value v29 0.i256;
@@ -495,89 +627,143 @@ func private %sum_first_class_pointers() -> i256 {
         v48.i256 = call %byte_ptr__g8571 v3;
         v49.i256 = call %cast__gcc0a v48;
         v51.i256 = mload v49 i256;
-        v52.@layout_0 = insert_value undef.@layout_0 0.i256 v51;
+        v52.@layout_1 = insert_value undef.@layout_1 0.i256 v51;
         v53.i256 = add v49 32.i256;
         v54.i256 = mload v53 i256;
-        v55.@layout_0 = insert_value v52 1.i256 v54;
+        v55.@layout_1 = insert_value v52 1.i256 v54;
         v56.@layout_0 = call %alloc_array 1.i256;
-        v57.objref<i256> = obj.proj v0 0.i256;
-        v58.i256 = extract_value v56 0.i256;
-        obj.store v57 v58;
-        v59.objref<i256> = obj.proj v0 1.i256;
-        v60.i256 = extract_value v56 1.i256;
-        obj.store v59 v60;
+        obj.store v0 v56;
         jump block3;
 
     block39:
-        v101.@layout_0 = obj.load v1;
-        v102.@layout_0 = call %into_bytes v101;
-        v103.@layout_0 = call %new_zeroed 1.i256;
-        v104.objref<i256> = obj.proj v2 0.i256;
-        v105.i256 = extract_value v103 0.i256;
-        obj.store v104 v105;
-        v106.objref<i256> = obj.proj v2 1.i256;
-        v107.i256 = extract_value v103 1.i256;
-        obj.store v106 v107;
+        v93.@layout_0 = obj.load v1;
+        v94.@layout_0 = call %into_bytes v93;
+        v95.@layout_0 = call %new_zeroed 1.i256;
+        obj.store v2 v95;
         jump block23;
 
     block40:
         jump block31;
 
     block41:
-        v143.i256 = call %len v102;
-        (v144.i256, v145.i1) = uaddo v140 v143;
-        br v145 block34 block42;
+        v131.i256 = call %len v94;
+        (v132.i256, v133.i1) = uaddo v128 v131;
+        br v133 block34 block42;
 
     block42:
-        (v147.i256, v148.i1) = uaddo v144 32.i256;
-        br v148 block34 block43;
+        (v135.i256, v136.i1) = uaddo v132 32.i256;
+        br v136 block34 block43;
 
     block43:
-        (v150.i256, v151.i1) = uaddo v147 0.i256;
-        br v151 block34 block44;
+        (v138.i256, v139.i1) = uaddo v135 0.i256;
+        br v139 block34 block44;
 
     block44:
-        (v153.i256, v154.i1) = uaddo v150 v25;
-        br v154 block34 block45;
+        (v141.i256, v142.i1) = uaddo v138 v25;
+        br v142 block34 block45;
 
     block45:
-        (v156.i256, v157.i1) = uaddo v153 v45;
-        br v157 block34 block46;
+        (v144.i256, v145.i1) = uaddo v141 v45;
+        br v145 block34 block46;
 
     block46:
-        v159.i256 = mul 0.i256 32.i256;
-        v160.i256 = add v115 v159;
-        v161.i256 = mload v160 i256;
-        (v162.i256, v163.i1) = uaddo v156 v161;
-        br v163 block34 block47;
+        v147.i256 = mul 0.i256 32.i256;
+        v148.i256 = add v103 v147;
+        v149.i256 = mload v148 i256;
+        (v150.i256, v151.i1) = uaddo v144 v149;
+        br v151 block34 block47;
 
     block47:
-        v165.i256 = mul 1.i256 32.i256;
-        v166.i256 = add v115 v165;
-        v167.i256 = mload v166 i256;
-        (v168.i256, v169.i1) = uaddo v162 v167;
-        br v169 block34 block48;
+        v153.i256 = mul 1.i256 32.i256;
+        v154.i256 = add v103 v153;
+        v155.i256 = mload v154 i256;
+        (v156.i256, v157.i1) = uaddo v150 v155;
+        br v157 block34 block48;
 
     block48:
-        v171.i256 = mload v123 i256;
-        (v172.i256, v173.i1) = uaddo v168 v171;
-        br v173 block34 block49;
+        v159.i256 = mload v111 i256;
+        (v160.i256, v161.i1) = uaddo v156 v159;
+        br v161 block34 block49;
 
     block49:
-        return v172;
+        return v160;
 }
 
-func private %zero(v0.objref<@layout_0>) {
+func private %wrapping_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = add v0 v1;
+        return v4;
+}
+
+func private %wrapping_mul(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = mul v0 v1;
+        return v4;
+}
+
+func private %impl_MemSlice__zero__ge513(noalias v0.objref<@layout_0>) {
     block0:
         jump block1;
 
     block1:
         v3.objref<i256> = obj.proj v0 0.i256;
         v4.i256 = obj.load v3;
-        v5.i256 = call %cast__g0587 v4;
-        v6.i256 = call %core__lib__ptr__impl_MemArray_065f__byte_len__ge513_a695 v0;
-        call %zero_bytes v5 v6;
+        v6.objref<i256> = obj.proj v0 1.i256;
+        v7.i256 = obj.load v6;
+        call %drop_in_place_n v4 v7;
+        v9.objref<i256> = obj.proj v0 0.i256;
+        v10.i256 = obj.load v9;
+        v11.i256 = call %byte_ptr__ge513 v10;
+        v12.i256 = call %impl_MemSlice__byte_len__ge513 v0;
+        call %zero_bytes v11 v12;
         return;
+}
+
+func private %impl_MemArray__zero__ge513(noalias v0.objref<@layout_0>) {
+    block0:
+        v1.objref<@layout_0> = obj.alloc @layout_0;
+        jump block1;
+
+    block1:
+        jump block3;
+
+    block2:
+        call %impl_MemSlice__zero__ge513 v1;
+        jump block7;
+
+    block3:
+        v7.objref<i256> = obj.proj v0 0.i256;
+        v8.i256 = obj.load v7;
+        v10.objref<i256> = obj.proj v0 1.i256;
+        v11.i256 = obj.load v10;
+        jump block5;
+
+    block4:
+        jump block2;
+
+    block5:
+        v15.@layout_0 = insert_value undef.@layout_0 0.i256 v8;
+        v17.@layout_0 = insert_value v15 1.i256 v11;
+        obj.store v1 v17;
+        jump block4;
+
+    block6:
+        return;
+
+    block7:
+        jump block9;
+
+    block8:
+        jump block6;
+
+    block9:
+        jump block8;
 }
 
 func private %zero_bytes(v0.i256, v1.i256) {

@@ -9,7 +9,8 @@ use super::{
     expr::{is_expr_start, parse_const_generic_expr, parse_expr, parse_expr_no_struct},
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
-    path::PathScope,
+    pat::parse_pat_operand,
+    path::{PathScope, is_path_segment},
     token_stream::TokenStream,
     type_::{TupleTypeScope, is_type_start, parse_closure_param_type, parse_type},
 };
@@ -88,12 +89,44 @@ fn mut_param_name_error<S: TokenStream>(parser: &mut Parser<S>) {
     );
 }
 
+/// `mut?` before a parameter's name, which goes on its type.
+fn maybe_mut_param_name_error<S: TokenStream>(parser: &mut Parser<S>) {
+    parser.error_msg_on_current_token("a parameter's mode goes on its type: `x: mut? T`");
+}
+
+/// Whether a parameter pattern starts here, after any binding marker, which
+/// the pattern parser reports: a tuple pattern, or a path to a tuple struct,
+/// record or variant. A path starts as any path does (`Self`, `super`,
+/// `ingot`, a qualified type, `self::` or a name), and only a name, or
+/// `self` alone, may be the parameter's name instead.
+fn is_param_pat_start<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    use SyntaxKind::*;
+    let tokens = parser.peek_n_non_trivia(3);
+    let tokens = match tokens.as_slice() {
+        [MutKw | MaybeMutKw | RefKw | VarKw, rest @ ..] => rest,
+        tokens => tokens,
+    };
+    match tokens {
+        [LParen, ..] => true,
+        [Ident, next, ..] => matches!(next, LParen | LBrace | Colon2 | Lt),
+        [SelfKw, next, ..] => *next == Colon2,
+        [Ident | SelfKw, ..] | [] => false,
+        [first, ..] => is_path_segment(*first),
+    }
+}
+
 impl super::Parse for FnParamScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // `..A`: the parameters a shape lists.
+        if parser.bump_if(SyntaxKind::Dot2) {
+            parse_type(parser, None)?;
+            return Ok(());
+        }
         let has_mut = parser.bump_if(SyntaxKind::MutKw);
-        let has_var = !has_mut && parser.bump_if(SyntaxKind::VarKw);
+        let has_maybe_mut = !has_mut && parser.bump_if(SyntaxKind::MaybeMutKw);
+        let has_var = !has_mut && !has_maybe_mut && parser.bump_if(SyntaxKind::VarKw);
         let lookahead = parser.peek_n_non_trivia(2);
         let allow_ref_self_shorthand = matches!(
             lookahead.as_slice(),
@@ -108,6 +141,22 @@ impl super::Parse for FnParamScope {
         }
         if allow_own_self_shorthand {
             parser.bump_expected(SyntaxKind::OwnKw);
+        }
+        // A closure parameter may be a pattern; a function's takes `_` first,
+        // having no label.
+        if !allow_ref_self_shorthand && !allow_own_self_shorthand && is_param_pat_start(parser) {
+            if has_mut || has_maybe_mut || has_var {
+                parser.error_msg_on_current_token(
+                    "a parameter pattern's markers go on the names it binds: `(var a, ref b)`",
+                );
+            }
+            if !self.allow_inferred_type {
+                parser.error_msg_on_current_token(
+                    "a parameter pattern has no label; write `_` before it: `_ (a, b): T`",
+                );
+            }
+            parse_pat_operand(parser)?;
+            return self.parse_param_ty(parser);
         }
         parser.expect(
             &[
@@ -149,6 +198,8 @@ impl super::Parse for FnParamScope {
             Some(SyntaxKind::Ident) => {
                 if has_mut {
                     mut_param_name_error(parser);
+                } else if has_maybe_mut {
+                    maybe_mut_param_name_error(parser);
                 }
                 parser.bump();
 
@@ -166,11 +217,15 @@ impl super::Parse for FnParamScope {
             Some(SyntaxKind::Underscore) => {
                 if has_mut {
                     mut_param_name_error(parser);
+                } else if has_maybe_mut {
+                    maybe_mut_param_name_error(parser);
                 }
                 parser.bump();
 
                 // A closure parameter may be a bare `_` with an inferred type.
-                if !self.allow_inferred_type
+                if is_param_pat_start(parser) {
+                    parse_pat_operand(parser)?;
+                } else if !self.allow_inferred_type
                     || !matches!(
                         parser.current_kind(),
                         Some(SyntaxKind::Comma | SyntaxKind::Pipe)
@@ -213,6 +268,14 @@ impl super::Parse for GenericParamListScope {
                 )?;
                 match parser.current_kind() {
                     Some(SyntaxKind::ConstKw) => parser.parse(ConstGenericParamScope::default()),
+                    // `shape` is a keyword only before a parameter's name.
+                    Some(SyntaxKind::Ident)
+                        if parser.is_ident("shape")
+                            && parser.peek_n_non_trivia(2).as_slice()
+                                == [SyntaxKind::Ident, SyntaxKind::Ident] =>
+                    {
+                        parser.parse(ShapeGenericParamScope::default())
+                    }
                     Some(SyntaxKind::Ident) => {
                         parser.parse(TypeGenericParamScope::new(self.disallow_trait_bound))
                     }
@@ -257,6 +320,18 @@ impl super::Parse for ConstGenericParamScope {
         if parser.bump_if(SyntaxKind::Eq) {
             parse_const_generic_expr(parser)?;
         }
+        Ok(())
+    }
+}
+
+define_scope! { ShapeGenericParamScope, ShapeGenericParam }
+impl super::Parse for ShapeGenericParamScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.bump_expected(SyntaxKind::Ident);
+        parser.bump_expected(SyntaxKind::Ident);
         Ok(())
     }
 }
@@ -320,6 +395,11 @@ impl super::Parse for TypeBoundScope {
         } else {
             if self.disallow_trait_bound {
                 return parser.error_and_recover("trait bounds are not allowed here");
+            }
+            // The modes the bound grants a trait's `mut?` methods at:
+            // `mut Index<usize>`, or the item's mode with `mut? Collection`.
+            if !parser.bump_if(SyntaxKind::MutKw) {
+                parser.bump_if(SyntaxKind::MaybeMutKw);
             }
             parser.parse_or_recover(TraitRefScope::default())
         }
@@ -409,7 +489,8 @@ impl super::Parse for FnShapeScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_expected(SyntaxKind::Ident);
         parser.parse(TupleTypeScope::default())?;
-        if parser.bump_if(SyntaxKind::Arrow) {
+        // `-> _` leaves the result open.
+        if parser.bump_if(SyntaxKind::Arrow) && !parser.bump_if(SyntaxKind::Underscore) {
             parse_type(parser, None)?;
         }
         Ok(())
@@ -473,16 +554,44 @@ impl super::Parse for GenericArgScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
 
-        // Check if this is an associated type argument (Ident = Type)
+        // `ref` or `mut` alone is the mode of an associated shape.
+        if matches!(
+            parser.peek_n_non_trivia(2).as_slice(),
+            [
+                SyntaxKind::RefKw | SyntaxKind::MutKw,
+                SyntaxKind::Gt | SyntaxKind::Comma
+            ]
+        ) {
+            parser.set_scope_kind(SyntaxKind::ModeGenericArg);
+            parser.bump();
+            return Ok(());
+        }
+
+        // Check if this is an associated type argument (`Ident = Type`), or
+        // an associated shape's at a mode (`Ident<ref> = Shape`).
         let is_assoc_type = matches!(
             parser.peek_n_non_trivia(2).as_slice(),
             [SyntaxKind::Ident, SyntaxKind::Eq]
+        ) || matches!(
+            parser.peek_n_non_trivia(5).as_slice(),
+            [
+                SyntaxKind::Ident,
+                SyntaxKind::Lt,
+                SyntaxKind::RefKw | SyntaxKind::MutKw,
+                SyntaxKind::Gt,
+                SyntaxKind::Eq
+            ]
         );
 
         if is_assoc_type {
-            self.set_kind(SyntaxKind::AssocTypeGenericArg);
+            parser.set_scope_kind(SyntaxKind::AssocTypeGenericArg);
             // Parse the identifier name
             parser.bump_expected(SyntaxKind::Ident);
+
+            // The mode an associated shape is bound at
+            if parser.current_kind() == Some(SyntaxKind::Lt) {
+                parser.parse(GenericArgListScope::default())?;
+            }
 
             // Parse the equals sign
             parser.bump_expected(SyntaxKind::Eq);
@@ -497,19 +606,19 @@ impl super::Parse for GenericArgScope {
             });
 
             if is_const_call {
-                self.set_kind(SyntaxKind::ConstGenericArg);
+                parser.set_scope_kind(SyntaxKind::ConstGenericArg);
                 parse_const_generic_expr(parser)?;
                 return Ok(());
             }
 
             match parser.current_kind() {
                 Some(SyntaxKind::LBrace) => {
-                    self.set_kind(SyntaxKind::ConstGenericArg);
+                    parser.set_scope_kind(SyntaxKind::ConstGenericArg);
                     parser.parse(BlockExprScope::default())?;
                 }
 
                 Some(kind) if kind.is_literal_leaf() => {
-                    self.set_kind(SyntaxKind::ConstGenericArg);
+                    parser.set_scope_kind(SyntaxKind::ConstGenericArg);
                     parser.parse(LitExprScope::default()).unwrap_infallible();
                 }
 

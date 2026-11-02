@@ -12,15 +12,13 @@ use sonatina_ir::{
         cast::Zext,
         cmp::Eq,
         control_flow::{BrTable, Jump, Phi, PhiArgs, Unreachable},
-        data::{ConstLoad, Mstore, ObjLoad, ObjMaterializeHeap},
+        data::{ConstLoad, InsertValue, ObjAlloc, ObjLoad, ObjMaterializeStack, ObjStore},
         logic::{And, Not, Or},
     },
     types::CompoundType,
 };
 
-use super::{
-    CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet, scalar_ty,
-};
+use super::{CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet};
 
 // The descriptor's layout also records the referent's address space. Provider
 // kinds may be erased when a reference is stored inside an ordinary typed slot.
@@ -45,6 +43,10 @@ pub(super) enum ReferentLayout {
 
 /// Stored references are one-word pointers to immutable address/layout
 /// descriptors. Copying a reference never copies its referent.
+///
+/// A stored reference is an access, which ends before the frame that creates
+/// it returns or the code creating it runs again, so its descriptor and an
+/// exported object both stay in that frame.
 #[derive(Clone, Copy)]
 pub(super) struct MemoryReference {
     pub(super) addr: ValueId,
@@ -56,24 +58,28 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         &mut self,
         reference: MemoryReference,
     ) -> Result<ValueId, LowerError> {
-        let size = self.index_value(64);
-        let descriptor = self.allocate_bytes(size, Type::I256)?;
-        let descriptor = self.coerce_value_to_ty(descriptor, Type::I256)?;
-        let addr = self.coerce_value_to_ty(reference.addr, Type::I256)?;
-        self.fb.insert_inst_no_result(Mstore::new(
-            self.module.inst_set(),
-            descriptor,
-            addr,
-            Type::I256,
-        ));
-        let layout_addr = self.offset_address_unscaled(descriptor, 32)?;
-        self.fb.insert_inst_no_result(Mstore::new(
-            self.module.inst_set(),
-            layout_addr,
-            reference.layout,
-            Type::I256,
-        ));
-        Ok(descriptor)
+        let ty = self.fb.module_builder.declare_array_type(Type::I256, 2);
+        let descriptor = self.fb.insert_inst(
+            ObjAlloc::new(self.module.inst_set(), ty),
+            self.fb.module_builder.objref_type(ty),
+        );
+        let mut value = self.fb.make_undef_value(ty);
+        for (idx, word) in [reference.addr, reference.layout].into_iter().enumerate() {
+            let word = self.coerce_value_to_ty(word, Type::I256)?;
+            let idx = self.index_value(idx as u64);
+            value = self.fb.insert_inst(
+                InsertValue::new(self.module.inst_set(), value, idx, word),
+                ty,
+            );
+        }
+        self.fb
+            .insert_inst_no_result(ObjStore::new(self.module.inst_set(), descriptor, value));
+        let ptr_ty = self.fb.ptr_type(ty);
+        let descriptor = self.fb.insert_inst(
+            ObjMaterializeStack::new(self.module.inst_set(), descriptor),
+            ptr_ty,
+        );
+        self.coerce_value_to_ty(descriptor, self.module.address_ty(AddressSpace::Memory))
     }
 
     pub(super) fn load_memory_reference(
@@ -103,7 +109,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         // This exports the original allocation, including all aliases. It must
         // not be replaced with an allocation followed by a referent copy.
         let addr = self.fb.insert_inst(
-            ObjMaterializeHeap::new(self.module.inst_set(), object),
+            ObjMaterializeStack::new(self.module.inst_set(), object),
             ptr_ty,
         );
         self.store_native_reference(addr)
@@ -163,7 +169,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         let ty = match class {
-            RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
+            RuntimeClass::Scalar(scalar) => self.module.scalar_repr_ty(scalar),
             _ => self.module.ty_for_class(class)?,
         };
         let packed = match class {
@@ -265,7 +271,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         value: ValueId,
     ) -> Result<(), LowerError> {
         let ty = match class {
-            RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
+            RuntimeClass::Scalar(scalar) => self.module.scalar_repr_ty(scalar),
             _ => self.module.ty_for_class(class)?,
         };
         let value = self.coerce_value_to_ty(value, ty)?;

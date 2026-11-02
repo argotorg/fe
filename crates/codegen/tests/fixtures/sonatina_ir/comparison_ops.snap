@@ -15,10 +15,8 @@ func private %comparison_ops() -> @layout_0 {
 
     block1:
         v4.constref<@layout_0> = const.ref $const_region_0;
-        v5.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v5 v4;
-        v6.@layout_0 = obj.load v5;
-        return v6;
+        v5.@layout_0 = const.load v4;
+        return v5;
 }
 
 func private %main_root() {

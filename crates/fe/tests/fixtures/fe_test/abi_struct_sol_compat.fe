@@ -108,7 +108,7 @@ struct OrdersEvent { orders: Orders }
 struct BadItem { item: Item }
 
 fn item(_ amount: u256) -> Item {
-    Item { itemType: 2, token: Address { inner: 0xbeef }, identifier: 7, amount }
+    Item { itemType: 2, token: Address::new(0xbeef), identifier: 7, amount }
 }
 
 #[test]

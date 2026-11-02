@@ -1,0 +1,48 @@
+use core::{Box, MemVec, Result}
+use core::ops::Drop
+
+extern {
+    fn putchar(_ c: i32) -> i32
+}
+
+fn put(_ c: i32) {
+    let _ = unsafe { putchar(c) }
+}
+
+// Too large for the allocator the test links, which refuses 1024 bytes or
+// more. Prints its tag when destroyed.
+struct Big {
+    tag: i32,
+    words: [u256; 32],
+}
+
+impl Drop for Big {
+    fn drop(own self) {
+        put(self.tag)
+    }
+}
+
+fn big(_ tag: i32) -> Big {
+    Big { tag, words: [0; 32] }
+}
+
+// "-A-B": a failed `try_new` or `try_push` hands its value back undestroyed.
+pub fn main() -> i32 {
+    match Box::try_new(big(65)) {
+        Result::Ok(_) => core::panic()
+        Result::Err(value) => {
+            put(45)
+            core::assert(value.tag == 65)
+        }
+    }
+    var values = MemVec::new()
+    match values.try_push(big(66)) {
+        Result::Ok(()) => core::panic()
+        Result::Err(value) => {
+            put(45)
+            core::assert(value.tag == 66)
+        }
+    }
+    core::assert(values.is_empty())
+    0
+}

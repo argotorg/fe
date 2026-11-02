@@ -3,7 +3,7 @@ use crate::{
     span::DynLazySpan,
 };
 use either::Either;
-use salsa::Update;
+use salsa::SalsaValue;
 use thin_vec::ThinVec;
 
 use super::NameRes;
@@ -14,7 +14,7 @@ use crate::analysis::{
 };
 use crate::hir_def::CallableDef;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PathResDiag<'db> {
     /// The definition conflicts with other definitions.
     Conflict(IdentId<'db>, ThinVec<DynLazySpan<'db>>),
@@ -184,7 +184,7 @@ impl<'db> PathResDiag<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ImportDiag<'db> {
     Conflict(IdentId<'db>, ThinVec<DynLazySpan<'db>>),
     NotFound(DynLazySpan<'db>, IdentId<'db>),

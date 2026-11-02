@@ -11,9 +11,10 @@ use hir::{
             binder::Binder,
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             normalize::normalize_from_assumptions,
-            trait_def::{TraitInstId, resolve_trait_method_instance},
-            trait_resolution::{PredicateListId, Selection, TraitSolveCx},
-            ty_def::{TyBase, TyData, TyId},
+            trait_def::TraitInstId,
+            trait_resolution::{PredicateListId, TraitSolveCx},
+            ty_check::{BodyOwner, check_body},
+            ty_def::{BorrowKind, TyBase, TyData, TyId},
         },
     },
     hir_def::{
@@ -160,6 +161,16 @@ pub fn generate_contract_abi(
         entry.anonymous = None;
         for input in entry.inputs.iter_mut().flatten() {
             input.indexed = None;
+        }
+        // Solidity's built-in errors are implicit. Declaring them as custom
+        // errors makes consumers such as ethers reject the entire ABI.
+        if let Some([input]) = entry.inputs.as_deref()
+            && matches!(
+                (entry.name.as_deref(), input.ty.as_str()),
+                (Some("Panic"), "uint256") | (Some("Error"), "string")
+            )
+        {
+            continue;
         }
         entries.push(entry);
     }
@@ -386,25 +397,22 @@ fn collect_typed_body_event_structs<'db>(
             && let hir::hir_def::CallableDef::Func(func) = callable.callable_def
         {
             let mut target = VisitedFuncBody::from_callable(func, callable);
-            if let Some(inst) = callable.trait_inst()
-                && let Some(name) = func.name(db).to_opt()
-                && let Selection::Unique(method) = resolve_trait_method_instance(
-                    db,
-                    TraitSolveCx::new(db, body.scope()).with_assumptions(typed_body.assumptions()),
-                    inst,
-                    name,
-                )
-                && let Some(impl_func) = method.body()
+            if let Some(method) = callable.selected_method(
+                db,
+                TraitSolveCx::new(db, body.scope()).with_assumptions(typed_body.assumptions()),
+            ) && let Some(impl_func) = method.body()
                 && let Ok(body_args) = method.complete_body_args(db, callable.generic_args())
             {
                 target.func = impl_func;
                 target.generic_args = body_args.into_values();
             }
+            // The body the call runs: a `mut?` function's at the call's mode.
+            let owner = BodyOwner::func_at(db, target.func, callable.mode());
+            target.mode = owner.mode();
             if target.func.body(db).is_none() || !visited_funcs.insert(target.clone()) {
                 continue;
             }
-            let (_, func_typed_body) =
-                hir::analysis::ty::ty_check::check_func_body(db, target.func);
+            let (_, func_typed_body) = check_body(db, owner);
             let func_typed_body =
                 instantiate_callable_typed_body(db, func_typed_body.clone(), &target);
             collect_typed_body_event_structs(
@@ -424,6 +432,8 @@ fn collect_typed_body_event_structs<'db>(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct VisitedFuncBody<'db> {
     func: Func<'db>,
+    /// The mode of the body of `func`, a `mut?` function, the call runs.
+    mode: Option<BorrowKind>,
     generic_args: Vec<TyId<'db>>,
     trait_inst: Option<TraitInstId<'db>>,
 }
@@ -435,6 +445,7 @@ impl<'db> VisitedFuncBody<'db> {
     ) -> Self {
         Self {
             func,
+            mode: callable.mode(),
             generic_args: callable.generic_args().to_vec(),
             trait_inst: callable.trait_inst(),
         }
@@ -1583,7 +1594,7 @@ msg InfoMsg {
 pub contract Info {
     recv InfoMsg {
         Information {} -> (DynString, Bytes32, Address) {
-            (DynString::empty(), Bytes32 { val: 0 }, Address { inner: 0 })
+            (DynString::empty(), Bytes32 { val: 0 }, Address::new(0))
         }
         Nested {} -> (u256, (DynString, bool)) {
             (0, (DynString::empty(), false))
@@ -1658,11 +1669,11 @@ msg BarMsg {
 pub contract Foo uses (ctx: Ctx, call: mut Call) {
     recv FooMsg {
         Who -> u256 uses (ctx) {
-            ctx.caller().inner
+            ctx.caller().word()
         }
 
         Ping { b } uses (call) {
-            call.call(addr: b, gas: 100000, value: 0, message: BarMsg::Pong {})
+            call.call(addr: b, gas: 100000, value: Wei::zero(), message: BarMsg::Pong {})
         }
     }
 }
@@ -2160,7 +2171,7 @@ pub contract EncodeMsgAbiProbe {
     recv ProbeMsg {
         Probe {} {
             let encoded = encode_msg_calldata(
-                TokenMsg::Transfer { to: Address { inner: 1 }, amount: 1 },
+                TokenMsg::Transfer { to: Address::new(1), amount: 1 },
             )
         }
     }

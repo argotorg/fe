@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/pointer_spaces.fe
 ---
@@ -57,7 +56,7 @@ error[8-0055]: cast is not provably lossless
 16 │     let _ = s as u8
    │             ^^^^^^^ cannot cast `StorPtr<u256>` to `u8` with `as`
    │
-   = a pointer converts only to and from its `u256` address
+   = a memory pointer converts only to and from its `usize` address, and a state pointer to and from its `u256` slot or offset
 
 error[8-0066]: mutable borrow requires a mutable place
    ┌─ pointer_spaces.fe:39:15

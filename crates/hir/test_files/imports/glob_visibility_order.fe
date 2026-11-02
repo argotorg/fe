@@ -1,0 +1,30 @@
+// `b1` and `b2` bring `S` in through a private and a `pub` glob import, and
+// `c1` and `c2` bring `R` in through a private and a `pub` named import. Each
+// re-exports it, whatever the order of the uses.
+mod x {
+    pub struct S {}
+    pub struct R {}
+}
+mod a {
+    pub use super::x::*
+}
+mod b1 {
+    pub use super::a::*
+    use super::x::*
+}
+mod b2 {
+    use super::x::*
+    pub use super::a::*
+}
+mod c1 {
+    use super::x::R
+    pub use super::x::R
+}
+mod c2 {
+    pub use super::x::R
+    use super::x::R
+}
+use b1::S as S1
+use b2::S as S2
+use c1::R as R1
+use c2::R as R2

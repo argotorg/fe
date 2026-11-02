@@ -1,0 +1,35 @@
+// `Fn(own A, B) -> R` is `Fn<(own A, B), Out = R>`: a bound names the shape
+// of a parameter list, and `-> _` leaves the result open.
+use core::functional::Fn
+
+fn apply_explicit<F: Fn<(own u256, u256), Out = u256>>(_ f: F, _ a: own u256, _ b: u256) -> u256 uses F::E {
+    f(a, b)
+}
+
+fn apply_open<F: FnMut(u256) -> _>(_ f: mut F, _ x: u256) -> F::Out uses F::E {
+    f(x)
+}
+
+fn apply_none<F: Fn() -> u256>(_ f: F) -> u256 uses F::E {
+    f()
+}
+
+fn add(_ a: own u256, _ b: u256) -> u256 {
+    a + b
+}
+
+#[test]
+fn explicit_shape() {
+    assert(apply_explicit(|a: own u256, b: u256| a * b, 3, 4) == 12)
+    // Unannotated parameters take their modes and types from the shape.
+    assert(apply_explicit(|a, b| a - b, 9, 4) == 5)
+    assert(apply_explicit(add, 3, 4) == 7)
+}
+
+#[test]
+fn open_result() {
+    var double = |x: u256| x * 2
+    let y: u256 = apply_open(mut double, 5)
+    assert(y == 10)
+    assert(apply_none(|| 7) == 7)
+}

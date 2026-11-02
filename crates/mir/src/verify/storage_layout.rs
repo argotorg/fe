@@ -371,7 +371,7 @@ pub contract Other {
                 let RuntimeFunctionOwner::Synthetic(spec) = function.owner(db) else {
                     return None;
                 };
-                let matches = match (&spec, kind) {
+                let matches = match (spec, kind) {
                     (RuntimeSyntheticSpec::ContractInitAbi { plan }, EntryKind::Init) => {
                         plan.contract == contract
                     }
@@ -380,7 +380,7 @@ pub contract Other {
                     }
                     _ => false,
                 };
-                matches.then_some((function, spec))
+                matches.then(|| (function, spec.clone()))
             })
             .unwrap_or_else(|| panic!("missing contract wrapper"))
     }

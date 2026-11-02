@@ -3,8 +3,10 @@ use hir::analysis::{
     semantic::{SemanticBody, SemanticInstance, same_owner_effect_binding},
     ty::ty_check::{BodyOwner, LocalBinding},
 };
+use hir::hir_def::FuncParamMode;
 
 use crate::{
+    RuntimeInstanceKey,
     db::MirDb,
     runtime::{RuntimeBoundarySpec, RuntimeParamPlan},
 };
@@ -51,22 +53,37 @@ pub(crate) fn runtime_param_locals<'db>(
         .collect()
 }
 
-#[salsa::tracked(return_ref)]
+/// Whether each runtime parameter of `key` is an access of its caller's
+/// place: a view or `mut` parameter, an access part of a product, or an
+/// effect. Fe's access rules make such a place exclusive to the call or
+/// unwritten during it.
+pub fn runtime_param_accesses<'db>(db: &'db dyn MirDb, key: RuntimeInstanceKey<'db>) -> Vec<bool> {
+    let Some(semantic) = key.semantic(db) else {
+        return Vec::new();
+    };
+    runtime_visible_binding_plans(db, semantic)
+        .iter()
+        .map(|entry| match entry.binding {
+            LocalBinding::Param { mode, .. } => mode != FuncParamMode::Own,
+            LocalBinding::ParamPart { access, .. } => access.is_some(),
+            LocalBinding::EffectParam { .. } => true,
+            LocalBinding::Local { .. } => false,
+        })
+        .collect()
+}
+
+#[salsa::tracked]
 pub(crate) fn runtime_param_plans<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeParamPlan<'db>> {
     let typed_body = semantic.key(db).typed_body(db);
-    let mut plans = Vec::new();
-    let mut idx = 0;
-    while typed_body.param_binding(idx).is_some() {
-        plans.push(desired_runtime_param_plan(db, semantic, typed_body, idx));
-        idx += 1;
-    }
-    plans
+    (0..typed_body.input_bindings().len())
+        .map(|idx| desired_runtime_param_plan(db, semantic, typed_body, idx))
+        .collect()
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn runtime_visible_binding_plans<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
@@ -85,8 +102,7 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         }
     };
 
-    let mut idx = 0;
-    while let Some(binding) = typed_body.param_binding(idx) {
+    for (idx, &binding) in typed_body.input_bindings().iter().enumerate() {
         push(
             binding,
             param_plans
@@ -94,7 +110,6 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
                 .cloned()
                 .unwrap_or(RuntimeParamPlan::Erased),
         );
-        idx += 1;
     }
 
     if let BodyOwner::ContractRecvArm {

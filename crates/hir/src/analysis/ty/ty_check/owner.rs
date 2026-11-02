@@ -1,19 +1,21 @@
-use crate::analysis::ty::ty_def::{ClosureTy, TyId};
+use crate::analysis::ty::ty_def::{BorrowKind, ClosureDef, ClosureTy, TyId};
 use crate::hir_def::{
-    ClosureDef, Expr, ExprId, ItemKind, Partial, attr::ArithmeticMode, params::FuncParamMode,
+    Expr, ExprId, ItemKind, Partial, attr::ArithmeticMode, params::FuncParamMode,
 };
-use crate::span::DynLazySpan;
+use crate::span::{DynLazySpan, types::LazyTySpan};
 use crate::{
     analysis::HirAnalysisDb,
-    hir_def::{Body, Const, Contract, EffectParamListId, Func, PathId, scope_graph::ScopeId},
-    span::item::{LazyContractRecvSpan, LazyRecvArmSpan},
+    hir_def::{Body, Const, Contract, EffectParamListId, Func, scope_graph::ScopeId},
+    span::item::LazyRecvArmSpan,
 };
-use salsa::Update;
+use salsa::SalsaValue;
 
 /// Identifies the HIR owner of a [`Body`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum BodyOwner<'db> {
-    Func(Func<'db>),
+    /// A function's body, at the mode it is checked at if it is a `mut?`
+    /// function: one body per mode.
+    Func(Func<'db>, Option<BorrowKind>),
     Const(Const<'db>),
     AnonConstBody {
         body: Body<'db>,
@@ -27,7 +29,7 @@ pub enum BodyOwner<'db> {
         recv_idx: u32,
         arm_idx: u32,
     },
-    /// The body of a closure called through a callable shape trait whose
+    /// The body of a closure called through a callable trait whose
     /// receiver, `self` or `mut self`, is `receiver`: one body per receiver
     /// mode it is called with.
     Closure {
@@ -38,7 +40,7 @@ pub enum BodyOwner<'db> {
 }
 
 /// Identifies the HIR owner of an effect parameter list (`uses (...)`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum EffectParamOwner<'db> {
     Func(Func<'db>),
     Contract(Contract<'db>),
@@ -71,24 +73,17 @@ impl<'db> EffectParamOwner<'db> {
         }
     }
 
-    pub fn effect_param_ty_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
+    pub fn effect_param_ty_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> LazyTySpan<'db> {
         match self {
             EffectParamOwner::Func(func) => func
                 .span()
                 .effects()
                 .param_idx(func.effect_origin(db, idx))
-                .ty()
-                .into(),
-            EffectParamOwner::Contract(contract) => {
-                contract.span().effects().param_idx(idx).ty().into()
+                .ty(),
+            EffectParamOwner::Contract(contract) => contract.span().effects().param_idx(idx).ty(),
+            EffectParamOwner::ContractInit { contract } => {
+                contract.span().init_block().effects().param_idx(idx).ty()
             }
-            EffectParamOwner::ContractInit { contract } => contract
-                .span()
-                .init_block()
-                .effects()
-                .param_idx(idx)
-                .ty()
-                .into(),
             EffectParamOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -100,8 +95,7 @@ impl<'db> EffectParamOwner<'db> {
                 .arm(arm_idx as usize)
                 .effects()
                 .param_idx(idx)
-                .ty()
-                .into(),
+                .ty(),
         }
     }
 }
@@ -120,10 +114,44 @@ impl<'db> BodyOwner<'db> {
         }
     }
 
-    /// The owner of the item body `body`, which a closure's body is part of.
-    pub fn from_body(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<Self> {
+    /// The bodies of `func`: one per mode a `mut?` function is checked at,
+    /// and one for any other function.
+    pub fn func_bodies(
+        db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
+    ) -> impl Iterator<Item = Self> + 'db {
+        func.modes(db)
+            .iter()
+            .map(move |&mode| Self::Func(func, mode))
+    }
+
+    /// The body of `func` that questions every mode answers alike read: a
+    /// `mut?` function's `ref` body.
+    pub fn func(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> Self {
+        Self::Func(func, func.modes(db)[0])
+    }
+
+    /// The body of `func` a call at `mode` runs: a `mut?` function's body at
+    /// that mode, and the one body of any other function, such as either
+    /// body of a method with one body per mode.
+    pub fn func_at(db: &'db dyn HirAnalysisDb, func: Func<'db>, mode: Option<BorrowKind>) -> Self {
+        Self::Func(func, if func.is_maybe_mut(db) { mode } else { None })
+    }
+
+    /// The mode this body is checked at: a `mut?` function's.
+    pub fn mode(self) -> Option<BorrowKind> {
+        match self {
+            Self::Func(_, mode) => mode,
+            _ => None,
+        }
+    }
+
+    /// The owner of the item body that defines the closure `def`: a `mut?`
+    /// function's body at the mode `def` was defined at.
+    pub fn closure_parent(db: &'db dyn HirAnalysisDb, def: ClosureDef<'db>) -> Option<Self> {
+        let body = def.body;
         if let Some(func) = body.containing_func(db) {
-            return Some(Self::Func(func));
+            return Some(Self::Func(func, def.mode));
         }
         match body.scope().parent_item(db)? {
             ItemKind::Const(const_) if const_.body(db).to_opt() == Some(body) => {
@@ -210,7 +238,7 @@ impl<'db> BodyOwner<'db> {
     }
 
     pub fn arithmetic_mode(self, db: &'db dyn HirAnalysisDb) -> ArithmeticMode {
-        if let Self::Func(func) = self {
+        if let Self::Func(func, _) = self {
             return func.arithmetic_mode(db);
         }
 
@@ -256,18 +284,9 @@ impl<'db> BodyOwner<'db> {
         }
     }
 
-    pub fn recv_msg_path(self, db: &'db dyn HirAnalysisDb) -> Option<PathId<'db>> {
-        match self {
-            BodyOwner::ContractRecvArm {
-                contract, recv_idx, ..
-            } => contract.recvs(db).data(db).get(recv_idx as usize)?.msg_path,
-            _ => None,
-        }
-    }
-
     pub fn body(self, db: &'db dyn HirAnalysisDb) -> Option<Body<'db>> {
         match self {
-            BodyOwner::Func(func) => func.body(db),
+            BodyOwner::Func(func, _) => func.body(db),
             BodyOwner::Const(const_) => const_.body(db).to_opt(),
             BodyOwner::AnonConstBody { body, .. } => Some(body),
             BodyOwner::ContractInit { contract } => Some(contract.init(db)?.body(db)),
@@ -287,7 +306,7 @@ impl<'db> BodyOwner<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         match self {
-            BodyOwner::Func(func) => func.scope(),
+            BodyOwner::Func(func, _) => func.scope(),
             BodyOwner::Const(const_) => const_.scope(),
             BodyOwner::AnonConstBody { body, .. } => body.scope(),
             BodyOwner::ContractInit { contract } => contract.scope(),
@@ -298,7 +317,7 @@ impl<'db> BodyOwner<'db> {
 
     pub fn effects(self, db: &'db dyn HirAnalysisDb) -> EffectParamListId<'db> {
         match self {
-            BodyOwner::Func(func) => func.effects(db),
+            BodyOwner::Func(func, _) => func.effects(db),
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
                 EffectParamListId::new(db, Vec::new())
             }
@@ -319,7 +338,7 @@ impl<'db> BodyOwner<'db> {
 
     pub fn effect_param_ty_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
         match self {
-            BodyOwner::Func(func) => func
+            BodyOwner::Func(func, _) => func
                 .span()
                 .effects()
                 .param_idx(func.effect_origin(db, idx))
@@ -349,15 +368,6 @@ impl<'db> BodyOwner<'db> {
                 .param_idx(idx)
                 .ty()
                 .into(),
-        }
-    }
-
-    pub fn recv_span(self) -> Option<LazyContractRecvSpan<'db>> {
-        match self {
-            BodyOwner::ContractRecvArm {
-                contract, recv_idx, ..
-            } => Some(contract.span().recv(recv_idx as usize)),
-            _ => None,
         }
     }
 

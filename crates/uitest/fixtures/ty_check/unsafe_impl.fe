@@ -1,4 +1,4 @@
-use core::marker::Pinned
+use core::marker::{Pinned, Storage}
 use core::ops::{Location, StateIndex}
 
 // An `unsafe trait`'s implementations assert a contract the compiler relies
@@ -33,7 +33,7 @@ unsafe impl Plain for A {}
 struct Cells {}
 
 impl Pinned for Cells {
-    space S = storage
+    type Space = Storage
 }
 
 // Rejected: `StateIndex` is an `unsafe trait`.

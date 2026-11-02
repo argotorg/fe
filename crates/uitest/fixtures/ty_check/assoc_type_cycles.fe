@@ -1,0 +1,29 @@
+// An associated type or shape that names itself, directly or inside another
+// type, never ends: each is a cycle.
+trait Holds {
+    type Part
+}
+
+struct Direct {}
+
+impl Holds for Direct {
+    type Part = Self::Part
+}
+
+struct Nested {}
+
+impl Holds for Nested {
+    type Part = (usize, Self::Part)
+}
+
+trait Shapes {
+    shape Part
+    shape Other
+}
+
+struct Mutual {}
+
+impl Shapes for Mutual {
+    shape Part = (own usize, Self::Other)
+    shape Other = (own usize, Self::Part)
+}

@@ -1,0 +1,28 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/invisible_glob_name.fe
+---
+note:
+  ┌─ invisible_glob_name.fe:9:5
+  │
+9 │     pub use super::p::x
+  │     ^^^^^^^^^^^^^^^^^^^ invisible_glob_name::p::x
+
+note:
+   ┌─ invisible_glob_name.fe:12:5
+   │
+12 │     use super::p::*
+   │     ^^^^^^^^^^^^^^^ invisible_glob_name::p::x as x
+
+note:
+   ┌─ invisible_glob_name.fe:13:5
+   │
+13 │     pub use super::k::*
+   │     ^^^^^^^^^^^^^^^^^^^ invisible_glob_name::p::x as x
+
+note:
+   ┌─ invisible_glob_name.fe:15:1
+   │
+15 │ use m::x::y
+   │ ^^^^^^^^^^^ invisible_glob_name::p::x::y

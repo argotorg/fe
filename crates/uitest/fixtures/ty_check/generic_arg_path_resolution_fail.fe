@@ -21,7 +21,7 @@ impl<T: Tr2> Tr1 for S1<T> {
     type Foo = T::Bar  // Error: T has Tr2 bound but Tr2 doesn't have Bar associated type
 
     fn make_foo(self) -> Self::Foo {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -40,7 +40,7 @@ impl Tr1 for S1<Concrete> {
     type Foo = Concrete::Bar  // Error: Concrete doesn't have associated type Bar
 
     fn make_foo(self) -> Self::Foo {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -53,6 +53,6 @@ impl<T: Tr3> Tr1 for S1<T> {
     type Foo = T::Inner::Missing  // Error: T::Inner doesn't have associated type Missing
 
     fn make_foo(self) -> Self::Foo {
-        todo()
+        unsafe { todo() }
     }
 }

@@ -1,0 +1,189 @@
+use core::ops::Drop
+
+// Accepted: the implementation covers every `Buf`.
+struct Buf {
+    len: u64,
+}
+
+impl Drop for Buf {
+    fn drop(own self) {}
+}
+
+// Accepted: each parameter of the type, once.
+struct Pair<T, U> {
+    a: T,
+    b: U,
+}
+
+impl<T, U> Drop for Pair<T, U> {
+    fn drop(own self) {}
+}
+
+// Rejected: only `Wrap<u8>` would be destroyed this way.
+struct Wrap<T> {
+    t: T,
+}
+
+impl Drop for Wrap<u8> {
+    fn drop(own self) {}
+}
+
+// Rejected: the same parameter twice covers only `Same<T, T>`.
+struct Same<T, U> {
+    a: T,
+    b: U,
+}
+
+impl<T> Drop for Same<T, T> {
+    fn drop(own self) {}
+}
+
+trait Marker {}
+
+// Rejected: a bound `Bounded` does not declare.
+struct Bounded<T> {
+    t: T,
+}
+
+impl<T: Marker> Drop for Bounded<T> {
+    fn drop(own self) {}
+}
+
+// Accepted: the type's own bound.
+struct Declared<T: Marker> {
+    t: T,
+}
+
+impl<T: Marker> Drop for Declared<T> {
+    fn drop(own self) {}
+}
+
+// Rejected: a copy would be destroyed twice.
+struct Copied {
+    x: u64,
+}
+
+impl Copy for Copied {}
+
+impl Drop for Copied {
+    fn drop(own self) {}
+}
+
+// Rejected: `Conditional<u64>` is `Copy`, and a `Copy` value is never
+// destroyed directly, but an owner holding one would destroy each copy.
+struct Conditional<T> {
+    x: T,
+}
+
+impl<T: Copy> Copy for Conditional<T> {}
+
+impl<T> Drop for Conditional<T> {
+    fn drop(own self) {}
+}
+
+// Rejected: a drop runs where no call is written, so it has no effects.
+struct Effectful {
+    n: u64,
+}
+
+impl Drop for Effectful {
+    fn drop(own self) uses (total: mut u256) {
+        total += 1
+    }
+}
+
+// Rejected twice: effects do not hide the other errors of an implementation.
+struct CopiedEffectful {
+    n: u64,
+}
+
+impl Copy for CopiedEffectful {}
+
+impl Drop for CopiedEffectful {
+    fn drop(own self) uses (total: mut u256) {
+        total += 1
+    }
+}
+
+// Rejected: an effect row names effects too.
+struct OnDrop<F: Fn() -> ()> {
+    f: F,
+}
+
+impl<F: Fn() -> ()> Drop for OnDrop<F> {
+    fn drop(own self) uses F::E {
+        (self.f)()
+    }
+}
+
+// Rejected: a field's effect row has nothing to provide it in a drop.
+struct Guard<F: Fn() -> ()> {
+    f: F,
+}
+
+impl<F: Fn() -> ()> Drop for Guard<F> {
+    fn drop(own self) {
+        (self.f)()
+    }
+}
+
+struct Ctx {
+    n: u256,
+}
+
+fn needs_ctx() uses (ctx: Ctx) {}
+
+// Rejected: no caller provides an effect to a drop, but a block may.
+struct Logged {
+    n: u64,
+}
+
+impl Drop for Logged {
+    fn drop(own self) {
+        needs_ctx()
+    }
+}
+
+// Accepted: a mutable owned receiver.
+struct Counter {
+    n: u64,
+}
+
+impl Drop for Counter {
+    fn drop(var own self) {
+        self.n += 1
+    }
+}
+
+// Rejected: a view has no value to destroy.
+#[view]
+struct Window {
+    start: u256,
+}
+
+impl Drop for Window {
+    fn drop(own self) {}
+}
+
+// Rejected: `Drop::drop` runs only where a value is destroyed.
+fn method_call(_ buf: own Buf) {
+    buf.drop()
+}
+
+fn path_call(_ buf: own Buf) {
+    Drop::drop(buf)
+}
+
+fn function_value() -> u64 {
+    let f = Buf::drop
+    0
+}
+
+// Accepted: ending or leaking a value explicitly.
+fn early(_ buf: own Buf) {
+    core::mem::drop(buf)
+}
+
+fn leaked(_ buf: own Buf) {
+    core::mem::forget(buf)
+}

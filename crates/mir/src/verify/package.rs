@@ -24,7 +24,7 @@ impl<'db> RuntimeProgramView<'db> for PackageView<'db> {
         &self,
         id: crate::instance::RuntimeInstance<'db>,
     ) -> crate::runtime::RuntimeInterfaceSignature<'db> {
-        id.interface_signature(self.db)
+        id.interface_signature(self.db).clone()
     }
 
     fn exit_behavior(
@@ -35,7 +35,7 @@ impl<'db> RuntimeProgramView<'db> for PackageView<'db> {
     }
 
     fn body(&self, id: crate::instance::RuntimeInstance<'db>) -> crate::runtime::RuntimeBody<'db> {
-        id.body(self.db)
+        id.body(self.db).clone()
     }
 
     fn layout(&self, id: crate::runtime::LayoutId<'db>) -> crate::runtime::Layout<'db> {
@@ -74,28 +74,32 @@ pub fn verify_runtime_package<'db>(
     let mut seen_symbols = FxHashSet::default();
     for function in functions {
         if !seen_symbols.insert(function.symbol(db).clone()) {
-            return Err(VerifyError::DuplicateRuntimeSymbol(function.symbol(db)));
+            return Err(VerifyError::DuplicateRuntimeSymbol(
+                function.symbol(db).clone(),
+            ));
         }
         let owner = function.owner(db);
-        verify_contract_storage_seam(db, &owner)?;
+        verify_contract_storage_seam(db, owner)?;
         if function.linkage(db) == RuntimeLinkage::External {
             continue;
         }
         let body = function.instance(db).body(db);
-        verify_runtime_body(db, &view, &body)?;
-        verify_code_region_refs(&view, &body)?;
-        verify_synthetic_function(db, owner, &body)?;
+        verify_runtime_body(db, &view, body)?;
+        verify_code_region_refs(&view, body)?;
+        verify_synthetic_function(db, owner.clone(), body)?;
     }
     for region in package.code_regions(db) {
         if !seen_symbols.insert(region.symbol(db).clone()) {
-            return Err(VerifyError::DuplicateRuntimeSymbol(region.symbol(db)));
+            return Err(VerifyError::DuplicateRuntimeSymbol(
+                region.symbol(db).clone(),
+            ));
         }
-        verify_resolved_code_region(db, &region, &function_instances, &objects)?;
+        verify_resolved_code_region(db, region, &function_instances, objects)?;
     }
     for &object in objects.iter() {
-        verify_object(db, object, &function_instances, &objects)?;
+        verify_object(db, object, &function_instances, objects)?;
     }
-    for object in package.root_objects(db) {
+    for &object in package.root_objects(db) {
         if !object_set.contains(&object) {
             return Err(VerifyError::InvalidPackageObject(object));
         }
@@ -405,7 +409,7 @@ fn verify_resolved_code_region<'db>(
             return Err(VerifyError::InvalidCodeRegion(region.region(db)));
         }
         let expected_symbol = code_region_symbol(db, region.region(db));
-        if region.symbol(db) != expected_symbol {
+        if *region.symbol(db) != expected_symbol {
             return Err(VerifyError::InvalidCodeRegion(region.region(db)));
         }
         let expected_section = code_region_section_name(db, region.region(db))
@@ -504,7 +508,7 @@ pub contract C {
                         return None;
                     };
                     let plan = plan.clone();
-                    Some((owner, plan, function.instance(db).body(db).clone()))
+                    Some((owner.clone(), plan, function.instance(db).body(db).clone()))
                 })
                 .collect();
         (package, wrappers)

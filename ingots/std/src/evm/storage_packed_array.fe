@@ -1,9 +1,9 @@
-use core::marker::Pinned
+use core::marker::{Pinned, Storage}
 use core::ops::{Location, StateIndex}
 use core::option::Option
 
-use super::effects::{RawStorage, storage_at_mut}
-use super::sol_slot::data_slot
+use super::effects::{RawStorage, storage_at}
+use super::layout::array_data_slot
 
 const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
@@ -52,7 +52,7 @@ pub struct StoragePackedArray<const BITS: u256> {
 struct PackedWords {}
 
 impl Pinned for PackedWords {
-    space S = storage
+    type Space = Storage
 }
 
 unsafe impl StateIndex for PackedWords {
@@ -62,7 +62,7 @@ unsafe impl StateIndex for PackedWords {
     #[arithmetic(unchecked)]
     #[inline(always)]
     fn locate(self, _ root: u256, _ word: u256) -> Location {
-        Location { slot: data_slot(root) + word, offset: 0 }
+        Location { slot: array_data_slot(root) + word, offset: 0 }
     }
 }
 
@@ -102,8 +102,8 @@ impl<const BITS: u256> StoragePackedArray<BITS>
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the words' slots.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
-        unsafe { storage_at_mut(slot) }
+    pub unsafe fn at(_ slot: u256) -> mut? Self uses (storage: mut? RawStorage) {
+        unsafe { storage_at(slot) }
     }
 
     /// Read the lane at index `i`. Returns the lane value zero-extended to `u256`.

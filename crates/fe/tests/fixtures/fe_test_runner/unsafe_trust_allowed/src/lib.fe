@@ -9,5 +9,5 @@ fn allowed_unsafe_use() {
 
 #[test]
 fn allowed_created_contract() uses (evm: mut Evm) {
-    evm.create2<dep::Vault>(value: 0, args: (), salt: 0)
+    evm.create2<dep::Vault>(value: Wei::zero(), args: (), salt: 0)
 }

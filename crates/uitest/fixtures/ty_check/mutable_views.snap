@@ -13,7 +13,7 @@ error[3-0059]: `MemSlice<u8>` is a `#[view]` type
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ mutable_views.fe:25:5
    │
-24 │     let (a, b) = s.split_at_mut(1)
+24 │     let (a, b) = s.split_at(1)
    │          - `a` is a read access; bind it with `mut` to write through it
 25 │     a[0] = 1
    │     ^^^^ immutable assignment
@@ -21,7 +21,7 @@ error[8-0018]: left-hand side of assignment is immutable
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ mutable_views.fe:26:5
    │
-24 │     let (a, b) = s.split_at_mut(1)
+24 │     let (a, b) = s.split_at(1)
    │             - `b` is a read access; bind it with `mut` to write through it
 25 │     a[0] = 1
 26 │     b[0] = 2
@@ -30,7 +30,7 @@ error[8-0018]: left-hand side of assignment is immutable
 error[8-0125]: `MemSlice<u8>` has no value for `var` to hold
    ┌─ mutable_views.fe:31:9
    │
-31 │     var s = buf.span_mut()
+31 │     var s = mut buf.span()
    │         ^ `var` binds a value, and a `#[view]` or state-only type has none
    │
    = bind it with `let` for its access, or `let x = mut …` to write through it

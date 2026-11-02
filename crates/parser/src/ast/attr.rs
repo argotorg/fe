@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::ast::AstNode;
 
-use super::{Expr, Path, ast_node, lit::Lit};
+use super::{Expr, Path, ast_node, lit::Lit, support};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {

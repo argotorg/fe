@@ -1,6 +1,6 @@
 //! Declaration-owned generic defaults and their application-site instantiation.
 
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{
     binder::Binder,
@@ -9,10 +9,11 @@ use super::{
         LoweringContext, UnevaluatedConstPolicy, canonicalize_ty_for_mode,
     },
     diagnostics::{TyDiagCollection, TyLowerDiag},
+    shape::Shape,
     subst::substitute_complete,
     trait_resolution::{PredicateListId, constraint::collect_candidate_constraints},
     ty_check::check_generic_default_body_types,
-    ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
+    ty_def::{BorrowKind, InvalidCause, Kind, PrimTy, TyBase, TyData, TyId, TyParam},
     ty_error::{collect_hir_ty_diags_deferred, emit_invalid_ty_error, first_invalid_ty_cause},
     ty_lower::{
         CompleteSubst, GenericParamTypeSet, ParamBasis, SourceParamIndex, collect_generic_params,
@@ -58,7 +59,7 @@ pub(crate) fn default_assumptions<'db>(
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum GenericDefault<'db> {
     Type(Binder<'db, TyId<'db>>),
     Const {
@@ -70,12 +71,12 @@ pub(crate) enum GenericDefault<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub(crate) struct DefaultLowerError<'db> {
-    #[return_ref]
     pub cause: InvalidCause<'db>,
+    #[returns(copy)]
     pub forward_ref: Option<IdentId<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) struct DefaultDiagnosticOwner<'db> {
     pub(crate) owner: GenericParamOwner<'db>,
     pub(crate) param: SourceParamIndex,
@@ -85,7 +86,7 @@ pub(crate) struct DefaultDiagnosticOwner<'db> {
 /// execution remains in the template's const nodes or in types reached at
 /// concrete demand. `Invalid` has a declaration diagnostic owned by the
 /// `(owner, param)` query key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum DefaultValidation<'db> {
     Checked(GenericDefault<'db>),
     Invalid(DefaultLowerError<'db>),
@@ -94,7 +95,7 @@ pub(crate) enum DefaultValidation<'db> {
 /// Structural discovery uses `generic_default`; consumers requiring a checked
 /// declaration use this result. Const execution remains an application or
 /// declaration-diagnostic obligation, never a prerequisite for shape discovery.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn checked_generic_default<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -118,7 +119,7 @@ pub(crate) fn checked_generic_default<'db>(
 
 /// This is a deferred semantic template, not proof that its const bodies have
 /// been validated. Declaration diagnostics check bodies independently of use.
-#[salsa::tracked(return_ref, cycle_initial=default_cycle_initial, cycle_fn=default_cycle_recover)]
+#[salsa::tracked(cycle_initial=default_cycle_initial)]
 pub(crate) fn generic_default<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -231,6 +232,7 @@ fn reject_forward_dependency<'db>(
 
 fn default_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _owner: GenericParamOwner<'db>,
     _param_idx: usize,
 ) -> Result<Option<GenericDefault<'db>>, DefaultLowerError<'db>> {
@@ -239,16 +241,6 @@ fn default_cycle_initial<'db>(
         InvalidCause::TypeLoweringCycle,
         None,
     ))
-}
-
-fn default_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Result<Option<GenericDefault<'db>>, DefaultLowerError<'db>>,
-    _count: u32,
-    _owner: GenericParamOwner<'db>,
-    _param_idx: usize,
-) -> salsa::CycleRecoveryAction<Result<Option<GenericDefault<'db>>, DefaultLowerError<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) fn type_default_diags<'db>(
@@ -361,6 +353,22 @@ fn check_argument<'db>(
         arg.evaluate_const_ty(db, expected)?
     } else {
         arg.check_const_ty_without_eval(db, expected)?
+    };
+    // A tuple type given for a shape lists views: `Fn<(A, B)>` takes `ref A`
+    // and `ref B`.
+    let (base, elems) = arg.decompose_ty_app(db);
+    let arg = if *kind == Kind::Shape
+        && matches!(
+            base.data(db),
+            TyData::TyBase(TyBase::Prim(PrimTy::Tuple(_)))
+        ) {
+        let params: Vec<_> = elems
+            .iter()
+            .map(|&elem| Shape::Access(BorrowKind::Ref, elem))
+            .collect();
+        TyId::params_shape(db, &params)
+    } else {
+        arg
     };
     if !kind.does_match(arg.kind(db)) {
         return Err(InvalidCause::KindMismatch {
@@ -539,7 +547,7 @@ fn instantiate_const_default<'db>(
 
 /// Parameter dependencies are a property of the source, not of successful type
 /// lowering. In particular, an unresolved `T::Item` still refers to `T`.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn default_dependencies<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,

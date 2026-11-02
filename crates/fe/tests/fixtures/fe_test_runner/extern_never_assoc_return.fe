@@ -16,7 +16,7 @@ impl<T> HasAssoc for Generic<T> {
 }
 
 fn make<T: HasAssoc>() -> T::Assoc {
-    todo()
+    unsafe { todo() }
 }
 
 fn trigger() {

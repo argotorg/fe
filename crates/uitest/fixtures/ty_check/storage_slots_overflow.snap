@@ -7,5 +7,5 @@ input_file: fixtures/ty_check/storage_slots_overflow.fe
 error[8-0128]: type has no storage layout
   ┌─ storage_slots_overflow.fe:5:5
   │
-5 │     storage_slots<[u256; 0x10000000000000000]>()
-  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[u256; 18446744073709551616]` cannot be laid out in storage: layout extent overflowed
+5 │     storage_slots<[[u256; 0x100000000]; 0x100000000]>()
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[[u256; 4294967296]; 4294967296]` cannot be laid out in storage: layout extent overflowed

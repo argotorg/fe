@@ -1,0 +1,34 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/lex_ambiguity_named_shadows.fe
+---
+note:
+  ┌─ lex_ambiguity_named_shadows.fe:5:9
+  │
+5 │         pub use super::super::*
+  │         ^^^^^^^^^^^^^^^^^^^^^^^ lex_ambiguity_named_shadows::a as a | lex_ambiguity_named_shadows::c as c | lex_ambiguity_named_shadows::f as f | lib::abi::Abi as Abi | lib::abi::AbiDecoder as AbiDecoder | lib::abi::AbiSize as AbiSize | lib::abi::Bytes as Bytes | lib::abi::Decode as Decode | lib::abi::Encode as Encode | lib::abi::Text as Text | lib::abi::Vec as Vec | lib::abi::sol::Sol as Sol | lib::abi::sol::sol as sol | lib::clone::Clone as Clone | lib::default::Default as Default | lib::error::ErrorVariant as ErrorVariant | lib::evm::effects::Address as Address | lib::evm::effects::Call as Call | lib::evm::effects::Create as Create | lib::evm::effects::Ctx as Ctx | lib::evm::effects::Evm as Evm | lib::evm::effects::Log as Log | lib::evm::effects::assert as assert | lib::evm::effects::revert as revert | lib::evm::effects::revert_error as revert_error | lib::evm::panic::Panic as Panic | lib::evm::storage_map::StorageMap as StorageMap | lib::evm::units::Duration as Duration | lib::evm::units::Timestamp as Timestamp | lib::evm::units::Wei as Wei | lib::marker::Copy as Copy | lib::marker::Snapshot as Snapshot | lib::message::MsgVariant as MsgVariant | lib::num::Abs as Abs | lib::num::Bounded as Bounded | lib::num::IntDowncast as IntDowncast | lib::num::UnsignedAbs as UnsignedAbs | lib::option::Option as Option | lib::option::Option::None as None | lib::option::Option::Some as Some | lib::panic as panic | lib::ptr::FixedMemBuffer as FixedMemBuffer | lib::ptr::MemArray as MemArray | lib::ptr::MemBuffer as MemBuffer | lib::ptr::MemSlice as MemSlice | lib::ptr::MemSpan as MemSpan | lib::ptr::MemVec as MemVec | lib::ptr::byte_ptr as byte_ptr | lib::ptr::cast as cast | lib::ptr::offset as offset | lib::ptr::offset_bytes as offset_bytes | lib::result::Result as Result | lib::result::Result::Err as Err | lib::result::Result::Ok as Ok | lib::todo as todo
+
+note:
+   ┌─ lex_ambiguity_named_shadows.fe:13:5
+   │
+13 │     use a::b::c as c
+   │     ^^^^^^^^^^^^^^^^ lex_ambiguity_named_shadows::c
+
+note:
+   ┌─ lex_ambiguity_named_shadows.fe:14:5
+   │
+14 │     use ingot::*
+   │     ^^^^^^^^^^^^ lex_ambiguity_named_shadows::a as a | lex_ambiguity_named_shadows::c as c | lex_ambiguity_named_shadows::f as f | lib::abi::Abi as Abi | lib::abi::AbiDecoder as AbiDecoder | lib::abi::AbiSize as AbiSize | lib::abi::Bytes as Bytes | lib::abi::Decode as Decode | lib::abi::Encode as Encode | lib::abi::Text as Text | lib::abi::Vec as Vec | lib::abi::sol::Sol as Sol | lib::abi::sol::sol as sol | lib::clone::Clone as Clone | lib::default::Default as Default | lib::error::ErrorVariant as ErrorVariant | lib::evm::effects::Address as Address | lib::evm::effects::Call as Call | lib::evm::effects::Create as Create | lib::evm::effects::Ctx as Ctx | lib::evm::effects::Evm as Evm | lib::evm::effects::Log as Log | lib::evm::effects::assert as assert | lib::evm::effects::revert as revert | lib::evm::effects::revert_error as revert_error | lib::evm::panic::Panic as Panic | lib::evm::storage_map::StorageMap as StorageMap | lib::evm::units::Duration as Duration | lib::evm::units::Timestamp as Timestamp | lib::evm::units::Wei as Wei | lib::marker::Copy as Copy | lib::marker::Snapshot as Snapshot | lib::message::MsgVariant as MsgVariant | lib::num::Abs as Abs | lib::num::Bounded as Bounded | lib::num::IntDowncast as IntDowncast | lib::num::UnsignedAbs as UnsignedAbs | lib::option::Option as Option | lib::option::Option::None as None | lib::option::Option::Some as Some | lib::panic as panic | lib::ptr::FixedMemBuffer as FixedMemBuffer | lib::ptr::MemArray as MemArray | lib::ptr::MemBuffer as MemBuffer | lib::ptr::MemSlice as MemSlice | lib::ptr::MemSpan as MemSpan | lib::ptr::MemVec as MemVec | lib::ptr::byte_ptr as byte_ptr | lib::ptr::cast as cast | lib::ptr::offset as offset | lib::ptr::offset_bytes as offset_bytes | lib::result::Result as Result | lib::result::Result::Err as Err | lib::result::Result::Ok as Ok | lib::todo as todo
+
+note:
+   ┌─ lex_ambiguity_named_shadows.fe:15:5
+   │
+15 │     use a::*
+   │     ^^^^^^^^ lex_ambiguity_named_shadows::a::b as b | lex_ambiguity_named_shadows::a::c as c
+
+note:
+   ┌─ lex_ambiguity_named_shadows.fe:17:9
+   │
+17 │         use c::*
+   │         ^^^^^^^^ lex_ambiguity_named_shadows::c::S as S

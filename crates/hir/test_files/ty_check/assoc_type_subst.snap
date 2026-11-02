@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/assoc_type_subst.fe
 ---
@@ -29,21 +29,27 @@ note:
    │
 38 │       fn get_nested(self) -> Self::Middle::Output {
    │ ╭─────────────────────────────────────────────────^
-39 │ │         todo()
+39 │ │         unsafe { todo() }
 40 │ │     }
    │ ╰─────^ T
 
 note:
    ┌─ assoc_type_subst.fe:39:9
    │
-39 │         todo()
-   │         ^^^^ fn todo
+39 │         unsafe { todo() }
+   │         ^^^^^^^^^^^^^^^^^ T
 
 note:
-   ┌─ assoc_type_subst.fe:39:9
+   ┌─ assoc_type_subst.fe:39:18
    │
-39 │         todo()
-   │         ^^^^^^ T
+39 │         unsafe { todo() }
+   │                  ^^^^ fn todo
+
+note:
+   ┌─ assoc_type_subst.fe:39:18
+   │
+39 │         unsafe { todo() }
+   │                  ^^^^^^ T
 
 note:
    ┌─ assoc_type_subst.fe:44:18

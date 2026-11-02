@@ -1,0 +1,59 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/shape_equalities.fe
+---
+error[3-0083]: a mode argument names an associated shape's mode
+   ┌─ shape_equalities.fe:55:27
+   │
+55 │ fn type_mode<D: Driver<Out<ref> = u256>>(_ d: D) {}
+   │                           ^^^^^ only an associated shape takes `ref` or `mut`, as in `D::Step<ref>`
+
+error[3-0084]: an associated shape needs a mode here
+   ┌─ shape_equalities.fe:52:22
+   │
+52 │ fn no_mode<D: Driver<Step = ref u256>>(_ d: D) {}
+   │                      ^^^^ write `<ref>` or `<mut>` after it, as in `D::Step<ref>`; only a `mut?` item's own signature names one without
+
+error[3-0085]: `mut?` in a shape argument
+   ┌─ shape_equalities.fe:66:42
+   │
+66 │ fn maybe_mut_value<D: Driver<Step<ref> = mut? u256>>(_ d: D) {}
+   │                                          ^^^^^^^^^ a shape's modes are concrete: write `ref` or `mut`
+
+error[3-0086]: `Step<ref>` is bound more than once
+   ┌─ shape_equalities.fe:58:42
+   │
+58 │ fn twice<D: Driver<Step<ref> = ref u256, Step<ref> = ref u8>>(_ d: D) {}
+   │                    ----                  ^^^^ `Step<ref>` is bound again here
+   │                    │
+   │                    `Step<ref>` is first bound here
+
+error[3-0086]: `Out` is bound more than once
+   ┌─ shape_equalities.fe:60:37
+   │
+60 │ fn type_twice<D: Driver<Out = u256, Out = u8>>(_ d: D) {}
+   │                         ---         ^^^ `Out` is bound again here
+   │                         │
+   │                         `Out` is first bound here
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ shape_equalities.fe:43:5
+   │
+36 │ fn read<D: Driver<Step<ref> = ref u256>>(_ d: D) -> u256 {
+   │            ---------------------------- required by this bound on `read`
+   ·
+43 │     read(s)
+   │     ^^^^ `Small` doesn't implement `Driver<Step<ref> = ref u256>`
+
+error[6-0039]: `Step` grants `mut` where it is named at `ref`
+   ┌─ shape_equalities.fe:68:37
+   │
+68 │ fn mut_at_ref<D: Driver<Step<ref> = (own usize, mut u256)>>(_ d: D) {}
+   │                                     ^^^^^^^^^^^^^^^^^^^^^ a shape's accesses are at most its mode: bind `Step<mut>` for a `mut` access
+
+error[8-0017]: not assignable left-hand side of assignment
+   ┌─ shape_equalities.fe:48:5
+   │
+48 │     d.at() += 1
+   │     ^^^^^^ cant assign to this expression

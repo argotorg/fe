@@ -2,7 +2,7 @@ use hir::analysis::{
     semantic::{SemanticInstance, check_semantic_accesses},
     ty::ty_check::BodyOwner,
 };
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     db::MirDb,
@@ -17,7 +17,7 @@ use crate::{
                 collect_runtime_calls as collect_runtime_calls_lowered,
             },
             inline::inline_projections,
-            returns::runtime_exit_behavior,
+            returns::{check_projection_result_spaces, runtime_exit_behavior},
         },
         synthetic::lower_synthetic_runtime_body,
     },
@@ -29,7 +29,7 @@ pub struct RuntimeSyntheticInstance<'db> {
     pub spec: RuntimeSyntheticSpec<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeInstanceSource<'db> {
     Semantic(SemanticInstance<'db>),
     Synthetic(RuntimeSyntheticInstance<'db>),
@@ -38,8 +38,8 @@ pub enum RuntimeInstanceSource<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct RuntimeInstanceKey<'db> {
+    #[returns(copy)]
     pub source: RuntimeInstanceSource<'db>,
-    #[return_ref]
     pub params: Vec<RuntimeClass<'db>>,
 }
 
@@ -55,6 +55,7 @@ impl<'db> RuntimeInstanceKey<'db> {
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct RuntimeInstance<'db> {
+    #[returns(copy)]
     pub key: RuntimeInstanceKey<'db>,
 }
 
@@ -65,25 +66,27 @@ impl<'db> RuntimeInstance<'db> {
         runtime_declaration_signature(db, self.key(db))
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn exit_behavior(self, db: &'db dyn MirDb) -> RuntimeExitBehavior {
         runtime_exit_behavior(db, self.key(db))
     }
 
     #[salsa::tracked]
     pub fn body(self, db: &'db dyn MirDb) -> RuntimeBody<'db> {
-        expect_lowered_runtime_body(db, self).body(db)
+        expect_lowered_runtime_body(db, self).body(db).clone()
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn calls(self, db: &'db dyn MirDb) -> Vec<RuntimeCallEdge<'db>> {
         if self.is_external_declaration(db) {
             return Vec::new();
         }
-        expect_lowered_runtime_body(db, self).direct_callees(db)
+        expect_lowered_runtime_body(db, self)
+            .direct_callees(db)
+            .clone()
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn referenced_const_regions(
         self,
         db: &'db dyn MirDb,
@@ -91,10 +94,12 @@ impl<'db> RuntimeInstance<'db> {
         if self.is_external_declaration(db) {
             return Vec::new();
         }
-        expect_lowered_runtime_body(db, self).referenced_const_regions(db)
+        expect_lowered_runtime_body(db, self)
+            .referenced_const_regions(db)
+            .clone()
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn referenced_code_regions(
         self,
         db: &'db dyn MirDb,
@@ -102,19 +107,21 @@ impl<'db> RuntimeInstance<'db> {
         if self.is_external_declaration(db) {
             return Vec::new();
         }
-        expect_lowered_runtime_body(db, self).referenced_code_regions(db)
+        expect_lowered_runtime_body(db, self)
+            .referenced_code_regions(db)
+            .clone()
     }
 }
 
 impl<'db> RuntimeInstance<'db> {
     pub fn is_external_declaration(self, db: &'db dyn MirDb) -> bool {
         self.key(db).semantic(db).is_some_and(|semantic| {
-            matches!(semantic.key(db).owner(db), BodyOwner::Func(func) if func.is_extern(db))
+            matches!(semantic.key(db).owner(db), BodyOwner::Func(func, _) if func.is_extern(db))
         })
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn get_or_build_runtime_instance<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
@@ -122,7 +129,7 @@ pub fn get_or_build_runtime_instance<'db>(
     RuntimeInstance::new(db, key)
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn lower_runtime_body<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
@@ -137,6 +144,9 @@ fn lower_runtime_body<'db>(
                 )));
             }
             let mut body = lower_to_rmir(db, instance)?;
+            if semantic.is_projection(db) {
+                check_projection_result_spaces(db, semantic, body.signature.ret.as_ref())?;
+            }
             inline_projections(db, &mut body)?;
             body.elide_proven_variant_asserts();
             body

@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/shape_args.fe
+---
+error[2-0012]: invalid type argument kind for `Call`
+   ┌─ shape_args.fe:21:13
+   │
+21 │ fn wrong<T: Call<u256>>(_ t: T) {}
+   │             ^^^^ expected `shape` kind, but `u256` has `*` kind
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ shape_args.fe:16:5
+   │
+10 │ fn views<T: Call<(u256, bool)>>(_ t: T) {}
+   │             ------------------ required by this bound on `views`
+   ·
+16 │     views(S {})
+   │     ^^^^^ `S` doesn't implement `Call<(ref u256, ref bool)>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ shape_args.fe:17:5
+   │
+12 │ fn none<T: Call<()>>(_ t: T) {}
+   │            -------- required by this bound on `none`
+   ·
+17 │     none(S {})
+   │     ^^^^ `S` doesn't implement `Call<()>`

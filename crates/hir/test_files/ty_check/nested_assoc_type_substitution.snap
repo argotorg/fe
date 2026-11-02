@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/nested_assoc_type_substitution.fe
 ---
@@ -8,21 +8,27 @@ note:
    │
 44 │   fn extract_value<T: Level1>() -> T::Middle::Nested::Value {
    │ ╭───────────────────────────────────────────────────────────^
-45 │ │     todo()
+45 │ │     unsafe { todo() }
 46 │ │ }
    │ ╰─^ T::Middle::Nested::Value
 
 note:
    ┌─ nested_assoc_type_substitution.fe:45:5
    │
-45 │     todo()
-   │     ^^^^ fn todo
+45 │     unsafe { todo() }
+   │     ^^^^^^^^^^^^^^^^^ T::Middle::Nested::Value
 
 note:
-   ┌─ nested_assoc_type_substitution.fe:45:5
+   ┌─ nested_assoc_type_substitution.fe:45:14
    │
-45 │     todo()
-   │     ^^^^^^ T::Middle::Nested::Value
+45 │     unsafe { todo() }
+   │              ^^^^ fn todo
+
+note:
+   ┌─ nested_assoc_type_substitution.fe:45:14
+   │
+45 │     unsafe { todo() }
+   │              ^^^^^^ T::Middle::Nested::Value
 
 note:
    ┌─ nested_assoc_type_substitution.fe:49:29
@@ -78,21 +84,27 @@ note:
    │
 87 │       fn encode(self) -> Self::Encoder::Output {
    │ ╭──────────────────────────────────────────────^
-88 │ │    todo()
+88 │ │    unsafe { todo() }
 89 │ │     }
    │ ╰─────^ T
 
 note:
    ┌─ nested_assoc_type_substitution.fe:88:4
    │
-88 │    todo()
-   │    ^^^^ fn todo
+88 │    unsafe { todo() }
+   │    ^^^^^^^^^^^^^^^^^ T
 
 note:
-   ┌─ nested_assoc_type_substitution.fe:88:4
+   ┌─ nested_assoc_type_substitution.fe:88:13
    │
-88 │    todo()
-   │    ^^^^^^ T
+88 │    unsafe { todo() }
+   │             ^^^^ fn todo
+
+note:
+   ┌─ nested_assoc_type_substitution.fe:88:13
+   │
+88 │    unsafe { todo() }
+   │             ^^^^^^ T
 
 note:
    ┌─ nested_assoc_type_substitution.fe:93:59
@@ -218,40 +230,52 @@ note:
 117 │ ╭ {
 118 │ │     // Here we need T::Assoc to resolve to something that implements Level1
 119 │ │     // and then we use its nested associated type
-120 │ │     let _nested: T::Assoc::Middle::Nested::Value = todo()
-121 │ │     todo()
+120 │ │     let _nested: T::Assoc::Middle::Nested::Value = unsafe { todo() }
+121 │ │     unsafe { todo() }
 122 │ │ }
     │ ╰─^ T::Assoc
 
 note:
     ┌─ nested_assoc_type_substitution.fe:120:9
     │
-120 │     let _nested: T::Assoc::Middle::Nested::Value = todo()
+120 │     let _nested: T::Assoc::Middle::Nested::Value = unsafe { todo() }
     │         ^^^^^^^ T::Assoc::Middle::Nested::Value
 
 note:
     ┌─ nested_assoc_type_substitution.fe:120:52
     │
-120 │     let _nested: T::Assoc::Middle::Nested::Value = todo()
-    │                                                    ^^^^ fn todo
+120 │     let _nested: T::Assoc::Middle::Nested::Value = unsafe { todo() }
+    │                                                    ^^^^^^^^^^^^^^^^^ T::Assoc::Middle::Nested::Value
 
 note:
-    ┌─ nested_assoc_type_substitution.fe:120:52
+    ┌─ nested_assoc_type_substitution.fe:120:61
     │
-120 │     let _nested: T::Assoc::Middle::Nested::Value = todo()
-    │                                                    ^^^^^^ T::Assoc::Middle::Nested::Value
+120 │     let _nested: T::Assoc::Middle::Nested::Value = unsafe { todo() }
+    │                                                             ^^^^ fn todo
+
+note:
+    ┌─ nested_assoc_type_substitution.fe:120:61
+    │
+120 │     let _nested: T::Assoc::Middle::Nested::Value = unsafe { todo() }
+    │                                                             ^^^^^^ T::Assoc::Middle::Nested::Value
 
 note:
     ┌─ nested_assoc_type_substitution.fe:121:5
     │
-121 │     todo()
-    │     ^^^^ fn todo
+121 │     unsafe { todo() }
+    │     ^^^^^^^^^^^^^^^^^ T::Assoc
 
 note:
-    ┌─ nested_assoc_type_substitution.fe:121:5
+    ┌─ nested_assoc_type_substitution.fe:121:14
     │
-121 │     todo()
-    │     ^^^^^^ T::Assoc
+121 │     unsafe { todo() }
+    │              ^^^^ fn todo
+
+note:
+    ┌─ nested_assoc_type_substitution.fe:121:14
+    │
+121 │     unsafe { todo() }
+    │              ^^^^^^ T::Assoc
 
 note:
     ┌─ nested_assoc_type_substitution.fe:130:23

@@ -2,8 +2,8 @@
 // Compile-time evaluation still computes the body's value where a condition
 // or constant needs it, so those uses add no errors, and the program is
 // rejected at the call.
-const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
-const fn helper() -> usize { bounded<0>() as usize }
+const fn bounded<const N: usize>() -> usize where N > 0 { 42 }
+const fn helper() -> usize { bounded<0>() }
 const fn uses_helper<const N: usize>() -> u256 where helper() == 42 { 1 }
 const X: usize = helper()
 fn go() -> u256 { uses_helper<1>() }

@@ -25,7 +25,7 @@ pub contract C {
 
 #[test]
 fn generic_pair_fields_hold_distinct_maps() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
-    let user = Address { inner: 7 }
-    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Msg::Swap { user, amount: 5 }) == 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let user = Address::new(7)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Swap { user, amount: 5 }) == 0)
 }

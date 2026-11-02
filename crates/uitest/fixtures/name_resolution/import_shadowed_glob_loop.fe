@@ -1,0 +1,84 @@
+// While `k::w` resolves, `w` would name the glob-imported `g::w`. Its `X`
+// must not stay in the loop of `a` and `b` once `w` names `z`.
+mod a {
+    pub use super::b::*
+    pub use super::k::*
+}
+mod b {
+    pub use super::a::*
+}
+mod k {
+    use super::g::*
+    use super::y1::w3 as w
+    pub use w::X
+}
+mod g {
+    pub mod w {
+        pub struct X {}
+    }
+}
+mod y1 {
+    pub use super::y2::w2 as w3
+}
+mod y2 {
+    pub use super::z as w2
+}
+mod z {}
+fn f(x: a::X, y: b::X) {}
+
+// `t` names `h::t`, which has no `A`, so the cycle of `A` and `B` imports
+// nothing, not `g::t::A`.
+mod gg {
+    pub mod t {
+        pub mod A {
+            pub struct S {}
+        }
+    }
+}
+mod h {
+    pub mod t {}
+}
+mod t1 {
+    pub use super::t2::t as t3
+}
+mod t2 {
+    pub use super::h::t
+}
+fn g() {
+    use gg::*
+    use t1::t3 as t
+    use t::*
+    use B as A
+    use A as B
+    let x: A::S = 1
+}
+
+// `p::Y` is ambiguous once both globs bring it in, so `q::Y` doesn't import
+// either, and neither do `c` and `d`.
+mod c {
+    pub use super::d::*
+    pub use super::q::*
+}
+mod d {
+    pub use super::c::*
+}
+mod q {
+    pub use super::p::Y
+}
+mod p {
+    pub use super::p1::*
+    pub use super::p2::*
+}
+mod p1 {
+    pub struct Y {}
+}
+mod p2 {
+    pub use super::p3::*
+}
+mod p3 {
+    pub use super::p4::*
+}
+mod p4 {
+    pub struct Y {}
+}
+fn h(x: c::Y, y: d::Y) {}

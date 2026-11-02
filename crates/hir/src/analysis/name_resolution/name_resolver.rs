@@ -4,12 +4,11 @@ use crate::{
     core::{
         hir_def::{
             Enum, EnumVariant, GenericParam, GenericParamOwner, HirIngot, IdentId, ItemKind, Mod,
-            TopLevelMod, Trait, Use,
+            TopLevelMod, Trait, Use, Visibility,
             prim_ty::PrimTy,
             scope_graph::{
-                AnonEdge, EdgeKind, FieldEdge, GenericParamEdge, IngotEdge, LexEdge, ModEdge,
-                ScopeId, SelfEdge, SelfTyEdge, SuperEdge, TraitEdge, TraitTypeEdge, TypeEdge,
-                ValueEdge, VariantEdge,
+                EdgeKind, FieldEdge, GenericParamEdge, ModEdge, ScopeId, TraitEdge, TraitTypeEdge,
+                TypeEdge, ValueEdge, VariantEdge,
             },
         },
         span::DynLazySpan,
@@ -18,7 +17,7 @@ use crate::{
 };
 use bitflags::bitflags;
 use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::Update;
+use salsa::SalsaValue;
 use thin_vec::ThinVec;
 
 use super::{
@@ -31,9 +30,12 @@ use crate::analysis::HirAnalysisDb;
 #[derive(Debug)]
 pub struct EarlyNameQueryId<'db> {
     /// The name to be resolved.
+    #[returns(copy)]
     name: IdentId<'db>,
     /// The scope where the name is resolved.
+    #[returns(copy)]
     scope: ScopeId<'db>,
+    #[returns(copy)]
     directive: QueryDirective,
 }
 
@@ -48,10 +50,6 @@ pub struct QueryDirective {
     /// If `allow_external` is `true`, then the query will be propagated to the
     /// external ingot and builtin types as well.
     allow_external: bool,
-
-    /// If `allow_glob` is `true`, then the resolver uses the glob import to
-    /// resolve the name.
-    allow_glob: bool,
 
     /// If `allow_assoc_fn` is `false`, functions defined in an `impl`,
     /// `impl trait` or `trait` scope are not visible. This is the case for
@@ -75,7 +73,6 @@ impl QueryDirective {
         Self {
             allow_lex: true,
             allow_external: true,
-            allow_glob: true,
             allow_assoc_fn: true,
         }
     }
@@ -88,11 +85,6 @@ impl QueryDirective {
 
     pub(super) fn disallow_external(mut self) -> Self {
         self.allow_external = false;
-        self
-    }
-
-    pub(super) fn disallow_glob(mut self) -> Self {
-        self.allow_glob = false;
         self
     }
 
@@ -111,7 +103,7 @@ impl Default for QueryDirective {
 /// The struct contains the lookup result of a name query.
 /// The results can contain more than one name resolutions which belong to
 /// different name domains.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, SalsaValue)]
 pub struct NameResBucket<'db> {
     // Contains a maximum of 3 entries (one for each distinct NameDomain)
     pub(super) bucket: ThinVec<(NameDomain, NameResolutionResult<'db, NameRes<'db>>)>,
@@ -169,20 +161,14 @@ impl<'db> NameResBucket<'db> {
         res
     }
 
-    pub fn filter_by_domain(&mut self, domain: NameDomain) {
-        for domain in domain.iter() {
-            self.bucket.retain(|(d, _)| *d == domain);
-        }
-    }
-
-    pub(super) fn merge(&mut self, bucket: &NameResBucket<'db>) {
+    pub(super) fn merge(&mut self, db: &dyn HirAnalysisDb, bucket: &NameResBucket<'db>) {
         for (domain, err) in bucket.errors() {
             if let Err(NameResolutionError::NotFound) = self.pick(domain) {
                 self.bucket.push((domain, Err(err.clone())));
             }
         }
         for res in bucket.iter_ok() {
-            self.push(res);
+            self.push(db, res);
         }
     }
 
@@ -192,57 +178,58 @@ impl<'db> NameResBucket<'db> {
         }
     }
 
-    /// Push the `res` into the set.
-    fn push(&mut self, res: &NameRes<'db>) {
+    /// Pushes `res` into the bucket. In each of its domains, `res` shadows a
+    /// resolution of lower precedence, and is ambiguous with a resolution of a
+    /// different scope of the same precedence. Of two imports of the same
+    /// scope, the more visible one is kept.
+    fn push(&mut self, db: &dyn HirAnalysisDb, res: &NameRes<'db>) {
         for domain in res.domain.iter() {
-            let existing_idx = self.bucket.iter().position(|(d, _)| *d == domain);
-
-            let Some(idx) = existing_idx else {
+            let Some((_, existing)) = self.bucket.iter_mut().find(|(d, _)| *d == domain) else {
                 self.bucket.push((domain, Ok(res.clone())));
                 continue;
             };
-            let (_, existing_res) = &mut self.bucket[idx];
-            match existing_res {
-                Ok(old_res) => {
-                    let old_derivation = old_res.derivation.clone();
-                    match res.derivation.cmp(&old_derivation) {
+            match existing {
+                Ok(old) => match res.derivation.cmp_precedence(&old.derivation) {
+                    cmp::Ordering::Less => {}
+                    cmp::Ordering::Equal if old.kind == res.kind => {
+                        if res.import_vis_rank(db) > old.import_vis_rank(db) {
+                            *existing = Ok(res.clone())
+                        }
+                    }
+                    cmp::Ordering::Equal => {
+                        *existing = Err(NameResolutionError::Ambiguous(ThinVec::from([
+                            old.clone(),
+                            res.clone(),
+                        ])))
+                    }
+                    cmp::Ordering::Greater => *existing = Ok(res.clone()),
+                },
+                Err(NameResolutionError::Ambiguous(cands)) => {
+                    match res.derivation.cmp_precedence(&cands[0].derivation) {
                         cmp::Ordering::Less => {}
                         cmp::Ordering::Equal => {
-                            // Only mark as ambiguous if the two resolutions actually
-                            // refer to different underlying scopes/kinds (i.e. true
-                            // duplicates like two generic params with the same name
-                            // under the same owner). If they are identical (same
-                            // scope/kind), keep the existing resolution to avoid
-                            // spurious ambiguity.
-                            if old_res.kind != res.kind {
-                                *existing_res =
-                                    Err(NameResolutionError::Ambiguous(ThinVec::from([
-                                        old_res.clone(),
-                                        res.clone(),
-                                    ])));
+                            if cands.iter().all(|cand| cand.kind != res.kind) {
+                                cands.push(res.clone());
                             }
                         }
-                        cmp::Ordering::Greater => {
-                            *existing_res = Ok(res.clone());
-                        }
+                        cmp::Ordering::Greater => *existing = Ok(res.clone()),
                     }
                 }
-                Err(NameResolutionError::NotFound) => {
-                    *existing_res = Ok(res.clone());
-                }
-                Err(NameResolutionError::Ambiguous(ambiguous_set)) => {
-                    if ambiguous_set[0].derivation == res.derivation {
-                        ambiguous_set.push(res.clone());
-                    }
-                }
+                Err(NameResolutionError::NotFound) => *existing = Ok(res.clone()),
                 Err(_) => {}
             }
         }
     }
 
     fn set_lexed_derivation(&mut self) {
-        for res in self.iter_ok_mut() {
-            res.derivation.lexed()
+        for (_, res) in &mut self.bucket {
+            match res {
+                Ok(res) => res.derivation.lexed(),
+                Err(NameResolutionError::Ambiguous(cands)) => {
+                    cands.iter_mut().for_each(|cand| cand.derivation.lexed())
+                }
+                Err(_) => {}
+            }
         }
     }
 }
@@ -256,7 +243,7 @@ impl<'db> From<NameRes<'db>> for NameResBucket<'db> {
 }
 
 /// The struct contains the lookup result of a name query.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct NameRes<'db> {
     /// The kind of the resolution.
     pub kind: NameResKind<'db>,
@@ -270,28 +257,14 @@ pub struct NameRes<'db> {
 impl<'db> NameRes<'db> {
     /// Returns `true` if the name is visible from the given `scope`.
     pub fn is_visible(&self, db: &'db dyn HirAnalysisDb, from: ScopeId<'db>) -> bool {
-        match self.derivation {
-            NameDerivation::Def | NameDerivation::Prim | NameDerivation::External => {
-                match self.kind {
-                    NameResKind::Scope(scope) => is_scope_visible_from(db, scope, from),
-                    NameResKind::Prim(_) => true,
-                }
-            }
+        match self.derivation.origin() {
             NameDerivation::NamedImported(use_) | NameDerivation::GlobImported(use_) => {
-                is_use_visible(db, from, use_)
+                is_use_visible(db, from, *use_)
             }
-            NameDerivation::Lex(ref inner) => {
-                let mut inner = inner;
-                while let NameDerivation::Lex(parent) = inner.as_ref() {
-                    inner = parent;
-                }
-
-                Self {
-                    derivation: inner.as_ref().clone(),
-                    ..self.clone()
-                }
-                .is_visible(db, from)
-            }
+            _ => match self.kind {
+                NameResKind::Scope(scope) => is_scope_visible_from(db, scope, from),
+                NameResKind::Prim(_) => true,
+            },
         }
     }
 
@@ -360,23 +333,10 @@ impl<'db> NameRes<'db> {
     }
 
     pub(super) fn derived_from(&self, db: &'db dyn HirAnalysisDb) -> Option<DynLazySpan<'db>> {
-        match self.derivation {
-            NameDerivation::Def | NameDerivation::Prim | NameDerivation::External => {
-                self.kind.name_span(db)
-            }
+        match self.derivation.origin() {
             NameDerivation::NamedImported(use_) => use_.imported_name_span(db),
             NameDerivation::GlobImported(use_) => use_.glob_span(db),
-            NameDerivation::Lex(ref inner) => {
-                let mut inner = inner;
-                while let NameDerivation::Lex(parent) = inner.as_ref() {
-                    inner = parent;
-                }
-                Self {
-                    derivation: inner.as_ref().clone(),
-                    ..self.clone()
-                }
-                .derived_from(db)
-            }
+            _ => self.kind.name_span(db),
         }
     }
 
@@ -399,6 +359,17 @@ impl<'db> NameRes<'db> {
         }
     }
 
+    /// Returns how widely the use that the name is imported through is
+    /// visible, from private up to `pub`.
+    fn import_vis_rank(&self, db: &dyn HirAnalysisDb) -> Option<u8> {
+        self.derivation.use_stmt().map(|use_| match use_.vis(db) {
+            Visibility::Private => 0,
+            Visibility::PubSuper => 1,
+            Visibility::PubIngot => 2,
+            Visibility::Public => 3,
+        })
+    }
+
     pub(super) fn is_importable(&self) -> bool {
         matches!(self.domain, NameDomain::TYPE | NameDomain::VALUE)
     }
@@ -412,7 +383,9 @@ impl<'db> NameRes<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, derive_more::From, Update)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub enum NameResKind<'db> {
     /// The name is resolved to a scope.
     Scope(ScopeId<'db>),
@@ -439,7 +412,7 @@ impl<'db> NameResKind<'db> {
 /// The name derivation indicates where a name resolution comes from.
 /// Name derivation is used to track the origin of a resolution, and to
 /// determine the shadowing rules.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum NameDerivation<'db> {
     /// Derived from a definition in the current scope.
     Def,
@@ -455,55 +428,44 @@ pub enum NameDerivation<'db> {
     Prim,
 }
 
-impl NameDerivation<'_> {
+impl<'db> NameDerivation<'db> {
     fn lexed(&mut self) {
         let inner = mem::replace(self, NameDerivation::Def);
         *self = NameDerivation::Lex(Box::new(inner));
     }
 
-    pub fn use_stmt(&self) -> Option<Use<'_>> {
+    /// Returns the derivation in the scope that the name is found in, looking
+    /// through lexical parents.
+    pub fn origin(&self) -> &Self {
         match self {
-            NameDerivation::NamedImported(u) | NameDerivation::GlobImported(u) => Some(*u),
-            NameDerivation::Lex(deriv) => deriv.use_stmt(),
+            NameDerivation::Lex(inner) => inner.origin(),
+            _ => self,
+        }
+    }
+
+    pub fn use_stmt(&self) -> Option<Use<'db>> {
+        match self.origin() {
+            NameDerivation::NamedImported(use_) | NameDerivation::GlobImported(use_) => Some(*use_),
             _ => None,
         }
     }
-}
 
-impl PartialOrd for NameDerivation<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for NameDerivation<'_> {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
+    /// Compares which of two derivations of a name shadows the other: in a
+    /// scope, a definition shadows a named import, which shadows a glob
+    /// import, and those shadow the names of lexical parents, external ingots
+    /// and builtin types, in that order.
+    pub(super) fn cmp_precedence(&self, other: &Self) -> cmp::Ordering {
+        let rank = |derivation: &Self| match derivation {
+            NameDerivation::Prim => 0,
+            NameDerivation::External => 1,
+            NameDerivation::Lex(_) => 2,
+            NameDerivation::GlobImported(_) => 3,
+            NameDerivation::NamedImported(_) => 4,
+            NameDerivation::Def => 5,
+        };
         match (self, other) {
-            (NameDerivation::Def, NameDerivation::Def) => cmp::Ordering::Equal,
-            (NameDerivation::Def, _) => cmp::Ordering::Greater,
-            (_, NameDerivation::Def) => cmp::Ordering::Less,
-
-            (NameDerivation::NamedImported(_), NameDerivation::NamedImported(_)) => {
-                cmp::Ordering::Equal
-            }
-            (NameDerivation::NamedImported(_), _) => cmp::Ordering::Greater,
-            (_, NameDerivation::NamedImported(_)) => cmp::Ordering::Less,
-
-            (NameDerivation::GlobImported(_), NameDerivation::GlobImported(_)) => {
-                cmp::Ordering::Equal
-            }
-            (NameDerivation::GlobImported(_), _) => cmp::Ordering::Greater,
-            (_, NameDerivation::GlobImported(_)) => cmp::Ordering::Less,
-
-            (NameDerivation::Lex(lhs), NameDerivation::Lex(rhs)) => lhs.cmp(rhs),
-            (NameDerivation::Lex(_), _) => cmp::Ordering::Greater,
-            (_, NameDerivation::Lex(_)) => cmp::Ordering::Less,
-
-            (NameDerivation::External, NameDerivation::External) => cmp::Ordering::Equal,
-            (NameDerivation::External, _) => cmp::Ordering::Greater,
-            (_, NameDerivation::External) => cmp::Ordering::Less,
-
-            (NameDerivation::Prim, NameDerivation::Prim) => cmp::Ordering::Equal,
+            (NameDerivation::Lex(lhs), NameDerivation::Lex(rhs)) => lhs.cmp_precedence(rhs),
+            _ => rank(self).cmp(&rank(other)),
         }
     }
 }
@@ -530,8 +492,7 @@ impl<'db, 'a> NameResolver<'db, 'a> {
         // 1. Look for the name in the current scope.
         let mut found_scopes = FxHashSet::default();
         let scope = query.scope(self.db);
-        let top_mod = scope.top_mod(self.db);
-        let s_graph = top_mod.scope_graph(self.db);
+        let s_graph = scope.scope_graph(self.db);
 
         {
             // Edges only need the query's name and whether lexical scopes apply.
@@ -546,7 +507,7 @@ impl<'db, 'a> NameResolver<'db, 'a> {
                                 NameDomain::from_scope(self.db, edge.dest),
                                 NameDerivation::Def,
                             );
-                            bucket.push(&res);
+                            bucket.push(self.db, &res);
                         }
                     }
 
@@ -577,15 +538,13 @@ impl<'db, 'a> NameResolver<'db, 'a> {
             .named_imports(self.db, query.scope(self.db))
             .and_then(|imports| imports.get(&query.name(self.db)))
         {
-            bucket.merge(imported);
+            bucket.merge(self.db, imported);
         }
 
         // 3. Look for the name in the glob imports.
-        if query.directive(self.db).allow_glob
-            && let Some(imported) = self.importer.glob_imports(self.db, query.scope(self.db))
-        {
+        if let Some(imported) = self.importer.glob_imports(self.db, query.scope(self.db)) {
             for res in imported.name_res_for(query.name(self.db)) {
-                bucket.push(res);
+                bucket.push(self.db, res);
             }
         }
 
@@ -600,7 +559,7 @@ impl<'db, 'a> NameResolver<'db, 'a> {
 
             let mut resolved = self.resolve_query(query_for_parent);
             resolved.set_lexed_derivation();
-            bucket.merge(&resolved);
+            bucket.merge(self.db, &resolved);
         }
 
         if !query.directive(self.db).allow_external {
@@ -618,11 +577,14 @@ impl<'db, 'a> NameResolver<'db, 'a> {
                 if *name == query.name(self.db) {
                     // We don't care about the result of `push` because we assume ingots are
                     // guaranteed to be unique.
-                    bucket.push(&NameRes::new_from_scope(
-                        ScopeId::from_item((ingot.root_mod(self.db)).into()),
-                        NameDomain::TYPE,
-                        NameDerivation::External,
-                    ))
+                    bucket.push(
+                        self.db,
+                        &NameRes::new_from_scope(
+                            ScopeId::from_item((ingot.root_mod(self.db)).into()),
+                            NameDomain::TYPE,
+                            NameDerivation::External,
+                        ),
+                    )
                 }
             });
 
@@ -630,7 +592,7 @@ impl<'db, 'a> NameResolver<'db, 'a> {
         if let Some(prim) = PrimTy::from_name(self.db, query.name(self.db)) {
             // We don't care about the result of `push` because we assume builtin types are
             // guaranteed to be unique.
-            bucket.push(&NameRes::new_prim(prim));
+            bucket.push(self.db, &NameRes::new_prim(prim));
         }
 
         bucket
@@ -648,11 +610,8 @@ impl<'db, 'a> NameResolver<'db, 'a> {
     /// for this is
     /// - Ambiguous error should be reported lazily, meaning it should be
     ///   reported when the resolution is actually used.
-    /// - The function is used for glob imports, so it's necessary to return
-    ///   monotonously increasing results. Also, we can't arbitrarily choose the
-    ///   possible resolution from multiple candidates to avoid hiding
-    ///   ambiguity. That's also the reason why we can't use [`ResBucket`] and
-    ///   [`ResBucket::merge`] in this function.
+    /// - We can't arbitrarily choose one of several candidates without hiding
+    ///   the ambiguity, which is why [`NameResBucket::merge`] isn't used here.
     ///
     /// The below examples demonstrates the second point.
     /// We need to report ambiguous error at `const C: S = S` because `S` is
@@ -679,19 +638,16 @@ impl<'db, 'a> NameResolver<'db, 'a> {
         &mut self,
         target: ScopeId<'db>,
         use_scope: ScopeId<'db>,
-        unresolved_named_imports: FxHashSet<IdentId<'db>>,
     ) -> FxHashMap<IdentId<'db>, Vec<NameRes<'db>>> {
         let mut res_collection: FxHashMap<IdentId, Vec<NameRes>> = FxHashMap::default();
         let mut found_domains: FxHashMap<IdentId, NameDomain> = FxHashMap::default();
         let mut found_kinds: FxHashSet<(IdentId, NameResKind)> = FxHashSet::default();
 
         for edge in target.edges(self.db) {
-            let scope = match edge.kind.propagate_glob() {
-                PropagationResult::Terminated => edge.dest,
-                _ => {
-                    continue;
-                }
-            };
+            if !edge.kind.is_glob_imported() {
+                continue;
+            }
+            let scope = edge.dest;
 
             let name = scope.name(self.db).unwrap();
             if !found_kinds.insert((name, scope.into())) {
@@ -731,14 +687,7 @@ impl<'db, 'a> NameResolver<'db, 'a> {
 
         if let Some(glob_imports) = self.importer.glob_imports(self.db, target) {
             for (_, resolutions) in glob_imports.iter() {
-                // if !is_use_visible(self.db, ref_scope, use_) {
-                //     continue;
-                // }
                 for (&name, res_for_name) in resolutions.iter() {
-                    if unresolved_named_imports.contains(&name) {
-                        continue;
-                    }
-
                     for res in res_for_name
                         .iter()
                         .filter(|res| res.is_visible(self.db, use_scope))
@@ -763,7 +712,7 @@ impl<'db, 'a> NameResolver<'db, 'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum NameResolutionError<'db> {
     /// The name is not found.
     NotFound,
@@ -806,7 +755,7 @@ impl fmt::Display for NameResolutionError<'_> {
 impl std::error::Error for NameResolutionError<'_> {}
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
     /// Each resolved name is associated with a domain that indicates which domain
     /// the name belongs to.
     /// The multiple same names can be introduced in a same scope as long as they
@@ -860,17 +809,6 @@ impl Default for NameDomain {
     }
 }
 
-/// The propagator controls how the name query is propagated to the next scope.
-trait QueryPropagator<'db> {
-    fn propagate(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        allow_lex: bool,
-    ) -> PropagationResult;
-    fn propagate_glob(self) -> PropagationResult;
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum PropagationResult {
     /// The query is resolved to the next scope(edge's destination).
@@ -882,309 +820,48 @@ enum PropagationResult {
     UnPropagated,
 }
 
-impl<'db> QueryPropagator<'db> for LexEdge {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        _name: IdentId<'db>,
-        allow_lex: bool,
-    ) -> PropagationResult {
-        if allow_lex {
-            PropagationResult::Continuation
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for ModEdge<'db> {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if self.0 == name {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::Terminated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for TypeEdge<'db> {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if self.0 == name {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::Terminated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for TraitEdge<'db> {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if self.0 == name {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::Terminated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for TraitTypeEdge<'db> {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if self.0 == name {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::Terminated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for ValueEdge<'db> {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if self.0 == name {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::Terminated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for GenericParamEdge<'db> {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if self.0 == name {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for FieldEdge<'db> {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if self.0 == name {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for VariantEdge<'db> {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if self.0 == name {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::Terminated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for SuperEdge {
-    fn propagate(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if name.is_super(db) {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for IngotEdge {
-    fn propagate(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if name.is_ingot(db) {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for SelfTyEdge {
-    fn propagate(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if name.is_self_ty(db) {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for SelfEdge {
-    fn propagate(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        if name.is_self(db) {
-            PropagationResult::Terminated
-        } else {
-            PropagationResult::UnPropagated
-        }
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for AnonEdge {
-    fn propagate(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        _name: IdentId<'db>,
-        _allow_lex: bool,
-    ) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-
-    fn propagate_glob(self) -> PropagationResult {
-        PropagationResult::UnPropagated
-    }
-}
-
-impl<'db> QueryPropagator<'db> for EdgeKind<'db> {
+impl<'db> EdgeKind<'db> {
+    /// Returns how a query for `name` propagates along an edge of this kind.
     fn propagate(
         self,
         db: &'db dyn HirAnalysisDb,
         name: IdentId<'db>,
         allow_lex: bool,
     ) -> PropagationResult {
-        match self {
-            EdgeKind::Lex(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Mod(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Type(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Trait(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::TraitType(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::GenericParam(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Value(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Field(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Variant(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Super(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Ingot(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Self_(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::SelfTy(edge) => edge.propagate(db, name, allow_lex),
-            EdgeKind::Anon(edge) => edge.propagate(db, name, allow_lex),
+        let terminated = match self {
+            EdgeKind::Lex(_) if allow_lex => return PropagationResult::Continuation,
+            EdgeKind::Mod(ModEdge(ident))
+            | EdgeKind::Type(TypeEdge(ident))
+            | EdgeKind::Trait(TraitEdge(ident))
+            | EdgeKind::TraitType(TraitTypeEdge(ident))
+            | EdgeKind::GenericParam(GenericParamEdge(ident))
+            | EdgeKind::Value(ValueEdge(ident))
+            | EdgeKind::Field(FieldEdge(ident))
+            | EdgeKind::Variant(VariantEdge(ident)) => ident == name,
+            EdgeKind::Super(_) => name.is_super(db),
+            EdgeKind::Ingot(_) => name.is_ingot(db),
+            EdgeKind::Self_(_) => name.is_self(db),
+            EdgeKind::SelfTy(_) => name.is_self_ty(db),
+            EdgeKind::Lex(_) | EdgeKind::Anon(_) => false,
+        };
+        if terminated {
+            PropagationResult::Terminated
+        } else {
+            PropagationResult::UnPropagated
         }
     }
 
-    fn propagate_glob(self) -> PropagationResult {
-        match self {
-            EdgeKind::Lex(edge) => edge.propagate_glob(),
-            EdgeKind::Mod(edge) => edge.propagate_glob(),
-            EdgeKind::Type(edge) => edge.propagate_glob(),
-            EdgeKind::Trait(edge) => edge.propagate_glob(),
-            EdgeKind::TraitType(edge) => edge.propagate_glob(),
-            EdgeKind::GenericParam(edge) => edge.propagate_glob(),
-            EdgeKind::Value(edge) => edge.propagate_glob(),
-            EdgeKind::Field(edge) => edge.propagate_glob(),
-            EdgeKind::Variant(edge) => edge.propagate_glob(),
-            EdgeKind::Super(edge) => edge.propagate_glob(),
-            EdgeKind::Ingot(edge) => edge.propagate_glob(),
-            EdgeKind::Self_(edge) => edge.propagate_glob(),
-            EdgeKind::SelfTy(edge) => edge.propagate_glob(),
-            EdgeKind::Anon(edge) => edge.propagate_glob(),
-        }
+    /// Returns `true` if a glob import of a scope imports the destinations of
+    /// its edges of this kind.
+    fn is_glob_imported(self) -> bool {
+        matches!(
+            self,
+            EdgeKind::Mod(_)
+                | EdgeKind::Type(_)
+                | EdgeKind::Trait(_)
+                | EdgeKind::TraitType(_)
+                | EdgeKind::Value(_)
+                | EdgeKind::Variant(_)
+        )
     }
 }

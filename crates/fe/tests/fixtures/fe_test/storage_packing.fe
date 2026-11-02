@@ -147,54 +147,54 @@ pub contract Layouts {
 
 #[test]
 fn test_layout_matches_solidity() uses (evm: mut Evm) {
-    let c = evm.create2<Layouts>(value: 0, args: (), salt: 1)
-    assert(c.inner != 0)
-    evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Fill {})
+    let c = evm.create2<Layouts>(value: Wei::zero(), args: (), salt: 1)
+    assert(c.word() != 0)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Fill {})
 
     // Small: a and b share slot 0, c takes slot 1.
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 0 }) == 0x2211)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 1 }) == 0x33)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 0 }) == 0x2211)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 1 }) == 0x33)
 
     // Mixed: flag, b, c and d share slot 2; e and f share slot 3. The int8
     // -2 is stored as its byte 0xfe, not sign-extended.
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfe << 24) | (0x4455 << 8) | 0x01)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 3 }) == (0x88 << 128) | 0x77)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfe << 24) | (0x4455 << 8) | 0x01)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 3 }) == (0x88 << 128) | 0x77)
 
     // Nested: the inner struct starts a new slot, and so does the field after it.
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 4 }) == 0x01)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 5 }) == (0x0304 << 8) | 0x02)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 6 }) == 0x05)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 4 }) == 0x01)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 5 }) == (0x0304 << 8) | 0x02)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 6 }) == 0x05)
 
     // Overflow: c does not fit beside a and b and starts slot 8.
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 7 }) == (0xbb << 128) | 0xaa)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 8 }) == 0xcc)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 7 }) == (0xbb << 128) | 0xaa)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 8 }) == 0xcc)
 
     // Signed: two's-complement bytes of -1 (int8), -300 (int16), -5 (int128).
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0xfed4 << 8) | 0xff)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 10 }) == 0)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0xfed4 << 8) | 0xff)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 10 }) == 0)
 }
 
 #[test]
 fn test_packed_fields_read_and_write() uses (evm: mut Evm) {
-    let c = evm.create2<Layouts>(value: 0, args: (), salt: 2)
-    assert(c.inner != 0)
-    evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Fill {})
+    let c = evm.create2<Layouts>(value: Wei::zero(), args: (), salt: 2)
+    assert(c.word() != 0)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Fill {})
 
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::MixedC {}) == -2)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::MixedFlag {}))
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::SignedSum {}) == -306)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::NestedSum {}) == 0x01 + 0x02 + 0x0304 + 0x05)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::MixedC {}) == -2)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::MixedFlag {}))
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::SignedSum {}) == -306)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::NestedSum {}) == 0x01 + 0x02 + 0x0304 + 0x05)
 
-    evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Update {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 0 }) == 0x9911)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfd << 24) | (0x4456 << 8))
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::MixedC {}) == -3)
-    assert(!evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::MixedFlag {}))
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0x0007 << 8) | 0xff)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Update {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 0 }) == 0x9911)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfd << 24) | (0x4456 << 8))
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::MixedC {}) == -3)
+    assert(!evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::MixedFlag {}))
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0x0007 << 8) | 0xff)
 
-    evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Forward {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfd << 24) | (0x4457 << 8))
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0x0003 << 8) | 0xff)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Forward {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfd << 24) | (0x4457 << 8))
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0x0003 << 8) | 0xff)
 }
 
 // ---------------------------------------------------------------------------
@@ -294,27 +294,27 @@ fn set_small_b() uses (value: mut Small) {
 
 #[test]
 fn test_map_entries_arrays_and_transient() uses (evm: mut Evm) {
-    let c = evm.create2<Collections>(value: 0, args: (), salt: 3)
-    assert(c.inner != 0)
+    let c = evm.create2<Collections>(value: Wei::zero(), args: (), salt: 3)
+    assert(c.word() != 0)
 
     // A map entry packs from its hashed slot like a Solidity mapping value.
-    evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Open { key: 9 })
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::EntryWord { key: 9, index: 0 }) == (0x1234 << 32) | (0x01 << 24) | (0x0003 << 8) | 0x0f)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::EntryWord { key: 9, index: 1 }) == 0x5678)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::EntryWord { key: 9, index: 2 }) == 0)
-    evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Raise { key: 9, by: 2 })
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Leverage { key: 9 }) == 5)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::EntryWord { key: 9, index: 0 }) == (0x1234 << 32) | (0x01 << 24) | (0x0005 << 8) | 0x0f)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::Open { key: 9 })
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::EntryWord { key: 9, index: 0 }) == (0x1234 << 32) | (0x01 << 24) | (0x0003 << 8) | 0x0f)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::EntryWord { key: 9, index: 1 }) == 0x5678)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::EntryWord { key: 9, index: 2 }) == 0)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::Raise { key: 9, by: 2 })
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::Leverage { key: 9 }) == 5)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::EntryWord { key: 9, index: 0 }) == (0x1234 << 32) | (0x01 << 24) | (0x0005 << 8) | 0x0f)
 
     // Array elements are whole packed structs: two slots each.
-    evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::FillPairs {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Slot { slot: 0 }) == 0x0201)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Slot { slot: 1 }) == 3)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Slot { slot: 2 }) == 0x0507)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Slot { slot: 3 }) == 6)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::FillPairs {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::Slot { slot: 0 }) == 0x0201)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::Slot { slot: 1 }) == 3)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::Slot { slot: 2 }) == 0x0507)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::Slot { slot: 3 }) == 6)
 
     // Transient storage packs the same way.
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Transient {}) == 0x4411)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: CollectionMsg::Transient {}) == 0x4411)
 }
 
 // ---------------------------------------------------------------------------
@@ -422,35 +422,35 @@ pub contract Edges {
 
 #[test]
 fn test_zero_sized_field_keeps_packed_word() uses (evm: mut Evm) {
-    let c = evm.create2<Edges>(value: 0, args: (), salt: 4)
-    assert(c.inner != 0)
-    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::WriteGap {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 0 }) == 0x2211)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::GapSum {}) == 0x33)
+    let c = evm.create2<Edges>(value: Wei::zero(), args: (), salt: 4)
+    assert(c.word() != 0)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::WriteGap {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 0 }) == 0x2211)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::GapSum {}) == 0x33)
 }
 
 #[test]
 fn test_lone_signed_field_keeps_its_byte() uses (evm: mut Evm) {
-    let c = evm.create2<Edges>(value: 0, args: (), salt: 5)
-    assert(c.inner != 0)
+    let c = evm.create2<Edges>(value: Wei::zero(), args: (), salt: 5)
+    assert(c.word() != 0)
     // Direct, forwarded and `mut self` writes all store -1 as 0xff.
-    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::LoneDirect {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 1 }) == 0xff)
-    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::LoneSelf {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 1 }) == 0xff)
-    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::LoneForward {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 1 }) == 0xff)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::LoneDirect {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 1 }) == 0xff)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::LoneSelf {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 1 }) == 0xff)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::LoneForward {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 1 }) == 0xff)
 }
 
 #[test]
 fn test_narrow_signed_contract_field_keeps_its_bytes() uses (evm: mut Evm) {
-    let c = evm.create2<Edges>(value: 0, args: (), salt: 6)
-    assert(c.inner != 0)
+    let c = evm.create2<Edges>(value: Wei::zero(), args: (), salt: 6)
+    assert(c.word() != 0)
     // A narrow signed contract field outside any struct is stored as its
     // own bytes too, not sign-extended to the whole slot.
-    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::AssignScalar {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 2 }) == 0xfffe)
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Scalar {}) == -2)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::AssignScalar {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 2 }) == 0xfffe)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Scalar {}) == -2)
 }
 
 #[test]
@@ -467,12 +467,12 @@ fn test_native_memory_narrow_field_projection() {
 
 #[test]
 fn test_storage_native_field_projection() uses (evm: mut Evm) {
-    let c = evm.create2<Edges>(value: 0, args: (), salt: 7)
-    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::WriteGap {})
-    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::GapNative {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 0 }) == 0x4411)
-    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::LoneNative {})
-    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 1 }) == 0xff)
+    let c = evm.create2<Edges>(value: Wei::zero(), args: (), salt: 7)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::WriteGap {})
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::GapNative {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 0 }) == 0x4411)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::LoneNative {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 1 }) == 0xff)
 }
 
 struct NativeLanes { a: u8, b: i16, c: bool }

@@ -1,15 +1,15 @@
 // A pinned type takes a whole slot of its own even without fields: its
 // number identifies its region, so sibling collections need distinct ones,
 // as Solidity reserves a mapping's slot. A plain zero-sized type takes none.
-use core::marker::Pinned
+use core::marker::{Pinned, Storage}
 use core::ops::{Location, StateIndex}
-use std::evm::{Address, Evm, RawStorage, SolSlot, keccak_words, storage_at_mut}
+use std::evm::{Address, Evm, RawStorage, SolSlot, keccak_words, storage_at}
 
 /// Words hashed with the map's number, like Solady's `LibMap`.
 struct Words {}
 
 impl Pinned for Words {
-    space S = storage
+    type Space = Storage
 }
 
 unsafe impl StateIndex for Words {
@@ -25,7 +25,7 @@ impl Words {
     /// The words rooted at `slot`.
     #[raw_place]
     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
-        unsafe { storage_at_mut(slot) }
+        unsafe { storage_at(slot) }
     }
 }
 
@@ -87,10 +87,10 @@ pub contract C uses (storage: mut RawStorage) {
 
 #[test]
 fn pinned_types_take_their_own_slots() uses (evm: mut Evm) {
-    let c: Address = evm.create2<C>(value: 0, args: (), salt: 0)
-    evm.call(addr: c, gas: 300000, value: 0, message: M::Write {})
+    let c: Address = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Write {})
     let slots: (u256, u256, u256, u256, u256, u256) =
-        evm.call(addr: c, gas: 300000, value: 0, message: M::Read {})
+        evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Read {})
     // `first` at 0; `marker` takes no slot, so `a` is at 1 and `b` at 2, and
     // their own slots are never written.
     assert!(slots.0 == 1)
@@ -101,7 +101,7 @@ fn pinned_types_take_their_own_slots() uses (evm: mut Evm) {
     assert!(slots.4 == 7)
     assert!(slots.5 == 9)
     let entries: (u256, u256, u256, u256) =
-        evm.call(addr: c, gas: 300000, value: 0, message: M::Entries {})
+        evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Entries {})
     assert!(entries.0 == 5)
     assert!(entries.1 == 6)
     assert!(entries.2 == 8)

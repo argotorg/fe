@@ -1,0 +1,13 @@
+use core::ptr::{self, MemSpan}
+use std::evm::revert_bytes
+use std::native::Args
+
+// Reverts with as many bytes as its argument count, byte i holding i.
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    let len = unsafe { Args::new(argc, argv) }.len() - 1
+    let data = ptr::alloc_bytes(len)
+    for i in 0..len {
+        unsafe { *ptr::offset_bytes(data, i) = i.downcast_unchecked() }
+    }
+    revert_bytes(unsafe { MemSpan::from_raw_parts(ptr: data, len) })
+}

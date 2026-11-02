@@ -1,6 +1,6 @@
 [package]
 name = "fe-driver"
-version = "26.4.0"
+version = "26.5.0"
 edition.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/argotorg/fe"
@@ -26,6 +26,5 @@ petgraph.workspace = true
 glob.workspace = true
 
 [dev-dependencies]
-dir-test.workspace = true
 tempfile = "3.13"
 test-utils.workspace = true

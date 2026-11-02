@@ -1,0 +1,7 @@
+fn sum(_ (a, b): (u256, u256)) -> u256 {}
+fn take(x: u256, _ (var a, ref b): own (u256, Buf)) {}
+fn norm(_ Point { x, y }: Point, _ Wrap(inner): Wrap) {}
+fn nested(_ ((a, b), _): ((u256, u256), u256)) {}
+fn generic(_ Wrapper<u256> { x }: Wrapper<u256>, _ Self { y }: Self) {}
+fn paths(_ self::Point { x }: Point, _ ingot::Point { y }: Point, _ super::Wrap(z): super::Wrap) {}
+fn qualified<T: Shaped>(_ <T as Shaped>::Out { x }: <T as Shaped>::Out, _ <T as Shaped>::Pair(a, b): <T as Shaped>::Pair) {}

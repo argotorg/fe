@@ -33,6 +33,8 @@ impl<'db> Pat<'db> {
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, path_ast.path());
                 let marker = if path_ast.mut_token().is_some() {
                     BindingMarker::Mut
+                } else if path_ast.maybe_mut_token().is_some() {
+                    BindingMarker::MaybeMut
                 } else if path_ast.ref_token().is_some() {
                     BindingMarker::Ref
                 } else if path_ast.var_token().is_some() {

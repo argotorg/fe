@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+invocation_extent_consumer v0.1.0
+└── invocation_extent_provider v0.1.0
+
+=== EXIT CODE: 0 ===

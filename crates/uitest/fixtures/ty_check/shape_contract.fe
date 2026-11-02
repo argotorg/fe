@@ -1,0 +1,140 @@
+// An impl's shape grants at most the mode it is named at, and a shape a
+// trait method returns has an access.
+trait Holds {
+    shape Part
+}
+
+struct Writes {}
+
+// `mut` where it is named at `ref`: write `mut?`.
+impl Holds for Writes {
+    shape Part = mut u256
+}
+
+struct Wrap<D> {}
+
+impl<D: Holds> Holds for Wrap<D> {
+    shape Part = (own usize, D::Part<mut>)
+}
+
+struct Of<shape A> {}
+
+// A shape parameter's accesses may be `mut` at any mode.
+impl<shape A> Holds for Of<A> {
+    shape Part = A
+}
+
+// Accepted: accesses at the mode, and an inherited shape.
+struct Reads {}
+
+impl Holds for Reads {
+    shape Part = (ref u256, mut? u256)
+}
+
+struct Nest<D> {}
+
+impl<D: Holds> Holds for Nest<D> {
+    shape Part = (own usize, D::Part)
+}
+
+trait Driver {
+    shape Step
+
+    fn peek(self) -> Self::Step<ref>
+}
+
+struct Owned {
+    x: u256,
+}
+
+// `peek` is a projection in every impl, so its shape has an access.
+impl Driver for Owned {
+    shape Step = own u256
+
+    fn peek(self) -> own u256 {
+        self.x
+    }
+}
+
+// A trait's default keeps the contract an impl's shape does.
+trait Defaulted {
+    shape Step = mut u256
+
+    fn peek(mut self) -> Self::Step<ref>
+}
+
+// `Holds::Part` may be owned in an impl: nothing returns it as a
+// projection. So it gives `Step` no access every impl has.
+struct Around<H> {}
+
+impl<H: Holds> Driver for Around<H> {
+    shape Step = H::Part
+
+    fn peek(self) -> H::Part<ref> {
+        todo()
+    }
+}
+
+// A super-trait's shape a method returns has an access in every impl of
+// the method's trait, which is checked there.
+trait Viewed: Holds {
+    fn view(self) -> Self::Part<ref>
+}
+
+struct Cell {
+    x: u256,
+}
+
+impl Holds for Cell {
+    shape Part = own u256
+}
+
+impl Viewed for Cell {
+    fn view(self) -> own u256 {
+        self.x
+    }
+}
+
+// Accepted: `Reads` gives `Part` an access.
+impl Viewed for Reads {
+    fn view(self) -> (ref u256, ref u256) {
+        todo()
+    }
+}
+
+// Accepted: `D: Viewed` gives `D::Part` an access, here and in a shape
+// that names it.
+struct Fwd<D> {}
+
+impl<D: Viewed> Holds for Fwd<D> {
+    shape Part = D::Part
+}
+
+impl<D: Viewed> Viewed for Fwd<D> {
+    fn view(self) -> D::Part<ref> {
+        todo()
+    }
+}
+
+struct Seen<H> {}
+
+impl<H: Viewed> Driver for Seen<H> {
+    shape Step = H::Part
+
+    fn peek(self) -> H::Part<ref> {
+        todo()
+    }
+}
+
+// Any `Holds` impl may give `Part` no access.
+struct Any<D> {}
+
+impl<D: Holds> Holds for Any<D> {
+    shape Part = D::Part
+}
+
+impl<D: Holds> Viewed for Any<D> {
+    fn view(self) -> D::Part<ref> {
+        todo()
+    }
+}

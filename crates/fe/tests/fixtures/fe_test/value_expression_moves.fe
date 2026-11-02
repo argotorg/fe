@@ -1,8 +1,6 @@
 // A value expression takes the value it evaluates to: a join, a wrapped
 // scrutinee, a temporary receiver or argument owns what it moved, and writes
 // through it reach that owner alone.
-use core::functional::FnMut_v
-use core::iter::map
 use core::option::Option
 use core::ptr::MemBuffer
 
@@ -21,7 +19,7 @@ struct Count {
     n: u256,
 }
 
-impl FnMut_v<u256> for Count {
+impl FnMut(u256) -> _ for Count {
     uses E = ()
     type Out = u256
     fn call_mut(mut self, _ x: u256) -> u256 {
@@ -69,9 +67,9 @@ fn temporary_receiver_and_argument() {
 #[test]
 fn producer_moves_into_its_loop() {
     let xs: [u256; 3] = [1, 2, 3]
-    let m = map(Count { n: 0 })
+    let m = xs.map(Count { n: 0 })
     var s: u256 = 0
-    for y in xs by m {
+    for y in xs.by(m) {
         s += y
     }
     assert(s == 10 + 1 + 20 + 2 + 30 + 3)

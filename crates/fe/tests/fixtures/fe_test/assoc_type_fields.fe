@@ -56,7 +56,7 @@ pub contract C {
 
 #[test]
 fn in_storage() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    let r: u256 = evm.call(addr: c, gas: 300000, value: 0, message: M::Run {})
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
     assert(r == 9)
 }

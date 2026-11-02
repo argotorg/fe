@@ -1,0 +1,36 @@
+use core::panics::PANIC_INDEX_OUT_OF_BOUNDS
+use std::io::{Write, write_char}
+use std::native::Args
+
+// Prints "A", then panics in the way its argument count selects.
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    with (Write = std::io::host()) {
+        write_char(65)
+        write_char(10)
+    }
+    let kind = unsafe { Args::new(argc, argv) }.len() - 1
+    if kind == 1 {
+        core::panic()
+    }
+    if kind == 2 {
+        core::panic_code(PANIC_INDEX_OUT_OF_BOUNDS)
+    }
+    if kind == 3 {
+        let byte: u8 = 255
+        let _ = byte + kind.downcast_unchecked()
+    }
+    if kind == 4 {
+        assert!(false, "custom message")
+    }
+    if kind == 5 {
+        core::panic_code(0x77)
+    }
+    if kind == 6 {
+        let _ = kind / (kind - 6)
+    }
+    if kind == 7 {
+        let bytes: [u8; 2] = [1, 2]
+        let _ = bytes[kind]
+    }
+    0
+}

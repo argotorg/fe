@@ -1,4 +1,4 @@
-use core::marker::Pinned
+use core::marker::{Pinned, Storage}
 use core::ops::{Location, StateIndex}
 use std::evm::keccak_words
 
@@ -10,7 +10,7 @@ struct Cells {
 }
 
 impl Pinned for Cells {
-    space S = storage
+    type Space = Storage
 }
 
 unsafe impl StateIndex for Cells {

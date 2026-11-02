@@ -100,48 +100,48 @@ pub contract StepDiary {
 
 #[test]
 fn test_struct_entries() uses (evm: mut Evm) {
-    let diary = evm.create2<StepDiary>(value: 0, args: (), salt: 1)
-    assert(diary.inner != 0)
+    let diary = evm.create2<StepDiary>(value: Wei::zero(), args: (), salt: 1)
+    assert(diary.word() != 0)
 
-    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Record { day: 3, steps: 4000, distance_m: 3000, calories: 200 })
-    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Record { day: 4, steps: 8000, distance_m: 6000, calories: 400 })
-    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::AddSteps { day: 3, steps: 2500 })
+    evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Record { day: 3, steps: 4000, distance_m: 3000, calories: 200 })
+    evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Record { day: 4, steps: 8000, distance_m: 6000, calories: 400 })
+    evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::AddSteps { day: 3, steps: 2500 })
 
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Steps { day: 3 }) == 6500)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Calories { day: 3 }) == 200)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Total { day: 3 }) == 9700)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Steps { day: 4 }) == 8000)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Steps { day: 3 }) == 6500)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Calories { day: 3 }) == 200)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Total { day: 3 }) == 9700)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Steps { day: 4 }) == 8000)
 
     // A never-written key reads as zero.
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Total { day: 5 }) == 0)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Total { day: 5 }) == 0)
 
     // Updating a field of a missing entry starts from zero.
-    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::AddSteps { day: 6, steps: 100 })
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Steps { day: 6 }) == 100)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Calories { day: 6 }) == 0)
+    evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::AddSteps { day: 6, steps: 100 })
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Steps { day: 6 }) == 100)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Calories { day: 6 }) == 0)
 }
 
 #[test]
 fn test_entry_layout_matches_solidity() uses (evm: mut Evm) {
-    let diary = evm.create2<StepDiary>(value: 0, args: (), salt: 2)
-    assert(diary.inner != 0)
+    let diary = evm.create2<StepDiary>(value: Wei::zero(), args: (), salt: 2)
+    assert(diary.word() != 0)
 
-    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Record { day: 7, steps: 11, distance_m: 22, calories: 33 })
+    evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Record { day: 7, steps: 11, distance_m: 22, calories: 33 })
 
     // Fields occupy consecutive slots from keccak256(key ++ slot), in order.
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::RawWord { day: 7, index: 0 }) == 11)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::RawWord { day: 7, index: 1 }) == 22)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::RawWord { day: 7, index: 2 }) == 33)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::RawWord { day: 7, index: 3 }) == 0)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::RawWord { day: 7, index: 0 }) == 11)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::RawWord { day: 7, index: 1 }) == 22)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::RawWord { day: 7, index: 2 }) == 33)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::RawWord { day: 7, index: 3 }) == 0)
 }
 
 #[test]
 fn test_entries_stay_separate_from_fields() uses (evm: mut Evm) {
-    let diary = evm.create2<StepDiary>(value: 0, args: (), salt: 3)
-    assert(diary.inner != 0)
+    let diary = evm.create2<StepDiary>(value: Wei::zero(), args: (), salt: 3)
+    assert(diary.word() != 0)
 
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::AddStepsCountingWalks { day: 1, steps: 10 }) == 1)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::AddStepsCountingWalks { day: 1, steps: 5 }) == 2)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::StepsCountingWalks { day: 1 }) == 15)
-    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Steps { day: 1 }) == 15)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::AddStepsCountingWalks { day: 1, steps: 10 }) == 1)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::AddStepsCountingWalks { day: 1, steps: 5 }) == 2)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::StepsCountingWalks { day: 1 }) == 15)
+    assert(evm.call(addr: diary, gas: 10000000, value: Wei::zero(), message: DiaryMsg::Steps { day: 1 }) == 15)
 }

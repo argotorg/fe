@@ -929,6 +929,7 @@ impl<T: SolWrappingInt + SolInt> WrappingMul for T {
 }
 
 impl<T: SolWordRepr + SolInt, A: Abi> Encode<A> for T {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.canonical_word())
     }

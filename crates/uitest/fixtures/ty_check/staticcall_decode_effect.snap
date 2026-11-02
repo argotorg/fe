@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/staticcall_decode_effect.fe
+---
+error[8-0036]: missing effect `Call` required by `staticcall_decode`
+  ┌─ staticcall_decode_effect.fe:5:13
+  │
+5 │     let _ = staticcall_decode<()>(addr: Address::zero(), gas: 100000, args: MemSpan::empty())
+  │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `staticcall_decode` requires effect `Call` to be in scope
+  │
+  = require it in this function's signature with `uses (call: Call)`, so that its callers provide it
+  = or provide it to a block of this function with `with (Call = value) { .. }`

@@ -1,0 +1,43 @@
+// Compile-time code runs no `Drop` implementation, so it destroys nothing
+// that might need one.
+use core::ops::Drop
+
+struct Token { id: u256 }
+impl Drop for Token {
+    fn drop(own self) {}
+}
+
+struct Holder { token: Token }
+
+const fn make(_ id: u256) -> Token {
+    Token { id }
+}
+
+// Accepted: a value moved out is not destroyed.
+const fn relay(_ token: own Token) -> Token {
+    token
+}
+
+// Rejected: `token` is destroyed when the function returns.
+const fn id(_ token: own Token) -> u256 {
+    token.id
+}
+
+// Rejected: a field holding a `Drop` type is destroyed with its holder.
+const fn holder_id(_ holder: own Holder) -> u256 {
+    holder.token.id
+}
+
+// Rejected: a value of a type parameter may need its `drop`.
+const fn discard<T>(_ value: own T) {}
+
+// Accepted: a `Copy` value is never destroyed.
+const fn discard_copy<T: Copy>(_ value: own T) {}
+
+// Rejected: a constant's temporaries are destroyed too.
+const ID: u256 = make(1).id
+
+// Accepted: runtime code destroys `token`.
+fn runtime_id(_ token: own Token) -> u256 {
+    token.id
+}

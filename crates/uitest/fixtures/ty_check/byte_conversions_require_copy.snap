@@ -1,0 +1,37 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/byte_conversions_require_copy.fe
+---
+error[6-0003]: trait bound is not satisfied
+    ┌─ byte_conversions_require_copy.fe:7:13
+    │
+  7 │     buffers.into_bytes()
+    │             ^^^^^^^^^^ `MemBuffer` doesn't implement `Copy`
+    │
+    ┌─ src/ptr.fe:217:18
+    │
+217 │         where T: Copy
+    │                  ---- required by this bound on `into_bytes`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ byte_conversions_require_copy.fe:11:13
+    │
+ 11 │     buffers.into_buffer()
+    │             ^^^^^^^^^^^ `MemBuffer` doesn't implement `Copy`
+    │
+    ┌─ src/ptr.fe:241:18
+    │
+241 │         where T: Copy
+    │                  ---- required by this bound on `into_buffer`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ byte_conversions_require_copy.fe:16:12
+    │
+ 16 │     values.into_buffer()
+    │            ^^^^^^^^^^^ `T` doesn't implement `Copy`
+    │
+    ┌─ src/ptr.fe:241:18
+    │
+241 │         where T: Copy
+    │                  ---- required by this bound on `into_buffer`

@@ -1,0 +1,37 @@
+// The block's glob brings `util` only after a chain of re-exports resolves,
+// and shadows the `util` that `m` imports.
+mod m {
+    use super::util
+
+    pub fn g() -> u256 {
+        use super::o1::*
+        use util::f
+        f()
+    }
+}
+
+mod util {
+    pub fn f() -> u8 {
+        1
+    }
+}
+
+mod o1 {
+    pub use super::o2::util
+}
+
+mod o2 {
+    pub use super::o3::util
+}
+
+mod o3 {
+    pub use super::q::util
+}
+
+mod q {
+    pub mod util {
+        pub fn f() -> u256 {
+            2
+        }
+    }
+}

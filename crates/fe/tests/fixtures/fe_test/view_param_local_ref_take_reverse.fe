@@ -1,22 +1,22 @@
 // The `Seq` adapters this test once used stored references to their base.
 // Drivers hold none: the traversal is a value beside the collection, which
 // stays a view parameter.
-use core::iter::{Collection, Driver, Identity, Reversed, Take, reversed, take}
+use core::iter::{Collection, Driver, Identity, Reversed, Take}
 
-fn sum_by<D: Driver<[u256; 8], Item = u256, Extra = ()>>(_ arr: [u256; 8], _ d: D) -> u256 uses D::E {
+fn sum_by<D: Copy + Driver<Base = [u256; 8], Step<ref> = ref u256>>(_ arr: [u256; 8], _ d: D) -> u256 uses D::E {
     var total = 0
-    for x in arr by d {
+    for x in arr.by(d) {
         total += x
     }
     total
 }
 
-fn last(_ n: usize) -> Take<Reversed> {
-    reversed().take(n)
+fn last(_ n: usize) -> Take<Reversed<[u256; 8]>> {
+    Reversed<[u256; 8]> {}.take(n)
 }
 
-fn first(_ n: usize) -> Take<Identity> {
-    take(n)
+fn first(_ n: usize) -> Take<Identity<[u256; 8]>> {
+    Identity<[u256; 8]> {}.take(n)
 }
 
 fn sum_last4(_ arr: [u256; 8]) -> u256 {

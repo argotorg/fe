@@ -1,0 +1,77 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/maybe_mut_effects.fe
+---
+error[16-0001]: access conflict in `fn mut_then_read`
+   ┌─ maybe_mut_effects.fe:29:13
+   │
+28 │     let a = mut slot()
+   │                 ------ projection opened here
+29 │     let b = slot()
+   │             ^^^^^^ cannot read this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn ref_then_write`
+   ┌─ maybe_mut_effects.fe:36:5
+   │
+35 │     let r = ref cell()
+   │                 ------ projection opened here
+36 │     slot() = 1
+   │     ^^^^^^ cannot mutably access this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn ref_then_receiver`
+   ┌─ maybe_mut_effects.fe:42:5
+   │
+41 │     let r = ref cell()
+   │                 ------ projection opened here
+42 │     cell().bump()
+   │     ^^^^^^ cannot mutably access this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn two_mut_results`
+   ┌─ maybe_mut_effects.fe:48:17
+   │
+47 │     let a = mut slot()
+   │                 ------ projection opened here
+48 │     let b = mut slot()
+   │                 ^^^^^^ cannot mutably access this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn mut_then_receiver`
+   ┌─ maybe_mut_effects.fe:55:5
+   │
+54 │     let c = mut cell()
+   │                 ------ projection opened here
+55 │     cell().bump()
+   │     ^^^^^^ cannot mutably access this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn with_write`
+   ┌─ maybe_mut_effects.fe:65:9
+   │
+64 │         let a = mut slot()
+   │                     ------ projection opened here
+65 │         s.a = 5
+   │         ^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn with_ref_then_raise`
+   ┌─ maybe_mut_effects.fe:74:9
+   │
+72 │     let r = ref s.a
+   │             ------- access opened here
+73 │     with (Store = s) {
+74 │         slot() = 1
+   │         ^^^^^^ cannot mutably access this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn method_mut_then_write`
+   ┌─ maybe_mut_effects.fe:98:9
+   │
+97 │         let x = mut c.slot()
+   │                     -------- projection opened here
+98 │         log.n = 100
+   │         ^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn method_ref_then_write`
+    ┌─ maybe_mut_effects.fe:108:9
+    │
+107 │         let x = ref c.slot()
+    │                     -------- projection opened here
+108 │         log.n = 100
+    │         ^^^^^^^^^^^ cannot write to this place while a `ref` projection of it is open

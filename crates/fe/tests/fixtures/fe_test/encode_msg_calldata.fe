@@ -20,7 +20,7 @@ msg EchoMsg {
 
 fn hash_calldata() -> u256 uses (raw: mut RawOps) {
     let len = raw.calldatasize()
-    var data = ptr::MemBuffer::alloc(len)
+    var data = ptr::MemBuffer::alloc(len.downcast_unchecked())
     raw.calldatacopy(dest: mut data, dest_offset: 0, src_offset: 0, len)
     raw.keccak256(data: data.span())
 }
@@ -58,7 +58,7 @@ pub contract Echo uses (raw: mut RawOps) {
             assert!(shifted.span().byte_at(0) == 0)
             assert!(shifted.span().byte_at(1) == 0)
             assert!(direct.span().byte_at(0) == shifted.span().byte_at(2))
-            direct.len() + shifted.len()
+            (direct.len() + shifted.len()) as u256
         }
     }
 }
@@ -75,15 +75,15 @@ fn build_bytes() -> Bytes {
 
 #[test]
 fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ctx: Ctx) {
-    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
-    assert!(echo.inner != 0)
+    let echo = evm.create2<Echo>(value: Wei::zero(), args: (), salt: 0)
+    assert!(echo.word() != 0)
 
-    let addr_arg = Address { inner: 0xabcdef }
+    let addr_arg = Address::new(0xabcdef)
     let typed_digest: u256 = echo.call(EchoMsg::DigestStatic { a: 42, b: addr_arg })
 
     let data = encode_msg_calldata(EchoMsg::DigestStatic { a: 42, b: addr_arg })
     var ret = ptr::MemBuffer::empty()
-    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args: data.span(), ret: mut ret)
+    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: Wei::zero(), args: data.span(), ret: mut ret)
     assert!(outcome.success())
     let raw_digest: u256 = decode_returndata(copy_returndata().span())
 
@@ -92,14 +92,14 @@ fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ct
 
 #[test]
 fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, ctx: Ctx) {
-    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
-    assert!(echo.inner != 0)
+    let echo = evm.create2<Echo>(value: Wei::zero(), args: (), salt: 0)
+    assert!(echo.word() != 0)
 
     let typed_digest: u256 = echo.call(EchoMsg::DigestDynamic { data: build_bytes() })
 
     let data = encode_msg_calldata(EchoMsg::DigestDynamic { data: build_bytes() })
     var ret = ptr::MemBuffer::empty()
-    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args: data.span(), ret: mut ret)
+    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: Wei::zero(), args: data.span(), ret: mut ret)
     assert!(outcome.success())
     let raw_digest: u256 = decode_returndata(copy_returndata().span())
 
@@ -110,21 +110,21 @@ fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, 
 fn test_raw_copy_apis_use_explicit_source_and_destination_ranges()
 uses (evm: mut Evm, call: mut Call, ctx: Ctx)
 {
-    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
-    assert!(echo.inner != 0)
+    let echo = evm.create2<Echo>(value: Wei::zero(), args: (), salt: 0)
+    assert!(echo.word() != 0)
 
     assert!(echo.call(EchoMsg::CopyCalldataWindow {}) == 0x0203)
     assert!(echo.call(EchoMsg::CopyCodeWindow {}) == 4)
 
     let data = encode_msg_calldata(EchoMsg::DigestStatic {
         a: 42,
-        b: Address { inner: 0xabcdef },
+        b: Address::new(0xabcdef),
     })
     var ignored = ptr::MemBuffer::empty()
     let outcome = call.raw_call(
         addr: echo,
         gas: ctx.gas(),
-        value: 0,
+        value: Wei::zero(),
         args: data.span(),
         ret: mut ignored,
     )

@@ -1500,6 +1500,9 @@ fn prepare_suite_job(
         db.compilation_settings()
             .set_profile(&mut db)
             .to(shared.profile.clone().into());
+        db.compilation_settings()
+            .set_target(&mut db)
+            .to(shared.backend.target());
         db
     });
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
@@ -3027,32 +3030,7 @@ fn execute_test(
         ),
         // Expected revert: execution reverted — check revert data against expectation
         (Err(contract_harness::HarnessError::Revert(data)), Some(expected)) => {
-            let mismatch = match expected {
-                ExpectedRevert::Any => None,
-                ExpectedRevert::Selector(sel) => {
-                    if data.0.len() >= 4 && data.0[..4] == sel[..] {
-                        None
-                    } else {
-                        Some(format!(
-                            "Expected revert with selector 0x{}, but got revert data: {}",
-                            hex::encode(sel),
-                            data,
-                        ))
-                    }
-                }
-                ExpectedRevert::PanicCode(expected_bytes) => {
-                    if data.0 == *expected_bytes {
-                        None
-                    } else {
-                        Some(format!(
-                            "Expected revert data 0x{}, but got: {}",
-                            hex::encode(expected_bytes),
-                            data,
-                        ))
-                    }
-                }
-            };
-            match mismatch {
+            match revert_mismatch(expected, &data.0) {
                 None => (
                     TestResult {
                         name: name.to_string(),
@@ -3086,6 +3064,28 @@ fn execute_test(
             Vec::new(),
             trace,
         ),
+    }
+}
+
+/// How revert `data` differs from what a `should_revert` test expects, if it
+/// does.
+fn revert_mismatch(expected: &ExpectedRevert, data: &[u8]) -> Option<String> {
+    match expected {
+        ExpectedRevert::Any => None,
+        ExpectedRevert::Selector(selector) => (data.get(..4) != Some(&selector[..])).then(|| {
+            format!(
+                "Expected revert with selector 0x{}, but got revert data: 0x{}",
+                hex::encode(selector),
+                hex::encode(data),
+            )
+        }),
+        ExpectedRevert::PanicCode(expected) => (data != &expected[..]).then(|| {
+            format!(
+                "Expected revert data 0x{}, but got: 0x{}",
+                hex::encode(expected),
+                hex::encode(data),
+            )
+        }),
     }
 }
 
@@ -3184,18 +3184,30 @@ mod tests {
             allow_single_steal: false,
             prefer_single_when_idle: false,
         };
+        // Salsa takes its event callback when the database is created, so the
+        // test seeds the cache with a counting database initialized the way
+        // `prepare_suite_job` initializes a new one.
+        let counters = Arc::new(Mutex::new(SalsaEventCounters::default()));
+        let mut db = DriverDataBase::with_salsa_event_counters(Arc::clone(&counters));
+        db.compiler_options()
+            .set_recovery_mode(&mut db)
+            .to(cfg.shared.use_recovery);
+        db.compilation_settings()
+            .set_profile(&mut db)
+            .to(cfg.shared.profile.clone().into());
+        assert!(!driver::init_workspace(&mut db, &workspace));
         let mut databases = WorkspaceDatabaseCache::new(cfg.database_cleanup.clone());
+        databases.store(Some(workspace.clone()), db);
         let (first, output) = prepare_suite_job(&plan, &cfg, &mut databases);
         assert!(first.results.is_empty(), "{output}");
-        let counters = Arc::new(Mutex::new(SalsaEventCounters::default()));
-        let db = &mut databases.cached.as_mut().expect("initialized workspace").1;
-        db.set_salsa_event_counters(Some(Arc::clone(&counters)));
+        let executed = counters.lock().unwrap().will_execute;
+        let db = &databases.cached.as_ref().expect("initialized workspace").1;
         let revision = salsa::plumbing::current_revision(db);
         let (second, output) = prepare_suite_job(&plan, &cfg, &mut databases);
         assert!(second.results.is_empty(), "{output}");
         let db = &databases.cached.as_ref().expect("retained workspace").1;
         assert_eq!(salsa::plumbing::current_revision(db), revision);
-        assert_eq!(counters.lock().unwrap().will_execute, 0);
+        assert_eq!(counters.lock().unwrap().will_execute, executed);
         assert!(
             databases
                 .take(Some(&workspace.join("different/").unwrap()))

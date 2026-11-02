@@ -1,7 +1,7 @@
 use core::ptr::MemArray
 
-// `t[i]` selects `index_mut` wherever the context needs a `mut` place: an
-// assignment target or its base, `mut t[i]`, and a `mut self` receiver.
+// `t[i]` calls `index` at `mut` wherever the context needs a `mut` place:
+// an assignment target or its base, `mut t[i]`, and a `mut self` receiver.
 struct Pair {
     x: u256,
     y: u256,

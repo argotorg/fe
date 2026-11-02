@@ -11,7 +11,7 @@ fn markers(c: Cells, p: Pair) {
     match p {
         Pair { ref a, mut b, .. } => {},
     }
-    if let Some(ref v,) = p.opt {}
+    if let Some(ref v) = p.opt {}
     let z = ref p
     var w = p.a
 }

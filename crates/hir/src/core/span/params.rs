@@ -1,6 +1,10 @@
-use parser::ast;
+use parser::ast::{self, prelude::*};
 
-use super::{define_lazy_span_node, types::LazyTySpan};
+use super::{
+    define_lazy_span_node,
+    transition::{LazyArg, LazyTransitionFn, ResolvedOrigin},
+    types::LazyTySpan,
+};
 use crate::span::{LazySpanAtom, path::LazyPathSpan};
 
 define_lazy_span_node!(
@@ -19,14 +23,43 @@ define_lazy_span_node!(
     }
 );
 
-define_lazy_span_node!(
-    LazyGenericArgListSpan,
-    ast::GenericArgList,
-    @idx {
-        (arg, LazyGenericArgSpan),
-    }
+define_lazy_span_node!(LazyGenericArgListSpan, ast::GenericArgList, @idx {});
 
-);
+impl<'db> LazyGenericArgListSpan<'db> {
+    /// Argument `idx`. A callable shape's are its parameter list and its
+    /// result, `Out`.
+    pub fn arg(mut self, idx: usize) -> LazyGenericArgSpan<'db> {
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let LazyArg::Idx(idx) = arg else {
+                unreachable!()
+            };
+            origin.map(|node| match ast::GenericArgList::cast(node.clone()) {
+                Some(args) => args
+                    .into_iter()
+                    .nth(idx)
+                    .map(|arg| arg.syntax().clone().into()),
+                None => {
+                    let shape = ast::FnShape::cast(node)?;
+                    match idx {
+                        0 => shape.params().map(|params| params.syntax().clone().into()),
+                        _ => Some(
+                            shape
+                                .ret_ty()
+                                .map_or_else(|| shape.syntax().clone(), |ty| ty.syntax().clone())
+                                .into(),
+                        ),
+                    }
+                }
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        });
+        LazyGenericArgSpan(self.0)
+    }
+}
 define_lazy_span_node!(
     LazyWhereClauseSpan,
     ast::WhereClause,
@@ -188,13 +221,26 @@ impl<'db> LazyGenericArgSpan<'db> {
     }
 }
 
-define_lazy_span_node!(
-    LazyTypeGenericArgSpan,
-    ast::TypeGenericArg,
-    @node {
-        (ty, ty, LazyTySpan),
+define_lazy_span_node!(LazyTypeGenericArgSpan, ast::TypeGenericArg, @node {});
+
+impl<'db> LazyTypeGenericArgSpan<'db> {
+    /// The argument's type, or a callable shape's parameter list, a type
+    /// already.
+    pub fn ty(mut self) -> LazyTySpan<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin.map(|node| match ast::TypeGenericArg::cast(node.clone()) {
+                Some(arg) => arg.ty().map(|ty| ty.syntax().clone().into()),
+                None => ast::Type::cast(node).map(|ty| ty.syntax().clone().into()),
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazyTySpan(self.0)
     }
-);
+}
 
 define_lazy_span_node!(
     LazyAssocTypeGenericArgSpan,
@@ -203,9 +249,27 @@ define_lazy_span_node!(
         (name, name),
     }
     @node {
-        (ty, ty, LazyTySpan),
+        (generic_args, generic_args, LazyGenericArgListSpan),
     }
 );
+
+impl<'db> LazyAssocTypeGenericArgSpan<'db> {
+    /// The bound type, or a callable shape's result, a type already.
+    pub fn ty(mut self) -> LazyTySpan<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin.map(|node| match ast::AssocTypeGenericArg::cast(node.clone()) {
+                Some(arg) => arg.ty().map(|ty| ty.syntax().clone().into()),
+                None => ast::Type::cast(node).map(|ty| ty.syntax().clone().into()),
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazyTySpan(self.0)
+    }
+}
 
 define_lazy_span_node!(
     LazyWherePredicateSpan,
@@ -233,27 +297,41 @@ define_lazy_span_node!(
     }
 );
 
-define_lazy_span_node!(
-    LazyTraitRefSpan,
-    ast::TraitRef,
-    @node {
-        (path, path, LazyPathSpan),
-    }
-);
+define_lazy_span_node!(LazyTraitRefSpan, ast::TraitRef, @node {});
 
 impl<'db> LazyTraitRefSpan<'db> {
-    /// Returns the span atom for the trait name (last segment ident) in this trait ref.
-    pub fn name(mut self) -> LazySpanAtom<'db> {
-        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
-        use parser::ast::prelude::*;
-
+    /// The trait's path, or the callable shape, `Fn(own A) -> R`, written in
+    /// its place.
+    pub fn path(mut self) -> LazyPathSpan<'db> {
         fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
             origin.map(|node| {
-                ast::TraitRef::cast(node)
-                    .and_then(|tr| tr.path())
-                    .and_then(|p| p.into_iter().last())
-                    .and_then(|seg| seg.ident())
-                    .map(|tok| tok.into())
+                let trait_ref = ast::TraitRef::cast(node)?;
+                trait_ref
+                    .path()
+                    .map(|path| path.syntax().clone())
+                    .or_else(|| trait_ref.fn_shape().map(|shape| shape.syntax().clone()))
+                    .map(Into::into)
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazyPathSpan(self.0)
+    }
+
+    /// The trait's name: its path's last segment, or a callable shape's
+    /// `Fn` or `FnMut`.
+    pub fn name(mut self) -> LazySpanAtom<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin.map(|node| {
+                let trait_ref = ast::TraitRef::cast(node)?;
+                match trait_ref.path() {
+                    Some(path) => path.into_iter().last()?.ident(),
+                    None => trait_ref.fn_shape()?.name(),
+                }
+                .map(Into::into)
             })
         }
 

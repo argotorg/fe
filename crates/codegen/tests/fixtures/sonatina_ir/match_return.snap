@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/match_return.fe
 ---
@@ -29,9 +28,9 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.*i8 = evm_malloc v0;
-        v13.i256 = ptr_to_int v12 i256;
-        return v13;
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
 func private %cast(v0.i256) -> i256 {
@@ -73,12 +72,7 @@ func private %f(v0.@layout_0) {
     block7:
         v14.@layout_1 = insert_value undef.@layout_1 0.i256 v10;
         v17.@layout_1 = insert_value v14 1.i256 0.i256;
-        v18.objref<i256> = obj.proj v1 0.i256;
-        v19.i256 = extract_value v17 0.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v1 1.i256;
-        v21.i256 = extract_value v17 1.i256;
-        obj.store v20 v21;
+        obj.store v1 v17;
         jump block6;
 
     block8:
@@ -86,26 +80,21 @@ func private %f(v0.@layout_0) {
         unreachable;
 
     block9:
-        v23.i256 = call %alloc_bytes 0.i256;
-        v24.i256 = call %cast v23;
+        v19.i256 = call %alloc_bytes 0.i256;
+        v20.i256 = call %cast v19;
         jump block11;
 
     block10:
         jump block8;
 
     block11:
-        v28.@layout_1 = insert_value undef.@layout_1 0.i256 v24;
-        v30.@layout_1 = insert_value v28 1.i256 0.i256;
-        v31.objref<i256> = obj.proj v2 0.i256;
-        v32.i256 = extract_value v30 0.i256;
-        obj.store v31 v32;
-        v33.objref<i256> = obj.proj v2 1.i256;
-        v34.i256 = extract_value v30 1.i256;
-        obj.store v33 v34;
+        v24.@layout_1 = insert_value undef.@layout_1 0.i256 v20;
+        v26.@layout_1 = insert_value v24 1.i256 0.i256;
+        obj.store v2 v26;
         jump block10;
 }
 
-func private %len(v0.objref<@layout_1>) -> i256 {
+func private %len(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -134,7 +123,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %ptr(v0.objref<@layout_1>) -> i256 {
+func private %ptr(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -144,7 +133,7 @@ func private %ptr(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %return_data(v0.objref<@layout_1>) {
+func private %return_data(noalias v0.objref<@layout_1>) {
     block0:
         jump block1;
 

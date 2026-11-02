@@ -51,12 +51,12 @@ fn test_pow_negative_exp_i8() {
 #[test]
 fn test_memarray_allocation_size_overflow() {
     let big: u256 = 3618502788666131106986593281521497120414687020801267626233049500247285301248
-    let _ = unsafe { ptr::MemArray<u256>::new_uninit(big) }
+    let _ = unsafe { ptr::MemArray<u256>::new_uninit(big.downcast_unchecked()) }
 }
 
 #[test]
 fn test_pointer_offset_size_overflow() {
     let big: u256 = 3618502788666131106986593281521497120414687020801267626233049500247285301248
     let p = ptr::alloc<u256>()
-    let _ = ptr::offset(p, big)
+    let _ = ptr::offset(p, big.downcast_unchecked())
 }

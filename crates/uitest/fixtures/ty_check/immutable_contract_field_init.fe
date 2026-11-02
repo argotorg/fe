@@ -121,6 +121,59 @@ contract InitViaMutArgForwardHelper {
     }
 }
 
+// A product's `mut` part is an argument of its own: it initializes what it
+// writes, and a later argument is not taken for one of its parts.
+fn init_part(_ (mut x, v): (mut u256, own u256)) {
+    x = v
+}
+
+fn init_after_parts(_ (mut a, mut b): (mut u256, mut u256), _ c: mut u256) {
+    c = 9
+}
+
+contract InitViaProductPart {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_part((mut x, v))
+    }
+}
+
+contract InitSkipsProductPart {
+    x: u256
+
+    init() uses (mut x) {
+        var a: u256 = 1
+        var c: u256 = 2
+        init_after_parts((mut a, mut x), mut c)
+    }
+}
+
+fn init_nested_part(_ ((n, mut x), v): ((own u256, mut u256), own u256)) {
+    x = n + v
+}
+
+fn init_after_nested(_ ((n, mut a), v): ((own u256, mut u256), own u256), _ c: mut u256) {
+    c = n + v
+}
+
+contract InitViaNestedProductPart {
+    x: u256
+
+    init() uses (mut x) {
+        init_nested_part(((1, mut x), 2))
+    }
+}
+
+contract InitSkipsNestedProductPart {
+    x: u256
+
+    init() uses (mut x) {
+        var c: u256 = 0
+        init_after_nested(((1, mut x), 2), mut c)
+    }
+}
+
 contract InitViaBreakDrivenLoop {
     x: u256
 

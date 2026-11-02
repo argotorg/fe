@@ -12,13 +12,13 @@ struct AddRight {
     left: u256,
 }
 
-impl Fn<u256, AddRight> for MakeAdder {
+impl Fn(own u256) -> AddRight for MakeAdder {
     fn call(self, _ value: own u256) -> AddRight {
         AddRight { left: value }
     }
 }
 
-impl Fn<u256, u256> for AddRight {
+impl Fn(own u256) -> u256 for AddRight {
     fn call(self, _ right: own u256) -> u256 {
         self.left + right
     }

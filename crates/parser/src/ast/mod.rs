@@ -25,6 +25,27 @@ pub type SyntaxText = rowan::SyntaxText;
 pub type AstPtr<T> = rowan::ast::AstPtr<T>;
 pub type SyntaxNodePtr = rowan::ast::SyntaxNodePtr<FeLang>;
 
+/// Child lookups that scan a node's green children and build a syntax node
+/// only for the one found, where `rowan::ast::support` builds one for every
+/// child it passes.
+mod support {
+    use rowan::{NodeOrToken, ast::AstNode};
+
+    use crate::{FeLang, SyntaxKind, SyntaxNode, SyntaxToken};
+
+    pub(super) fn child<N: AstNode<Language = FeLang>>(parent: &SyntaxNode) -> Option<N> {
+        parent.first_child_by_kind(&N::can_cast).and_then(N::cast)
+    }
+
+    pub(super) use rowan::ast::support::children;
+
+    pub(super) fn token(parent: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxToken> {
+        parent
+            .first_child_or_token_by_kind(&|found| found == kind)
+            .and_then(NodeOrToken::into_token)
+    }
+}
+
 pub mod prelude {
     pub use super::{
         AttrListOwner, GenericArgsOwner, GenericParamsOwner, ItemModifierOwner, WhereClauseOwner,

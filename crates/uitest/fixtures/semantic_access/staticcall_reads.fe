@@ -1,0 +1,109 @@
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::{Address, Call, TSlot, staticcall_decode}
+
+msg Query {
+    #[selector = 1]
+    Value {} -> u256,
+}
+
+fn read_remote() uses (call: Call) {
+    let _ = staticcall_decode<()>(addr: Address::zero(), gas: 100000, args: MemSpan::empty())
+}
+
+// All safe STATICCALL entry points can coexist with shared accesses to both
+// state spaces. Closed mutable accesses can precede and follow the call.
+pub contract SharedReads {
+    mut value: u256,
+    mut temporary: TSlot<u256>,
+    init()
+    uses (mut value, temporary, call: Call)
+    {
+        value = 1
+        let held = ref value
+        let transient = ref temporary.value
+        let target = Address::zero()
+        let _ = call.static(addr: target, gas: 100000, message: Query::Value {})
+        let _ = call.try_static(addr: target, gas: 100000, message: Query::Value {})
+        var output = MemBuffer::empty()
+        let _ = call
+            .try_static_into(
+                addr: target,
+                gas: 100000,
+                message: Query::Value {},
+                ret: mut output,
+            )
+        read_remote()
+        assert(held == 1 && transient == 0)
+        value = 2
+    }
+}
+
+pub contract DecodeAcrossMut {
+    mut value: u256,
+    init()
+    uses (mut value, call: Call)
+    {
+        let held = mut value
+        let _ = staticcall_decode<()>(addr: Address::zero(), gas: 100000, args: MemSpan::empty())
+        held = 1
+    }
+}
+
+pub contract ForwardedDecodeAcrossMut {
+    mut temporary: TSlot<u256>,
+    init()
+    uses (mut temporary, call: Call)
+    {
+        let held = mut temporary.value
+        read_remote()
+        held = 1
+    }
+}
+
+pub contract TypedStaticAcrossMut {
+    mut value: u256,
+    init()
+    uses (mut value, call: Call)
+    {
+        let held = mut value
+        let _ = call.static(
+                addr: Address::zero(),
+                gas: 100000,
+                message: Query::Value {},
+            )
+        held = 1
+    }
+}
+
+pub contract TryStaticAcrossMut {
+    mut temporary: TSlot<u256>,
+    init()
+    uses (mut temporary, call: Call)
+    {
+        let held = mut temporary.value
+        let _ = call.try_static(
+                addr: Address::zero(),
+                gas: 100000,
+                message: Query::Value {},
+            )
+        held = 1
+    }
+}
+
+pub contract StaticIntoAcrossMut {
+    mut value: u256,
+    init()
+    uses (mut value, call: Call)
+    {
+        let held = mut value
+        var output = MemBuffer::empty()
+        let _ = call
+            .try_static_into(
+                addr: Address::zero(),
+                gas: 100000,
+                message: Query::Value {},
+                ret: mut output,
+            )
+        held = 1
+    }
+}

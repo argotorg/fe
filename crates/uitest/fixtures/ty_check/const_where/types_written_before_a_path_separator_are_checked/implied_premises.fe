@@ -11,7 +11,9 @@ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
 impl<const N: usize> Mk for Bounded<N> { type Out = Holder<{ dec<N>() }> }
 impl<const N: usize> Get for Bounded<N> { const V: usize = dec<N>() }
 impl<const N: usize> Bounded<N> { const D: usize = dec<N>() }
-const MAX: usize = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+#[arithmetic(unchecked)]
+const fn wrapped_max() -> usize { 0 - 1 }
+const MAX: usize = wrapped_max()
 
 fn param(_ x: Bounded<0>::Out) {}
 fn use_param() { param(Holder<MAX> {}) }

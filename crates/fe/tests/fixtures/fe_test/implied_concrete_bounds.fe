@@ -1,0 +1,68 @@
+use core::iter::Collection
+
+trait Holds {
+    type Base: Collection
+}
+
+struct Three {}
+
+impl Holds for Three {
+    type Base = [u256; 3]
+}
+
+// The equality makes `Base`'s bound one on `[u256; 3]`, which the array's
+// implementation proves, so the array's methods are not ambiguous.
+fn last_position<H: Holds<Base = [u256; 3]>>(_ xs: [u256; 3]) -> usize {
+    var c = xs.start()
+    while xs.has(xs.next(c)) {
+        c = xs.next(c)
+    }
+    c
+}
+
+#[test]
+fn concrete_implied_bound() {
+    assert(last_position<Three>([1, 2, 3]) == 2)
+}
+
+trait Read<T> {
+    fn read(self, _ t: T) -> u256
+}
+
+struct Reader {}
+
+impl Read<u256> for Reader {
+    fn read(self, _ t: u256) -> u256 {
+        t + 1
+    }
+}
+
+trait Source<T> {
+    type Base: Read<T>
+    fn base(self) -> Self::Base
+}
+
+struct Holder {}
+
+impl Source<u256> for Holder {
+    type Base = Reader
+    fn base(self) -> Reader {
+        Reader {}
+    }
+}
+
+fn invoke<T, R: Read<T>>(_ r: R, _ t: T) -> u256 {
+    r.read(t)
+}
+
+// A bound still generic in an argument, `Reader: Read<T>`, is assumed: no
+// implementation proves it for every `T`.
+fn read_through<T, S: Source<T, Base = Reader>>(_ s: S, _ t: T) -> u256 {
+    let direct: u256 = s.base().read(t)
+    direct + invoke<T, Reader>(s.base(), t)
+}
+
+#[test]
+fn generic_implied_bound() {
+    assert(read_through(Holder {}, 3) == 8)
+}

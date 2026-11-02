@@ -107,7 +107,7 @@ fn runtime_body_for_symbol<'db>(
         .copied()
         .find(|function| function.symbol(db).contains(symbol))
         .unwrap_or_else(|| panic!("missing runtime function `{symbol}`"));
-    function.instance(db).body(db)
+    function.instance(db).body(db).clone()
 }
 
 fn runtime_body_stmts<'a, 'db>(body: &'a RuntimeBody<'db>) -> impl Iterator<Item = &'a RStmt<'db>> {
@@ -866,7 +866,7 @@ struct Note {
 }
 
 fn note_size(_ note: own Note) -> u256 {
-    note.id + note.body.len()
+    note.id + note.body.len() as u256
 }
 
 fn entry() -> u256 {
@@ -895,7 +895,7 @@ fn pointer_aggregate_temporaries_stay_values() {
         r#"use core::abi::store_word
 use core::ptr::MemBuffer
 
-fn buffer_len() -> u256 {
+fn buffer_len() -> usize {
     let buffer = MemBuffer::alloc(32)
     unsafe { store_word(ptr: buffer.ptr(), value: 42) }
     buffer.span().len()
@@ -1534,7 +1534,7 @@ fn trigger() {
             let symbol = function.symbol(&db);
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
-            let function_ir = sonatina_function_body(&output, &symbol);
+            let function_ir = sonatina_function_body(&output, symbol);
             assert!(
                 function_ir.contains("evm_revert 0.i256 0.i256")
                     && !function_ir.contains("evm_malloc 0.i256"),
@@ -1833,8 +1833,8 @@ pub fn entry() -> u256 {
             "{label} should load through const data projections:\n{pick}"
         );
         assert!(
-            !ir.contains("obj.init.const"),
-            "{label} should not materialize the full array:\n{ir}"
+            !ir.contains("[i256; 4] = const.load"),
+            "{label} should not load the full array:\n{ir}"
         );
     }
 }
@@ -1944,8 +1944,10 @@ fn mutable_with_provider_reuses_materialized_root_for_later_readonly_effects() {
 fn readonly_with_provider_can_remain_const_backed() {
     with_test_runtime_package!(
         "readonly_with_provider_can_remain_const_backed.fe",
+        // Two words: a one-word constant struct is passed as the plain word.
         r#"pub struct Counter {
     pub value: u256,
+    pub step: u256,
 }
 
 fn read() -> u256 uses (counter: Counter) {
@@ -1954,10 +1956,10 @@ fn read() -> u256 uses (counter: Counter) {
 
 #[test]
 fn test_readonly_with_provider() {
-    let out: u256 = with (Counter = Counter { value: 7 }) {
+    let out: u256 = with (Counter = Counter { value: 7, step: 1 }) {
         read() + read()
     }
-    let other: u256 = with (Counter = { Counter { value: 9 } }) {
+    let other: u256 = with (Counter = { Counter { value: 9, step: 1 } }) {
         read() + read()
     }
 
@@ -2376,9 +2378,52 @@ fn use_returned_array() -> u8 {
 }
 
 #[test]
-fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+fn constant_aggregate_initializers_store_their_const_data_whole() {
+    with_test_runtime_package!(
+        "constant_aggregate_initializers_store_their_const_data_whole.fe",
+        r#"
+const TABLE: [u256; 4] = [1, 2, 3, 4]
+
+fn zeroed_bytes(i: usize) -> u8 {
+    var bytes: [u8; 64] = [0; 64]
+    bytes[i] = 7
+    bytes[1]
+}
+
+fn copied_table(i: usize) -> u256 {
+    var xs: [u256; 4] = TABLE
+    xs[i] = 7
+    xs[1]
+}
+
+#[test]
+fn initializers() {
+    assert(zeroed_bytes(i: 3) == 0 && copied_table(i: 1) == 7)
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
+            for (name, ty) in [("zeroed_bytes", "[i8; 64]"), ("copied_table", "[i256; 4]")] {
+                let body = sonatina_function_body(&output, name);
+                assert!(
+                    body.contains(&format!("{ty} = const.load")) && !body.contains("insert_value"),
+                    "a constant initializer should load its const data whole:\n{body}"
+                );
+                assert_eq!(
+                    body.matches("obj.alloc").count(),
+                    1,
+                    "a constant initializer should store into its binding without a temporary:\n{body}"
+                );
+            }
+        }
+    );
+}
+
+#[test]
+fn by_value_array_returns_store_whole_into_object_storage() {
     with_runtime_package!(
-        "by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+        "by_value_array_returns_store_whole_into_object_storage.fe",
         r#"
 fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
     let ys = xs
@@ -2396,23 +2441,32 @@ fn use_returned_array() -> u256 {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             let body = sonatina_function_body(&output, "use_returned_array");
+            let result = body
+                .lines()
+                .find_map(|line| {
+                    line.contains("call %return_array_after_projection")
+                        .then(|| line.trim().split('.').next())
+                        .flatten()
+                })
+                .unwrap_or_else(|| panic!("missing array call:\n{body}"));
 
             assert!(
-                body.contains("extract_value"),
-                "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+                body.lines().any(|line| line.contains("obj.store")
+                    && line.trim().ends_with(&format!(" {result};"))),
+                "a by-value array result should store into its object whole:\n{body}"
             );
             assert!(
-                body.contains("obj.load"),
-                "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+                !body.contains("extract_value"),
+                "a by-value array result should not be copied element by element:\n{body}"
             );
         }
     );
 }
 
 #[test]
-fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+fn enum_bearing_struct_results_store_whole_into_object_storage() {
     with_test_runtime_package!(
-        "fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe",
+        "enum_bearing_struct_results_store_whole_into_object_storage.fe",
         r#"
 enum E {
     A,
@@ -2432,16 +2486,17 @@ fn build(flag: bool) -> Pair {
 
 #[test]
 fn exercise() {
-    let pair = build(true)
-    assert(pair.xs[0] == 1)
+    var pair = build(true)
+    pair.xs[1] = 5
+    assert(pair.xs[0] == 1 && pair.xs[1] == 5)
 }
 "#,
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             assert!(
-                output.contains("enum.set_tag"),
-                "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
+                !output.contains("enum.set_tag") && !output.contains("br_table"),
+                "a struct result should keep its enum field inside one whole store:\n{output}"
             );
         }
     );
@@ -2752,7 +2807,7 @@ use std::evm::Mutex
 
 fn bump(_ m: mut Mutex<u256>) {
     assert!(m.try_lock())
-    m.value_mut() += 1
+    m.value() += 1
     m.unlock()
 }
 

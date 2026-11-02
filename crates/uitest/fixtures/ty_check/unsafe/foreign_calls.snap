@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unsafe/foreign_calls.fe
+---
+error[8-0097]: call to unsafe function `memset` requires an `unsafe` block or function
+  ┌─ foreign_calls.fe:8:5
+  │
+2 │     fn memset(_ p: *u8, _ c: i32, _ n: i64) -> *u8
+  │        ------ callee defined here
+  ·
+8 │     memset(p, 0, 1)
+  │     ^^^^^^^^^^^^^^^ call to unsafe function
+
+error[8-0097]: call to unsafe function `getchar` requires an `unsafe` block or function
+   ┌─ foreign_calls.fe:12:5
+   │
+ 3 │     fn getchar() -> i32
+   │        ------- callee defined here
+   ·
+12 │     getchar()
+   │     ^^^^^^^^^ call to unsafe function

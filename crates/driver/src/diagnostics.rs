@@ -66,7 +66,7 @@ fn convert_severity(severity: Severity) -> cs_diag::Severity {
     }
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn file_line_starts(db: &dyn SpannedHirAnalysisDb, file: File) -> Vec<usize> {
     cs::files::line_starts(file.text(db)).collect()
 }

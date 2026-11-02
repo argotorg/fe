@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/const_destructors.fe
+---
+error[16-0017]: compile-time destructor in `fn id`
+   ┌─ const_destructors.fe:22:41
+   │
+22 │   const fn id(_ token: own Token) -> u256 {
+   │ ╭─────────────────────────────────────────^
+23 │ │     token.id
+24 │ │ }
+   │ ╰─^ destroying `Token` may run a `Drop` implementation, which compile-time code cannot
+
+error[16-0017]: compile-time destructor in `fn holder_id`
+   ┌─ const_destructors.fe:27:50
+   │
+27 │   const fn holder_id(_ holder: own Holder) -> u256 {
+   │ ╭──────────────────────────────────────────────────^
+28 │ │     holder.token.id
+29 │ │ }
+   │ ╰─^ destroying `Holder` may run a `Drop` implementation, which compile-time code cannot
+
+error[16-0017]: compile-time destructor in `fn discard`
+   ┌─ const_destructors.fe:32:37
+   │
+32 │ const fn discard<T>(_ value: own T) {}
+   │                                     ^^ destroying `T` may run a `Drop` implementation, which compile-time code cannot
+
+error[16-0017]: compile-time destructor in `const ID`
+   ┌─ const_destructors.fe:38:18
+   │
+38 │ const ID: u256 = make(1).id
+   │                  ^^^^^^^^^^ destroying `Token` may run a `Drop` implementation, which compile-time code cannot

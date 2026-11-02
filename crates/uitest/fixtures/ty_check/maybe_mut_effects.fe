@@ -1,0 +1,131 @@
+use std::evm::{Ctx, RawStorage, storage_at}
+
+struct Store {
+    n: u256,
+}
+
+fn slot() -> mut? u256 uses (store: mut? Store) {
+    mut? store.n
+}
+
+// The `ref` body cannot write through a `mut?` effect.
+fn reset() -> mut? u256 uses (store: mut? Store) {
+    store.n = 0
+    mut? store.n
+}
+
+// A call at `mut` needs the effect `mut`.
+fn write_with_read() uses (store: Store) {
+    slot() = 1
+}
+
+fn take_with_read() uses (store: Store) {
+    let n = mut slot()
+    n = 2
+}
+
+// A call at `ref` asks for the effect read-only.
+fn read_without_effect() -> u256 {
+    slot()
+}
+
+// A call at `mut` asks for it `mut`,
+fn write_without_effect() {
+    slot() = 1
+}
+
+// and a `mut?` caller, whose bodies call it at their own modes, `mut?`.
+fn forward_without_effect(_ c: mut? Cell) -> mut? u256 {
+    slot()
+}
+
+trait Counter {
+    uses E
+    fn bump(mut self) uses E
+}
+
+struct StoreCounter {}
+
+// A row has no mode.
+impl Counter for StoreCounter {
+    uses E = (store: mut? Store)
+
+    fn bump(mut self) uses E {}
+}
+
+// Nor does an entry naming one: its components carry their own modes.
+fn bump_row<T: Counter>(_ t: mut T) uses (mut? T::E) {
+    t.bump()
+}
+
+// A contract has no mode.
+contract C uses (ctx: mut? Ctx) {}
+
+trait Slot {
+    fn slot(mut? self) -> mut? u256 uses (store: mut? Store)
+}
+
+struct Cell {
+    value: u256,
+}
+
+// The `ref` body takes the trait's effect at `ref`, which is read-only.
+impl Slot for Cell {
+    fn slot(self) -> ref u256 uses (store: mut Store) {
+        ref self.value
+    }
+
+    fn slot(mut self) -> mut u256 uses (store: mut Store) {
+        mut self.value
+    }
+}
+
+struct FixedCell {
+    value: u256,
+}
+
+// A `mut?` method whose effect is always `mut` differs at `ref` alone.
+impl Slot for FixedCell {
+    fn slot(mut? self) -> mut? u256 uses (store: mut Store) {
+        mut? self.value
+    }
+}
+
+struct Pair {
+    items: [u256; 2],
+}
+
+fn items() -> mut? [u256; 2] uses (pair: mut? Pair) {
+    mut? pair.items
+}
+
+// A `mut` loop item asks the call for `mut`, which needs the effect `mut`.
+fn loop_with_read() uses (pair: Pair) {
+    for mut x in items() {
+        x = 1
+    }
+}
+
+#[raw_place]
+unsafe fn pair_at(_ slot: u256) -> (mut? u256, mut? u256) uses (storage: mut? RawStorage) {
+    unsafe { (storage_at<u256>(slot), storage_at<u256>(slot + 1)) }
+}
+
+// A `mut` binding of a nested split part asks the call for `mut`, which
+// needs the effect `mut`.
+fn nested_split_with_read() uses (storage: RawStorage) {
+    let ((mut a, b), c) = unsafe { (pair_at(0), storage_at<u256>(2)) }
+    a = 1
+}
+
+fn needs_mut() uses (store: mut Store) {}
+
+fn takes_mut(_ s: mut Store) {}
+
+// A `mut?` function's `ref` body only reads its `mut?` effects and
+// parameters, so it cannot pass them on `mut`.
+fn pass_on_in_ref_body(_ s: mut? Store) -> mut? u256 uses (store: mut? Store) {
+    needs_mut()
+    takes_mut(mut s)
+    mut? s.n
+}

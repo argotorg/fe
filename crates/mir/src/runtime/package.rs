@@ -1,12 +1,11 @@
-use common::indexmap::IndexMap;
+use common::{compilation::Target, indexmap::IndexMap};
 use hir::analysis::ty::AddressSpace;
 use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
             ManualContractSection, RootSemanticInstanceError, SemanticInstance,
-            generated_callee_key, get_or_build_semantic_instance, root_semantic_instance_key,
-            same_owner_effect_binding,
+            generated_callee_key, root_semantic_instance_key, same_owner_effect_binding,
         },
         ty::{
             const_ty::ConstTyData,
@@ -58,7 +57,7 @@ use crate::{
     verify::verify_runtime_package,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum LowerError {
     Unsupported(String),
 }
@@ -182,7 +181,7 @@ impl<'db> RuntimeGraphBuilder<'db> {
                 .map_err(|err| wrap_runtime_lowering_error(self.db, instance, err))?;
             let direct_callees = lowered
                 .direct_callees(self.db)
-                .into_iter()
+                .iter()
                 .map(|edge| edge.callee)
                 .collect::<Vec<_>>();
             let referenced_const_regions = lowered.referenced_const_regions(self.db);
@@ -190,13 +189,13 @@ impl<'db> RuntimeGraphBuilder<'db> {
             for callee in direct_callees.iter().copied() {
                 self.enqueue(callee);
             }
-            self.process_referenced_regions(&referenced_code_regions)?;
+            self.process_referenced_regions(referenced_code_regions)?;
             self.nodes.insert(
                 instance,
                 RuntimeGraphNode {
                     direct_callees,
-                    referenced_const_regions,
-                    referenced_code_regions,
+                    referenced_const_regions: referenced_const_regions.clone(),
+                    referenced_code_regions: referenced_code_regions.clone(),
                 },
             );
         }
@@ -339,7 +338,7 @@ fn build_standalone_main_package<'db>(
 ) -> Result<RuntimePackage<'db>, LowerError> {
     let mut roots = Vec::new();
     for &func in entry_funcs {
-        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
         let entry_args =
             entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)?;
         roots.push((
@@ -455,50 +454,89 @@ pub fn build_test_runtime_package<'db>(
     top_mod: TopLevelMod<'db>,
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
+    build_test_package(db, &[top_mod], filter, |_, name| sanitize_object_name(name))
+}
+
+/// Build one reachable runtime graph for every selected native test in a suite.
+/// Object identities remain distinct when source modules use the same test name.
+pub fn build_native_test_runtime_package<'db>(
+    db: &'db dyn MirDb,
+    top_mods: &[TopLevelMod<'db>],
+    filter: Option<&str>,
+) -> Result<RuntimePackage<'db>, LowerError> {
+    require_target(db, Target::Native)?;
+    build_test_package(db, top_mods, filter, |index, name| {
+        format!("__native_test_{index}_{}", sanitize_object_name(name))
+    })
+}
+
+/// Rejects building a package for another machine than the compilation's:
+/// layouts and destruction follow the compilation target.
+fn require_target(db: &dyn MirDb, target: Target) -> Result<(), LowerError> {
+    let actual = db.compilation_settings().target(db);
+    if actual == target {
+        Ok(())
+    } else {
+        Err(LowerError::Unsupported(format!(
+            "a {target:?} package needs the {target:?} compilation target, not {actual:?}"
+        )))
+    }
+}
+
+fn build_test_package<'db>(
+    db: &'db dyn MirDb,
+    top_mods: &[TopLevelMod<'db>],
+    filter: Option<&str>,
+    object_name: impl Fn(usize, &str) -> String,
+) -> Result<RuntimePackage<'db>, LowerError> {
+    let &top_mod = top_mods.first().ok_or_else(|| {
+        LowerError::Unsupported("test runtime package needs a source module".into())
+    })?;
     let mut roots = Vec::new();
     let mut objects = Vec::new();
-    for &func in top_mod.all_funcs(db) {
-        if func.top_mod(db) != top_mod {
-            continue;
-        }
-        let Some(attrs) = ItemKind::from(func).attrs(db) else {
-            continue;
-        };
-        if attrs.get_attr(db, "test").is_none() {
-            continue;
-        }
+    for &module in top_mods {
+        for &func in module.all_funcs(db) {
+            if func.top_mod(db) != module {
+                continue;
+            }
+            let Some(attrs) = ItemKind::from(func).attrs(db) else {
+                continue;
+            };
+            if attrs.get_attr(db, "test").is_none() {
+                continue;
+            }
 
-        let name = func
-            .name(db)
-            .to_opt()
-            .map(|name| name.data(db).to_string())
-            .unwrap_or_else(|| "<anonymous>".to_string());
-        if let Some(filter) = filter
-            && !name.contains(filter)
-        {
-            continue;
-        }
+            let name = func
+                .name(db)
+                .to_opt()
+                .map(|name| name.data(db).to_string())
+                .unwrap_or_else(|| "<anonymous>".to_string());
+            if let Some(filter) = filter
+                && !name.contains(filter)
+            {
+                continue;
+            }
 
-        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
-        let entry_args =
-            entry_semantic_args_plan(db, EntryEffectContext::TestFunc { func }, semantic)?;
-        let runtime_root = runtime_instance_for_semantic(db, semantic);
-        let root = synthetic_instance(
-            db,
-            RuntimeSyntheticSpec::TestRoot {
-                name: name.clone(),
-                callee: runtime_root,
-                entry_args,
-            },
-            Vec::new(),
-        );
-        roots.push(root);
-        objects.push((
-            sanitize_object_name(&name),
-            vec![(RuntimeSectionName::Test(name), root)],
-        ));
+            let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
+            let entry_args =
+                entry_semantic_args_plan(db, EntryEffectContext::TestFunc { func }, semantic)?;
+            let runtime_root = runtime_instance_for_semantic(db, semantic);
+            let root = synthetic_instance(
+                db,
+                RuntimeSyntheticSpec::TestRoot {
+                    name: name.clone(),
+                    callee: runtime_root,
+                    entry_args,
+                },
+                Vec::new(),
+            );
+            roots.push(root);
+            objects.push((
+                object_name(objects.len(), &name),
+                vec![(RuntimeSectionName::Test(name), root)],
+            ));
+        }
     }
-
     let primary = (objects.len() == 1).then(|| objects[0].0.clone());
     let package = build_sectioned_package(db, top_mod, roots, objects, primary.as_deref())?;
     verify_runtime_package(db, package)
@@ -510,6 +548,7 @@ fn build_contract_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
+    require_target(db, Target::Evm)?;
     let mut roots = Vec::new();
     let mut objects = Vec::new();
     let contracts = top_mod.all_contracts(db);
@@ -551,12 +590,13 @@ pub fn build_native_executable_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
+    require_target(db, Target::Native)?;
     let main = native_executable_entry(db, top_mod).ok_or_else(|| {
         LowerError::Unsupported(
             "native executable output requires `pub fn main() -> i32`".to_string(),
         )
     })?;
-    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(main))?;
+    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(main, None))?;
     let instance = runtime_instance_for_semantic(db, semantic);
     let package = build_sectioned_package(
         db,
@@ -726,7 +766,7 @@ pub(crate) fn manual_contract_root_instance<'db>(
     db: &'db dyn MirDb,
     func: Func<'db>,
 ) -> Result<RuntimeInstance<'db>, LowerError> {
-    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
     let callee = runtime_instance_for_semantic(db, semantic);
     let entry_args = entry_semantic_args_plan(
         db,
@@ -1094,7 +1134,7 @@ fn build_sectioned_package<'db>(
         .collect();
     let root_objects: Vec<_> = objects
         .iter()
-        .filter(|object| root_object_names.contains(&object.name(db)))
+        .filter(|object| root_object_names.contains(object.name(db)))
         .copied()
         .collect();
     let primary_object = primary_object_name.and_then(|primary| {
@@ -1128,7 +1168,7 @@ fn rewrite_object_embeds<'db>(
 ) -> RuntimeObject<'db> {
     let section_refs = code_region_map
         .iter()
-        .map(|(region, resolved)| (*region, resolved.source(db)))
+        .map(|(region, resolved)| (*region, resolved.source(db).clone()))
         .collect::<FxHashMap<_, _>>();
     let sections = object
         .sections(db)
@@ -1143,14 +1183,14 @@ fn rewrite_object_embeds<'db>(
                 &reachable,
                 &section_refs,
                 RuntimeSectionRef::Local {
-                    object: object.name(db),
+                    object: object.name(db).clone(),
                     section: section.name.clone(),
                 },
             );
             section
         })
         .collect();
-    make_runtime_object(db, object.name(db), sections)
+    make_runtime_object(db, object.name(db).clone(), sections)
 }
 
 fn resolve_code_regions<'db>(
@@ -1160,7 +1200,7 @@ fn resolve_code_regions<'db>(
     let mut resolved = Vec::new();
     for object in objects {
         for section in object.sections(db) {
-            let Some((region, symbol)) = resolved_section_region(db, &section) else {
+            let Some((region, symbol)) = resolved_section_region(db, section) else {
                 continue;
             };
             resolved.push(make_resolved_code_region(
@@ -1190,23 +1230,33 @@ fn resolved_section_region<'db>(
             | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. },
         ) => match section.name {
             RuntimeSectionName::Init => Some((
-                RuntimeCodeRegion::new(db, RuntimeCodeRegionKey::ContractInit { contract }),
-                format!("{}_init", contract_name(db, contract)),
+                RuntimeCodeRegion::new(
+                    db,
+                    RuntimeCodeRegionKey::ContractInit {
+                        contract: *contract,
+                    },
+                ),
+                format!("{}_init", contract_name(db, *contract)),
             )),
             RuntimeSectionName::Runtime => Some((
-                RuntimeCodeRegion::new(db, RuntimeCodeRegionKey::ContractRuntime { contract }),
-                format!("{}_runtime", contract_name(db, contract)),
+                RuntimeCodeRegion::new(
+                    db,
+                    RuntimeCodeRegionKey::ContractRuntime {
+                        contract: *contract,
+                    },
+                ),
+                format!("{}_runtime", contract_name(db, *contract)),
             )),
             RuntimeSectionName::Main | RuntimeSectionName::Test(_) => None,
         },
         RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ManualContractRoot {
             func, ..
         }) => {
-            let region = runtime_code_region_for_manual_root(db, func)?;
+            let region = runtime_code_region_for_manual_root(db, *func)?;
             Some((region, code_region_symbol(db, region)))
         }
         RuntimeFunctionOwner::Semantic(semantic) => {
-            let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+            let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
                 return None;
             };
             let region = runtime_code_region_for_manual_root(db, func)?;
@@ -1330,7 +1380,7 @@ fn materialized_contracts_for_roots<'db>(
         .filter_map(|root| match root.key(db).source(db) {
             RuntimeInstanceSource::Synthetic(synthetic) => match synthetic.spec(db) {
                 RuntimeSyntheticSpec::ContractInitRoot { contract, .. }
-                | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => Some(contract),
+                | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => Some(*contract),
                 RuntimeSyntheticSpec::MainRoot { .. }
                 | RuntimeSyntheticSpec::TestRoot { .. }
                 | RuntimeSyntheticSpec::ManualContractRoot { .. }
@@ -1363,7 +1413,7 @@ fn semantic_instance_for_root_owner<'db>(
             "root semantic instance is not closed under synthesized root substitution: {err:?}"
         )),
     })?;
-    Ok(get_or_build_semantic_instance(db, key))
+    Ok(SemanticInstance::new(db, key))
 }
 
 fn contract_object_spec<'db>(
@@ -1395,8 +1445,8 @@ fn runtime_root_candidate<'db>(
     if func.is_associated_func(db) || func.params(db).next().is_some() {
         return Ok(RuntimeRootCandidate::NotRoot);
     }
-    let semantic = match root_semantic_instance_key(db, BodyOwner::Func(func)) {
-        Ok(key) => get_or_build_semantic_instance(db, key),
+    let semantic = match root_semantic_instance_key(db, BodyOwner::Func(func, None)) {
+        Ok(key) => SemanticInstance::new(db, key),
         Err(err) => {
             return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
                 func,
@@ -1495,7 +1545,7 @@ pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
 ) -> RuntimeInstance<'db> {
     let typed_body = semantic.key(db).typed_body(db);
     let owner = semantic.key(db).owner(db);
-    if let BodyOwner::Func(func) = owner
+    if let BodyOwner::Func(func, _) = owner
         && func.body(db).is_none()
     {
         panic!(
@@ -1604,7 +1654,7 @@ fn resolve_decode_runtime_args_instance<'db>(
         &[host_ty, sol_abi_ty(db, scope)?, msg_ty],
     )
     .map_err(|error| generated_call_error(db, func, error))?;
-    let semantic = get_or_build_semantic_instance(db, key);
+    let semantic = SemanticInstance::new(db, key);
     Ok(runtime_instance_for_semantic_with_visible_param_overrides(
         db,
         semantic,
@@ -1618,6 +1668,7 @@ fn resolve_decode_runtime_args_instance<'db>(
     ))
 }
 
+/// The instance of `inst`'s `method` an EVM contract entry calls.
 pub(crate) fn resolve_trait_runtime_instance<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
@@ -1647,7 +1698,7 @@ pub(crate) fn resolve_trait_runtime_instance<'db>(
     .map_err(|error| generated_call_error(db, func, error))?;
     Ok(runtime_instance_for_semantic(
         db,
-        get_or_build_semantic_instance(db, key),
+        SemanticInstance::new(db, key),
     ))
 }
 
@@ -1678,7 +1729,9 @@ fn visible_init_arg_fields<'db>(db: &'db dyn MirDb, semantic: SemanticInstance<'
         .iter()
         .filter_map(|entry| match entry.binding {
             LocalBinding::Param { idx, .. } => Some(idx as u32),
-            LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => None,
+            LocalBinding::Local { .. }
+            | LocalBinding::ParamPart { .. }
+            | LocalBinding::EffectParam { .. } => None,
         })
         .collect::<Vec<_>>()
         .into_boxed_slice()
@@ -1698,7 +1751,9 @@ fn visible_recv_arg_fields<'db>(
         .iter()
         .filter_map(|entry| match entry.binding {
             LocalBinding::Local { pat, .. } => tuple_indices_by_pat.get(&pat).copied(),
-            LocalBinding::Param { .. } | LocalBinding::EffectParam { .. } => None,
+            LocalBinding::Param { .. }
+            | LocalBinding::ParamPart { .. }
+            | LocalBinding::EffectParam { .. } => None,
         })
         .collect::<Vec<_>>()
         .into_boxed_slice()
@@ -1884,11 +1939,11 @@ pub fn runtime_instance_symbol_key<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
 ) -> String {
-    runtime_instance_symbol_key_query(db, instance)
+    runtime_instance_symbol_key_query(db, instance).clone()
 }
 
 fn runtime_instance_sort_key<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> String {
-    runtime_instance_sort_key_query(db, instance)
+    runtime_instance_sort_key_query(db, instance).clone()
 }
 
 #[salsa::tracked]
@@ -1914,8 +1969,8 @@ fn runtime_instance_key_in_mode<'db>(
     mode: IdentityMode,
 ) -> String {
     match mode {
-        IdentityMode::Sort => runtime_instance_sort_key_query(db, instance),
-        IdentityMode::Symbol => runtime_instance_symbol_key_query(db, instance),
+        IdentityMode::Sort => runtime_instance_sort_key_query(db, instance).clone(),
+        IdentityMode::Symbol => runtime_instance_symbol_key_query(db, instance).clone(),
     }
 }
 
@@ -1948,7 +2003,7 @@ fn runtime_instance_source_key<'db>(
             )
         }
         RuntimeInstanceSource::Synthetic(synthetic) => {
-            runtime_synthetic_spec_key(db, synthetic.spec(db), mode)
+            runtime_synthetic_spec_key(db, synthetic.spec(db).clone(), mode)
         }
     }
 }
@@ -2225,6 +2280,7 @@ fn scalar_role_sort_key<'db>(db: &'db dyn MirDb, role: &ScalarRole<'db>) -> Stri
         ScalarRole::EnumTag { enum_layout } => {
             format!("enum_tag:{}", layout_sort_key(db, *enum_layout))
         }
+        ScalarRole::Pointer => "pointer".to_string(),
     }
 }
 
@@ -2269,7 +2325,7 @@ fn target_root_provider_materialization_sort_key<'db>(
 }
 
 fn layout_sort_key<'db>(db: &'db dyn MirDb, layout: LayoutId<'db>) -> String {
-    layout_sort_key_query(db, layout)
+    layout_sort_key_query(db, layout).clone()
 }
 
 #[salsa::tracked]
@@ -2329,7 +2385,7 @@ pub(crate) fn runtime_instance_display_name<'db>(
             symbol_base_for_semantic_instance(db, semantic)
         }
         RuntimeInstanceSource::Synthetic(synthetic) => {
-            symbol_base_for_runtime_instance(db, &synthetic.spec(db))
+            symbol_base_for_runtime_instance(db, synthetic.spec(db))
         }
     }
 }
@@ -2353,7 +2409,7 @@ fn symbol_base_for_semantic_instance<'db>(
 ) -> String {
     let owner = semantic.key(db).owner(db);
     match owner {
-        BodyOwner::Func(func) => func
+        BodyOwner::Func(func, _) => func
             .name(db)
             .to_opt()
             .map(|name| name.data(db).to_string())
@@ -2438,7 +2494,7 @@ fn inline_hint_for_semantic<'db>(
     semantic: SemanticInstance<'db>,
 ) -> RuntimeInlineHint {
     match semantic.key(db).owner(db) {
-        BodyOwner::Func(func) => match func.inline_hint(db) {
+        BodyOwner::Func(func, _) => match func.inline_hint(db) {
             Some(InlineHint::Hint) => RuntimeInlineHint::Hint,
             Some(InlineHint::Always) => RuntimeInlineHint::Always,
             Some(InlineHint::Never) => RuntimeInlineHint::Never,
@@ -2510,6 +2566,7 @@ fn sanitize_object_name(value: &str) -> String {
 mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
+    use salsa::Setter;
     use url::Url;
 
     use crate::runtime::RuntimeExitBehavior;
@@ -2519,6 +2576,9 @@ mod tests {
     #[test]
     fn native_package_keeps_extern_calls_as_bodyless_declarations() {
         let mut db = DriverDataBase::default();
+        db.compilation_settings()
+            .set_target(&mut db)
+            .to(Target::Native);
         let file = db.workspace().touch(
             &mut db,
             Url::parse("file:///native_extern.fe").unwrap(),
@@ -2534,7 +2594,7 @@ pub fn main() -> i32 {
         let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
         let imports = package
             .functions(&db)
-            .into_iter()
+            .iter()
             .filter(|function| function.linkage(&db) == RuntimeLinkage::External)
             .collect::<Vec<_>>();
         assert_eq!(imports.len(), 1);
@@ -2569,7 +2629,7 @@ pub fn main() -> i32 {
             panic!("recv wrapper should be synthetic");
         };
         match synthetic.spec(db) {
-            RuntimeSyntheticSpec::ContractRecvAbi { plan } => plan,
+            RuntimeSyntheticSpec::ContractRecvAbi { plan } => plan.clone(),
             other => panic!("expected recv wrapper synthetic spec, got {other:?}"),
         }
     }
@@ -2640,9 +2700,12 @@ fn invalid(result: mut u256) -> u256 {
                     .is_some_and(|name| name.data(&db) == "invalid")
             })
             .expect("invalid function");
-        let semantic = get_or_build_semantic_instance(
+        let semantic = SemanticInstance::new(
             &db,
-            hir::analysis::semantic::identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+            hir::analysis::semantic::identity_semantic_instance_key(
+                &db,
+                BodyOwner::Func(func, None),
+            ),
         );
         let runtime = runtime_instance_for_semantic(&db, semantic);
 
@@ -2662,8 +2725,8 @@ fn invalid(result: mut u256) -> u256 {
     fn package_object_names(db: &DriverDataBase, package: RuntimePackage<'_>) -> Vec<String> {
         let mut names = package
             .objects(db)
-            .into_iter()
-            .map(|object| object.name(db))
+            .iter()
+            .map(|object| object.name(db).clone())
             .collect::<Vec<_>>();
         names.sort();
         names
@@ -2672,8 +2735,8 @@ fn invalid(result: mut u256) -> u256 {
     fn package_root_object_names(db: &DriverDataBase, package: RuntimePackage<'_>) -> Vec<String> {
         let mut names = package
             .root_objects(db)
-            .into_iter()
-            .map(|object| object.name(db))
+            .iter()
+            .map(|object| object.name(db).clone())
             .collect::<Vec<_>>();
         names.sort();
         names
@@ -2729,8 +2792,8 @@ pub contract Unused {}
 
 #[test]
 fn selected() uses (evm: mut Evm) {
-    let addr = evm.create2<Child>(value: 0, args: (), salt: 1)
-    assert!(addr.inner != 0)
+    let addr = evm.create2<Child>(value: Wei::zero(), args: (), salt: 1)
+    assert!(addr.word() != 0)
 }
 "#,
             Some("selected"),
@@ -2890,7 +2953,7 @@ pub contract NoInitBox {}
             panic!("expected synthetic contract init root");
         };
         assert_eq!(
-            root_init_abi, init_abi,
+            *root_init_abi, init_abi,
             "contract init root should always call the synthesized init abi wrapper"
         );
     }

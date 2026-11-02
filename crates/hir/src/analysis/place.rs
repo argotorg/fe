@@ -9,25 +9,25 @@ use crate::{
     hir_def::{BinOp, Body, Expr, ExprId, FieldIndex, Partial, UnOp},
 };
 use num_traits::ToPrimitive;
-use salsa::Update;
+use salsa::SalsaValue;
 
 /// A "place" is an assignable location (an lvalue): a base binding plus zero or
 /// more resolved projections (field/index).
 ///
 /// Places are used to model effect arguments as implicit references and to
 /// select the correct load/store operations based on address space.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct Place<'db> {
     pub base: PlaceBase<'db>,
     pub projections: Vec<PlaceProjection<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PlaceBase<'db> {
     Binding(LocalBinding<'db>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PlaceProjection<'db> {
     Deref {
         result_ty: TyId<'db>,
@@ -48,7 +48,7 @@ pub enum PlaceProjection<'db> {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ResolvedPlaceField<'db> {
     pub base_ty: TyId<'db>,
     pub implicit_deref_ty: Option<TyId<'db>>,
@@ -136,7 +136,7 @@ impl<'db> Place<'db> {
                 let binding = expr_binding(expr)?;
                 Some(Place::new(PlaceBase::Binding(binding)))
             }
-            Expr::Un(base, UnOp::Mut | UnOp::Ref) => {
+            Expr::Un(base, UnOp::Mut | UnOp::MaybeMut | UnOp::Ref) => {
                 Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty, is_entry)
             }
             Expr::Un(base, UnOp::Deref) => {
@@ -302,6 +302,12 @@ fn field_index<'db>(
     let idx = match field {
         FieldIndex::Index(index) => {
             let idx = index.data(db).to_usize()?;
+            if base_ty.as_tuple_struct(db).is_some() {
+                if idx >= base_ty.field_types(db).len() {
+                    return None;
+                }
+                return u16::try_from(idx).ok();
+            }
             let (base_ty, ty_args) = base_ty.decompose_ty_app(db);
             if !base_ty.is_tuple(db) || idx >= ty_args.len() {
                 return None;

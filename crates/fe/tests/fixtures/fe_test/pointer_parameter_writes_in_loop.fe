@@ -16,14 +16,14 @@ impl<T> Copy for Arr<T> {}
 
 impl<T> Arr<T> {
     fn alloc(_ len: u256) -> Self {
-        Arr { ptr: ptr::cast<u8, T>(ptr::alloc_bytes(len * 64)), len }
+        Arr { ptr: ptr::cast<u8, T>(ptr::alloc_bytes((len * 64).downcast_saturate())), len }
     }
 
     fn at(self, _ i: u256) -> *T {
         if i >= self.len {
             core::panic()
         }
-        ptr::offset(self.ptr, i)
+        ptr::offset(self.ptr, i.downcast_unchecked())
     }
 }
 
@@ -70,7 +70,7 @@ fn load_word(_ at: *u8) -> u256 {
 }
 
 fn record(_ buf: *u8, _ value: u256) -> u256 {
-    let at = ptr::offset_bytes(buf, (value & 3) * 0xc0)
+    let at = ptr::offset_bytes(buf, ((value & 3) * 0xc0).downcast_unchecked())
     store_word(at, value)
     store_word(ptr::offset_bytes(at, 0x20), value)
     store_word(ptr::offset_bytes(at, 0x40), value)

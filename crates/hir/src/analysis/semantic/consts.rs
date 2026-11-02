@@ -2,12 +2,13 @@ use common::layout::enum_tag_bits;
 use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::analysis::{
     HirAnalysisDb,
     semantic::SemanticInstance,
     ty::{
+        AddressSpace,
         adt_def::{AdtDef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand},
         const_ty::{
             ConcreteArrayLengthError, ConstTyData, ConstTyId, const_ty_from_sem_const,
@@ -26,7 +27,6 @@ use super::ir::VariantIndex;
 #[salsa::interned]
 #[derive(Debug)]
 pub struct SemConstId<'db> {
-    #[return_ref]
     pub value: SemConstValue<'db>,
 }
 
@@ -98,7 +98,7 @@ impl<'db> SemConstId<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemConstValue<'db> {
     Unit,
     Scalar {
@@ -125,7 +125,7 @@ pub enum SemConstValue<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemConstScalar {
     Bool(bool),
     Int { value: BigInt },
@@ -249,7 +249,7 @@ pub(crate) fn verify_sem_const_description_shape<'db>(
 }
 
 // Evaluation loads the same constants repeatedly, and each value is immutable.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn verify_sem_const_shape_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     value: SemConstId<'db>,
@@ -587,7 +587,7 @@ pub fn sem_const_from_ty<'db>(
 /// Reify a declaration-owned const value, specializing its expected type once
 /// with the instance's arguments. For values whose expected type already comes
 /// from an instantiated body, use `reify_runtime_const_for_ty` instead.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn reify_runtime_const<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -602,7 +602,7 @@ pub fn reify_runtime_const<'db>(
 /// Reify an instantiated constant against an already-instantiated expected
 /// type. Both belong to their current environment; this operation performs no
 /// generic substitution. Use `reify_runtime_const` for declaration templates.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn reify_runtime_const_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -899,31 +899,9 @@ pub fn normalize_int_to_shape(value: BigInt, bits: u16, signed: bool) -> BigInt 
 pub fn int_ty_shape<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<(u16, bool)> {
     // A view of an integer has the integer's value shape.
     let ty = ty.as_view(db).unwrap_or(ty);
-    let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
-        return None;
-    };
-    Some(match prim {
-        PrimTy::U8 => (8, false),
-        PrimTy::U16 => (16, false),
-        PrimTy::U32 => (32, false),
-        PrimTy::U64 => (64, false),
-        PrimTy::U128 => (128, false),
-        PrimTy::U256 | PrimTy::Usize => (256, false),
-        PrimTy::I8 => (8, true),
-        PrimTy::I16 => (16, true),
-        PrimTy::I32 => (32, true),
-        PrimTy::I64 => (64, true),
-        PrimTy::I128 => (128, true),
-        PrimTy::I256 | PrimTy::Isize => (256, true),
-        PrimTy::Bool
-        | PrimTy::String
-        | PrimTy::Array
-        | PrimTy::Tuple(_)
-        | PrimTy::Ptr(_)
-        | PrimTy::View
-        | PrimTy::BorrowMut
-        | PrimTy::BorrowRef => return None,
-    })
+    let prim = ty.as_prim(db)?;
+    let bits = prim_int_bits(prim, db.compilation_settings().target(db))?;
+    Some((bits as u16, prim.is_signed_int()))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1019,6 +997,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         if !visiting.insert(ty) {
             return Ok(None);
         }
+        let target = db.compilation_settings().target(db);
 
         let result = if let Some(cause) = ty.invalid_cause(db) {
             return Err(RuntimeSizeError::InvalidType(cause));
@@ -1071,13 +1050,15 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         } else if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
             match prim {
                 PrimTy::Bool => Some(1),
-                PrimTy::String
-                | PrimTy::Ptr(_)
+                // A memory address or a reference is a `usize`; a state
+                // pointer is its slot word.
+                PrimTy::Ptr(AddressSpace::Memory)
                 | PrimTy::View
                 | PrimTy::BorrowMut
-                | PrimTy::BorrowRef => Some(WORD_SIZE_BYTES),
+                | PrimTy::BorrowRef => Some(target.usize_bits() as u64 / 8),
+                PrimTy::String | PrimTy::Ptr(_) => Some(WORD_SIZE_BYTES),
                 PrimTy::Array | PrimTy::Tuple(_) => None,
-                _ => prim_int_bits(*prim).map(|bits| bits as u64 / 8),
+                _ => prim_int_bits(*prim, target).map(|bits| bits as u64 / 8),
             }
         } else if ty.is_struct(db) {
             let adt = ty.adt_def(db).expect("struct has an ADT definition");
@@ -1122,4 +1103,93 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         return Err(RuntimeSizeError::UnavailableConcrete);
     }
     Ok(size)
+}
+
+/// The first evaluation fault in the layout of `ty`: in the type itself, in
+/// an array extent, or in a field instantiated for its application, walked as
+/// capability shapes walk it, with each part normalized by `normalize`.
+/// Unlike [`runtime_size_bytes`], it looks past generic components and
+/// sizes, so a known fault is found however the rest of the layout turns out.
+pub(crate) fn concrete_layout_fault<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    normalize: &dyn Fn(TyId<'db>) -> TyId<'db>,
+) -> Option<InvalidCause<'db>> {
+    // The walk stops at the first fault, so a view seen before is either on
+    // the current path or free of faults.
+    fn inner<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        source: TyId<'db>,
+        normalize: &dyn Fn(TyId<'db>) -> TyId<'db>,
+        seen: &mut FxHashSet<(TyId<'db>, TyId<'db>)>,
+    ) -> Option<InvalidCause<'db>> {
+        // An instantiated field may still be a projection. The source view
+        // keeps its anonymous const bodies for checked evaluation, so only a
+        // projection is resolved there.
+        let ty = normalize(ty);
+        let source = if source.has_projection(db) {
+            normalize(source)
+        } else {
+            source
+        };
+        if let Some(cause) = ty.invalid_cause(db) {
+            return Some(cause);
+        }
+        if ty.has_invalid(db) {
+            return Some(first_invalid_ty_cause(db, ty).unwrap_or(InvalidCause::Other));
+        }
+        if ty.has_var(db) || !seen.insert((ty, source)) {
+            return None;
+        }
+        let parts = if let Some(target) = ty.as_view(db) {
+            vec![ConcreteTypeView::new(
+                target,
+                source.as_view(db).unwrap_or(target),
+            )]
+        } else if ty.is_tuple(db) {
+            let source_fields = source.field_types(db);
+            ty.field_types(db)
+                .into_iter()
+                .enumerate()
+                .map(|(index, field)| {
+                    ConcreteTypeView::new(field, source_fields.get(index).copied().unwrap_or(field))
+                })
+                .collect()
+        } else if ty.is_array(db) {
+            let (_, args) = ty.decompose_ty_app(db);
+            let (_, source_args) = source.decompose_ty_app(db);
+            let source_args = if source.is_array(db) {
+                source_args
+            } else {
+                args
+            };
+            // An extent faults once the arguments it reads are concrete, even
+            // while other generic arguments its body captures are not.
+            if let (Some(&len), Some(&source_len)) = (args.get(1), source_args.get(1))
+                && let Err(ConcreteArrayLengthError::Invalid(cause)) =
+                    demand_concrete_array_length(db, len, source_len)
+            {
+                return Some(cause);
+            }
+            args.first()
+                .map(|&elem| {
+                    ConcreteTypeView::new(elem, source_args.first().copied().unwrap_or(elem))
+                })
+                .into_iter()
+                .collect()
+        } else if let Some(adt) = ty.adt_def(db) {
+            (0..adt.fields(db).len())
+                .filter_map(|variant| adt_variant_field_views(db, adt, variant, ty, source).ok())
+                .flatten()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        parts
+            .into_iter()
+            .find_map(|part| inner(db, part.canonical, part.source, normalize, seen))
+    }
+
+    inner(db, ty, ty, normalize, &mut FxHashSet::default())
 }

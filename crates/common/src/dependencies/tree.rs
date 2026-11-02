@@ -66,7 +66,7 @@ fn collect_configs(db: &dyn InputDb, graph: &DiGraph<Url, TreeEdge>) -> HashMap<
     for node_idx in graph.node_indices() {
         let url = &graph[node_idx];
         if let Some(ingot) = db.workspace().containing_ingot(db, url.clone())
-            && let Some(mut config) = ingot.config(db)
+            && let Some(mut config) = ingot.config(db).clone()
         {
             if config.metadata.version.is_none()
                 && let Some(workspace_url) =

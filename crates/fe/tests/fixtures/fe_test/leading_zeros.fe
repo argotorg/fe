@@ -93,20 +93,20 @@ pub contract BitsProbe {
 
 #[test]
 fn bit_counts_runtime() uses (evm: mut Evm) {
-    let probe = evm.create2<BitsProbe>(value: 0, args: (), salt: 0)
+    let probe = evm.create2<BitsProbe>(value: Wei::zero(), args: (), salt: 0)
     for (value, leading, trailing) in CASES {
         let got_leading: u256 = evm
             .call(
                 addr: probe,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: BitsMsg::Leading { value },
             )
         let got_trailing: u256 = evm
             .call(
                 addr: probe,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: BitsMsg::Trailing { value },
             )
         assert!(got_leading == leading)

@@ -14,7 +14,7 @@ fn forward(_ x: mut bool) -> mut bool {
 }
 
 impl Guarded {
-    fn locked_forwarded(mut self) -> mut bool @transient {
+    fn locked_forwarded(mut self) -> mut bool {
         forward(mut self.locked.value)
     }
 
@@ -49,8 +49,8 @@ pub contract C uses (storage: mut RawStorage) {
 
 #[test]
 fn forwarded_transient_place() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    let r: (bool, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: 0, message: M::Run {})
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: (bool, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
     assert!(r.0)
     assert!(r.1 == 7)
     assert!(r.2 == 0)

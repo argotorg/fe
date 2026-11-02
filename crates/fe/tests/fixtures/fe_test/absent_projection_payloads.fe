@@ -1,0 +1,82 @@
+// A projection that never returns a variant grants nothing through its
+// payload, so its result space there is none, and lowering returns the
+// payload as it likes.
+use core::option::Option
+use core::result::Result
+
+fn absent() -> Option<ref u256> {
+    Option::None
+}
+
+fn absent_pair() -> Option<(ref u256, ref u256)> {
+    Option::None
+}
+
+fn failed() -> Result<u256, ref u256> {
+    Result::Err(7)
+}
+
+fn absent_of<T>(_ value: T) -> Option<ref T> {
+    Option::None
+}
+
+// A grant of `absent`'s payload is never live either.
+fn forwarded() -> Option<ref u256> {
+    absent()
+}
+
+fn first_if(_ xs: ref [u256; 2], _ given: bool) -> Option<ref u256> {
+    if given {
+        Option::Some(ref xs[0])
+    } else {
+        absent()
+    }
+}
+
+#[test]
+fn absent_payload() {
+    if let Option::Some(ref _x) = absent() {
+        assert(false)
+    }
+}
+
+#[test]
+fn absent_nested_payload() {
+    if let Option::Some((ref _a, ref _b)) = absent_pair() {
+        assert(false)
+    }
+}
+
+#[test]
+fn absent_ok_payload() {
+    match failed() {
+        Result::Err(code) => assert(code == 7),
+        Result::Ok(ref _x) => assert(false),
+    }
+}
+
+#[test]
+fn absent_generic_payload() {
+    if let Option::Some(ref _x) = absent_of(7 as u256) {
+        assert(false)
+    }
+}
+
+#[test]
+fn forwarded_absent_payload() {
+    if let Option::Some(ref _x) = forwarded() {
+        assert(false)
+    }
+}
+
+#[test]
+fn absent_beside_a_grant() {
+    let xs: [u256; 2] = [5, 6]
+    match first_if(ref xs, given: true) {
+        Option::Some(ref x) => assert(x == 5),
+        Option::None => assert(false),
+    }
+    if let Option::Some(ref _x) = first_if(ref xs, given: false) {
+        assert(false)
+    }
+}

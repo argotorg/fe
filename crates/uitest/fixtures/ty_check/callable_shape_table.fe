@@ -1,0 +1,42 @@
+// The rows of the parameter-shape table are distinct shapes: a callable of
+// one row does not satisfy a bound of another.
+fn two<F: Fn(own usize, u256) -> u256>(_ f: F) -> u256 uses F::E { f(2, 3) }
+fn product<F: Fn((own usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn views<F: Fn((ref usize, ref u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn tuple<F: Fn((usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn tuple_own<F: Fn(own (usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn none<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+fn unit<F: Fn(own ()) -> u256>(_ f: F) -> u256 uses F::E { f(()) }
+
+fn f_two(_ i: own usize, _ x: u256) -> u256 { i as u256 + x }
+fn f_product(_ (i, x): (own usize, u256)) -> u256 { i as u256 + x }
+fn f_tuple(_ t: (usize, u256)) -> u256 { t.0 as u256 + t.1 }
+fn f_tuple_own(_ t: own (usize, u256)) -> u256 { t.0 as u256 + t.1 }
+fn f_none() -> u256 { 5 }
+fn f_unit(_ u: own ()) -> u256 { 5 }
+
+fn items() {
+    let _ = product(f_tuple)
+    let _ = tuple(f_product)
+    let _ = two(f_product)
+    let _ = views(f_product)
+    let _ = unit(f_none)
+    let _ = none(f_unit)
+    let _ = tuple_own(f_tuple)
+    let _ = tuple(f_tuple_own)
+}
+
+fn closures() {
+    let _ = product(|t: own (usize, u256)| t.0 as u256 + t.1)
+    let _ = tuple(|t: own (usize, u256)| t.0 as u256 + t.1)
+}
+
+// Accepted: each callable at its own row.
+fn same_rows() {
+    let _ = two(f_two)
+    let _ = product(f_product)
+    let _ = tuple(f_tuple)
+    let _ = tuple_own(f_tuple_own)
+    let _ = none(f_none)
+    let _ = unit(f_unit)
+}

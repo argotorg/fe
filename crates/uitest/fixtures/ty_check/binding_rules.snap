@@ -5,55 +5,55 @@ expression: diags
 input_file: fixtures/ty_check/binding_rules.fe
 ---
 error[1-0001]: `let mut` is not Fe: `var x = …` binds a mutable value, and `let x = mut p` a mutable access
-    ┌─ binding_rules.fe:146:9
+    ┌─ binding_rules.fe:147:9
     │
-146 │     let mut x = p.word
+147 │     let mut x = p.word
     │         ^^^ `let mut` is not Fe: `var x = …` binds a mutable value, and `let x = mut p` a mutable access
 
 error[1-0001]: a read access is bound by `let x = ref p`, with `ref` on the initializer
-    ┌─ binding_rules.fe:147:9
+    ┌─ binding_rules.fe:148:9
     │
-147 │     let ref y = p
+148 │     let ref y = p
     │         ^^^ a read access is bound by `let x = ref p`, with `ref` on the initializer
-
-error[8-0018]: left-hand side of assignment is immutable
-    ┌─ binding_rules.fe:160:5
-    │
-159 │ fn assign_params(_ x: own u256, _ y: u256) -> u256 {
-    │                    - write `var x` to make this owned parameter mutable
-160 │     x = 1
-    │     ^ immutable assignment
 
 error[8-0018]: left-hand side of assignment is immutable
     ┌─ binding_rules.fe:161:5
     │
-159 │ fn assign_params(_ x: own u256, _ y: u256) -> u256 {
-    │                                   - a view parameter is read-only; write `y: mut …` for a mutable borrow
-160 │     x = 1
-161 │     y = 2
+160 │ fn assign_params(_ x: own u256, _ y: u256) -> u256 {
+    │                    - write `var x` to make this owned parameter mutable
+161 │     x = 1
     │     ^ immutable assignment
 
 error[8-0018]: left-hand side of assignment is immutable
-    ┌─ binding_rules.fe:168:28
+    ┌─ binding_rules.fe:162:5
     │
-168 │         Option::Some(v) => v += 1
+160 │ fn assign_params(_ x: own u256, _ y: u256) -> u256 {
+    │                                   - a view parameter is read-only; write `y: mut …` for a mutable borrow
+161 │     x = 1
+162 │     y = 2
+    │     ^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+    ┌─ binding_rules.fe:169:28
+    │
+169 │         Option::Some(v) => v += 1
     │                      -     ^ immutable assignment
     │                      │
     │                      write `mut v` to write through to its place
 
 error[8-0066]: mutable borrow requires a mutable place
-    ┌─ binding_rules.fe:139:22
+    ┌─ binding_rules.fe:140:22
     │
-137 │ fn mut_immutable(_ o: Option<u256>) -> u256 {
+138 │ fn mut_immutable(_ o: Option<u256>) -> u256 {
     │                    - `o` does not provide mutable access
-138 │     match o {
-139 │         Option::Some(mut v) => v
+139 │     match o {
+140 │         Option::Some(mut v) => v
     │                      ^^^^^ cannot borrow as `mut`
 
 error[8-0069]: explicit borrow required
-    ┌─ binding_rules.fe:195:10
+    ┌─ binding_rules.fe:196:10
     │
-195 │     bump(cell.get_mut())
+196 │     bump(cell.get_mut())
     │          ^^^^^^^^^^^^^^ this argument must be explicitly borrowed as `mut`
     │
     = help: try `mut cell.get_mut()`
@@ -75,81 +75,89 @@ error[8-0119]: a read access needs a `ref` binding
    = mark the binding `ref` to hold the access, as `let x = ref …`, `(i, ref x)` or `for ref x in …`
 
 error[8-0119]: a read access needs a `ref` binding
-   ┌─ binding_rules.fe:74:13
+   ┌─ binding_rules.fe:75:13
    │
-74 │     let (i, x) = first(items)
+75 │     let (i, x) = first(items)
    │             ^ this binds a read access of `Item`, which is not `Copy`
    │
    = mark the binding `ref` to hold the access, as `let x = ref …`, `(i, ref x)` or `for ref x in …`
 
 error[8-0119]: a read access needs a `ref` binding
-   ┌─ binding_rules.fe:87:9
+   ┌─ binding_rules.fe:88:9
    │
-87 │     for item in items {
+88 │     for item in items {
    │         ^^^^ this binds a read access of `Item`, which is not `Copy`
    │
    = mark the binding `ref` to hold the access, as `let x = ref …`, `(i, ref x)` or `for ref x in …`
 
 error[8-0119]: a read access needs a `ref` binding
-   ┌─ binding_rules.fe:90:9
+   ┌─ binding_rules.fe:91:9
    │
-90 │     for var item in items {
+91 │     for var item in items {
    │         ^^^^^^^^ this binds a read access of `Item`, which is not `Copy`
    │
    = mark the binding `ref` to hold the access, as `let x = ref …`, `(i, ref x)` or `for ref x in …`
 
 error[8-0120]: a `ref` binding needs a place or an access
-    ┌─ binding_rules.fe:112:10
+    ┌─ binding_rules.fe:113:10
     │
-112 │     let (ref a, mut b) = (5, 6)
+113 │     let (ref a, mut b) = (5, 6)
     │          ^^^^^ this binds an owned value
     │
     = remove `ref`: an owned value is bound by value
 
 error[8-0120]: a `mut` binding needs a place or an access
-    ┌─ binding_rules.fe:112:17
+    ┌─ binding_rules.fe:113:17
     │
-112 │     let (ref a, mut b) = (5, 6)
+113 │     let (ref a, mut b) = (5, 6)
     │                 ^^^^^ this binds an owned value
     │
     = write `var` for a mutable value
 
 error[8-0120]: a `ref` binding needs a place or an access
-    ┌─ binding_rules.fe:113:10
+    ┌─ binding_rules.fe:114:10
     │
-113 │     let (ref i, ref item) = first(items)
+114 │     let (ref i, ref item) = first(items)
     │          ^^^^^ this binds an owned value
     │
     = remove `ref`: an owned value is bound by value
 
 warning[8-0121]: `var` copies a `mut` access
-    ┌─ binding_rules.fe:132:9
+    ┌─ binding_rules.fe:133:9
     │
-132 │     var w = cell.get_mut()
+133 │     var w = cell.get_mut()
     │         ^ this binds a copy of the `u256`, so writes to it do not reach its place
     │
     = bind it with `let` to write through the access, or call the read projection to copy
 
 error[8-0122]: `var` binds a value, not an access
-    ┌─ binding_rules.fe:125:9
+    ┌─ binding_rules.fe:126:9
     │
-125 │     var w = mut cell.word
+126 │     var w = mut cell.word
     │         ^ this binds a value, but its initializer names an access
     │
     = remove `ref` or `mut` from the initializer to copy its value, or bind the access with `let`
 
 error[8-0123]: a `mut` binding needs a mutable place or access
-    ┌─ binding_rules.fe:119:13
+    ┌─ binding_rules.fe:120:13
     │
-119 │     let (i, mut item) = first(items)
+120 │     let (i, mut item) = first(items)
+    │             ^^^^^^^^ this binds part of a read access
+    │
+    = write `var` for a mutable copy, or use the `mut` projection to write through
+
+error[8-0123]: a `mut` binding needs a mutable place or access
+    ┌─ binding_rules.fe:206:13
+    │
+206 │     let (i, mut item) = first(items)
     │             ^^^^^^^^ this binds part of a read access
     │
     = write `var` for a mutable copy, or use the `mut` projection to write through
 
 error[8-0129]: a `mut` result needs a `mut` binding
-    ┌─ binding_rules.fe:188:9
+    ┌─ binding_rules.fe:189:9
     │
-188 │     let w = cell.get_mut()
+189 │     let w = cell.get_mut()
     │         ^ this binds a mutable access of `u256` under a plain name
     │
     = a plain `let` binds a value; write `let x = mut …`, or `unsafe { mut … }` for a block's result, to hold the access

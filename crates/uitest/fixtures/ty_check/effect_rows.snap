@@ -8,7 +8,7 @@ error[6-0009]: method has stricter bounds than trait
    ┌─ effect_rows.fe:31:8
    │
 31 │     fn bump(mut self) uses (store: mut Store) {
-   │        ^^^^ method has stricter bounds than the declared method in the trait: `store: EffectRef<Store>`, `store: EffectRefMut<Store>`
+   │        ^^^^ method has stricter bounds than the declared method in the trait: `store: EffectRef<Store>`
 
 error[6-0024]: method `bump` has incompatible effects
    ┌─ effect_rows.fe:24:8

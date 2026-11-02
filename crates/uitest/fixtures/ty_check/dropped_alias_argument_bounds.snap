@@ -1,0 +1,76 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/dropped_alias_argument_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:22:31
+   │
+22 │ fn effect_key() uses (p: Drop<Guarded<bool>>) {}
+   │                               ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:24:18
+   │
+24 │ fn param(x: Drop<Guarded<bool>>) {}
+   │                  ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:26:24
+   │
+26 │ struct Field { x: Drop<Guarded<bool>> }
+   │                        ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:28:22
+   │
+28 │ fn bound<T: Has<Drop<Guarded<bool>>>>() {}
+   │                      ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:31:17
+   │
+31 │     let x: Drop<Guarded<bool>> = 0
+   │                 ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:34:22
+   │
+34 │ type Declared = Drop<Guarded<bool>>
+   │                      ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:38:24
+   │
+38 │ fn nested(x: Drop<Wrap<Guarded<bool>>>) {}
+   │                        ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:40:23
+   │
+40 │ fn twice(x: Drop<Drop<Guarded<bool>>>) {}
+   │                       ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:42:24
+   │
+42 │ type Generic<T> = Drop<Guarded<T>>
+   │                        ^^^^^^^^^^ `T` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:45:12
+   │
+45 │ fn kept(x: Keep<Guarded<bool>>) {}
+   │            ^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:47:14
+   │
+47 │ fn picked(x: Pick<Guarded<bool>, Guarded<bool>>) {}
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dropped_alias_argument_bounds.fe:47:34
+   │
+47 │ fn picked(x: Pick<Guarded<bool>, Guarded<bool>>) {}
+   │                                  ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`

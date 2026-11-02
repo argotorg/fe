@@ -413,7 +413,10 @@ impl ToDoc for ast::UnExpr {
             };
 
             let op_doc = alloc.text(op_text);
-            return if matches!(op, ast::UnOp::Mut(_) | ast::UnOp::Ref(_)) {
+            return if matches!(
+                op,
+                ast::UnOp::Mut(_) | ast::UnOp::MaybeMut(_) | ast::UnOp::Ref(_)
+            ) {
                 op_doc.append(alloc.text(" ")).append(expr.to_doc(ctx))
             } else if matches!(op, ast::UnOp::Deref(_))
                 && matches!(
@@ -1161,18 +1164,20 @@ impl ToDoc for ast::UsesParam {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
         let mut doc = alloc.nil();
-        let is_mut = self.mut_token().is_some();
+        let mode = if self.mut_token().is_some() {
+            "mut "
+        } else if self.maybe_mut_token().is_some() {
+            "mut? "
+        } else {
+            ""
+        };
 
         if let Some(name) = self.name() {
             doc = doc
                 .append(alloc.text(ctx.snippet(name.syntax().text_range()).trim()))
                 .append(alloc.text(": "));
-            if is_mut {
-                doc = doc.append(alloc.text("mut "));
-            }
-        } else if is_mut {
-            doc = doc.append(alloc.text("mut "));
         }
+        doc = doc.append(alloc.text(mode));
 
         if let Some(ty) = self.ty() {
             doc = doc.append(ty.to_doc(ctx));

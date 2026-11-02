@@ -6,31 +6,12 @@ input_file: tests/fixtures/access_items.fe
 ---
 trait Collection {
     uses E
-    space S
-    fn at(self, _ c: u256) -> ref u256 @S uses E
+    fn at(self, _ c: u256) -> ref u256 uses E
 }
 
 impl Collection for Words {
     uses E = (storage: mut Self)
-    space S = storage
-    fn at(self, _ c: u256) -> (u256, ref u256) @self uses E {
+    fn at(self, _ c: u256) -> (u256, ref u256) uses E {
         self.get(c)
-    }
-}
-
-impl Collection for Cells {
-    space S = self[_]
-    fn at(self, _ c: u256) -> ref u256 uses E {
-        ref self.cells[c]
-    }
-}
-
-impl Guarded {
-    fn value_mut(mut self) -> mut u256 @self.value {
-        mut self.value
-    }
-
-    fn first(mut self) -> mut u256 @self.pair.0 {
-        mut self.pair.0
     }
 }

@@ -53,7 +53,7 @@ pub enum FamilyKeyedEntry<'db> {
     Forwarder(EffectForwarder<'db, ProvidedEffect<'db>>),
 }
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EffectFrame<'db> {
     keyed_by_family:
         FxHashMap<EffectFamily<'db>, SmallVec<[KeyedEffectEntry<'db, ProvidedEffect<'db>>; 2]>>,
@@ -80,6 +80,22 @@ impl<'db> EffectEnv<'db> {
         if self.frames.len() > 1 {
             self.frames.pop();
         }
+    }
+
+    /// The frames of the `with` blocks being checked, innermost last.
+    pub fn with_frames(&self) -> Vec<EffectFrame<'db>> {
+        self.frames[1..].to_vec()
+    }
+
+    /// Reopens `frames`, which `with_frames` took, over the outermost frame,
+    /// to resolve a call deferred from under them.
+    pub fn reopen_with_frames(&mut self, frames: Vec<EffectFrame<'db>>) {
+        debug_assert_eq!(self.frames.len(), 1, "no `with` block is open");
+        self.frames.extend(frames);
+    }
+
+    pub fn close_with_frames(&mut self) {
+        self.frames.truncate(1);
     }
 
     /// Adds `forwarder` to the outermost frame: an effect of the whole body
@@ -188,9 +204,12 @@ impl<'db> EffectEnv<'db> {
                 for entry in family_entries.iter().cloned() {
                     match entry {
                         KeyedEffectEntry::Witness(witness) => {
-                            if let Some(key_commit) =
-                                query_matches_witness(tc, &query.key, &witness.key)
-                            {
+                            if let Some(key_commit) = query_matches_witness(
+                                tc,
+                                &query.key,
+                                &witness.key,
+                                witness.provider.ty,
+                            ) {
                                 entries.push(MatchedKeyedEntry::Witness(MatchedWitness {
                                     witness,
                                     key_commit,

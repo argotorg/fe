@@ -8,14 +8,16 @@ use crate::analysis::{
             stored_trait_key_is_rigid, stored_type_key_is_rigid,
         },
         fold::{TyFoldable, TyFolder},
+        instantiate_trait_self,
         method_cmp::trait_effect_key_matches_with,
-        trait_def::TraitInstId,
+        trait_def::{AssocBinding, TraitInstId},
         ty_def::{InvalidCause, Kind, TyBase, TyData, TyId, TyVarSort},
         ty_lower::collect_generic_params,
         unify::UnificationTable,
     },
 };
-use crate::hir_def::{CallableDef, IdentId, Trait};
+use crate::hir_def::ModeMarker;
+use crate::hir_def::{CallableDef, Trait};
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -53,6 +55,7 @@ pub fn query_matches_witness<'db>(
     tc: &mut crate::analysis::ty::ty_check::TyChecker<'db>,
     query: &EffectPatternKey<'db>,
     witness: &StoredEffectKey<'db>,
+    provider_ty: TyId<'db>,
 ) -> Option<KeyMatchCommit<'db>> {
     // Witnesses are rigid authoritative providers. Matching is directional from the
     // query pattern into that stored key and must not persist body-local specialization.
@@ -68,7 +71,44 @@ pub fn query_matches_witness<'db>(
                 .then_some(KeyMatchCommit::WitnessType { query, witness })
         }
         (EffectPatternKey::Trait(query), StoredEffectKey::Trait(witness)) => {
-            query_matches_stored_trait(tc.db, query.clone(), witness.clone())
+            // A key names its provider as the trait's own `Self`, which the
+            // witness's provider is.
+            let db = tc.db;
+            let provided =
+                |args_no_self: &[TyId<'db>], assoc_bindings: &[(AssocBinding<'db>, TyId<'db>)]| {
+                    let inst = instantiate_trait_self(
+                        db,
+                        trait_inst_from_parts(
+                            db,
+                            witness.def,
+                            args_no_self.iter().copied(),
+                            assoc_bindings.iter().copied(),
+                        ),
+                        provider_ty,
+                    );
+                    (
+                        inst.args(db)[1..].iter().copied().collect(),
+                        inst.assoc_type_bindings(db)
+                            .iter()
+                            .map(|(name, ty)| (*name, *ty))
+                            .collect(),
+                    )
+                };
+            let (args_no_self, assoc_bindings) =
+                provided(&query.args_no_self, &query.assoc_bindings);
+            let query = TraitPatternKey {
+                args_no_self,
+                assoc_bindings,
+                ..query
+            };
+            let (args_no_self, assoc_bindings) =
+                provided(&witness.args_no_self, &witness.assoc_bindings);
+            let witness = StoredTraitKey {
+                args_no_self,
+                assoc_bindings,
+                ..witness
+            };
+            query_matches_stored_trait(db, query.clone(), witness.clone())
                 .then_some(KeyMatchCommit::WitnessTrait { query, witness })
         }
         _ => None,
@@ -226,7 +266,7 @@ fn instantiate_trait_pattern_with_replacements<'db>(
         .iter()
         .map(|(name, ty)| (*name, apply_slot_replacements(db, *ty, replacements)))
         .collect::<IndexMap<_, _>>();
-    TraitInstId::new(db, pattern.def, args, assoc)
+    TraitInstId::new(db, pattern.def, args, assoc, ModeMarker::None)
 }
 
 fn type_patterns_overlap<'db>(
@@ -315,7 +355,7 @@ fn trait_inst_from_parts<'db>(
     db: &'db dyn HirAnalysisDb,
     def: Trait<'db>,
     args_no_self: impl IntoIterator<Item = TyId<'db>>,
-    assoc_bindings: impl IntoIterator<Item = (IdentId<'db>, TyId<'db>)>,
+    assoc_bindings: impl IntoIterator<Item = (AssocBinding<'db>, TyId<'db>)>,
 ) -> TraitInstId<'db> {
     let self_ty = TyId::invalid(db, InvalidCause::Other);
     TraitInstId::new(
@@ -325,6 +365,7 @@ fn trait_inst_from_parts<'db>(
             .chain(args_no_self)
             .collect::<Vec<_>>(),
         assoc_bindings.into_iter().collect::<IndexMap<_, _>>(),
+        ModeMarker::None,
     )
 }
 
@@ -499,7 +540,7 @@ fn fresh_slot_value<'db>(
     let is_const_slot = matches!(slot.placeholder.data(db), TyData::ConstTy(..));
     let key = table.new_key(slot.fallback_ty.kind(db), TyVarSort::General);
     if is_const_slot {
-        TyId::const_ty_var(db, slot.fallback_ty, key)
+        TyId::const_ty_var(db, slot.fallback_ty, TyVarSort::General, key)
     } else {
         TyId::ty_var(db, TyVarSort::General, Kind::Star, key)
     }
@@ -567,7 +608,7 @@ impl<'a, 'db> EffectKeyIdentityInstantiator<'a, 'db> {
                 let key = self
                     .table
                     .new_key(fallback_ty.kind(self.db), TyVarSort::General);
-                TyId::const_ty_var(self.db, fallback_ty, key)
+                TyId::const_ty_var(self.db, fallback_ty, TyVarSort::General, key)
             }
             _ => unreachable!("unexpected non-inference type in effect-key identity matcher"),
         }
@@ -580,7 +621,7 @@ impl<'a, 'db> TyFolder<'db> for EffectKeyIdentityInstantiator<'a, 'db> {
             let key = self
                 .table
                 .new_key(expected.kind(self.db), TyVarSort::General);
-            return TyId::const_ty_var(self.db, expected, key);
+            return TyId::const_ty_var(self.db, expected, TyVarSort::General, key);
         }
 
         if let Some(replacement) = self.replacements.get(&ty).copied() {
@@ -616,7 +657,7 @@ fn explicit_param_count_for_effect_identity_base<'db>(
             CallableDef::Func(def) => {
                 collect_generic_params(db, (*def).into()).explicit_param_count(db)
             }
-            CallableDef::VariantCtor(_) => 0,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => 0,
         },
         _ => 0,
     }

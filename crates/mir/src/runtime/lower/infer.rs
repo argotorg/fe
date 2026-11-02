@@ -323,7 +323,9 @@ impl<'db, S: AssignmentSpace<'db>> SparseAnalysis for CarrierInferer<'_, '_, 'db
         let stmt = &self.env.body().normalized.blocks[assign.block_idx].statements[assign.stmt_idx];
         let expr = match &stmt.kind {
             NStatementKind::Define { expr, .. } => expr,
-            NStatementKind::Store { .. } | NStatementKind::End { .. } => {
+            NStatementKind::Store { .. }
+            | NStatementKind::End { .. }
+            | NStatementKind::Drop { .. } => {
                 panic!(
                     "assignment facts point to non-assignment statement: block={} stmt={}",
                     assign.block_idx, assign.stmt_idx
