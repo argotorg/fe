@@ -59,10 +59,7 @@ impl<'db> DocExtractor<'db> {
         if self.include_tests {
             return false;
         }
-        matches!(item, ItemKind::Func(_))
-            && item
-                .attrs(self.db)
-                .is_some_and(|attrs| attrs.has_attr(self.db, "test"))
+        matches!(item, ItemKind::Func(func) if func.is_test(self.db))
     }
 
     /// Rewrite a path to use the ingot's config name instead of "lib".

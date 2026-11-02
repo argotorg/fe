@@ -75,6 +75,11 @@ pub enum TyLowerDiag<'db> {
     ShapeWithoutMode(DynLazySpan<'db>),
     /// A parameter pattern of a function without a body to bind it.
     DestructuredParamWithoutBody(DynLazySpan<'db>),
+    /// An `#[export]` function a C caller cannot call as declared.
+    InvalidExport {
+        span: DynLazySpan<'db>,
+        issue: ExportIssue,
+    },
     /// A mode on a product parameter's type, whose parts carry the modes;
     /// with `shape`, on an associated shape's, which is named at its mode.
     ModeOnProduct {
@@ -343,6 +348,14 @@ pub enum RevealedBy {
     Evaluation,
 }
 
+/// Why a C caller cannot call an `#[export]` function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum ExportIssue {
+    NotPub,
+    Generic,
+    Effects,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractFieldLayoutIssue {
     ExtentOverflow,
@@ -361,6 +374,7 @@ impl TyLowerDiag<'_> {
             Self::ProductReceiver(_) => 74,
             Self::ProductParamNotDestructured { .. } => 75,
             Self::DestructuredParamWithoutBody(_) => 76,
+            Self::InvalidExport { .. } => 88,
             Self::MaybeMutWithoutResult(_) => 77,
             Self::MaybeMutRowEffect { .. } => 78,
             Self::MisplacedSpread(_) => 80,
@@ -600,6 +614,15 @@ pub enum BodyDiag<'db> {
         key: HirTypeId<'db>,
         idx: usize,
         given: TyId<'db>,
+    },
+
+    /// An effect of a test or `main` that the target's root effect, which
+    /// supplies it, does not provide.
+    EntryEffectNotProvided {
+        owner: EffectParamOwner<'db>,
+        key: HirTypeId<'db>,
+        idx: usize,
+        root_ty: TyId<'db>,
     },
 
     /// A call's missing effect, which the call needs at `mode`: `mut?` when
@@ -1413,6 +1436,7 @@ impl<'db> BodyDiag<'db> {
             Self::InvalidEffectKey { .. } => 51,
             Self::ContractRootEffectTraitNotImplemented { .. } => 53,
             Self::ContractRootEffectTypeNotZeroSized { .. } => 54,
+            Self::EntryEffectNotProvided { .. } => 153,
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
             Self::EffectTypeMismatch { .. } => 38,

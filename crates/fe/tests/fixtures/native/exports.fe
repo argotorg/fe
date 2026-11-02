@@ -1,0 +1,13 @@
+#[export]
+pub fn twice(_ x: i64) -> i64 {
+    x * 2
+}
+
+#[export]
+pub fn store(_ p: *i64, _ value: i64) {
+    unsafe { *p = value }
+}
+
+pub fn main() -> i32 {
+    0
+}

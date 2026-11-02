@@ -132,16 +132,7 @@ func private %cast(v0.i256) -> i256 {
         return v0;
 }
 
-func private %main_root() {
-    block0:
-        jump block1;
-
-    block1:
-        call %test_effect_ptr_domains;
-        evm_stop;
-}
-
-func private %test_effect_ptr_domains() {
+func private %main() {
     block0:
         v0.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
@@ -156,6 +147,15 @@ func private %test_effect_ptr_domains() {
         obj.store v0 v9;
         call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a78 v0;
         return;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        call %main;
+        evm_stop;
 }
 
 

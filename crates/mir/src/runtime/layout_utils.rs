@@ -1,6 +1,9 @@
-use common::layout::{
-    StorageFieldShape, StorageFieldsLayout, StorageLane, StorageLayoutError, TargetDataLayout,
-    storage_fields_layout,
+use common::{
+    compilation::Target,
+    layout::{
+        EnumMemoryLayout, MemoryLayout, PlacedFields, StorageFieldShape, StorageFieldsLayout,
+        StorageLane, StorageLayoutError, TargetDataLayout, storage_fields_layout,
+    },
 };
 use hir::analysis::semantic::FieldIndex;
 use hir::analysis::ty::AddressSpace;
@@ -9,8 +12,8 @@ use rustc_hash::FxHashSet;
 use crate::{
     db::MirDb,
     runtime::{
-        ArrayLayout, ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, LowerError,
-        RuntimeClass, ScalarClass, ScalarRepr, ScalarRole, StructLayout, VariantId,
+        ArrayLayout, ConstNode, ConstRegionId, ConstScalar, EnumLayout, Layout, LayoutId,
+        LowerError, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole, StructLayout, VariantId,
     },
 };
 
@@ -145,7 +148,9 @@ impl<'db> RuntimeMemoryLayout<'db> {
             .ok_or(RuntimeMemoryLayoutError::InvalidProjection("field"))?;
         match self.unit {
             RuntimeMemoryUnit::Byte => Ok(FieldPlacement {
-                offset: self.class_sizes_sum(&layout.fields[..field], &mut FxHashSet::default())?,
+                offset: self
+                    .placed_fields(&layout.fields, &mut FxHashSet::default())?
+                    .offsets[field],
                 lane: None,
                 shared: false,
             }),
@@ -234,9 +239,20 @@ impl<'db> RuntimeMemoryLayout<'db> {
             .fields
             .get(field)
             .ok_or(RuntimeMemoryLayoutError::InvalidProjection("variant field"))?;
-        self.scalar_size(&layout.tag)
-            .checked_add(self.class_sizes_sum(&variant.fields[..field], &mut FxHashSet::default())?)
-            .ok_or(RuntimeMemoryLayoutError::Overflow)
+        match self.unit {
+            RuntimeMemoryUnit::Byte => {
+                let visiting = &mut FxHashSet::default();
+                let payload_offset = self.enum_memory_layout(&layout, visiting)?.payload_offset;
+                payload_offset
+                    .checked_add(self.placed_fields(&variant.fields, visiting)?.offsets[field])
+                    .ok_or(RuntimeMemoryLayoutError::Overflow)
+            }
+            RuntimeMemoryUnit::Word => 1u64
+                .checked_add(
+                    self.class_sizes_sum(&variant.fields[..field], &mut FxHashSet::default())?,
+                )
+                .ok_or(RuntimeMemoryLayoutError::Overflow),
+        }
     }
 
     fn class_size_inner(
@@ -244,10 +260,12 @@ impl<'db> RuntimeMemoryLayout<'db> {
         class: &RuntimeClass<'db>,
         visiting: &mut FxHashSet<LayoutId<'db>>,
     ) -> Result<u64, RuntimeMemoryLayoutError> {
-        match class {
-            RuntimeClass::Scalar(scalar) => Ok(self.scalar_size(scalar)),
-            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => Ok(self.pointer_size()),
-            RuntimeClass::AggregateValue { layout } => self.layout_size_inner(*layout, visiting),
+        match (self.unit, class) {
+            (RuntimeMemoryUnit::Byte, _) => Ok(self.memory_layout(class, visiting)?.size),
+            (RuntimeMemoryUnit::Word, RuntimeClass::AggregateValue { layout }) => {
+                self.layout_size_inner(*layout, visiting)
+            }
+            (RuntimeMemoryUnit::Word, _) => Ok(1),
         }
     }
 
@@ -256,36 +274,35 @@ impl<'db> RuntimeMemoryLayout<'db> {
         layout: LayoutId<'db>,
         visiting: &mut FxHashSet<LayoutId<'db>>,
     ) -> Result<u64, RuntimeMemoryLayoutError> {
+        if let RuntimeMemoryUnit::Byte = self.unit {
+            return Ok(self.layout_memory_layout(layout, visiting)?.size);
+        }
         if !visiting.insert(layout) {
             return Err(RuntimeMemoryLayoutError::Recursive);
         }
         let size = match layout.data(self.db) {
-            Layout::Struct(data) => match self.unit {
-                RuntimeMemoryUnit::Byte => self.class_sizes_sum(&data.fields, visiting),
-                RuntimeMemoryUnit::Word => self
-                    .storage_struct_layout(&data, visiting)
-                    .map(|layout| layout.slots.max(u64::from(data.pinned))),
-            },
+            Layout::Struct(data) => self
+                .storage_struct_layout(&data, visiting)
+                .map(|layout| layout.slots.max(u64::from(data.pinned))),
             Layout::Array(data) => self
                 .class_size_inner(&data.elem, visiting)?
                 .checked_mul(data.len)
                 .ok_or(RuntimeMemoryLayoutError::Overflow),
-            Layout::Enum(data) => self
-                .scalar_size(&data.tag)
-                .checked_add(
-                    data.variants
-                        .iter()
-                        .map(|variant| self.class_sizes_sum(&variant.fields, visiting))
-                        .try_fold(0u64, |max, size| {
-                            Ok::<_, RuntimeMemoryLayoutError>(max.max(size?))
-                        })?,
-                )
+            Layout::Enum(data) => data
+                .variants
+                .iter()
+                .map(|variant| self.class_sizes_sum(&variant.fields, visiting))
+                .try_fold(0u64, |max, size| {
+                    Ok::<_, RuntimeMemoryLayoutError>(max.max(size?))
+                })?
+                .checked_add(1)
                 .ok_or(RuntimeMemoryLayoutError::Overflow),
         };
         visiting.remove(&layout);
         size
     }
 
+    /// The words `classes` take in storage, one after another.
     fn class_sizes_sum(
         self,
         classes: &[RuntimeClass<'db>],
@@ -297,21 +314,82 @@ impl<'db> RuntimeMemoryLayout<'db> {
         })
     }
 
-    fn scalar_size(self, scalar: &ScalarClass<'_>) -> u64 {
-        match self.unit {
-            RuntimeMemoryUnit::Byte => scalar_raw_memory_size_bytes(scalar),
-            RuntimeMemoryUnit::Word => 1,
+    fn target(self) -> Target {
+        self.db.compilation_settings().target(self.db)
+    }
+
+    /// The memory layout of `class` in byte-addressed memory.
+    fn memory_layout(
+        self,
+        class: &RuntimeClass<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<MemoryLayout, RuntimeMemoryLayoutError> {
+        match class {
+            RuntimeClass::Scalar(scalar) => {
+                Ok(self.target().scalar_memory_layout(scalar_bits(scalar)))
+            }
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                Ok(self.target().pointer_memory_layout())
+            }
+            RuntimeClass::AggregateValue { layout } => self.layout_memory_layout(*layout, visiting),
         }
     }
 
-    /// A memory address, or a reference, is a `usize`.
-    fn pointer_size(self) -> u64 {
-        match self.unit {
-            RuntimeMemoryUnit::Byte => {
-                self.db.compilation_settings().target(self.db).usize_bits() as u64 / 8
-            }
-            RuntimeMemoryUnit::Word => 1,
+    fn layout_memory_layout(
+        self,
+        layout: LayoutId<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<MemoryLayout, RuntimeMemoryLayoutError> {
+        if !visiting.insert(layout) {
+            return Err(RuntimeMemoryLayoutError::Recursive);
         }
+        let memory_layout = match layout.data(self.db) {
+            Layout::Struct(data) => self
+                .placed_fields(&data.fields, visiting)?
+                .struct_layout()
+                .ok_or(RuntimeMemoryLayoutError::Overflow),
+            Layout::Array(data) => {
+                let elem = self.memory_layout(&data.elem, visiting)?;
+                elem.size
+                    .checked_mul(data.len)
+                    .map(|size| MemoryLayout {
+                        size,
+                        align: elem.align,
+                    })
+                    .ok_or(RuntimeMemoryLayoutError::Overflow)
+            }
+            Layout::Enum(data) => self
+                .enum_memory_layout(&data, visiting)
+                .map(|layout| layout.layout),
+        };
+        visiting.remove(&layout);
+        memory_layout
+    }
+
+    fn placed_fields(
+        self,
+        classes: &[RuntimeClass<'db>],
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<PlacedFields, RuntimeMemoryLayoutError> {
+        let fields = classes
+            .iter()
+            .map(|class| self.memory_layout(class, visiting))
+            .collect::<Result<Vec<_>, _>>()?;
+        PlacedFields::new(fields).ok_or(RuntimeMemoryLayoutError::Overflow)
+    }
+
+    fn enum_memory_layout(
+        self,
+        layout: &EnumLayout<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<EnumMemoryLayout, RuntimeMemoryLayoutError> {
+        let variants = layout
+            .variants
+            .iter()
+            .map(|variant| self.placed_fields(&variant.fields, visiting))
+            .collect::<Result<Vec<_>, _>>()?;
+        let tag = self.target().scalar_memory_layout(scalar_bits(&layout.tag));
+        EnumMemoryLayout::new(tag, &variants).ok_or(RuntimeMemoryLayoutError::Overflow)
     }
 }
 
@@ -328,12 +406,18 @@ pub fn storage_scalar_bytes(scalar: &ScalarClass<'_>) -> u32 {
     }
 }
 
-pub fn scalar_raw_memory_size_bytes(scalar: &ScalarClass<'_>) -> u64 {
+/// The bits of a scalar's value.
+fn scalar_bits(scalar: &ScalarClass<'_>) -> u16 {
     match scalar.repr {
         ScalarRepr::Bool => 1,
-        ScalarRepr::Int { bits, .. } | ScalarRepr::Address { bits } => u64::from(bits.div_ceil(8)),
-        ScalarRepr::FixedBytes { len } => u64::from(len),
+        ScalarRepr::Int { bits, .. } | ScalarRepr::Address { bits } => bits,
+        ScalarRepr::FixedBytes { len } => len * 8,
     }
+}
+
+/// The bytes a scalar takes in `target`'s memory.
+pub fn scalar_raw_memory_size_bytes(target: Target, scalar: &ScalarClass<'_>) -> u64 {
+    target.scalar_memory_layout(scalar_bits(scalar)).size
 }
 
 fn layout_size_bytes<'db>(
@@ -724,7 +808,9 @@ fn enum_tag_scalar(node: ConstNode<'_>) -> Result<ConstScalar, LowerError> {
 
 #[cfg(test)]
 mod tests {
+    use common::InputDb;
     use driver::DriverDataBase;
+    use salsa::Setter;
 
     use super::*;
     use crate::runtime::{
@@ -777,6 +863,49 @@ mod tests {
         let words = RuntimeMemoryLayout::for_space(&db, AddressSpace::Storage);
         assert_eq!(words.struct_field_offset(&struct_layout, 1), Ok(1));
         assert_eq!(words.array_element_offset(&array_layout, 2), Ok(2));
+    }
+
+    #[test]
+    fn native_layout_aligns_fields_like_sonatina_objects() {
+        let mut db = DriverDataBase::default();
+        db.compilation_settings()
+            .set_target(&mut db)
+            .to(Target::Native);
+        let struct_layout = StructLayout {
+            fields: vec![scalar(8), scalar(256), scalar(24)].into_boxed_slice(),
+            pinned: false,
+        };
+        let pair = LayoutId::new(&db, LayoutKey::Struct(struct_layout.clone()));
+        let bytes = RuntimeMemoryLayout::raw(&db);
+        // The u256 aligns to 16 bytes; a u24 takes an i32's four.
+        assert_eq!(bytes.struct_field_offset(&struct_layout, 1), Ok(16));
+        assert_eq!(bytes.struct_field_offset(&struct_layout, 2), Ok(48));
+        assert_eq!(bytes.layout_size(pair), Ok(64));
+
+        let variants =
+            [vec![scalar(8)], vec![scalar(64), scalar(16)]].map(|fields| EnumVariantLayout {
+                fields: fields.into_boxed_slice(),
+            });
+        let choice = LayoutId::new(
+            &db,
+            LayoutKey::Enum(EnumLayoutKey {
+                variants: variants.into(),
+            }),
+        );
+        let field = |index, field| {
+            bytes.variant_field_offset(
+                VariantId {
+                    enum_layout: choice,
+                    index,
+                },
+                FieldIndex(field),
+            )
+        };
+        // A one-byte tag, then both payloads from the u64's alignment.
+        assert_eq!(field(0, 0), Ok(8));
+        assert_eq!(field(1, 0), Ok(8));
+        assert_eq!(field(1, 1), Ok(16));
+        assert_eq!(bytes.layout_size(choice), Ok(24));
     }
 
     #[test]

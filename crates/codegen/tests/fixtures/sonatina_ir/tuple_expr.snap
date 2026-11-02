@@ -9,16 +9,7 @@ type @layout_0 = {i64, i1};
 
 global private const @layout_0 $const_region_0 = {3, 1};
 
-func private %main_root() {
-    block0:
-        jump block1;
-
-    block1:
-        v0.@layout_0 = call %tuple_expr;
-        evm_stop;
-}
-
-func private %tuple_expr() -> @layout_0 {
+func private %main() -> @layout_0 {
     block0:
         jump block1;
 
@@ -26,6 +17,15 @@ func private %tuple_expr() -> @layout_0 {
         v5.constref<@layout_0> = const.ref $const_region_0;
         v6.@layout_0 = const.load v5;
         return v6;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.@layout_0 = call %main;
+        evm_stop;
 }
 
 

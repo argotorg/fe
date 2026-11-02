@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/entry_effect_not_provided.fe
+---
+error[8-0153]: unsupported entry effect
+  ┌─ entry_effect_not_provided.fe:7:28
+  │
+7 │ fn prints() uses (out: mut Stdout) {
+  │                            ^^^^^^ the root effect `Evm` does not provide `Stdout`
+  │
+  = a test or `main` receives its effects from the target's root effect, `Evm`
+
+error[8-0153]: unsupported entry effect
+   ┌─ entry_effect_not_provided.fe:11:37
+   │
+11 │ pub fn main() -> i32 uses (out: mut Stdout, ctx: Ctx, evm: Evm) {
+   │                                     ^^^^^^ the root effect `Evm` does not provide `Stdout`
+   │
+   = a test or `main` receives its effects from the target's root effect, `Evm`

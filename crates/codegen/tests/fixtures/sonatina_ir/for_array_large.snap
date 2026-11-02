@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 462
 expression: output
 input_file: crates/codegen/tests/fixtures/for_array_large.fe
 ---
@@ -8,7 +7,16 @@ target = "evm-ethereum-osaka"
 
 global private const [i64; 10] $const_region_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-func private %for_array_large_sum() -> i64 {
+func inline(always) private %has(v0.constref<[i64; 10]>, v1.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i1 = lt v1 10.i256;
+        return v4;
+}
+
+func private %main() -> i64 {
     block0:
         jump block1;
 
@@ -66,21 +74,12 @@ func private %for_array_large_sum() -> i64 {
         jump block4;
 }
 
-func inline(always) private %has(v0.constref<[i64; 10]>, v1.i256) -> i1 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i1 = lt v1 10.i256;
-        return v4;
-}
-
 func private %main_root() {
     block0:
         jump block1;
 
     block1:
-        v0.i64 = call %for_array_large_sum;
+        v0.i64 = call %main;
         evm_stop;
 }
 

@@ -1,9 +1,11 @@
+mod host_state;
 mod memory_reference;
 mod native_panic;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use host_state::HostState;
 use memory_reference::{MemoryReference, ReferentLayout};
 pub(super) use native_panic::NativePanics;
 use native_panic::{COMPILER_SYMBOL_PREFIX, NativePanic};
@@ -13,8 +15,8 @@ use std::mem;
 use std::sync::Arc;
 
 use common::InputDb;
-use common::layout::StorageLane;
 use common::origin::OriginExportKey;
+use common::{compilation::Target, layout::StorageLane};
 use driver::DriverDataBase;
 use hir::{
     analysis::{
@@ -51,8 +53,8 @@ use sonatina_ir::{
             Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
             EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, MemAllocDynamic,
-            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj,
-            ObjStore, SymAddr, SymSize, SymbolRef,
+            Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
+            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         downcast,
         evm::{
@@ -199,6 +201,7 @@ define_lowering_inst_set!(
     ObjIndex,
     ObjLoad,
     ObjMaterializeStack,
+    ObjFromPtr,
     ObjProj,
     ObjStore,
     SymAddr,
@@ -220,7 +223,7 @@ pub(super) fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
-    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, None, NativePanics::Trap)
+    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, &[], NativePanics::Trap)
         .map(|(module, _)| module)
 }
 
@@ -245,7 +248,7 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
         builder,
         isa.inst_set(),
         package,
-        None,
+        &[],
         NativePanics::Trap,
     )?;
     lowerer.declare_functions()?;
@@ -268,7 +271,7 @@ pub(super) fn compile_runtime_package_sonatina_for_isa<'db, I>(
     package: &RuntimePackage<'db>,
     isa: &I,
     declare_objects: bool,
-    fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+    fixed_symbols: &[(RuntimeInstance<'db>, &str)],
     panics: NativePanics,
 ) -> Result<(Module, FxHashMap<RuntimeInstance<'db>, FuncRef>), LowerError>
 where
@@ -277,7 +280,7 @@ where
 {
     let builder = ModuleBuilder::new(ModuleCtx::new(isa));
     let mut lowerer =
-        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol, panics)?;
+        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbols, panics)?;
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
@@ -314,7 +317,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         builder: ModuleBuilder,
         inst_set: &'static I,
         package: &'a RuntimePackage<'db>,
-        fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+        fixed_symbols: &[(RuntimeInstance<'db>, &str)],
         panics: NativePanics,
     ) -> Result<Self, LowerError> {
         // HIR and MIR lay memory out with the compilation target's `usize`,
@@ -329,6 +332,22 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             )));
         }
         let native = is_native_architecture(builder.ctx.triple.architecture);
+        // A function defining a symbol native code imports would replace it.
+        for &(_, symbol) in fixed_symbols {
+            if symbol.starts_with(COMPILER_SYMBOL_PREFIX) {
+                return Err(LowerError::Unsupported(format!(
+                    "exported symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
+                )));
+            }
+            if HostFunction::ALL
+                .map(HostFunction::symbol)
+                .contains(&symbol)
+            {
+                return Err(LowerError::Unsupported(format!(
+                    "exported symbol `{symbol}` is reserved: native code calls the C library's `{symbol}`"
+                )));
+            }
+        }
         Ok(Self {
             db,
             builder,
@@ -339,12 +358,14 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             func_symbols: assign_sonatina_function_symbols(
                 db,
                 package,
-                fixed_symbol,
+                fixed_symbols,
                 &if native {
                     HostFunction::ALL
                         .map(HostFunction::symbol)
                         .into_iter()
                         .chain(NativePanic::ALL.map(NativePanic::symbol))
+                        .chain(HostState::ALL.map(HostState::accessor))
+                        .chain(HostState::ALL.map(HostState::global))
                         .collect()
                 } else {
                     Vec::new()
@@ -470,8 +491,12 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let instance = function.instance(self.db);
         let (mut args, ret) = self.signature_tys(instance)?;
         let symbol = self.function_symbol(instance);
+        // The compiler defines the host state accessors that `std::env`
+        // declares, privately to the module.
+        let host_state = HostState::from_accessor(&symbol).filter(|_| self.is_native_target());
         if function.linkage(self.db) == RuntimeLinkage::External
             && symbol.starts_with(COMPILER_SYMBOL_PREFIX)
+            && host_state.is_none()
         {
             return Err(LowerError::Unsupported(format!(
                 "extern symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
@@ -479,9 +504,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         }
         if function.linkage(self.db) == RuntimeLinkage::External
             && (!self.is_native_target()
-                || args.iter().chain(ret.iter()).any(|ty| {
-                    !matches!(ty, Type::I32 | Type::I64) && !ty.is_pointer(&self.builder.ctx)
-                }))
+                || args
+                    .iter()
+                    .chain(ret.iter())
+                    .any(|ty| !is_c_abi_value(ty, &self.builder.ctx)))
         {
             return Err(LowerError::Unsupported(format!(
                 "extern function `{symbol}` requires a native target and i32/i64 or raw-pointer ABI values"
@@ -499,18 +525,14 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             self.argument_packs.insert(instance, pack);
             args = vec![self.builder.objref_type(pack)];
         }
+        let linkage = if host_state.is_some() {
+            Linkage::Private
+        } else {
+            linkage_for_runtime(function.linkage(self.db))
+        };
         Ok(match ret {
-            Some(ret) => Signature::new_single(
-                &symbol,
-                linkage_for_runtime(function.linkage(self.db)),
-                &args,
-                ret,
-            ),
-            None => Signature::new_unit(
-                &symbol,
-                linkage_for_runtime(function.linkage(self.db)),
-                &args,
-            ),
+            Some(ret) => Signature::new_single(&symbol, linkage, &args, ret),
+            None => Signature::new_unit(&symbol, linkage, &args),
         })
     }
 
@@ -690,6 +712,13 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
         for &function in self.package.functions(self.db) {
             if function.linkage(self.db) == RuntimeLinkage::External {
+                let instance = function.instance(self.db);
+                if self.is_native_target()
+                    && let Some(state) = HostState::from_accessor(&self.function_symbol(instance))
+                {
+                    let func = self.func_ref(instance)?;
+                    self.define_host_state_accessor(func, state)?;
+                }
                 continue;
             }
             let instance = function.instance(self.db);
@@ -1003,7 +1032,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 fn assign_sonatina_function_symbols<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
-    fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+    fixed_symbols: &[(RuntimeInstance<'db>, &str)],
     reserved: &[&str],
 ) -> FxHashMap<mir::RuntimeInstance<'db>, String> {
     let functions = package.functions(db);
@@ -1011,8 +1040,9 @@ fn assign_sonatina_function_symbols<'db>(
         .iter()
         .map(|function| FunctionSymbolInput {
             owner: function.owner(db).clone(),
-            fixed_symbol: fixed_symbol
-                .filter(|(instance, _)| *instance == function.instance(db))
+            fixed_symbol: fixed_symbols
+                .iter()
+                .find(|(instance, _)| *instance == function.instance(db))
                 .map(|(_, symbol)| symbol.to_string())
                 .or_else(|| {
                     let semantic = function.instance(db).key(db).semantic(db)?;
@@ -1999,6 +2029,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 }
                 value
             }
+            RExpr::ObjectFromRaw { raw } => {
+                let class = dst
+                    .and_then(|dst| self.body.value_class(dst))
+                    .cloned()
+                    .ok_or_else(|| {
+                        LowerError::Internal("object view requires a destination class".into())
+                    })?;
+                let RuntimeClass::Ref { pointee, .. } = class else {
+                    return Err(LowerError::Internal(
+                        "object view destination is not a reference".into(),
+                    ));
+                };
+                let pointee_ty = self.module.ty_for_class(&pointee)?;
+                let raw = self.local_value(*raw)?;
+                let ptr_ty = self.fb.ptr_type(pointee_ty);
+                let ptr = self.coerce_value_to_ty(raw, ptr_ty)?;
+                self.fb.insert_inst(
+                    ObjFromPtr::new(self.module.inst_set(), ptr),
+                    self.fb.module_builder.objref_type(pointee_ty),
+                )
+            }
             RExpr::WordToRawAddr { value, .. } => self.local_value(*value)?,
             RExpr::ProviderRefToRaw { value } => self.local_value(*value)?,
             RExpr::RetagRef { value } => self.local_value(*value)?,
@@ -2559,14 +2610,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeBuiltin::LeadingZeros { value } => {
                 let value = self.local_value(*value)?;
-                if self.module.is_native_target() {
-                    self.lower_leading_zeros(value)
-                } else {
-                    self.fb.insert_inst(
-                        EvmClz::new(self.module.required_inst::<EvmClz>()?, value),
-                        Type::I256,
-                    )
-                }
+                self.fb.insert_inst(
+                    EvmClz::new(self.module.required_inst::<EvmClz>()?, value),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::SwapBytes { value } => {
                 let value = self.local_value(*value)?;
@@ -4586,7 +4633,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     }
                 }
             }
-            RuntimeClass::AggregateValue { .. } if self.memory_matches_value(memory, class)? => {
+            RuntimeClass::AggregateValue { .. } if self.memory_matches_value(memory, class) => {
                 let ty = self.module.ty_for_class(class)?;
                 self.fb
                     .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, src, ty));
@@ -4732,10 +4779,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     tag_word,
                 )?,
                 ReferentLayout::Object => {
-                    let ty = self
-                        .native_class_layout(&RuntimeClass::AggregateValue { layout })?
-                        .tag_type()
-                        .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                    let ty = self.native_tag_ty(layout)?;
                     let value = self.cast_scalar(tag_word, ty)?;
                     self.fb.insert_inst_no_result(Mstore::new(
                         self.module.inst_set(),
@@ -4977,76 +5021,32 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     /// Whether `class` has the same bytes in `memory` as a Sonatina value of
-    /// its type, so it moves between them in one load or store. Raw memory
-    /// packs fields without alignment, which matches only where no field is
-    /// padded; enums and handles keep encodings of their own.
-    fn memory_matches_value(
-        &mut self,
-        memory: ReferentLayout,
-        class: &RuntimeClass<'db>,
-    ) -> Result<bool, LowerError> {
-        if !self.module.is_native_target() {
-            return Ok(false);
+    /// its type, so it moves between them in one load or store. Natively raw
+    /// memory takes Sonatina's layout; references and addresses keep raw
+    /// encodings of their own.
+    fn memory_matches_value(&self, memory: ReferentLayout, class: &RuntimeClass<'db>) -> bool {
+        self.module.is_native_target()
+            && match memory {
+                ReferentLayout::Object => true,
+                ReferentLayout::Raw(AddressSpace::Memory) => !self.holds_handle(class),
+                ReferentLayout::Raw(_) => false,
+            }
+    }
+
+    /// Whether `class` is or contains a reference or address.
+    fn holds_handle(&self, class: &RuntimeClass<'db>) -> bool {
+        let RuntimeClass::AggregateValue { layout } = class else {
+            return !matches!(class, RuntimeClass::Scalar(_));
+        };
+        match layout.data(self.module.db) {
+            Layout::Struct(data) => data.fields.iter().any(|field| self.holds_handle(field)),
+            Layout::Array(data) => self.holds_handle(&data.elem),
+            Layout::Enum(data) => data
+                .variants
+                .iter()
+                .flat_map(|variant| &variant.fields)
+                .any(|field| self.holds_handle(field)),
         }
-        let raw = match memory {
-            ReferentLayout::Object => None,
-            ReferentLayout::Raw(AddressSpace::Memory) => {
-                Some(RuntimeMemoryLayout::raw(self.module.db))
-            }
-            ReferentLayout::Raw(_) => return Ok(false),
-        };
-        let ty = self.module.ty_for_class(class)?;
-        let size = self.fb.module_builder.ctx.size_of(ty).ok();
-        let offset = |lowerer: &Self, idx: usize| {
-            lowerer
-                .fb
-                .module_builder
-                .ctx
-                .aggregate_elem_offset(ty, idx)
-                .map(|(offset, _)| offset as u64)
-        };
-        let layout = match class {
-            RuntimeClass::Scalar(scalar) => {
-                return Ok(
-                    raw.is_none() || size == Some(scalar_raw_memory_size_bytes(scalar) as usize)
-                );
-            }
-            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => return Ok(raw.is_none()),
-            RuntimeClass::AggregateValue { layout } => *layout,
-        };
-        let fields = match layout.data(self.module.db) {
-            Layout::Enum(_) => return Ok(false),
-            Layout::Struct(data) => {
-                let mut offsets = Vec::with_capacity(data.fields.len());
-                for (idx, field) in data.fields.iter().enumerate() {
-                    if !self.memory_matches_value(memory, field)? {
-                        return Ok(false);
-                    }
-                    if let Some(raw) = raw {
-                        offsets.push((raw.struct_field_offset(&data, idx)?, idx));
-                    }
-                }
-                offsets
-            }
-            Layout::Array(data) => {
-                if !self.memory_matches_value(memory, &data.elem)? {
-                    return Ok(false);
-                }
-                match raw {
-                    Some(raw) if data.len > 1 => vec![(raw.array_element_offset(&data, 1)?, 1)],
-                    _ => Vec::new(),
-                }
-            }
-        };
-        Ok(match raw {
-            None => true,
-            Some(raw) => {
-                size == Some(raw.layout_size(layout)? as usize)
-                    && fields
-                        .into_iter()
-                        .all(|(raw_offset, idx)| offset(self, idx) == Some(raw_offset))
-            }
-        })
     }
 
     fn load_aggregate_from_ptr(
@@ -5056,7 +5056,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         layout: LayoutId<'db>,
     ) -> Result<ValueId, LowerError> {
         let class = RuntimeClass::AggregateValue { layout };
-        if self.memory_matches_value(memory, &class)? {
+        if self.memory_matches_value(memory, &class) {
             let ty = self.module.ty_for_layout(layout)?;
             return Ok(self
                 .fb
@@ -5163,10 +5163,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let tag = match memory {
             ReferentLayout::Raw(space) => self.load_scalar(addr, space, &data.tag)?,
             ReferentLayout::Object => {
-                let ty = self
-                    .native_class_layout(&RuntimeClass::AggregateValue { layout })?
-                    .tag_type()
-                    .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                let ty = self.native_tag_ty(layout)?;
                 self.fb
                     .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty)
             }
@@ -5284,7 +5281,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         }
         let word = self.load_word(addr, space)?;
         let value = if space.is_byte_addressed() {
-            let width = scalar_raw_memory_size_bytes(scalar);
+            let width = scalar_raw_memory_size_bytes(Target::Evm, scalar);
             if width < 32 {
                 let shift = self.index_value((32 - width) * 8);
                 self.fb
@@ -5367,7 +5364,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         match space {
             AddressSpace::Memory => match class {
                 RuntimeClass::Scalar(scalar)
-                    if !native_memory && scalar_raw_memory_size_bytes(scalar) < 32 =>
+                    if !native_memory && scalar_raw_memory_size_bytes(Target::Evm, scalar) < 32 =>
                 {
                     self.store_memory_scalar_bytes(addr, scalar, value)?
                 }
@@ -5428,7 +5425,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         scalar: &ScalarClass<'db>,
         value: ValueId,
     ) -> Result<(), LowerError> {
-        let width = scalar_raw_memory_size_bytes(scalar);
+        let width = scalar_raw_memory_size_bytes(Target::Evm, scalar);
         for byte_idx in 0..width {
             let shift = (width - 1 - byte_idx) * 8;
             let shifted = if shift == 0 {
@@ -6066,47 +6063,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
-    /// Branch-free binary search for the most significant set bit, for targets
-    /// without a count-leading-zeros instruction. Returns 256 for zero.
-    fn lower_leading_zeros(&mut self, value: ValueId) -> ValueId {
-        let inst_set = self.module.inst_set();
-        let mut remaining = value;
-        let mut msb = self.fb.make_imm_value(I256::zero());
-        for bits in [128u32, 64, 32, 16, 8, 4, 2, 1] {
-            let bits = self.fb.make_imm_value(I256::from(bits));
-            let high = self
-                .fb
-                .insert_inst(Shr::new(inst_set, bits, remaining), Type::I256);
-            let high_is_zero = self.fb.insert_inst(IsZero::new(inst_set, high), Type::I1);
-            let high_is_set = self
-                .fb
-                .insert_inst(IsZero::new(inst_set, high_is_zero), Type::I1);
-            let set = self
-                .fb
-                .insert_inst(Zext::new(inst_set, high_is_set, Type::I256), Type::I256);
-            let shift = self
-                .fb
-                .insert_inst(Mul::new(inst_set, set, bits), Type::I256);
-            remaining = self
-                .fb
-                .insert_inst(Shr::new(inst_set, shift, remaining), Type::I256);
-            msb = self
-                .fb
-                .insert_inst(Add::new(inst_set, msb, shift), Type::I256);
-        }
-        // 255 - msb, plus one more when the input is zero (msb is then 0).
-        let max_bit = self.fb.make_imm_value(I256::from(255u32));
-        let zeros = self
-            .fb
-            .insert_inst(Sub::new(inst_set, max_bit, msb), Type::I256);
-        let is_zero = self.fb.insert_inst(IsZero::new(inst_set, value), Type::I1);
-        let extra = self
-            .fb
-            .insert_inst(Zext::new(inst_set, is_zero, Type::I256), Type::I256);
-        self.fb
-            .insert_inst(Add::new(inst_set, zeros, extra), Type::I256)
-    }
-
     fn lower_pow(
         &mut self,
         base: ValueId,
@@ -6705,6 +6661,13 @@ trait Pipe: Sized {
 }
 
 impl<T> Pipe for T {}
+
+/// Whether C passes `ty` as Fe does: an `i32`, an `i64` or a pointer. Only
+/// these cross between Fe and C, through `extern` declarations and
+/// `#[export]` functions.
+pub(super) fn is_c_abi_value(ty: &Type, ctx: &ModuleCtx) -> bool {
+    matches!(ty, Type::I32 | Type::I64) || ty.is_pointer(ctx)
+}
 
 fn linkage_for_runtime(linkage: RuntimeLinkage) -> Linkage {
     match linkage {

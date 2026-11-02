@@ -71,12 +71,10 @@ pub fn verify_runtime_body_detailed<'db>(
         }
     }
 
-    let predecessors = body.predecessors();
     for (block_idx, block) in body.blocks.iter().enumerate() {
         let block_id = crate::runtime::RBlockId::from_u32(block_idx as u32);
         for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
             let site = StmtSite {
-                predecessors: &predecessors,
                 block: block_id,
                 stmt_idx,
             };
@@ -102,8 +100,7 @@ pub fn verify_runtime_body_detailed<'db>(
 
 /// Where a statement is, for the proofs that depend on its block.
 #[derive(Clone, Copy)]
-struct StmtSite<'a> {
-    predecessors: &'a [Vec<crate::runtime::RBlockId>],
+struct StmtSite {
     block: crate::runtime::RBlockId,
     stmt_idx: usize,
 }
@@ -112,7 +109,7 @@ fn verify_stmt<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
-    site: StmtSite<'_>,
+    site: StmtSite,
     stmt: &RStmt<'db>,
 ) -> Result<(), VerifyError<'db>> {
     match stmt {
@@ -206,7 +203,7 @@ fn verify_assign<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
-    site: StmtSite<'_>,
+    site: StmtSite,
     dst: crate::runtime::RLocalId,
     expr: &RExpr<'db>,
 ) -> Result<(), VerifyError<'db>> {
@@ -254,15 +251,16 @@ fn verify_assign<'db>(
     Ok(())
 }
 
-/// Whether `value` holds `variant` at the statement: a branch into the block
-/// proved it, or an earlier statement of the block made or asserted it.
+/// Whether `value` holds `variant` at the statement: an earlier statement of
+/// the block made or asserted it. A branch on `EnumIsVariant` is no proof:
+/// Sonatina needs the assertion to read a payload it did not see written.
 fn enum_variant_proven<'db>(
     body: &RuntimeBody<'db>,
-    site: StmtSite<'_>,
+    site: StmtSite,
     value: crate::runtime::RValueId,
     variant: crate::runtime::VariantId<'db>,
 ) -> bool {
-    let mut proven = body.variant_known_on_entry(site.predecessors, site.block, value, variant);
+    let mut proven = false;
     for stmt in body.blocks[site.block.index()]
         .stmts
         .iter()

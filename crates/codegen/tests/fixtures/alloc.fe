@@ -4,6 +4,6 @@ pub fn bump(size: usize) -> *u8 {
     ptr::alloc_bytes(size)
 }
 
-pub fn bump_const() -> *u8 {
+pub fn main() -> *u8 {
     ptr::alloc_bytes(64)
 }

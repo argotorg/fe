@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 462
 expression: output
 input_file: crates/codegen/tests/fixtures/range_bounds.fe
 ---
@@ -15,57 +14,7 @@ func inline(always) private %has(v0.i256) -> i1 {
         return v4;
 }
 
-func private %main_root() {
-    block0:
-        jump block1;
-
-    block1:
-        v0.i256 = call %sum_const;
-        evm_stop;
-}
-
-func inline(always) private %next(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = call %wrapping_add v0 1.i256;
-        return v3;
-}
-
-func inline(always) private %range_has(v0.i256, v1.i256, v2.i256) -> i1 {
-    block0:
-        jump block1;
-
-    block1:
-        v5.i1 = gt v1 v0;
-        v6.i1 = is_zero v5;
-        br v6 block5 block3;
-
-    block2:
-        jump block4;
-
-    block3:
-        jump block4;
-
-    block4:
-        v9.i1 = phi (1.i1 block2) (0.i1 block3);
-        return v9;
-
-    block5:
-        v12.i1 = lt v0 v2;
-        br v12 block2 block3;
-}
-
-func inline(always) private %start() -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 0.i256;
-}
-
-func private %sum_const() -> i256 {
+func private %main() -> i256 {
     block0:
         v0.objref<i256> = obj.alloc i256;
         jump block1;
@@ -112,6 +61,56 @@ func private %sum_const() -> i256 {
 
     block11:
         jump block4;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %main;
+        evm_stop;
+}
+
+func inline(always) private %next(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = call %wrapping_add v0 1.i256;
+        return v3;
+}
+
+func inline(always) private %range_has(v0.i256, v1.i256, v2.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i1 = gt v1 v0;
+        v6.i1 = is_zero v5;
+        br v6 block5 block3;
+
+    block2:
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v9.i1 = phi (1.i1 block2) (0.i1 block3);
+        return v9;
+
+    block5:
+        v12.i1 = lt v0 v2;
+        br v12 block2 block3;
+}
+
+func inline(always) private %start() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return 0.i256;
 }
 
 func private %wrapping_add(v0.i256, v1.i256) -> i256 {

@@ -200,6 +200,23 @@ pub fn expr_result_class<'db>(
                 _ => return Err(VerifyError::InvalidExprClass(dst)),
             }
         }
+        RExpr::ObjectFromRaw { raw } => {
+            let RuntimeClass::RawAddr {
+                space: AddressSpace::Memory,
+                pointee: Some(raw_pointee),
+            } = runtime_value_class(body, *raw)?
+            else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            match &dst_class {
+                Some(RuntimeClass::Ref {
+                    pointee,
+                    kind: RefKind::Object,
+                    view: RefView::Whole,
+                }) if raw_pointee.target(db) == &**pointee => dst_class.clone(),
+                _ => return Err(VerifyError::InvalidExprClass(dst)),
+            }
+        }
         RExpr::WordToRawAddr { value, space } => {
             if runtime_value_class(body, *value)?
                 != &RuntimeClass::Scalar(pointer_class(db, *space))

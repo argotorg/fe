@@ -21,12 +21,22 @@ func private %access_tuple() -> i256 {
         return 2.i256;
 }
 
+func private %main() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.@layout_0 = call %make_tuple;
+        v1.i256 = call %access_tuple;
+        return;
+}
+
 func private %main_root() {
     block0:
         jump block1;
 
     block1:
-        v0.i256 = call %access_tuple;
+        call %main;
         evm_stop;
 }
 

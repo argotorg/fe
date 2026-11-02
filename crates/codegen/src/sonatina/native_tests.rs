@@ -69,7 +69,7 @@ pub fn emit_test_suite_native(
         &package,
         &isa,
         false,
-        None,
+        &[],
         NativePanics::HostRevert,
     )?;
     let mut tests = Vec::with_capacity(roots.len());

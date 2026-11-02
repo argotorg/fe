@@ -1,0 +1,15 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[8-0153]: unsupported entry effect
+   ┌─ src/lib.fe:18:31
+   │
+18 │ pub fn main() uses (greeting: Greeting) {}
+   │                               ^^^^^^^^ the root effect `Evm` does not provide `Greeting`
+   │
+   = a test or `main` receives its effects from the target's root effect, `Evm`
+
+
+=== EXIT CODE: 1 ===

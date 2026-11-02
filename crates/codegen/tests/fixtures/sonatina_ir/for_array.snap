@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 462
 expression: output
 input_file: crates/codegen/tests/fixtures/for_array.fe
 ---
@@ -75,12 +74,21 @@ func inline(always) private %has(v0.constref<[i64; 25]>, v1.i256) -> i1 {
         return v4;
 }
 
-func private %main_root() {
+func private %main() -> i64 {
     block0:
         jump block1;
 
     block1:
         v0.i64 = call %for_array_sum;
+        return v0;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i64 = call %main;
         evm_stop;
 }
 

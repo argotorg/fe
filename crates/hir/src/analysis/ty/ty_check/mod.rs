@@ -125,6 +125,7 @@ use crate::analysis::ty::{
     pattern_ir::{
         ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
     },
+    registered_root_providers,
     ty_error::{
         collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause,
         normalization_limit_diag, path_arg_diags, qualified_path_wf_diags,
@@ -1725,6 +1726,16 @@ impl<'db> TyChecker<'db> {
         func: Func<'db>,
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
+        // An entry has no caller: the target's root effect supplies its
+        // effects.
+        let is_entry = func.is_test(self.db) || func.is_main_entry(self.db);
+        let root_ty = if is_entry {
+            registered_root_providers(self.db, EffectParamSite::Func(func, None))
+                .first()
+                .map(|registration| registration.provider_ty)
+        } else {
+            None
+        };
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
             let Some(key_ty) = effect.key_ty.to_opt() else {
                 continue;
@@ -1750,6 +1761,43 @@ impl<'db> TyChecker<'db> {
                 TraitSolveCx::new(self.db, func.scope()).with_assumptions(self.env.assumptions()),
             ) {
                 self.push_diag(diag);
+            } else if let Some(root_ty) = root_ty {
+                // The root provides a trait it implements, and a type key
+                // only as its own type: on a native target, `Host` is no
+                // `Evm`.
+                let provided = match key {
+                    ResolvedEffectKey::Trait(schema) => !matches!(
+                        is_goal_satisfiable(
+                            self.db,
+                            TraitSolveCx::new(self.db, func.scope()),
+                            instantiate_trait_self(
+                                self.db,
+                                schema.into_trait_inst(self.db),
+                                root_ty
+                            ),
+                        ),
+                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                    ),
+                    ResolvedEffectKey::Type(schema) => {
+                        normalize_ty(
+                            self.db,
+                            schema.carrier,
+                            func.scope(),
+                            self.env.assumptions(),
+                        ) == root_ty
+                    }
+                    ResolvedEffectKey::Row(_)
+                    | ResolvedEffectKey::Invalid
+                    | ResolvedEffectKey::Other => true,
+                };
+                if !provided {
+                    self.push_diag(BodyDiag::EntryEffectNotProvided {
+                        owner: EffectParamOwner::Func(func),
+                        key: key_ty,
+                        idx,
+                        root_ty,
+                    });
+                }
             }
         }
     }

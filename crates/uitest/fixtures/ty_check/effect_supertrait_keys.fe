@@ -1,0 +1,105 @@
+use std::evm::{Ctx, Super}
+
+trait Ping {}
+trait Pong {}
+trait Both: Ping + Pong {}
+trait All: Both {}
+
+fn ping() uses (p: Ping) {}
+fn pong() uses (p: Pong) {}
+fn both() uses (b: Both) {}
+
+// A trait effect provides its supertraits, and theirs in turn.
+fn from_both() uses (b: Both) {
+    ping()
+    pong()
+}
+
+fn from_all() uses (a: All) {
+    both()
+    ping()
+}
+
+fn chain() -> u256 uses (ctx: Ctx) {
+    ctx.chainid()
+}
+
+fn from_super() -> u256 uses (evm: mut Super) {
+    chain()
+}
+
+// An effect's own entry shadows the one a subtrait effect implies.
+fn from_both_and_ping() uses (b: Both, p: Ping) {
+    ping()
+}
+
+// A supertrait's associated type arguments are normalized: `Derived<Concrete>`
+// provides `Base<u8>`, as does `Sub<Assoc = u8>`.
+trait HasItem {
+    type Item
+}
+struct Concrete {}
+impl HasItem for Concrete {
+    type Item = u8
+}
+trait Base<T> {}
+trait Derived<T: HasItem>: Base<T::Item> {}
+trait Sub: Base<Self::Assoc> {
+    type Assoc
+}
+struct Provider {}
+impl Base<u8> for Provider {}
+impl Derived<Concrete> for Provider {}
+
+fn base_u8() uses (b: Base<u8>) {}
+fn base_item<T: HasItem>() uses (b: Base<T::Item>) {}
+
+fn from_derived() uses (d: Derived<Concrete>) {
+    base_u8()
+}
+
+fn from_derived_witness() {
+    with (Derived<Concrete> = Provider {}) {
+        base_u8()
+    }
+}
+
+fn from_sub() uses (s: Sub<Assoc = u8>) {
+    base_u8()
+}
+
+fn from_bound<T: HasItem<Item = u8>>() uses (d: Derived<T>) {
+    base_u8()
+}
+
+fn from_generic<T: HasItem>() uses (d: Derived<T>) {
+    base_item<T>()
+}
+
+// Supertraits that normalize to one key provide it once.
+trait DerivedTwice<T: HasItem>: Base<T::Item> + Base<u8> {}
+
+fn from_derived_twice() uses (d: DerivedTwice<Concrete>) {
+    base_u8()
+}
+
+// An effect's own entry shadows an implied one only when it matches: with
+// `T` to infer, `Pair<u16, u64>` does not hide the `Pair<u8, u32>` that
+// `BytePair` implies, but `Pair<u8, u64>` does.
+trait Pair<A, B> {}
+trait BytePair: Pair<u8, u32> {}
+
+fn need_pair<T>() uses (p: Pair<u8, T>) {}
+
+fn infer_from_implied() uses (b: BytePair, q: Pair<u16, u64>) {
+    need_pair()
+}
+
+fn infer_from_own() uses (b: BytePair, q: Pair<u8, u64>) {
+    need_pair()
+}
+
+// A supertrait does not provide its subtraits.
+fn from_ping() uses (p: Ping) {
+    both()
+}

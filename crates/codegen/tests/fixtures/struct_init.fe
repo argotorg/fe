@@ -3,7 +3,7 @@ struct Dummy {
     b: u256,
 }
 
-pub fn make_dummy() -> Dummy {
+pub fn main() -> Dummy {
     let dum = Dummy {
         a: 42,
         b: 99,

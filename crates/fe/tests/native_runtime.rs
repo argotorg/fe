@@ -332,10 +332,75 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_boxed_values_move_whole_where_raw_and_native_layouts_agree() {
-    // A box stores its value packed. `words` follows a one-byte bool, so the
-    // frame's raw layout differs from its native one and moves field by
-    // field, but `words`, `small` and `pair` each move in one load and store.
+fn native_records_and_enums_take_aligned_layout() {
+    // Native memory lays fields out as a Sonatina object does: each at its
+    // alignment, little-endian, and an enum's variants from one payload
+    // offset after the tag.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("aligned.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr::MemArray
+
+struct Inner { code: u16, ready: bool }
+struct Packet { tag: u8, inner: Inner, samples: [u16; 3], tail: u8 }
+enum Choice { Small(u8), Wide(u64, u16) }
+
+impl Copy for Inner {}
+impl Copy for Packet {}
+impl Copy for Choice {}
+
+pub fn main() -> i32 {
+    assert!(core::size_of<Inner>() == 4)
+    assert!(core::size_of<Packet>() == 14)
+    assert!(core::size_of<Choice>() == 24)
+    var packets = MemArray<Packet>::new_zeroed(2)
+    assert!(packets.byte_len() == 2 * core::size_of<Packet>())
+    packets[1] = Packet {
+        tag: 0xa1,
+        inner: Inner { code: 0x1234, ready: true },
+        samples: [0x5678, 0x9abc, 0xdef0],
+        tail: 0x7e,
+    }
+    let bytes = packets.span()
+    // The tag, then `inner` at its two-byte alignment, `samples` and `tail`.
+    let offsets: [usize; 9] = [0, 2, 3, 4, 6, 7, 8, 11, 12]
+    let expected: [u8; 9] = [0xa1, 0x34, 0x12, 1, 0x78, 0x56, 0xbc, 0xde, 0x7e]
+    var i: usize = 0
+    while i < 9 {
+        assert!(bytes[14 + offsets[i]] == expected[i])
+        i += 1
+    }
+    var choices = MemArray<Choice>::new_zeroed(2)
+    assert!(choices.byte_len() == 2 * core::size_of<Choice>())
+    choices[0] = Choice::Wide(0x0102030405060708, 0x0a0b)
+    choices[1] = Choice::Small(0x5c)
+    let bytes = choices.span()
+    // Both payloads start at the u64's eight-byte alignment.
+    assert!(bytes[0] == 1 && bytes[8] == 0x08 && bytes[15] == 0x01 && bytes[16] == 0x0b)
+    assert!(bytes[24] == 0 && bytes[32] == 0x5c)
+    match choices[0] {
+        Choice::Wide(word, half) => assert!(word == 0x0102030405060708 && half == 0x0a0b)
+        Choice::Small(_) => assert!(false)
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("aligned")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_boxed_structs_move_whole() {
+    // A box's value is a Sonatina object in place, so the frame moves in one
+    // object load and store despite the padding after `flag`.
     let temp = tempdir().unwrap();
     let source = temp.path().join("boxed.fe");
     fs::write(
@@ -381,16 +446,151 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
         if level == "0" {
             let ir = fs::read_to_string(out.join("boxed.native.sona")).unwrap();
-            for ty in ["[i256; 64]", "[i8; 3]"] {
-                for op in ["= mload", "mstore"] {
-                    assert!(
-                        ir.lines()
-                            .any(|line| line.contains(op) && line.ends_with(&format!(" {ty};"))),
-                        "{op} {ty}\n{ir}"
-                    );
-                }
-            }
+            let frame = ir
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("type ")?
+                        .strip_suffix(" = {i1, [i256; 64], i64, [i8; 3], @layout_1};")
+                })
+                .unwrap_or_else(|| panic!("no frame type\n{ir}"));
+            // Value names are per function, and the object operand is the
+            // whole token after `op`: `v5` must not match `v57`.
+            let through_view = |op: &str| {
+                ir.split("\nfunc ").any(|function| {
+                    let views: Vec<_> = function
+                        .lines()
+                        .filter_map(|line| {
+                            let (view, rest) =
+                                line.trim().split_once(&format!(".objref<{frame}> = "))?;
+                            rest.starts_with("obj.from_ptr ").then_some(view)
+                        })
+                        .collect();
+                    function.lines().any(|line| {
+                        line.split_once(&format!("{op} "))
+                            .and_then(|(_, operands)| operands.split([' ', ';']).next())
+                            .is_some_and(|object| views.contains(&object))
+                    })
+                })
+            };
+            assert!(
+                through_view("obj.load") && through_view("obj.store"),
+                "{frame}\n{ir}"
+            );
         }
+    }
+}
+
+#[test]
+fn native_boxed_and_local_values_share_methods() {
+    // A value behind a pointer is an object in place, like a local, so a
+    // method called on both compiles once and keeps `noalias`.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("shared.fe");
+    fs::write(
+        &source,
+        r#"
+use core::{Box, Result}
+
+struct Counter {
+    tag: u8,
+    total: u64,
+    last: u256,
+}
+
+impl Counter {
+    fn bump(mut self, by: u64) {
+        self.total += by
+        self.last = self.total as u256
+    }
+}
+
+pub fn main() -> i32 {
+    var local = Counter { tag: 1, total: 0, last: 0 }
+    local.bump(by: 3)
+    var boxed = match Box::try_new(Counter { tag: 2, total: 0, last: 0 }) {
+        Result::Ok(boxed) => boxed,
+        Result::Err(_) => return 1,
+    }
+    boxed.get().bump(by: 4)
+    let inner = boxed.into_inner()
+    if local.total == 3 && inner.total == 4 && inner.last == 4 { 0 } else { 2 }
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("shared")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        if level == "0" {
+            let ir = fs::read_to_string(out.join("shared.native.sona")).unwrap();
+            let bumps: Vec<_> = ir
+                .lines()
+                .filter(|line| line.starts_with("func") && line.contains("bump"))
+                .collect();
+            assert!(
+                matches!(bumps[..], [bump] if bump.contains("(noalias v0.objref<")),
+                "{bumps:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_object_views_and_raw_accesses_see_each_other() {
+    // An object view and raw pointers address the same memory: a write
+    // through either is seen through the other, in the same function and
+    // across calls.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("views.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr::{self, cast, offset_bytes}
+
+struct Pair { a: u64, b: u64 }
+
+impl Pair {
+    fn bump(mut self) {
+        self.a += 1
+        self.b += 2
+    }
+}
+
+#[inline(never)]
+fn bump_at(_ pair: *Pair) {
+    unsafe { (*pair).bump() }
+}
+
+#[inline(never)]
+fn poke(_ pair: *Pair, b: u64) {
+    unsafe { *offset_bytes(cast<Pair, u64>(pair), 8) = b }
+}
+
+pub fn main() -> i32 {
+    let pair = ptr::alloc<Pair>()
+    let first = cast<Pair, u64>(pair)
+    let second = offset_bytes(first, 8)
+    unsafe { *pair = Pair { a: 1, b: 2 } }
+    if unsafe { *first } != 1 || unsafe { *second } != 2 { return 1 }
+    unsafe { *first = 10 }
+    if unsafe { (*pair).a } != 10 { return 2 }
+    bump_at(pair)
+    if unsafe { *first } != 11 || unsafe { *second } != 4 { return 3 }
+    let before = unsafe { (*pair).b }
+    poke(pair, b: 40)
+    if before != 4 || unsafe { (*pair).b } != 40 { return 4 }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("views")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
 
@@ -525,17 +725,17 @@ math = true
     .unwrap();
     fs::write(
         root.join("math/src/lib.fe"),
-        "pub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
+        "#[export]\npub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
     )
     .unwrap();
     fs::write(
         root.join("app/src/lib.fe"),
-        "pub fn main() -> i32 { helper::answer() }\n#[test]\nfn root_test() { core::assert(main() == 42) }\n",
+        "use std::io::Stdout\npub fn main() -> i32 uses (out: mut Stdout) { helper::answer() }\n#[test]\nfn root_test() uses (out: mut Stdout) { core::assert(main() == 42) }\n",
     )
     .unwrap();
     fs::write(
         root.join("app/src/helper.fe"),
-        "use std::io::{Write, host, write_char}\npub fn answer() -> i32 {\n with (Write = host()) { write_char(65) }\n math::answer()\n}\n#[test]\nfn nested_test() { core::assert(answer() == 42) }\n",
+        "use std::io::Stdout\npub fn answer() -> i32 uses (out: mut Stdout) {\n print!(\"A\")\n math::answer()\n}\n#[test]\nfn nested_test() uses (out: mut Stdout) { core::assert(answer() == 42) }\n",
     )
     .unwrap();
     for level in ["0", "1"] {
@@ -548,6 +748,25 @@ math = true
         assert!(!ir.contains("unused"));
         build(root, &out, level, &[]);
         assert!(!out.join("math").exists());
+        // A library build selects the members that export functions.
+        let library = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args([
+                "build",
+                "--backend",
+                "native",
+                "--emit",
+                "staticlib",
+                "-O",
+                level,
+            ])
+            .arg("--out-dir")
+            .arg(&out)
+            .arg(root)
+            .output()
+            .unwrap();
+        assert!(library.status.success(), "{library:?}");
+        assert!(out.join("libmath.a").is_file());
+        assert!(!out.join("libapp.a").exists());
         build(&root.join("app"), &out, level, &[]);
         for (selection, expected_count) in [(&["--ingot", "app"][..], 2), (&[][..], 3)] {
             let result = Command::new(env!("CARGO_BIN_EXE_fe"))
@@ -632,14 +851,16 @@ fn native_host_io_and_assertions_execute_at_o0_and_o1() {
     fs::write(
         &source,
         r#"
-use std::io::{Read, Write, host, read_char, write_char, writeln}
-pub fn main() -> i32 {
-    with (Read = host(), Write = host()) {
-        writeln("ready")
-        let c = read_char()
-        core::assert(c == 65)
-        write_char(c + 1)
-    }
+use core::MemBuffer
+use std::io::{Stdin, Stdout, read_to_end}
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    println!("ready")
+    var data = MemBuffer::empty()
+    read_to_end(mut data)
+    core::assert(data.len() == 1 && data[0] == 65)
+    var reply = MemBuffer::empty()
+    reply.push(data[0] + 1)
+    print!(reply.span())
     0
 }
 
@@ -670,6 +891,216 @@ pub fn main() -> i32 {
             "failed assertion must trap"
         );
     }
+}
+
+#[test]
+fn native_standard_streams_print_and_read() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("streams.fe");
+    fs::write(
+        &source,
+        r#"
+use core::MemBuffer
+use std::io::{Stderr, Stdio, StdinReader, Stdout}
+
+fn report(_ count: usize) uses (out: mut Stdout) {
+    println!("lines: ", count)
+}
+
+// `Stdio` provides each stream, here two at once.
+fn both() uses (out: mut Stdout, err: mut Stderr) {
+    print!("no newline")
+    println!()
+    eprint!("to ")
+    eprintln!("stderr")
+}
+
+pub fn main() -> i32 uses (io: mut Stdio) {
+    println!(0 as u8, " ", 255 as u8, " ", 65535 as u16, " ", 4294967295 as u32)
+    println!(18446744073709551615 as u64, " ", 340282366920938463463374607431768211455 as u128)
+    println!(115792089237316195423570985008687907853269984665640564039457584007913129639935 as u256)
+    let small: i8 = -128
+    let half: i16 = -32768
+    let word: i32 = -2147483648
+    println!(small, " ", 127 as i8, " ", half, " ", word)
+    let long: i64 = -9223372036854775808
+    let wide: i128 = -170141183460469231731687303715884105728
+    println!(long, " ", wide)
+    let widest: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    println!(widest)
+    let minus: isize = -1
+    println!(0 as usize, " ", minus, " ", true, " ", false)
+    let padded: String<8> = "ab"
+    println!(padded, "|", "a literal longer than thirty-one bytes")
+    both()
+
+    var reader = StdinReader::new()
+    let first = reader.read_byte().unwrap()
+    var line = MemBuffer::empty()
+    var count: usize = 0
+    while reader.read_line(mut line) {
+        count += 1
+        println!("[", line.span(), "]")
+        line.clear()
+    }
+    report(count)
+    var reply = MemBuffer::empty()
+    reply.push(first)
+    let first = format!("first byte: ", reply.span())
+    println!(first, ", ", first.len(), " bytes")
+    0
+}
+"#,
+    )
+    .unwrap();
+    // Lines longer than the reader's 4 KiB reads span several of them.
+    let long = "x".repeat(10_000);
+    let input = format!("@first\n\nlast {long}");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let mut child = Command::new(out.join("streams"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            format!(
+                "0 255 65535 4294967295\n\
+                 18446744073709551615 340282366920938463463374607431768211455\n\
+                 115792089237316195423570985008687907853269984665640564039457584007913129639935\n\
+                 -128 127 -32768 -2147483648\n\
+                 -9223372036854775808 -170141183460469231731687303715884105728\n\
+                 -57896044618658097711785492504343953926634992332820282019728792003956564819968\n\
+                 0 -1 true false\n\
+                 ab|a literal longer than thirty-one bytes\n\
+                 no newline\n\
+                 [first]\n[]\n[last {long}]\nlines: 3\nfirst byte: @, 13 bytes\n"
+            )
+        );
+        assert_eq!(result.stderr, b"to stderr\n");
+    }
+
+    // `read_to_end` keeps every byte, including zeros.
+    let source = temp.path().join("echo.fe");
+    fs::write(
+        &source,
+        r#"
+use core::MemBuffer
+use std::io::{Stdin, Stdout, read_to_end}
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    var data = MemBuffer::empty()
+    read_to_end(mut data)
+    print!(data.span())
+    0
+}
+"#,
+    )
+    .unwrap();
+    let input = (0..20_000u32).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+    let out = temp.path().join("echo-out");
+    build(&source, &out, "1", &[]);
+    let mut child = Command::new(out.join("echo"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&input).unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, input);
+}
+
+#[test]
+fn native_environment_and_exit() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("environment.fe");
+    fs::write(
+        &source,
+        r#"
+use core::Option
+use std::env::Env
+use std::io::Stdout
+use std::process::Exit
+pub fn main() -> i32 uses (out: mut Stdout, env: Env, proc: Exit) {
+    match env.lookup("FE_NATIVE_VALUE") {
+        Option::Some(value) => print!("[", value, "]"),
+        Option::None => print!("unset"),
+    }
+    // Any `Display` value names a variable.
+    let name = format!("FE_NATIVE", "_VALUE")
+    core::assert(env.lookup(name.span()).is_some() == env.lookup("FE_NATIVE_VALUE").is_some())
+    proc.exit(7)
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("environment");
+        for (value, expected) in [
+            (Some("a=b c"), &b"[a=b c]"[..]),
+            (Some(""), b"[]"),
+            (None, b"unset"),
+        ] {
+            let mut command = Command::new(&executable);
+            match value {
+                Some(value) => command.env("FE_NATIVE_VALUE", value),
+                None => command.env_remove("FE_NATIVE_VALUE"),
+            };
+            let result = command.output().unwrap();
+            assert_eq!(result.status.code(), Some(7), "{result:?}");
+            assert_eq!(result.stdout, expected);
+        }
+    }
+
+    // A test is not an executable's entry, so it has no arguments.
+    let source = temp.path().join("tests.fe");
+    fs::write(
+        &source,
+        "use std::env::Args\n#[test]\nfn no_arguments() uses (args: Args) { core::assert(args.count() == 0) }\n",
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["test", "--backend", "native"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
+
+#[test]
+fn native_entries_take_only_host_effects() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("evm_effect.fe");
+    fs::write(
+        &source,
+        "use std::evm::{Ctx, Evm}\n#[test]\nfn reads() uses (evm: mut Evm) {}\n#[test]\nfn chain() uses (ctx: Ctx) {}\n",
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["test", "--backend", "native"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(!result.status.success());
+    assert!(
+        output.contains("the root effect `Host` does not provide `Evm`")
+            && output.contains("the root effect `Host` does not provide `Ctx`"),
+        "{output}"
+    );
 }
 
 #[test]
@@ -808,17 +1239,15 @@ fn native_runner_bounds_time_and_combined_output() {
     fs::write(
         &source,
         r#"
-use std::io::{Write, host, write_char}
+use std::io::Stdout
 #[test]
 fn spin() { while true {} }
 #[test]
-fn noisy() {
-    with (Write = host()) {
-        var i: u32 = 0
-        while i < 2048 {
-            write_char(65)
-            i += 1
-        }
+fn noisy() uses (out: mut Stdout) {
+    var i: u32 = 0
+    while i < 2048 {
+        print!("A")
+        i += 1
     }
 }
 "#,
@@ -1050,19 +1479,20 @@ fn native_process_clock_preserves_borrows_and_host_io() {
     fs::write(
         &source,
         r#"
-use std::io::{HostIo, Read, Write, host}
+use core::MemBuffer
+use std::io::{Stdin, StdinReader, Stdout}
 use std::native::cpu_clock_ticks
-pub fn main() -> i32 {
-    var input = host()
-    var output = host()
-    var value: i32 = 0
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    var reader = StdinReader::new()
+    var value: u8 = 0
     let borrowed = mut value
     let start = cpu_clock_ticks()
-    borrowed = input.read_char()
+    borrowed = reader.read_byte().unwrap()
     let end = cpu_clock_ticks()
     core::assert(start >= 0 && end >= start)
-    output.write_char(c: value)
-    core::assert(!output.failed())
+    var reply = MemBuffer::empty()
+    reply.push(value)
+    print!(reply.span())
     0
 }
 "#,
@@ -1084,38 +1514,32 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_arguments_preserve_bytes_bounds_and_internal_entry_calls() {
+fn native_arguments_preserve_bytes_bounds_and_the_entry_name() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("arguments.fe");
     fs::write(
         &source,
         r#"
-use std::io::{Write, host, write_char}
-use std::native::Args
+use core::MemBuffer
+use std::env::Args
+use std::io::Stdout
+// The entry's internal name is free for a Fe function.
 fn __fe_native_main() -> i32 { 42 }
-pub fn main(argc: i32, argv: **u8) -> i32 {
-    if argc == 0 { return __fe_native_main() }
-    let args = unsafe { Args::new(argc, argv) }
-    core::assert(args.len() == argc.downcast_unchecked())
-    if argc == 1 { args.get(args.len()) }
-    if argc == 2 {
+pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
+    core::assert(__fe_native_main() == 42)
+    if args.count() == 1 { let _ = args.get(args.count()) }
+    if args.count() == 2 {
         let arg = args.get(1)
-        arg.byte_at(arg.len())
+        let _ = arg.span()[arg.len()]
     }
-    core::assert(main(argc: 0, argv) == 42)
-    with (Write = host()) {
-        var i: usize = 1
-        while i < args.len() {
-            let arg = args.get(i)
-            var j: usize = 0
-            while j < arg.len() {
-                write_char(arg.byte_at(j) as i32)
-                j += 1
-            }
-            write_char(124)
-            i += 1
-        }
+    var text = MemBuffer::empty()
+    var i: usize = 1
+    while i < args.count() {
+        text.extend_from(args.get(i).span())
+        text.push(124)
+        i += 1
     }
+    print!(text)
     0
 }
 "#,
@@ -1149,41 +1573,43 @@ fn native_modular_arithmetic_matches_full_precision_runtime_inputs() {
     fs::write(
         &source,
         r#"
-use std::io::{HostIo, Read, Write, host, read_char}
+use core::MemBuffer
+use std::io::{Stdin, StdinReader, Stdout}
 use std::evm::crypto::{addmod, mulmod}
-fn read_word() -> u256 uses (input: mut Read) {
+fn read_word(_ reader: mut StdinReader) -> u256 uses (input: mut Stdin) {
     var value: u256 = 0
     var i: u256 = 0
     while i < 32 {
-        let byte = read_char()
-        core::assert(byte >= 0)
-        let bits: u256 = byte.downcast_unchecked()
+        let bits: u256 = reader.read_byte().unwrap() as u256
         value = value | (bits << (i * 8))
         i += 1
     }
     value
 }
-fn write_word(_ value: u256) uses (output: mut HostIo) {
+fn write_word(_ text: mut MemBuffer, _ value: u256) {
     var i: u256 = 0
     while i < 32 {
-        output.write_char(c: ((value >> (i * 8)) & 255).downcast_unchecked())
-        core::assert(!output.failed())
+        text.push(((value >> (i * 8)) & 255).downcast_unchecked())
         i += 1
     }
 }
-pub fn main() -> i32 {
-    with (Read = host(), HostIo = host()) {
-        var marker = read_char()
-        while marker != -1 {
-            core::assert(marker == 64)
-            let lhs = read_word()
-            let rhs = read_word()
-            let modulus = read_word()
-            write_word(addmod(lhs, rhs, modulus))
-            write_word(mulmod(lhs, rhs, modulus))
-            marker = read_char()
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    var reader = StdinReader::new()
+    var text = MemBuffer::empty()
+    while true {
+        match reader.read_byte() {
+            Option::Some(marker) => {
+                core::assert(marker == 64)
+                let lhs = read_word(mut reader)
+                let rhs = read_word(mut reader)
+                let modulus = read_word(mut reader)
+                write_word(mut text, addmod(lhs, rhs, modulus))
+                write_word(mut text, mulmod(lhs, rhs, modulus))
+            }
+            Option::None => break
         }
     }
+    print!(text.span())
     0
 }
 "#,
@@ -1272,39 +1698,41 @@ fn native_bit_counts_match_runtime_inputs() {
     fs::write(
         &source,
         r#"
-use std::io::{HostIo, Read, Write, host, read_char}
+use core::MemBuffer
 use core::num::{leading_zeros, trailing_zeros}
-fn read_word() -> u256 uses (input: mut Read) {
+use std::io::{Stdin, StdinReader, Stdout}
+fn read_word(_ reader: mut StdinReader) -> u256 uses (input: mut Stdin) {
     var value: u256 = 0
     var i: u256 = 0
     while i < 32 {
-        let byte = read_char()
-        core::assert(byte >= 0)
-        let bits: u256 = byte.downcast_unchecked()
+        let bits: u256 = reader.read_byte().unwrap() as u256
         value = value | (bits << (i * 8))
         i += 1
     }
     value
 }
-fn write_word(_ value: u256) uses (output: mut HostIo) {
+fn write_word(_ text: mut MemBuffer, _ value: u256) {
     var i: u256 = 0
     while i < 32 {
-        output.write_char(c: ((value >> (i * 8)) & 255).downcast_unchecked())
-        core::assert(!output.failed())
+        text.push(((value >> (i * 8)) & 255).downcast_unchecked())
         i += 1
     }
 }
-pub fn main() -> i32 {
-    with (Read = host(), HostIo = host()) {
-        var marker = read_char()
-        while marker != -1 {
-            core::assert(marker == 64)
-            let value = read_word()
-            write_word(leading_zeros(value))
-            write_word(trailing_zeros(value))
-            marker = read_char()
+pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
+    var reader = StdinReader::new()
+    var text = MemBuffer::empty()
+    while true {
+        match reader.read_byte() {
+            Option::Some(marker) => {
+                core::assert(marker == 64)
+                let value = read_word(mut reader)
+                write_word(mut text, leading_zeros(value))
+                write_word(mut text, trailing_zeros(value))
+            }
+            Option::None => break
         }
     }
+    print!(text.span())
     0
 }
 "#,
@@ -1413,6 +1841,121 @@ fn native_fallible_allocation_reports_failure_and_releases_blocks() {
             .unwrap();
         assert!(linked.status.success(), "{linked:?}");
         let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_exports_are_callable_from_c() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let object = build_native_object(&fixtures.join("exports.fe"), &out, level);
+        let executable = out.join("call_exports");
+        let linked = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+            .arg(&object)
+            .arg(fixtures.join("call_exports.c"))
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(linked.status.success(), "{linked:?}");
+        let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_static_libraries_link_into_c_programs() {
+    // The library's panic aborts its host.
+    test_utils::skip_crash_reports();
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let built = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["build", "--backend", "native", "--emit", "object,staticlib"])
+            .args(["-O", level, "--out-dir"])
+            .arg(&out)
+            .arg(fixtures.join("library.fe"))
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "O{level}: {built:?}");
+        let mut library = OsString::from("-L");
+        library.push(&out);
+        for (form, inputs) in [
+            ("archive", vec![library, OsString::from("-llibrary")]),
+            ("object", vec![out.join("library.o").into_os_string()]),
+        ] {
+            let executable = out.join(format!("host-{form}"));
+            let linked = Command::new("cc")
+                .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+                .arg(fixtures.join("library_host.c"))
+                .args(&inputs)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap();
+            assert!(linked.status.success(), "O{level} {form}: {linked:?}");
+            let result = Command::new(&executable).output().unwrap();
+            assert!(result.status.success(), "O{level} {form}: {result:?}");
+            assert_eq!(result.stdout, b"42 zzz\n", "O{level} {form}: {result:?}");
+            // A panic aborts the host process, after flushing its output.
+            let panicked = Command::new(&executable).arg("x").output().unwrap();
+            assert_eq!(
+                panicked.status.signal(),
+                Some(libc::SIGABRT),
+                "O{level} {form}: {panicked:?}"
+            );
+            assert_eq!(panicked.stdout, b"42 zzz\n", "O{level} {form}");
+            assert_eq!(
+                panicked.stderr, b"panicked: arithmetic overflow\n",
+                "O{level} {form}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_executables_link_host_objects_and_libraries() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    // An object, and a library the C compiler finds on `LIBRARY_PATH`.
+    let host = temp.path().join("host");
+    fs::create_dir_all(&host).unwrap();
+    for name in ["host_apply", "host_offset"] {
+        let compiled = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"])
+            .arg(fixtures.join(format!("{name}.c")))
+            .arg("-o")
+            .arg(host.join(format!("{name}.o")))
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+    }
+    let archived = Command::new("ar")
+        .arg("rcs")
+        .arg(host.join("libhost_offset.a"))
+        .arg(host.join("host_offset.o"))
+        .output()
+        .unwrap();
+    assert!(archived.status.success(), "{archived:?}");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let built = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["build", "--backend", "native", "-O", level, "--out-dir"])
+            .arg(&out)
+            .arg("--link")
+            .arg(host.join("host_apply.o"))
+            .args(["--link-lib", "host_offset"])
+            .arg(fixtures.join("host_calls.fe"))
+            .env("LIBRARY_PATH", &host)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "O{level}: {built:?}");
+        let result = Command::new(out.join("host_calls")).output().unwrap();
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }

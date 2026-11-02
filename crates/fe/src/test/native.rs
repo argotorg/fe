@@ -388,7 +388,7 @@ _exit({NATIVE_TEST_REVERT_STATUS});
             source.push_str("return 2;\n}\n");
             fs::write(&launcher, source)
                 .map_err(|err| format!("failed to write native test launcher: {err}"))?;
-            link_executable(&[&launcher, &object], &executable_path)?;
+            link_executable(&[&launcher, &object], &[], &executable_path)?;
 
             if let Some(out_dir) = &out_dir {
                 let stem = format!("{}.native", test_emit_stem(suite_key));

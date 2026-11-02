@@ -10,6 +10,7 @@ use crate::core::hir_def::{
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef};
+use common::compilation::Target;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use fold::{TyFoldable, TyFolder};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -77,7 +78,8 @@ pub use provider::{
     RootProviderScope, RootProviderSiteKind, provider_semantics, registered_root_providers,
 };
 
-const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
+const EVM_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
+const NATIVE_ROOT_EFFECT_TY_PATH: &[&str] = &["std", "native", "Host"];
 
 pub fn ty_is_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -938,18 +940,15 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
     }
 }
 
+/// The type contracts take their EVM capabilities from: the `RootEffect` of
+/// `std::evm::EvmTarget`, whatever the compilation target.
 #[salsa::tracked(returns(copy))]
-pub fn resolve_default_root_effect_ty<'db>(
+pub fn resolve_contract_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<TyId<'db>> {
-    let target_path = PathId::from_segments(db, DEFAULT_TARGET_TY_PATH);
-    let target_ty = match resolve_path(db, target_path, scope, assumptions, false).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
-        _ => return None,
-    };
-
+    let target_ty = resolve_ty_path(db, EVM_TARGET_TY_PATH, scope, assumptions)?;
     let target_trait = corelib::resolve_core_trait(db, scope, &["contracts", "Target"])?;
     let inst_target = trait_def::TraitInstId::new_simple(db, target_trait, vec![target_ty]);
     let root_ident = IdentId::new(db, "RootEffect".to_owned());
@@ -959,6 +958,39 @@ pub fn resolve_default_root_effect_ty<'db>(
         scope,
         assumptions,
     ))
+}
+
+/// The type `main` and tests take their target capabilities from:
+/// `std::native::Host` for native code, else the contracts' root effect.
+pub fn resolve_func_root_effect_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    match db.compilation_settings().target(db) {
+        Target::Native => resolve_ty_path(db, NATIVE_ROOT_EFFECT_TY_PATH, scope, assumptions),
+        Target::Evm => resolve_contract_root_effect_ty(db, scope, assumptions),
+    }
+}
+
+fn resolve_ty_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    segments: &[&str],
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    match resolve_path(
+        db,
+        PathId::from_segments(db, segments),
+        scope,
+        assumptions,
+        false,
+    )
+    .ok()?
+    {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        _ => None,
+    }
 }
 
 /// `inst`, an effect key, as the predicate `self_ty` provides. A key leaves

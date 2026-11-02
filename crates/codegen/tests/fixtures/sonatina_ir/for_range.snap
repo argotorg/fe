@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 462
 expression: output
 input_file: crates/codegen/tests/fixtures/for_range.fe
 ---
@@ -10,7 +9,20 @@ type @layout_0 = {i256, i256};
 
 global private const @layout_0 $const_region_0 = {0, 10};
 
-func private %for_range_sum() -> i256 {
+func inline(always) private %has(v0.constref<@layout_0>, v1.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.constref<i256> = const.proj v0 0.i256;
+        v5.i256 = const.load v4;
+        v7.constref<i256> = const.proj v0 1.i256;
+        v8.i256 = const.load v7;
+        v10.i1 = call %range_has v1 v5 v8;
+        return v10;
+}
+
+func private %main() -> i256 {
     block0:
         v0.objref<i256> = obj.alloc i256;
         jump block1;
@@ -60,25 +72,12 @@ func private %for_range_sum() -> i256 {
         jump block4;
 }
 
-func inline(always) private %has(v0.constref<@layout_0>, v1.i256) -> i1 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.constref<i256> = const.proj v0 0.i256;
-        v5.i256 = const.load v4;
-        v7.constref<i256> = const.proj v0 1.i256;
-        v8.i256 = const.load v7;
-        v10.i1 = call %range_has v1 v5 v8;
-        return v10;
-}
-
 func private %main_root() {
     block0:
         jump block1;
 
     block1:
-        v0.i256 = call %for_range_sum;
+        v0.i256 = call %main;
         evm_stop;
 }
 

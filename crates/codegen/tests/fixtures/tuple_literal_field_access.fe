@@ -20,3 +20,9 @@ pub fn tuple_literal_struct_chain() -> u256 {
     let b: u256 = 2
     PairWrap { pair: (a, b) }.pair.1
 }
+
+pub fn main() {
+    let _ = tuple_literal_field_access()
+    let _ = tuple_literal_nested_access()
+    let _ = tuple_literal_struct_chain()
+}

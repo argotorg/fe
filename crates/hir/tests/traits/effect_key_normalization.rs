@@ -3243,7 +3243,7 @@ fn root_effect_bindings_specialize_raw_storage_to_evm() {
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
-    let entry = find_func(&db, top_mod, "explicit_raw_boundaries");
+    let entry = find_func(&db, top_mod, "main");
     let root = SemanticInstance::new(
         &db,
         root_semantic_instance_key(&db, BodyOwner::Func(entry, None))

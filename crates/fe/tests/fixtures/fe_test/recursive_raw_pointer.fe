@@ -114,7 +114,10 @@ fn test_self_recursive_reads_writes_and_copies() {
     unsafe { assert(slot.value == 10) }
     unsafe { slot.next.value = 22 }
     unsafe { assert(tail.value == 22) }
-    assert(core::size_of<Node>() == 32 + core::size_of<*Node>())
+    // Natively a pointer takes 8 bytes, and `Node` rounds up to the u256's
+    // 16-byte alignment.
+    let pointer_size = core::size_of<*Node>()
+    assert(core::size_of<Node>() == if pointer_size == 8 { 48 } else { 32 + pointer_size })
 }
 
 #[test]

@@ -1,7 +1,7 @@
 // `#[abi]` structs implement `SolCompat` as the Solidity tuple of their
 // fields, so they can be event and error fields.
 use std::abi::{Bytes, Bytes32, DynArray, SolCompat}
-use std::evm::{Address, Evm, revert_error}
+use std::evm::{Address, revert_error}
 
 #[abi]
 pub struct Item {
@@ -135,6 +135,6 @@ fn abi_struct_event_topics() {
 
 // BadItem((uint8,address,uint256,uint256))
 #[test(should_revert, selector = 0x81ead8b7)]
-fn abi_struct_error_selector() uses (evm: mut Evm) {
+fn abi_struct_error_selector() {
     revert_error(BadItem { item: item(4) })
 }

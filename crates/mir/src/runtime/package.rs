@@ -16,7 +16,7 @@ use hir::{
             ty_def::{TyData, TyId},
         },
     },
-    hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
+    hir_def::{Contract, Func, HirIngot, IdentId, InlineHint, ManualContractRootAttr, TopLevelMod},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -37,6 +37,7 @@ use crate::{
         RuntimeTypeEnv, provider_class_for_target_in_env, top_level_class_for_ty_in_env,
         validate_runtime_array_extents_in_env,
     },
+    runtime::object_name::{ObjectId, assign_object_names},
     runtime::root_effects::{
         EntryEffectContext, entry_semantic_args_plan, target_root_provider_materialization,
     },
@@ -80,30 +81,18 @@ struct ManualContractRoot<'db> {
     section: ManualContractSection,
 }
 
-type ManualContractObjectSpec<'db> = (
-    String,
-    Vec<(RuntimeSectionName, RuntimeInstance<'db>)>,
+type ObjectSections<'db> = Vec<(RuntimeSectionName, RuntimeInstance<'db>)>;
+
+/// An object to build: what it is built from, its sections, and the roots that
+/// keep those sections alive.
+type ObjectSpecWithRoots<'db> = (
+    ObjectId<'db>,
+    ObjectSections<'db>,
     Vec<RuntimeInstance<'db>>,
 );
 
-#[derive(Debug)]
-enum RuntimeRootCandidate<'db> {
-    Root(Func<'db>),
-    NotRoot,
-    Rejected(RuntimeRootRejection<'db>),
-}
-
-#[derive(Debug)]
-struct RuntimeRootRejection<'db> {
-    func: Func<'db>,
-    reason: RuntimeRootRejectionReason<'db>,
-}
-
-#[derive(Debug)]
-enum RuntimeRootRejectionReason<'db> {
-    RootSemanticInstance(RootSemanticInstanceError<'db>),
-    UnsupportedEntryEffect(String),
-}
+/// An object to build, named once all objects of the package are known.
+type ObjectSpec<'db> = (ObjectId<'db>, ObjectSections<'db>);
 
 #[derive(Debug, Clone)]
 struct RuntimeGraphNode<'db> {
@@ -117,7 +106,7 @@ struct RuntimeGraph<'db> {
     // across runs, which would make `_0`/`_1` suffix assignment for
     // content-identical duplicates non-deterministic.
     nodes: IndexMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
-    object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+    object_specs: Vec<ObjectSpec<'db>>,
 }
 
 struct RuntimeGraphBuilder<'db> {
@@ -125,22 +114,22 @@ struct RuntimeGraphBuilder<'db> {
     queue: Vec<RuntimeInstance<'db>>,
     queued: FxHashSet<RuntimeInstance<'db>>,
     nodes: IndexMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
-    object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
-    discovered_contract_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+    object_specs: Vec<ObjectSpec<'db>>,
+    discovered_contract_specs: Vec<ObjectSpec<'db>>,
     materialized_contracts: FxHashSet<Contract<'db>>,
-    materialized_object_names: FxHashSet<String>,
+    materialized_objects: FxHashSet<ObjectId<'db>>,
 }
 
 impl<'db> RuntimeGraphBuilder<'db> {
     fn new(
         db: &'db dyn MirDb,
         roots: Vec<RuntimeInstance<'db>>,
-        object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+        object_specs: Vec<ObjectSpec<'db>>,
     ) -> Self {
         let materialized_contracts = materialized_contracts_for_roots(db, &roots);
-        let materialized_object_names = object_specs
+        let materialized_objects = object_specs
             .iter()
-            .map(|(name, _)| name.clone())
+            .map(|(id, _)| id.clone())
             .collect::<FxHashSet<_>>();
         let mut builder = Self {
             db,
@@ -150,7 +139,7 @@ impl<'db> RuntimeGraphBuilder<'db> {
             object_specs,
             discovered_contract_specs: Vec::new(),
             materialized_contracts,
-            materialized_object_names,
+            materialized_objects,
         };
         for root in roots {
             builder.enqueue(root);
@@ -200,8 +189,9 @@ impl<'db> RuntimeGraphBuilder<'db> {
             );
         }
 
+        let db = self.db;
         self.discovered_contract_specs
-            .sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+            .sort_by_cached_key(|(id, _)| id.sort_key(db));
         self.object_specs.extend(self.discovered_contract_specs);
         Ok(RuntimeGraph {
             nodes: self.nodes,
@@ -235,13 +225,14 @@ impl<'db> RuntimeGraphBuilder<'db> {
             }
         }
 
-        referenced_contracts.sort_by_key(|contract| contract_name(self.db, *contract));
+        referenced_contracts
+            .sort_by_cached_key(|contract| ObjectId::Contract(*contract).sort_key(self.db));
         for contract in referenced_contracts {
-            let (name, sections, section_roots) = contract_object_spec(self.db, contract)?;
-            if !self.materialized_object_names.insert(name.clone()) {
+            let (id, sections, section_roots) = contract_object_spec(self.db, contract)?;
+            if !self.materialized_objects.insert(id.clone()) {
                 continue;
             }
-            self.discovered_contract_specs.push((name, sections));
+            self.discovered_contract_specs.push((id, sections));
             for root in section_roots {
                 self.enqueue(root);
             }
@@ -252,15 +243,15 @@ impl<'db> RuntimeGraphBuilder<'db> {
                 .map(|name| name.data(self.db).to_string())
         });
         for func in referenced_manual_roots {
-            let Some((name, sections, section_roots)) =
+            let Some((id, sections, section_roots)) =
                 manual_contract_object_for_root(self.db, func)?
             else {
                 continue;
             };
-            if !self.materialized_object_names.insert(name.clone()) {
+            if !self.materialized_objects.insert(id.clone()) {
                 continue;
             }
-            self.discovered_contract_specs.push((name, sections));
+            self.discovered_contract_specs.push((id, sections));
             for root in section_roots {
                 self.enqueue(root);
             }
@@ -269,109 +260,55 @@ impl<'db> RuntimeGraphBuilder<'db> {
     }
 }
 
+/// Build the runtime package of a single-module build: its contracts, or the
+/// executable its `main` entry makes, if any.
 pub fn build_runtime_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    if !top_mod.all_contracts(db).is_empty()
-        || !discover_manual_contract_roots(db, top_mod)?.is_empty()
-    {
-        return build_contract_package(db, top_mod);
-    }
-
-    let funcs = top_mod
-        .all_funcs(db)
-        .iter()
-        .copied()
-        .filter(|func| func.top_mod(db) == top_mod)
-        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
-        .collect::<Vec<_>>();
-    let mut funcs = funcs;
-    funcs.sort_by_key(|func| {
-        func.name(db)
-            .to_opt()
-            .map(|name| name.data(db).to_string())
-            .unwrap_or_default()
-    });
-    let mut entry_funcs = Vec::new();
-    let mut rejections = Vec::new();
-    for func in funcs.iter().copied() {
-        match runtime_root_candidate(db, func)? {
-            RuntimeRootCandidate::Root(func) => entry_funcs.push(func),
-            RuntimeRootCandidate::NotRoot => {}
-            RuntimeRootCandidate::Rejected(rejection) => rejections.push(rejection),
-        }
-    }
-    if let Some(rejection) = rejections
-        .iter()
-        .find(|rejection| is_main_func(db, rejection.func))
-    {
-        return Err(LowerError::Unsupported(format_runtime_root_rejection(
-            db, rejection,
-        )));
-    }
-    if entry_funcs.is_empty() {
-        if let Some(rejection) = rejections.first() {
-            return Err(LowerError::Unsupported(format_runtime_root_rejection(
-                db, rejection,
-            )));
-        }
-        return Ok(RuntimePackage::new(
+    match build_ingot_module_runtime_package(db, top_mod)? {
+        Some(package) => Ok(package),
+        None => Ok(RuntimePackage::new(
             db,
             top_mod,
             Vec::new(),
             RuntimePackagePlan::new(db, Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
-        ));
+        )),
     }
-
-    build_standalone_main_package(db, top_mod, &entry_funcs)
 }
 
-/// Build the executable `main` object for a non-contract module, given the
-/// free functions to keep alive as standalone runtime roots. `entry_funcs` must
-/// be non-empty; the `main` function (or, failing that, the first root) is used
-/// as the program entry point.
-fn build_standalone_main_package<'db>(
+/// Build the executable `main` object entered at `main`, the module's entry,
+/// with the target's root effect.
+fn build_main_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
-    entry_funcs: &[Func<'db>],
+    main: Func<'db>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    let mut roots = Vec::new();
-    for &func in entry_funcs {
-        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
-        let entry_args =
-            entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)?;
-        roots.push((
-            func,
-            runtime_instance_for_semantic(db, semantic),
-            entry_args,
-        ));
-    }
-    let entry = roots
-        .iter()
-        .find(|(func, _, _)| is_main_func(db, *func))
-        .or_else(|| roots.first())
-        .map(|(_, instance, entry_args)| (*instance, entry_args.clone()))
-        .expect("entry root candidates should include the chosen entry function");
+    let semantic = root_semantic_instance_key(db, BodyOwner::Func(main, None))
+        .map(|key| SemanticInstance::new(db, key))
+        .map_err(|err| {
+            let name = func_display_name(db, main);
+            LowerError::Unsupported(format_root_semantic_instance_rejection(db, &name, &err))
+        })?;
+    let entry_args = entry_semantic_args_plan(
+        db,
+        EntryEffectContext::StandaloneFunc { func: main },
+        semantic,
+    )?;
+    let instance = runtime_instance_for_semantic(db, semantic);
     let root = synthetic_instance(
         db,
         RuntimeSyntheticSpec::MainRoot {
-            callee: entry.0,
-            entry_args: entry.1,
+            callee: instance,
+            entry_args,
         },
         Vec::new(),
     );
-    let mut package_roots = roots
-        .into_iter()
-        .map(|(_, instance, _)| instance)
-        .collect::<Vec<_>>();
-    package_roots.push(root);
     let package = build_non_contract_package(
         db,
         top_mod,
-        package_roots,
-        vec![(sanitize_object_name("main"), RuntimeSectionName::Main, root)],
-        Some("main"),
+        vec![instance, root],
+        vec![(ObjectId::Main, RuntimeSectionName::Main, root)],
     )?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
@@ -381,18 +318,10 @@ fn build_standalone_main_package<'db>(
 /// Build the runtime package contributed by `top_mod` as part of an *ingot*
 /// build, or `None` when the module contributes nothing deployable.
 ///
-/// An ingot is a package of contracts. Contracts (and manual contract roots) are
-/// deployable wherever they live. The only non-contract artifact an ingot
-/// produces is the root module's `main` executable, when the root module defines
-/// a `main` function (a script-style ingot).
-///
-/// Crucially, library/re-export modules are *not* built as standalone executable
-/// modules here. Their free functions are not entry points: they are lowered as
-/// dependencies of the contracts that call them. Running standalone-root
-/// construction on them (as [`build_runtime_package`] does for a single-module
-/// build) is wrong - it both invents an object named `main` per module (so
-/// multi-module ingots collide) and rejects ordinary helpers that declare `uses`
-/// effect parameters, since a standalone root has no caller to supply them.
+/// Contracts (and manual contract roots) are deployable wherever they live.
+/// The only other artifact is the executable of the ingot's entry, the root
+/// module's `pub fn main()`. Other modules' free functions are not entries:
+/// they are lowered as dependencies of what calls them.
 pub fn build_ingot_module_runtime_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
@@ -402,51 +331,10 @@ pub fn build_ingot_module_runtime_package<'db>(
     {
         return Ok(Some(build_contract_package(db, top_mod)?));
     }
-    match ingot_root_main_func(db, top_mod)? {
-        Some(main_func) => Ok(Some(build_standalone_main_package(
-            db,
-            top_mod,
-            &[main_func],
-        )?)),
-        None => Ok(None),
-    }
-}
-
-/// Returns the root module's `main` function when it is a valid standalone
-/// executable entry - the only place an ingot may build a `main` object.
-///
-/// This applies the same validation [`build_runtime_package`] uses for a
-/// single-module build: `extern`/`#[test]` functions are skipped, a `main` with
-/// ordinary parameters (or an associated `main`) is not an executable and yields
-/// `None`, and a malformed `main` is a hard error. Because only the function
-/// literally named `main` is ever inspected, library helpers (including
-/// effectful ones, even when defined in the root module) are never
-/// standalone-validated.
-fn ingot_root_main_func<'db>(
-    db: &'db dyn MirDb,
-    top_mod: TopLevelMod<'db>,
-) -> Result<Option<Func<'db>>, LowerError> {
-    use hir::hir_def::HirIngot;
-    if top_mod != top_mod.ingot(db).root_mod(db) {
-        return Ok(None);
-    }
-    let Some(main_func) = top_mod
-        .all_funcs(db)
-        .iter()
-        .copied()
-        .filter(|func| func.top_mod(db) == top_mod)
-        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
-        .find(|func| is_main_func(db, *func))
-    else {
-        return Ok(None);
-    };
-    match runtime_root_candidate(db, main_func)? {
-        RuntimeRootCandidate::Root(func) => Ok(Some(func)),
-        RuntimeRootCandidate::NotRoot => Ok(None),
-        RuntimeRootCandidate::Rejected(rejection) => Err(LowerError::Unsupported(
-            format_runtime_root_rejection(db, &rejection),
-        )),
-    }
+    top_mod
+        .main_entry(db)
+        .map(|main| build_main_package(db, top_mod, main))
+        .transpose()
 }
 
 pub fn build_test_runtime_package<'db>(
@@ -454,7 +342,7 @@ pub fn build_test_runtime_package<'db>(
     top_mod: TopLevelMod<'db>,
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    build_test_package(db, &[top_mod], filter, |_, name| sanitize_object_name(name))
+    build_test_package(db, &[top_mod], filter)
 }
 
 /// Build one reachable runtime graph for every selected native test in a suite.
@@ -465,9 +353,7 @@ pub fn build_native_test_runtime_package<'db>(
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     require_target(db, Target::Native)?;
-    build_test_package(db, top_mods, filter, |index, name| {
-        format!("__native_test_{index}_{}", sanitize_object_name(name))
-    })
+    build_test_package(db, top_mods, filter)
 }
 
 /// Rejects building a package for another machine than the compilation's:
@@ -487,7 +373,6 @@ fn build_test_package<'db>(
     db: &'db dyn MirDb,
     top_mods: &[TopLevelMod<'db>],
     filter: Option<&str>,
-    object_name: impl Fn(usize, &str) -> String,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     let &top_mod = top_mods.first().ok_or_else(|| {
         LowerError::Unsupported("test runtime package needs a source module".into())
@@ -496,13 +381,7 @@ fn build_test_package<'db>(
     let mut objects = Vec::new();
     for &module in top_mods {
         for &func in module.all_funcs(db) {
-            if func.top_mod(db) != module {
-                continue;
-            }
-            let Some(attrs) = ItemKind::from(func).attrs(db) else {
-                continue;
-            };
-            if attrs.get_attr(db, "test").is_none() {
+            if func.top_mod(db) != module || !func.is_test(db) {
                 continue;
             }
 
@@ -532,13 +411,12 @@ fn build_test_package<'db>(
             );
             roots.push(root);
             objects.push((
-                object_name(objects.len(), &name),
+                ObjectId::Test(func),
                 vec![(RuntimeSectionName::Test(name), root)],
             ));
         }
     }
-    let primary = (objects.len() == 1).then(|| objects[0].0.clone());
-    let package = build_sectioned_package(db, top_mod, roots, objects, primary.as_deref())?;
+    let package = build_sectioned_package(db, top_mod, roots, objects)?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
     Ok(package)
@@ -553,60 +431,94 @@ fn build_contract_package<'db>(
     let mut objects = Vec::new();
     let contracts = top_mod.all_contracts(db);
     for &contract in contracts {
-        let (name, sections, section_roots) = contract_object_spec(db, contract)?;
+        let (id, sections, section_roots) = contract_object_spec(db, contract)?;
         roots.extend(section_roots);
-        objects.push((name, sections));
+        objects.push((id, sections));
     }
-    for (name, sections, section_roots) in manual_contract_objects(db, top_mod)? {
+    for (id, sections, section_roots) in manual_contract_objects(db, top_mod)? {
         roots.extend(section_roots);
-        objects.push((name, sections));
+        objects.push((id, sections));
     }
 
-    let primary = (objects.len() == 1).then(|| objects[0].0.clone());
-    let package = build_sectioned_package(db, top_mod, roots, objects, primary.as_deref())?;
+    let package = build_sectioned_package(db, top_mod, roots, objects)?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
     Ok(package)
 }
 
-/// Find a public native entry in the root scope, without lowering library helpers.
-pub fn native_executable_entry<'db>(
-    db: &'db dyn MirDb,
-    top_mod: TopLevelMod<'db>,
-) -> Option<Func<'db>> {
+/// The `#[export]` functions of `top_mod`'s ingot, which a native object
+/// defines under their own names.
+pub fn native_exports<'db>(db: &'db dyn MirDb, top_mod: TopLevelMod<'db>) -> Vec<Func<'db>> {
     top_mod
-        .children_non_nested(db)
-        .filter_map(|item| match item {
-            ItemKind::Func(func) => Some(func),
-            _ => None,
-        })
-        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
-        .find(|func| func.vis(db).is_pub() && is_main_func(db, *func))
+        .ingot(db)
+        .all_funcs(db)
+        .iter()
+        .copied()
+        .filter(|func| func.is_exported(db))
+        .collect()
 }
 
-/// Build a target-neutral executable package rooted at a public top-level
-/// `main` function while preserving its ordinary function signature.
-pub fn build_native_executable_package<'db>(
+/// What a native package is built for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeOutputKind {
+    /// An executable, entered at the public top-level `main`, that also
+    /// defines the exported functions.
+    Executable,
+    /// A library of the exported functions.
+    Library,
+}
+
+/// Build a target-neutral native package of one object, `main`, whose
+/// sections are the exported functions and, for an executable, the public
+/// top-level `main`. Each keeps its ordinary function signature.
+pub fn build_native_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
+    kind: NativeOutputKind,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     require_target(db, Target::Native)?;
-    let main = native_executable_entry(db, top_mod).ok_or_else(|| {
-        LowerError::Unsupported(
-            "native executable output requires `pub fn main() -> i32`".to_string(),
-        )
-    })?;
-    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(main, None))?;
-    let instance = runtime_instance_for_semantic(db, semantic);
+    let root = |func| {
+        semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))
+            .map(|semantic| runtime_instance_for_semantic(db, semantic))
+    };
+    let mut sections = Vec::new();
+    // The function each exported symbol names. An executable's entry is
+    // exported as `main`.
+    let mut symbols = FxHashMap::default();
+    if kind == NativeOutputKind::Executable {
+        let main = top_mod.main_entry(db).ok_or_else(|| {
+            LowerError::Unsupported(
+                "native executable output requires `pub fn main() -> i32`".to_string(),
+            )
+        })?;
+        symbols.insert("main".to_string(), main);
+        sections.push((RuntimeSectionName::Main, root(main)?));
+    }
+    for func in native_exports(db, top_mod) {
+        let symbol = func_display_name(db, func);
+        match symbols.insert(symbol.clone(), func) {
+            Some(other) if other == func => continue,
+            Some(other) => {
+                let path = |func: Func<'db>| func.scope().pretty_path(db).unwrap_or_default();
+                return Err(LowerError::Unsupported(format!(
+                    "`{}` and `{}` both define the native symbol `{symbol}`",
+                    path(other),
+                    path(func),
+                )));
+            }
+            None => sections.push((RuntimeSectionName::Export(symbol), root(func)?)),
+        }
+    }
+    if sections.is_empty() {
+        return Err(LowerError::Unsupported(
+            "native library output requires an `#[export]` function".to_string(),
+        ));
+    }
     let package = build_sectioned_package(
         db,
         top_mod,
-        vec![instance],
-        vec![(
-            sanitize_object_name("main"),
-            vec![(RuntimeSectionName::Main, instance)],
-        )],
-        Some("main"),
+        sections.iter().map(|(_, instance)| *instance).collect(),
+        vec![(ObjectId::Main, sections)],
     )?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid native package: {err:?}")))?;
@@ -616,7 +528,7 @@ pub fn build_native_executable_package<'db>(
 fn manual_contract_objects<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
-) -> Result<Vec<ManualContractObjectSpec<'db>>, LowerError> {
+) -> Result<Vec<ObjectSpecWithRoots<'db>>, LowerError> {
     let roots = discover_manual_contract_roots(db, top_mod)?;
     let mut by_contract =
         FxHashMap::<String, (Option<RuntimeInstance<'db>>, Option<RuntimeInstance<'db>>)>::default(
@@ -671,17 +583,17 @@ fn manual_contract_objects<'db>(
                 sections.push((RuntimeSectionName::Runtime, runtime));
                 roots.push(runtime);
             }
-            (sanitize_object_name(&contract_name), sections, roots)
+            (ObjectId::manual(top_mod, &contract_name), sections, roots)
         })
         .collect::<Vec<_>>();
-    objects.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+    objects.sort_by_cached_key(|(id, _, _)| id.sort_key(db));
     Ok(objects)
 }
 
 fn manual_contract_object_for_root<'db>(
     db: &'db dyn MirDb,
     func: Func<'db>,
-) -> Result<Option<ManualContractObjectSpec<'db>>, LowerError> {
+) -> Result<Option<ObjectSpecWithRoots<'db>>, LowerError> {
     let Some(attr) = func.manual_contract_root_attr(db) else {
         return Ok(None);
     };
@@ -698,10 +610,10 @@ fn manual_contract_object_for_root<'db>(
             )));
         }
     };
-    let object_name = sanitize_object_name(contract_name);
+    let id = ObjectId::manual(func.top_mod(db), contract_name);
     Ok(manual_contract_objects(db, func.top_mod(db))?
         .into_iter()
-        .find(|(name, _, _)| name == &object_name))
+        .find(|(candidate, _, _)| *candidate == id))
 }
 
 fn discover_manual_contract_roots<'db>(
@@ -1055,8 +967,7 @@ fn build_non_contract_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
     roots: Vec<RuntimeInstance<'db>>,
-    object_specs: Vec<(String, RuntimeSectionName, RuntimeInstance<'db>)>,
-    primary_object_name: Option<&str>,
+    object_specs: Vec<(ObjectId<'db>, RuntimeSectionName, RuntimeInstance<'db>)>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     build_sectioned_package(
         db,
@@ -1064,9 +975,8 @@ fn build_non_contract_package<'db>(
         roots,
         object_specs
             .into_iter()
-            .map(|(name, section, entry)| (name, vec![(section, entry)]))
+            .map(|(id, section, entry)| (id, vec![(section, entry)]))
             .collect(),
-        primary_object_name,
     )
 }
 
@@ -1074,13 +984,9 @@ fn build_sectioned_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
     roots: Vec<RuntimeInstance<'db>>,
-    object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
-    primary_object_name: Option<&str>,
+    object_specs: Vec<ObjectSpec<'db>>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    let root_object_names = object_specs
-        .iter()
-        .map(|(name, _)| name.clone())
-        .collect::<FxHashSet<_>>();
+    let root_object_count = object_specs.len();
     let mut graph = RuntimeGraphBuilder::new(db, roots, object_specs).build()?;
     let functions = collect_runtime_functions(db, &graph);
     let functions_by_instance = functions
@@ -1090,9 +996,18 @@ fn build_sectioned_package<'db>(
     let const_regions = collect_const_regions(db, &graph);
     let mut reachable_cache = FxHashMap::default();
 
-    let mut objects = std::mem::take(&mut graph.object_specs)
+    // Objects are named once the contracts the roots reach are known, so that
+    // no two objects of the package can share a name.
+    let object_specs = std::mem::take(&mut graph.object_specs);
+    let object_ids = object_specs
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    let object_names = assign_object_names(db, top_mod.ingot(db), &object_ids);
+    let mut objects = object_specs
         .into_iter()
-        .map(|(name, sections)| {
+        .zip(object_names)
+        .map(|((_, sections), name)| {
             make_runtime_object(
                 db,
                 name,
@@ -1132,17 +1047,9 @@ fn build_sectioned_package<'db>(
             rewrite_object_embeds(db, &graph, object, &code_region_map, &mut reachable_cache)
         })
         .collect();
-    let root_objects: Vec<_> = objects
-        .iter()
-        .filter(|object| root_object_names.contains(object.name(db)))
-        .copied()
-        .collect();
-    let primary_object = primary_object_name.and_then(|primary| {
-        objects
-            .iter()
-            .find(|object| object.name(db) == primary)
-            .copied()
-    });
+    // The roots come first; the contracts they reach follow.
+    let root_objects: Vec<_> = objects[..root_object_count].to_vec();
+    let primary_object = (root_object_count == 1).then(|| objects[0]);
 
     Ok(RuntimePackage::new(
         db,
@@ -1200,13 +1107,13 @@ fn resolve_code_regions<'db>(
     let mut resolved = Vec::new();
     for object in objects {
         for section in object.sections(db) {
-            let Some((region, symbol)) = resolved_section_region(db, section) else {
+            let Some(region) = resolved_section_region(db, section) else {
                 continue;
             };
             resolved.push(make_resolved_code_region(
                 db,
                 region,
-                symbol,
+                code_region_symbol(db, region, object.name(db)),
                 RuntimeSectionRef::Local {
                     object: object.name(db).clone(),
                     section: section.name.clone(),
@@ -1223,44 +1130,39 @@ fn resolve_code_regions<'db>(
 fn resolved_section_region<'db>(
     db: &'db dyn MirDb,
     section: &RuntimeSection<'db>,
-) -> Option<(RuntimeCodeRegion<'db>, String)> {
+) -> Option<RuntimeCodeRegion<'db>> {
     match section.entry.owner(db) {
         RuntimeFunctionOwner::Synthetic(
             RuntimeSyntheticSpec::ContractInitRoot { contract, .. }
             | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. },
         ) => match section.name {
-            RuntimeSectionName::Init => Some((
-                RuntimeCodeRegion::new(
-                    db,
-                    RuntimeCodeRegionKey::ContractInit {
-                        contract: *contract,
-                    },
-                ),
-                format!("{}_init", contract_name(db, *contract)),
+            RuntimeSectionName::Init => Some(RuntimeCodeRegion::new(
+                db,
+                RuntimeCodeRegionKey::ContractInit {
+                    contract: *contract,
+                },
             )),
-            RuntimeSectionName::Runtime => Some((
-                RuntimeCodeRegion::new(
-                    db,
-                    RuntimeCodeRegionKey::ContractRuntime {
-                        contract: *contract,
-                    },
-                ),
-                format!("{}_runtime", contract_name(db, *contract)),
+            RuntimeSectionName::Runtime => Some(RuntimeCodeRegion::new(
+                db,
+                RuntimeCodeRegionKey::ContractRuntime {
+                    contract: *contract,
+                },
             )),
-            RuntimeSectionName::Main | RuntimeSectionName::Test(_) => None,
+            RuntimeSectionName::Main
+            | RuntimeSectionName::Test(_)
+            | RuntimeSectionName::Export(_) => None,
         },
         RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ManualContractRoot {
             func, ..
         }) => {
             let region = runtime_code_region_for_manual_root(db, *func)?;
-            Some((region, code_region_symbol(db, region)))
+            Some(region)
         }
         RuntimeFunctionOwner::Semantic(semantic) => {
             let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
                 return None;
             };
-            let region = runtime_code_region_for_manual_root(db, func)?;
-            Some((region, code_region_symbol(db, region)))
+            runtime_code_region_for_manual_root(db, func)
         }
         RuntimeFunctionOwner::Synthetic(
             RuntimeSyntheticSpec::MainRoot { .. }
@@ -1299,6 +1201,18 @@ fn collect_region_embeds<'db>(
             if *source == current_section || !seen.insert(region) {
                 continue;
             }
+            let as_symbol = code_region_symbol(db, region, source.object());
+            let order = match region.key(db) {
+                RuntimeCodeRegionKey::ContractInit { contract } => {
+                    (item_identity(db, contract.into()), 0)
+                }
+                RuntimeCodeRegionKey::ContractRuntime { contract } => {
+                    (item_identity(db, contract.into()), 1)
+                }
+                RuntimeCodeRegionKey::ManualContractRoot { func } => {
+                    (item_identity(db, func.into()), 0)
+                }
+            };
             let source = if source.object() == current_object {
                 RuntimeSectionRef::Local {
                     object: source.object().to_string(),
@@ -1310,14 +1224,14 @@ fn collect_region_embeds<'db>(
                     section: source.section().clone(),
                 }
             };
-            embeds.push(crate::runtime::RuntimeEmbed {
-                source,
-                as_symbol: code_region_symbol(db, region),
-            });
+            embeds.push((order, crate::runtime::RuntimeEmbed { source, as_symbol }));
         }
     }
-    embeds.sort_by(|lhs, rhs| lhs.as_symbol.cmp(&rhs.as_symbol));
-    embeds
+    // Embedded code is laid out in this order. Order it by what each region is
+    // built from, so that object names, which another package may choose
+    // differently for a dependency's contract, cannot change the bytes.
+    embeds.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+    embeds.into_iter().map(|(_, embed)| embed).collect()
 }
 
 fn collect_reachable_from_entry<'db>(
@@ -1419,11 +1333,11 @@ fn semantic_instance_for_root_owner<'db>(
 fn contract_object_spec<'db>(
     db: &'db dyn MirDb,
     contract: Contract<'db>,
-) -> Result<ManualContractObjectSpec<'db>, LowerError> {
+) -> Result<ObjectSpecWithRoots<'db>, LowerError> {
     let runtime_root = contract_runtime_root(db, contract)?;
     let init_root = contract_init_root(db, contract)?;
     Ok((
-        sanitize_object_name(&contract_name(db, contract)),
+        ObjectId::Contract(contract),
         vec![
             (RuntimeSectionName::Init, init_root),
             (RuntimeSectionName::Runtime, runtime_root),
@@ -1432,63 +1346,11 @@ fn contract_object_spec<'db>(
     ))
 }
 
-fn is_test_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
-    ItemKind::from(func)
-        .attrs(db)
-        .is_some_and(|attrs| attrs.get_attr(db, "test").is_some())
-}
-
-fn runtime_root_candidate<'db>(
-    db: &'db dyn MirDb,
-    func: Func<'db>,
-) -> Result<RuntimeRootCandidate<'db>, LowerError> {
-    if func.is_associated_func(db) || func.params(db).next().is_some() {
-        return Ok(RuntimeRootCandidate::NotRoot);
-    }
-    let semantic = match root_semantic_instance_key(db, BodyOwner::Func(func, None)) {
-        Ok(key) => SemanticInstance::new(db, key),
-        Err(err) => {
-            return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
-                func,
-                reason: RuntimeRootRejectionReason::RootSemanticInstance(err),
-            }));
-        }
-    };
-    if let Err(err) =
-        entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)
-    {
-        return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
-            func,
-            reason: RuntimeRootRejectionReason::UnsupportedEntryEffect(err.to_string()),
-        }));
-    }
-    Ok(RuntimeRootCandidate::Root(func))
-}
-
-fn is_main_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
-    func.name(db)
-        .to_opt()
-        .is_some_and(|name| name.data(db) == "main")
-}
-
 fn func_display_name<'db>(db: &'db dyn MirDb, func: Func<'db>) -> String {
     func.name(db)
         .to_opt()
         .map(|name| name.data(db).to_string())
         .unwrap_or_else(|| "<anonymous>".to_string())
-}
-
-fn format_runtime_root_rejection<'db>(
-    db: &'db dyn MirDb,
-    rejection: &RuntimeRootRejection<'db>,
-) -> String {
-    let name = func_display_name(db, rejection.func);
-    match &rejection.reason {
-        RuntimeRootRejectionReason::RootSemanticInstance(err) => {
-            format_root_semantic_instance_rejection(db, &name, err)
-        }
-        RuntimeRootRejectionReason::UnsupportedEntryEffect(message) => message.clone(),
-    }
 }
 
 fn format_root_semantic_instance_rejection<'db>(
@@ -2538,7 +2400,10 @@ fn collect_const_regions<'db>(
     regions
 }
 
-fn contract_name<'db>(db: &'db dyn MirDb, contract: hir::hir_def::Contract<'db>) -> String {
+pub(crate) fn contract_name<'db>(
+    db: &'db dyn MirDb,
+    contract: hir::hir_def::Contract<'db>,
+) -> String {
     contract
         .name(db)
         .to_opt()
@@ -2546,20 +2411,11 @@ fn contract_name<'db>(db: &'db dyn MirDb, contract: hir::hir_def::Contract<'db>)
         .unwrap_or_else(|| "contract".to_string())
 }
 
-fn sanitize_symbol(value: &str) -> String {
+pub(crate) fn sanitize_symbol(value: &str) -> String {
     value
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
-}
-
-fn sanitize_object_name(value: &str) -> String {
-    let sanitized = sanitize_symbol(value);
-    if sanitized.is_empty() {
-        "object".to_string()
-    } else {
-        sanitized
-    }
 }
 
 #[cfg(test)]
@@ -2583,15 +2439,18 @@ mod tests {
             &mut db,
             Url::parse("file:///native_extern.fe").unwrap(),
             Some(
-                r#"use std::io::{Write, host, write_char}
+                r#"extern {
+    fn putchar(_ c: i32) -> i32
+}
 pub fn main() -> i32 {
-    with (Write = host()) { write_char(65) }
+    let _ = unsafe { putchar(65) }
     0
 }"#
                 .to_string(),
             ),
         );
-        let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
+        let package =
+            build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
         let imports = package
             .functions(&db)
             .iter()
@@ -2740,6 +2599,121 @@ fn invalid(result: mut u256) -> u256 {
             .collect::<Vec<_>>();
         names.sort();
         names
+    }
+
+    #[test]
+    fn same_named_contracts_in_nested_modules_get_distinct_objects() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///same_named_nested.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            file_url,
+            Some(
+                r#"
+pub contract C {}
+
+pub mod inner {
+    pub contract C {}
+}
+
+pub contract Other {}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("package should build");
+        let mut names = package_root_object_names(&db, package);
+        names.sort();
+        // Only the clashing contracts are qualified.
+        assert_eq!(
+            names,
+            vec![
+                "Other",
+                "same_named_nested__C",
+                "same_named_nested__inner__C"
+            ]
+        );
+        let mut symbols = package
+            .code_regions(&db)
+            .iter()
+            .map(|region| region.symbol(&db).clone())
+            .collect::<Vec<_>>();
+        symbols.sort();
+        assert_eq!(
+            symbols,
+            vec![
+                "Other_init",
+                "Other_runtime",
+                "same_named_nested__C_init",
+                "same_named_nested__C_runtime",
+                "same_named_nested__inner__C_init",
+                "same_named_nested__inner__C_runtime",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_test_that_deploys_same_named_contracts_gets_an_object_for_each() {
+        with_test_runtime_package(
+            "same_named_deployed.fe",
+            r#"
+pub contract C {}
+
+pub mod inner {
+    pub contract C {}
+}
+
+#[test]
+fn deploys_both() uses (evm: mut Evm) {
+    let first = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let second = evm.create2<inner::C>(value: Wei::zero(), args: (), salt: 1)
+    assert!(first != second)
+}
+"#,
+            None,
+            |db, package| {
+                assert_eq!(package_root_object_names(db, package), vec!["deploys_both"]);
+                let mut names = package_object_names(db, package);
+                names.sort();
+                assert_eq!(
+                    names,
+                    vec![
+                        "deploys_both",
+                        "same_named_deployed__C",
+                        "same_named_deployed__inner__C"
+                    ]
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_two_objects_with_one_name() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///duplicate_object_name.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            file_url,
+            Some("pub contract A {}\npub contract B {}\n".to_string()),
+        );
+        let package = build_runtime_package(&db, db.top_mod(file)).expect("package should build");
+        let [first, second] = package.objects(&db) else {
+            panic!("expected two objects");
+        };
+        let duplicate =
+            RuntimeObject::new(&db, first.name(&db).clone(), second.sections(&db).clone());
+        let objects = vec![*first, duplicate];
+        let broken = RuntimePackage::new(
+            &db,
+            package.top_mod(&db),
+            package.functions(&db).clone(),
+            RuntimePackagePlan::new(&db, objects, Vec::new(), Vec::new(), Vec::new(), None),
+        );
+        assert_eq!(
+            verify_runtime_package(&db, broken),
+            Err(crate::VerifyError::DuplicateObjectName("A".to_string()))
+        );
     }
 
     #[test]

@@ -74,7 +74,7 @@ fn option_ok_or_none_to_err() {
 }
 
 #[test(should_revert, panic = 0x31)]
-fn option_ok_or_unwrap_panics() uses (evm: mut Evm) {
+fn option_ok_or_unwrap_panics() {
     let opt: Option<u256> = Option::None
     let r: Result<Panic, u256> = opt.ok_or(Panic { code: 0x31 })
     r.unwrap()
@@ -95,14 +95,14 @@ fn option_ok_or_else_none_calls_fn() {
 }
 
 #[test(should_revert, panic = 0x31)]
-fn option_ok_or_else_unwrap_panics() uses (evm: mut Evm) {
+fn option_ok_or_else_unwrap_panics() {
     let opt: Option<u256> = Option::None
     let r: Result<Panic, u256> = opt.ok_or_else(MakePanic {})
     r.unwrap()
 }
 
 #[test(should_revert, panic = 0x31)]
-fn option_ok_or_panic_from_chain() uses (evm: mut Evm) {
+fn option_ok_or_panic_from_chain() {
     // `Panic::from(code)` is a one-arg shorthand for `Panic { code: code }`.
     let opt: Option<u256> = Option::None
     opt.ok_or(Panic::from(0x31)).unwrap()

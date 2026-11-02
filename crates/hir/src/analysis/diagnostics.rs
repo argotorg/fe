@@ -14,7 +14,7 @@ use crate::analysis::{
         closure::func_item_callable_inst,
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
-            FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
+            ExportIssue, FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
             ReadOnlyProvider, RevealedBy, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection,
             TyLowerDiag,
         },
@@ -1783,6 +1783,37 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::InvalidExport { span, issue } => {
+                let (message, label, note) = match issue {
+                    ExportIssue::NotPub => (
+                        "an `#[export]` function must be `pub`",
+                        "this function is not `pub`",
+                        None,
+                    ),
+                    ExportIssue::Generic => (
+                        "an `#[export]` function cannot be generic",
+                        "generic parameters",
+                        Some("a C caller supplies no generic arguments: export a function for each one"),
+                    ),
+                    ExportIssue::Effects => (
+                        "an `#[export]` function cannot take effects",
+                        "effects",
+                        Some("a C caller provides no effects: provide them in the body with `with`"),
+                    ),
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: message.to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: label.to_string(),
+                        span: span.resolve(db),
+                    }],
+                    notes: note.into_iter().map(str::to_string).collect(),
+                    error_code,
+                }
+            }
+
             Self::MaybeMutBound(span) => primary_diag(
                 Severity::Error,
                 "`mut?` bound of an item without a mode",
@@ -3175,6 +3206,31 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::EntryEffectNotProvided {
+                owner,
+                key,
+                idx,
+                root_ty,
+            } => {
+                let root = root_ty.pretty_print(db);
+                CompleteDiagnostic {
+                    severity,
+                    message: "unsupported entry effect".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "the root effect `{root}` does not provide `{}`",
+                            key.pretty_print(db)
+                        ),
+                        span: owner.effect_param_ty_span(db, *idx).resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "a test or `main` receives its effects from the target's root effect, `{root}`"
+                    )],
+                    error_code,
+                }
+            }
+
             Self::ContractRootEffectTypeNotZeroSized {
                 owner,
                 key,
@@ -3882,7 +3938,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::UnsupportedMacroCall(primary) => primary_diag(
                 Severity::Error,
                 "unsupported macro call",
-                "only `assert!(...)` is supported",
+                "the macros are `assert!`, `format!`, `print!`, `println!`, `eprint!` and `eprintln!`",
                 primary.resolve(db),
                 error_code,
             ),

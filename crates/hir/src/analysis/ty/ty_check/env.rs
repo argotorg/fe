@@ -1755,9 +1755,12 @@ impl<'db> TyChecker<'db> {
                 && let Some(forwarder) =
                     seed_forwarder_from_requirement(self, &req, provided, func.scope(), assumptions)
             {
-                self.env
-                    .effect_env_mut()
-                    .insert_forwarder(self.db, forwarder);
+                self.env.effect_env_mut().insert_forwarder(
+                    self.db,
+                    forwarder,
+                    func.scope(),
+                    assumptions,
+                );
             }
         }
 
@@ -1778,9 +1781,12 @@ impl<'db> TyChecker<'db> {
                 && let Some(forwarder) =
                     seed_forwarder_from_requirement(self, &req, provided, func.scope(), assumptions)
             {
-                self.env
-                    .effect_env_mut()
-                    .insert_forwarder(self.db, forwarder);
+                self.env.effect_env_mut().insert_forwarder(
+                    self.db,
+                    forwarder,
+                    func.scope(),
+                    assumptions,
+                );
             }
         }
     }
@@ -1869,7 +1875,9 @@ impl<'db> TyChecker<'db> {
             return false;
         }
         self.commit_state(snapshot);
-        self.env.effect_env_mut().insert_witness(self.db, witness);
+        self.env
+            .effect_env_mut()
+            .insert_witness(self.db, witness, scope, assumptions);
         true
     }
 }

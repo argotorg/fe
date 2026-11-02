@@ -10,3 +10,8 @@ pub fn long_string() -> DynString {
 pub fn two_word_string() -> DynString {
     "Two words are stored one constant word at a time."
 }
+
+pub fn main() {
+    let _ = long_string()
+    let _ = two_word_string()
+}

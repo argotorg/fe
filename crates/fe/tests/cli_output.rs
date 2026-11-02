@@ -992,7 +992,7 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
     }
     assert_eq!(cases.len(), 24);
 
-    let mut source = String::from("use std::native::Args\n");
+    let mut source = String::from("use std::env::Args\n");
     for (index, (ty, op, _, _)) in cases.iter().enumerate() {
         source.push_str(&format!(
             "fn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
@@ -1000,12 +1000,11 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
     }
     source.push_str(
         r#"
-pub fn main(argc: i32, argv: **u8) -> i32 {
-    let args = unsafe { Args::new(argc, argv) }
-    if args.len() != 2 { return 97 }
+pub fn main() -> i32 uses (args: Args) {
+    if args.count() != 2 { return 97 }
     let arg = args.get(1)
     if arg.len() != 1 { return 97 }
-    let selector = arg.byte_at(0)
+    let selector = arg.span()[0]
 "#,
     );
     let selectors: Vec<_> = cases
@@ -1153,7 +1152,7 @@ fn test_cli_build_native_rejects_executable_on_unsupported_host() {
     assert_eq!(exit_code, 1, "expected native host rejection:\n{output}");
     assert!(
         output.contains(
-            "native executable output currently requires an x86-64 Linux or AArch64 macOS host"
+            "native executable and library output currently require an x86-64 Linux or AArch64 macOS host"
         ),
         "unexpected output:\n{output}"
     );
@@ -1176,9 +1175,53 @@ fn test_cli_build_native_rejects_evm_artifacts() {
     ]);
     assert_eq!(exit_code, 1, "expected native build rejection:\n{output}");
     assert!(
-        output.contains("native backend only supports `--emit executable` and `--emit ir`"),
+        output.contains(
+            "native backend only supports `--emit executable`, `--emit object`, `--emit staticlib` and `--emit ir`"
+        ),
         "unexpected output:\n{output}"
     );
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_library_needs_exports_and_no_executable() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("library.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write native source");
+    let out_dir = temp.path().join("out");
+    for (emit, error) in [
+        (
+            "executable,staticlib",
+            "`--emit executable` cannot be combined with `--emit object` or `--emit staticlib`, which build a library without `main`",
+        ),
+        (
+            "staticlib",
+            "native library output requires an `#[export]` function",
+        ),
+    ] {
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--backend",
+            "native",
+            "--emit",
+            emit,
+            "--out-dir",
+            out_dir.to_str().expect("UTF-8 out path"),
+            source.to_str().expect("UTF-8 source path"),
+        ]);
+        assert_eq!(exit_code, 1, "{emit}: expected rejection:\n{output}");
+        assert!(
+            output.contains(error),
+            "{emit}: unexpected output:\n{output}"
+        );
+        assert!(!out_dir.join("liblibrary.a").exists(), "{emit}");
+    }
 }
 
 #[test]
@@ -1201,6 +1244,86 @@ fn test_cli_build_sonatina_rejects_executable_emit() {
         output.contains("`--emit executable` requires `--backend native`"),
         "unexpected output:\n{output}"
     );
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_library_emits() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("library.fe");
+    fs::write(&source, "#[export]\npub fn answer() -> i64 { 42 }\n").expect("write source");
+    for emit in ["object", "staticlib"] {
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--emit",
+            emit,
+            source.to_str().expect("UTF-8 source path"),
+        ]);
+        assert_eq!(exit_code, 1, "{emit}: expected rejection:\n{output}");
+        assert!(
+            output.contains("`--emit object` and `--emit staticlib` require `--backend native`"),
+            "{emit}: unexpected output:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_build_link_inputs_need_native_executables() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("host.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    let mut requests = vec![
+        vec!["build", "--link", "host.o", source],
+        vec!["build", "--link-lib", "host", source],
+    ];
+    if cfg!(feature = "cranelift") {
+        requests.push(vec![
+            "build",
+            "--backend",
+            "native",
+            "--emit",
+            "staticlib",
+            "--link",
+            "host.o",
+            source,
+        ]);
+    }
+    for args in requests {
+        let (output, exit_code) = run_fe_main(&args);
+        assert_eq!(exit_code, 1, "{args:?}: expected rejection:\n{output}");
+        assert!(
+            output.contains(
+                "`--link` and `--link-lib` require `--backend native` and `--emit executable`"
+            ),
+            "{args:?}: unexpected output:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_exported_functions() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("exports.fe");
+    fs::write(
+        &source,
+        "#[export]\npub fn answer() -> i64 { 42 }\ncontract Counter {}\n",
+    )
+    .expect("write source");
+    let out_dir = temp.path().join("out");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--out-dir",
+        out_dir.to_str().expect("UTF-8 out path"),
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 1, "expected export rejection:\n{output}");
+    assert!(
+        output
+            .contains("`#[export]` requires `--backend native`, but `exports::answer` is exported"),
+        "unexpected output:\n{output}"
+    );
+    assert!(!out_dir.exists(), "a rejected build must write nothing");
 }
 
 #[cfg(feature = "sp1")]
@@ -2840,10 +2963,11 @@ fn test_cli_build_from_metadata_warns_on_compiler_commit_mismatch() {
 
 #[test]
 fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
-    // Two modules in the same ingot each define a contract named `Foo`;
-    // `settings.compilationTarget` records which source file the metadata is
-    // for. The rebuild must scope itself to that module instead of failing on
-    // the ambiguous name.
+    // Two modules in the same ingot each define a contract named `Foo`, so
+    // their artifacts are qualified by module path (`lib__a__Foo`,
+    // `lib__b__Foo`). `settings.compilationTarget` records the source file and
+    // the contract's path in it; the rebuild must produce the contract of that
+    // module.
     let temp = tempdir().expect("tempdir");
     let root = temp.path();
     fs::create_dir_all(root.join("app/src")).expect("create app/src");
@@ -2872,7 +2996,7 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
     assert_eq!(exit_code, 0, "original build failed:\n{output}");
 
     let metadata: Value = serde_json::from_str(
-        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+        &fs::read_to_string(out_dir.join("lib__a__Foo.metadata.json")).expect("read metadata"),
     )
     .expect("parse metadata");
     assert_eq!(
@@ -2887,7 +3011,7 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
         "build",
         "--from-metadata",
         out_dir
-            .join("Foo.metadata.json")
+            .join("lib__a__Foo.metadata.json")
             .to_str()
             .expect("metadata utf8"),
         "--emit",
@@ -2899,8 +3023,8 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
         exit_code, 0,
         "rebuild must honor the recorded source path:\n{output}"
     );
-    let rebuilt_runtime =
-        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+    let rebuilt_runtime = fs::read_to_string(recon_out.join("lib__a__Foo.runtime.bin"))
+        .expect("read rebuilt runtime.bin");
 
     // The rebuilt bytecode must be the `src/a.fe` contract: it must match a
     // reference build of an identical ingot containing only that module.
@@ -3672,8 +3796,8 @@ fn test_fe_test(fixture: Fixture<&str>) {
         all(target_arch = "aarch64", target_os = "macos")
     )
 ))]
-/// `fe_test` fixtures that need the EVM: contracts, storage or EVM
-/// instructions. Sorted.
+/// `fe_test` fixtures that need the EVM: contracts, storage, EVM
+/// instructions or EVM effects. Sorted.
 const EVM_ONLY_FE_TESTS: &[&str] = &[
     "abi_array_overflow_revert",
     "abi_array_view",
@@ -3885,7 +4009,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
 const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[(
     "raw_record_layout",
     &["0", "2"],
-    "packed record fields are little-endian natively and big-endian on EVM",
+    "EVM memory packs record fields big-endian; native memory aligns them little-endian",
 )];
 
 #[cfg(all(
@@ -3910,7 +4034,8 @@ fn test_fe_test_native(fixture: Fixture<&str>) {
         assert!(
             exit_code != 0
                 && (output.contains("needs the Evm compilation target")
-                    || output.contains("does not support instruction")),
+                    || output.contains("does not support instruction")
+                    || output.contains("the root effect `Host` does not provide")),
             "{name} no longer needs the EVM; remove it from EVM_ONLY_FE_TESTS:\n{output}"
         );
         return;

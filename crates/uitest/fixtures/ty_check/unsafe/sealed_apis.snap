@@ -9,9 +9,9 @@ error[8-0097]: call to unsafe function `copy_raw` requires an `unsafe` block or 
    6 │     ptr::copy_raw(dest, source, 32)
      │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
      │
-     ┌─ src/ptr.fe:1370:15
+     ┌─ src/ptr.fe:1380:15
      │
-1370 │ pub unsafe fn copy_raw(_ dest: *u8, _ source: *u8, _ len: usize) {
+1380 │ pub unsafe fn copy_raw(_ dest: *u8, _ source: *u8, _ len: usize) {
      │               -------- callee defined here
 
 error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` block or function
@@ -53,7 +53,7 @@ error[8-0097]: call to unsafe function `alloc_array` requires an `unsafe` block 
   22 │     let array = ptr::alloc_array<u256>(1)
      │                 ^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
      │
-     ┌─ src/ptr.fe:1323:15
+     ┌─ src/ptr.fe:1333:15
      │
-1323 │ pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
+1333 │ pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
      │               ----------- callee defined here

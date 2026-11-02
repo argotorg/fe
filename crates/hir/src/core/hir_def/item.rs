@@ -473,6 +473,15 @@ impl<'db> TopLevelMod<'db> {
         s_graph.child_items(scope)
     }
 
+    /// The module's executable entry, its `pub fn main()` when it is its
+    /// ingot's root module.
+    pub fn main_entry(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
+        self.children_non_nested(db).find_map(|item| match item {
+            ItemKind::Func(func) if func.is_main_entry(db) => Some(func),
+            _ => None,
+        })
+    }
+
     /// Returns all the children of this module, including nested items and
     /// every body.
     pub fn children_nested(self, db: &'db dyn HirDb) -> impl Iterator<Item = ItemKind<'db>> + 'db {
@@ -756,6 +765,38 @@ impl<'db> Func<'db> {
     /// component.
     pub fn is_raw_place(self, db: &'db dyn HirDb) -> bool {
         self.attributes(db).has_marker_attr(db, "raw_place")
+    }
+
+    /// A free `#[export]` function, which a native object defines under its
+    /// own name for C callers. Elsewhere the attribute is an error.
+    pub fn is_exported(self, db: &'db dyn HirDb) -> bool {
+        !self.is_extern(db)
+            && !self.is_associated_func(db)
+            && self.attributes(db).has_marker_attr(db, "export")
+    }
+
+    /// A `#[test]` function, which `fe test` enters with the target's root
+    /// effect.
+    pub fn is_test(self, db: &'db dyn HirDb) -> bool {
+        self.attributes(db).has_attr(db, "test")
+    }
+
+    /// The ingot's executable entry: a `pub fn main` without parameters
+    /// directly in the ingot's root module, which a build enters with the
+    /// target's root effect. Any other `main` is an ordinary function.
+    pub fn is_main_entry(self, db: &'db dyn HirDb) -> bool {
+        self.vis(db).is_pub()
+            && !self.is_extern(db)
+            && !self.is_test(db)
+            && self
+                .name(db)
+                .to_opt()
+                .is_some_and(|name| name.data(db) == "main")
+            && self.params(db).next().is_none()
+            && matches!(
+                self.scope().parent_item(db),
+                Some(ItemKind::TopMod(top_mod)) if top_mod == top_mod.ingot(db).root_mod(db)
+            )
     }
 
     fn inline_attr(self, db: &'db dyn HirDb) -> Option<InlineAttr> {
