@@ -313,6 +313,18 @@ fn native_entry_keeps_its_arguments_for_std_env() {
 }
 
 #[test]
+fn native_environ_reads_the_c_library_global() {
+    let ir = with_top_mod_for_source(
+        "native_environ.fe",
+        "extern {\n    fn __fe_native_environ() -> **u8\n}\npub fn main() -> i32 {\n    if unsafe { __fe_native_environ() } as usize == 0 { 1 } else { 0 }\n}\n",
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .unwrap();
+    assert!(ir.contains("global external *i8 $environ;"), "{ir}");
+    assert!(ir.contains("mload $environ *i8;"), "{ir}");
+}
+
+#[test]
 fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
     // A `main` with parameters is no entry, even with an effect `Host` does
     // not provide; one returning `u32` is an entry whose Fe type the lowered
