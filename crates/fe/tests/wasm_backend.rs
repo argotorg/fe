@@ -1177,6 +1177,23 @@ fn non_scalar_exports_are_named_errors() {
         "pub fn bump(x: mut i32) { x = x + 1 }\n",
         &["cannot export `bump`", "parameter `x: i32`", "not a scalar"],
     );
+    rejected(
+        "product_param",
+        "pub fn sum(_ (a, b): (own u32, own u32)) -> u32 { a + b }\n",
+        &[
+            "cannot export `sum`",
+            "parameter `0: (u32, u32)`",
+            "not a scalar",
+        ],
+    );
+    rejected(
+        "unit_param",
+        "pub fn second(unit: (), n: u64) -> u64 { n }\n",
+        &[
+            "cannot export `second`",
+            "parameter `unit: ()` is zero-sized",
+        ],
+    );
 }
 
 #[test]

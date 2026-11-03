@@ -1373,6 +1373,15 @@ fn imports_that_are_not_scalar_are_named_errors() {
         pointer.contains("cannot import `h` from the WebAssembly host: parameter `p: *u8` is a pointer into Fe memory"),
         "{pointer}"
     );
+    let unit = build_error(
+        "extern { fn h(_ unit: (), _ a: i32) -> i32 }\npub fn run(x: i32) -> i32 { unsafe { h((), x) } }\n",
+    );
+    assert!(
+        unit.contains(
+            "cannot import `h` from the WebAssembly host: parameter `unit: ()` is zero-sized"
+        ),
+        "{unit}"
+    );
 }
 
 #[test]

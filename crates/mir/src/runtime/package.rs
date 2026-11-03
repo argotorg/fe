@@ -697,15 +697,10 @@ fn check_wasm_imports<'db>(
         {
             continue;
         }
-        let Some(func) =
-            instance
-                .key(db)
-                .semantic(db)
-                .and_then(|semantic| match semantic.key(db).owner(db) {
-                    BodyOwner::Func(func, _) => Some(func),
-                    _ => None,
-                })
-        else {
+        let Some(semantic) = instance.key(db).semantic(db) else {
+            continue;
+        };
+        let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
             continue;
         };
         let name = func_display_name(db, func);
@@ -716,9 +711,15 @@ fn check_wasm_imports<'db>(
         } else {
             WasmResultShape::Unit
         };
-        if let Some(reason) =
-            wasm_signature_rejection(db, func, signature, WasmBoundary::Import, &scalar, result)
-        {
+        if let Some(reason) = wasm_signature_rejection(
+            db,
+            func,
+            semantic,
+            signature,
+            WasmBoundary::Import,
+            &scalar,
+            result,
+        ) {
             return Err(LowerError::Unsupported(format!(
                 "cannot import `{name}` from the WebAssembly host: {reason}"
             )));
@@ -775,21 +776,50 @@ impl<'db> WasmBoundaryTypes<'db> {
 fn wasm_signature_rejection<'db>(
     db: &'db dyn MirDb,
     func: Func<'db>,
+    semantic: SemanticInstance<'db>,
     signature: &RuntimeInterfaceSignature<'db>,
     boundary: WasmBoundary,
     shapes: &[WasmParamShape],
     result: WasmResultShape,
 ) -> Option<String> {
-    let hir_params = func.params(db).count();
     let types = WasmBoundaryTypes::resolve(db, func);
+    let describe = |idx: usize| {
+        let param_name = func
+            .params(db)
+            .nth(idx)
+            .and_then(|view| view.name(db))
+            .map_or_else(|| format!("{idx}"), |ident| ident.data(db).to_string());
+        let ty = func.arg_ty(db, idx).map_or_else(String::new, |ty| {
+            format!(": {}", ty.instantiate_identity().pretty_print(db))
+        });
+        format!("parameter `{param_name}{ty}`")
+    };
+    // Each declared parameter must be one parameter of the module, so that
+    // the host sees the declared signature. A zero-sized parameter has no
+    // runtime value, and a product parameter may be several.
+    let bindings: Vec<_> = runtime_visible_binding_plans(db, semantic)
+        .iter()
+        .map(|entry| entry.binding)
+        .filter(|binding| !matches!(binding, LocalBinding::EffectParam { .. }))
+        .collect();
+    if let Some(idx) = (0..func.params(db).count()).find(|&idx| {
+        !matches!(bindings.get(idx), Some(LocalBinding::Param { idx: param, .. }) if *param == idx)
+    }) {
+        let split = bindings.iter().any(|binding| {
+            matches!(binding, LocalBinding::ParamPart { idx: param, .. } if *param == idx)
+        });
+        let reason = if split {
+            "is not a scalar (a struct, tuple, array, enum, reference or pointer)"
+        } else {
+            "is zero-sized"
+        };
+        return Some(format!("{} {reason}; {}", describe(idx), boundary.rule()));
+    }
     // Fe holds a raw pointer in a 256-bit integer, which would be reported as
     // a wide integer. The host sees no Fe memory, so name it for what it is.
     let pointer_reason = || format!("is a pointer into Fe memory; {}", boundary.rule());
     for (idx, param) in signature.params.iter().enumerate() {
-        let declared = (signature.params.len() == hir_params)
-            .then(|| func.arg_ty(db, idx))
-            .flatten()
-            .map(|ty| ty.instantiate_identity());
+        let declared = func.arg_ty(db, idx).map(|ty| ty.instantiate_identity());
         let rejection = if shapes.get(idx) == Some(&WasmParamShape::Text) {
             None
         } else if declared.is_some_and(|ty| ty.as_ptr(db).is_some()) {
@@ -814,20 +844,7 @@ fn wasm_signature_rejection<'db>(
             wasm_scalar_rejection(&param.class, boundary)
         };
         if let Some(reason) = rejection {
-            let what = if signature.params.len() == hir_params {
-                let param_name = func
-                    .params(db)
-                    .nth(idx)
-                    .and_then(|view| view.name(db))
-                    .map_or_else(|| format!("{idx}"), |ident| ident.data(db).to_string());
-                let ty = func.arg_ty(db, idx).map_or_else(String::new, |ty| {
-                    format!(": {}", ty.instantiate_identity().pretty_print(db))
-                });
-                format!("parameter `{param_name}{ty}`")
-            } else {
-                format!("parameter {idx}")
-            };
-            return Some(format!("{what} {reason}"));
+            return Some(format!("{} {reason}", describe(idx)));
         }
     }
     let ret_class = signature.ret.as_ref()?;
@@ -864,16 +881,14 @@ fn wasm_export_shapes<'db>(
     signature: &RuntimeInterfaceSignature<'db>,
 ) -> (Vec<WasmParamShape>, WasmResultShape) {
     let types = WasmBoundaryTypes::resolve(db, func);
-    let by_hir = signature.params.len() == func.params(db).count();
     let params = signature
         .params
         .iter()
         .enumerate()
         .map(|(idx, param)| {
-            let is_text = by_hir
-                && func
-                    .arg_ty(db, idx)
-                    .is_some_and(|ty| types.is_text(ty.instantiate_identity()))
+            let is_text = func
+                .arg_ty(db, idx)
+                .is_some_and(|ty| types.is_text(ty.instantiate_identity()))
                 && !func
                     .params(db)
                     .nth(idx)
@@ -949,9 +964,15 @@ fn wasm_export_for_func<'db>(
     };
     let signature = instance.interface_signature(db);
     let (params, result) = wasm_export_shapes(db, func, signature);
-    if let Some(reason) =
-        wasm_signature_rejection(db, func, signature, WasmBoundary::Export, &params, result)
-    {
+    if let Some(reason) = wasm_signature_rejection(
+        db,
+        func,
+        semantic,
+        signature,
+        WasmBoundary::Export,
+        &params,
+        result,
+    ) {
         return Err(LowerError::Unsupported(format!(
             "cannot export `{name}` to WebAssembly: {reason}"
         )));
