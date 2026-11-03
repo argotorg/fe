@@ -856,6 +856,14 @@ impl MemBuffer {
         buffer
     }
 
+    /// As `new`, or `None` when the allocation fails.
+    pub fn try_new(_ len: usize) -> Option<Self> {
+        let ptr = try_alloc_bytes(len)?
+        unsafe { zero_bytes(ptr, len) }
+        // A fresh allocation of `len` bytes, all of them zeroed.
+        Option::Some(unsafe { Self { ptr, len, capacity: len } })
+    }
+
     /// A buffer of `len` bytes holding whatever the memory held.
     ///
     /// The caller must write every byte before anything reads it.

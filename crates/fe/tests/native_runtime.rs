@@ -2403,7 +2403,19 @@ pub fn main() -> i32 {
             core::assert(buffer[i] == 0)
         }
         consume(buffer)
+        var filled = MemBuffer::new(64)
+        for i in 0..64 {
+            filled[i] = 0xff
+        }
+        consume(filled)
+        let zeroed = MemBuffer::try_new(64).unwrap()
+        core::assert(zeroed.len() == 64 && zeroed.capacity() == 64)
+        for i in 0..64 {
+            core::assert(zeroed[i] == 0)
+        }
+        consume(zeroed)
     }
+    core::assert(MemBuffer::try_new(usize::max()).is_none())
     0
 }
 "#,

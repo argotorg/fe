@@ -21,9 +21,9 @@ error[8-0023]: argument number mismatch
   58 │     write!()
      │     ^^^^^^^^ expected 2 arguments, but 1 given
      │
-     ┌─ src/ptr.fe:1040:12
+     ┌─ src/ptr.fe:1048:12
      │
-1040 │     pub fn extend_from(mut self, _ source: MemSpan) {
+1048 │     pub fn extend_from(mut self, _ source: MemSpan) {
      │            ----------- function defined here
 
 error[8-0031]: type annotation is needed
