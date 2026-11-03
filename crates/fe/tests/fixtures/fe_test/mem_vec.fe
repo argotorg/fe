@@ -149,6 +149,19 @@ fn pop_truncate_and_access() {
 }
 
 #[test]
+fn swap_remove_moves_the_last_element_in() {
+    var v = MemVec<MemBuffer>::new()
+    for byte in 0..4 {
+        var buffer = MemBuffer::empty()
+        buffer.push(byte.downcast_unchecked())
+        v.push(buffer)
+    }
+    assert!(v.swap_remove(1)[0] == 1 && v.len() == 3 && v[1][0] == 3)
+    assert!(v.swap_remove(2)[0] == 2 && v.len() == 2)
+    assert!(v[0][0] == 0 && v[1][0] == 3)
+}
+
+#[test]
 fn non_copy_elements_move_in_and_out() {
     var v = MemVec<MemBuffer>::new()
     for n in 1..6 {
