@@ -13,16 +13,89 @@
 /// `MemBuffer`, and `write!(mut buf, a, b, ..)` and `writeln!` append it to
 /// `buf`, a `MemBuffer` held by a local, a field or an effect
 /// (`uses (text: mut MemBuffer)`). They work on any target.
+///
+/// A host operation that fails, such as one of `std::fs` or `std::process`,
+/// returns the host's reason as an `Error`.
 use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes}
 use core::abi::DynString
 use core::num::{IntWord, UnsignedAbs}
+use super::env::c_string_len
 use super::native::{Host, HostCapabilitySeal}
 
 extern {
     // POSIX descriptor I/O.
-    fn read(_ fd: i32, _ buf: *u8, _ count: usize) -> isize
-    fn write(_ fd: i32, _ buf: *u8, _ count: usize) -> isize
+    pub(ingot) fn read(_ fd: i32, _ buf: *u8, _ count: usize) -> isize
+    pub(ingot) fn write(_ fd: i32, _ buf: *u8, _ count: usize) -> isize
+    fn strerror(_ code: i32) -> *u8
 }
+
+// The `errno` values every supported host shares.
+const EPERM: i32 = 1
+const ENOENT: i32 = 2
+const EACCES: i32 = 13
+const EEXIST: i32 = 17
+const ENOTDIR: i32 = 20
+const EISDIR: i32 = 21
+pub(ingot) const EINVAL: i32 = 22
+
+/// Why a host operation failed: the host's `errno`.
+pub struct Error { code: i32 }
+
+impl Copy for Error {}
+
+impl Error {
+    /// The error with the host's error number `code`.
+    pub fn from_code(_ code: i32) -> Self {
+        Error { code }
+    }
+
+    /// The host's error number.
+    pub fn code(self) -> i32 {
+        self.code
+    }
+
+    /// What went wrong, in terms every host shares.
+    pub fn kind(self) -> ErrorKind {
+        let code = self.code
+        if code == EPERM || code == EACCES {
+            ErrorKind::PermissionDenied
+        } else if code == ENOENT {
+            ErrorKind::NotFound
+        } else if code == EEXIST {
+            ErrorKind::AlreadyExists
+        } else if code == ENOTDIR {
+            ErrorKind::NotADirectory
+        } else if code == EISDIR {
+            ErrorKind::IsADirectory
+        } else if code == EINVAL {
+            ErrorKind::InvalidInput
+        } else {
+            ErrorKind::Other
+        }
+    }
+}
+
+/// The host's description of the error, such as `No such file or directory`.
+impl Display for Error {
+    fn fmt(self, _ out: mut MemBuffer) {
+        let text = unsafe { strerror(self.code) }
+        out.extend_from(unsafe { MemSlice::from_raw_parts(ptr: text, len: c_string_len(text)) })
+    }
+}
+
+/// The kinds of `Error`.
+pub enum ErrorKind {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    NotADirectory,
+    IsADirectory,
+    /// A path or other text holds a NUL byte, or an argument is invalid.
+    InvalidInput,
+    Other,
+}
+
+impl Copy for ErrorKind {}
 
 /// The process's standard output.
 pub trait Stdout: HostCapabilitySeal {

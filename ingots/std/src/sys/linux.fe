@@ -1,0 +1,23 @@
+#![cfg(target_os = "linux")]
+/// glibc's x86-64 layouts and values.
+use core::MemSpan
+
+extern {
+    fn __errno_location() -> *i32
+}
+
+pub fn errno_location() -> *i32 {
+    unsafe { __errno_location() }
+}
+
+// `struct stat` and `struct dirent`.
+pub fn stat_mode(_ stat: MemSpan) -> u32 {
+    stat.read_le<u32>(24)
+}
+
+pub fn stat_size(_ stat: MemSpan) -> u64 {
+    stat.read_le<u64>(48)
+}
+
+pub const DIRENT_TYPE: usize = 18
+pub const DIRENT_NAME: usize = 19
