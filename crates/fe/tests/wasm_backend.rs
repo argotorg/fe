@@ -1079,6 +1079,20 @@ fn an_export_named_like_an_import_or_a_runtime_routine_is_an_error() {
         "pub fn free(x: u32) -> u32 {\n    x\n}\n",
         &["cannot export `free`", "reserved for a runtime routine"],
     );
+    // An export whose result is a `Reply` is a wrapper of that name.
+    rejected(
+        "adapted_export_import",
+        "use std::wasm::{Clock, Reply, now_ms}\n\npub fn sys_wasm_now_ms() -> Reply {\n    Reply::ok(5)\n}\n\npub fn elapsed() -> u64 uses (clock: mut Clock) {\n    now_ms()\n}\n",
+        &[
+            "cannot export `sys_wasm_now_ms`",
+            "imports an `extern` function of that name",
+        ],
+    );
+    rejected(
+        "adapted_export_free",
+        "use std::wasm::Reply\n\npub fn free() -> Reply {\n    Reply::ok(1)\n}\n",
+        &["cannot export `free`", "reserved for a runtime routine"],
+    );
 }
 
 #[test]

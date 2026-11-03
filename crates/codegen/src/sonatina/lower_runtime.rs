@@ -202,6 +202,7 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
         isa.inst_set(),
         package,
         &[],
+        &[],
         NativePanics::Trap,
     )?;
     lowerer.declare_functions()?;
@@ -306,9 +307,15 @@ where
     I::InstSet: LoweringInstSet,
 {
     let builder = ModuleBuilder::new(ModuleCtx::new(isa));
-    let mut lowerer =
-        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbols, panics)?;
-    lowerer.adapt_exports(adapters);
+    let mut lowerer = ModuleLowerer::new(
+        db,
+        builder,
+        isa.inst_set(),
+        package,
+        fixed_symbols,
+        adapters,
+        panics,
+    )?;
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
@@ -348,6 +355,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         inst_set: &'static I,
         package: &'a RuntimePackage<'db>,
         fixed_symbols: &[(RuntimeInstance<'db>, &str)],
+        adapters: &[WasmAdapter<'db>],
         panics: NativePanics,
     ) -> Result<Self, LowerError> {
         // HIR and MIR lay memory out with the compilation target's `usize`,
@@ -365,7 +373,15 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let wasm = builder.ctx.triple.architecture == Architecture::Wasm32;
         #[cfg(not(feature = "wasm"))]
         let wasm = false;
-        for &(_, symbol) in fixed_symbols {
+        // A wrapper takes the name of the export it adapts.
+        let exported = || {
+            fixed_symbols.iter().copied().chain(
+                adapters
+                    .iter()
+                    .map(|adapter| (adapter.instance, adapter.name.as_str())),
+            )
+        };
+        for (_, symbol) in exported() {
             if symbol.starts_with(COMPILER_SYMBOL_PREFIX) {
                 return Err(LowerError::Unsupported(format!(
                     "exported symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
@@ -383,10 +399,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 )));
             }
         }
-        let func_symbols = assign_sonatina_function_symbols(db, package, fixed_symbols);
+        let mut func_symbols = assign_sonatina_function_symbols(db, package, fixed_symbols);
         // Sonatina merges functions declared under one name, so on WebAssembly
         // an import of an export's name would replace it.
-        for &(instance, symbol) in fixed_symbols {
+        for (instance, symbol) in exported() {
             if wasm
                 && func_symbols
                     .iter()
@@ -396,6 +412,11 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     "cannot export `{symbol}`: the module imports an `extern` function of that name"
                 )));
             }
+        }
+        // An adapted export moves to a symbol of its own, so that the wrapper
+        // can take its name.
+        for adapter in adapters {
+            func_symbols.insert(adapter.instance, format!("{}$export", adapter.name));
         }
         Ok(Self {
             db,
@@ -413,19 +434,9 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             explicit_code_region_sections: FxHashSet::default(),
             external_code: FxHashMap::default(),
             const_bytes: FxHashMap::default(),
-            adapted: FxHashSet::default(),
+            adapted: adapters.iter().map(|adapter| adapter.instance).collect(),
             panics,
         })
-    }
-
-    /// Gives each adapted export the symbol of its body, so that the wrapper
-    /// can take the name of the export.
-    fn adapt_exports(&mut self, adapters: &[WasmAdapter<'db>]) {
-        for adapter in adapters {
-            self.func_symbols
-                .insert(adapter.instance, format!("{}$export", adapter.name));
-            self.adapted.insert(adapter.instance);
-        }
     }
 
     /// The public function of each adapter: it takes the parameters of the

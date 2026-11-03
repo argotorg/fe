@@ -83,6 +83,7 @@ fn backend_addresses_must_be_as_wide_as_the_target_usize() {
         isa.inst_set(),
         &package,
         &[],
+        &[],
         NativePanics::Abort,
     ) else {
         panic!("a native backend must not lower an EVM compilation");
@@ -207,6 +208,7 @@ pub fn main() -> i32 {
         isa.inst_set(),
         &package,
         &[],
+        &[],
         NativePanics::Abort,
     )
     .unwrap();
@@ -297,6 +299,7 @@ fn assert_raw_memory_layouts_match_objects<I>(
         ModuleBuilder::new(ModuleCtx::new(isa)),
         isa.inst_set(),
         package,
+        &[],
         &[],
         NativePanics::Abort,
     )
@@ -561,6 +564,7 @@ pub contract SlotContract {
             ModuleBuilder::new(ModuleCtx::new(&isa)),
             isa.inst_set(),
             &package,
+            &[],
             &[],
             NativePanics::Trap,
         )
