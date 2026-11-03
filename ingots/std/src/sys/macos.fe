@@ -21,3 +21,6 @@ pub fn stat_size(_ stat: MemSpan) -> u64 {
 
 pub const DIRENT_TYPE: usize = 20
 pub const DIRENT_NAME: usize = 21
+
+// `clock_gettime`'s clock that never goes back.
+pub const CLOCK_MONOTONIC: i32 = 6

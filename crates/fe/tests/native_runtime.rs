@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use num_bigint::BigUint;
@@ -3030,5 +3030,41 @@ read a\0: InvalidInput (Invalid argument)"#,
         );
         assert_eq!(lines.join("\n"), expected, "O{level}");
         assert_eq!(fs::read(dir.join("a/b/c/file")).unwrap(), b"hello world");
+    }
+}
+
+#[test]
+fn native_clock_reads_wall_and_monotonic_time() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/time.fe");
+    let unix_secs = || {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let before = unix_secs();
+        let result = Command::new(out.join("time")).output().unwrap();
+        let after = unix_secs();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        let stdout = String::from_utf8(result.stdout).unwrap();
+        let (now, rest) = stdout
+            .strip_prefix("now ")
+            .unwrap()
+            .split_once('\n')
+            .unwrap();
+        let now = now.parse::<u64>().unwrap();
+        assert!(
+            (before..=after).contains(&now),
+            "O{level}: {now} outside {before}..={after}"
+        );
+        assert_eq!(
+            rest,
+            "spun 20 ms: true\nsince a later reading: 0\n2 s, 2499 ms, 2499750 us, 2499750000 ns\ntrue true\n",
+            "O{level}"
+        );
     }
 }
