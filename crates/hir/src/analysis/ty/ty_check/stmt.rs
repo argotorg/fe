@@ -140,6 +140,20 @@ impl<'db> TyChecker<'db> {
             } else {
                 self.check_expr_unknown(*expr)
             };
+            // The else block runs only when the pattern does not match, so it
+            // is checked before the pattern binds anything: a scope inside it
+            // would otherwise take the pattern's pending bindings.
+            if let Some(else_) = else_ {
+                let else_ty = self
+                    .check_expr_unknown(*else_)
+                    .ty
+                    .fold_with(self.db, &mut self.table);
+                if !else_ty.is_never(self.db) && !else_ty.has_invalid(self.db) {
+                    self.push_diag(BodyDiag::LetElseMustDiverge {
+                        primary: else_.span(self.body()).into(),
+                    });
+                }
+            }
             // The `let` a destructured parameter's body begins with.
             let param = self.destructured_param(prop.binding);
             // An access marker on the initializer binds a single name only.
@@ -166,17 +180,8 @@ impl<'db> TyChecker<'db> {
             if prop.shape.is_some() {
                 self.bind_pattern_source(*pat, *expr, &prop, true);
             }
-            if let Some(else_) = else_ {
-                let else_ty = self
-                    .check_expr_unknown(*else_)
-                    .ty
-                    .fold_with(self.db, &mut self.table);
-                if !else_ty.is_never(self.db) && !else_ty.has_invalid(self.db) {
-                    self.push_diag(BodyDiag::LetElseMustDiverge {
-                        primary: else_.span(self.body()).into(),
-                    });
-                }
-            } else if let Some(root) = self.env.pattern_store().root(*pat)
+            if else_.is_none()
+                && let Some(root) = self.env.pattern_store().root(*pat)
                 && !self.env.pattern_store().is_irrefutable(self.db, root)
             {
                 let primary = pat.span(self.body()).into();
