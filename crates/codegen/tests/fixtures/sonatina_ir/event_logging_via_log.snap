@@ -254,7 +254,7 @@ func private %index_out_of_bounds() {
         evm_revert 0.i256 36.i256;
 }
 
-func private %len__g79ff(noalias v0.objref<@layout_2>) -> i256 {
+func private %len__g79ff(noalias nocapture v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -273,7 +273,7 @@ func inline(always) private %impl_AbiFrame__len(v0.@layout_2) -> i256 {
         return v3;
 }
 
-func private %log3(noalias v0.objref<@layout_2>, v1.i256, v2.i256, v3.i256) {
+func private %log3(noalias nocapture v0.objref<@layout_2>, v1.i256, v2.i256, v3.i256) {
     block0:
         jump block1;
 
@@ -346,7 +346,7 @@ func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %ptr__g79ff(noalias v0.objref<@layout_2>) -> i256 {
+func private %ptr__g79ff(noalias nocapture v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 

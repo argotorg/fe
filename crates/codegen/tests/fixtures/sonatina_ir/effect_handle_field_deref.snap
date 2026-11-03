@@ -543,7 +543,7 @@ func inline(always) private %decode_msg_field_from(v0.@layout_1, v1.i256, v2.i25
         return v13;
 }
 
-func inline(always) private %decode_runtime_args__g01e9(noalias v0.objref<@layout_4>) -> @layout_1 {
+func inline(always) private %decode_runtime_args__g01e9(noalias nocapture v0.objref<@layout_4>) -> @layout_1 {
     block0:
         jump block1;
 
@@ -555,7 +555,7 @@ func inline(always) private %decode_runtime_args__g01e9(noalias v0.objref<@layou
         return v6;
 }
 
-func inline(always) private %decode_runtime_args__g5aad(noalias v0.objref<@layout_4>) -> @layout_2 {
+func inline(always) private %decode_runtime_args__g5aad(noalias nocapture v0.objref<@layout_4>) -> @layout_2 {
     block0:
         jump block1;
 
@@ -567,7 +567,7 @@ func inline(always) private %decode_runtime_args__g5aad(noalias v0.objref<@layou
         return v6;
 }
 
-func inline(always) private %decode_runtime_args__g0392(noalias v0.objref<@layout_4>) -> @layout_1 {
+func inline(always) private %decode_runtime_args__g0392(noalias nocapture v0.objref<@layout_4>) -> @layout_1 {
     block0:
         jump block1;
 
@@ -760,7 +760,7 @@ func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
         return v3;
 }
 
-func private %len__g79ff(noalias v0.objref<@layout_5>) -> i256 {
+func private %len__g79ff(noalias nocapture v0.objref<@layout_5>) -> i256 {
     block0:
         jump block1;
 
@@ -819,7 +819,7 @@ func inline(always) private %ptr__g03ed(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %ptr__g79ff(noalias v0.objref<@layout_5>) -> i256 {
+func private %ptr__g79ff(noalias nocapture v0.objref<@layout_5>) -> i256 {
     block0:
         jump block1;
 
@@ -866,7 +866,7 @@ func private %read_cell(v0.i256) -> i256 {
         return v2;
 }
 
-func private %return_bytes(noalias v0.objref<@layout_5>) {
+func private %return_bytes(noalias nocapture v0.objref<@layout_5>) {
     block0:
         jump block1;
 
@@ -875,7 +875,7 @@ func private %return_bytes(noalias v0.objref<@layout_5>) {
         unreachable;
 }
 
-func private %return_data(noalias v0.objref<@layout_5>) {
+func private %return_data(noalias nocapture v0.objref<@layout_5>) {
     block0:
         jump block1;
 

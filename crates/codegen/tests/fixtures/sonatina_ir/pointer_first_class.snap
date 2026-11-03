@@ -60,7 +60,7 @@ func private %alloc__g8571() -> i256 {
         return v2;
 }
 
-func private %impl_MemSlice__byte_len__ge513(noalias v0.objref<@layout_0>) -> i256 {
+func private %impl_MemSlice__byte_len__ge513(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -570,7 +570,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func inline(always) private %mem_array_elem(noalias v0.objref<@layout_0>, v1.i256) -> i256 {
+func inline(always) private %mem_array_elem(noalias nocapture v0.objref<@layout_0>, v1.i256) -> i256 {
     block0:
         jump block1;
 
@@ -707,7 +707,7 @@ func private %wrapping_mul(v0.i256, v1.i256) -> i256 {
         return v4;
 }
 
-func private %impl_MemSlice__zero__ge513(noalias v0.objref<@layout_0>) {
+func private %impl_MemSlice__zero__ge513(noalias nocapture v0.objref<@layout_0>) {
     block0:
         jump block1;
 
@@ -725,7 +725,7 @@ func private %impl_MemSlice__zero__ge513(noalias v0.objref<@layout_0>) {
         return;
 }
 
-func private %impl_MemArray__zero__ge513(noalias v0.objref<@layout_0>) {
+func private %impl_MemArray__zero__ge513(noalias nocapture v0.objref<@layout_0>) {
     block0:
         v1.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;

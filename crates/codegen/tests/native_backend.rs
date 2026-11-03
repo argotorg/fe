@@ -436,7 +436,7 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_access_parameters_are_noalias() {
+fn native_object_parameters_are_nocapture_and_accesses_noalias() {
     let ir = with_top_mod_for_source(
         "noalias_parameters.fe",
         r#"
@@ -472,17 +472,18 @@ pub fn main() -> i32 {
             .find(|line| line.starts_with("func ") && line.contains(name))
             .unwrap_or_else(|| panic!("missing {name}:\n{ir}"))
     };
-    // A view, `mut` or effect parameter is an access of its caller's place.
+    // A view, `mut` or effect parameter is an access of its caller's place,
+    // and no reference to any parameter outlives the call.
     for name in ["total", "bump", "tick"] {
         assert!(
-            signature(name).contains("(noalias v0.objref<"),
+            signature(name).contains("(noalias nocapture v0.objref<"),
             "{name}:\n{ir}"
         );
     }
-    // An owned parameter is not, even when passed by reference.
+    // An owned parameter is no access, even when passed by reference.
     let consume = signature("consume");
     assert!(
-        consume.contains("(v0.objref<") && !consume.contains("noalias"),
+        consume.contains("(nocapture v0.objref<") && !consume.contains("noalias"),
         "{ir}"
     );
 }

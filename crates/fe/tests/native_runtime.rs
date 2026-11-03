@@ -531,7 +531,7 @@ pub fn main() -> i32 {
                 .filter(|line| line.starts_with("func") && line.contains("bump"))
                 .collect();
             assert!(
-                matches!(bumps[..], [bump] if bump.contains("(noalias v0.objref<")),
+                matches!(bumps[..], [bump] if bump.contains("(noalias nocapture v0.objref<")),
                 "{bumps:?}"
             );
         }

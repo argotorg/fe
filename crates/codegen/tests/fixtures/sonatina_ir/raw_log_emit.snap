@@ -64,7 +64,7 @@ func private %cast__gab97(v0.i256) -> i256 {
         return v0;
 }
 
-func private %len(noalias v0.objref<@layout_0>) -> i256 {
+func private %len(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -74,7 +74,7 @@ func private %len(noalias v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func private %log0(noalias v0.objref<@layout_0>) {
+func private %log0(noalias nocapture v0.objref<@layout_0>) {
     block0:
         jump block1;
 
@@ -103,7 +103,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %ptr(noalias v0.objref<@layout_0>) -> i256 {
+func private %ptr(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
