@@ -1,0 +1,39 @@
+use core::{ByteSource, Bytes, MemBuffer, MemSpan}
+
+fn source_word<S: ByteSource>(_ source: S, _ offset: usize) -> u256 {
+    source.word_at(offset as u256)
+}
+
+fn source_byte<S: ByteSource>(_ source: S, _ offset: usize) -> u8 {
+    source.byte_at(offset as u256)
+}
+
+// The 32 bytes from `offset` on, read one at a time, with those past the end
+// of `span` zero.
+fn expected_word(_ span: MemSpan, _ offset: usize) -> u256 {
+    var word: u256 = 0
+    for i in offset..offset + 32 {
+        word = word << 8 | if i < span.len() { span.byte_at(i) as u256 } else { 0 }
+    }
+    word
+}
+
+// The allocator the test links ends every block just before an inaccessible
+// page, so a read past the last word of a block faults.
+pub fn main() -> i32 {
+    for len in 1..65 {
+        var buffer = MemBuffer::alloc(len)
+        for i in 0..len {
+            buffer[i] = (i + 1).downcast_truncate()
+        }
+        let span = buffer.span()
+        let bytes = Bytes::from_payload(source: span)
+        for offset in 0..len {
+            let word = expected_word(span, offset)
+            core::assert(source_word(span, offset) == word)
+            core::assert(source_byte(span, offset) == span.byte_at(offset))
+            core::assert(bytes.word_at(offset) == word)
+        }
+    }
+    0
+}

@@ -412,6 +412,11 @@ fn builtin_result_class<'db>(
             verify_memory_int(db, body, *len)?;
             Ok(None)
         }
+        RuntimeBuiltin::ReadPaddedWord { ptr, len } => {
+            verify_address_operand(db, body, *ptr, AddressSpace::Memory)?;
+            verify_memory_int(db, body, *len)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
         RuntimeBuiltin::StoreConstBytes { dst, .. } => {
             verify_address_operand(db, body, *dst, AddressSpace::Memory)?;
             Ok(None)

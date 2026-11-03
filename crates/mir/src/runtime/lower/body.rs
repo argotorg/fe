@@ -3900,6 +3900,16 @@ impl<'db> RmirEmitter<'db> {
                     None,
                 )
             }
+            RuntimeBuiltinFuncKind::ReadPaddedWord => {
+                let [ptr, len] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::ReadPaddedWord {
+                        ptr: *ptr,
+                        len: *len,
+                    },
+                    Some(word.clone()),
+                )
+            }
             RuntimeBuiltinFuncKind::Msize => {
                 let [] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::Msize, Some(word.clone()))
