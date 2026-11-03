@@ -1555,6 +1555,10 @@ enum TraitObligationOutcome<'db> {
 enum Viability {
     Viable,
     Incompatible,
+    /// Incompatible by a comparison with a projection that waits on
+    /// inference, such as `T::Output` of a `T` a later use infers, so the
+    /// candidate may fit once the projection normalizes.
+    Undecided,
     ReturnTypeMismatch,
 }
 
@@ -2571,7 +2575,10 @@ impl<'db> TyChecker<'db> {
                         .filter(|&candidate| {
                             let fit =
                                 self.method_viability(&pending, recv_ty, expr_ty, parts, candidate);
-                            !matches!(fit.viability, Viability::Incompatible)
+                            !matches!(
+                                fit.viability,
+                                Viability::Incompatible | Viability::Undecided
+                            )
                         })
                         .collect();
                     let viable = self.dedup_equivalent_pending_method_candidates(viable);
@@ -2658,7 +2665,7 @@ impl<'db> TyChecker<'db> {
                             continue;
                         }
 
-                        let viable = self
+                        let (viable, _) = self
                             .viable_pending_candidates(&pending, recv_ty, expr_ty, parts, fallback);
                         if let [candidate] = viable.as_slice() {
                             if self.env.callable_expr(pending.expr).is_none() {
@@ -2698,7 +2705,8 @@ impl<'db> TyChecker<'db> {
     /// type `recv_ty` and its arguments: those that also fit its type
     /// `expr_ty`, if any do. With `literal_defaults`, several candidates
     /// narrow to those under which its open string literals take their
-    /// default types, as an operator's do.
+    /// default types, as an operator's do. Also whether a candidate it
+    /// rejects is `Viability::Undecided`, so it may fit later.
     fn viable_pending_candidates(
         &mut self,
         pending: &env::PendingMethod<'db>,
@@ -2706,18 +2714,20 @@ impl<'db> TyChecker<'db> {
         expr_ty: TyId<'db>,
         parts: PendingCallParts<'db>,
         literal_defaults: bool,
-    ) -> Vec<env::PendingMethodCandidate<'db>> {
+    ) -> (Vec<env::PendingMethodCandidate<'db>>, bool) {
+        let mut undecided = false;
         let (strict, soft): (Vec<_>, Vec<_>) = pending
             .candidates
             .iter()
             .copied()
             .filter_map(|candidate| {
                 let fit = self.method_viability(pending, recv_ty, expr_ty, parts, candidate);
-                (!matches!(fit.viability, Viability::Incompatible)).then_some((
-                    candidate,
+                undecided |= matches!(fit.viability, Viability::Undecided);
+                (!matches!(
                     fit.viability,
-                    fit.keeps_literal_defaults,
+                    Viability::Incompatible | Viability::Undecided
                 ))
+                .then_some((candidate, fit.viability, fit.keeps_literal_defaults))
             })
             .partition(|(_, viability, _)| matches!(viability, Viability::Viable));
         let viable: Vec<_> = if strict.is_empty() { soft } else { strict }
@@ -2725,7 +2735,10 @@ impl<'db> TyChecker<'db> {
             .map(|(candidate, _, keeps_defaults)| (candidate, keeps_defaults || !literal_defaults))
             .collect();
         let viable = prefer_literal_defaults(viable);
-        self.dedup_equivalent_pending_method_candidates(viable)
+        (
+            self.dedup_equivalent_pending_method_candidates(viable),
+            undecided,
+        )
     }
 
     /// Resolves the deferred call `pending`, typed `expr_ty`, to `candidate`
@@ -2862,13 +2875,23 @@ impl<'db> TyChecker<'db> {
         let assumptions = self.env.assumptions();
         let snap = self.snapshot_state();
 
+        // A comparison that fails on a projection waiting on inference can
+        // succeed once the projection normalizes.
+        let rejection = |lhs: TyId<'db>, rhs: TyId<'db>| {
+            if depends_on_type_inference(db, lhs) || depends_on_type_inference(db, rhs) {
+                Viability::Undecided
+            } else {
+                Viability::Incompatible
+            }
+        };
+        let mut undecided_generic_arg = false;
         let mut keeps_literal_defaults = false;
         let mut fixed_ret_ty = None;
         let viability = (|| {
             let inst = candidate.inst;
             let inst_self = self.table.instantiate_to_term(inst.self_ty(db));
             if self.table.unify(inst_self, recv_ty).is_err() {
-                return Viability::Incompatible;
+                return rejection(inst_self, recv_ty);
             }
 
             let Ok(func_ty) =
@@ -2888,9 +2911,17 @@ impl<'db> TyChecker<'db> {
                 self,
                 generic_args,
                 CallGenericArgPhase::Probe,
-                |this, _, given, current| this.table.unify(given, *current).is_ok(),
+                |this, _, given, current| {
+                    let unifies = this.table.unify(given, *current).is_ok();
+                    undecided_generic_arg |=
+                        !unifies && matches!(rejection(given, *current), Viability::Undecided);
+                    unifies
+                },
             ) {
                 Ok(()) => {}
+                Err(CallGenericArgUnifyError::UnificationFailed) if undecided_generic_arg => {
+                    return Viability::Undecided;
+                }
                 Err(CallGenericArgUnifyError::ArityMismatch { .. })
                 | Err(CallGenericArgUnifyError::UnificationFailed)
                 | Err(CallGenericArgUnifyError::InvalidArgument(_)) => {
@@ -2929,7 +2960,7 @@ impl<'db> TyChecker<'db> {
                 let given =
                     normalize_ty(db, given.fold_with(db, &mut self.table), scope, assumptions);
                 if self.table.unify(given, expected).is_err() {
-                    return Viability::Incompatible;
+                    return rejection(given, expected);
                 }
             }
             keeps_literal_defaults = self.keeps_literal_defaults(all_arg_tys);

@@ -2113,28 +2113,31 @@ impl<'db> TyChecker<'db> {
             span,
             site: self.env.call_site(),
         };
-        // Inference only narrows the candidates, and the call's type is not
-        // yet constrained, so a single fitting candidate is the one the
-        // deferred call would resolve to. Resolving it now types the call
-        // for an operator applied to it: `!s.eq(t)`.
+        // Inference only narrows the candidates, unless one is rejected on a
+        // projection that waits on it, and the call's type is not yet
+        // constrained, so a single fitting candidate is the one the deferred
+        // call would resolve to. Resolving it now types the call for an
+        // operator applied to it: `!s.eq(t)`.
         if let Some(parts) = super::pending_call_parts(self.db, self.body(), &self.env, expr) {
             let recv_ty = receiver_ty.fold_with(self.db, &mut self.table);
-            let viable = self.viable_pending_candidates(&pending, recv_ty, typed.ty, parts, false);
-            if let [candidate] = viable[..] {
+            let (viable, undecided) =
+                self.viable_pending_candidates(&pending, recv_ty, typed.ty, parts, false);
+            if !undecided && let [candidate] = viable[..] {
                 self.resolve_pending_method(&pending, candidate, recv_ty, typed.ty, parts);
                 return typed;
             }
             // For the same reason, a type all fitting candidates return is
             // the call's: `!s.eq("serve")` is a `bool` whichever impl the
             // literal picks.
-            let ret_tys: Option<Vec<_>> = viable
-                .iter()
-                .map(|&candidate| {
-                    self.method_viability(&pending, recv_ty, typed.ty, parts, candidate)
-                        .ret_ty
-                })
-                .collect();
-            if let Some([ret_ty, rest @ ..]) = ret_tys.as_deref()
+            if !undecided
+                && let Some(ret_tys) = viable
+                    .iter()
+                    .map(|&candidate| {
+                        self.method_viability(&pending, recv_ty, typed.ty, parts, candidate)
+                            .ret_ty
+                    })
+                    .collect::<Option<Vec<_>>>()
+                && let [ret_ty, rest @ ..] = &ret_tys[..]
                 && rest.iter().all(|ty| ty == ret_ty)
             {
                 self.equate_ty(typed.ty, *ret_ty, pending.span.clone());

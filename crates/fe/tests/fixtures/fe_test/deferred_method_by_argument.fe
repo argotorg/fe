@@ -23,3 +23,105 @@ fn argument_selects_impl() {
     assert!(c.get(5) == 1)
     assert!(c.get(5) + c.get(false) == 3)
 }
+
+trait Make {
+    fn make() -> Self
+}
+
+impl Make for u16 {
+    fn make() -> Self {
+        3
+    }
+}
+
+trait HasOutput {
+    type Output
+    fn output(self) -> Self::Output
+}
+
+impl HasOutput for u16 {
+    type Output = u8
+    fn output(self) -> u8 {
+        7
+    }
+}
+
+fn make<T: Make>() -> T {
+    T::make()
+}
+
+fn output<T: HasOutput>(_ x: T) -> T::Output {
+    x.output()
+}
+
+struct S {}
+
+trait Specific {
+    fn foo(self, _ x: u8) -> bool
+}
+
+impl Specific for S {
+    fn foo(self, _ x: u8) -> bool {
+        true
+    }
+}
+
+trait General<T> {
+    fn foo(self, _ x: T) -> u256
+}
+
+impl<T> General<T> for S {
+    fn foo(self, _ x: T) -> u256 {
+        0
+    }
+}
+
+#[test]
+fn later_use_settles_argument_projection() {
+    // `y` is `T::Output` until `x: u16` fixes `T`, so `Specific::foo(u8)`
+    // may still fit, and the call waits for it.
+    let s = S {}
+    let x = make()
+    let y = output(x)
+    let result: bool = s.foo(y)
+    let fixed: u16 = x
+    assert!(result)
+    assert!(fixed == 3)
+}
+
+struct Twice {}
+
+impl Specific for Twice {
+    fn foo(self, _ x: u8) -> bool {
+        true
+    }
+}
+
+impl<T> General<T> for Twice {
+    fn foo(self, _ x: T) -> u256 {
+        0
+    }
+}
+
+trait Other<T> {
+    fn foo(self, _ x: T) -> u256
+}
+
+impl<T> Other<T> for Twice {
+    fn foo(self, _ x: T) -> u256 {
+        1
+    }
+}
+
+#[test]
+fn later_use_settles_projection_before_return_type() {
+    // Both generic impls fit now and return `u256`, but `Specific::foo(u8)`
+    // may fit once `x: u16` fixes `T`, so the call's type stays open.
+    let t = Twice {}
+    let x = make()
+    let y = output(x)
+    let result: bool = t.foo(y)
+    let fixed: u16 = x
+    assert!(result)
+    assert!(fixed == 3)
+}
