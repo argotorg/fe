@@ -313,6 +313,10 @@ test("a module is refused, and the import named, when the host does not provide 
   await refuses(instantiate(bytes), /the module imports env\.custom_import, which the host does not provide/);
   const two = assemble(["custom_a", "custom_b"]);
   await refuses(instantiate(two), /2 functions that the host does not provide: env\.custom_a, env\.custom_b/);
+  // A property that `env` inherits from `Object.prototype` is not an import.
+  for (const name of ["constructor", "toString"]) {
+    await refuses(instantiate(assemble([name])), new RegExp(`imports env\\.${name}, which the host does not provide`));
+  }
 });
 
 test("a manifest lets the host refuse before it compiles the module", async () => {

@@ -360,12 +360,15 @@ export function checkManifestShape(manifest) {
 /** `module.name` of an import or export entry. */
 const qualified = (entry) => `${entry.module}.${entry.name}`;
 
+/** The own property `key` of `object`, not one it inherits, such as `toString`. */
+const own = (object, key) => (object != null && Object.hasOwn(object, key) ? object[key] : undefined);
+
 /**
  * Throws a `ContractError` that names every import in `wanted` (entries with
  * `module` and `name`) which `imports` does not provide as a function.
  */
 function requireImports(wanted, imports, what) {
-  const missing = wanted.filter((entry) => typeof imports?.[entry.module]?.[entry.name] !== "function");
+  const missing = wanted.filter((entry) => typeof own(own(imports, entry.module), entry.name) !== "function");
   if (missing.length === 0) return;
   const names = missing.map(qualified).join(", ");
   throw new ContractError(
