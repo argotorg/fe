@@ -314,12 +314,14 @@ fn emit_ir_writes_the_ir_of_each_test() {
     let source = temp.path().join("pair.fe");
     fs::write(
         &source,
-        "#[test]\nfn first() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test]\nfn second() {\n    let x: u32 = 2\n    assert(x == 2)\n}\n",
+        "#[test]\nfn first() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test]\nfn second() {\n    let x: u32 = 2\n    assert(x == 2)\n}\n\nmod inner {\n    #[test]\n    fn first() {\n        let x: u32 = 3\n        assert(x == 3)\n    }\n}\n",
     )
     .unwrap();
     let output = fe_test("wasm", "1", &["--emit", "ir"], &source);
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
-    for test in ["first", "second"] {
+    // A test's file names its path, so tests of one name in two modules do
+    // not share a file.
+    for test in ["first", "second", "inner.first"] {
         let ir = temp.path().join(format!("out/pair.wasm.{test}.test.sona"));
         let text = fs::read_to_string(&ir).unwrap_or_else(|err| panic!("{}: {err}", ir.display()));
         assert!(text.contains("func"), "{text}");

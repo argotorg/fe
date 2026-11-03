@@ -258,7 +258,17 @@ pub(super) fn prepare_tests(
             return setup_error(format!("failed to write {module_file}: {err}"));
         }
         if let (Some(out_dir), Some(ir)) = (&out_dir, &module.ir) {
-            let stem = format!("{}.wasm.{}", test_emit_stem(suite_key), test.name);
+            // Tests of two modules may share a name, so the file names the
+            // test's path below the root module, `inner.first`.
+            let path = test.func.scope().pretty_path(db).unwrap_or_default();
+            let path = path
+                .split_once("::")
+                .map_or(path.as_str(), |(_, path)| path);
+            let stem = format!(
+                "{}.wasm.{}",
+                test_emit_stem(suite_key),
+                path.replace("::", ".")
+            );
             if let Err(err) = write_test_emit_artifact(out_dir, &stem, "sona", ir, output) {
                 return setup_error(err);
             }

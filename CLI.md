@@ -775,7 +775,8 @@ fe test [--backend <sonatina|native|wasm>] [--filter <pattern>] [--jobs <n>] [--
   the host's message. A test that uses something the backend cannot build (an EVM
   built-in, `should_revert`, `balance`) fails with `cannot build <name> for WebAssembly`
   and the reason; no test is skipped silently. A test that runs for more than 60 seconds
-  fails. `--emit ir` writes `<suite>.wasm.<test>.test.sona` for each test. `--show-logs`,
+  fails. `--emit ir` writes `<suite>.wasm.<test>.test.sona` for each test, where `<test>` is
+  its path below the root module with `.` between the names (`inner.first`). `--show-logs`,
   the tracing options, `--debug-dir`, `--emit rmir`, `--report` and `--report-dir` are
   errors with this backend.
 
