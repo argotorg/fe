@@ -964,6 +964,8 @@ fn other_backends_and_outputs_are_refused_with_a_reason() {
         "abi",
         "metadata",
         "executable",
+        "object",
+        "staticlib",
     ] {
         expect_failure(
             &["build", "--backend", "wasm", "--emit", emit, path],

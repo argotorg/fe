@@ -224,7 +224,7 @@ fn validate_build_request(
                 || emit.abi
                 || emit.metadata
                 || emit.executable
-                || emit.elf =>
+                || emit.library() =>
         {
             Err("WebAssembly backend only supports `--emit wasm` and `--emit ir`".to_string())
         }
