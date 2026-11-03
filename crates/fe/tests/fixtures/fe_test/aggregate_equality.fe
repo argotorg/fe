@@ -182,3 +182,27 @@ fn empty_array_dynamic_index_reverts() {
     let a: [u256; 0] = []
     let _ = array_element(a, 0)
 }
+
+#[test]
+fn option_equality() {
+    let some: Option<u256> = Option::Some(7)
+    let none: Option<u256> = Option::None
+    assert!(equal(some, Option::Some(7)))
+    assert!(some != Option::Some(8))
+    assert!(some != none && none != some)
+    assert!(none == Option::None && !(none != Option::None))
+    let nested: Option<(u256, Option<bool>)> = Option::Some((1, Option::Some(true)))
+    assert!(nested == Option::Some((1, Option::Some(true))))
+    assert!(nested != Option::Some((1, Option::None)))
+    assert!([some, none] == [Option::Some(7), Option::None])
+}
+
+#[test]
+fn custom_noncopy_option_values() {
+    let a = Option::Some(Item { value: 1 })
+    let b = Option::Some(Item { value: 11 })
+    assert!(a == b && !(a != b))
+    assert!(a != Option::Some(Item { value: 2 }))
+    assert!(a != Option::None)
+    assert!(b.unwrap().value == 11)
+}

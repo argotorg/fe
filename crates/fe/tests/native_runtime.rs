@@ -789,6 +789,7 @@ math = true
 #[test]
 fn aggregate_fixtures_run_at_every_level() {
     for (name, expected_count) in [
+        ("aggregate_equality.fe", 14),
         ("aggregate_object_copies.fe", 3),
         ("const_aggregate_values.fe", 5),
     ] {
