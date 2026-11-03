@@ -1,4 +1,5 @@
 use ingot::Default
+use ingot::Eq
 use ingot::Fn
 use ingot::Functor
 use ingot::Applicative
@@ -94,6 +95,19 @@ impl<T> Option<T> where T: Default {
 impl<T> Default for Option<T> {
     fn default() -> Self {
         Self::None
+    }
+}
+
+/// Options are equal when both are `None`, or both hold equal values.
+impl<T: Eq> Eq for Option<T> {
+    fn eq(self, _ other: Option<T>) -> bool {
+        match self {
+            Self::Some(ref value) => match other {
+                Option::Some(ref other) => value == other
+                Option::None => false
+            }
+            Self::None => other.is_none()
+        }
     }
 }
 

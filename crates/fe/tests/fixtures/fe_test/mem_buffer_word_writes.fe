@@ -75,7 +75,7 @@ fn unaligned_word_reads() {
 
 #[test]
 fn span_word_writes_stay_in_the_span() {
-    var buffer = MemBuffer::alloc(66)
+    var buffer = MemBuffer::new(66)
     buffer.slice(offset: 1, len: 64).write_word(offset: 30, value: u256::max())
     assert!(buffer.read_word(0) == 0xff)
     assert!(buffer.read_word(32) == u256::max() << 8)
@@ -91,6 +91,6 @@ fn rejects_read_past_the_extent() {
 
 #[test(should_revert, panic = 0x32)]
 fn rejects_span_write_past_its_end() {
-    var buffer = MemBuffer::alloc(64)
+    var buffer = MemBuffer::new(64)
     buffer.slice(offset: 0, len: 40).write_word(offset: 9, value: 1)
 }

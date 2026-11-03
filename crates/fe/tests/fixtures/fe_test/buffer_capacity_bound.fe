@@ -27,7 +27,7 @@ fn huge_alloc_bytes_reverts() {
 
 #[test(should_revert, selector = 0x4e487b71)]
 fn huge_buffer_reverts() {
-    let _ = MemBuffer::alloc(huge(0x10000000000000000).downcast_unchecked())
+    let _ = MemBuffer::new(huge(0x10000000000000000).downcast_unchecked())
 }
 
 #[test(should_revert, selector = 0x4e487b71)]
@@ -64,6 +64,6 @@ fn huge_packed_width_reverts() {
 fn bounded_capacity_allocates() {
     var buf = MemBuffer::with_capacity(huge(64).downcast_unchecked())
     buf.reserve(100)
-    let other = MemBuffer::alloc(32)
+    let other = MemBuffer::new(32)
     assert(buf.capacity() >= 100 && other[0] == 0)
 }

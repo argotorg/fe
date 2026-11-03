@@ -18,7 +18,7 @@ func private %abi_encode_u256(v0.i256) {
         jump block1;
 
     block1:
-        v3.@layout_0 = call %alloc 32.i256;
+        v3.@layout_0 = call %new 32.i256;
         v4.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_1f42 v3;
         call %store_word v4 v0;
         jump block3;
@@ -42,17 +42,6 @@ func private %abi_encode_u256(v0.i256) {
         jump block4;
 }
 
-func private %alloc(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %alloc_uninit v0;
-        v4.i256 = extract_value v2 0.i256;
-        call %zero_bytes v4 v0;
-        return v2;
-}
-
 func inline(always) private %alloc_bytes(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -73,18 +62,6 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         v10.*i8 = evm_malloc v0;
         v11.i256 = ptr_to_int v10 i256;
         return v11;
-}
-
-func private %alloc_uninit(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %alloc_bytes v0;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
-        v7.@layout_0 = insert_value v5 1.i256 v0;
-        v9.@layout_0 = insert_value v7 2.i256 v0;
-        return v9;
 }
 
 func private %calldataload(v0.i256) -> i256 {
@@ -202,7 +179,7 @@ func private %init() {
         v2.i256 = sym_size &__EnumContract_runtime;
         v3.i256 = sym_addr &__EnumContract_runtime;
         v4.i256 = call %downcast_unchecked v2;
-        v5.@layout_0 = call %alloc v4;
+        v5.@layout_0 = call %new v4;
         obj.store v0 v5;
         call %codecopy v0 0.i256 v3 v2;
         jump block3;
@@ -264,6 +241,29 @@ func private %manual_contract_runtime_root_EnumContract() {
     block1:
         call %runtime;
         evm_stop;
+}
+
+func private %new(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@layout_0 = call %new_uninit v0;
+        v4.i256 = extract_value v2 0.i256;
+        call %zero_bytes v4 v0;
+        return v2;
+}
+
+func private %new_uninit(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %alloc_bytes v0;
+        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
+        v7.@layout_0 = insert_value v5 1.i256 v0;
+        v9.@layout_0 = insert_value v7 2.i256 v0;
+        return v9;
 }
 
 func private %prepare_copy_destination(noalias v0.objref<@layout_0>, v1.i256, v2.i256) -> i256 {

@@ -152,7 +152,7 @@ fn pop_truncate_and_access() {
 fn non_copy_elements_move_in_and_out() {
     var v = MemVec<MemBuffer>::new()
     for n in 1..6 {
-        v.push(MemBuffer::alloc(n))
+        v.push(MemBuffer::new(n))
     }
     assert!(v[4].len() == 5)
     let last = v.pop().unwrap()
@@ -243,7 +243,7 @@ uses (evm: mut Evm, call: mut Call, ctx: Ctx)
     assert!(ret.len() == 160)
 
     // Precomputed Solidity abi.encode(uint256[]): offset, length, elements.
-    let expected = MemBuffer::alloc(160)
+    let expected = MemBuffer::new(160)
     unsafe { store_word(ptr: expected.ptr(), value: 0x20) }
     unsafe { store_word(ptr: ptr::offset_bytes(expected.ptr(), 32), value: 3) }
     unsafe { store_word(ptr: ptr::offset_bytes(expected.ptr(), 64), value: 100) }
@@ -274,7 +274,7 @@ uses (evm: mut Evm)
 
     let hash: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: VecMsg::PayloadHash { a: 0xaaaa, b: 0xbbbb })
 
-    let expected = MemBuffer::alloc(128)
+    let expected = MemBuffer::new(128)
     unsafe { store_word(ptr: expected.ptr(), value: 0x20) }
     unsafe { store_word(ptr: ptr::offset_bytes(expected.ptr(), 32), value: 2) }
     unsafe { store_word(ptr: ptr::offset_bytes(expected.ptr(), 64), value: 0xaaaa) }

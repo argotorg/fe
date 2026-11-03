@@ -94,7 +94,7 @@ fn list() {
 fn buffers() {
     var buffer = MemBuffer::with_capacity(4)
     for i in 0..1000 {
-        buffer.extend_from(MemBuffer::alloc(i % 7).span())
+        buffer.extend_from(MemBuffer::new(i % 7).span())
     }
     var words: MemVec<u64> = MemVec::new()
     words.resize(100)

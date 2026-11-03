@@ -408,13 +408,13 @@ fn contract_init_code<C: Contract>(_ args: own C::InitArgs) -> MemBuffer {
     let init_len = C::init_code_len()
     let init_off = C::init_code_offset()
     if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
-        let init_code = unsafe { MemBuffer::alloc_uninit(init_len.downcast_unchecked()) }
+        let init_code = unsafe { MemBuffer::new_uninit(init_len.downcast_unchecked()) }
         unsafe { ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len) }
         init_code
     } else {
         let encoded = encode_abi_payload<C::InitArgs>(args)
         let code_len: usize = init_len.downcast_unchecked()
-        let init_code = unsafe { MemBuffer::alloc_uninit(code_len + encoded.len()) }
+        let init_code = unsafe { MemBuffer::new_uninit(code_len + encoded.len()) }
         unsafe {
             ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
             ptr::copy(
@@ -1148,7 +1148,7 @@ where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
     let payload_size = abi_payload_size(message)
-    let buffer = unsafe { MemBuffer::alloc_uninit(selector_size + payload_size.downcast_unchecked()) }
+    let buffer = unsafe { MemBuffer::new_uninit(selector_size + payload_size.downcast_unchecked()) }
     let payload = ptr::offset_bytes(buffer.ptr(), selector_size)
     unsafe {
         // The selector word's low bytes are overwritten by the payload, or
@@ -1172,7 +1172,7 @@ where M: MsgVariant<Sol> + Encode<Sol>
 /// Copy the complete current returndata into a fresh owner.
 pub fn copy_returndata() -> MemBuffer {
     let ret_len = ops::returndatasize()
-    let buffer = unsafe { MemBuffer::alloc_uninit(ret_len.downcast_unchecked()) }
+    let buffer = unsafe { MemBuffer::new_uninit(ret_len.downcast_unchecked()) }
     unsafe { ops::returndatacopy(dest: buffer.ptr(), offset: 0, len: ret_len) }
     buffer
 }
@@ -1304,7 +1304,7 @@ impl ContractHost for Evm {
             self.abort()
         }
         let args_len = code_size - args_offset
-        var args = MemBuffer::alloc(args_len.downcast_unchecked())
+        var args = MemBuffer::new(args_len.downcast_unchecked())
         self.codecopy(
             dest: mut args,
             dest_offset: 0,
@@ -1317,7 +1317,7 @@ impl ContractHost for Evm {
     fn create_contract<F>(mut self, _ runtime: F) -> ! {
         let len = self.code_region_len(runtime)
         let offset = self.code_region_offset(runtime)
-        var buffer = MemBuffer::alloc(len.downcast_unchecked())
+        var buffer = MemBuffer::new(len.downcast_unchecked())
         self.codecopy(
             dest: mut buffer,
             dest_offset: 0,
@@ -1357,7 +1357,7 @@ impl ContractHost for Evm {
                     )
                 }
             } else {
-                let out = MemBuffer::alloc(T::HEAD_SIZE.downcast_unchecked())
+                let out = MemBuffer::new(T::HEAD_SIZE.downcast_unchecked())
                 value.encode(unsafe { AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE) })
                 self.return_data(data: out.span())
             }

@@ -20,7 +20,7 @@ fn expected_word(_ span: MemSpan, _ offset: usize) -> u256 {
 
 // 97 nonzero bytes, so a read past the end of a prefix finds nonzero bytes.
 fn filled() -> MemBuffer {
-    var buffer = MemBuffer::alloc(97)
+    var buffer = MemBuffer::new(97)
     for i in 0..97 {
         buffer[i] = (0xff - i).downcast_truncate()
     }

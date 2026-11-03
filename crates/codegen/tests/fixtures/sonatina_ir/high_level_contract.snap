@@ -6,12 +6,12 @@ input_file: crates/codegen/tests/fixtures/high_level_contract.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
-type @layout_1 = {i256, i256, i256};
+type @layout_1 = {i256, i256};
 type @layout_2 = {i256, i256};
-type @layout_3 = {i256, i256};
-type @layout_4 = {i256};
-type @layout_5 = {};
-type @layout_6 = {@layout_5};
+type @layout_3 = {i256};
+type @layout_4 = {};
+type @layout_5 = {@layout_4};
+type @layout_6 = {i256, i256, i256};
 
 func private %__EchoContract_init(v0.i256, v1.i256, v2.i256) {
     block0:
@@ -127,17 +127,6 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         return v11;
 }
 
-func private %impl_MemBuffer__alloc(v0.i256) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_1 = call %impl_MemBuffer__alloc_uninit v0;
-        v4.i256 = extract_value v2 0.i256;
-        call %zero_bytes v4 v0;
-        return v2;
-}
-
 func inline(always) private %alloc__g03ed() -> @layout_0 {
     block0:
         jump block1;
@@ -169,18 +158,6 @@ func inline(always) private %alloc_uninit__g1d2b() -> @layout_0 {
         return v4;
 }
 
-func private %impl_MemBuffer__alloc_uninit(v0.i256) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %alloc_bytes v0;
-        v5.@layout_1 = insert_value undef.@layout_1 0.i256 v2;
-        v7.@layout_1 = insert_value v5 1.i256 v0;
-        v9.@layout_1 = insert_value v7 2.i256 v0;
-        return v9;
-}
-
 func inline(always) private %allocation_len(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -202,7 +179,7 @@ func inline(always) private %allocation_len(v0.i256) -> i256 {
         return v10;
 }
 
-func private %base(noalias v0.objref<@layout_2>) -> i256 {
+func private %base(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -268,8 +245,8 @@ func inline(always) private %checked_tail(v0.i256, v1.i256) -> i256 {
 
 func inline(always) private %contract_init_abi_EchoContract() {
     block0:
-        v0.objref<@layout_3> = obj.alloc @layout_3;
-        v1.objref<@layout_2> = obj.alloc @layout_2;
+        v0.objref<@layout_2> = obj.alloc @layout_2;
+        v1.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
@@ -307,9 +284,9 @@ func inline(always) private %contract_init_abi_EchoContract() {
         obj.store v21 v18;
         v23.objref<i256> = obj.proj v0 1.i256;
         obj.store v23 v11;
-        v24.@layout_2 = call %decoder_new;
+        v24.@layout_1 = call %decoder_new;
         obj.store v1 v24;
-        v25.@layout_2 = call %decode_payload__g6c12 v1 v0;
+        v25.@layout_1 = call %decode_payload__g6c12 v1 v0;
         v26.i256 = extract_value v25 0.i256;
         v27.i256 = extract_value v25 1.i256;
         call %__EchoContract_init v26 v27 0.i256;
@@ -342,7 +319,7 @@ func private %contract_recv_abi_EchoContract_1() {
         evm_revert 0.i256 0.i256;
 
     block3:
-        v4.objref<@layout_6> = obj.alloc @layout_6;
+        v4.objref<@layout_5> = obj.alloc @layout_5;
         call %decode_runtime_args__g235a v4;
         v6.i256 = call %__EchoContract_recv_0_0;
         call %return_value v6;
@@ -363,8 +340,8 @@ func private %contract_recv_abi_EchoContract_2() {
         evm_revert 0.i256 0.i256;
 
     block3:
-        v4.objref<@layout_6> = obj.alloc @layout_6;
-        v5.@layout_4 = call %decode_runtime_args__g9e33 v4;
+        v4.objref<@layout_5> = obj.alloc @layout_5;
+        v5.@layout_3 = call %decode_runtime_args__g9e33 v4;
         v6.i256 = extract_value v5 0.i256;
         v7.i256 = call %__EchoContract_recv_0_1 v6;
         call %return_value v7;
@@ -385,7 +362,7 @@ func private %contract_recv_abi_EchoContract_3() {
         evm_revert 0.i256 0.i256;
 
     block3:
-        v4.objref<@layout_6> = obj.alloc @layout_6;
+        v4.objref<@layout_5> = obj.alloc @layout_5;
         call %decode_runtime_args__gf173 v4;
         v6.i256 = call %__EchoContract_recv_0_2 0.i256;
         call %return_value v6;
@@ -431,7 +408,7 @@ func private %decode_error() {
         evm_revert 0.i256 0.i256;
 }
 
-func inline(always) private %decode_field(noalias v0.objref<@layout_2>, noalias v1.objref<@layout_3>) -> i256 {
+func inline(always) private %decode_field(noalias v0.objref<@layout_1>, noalias v1.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -459,7 +436,7 @@ func inline(always) private %decode_field(noalias v0.objref<@layout_2>, noalias 
         return v17;
 }
 
-func inline(always) private %decode_field_from(v0.@layout_4, v1.i256, v2.i256) -> i256 {
+func inline(always) private %decode_field_from(v0.@layout_3, v1.i256, v2.i256) -> i256 {
     block0:
         jump block1;
 
@@ -480,7 +457,7 @@ func inline(always) private %decode_field_from(v0.@layout_4, v1.i256, v2.i256) -
         return v12;
 }
 
-func inline(always) private %decode_field_from_prechecked_head(v0.@layout_4, v1.i256, v2.i256, v3.i256) -> i256 {
+func inline(always) private %decode_field_from_prechecked_head(v0.@layout_3, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
 
@@ -501,18 +478,18 @@ func inline(always) private %decode_field_from_prechecked_head(v0.@layout_4, v1.
         return v14;
 }
 
-func inline(always) private %impl_trait_Echo__decode_from__g8f43(v0.@layout_4, v1.i256) -> @layout_4 {
+func inline(always) private %impl_trait_Echo__decode_from__g8f43(v0.@layout_3, v1.i256) -> @layout_3 {
     block0:
         jump block1;
 
     block1:
         v3.i256 = call %len__g8f43 v0;
         v5.i256 = call %decode_msg_field_from v0 v1 v1 v3;
-        v8.@layout_4 = insert_value undef.@layout_4 0.i256 v5;
+        v8.@layout_3 = insert_value undef.@layout_3 0.i256 v5;
         return v8;
 }
 
-func inline(always) private %impl_trait_Answer__decode_from__g8f43(v0.@layout_4, v1.i256) {
+func inline(always) private %impl_trait_Answer__decode_from__g8f43(v0.@layout_3, v1.i256) {
     block0:
         jump block1;
 
@@ -520,7 +497,7 @@ func inline(always) private %impl_trait_Answer__decode_from__g8f43(v0.@layout_4,
         return;
 }
 
-func inline(always) private %decode_from__gc8cd(v0.@layout_4, v1.i256) -> i256 {
+func inline(always) private %decode_from__gc8cd(v0.@layout_3, v1.i256) -> i256 {
     block0:
         jump block1;
 
@@ -529,7 +506,7 @@ func inline(always) private %decode_from__gc8cd(v0.@layout_4, v1.i256) -> i256 {
         return v4;
 }
 
-func private %decode_from_bounded(v0.@layout_4, v1.i256, v2.i256) -> i256 {
+func private %decode_from_bounded(v0.@layout_3, v1.i256, v2.i256) -> i256 {
     block0:
         jump block1;
 
@@ -539,7 +516,7 @@ func private %decode_from_bounded(v0.@layout_4, v1.i256, v2.i256) -> i256 {
         return v8;
 }
 
-func inline(always) private %impl_trait_GetX__decode_from__g8f43(v0.@layout_4, v1.i256) {
+func inline(always) private %impl_trait_GetX__decode_from__g8f43(v0.@layout_3, v1.i256) {
     block0:
         jump block1;
 
@@ -547,16 +524,16 @@ func inline(always) private %impl_trait_GetX__decode_from__g8f43(v0.@layout_4, v
         return;
 }
 
-func inline(always) private %decode_from_prechecked_head__gc4b9(v0.@layout_4, v1.i256, v2.i256) -> @layout_4 {
+func inline(always) private %decode_from_prechecked_head__gc4b9(v0.@layout_3, v1.i256, v2.i256) -> @layout_3 {
     block0:
         jump block1;
 
     block1:
-        v5.@layout_4 = call %impl_trait_Echo__decode_from__g8f43 v0 v1;
+        v5.@layout_3 = call %impl_trait_Echo__decode_from__g8f43 v0 v1;
         return v5;
 }
 
-func inline(always) private %decode_from_prechecked_head__gf38d(v0.@layout_4, v1.i256, v2.i256) {
+func inline(always) private %decode_from_prechecked_head__gf38d(v0.@layout_3, v1.i256, v2.i256) {
     block0:
         jump block1;
 
@@ -565,7 +542,7 @@ func inline(always) private %decode_from_prechecked_head__gf38d(v0.@layout_4, v1
         return;
 }
 
-func inline(always) private %decode_from_prechecked_head__g5ec4(v0.@layout_4, v1.i256, v2.i256) {
+func inline(always) private %decode_from_prechecked_head__g5ec4(v0.@layout_3, v1.i256, v2.i256) {
     block0:
         jump block1;
 
@@ -574,7 +551,7 @@ func inline(always) private %decode_from_prechecked_head__g5ec4(v0.@layout_4, v1
         return;
 }
 
-func inline(always) private %decode_msg_field_from(v0.@layout_4, v1.i256, v2.i256, v3.i256) -> i256 {
+func inline(always) private %decode_msg_field_from(v0.@layout_3, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
 
@@ -593,19 +570,19 @@ func inline(always) private %decode_msg_field_from(v0.@layout_4, v1.i256, v2.i25
         return v13;
 }
 
-func private %decode_payload__g6c12(noalias v0.objref<@layout_2>, noalias v1.objref<@layout_3>) -> @layout_2 {
+func private %decode_payload__g6c12(noalias v0.objref<@layout_1>, noalias v1.objref<@layout_2>) -> @layout_1 {
     block0:
         jump block1;
 
     block1:
         v4.i256 = call %decode_field v0 v1;
         v5.i256 = call %decode_field v0 v1;
-        v8.@layout_2 = insert_value undef.@layout_2 0.i256 v4;
-        v10.@layout_2 = insert_value v8 1.i256 v5;
+        v8.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
+        v10.@layout_1 = insert_value v8 1.i256 v5;
         return v10;
 }
 
-func inline(always) private %decode_payload__gdc8c(noalias v0.objref<@layout_2>, noalias v1.objref<@layout_3>) -> i256 {
+func inline(always) private %decode_payload__gdc8c(noalias v0.objref<@layout_1>, noalias v1.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -614,48 +591,48 @@ func inline(always) private %decode_payload__gdc8c(noalias v0.objref<@layout_2>,
         return v4;
 }
 
-func inline(always) private %decode_runtime_args__gf173(noalias v0.objref<@layout_6>) {
+func inline(always) private %decode_runtime_args__gf173(noalias v0.objref<@layout_5>) {
     block0:
         jump block1;
 
     block1:
-        v1.@layout_4 = call %input;
+        v1.@layout_3 = call %input;
         v3.i256 = call %len__g8f43 v1;
         call %validate_runtime_head v3 4.i256 0.i256;
         call %decode_from_prechecked_head__g5ec4 v1 4.i256 v3;
         return;
 }
 
-func inline(always) private %decode_runtime_args__g235a(noalias v0.objref<@layout_6>) {
+func inline(always) private %decode_runtime_args__g235a(noalias v0.objref<@layout_5>) {
     block0:
         jump block1;
 
     block1:
-        v1.@layout_4 = call %input;
+        v1.@layout_3 = call %input;
         v3.i256 = call %len__g8f43 v1;
         call %validate_runtime_head v3 4.i256 0.i256;
         call %decode_from_prechecked_head__gf38d v1 4.i256 v3;
         return;
 }
 
-func inline(always) private %decode_runtime_args__g9e33(noalias v0.objref<@layout_6>) -> @layout_4 {
+func inline(always) private %decode_runtime_args__g9e33(noalias v0.objref<@layout_5>) -> @layout_3 {
     block0:
         jump block1;
 
     block1:
-        v1.@layout_4 = call %input;
+        v1.@layout_3 = call %input;
         v3.i256 = call %len__g8f43 v1;
         call %validate_runtime_head v3 4.i256 32.i256;
-        v6.@layout_4 = call %decode_from_prechecked_head__gc4b9 v1 4.i256 v3;
+        v6.@layout_3 = call %decode_from_prechecked_head__gc4b9 v1 4.i256 v3;
         return v6;
 }
 
-func private %decoder_new() -> @layout_2 {
+func private %decoder_new() -> @layout_1 {
     block0:
         jump block1;
 
     block1:
-        v1.@layout_2 = call %with_base 0.i256;
+        v1.@layout_1 = call %with_base 0.i256;
         return v1;
 }
 
@@ -705,7 +682,7 @@ func private %downcast_truncate__g3ef4(v0.i256) -> i64 {
         return v12;
 }
 
-func inline(always) private %encode(v0.i256, v1.@layout_3) {
+func inline(always) private %encode(v0.i256, v1.@layout_2) {
     block0:
         jump block1;
 
@@ -714,21 +691,21 @@ func inline(always) private %encode(v0.i256, v1.@layout_3) {
         return;
 }
 
-func inline(always) private %encode_alloc(v0.i256) -> @layout_1 {
+func inline(always) private %encode_alloc(v0.i256) -> @layout_6 {
     block0:
         jump block1;
 
     block1:
         v2.i256 = call %abi_payload_size v0;
         v3.i256 = call %allocation_len v2;
-        v4.@layout_1 = call %impl_MemBuffer__alloc v3;
+        v4.@layout_6 = call %impl_MemBuffer__new v3;
         v5.i256 = call %impl_MemBuffer__ptr v4;
-        v6.@layout_3 = call %from_raw_parts v5 v2;
+        v6.@layout_2 = call %from_raw_parts v5 v2;
         call %encode v0 v6;
         return v4;
 }
 
-func inline(always) private %encode_field(v0.i256, v1.@layout_3, v2.i256, v3.@layout_3) -> @layout_3 {
+func inline(always) private %encode_field(v0.i256, v1.@layout_2, v2.i256, v3.@layout_2) -> @layout_2 {
     block0:
         jump block1;
 
@@ -741,21 +718,21 @@ func inline(always) private %encode_field(v0.i256, v1.@layout_3, v2.i256, v3.@la
         v10.i256 = call %impl_AbiFrame__len v3;
         v11.i256 = sub v8 v10;
         call %impl_AbiFrame__store_word v1 v2 v11;
-        v15.@layout_3 = call %slice v3 0.i256 v6;
+        v15.@layout_2 = call %slice v3 0.i256 v6;
         call %encode v0 v15;
-        v17.@layout_3 = call %tail v3 v6;
+        v17.@layout_2 = call %tail v3 v6;
         return v17;
 
     block3:
         jump block4;
 
     block4:
-        v21.@layout_3 = call %slice v1 v2 32.i256;
+        v21.@layout_2 = call %slice v1 v2 32.i256;
         call %encode v0 v21;
         return v3;
 }
 
-func inline(always) private %encode_return_alloc(v0.i256) -> @layout_1 {
+func inline(always) private %encode_return_alloc(v0.i256) -> @layout_6 {
     block0:
         jump block1;
 
@@ -763,39 +740,39 @@ func inline(always) private %encode_return_alloc(v0.i256) -> @layout_1 {
         br 0.i1 block2 block3;
 
     block2:
-        v3.@layout_1 = call %encode_alloc v0;
+        v3.@layout_6 = call %encode_alloc v0;
         return v3;
 
     block3:
         jump block4;
 
     block4:
-        v5.@layout_1 = call %encode_single_root_alloc v0;
+        v5.@layout_6 = call %encode_single_root_alloc v0;
         return v5;
 }
 
-func inline(always) private %encode_single_root_alloc(v0.i256) -> @layout_1 {
+func inline(always) private %encode_single_root_alloc(v0.i256) -> @layout_6 {
     block0:
         jump block1;
 
     block1:
         v2.i256 = call %abi_single_root_size v0;
         v3.i256 = call %allocation_len v2;
-        v4.@layout_1 = call %impl_MemBuffer__alloc v3;
+        v4.@layout_6 = call %impl_MemBuffer__new v3;
         v5.i256 = call %impl_MemBuffer__ptr v4;
-        v6.@layout_3 = call %from_raw_parts v5 v2;
-        v9.@layout_3 = call %tail v6 32.i256;
-        v10.@layout_3 = call %encode_field v0 v6 0.i256 v9;
+        v6.@layout_2 = call %from_raw_parts v5 v2;
+        v9.@layout_2 = call %tail v6 32.i256;
+        v10.@layout_2 = call %encode_field v0 v6 0.i256 v9;
         return v4;
 }
 
-func inline(always) private %from_raw_parts(v0.i256, v1.i256) -> @layout_3 {
+func inline(always) private %from_raw_parts(v0.i256, v1.i256) -> @layout_2 {
     block0:
         jump block1;
 
     block1:
-        v6.@layout_3 = insert_value undef.@layout_3 0.i256 v0;
-        v8.@layout_3 = insert_value v6 1.i256 v1;
+        v6.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
+        v8.@layout_2 = insert_value v6 1.i256 v1;
         return v8;
 }
 
@@ -826,16 +803,16 @@ func private %index_out_of_bounds() {
         evm_revert 0.i256 36.i256;
 }
 
-func private %input() -> @layout_4 {
+func private %input() -> @layout_3 {
     block0:
         jump block1;
 
     block1:
-        v0.@layout_4 = call %new;
+        v0.@layout_3 = call %impl_CallData__new;
         return v0;
 }
 
-func inline(always) private %impl_AbiFrame__len(v0.@layout_3) -> i256 {
+func inline(always) private %impl_AbiFrame__len(v0.@layout_2) -> i256 {
     block0:
         jump block1;
 
@@ -844,7 +821,7 @@ func inline(always) private %impl_AbiFrame__len(v0.@layout_3) -> i256 {
         return v3;
 }
 
-func inline(always) private %len__g140d(noalias v0.objref<@layout_3>) -> i256 {
+func inline(always) private %len__g140d(noalias v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -854,7 +831,7 @@ func inline(always) private %len__g140d(noalias v0.objref<@layout_3>) -> i256 {
         return v3;
 }
 
-func private %len__g79ff(noalias v0.objref<@layout_3>) -> i256 {
+func private %len__g79ff(noalias v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -864,7 +841,7 @@ func private %len__g79ff(noalias v0.objref<@layout_3>) -> i256 {
         return v4;
 }
 
-func inline(always) private %len__g8f43(v0.@layout_4) -> i256 {
+func inline(always) private %len__g8f43(v0.@layout_3) -> i256 {
     block0:
         jump block1;
 
@@ -874,13 +851,36 @@ func inline(always) private %len__g8f43(v0.@layout_4) -> i256 {
         return v3;
 }
 
-func inline(always) private %new() -> @layout_4 {
+func inline(always) private %impl_CallData__new() -> @layout_3 {
     block0:
         jump block1;
 
     block1:
-        v2.@layout_4 = insert_value undef.@layout_4 0.i256 0.i256;
+        v2.@layout_3 = insert_value undef.@layout_3 0.i256 0.i256;
         return v2;
+}
+
+func private %impl_MemBuffer__new(v0.i256) -> @layout_6 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@layout_6 = call %new_uninit v0;
+        v4.i256 = extract_value v2 0.i256;
+        call %zero_bytes v4 v0;
+        return v2;
+}
+
+func private %new_uninit(v0.i256) -> @layout_6 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %alloc_bytes v0;
+        v5.@layout_6 = insert_value undef.@layout_6 0.i256 v2;
+        v7.@layout_6 = insert_value v5 1.i256 v0;
+        v9.@layout_6 = insert_value v7 2.i256 v0;
+        return v9;
 }
 
 func private %payload_size(v0.i256) -> i256 {
@@ -891,7 +891,7 @@ func private %payload_size(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %pos(noalias v0.objref<@layout_2>) -> i256 {
+func private %pos(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -901,7 +901,7 @@ func private %pos(noalias v0.objref<@layout_2>) -> i256 {
         return v4;
 }
 
-func private %impl_MemBuffer__ptr(v0.@layout_1) -> i256 {
+func private %impl_MemBuffer__ptr(v0.@layout_6) -> i256 {
     block0:
         jump block1;
 
@@ -910,7 +910,7 @@ func private %impl_MemBuffer__ptr(v0.@layout_1) -> i256 {
         return v3;
 }
 
-func private %ptr__g79ff(noalias v0.objref<@layout_3>) -> i256 {
+func private %ptr__g79ff(noalias v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -948,7 +948,7 @@ func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v5;
 }
 
-func inline(always) private %read_word(noalias v0.objref<@layout_2>, noalias v1.objref<@layout_3>) -> i256 {
+func inline(always) private %read_word(noalias v0.objref<@layout_1>, noalias v1.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -989,7 +989,7 @@ func inline(always) private %read_word(noalias v0.objref<@layout_2>, noalias v1.
         br v16 block2 block5;
 }
 
-func private %return_bytes(noalias v0.objref<@layout_3>) {
+func private %return_bytes(noalias v0.objref<@layout_2>) {
     block0:
         jump block1;
 
@@ -998,7 +998,7 @@ func private %return_bytes(noalias v0.objref<@layout_3>) {
         unreachable;
 }
 
-func private %return_data(noalias v0.objref<@layout_3>) {
+func private %return_data(noalias v0.objref<@layout_2>) {
     block0:
         jump block1;
 
@@ -1010,10 +1010,10 @@ func private %return_data(noalias v0.objref<@layout_3>) {
 
 func private %return_value(v0.i256) {
     block0:
-        v1.objref<@layout_3> = obj.alloc @layout_3;
-        v2.objref<@layout_3> = obj.alloc @layout_3;
-        v3.objref<@layout_3> = obj.alloc @layout_3;
-        v4.objref<@layout_3> = obj.alloc @layout_3;
+        v1.objref<@layout_2> = obj.alloc @layout_2;
+        v2.objref<@layout_2> = obj.alloc @layout_2;
+        v3.objref<@layout_2> = obj.alloc @layout_2;
+        v4.objref<@layout_2> = obj.alloc @layout_2;
         jump block1;
 
     block1:
@@ -1023,13 +1023,13 @@ func private %return_value(v0.i256) {
         br 1.i1 block4 block5;
 
     block3:
-        v9.@layout_1 = call %encode_return_alloc v0;
+        v9.@layout_6 = call %encode_return_alloc v0;
         jump block9;
 
     block4:
         v10.@layout_0 = call %alloc__g1d2b;
         v11.i256 = call %ptr__g1d2b v10;
-        v12.@layout_3 = call %from_raw_parts v11 32.i256;
+        v12.@layout_2 = call %from_raw_parts v11 32.i256;
         call %encode v0 v12;
         v15.i256 = call %ptr__g1d2b v10;
         jump block13;
@@ -1040,15 +1040,15 @@ func private %return_value(v0.i256) {
     block6:
         v17.@layout_0 = call %alloc__g03ed;
         v18.i256 = call %ptr__g03ed v17;
-        v19.@layout_3 = call %from_raw_parts v18 32.i256;
+        v19.@layout_2 = call %from_raw_parts v18 32.i256;
         call %encode v0 v19;
         v22.i256 = call %ptr__g03ed v17;
         jump block15;
 
     block7:
-        v23.@layout_1 = call %impl_MemBuffer__alloc 32.i256;
+        v23.@layout_6 = call %impl_MemBuffer__new 32.i256;
         v24.i256 = call %impl_MemBuffer__ptr v23;
-        v25.@layout_3 = call %from_raw_parts v24 32.i256;
+        v25.@layout_2 = call %from_raw_parts v24 32.i256;
         call %encode v0 v25;
         jump block17;
 
@@ -1065,8 +1065,8 @@ func private %return_value(v0.i256) {
         jump block8;
 
     block11:
-        v37.@layout_3 = insert_value undef.@layout_3 0.i256 v31;
-        v39.@layout_3 = insert_value v37 1.i256 v33;
+        v37.@layout_2 = insert_value undef.@layout_2 0.i256 v31;
+        v39.@layout_2 = insert_value v37 1.i256 v33;
         obj.store v1 v39;
         jump block10;
 
@@ -1075,8 +1075,8 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block13:
-        v43.@layout_3 = insert_value undef.@layout_3 0.i256 v15;
-        v45.@layout_3 = insert_value v43 1.i256 32.i256;
+        v43.@layout_2 = insert_value undef.@layout_2 0.i256 v15;
+        v45.@layout_2 = insert_value v43 1.i256 32.i256;
         obj.store v2 v45;
         jump block12;
 
@@ -1085,8 +1085,8 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block15:
-        v49.@layout_3 = insert_value undef.@layout_3 0.i256 v22;
-        v51.@layout_3 = insert_value v49 1.i256 32.i256;
+        v49.@layout_2 = insert_value undef.@layout_2 0.i256 v22;
+        v51.@layout_2 = insert_value v49 1.i256 32.i256;
         obj.store v3 v51;
         jump block14;
 
@@ -1103,13 +1103,13 @@ func private %return_value(v0.i256) {
         jump block16;
 
     block19:
-        v59.@layout_3 = insert_value undef.@layout_3 0.i256 v54;
-        v61.@layout_3 = insert_value v59 1.i256 v55;
+        v59.@layout_2 = insert_value undef.@layout_2 0.i256 v54;
+        v61.@layout_2 = insert_value v59 1.i256 v55;
         obj.store v4 v61;
         jump block18;
 }
 
-func private %set_base(noalias v0.objref<@layout_2>, v1.i256) {
+func private %set_base(noalias v0.objref<@layout_1>, v1.i256) {
     block0:
         jump block1;
 
@@ -1119,7 +1119,7 @@ func private %set_base(noalias v0.objref<@layout_2>, v1.i256) {
         return;
 }
 
-func private %set_pos(noalias v0.objref<@layout_2>, v1.i256) {
+func private %set_pos(noalias v0.objref<@layout_1>, v1.i256) {
     block0:
         jump block1;
 
@@ -1153,7 +1153,7 @@ func private %sign_extend(v0.i256, v1.i256, v2.i256) -> i256 {
         return v17;
 }
 
-func private %impl_trait_MemSlice__size(noalias v0.objref<@layout_3>) -> i64 {
+func private %impl_trait_MemSlice__size(noalias v0.objref<@layout_2>) -> i64 {
     block0:
         jump block1;
 
@@ -1163,7 +1163,7 @@ func private %impl_trait_MemSlice__size(noalias v0.objref<@layout_3>) -> i64 {
         return v3;
 }
 
-func inline(always) private %impl_trait_CallData__size(v0.@layout_4) -> i64 {
+func inline(always) private %impl_trait_CallData__size(v0.@layout_3) -> i64 {
     block0:
         jump block1;
 
@@ -1195,7 +1195,7 @@ func inline(always) private %impl_trait_CallData__size(v0.@layout_4) -> i64 {
         jump block4;
 }
 
-func inline(always) private %slice(v0.@layout_3, v1.i256, v2.i256) -> @layout_3 {
+func inline(always) private %slice(v0.@layout_2, v1.i256, v2.i256) -> @layout_2 {
     block0:
         jump block1;
 
@@ -1214,8 +1214,8 @@ func inline(always) private %slice(v0.@layout_3, v1.i256, v2.i256) -> @layout_3 
     block4:
         v10.i256 = extract_value v0 0.i256;
         v12.i256 = call %ptr_offset v10 v1;
-        v15.@layout_3 = insert_value undef.@layout_3 0.i256 v12;
-        v16.@layout_3 = insert_value v15 1.i256 v2;
+        v15.@layout_2 = insert_value undef.@layout_2 0.i256 v12;
+        v16.@layout_2 = insert_value v15 1.i256 v2;
         return v16;
 
     block5:
@@ -1235,18 +1235,18 @@ func private %lib__abi__store_word(v0.i256, v1.i256) {
         return;
 }
 
-func inline(always) private %impl_AbiFrame__store_word(v0.@layout_3, v1.i256, v2.i256) {
+func inline(always) private %impl_AbiFrame__store_word(v0.@layout_2, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        v6.@layout_3 = call %slice v0 v1 32.i256;
+        v6.@layout_2 = call %slice v0 v1 32.i256;
         v8.i256 = extract_value v6 0.i256;
         call %lib__abi__store_word v8 v2;
         return;
 }
 
-func inline(always) private %tail(v0.@layout_3, v1.i256) -> @layout_3 {
+func inline(always) private %tail(v0.@layout_2, v1.i256) -> @layout_2 {
     block0:
         jump block1;
 
@@ -1267,8 +1267,8 @@ func inline(always) private %tail(v0.@layout_3, v1.i256) -> @layout_3 {
         v11.i256 = call %ptr_offset v9 v1;
         v12.i256 = extract_value v0 1.i256;
         v13.i256 = sub v12 v1;
-        v15.@layout_3 = insert_value undef.@layout_3 0.i256 v11;
-        v16.@layout_3 = insert_value v15 1.i256 v13;
+        v15.@layout_2 = insert_value undef.@layout_2 0.i256 v11;
+        v16.@layout_2 = insert_value v15 1.i256 v13;
         return v16;
 }
 
@@ -1320,17 +1320,17 @@ func inline(always) private %validate_runtime_head(v0.i256, v1.i256, v2.i256) {
         jump block4;
 }
 
-func inline(always) private %with_base(v0.i256) -> @layout_2 {
+func inline(always) private %with_base(v0.i256) -> @layout_1 {
     block0:
         jump block1;
 
     block1:
-        v4.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v6.@layout_2 = insert_value v4 1.i256 v0;
+        v4.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
+        v6.@layout_1 = insert_value v4 1.i256 v0;
         return v6;
 }
 
-func inline(always) private %impl_trait_CallData__word_at(v0.@layout_4, v1.i256) -> i256 {
+func inline(always) private %impl_trait_CallData__word_at(v0.@layout_3, v1.i256) -> i256 {
     block0:
         jump block1;
 
@@ -1341,7 +1341,7 @@ func inline(always) private %impl_trait_CallData__word_at(v0.@layout_4, v1.i256)
         return v7;
 }
 
-func inline(always) private %impl_trait_MemSlice__word_at(noalias v0.objref<@layout_3>, v1.i256) -> i256 {
+func inline(always) private %impl_trait_MemSlice__word_at(noalias v0.objref<@layout_2>, v1.i256) -> i256 {
     block0:
         jump block1;
 

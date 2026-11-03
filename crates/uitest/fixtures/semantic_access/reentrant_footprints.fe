@@ -107,7 +107,7 @@ pub contract V uses (call: mut Call, evm: mut Evm) {
         // Accepted: a precompile cannot call back.
         Precompile uses (mut value) {
             let held = mut value
-            let _ = sha256(MemBuffer::alloc(32).span())
+            let _ = sha256(MemBuffer::new(32).span())
             held = 1
         }
         // Rejected: a view of `Evm` may read storage.

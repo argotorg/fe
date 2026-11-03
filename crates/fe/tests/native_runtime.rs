@@ -789,6 +789,7 @@ math = true
 #[test]
 fn aggregate_fixtures_run_at_every_level() {
     for (name, expected_count) in [
+        ("aggregate_equality.fe", 14),
         ("aggregate_object_copies.fe", 3),
         ("const_aggregate_values.fe", 5),
     ] {
@@ -2403,7 +2404,19 @@ pub fn main() -> i32 {
             core::assert(buffer[i] == 0)
         }
         consume(buffer)
+        var filled = MemBuffer::new(64)
+        for i in 0..64 {
+            filled[i] = 0xff
+        }
+        consume(filled)
+        let zeroed = MemBuffer::try_new(64).unwrap()
+        core::assert(zeroed.len() == 64 && zeroed.capacity() == 64)
+        for i in 0..64 {
+            core::assert(zeroed[i] == 0)
+        }
+        consume(zeroed)
     }
+    core::assert(MemBuffer::try_new(usize::max()).is_none())
     0
 }
 "#,
@@ -2588,12 +2601,12 @@ fn write_alternating(_ first: mut MemBuffer, _ second: mut MemBuffer, depth: usi
     }
 }
 pub fn main() -> i32 {
-    var buffer = MemBuffer::alloc(32)
+    var buffer = MemBuffer::new(32)
     write_at_depth(mut buffer, depth: 0, value: 19)
     core::assert(buffer[31] == 19)
     write_at_depth(mut buffer, depth: 32, value: 42)
     core::assert(buffer[31] == 42)
-    var other = MemBuffer::alloc(32)
+    var other = MemBuffer::new(32)
     other[31] = 7
     write_alternating(mut buffer, mut other, depth: 32, value: 19)
     core::assert(buffer[31] == 19 && other[31] == 7)

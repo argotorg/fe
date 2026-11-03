@@ -15,3 +15,7 @@ fn different_lengths(_ a: [u256; 2], _ b: [u256; 3]) -> bool {
 fn different_tuple_elements(_ a: (u256, bool), _ b: (u256, u256)) -> bool {
     a == b
 }
+
+fn missing_option_bound(_ a: Option<NoEq>, _ b: Option<NoEq>) -> bool {
+    a == b
+}

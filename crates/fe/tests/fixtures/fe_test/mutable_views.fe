@@ -11,7 +11,7 @@ fn fill<T: Copy>(_ s: mut MemSlice<T>, _ v: T) {
 
 #[test]
 fn mutable_views_write_their_owners() {
-    var buf = MemBuffer::alloc(8)
+    var buf = MemBuffer::new(8)
     let s = mut buf.span()
     s[0] = 10
     assert!(buf[0] == 10)
@@ -32,7 +32,7 @@ fn mutable_views_write_their_owners() {
 
 #[test]
 fn splits_read_and_check_their_bounds() {
-    var buf = MemBuffer::alloc(4)
+    var buf = MemBuffer::new(4)
     buf[1] = 5
     buf[2] = 6
     let (head, tail) = buf.span().split_at(2)

@@ -74,7 +74,7 @@ pub contract WrongMagic {
 pub contract ShortMagic {
     recv Erc1271Msg {
         IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
-            var data = MemBuffer::alloc(32)
+            var data = MemBuffer::new(32)
             unsafe { store_word(ptr: data.ptr(), value: MAGIC_WORD) }
             unsafe { data.set_len(4) }
             raw.return_data(data: data.span())
@@ -86,7 +86,7 @@ pub contract ShortMagic {
 pub contract RevertMagic {
     recv Erc1271Msg {
         IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
-            let data = MemBuffer::alloc(32)
+            let data = MemBuffer::new(32)
             unsafe { store_word(ptr: data.ptr(), value: MAGIC_WORD) }
             raw.revert(data: data.span())
         }
@@ -97,7 +97,7 @@ pub contract RevertMagic {
 pub contract LongMagic {
     recv Erc1271Msg {
         IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
-            let data = MemBuffer::alloc(64)
+            let data = MemBuffer::new(64)
             unsafe { store_word(ptr: data.ptr(), value: MAGIC_WORD) }
             unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 0xdead) }
             raw.return_data(data: data.span())
@@ -109,7 +109,7 @@ pub contract LongMagic {
 // These spans view frame-local buffers, so their sessions reserve no
 // storage: the helpers write memory without an `Evm` effect.
 fn sig65(r: u256, s: u256, v: u256) -> ref MemSpan {
-    let data = MemBuffer::alloc(65)
+    let data = MemBuffer::new(65)
     unsafe {
         store_word(ptr: data.ptr(), value: r)
         store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: s)
@@ -119,7 +119,7 @@ fn sig65(r: u256, s: u256, v: u256) -> ref MemSpan {
 }
 
 fn sig64(r: u256, vs: u256) -> ref MemSpan {
-    let data = MemBuffer::alloc(64)
+    let data = MemBuffer::new(64)
     unsafe {
         store_word(ptr: data.ptr(), value: r)
         store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: vs)
@@ -128,7 +128,7 @@ fn sig64(r: u256, vs: u256) -> ref MemSpan {
 }
 
 fn blob(len: u256) -> ref MemSpan {
-    let data = MemBuffer::alloc(96)
+    let data = MemBuffer::new(96)
     unsafe {
         store_word(ptr: data.ptr(), value: R_1)
         store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: S_1)

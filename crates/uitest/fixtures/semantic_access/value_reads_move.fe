@@ -122,7 +122,7 @@ fn block_view_arg(_ b: mut Buf) -> u256 {
 // Rejected: a producer moves into its first loop.
 fn producer_reused() -> u256 {
     let xs: [u256; 3] = [1, 2, 3]
-    let m = xs.map(Bump { buf: MemBuffer::alloc(1) })
+    let m = xs.map(Bump { buf: MemBuffer::new(1) })
     var s: u256 = 0
     for y in xs.by(m) {
         s += y
@@ -137,7 +137,7 @@ fn producer_reused() -> u256 {
 // producer does.
 fn driver_reused() -> u256 {
     let xs: [u256; 3] = [1, 2, 3]
-    let d = xs.filter(Above { buf: MemBuffer::alloc(1) })
+    let d = xs.filter(Above { buf: MemBuffer::new(1) })
     var s: u256 = 0
     for x in xs.by(d) {
         s += x
@@ -168,7 +168,7 @@ fn owned_scrutinee(_ o: own MemBuffer) -> MemBuffer {
 fn fresh_view_arg(_ b: mut Buf) -> u256 {
     read_first(
         {
-            Buf { b: MemBuffer::alloc(1), m: 0 }
+            Buf { b: MemBuffer::new(1), m: 0 }
         },
         mut b,
     )

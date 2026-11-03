@@ -10,7 +10,7 @@ msg OffsetMsg {
 pub contract OffsetProbe {
     recv OffsetMsg {
         Read { mode, offset } -> u256 {
-            let data = MemBuffer::alloc(160)
+            let data = MemBuffer::new(160)
             unsafe { store_word(ptr: data.ptr(), value: offset) }
             unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: offset) }
             unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 64), value: 0) }
@@ -31,11 +31,11 @@ pub contract OffsetProbe {
 }
 fn check_offset(_ mode: u256, _ offset: u256, _ valid: bool) uses (evm: mut Evm) {
     let target = evm.create2<OffsetProbe>(value: Wei::zero(), args: (), salt: mode)
-    let data = MemBuffer::alloc(68)
+    let data = MemBuffer::new(68)
     unsafe { store_word(ptr: data.ptr(), value: (0x11223344 as u256) << 224) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: mode) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: offset) }
-    var ret = MemBuffer::alloc(64)
+    var ret = MemBuffer::new(64)
     let result = evm.raw_call(addr: target, gas: 1000000, value: Wei::zero(), args: data.span(), ret: mut ret)
     assert!(result.success() == valid)
     if valid {

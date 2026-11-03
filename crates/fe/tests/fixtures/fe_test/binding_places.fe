@@ -84,7 +84,7 @@ fn components_bind_where_they_lie() {
 
 #[test]
 fn moves_and_copies() {
-    var held = Option::Some(MemBuffer::alloc(3))
+    var held = Option::Some(MemBuffer::new(3))
     let taken = take(mut held)
     assert!(len_of(taken) == 3)
     assert!(len_of(held) == 0)

@@ -20,7 +20,7 @@ msg EchoMsg {
 
 fn hash_calldata() -> u256 uses (raw: mut RawOps) {
     let len = raw.calldatasize()
-    var data = ptr::MemBuffer::alloc(len.downcast_unchecked())
+    var data = ptr::MemBuffer::new(len.downcast_unchecked())
     raw.calldatacopy(dest: mut data, dest_offset: 0, src_offset: 0, len)
     raw.keccak256(data: data.span())
 }

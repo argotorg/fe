@@ -109,7 +109,7 @@ uses (call: Call)
 {
     let len = signature.len() as u256
     let padded = (len + 31) / 32 * 32
-    let args = unsafe { MemBuffer::alloc_uninit((0x64 + padded).downcast_unchecked()) }
+    let args = unsafe { MemBuffer::new_uninit((0x64 + padded).downcast_unchecked()) }
     unsafe {
         ops::mstore(addr: args.ptr(), value: ERC1271_MAGIC_WORD)
         ops::mstore(addr: offset(args.ptr(), 0x04), value: digest)

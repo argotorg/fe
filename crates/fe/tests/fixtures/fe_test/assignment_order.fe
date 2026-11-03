@@ -87,7 +87,7 @@ fn map_value_first() uses (evm: mut Evm) {
 
 fn make() -> MemBuffer uses (log: mut u256) {
     log = log * 10 + 1
-    MemBuffer::alloc(1)
+    MemBuffer::new(1)
 }
 
 fn seven() -> u8 uses (log: mut u256) {

@@ -2615,7 +2615,7 @@ pub contract C uses (evm: mut Evm) {
         for helper in [
             &["bump"][..],
             &["abi__store_word("],
-            &["MemBuffer", "__alloc("],
+            &["MemBuffer", "__new("],
         ] {
             let definitions = output
                 .lines()

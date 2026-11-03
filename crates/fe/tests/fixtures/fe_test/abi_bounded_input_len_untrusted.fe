@@ -10,7 +10,7 @@ use std::evm::{Call, Create, Evm}
 /// A 32-byte input whose bytes tail claims to reach `secret`, and `secret`.
 #[inline(never)]
 fn tail_input() -> (MemBuffer, MemArray<u256>) {
-    var input = MemBuffer::alloc(32)
+    var input = MemBuffer::new(32)
     var secret = MemArray<u256>::new_zeroed(1)
     secret[0] = 0x5ec2e7
     let rel = (secret.ptr() as usize as u256) - (input.ptr() as usize as u256) - 32
@@ -22,7 +22,7 @@ fn tail_input() -> (MemBuffer, MemArray<u256>) {
 /// `secret`, and `secret`.
 #[inline(never)]
 fn head_input() -> (MemBuffer, MemArray<u256>) {
-    var input = MemBuffer::alloc(64)
+    var input = MemBuffer::new(64)
     var secret = MemArray<u256>::new_zeroed(1)
     secret[0] = 0x5ec2e7
     let rel = (secret.ptr() as usize as u256) - (input.ptr() as usize as u256) - 64
@@ -76,7 +76,7 @@ pub contract Decoder {
             b.len() as u256
         }
         BoundedDynArray {} -> u256 {
-            var input = MemBuffer::alloc(32)
+            var input = MemBuffer::new(32)
             var secret = MemArray<u256>::new_zeroed(1)
             secret[0] = 0x5ec2e7
             let rel = (secret.ptr() as usize as u256) - (input.ptr() as usize as u256) - 32
@@ -86,7 +86,7 @@ pub contract Decoder {
         }
         // An honest length still decodes a memory input.
         Honest {} -> u256 {
-            var input = MemBuffer::alloc(96)
+            var input = MemBuffer::new(96)
             input.write_word(offset: 0, value: 32)
             input.write_word(offset: 32, value: 3)
             input.write_word(offset: 64, value: 0x616263 << 232)

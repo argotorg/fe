@@ -263,7 +263,7 @@ impl Fs for Host {
     fn canonicalize<P: Display>(self, _ path: P) -> Result<Error, MemBuffer> {
         let path = c_path(path)?
         // At least `PATH_MAX`: 4096 on Linux, 1024 on macOS.
-        var resolved = MemBuffer::alloc(4096)
+        var resolved = MemBuffer::new(4096)
         if unsafe { realpath(path.ptr(), resolved.ptr()) } as usize == 0 {
             return Result::Err(last_error())
         }
@@ -379,7 +379,7 @@ fn dir_entry(_ dir: MemBuffer, _ name: MemSpan, _ d_type: u8) -> Result<Error, D
 // The metadata of the file at the C string `path`, or of the symbolic link
 // itself unless `follow`.
 fn stat_path(_ path: MemBuffer, follow: bool) -> Result<Error, Metadata> {
-    let buf = MemBuffer::alloc(STAT_SIZE)
+    let buf = MemBuffer::new(STAT_SIZE)
     let status = if follow {
         unsafe { stat(path.ptr(), buf.ptr()) }
     } else {
