@@ -68,6 +68,7 @@
 ; === Attributes ===
 
 (attribute name: (identifier) @attribute)
+(inner_attribute name: (identifier) @attribute)
 (doc_comment) @comment.doc
 
 ; === Keywords ===

@@ -1,0 +1,47 @@
+#[cfg(target = "wasm")]
+fn unknown_target() {}
+
+#[cfg(os = "linux")]
+fn unknown_key() {}
+
+#[cfg(target)]
+fn missing_value() {}
+
+#[cfg(target = native)]
+fn ident_value() {}
+
+#[cfg]
+fn bare() {}
+
+#[cfg(target = "evm", target_os = "linux")]
+fn two_predicates() {}
+
+struct S {
+    #[cfg(target = "evm")]
+    x: u8,
+}
+
+enum E {
+    #[cfg(target = "evm")]
+    A,
+}
+
+impl S {
+    #[cfg(target = "evm")]
+    fn method(self) {}
+}
+
+trait T {
+    #[cfg(target = "evm")]
+    const C: u8
+}
+
+extern {
+    #[cfg(target = "native")]
+    fn external()
+}
+
+pub fn main() {
+    #[cfg(target = "evm")]
+    for _ in 0..1 {}
+}

@@ -1,10 +1,16 @@
+use common::compilation::{Os, Target};
 use parser::{
     TextRange,
     ast::{self, prelude::*},
 };
 
 use super::FileLowerCtxt;
-use crate::core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*};
+use crate::{
+    HirDb,
+    core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*},
+};
+
+const CFG_EXPECTED: &str = "`#[cfg(target = \"evm\")]`, `#[cfg(target = \"native\")]`, `#[cfg(target_os = \"linux\")]`, `#[cfg(target_os = \"macos\")]`, or `#[cfg(target_family = \"unix\")]`";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrMisuseError {
@@ -233,6 +239,67 @@ pub(super) fn validate_attr_rules<'db>(
                 }
             }
         }
+    }
+}
+
+/// Whether every `cfg` attribute in `attrs` holds for the compilation's
+/// target and operating system. A malformed one is an error and doesn't hold.
+pub(super) fn cfg_holds<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    target: AttrTarget,
+) -> bool {
+    let db = ctxt.db();
+    named_attr_specs(attrs, "cfg")
+        .into_iter()
+        .fold(true, |holds, spec| {
+            let held = cfg_spec_holds(db, &spec);
+            if held.is_none() {
+                report_attr_misuse(
+                    ctxt,
+                    spec.range,
+                    "cfg".to_string(),
+                    target.clone(),
+                    AttrMisuseErrorKind::InvalidForm {
+                        expected_form: CFG_EXPECTED,
+                    },
+                );
+            }
+            holds && held == Some(true)
+        })
+}
+
+/// Whether the `cfg` attribute `spec` holds for the compilation's target and
+/// operating system, or `None` if it is malformed.
+pub(super) fn cfg_spec_holds(db: &dyn HirDb, spec: &AstAttrSpec) -> Option<bool> {
+    let settings = db.compilation_settings();
+    let (machine, os) = (settings.target(db), settings.os(db));
+    let [
+        AstAttrArgSpec {
+            key: Some(key),
+            value: Some(ast::AttrArgValueKind::Lit(lit)),
+        },
+    ] = &spec.args[..]
+    else {
+        return None;
+    };
+    let ast::LitKind::String(value) = lit.kind() else {
+        return None;
+    };
+    let value = value.value().ok().filter(|_| spec.value.is_none())?;
+    match key.as_str() {
+        "target" => Target::ALL
+            .iter()
+            .any(|target| target.name() == value)
+            .then(|| machine.name() == value),
+        "target_os" => Os::ALL
+            .iter()
+            .any(|os| os.name() == value)
+            .then(|| os.is_some_and(|os| os.name() == value)),
+        "target_family" => {
+            (value == "unix").then(|| os.is_some_and(|os| matches!(os, Os::Linux | Os::Macos)))
+        }
+        _ => None,
     }
 }
 

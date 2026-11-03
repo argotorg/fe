@@ -1497,6 +1497,9 @@ fn prepare_suite_job(
         db.compilation_settings()
             .set_target(&mut db)
             .to(shared.backend.target());
+        db.compilation_settings()
+            .set_os(&mut db)
+            .to(shared.backend.os());
         db
     });
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {

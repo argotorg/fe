@@ -1,0 +1,108 @@
+use core::MemBuffer
+use std::env::Args
+use std::fs::{Error, ErrorKind, FileType, Fs}
+use std::io::{Display, Stdout}
+
+// Runs each `std::fs` operation in the directory named by the first
+// argument, which holds a symbolic link `link` to `a/b/c/file`.
+pub fn main() -> i32 uses (out: mut Stdout, args: Args, fs: mut Fs) {
+    let dir = args.get(1)
+    done("create_dir_all a/b/c", fs.create_dir_all(format!(dir, "/a/b/c")))
+    done("create_dir_all a/b/c/", fs.create_dir_all(format!(dir, "/a/b/c/")))
+    done("write a/b/c/file", fs.write(format!(dir, "/a/b/c/file"), format!("hello").span()))
+    done("append a/b/c/file", fs.append(format!(dir, "/a/b/c/file"), format!(" world").span()))
+    done("append a/new", fs.append(format!(dir, "/a/new"), format!("new").span()))
+    done("write a/empty", fs.write(format!(dir, "/a/empty"), MemBuffer::empty().span()))
+    read("a/b/c/file", fs.read(format!(dir, "/a/b/c/file")))
+    read("a/new", fs.read(format!(dir, "/a/new")))
+    read("a/empty", fs.read(format!(dir, "/a/empty")))
+    read("link", fs.read(format!(dir, "/link")))
+    metadata("a", format!(dir, "/a"))
+    metadata("a/b/c/file", format!(dir, "/a/b/c/file"))
+    metadata("link", format!(dir, "/link"))
+    list(".", format!(dir))
+    list("a", format!(dir, "/a"))
+    match fs.canonicalize(format!(dir, "/a/b/../b/./c/file")) {
+        Result::Ok(path) => println!("canonicalize a/b/../b/./c/file: ", path),
+        Result::Err(error) => failed("canonicalize", error),
+    }
+
+    read("missing", fs.read(format!(dir, "/missing")))
+    read("a", fs.read(format!(dir, "/a")))
+    done("write a", fs.write(format!(dir, "/a"), format!("x").span()))
+    done("create_dir_all a/empty", fs.create_dir_all(format!(dir, "/a/empty")))
+    done("create_dir_all a/empty/x", fs.create_dir_all(format!(dir, "/a/empty/x")))
+    metadata("missing", format!(dir, "/missing"))
+    list("a/empty", format!(dir, "/a/empty"))
+    var nul = format!(dir, "/a")
+    nul.push(0)
+    read("a\\0", fs.read(nul))
+    0
+}
+
+fn done<T: Display>(_ label: T, _ result: Result<Error, ()>) uses (out: mut Stdout) {
+    match result {
+        Result::Ok(_) => println!(label, ": ok"),
+        Result::Err(error) => failed(label, error),
+    }
+}
+
+fn read<T: Display>(_ label: T, _ result: Result<Error, MemBuffer>) uses (out: mut Stdout) {
+    match result {
+        Result::Ok(ref contents) => println!("read ", label, ": ", contents.len(), " bytes \"", contents, "\""),
+        Result::Err(error) => failed(format!("read ", label), error),
+    }
+}
+
+fn metadata<T: Display>(_ label: T, _ path: MemBuffer) uses (out: mut Stdout, fs: Fs) {
+    match fs.metadata(path) {
+        Result::Ok(meta) => {
+            core::assert(meta.is_file() == (type_name(meta.file_type()) == "file"))
+            core::assert(meta.is_dir() == (type_name(meta.file_type()) == "dir"))
+            if meta.is_file() {
+                println!("metadata ", label, ": file of ", meta.len(), " bytes")
+            } else {
+                println!("metadata ", label, ": ", type_name(meta.file_type()))
+            }
+        }
+        Result::Err(error) => failed(format!("metadata ", label), error),
+    }
+}
+
+// Lists the directory's entries, one per line after the count.
+fn list<T: Display>(_ label: T, _ path: MemBuffer) uses (out: mut Stdout, fs: Fs) {
+    match fs.read_dir(path) {
+        Result::Ok(entries) => {
+            println!("read_dir ", label, ": ", entries.len(), " entries")
+            for ref entry in entries.as_slice() {
+                println!("  ", entry.name(), " ", type_name(entry.file_type()))
+            }
+        }
+        Result::Err(error) => failed(format!("read_dir ", label), error),
+    }
+}
+
+fn failed<T: Display>(_ label: T, _ error: Error) uses (out: mut Stdout) {
+    println!(label, ": ", kind_name(error.kind()), " (", error, ")")
+}
+
+fn type_name(_ file_type: FileType) -> String<8> {
+    match file_type {
+        FileType::File => "file",
+        FileType::Dir => "dir",
+        FileType::Symlink => "symlink",
+        FileType::Other => "other",
+    }
+}
+
+fn kind_name(_ kind: ErrorKind) -> String<20> {
+    match kind {
+        ErrorKind::NotFound => "NotFound",
+        ErrorKind::PermissionDenied => "PermissionDenied",
+        ErrorKind::AlreadyExists => "AlreadyExists",
+        ErrorKind::NotADirectory => "NotADirectory",
+        ErrorKind::IsADirectory => "IsADirectory",
+        ErrorKind::InvalidInput => "InvalidInput",
+        ErrorKind::Other => "Other",
+    }
+}

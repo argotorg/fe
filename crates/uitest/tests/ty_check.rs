@@ -1,5 +1,11 @@
-use common::InputDb;
+use std::collections::BTreeSet;
+
+use common::{
+    InputDb,
+    compilation::{Os, Target},
+};
 use driver::DriverDataBase;
+use salsa::Setter;
 use test_utils::{fixture_shards, fixtures::Fixture, snap_test};
 use url::Url;
 
@@ -66,6 +72,42 @@ fn check_formatting_keeps_meaning(db: &mut DriverDataBase, fixture: &Fixture) {
         error_headlines(db, fixture.path(), &formatted),
         "formatting changed the errors:\n{formatted}"
     );
+}
+
+// `#[cfg]` keeps the items whose predicates hold for the target and OS.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cfg_selects_items() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/cfg/select.fe");
+    let content = include_str!("../fixtures/cfg/select.fe");
+    for (target, os, kept) in [
+        (Target::Evm, None, &["evm"][..]),
+        (Target::Native, None, &["native", "native_mod"]),
+        (
+            Target::Native,
+            Some(Os::Linux),
+            &["linux", "native", "native_linux", "native_mod", "unix"],
+        ),
+        (
+            Target::Native,
+            Some(Os::Macos),
+            &["macos", "native", "native_mod", "unix"],
+        ),
+    ] {
+        let mut db = DriverDataBase::default();
+        db.compilation_settings().set_target(&mut db).to(target);
+        db.compilation_settings().set_os(&mut db).to(os);
+        let diags = diagnostics(&mut db, path, content);
+        let reported = diags
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter_map(|word| word.strip_suffix("_kept"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            reported,
+            kept.iter().copied().collect(),
+            "{target:?} {os:?}:\n{diags}"
+        );
+    }
 }
 
 #[cfg(target_family = "wasm")]
