@@ -261,13 +261,14 @@ impl<'db> FileLowerCtxt<'db> {
         self.builder.lazy_func
     }
 
-    /// The path naming the core ingot from the file: `ingot` within core.
-    pub(super) fn core_path(&self) -> PathId<'db> {
+    /// The path naming the builtin ingot `name` of `kind`, `core` or `std`,
+    /// from the file: `ingot` within that ingot.
+    pub(super) fn builtin_ingot_path(&self, kind: IngotKind, name: &str) -> PathId<'db> {
         let db = self.db();
-        let root = if self.top_mod().ingot(db).kind(db) == IngotKind::Core {
+        let root = if self.top_mod().ingot(db).kind(db) == kind {
             IdentId::make_ingot(db)
         } else {
-            IdentId::new(db, "core".to_string())
+            IdentId::new(db, name.to_string())
         };
         PathId::from_ident(db, root)
     }
@@ -431,6 +432,8 @@ impl<'db> LitKind<'db> {
                 // their source spelling as a valid semantic string.
                 Self::String(StringId::new(ctxt.db(), string.value().ok()?))
             }
+            // Parsing diagnosed invalid byte literals.
+            ast::LitKind::Byte(byte) => Self::Byte(byte.value().ok()?),
             ast::LitKind::Bool(bool) => match bool.token().text() {
                 "true" => Self::Bool(true),
                 "false" => Self::Bool(false),

@@ -1,0 +1,17 @@
+use core::abi::DynString
+
+#[test]
+fn literals_compare_on_the_left() {
+    let x: String<1> = "x"
+    assert!("x" == x)
+    assert!("y" != x)
+    let wide: String<5> = "x"
+    assert!("x" == wide)
+    assert!("xy" != wide)
+    assert!("x" == "x")
+    assert!("x" != "xy")
+    let text = DynString::from_word_prefix(word: 0x78 << 248, len: 1)
+    assert!("x" == text)
+    assert!("y" != text)
+    assert!("a literal of thirty-two bytes!!!" != text)
+}

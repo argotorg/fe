@@ -7,9 +7,12 @@
 /// `uses (io: mut Stdio)`.
 ///
 /// `print!(a, b, ..)`, `println!`, `eprint!` and `eprintln!` write the text
-/// of each `Display` argument in order, the `ln` forms then a newline, and
-/// `format!` returns that text in a `MemBuffer`. Output is unbuffered: each
-/// print is one write to the stream, so a later panic loses nothing.
+/// of each `Display` argument in order, the `ln` forms then a newline.
+/// Output is unbuffered: each print is one write to the stream, so a later
+/// panic loses nothing. `format!(a, b, ..)` returns the text in a new
+/// `MemBuffer`, and `write!(mut buf, a, b, ..)` and `writeln!` append it to
+/// `buf`, a `MemBuffer` held by a local, a field or an effect
+/// (`uses (text: mut MemBuffer)`). They work on any target.
 use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes}
 use core::abi::DynString
 use core::num::{IntWord, UnsignedAbs}
@@ -77,8 +80,8 @@ fn write_all(fd: i32, _ bytes: MemSpan) -> bool {
     true
 }
 
-/// A value with a text form, which `format!`, `print!` and their relatives
-/// write.
+/// A value with a text form, which `format!`, `write!`, `print!` and their
+/// relatives write.
 pub trait Display {
     /// Appends the value's text to `out`.
     fn fmt(self, _ out: mut MemBuffer)
@@ -227,7 +230,7 @@ fn push_decimal_u64(_ out: mut MemBuffer, _ value: u64) {
 
 fn push_signed<T: IntWord>(_ out: mut MemBuffer, negative: bool, magnitude: T) {
     if negative {
-        out.push(45)
+        out.push(b'-')
     }
     push_decimal(mut out, IntWord::to_word(magnitude))
 }
@@ -277,7 +280,7 @@ impl Display for isize {
 
 impl Display for bool {
     fn fmt(self, _ out: mut MemBuffer) {
-        if self { "true".fmt(mut out) } else { "false".fmt(mut out) }
+        write!(mut out, if self { "true" } else { "false" })
     }
 }
 

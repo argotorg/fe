@@ -1,0 +1,1 @@
+The builtin macros `write!(mut buf, a, b, ..)` and `writeln!` append the text of each `Display` argument to an existing `MemBuffer`, `writeln!` then a newline, as `format!` builds a new one. The buffer is written as a `mut` argument and may be a local, a field or an effect, as in `uses (text: mut MemBuffer)`.
