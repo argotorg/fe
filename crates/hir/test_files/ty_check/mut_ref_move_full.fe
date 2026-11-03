@@ -17,8 +17,8 @@ fn take_u256(_ x: own u256) -> u256 {
 }
 
 fn full() {
-    let mut x: u256 = 0
-    let r: ref u256 = ref x
+    var x: u256 = 0
+    let r = ref x
     r
     bump(mut x)
 
@@ -26,26 +26,26 @@ fn full() {
     let a2 = take_u256(a)
     a2
 
-    let mut s = Pair {a: 1, b: 2}
+    var s = Pair {a: 1, b: 2}
     bump_pair(mut s)
     if true {
-        let ma: mut u256 = mut s.a
-        let mb: mut u256 = mut s.b
+        let ma = mut s.a
+        let mb = mut s.b
         ma += 1
         mb += 1
     }
     let moved_a = s.a
     s.a = moved_a
 
-    let mut arr: [u256; 2] = [10, 20]
+    var arr: [u256; 2] = [10, 20]
     if true {
-        let p0: mut u256 = mut arr[0]
-        let p1: mut u256 = mut arr[1]
+        let p0 = mut arr[0]
+        let p1 = mut arr[1]
         p0 += 1
         p1 += 1
     }
 
-    let mut z: u256 = 5
+    var z: u256 = 5
     let w = z
     z = w
 }

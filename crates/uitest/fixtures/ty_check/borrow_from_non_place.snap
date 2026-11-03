@@ -5,7 +5,7 @@ expression: diags
 input_file: fixtures/ty_check/borrow_from_non_place.fe
 ---
 error[8-0065]: cannot borrow from this expression
-  ┌─ borrow_from_non_place.fe:3:23
+  ┌─ borrow_from_non_place.fe:3:13
   │
-3 │     let r: ref u256 = ref (x + 1)
-  │                       ^^^^^^^^^^^ expected a place expression
+3 │     let r = ref (x + 1)
+  │             ^^^^^^^^^^^ expected a place expression

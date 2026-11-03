@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/copy_impl_fields.fe
+---
+error[6-0031]: `W` cannot be `Copy`
+  ┌─ copy_impl_fields.fe:8:15
+  │
+8 │ impl Copy for W {}
+  │               ^ `W` has a field of type `MemBuffer`, which is not `Copy`
+  │
+  = a copy copies every field, so two copies of a field that owns memory would be two owners of it; a generic field needs a `Copy` bound on the implementation
+
+error[6-0031]: `Gen<T>` cannot be `Copy`
+   ┌─ copy_impl_fields.fe:15:18
+   │
+15 │ impl<T> Copy for Gen<T> {}
+   │                  ^^^^^^ `Gen<T>` has a field of type `T`, which is not `Copy`
+   │
+   = a copy copies every field, so two copies of a field that owns memory would be two owners of it; a generic field needs a `Copy` bound on the implementation
+
+error[6-0031]: `E` cannot be `Copy`
+   ┌─ copy_impl_fields.fe:30:15
+   │
+30 │ impl Copy for E {}
+   │               ^ `E` has a field of type `MemBuffer`, which is not `Copy`
+   │
+   = a copy copies every field, so two copies of a field that owns memory would be two owners of it; a generic field needs a `Copy` bound on the implementation

@@ -10,9 +10,9 @@ struct Cell {
 
 fn new_cell() -> *Cell {
     let cell = core::ptr::alloc<Cell>()
-    cell.counter = Counter { n: 0 }
-    cell.counters = [Counter { n: 0 }, Counter { n: 0 }]
-    cell.next = cell
+    unsafe { cell.counter = Counter { n: 0 } }
+    unsafe { cell.counters = [Counter { n: 0 }, Counter { n: 0 }] }
+    unsafe { cell.next = cell }
     cell
 }
 
@@ -31,32 +31,38 @@ fn incr() uses (counter: mut Counter) {
 #[test]
 fn test_writes_and_borrows_through_temporary_pointers() {
     let cell = new_cell()
-    id(cell).counter.n = 1
-    (*id(cell)).counter.n += 1
-    id(cell).counters[1].n = 5
-    bump(mut id(cell).counter)
-    assert(cell.counter.n == 3)
-    assert(cell.counters[1].n == 5)
+    unsafe { id(cell).counter.n = 1 }
+    unsafe { (*id(cell)).counter.n += 1 }
+    unsafe { id(cell).counters[1].n = 5 }
+    unsafe { bump(mut id(cell).counter) }
+    unsafe { assert(cell.counter.n == 3) }
+    unsafe { assert(cell.counters[1].n == 5) }
 }
 
 #[test]
 fn test_with_captures_temporary_pointer_places() {
     let cell = new_cell()
     let other = new_cell()
-    with ((*id(cell)).counter) {
-        incr()
+    unsafe {
+        with ((*id(cell)).counter) {
+            incr()
+        }
     }
-    let mut i: usize = 0
-    with (id(cell).counters[i]) {
-        i = 1
-        incr()
+    var i: usize = 0
+    unsafe {
+        with (id(cell).counters[i]) {
+            i = 1
+            incr()
+        }
     }
-    with (id(cell).next.counter) {
-        cell.next = other
-        incr()
+    unsafe {
+        with (id(cell).next.counter) {
+            cell.next = other
+            incr()
+        }
     }
-    assert(cell.counter.n == 2)
-    assert(cell.counters[0].n == 1)
-    assert(cell.counters[1].n == 0)
-    assert(other.counter.n == 0)
+    unsafe { assert(cell.counter.n == 2) }
+    unsafe { assert(cell.counters[0].n == 1) }
+    unsafe { assert(cell.counters[1].n == 0) }
+    unsafe { assert(other.counter.n == 0) }
 }

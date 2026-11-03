@@ -1,0 +1,6 @@
+[ingot]
+name = "invocation_extent_consumer"
+version = "0.1.0"
+
+[dependencies]
+invocation_extent_provider = "../invocation_extent_provider"

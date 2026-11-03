@@ -1,0 +1,4 @@
+pub unsafe trait Trusted {}
+unsafe impl Trusted for u256 {}
+unsafe struct Foo {}
+unsafe impl Foo {}

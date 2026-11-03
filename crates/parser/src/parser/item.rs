@@ -79,6 +79,7 @@ impl super::Parse for ItemListScope {
                 break;
             }
 
+            let start = parser.token_pos;
             let ok = parser.parse_ok(ItemScope::default())?;
             if parser.current_kind().is_none() || (self.inside_mod && parser.bump_if(RBrace)) {
                 break;
@@ -94,6 +95,13 @@ impl super::Parse for ItemListScope {
                 )? {
                     parser.bump();
                 }
+            } else if parser.token_pos == start {
+                // Recovery stopped at a token that starts no item, so the next
+                // iteration would stop at it again. `ItemScope` consumes every
+                // token in this scope's recovery set, so this is a parser bug;
+                // consume the token anyway rather than loop without end.
+                debug_assert!(false, "no item starts at {:?}", parser.current_kind());
+                parser.unexpected_token_error("unexpected token, expected an item".into());
             }
         }
         Ok(())
@@ -114,8 +122,11 @@ impl super::Parse for ItemScope {
         let mut checkpoint = attr::parse_attr_list(parser)?;
         let modifiers = parse_item_modifiers(parser, &mut checkpoint);
 
-        if modifiers.is_unsafe && !is_fn_item_head(parser) {
-            parser.error("expected `fn` after `unsafe` keyword");
+        if modifiers.is_unsafe
+            && !is_fn_item_head(parser)
+            && !matches!(parser.current_kind(), Some(TraitKw | ImplKw))
+        {
+            parser.error("expected `fn`, `trait` or `impl` after `unsafe` keyword");
         } else if modifiers.is_pub
             && matches!(
                 parser.current_kind(),
@@ -156,7 +167,7 @@ impl super::Parse for ItemScope {
             Some(MsgKw) => parser.parse_cp(MsgScope::default(), checkpoint),
             Some(EnumKw) => parser.parse_cp(EnumScope::default(), checkpoint),
             Some(TraitKw) => parser.parse_cp(TraitScope::default(), checkpoint),
-            Some(ImplKw) => parser.parse_cp(ImplScope::default(), checkpoint),
+            Some(ImplKw) => parser.parse_cp(ImplScope::new(modifiers.is_unsafe), checkpoint),
             Some(UseKw) => parser.parse_cp(UseScope::default(), checkpoint),
             Some(ConstKw) => {
                 if is_fn_item_head(parser) {
@@ -257,7 +268,7 @@ fn parse_item_modifiers<S: TokenStream>(
         match parser.current_kind() {
             Some(SyntaxKind::PubKw) => {
                 if checkpoint.is_none() {
-                    *checkpoint = Some(parser.checkpoint());
+                    *checkpoint = Some(parser.checkpoint_after_trivias());
                 }
 
                 if modifiers.is_pub {
@@ -285,7 +296,7 @@ fn parse_item_modifiers<S: TokenStream>(
             }
             Some(SyntaxKind::UnsafeKw) => {
                 if checkpoint.is_none() {
-                    *checkpoint = Some(parser.checkpoint());
+                    *checkpoint = Some(parser.checkpoint_after_trivias());
                 }
 
                 if modifiers.is_unsafe {
@@ -424,7 +435,7 @@ impl super::Parse for ContractFieldsScope {
                 _ => {}
             }
 
-            parser.parse(RecordFieldDefScope::default())?;
+            parser.parse(RecordFieldDefScope::new(false))?;
 
             // Optional comma between fields
             let _ = parser.bump_if(SyntaxKind::Comma);
@@ -603,7 +614,7 @@ impl super::Parse for MsgVariantParamsScope {
             true,
             SyntaxKind::MsgVariantParams,
             (SyntaxKind::LBrace, SyntaxKind::RBrace),
-            |parser| parser.parse(RecordFieldDefScope::default()),
+            |parser| parser.parse(RecordFieldDefScope::new(false)),
         )
     }
 }
@@ -721,7 +732,7 @@ impl super::Parse for SuperTraitListScope {
     }
 }
 
-define_scope! { TraitItemListScope, TraitItemList, (RBrace, Newline, FnKw, TypeKw, ConstKw) }
+define_scope! { TraitItemListScope, TraitItemList, (RBrace, Newline, UnsafeKw, FnKw, TypeKw, ConstKw, UsesKw) }
 impl super::Parse for TraitItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -759,6 +770,49 @@ impl super::Parse for TraitTypeItemScope {
     }
 }
 
+define_scope! { TraitUsesItemScope, TraitUsesItem }
+impl super::Parse for TraitUsesItemScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.bump_expected(SyntaxKind::UsesKw);
+        parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Eq]);
+        if parser.find_and_pop(
+            SyntaxKind::Ident,
+            ExpectedKind::Name(SyntaxKind::TraitUsesItem),
+        )? {
+            parser.bump();
+        }
+        if parser.bump_if(SyntaxKind::Eq) {
+            super::func::parse_uses_row(parser)?;
+        }
+        Ok(())
+    }
+}
+
+define_scope! { TraitShapeItemScope, TraitShapeItem }
+impl super::Parse for TraitShapeItemScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        // `shape`, a keyword only before the item's name.
+        parser.bump_expected(SyntaxKind::Ident);
+        parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Eq]);
+        if parser.find_and_pop(
+            SyntaxKind::Ident,
+            ExpectedKind::Name(SyntaxKind::TraitShapeItem),
+        )? {
+            parser.bump();
+        }
+        if parser.bump_if(SyntaxKind::Eq) {
+            parse_type(parser, None)?;
+        }
+        Ok(())
+    }
+}
+
 define_scope! { TraitConstItemScope, TraitConstItem }
 impl super::Parse for TraitConstItemScope {
     type Error = Recovery<ErrProof>;
@@ -792,7 +846,7 @@ impl super::Parse for TraitConstItemScope {
     }
 }
 
-define_scope! { ImplScope, Impl, (ForKw, LBrace) }
+define_scope! { ImplScope { is_unsafe: bool }, Impl, (ForKw, LBrace) }
 impl super::Parse for ImplScope {
     type Error = Recovery<ErrProof>;
 
@@ -809,7 +863,7 @@ impl super::Parse for ImplScope {
         });
 
         if is_impl_trait {
-            self.set_kind(SyntaxKind::ImplTrait);
+            parser.set_scope_kind(SyntaxKind::ImplTrait);
             parser.set_scope_recovery_stack(&[
                 SyntaxKind::ForKw,
                 SyntaxKind::WhereKw,
@@ -821,6 +875,9 @@ impl super::Parse for ImplScope {
                 parser.bump();
             }
         } else {
+            if self.is_unsafe {
+                parser.error("an inherent `impl` cannot be `unsafe`; only a trait's can");
+            }
             parser.set_scope_recovery_stack(&[SyntaxKind::WhereKw, SyntaxKind::LBrace]);
         }
 
@@ -843,7 +900,7 @@ impl super::Parse for ImplScope {
     }
 }
 
-define_scope! { ImplTraitItemListScope, TraitItemList, (RBrace, FnKw, TypeKw, ConstKw) }
+define_scope! { ImplTraitItemListScope, TraitItemList, (RBrace, UnsafeKw, FnKw, TypeKw, ConstKw, UsesKw) }
 impl super::Parse for ImplTraitItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -1037,14 +1094,26 @@ fn parse_trait_item_block<S: TokenStream>(
             break;
         }
 
-        let checkpoint = attr::parse_attr_list(parser)?;
+        let mut checkpoint = attr::parse_attr_list(parser)?;
 
-        while parser.current_kind().is_some_and(|k| k.is_modifier_head()) {
-            let kind = parser.current_kind().unwrap();
-            parser.unexpected_token_error(format!(
-                "{} modifier is not allowed in this block",
-                kind.describe()
-            ));
+        // Trait methods may be `unsafe`; their visibility is the trait's.
+        let mut is_unsafe = false;
+        while let Some(kind) = parser.current_kind().filter(|k| k.is_modifier_head()) {
+            if kind == SyntaxKind::UnsafeKw && !is_unsafe {
+                checkpoint.get_or_insert_with(|| parser.checkpoint_after_trivias());
+                parser.bump();
+                is_unsafe = true;
+            } else if kind == SyntaxKind::UnsafeKw {
+                parser.unexpected_token_error(format!("duplicate {} modifier", kind.describe()));
+            } else {
+                parser.unexpected_token_error(format!(
+                    "{} modifier is not allowed in this block",
+                    kind.describe()
+                ));
+            }
+        }
+        if is_unsafe && !is_fn_item_head(parser) {
+            parser.error("expected `fn` after `unsafe` keyword");
         }
 
         match parser.current_kind() {
@@ -1060,9 +1129,19 @@ fn parse_trait_item_block<S: TokenStream>(
             Some(SyntaxKind::ConstKw) => {
                 parser.parse_cp(TraitConstItemScope::default(), checkpoint)?;
             }
+            Some(SyntaxKind::UsesKw) => {
+                parser.parse_cp(TraitUsesItemScope::default(), checkpoint)?;
+            }
+            Some(SyntaxKind::Ident)
+                if parser.is_ident("shape")
+                    && parser.peek_n_non_trivia(2).as_slice()
+                        == [SyntaxKind::Ident, SyntaxKind::Ident] =>
+            {
+                parser.parse_cp(TraitShapeItemScope::default(), checkpoint)?;
+            }
             _ => {
                 let proof = parser.error_msg_on_current_token(
-                    "only `fn`, `type`, or `const` is allowed in this block",
+                    "only `fn`, `type`, `shape`, `const`, or `uses` is allowed in this block",
                 );
                 parser.try_recover().map_err(|r| r.add_err_proof(proof))?;
             }

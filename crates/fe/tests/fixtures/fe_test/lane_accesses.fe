@@ -1,0 +1,96 @@
+// Every construct that consumes a lane, a value packed into part of a
+// storage word, works the same way: a read extracts it, a write masks it into
+// its word, and an access held for a while works on a copy that is stored
+// back. Element lanes (`SolArray<Uint24>`) and packed struct fields
+// (`Flags.a`) are both covered.
+use core::keccak
+use std::abi::sol::Uint24
+use std::evm::{Evm, RawStorage, SolArray}
+
+struct Flags { a: u8, b: u8, big: u256 }
+
+fn load(_ slot: u256) -> u256 uses (storage: RawStorage) {
+    unsafe { storage.sload(slot) }
+}
+
+fn bump(_ x: mut u8) { x += 1 }
+fn bump24(_ x: mut Uint24) { x.val += 1 }
+
+#[test]
+fn entry_lane_field_updates() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let arr = unsafe { mut SolArray<Uint24>::at(0) }
+        arr.push(Uint24 { val: 1 })
+        arr.push(Uint24 { val: 2 })
+        arr[1].val += 5
+        arr[0].val = 9
+        bump24(mut arr[0])
+        let e = mut arr[1]
+        e.val *= 2
+        let v0 = arr[0].val
+        let v1 = arr[1].val
+        assert(v0 == 10)
+        assert(v1 == 14)
+        let data = keccak(0 as u256)
+        assert(load(data) == 0x00000e00000a)
+    }
+}
+
+#[test]
+fn field_lane_updates() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let arr = unsafe { mut SolArray<Flags>::at(1) }
+        arr.push(Flags { a: 1, b: 2, big: 3 })
+        arr[0].a += 4
+        bump(mut arr[0].b)
+        let f = mut arr[0].b
+        f *= 3
+        let a = arr[0].a
+        let b = arr[0].b
+        let big = arr[0].big
+        assert(a == 5 && b == 9 && big == 3)
+        let data = keccak(1 as u256)
+        assert(load(data) == 0x0905)
+    }
+}
+
+trait Inc {
+    fn inc(mut self)
+}
+impl Inc for u8 {
+    fn inc(mut self) { self += 1 }
+}
+impl Inc for Uint24 {
+    fn inc(mut self) { self.val += 1 }
+}
+
+fn inc_generic<T: Inc>(_ x: mut T) {
+    x.inc()
+}
+
+#[test]
+fn receivers_and_generics() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let flags = unsafe { mut SolArray<Flags>::at(1) }
+        flags.push(Flags { a: 1, b: 2, big: 3 })
+        flags[0].a.inc()
+        inc_generic(mut flags[0].b)
+        let a = flags[0].a
+        let b = flags[0].b
+        assert(a == 2)
+        assert(b == 3)
+        let lanes = unsafe { mut SolArray<Uint24>::at(2) }
+        lanes.push(Uint24 { val: 5 })
+        lanes.push(Uint24 { val: 6 })
+        lanes[0].inc()
+        inc_generic(mut lanes[1])
+        let l0 = lanes[0].val
+        let l1 = lanes[1].val
+        assert(l0 == 6)
+        assert(l1 == 7)
+        let data1 = keccak(1 as u256)
+        let data2 = keccak(2 as u256)
+        assert(load(data1) == 0x0302)
+        assert(load(data2) == 0x000007000006)
+    }
+}

@@ -107,3 +107,8 @@ mod import_test {
         let x: <|>
     }
 }
+
+// A destructured parameter offers its pattern's names, not its hidden one.
+fn sum_pair(_ (first, second): (i32, i32)) -> i32 {
+    <|>
+}

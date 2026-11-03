@@ -1,0 +1,76 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unsafe/call_outside_unsafe.fe
+---
+error[8-0097]: call to unsafe function `danger` requires an `unsafe` block or function
+   ┌─ call_outside_unsafe.fe:37:5
+   │
+ 1 │ unsafe fn danger() -> u256 {
+   │           ------ callee defined here
+   ·
+37 │     danger()
+   │     ^^^^^^^^ call to unsafe function
+
+error[8-0097]: call to unsafe function `method` requires an `unsafe` block or function
+   ┌─ call_outside_unsafe.fe:41:5
+   │
+ 8 │     unsafe fn method(self) -> u256 {
+   │               ------ callee defined here
+   ·
+41 │     s.method()
+   │     ^^^^^^^^^^ call to unsafe function
+
+error[8-0097]: call to unsafe function `assoc` requires an `unsafe` block or function
+   ┌─ call_outside_unsafe.fe:45:5
+   │
+12 │     unsafe fn assoc() -> u256 {
+   │               ----- callee defined here
+   ·
+45 │     S::assoc()
+   │     ^^^^^^^^^^ call to unsafe function
+
+error[8-0097]: call to unsafe function `raw` requires an `unsafe` block or function
+   ┌─ call_outside_unsafe.fe:49:5
+   │
+18 │     unsafe fn raw(self) -> u256
+   │               --- callee defined here
+   ·
+49 │     s.raw() + s.safe()
+   │     ^^^^^^^ call to unsafe function
+
+error[8-0097]: call to unsafe function `raw` requires an `unsafe` block or function
+   ┌─ call_outside_unsafe.fe:53:5
+   │
+18 │     unsafe fn raw(self) -> u256
+   │               --- callee defined here
+   ·
+53 │     Raw::raw(s)
+   │     ^^^^^^^^^^^ call to unsafe function
+
+error[8-0097]: call to unsafe function `raw` requires an `unsafe` block or function
+   ┌─ call_outside_unsafe.fe:57:5
+   │
+18 │     unsafe fn raw(self) -> u256
+   │               --- callee defined here
+   ·
+57 │     t.raw()
+   │     ^^^^^^^ call to unsafe function
+
+error[8-0097]: call to unsafe function `ext` requires an `unsafe` block or function
+   ┌─ call_outside_unsafe.fe:61:5
+   │
+33 │     unsafe fn ext() -> u256
+   │               --- callee defined here
+   ·
+61 │     ext()
+   │     ^^^^^ call to unsafe function
+
+error[8-0097]: call to unsafe function `danger` requires an `unsafe` block or function
+   ┌─ call_outside_unsafe.fe:65:10
+   │
+ 1 │ unsafe fn danger() -> u256 {
+   │           ------ callee defined here
+   ·
+65 │     free(danger())
+   │          ^^^^^^^^ call to unsafe function

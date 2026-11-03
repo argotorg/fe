@@ -1,0 +1,49 @@
+// Only a `Clearable` value is cleared: one holding a storage collection is
+// not, since zeroing its own slots would leave the collection's entries.
+// Its scalar fields stay assignable, and generic code forwards the bound.
+use core::marker::Clearable
+use std::evm::{SolArray, StorageMap}
+
+struct Book {
+    owner: u256,
+    pages: StorageMap<u256, u256>,
+}
+
+struct Mine { x: u256 }
+
+// Rejected: only the compiler implements `Clearable`.
+impl Clearable for Mine {}
+
+msg M {
+    #[selector = 1]
+    Drop { k: u256 },
+}
+
+pub contract C {
+    mut books: StorageMap<u256, Book>,
+    mut nested: StorageMap<u256, StorageMap<u256, u256>>,
+    mut shelves: SolArray<Book>,
+    mut counts: SolArray<u256>,
+
+    recv M {
+        Drop { k } uses (mut books, mut nested, mut shelves, mut counts) {
+            // Rejected: the values hold maps.
+            books.remove(k)
+            nested.remove(k)
+            shelves.clear_at(k)
+            // Accepted: an ordinary store, and clearing a scalar.
+            books[k].owner = 0
+            counts[k] = u256::default()
+            counts.clear_at(k)
+        }
+    }
+}
+
+fn wipe<V: Clearable>(_ m: mut StorageMap<u256, V>, _ k: u256) {
+    m.remove(k)
+}
+
+// Rejected: nothing says `V` is clearable.
+fn wipe_any<V>(_ m: mut StorageMap<u256, V>, _ k: u256) {
+    m.remove(k)
+}

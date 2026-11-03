@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/effects_generic_type_nested.fe
 ---
@@ -265,7 +266,7 @@ note:
    │
 38 │   pub fn mutable_storage() {
    │ ╭──────────────────────────^
-39 │ │     let mut storage = Storage<u8> { value: 10 }
+39 │ │     var storage = Storage<u8> { value: 10 }
 40 │ │     with (Storage<u8> = storage) {
 41 │ │         write_u8(val: 20)
 42 │ │         let _ = read_u8()
@@ -276,20 +277,20 @@ note:
 note:
    ┌─ effects_generic_type_nested.fe:39:9
    │
-39 │     let mut storage = Storage<u8> { value: 10 }
-   │         ^^^^^^^^^^^ Storage<u8>
+39 │     var storage = Storage<u8> { value: 10 }
+   │         ^^^^^^^ Storage<u8>
 
 note:
-   ┌─ effects_generic_type_nested.fe:39:23
+   ┌─ effects_generic_type_nested.fe:39:19
    │
-39 │     let mut storage = Storage<u8> { value: 10 }
-   │                       ^^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
+39 │     var storage = Storage<u8> { value: 10 }
+   │                   ^^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
 
 note:
-   ┌─ effects_generic_type_nested.fe:39:44
+   ┌─ effects_generic_type_nested.fe:39:40
    │
-39 │     let mut storage = Storage<u8> { value: 10 }
-   │                                            ^^ u8
+39 │     var storage = Storage<u8> { value: 10 }
+   │                                        ^^ u8
 
 note:
    ┌─ effects_generic_type_nested.fe:40:5

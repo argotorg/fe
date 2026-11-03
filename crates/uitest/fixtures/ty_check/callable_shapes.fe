@@ -1,0 +1,14 @@
+// A callable trait's shape lists its parameters' modes, so a closure of
+// other modes does not implement it.
+use core::functional::Fn
+
+fn view<F: Fn(u256) -> u256>(_ f: F) {}
+
+fn calls() {
+    view(|x: own u256| x)
+}
+
+// A generic shape lists no known parameters to call with.
+fn generic<shape S, F: Fn<S>>(_ f: F) {
+    f()
+}

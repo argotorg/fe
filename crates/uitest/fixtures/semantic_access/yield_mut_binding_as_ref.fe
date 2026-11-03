@@ -1,0 +1,50 @@
+use core::option::Option
+use core::ptr::MemArray
+
+// A `mut` access binding stands where a `ref` result is expected, as `ref g`
+// does, in any result position.
+struct Holder {
+    a: u256,
+    b: MemArray<u256>,
+}
+
+fn param_tail(_ p: mut u256) -> ref u256 {
+    p
+}
+
+fn param_yield(_ p: mut u256) -> ref u256 {
+    yield p
+}
+
+impl Holder {
+    fn binding_tail(mut self) -> ref u256 {
+        let g = mut self.a
+        g
+    }
+
+    fn in_variant(mut self, _ c: bool) -> Option<ref u256> {
+        let g = mut self.a
+        if c {
+            return Option::None
+        }
+        Option::Some(g)
+    }
+
+    fn in_tuple(mut self) -> (u256, ref u256) {
+        let g = mut self.a
+        (1, g)
+    }
+
+    fn projection_result(mut self) -> ref u256 {
+        let g = mut self.a_mut()
+        g
+    }
+
+    fn a_mut(mut self) -> mut u256 {
+        mut self.a
+    }
+
+    fn self_as_ref(mut self) -> ref Holder {
+        self
+    }
+}

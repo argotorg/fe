@@ -1,7 +1,8 @@
 use core::ptr
+use core::abi::store_word
 use std::evm::{Address, Create, Evm, StorageBytes, keccak256}
 
-type Blobs = StorageBytes<u256, 0, 1>
+type Blobs = StorageBytes<u256>
 
 msg BlobMsg {
     #[selector = 0x01]
@@ -22,7 +23,7 @@ pub contract Blob uses (create: mut Create) {
 
     recv BlobMsg {
         Set { data } uses (mut blobs) {
-            blobs.store_view(key: 0, view: data.view())
+            blobs.store_view(key: 0, view: data.payload_span())
         }
 
         // Loads the stored bytes back into memory, then keeps executing:
@@ -30,8 +31,8 @@ pub contract Blob uses (create: mut Create) {
         LoadHash -> u256 uses (blobs, mut marker) {
             let data = blobs.to_memory(key: 0)
             let len = data.len()
-            let hash = keccak256(data.capacity_span())
-            marker = len + 1
+            let hash = unsafe { keccak256(data.capacity_span()) }
+            marker = (len + 1) as u256
             hash
         }
 
@@ -43,9 +44,9 @@ pub contract Blob uses (create: mut Create) {
         Deploy { salt } -> u256 uses (blobs, mut create, mut marker) {
             let data = blobs.to_memory(key: 0)
             let len = data.len()
-            let deployed = create.create2_raw(value: 0, init_code: data.span(), salt)
-            marker = len + 1
-            deployed.inner
+            let deployed = create.create2_raw(value: Wei::zero(), init_code: data.span(), salt)
+            marker = (len + 1) as u256
+            deployed.word()
         }
 
         WordAt { index } -> u256 uses (blobs) {
@@ -57,20 +58,20 @@ pub contract Blob uses (create: mut Create) {
 fn set_bytes(addr: Address, data: Bytes)
 uses (evm: mut Evm)
 {
-    evm.call(addr: addr, gas: 1000000, value: 0, message: BlobMsg::Set { data: data })
+    evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: BlobMsg::Set { data: data })
 }
 
 fn load_hash(addr: Address) -> u256
 uses (evm: mut Evm)
 {
-    let hash: u256 = evm.call(addr: addr, gas: 1000000, value: 0, message: BlobMsg::LoadHash {})
+    let hash: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: BlobMsg::LoadHash {})
     hash
 }
 
 fn get_marker(addr: Address) -> u256
 uses (evm: mut Evm)
 {
-    let marker: u256 = evm.call(addr: addr, gas: 1000000, value: 0, message: BlobMsg::GetMarker {})
+    let marker: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: BlobMsg::GetMarker {})
     marker
 }
 
@@ -78,12 +79,12 @@ uses (evm: mut Evm)
 fn test_to_memory_empty()
 uses (evm: mut Evm)
 {
-    let blob = evm.create2<Blob>(value: 0, args: (), salt: 0)
-    assert!(blob.inner != 0)
+    let blob = evm.create2<Blob>(value: Wei::zero(), args: (), salt: 0)
+    assert!(blob.word() != 0)
 
     let data_ptr = ptr::alloc_bytes(32)
-    evm.mstore(addr: data_ptr, value: 0)
-    set_bytes(addr: blob, data: Bytes::from_abi_tail(data: data_ptr, len: 0, size: 32))
+    unsafe { store_word(ptr: data_ptr, value: 0) }
+    unsafe { set_bytes(addr: blob, data: Bytes::from_abi_tail(data: data_ptr, len: 0, size: 32)) }
 
     assert!(load_hash(addr: blob) == keccak256(ptr::MemSpan::empty()))
 
@@ -95,30 +96,38 @@ uses (evm: mut Evm)
 fn test_to_memory_exact_word_multiple()
 uses (evm: mut Evm)
 {
-    let blob = evm.create2<Blob>(value: 0, args: (), salt: 0)
-    assert!(blob.inner != 0)
+    let blob = evm.create2<Blob>(value: Wei::zero(), args: (), salt: 0)
+    assert!(blob.word() != 0)
 
     let payload_len: u256 = 64
-    let data_ptr = ptr::alloc_bytes(payload_len + 32)
-    evm.mstore(addr: data_ptr, value: payload_len)
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 32),
-        value: 0x1111111111111111111111111111111111111111111111111111111111111111,
-    )
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 64),
-        value: 0x2222222222222222222222222222222222222222222222222222222222222222,
-    )
-    set_bytes(
-        addr: blob,
-        data: Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: payload_len + 32),
-    )
+    let data_ptr = ptr::alloc_bytes((payload_len + 32).downcast_saturate())
+    unsafe { store_word(ptr: data_ptr, value: payload_len) }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 32),
+            value: 0x1111111111111111111111111111111111111111111111111111111111111111,
+        )
+    }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 64),
+            value: 0x2222222222222222222222222222222222222222222222222222222222222222,
+        )
+    }
+    unsafe {
+        set_bytes(
+            addr: blob,
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: payload_len + 32),
+        )
+    }
 
     // Hash of the two payload words, computed locally.
-    let expected = keccak256(ptr::MemSpan::from_raw_parts(
-        ptr: ptr::offset_bytes(data_ptr, 32),
-        len: 64,
-    ))
+    let expected = unsafe {
+        keccak256(ptr::MemSpan::from_raw_parts(
+            ptr: ptr::offset_bytes(data_ptr, 32),
+            len: 64,
+        ))
+    }
     assert!(load_hash(addr: blob) == expected)
     assert!(get_marker(addr: blob) == 65)
 }
@@ -127,43 +136,53 @@ uses (evm: mut Evm)
 fn test_to_memory_partial_trailing_word()
 uses (evm: mut Evm)
 {
-    let blob = evm.create2<Blob>(value: 0, args: (), salt: 0)
-    assert!(blob.inner != 0)
+    let blob = evm.create2<Blob>(value: Wei::zero(), args: (), salt: 0)
+    assert!(blob.word() != 0)
 
     let payload_len: u256 = 65
     let data_ptr = ptr::alloc_bytes(128)
-    evm.mstore(addr: data_ptr, value: payload_len)
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 32),
-        value: 0x1111111111111111111111111111111111111111111111111111111111111111,
-    )
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 64),
-        value: 0x2222222222222222222222222222222222222222222222222222222222222222,
-    )
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 96),
-        value: 0x3300000000000000000000000000000000000000000000000000000000000000,
-    )
-    set_bytes(
-        addr: blob,
-        data: Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: 128),
-    )
+    unsafe { store_word(ptr: data_ptr, value: payload_len) }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 32),
+            value: 0x1111111111111111111111111111111111111111111111111111111111111111,
+        )
+    }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 64),
+            value: 0x2222222222222222222222222222222222222222222222222222222222222222,
+        )
+    }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 96),
+            value: 0x3300000000000000000000000000000000000000000000000000000000000000,
+        )
+    }
+    unsafe {
+        set_bytes(
+            addr: blob,
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: 128),
+        )
+    }
 
     // The contract hashes ceil_words(65) * 32 = 96 bytes, so a matching hash
     // proves the 31 padding bytes of the trailing word come back zeroed.
-    let expected = keccak256(ptr::MemSpan::from_raw_parts(
-        ptr: ptr::offset_bytes(data_ptr, 32),
-        len: 96,
-    ))
+    let expected = unsafe {
+        keccak256(ptr::MemSpan::from_raw_parts(
+            ptr: ptr::offset_bytes(data_ptr, 32),
+            len: 96,
+        ))
+    }
     assert!(load_hash(addr: blob) == expected)
     assert!(get_marker(addr: blob) == 66)
 
-    let word0: u256 = evm.call(addr: blob, gas: 1000000, value: 0, message: BlobMsg::WordAt { index: 0 })
+    let word0: u256 = evm.call(addr: blob, gas: 1000000, value: Wei::zero(), message: BlobMsg::WordAt { index: 0 })
     assert!(word0 == 0x1111111111111111111111111111111111111111111111111111111111111111)
-    let word2: u256 = evm.call(addr: blob, gas: 1000000, value: 0, message: BlobMsg::WordAt { index: 2 })
+    let word2: u256 = evm.call(addr: blob, gas: 1000000, value: Wei::zero(), message: BlobMsg::WordAt { index: 2 })
     assert!(word2 == 0x3300000000000000000000000000000000000000000000000000000000000000)
-    let word3: u256 = evm.call(addr: blob, gas: 1000000, value: 0, message: BlobMsg::WordAt { index: 3 })
+    let word3: u256 = evm.call(addr: blob, gas: 1000000, value: Wei::zero(), message: BlobMsg::WordAt { index: 3 })
     assert!(word3 == 0)
 }
 
@@ -171,25 +190,29 @@ uses (evm: mut Evm)
 fn test_to_memory_deploys_stored_initcode()
 uses (evm: mut Evm)
 {
-    let blob = evm.create2<Blob>(value: 0, args: (), salt: 0)
-    assert!(blob.inner != 0)
+    let blob = evm.create2<Blob>(value: Wei::zero(), args: (), salt: 0)
+    assert!(blob.word() != 0)
 
     // 22-byte initcode that deploys a 10-byte runtime returning 0x2a:
     //   600a600c600039600a6000f3  copy runtime to memory and return it
     //   602a60005260206000f3      runtime: mstore(0, 42); return(0, 32)
     let payload_len: u256 = 22
     let data_ptr = ptr::alloc_bytes(64)
-    evm.mstore(addr: data_ptr, value: payload_len)
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 32),
-        value: 0x600a600c600039600a6000f3602a60005260206000f300000000000000000000,
-    )
-    set_bytes(
-        addr: blob,
-        data: Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: 64),
-    )
+    unsafe { store_word(ptr: data_ptr, value: payload_len) }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 32),
+            value: 0x600a600c600039600a6000f3602a60005260206000f300000000000000000000,
+        )
+    }
+    unsafe {
+        set_bytes(
+            addr: blob,
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: 64),
+        )
+    }
 
-    let deployed: u256 = evm.call(addr: blob, gas: 1000000, value: 0, message: BlobMsg::Deploy { salt: 7 })
+    let deployed: u256 = evm.call(addr: blob, gas: 1000000, value: Wei::zero(), message: BlobMsg::Deploy { salt: 7 })
     assert!(deployed != 0)
 
     // Execution continued after the read and the CREATE2.

@@ -10,12 +10,16 @@ impl<'db> Stmt<'db> {
     pub(super) fn push_to_body(ctxt: &mut BodyCtxt<'_, 'db>, ast: ast::Stmt) -> StmtId {
         let (stmt, origin_kind) = match ast.kind() {
             ast::StmtKind::Let(let_) => {
-                let pat = Pat::lower_ast_opt(ctxt, let_.pat());
+                let pat = Pat::lower_let_ast(ctxt, let_.pat(), let_.var_token().is_some());
                 let ty = let_
                     .type_annotation()
                     .map(|ty| TypeId::lower_ast(ctxt.f_ctxt, ty));
                 let init = let_.initializer().map(|init| Expr::lower_ast(ctxt, init));
-                (Stmt::Let(pat, ty, init), HirOrigin::raw(&ast))
+                let else_ = let_
+                    .else_block()
+                    .and_then(|block| ast::Expr::cast(block.syntax().clone()))
+                    .map(|block| Expr::lower_ast(ctxt, block));
+                (Stmt::Let(pat, ty, init, else_), HirOrigin::raw(&ast))
             }
             ast::StmtKind::For(for_) => {
                 super::item::validate_for_loop_attrs(ctxt.f_ctxt, for_.attr_list());
@@ -55,6 +59,11 @@ impl<'db> Stmt<'db> {
                     .has_value()
                     .then(|| Expr::push_to_body_opt(ctxt, ret.expr()));
                 (Stmt::Return(expr), HirOrigin::raw(&ast))
+            }
+
+            ast::StmtKind::Yield(yield_) => {
+                let expr = Expr::push_to_body_opt(ctxt, yield_.expr());
+                (Stmt::Yield(expr), HirOrigin::raw(&ast))
             }
 
             ast::StmtKind::Expr(expr) => {

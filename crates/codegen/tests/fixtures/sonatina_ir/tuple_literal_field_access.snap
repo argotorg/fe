@@ -14,12 +14,23 @@ global private const @layout_0 $const_region_1 = {2, 3};
 global private const @layout_1 $const_region_2 = {1, {2, 3}};
 global private const @layout_2 $const_region_3 = {{1, 2}};
 
-func private %main_root() {
+func private %main() {
     block0:
         jump block1;
 
     block1:
         v0.i256 = call %tuple_literal_field_access;
+        v1.i256 = call %tuple_literal_nested_access;
+        v2.i256 = call %tuple_literal_struct_chain;
+        return;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        call %main;
         evm_stop;
 }
 

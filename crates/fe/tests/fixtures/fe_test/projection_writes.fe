@@ -1,0 +1,100 @@
+// Writes through `mut` projections reach the projected place, whether the
+// receiver is a local, an array element, or nested inside another value.
+struct Wrap {
+    value: u256,
+}
+
+struct Outer {
+    inner: Wrap,
+}
+
+impl Wrap {
+    fn handle(mut self) -> mut u256 {
+        mut self.value
+    }
+}
+
+impl Outer {
+    fn inner_mut(mut self) -> mut Wrap {
+        mut self.inner
+    }
+}
+
+fn write_array(values: mut [Wrap; 2], index: usize, value: u256) {
+    let target = mut values[index].handle()
+    target = value
+}
+
+fn write_nested(outer: mut Outer, value: u256) {
+    let target = mut outer.inner_mut().handle()
+    target = value
+}
+
+#[test]
+fn local_and_array_member_projections_write_their_places() {
+    var holder = Wrap { value: 0 }
+    let handle = mut holder.handle()
+    handle = 7
+    var values = [Wrap { value: 0 }]
+    let element = mut values[0].handle()
+    element = 9
+    assert!(holder.value == 7)
+    assert!(values[0].value == 9)
+}
+
+#[test]
+fn dynamic_member_projection_writes_its_element() {
+    var values = [Wrap { value: 0 }, Wrap { value: 0 }]
+    write_array(values: mut values, index: 1, value: 11)
+    write_array(values: mut values, index: 0, value: 13)
+    assert!(values[0].value == 13)
+    assert!(values[1].value == 11)
+}
+
+#[test]
+fn chained_projections_write_the_innermost_place() {
+    var outer = Outer { inner: Wrap { value: 0 } }
+    write_nested(outer: mut outer, value: 17)
+    assert!(outer.inner.value == 17)
+}
+
+#[test]
+fn nested_access_through_a_grant_writes_its_place() {
+    var holder = Wrap { value: 0 }
+    let handle = mut holder.handle()
+    let alias = mut handle
+    alias = 19
+    assert!(holder.value == 19)
+}
+
+// A `mut` projection's result is a place: it can be assigned, updated,
+// accessed again, and projected.
+struct Cell {
+    v: u256,
+    w: (u256, u256),
+}
+
+impl Cell {
+    fn get_mut(mut self) -> mut u256 {
+        mut self.v
+    }
+
+    fn pair_mut(mut self) -> mut (u256, u256) {
+        mut self.w
+    }
+}
+
+fn write_grants(_ c: mut Cell) -> u256 {
+    let x = mut c.get_mut()
+    x = 5
+    c.get_mut() = 7
+    c.get_mut() += 1
+    c.pair_mut().0 = 3
+    c.v + c.w.0
+}
+
+#[test]
+fn grant_places_are_assignable() {
+    var c = Cell { v: 0, w: (0, 0) }
+    assert!(write_grants(mut c) == 11)
+}

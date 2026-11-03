@@ -1,0 +1,76 @@
+// A closure captures by copy or move, reads its captures only, and is
+// called with the shape its callee expects.
+use core::iter::Collection
+
+struct Account { balance: u256 }
+
+struct Store { n: u256 }
+
+fn read() -> u256 uses (store: Store) {
+    store.n
+}
+
+fn write_capture(_ xs: [u256; 2]) -> u256 {
+    var total = 0
+    let n = xs.fold(0, |acc, x| {
+        total += x
+        acc
+    })
+    total + n
+}
+
+fn mut_access_of_capture() {
+    var a = Account { balance: 1 }
+    let xs: [u256; 1] = [1]
+    let _ = xs.any(|_x| {
+        let r = mut a
+        true
+    })
+}
+
+fn access_capture(_ accounts: [Account; 2]) -> u256 {
+    let idx: [usize; 2] = [0, 1]
+    idx.fold(0, |acc, i| acc + accounts[i].balance)
+}
+
+fn view_account(_ o: Option<Account>) -> u256 {
+    match o {
+        Option::Some(ref a) => a.balance
+        Option::None => 0
+    }
+}
+
+// The access's type is inferred only after the closure captures it.
+fn late_access_capture() -> u256 {
+    var o = Option::None
+    let r = ref o
+    let f = |x: u256| view_account(r) + x
+    o = Option::Some(Account { balance: 5 })
+    f(1)
+}
+
+fn arity(_ xs: [u256; 2]) -> u256 {
+    xs.fold(0, |acc| acc)
+}
+
+fn wrong_mode(_ xs: [u256; 2]) -> u256 {
+    xs.fold(0, |acc: mut, x| acc)
+}
+
+fn break_in_closure(_ xs: [u256; 2]) {
+    for _ in xs {
+        let _ = xs.any(|x| {
+            break
+        })
+    }
+}
+
+const C: u256 = {
+    let f = |x: u256| x
+    1
+}
+
+// The row of a closure using `Store` needs a provider where `any` is called.
+fn missing_at_call(_ xs: [u256; 2]) -> bool {
+    xs.any(|x| x == read())
+}

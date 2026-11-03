@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/closure_capture_moves.fe
+---
+error[16-0002]: move conflict in `fn <closure>`
+   ┌─ closure_capture_moves.fe:17:25
+   │
+17 │     xs.any(|_x| consume(a) == 1)
+   │                         ^ cannot move out of a closure's captures, which each call of the closure only views
+
+error[16-0002]: move conflict in `fn <closure>`
+   ┌─ closure_capture_moves.fe:23:27
+   │
+23 │     xs.any(|_x| consume({ a }) == 1)
+   │                           ^ cannot move out of a closure's captures, which each call of the closure only views
+
+error[16-0002]: move conflict in `fn <closure>`
+   ┌─ closure_capture_moves.fe:29:24
+   │
+29 │     xs.any(|_x| xs.any(|_y| consume(a) == 1))
+   │                        ^^^^^^^^^^^^^^^^^^^^ cannot move out of a closure's captures, which each call of the closure only views

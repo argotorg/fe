@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/mut_ref_move_full.fe
 ---
@@ -16,7 +17,7 @@ note:
   ┌─ mut_ref_move_full.fe:7:5
   │
 7 │     x += 1
-  │     ^ mut u256
+  │     ^ u256
 
 note:
   ┌─ mut_ref_move_full.fe:7:5
@@ -56,13 +57,13 @@ note:
    ┌─ mut_ref_move_full.fe:11:10
    │
 11 │     bump(mut p.a)
-   │          ^^^^^^^ mut u256
+   │          ^^^^^^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:11:14
    │
 11 │     bump(mut p.a)
-   │              ^ mut Pair
+   │              ^ Pair
 
 note:
    ┌─ mut_ref_move_full.fe:11:14
@@ -86,13 +87,13 @@ note:
    ┌─ mut_ref_move_full.fe:12:10
    │
 12 │     bump(mut p.b)
-   │          ^^^^^^^ mut u256
+   │          ^^^^^^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:12:14
    │
 12 │     bump(mut p.b)
-   │              ^ mut Pair
+   │              ^ Pair
 
 note:
    ┌─ mut_ref_move_full.fe:12:14
@@ -120,8 +121,8 @@ note:
    │
 19 │   fn full() {
    │ ╭───────────^
-20 │ │     let mut x: u256 = 0
-21 │ │     let r: ref u256 = ref x
+20 │ │     var x: u256 = 0
+21 │ │     let r = ref x
 22 │ │     r
    · │
 50 │ │     z = w
@@ -131,38 +132,38 @@ note:
 note:
    ┌─ mut_ref_move_full.fe:20:9
    │
-20 │     let mut x: u256 = 0
-   │         ^^^^^ u256
+20 │     var x: u256 = 0
+   │         ^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:20:23
+   ┌─ mut_ref_move_full.fe:20:19
    │
-20 │     let mut x: u256 = 0
-   │                       ^ u256
+20 │     var x: u256 = 0
+   │                   ^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:21:9
    │
-21 │     let r: ref u256 = ref x
-   │         ^ ref u256
+21 │     let r = ref x
+   │         ^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:21:23
+   ┌─ mut_ref_move_full.fe:21:13
    │
-21 │     let r: ref u256 = ref x
-   │                       ^^^^^ ref u256
+21 │     let r = ref x
+   │             ^^^^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:21:27
+   ┌─ mut_ref_move_full.fe:21:17
    │
-21 │     let r: ref u256 = ref x
-   │                           ^ u256
+21 │     let r = ref x
+   │                 ^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:22:5
    │
 22 │     r
-   │     ^ ref u256
+   │     ^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:23:5
@@ -180,7 +181,7 @@ note:
    ┌─ mut_ref_move_full.fe:23:10
    │
 23 │     bump(mut x)
-   │          ^^^^^ mut u256
+   │          ^^^^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:23:14
@@ -233,26 +234,26 @@ note:
 note:
    ┌─ mut_ref_move_full.fe:29:9
    │
-29 │     let mut s = Pair {a: 1, b: 2}
-   │         ^^^^^ Pair
+29 │     var s = Pair {a: 1, b: 2}
+   │         ^ Pair
 
 note:
-   ┌─ mut_ref_move_full.fe:29:17
+   ┌─ mut_ref_move_full.fe:29:13
    │
-29 │     let mut s = Pair {a: 1, b: 2}
-   │                 ^^^^^^^^^^^^^^^^^ Pair
+29 │     var s = Pair {a: 1, b: 2}
+   │             ^^^^^^^^^^^^^^^^^ Pair
 
 note:
-   ┌─ mut_ref_move_full.fe:29:26
+   ┌─ mut_ref_move_full.fe:29:22
    │
-29 │     let mut s = Pair {a: 1, b: 2}
-   │                          ^ u256
+29 │     var s = Pair {a: 1, b: 2}
+   │                      ^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:29:32
+   ┌─ mut_ref_move_full.fe:29:28
    │
-29 │     let mut s = Pair {a: 1, b: 2}
-   │                                ^ u256
+29 │     var s = Pair {a: 1, b: 2}
+   │                            ^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:30:5
@@ -270,7 +271,7 @@ note:
    ┌─ mut_ref_move_full.fe:30:15
    │
 30 │     bump_pair(mut s)
-   │               ^^^^^ mut Pair
+   │               ^^^^^ Pair
 
 note:
    ┌─ mut_ref_move_full.fe:30:19
@@ -282,8 +283,8 @@ note:
    ┌─ mut_ref_move_full.fe:31:5
    │
 31 │ ╭     if true {
-32 │ │         let ma: mut u256 = mut s.a
-33 │ │         let mb: mut u256 = mut s.b
+32 │ │         let ma = mut s.a
+33 │ │         let mb = mut s.b
 34 │ │         ma += 1
 35 │ │         mb += 1
 36 │ │     }
@@ -300,8 +301,8 @@ note:
    │
 31 │       if true {
    │ ╭─────────────^
-32 │ │         let ma: mut u256 = mut s.a
-33 │ │         let mb: mut u256 = mut s.b
+32 │ │         let ma = mut s.a
+33 │ │         let mb = mut s.b
 34 │ │         ma += 1
 35 │ │         mb += 1
 36 │ │     }
@@ -310,56 +311,56 @@ note:
 note:
    ┌─ mut_ref_move_full.fe:32:13
    │
-32 │         let ma: mut u256 = mut s.a
-   │             ^^ mut u256
+32 │         let ma = mut s.a
+   │             ^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:32:28
+   ┌─ mut_ref_move_full.fe:32:18
    │
-32 │         let ma: mut u256 = mut s.a
-   │                            ^^^^^^^ mut u256
+32 │         let ma = mut s.a
+   │                  ^^^^^^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:32:32
+   ┌─ mut_ref_move_full.fe:32:22
    │
-32 │         let ma: mut u256 = mut s.a
-   │                                ^ Pair
+32 │         let ma = mut s.a
+   │                      ^ Pair
 
 note:
-   ┌─ mut_ref_move_full.fe:32:32
+   ┌─ mut_ref_move_full.fe:32:22
    │
-32 │         let ma: mut u256 = mut s.a
-   │                                ^^^ u256
+32 │         let ma = mut s.a
+   │                      ^^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:33:13
    │
-33 │         let mb: mut u256 = mut s.b
-   │             ^^ mut u256
+33 │         let mb = mut s.b
+   │             ^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:33:28
+   ┌─ mut_ref_move_full.fe:33:18
    │
-33 │         let mb: mut u256 = mut s.b
-   │                            ^^^^^^^ mut u256
+33 │         let mb = mut s.b
+   │                  ^^^^^^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:33:32
+   ┌─ mut_ref_move_full.fe:33:22
    │
-33 │         let mb: mut u256 = mut s.b
-   │                                ^ Pair
+33 │         let mb = mut s.b
+   │                      ^ Pair
 
 note:
-   ┌─ mut_ref_move_full.fe:33:32
+   ┌─ mut_ref_move_full.fe:33:22
    │
-33 │         let mb: mut u256 = mut s.b
-   │                                ^^^ u256
+33 │         let mb = mut s.b
+   │                      ^^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:34:9
    │
 34 │         ma += 1
-   │         ^^ mut u256
+   │         ^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:34:9
@@ -377,7 +378,7 @@ note:
    ┌─ mut_ref_move_full.fe:35:9
    │
 35 │         mb += 1
-   │         ^^ mut u256
+   │         ^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:35:9
@@ -436,33 +437,33 @@ note:
 note:
    ┌─ mut_ref_move_full.fe:40:9
    │
-40 │     let mut arr: [u256; 2] = [10, 20]
-   │         ^^^^^^^ [u256; 2]
+40 │     var arr: [u256; 2] = [10, 20]
+   │         ^^^ [u256; 2]
 
 note:
-   ┌─ mut_ref_move_full.fe:40:30
+   ┌─ mut_ref_move_full.fe:40:26
    │
-40 │     let mut arr: [u256; 2] = [10, 20]
-   │                              ^^^^^^^^ [u256; 2]
+40 │     var arr: [u256; 2] = [10, 20]
+   │                          ^^^^^^^^ [u256; 2]
+
+note:
+   ┌─ mut_ref_move_full.fe:40:27
+   │
+40 │     var arr: [u256; 2] = [10, 20]
+   │                           ^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:40:31
    │
-40 │     let mut arr: [u256; 2] = [10, 20]
+40 │     var arr: [u256; 2] = [10, 20]
    │                               ^^ u256
-
-note:
-   ┌─ mut_ref_move_full.fe:40:35
-   │
-40 │     let mut arr: [u256; 2] = [10, 20]
-   │                                   ^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:41:5
    │
 41 │ ╭     if true {
-42 │ │         let p0: mut u256 = mut arr[0]
-43 │ │         let p1: mut u256 = mut arr[1]
+42 │ │         let p0 = mut arr[0]
+43 │ │         let p1 = mut arr[1]
 44 │ │         p0 += 1
 45 │ │         p1 += 1
 46 │ │     }
@@ -479,8 +480,8 @@ note:
    │
 41 │       if true {
    │ ╭─────────────^
-42 │ │         let p0: mut u256 = mut arr[0]
-43 │ │         let p1: mut u256 = mut arr[1]
+42 │ │         let p0 = mut arr[0]
+43 │ │         let p1 = mut arr[1]
 44 │ │         p0 += 1
 45 │ │         p1 += 1
 46 │ │     }
@@ -489,68 +490,68 @@ note:
 note:
    ┌─ mut_ref_move_full.fe:42:13
    │
-42 │         let p0: mut u256 = mut arr[0]
-   │             ^^ mut u256
+42 │         let p0 = mut arr[0]
+   │             ^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:42:28
+   ┌─ mut_ref_move_full.fe:42:18
    │
-42 │         let p0: mut u256 = mut arr[0]
-   │                            ^^^^^^^^^^ mut u256
+42 │         let p0 = mut arr[0]
+   │                  ^^^^^^^^^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:42:32
+   ┌─ mut_ref_move_full.fe:42:22
    │
-42 │         let p0: mut u256 = mut arr[0]
-   │                                ^^^ [u256; 2]
+42 │         let p0 = mut arr[0]
+   │                      ^^^ [u256; 2]
 
 note:
-   ┌─ mut_ref_move_full.fe:42:32
+   ┌─ mut_ref_move_full.fe:42:22
    │
-42 │         let p0: mut u256 = mut arr[0]
-   │                                ^^^^^^ u256
+42 │         let p0 = mut arr[0]
+   │                      ^^^^^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:42:36
+   ┌─ mut_ref_move_full.fe:42:26
    │
-42 │         let p0: mut u256 = mut arr[0]
-   │                                    ^ usize
+42 │         let p0 = mut arr[0]
+   │                          ^ usize
 
 note:
    ┌─ mut_ref_move_full.fe:43:13
    │
-43 │         let p1: mut u256 = mut arr[1]
-   │             ^^ mut u256
+43 │         let p1 = mut arr[1]
+   │             ^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:43:28
+   ┌─ mut_ref_move_full.fe:43:18
    │
-43 │         let p1: mut u256 = mut arr[1]
-   │                            ^^^^^^^^^^ mut u256
+43 │         let p1 = mut arr[1]
+   │                  ^^^^^^^^^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:43:32
+   ┌─ mut_ref_move_full.fe:43:22
    │
-43 │         let p1: mut u256 = mut arr[1]
-   │                                ^^^ [u256; 2]
+43 │         let p1 = mut arr[1]
+   │                      ^^^ [u256; 2]
 
 note:
-   ┌─ mut_ref_move_full.fe:43:32
+   ┌─ mut_ref_move_full.fe:43:22
    │
-43 │         let p1: mut u256 = mut arr[1]
-   │                                ^^^^^^ u256
+43 │         let p1 = mut arr[1]
+   │                      ^^^^^^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:43:36
+   ┌─ mut_ref_move_full.fe:43:26
    │
-43 │         let p1: mut u256 = mut arr[1]
-   │                                    ^ usize
+43 │         let p1 = mut arr[1]
+   │                          ^ usize
 
 note:
    ┌─ mut_ref_move_full.fe:44:9
    │
 44 │         p0 += 1
-   │         ^^ mut u256
+   │         ^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:44:9
@@ -568,7 +569,7 @@ note:
    ┌─ mut_ref_move_full.fe:45:9
    │
 45 │         p1 += 1
-   │         ^^ mut u256
+   │         ^^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:45:9
@@ -585,14 +586,14 @@ note:
 note:
    ┌─ mut_ref_move_full.fe:48:9
    │
-48 │     let mut z: u256 = 5
-   │         ^^^^^ u256
+48 │     var z: u256 = 5
+   │         ^ u256
 
 note:
-   ┌─ mut_ref_move_full.fe:48:23
+   ┌─ mut_ref_move_full.fe:48:19
    │
-48 │     let mut z: u256 = 5
-   │                       ^ u256
+48 │     var z: u256 = 5
+   │                   ^ u256
 
 note:
    ┌─ mut_ref_move_full.fe:49:9

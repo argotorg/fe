@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/mixed_space_projections.fe
+---
+error[16-0001]: access conflict in `fn held_across`
+   ┌─ mixed_space_projections.fe:82:5
+   │
+81 │     let w = mut vault.value()
+   │                 ----- access opened here
+82 │     call_out(to)
+   │     ^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0007]: transport violation in `fn pick`
+   ┌─ mixed_space_projections.fe:33:40
+   │
+33 │         if c { mut self.value } else { mut self.hits.value }
+   │                --------------          ^^^^^^^^^^^^^^^^^^^ this yield names transient storage, but another yield names storage
+   │                │
+   │                yields storage

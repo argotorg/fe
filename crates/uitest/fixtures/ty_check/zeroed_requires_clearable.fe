@@ -1,0 +1,56 @@
+// A zeroed array holds zero values, so its element type must be
+// `Clearable`: zero must be a value of it. A type with `unsafe` fields is
+// not, since they carry an invariant zero need not satisfy.
+use core::abi::DynString
+use core::marker::Clearable
+use core::option::Option
+use core::ptr::{FixedMemBuffer, MemArray}
+use std::evm::Evm
+
+struct Pair {
+    a: u256,
+    b: u8,
+}
+
+// Rejected: the runtime grants an `Evm`; a zeroed one would forge it.
+fn forged_capability() {
+    let _ = MemArray<Evm>::new_zeroed(1)
+}
+
+// Rejected: a zeroed buffer would claim memory at address 0.
+fn zeroed_buffer() {
+    let _ = MemArray<FixedMemBuffer<32>>::new_zeroed(1)
+}
+
+// Rejected: a zeroed string breaks its size invariant.
+fn zeroed_string() {
+    let _ = MemArray<DynString>::new_zeroed(1)
+}
+
+// Rejected: an `Option` holding a type zero is no value of.
+fn zeroed_option() {
+    let _ = MemArray<Option<Evm>>::new_zeroed(1)
+}
+
+// Rejected: nothing says zero is a value of `T`.
+fn zeroed_generic<T>() {
+    let _ = MemArray<T>::new_zeroed(1)
+}
+
+// Rejected: zeroing existing elements.
+fn zero_strings(_ strings: mut MemArray<DynString>) {
+    strings.zero()
+}
+
+// Accepted.
+fn zeroed_words() -> MemArray<u256> {
+    MemArray<u256>::new_zeroed(2)
+}
+
+fn zeroed_pairs() -> MemArray<Pair> {
+    MemArray<Pair>::new_zeroed(2)
+}
+
+fn zeroed_clearable<T: Clearable>() -> MemArray<T> {
+    MemArray<T>::new_zeroed(2)
+}

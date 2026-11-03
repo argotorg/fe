@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::{GreenNodeData, ast::AstNode};
 
-use super::{GenericArgsOwner, LitInt, ast_node};
+use super::{GenericArgsOwner, LitInt, ast_node, support};
 use crate::{SyntaxKind as SK, SyntaxNode, SyntaxToken};
 
 ast_node! {
@@ -8,9 +8,11 @@ ast_node! {
     /// Use [`Self::kind`] to determine the type of expression.
     pub struct Expr,
     SK::BlockExpr
+    | SK::ClosureExpr
     | SK::BinExpr
     | SK::UnExpr
     | SK::CastExpr
+    | SK::TryExpr
     | SK::CallExpr
     | SK::MacroCallExpr
     | SK::MethodCallExpr
@@ -26,6 +28,7 @@ ast_node! {
     | SK::IfExpr
     | SK::MatchExpr
     | SK::WithExpr
+    | SK::UnsafeExpr
     | SK::ParenExpr
     | SK::AssignExpr
     | SK::AugAssignExpr,
@@ -36,9 +39,11 @@ impl Expr {
     pub fn kind(&self) -> ExprKind {
         match self.syntax().kind() {
             SK::BlockExpr => ExprKind::Block(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::ClosureExpr => ExprKind::Closure(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BinExpr => ExprKind::Bin(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::UnExpr => ExprKind::Un(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::CastExpr => ExprKind::Cast(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::TryExpr => ExprKind::Try(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::CallExpr => ExprKind::Call(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MacroCallExpr => ExprKind::MacroCall(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MethodCallExpr => {
@@ -58,6 +63,7 @@ impl Expr {
             SK::IfExpr => ExprKind::If(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MatchExpr => ExprKind::Match(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::WithExpr => ExprKind::With(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::UnsafeExpr => ExprKind::Unsafe(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ParenExpr => ExprKind::Paren(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::AssignExpr => ExprKind::Assign(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::AugAssignExpr => ExprKind::AugAssign(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -81,6 +87,45 @@ impl BlockExpr {
     /// Returns items declared in the block.
     pub fn items(&self) -> impl Iterator<Item = super::Item> {
         support::children(self.syntax())
+    }
+
+    /// Returns `true` if the block or any block nested in it declares an item.
+    pub fn declares_items(&self) -> bool {
+        fn contains_item(node: &GreenNodeData) -> bool {
+            node.children().any(|child| {
+                child
+                    .into_node()
+                    .is_some_and(|node| node.kind() == SK::Item.into() || contains_item(node))
+            })
+        }
+        contains_item(&self.syntax().green())
+    }
+}
+
+ast_node! {
+    /// `|arg: Type| -> Type expr`
+    pub struct ClosureExpr,
+    SK::ClosureExpr
+}
+impl ClosureExpr {
+    /// Returns the parameter list, or `None` for an empty `||` list.
+    pub fn params(&self) -> Option<super::FuncParamList> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the return type.
+    pub fn ret_ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the body.
+    pub fn body(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the `||` token for an empty parameter list.
+    pub fn empty_params_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Pipe2)
     }
 }
 
@@ -125,6 +170,19 @@ impl UnExpr {
             rowan::NodeOrToken::Token(token) => UnOp::from_token(token),
             rowan::NodeOrToken::Node(_) => None,
         })
+    }
+}
+
+ast_node! {
+    /// `expr?`: the payload of a `Some` or `Ok`, or else an early exit with
+    /// the `None` or `Err`.
+    pub struct TryExpr,
+    SK::TryExpr
+}
+impl TryExpr {
+    /// Returns the operand.
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
     }
 }
 
@@ -413,6 +471,21 @@ impl WithExpr {
 }
 
 ast_node! {
+    /// `unsafe { .. }`
+    pub struct UnsafeExpr,
+    SK::UnsafeExpr
+}
+impl UnsafeExpr {
+    pub fn unsafe_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::UnsafeKw)
+    }
+
+    pub fn block(&self) -> Option<BlockExpr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     pub struct WithParamList,
     SK::WithParamList,
     IntoIterator<Item=WithParam>,
@@ -498,9 +571,11 @@ pub enum ExprKind {
     Lit(LitExpr),
     Let(LetExpr),
     Block(BlockExpr),
+    Closure(ClosureExpr),
     Bin(BinExpr),
     Un(UnExpr),
     Cast(CastExpr),
+    Try(TryExpr),
     Call(CallExpr),
     MacroCall(MacroCallExpr),
     MethodCall(MethodCallExpr),
@@ -514,6 +589,7 @@ pub enum ExprKind {
     If(IfExpr),
     Match(MatchExpr),
     With(WithExpr),
+    Unsafe(UnsafeExpr),
     Paren(ParenExpr),
     Assign(AssignExpr),
     AugAssign(AugAssignExpr),
@@ -610,6 +686,8 @@ pub enum UnOp {
     BitNot(SyntaxToken),
     /// `mut`
     Mut(SyntaxToken),
+    /// `mut?`
+    MaybeMut(SyntaxToken),
     /// `ref`
     Ref(SyntaxToken),
     /// `*`
@@ -623,6 +701,7 @@ impl UnOp {
             UnOp::Not(token) => token.clone(),
             UnOp::BitNot(token) => token.clone(),
             UnOp::Mut(token) => token.clone(),
+            UnOp::MaybeMut(token) => token.clone(),
             UnOp::Ref(token) => token.clone(),
             UnOp::Deref(token) => token.clone(),
         }
@@ -635,6 +714,7 @@ impl UnOp {
             SK::Not => Some(Self::Not(token)),
             SK::Tilde => Some(Self::BitNot(token)),
             SK::MutKw => Some(Self::Mut(token)),
+            SK::MaybeMutKw => Some(Self::MaybeMut(token)),
             SK::RefKw => Some(Self::Ref(token)),
             SK::Star => Some(Self::Deref(token)),
             _ => None,
@@ -842,6 +922,14 @@ mod tests {
         }"#;
         let block_expr: BlockExpr = parse_expr(source);
         assert_eq!(block_expr.stmts().count(), 3);
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn unsafe_expr() {
+        let unsafe_expr: UnsafeExpr = parse_expr("unsafe { *p }");
+        assert!(unsafe_expr.unsafe_kw().is_some());
+        assert_eq!(unsafe_expr.block().unwrap().stmts().count(), 1);
     }
 
     #[test]

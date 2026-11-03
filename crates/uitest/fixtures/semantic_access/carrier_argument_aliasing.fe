@@ -1,0 +1,185 @@
+// A call's arguments, receiver and effects are checked against each other
+// whether their places are roots or reached through a `mut` parameter or
+// binding: a `mut` one excludes any other of the same place.
+struct Buf {
+    n: u256,
+    m: u256,
+}
+
+impl Buf {
+    fn set(mut self, _ other: Buf) -> u256 {
+        self.n = 7
+        other.n
+    }
+
+    fn set_n(mut self, _ v: u256) {
+        self.n = v
+    }
+
+    fn pick(mut self, _ other: Buf) -> mut u256 {
+        mut self.n
+    }
+}
+
+struct State {
+    n: u256,
+}
+
+fn view_eff(_ s: State) -> u256 uses (st: mut State) {
+    st.n = 9
+    s.n
+}
+
+fn read(_ b: Buf, _ c: Buf) -> u256 {
+    b.n + c.n
+}
+
+// Rejected: `mut self` and a view of the same place.
+fn via_param(_ b: mut Buf) -> u256 {
+    b.set(b)
+}
+
+// Rejected: through a `mut` binding too.
+fn via_binding(_ b: mut Buf) -> u256 {
+    let h = mut b
+    h.set(h)
+}
+
+// Rejected: a view argument and a `mut` effect of the same place.
+fn effect_alias(_ s: mut State) -> u256 {
+    with (State = s) {
+        view_eff(s)
+    }
+}
+
+// Rejected: a projection's `mut self` and a view argument.
+fn proj_alias(_ b: mut Buf) {
+    let x = mut b.pick(b)
+    x = 1
+}
+
+// Accepted: a snapshot argument is a copy.
+fn snapshot_arg(_ b: mut Buf) {
+    b.set_n(b.m + 1)
+}
+
+// Accepted: two views.
+fn two_views(_ b: mut Buf) -> u256 {
+    read(b, b)
+}
+
+// Accepted: disjoint parts.
+struct Two {
+    a: Buf,
+    b: Buf,
+}
+
+fn disjoint(_ t: mut Two) -> u256 {
+    t.a.set(t.b)
+}
+
+struct Counter {
+    n: u256,
+}
+
+impl Counter {
+    fn bump(mut self) -> u256 uses (st: Counter) {
+        let r = ref st.n
+        self.n = 5
+        r
+    }
+
+    fn bump_mut(mut self) -> u256 uses (st: mut Counter) {
+        self.n = 5
+        st.n = 6
+        self.n
+    }
+
+    fn proj(mut self) -> mut u256 uses (st: Counter) {
+        let seen = st.n
+        yield mut self.n
+        self.n += seen
+    }
+}
+
+struct Inner {
+    n: u256,
+}
+
+struct Outer {
+    inner: Inner,
+    s: Counter,
+}
+
+impl Outer {
+    fn write_read(mut self) -> u256 uses (i: Inner) {
+        self.inner.n = 5
+        i.n
+    }
+
+    fn get_mut(mut self) -> mut Counter {
+        mut self.s
+    }
+}
+
+// Rejected: `mut self` through a `mut` parameter and a read effect of the
+// same place.
+fn recv_param(_ p: mut Counter) -> u256 {
+    with (Counter = p) {
+        p.bump()
+    }
+}
+
+// Rejected: through a `mut` binding.
+fn recv_binding(_ p: mut Counter) -> u256 {
+    let h = mut p
+    with (Counter = h) {
+        h.bump()
+    }
+}
+
+// Rejected: a `mut` effect of the same place.
+fn recv_mut_effect(_ p: mut Counter) -> u256 {
+    with (Counter = p) {
+        p.bump_mut()
+    }
+}
+
+// Rejected: a projection's `mut self` and an effect of the same place.
+fn recv_projection(_ p: mut Counter) {
+    with (Counter = p) {
+        let g = mut p.proj()
+        g += 1
+    }
+}
+
+// Rejected: an effect provided by a field of the receiver.
+fn recv_field_effect(_ p: mut Outer) -> u256 {
+    with (Inner = p.inner) {
+        p.write_read()
+    }
+}
+
+// Rejected: a projection's grant as the receiver.
+fn recv_grant(_ o: mut Outer) -> u256 {
+    let g = mut o.get_mut()
+    with (Counter = g) {
+        g.bump()
+    }
+}
+
+// Rejected: a `for mut` element as the receiver.
+fn recv_loop(_ xs: mut [Counter; 2]) -> u256 {
+    var total: u256 = 0
+    for mut x in xs {
+        total += with (Counter = x) {
+            x.bump()
+        }
+    }
+    total
+}
+
+// Accepted: a data parameter is disjoint from the enclosing function's effect.
+fn recv_enclosing(_ p: mut Counter) -> u256 uses (st: Counter) {
+    p.bump()
+}

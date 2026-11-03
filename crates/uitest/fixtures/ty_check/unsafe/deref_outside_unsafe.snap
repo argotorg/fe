@@ -1,0 +1,94 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unsafe/deref_outside_unsafe.fe
+---
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+  ┌─ deref_outside_unsafe.fe:7:5
+  │
+7 │     *p
+  │     ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:11:5
+   │
+11 │     *p = 1
+   │     ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:12:5
+   │
+12 │     *p += 1
+   │     ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:16:18
+   │
+16 │     let _r = ref *p
+   │                  ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:17:18
+   │
+17 │     let _m = mut *p
+   │                  ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:21:11
+   │
+21 │     match *p {
+   │           ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:28:8
+   │
+28 │     if *p == 0 { true } else { false }
+   │        ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:32:5
+   │
+32 │     p.x
+   │     ^^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:36:5
+   │
+36 │     p.y = 2
+   │     ^^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:40:6
+   │
+40 │     (*p).x
+   │      ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:44:6
+   │
+44 │     (*p)[1]
+   │      ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:48:5
+   │
+48 │     *(*p)
+   │     ^^^^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:48:7
+   │
+48 │     *(*p)
+   │       ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:61:13
+   │
+61 │             *q
+   │             ^^ dereference of raw pointer
+
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+   ┌─ deref_outside_unsafe.fe:69:9
+   │
+69 │     x + *p
+   │         ^^ dereference of raw pointer

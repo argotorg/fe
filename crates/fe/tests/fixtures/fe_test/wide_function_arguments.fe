@@ -218,12 +218,12 @@ pub contract Wide {
 
 #[test]
 fn wide_recv() uses (evm: mut Evm) {
-    let addr = evm.create2<Wide>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<Wide>(value: Wei::zero(), args: (), salt: 0)
     let value: u256 = evm
         .call(
             addr,
             gas: 10000000,
-            value: 0,
+            value: Wei::zero(),
             message: WideMsg::Sum {
                 a00: 1,
                 a01: 2,
@@ -427,7 +427,7 @@ uses (counter: mut Counter)
 
 #[test]
 fn wide_call_preserves_mutable_effect() {
-    let mut counter = Counter { value: 10 }
+    var counter = Counter { value: 10 }
     with (Counter = counter) {
         let pair = with_effect(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
         assert!(pair.0 == 1506)
@@ -462,7 +462,7 @@ fn wide_result(
 #[test]
 fn wide_result_with_sixteen_arguments() {
     let result = wide_result(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
-    let mut i: usize = 0
+    var i: usize = 0
     while i < 16 {
         assert!(result[i] == (i as u256) + 1)
         i += 1

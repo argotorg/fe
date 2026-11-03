@@ -8,7 +8,7 @@ fn f(x: i32, y: i32) {
     let c = x
         << y
 
-    let mut d = x
+    var d = x
     d
         <<= y
 

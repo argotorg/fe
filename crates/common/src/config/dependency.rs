@@ -65,6 +65,7 @@ pub fn parse_dependencies_table(
                     let arguments = crate::dependencies::DependencyArguments {
                         name: Some(alias.clone()),
                         version: Some(version),
+                        allow_unsafe: false,
                     };
                     dependencies.push(DependencyEntry::new(
                         alias.clone(),
@@ -116,6 +117,15 @@ pub fn parse_dependencies_table(
                         diagnostics
                             .push(ConfigDiagnostic::InvalidDependencyVersion(version.into()));
                     }
+                }
+                match table.get("allow_unsafe") {
+                    Some(Value::Boolean(allow)) => arguments.allow_unsafe = *allow,
+                    Some(value) => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
+                        field: format!("{field_prefix}.{alias}.allow_unsafe").into(),
+                        found: value.type_str().to_lowercase().into(),
+                        expected: Some("boolean".into()),
+                    }),
+                    None => {}
                 }
 
                 if table.contains_key("source") {

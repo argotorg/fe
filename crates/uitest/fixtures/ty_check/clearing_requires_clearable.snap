@@ -1,0 +1,61 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/clearing_requires_clearable.fe
+---
+error[6-0003]: trait bound is not satisfied
+    ┌─ clearing_requires_clearable.fe:31:19
+    │
+ 31 │             books.remove(k)
+    │                   ^^^^^^
+    │                   │
+    │                   `Book` doesn't implement `Clearable`
+    │                   trait bound `StorageMap<u256, u256>: Clearable` is not satisfied
+    │
+    ┌─ src/evm/storage_map.fe:252:18
+    │
+252 │         where V: Clearable
+    │                  --------- required by this bound on `remove`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ clearing_requires_clearable.fe:32:20
+    │
+ 32 │             nested.remove(k)
+    │                    ^^^^^^ `StorageMap<u256, u256>` doesn't implement `Clearable`
+    │
+    ┌─ src/evm/storage_map.fe:252:18
+    │
+252 │         where V: Clearable
+    │                  --------- required by this bound on `remove`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ clearing_requires_clearable.fe:33:21
+    │
+ 33 │             shelves.clear_at(k)
+    │                     ^^^^^^^^
+    │                     │
+    │                     `Book` doesn't implement `Clearable`
+    │                     trait bound `StorageMap<u256, u256>: Clearable` is not satisfied
+    │
+    ┌─ src/evm/sol_array.fe:132:18
+    │
+132 │         where T: Clearable
+    │                  --------- required by this bound on `clear_at`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ clearing_requires_clearable.fe:48:7
+    │
+ 48 │     m.remove(k)
+    │       ^^^^^^ `V` doesn't implement `Clearable`
+    │
+    ┌─ src/evm/storage_map.fe:252:18
+    │
+252 │         where V: Clearable
+    │                  --------- required by this bound on `remove`
+
+error[6-0028]: trait implemented by the compiler
+   ┌─ clearing_requires_clearable.fe:15:6
+   │
+15 │ impl Clearable for Mine {}
+   │      ^^^^^^^^^ `Clearable` is implemented by the compiler and cannot be implemented

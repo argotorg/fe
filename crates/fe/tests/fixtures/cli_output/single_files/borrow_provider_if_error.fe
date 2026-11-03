@@ -8,9 +8,9 @@ pub contract C {
 
     recv Msg {
         Test -> u256 uses (mut value) {
-            let mut local = 1
+            var local = 1
             let pick = true
-            let target: mut u256 = if pick { mut value } else { mut local }
+            let target = if pick { mut value } else { mut local }
             target += 1
             0
         }

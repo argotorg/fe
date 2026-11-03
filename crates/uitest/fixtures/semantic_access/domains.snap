@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/domains.fe
+---
+error[16-0001]: access conflict in `fn SameField::__init__`
+   ┌─ domains.fe:34:9
+   │
+33 │         let a = mut first
+   │                 --------- access opened here
+34 │         first = 1
+   │         ^^^^^^^^^ cannot write to this place while a `mut` access of it is open
+
+error[16-0007]: transport violation in `fn pick`
+   ┌─ domains.fe:13:13
+   │
+10 │             mut self.value
+   │             -------------- yields storage
+   ·
+13 │             mut scratch
+   │             ^^^^^^^^^^^ this yield names memory, but another yield names storage
+
+warning[16-0012]: discarded writes in `fn pick`
+   ┌─ domains.fe:13:13
+   │
+13 │             mut scratch
+   │             ^^^^^^^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back

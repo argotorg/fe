@@ -1,0 +1,180 @@
+use core::marker::{Pinned, Storage, Transient}
+use core::ops::{Location, StateIndex}
+use std::evm::Ctx
+
+// Implementing `Pinned` pins the implementor to its `Space`: it is
+// state-only. A memory collection implements `Index` instead.
+struct Cells {
+    len: u256,
+}
+
+impl Pinned for Cells {
+    type Space = Storage
+}
+
+unsafe impl StateIndex for Cells {
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + 1 + key % 8, offset: 0 }
+    }
+}
+
+// Rejected: a type is pinned to a state space.
+struct Words {
+    base: u256,
+}
+
+impl Pinned for Words {
+    type Space = u256
+}
+
+// Rejected: a pinned type is never constructed as a memory value.
+fn make_cells() {
+    let _cells = Cells { len: 0 }
+}
+
+// Rejected: `locate` declares no effects.
+struct Noisy {
+    len: u256,
+}
+
+impl Pinned for Noisy {
+    type Space = Storage
+}
+
+unsafe impl StateIndex for Noisy {
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location uses (ctx: Ctx) {
+        Location { slot: root + key + ctx.address().word(), offset: 0 }
+    }
+}
+
+// A pin belongs to the implementation that applies to each instance.
+struct InStorage {}
+
+impl Pinned for InStorage {
+    type Space = Storage
+}
+
+struct InTransient {}
+
+impl Pinned for InTransient {
+    type Space = Transient
+}
+
+struct Cell<P> {
+    base: u256,
+}
+
+impl<P: Pinned> Pinned for Cell<P> {
+    type Space = P::Space
+}
+
+// Rejected: `Cell<InStorage>` is pinned to storage.
+fn make_stored_cell() {
+    let _cell: Cell<InStorage> = Cell { base: 0 }
+}
+
+// Rejected: `Cell<InTransient>` is pinned to transient storage.
+fn make_transient_cell() {
+    let _cell: Cell<InTransient> = Cell { base: 0 }
+}
+
+// Rejected: some `Cell<P>` is pinned.
+fn make_any_cell<P: Pinned>() {
+    let _cell: Cell<P> = Cell { base: 0 }
+}
+
+struct Split<P> {
+    base: u256,
+}
+
+impl Pinned for Split<InStorage> {
+    type Space = Storage
+}
+
+struct Unplaced {}
+
+// Accepted: no implementation applies to `Split<Unplaced>`.
+fn make_unplaced_split() -> Split<Unplaced> {
+    Split { base: 0 }
+}
+
+// Rejected: the implementation for `Split<InStorage>` pins it.
+fn make_stored_split() {
+    let _split: Split<InStorage> = Split { base: 0 }
+}
+
+// Rejected: a forwarded space is another pinned type's.
+trait Placement {
+    type Space
+}
+
+struct Forwarded<P> {}
+
+impl<P: Placement> Pinned for Forwarded<P> {
+    type Space = P::Space
+}
+
+struct Bound<P, S> {}
+
+// Accepted: under `P: Pinned<Space = S>`, `P::Space` is `S`, the pin of `P`.
+impl<P: Pinned<Space = S>, S> Pinned for Bound<P, S> {
+    type Space = P::Space
+}
+
+struct Qualified<P, S> {}
+
+// Accepted: the qualified path is the same space.
+impl<P: Pinned<Space = S>, S> Pinned for Qualified<P, S> {
+    type Space = <P as Pinned>::Space
+}
+
+struct Equal<P, S> {}
+
+// Accepted: `S` is the pin of `P`.
+impl<P: Pinned<Space = S>, S> Pinned for Equal<P, S> {
+    type Space = S
+}
+
+trait Marker<S>: Pinned<Space = S> {}
+
+struct Implied<P, S> {}
+
+// Accepted: `P: Marker<S>` implies `P: Pinned<Space = S>`.
+impl<P: Marker<S>, S> Pinned for Implied<P, S> {
+    type Space = S
+}
+
+trait WhereMarker<S>
+    where Self: Pinned<Space = S>
+{}
+
+struct WhereImplied<P, S> {}
+
+// Accepted: so does a trait's `where Self: Pinned<Space = S>`.
+impl<P: WhereMarker<S>, S> Pinned for WhereImplied<P, S> {
+    type Space = S
+}
+
+trait Ty {
+    type T
+}
+
+struct Transitive<P, Q> {}
+
+// Accepted: the binding names `Q::T`, the pin of `P`.
+impl<P: Pinned<Space = Q::T>, Q: Ty> Pinned for Transitive<P, Q> {
+    type Space = Q::T
+}
+
+struct Loose<P, S> {}
+
+// Rejected: nothing makes `S` a pinned type's space.
+impl<P: Pinned, S> Pinned for Loose<P, S> {
+    type Space = S
+}

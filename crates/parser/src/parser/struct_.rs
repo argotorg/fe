@@ -22,6 +22,7 @@ impl super::Parse for StructScope {
         parser.set_scope_recovery_stack(&[
             SyntaxKind::Ident,
             SyntaxKind::Lt,
+            SyntaxKind::LParen,
             SyntaxKind::WhereKw,
             SyntaxKind::LBrace,
         ]);
@@ -32,6 +33,14 @@ impl super::Parse for StructScope {
 
         parser.expect_and_pop_recovery_stack()?;
         parse_generic_params_opt(parser, false)?;
+
+        parser.expect_and_pop_recovery_stack()?;
+        // Tuple struct: `struct Month(pub u8)`, optionally followed by a where
+        // clause.
+        if parser.current_kind() == Some(SyntaxKind::LParen) {
+            parser.parse(TupleFieldDefListScope::default())?;
+            return parse_where_clause_opt(parser, ItemBlock::Absent);
+        }
 
         parser.expect_and_pop_recovery_stack()?;
         parse_where_clause_opt(parser, ItemBlock::Required)?;
@@ -57,12 +66,12 @@ impl super::Parse for RecordFieldDefListScope {
             true,
             SyntaxKind::RecordFieldDefList,
             (SyntaxKind::LBrace, SyntaxKind::RBrace),
-            |parser| parser.parse(RecordFieldDefScope::default()),
+            |parser| parser.parse(RecordFieldDefScope::new(true)),
         )
     }
 }
 
-define_scope! { pub(crate) RecordFieldDefScope, RecordFieldDef }
+define_scope! { pub(crate) RecordFieldDefScope { allow_unsafe: bool }, RecordFieldDef }
 impl super::Parse for RecordFieldDefScope {
     type Error = Recovery<ErrProof>;
 
@@ -87,7 +96,7 @@ impl super::Parse for RecordFieldDefScope {
         //    to Fe-V2.
         if parser.current_kind() == Some(SyntaxKind::FnKw) {
             parser.error_msg_on_current_token("function definition in struct is not allowed");
-            let checkpoint = parser.enter(super::ErrorScope::new(), None);
+            let checkpoint = parser.enter::<super::ErrorScope>(None);
             let result = parser.parse(FuncScope::default());
             parser.leave(checkpoint);
             result?;
@@ -95,6 +104,19 @@ impl super::Parse for RecordFieldDefScope {
         }
 
         parser.set_scope_recovery_stack(&[SyntaxKind::Colon]);
+
+        // An `unsafe` field holds a value the type's safe methods trust.
+        if matches!(
+            parser.peek_n_non_trivia(2).as_slice(),
+            [SyntaxKind::UnsafeKw, SyntaxKind::Ident]
+        ) {
+            if !self.allow_unsafe {
+                parser.error_msg_on_current_token(
+                    "only struct and enum variant fields can be `unsafe`",
+                );
+            }
+            parser.bump();
+        }
 
         // Optional `mut` marker for fields (e.g. `mut field: Type`)
         parser.bump_if(SyntaxKind::MutKw);
@@ -114,5 +136,51 @@ impl super::Parse for RecordFieldDefScope {
             parse_type(parser, None).map(|_| ())?;
         }
         Ok(())
+    }
+}
+
+define_scope! {
+    pub(crate) TupleFieldDefListScope,
+    TupleFieldDefList,
+    (RParen, Comma)
+}
+impl super::Parse for TupleFieldDefListScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_list(
+            parser,
+            false,
+            SyntaxKind::TupleFieldDefList,
+            (SyntaxKind::LParen, SyntaxKind::RParen),
+            |parser| parser.parse(TupleFieldDefScope::default()),
+        )
+    }
+}
+
+define_scope! { pub(crate) TupleFieldDefScope, TupleFieldDef }
+impl super::Parse for TupleFieldDefScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_attr_list(parser)?;
+
+        if parser.bump_if(SyntaxKind::PubKw) {
+            // Check for visibility restriction: pub(ingot), pub(super), pub(in path).
+            // Unlike record fields, a `(` here may also start a tuple type, as
+            // in `struct S(pub (u8, u8))`.
+            if matches!(
+                parser.peek_two(),
+                (
+                    Some(SyntaxKind::LParen),
+                    Some(SyntaxKind::IngotKw | SyntaxKind::SuperKw | SyntaxKind::InKw)
+                )
+            ) {
+                parser.bump(); // (
+                parse_vis_restriction(parser);
+            }
+        }
+
+        parse_type(parser, None).map(|_| ())
     }
 }

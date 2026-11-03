@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/while.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %do_while() -> i64 {
+func private %main() -> i64 {
     block0:
         jump block1;
 
@@ -13,16 +13,16 @@ func private %do_while() -> i64 {
         jump block2;
 
     block2:
-        v2.i64 = phi (0.i64 block1) (v6 block6);
-        v3.i1 = lt v2 10.i64;
+        v1.i64 = phi (0.i64 block1) (v6 block6);
+        v3.i1 = lt v1 10.i64;
         br v3 block3 block4;
 
     block3:
-        (v6.i64, v7.i1) = uaddo v2 1.i64;
+        (v6.i64, v7.i1) = uaddo v1 1.i64;
         br v7 block5 block6;
 
     block4:
-        return v2;
+        return v1;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -38,7 +38,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i64 = call %do_while;
+        v0.i64 = call %main;
         evm_stop;
 }
 

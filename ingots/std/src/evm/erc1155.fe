@@ -8,6 +8,7 @@ use core::ptr::MemBuffer
 use ingot::abi::{Bytes, DynArray, sol::sol}
 use super::effects::{Address, Call, Ctx}
 use super::token::TokenCall
+use super::units::Wei
 use ingot::evm::ops
 
 msg Erc1155Msg {
@@ -45,11 +46,11 @@ uses (ctx: Ctx, call: mut Call)
     if ctx.extcodesize(token) == 0 {
         return TokenCall::NoCode
     }
-    let mut ret = MemBuffer::empty()
+    var ret = MemBuffer::empty()
     let outcome = call.try_call_into(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc1155Msg::SafeTransferFrom { owner, receiver, id, amount, data },
         ret: mut ret,
     )
@@ -77,11 +78,11 @@ uses (ctx: Ctx, call: mut Call)
     if ctx.extcodesize(token) == 0 {
         return TokenCall::NoCode
     }
-    let mut ret = MemBuffer::empty()
+    var ret = MemBuffer::empty()
     let outcome = call.try_call_into(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc1155Msg::SafeBatchTransferFrom { owner, receiver, ids, amounts, data },
         ret: mut ret,
     )

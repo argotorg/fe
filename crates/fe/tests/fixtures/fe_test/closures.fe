@@ -1,0 +1,105 @@
+// Closures are values of their captures, copied or moved in, and implement
+// the callable shape of their parameter modes; unannotated parameters take
+// their modes and types from the shape the callee expects.
+use core::iter::{Collection, FromProducer}
+use core::option::Option
+use core::ptr::MemArray
+
+struct Account { balance: u256 }
+
+struct Totals { sum: u256, count: u256 }
+
+fn apply<F: Fn(u256) -> u256>(_ f: F, _ x: u256) -> u256 uses F::E {
+    f(x)
+}
+
+#[test]
+fn folds_and_predicates() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    assert!(xs.fold(0, |acc, x| acc + x) == 10)
+    let offset = 10
+    assert!(xs.fold(0, |acc, x| acc + x + offset) == 50)
+    assert!(xs.any(|x| x == 3))
+    assert!(!xs.any(|x| x == offset))
+    assert!(xs.count(|x| x % 2 == 0) == 2)
+    match xs.find(|x| x > 2) {
+        Option::Some(i) => assert!(i == 2)
+        Option::None => assert!(false)
+    }
+}
+
+#[test]
+fn non_copy_accumulator_and_items() {
+    let accounts = [Account { balance: 5 }, Account { balance: 7 }]
+    let totals = accounts.fold(Totals { sum: 0, count: 0 }, |acc, account| {
+        Totals { sum: acc.sum + account.balance, count: acc.count + 1 }
+    })
+    assert!(totals.sum == 12 && totals.count == 2)
+}
+
+#[test]
+fn adapters() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    var evens = 0
+    for x in xs.filter(|x| x % 2 == 0) {
+        evens += x
+    }
+    assert!(evens == 6)
+    var total = 0
+    for y in xs.map(|x| x + 1) {
+        total += y
+    }
+    assert!(total == 14)
+}
+
+#[test]
+fn direct_generic_and_nested_calls() {
+    let k = 3
+    assert!(apply(|x| x * k, 5) == 15)
+    let add = |a: u256, b: u256| a + b
+    assert!(add(2, 3) == 5)
+    let twice = |x: u256| apply(|y| y + x, x)
+    assert!(twice(4) == 8)
+}
+
+#[test]
+fn control_flow_in_bodies() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    let r = xs.fold(0, |acc, x| {
+        if x == 3 {
+            return acc
+        }
+        var i = 0
+        while true {
+            i += 1
+            if i == x {
+                break
+            }
+        }
+        acc + i
+    })
+    assert!(r == 7)
+}
+
+#[test]
+fn collect_and_chains() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    let doubled = MemArray::collect(xs, xs.map(|x| x * 2))
+    assert!(doubled.len() == 4)
+    assert!(doubled[3] == 8)
+    let offset = 100
+    let shifted: MemArray<u256> = MemArray::collect(xs, xs.map(|x| x + offset))
+    assert!(shifted[0] == 101)
+
+    var weighted = 0
+    for (i, x) in xs.filter(|x| x % 2 == 0).enumerate() {
+        weighted += (i as u256 + 1) * x
+    }
+    assert!(weighted == 2 + 8)
+
+    var taken = 0
+    for x in xs.filter(|x| x > 1).take(2) {
+        taken += x
+    }
+    assert!(taken == 5)
+}

@@ -252,8 +252,7 @@ mod tests {
         }
 
         // Also collect cursors from item definition sites
-        let scope_graph = top_mod.scope_graph(db);
-        for item in scope_graph.items_dfs(db) {
+        for &item in top_mod.all_items(db) {
             if let Some(name_span) = item.name_span()
                 && let Some(span) = name_span.resolve(db)
             {
@@ -261,7 +260,7 @@ mod tests {
             }
 
             // Collect cursors from non-item children (variants, fields, etc.)
-            for child in scope_graph.children(ScopeId::from_item(item)) {
+            for child in ScopeId::from_item(item).children(db) {
                 if child.to_item().is_some() {
                     continue;
                 }

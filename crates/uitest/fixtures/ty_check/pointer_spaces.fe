@@ -1,0 +1,43 @@
+use core::ptr::{StorPtr, TStorPtr}
+
+// Only core names a state pointer.
+#[pointer(storage)]
+type Slot<T> = *T
+
+fn casts(p: *u256, s: StorPtr<u256>, t: TStorPtr<u256>) {
+    // A pointer converts to and from its address word.
+    let word = s as u256
+    let _ = word as TStorPtr<u256>
+    // A pointer never changes its space.
+    let _ = p as StorPtr<u256>
+    let _ = s as *u256
+    let _ = t as StorPtr<u256>
+    // The address word is a `u256`.
+    let _ = s as u8
+}
+
+pub contract C {
+    // A memory address is meaningless after the transaction.
+    mut memory: *u256,
+    mut slot: StorPtr<u256>,
+}
+
+// Calldata is immutable input.
+fn calldata(c: core::ptr::CalldataPtr<u256>) -> u256 {
+    unsafe {
+        *c = 1
+        *c
+    }
+}
+
+fn set() uses (value: mut u256) {
+    value = 1
+}
+
+fn provide_calldata(c: core::ptr::CalldataPtr<u256>) {
+    unsafe {
+        with (mut *c) {
+            set()
+        }
+    }
+}

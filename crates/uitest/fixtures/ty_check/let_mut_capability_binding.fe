@@ -1,26 +1,26 @@
 struct Foo {}
 
+// Accepted: binding a view parameter copies a `Copy` value.
 fn copy_ok(x: u256) {
-    let mut y = x
+    var y = x
     let _z = x
     y += 1
 }
 
-fn explicit_mut_handle_bad(mut x: own u256) {
-    let mut h: mut u256 = mut x
+// Rejected: `var` binds an owned value, not an access.
+fn mut_access_binding_bad(var x: own u256) {
+    var h = mut x
     h = 1
 }
 
-fn inferred_mut_handle_bad(mut x: own u256) {
-    let mut h = mut x
-    h = 1
+// Accepted: binding an access binding copies its `Copy` referent.
+fn copy_through_access_ok(var x: own u256) {
+    let h = mut x
+    var y = h
+    y = 1
 }
 
-fn noncopy_view_origin_bad(x: Foo) {
-    let mut y = x
-}
-
-fn nested_pattern_bad(mut x: own u256) {
-    let (mut h, _): (mut u256, u256) = (mut x, 1)
-    h = 1
+// Rejected: an access is not a tuple element.
+fn nested_access_bad(var x: own u256) {
+    let (h, _) = (mut x, 1)
 }

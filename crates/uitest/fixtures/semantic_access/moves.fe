@@ -1,0 +1,119 @@
+// Ownership: moves, partial moves, reinitialization, and initialization.
+struct Item { n: u256 }
+struct Pair { a: Item, b: Item }
+
+fn consume(_ item: own Item) {}
+
+// Rejected: a value is used after it was moved.
+fn use_after_move() {
+    let item = Item { n: 1 }
+    consume(item)
+    consume(item)
+}
+
+// Accepted: disjoint fields of one aggregate are moved separately.
+fn partial_moves() {
+    let pair = Pair { a: Item { n: 1 }, b: Item { n: 2 } }
+    consume(pair.a)
+    consume(pair.b)
+}
+
+// Rejected: the whole aggregate is used after one field was moved.
+fn whole_after_partial_move() -> Pair {
+    let pair = Pair { a: Item { n: 1 }, b: Item { n: 2 } }
+    consume(pair.a)
+    pair
+}
+
+// Accepted: assigning a moved local reinitializes it.
+fn reinitialize() {
+    var item = Item { n: 1 }
+    consume(item)
+    item = Item { n: 2 }
+    consume(item)
+}
+
+// Rejected: a value moved on one branch is unavailable after the join.
+fn moved_on_one_branch(_ c: bool) {
+    let item = Item { n: 1 }
+    if c {
+        consume(item)
+    }
+    consume(item)
+}
+
+// Rejected: a value moved in a loop body is unavailable on the next iteration.
+fn moved_in_loop() {
+    let item = Item { n: 1 }
+    var i: u256 = 0
+    while i < 2 {
+        consume(item)
+        i += 1
+    }
+}
+
+// Accepted: each iteration moves the value it created.
+fn fresh_value_per_iteration() {
+    var i: u256 = 0
+    while i < 2 {
+        let item = Item { n: i }
+        consume(item)
+        i += 1
+    }
+}
+
+// Rejected: a local is read before every path initializes it.
+fn use_before_init(_ c: bool) -> u256 {
+    var x: u256
+    if c {
+        x = 1
+    }
+    x
+}
+
+// Accepted: a moved field is reinitialized by assigning it.
+fn reinitialize_field() -> Pair {
+    var pair = Pair { a: Item { n: 1 }, b: Item { n: 2 } }
+    consume(pair.a)
+    pair.a = Item { n: 3 }
+    pair
+}
+
+// Rejected: a field of a wholly moved aggregate cannot be assigned.
+fn assign_into_moved() {
+    var pair = Pair { a: Item { n: 1 }, b: Item { n: 2 } }
+    let moved = pair
+    pair.a = Item { n: 3 }
+}
+
+fn consume_both(_ first: own Item, _ second: own Item) {}
+
+// Rejected: one call cannot move the same value twice.
+fn call_moves_twice() {
+    let item = Item { n: 1 }
+    consume_both(item, item)
+}
+
+// Rejected: one aggregate cannot move the same value twice.
+fn aggregate_moves_twice() -> Pair {
+    let item = Item { n: 1 }
+    Pair { a: item, b: item }
+}
+
+fn replace(_ slot: mut Item, _ next: own Item) -> Item {
+    let old = slot
+    slot = next
+    old
+}
+
+// Accepted: a `mut` parameter moved out of is reinitialized before returning.
+fn reinitialized_mut_param() -> u256 {
+    var item = Item { n: 1 }
+    let old = replace(mut item, Item { n: 2 })
+    old.n + item.n
+}
+
+// Rejected: a `mut` parameter is left moved out of.
+fn take(_ slot: mut Item) -> Item {
+    slot
+}

@@ -2,6 +2,6 @@ pub fn foo() {
     let x: [i32; 3] = [1, 2]
     let z = [1, false, 1]
     
-    let mut x: [i32; 5] = [1; 10]
+    var x: [i32; 5] = [1; 10]
     let x = [1; false]
 }

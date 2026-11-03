@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/method.fe
 ---
@@ -8,21 +8,27 @@ note:
   │
 7 │   pub fn todo() -> ! {
   │ ╭────────────────────^
-8 │ │     evm::abort()
+8 │ │     unsafe { evm::abort() }
 9 │ │ }
   │ ╰─^ !
 
 note:
   ┌─ method.fe:8:5
   │
-8 │     evm::abort()
-  │     ^^^^^^^^^^ fn abort
+8 │     unsafe { evm::abort() }
+  │     ^^^^^^^^^^^^^^^^^^^^^^^ !
 
 note:
-  ┌─ method.fe:8:5
+  ┌─ method.fe:8:14
   │
-8 │     evm::abort()
-  │     ^^^^^^^^^^^^ !
+8 │     unsafe { evm::abort() }
+  │              ^^^^^^^^^^ fn abort
+
+note:
+  ┌─ method.fe:8:14
+  │
+8 │     unsafe { evm::abort() }
+  │              ^^^^^^^^^^^^ !
 
 note:
    ┌─ method.fe:17:68
@@ -84,7 +90,7 @@ note:
 note:
    ┌─ method.fe:24:59
    │
-24 │       pub fn get_or_insert(mut own self, inner: own T) -> T {
+24 │       pub fn get_or_insert(var own self, inner: own T) -> T {
    │ ╭───────────────────────────────────────────────────────────^
 25 │ │         match self {
 26 │ │             Self::Some(t) => t
@@ -188,7 +194,7 @@ note:
 36 │       pub fn unwrap<T>(self: own Self<T>) -> T {
    │ ╭──────────────────────────────────────────────^
 37 │ │         match self {
-38 │ │             Self::None => evm::abort()
+38 │ │             Self::None => unsafe { evm::abort() }
 39 │ │             Self::Some(t) => t
 40 │ │         }
 41 │ │     }
@@ -198,7 +204,7 @@ note:
    ┌─ method.fe:37:9
    │
 37 │ ╭         match self {
-38 │ │             Self::None => evm::abort()
+38 │ │             Self::None => unsafe { evm::abort() }
 39 │ │             Self::Some(t) => t
 40 │ │         }
    │ ╰─────────^ T
@@ -212,20 +218,26 @@ note:
 note:
    ┌─ method.fe:38:13
    │
-38 │             Self::None => evm::abort()
+38 │             Self::None => unsafe { evm::abort() }
    │             ^^^^^^^^^^ Option<T>
 
 note:
    ┌─ method.fe:38:27
    │
-38 │             Self::None => evm::abort()
-   │                           ^^^^^^^^^^ fn abort
+38 │             Self::None => unsafe { evm::abort() }
+   │                           ^^^^^^^^^^^^^^^^^^^^^^^ T
 
 note:
-   ┌─ method.fe:38:27
+   ┌─ method.fe:38:36
    │
-38 │             Self::None => evm::abort()
-   │                           ^^^^^^^^^^^^ T
+38 │             Self::None => unsafe { evm::abort() }
+   │                                    ^^^^^^^^^^ fn abort
+
+note:
+   ┌─ method.fe:38:36
+   │
+38 │             Self::None => unsafe { evm::abort() }
+   │                                    ^^^^^^^^^^^^ T
 
 note:
    ┌─ method.fe:39:13
@@ -271,7 +283,7 @@ note:
    │
 48 │   fn foo() -> Option<bool> {
    │ ╭──────────────────────────^
-49 │ │     let mut x: Option<i32> = Option::Some(1)
+49 │ │     var x: Option<i32> = Option::Some(1)
 50 │ │     let y: Option<i32> = Option::Some(2)
 51 │ │     let func_obj = get_t
    · │
@@ -282,26 +294,26 @@ note:
 note:
    ┌─ method.fe:49:9
    │
-49 │     let mut x: Option<i32> = Option::Some(1)
-   │         ^^^^^ Option<i32>
+49 │     var x: Option<i32> = Option::Some(1)
+   │         ^ Option<i32>
 
 note:
-   ┌─ method.fe:49:30
+   ┌─ method.fe:49:26
    │
-49 │     let mut x: Option<i32> = Option::Some(1)
-   │                              ^^^^^^^^^^^^ fn Some<i32>
+49 │     var x: Option<i32> = Option::Some(1)
+   │                          ^^^^^^^^^^^^ fn Some<i32>
 
 note:
-   ┌─ method.fe:49:30
+   ┌─ method.fe:49:26
    │
-49 │     let mut x: Option<i32> = Option::Some(1)
-   │                              ^^^^^^^^^^^^^^^ Option<i32>
+49 │     var x: Option<i32> = Option::Some(1)
+   │                          ^^^^^^^^^^^^^^^ Option<i32>
 
 note:
-   ┌─ method.fe:49:43
+   ┌─ method.fe:49:39
    │
-49 │     let mut x: Option<i32> = Option::Some(1)
-   │                                           ^ i32
+49 │     var x: Option<i32> = Option::Some(1)
+   │                                       ^ i32
 
 note:
    ┌─ method.fe:50:9

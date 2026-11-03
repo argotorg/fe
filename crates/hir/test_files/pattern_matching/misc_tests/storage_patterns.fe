@@ -69,7 +69,7 @@ fn match_boolean_values(b1: bool, b2: bool) -> u8 {
 }
 
 fn modify_values_in_match_arms(val: u8) -> u8 {
-    let mut my_enum: MyEnum = MyEnum::Unit
+    var my_enum: MyEnum = MyEnum::Unit
     
     match val {
         0 => {

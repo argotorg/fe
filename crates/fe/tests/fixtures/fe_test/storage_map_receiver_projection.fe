@@ -1,0 +1,72 @@
+use std::evm::{Evm, StorageMap}
+
+struct Wrapped {
+    map: StorageMap<u256, u256>,
+}
+
+impl Wrapped {
+    fn map(self) -> ref StorageMap<u256, u256> {
+        ref self.map
+    }
+}
+
+fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 {
+    wrapped.map().get(key: key)
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut first: Wrapped,
+    mut second: Wrapped,
+
+    recv Msg {
+        Set { lane, key, value } uses (mut first, mut second) {
+            if lane == 0 {
+                first.map.set(key: key, value: value)
+            } else {
+                second.map.set(key: key, value: value)
+            }
+        }
+
+        Get { lane, key } -> u256 uses (first, second) {
+            // The wrapped map is a place in the field this arm reads.
+            if lane == 0 {
+                read_wrapped(wrapped: first, key: key)
+            } else {
+                read_wrapped(wrapped: second, key: key)
+            }
+        }
+    }
+}
+
+#[test]
+fn receiver_projections_yield_the_field_map() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Set { lane: 1, key: 7, value: 42 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Get { lane: 1, key: 7 },
+    )
+    assert!(value == 42)
+    let untouched: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Get { lane: 0, key: 7 },
+    )
+    assert!(untouched == 0)
+}

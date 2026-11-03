@@ -1,0 +1,17 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 17
+expression: output
+input_file: tests/fixtures/fn_shapes.fe
+---
+fn fold<A, F: FnMut(own A, u256) -> A>(_ f: mut F) -> A uses F::E {}
+
+impl Fn(u256) -> bool for IsEven {
+    fn call(self, _ x: u256) -> bool {
+        true
+    }
+}
+
+fn unit<F: Fn()>(_ f: F) {}
+
+fn open<T, F: FnMut(T) -> _>(_ f: own F) {}

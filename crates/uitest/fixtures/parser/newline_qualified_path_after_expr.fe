@@ -12,7 +12,7 @@ fn f() {
         || x
     <T as Foo>::bar()
 
-    let mut y = x
+    var y = x
     y = x
     <T as Foo>::bar()
 }

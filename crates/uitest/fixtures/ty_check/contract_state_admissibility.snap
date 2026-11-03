@@ -1,0 +1,37 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/contract_state_admissibility.fe
+---
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ contract_state_admissibility.fe:13:14
+   │
+13 │     mut buf: MemBuffer,
+   │              ^^^^^^^^^ `MemBuffer` holds the memory pointer `*u8`
+   │
+   = memory lasts for one call, so a later one could not follow the pointer
+
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ contract_state_admissibility.fe:14:16
+   │
+14 │     mut items: MemArray<u256>,
+   │                ^^^^^^^^^^^^^^ `MemArray<u256>` holds the memory pointer `*u256`
+   │
+   = memory lasts for one call, so a later one could not follow the pointer
+
+error[3-0066]: a persistent collection cannot lie in transient storage
+   ┌─ contract_state_admissibility.fe:15:15
+   │
+15 │     mut cell: TSlot<StorageMap<u256, u256>>,
+   │               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TSlot<StorageMap<u256, u256>>` keeps `StorageMap<u256, u256>` in transient storage
+   │
+   = its entries would persist after the transient value holding it is gone
+
+error[3-0066]: a persistent collection cannot lie in transient storage
+   ┌─ contract_state_admissibility.fe:16:17
+   │
+16 │     mut ledger: TSlot<Ledger>,
+   │                 ^^^^^^^^^^^^^ `TSlot<Ledger>` keeps `StorageMap<u256, u256>` in transient storage
+   │
+   = its entries would persist after the transient value holding it is gone

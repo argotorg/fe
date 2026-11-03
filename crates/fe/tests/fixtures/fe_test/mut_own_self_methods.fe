@@ -9,7 +9,7 @@ impl Packet {
         self.version += 1
     }
 
-    fn retag(mut own self, _ by: u256) -> Packet {
+    fn retag(var own self, _ by: u256) -> Packet {
         self.version += by
         self
     }
@@ -21,7 +21,7 @@ impl Packet {
 
 #[test]
 fn test_mut_own_self_methods() {
-    let mut p = Packet {
+    var p = Packet {
         version: 1,
         size: 50,
     }

@@ -1,0 +1,38 @@
+// Both bodies of `slot` pass `note` the same effect slot: `log` is not
+// `mut?`, so one instance of `note` serves them.
+struct Log {
+    n: u256,
+}
+
+struct Cell {
+    v: u256,
+}
+
+fn note() -> u256 uses (log: Log) {
+    log.n
+}
+
+impl Cell {
+    fn slot(mut? self) -> mut? u256 uses (log: Log) {
+        let x = note()
+        mut? self.v
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Go { v: u256 } -> u256,
+}
+
+pub contract C {
+    mut cell: Cell,
+
+    recv M {
+        Go { v } -> u256 uses (mut cell) {
+            with (Log = Log { n: v }) {
+                cell.slot() = v
+                cell.slot()
+            }
+        }
+    }
+}

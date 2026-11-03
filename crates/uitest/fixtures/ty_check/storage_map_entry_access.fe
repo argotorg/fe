@@ -1,0 +1,35 @@
+use std::evm::StorageMap
+
+// A map's entry is a place, mutable through a mutable map: a view of the map
+// provides an entry for reading only.
+
+struct Position {
+    owner: u256,
+    debt: u256,
+}
+
+fn bump_debt() uses (p: mut Position) {
+    p.debt += 1
+}
+
+fn debt() -> u256 uses (p: Position) {
+    p.debt
+}
+
+type Positions = StorageMap<u256, Position>
+
+pub fn ok_read(_ m: Positions, key: u256) -> u256 {
+    with (m[key]) { debt() }
+}
+
+pub fn ok_write(_ m: mut Positions, key: u256) {
+    with (mut m[key]) { bump_debt() }
+}
+
+pub fn bad_write_through_view(_ m: Positions, key: u256) {
+    with (mut m[key]) { bump_debt() }
+}
+
+pub fn bad_assign_through_view(_ m: Positions, key: u256) {
+    m[key].debt = 1
+}

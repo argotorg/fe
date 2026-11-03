@@ -1,5 +1,5 @@
 fn f() -> i32 {
-    let mut x = -1
+    var x = -1
     x += 10
     x = x - 1
     x

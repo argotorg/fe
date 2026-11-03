@@ -1,0 +1,88 @@
+use core::ptr::{StorPtr, TStorPtr}
+use std::evm::{Evm, RawStorage}
+
+struct Cell {
+    value: u256,
+    count: u256,
+}
+
+msg M {
+    #[selector = 1]
+    Write { slot: u256, value: u256 } -> u256,
+    #[selector = 2]
+    ReadWord { slot: u256 } -> u256,
+    #[selector = 3]
+    Bump {} -> u256,
+    #[selector = 4]
+    Flag { slot: u256 } -> bool,
+    #[selector = 5]
+    Saved {} -> u256,
+}
+
+fn bump() -> u256 uses (cell: mut Cell) {
+    cell.count += 1
+    cell.count
+}
+
+// An access through a state pointer needs the contract's raw state authority.
+pub contract C uses (storage: mut RawStorage) {
+    // A storage pointer is a slot number, so it may persist in storage.
+    mut saved: StorPtr<Cell>,
+
+    recv M {
+        Write { slot, value } -> u256 uses (mut saved, mut storage) {
+            let cell = slot as StorPtr<Cell>
+            saved = cell
+            unsafe {
+                (*cell).value = value
+                (*cell).value
+            }
+        }
+
+        ReadWord { slot } -> u256 uses (storage) {
+            let word = slot as StorPtr<u256>
+            unsafe { *word }
+        }
+
+        Bump {} -> u256 uses (saved, mut storage) {
+            let cell = saved
+            unsafe {
+                with (mut *cell) {
+                    bump()
+                }
+            }
+        }
+
+        Flag { slot } -> bool uses (mut storage) {
+            let flag = slot as TStorPtr<bool>
+            unsafe {
+                *flag = true
+                *flag
+            }
+        }
+
+        Saved {} -> u256 uses (saved) {
+            saved as u256
+        }
+    }
+}
+
+#[test]
+fn state_pointers_address_their_space() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let written: u256 =
+        evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Write { slot: 40, value: 7 })
+    assert!(written == 7)
+    let word: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::ReadWord { slot: 40 })
+    assert!(word == 7)
+    let saved: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Saved {})
+    assert!(saved == 40)
+    let first: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Bump {})
+    assert!(first == 1)
+    let second: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Bump {})
+    assert!(second == 2)
+    let count: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::ReadWord { slot: 41 })
+    assert!(count == 2)
+    let flag: bool = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Flag { slot: 3 })
+    assert!(flag)
+}

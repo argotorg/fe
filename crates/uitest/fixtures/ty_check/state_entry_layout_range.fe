@@ -1,0 +1,21 @@
+// A collection's entries are laid out like fields, at the slots the
+// collection locates: an entry type that cannot be laid out makes the field
+// that holds the collection invalid.
+use std::evm::StorageMap
+
+msg M {
+    #[selector = 1]
+    Go -> u256,
+}
+
+pub contract C {
+    // Rejected: an entry would take more slots than a layout can count.
+    mut too_long: StorageMap<u256, [[u256; 0x100000000]; 0x100000000]>,
+    mut nested: StorageMap<u256, StorageMap<u256, [[u256; 0x100000000]; 0x100000000]>>,
+    // Accepted.
+    mut ok: StorageMap<u256, [u256; 4]>,
+
+    recv M {
+        Go -> u256 { 0 }
+    }
+}

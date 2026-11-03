@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/binding_places.fe
+---
+error[16-0001]: access conflict in `fn held`
+   ┌─ binding_places.fe:37:5
+   │
+36 │     let v = ref words[0]
+   │                 -------- projection opened here
+37 │     words.set(0, 5)
+   │     ^^^^^ cannot mutably access this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn view_reborrow`
+   ┌─ binding_places.fe:65:5
+   │
+63 │     let s = buf.span()
+   │             ---------- projection opened here
+64 │     let t = s
+65 │     buf.truncate(0)
+   │     ^^^ cannot mutably access this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn write_bound`
+   ┌─ binding_places.fe:74:13
+   │
+72 │         Pair { ref a, mut b, .. } => {
+   │                ----- access opened here
+73 │             b = 1
+74 │             p.a = 2
+   │             ^^^^^^^ cannot write to this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn component_ref`
+    ┌─ binding_places.fe:109:5
+    │
+108 │     let (i, ref x) = at(words, 0)
+    │                         ----- access opened here
+109 │     words.set(0, 5)
+    │     ^^^^^ cannot mutably access this place while a `ref` access of it is open
+
+error[16-0002]: move conflict in `fn unrestored`
+    ┌─ binding_places.fe:138:22
+    │
+138 │         Option::Some(buf) => consume(buf)
+    │                      ^^^ a `mut` parameter moved out of here must be reinitialized before the function returns; bind it with `mut` or `ref` to use it in place
+
+error[16-0002]: move conflict in `fn view_move`
+    ┌─ binding_places.fe:146:22
+    │
+146 │         Option::Some(buf) => consume(buf)
+    │                      ^^^ cannot move out of a place reached through a `ref` access; bind it with `ref` to read it in place
+
+error[16-0002]: move conflict in `fn grant_move`
+    ┌─ binding_places.fe:172:11
+    │
+172 │     match h.maybe_buf() {
+    │           ^^^^^^^^^^^^^ this access ends while its referent is moved out
+173 │         Option::Some(buf) => consume(buf)
+    │                      --- value is moved here; bind it with `mut` or `ref` to use it in place

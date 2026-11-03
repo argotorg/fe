@@ -346,66 +346,6 @@ fn test(flag: bool) -> u8 {
         },
     );
 }
-
-#[test]
-fn borrowed_match_keeps_match_ty_separate_from_binding_ty() {
-    with_func_body(
-        r#"
-struct Pair {
-    a: u256,
-}
-
-fn test(x: ref Pair) -> u256 {
-    match x {
-        Pair { a } => 0
-    }
-}
-"#,
-        "test",
-        |db, _diags, typed_body| {
-            let body = typed_body.body().unwrap();
-
-            let record_pat = body
-                .pats(db)
-                .keys()
-                .find(|pat| matches!(pat.data(db, body), Partial::Present(Pat::Record(..))))
-                .unwrap();
-            let binding_pat = body
-                .pats(db)
-                .keys()
-                .find(|pat| matches!(pat.data(db, body), Partial::Present(Pat::Path(..))))
-                .unwrap();
-
-            let record_root = typed_body.pattern_root(record_pat).unwrap();
-            let binding_root = typed_body.pattern_root(binding_pat).unwrap();
-            let store = typed_body.pattern_store();
-
-            assert!(
-                store
-                    .node(record_root)
-                    .match_ty()
-                    .raw()
-                    .as_capability(db)
-                    .is_none()
-            );
-            assert!(
-                store
-                    .node(binding_root)
-                    .match_ty()
-                    .raw()
-                    .as_capability(db)
-                    .is_none()
-            );
-            assert!(
-                typed_body
-                    .pat_ty(db, binding_pat)
-                    .as_capability(db)
-                    .is_some()
-            );
-        },
-    );
-}
-
 #[test]
 fn record_fields_are_canonicalized_in_pattern_ir() {
     with_func_body(

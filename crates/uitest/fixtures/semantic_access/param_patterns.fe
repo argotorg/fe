@@ -1,0 +1,13 @@
+struct Buf {
+    x: u256,
+}
+
+// A pattern binds a viewed parameter's parts as `let` does: a part that is
+// not `Copy` is read in place with `ref`.
+fn moved(_ (a, b): (Buf, Buf)) -> u256 {
+    a.x + b.x
+}
+
+fn read(_ (ref a, ref b): (Buf, Buf)) -> u256 {
+    a.x + b.x
+}

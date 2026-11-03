@@ -1,14 +1,13 @@
 use std::hash::Hash;
 
-use crate::core::hir_def::IdentId;
 use crate::hir_def::scope_graph::ScopeId;
 use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
-    ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
-    ty_def::{TyData, TyId},
+    ty_check::{ClosureCapture, ClosureInfo, EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
+    ty_def::{ClosureTy, TyBase as TyBaseData, TyData, TyId},
     visitor::TyVisitable,
 };
 use crate::analysis::{
@@ -43,6 +42,17 @@ pub trait TyFolder<'db> {
 
     fn fold_scope(&mut self, scope: ScopeId<'db>) -> ScopeId<'db> {
         scope
+    }
+
+    fn fold_const_context_key(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        key: SemanticInstanceKey<'db>,
+    ) -> SemanticInstanceKey<'db>
+    where
+        Self: Sized,
+    {
+        key.fold_with(db, self)
     }
 
     fn fold_const_capture(
@@ -92,10 +102,6 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         let ty = folder.fold_ty(db, *ty);
                         TyParam(param.clone(), ty)
                     }
-                    Hole(ty, hole_id) => {
-                        let ty = folder.fold_ty(db, *ty);
-                        Hole(ty, *hole_id)
-                    }
                     Value(value) => {
                         const_ty_from_sem_const(db, fold_sem_const(db, folder, value.value()))
                             .data(db)
@@ -111,7 +117,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         source,
                     } => Computation {
                         description: Box::new(description.as_ref().clone().fold_with(db, folder)),
-                        source: source.fold_with(db, folder),
+                        source: folder.fold_const_context_key(db, *source),
                     },
                     Invalid(ty) => Invalid(folder.fold_ty(db, *ty)),
                     Abstract(expr, ty) => {
@@ -146,13 +152,39 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
 
             AssocTy(assoc) => {
                 let folded_trait = assoc.trait_.fold_with(db, folder);
-
-                TyId::assoc_ty(db, folded_trait, assoc.name)
+                let folded = TyId::assoc_ty(db, folded_trait, assoc.name);
+                match assoc.mode {
+                    Some(mode) => folded.with_shape_mode(db, mode),
+                    None => folded,
+                }
             }
 
             QualifiedTy(trait_inst) => {
                 let folded_trait = trait_inst.fold_with(db, folder);
                 TyId::qualified_ty(db, folded_trait)
+            }
+
+            TyBase(TyBaseData::Closure(closure)) => {
+                let mut fold_tys = |tys: &Vec<TyId<'db>>| -> Vec<TyId<'db>> {
+                    tys.iter().map(|&ty| folder.fold_ty(db, ty)).collect()
+                };
+                let parent_args = fold_tys(closure.parent_args(db));
+                let captures = fold_tys(closure.captures(db));
+                let params = closure.params(db).clone().fold_with(db, folder);
+                let ret_ty = folder.fold_ty(db, closure.ret_ty(db));
+                let effects = closure.effects(db).clone().fold_with(db, folder);
+                TyId::closure(
+                    db,
+                    ClosureTy::new(
+                        db,
+                        closure.def(db),
+                        parent_args,
+                        captures,
+                        params,
+                        ret_ty,
+                        effects,
+                    ),
+                )
             }
 
             TyVar(_) | TyParam(_) | TyBase(_) | Never | Invalid(_) => self,
@@ -246,7 +278,7 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
             owner => owner,
         };
         let env = self.impl_env(db);
-        Self::new(
+        Self::of(
             db,
             owner,
             GenericSubst::new(
@@ -262,6 +294,7 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
                     .providers(db)
                     .clone()
                     .fold_with(db, folder),
+                self.effect_providers(db).param_spaces(db).clone(),
             ),
             ImplEnv::new(
                 db,
@@ -269,6 +302,7 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
                 env.assumptions(db).fold_with(db, folder),
                 env.witnesses(db).clone().fold_with(db, folder),
             ),
+            self.evidence(db).fold_with(db, folder),
         )
     }
 }
@@ -287,7 +321,6 @@ where
             ConstExpr::Invocation(ConstInvocation {
                 key: invocation.key.fold_with(db, folder),
                 args: invocation.args.clone().fold_with(db, folder),
-                parameter_owner: folder.fold_scope(invocation.parameter_owner),
             }),
         ),
         ConstExpr::ArithBinOp { op, mode, lhs, rhs } => {
@@ -319,6 +352,26 @@ where
             let to = folder.fold_ty(db, *to);
             ConstExprId::new(db, ConstExpr::Cast { expr, to })
         }
+        ConstExpr::Compare { op, lhs, rhs } => ConstExprId::new(
+            db,
+            ConstExpr::Compare {
+                op: *op,
+                lhs: folder.fold_ty(db, *lhs),
+                rhs: folder.fold_ty(db, *rhs),
+            },
+        ),
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => ConstExprId::new(
+            db,
+            ConstExpr::Select {
+                cond: folder.fold_ty(db, *cond),
+                then: folder.fold_ty(db, *then),
+                otherwise: folder.fold_ty(db, *otherwise),
+            },
+        ),
         ConstExpr::ArrayRepeat { value, len } => ConstExprId::new(
             db,
             ConstExpr::ArrayRepeat {
@@ -407,13 +460,13 @@ impl<'db> TyFoldable<'db> for TraitInstId<'db> {
             .map(|ty| ty.fold_with(db, folder))
             .collect::<Vec<_>>();
 
-        let assoc_type_bindings: IndexMap<IdentId<'db>, TyId<'db>> = self
+        let assoc_type_bindings: IndexMap<_, _> = self
             .assoc_type_bindings(db)
             .iter()
             .map(|(name, ty)| (*name, ty.fold_with(db, folder)))
             .collect();
 
-        TraitInstId::new(db, def, args, assoc_type_bindings)
+        TraitInstId::new(db, def, args, assoc_type_bindings, self.mode(db))
     }
 }
 
@@ -500,6 +553,38 @@ impl<'db> TyFoldable<'db> for LocalBinding<'db> {
                 ty: ty.fold_with(db, folder),
                 is_mut,
             },
+            LocalBinding::ParamPart {
+                site,
+                idx,
+                part,
+                access,
+                ty,
+            } => LocalBinding::ParamPart {
+                site,
+                idx,
+                part,
+                access,
+                ty: ty.fold_with(db, folder),
+            },
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ClosureInfo<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            params: self.params.fold_with(db, folder),
+            captures: self
+                .captures
+                .into_iter()
+                .map(|capture| ClosureCapture {
+                    binding: capture.binding.fold_with(db, folder),
+                    ty: capture.ty.fold_with(db, folder),
+                })
+                .collect(),
         }
     }
 }
@@ -511,9 +596,11 @@ impl<'db> TyFoldable<'db> for ExprProp<'db> {
     {
         let ty = self.ty.fold_with(db, folder);
         let binding = self.binding.map(|binding| binding.fold_with(db, folder));
+        let shape = self.shape.map(|shape| shape.fold_with(db, folder));
         Self {
             ty,
             binding,
+            shape,
             ..self
         }
     }
@@ -552,6 +639,13 @@ impl<'db> TyFoldable<'db> for PlaceProjection<'db> {
                 result_ty,
             } => PlaceProjection::Index {
                 index_expr,
+                result_ty: result_ty.fold_with(db, folder),
+            },
+            PlaceProjection::Entry {
+                key_expr,
+                result_ty,
+            } => PlaceProjection::Entry {
+                key_expr,
                 result_ty: result_ty.fold_with(db, folder),
             },
         }
@@ -594,12 +688,12 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
             arg: self.arg.fold_with(db, folder),
             with_source: self.with_source,
             pass_mode: self.pass_mode,
-            layout_view: self.layout_view,
             required_mut: self.required_mut,
             key_kind: self.key_kind,
             instantiated_key_ty: self.instantiated_key_ty.map(|ty| ty.fold_with(db, folder)),
             provider_target_ty: self.provider_target_ty.map(|ty| ty.fold_with(db, folder)),
             provider: self.provider,
+            row_arg: self.row_arg,
         }
     }
 }

@@ -1,0 +1,14 @@
+use core::hint::black_box
+use core::ptr::alloc_bytes
+
+type Pointer = *u8
+
+fn hide<T>(_ value: own T) -> T {
+    black_box(value)
+}
+
+pub fn main() -> u256 {
+    let pointer: Pointer = alloc_bytes(32)
+    hide(pointer)
+    0
+}

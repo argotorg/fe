@@ -1,0 +1,61 @@
+// A state-only type, one that holds a pinned type, never lives in memory. A
+// generic function's own check puts a parameter or effect of one in its pin's
+// space, or in storage, so a reentrant call across an open access to it is
+// rejected before any caller instantiates the function.
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::{Address, Call, Mutex, StorageMap}
+
+struct Store { total: u256, m: StorageMap<u256, u256> }
+
+struct Plain { total: u256 }
+
+fn ping() uses (call: mut Call) {
+    var output = MemBuffer::empty()
+    let _ = call.raw_call(
+        addr: Address::new(1), gas: 0, value: Wei::zero(), args: MemSpan::empty(), ret: mut output,
+    )
+}
+
+// Rejected: a call crosses an open entry of a map effect.
+fn map_entry() uses (m: mut StorageMap<u256, u256>, call: mut Call) {
+    let entry = mut m[1]
+    ping()
+    entry = 2
+}
+
+// Rejected: a call crosses an open field of a state-only effect.
+fn store_field() uses (s: mut Store, call: mut Call) {
+    let total = mut s.total
+    ping()
+    total = 1
+}
+
+// Rejected: a call crosses a mutex's open value grant.
+fn mutex_value() uses (vault: mut Mutex<u256>, call: mut Call) {
+    assert!(vault.try_lock())
+    let value = mut vault.value()
+    ping()
+    value += 1
+    vault.unlock()
+}
+
+// Accepted: the effect's accesses close before the call and reopen after it.
+fn closed_across() uses (s: mut Store, call: mut Call) {
+    s.total = 1
+    ping()
+    s.m[1] = 2
+}
+
+// Rejected: a `mut` parameter of a state-only type is a state place, open
+// for the whole body.
+fn state_param(_ s: mut Store) uses (call: mut Call) {
+    s.total = 1
+    ping()
+}
+
+// Accepted: a parameter of an ordinary type stays in memory.
+fn memory_param(_ p: mut Plain) uses (call: mut Call) {
+    let total = mut p.total
+    ping()
+    total = 1
+}

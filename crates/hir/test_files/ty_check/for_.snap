@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/for_.fe
 ---
@@ -9,7 +10,7 @@ note:
  6 │   fn foo() -> i256 {
    │ ╭──────────────────^
  7 │ │     let arr = [1, 2, 3, 4, 5]
- 8 │ │     let mut res = 0
+ 8 │ │     var res = 0
  9 │ │     for i in arr {
    · │
 13 │ │     res
@@ -61,14 +62,14 @@ note:
 note:
   ┌─ for_.fe:8:9
   │
-8 │     let mut res = 0
-  │         ^^^^^^^ i256
+8 │     var res = 0
+  │         ^^^ i256
 
 note:
-  ┌─ for_.fe:8:19
+  ┌─ for_.fe:8:15
   │
-8 │     let mut res = 0
-  │                   ^ i256
+8 │     var res = 0
+  │               ^ i256
 
 note:
   ┌─ for_.fe:9:9
@@ -120,7 +121,7 @@ note:
    │
 16 │   fn bar(foo_arr: [Foo; 10]) -> i32 {
    │ ╭───────────────────────────────────^
-17 │ │     let mut res = 0
+17 │ │     var res = 0
 18 │ │     for Foo {x, y} in foo_arr {
 19 │ │         res += x + y
    · │
@@ -131,14 +132,14 @@ note:
 note:
    ┌─ for_.fe:17:9
    │
-17 │     let mut res = 0
-   │         ^^^^^^^ i32
+17 │     var res = 0
+   │         ^^^ i32
 
 note:
-   ┌─ for_.fe:17:19
+   ┌─ for_.fe:17:15
    │
-17 │     let mut res = 0
-   │                   ^ i32
+17 │     var res = 0
+   │               ^ i32
 
 note:
    ┌─ for_.fe:18:9

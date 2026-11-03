@@ -1,0 +1,38 @@
+use core::Option
+use core::ptr
+mod local {
+    pub fn malloc() -> u8 { 40 }
+    pub fn free() -> u8 { 2 }
+}
+fn exercise() {
+    let block = match ptr::try_alloc_bytes(1024) {
+        Option::Some(block) => block
+        Option::None => core::panic()
+    }
+    let empty = match ptr::try_alloc_bytes(0) {
+        Option::Some(empty) => empty
+        Option::None => core::panic()
+    }
+    unsafe {
+        *ptr::offset(block, 1023) = local::malloc() + local::free()
+        core::assert(*ptr::offset(block, 1023) == 42)
+    }
+    match ptr::try_alloc_bytes(usize::max()) {
+        Option::Some(_) => core::panic()
+        Option::None => {}
+    }
+    unsafe {
+        ptr::dealloc(block)
+        ptr::dealloc(empty)
+    }
+}
+#[test]
+fn fallible_allocations_and_releases() { exercise() }
+pub fn main() -> i32 {
+    exercise()
+    // The controlled host allocator refuses this size.
+    match ptr::try_alloc_bytes(4096) {
+        Option::Some(_) => 1
+        Option::None => 0
+    }
+}

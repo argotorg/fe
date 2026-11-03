@@ -16,13 +16,13 @@ pub trait Add<RHS: Add>
 
 
 pub trait Parse {
-    fn parse<S: TokenStream>(mut self, mut parser: Parser<S>)
+    fn parse<S: TokenStream>(mut self, var parser: own Parser<S>)
 }
 
 impl<S> Parser<S> 
     where S: TokenStream + Clone
 {
-    pub fn parse<T: Parse>(mut self, mut scope: T, checkpoint: Option<Checkpoint>) -> (bool, Checkpoint) {
+    pub fn parse<T: Parse>(mut self, var scope: own T, checkpoint: Option<Checkpoint>) -> (bool, Checkpoint) {
         (SyntaxNode::new_root(self.builder.finish()), self.errors)
     }
 }

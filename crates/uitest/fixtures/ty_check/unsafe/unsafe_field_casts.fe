@@ -1,0 +1,36 @@
+mod lib {
+    pub struct Cell {
+        pub unsafe p: *u8,
+    }
+
+    pub struct Wrapper {
+        pub cell: Cell,
+    }
+}
+
+use lib::{Cell, Wrapper}
+
+// Rejected: a newtype cast builds a `Cell`, initializing its `unsafe` field.
+fn forge(_ p: *u8) -> Cell {
+    p as Cell
+}
+
+// Rejected: so does a cast through the field's address.
+fn forge_word(_ w: usize) -> Cell {
+    w as Cell
+}
+
+// Accepted: in an `unsafe` block the code vouches for the new value.
+fn vouched(_ p: *u8) -> Cell {
+    unsafe { p as Cell }
+}
+
+// Accepted: reading the field out is safe.
+fn read(_ c: Cell) -> *u8 {
+    c as *u8
+}
+
+// Accepted: unwrapping reuses the `Cell` the wrapper holds.
+fn unwrap(_ w: Wrapper) -> Cell {
+    w as Cell
+}

@@ -1,0 +1,28 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_static_assert.fe
+---
+note: 
+  ┌─ goto_static_assert.fe:6:15
+  │
+6 │ static_assert(A == B)
+  │               ^ -> goto_static_assert::A
+
+note: 
+  ┌─ goto_static_assert.fe:6:20
+  │
+6 │ static_assert(A == B)
+  │                    ^ -> goto_static_assert::B
+
+note: 
+  ┌─ goto_static_assert.fe:7:16
+  │
+7 │ static_assert((A + 1) > B)
+  │                ^ -> goto_static_assert::A
+
+note: 
+  ┌─ goto_static_assert.fe:7:25
+  │
+7 │ static_assert((A + 1) > B)
+  │                         ^ -> goto_static_assert::B

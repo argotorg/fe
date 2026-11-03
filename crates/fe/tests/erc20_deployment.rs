@@ -1,5 +1,6 @@
 //! ERC20 deployment-size regression from banteg/evm-compiler-bench, with
-//! independent ABI expectations. No Solidity compiler or Foundry is required.
+//! independent ABI expectations. The snapshot records code sizes. No Solidity
+//! compiler or Foundry is required.
 
 use contract_harness::{ExecutionOptions, HarnessError, RuntimeInstance};
 use ethers_core::{
@@ -7,6 +8,7 @@ use ethers_core::{
     types::Address,
 };
 use fe::bench_support::compile_fe_sonatina_bytecode;
+use test_utils::snap_test;
 
 fn calldata(signature: &str, args: &[Token]) -> Vec<u8> {
     AbiParser::default()
@@ -17,21 +19,13 @@ fn calldata(signature: &str, args: &[Token]) -> Vec<u8> {
 }
 
 #[test]
-#[allow(clippy::print_stderr)] // Report benchmark measurements with --nocapture.
 fn erc20_deployment_size_and_behavior() {
     let source = include_str!("evm_compiler_bench/erc20_minimal.fe");
     let bytecode = compile_fe_sonatina_bytecode(source, "Erc20Minimal", "Erc20Minimal")
         .expect("compile ERC20 benchmark");
-    // The 9c9840ce4 baseline was 1,675/1,551 bytes. Keep meaningful headroom
-    // below that baseline without pinning incidental instruction ordering.
-    assert!(
-        bytecode.deploy.len() <= 1_390,
-        "ERC20 initcode regressed to {} bytes",
-        bytecode.deploy.len()
-    );
-    assert!(
-        bytecode.runtime.len() <= 1_250,
-        "ERC20 runtime size regressed to {} bytes",
+    let report = format!(
+        "initcode bytes: {}\nruntime bytes: {}\n",
+        bytecode.deploy.len(),
         bytecode.runtime.len()
     );
     let mut runtime = RuntimeInstance::deploy_with_constructor_args(
@@ -118,4 +112,11 @@ fn erc20_deployment_size_and_behavior() {
             calldata("Error(string)", &[Token::String(message.into())])
         );
     }
+    snap_test!(
+        report,
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/evm_compiler_bench/erc20_minimal"
+        )
+    );
 }

@@ -1,0 +1,5 @@
+// `dep::round_trip` runs unsafe code, and nothing trusts `dep`.
+#[test]
+fn untrusted_unsafe_use() {
+    assert!(dep::round_trip(7) == 7)
+}

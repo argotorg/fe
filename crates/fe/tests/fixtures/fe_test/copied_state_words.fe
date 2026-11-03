@@ -1,0 +1,60 @@
+use std::evm::{Evm, RawStorage, TSlot, read_storage_word, read_transient_word}
+
+struct Pair { low: u128, high: u128 }
+
+msg WordsMsg {
+    #[selector = 1]
+    Set { value: u256, low: u128, high: u128, temporary: u256 },
+    #[selector = 2]
+    Read {} -> (u256, u256, u256, u256),
+    #[selector = 3]
+    SnapshotThenWrite { next: u256 } -> (u256, u256),
+}
+
+pub contract Words {
+    mut value: u256,
+    mut packed: Pair,
+    #[slot(9)]
+    mut temporary: TSlot<u256>,
+
+    recv WordsMsg {
+        Set { value: next, low, high, temporary: transient_value }
+        uses (mut value, mut packed, mut temporary)
+        {
+            value = next
+            packed.low = low
+            packed.high = high
+            temporary.write(transient_value)
+        }
+        Read {} -> (u256, u256, u256, u256)
+        uses (value, packed, temporary, storage: RawStorage)
+        {
+            // Shared typed views can coexist with copied word reads.
+            let held = ref packed
+            let raw = read_storage_word(1)
+            assert(raw == (held.low as u256) | ((held.high as u256) << 128))
+            assert(read_storage_word(0) == value)
+            assert(read_transient_word(9) == temporary.read())
+            (read_storage_word(0), raw, read_transient_word(9), read_storage_word(9))
+        }
+        SnapshotThenWrite { next } -> (u256, u256)
+        uses (mut value, storage: RawStorage)
+        {
+            let before = read_storage_word(0)
+            value = next
+            (before, read_storage_word(0))
+        }
+    }
+}
+
+#[test]
+fn copied_words_read_declared_state_and_remain_independent() uses (evm: mut Evm) {
+    let target = evm.create2<Words>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: target, gas: 300000, value: Wei::zero(), message: WordsMsg::Set {
+        value: u256::max(), low: 17, high: 29, temporary: 42,
+    })
+    let result = evm.call(addr: target, gas: 300000, value: Wei::zero(), message: WordsMsg::Read {})
+    assert(result == (u256::max(), 17 | (29 << 128), 42, 0))
+    let snapshot = evm.call(addr: target, gas: 300000, value: Wei::zero(), message: WordsMsg::SnapshotThenWrite { next: 7 })
+    assert(snapshot == (u256::max(), 7))
+}

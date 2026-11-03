@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/storage_entries_and_raw_pointers.fe
+---
+error[16-0001]: access conflict in `fn Ledger::recv[0][0]`
+   ┌─ storage_entries_and_raw_pointers.fe:33:38
+   │
+31 │             let total = mut book.total
+   │                         -------------- access opened here
+32 │             let p = slot as StorPtr<Position>
+33 │             unsafe { with (mut *p) { bump_debt() } }
+   │                                      ^^^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open

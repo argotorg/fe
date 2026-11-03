@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/known_restrictions.fe
+---
+error[16-0001]: access conflict in `fn aggregate_cursor`
+   ┌─ known_restrictions.fe:32:5
+   │
+31 │     let x = ref g.at(cur)
+   │                      --- access opened here
+32 │     cur = (0, 1)
+   │     ^^^^^^^^^^^^ cannot write to this place while a `ref` access of it is open
+
+error[16-0002]: move conflict in `fn StorageCopy::__init__`
+   ┌─ known_restrictions.fe:66:28
+   │
+66 │         item.n = n + spend(token)
+   │                            ^^^^^ cannot move out of storage, which never holds a hole

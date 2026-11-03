@@ -1,0 +1,78 @@
+// A call's arguments are evaluated left to right, each opening its access
+// where it appears: a variable passed by value is copied or moved there, and
+// a view argument's access stays open until the call returns.
+use core::ptr::MemArray
+
+struct Bag { items: MemArray<u256>, n: u256 }
+
+impl Bag {
+    fn n(self) -> u256 { self.n }
+}
+
+fn make() -> Bag {
+    Bag { items: MemArray::new_zeroed(1), n: 5 }
+}
+
+fn take(_ bag: own Bag, _ k: u256) -> u256 { bag.n + k }
+
+fn inspect(_ bag: Bag, _ k: u256) -> u256 { bag.n + k }
+
+fn reset(_ bag: mut Bag) -> u256 {
+    bag.n = 0
+    7
+}
+
+fn bump(_ x: mut u256) -> u256 {
+    x = 0
+    7
+}
+
+fn add(_ a: u256, _ b: u256) -> u256 { a + b }
+
+// Accepted: a `Copy` variable is copied before a later argument writes it.
+fn copied_then_written() -> u256 {
+    var x: u256 = 5
+    add(x, bump(mut x))
+}
+
+// Rejected: the first argument moves the variable a later argument reads.
+fn moved_then_read() -> u256 {
+    let bag = make()
+    take(bag, bag.n())
+}
+
+// Rejected: the first argument moves the variable a later argument writes.
+fn moved_then_written() -> u256 {
+    var bag = make()
+    take(bag, reset(mut bag))
+}
+
+// Rejected: a later argument writes the variable a view argument reads.
+fn viewed_then_written() -> u256 {
+    var bag = make()
+    inspect(bag, reset(mut bag))
+}
+
+// Rejected: a later argument writes a `mut` parameter a view argument reads.
+fn viewed_then_written_param(_ bag: mut Bag) -> u256 {
+    inspect(bag, reset(mut bag))
+}
+
+// Rejected: through a `mut` binding.
+fn viewed_then_written_binding() -> u256 {
+    var b = make()
+    let bag = mut b
+    inspect(bag, reset(mut bag))
+}
+
+// Accepted: a `Copy` value read through a `mut` parameter or binding is read
+// where it appears, before a later argument writes it.
+fn copied_then_written_param(_ x: mut u256) -> u256 {
+    add(x, bump(mut x))
+}
+
+fn copied_then_written_binding() -> u256 {
+    var y: u256 = 5
+    let x = mut y
+    add(x, bump(mut x))
+}

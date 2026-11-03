@@ -1,0 +1,3 @@
+struct Missing(u8,, u16)
+struct Unclosed(u8
+struct Next(u8)

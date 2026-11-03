@@ -1,0 +1,39 @@
+// A call evaluates its callee unless the callee is a path naming the function:
+// a call of a function item value runs the expression that produced it.
+struct Counter {
+    hits: u256,
+}
+
+fn triple(_ x: u256) -> u256 {
+    x * 3
+}
+
+fn checked<T>(_ ok: bool, _ t: own T) -> T {
+    assert(ok)
+    t
+}
+
+fn noisy<T>(_ t: own T) -> T uses (c: mut Counter) {
+    c.hits += 1
+    t
+}
+
+#[test]
+fn callee_runs() {
+    var c = Counter { hits: 0 }
+    with (Counter = c) {
+        assert(noisy(triple)(5) == 15)
+    }
+    assert(c.hits == 1)
+    let r = {
+        c.hits += 5
+        triple
+    }(2)
+    assert(r == 6 && c.hits == 6)
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn guard_runs() {
+    let r = checked(false, triple)(5)
+    assert(r == 15)
+}

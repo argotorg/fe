@@ -1,0 +1,86 @@
+// A pattern on a non-`Copy` place matches it in place: its tests read the
+// place, and only a plain name moves what it binds.
+use core::ptr::MemBuffer
+
+enum Status { A, B }
+struct Store { status: Status, buf: Option<MemBuffer>, n: usize }
+
+fn keep(_ b: own MemBuffer) -> MemBuffer {
+    b
+}
+
+// Accepted: matches that bind nothing move nothing.
+fn twice(_ s: own Store) -> usize {
+    let x = match s.status {
+        Status::A => 0
+        Status::B => 1
+    }
+    let y = if let Status::A = s.status { 2 } else { 3 }
+    let _ = s.buf
+    x + y + s.n
+}
+
+// Accepted: a plain name moves only its component.
+fn partial(_ s: own Store) -> usize {
+    let n = match s.buf {
+        Option::Some(b) => b.len()
+        Option::None => 0
+    }
+    n + s.n + match s.status {
+        Status::A => 0
+        Status::B => 1
+    }
+}
+
+// Rejected: the payload was moved by the first match.
+fn payload_twice(_ s: own Store) -> usize {
+    let a = match s.buf {
+        Option::Some(b) => b.len()
+        Option::None => 0
+    }
+    let c = match s.buf {
+        Option::Some(b) => b.len()
+        Option::None => 0
+    }
+    a + c
+}
+
+// Rejected: moving a payload out of a view, in a match and in a `let`.
+fn from_view(_ s: Store) -> MemBuffer {
+    match s.buf {
+        Option::Some(b) => keep(b)
+        Option::None => MemBuffer::alloc(0)
+    }
+}
+
+fn from_view_let(_ s: Store) -> Option<MemBuffer> {
+    let Store { buf, .. } = s
+    buf
+}
+
+// Accepted: a `ref` binding reads the payload in place.
+fn from_view_ref(_ s: Store) -> usize {
+    match s.buf {
+        Option::Some(ref b) => b.len()
+        Option::None => 0
+    }
+}
+
+// Rejected: a payload moved out of a `mut` parameter is never restored.
+fn from_mut(_ s: mut Store) -> MemBuffer {
+    match s.buf {
+        Option::Some(b) => keep(b)
+        Option::None => MemBuffer::alloc(0)
+    }
+}
+
+// Accepted: the hole is restored before the parameter's access closes.
+fn swap_out(_ s: mut Store) -> MemBuffer {
+    match s.buf {
+        Option::Some(b) => {
+            s.buf = Option::None
+            keep(b)
+        }
+        Option::None => MemBuffer::alloc(0)
+    }
+}

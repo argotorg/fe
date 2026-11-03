@@ -1,6 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
-assertion_line: 45
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/assign.fe
 ---
@@ -17,7 +17,7 @@ note:
    ┌─ assign.fe:21:9
    │
 21 │         self.inner = Inner { x, y }
-   │         ^^^^ mut Outer
+   │         ^^^^ Outer
 
 note:
    ┌─ assign.fe:21:9
@@ -50,11 +50,11 @@ note:
    │                                 ^ u32
 
 note:
-   ┌─ assign.fe:25:34
+   ┌─ assign.fe:25:38
    │
-25 │   pub fn foo(opt: own Option<i32>) {
-   │ ╭──────────────────────────────────^
-26 │ │     let mut x = 1
+25 │   pub fn foo(var opt: own Option<i32>) {
+   │ ╭──────────────────────────────────────^
+26 │ │     var x = 1
 27 │ │     let y = 2
 28 │ │
    · │
@@ -65,14 +65,14 @@ note:
 note:
    ┌─ assign.fe:26:9
    │
-26 │     let mut x = 1
-   │         ^^^^^ i32
+26 │     var x = 1
+   │         ^ i32
 
 note:
-   ┌─ assign.fe:26:17
+   ┌─ assign.fe:26:13
    │
-26 │     let mut x = 1
-   │                 ^ i32
+26 │     var x = 1
+   │             ^ i32
 
 note:
    ┌─ assign.fe:27:9
@@ -113,20 +113,20 @@ note:
 note:
    ┌─ assign.fe:31:9
    │
-31 │     let mut arr = [false; 10]
-   │         ^^^^^^^ [bool; 10]
+31 │     var arr = [false; 10]
+   │         ^^^ [bool; 10]
 
 note:
-   ┌─ assign.fe:31:19
+   ┌─ assign.fe:31:15
    │
-31 │     let mut arr = [false; 10]
-   │                   ^^^^^^^^^^^ [bool; 10]
+31 │     var arr = [false; 10]
+   │               ^^^^^^^^^^^ [bool; 10]
 
 note:
-   ┌─ assign.fe:31:20
+   ┌─ assign.fe:31:16
    │
-31 │     let mut arr = [false; 10]
-   │                    ^^^^^ bool
+31 │     var arr = [false; 10]
+   │                ^^^^^ bool
 
 note:
    ┌─ assign.fe:32:5
@@ -161,44 +161,44 @@ note:
 note:
    ┌─ assign.fe:34:9
    │
-34 │     let mut tuple = (true, false, Inner { x, y })
-   │         ^^^^^^^^^ (bool, bool, Inner)
+34 │     var tuple = (true, false, Inner { x, y })
+   │         ^^^^^ (bool, bool, Inner)
 
 note:
-   ┌─ assign.fe:34:21
+   ┌─ assign.fe:34:17
    │
-34 │     let mut tuple = (true, false, Inner { x, y })
-   │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool, bool, Inner)
+34 │     var tuple = (true, false, Inner { x, y })
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool, bool, Inner)
 
 note:
-   ┌─ assign.fe:34:22
+   ┌─ assign.fe:34:18
    │
-34 │     let mut tuple = (true, false, Inner { x, y })
-   │                      ^^^^ bool
+34 │     var tuple = (true, false, Inner { x, y })
+   │                  ^^^^ bool
 
 note:
-   ┌─ assign.fe:34:28
+   ┌─ assign.fe:34:24
    │
-34 │     let mut tuple = (true, false, Inner { x, y })
-   │                            ^^^^^ bool
+34 │     var tuple = (true, false, Inner { x, y })
+   │                        ^^^^^ bool
 
 note:
-   ┌─ assign.fe:34:35
+   ┌─ assign.fe:34:31
    │
-34 │     let mut tuple = (true, false, Inner { x, y })
-   │                                   ^^^^^^^^^^^^^^ Inner
+34 │     var tuple = (true, false, Inner { x, y })
+   │                               ^^^^^^^^^^^^^^ Inner
 
 note:
-   ┌─ assign.fe:34:43
+   ┌─ assign.fe:34:39
    │
-34 │     let mut tuple = (true, false, Inner { x, y })
-   │                                           ^ i32
+34 │     var tuple = (true, false, Inner { x, y })
+   │                                       ^ i32
 
 note:
-   ┌─ assign.fe:34:46
+   ┌─ assign.fe:34:42
    │
-34 │     let mut tuple = (true, false, Inner { x, y })
-   │                                              ^ u32
+34 │     var tuple = (true, false, Inner { x, y })
+   │                                          ^ u32
 
 note:
    ┌─ assign.fe:35:5
@@ -233,32 +233,32 @@ note:
 note:
    ┌─ assign.fe:37:9
    │
-37 │     let mut outer = Outer { inner: Inner { x, y } }
-   │         ^^^^^^^^^ Outer
+37 │     var outer = Outer { inner: Inner { x, y } }
+   │         ^^^^^ Outer
 
 note:
-   ┌─ assign.fe:37:21
+   ┌─ assign.fe:37:17
    │
-37 │     let mut outer = Outer { inner: Inner { x, y } }
-   │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Outer
+37 │     var outer = Outer { inner: Inner { x, y } }
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Outer
 
 note:
-   ┌─ assign.fe:37:36
+   ┌─ assign.fe:37:32
    │
-37 │     let mut outer = Outer { inner: Inner { x, y } }
-   │                                    ^^^^^^^^^^^^^^ Inner
+37 │     var outer = Outer { inner: Inner { x, y } }
+   │                                ^^^^^^^^^^^^^^ Inner
 
 note:
-   ┌─ assign.fe:37:44
+   ┌─ assign.fe:37:40
    │
-37 │     let mut outer = Outer { inner: Inner { x, y } }
-   │                                            ^ i32
+37 │     var outer = Outer { inner: Inner { x, y } }
+   │                                        ^ i32
 
 note:
-   ┌─ assign.fe:37:47
+   ┌─ assign.fe:37:43
    │
-37 │     let mut outer = Outer { inner: Inner { x, y } }
-   │                                               ^ u32
+37 │     var outer = Outer { inner: Inner { x, y } }
+   │                                           ^ u32
 
 note:
    ┌─ assign.fe:38:5
@@ -361,20 +361,20 @@ note:
 note:
    ┌─ assign.fe:47:9
    │
-47 │     let mut g = Gen { t: false }
-   │         ^^^^^ Gen<bool>
+47 │     var g = Gen { t: false }
+   │         ^ Gen<bool>
 
 note:
-   ┌─ assign.fe:47:17
+   ┌─ assign.fe:47:13
    │
-47 │     let mut g = Gen { t: false }
-   │                 ^^^^^^^^^^^^^^^^ Gen<bool>
+47 │     var g = Gen { t: false }
+   │             ^^^^^^^^^^^^^^^^ Gen<bool>
 
 note:
-   ┌─ assign.fe:47:26
+   ┌─ assign.fe:47:22
    │
-47 │     let mut g = Gen { t: false }
-   │                          ^^^^^ bool
+47 │     var g = Gen { t: false }
+   │                      ^^^^^ bool
 
 note:
    ┌─ assign.fe:48:5

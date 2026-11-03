@@ -26,6 +26,7 @@
 use core::ptr::MemBuffer
 use super::effects::{Address, Call, Ctx, RawCallOutcome, revert}
 use super::token::TokenCall
+use super::units::Wei
 use ingot::abi::sol::sol
 use ingot::evm::ops
 
@@ -46,7 +47,7 @@ uses (ctx: Ctx, call: mut Call)
     let ok = call.call_with_default(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc20Msg::Transfer { receiver, amount },
         default: true,
     )
@@ -63,7 +64,7 @@ uses (ctx: Ctx, call: mut Call)
     let ok = call.call_with_default(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc20Msg::TransferFrom { owner, receiver, amount },
         default: true,
     )
@@ -80,7 +81,7 @@ uses (ctx: Ctx, call: mut Call)
     let ok = call.call_with_default(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc20Msg::Approve { spender, amount },
         default: true,
     )
@@ -107,11 +108,11 @@ uses (ctx: Ctx)
 pub fn try_transfer(token: Address, receiver: Address, amount: u256) -> TokenCall
 uses (ctx: Ctx, call: mut Call)
 {
-    let mut ret = MemBuffer::with_capacity(32)
+    var ret = MemBuffer::with_capacity(32)
     let outcome = call.try_call_into(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc20Msg::Transfer { receiver, amount },
         ret: mut ret,
     )
@@ -143,11 +144,11 @@ pub fn try_transfer_from(
 ) -> TokenCall
 uses (ctx: Ctx, call: mut Call)
 {
-    let mut ret = MemBuffer::with_capacity(32)
+    var ret = MemBuffer::with_capacity(32)
     let outcome = call.try_call_into(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc20Msg::TransferFrom { owner, receiver, amount },
         ret: mut ret,
     )
@@ -159,11 +160,11 @@ uses (ctx: Ctx, call: mut Call)
 pub fn try_approve(token: Address, spender: Address, amount: u256) -> TokenCall
 uses (ctx: Ctx, call: mut Call)
 {
-    let mut ret = MemBuffer::with_capacity(32)
+    var ret = MemBuffer::with_capacity(32)
     let outcome = call.try_call_into(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc20Msg::Approve { spender, amount },
         ret: mut ret,
     )

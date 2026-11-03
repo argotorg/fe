@@ -14,10 +14,9 @@ use crate::analysis::{
 };
 use crate::{
     AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, AbiStructDiagnostic,
-    AbiStructDiagnosticKind, AttrMisuseError, ErrorDiagnostic, EventError, EventErrorKind,
-    FieldModifierError, MsgDiagnostic, ParserError,
+    AbiStructDiagnosticKind, EventError, EventErrorKind, LowerDiagnostic,
     hir_def::{ModuleTree, Partial, TopLevelMod, TypeKind},
-    lower::{parse_file_impl, scope_graph_impl, top_mod_ast},
+    lower::{func_body_graph_impl, parse_file_impl, top_mod_ast},
     semantic::constraints_for,
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -97,8 +96,9 @@ impl ModuleAnalysisPass for ParsingPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        parse_file_impl::accumulated::<ParserError>(db, top_mod)
-            .into_iter()
+        parse_file_impl(db, top_mod)
+            .errors
+            .iter()
             .map(|d| Box::new(d.clone()) as _)
             .collect::<Vec<_>>()
     }
@@ -113,9 +113,11 @@ impl ModuleAnalysisPass for MsgLowerPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        scope_graph_impl::accumulated::<MsgDiagnostic>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
+        lower_diagnostics(db, top_mod)
+            .filter_map(|d| match d {
+                LowerDiagnostic::Msg(d) => Some(Box::new(d.clone()) as _),
+                _ => None,
+            })
             .collect::<Vec<_>>()
     }
 }
@@ -129,9 +131,11 @@ impl ModuleAnalysisPass for EventLowerPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        let mut diags = scope_graph_impl::accumulated::<EventError>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
+        let mut diags = lower_diagnostics(db, top_mod)
+            .filter_map(|d| match d {
+                LowerDiagnostic::Event(d) => Some(Box::new(d.clone()) as _),
+                _ => None,
+            })
             .collect::<Vec<_>>();
         diags.extend(
             accumulated_abi_field_diagnostics(db, top_mod, AbiFieldContext::Event)
@@ -238,6 +242,14 @@ fn semantic_indexed_dynamic_field_errors<'db>(
     diags.into_iter()
 }
 
+/// The diagnostics reported while lowering `top_mod`'s items.
+fn lower_diagnostics<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> impl Iterator<Item = &'db LowerDiagnostic> {
+    top_mod.scope_graph(db).lower_diagnostics.iter()
+}
+
 // Syntactic non-path field types are rejected during event/error lowering so we
 // can skip generated selector/TOPIC0 constants. This catches unsupported shapes
 // that only become visible after type aliases are resolved.
@@ -246,10 +258,10 @@ fn accumulated_abi_field_diagnostics<'db>(
     top_mod: TopLevelMod<'db>,
     context: AbiFieldContext,
 ) -> impl Iterator<Item = AbiFieldDiagnostic> {
-    scope_graph_impl::accumulated::<AbiFieldDiagnostic>(db, top_mod)
-        .into_iter()
-        .filter(move |diag| diag.context == context)
-        .cloned()
+    lower_diagnostics(db, top_mod).filter_map(move |diag| match diag {
+        LowerDiagnostic::AbiField(diag) if diag.context == context => Some(diag.clone()),
+        _ => None,
+    })
 }
 
 /// Tuple fields, and fields without a Solidity type name for the signature,
@@ -370,9 +382,11 @@ impl ModuleAnalysisPass for ErrorLowerPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        let mut diags = scope_graph_impl::accumulated::<ErrorDiagnostic>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
+        let mut diags = lower_diagnostics(db, top_mod)
+            .filter_map(|d| match d {
+                LowerDiagnostic::Error(d) => Some(Box::new(d.clone()) as _),
+                _ => None,
+            })
             .collect::<Vec<_>>();
         diags.extend(
             accumulated_abi_field_diagnostics(db, top_mod, AbiFieldContext::Error)
@@ -404,9 +418,11 @@ impl ModuleAnalysisPass for AbiStructLowerPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        let mut diags = scope_graph_impl::accumulated::<AbiStructDiagnostic>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
+        let mut diags = lower_diagnostics(db, top_mod)
+            .filter_map(|d| match d {
+                LowerDiagnostic::AbiStruct(d) => Some(Box::new(d.clone()) as _),
+                _ => None,
+            })
             .collect::<Vec<_>>();
         diags.extend(
             non_copy_array_field_errors(
@@ -497,15 +513,24 @@ impl ModuleAnalysisPass for AttrMisusePass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        let mut diags = scope_graph_impl::accumulated::<AttrMisuseError>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
+        // Loop attributes in a function body are checked when the body is
+        // lowered, which may happen apart from the module.
+        let func_body_diagnostics = top_mod.all_funcs(db).iter().flat_map(|&func| {
+            func_body_graph_impl(db, func)
+                .iter()
+                .flat_map(|graph| &graph.lower_diagnostics)
+        });
+        let mut diags = lower_diagnostics(db, top_mod)
+            .chain(func_body_diagnostics)
+            .filter_map(|d| match d {
+                LowerDiagnostic::AttrMisuse(d) => Some(Box::new(d.clone()) as _),
+                _ => None,
+            })
             .collect::<Vec<_>>();
-        diags.extend(
-            scope_graph_impl::accumulated::<FieldModifierError>(db, top_mod)
-                .into_iter()
-                .map(|d| Box::new(d.clone()) as _),
-        );
+        diags.extend(lower_diagnostics(db, top_mod).filter_map(|d| match d {
+            LowerDiagnostic::FieldModifier(d) => Some(Box::new(d.clone()) as _),
+            _ => None,
+        }));
         diags
     }
 }

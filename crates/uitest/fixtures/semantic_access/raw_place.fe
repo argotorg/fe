@@ -1,0 +1,49 @@
+// A `#[raw_place]` projection has nothing to resume after its yield: no code
+// runs there, it keeps no access or session of its own open across it, and
+// it yields no place of its own frame. Its body is checked where it is
+// written, so an unsafe split may take its calls as components.
+
+struct Pair { a: u256, b: u256 }
+
+// Accepted: a place of its input, with no code after the yield.
+#[raw_place]
+fn first(_ p: mut Pair) -> mut u256 {
+    mut p.a
+}
+
+// Accepted: another `#[raw_place]` projection's grant, forwarded.
+#[raw_place]
+fn first_again(_ p: mut Pair) -> mut u256 {
+    first(mut p)
+}
+
+// Rejected: code after the yield.
+#[raw_place]
+fn with_slide(_ p: mut Pair) -> mut u256 {
+    yield mut p.a
+    p.b = 1
+}
+
+// Rejected: a place of the projection's own frame.
+#[raw_place]
+fn frame_local() -> mut u256 {
+    var x = 0
+    mut x
+}
+
+fn second(_ p: mut Pair) -> mut u256 {
+    mut p.b
+}
+
+// Rejected: forwards an ordinary projection's grant, whose session it keeps
+// open across the yield.
+#[raw_place]
+fn forwards_ordinary(_ p: mut Pair) -> mut u256 {
+    second(mut p)
+}
+
+// Rejected: not a projection.
+#[raw_place]
+fn not_a_projection(_ p: Pair) -> u256 {
+    p.a
+}

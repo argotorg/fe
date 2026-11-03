@@ -1,0 +1,77 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/marker_positions.fe
+---
+error[8-0124]: `ref` goes on the bound names, not on the scrutinee
+   ┌─ marker_positions.fe:12:11
+   │
+12 │     match ref o {
+   │           ^^^ remove `ref` here
+13 │         Option::Some(p) => p.a
+   │                      - write `ref p`
+   │
+   = a `ref` there would hold all of it, not just the components the names bind
+
+error[8-0124]: `mut` goes on the bound names, not on the scrutinee
+   ┌─ marker_positions.fe:19:11
+   │
+19 │     match mut o {
+   │           ^^^ remove `mut` here
+20 │         Option::Some(v) => v += 1
+   │                      - write `mut v`
+   │
+   = a `mut` there would make plain names write through; a plain name binds a value
+
+error[8-0124]: `mut` goes on the bound names, not on the scrutinee
+   ┌─ marker_positions.fe:23:30
+   │
+23 │     if let Option::Some(v) = mut o {
+   │                         -    ^^^ remove `mut` here
+   │                         │
+   │                         write `mut v`
+   │
+   = a `mut` there would make plain names write through; a plain name binds a value
+
+error[8-0124]: `mut` goes on the bound names, not on a destructured initializer
+   ┌─ marker_positions.fe:30:18
+   │
+30 │     let (a, b) = mut t
+   │          -  -    ^^^ remove `mut` here
+   │          │  │
+   │          │  write `mut b`
+   │          write `mut a`
+   │
+   = a `mut` there would make plain names write through; a plain name binds a value
+
+error[8-0124]: `mut` goes on the bound names, not on a destructured initializer
+   ┌─ marker_positions.fe:32:25
+   │
+32 │     let Pair { a, b } = mut p
+   │                -  -     ^^^ remove `mut` here
+   │                │  │
+   │                │  write `mut b`
+   │                write `mut a`
+   │
+   = a `mut` there would make plain names write through; a plain name binds a value
+
+error[8-0124]: `mut` goes on the loop's item, not on its base
+   ┌─ marker_positions.fe:46:14
+   │
+46 │     for x in mut xs {
+   │         -    ^^^ remove `mut` here
+   │         │
+   │         write `mut x`
+   │
+   = the item pattern chooses the traversal: `for mut x in xs` writes each element
+
+error[8-0124]: `ref` goes on the loop's item, not on its base
+   ┌─ marker_positions.fe:50:14
+   │
+50 │     for y in ref ys {
+   │         -    ^^^ remove `ref` here
+   │         │
+   │         write `ref y`
+   │
+   = the item pattern chooses the traversal: `for ref x in xs` reads each element in place

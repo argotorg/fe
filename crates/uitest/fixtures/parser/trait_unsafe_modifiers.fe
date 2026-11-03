@@ -1,0 +1,7 @@
+trait Foo {
+    unsafe fn ok(self)
+    unsafe unsafe fn dup(self)
+    unsafe type Assoc
+    unsafe const C: u256
+    unsafe pub fn bar(self)
+}

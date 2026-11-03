@@ -1,0 +1,114 @@
+use std::evm::{Address, StorageMap}
+
+// A StorageMap's entries are paths under the map's place, apart from the
+// struct's other fields: a `mut` access of a sibling field does not conflict
+// with the map operations a method performs through `self`.
+
+pub struct Ledger {
+    pub balances: StorageMap<Address, u256>,
+    pub total_supply: u256,
+}
+
+impl Ledger {
+    fn balance(mut self, _ owner: Address) -> u256
+       
+    {
+        self.balances.get(key: owner)
+    }
+
+    fn credit(mut self, _ to: Address, amount: u256) {
+        let balance = self.balances.get(key: to)
+        self.balances.set(key: to, value: balance + amount)
+    }
+
+    fn mint(mut self, _ to: Address, amount: u256) {
+        self.total_supply += amount
+        self.credit(to, amount)
+    }
+}
+
+pub struct Outer {
+    pub ledger: Ledger,
+    pub epoch: u256,
+}
+
+msg LedgerMsg {
+    #[selector = 1]
+    Mint { to: Address, amount: u256 },
+    #[selector = 2]
+    Balance { owner: Address } -> u256,
+    #[selector = 3]
+    Hold { to: Address } -> u256,
+}
+
+// Accepted: init and recv arms call receiver methods on a contract field.
+pub contract Direct {
+    mut ledger: Ledger,
+
+    init(owner: Address) uses (mut ledger) {
+        ledger.mint(owner, amount: 100)
+    }
+
+    recv LedgerMsg {
+        Mint { to, amount } uses (mut ledger) {
+            ledger.mint(to, amount)
+        }
+        Balance { owner } -> u256 uses (mut ledger) {
+            ledger.balance(owner)
+        }
+        // A live borrow of the scalar field does not overlap the map entry.
+        Hold { to } -> u256 uses (mut ledger) {
+            let supply = mut ledger.total_supply
+            ledger.balances.set(key: to, value: 7)
+            supply += 1
+            supply
+        }
+    }
+}
+
+fn mint_through(_ to: Address, amount: u256) uses (ledger: mut Ledger) {
+    ledger.mint(to, amount)
+}
+
+fn mint_twice(_ to: Address, amount: u256) uses (ledger: mut Ledger) {
+    mint_through(to, amount)
+    ledger.credit(to, amount)
+}
+
+// Accepted: helpers forward the contract-field provider to receiver methods.
+pub contract Forwarded {
+    mut ledger: Ledger,
+
+    recv LedgerMsg {
+        Mint { to, amount } uses (mut ledger) {
+            mint_twice(to, amount)
+        }
+        Balance { owner } -> u256 uses (mut ledger) {
+            ledger.balance(owner)
+        }
+        Hold { to } -> u256 uses (mut ledger) {
+            mint_through(to, amount: 1)
+            ledger.total_supply
+        }
+    }
+}
+
+// Accepted: nested fields and array elements, each map at its own place.
+pub contract Nested {
+    mut outer: Outer,
+    mut ledgers: [Ledger; 2],
+
+    recv LedgerMsg {
+        Mint { to, amount } uses (mut outer, mut ledgers) {
+            outer.ledger.mint(to, amount)
+            ledgers[1].mint(to, amount)
+        }
+        Balance { owner } -> u256 uses (mut ledgers) {
+            ledgers[0].balance(owner)
+        }
+        Hold { to } -> u256 uses (mut outer) {
+            outer.epoch += 1
+            outer.ledger.balance(to)
+        }
+    }
+}

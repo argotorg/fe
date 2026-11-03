@@ -1,0 +1,18 @@
+// Reading or writing an entry of a `dep::Slots` calls its `locate`, which
+// runs unsafe code, and nothing trusts `dep`.
+use std::evm::Evm
+
+pub contract Store {
+    mut words: dep::Slots<u256>,
+    mut flags: dep::Slots<bool>,
+
+    init() uses (mut words, mut flags) {
+        let first = words[0]
+        flags[1] = first == 0
+    }
+}
+
+#[test]
+fn untrusted_locate() uses (evm: mut Evm) {
+    evm.create2<Store>(value: Wei::zero(), args: (), salt: 0)
+}

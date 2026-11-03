@@ -1,6 +1,6 @@
 use common::diagnostics::Span;
 use parser::ast::{self, AstPtr, SyntaxNodePtr, prelude::*};
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     HirDb, SpannedHirDb,
@@ -39,11 +39,12 @@ pub mod lazy_spans {
             LazyWithParamSpan,
         },
         item::{
-            LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,
-            LazyFieldDefListSpan, LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan,
-            LazyImplSpan, LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyRecvArmListSpan,
-            LazyRecvArmSpan, LazyStaticAssertSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan,
-            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
+            LazyBodySpan, LazyConstSpan, LazyContractInitSpan, LazyContractRecvSpan,
+            LazyContractSpan, LazyEnumSpan, LazyFieldDefListSpan, LazyFieldDefSpan,
+            LazyFuncSignatureSpan, LazyFuncSpan, LazyImplSpan, LazyImplTraitSpan, LazyItemSpan,
+            LazyModSpan, LazyRecvArmListSpan, LazyRecvArmSpan, LazyStaticAssertSpan,
+            LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTypeAliasSpan, LazyUseSpan,
+            LazyVariantDefListSpan, LazyVariantDefSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,
@@ -70,7 +71,7 @@ pub mod lazy_spans {
 /// types that implement [`LazySpan`] in this module. We want to avoid `dyn
 /// LazySpan` usage because it doesn't implement `Clone` and `Eq` which leads to
 /// a lot of difficulties in salsa integration
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct DynLazySpan<'db>(pub(super) Option<SpanTransitionChain<'db>>);
 impl<'db> DynLazySpan<'db> {
     pub fn invalid() -> Self {

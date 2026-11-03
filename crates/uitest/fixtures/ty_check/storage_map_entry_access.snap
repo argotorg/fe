@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/storage_map_entry_access.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ storage_map_entry_access.fe:34:5
+   │
+33 │ pub fn bad_assign_through_view(_ m: Positions, key: u256) {
+   │                                  - a view parameter is read-only; write `m: mut …` for a mutable borrow
+34 │     m[key].debt = 1
+   │     ^^^^^^^^^^^ immutable assignment
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ storage_map_entry_access.fe:30:11
+   │
+29 │ pub fn bad_write_through_view(_ m: Positions, key: u256) {
+   │                                 - `m` does not provide mutable access
+30 │     with (mut m[key]) { bump_debt() }
+   │           ^^^^^^^^^^ cannot borrow as `mut`

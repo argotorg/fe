@@ -5,9 +5,10 @@ use thin_vec::ThinVec;
 
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{available_traits_in_scope, is_scope_visible_from},
+    name_resolution::{is_scope_visible_from, traits_in_scope::traits_available_for_selection},
     ty::{
         canonical::{Canonical, Canonicalized, Solution},
+        closure::{CallableTrait, callable_insts},
         fold::TyFoldable as _,
         method_table::{MethodProbe, ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
@@ -21,7 +22,7 @@ use crate::analysis::{
 };
 use crate::hir_def::{CallableDef, Func};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum MethodCandidate<'db> {
     InherentMethod(ProbedMethod<'db>),
     TraitMethod(TraitMethodCand<'db>),
@@ -43,7 +44,7 @@ impl<'db> MethodCandidate<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TraitMethodCand<'db> {
     pub inst: Solution<TraitInstId<'db>>,
     pub method: Func<'db>,
@@ -83,13 +84,13 @@ impl<'db> AssembledTraitMethodCand<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AmbiguousTraitMethodCand<'db> {
     pub cand: TraitMethodCand<'db>,
     pub needs_confirmation: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AmbiguousTraitMethods<'db> {
     pub candidates: ThinVec<AmbiguousTraitMethodCand<'db>>,
     pub diagnostic_traits: ThinVec<TraitInstId<'db>>,
@@ -111,13 +112,52 @@ pub(crate) fn select_method_candidate<'db>(
     assumptions: PredicateListId<'db>,
     trait_: Option<Trait<'db>>,
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+    let filter = trait_.map_or(TraitFilter::Any, TraitFilter::Trait);
+    select_filtered_method(db, receiver, method_name, scope, assumptions, filter)
+}
+
+/// Selects the method a call `f(..)` of the value `receiver` runs: `call`
+/// of a core callable trait whose receiver is `self`, else `call_mut`
+/// of one whose receiver is `mut self`. Other methods named `call` do not
+/// make a type callable.
+pub(crate) fn select_callable_value_method<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver: &Canonicalized<'db, TyId<'db>>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+    let select = |name: &str| {
+        let name = IdentId::new(db, name.to_string());
+        select_filtered_method(
+            db,
+            receiver,
+            name,
+            scope,
+            assumptions,
+            TraitFilter::CallableTraits,
+        )
+    };
+    match select("call") {
+        Err(MethodSelectionError::NotFound) => select("call_mut"),
+        selected => selected,
+    }
+}
+
+fn select_filtered_method<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver: &Canonicalized<'db, TyId<'db>>,
+    method_name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    filter: TraitFilter<'db>,
+) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
     let receiver_ty = receiver.original();
     if receiver_ty.is_ty_var(db) {
         return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
     }
 
     let candidates =
-        assemble_method_candidates(db, receiver, method_name, scope, assumptions, trait_);
+        assemble_method_candidates(db, receiver, method_name, scope, assumptions, filter);
 
     let selector = MethodSelector {
         db,
@@ -125,9 +165,22 @@ pub(crate) fn select_method_candidate<'db>(
         scope,
         candidates,
         assumptions,
+        filter,
     };
 
     selector.select()
+}
+
+/// The methods a selection considers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TraitFilter<'db> {
+    /// Inherent methods, then the methods of every trait.
+    Any,
+    /// The methods of one trait.
+    Trait(Trait<'db>),
+    /// The methods of the core callable traits, which are visible
+    /// whether or not they are in scope.
+    CallableTraits,
 }
 
 pub(crate) fn select_trait_method_candidates<'db>(
@@ -143,8 +196,9 @@ pub(crate) fn select_trait_method_candidates<'db>(
         return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
     }
 
+    let filter = TraitFilter::Trait(trait_);
     let candidates =
-        assemble_method_candidates(db, receiver, method_name, scope, assumptions, Some(trait_));
+        assemble_method_candidates(db, receiver, method_name, scope, assumptions, filter);
 
     let selector = MethodSelector {
         db,
@@ -152,9 +206,18 @@ pub(crate) fn select_trait_method_candidates<'db>(
         scope,
         candidates,
         assumptions,
+        filter,
     };
 
-    selector.select_visible_trait_method_candidates()
+    // Every candidate implements `trait_`, which the caller picked directly
+    // (e.g. `Div` for `/`), so trait visibility in `scope` must not filter
+    // them. Multiple candidates are impls for different generic arguments,
+    // like `Div<u256>` and `Div<Wei>`, and the caller disambiguates them.
+    let traits = &selector.candidates.traits;
+    if traits.is_empty() {
+        return Err(MethodSelectionError::NotFound);
+    }
+    Ok(selector.trait_method_candidates(traits.iter().copied()))
 }
 
 fn assemble_method_candidates<'db>(
@@ -163,7 +226,7 @@ fn assemble_method_candidates<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    trait_: Option<Trait<'db>>,
+    filter: TraitFilter<'db>,
 ) -> AssembledCandidates<'db> {
     CandidateAssembler {
         db,
@@ -171,7 +234,7 @@ fn assemble_method_candidates<'db>(
         method_name,
         scope,
         assumptions,
-        trait_,
+        filter,
         candidates: AssembledCandidates::default(),
     }
     .assemble()
@@ -187,7 +250,7 @@ struct CandidateAssembler<'db, 'a> {
     scope: ScopeId<'db>,
     /// The assumptions for the type bound in the current scope.
     assumptions: PredicateListId<'db>,
-    trait_: Option<Trait<'db>>,
+    filter: TraitFilter<'db>,
     candidates: AssembledCandidates<'db>,
 }
 
@@ -201,7 +264,7 @@ fn receiver_is_ty_param_like<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> 
 
 impl<'db, 'a> CandidateAssembler<'db, 'a> {
     fn assemble(mut self) -> AssembledCandidates<'db> {
-        if self.trait_.is_none() {
+        if self.filter == TraitFilter::Any {
             self.assemble_inherent_method_candidates();
         }
         self.assemble_trait_method_candidates();
@@ -230,6 +293,12 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
 
     fn assemble_trait_method_candidates(&mut self) {
         let scope_ingot = self.scope.ingot(self.db);
+        // Callable values implement their callable traits without HIR impls.
+        // The shapes are built from the canonical receiver, whose variables
+        // are the ones a candidate's check seeds its table with.
+        for inst in callable_insts(self.db, self.receiver.canonical().value()) {
+            self.insert_assumption_trait_method_cand(inst);
+        }
 
         // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // we don't know its concrete type yet, so probing impls would pull in many
@@ -248,7 +317,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                     .filter(|&ingot| ingot != scope_ingot),
             ];
             for ingot in search_ingots.into_iter().flatten() {
-                let implementors = if let Some(trait_def) = self.trait_ {
+                let implementors = if let TraitFilter::Trait(trait_def) = self.filter {
                     impls_for_trait_and_ty(self.db, ingot, trait_def, self.receiver.canonical())
                 } else {
                     impls_for_ty(self.db, ingot, self.receiver.canonical())
@@ -286,7 +355,11 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
     }
 
     fn allow_trait(&self, trait_def: Trait<'db>) -> bool {
-        self.trait_.is_none_or(|t| t == trait_def)
+        match self.filter {
+            TraitFilter::Any => true,
+            TraitFilter::Trait(trait_) => trait_ == trait_def,
+            TraitFilter::CallableTraits => CallableTrait::of(self.db, trait_def).is_some(),
+        }
     }
 
     fn insert_impl_trait_method_cand(&mut self, implementor: ImplementorId<'db>) {
@@ -306,16 +379,46 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
 
     fn insert_assumption_trait_method_cand(&mut self, inst: TraitInstId<'db>) {
         let trait_def = inst.def(self.db);
-        if self.allow_trait(trait_def)
-            && let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name)
-        {
-            self.candidates
-                .traits
-                .insert(AssembledTraitMethodCand::Assumption {
-                    inst,
-                    method: trait_method,
-                });
+        if !self.allow_trait(trait_def) {
+            return;
         }
+        let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name) else {
+            return;
+        };
+        // Bounds on one trait instance that differ only in associated type
+        // bindings, such as `A<T = u256>` and the `A` a bound on a subtrait
+        // implies, are one candidate with every binding.
+        let same = self.candidates.traits.iter().copied().find(|cand| {
+            matches!(cand, AssembledTraitMethodCand::Assumption { inst: known, .. }
+                if known.def(self.db) == trait_def && known.args(self.db) == inst.args(self.db))
+        });
+        let inst = match same {
+            Some(
+                known @ AssembledTraitMethodCand::Assumption {
+                    inst: known_inst, ..
+                },
+            ) => {
+                self.candidates.traits.remove(&known);
+                let mut bindings = known_inst.assoc_type_bindings(self.db).clone();
+                for (&name, &ty) in inst.assoc_type_bindings(self.db) {
+                    bindings.entry(name).or_insert(ty);
+                }
+                TraitInstId::new(
+                    self.db,
+                    trait_def,
+                    inst.args(self.db).to_vec(),
+                    bindings,
+                    inst.mode(self.db),
+                )
+            }
+            _ => inst,
+        };
+        self.candidates
+            .traits
+            .insert(AssembledTraitMethodCand::Assumption {
+                inst,
+                method: trait_method,
+            });
     }
 }
 
@@ -325,6 +428,7 @@ struct MethodSelector<'db, 'a> {
     scope: ScopeId<'db>,
     candidates: AssembledCandidates<'db>,
     assumptions: PredicateListId<'db>,
+    filter: TraitFilter<'db>,
 }
 
 impl<'db, 'a> MethodSelector<'db, 'a> {
@@ -419,7 +523,10 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let visible: Vec<_> = checked
             .iter()
             .copied()
-            .filter(|(cand, _)| available_traits.contains(&cand.trait_def(self.db)))
+            .filter(|(cand, _)| {
+                self.filter == TraitFilter::CallableTraits
+                    || available_traits.contains(&cand.trait_def(self.db))
+            })
             .collect();
 
         match visible.len() {
@@ -549,35 +656,6 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 Ok(MethodCandidate::NeedsConfirmation(cand))
             }
             TraitCandidateCheck::Rejected => Err(MethodSelectionError::NotFound),
-        }
-    }
-
-    fn select_visible_trait_method_candidates(
-        &self,
-    ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
-        let traits = &self.candidates.traits;
-
-        if traits.len() == 1 {
-            return Ok(self.trait_method_candidates(traits.iter().copied()));
-        }
-
-        let available_traits = self.available_traits();
-        let visible_traits: Vec<_> = traits
-            .iter()
-            .copied()
-            .filter(|cand| available_traits.contains(&cand.trait_def(self.db)))
-            .collect();
-
-        match visible_traits.len() {
-            0 => {
-                if traits.is_empty() {
-                    Err(MethodSelectionError::NotFound)
-                } else {
-                    let traits = traits.iter().map(|cand| cand.trait_def(self.db)).collect();
-                    Err(MethodSelectionError::InvisibleTraitMethod(traits))
-                }
-            }
-            _ => Ok(self.trait_method_candidates(visible_traits)),
         }
     }
 
@@ -831,31 +909,21 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     }
 
     fn available_traits(&self) -> IndexSet<Trait<'db>> {
-        let mut traits = IndexSet::default();
-
-        let mut insert_trait = |trait_def: Trait<'db>| {
-            traits.insert(trait_def);
-
-            for trait_ in trait_def.super_traits(self.db) {
-                traits.insert(trait_.skip_binder().def(self.db));
-            }
-        };
-
-        for &trait_ in available_traits_in_scope(self.db, self.scope) {
-            let trait_def = trait_;
-            insert_trait(trait_def);
-        }
-
-        for pred in self.assumptions.list(self.db) {
-            let trait_def = pred.def(self.db);
-            insert_trait(trait_def)
-        }
-
-        traits
+        // A callable value's shapes are intrinsic to its type.
+        let shapes = callable_insts(self.db, self.receiver.canonical().value());
+        traits_available_for_selection(
+            self.db,
+            self.scope,
+            self.assumptions
+                .list(self.db)
+                .iter()
+                .chain(&shapes)
+                .map(|inst| inst.def(self.db)),
+        )
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum MethodSelectionError<'db> {
     AmbiguousInherentMethod(ThinVec<CallableDef<'db>>),
     AmbiguousTraitMethod(AmbiguousTraitMethods<'db>),
@@ -893,12 +961,12 @@ mod tests {
     };
 
     #[test]
-    fn address_has_wordrepr_impl_in_std_trait_env() {
+    fn address_has_storage_key_impl_in_std_trait_env() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from("address_has_wordrepr_impl_in_std_trait_env.fe"),
+            Utf8PathBuf::from("address_has_storage_key_impl_in_std_trait_env.fe"),
             r#"
-use std::evm::word::WordRepr
+use std::evm::storage_map::StorageKey
 
 fn test_it() {
     let _ = Address::zero()
@@ -923,9 +991,9 @@ fn test_it() {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
             res => panic!("expected Address to resolve to a type, got {res:?}"),
         };
-        let wordrepr = match resolve_path(
+        let storage_key = match resolve_path(
             &db,
-            PathId::from_ident(&db, IdentId::new(&db, "WordRepr".to_string())),
+            PathId::from_ident(&db, IdentId::new(&db, "StorageKey".to_string())),
             scope,
             assumptions,
             false,
@@ -933,7 +1001,7 @@ fn test_it() {
         .unwrap()
         {
             PathRes::Trait(inst) => inst.def(&db),
-            res => panic!("expected WordRepr to resolve to a trait, got {res:?}"),
+            res => panic!("expected StorageKey to resolve to a trait, got {res:?}"),
         };
 
         let std_ingot = address.ingot(&db).expect("Address should come from std");
@@ -944,22 +1012,22 @@ fn test_it() {
             .collect();
 
         assert!(
-            impls.iter().any(|imp| imp.trait_def(&db) == wordrepr),
-            "expected WordRepr impl for Address, found {impl_trait_names:?}"
+            impls.iter().any(|imp| imp.trait_def(&db) == storage_key),
+            "expected StorageKey impl for Address, found {impl_trait_names:?}"
         );
     }
 
     #[test]
-    fn address_wordrepr_method_resolves_across_std_modules() {
+    fn address_storage_key_method_resolves_across_std_modules() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from("address_wordrepr_method_resolves_across_std_modules.fe"),
+            Utf8PathBuf::from("address_storage_key_method_resolves_across_std_modules.fe"),
             r#"
-use std::evm::word::WordRepr
+use std::evm::storage_map::StorageKey
 
 fn test_it() {
-    let a = Address { inner: 42 }
-    let _w = a.to_word()
+    let a = Address::new(42)
+    let _len = a.encoded_len()
 }
 "#,
         );
@@ -968,15 +1036,16 @@ fn test_it() {
     }
 
     #[test]
-    fn storage_map_address_value_uses_wordrepr_impl() {
+    fn storage_map_accepts_address_key_and_value() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from("storage_map_address_value_uses_wordrepr_impl.fe"),
+            Utf8PathBuf::from("storage_map_accepts_address_key_and_value.fe"),
             r#"
-use std::evm::{RawStorage, StorageMap}
+use std::evm::StorageMap
 
-fn test_it() uses (storage: mut RawStorage) {
-    let _map: StorageMap<Address, Address, 0> = StorageMap::new()
+fn test_it(_ map: mut StorageMap<Address, Address>, _ key: Address) -> Address {
+    map[key] = key
+    map.get(key)
 }
 "#,
         );

@@ -1,0 +1,43 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/sessions.fe
+---
+error[16-0001]: access conflict in `fn aliased`
+   ┌─ sessions.fe:11:65
+   │
+11 │     fn aliased(mut self) -> (mut u256, mut u256) { (mut self.a, mut self.a) }
+   │                                                     ----------  ^^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │                                                     │
+   │                                                     access opened here
+
+error[16-0001]: access conflict in `fn receiver_used_during_session`
+   ┌─ sessions.fe:41:13
+   │
+40 │     let a = mut p.a_mut()
+   │                 - access opened here
+41 │     let b = p.b
+   │             ^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn opaque_sub_places`
+   ┌─ sessions.fe:51:17
+   │
+50 │     let a = mut p.a_mut()
+   │                 - access opened here
+51 │     let b = mut p.b_mut()
+   │                 ^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn view_of_grant_blocks_write`
+    ┌─ sessions.fe:111:5
+    │
+110 │     let r = ref c
+    │             ----- access opened here
+111 │     c = 1
+    │     ^^^^^ cannot write to this place while a `ref` access of it is open
+
+warning[16-0012]: discarded writes in `fn counter`
+   ┌─ sessions.fe:26:5
+   │
+26 │     mut n
+   │     ^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back

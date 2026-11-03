@@ -5,7 +5,7 @@ trait Add {
 struct Foo {}
 
 impl Add for Foo {
-    fn add(mut own self) -> Self {
+    fn add(var own self) -> Self {
         self
     }
 }

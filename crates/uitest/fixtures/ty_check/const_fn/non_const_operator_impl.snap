@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/const_fn/non_const_operator_impl.fe
 ---
@@ -9,9 +10,9 @@ error[8-0062]: non-const call in `const fn`
 16 │     (RuntimeCounter { value: 1 }) + (RuntimeCounter { value: 2 })
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `add` is not a `const fn`
    │
-   ┌─ src/ops.fe:4:8
+   ┌─ src/ops.fe:6:8
    │
- 4 │     fn add(own self, _ other: own T) -> Self::Output
+ 6 │     fn add(own self, _ other: own T) -> Self::Output
    │        --- callee defined here
 
 error[8-0062]: non-const call in `const fn`
@@ -20,7 +21,7 @@ error[8-0062]: non-const call in `const fn`
 22 │     lhs + rhs
    │     ^^^^^^^^^ `add` is not a `const fn`
    │
-   ┌─ src/ops.fe:4:8
+   ┌─ src/ops.fe:6:8
    │
- 4 │     fn add(own self, _ other: own T) -> Self::Output
+ 6 │     fn add(own self, _ other: own T) -> Self::Output
    │        --- callee defined here

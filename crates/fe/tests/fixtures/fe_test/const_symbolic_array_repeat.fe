@@ -11,13 +11,13 @@ impl<const N: usize> Repeated<N> {
 }
 
 const fn changed_values<const N: usize>() -> [u8; N] {
-    let mut value = Repeated<N> { values: [0; N] }
+    var value = Repeated<N> { values: [0; N] }
     value.values[0] = 1
     value.values
 }
 
 const fn changed_rows<const N: usize>() -> [[u8; N]; 2] {
-    let mut rows = Repeated<N>::ROWS
+    var rows = Repeated<N>::ROWS
     rows[0][1] = 2
     rows
 }
@@ -87,7 +87,7 @@ impl<const N: usize, const I: usize> Indexed<N, I> {
 }
 
 const fn changed_index<const N: usize, const I: usize>() -> [u8; N] {
-    let mut values = [0; N]
+    var values = [0; N]
     values[I] = 17
     values
 }

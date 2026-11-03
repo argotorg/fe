@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 ---
@@ -44,7 +45,7 @@ func private %match_nested_enum(v0.@layout_1) -> i8 {
         br_table v2 (0.enumtag(@layout_1) block3) (1.enumtag(@layout_1) block4);
 
     block2:
-        v5.i8 = phi (v13 block4) (0.i8 block5) (v16 block6);
+        v5.i8 = phi (v13 block4) (0.i8 block5) (v17 block6);
         return v5;
 
     block3:
@@ -62,8 +63,10 @@ func private %match_nested_enum(v0.@layout_1) -> i8 {
         jump block2;
 
     block6:
-        enum.assert_variant v8 #variant_1;
-        v16.i8 = enum.extract v8 #variant_1 0.i256;
+        enum.assert_variant v0 #variant_0;
+        v16.@layout_0 = enum.extract v0 #variant_0 0.i256;
+        enum.assert_variant v16 #variant_1;
+        v17.i8 = enum.extract v16 #variant_1 0.i256;
         jump block2;
 }
 

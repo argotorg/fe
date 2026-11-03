@@ -1,0 +1,53 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/state_pointer_entries.fe
+---
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ state_pointer_entries.fe:16:12
+   │
+16 │     mut a: StorageMap<u256, *u256>,
+   │            ^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, *u256>` holds the memory pointer `*u256`
+   │
+   = memory lasts for one call, so a later one could not follow the pointer
+
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ state_pointer_entries.fe:17:12
+   │
+17 │     mut b: StorageMap<u256, MemBuffer>,
+   │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, MemBuffer>` holds the memory pointer `*u8`
+   │
+   = memory lasts for one call, so a later one could not follow the pointer
+
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ state_pointer_entries.fe:18:12
+   │
+18 │     mut c: SolArray<MemBuffer>,
+   │            ^^^^^^^^^^^^^^^^^^^ `SolArray<MemBuffer>` holds the memory pointer `*u8`
+   │
+   = memory lasts for one call, so a later one could not follow the pointer
+
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ state_pointer_entries.fe:19:12
+   │
+19 │     mut d: StorageMap<u256, Holds>,
+   │            ^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, Holds>` holds the memory pointer `*u8`
+   │
+   = memory lasts for one call, so a later one could not follow the pointer
+
+error[3-0065]: contract state cannot hold a calldata pointer
+   ┌─ state_pointer_entries.fe:20:12
+   │
+20 │     mut e: StorageMap<u256, StorageMap<u256, CalldataPtr<u256>>>,
+   │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, StorageMap<u256, CalldataPtr<u256>>>` holds the calldata pointer `CalldataPtr<u256>`
+   │
+   = calldata lasts for one call, so a later one could not follow the pointer
+
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ state_pointer_entries.fe:21:12
+   │
+21 │     mut f: TSlot<MemBuffer>,
+   │            ^^^^^^^^^^^^^^^^ `TSlot<MemBuffer>` holds the memory pointer `*u8`
+   │
+   = memory lasts for one call, so a later one could not follow the pointer

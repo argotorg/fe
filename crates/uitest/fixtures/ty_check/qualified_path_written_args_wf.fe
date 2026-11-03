@@ -1,0 +1,59 @@
+// Types written inside a qualified path are checked for well-formedness,
+// even though the path resolves to a type that does not mention them.
+trait Marker {}
+struct Marked {}
+struct NotMarked {}
+impl Marker for Marked {}
+
+struct Foo<T: Marker> {}
+
+trait Tr<T> {
+    type Item
+}
+struct S {}
+impl<T> Tr<T> for S {
+    type Item = u8
+}
+
+trait Plain {
+    type Item
+}
+struct Wrap<T> {}
+impl<T> Plain for Wrap<T> {
+    type Item = u8
+}
+
+fn annotated() -> u8 {
+    let x: <S as Tr<Foo<NotMarked>>>::Item = 1
+    x
+}
+
+fn self_type() -> u8 {
+    let x: <Wrap<Foo<NotMarked>> as Plain>::Item = 1
+    x
+}
+
+fn cast(v: u8) -> u8 {
+    v as <S as Tr<Foo<NotMarked>>>::Item
+}
+
+fn param(_ x: <S as Tr<Foo<NotMarked>>>::Item) {}
+
+fn ret() -> <S as Tr<Foo<NotMarked>>>::Item {
+    1
+}
+
+struct Field {
+    f: <S as Tr<Foo<NotMarked>>>::Item,
+}
+
+fn well_formed<T: Marker>() -> <S as Tr<Foo<T>>>::Item {
+    let x: <S as Tr<Foo<Marked>>>::Item = 1
+    let _: <S as Tr<Foo<T>>>::Item = x
+    x
+}
+
+// Calling through such a path does not resolve today.
+fn call() -> u8 {
+    <S as Tr<Foo<NotMarked>>>::Item::new()
+}

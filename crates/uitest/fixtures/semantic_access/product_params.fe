@@ -1,0 +1,156 @@
+// The parts of a product argument are accesses of the call, as separate
+// arguments' are: two parts conflict as they would, as do a part and another
+// argument or an effect.
+use std::evm::{RawStorage, read_storage_word}
+
+fn add_to(_ (mut a, b): (mut u256, ref u256)) {
+    a += b
+}
+
+fn both(_ (mut a, mut b): (mut u256, mut u256)) {
+    a += b
+}
+
+fn and_view(_ (mut a, b): (mut u256, ref u256), _ c: u256) {
+    a += b + c
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn same_ref() {
+    var x: u256 = 1
+    add_to((mut x, ref x))
+}
+
+fn same_mut() {
+    var x: u256 = 1
+    both((mut x, mut x))
+}
+
+fn other_arg() {
+    var x: u256 = 1
+    var y: u256 = 2
+    and_view((mut x, ref y), x)
+}
+
+// Accepted: disjoint fields.
+fn disjoint() {
+    var p = Pair { a: 1, b: 2 }
+    add_to((mut p.a, ref p.b))
+}
+
+impl Pair {
+    fn add(mut self, _ (mut x, y): (mut u256, ref u256)) -> u256 {
+        x += y
+        self.a += x
+        self.a
+    }
+
+    fn read(self, _ (mut x, y): (mut u256, ref u256)) -> u256 {
+        x += y
+        self.a
+    }
+
+    fn both(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+// A part conflicts with the receiver as another argument would.
+fn receiver_and_mut_part() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    let y: u256 = 3
+    p.add((mut p.b, ref y))
+}
+
+fn receiver_and_ref_part() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    var x: u256 = 3
+    p.add((mut x, ref p.b))
+}
+
+fn read_receiver_and_mut_part() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    let y: u256 = 3
+    p.read((mut p.b, ref y))
+}
+
+fn receiver_and_result_parts() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    p.add(p.both())
+}
+
+struct Counter {
+    count: u256,
+}
+
+fn add_and_read(_ (mut a, b): (mut u256, ref u256)) -> u256 uses (c: Counter) {
+    a += b
+    c.count
+}
+
+// A capability part reaches what its part's mode grants: a `ref` part only
+// reads.
+fn read_part<S: RawStorage>(_ (ref s, n): (ref S, own u256)) -> u256 {
+    with (RawStorage = s) {
+        read_storage_word(n)
+    }
+}
+
+fn write_part<S: RawStorage>(_ (mut s, n): (mut S, own u256)) -> u256 {
+    with (RawStorage = s) {
+        read_storage_word(n)
+    }
+}
+
+msg CounterMsg {
+    #[selector = 1]
+    Overlap -> u256,
+    #[selector = 2]
+    Disjoint -> u256,
+    #[selector = 3]
+    ReadPart -> u256,
+    #[selector = 4]
+    WritePart -> u256,
+}
+
+pub contract Store {
+    mut counter: Counter
+
+    recv CounterMsg {
+        Overlap -> u256 uses (mut counter) {
+            var local: u256 = 5
+            with (Counter = counter) {
+                add_and_read((mut counter.count, ref local))
+            }
+        }
+        // Accepted: the effect and the parts only read the same place.
+        Disjoint -> u256 uses (mut counter) {
+            var local: u256 = 5
+            with (Counter = counter) {
+                add_and_read((mut local, ref counter.count))
+            }
+        }
+        // Accepted: a `ref` capability part reads while a read is open.
+        ReadPart -> u256 uses (counter, s: RawStorage) {
+            let r = ref counter.count
+            read_part((s, 0)) + r
+        }
+        WritePart -> u256 uses (counter, s: mut RawStorage) {
+            let r = ref counter.count
+            write_part((mut s, 0)) + r
+        }
+    }
+}
+
+// A closure's product parameter takes its parts as the call's accesses too.
+fn closure_parts() {
+    var swap = |(mut a, mut b): (mut u256, mut u256)| {
+        a = b
+    }
+    var y: u256 = 1
+    swap((mut y, mut y))
+}

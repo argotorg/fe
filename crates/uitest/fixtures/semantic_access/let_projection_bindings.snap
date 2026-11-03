@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/let_projection_bindings.fe
+---
+error[16-0001]: access conflict in `fn explicit_ref`
+   ┌─ let_projection_bindings.fe:37:5
+   │
+36 │     let word = ref cell.get()
+   │                    ---------- projection opened here
+37 │     cell.word = 2
+   │     ^^^^^^^^^^^^^ cannot write to this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn non_copy`
+   ┌─ let_projection_bindings.fe:44:5
+   │
+43 │     let buffer = ref buffers[0]
+   │                      ---------- projection opened here
+44 │     buffers.set(0, MemBuffer::empty())
+   │     ^^^^^^^ cannot mutably access this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn mut_projection`
+   ┌─ let_projection_bindings.fe:51:18
+   │
+50 │     let word = mut cell.get_mut()
+   │                    -------------- projection opened here
+51 │     let before = cell.word
+   │                  ^^^^^^^^^ cannot read this place while a `mut` projection of it is open

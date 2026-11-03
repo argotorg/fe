@@ -1,6 +1,5 @@
 use num_bigint::BigUint;
 use parser::ast::{self, AttrListOwner as _, prelude::AstNode as _};
-use salsa::Accumulator as _;
 
 use super::{
     attr::named_attr_specs,
@@ -169,6 +168,7 @@ pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::Desugar
         is_mut: false,
         has_ref_prefix: false,
         has_own_prefix: false,
+        has_mut_prefix: false,
         is_label_suppressed: false,
         name: Partial::Present(FuncParamName::Ident(IdentId::make_self(builder.db()))),
         ty: Partial::Present(builder.self_ty()),
@@ -222,24 +222,7 @@ fn lower_msg_variant_encode_impl<'db>(
             let impl_trait =
                 builder.new_impl_trait(id, trait_ref, ty, vec![], vec![], builder.origin());
 
-            let ptr_ident = builder.ident("ptr");
-            let u8_ty = builder.ty_ident(builder.ident("u8"));
-            let ptr_ty = builder.ty_ptr(u8_ty);
-            let params = builder.params([
-                builder.param_own_self(),
-                builder.param_underscore_named(ptr_ident, ptr_ty),
-            ]);
-
-            builder.func_with_body_inline_always(
-                builder.ident("encode"),
-                builder.empty_generic_params(),
-                params,
-                None,
-                FuncModifiers::new(Visibility::Private, false, false, false),
-                |body| {
-                    body.encode_fields(&field_specs, ptr_ident);
-                },
-            );
+            builder.encode_func(&field_specs);
 
             impl_trait
         },
@@ -413,31 +396,36 @@ fn lower_msg_variant_decode_trait_impl<'db>(
 
     builder.impl_trait(trait_ref, ty, |builder| {
         let abi_decoder_trait_ref = builder.core_abi_trait_ref_sol("AbiDecoder");
-        let (d_generic_params, d_ty) =
-            builder.type_param_with_trait_bound("D", abi_decoder_trait_ref);
+        let byte_input_trait_ref = builder.core_abi_trait_ref("ByteInput");
+        let (payload_generic_params, payload_tys) = builder.type_params_with_trait_bounds([
+            ("D", abi_decoder_trait_ref),
+            ("I", byte_input_trait_ref),
+        ]);
 
         let decoder_ident = builder.generated_ident("msg_decode_decoder");
-        let params = builder.params([builder.param_mut_underscore_named(decoder_ident, d_ty)]);
+        let input_ident = builder.generated_ident("msg_decode_input");
+        let params = builder.params([
+            builder.param_mut_underscore_named(decoder_ident, payload_tys[0]),
+            builder.param_underscore_named(input_ident, payload_tys[1]),
+        ]);
 
         builder.func_generic_inline_always(
             "decode_payload",
-            d_generic_params,
+            payload_generic_params,
             params,
             Some(builder.self_ty()),
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
                 for (name, ty) in fields.iter().copied() {
-                    body.decode_into(name, ty, decoder_ident, d_ty);
+                    body.decode_into(name, ty, [decoder_ident, input_ident], payload_tys);
                 }
                 body.return_record_self(&field_names);
             },
         );
 
-        let byte_input_trait_ref = builder.core_abi_trait_ref("ByteInput");
-        let (i_generic_params, i_ty) =
-            builder.type_param_with_trait_bound("I", byte_input_trait_ref);
+        let (i_generic_params, [i_ty]) =
+            builder.type_params_with_trait_bounds([("I", byte_input_trait_ref)]);
 
-        let input_ident = builder.generated_ident("msg_decode_input");
         let base_ident = builder.generated_ident("msg_decode_base");
         let input_len_ident = builder.generated_ident("msg_decode_input_len");
         let u256_ty = builder.ty_ident(builder.ident("u256"));
@@ -593,16 +581,16 @@ fn create_selector_const<'db>(
 
     let body = if let Some(parsed) = parsed {
         if let Some(error_kind) = parsed.error {
-            MsgDiagnostic {
+            ctxt.report(MsgDiagnostic {
                 kind: error_kind,
                 file,
                 primary_range: parsed.range,
                 secondary_range: None,
                 variant_name: variant_name.to_string(),
-            }
-            .accumulate(db);
+            });
             Body::lower_ast_with_variant(
                 ctxt,
+                None,
                 None,
                 TrackedItemVariant::NamelessBody,
                 BodyKind::Anonymous,
@@ -613,6 +601,7 @@ fn create_selector_const<'db>(
             Body::lower_ast_with_variant(
                 ctxt,
                 None,
+                None,
                 TrackedItemVariant::NamelessBody,
                 BodyKind::Anonymous,
             )
@@ -621,16 +610,16 @@ fn create_selector_const<'db>(
         let variant_range = variant
             .name()
             .map_or_else(|| variant.syntax().text_range(), |n| n.text_range());
-        MsgDiagnostic {
+        ctxt.report(MsgDiagnostic {
             kind: MsgDiagnosticKind::Missing,
             file,
             primary_range: variant_range,
             secondary_range: None,
             variant_name: variant_name.to_string(),
-        }
-        .accumulate(db);
+        });
         Body::lower_ast_with_variant(
             ctxt,
+            None,
             None,
             TrackedItemVariant::NamelessBody,
             BodyKind::Anonymous,

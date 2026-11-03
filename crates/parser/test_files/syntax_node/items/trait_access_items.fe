@@ -1,0 +1,24 @@
+trait Collection {
+    uses E
+    type Item
+
+    fn at(self, _ c: u256) -> ref Self::Item uses E
+}
+
+impl Collection for Words {
+    uses E = (storage: RawStorage)
+    type Item = u256
+
+    fn at(self, _ c: u256) -> ref u256 uses E {
+        self.get(c)
+    }
+}
+
+impl<B: Collection> Collection for Identity<B> {
+    uses E = B::E
+    type Item = B::Item
+
+    fn at(self, _ c: u256) -> (u256, ref B::Item) uses E {
+        (c, self.base.at(c))
+    }
+}

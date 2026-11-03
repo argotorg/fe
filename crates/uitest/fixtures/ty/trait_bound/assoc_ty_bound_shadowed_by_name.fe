@@ -1,0 +1,17 @@
+trait Decoder<A> {}
+
+// The bound names the trait `Decoder`, not the associated type it shares a
+// name with, so it is enforced on implementations.
+trait Abi {
+    type Decoder: Decoder<Self>
+}
+
+struct Sol {}
+struct Other {}
+struct OtherDecoder {}
+
+impl Decoder<Other> for OtherDecoder {}
+
+impl Abi for Sol {
+    type Decoder = OtherDecoder
+}

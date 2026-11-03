@@ -1,0 +1,88 @@
+// Storage collections are `Collection`s and `Bidirectional`. A `SolArray`'s
+// elements are places: a loop views each in storage, and a `mut` loop
+// updates it there. A `Copy` element is copied before the body runs, so its
+// session, which reserves the array, is finished and the body may write
+// storage.
+use std::evm::{Evm, RawStorage, SolArray, SolEnumerableSet}
+
+#[test]
+fn sol_array_loops() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        // Two arrays at runtime slots at once: an unsafe split, whose grants
+        // are disjoint, so a loop over one may push onto the other.
+        let (mut a, mut doubled) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
+        a.push(1)
+        a.push(2)
+        a.push(3)
+
+        for x in a {
+            doubled.push(x * 2)
+        }
+        assert(doubled.len() == 3 && doubled.get(2) == 6)
+
+        for mut x in a {
+            x *= 10
+        }
+        assert(a.get(0) == 10 && a.get(1) == 20 && a.get(2) == 30)
+
+        var weighted = 0
+        for (i, x) in a.enumerate() {
+            weighted += i as u256 * x
+        }
+        assert(weighted == 80)
+
+        var tail = 0
+        for x in a.skip(1) {
+            tail += x
+        }
+        assert(tail == 50)
+
+        var digits = 0
+        for x in a.reversed() {
+            digits = digits * 100 + x
+        }
+        assert(digits == 302010)
+
+        let empty = unsafe { mut SolArray<u256>::at(2) }
+        for _ in empty {
+            assert(false)
+        }
+    }
+}
+
+#[test]
+fn raw_constructor_loops() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let a = unsafe { mut SolArray<u256>::at(4) }
+        a.push(1)
+        a.push(2)
+        // A `mut` item asks the `mut?` constructor for `mut`.
+        for mut x in unsafe { SolArray<u256>::at(4) } {
+            x += 10
+        }
+        let b = unsafe { SolArray<u256>::at(4) }
+        assert(b.get(0) == 11 && b.get(1) == 12)
+    }
+}
+
+#[test]
+fn sol_set_loops() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let s = unsafe { mut SolEnumerableSet<u256>::at(3) }
+        assert(s.add(5))
+        assert(s.add(7))
+        assert(s.add(9))
+        assert(s.remove(5))
+        var sum = 0
+        for v in s {
+            sum += v
+        }
+        assert(sum == 16)
+
+        var order = 0
+        for v in s.reversed() {
+            order = order * 10 + v
+        }
+        assert(order == 79)
+    }
+}

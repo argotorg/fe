@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/array.fe
 ---
@@ -22,10 +23,10 @@ error[8-0000]: type mismatch
   │                 ^^^^^ expected `{integer}`, but `bool` is given
 
 error[8-0000]: type mismatch
-  ┌─ array.fe:5:27
+  ┌─ array.fe:5:23
   │
-5 │     let mut x: [i32; 5] = [1; 10]
-  │                           ^^^^^^^ expected `[i32; 5]`, but `[i32; 10]` is given
+5 │     var x: [i32; 5] = [1; 10]
+  │                       ^^^^^^^ expected `[i32; 5]`, but `[i32; 10]` is given
 
 error[8-0031]: type annotation is needed
   ┌─ array.fe:3:14

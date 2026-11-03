@@ -1,0 +1,51 @@
+// A row's footprint counts at each instantiation: here `C::E` is
+// `(store: mut Store)`, the provider of the function's own `store`.
+trait Counter {
+    uses E
+    fn bump(mut self) uses E
+}
+
+pub struct Store { total: u256 }
+struct StoreCounter {}
+
+impl Counter for StoreCounter {
+    uses E = (store: mut Store)
+
+    fn bump(mut self) uses E {
+        store.total += 1
+    }
+}
+
+fn bump_while_open<C: Counter>(_ c: mut C) uses (C::E, store: mut Store) {
+    let total = mut store.total
+    c.bump()
+    total += 1
+}
+
+fn bump_after<C: Counter>(_ c: mut C) uses (C::E, store: mut Store) {
+    store.total += 1
+    c.bump()
+}
+
+fn instantiate() {
+    var store = Store { total: 0 }
+    var sc = StoreCounter {}
+    with (Store = store) {
+        bump_while_open(mut sc)
+        bump_after(mut sc)
+    }
+}
+
+// Passing the provider of a row's component as a data argument too.
+fn bump_with<C: Counter>(_ c: mut C, _ s: mut Store) uses C::E {
+    c.bump()
+    s.total += 1
+}
+
+fn aliased() {
+    var store = Store { total: 0 }
+    var sc = StoreCounter {}
+    with (Store = store) {
+        bump_with(mut sc, mut store)
+    }
+}

@@ -1,0 +1,85 @@
+// An operation on a storage map is an access of the map's place, which holds
+// its entries: it conflicts with an open entry access, and an operation on a
+// struct holding the map accesses it too.
+use std::evm::StorageMap
+
+// Rejected: `set` writes the map while an entry access is open.
+pub contract Direct {
+    mut m: StorageMap<u256, u256>,
+    init() uses (mut m) {
+        let x = mut m[1]
+        m.set(key: 2, value: 5)
+        x += 1
+    }
+}
+
+// Accepted: the entry access ends before the write.
+pub contract Sequential {
+    mut m: StorageMap<u256, u256>,
+    init() uses (mut m) {
+        let x = mut m[1]
+        x += 1
+        m.set(key: 2, value: 5)
+    }
+}
+
+// Accepted: distinct contract fields are distinct roots.
+pub contract Distinct {
+    mut a: StorageMap<u256, u256>,
+    mut b: StorageMap<u256, u256>,
+    init() uses (mut a, b) {
+        let x = mut a[1]
+        let v = b.get(1)
+        x += v
+    }
+}
+
+struct Pair {
+    left: StorageMap<u256, u256>,
+    right: StorageMap<u256, u256>,
+}
+
+fn read_left(_ pair: Pair, _ key: u256) -> u256 {
+    pair.left.get(key)
+}
+
+// Accepted: the argument views the receiver's root before the receiver's
+// own access opens.
+pub contract Nested {
+    mut pair: Pair,
+    init() uses (mut pair) {
+        pair.left.set(key: 1, value: read_left(pair, 1) + 1)
+    }
+}
+
+// Rejected: the call views all of `pair`, including the entry a binding holds.
+pub contract NestedSession {
+    mut pair: Pair,
+    init() uses (mut pair) {
+        let x = mut pair.right[1]
+        let v = read_left(pair, 1)
+        x += v
+    }
+}
+
+struct Holder {
+    map: StorageMap<u256, u256>,
+}
+
+fn write_held(_ source: StorageMap<u256, u256>) uses (holder: mut Holder) {
+    holder.map[1] = source[1]
+}
+
+// Rejected: `write_held` writes the map its provider holds, which a binding
+// reads.
+pub contract HeldSession {
+    mut a: Holder,
+    mut b: Holder,
+    init() uses (mut a, mut b) {
+        let x = ref b.map[1]
+        with (Holder = b) {
+            write_held(a.map)
+        }
+        let _ = x + 1
+    }
+}

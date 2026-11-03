@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 416
 expression: output
 input_file: crates/codegen/tests/fixtures/match_tuple_nested.fe
 ---
@@ -50,30 +51,35 @@ func private %match_deeply_nested(v0.constref<@layout_3>) -> i8 {
         jump block3;
 
     block2:
-        v2.i8 = phi (0.i8 block7) (8.i8 block10) (8.i8 block13) (15.i8 block15) (8.i8 block16);
-        return v2;
+        v1.i8 = phi (0.i8 block7) (8.i8 block10) (8.i8 block13) (15.i8 block15) (8.i8 block16);
+        return v1;
 
     block3:
-        v5.constref<@layout_2> = const.proj v0 0.i256;
-        v6.objref<@layout_2> = obj.alloc @layout_2;
-        obj.init.const v6 v5;
-        v7.@layout_2 = obj.load v6;
+        v4.constref<@layout_2> = const.proj v0 0.i256;
         jump block4;
 
     block4:
-        v9.@layout_1 = extract_value v7 0.i256;
+        v6.constref<@layout_2> = const.proj v0 0.i256;
+        v7.constref<@layout_1> = const.proj v6 0.i256;
         jump block5;
 
     block5:
-        v11.i1 = extract_value v9 0.i256;
-        v13.i1 = eq v11 1.i1;
-        br v13 block6 block8;
+        v9.constref<@layout_2> = const.proj v0 0.i256;
+        v10.constref<@layout_1> = const.proj v9 0.i256;
+        v11.constref<i1> = const.proj v10 0.i256;
+        v13.constref<@layout_2> = const.proj v0 0.i256;
+        v14.constref<@layout_1> = const.proj v13 0.i256;
+        v15.constref<i1> = const.proj v14 0.i256;
+        v16.i1 = const.load v15;
+        v17.i1 = eq v16 1.i1;
+        br v17 block6 block8;
 
     block6:
-        v16.constref<i1> = const.proj v0 1.i256;
-        v17.i1 = const.load v16;
-        v18.i1 = eq v17 1.i1;
-        br v18 block9 block11;
+        v20.constref<i1> = const.proj v0 1.i256;
+        v21.constref<i1> = const.proj v0 1.i256;
+        v22.i1 = const.load v21;
+        v23.i1 = eq v22 1.i1;
+        br v23 block9 block11;
 
     block7:
         jump block2;
@@ -82,9 +88,13 @@ func private %match_deeply_nested(v0.constref<@layout_3>) -> i8 {
         jump block7;
 
     block9:
-        v21.i1 = extract_value v7 1.i256;
-        v22.i1 = eq v21 1.i1;
-        br v22 block12 block14;
+        v26.constref<@layout_2> = const.proj v0 0.i256;
+        v27.constref<i1> = const.proj v26 1.i256;
+        v28.constref<@layout_2> = const.proj v0 0.i256;
+        v29.constref<i1> = const.proj v28 1.i256;
+        v30.i1 = const.load v29;
+        v31.i1 = eq v30 1.i1;
+        br v31 block12 block14;
 
     block10:
         jump block2;
@@ -93,9 +103,15 @@ func private %match_deeply_nested(v0.constref<@layout_3>) -> i8 {
         jump block10;
 
     block12:
-        v25.i1 = extract_value v9 1.i256;
-        v26.i1 = eq v25 1.i1;
-        br v26 block15 block17;
+        v34.constref<@layout_2> = const.proj v0 0.i256;
+        v35.constref<@layout_1> = const.proj v34 0.i256;
+        v36.constref<i1> = const.proj v35 1.i256;
+        v37.constref<@layout_2> = const.proj v0 0.i256;
+        v38.constref<@layout_1> = const.proj v37 0.i256;
+        v39.constref<i1> = const.proj v38 1.i256;
+        v40.i1 = const.load v39;
+        v41.i1 = eq v40 1.i1;
+        br v41 block15 block17;
 
     block13:
         jump block2;
@@ -121,40 +137,47 @@ func private %match_nested_tuple(v0.constref<@layout_2>) -> i8 {
         jump block3;
 
     block2:
-        v2.i8 = phi (5.i8 block9) (7.i8 block11) (6.i8 block12) (2.i8 block14) (1.i8 block15);
-        return v2;
+        v1.i8 = phi (5.i8 block9) (7.i8 block11) (6.i8 block12) (2.i8 block14) (1.i8 block15);
+        return v1;
 
     block3:
-        v5.constref<@layout_1> = const.proj v0 0.i256;
-        v6.objref<@layout_1> = obj.alloc @layout_1;
-        obj.init.const v6 v5;
-        v7.@layout_1 = obj.load v6;
+        v4.constref<@layout_1> = const.proj v0 0.i256;
         jump block4;
 
     block4:
-        v9.i1 = extract_value v7 0.i256;
-        v11.i1 = eq v9 1.i1;
-        br v11 block5 block7;
+        v6.constref<@layout_1> = const.proj v0 0.i256;
+        v7.constref<i1> = const.proj v6 0.i256;
+        v9.constref<@layout_1> = const.proj v0 0.i256;
+        v10.constref<i1> = const.proj v9 0.i256;
+        v11.i1 = const.load v10;
+        v12.i1 = eq v11 1.i1;
+        br v12 block5 block7;
 
     block5:
-        v14.i1 = extract_value v7 1.i256;
-        v15.i1 = eq v14 1.i1;
-        br v15 block8 block10;
+        v14.constref<@layout_1> = const.proj v0 0.i256;
+        v16.constref<i1> = const.proj v14 1.i256;
+        v17.constref<@layout_1> = const.proj v0 0.i256;
+        v18.constref<i1> = const.proj v17 1.i256;
+        v19.i1 = const.load v18;
+        v20.i1 = eq v19 1.i1;
+        br v20 block8 block10;
 
     block6:
-        v17.constref<i1> = const.proj v0 1.i256;
-        v18.i1 = const.load v17;
-        v19.i1 = eq v18 1.i1;
-        br v19 block14 block16;
+        v22.constref<i1> = const.proj v0 1.i256;
+        v23.constref<i1> = const.proj v0 1.i256;
+        v24.i1 = const.load v23;
+        v25.i1 = eq v24 1.i1;
+        br v25 block14 block16;
 
     block7:
         jump block6;
 
     block8:
-        v21.constref<i1> = const.proj v0 1.i256;
-        v22.i1 = const.load v21;
-        v23.i1 = eq v22 1.i1;
-        br v23 block11 block13;
+        v27.constref<i1> = const.proj v0 1.i256;
+        v28.constref<i1> = const.proj v0 1.i256;
+        v29.i1 = const.load v28;
+        v30.i1 = eq v29 1.i1;
+        br v30 block11 block13;
 
     block9:
         jump block2;

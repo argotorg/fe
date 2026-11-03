@@ -10,9 +10,9 @@ pub contract Fib {
 
     recv FibMsg {
         Compute { n } -> u32 {
-            let mut a: u32 = 0
-            let mut b: u32 = 1
-            let mut i: u32 = 0
+            var a: u32 = 0
+            var b: u32 = 1
+            var i: u32 = 0
             while i < n {
                 let next: u32 = a + b
                 a = b

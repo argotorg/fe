@@ -3,18 +3,28 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/string_literal_too_large_inferred.fe
 ---
-error[3-0033]: string type exceeds inline capacity
-   ┌─ string_literal_too_large_inferred.fe:11:31
+error[6-0003]: trait bound is not satisfied
+   ┌─ string_literal_too_large_inferred.fe:12:25
    │
-11 │ const FORWARDED: u256 = hash(("OrderComponents(address offerer,address zone)", "x"))
-   │                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `String<45>` exceeds the current inline limit of `String<31>`
-   │
-   = strings currently use one word of storage: 1 length byte and 31 payload bytes
+ 8 │ const fn hash<T: AsBytes>(_ x: T) -> u256 {
+   │                  ------- required by this bound on `hash`
+   ·
+12 │ const FORWARDED: u256 = hash(("OrderComponents(address offerer,address zone)", "x"))
+   │                         ^^^^
+   │                         │
+   │                         `(DynString, String<1>)` doesn't implement `AsBytes`
+   │                         trait bound `DynString: AsBytes` is not satisfied
 
-error[3-0033]: string type exceeds inline capacity
-   ┌─ string_literal_too_large_inferred.fe:14:18
-   │
-14 │     let parts = ("OrderComponents(address offerer,address zone)", "x")
-   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `String<45>` exceeds the current inline limit of `String<31>`
-   │
-   = strings currently use one word of storage: 1 length byte and 31 payload bytes
+error[6-0003]: trait bound is not satisfied
+    ┌─ string_literal_too_large_inferred.fe:16:5
+    │
+ 16 │     core::keccak(parts)
+    │     ^^^^^^^^^^^^
+    │     │
+    │     `(DynString, String<1>)` doesn't implement `AsBytes`
+    │     trait bound `DynString: AsBytes` is not satisfied
+    │
+    ┌─ src/bytes.fe:679:24
+    │
+679 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+    │                        ------- required by this bound on `keccak`

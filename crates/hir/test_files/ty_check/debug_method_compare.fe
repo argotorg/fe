@@ -17,6 +17,6 @@ impl<T> HasAssoc for MyStruct<T> {
     type Output = T
 
     fn get_output(self) -> Self::Output {
-        todo()
+        unsafe { todo() }
     }
 }

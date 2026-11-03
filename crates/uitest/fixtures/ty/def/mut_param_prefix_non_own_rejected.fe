@@ -8,7 +8,11 @@ fn bad_mut(mut x: mut Foo) {}
 
 fn bad_underscore(mut _: Foo) {}
 
-fn ok_own(mut x: own Foo) {}
+fn bad_var_plain(var x: Foo) {}
+
+fn bad_var_mut(var x: mut Foo) {}
+
+fn ok_own(var x: own Foo) {}
 
 fn ok_borrow(x: mut Foo) {}
 

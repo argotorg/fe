@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/state_only_instance_values.fe
+---
+error[16-0010]: invalid concrete type in `fn zeroed_one`
+   ┌─ state_only_instance_values.fe:18:9
+   │
+18 │     let arr = unsafe { MemArray<T>::new_uninit(1) }
+   │         ^^^ here `MemArray<SCell>` is a value in memory, but it holds `SCell`, which is pinned to a state space

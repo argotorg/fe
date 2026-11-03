@@ -9,13 +9,14 @@ use rustc_hash::FxHashSet;
 use crate::{
     HirDb,
     hir_def::{
-        ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, Body, BodyKind,
-        EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
-        FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg, GenericArgListId,
-        GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId, ItemKind, LitKind, Mod,
-        NormalAttr, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod,
-        TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam,
-        TypeId, TypeKind, TypeMode, Visibility, WhereClauseId, expr::CallArg,
+        ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, BindingMarker,
+        BlockKind, Body, BodyKind, EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex,
+        Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg,
+        GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId,
+        ItemKind, LitKind, Mod, ModeMarker, NormalAttr, Partial, Pat, PatId, PathId, PathKind,
+        Stmt, StmtId, Struct, TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId,
+        TypeBound, TypeGenericArg, TypeGenericParam, TypeId, TypeKind, TypeMode, UnOp, Visibility,
+        WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -204,10 +205,6 @@ where
         self.ty_path(PathId::from_ident(self.db(), ident))
     }
 
-    pub(super) fn ty_ptr(&self, pointee: TypeId<'db>) -> TypeId<'db> {
-        TypeId::new(self.db(), TypeKind::Ptr(Partial::Present(pointee)))
-    }
-
     pub(super) fn sol_ty(&self) -> TypeId<'db> {
         let path = self.path_from_root(self.roots.std, &["abi", "Sol"]);
         self.ty_path(path)
@@ -235,22 +232,25 @@ where
 
     /// A generated generic parameter, named so that it cannot shadow a user
     /// type spelled `name` in the generated signature or body.
-    pub(super) fn type_param_with_trait_bound(
+    pub(super) fn type_params_with_trait_bounds<const N: usize>(
         &self,
-        name: &str,
-        bound: TraitRefId<'db>,
-    ) -> (GenericParamListId<'db>, TypeId<'db>) {
-        let db = self.db();
-        let ident = self.generated_ident(name);
-        let params = GenericParamListId::new(
-            db,
-            vec![GenericParam::Type(TypeGenericParam {
-                name: Partial::Present(ident),
-                bounds: vec![TypeBound::Trait(bound)],
-                default_ty: None,
-            })],
+        params: [(&str, TraitRefId<'db>); N],
+    ) -> (GenericParamListId<'db>, [TypeId<'db>; N]) {
+        let idents = params.map(|(name, bound)| (self.generated_ident(name), bound));
+        let list = GenericParamListId::new(
+            self.db(),
+            idents
+                .iter()
+                .map(|&(ident, bound)| {
+                    GenericParam::Type(TypeGenericParam {
+                        name: Partial::Present(ident),
+                        bounds: vec![TypeBound::Trait(bound, ModeMarker::None)],
+                        default_ty: None,
+                    })
+                })
+                .collect::<Vec<_>>(),
         );
-        (params, self.ty_ident(ident))
+        (list, idents.map(|(ident, _)| self.ty_ident(ident)))
     }
 
     pub(super) fn param_own_self(&self) -> FuncParam<'db> {
@@ -260,6 +260,7 @@ where
             is_mut: false,
             has_ref_prefix: false,
             has_own_prefix: false,
+            has_mut_prefix: false,
             is_label_suppressed: false,
             name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
             ty: Partial::Present(self.self_ty()),
@@ -273,10 +274,11 @@ where
         ty: TypeId<'db>,
     ) -> FuncParam<'db> {
         FuncParam {
-            mode: FuncParamMode::View,
+            mode: FuncParamMode::Mut,
             is_mut: false,
             has_ref_prefix: false,
             has_own_prefix: false,
+            has_mut_prefix: false,
             is_label_suppressed: true,
             name: Partial::Present(FuncParamName::Ident(name)),
             ty: Partial::Present(TypeId::new(
@@ -297,6 +299,7 @@ where
             is_mut: false,
             has_ref_prefix: false,
             has_own_prefix: false,
+            has_mut_prefix: false,
             is_label_suppressed: true,
             name: Partial::Present(FuncParamName::Ident(name)),
             ty: Partial::Present(ty),
@@ -316,6 +319,7 @@ where
             attributes: self.empty_attrs(),
             name: Partial::Present(self.ident(name)),
             type_ref,
+            is_shape: false,
         }
     }
 
@@ -390,6 +394,7 @@ where
                 generic_params,
                 where_clause,
                 fields,
+                false,
                 this.top_mod(),
                 this.origin(),
             )
@@ -445,6 +450,8 @@ where
             where_clause,
             types,
             consts,
+            vec![],
+            false,
             self.top_mod(),
             origin,
         )
@@ -576,6 +583,25 @@ where
             build_body,
         )
     }
+
+    /// `fn encode(own self, _ out: core::abi::AbiFrame)`, writing `fields` in
+    /// the head/tail layout of `Self`.
+    pub(super) fn encode_func(&mut self, fields: &[(IdentId<'db>, TypeId<'db>)]) {
+        let out_ident = self.generated_ident("out");
+        let frame_ty = self.ty_path(self.path_from_root(self.roots.core, &["abi", "AbiFrame"]));
+        let params = self.params([
+            self.param_own_self(),
+            self.param_underscore_named(out_ident, frame_ty),
+        ]);
+        self.func_with_body_inline_always(
+            self.ident("encode"),
+            self.empty_generic_params(),
+            params,
+            None,
+            FuncModifiers::new(Visibility::Private, false, false, false),
+            |body| body.encode_fields(fields, out_ident),
+        );
+    }
 }
 
 pub(super) struct BodyBuilder<'ctxt, 'db, O>
@@ -689,6 +715,12 @@ where
         ))))
     }
 
+    /// `mut <ident>`: a `mut` access to a local place.
+    pub(super) fn mut_ident_expr(&mut self, ident: IdentId<'db>) -> ExprId {
+        let place = self.ident_expr(ident);
+        self.push_expr(Expr::Un(place, UnOp::Mut))
+    }
+
     pub(super) fn path_expr(&mut self, path: PathId<'db>) -> ExprId {
         self.push_expr(Expr::Path(Partial::Present(path)))
     }
@@ -761,43 +793,42 @@ where
         ))
     }
 
-    pub(super) fn encode_fields(
-        &mut self,
-        fields: &[(IdentId<'db>, TypeId<'db>)],
-        ptr_ident: IdentId<'db>,
-    ) {
+    fn encode_fields(&mut self, fields: &[(IdentId<'db>, TypeId<'db>)], out_ident: IdentId<'db>) {
         if fields.is_empty() {
             return;
         }
 
         let db = self.db();
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-        let tail_ident = self.generated_ident("tail");
+        let tails_ident = self.generated_ident("tails");
         let head_pos_ident = self.generated_ident("head_pos");
         let head_size = self.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
-        let tail_pat = self.push_pat(Pat::Path(
-            Partial::Present(PathId::from_ident(db, tail_ident)),
-            true,
+        let out = self.ident_expr(out_ident);
+        let tails =
+            self.method_call_expr(out, IdentId::new(db, "tail".to_string()), vec![head_size]);
+        let tails_pat = self.push_pat(Pat::Path(
+            Partial::Present(PathId::from_ident(db, tails_ident)),
+            BindingMarker::Var,
         ));
-        self.emit_stmt(Stmt::Let(tail_pat, None, Some(head_size)));
+        self.emit_stmt(Stmt::Let(tails_pat, None, Some(tails), None));
         let head_pos_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, head_pos_ident)),
-            true,
+            BindingMarker::Var,
         ));
         let zero = self.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))));
-        self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero)));
+        self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero), None));
 
         for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
             let field_ident = self.generated_ident(&format!("field_{index}"));
             let field_pat = self.push_pat(Pat::Path(
                 Partial::Present(PathId::from_ident(db, field_ident)),
-                false,
+                BindingMarker::Plain,
             ));
             let receiver = self.push_expr(Expr::Field(
                 self_expr,
                 Partial::Present(FieldIndex::Ident(field)),
             ));
-            self.emit_stmt(Stmt::Let(field_pat, None, Some(receiver)));
+            self.emit_stmt(Stmt::Let(field_pat, None, Some(receiver), None));
             let encode_field_args = GenericArgListId::given(
                 db,
                 vec![
@@ -811,12 +842,12 @@ where
             );
             let encode_field_path = PathId::from_ident(db, self.roots.core)
                 .push_str(db, "abi")
-                .push_str_args(db, "encode_field_at", encode_field_args);
+                .push_str_args(db, "encode_field", encode_field_args);
             let encode_field_callee = self.path_expr(encode_field_path);
             let field_value = self.ident_expr(field_ident);
-            let ptr_arg = self.ident_expr(ptr_ident);
+            let out_arg = self.ident_expr(out_ident);
             let head_pos_arg = self.ident_expr(head_pos_ident);
-            let tail_arg = self.ident_expr(tail_ident);
+            let tails_arg = self.ident_expr(tails_ident);
             let call = self.call_expr_with_args(
                 encode_field_callee,
                 vec![
@@ -826,15 +857,15 @@ where
                     },
                     CallArg {
                         label: None,
-                        expr: ptr_arg,
+                        expr: out_arg,
                     },
                     CallArg {
                         label: Some(IdentId::new(db, "head_pos".to_string())),
                         expr: head_pos_arg,
                     },
                     CallArg {
-                        label: Some(IdentId::new(db, "tail".to_string())),
-                        expr: tail_arg,
+                        label: Some(IdentId::new(db, "tails".to_string())),
+                        expr: tails_arg,
                     },
                 ],
             );
@@ -843,9 +874,9 @@ where
                 continue;
             }
 
-            let tail_place = self.ident_expr(tail_ident);
-            let assign_tail = self.push_expr(Expr::Assign(tail_place, call));
-            self.emit_expr_stmt(assign_tail);
+            let tails_place = self.ident_expr(tails_ident);
+            let assign_tails = self.push_expr(Expr::Assign(tails_place, call));
+            self.emit_expr_stmt(assign_tails);
 
             let abi_head_size_args = GenericArgListId::given(
                 db,
@@ -870,40 +901,30 @@ where
         }
     }
 
+    /// `let target: ty = core::abi::decode_field<Sol, ty, D, I>(mut decoder, input)`.
     pub(super) fn decode_into(
         &mut self,
         target_ident: IdentId<'db>,
         ty: TypeId<'db>,
-        decoder_ident: IdentId<'db>,
-        decoder_ty: TypeId<'db>,
+        [decoder_ident, input_ident]: [IdentId<'db>; 2],
+        [decoder_ty, input_ty]: [TypeId<'db>; 2],
     ) {
         let db = self.db();
-        let decode_args = GenericArgListId::given(
-            db,
-            vec![
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(self.sol_ty()),
-                }),
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(ty),
-                }),
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(decoder_ty),
-                }),
-            ],
-        );
+        let decode_args =
+            GenericArgListId::given_types(db, [self.sol_ty(), ty, decoder_ty, input_ty]);
         let decode_path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
             .push_str_args(db, "decode_field", decode_args);
         let decode_callee = self.path_expr(decode_path);
-        let decoder_expr = self.ident_expr(decoder_ident);
-        let decode_call = self.call_expr(decode_callee, vec![decoder_expr]);
+        let decoder_expr = self.mut_ident_expr(decoder_ident);
+        let input_expr = self.ident_expr(input_ident);
+        let decode_call = self.call_expr(decode_callee, vec![decoder_expr, input_expr]);
 
         let bind_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, target_ident)),
-            false,
+            BindingMarker::Plain,
         ));
-        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call), None));
     }
 
     pub(super) fn decode_from_into(
@@ -956,9 +977,9 @@ where
 
         let bind_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, target_ident)),
-            false,
+            BindingMarker::Plain,
         ));
-        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call), None));
     }
 
     pub(super) fn bind_input_len(&mut self, target_ident: IdentId<'db>, input_ident: IdentId<'db>) {
@@ -968,7 +989,7 @@ where
             self.method_call_expr(input_expr, IdentId::new(db, "len".to_string()), vec![]);
         let bind_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, target_ident)),
-            false,
+            BindingMarker::Plain,
         ));
         let u256_ty = TypeId::new(
             db,
@@ -977,7 +998,7 @@ where
                 IdentId::new(db, "u256".to_string()),
             ))),
         );
-        self.emit_stmt(Stmt::Let(bind_pat, Some(u256_ty), Some(len_call)));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(u256_ty), Some(len_call), None));
     }
 
     pub(super) fn return_record_self(&mut self, fields: &[IdentId<'db>]) {
@@ -998,7 +1019,7 @@ where
     fn finish(mut self) -> Body<'db> {
         self.body.f_ctxt.enter_block_scope();
         let stmts = std::mem::take(&mut self.stmts);
-        let root_expr = self.push_expr(Expr::Block(stmts));
+        let root_expr = self.push_expr(Expr::Block(stmts, BlockKind::Normal));
         self.body.f_ctxt.leave_block_scope(root_expr);
         self.body.build(None, root_expr, BodyKind::FuncBody)
     }

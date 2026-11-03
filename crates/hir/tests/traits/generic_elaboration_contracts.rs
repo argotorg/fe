@@ -3,14 +3,13 @@ use common::{InputDb, indexmap::IndexMap, stdlib::HasBuiltinCore};
 use fe_hir::{
     analysis::{
         semantic::{
-            SemanticInstanceKey, check_semantic_borrows, check_semantic_boundaries,
-            get_or_build_semantic_instance, identity_semantic_instance_key,
-            root_semantic_instance_key,
+            SemanticInstance, SemanticInstanceKey, check_semantic_accesses,
+            identity_semantic_instance_key, root_semantic_instance_key,
         },
         ty::{
             binder::Binder,
             normalize::normalize_ty,
-            trait_def::TraitInstId,
+            trait_def::{AssocBinding, TraitInstId},
             trait_resolution::PredicateListId,
             ty_check::BodyOwner,
             ty_def::{Kind, TyData, TyId, TyVarSort},
@@ -30,7 +29,7 @@ fn first_callee_key<'db>(
     db: &'db HirAnalysisTestDb,
     key: SemanticInstanceKey<'db>,
 ) -> SemanticInstanceKey<'db> {
-    get_or_build_semantic_instance(db, key)
+    SemanticInstance::new(db, key)
         .call_sites(db)
         .iter()
         .flatten()
@@ -68,7 +67,7 @@ fn second<Y: B>() { target(true) }
             let func = find_func(&db, module, name);
             first_callee_key(
                 &db,
-                identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+                identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
             )
         });
         assert_eq!(first, second, "{source}");
@@ -102,8 +101,9 @@ fn caller(_ x: mut Counter) { x.target() }",
                             .is_some_and(|name| name.data(&db) == "target")
                     })
                     .expect("target function or method"),
+                None,
             );
-            let caller = BodyOwner::Func(find_func(&db, module, "caller"));
+            let caller = BodyOwner::Func(find_func(&db, module, "caller"), None);
             let root = || root_semantic_instance_key(&db, target).expect("closed root");
             let called = || first_callee_key(&db, identity_semantic_instance_key(&db, caller));
             let (root, called) = if root_first {
@@ -114,8 +114,8 @@ fn caller(_ x: mut Counter) { x.target() }",
             };
             assert_eq!(root, called, "{source}");
             assert_eq!(identity_semantic_instance_key(&db, target), called);
-            let instance = get_or_build_semantic_instance(&db, root);
-            check_semantic_borrows(&db, instance).expect("valid root borrows");
+            let instance = SemanticInstance::new(&db, root);
+            check_semantic_accesses(&db, instance).expect("valid root accesses");
             db.assert_no_diags(module);
         }
     }
@@ -125,18 +125,18 @@ fn caller(_ x: mut Counter) { x.target() }",
 fn symbolic_and_effect_roots_keep_their_declaration_environment() {
     for source in [
         "trait Value {}
-fn target<T: Value>(_ x: T) -> T { x }",
+fn target<T: Value>(_ x: own T) -> T { x }",
         "fn target() uses (value: mut u256) { value += 1 }",
     ] {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(Utf8PathBuf::from("root_callee_evidence.fe"), source);
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
-        let owner = BodyOwner::Func(find_func(&db, module, "target"));
+        let owner = BodyOwner::Func(find_func(&db, module, "target"), None);
         let key = identity_semantic_instance_key(&db, owner);
         assert_eq!(key.impl_env(&db).normalization_scope(&db), owner.scope());
-        let instance = get_or_build_semantic_instance(&db, key);
-        check_semantic_borrows(&db, instance).expect("valid root borrows");
+        let instance = SemanticInstance::new(&db, key);
+        check_semantic_accesses(&db, instance).expect("valid root accesses");
     }
 }
 
@@ -190,7 +190,7 @@ fn root_callee_sharing_preserves_the_callers_ingot() {
                 &db,
                 identity_semantic_instance_key(
                     &db,
-                    BodyOwner::Func(find_func(&db, module, "caller")),
+                    BodyOwner::Func(find_func(&db, module, "caller"), None),
                 ),
             )
         })
@@ -213,8 +213,8 @@ fn source_and_full_method_schemas_keep_inherited_keys_in_both_query_orders() {
         let file = db.new_stand_alone(
             Utf8PathBuf::from("method_schema_basis.fe"),
             r#"
-struct Slot<const ROOT: u256 = _> {}
-trait T<X> { fn f<Y>(_ value: Slot, _ extra: Y) {} }
+struct K {}
+trait T<X> { fn f<Y>(_ extra: Y) uses (k: K) {} }
 fn foreign<Z>() {}
 "#,
         );
@@ -245,8 +245,8 @@ fn foreign<Z>() {}
         assert!(
             full.keys(&db)
                 .iter()
-                .any(|key| matches!(key, ParamKey::CallableLayout { .. })),
-            "method signature did not reserve a hidden layout slot"
+                .any(|key| matches!(key, ParamKey::EffectProvider { .. })),
+            "method signature did not reserve a hidden provider slot"
         );
         let own_key = source
             .source_key(&db, SourceParamIndex(0))
@@ -286,7 +286,7 @@ fn foreign<Z>() {}
         assert_eq!(full.original_key(&db, full_own), Some(own_key));
         assert_eq!(full.original_key(&db, source_own), None);
         let hidden_key = full.key_at(&db, LoweredSlot(2)).unwrap();
-        assert!(matches!(hidden_key, ParamKey::CallableLayout { .. }));
+        assert!(matches!(hidden_key, ParamKey::EffectProvider { .. }));
         let hidden = full.formal_at(&db, LoweredSlot(2)).unwrap();
         assert_eq!(source.original_key(&db, hidden), None);
 
@@ -327,18 +327,16 @@ fn sealed_effect_identity_retains_bodyless_call_after_semantic_checks() {
         Utf8PathBuf::from("sealed_effect_trait_selection.fe"),
         r#"
 use std::evm::RawStorage
-fn access() -> u256 uses (raw: mut RawStorage) { raw.sload(0) }
+fn access() -> u256 uses (raw: mut RawStorage) { unsafe { raw.sload(0) } }
 "#,
     );
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let func = find_func(&db, module, "access");
-    let identity = identity_semantic_instance_key(&db, BodyOwner::Func(func));
-    let instance = get_or_build_semantic_instance(&db, identity);
-    check_semantic_borrows(&db, instance).expect("sealed effect call must pass borrow validation");
-    check_semantic_boundaries(&db, instance)
-        .expect("sealed effect call must pass boundary validation");
-    let BodyOwner::Func(selected) = first_callee_key(&db, identity).owner(&db) else {
+    let identity = identity_semantic_instance_key(&db, BodyOwner::Func(func, None));
+    let instance = SemanticInstance::new(&db, identity);
+    check_semantic_accesses(&db, instance).expect("sealed effect call must pass access validation");
+    let BodyOwner::Func(selected, _) = first_callee_key(&db, identity).owner(&db) else {
         panic!("sealed effect callee is not a function");
     };
     assert!(
@@ -346,9 +344,9 @@ fn access() -> u256 uses (raw: mut RawStorage) { raw.sload(0) }
         "sealed effect call unexpectedly selected its runtime body in HIR"
     );
 
-    let root_key = root_semantic_instance_key(&db, BodyOwner::Func(func))
+    let root_key = root_semantic_instance_key(&db, BodyOwner::Func(func, None))
         .expect("standalone root must synthesize the sealed effect provider");
-    let BodyOwner::Func(selected) = first_callee_key(&db, root_key).owner(&db) else {
+    let BodyOwner::Func(selected, _) = first_callee_key(&db, root_key).owner(&db) else {
         panic!("root sealed effect callee is not a function");
     };
     assert!(
@@ -382,7 +380,8 @@ fn substituting_projection_and_evidence_preserves_both_arguments_and_bindings() 
         &db,
         trait_,
         vec![param],
-        IndexMap::from_iter([(item, param)]),
+        IndexMap::from_iter([(AssocBinding::of(item), param)]),
+        fe_hir::hir_def::ModeMarker::None,
     );
     let projection = TyId::assoc_ty(&db, inst.trait_ref(&db), item);
     let result = Binder::bind(func.into(), projection).instantiate(&db, &[TyId::bool(&db)]);
@@ -392,7 +391,9 @@ fn substituting_projection_and_evidence_preserves_both_arguments_and_bindings() 
     };
     assert_eq!(result.trait_.args(&db), &[TyId::bool(&db)]);
     assert_eq!(
-        evidence.assoc_type_bindings(&db).get(&item),
+        evidence
+            .assoc_type_bindings(&db)
+            .get(&AssocBinding::of(item)),
         Some(&TyId::bool(&db)),
         "associated binding retained a stale declaration parameter"
     );
@@ -423,7 +424,8 @@ fn projection_normalization_does_not_commit_speculative_trait_arguments() {
         &db,
         trait_,
         vec![TyId::bool(&db), TyId::u8(&db)],
-        IndexMap::from_iter([(item, TyId::u256(&db))]),
+        IndexMap::from_iter([(AssocBinding::of(item), TyId::u256(&db))]),
+        fe_hir::hir_def::ModeMarker::None,
     );
     let assumptions = PredicateListId::new(&db, vec![assumption]);
     assert_eq!(

@@ -68,11 +68,3 @@ error[1-0001]: `pub` modifier is not allowed in this block
    │
 13 │     pub unsafe fn f(self) {}
    │     ^^^ unexpected
-
-error[1-0001]: `unsafe` modifier is not allowed in this block
-   ┌─ fn_modifiers.fe:13:9
-   │
-13 │     pub unsafe fn f(self) {}
-   │         ^^^^^^ unexpected
-
-

@@ -1,0 +1,27 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/unsafe_impl.fe
+---
+error[6-0030]: implementing `Trusted` requires `unsafe impl`
+   ┌─ unsafe_impl.fe:22:6
+   │
+22 │ impl Trusted for B {
+   │      ^^^^^^^ `Trusted` is an `unsafe trait`
+   │
+   = an `unsafe impl` asserts the contract the trait documents, which the compiler relies on without checking it
+
+error[6-0030]: `Plain` is not an `unsafe trait`
+   ┌─ unsafe_impl.fe:31:13
+   │
+31 │ unsafe impl Plain for A {}
+   │             ^^^^^ remove `unsafe` from this `impl`
+
+error[6-0030]: implementing `StateIndex` requires `unsafe impl`
+   ┌─ unsafe_impl.fe:40:6
+   │
+40 │ impl StateIndex for Cells {
+   │      ^^^^^^^^^^ `StateIndex` is an `unsafe trait`
+   │
+   = an `unsafe impl` asserts the contract the trait documents, which the compiler relies on without checking it

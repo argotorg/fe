@@ -1,0 +1,116 @@
+// Sum and tuple shapes nest: a sum's payload may be a tuple of accesses,
+// `Option<(mut T, mut T)>`, and a tuple may hold sums,
+// `(mut T, Option<mut T>)`. Each `mut` component binds an access to its own
+// part, and a path that builds one variant leaves the others' payloads to the
+// paths that build them.
+use core::option::Option
+
+struct Pair { a: u256, b: u256 }
+
+impl Pair {
+    fn both_mut(mut self, _ ok: bool) -> Option<(mut u256, mut u256)> {
+        if !ok {
+            return Option::None
+        }
+        Option::Some((mut self.a, mut self.b))
+    }
+
+    fn sum_and_b(mut self) -> Option<(u256, mut u256)> {
+        Option::Some((self.a + self.b, mut self.b))
+    }
+
+    fn a_and_b(mut self, _ ok: bool) -> (mut u256, Option<mut u256>) {
+        if ok {
+            (mut self.a, Option::Some(mut self.b))
+        } else {
+            (mut self.a, Option::None)
+        }
+    }
+
+    fn either(mut self, _ first: bool) -> (Option<mut u256>, Option<mut u256>) {
+        if first {
+            (Option::Some(mut self.a), Option::None)
+        } else {
+            (Option::None, Option::Some(mut self.b))
+        }
+    }
+
+    fn nested(mut self, _ k: u256) -> Option<(mut u256, Option<mut u256>)> {
+        if k == 0 {
+            return Option::None
+        }
+        if k == 1 {
+            Option::Some((mut self.a, Option::None))
+        } else {
+            Option::Some((mut self.a, Option::Some(mut self.b)))
+        }
+    }
+}
+
+#[test]
+fn option_mut_pair_match() {
+    var p = Pair { a: 1, b: 2 }
+    if let Option::Some((mut a, mut b)) = p.both_mut(true) {
+        a += 10
+        b += 20
+    }
+    assert!(p.a == 11 && p.b == 22)
+    match p.both_mut(false) {
+        Option::Some((mut a, _)) => {
+            a = 0
+        }
+        Option::None => {}
+    }
+    assert!(p.a == 11)
+    if let Option::Some((sum, mut b)) = p.sum_and_b() {
+        b = sum
+    }
+    assert!(p.b == 33)
+}
+
+#[test]
+fn tuple_of_sums() {
+    var p = Pair { a: 1, b: 2 }
+    match p.a_and_b(true) {
+        (mut a, Option::Some(mut b)) => {
+            a = 4
+            b = 5
+        }
+        (_, Option::None) => {}
+    }
+    assert!(p.a == 4 && p.b == 5)
+    match p.a_and_b(false) {
+        (mut a, Option::None) => {
+            a = 6
+        }
+        (_, Option::Some(_)) => {}
+    }
+    assert!(p.a == 6 && p.b == 5)
+    match p.either(false) {
+        (Option::None, Option::Some(mut b)) => {
+            b = 7
+        }
+        _ => {}
+    }
+    match p.either(true) {
+        (Option::Some(mut a), Option::None) => {
+            a = 8
+        }
+        _ => {}
+    }
+    assert!(p.a == 8 && p.b == 7)
+    if let Option::Some((mut a, Option::Some(mut b))) = p.nested(2) {
+        a += 1
+        b += 1
+    }
+    assert!(p.a == 9 && p.b == 8)
+    if let Option::Some((mut a, Option::None)) = p.nested(1) {
+        a += 1
+    }
+    assert!(p.a == 10)
+    var reached = false
+    if let Option::None = p.nested(0) {
+        reached = true
+    }
+    assert!(reached)
+}

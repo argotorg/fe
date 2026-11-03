@@ -98,13 +98,33 @@ macro_rules! impl_db_default {
             $db_type: $crate::stdlib::HasBuiltinCore + $crate::stdlib::HasBuiltinStd,
         {
             fn default() -> Self {
+                Self::with_storage(salsa::Storage::default())
+            }
+        }
+
+        impl $db_type
+        where
+            $db_type: $crate::stdlib::HasBuiltinCore + $crate::stdlib::HasBuiltinStd,
+        {
+            /// A database that tallies its salsa events in `counters`.
+            #[allow(dead_code)]
+            pub fn with_salsa_event_counters(
+                counters: std::sync::Arc<std::sync::Mutex<$crate::SalsaEventCounters>>,
+            ) -> Self {
+                Self::with_storage(salsa::Storage::new(Some(Box::new(move |event| {
+                    if let Ok(mut counters) = counters.lock() {
+                        counters.record_event(&event);
+                    }
+                }))))
+            }
+
+            fn with_storage(storage: salsa::Storage<Self>) -> Self {
                 let mut db = Self {
-                    storage: salsa::Storage::default(),
+                    storage,
                     index: None,
                     graph: None,
                     options: None,
                     settings: None,
-                    salsa_event_counters: None,
                 };
                 let index = $crate::file::Workspace::default(&db);
                 db.index = Some(index);
@@ -134,42 +154,12 @@ macro_rules! define_input_db {
             graph: Option<$crate::dependencies::DependencyGraph>,
             options: Option<$crate::options::CompilerOptions>,
             settings: Option<$crate::compilation::CompilationSettings>,
-            salsa_event_counters:
-                Option<std::sync::Arc<std::sync::Mutex<$crate::SalsaEventCounters>>>,
         }
 
         #[salsa::db]
-        impl salsa::Database for $db_name {
-            fn salsa_event(&self, event: &dyn Fn() -> salsa::Event) {
-                if let Some(counters) = &self.salsa_event_counters
-                    && let Ok(mut counters) = counters.lock()
-                {
-                    counters.record_event(&event());
-                }
-            }
-        }
-
-        impl $db_name {
-            #[allow(dead_code)]
-            pub fn set_salsa_event_counters(
-                &mut self,
-                counters: Option<std::sync::Arc<std::sync::Mutex<$crate::SalsaEventCounters>>>,
-            ) {
-                self.salsa_event_counters = counters;
-            }
-        }
+        impl salsa::Database for $db_name {}
 
         $crate::impl_input_db!($db_name);
         $crate::impl_db_default!($db_name);
-    };
-}
-
-#[macro_export]
-macro_rules! impl_db_traits {
-    ($db_type:ty, $($trait_name:ident),+ $(,)?) => {
-        #[salsa::db]
-        impl salsa::Database for $db_type {
-            fn salsa_event(&self, _event: &dyn Fn() -> salsa::Event) {}
-        }
     };
 }

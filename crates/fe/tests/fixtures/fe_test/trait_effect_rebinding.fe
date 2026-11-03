@@ -1,0 +1,50 @@
+trait CounterRead {
+    fn read(self) -> u256
+}
+trait CounterWrite: CounterRead {
+    fn increment(mut self)
+}
+trait TypedRead<T> {
+    fn read_typed(self) -> T
+}
+
+struct Counter { total: u256 }
+impl CounterRead for Counter {
+    fn read(self) -> u256 { self.total }
+}
+impl CounterWrite for Counter {
+    fn increment(mut self) { self.total += 1 }
+}
+impl TypedRead<u256> for Counter {
+    fn read_typed(self) -> u256 { self.total }
+}
+
+fn read() -> u256 uses (counter: CounterRead) { counter.read() }
+fn increment() uses (counter: mut CounterWrite) { counter.increment() }
+
+fn same_trait() -> u256 uses (counter: CounterRead) {
+    with (CounterRead = counter) { read() }
+}
+fn supertrait() -> u256 uses (counter: CounterWrite) {
+    with (CounterRead = counter) { same_trait() }
+}
+fn mutable_provider() uses (counter: mut CounterWrite) {
+    with (CounterWrite = counter) { increment() }
+}
+fn read_typed<T>() -> T uses (counter: TypedRead<T>) { counter.read_typed() }
+fn generic_trait<T>() -> T uses (counter: TypedRead<T>) {
+    with (TypedRead<T> = counter) { read_typed<T>() }
+}
+
+#[test]
+fn named_effects_rebind_without_losing_their_provider() {
+    var counter = Counter { total: 7 }
+    with (CounterWrite = counter) {
+        assert(supertrait() == 7)
+        mutable_provider()
+        assert(supertrait() == 8)
+    }
+    with (CounterRead = counter) { assert(same_trait() == 8) }
+    with (TypedRead<u256> = counter) { assert(generic_trait<u256>() == 8) }
+    assert(counter.total == 8)
+}

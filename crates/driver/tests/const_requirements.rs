@@ -1,7 +1,7 @@
 //! Const `where` requirements through the driver.
 //!
 //! Rejected programs are rendered uitest fixtures (`ty_check/const_where`,
-//! `semantic_borrowck/const_where`). This file covers accepted programs,
+//! `semantic_access/const_where`). This file covers accepted programs,
 //! whose `answer*` functions are evaluated and snapshotted, and relational
 //! checks that compare one program across edits, query orders or printing.
 
@@ -13,14 +13,14 @@ use common::{
     file::File,
     stdlib::{HasBuiltinCore, HasBuiltinStd},
 };
-use dir_test::{Fixture, dir_test};
+
 use fe_driver::DriverDataBase;
 use hir::{
     analysis::semantic::{EvalOutcome, GenericSubst, eval_body_owner_const_with_args},
     analysis::ty::ty_check::BodyOwner,
     hir_def::Func,
 };
-use test_utils::snap_test;
+use test_utils::{fixture_shards, fixtures::Fixture, snap_test};
 use url::Url;
 
 fn database() -> DriverDataBase {
@@ -101,7 +101,7 @@ fn named<'db>(db: &'db DriverDataBase, file: File, name: &str) -> Func<'db> {
 }
 
 fn evaluate(db: &DriverDataBase, file: File, name: &str) -> String {
-    let owner = BodyOwner::Func(named(db, file, name));
+    let owner = BodyOwner::Func(named(db, file, name), None);
     match eval_body_owner_const_with_args(
         db,
         owner,
@@ -113,26 +113,32 @@ fn evaluate(db: &DriverDataBase, file: File, name: &str) -> String {
     }
 }
 
-/// Each accepted program must produce no errors. Its top-level `const fn`s
-/// whose names start with `answer` are evaluated, in source order.
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/const_requirements/accept",
-    glob: "**/*.fe"
-)]
-fn accepted(fixture: Fixture<&str>) {
-    let mut db = database();
+// Each accepted program must produce no errors. Its top-level `const fn`s
+// whose names start with `answer` are evaluated, in source order.
+fixture_shards!(
+    accepted,
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/const_requirements/accept"
+    ),
+    "**/*.fe",
+    database,
+    check_accepted,
+);
+
+fn check_accepted(db: &mut DriverDataBase, fixture: &Fixture) {
     let source = fixture.content().replace("\r\n", "\n");
-    let file = input(&mut db, Path::new(fixture.path()), &source);
-    let errors = diagnostics(&db, file);
+    let file = input(db, Path::new(fixture.path()), &source);
+    let errors = diagnostics(db, file);
     assert!(errors.is_empty(), "unexpected diagnostics:\n{errors}");
     let mut values = String::new();
-    for func in db.top_mod(file).all_funcs(&db).iter() {
-        let Some(name) = func.name(&db).to_opt().filter(|_| func.is_const(&db)) else {
+    for func in db.top_mod(file).all_funcs(db).iter() {
+        let Some(name) = func.name(db).to_opt().filter(|_| func.is_const(db)) else {
             continue;
         };
-        let name = name.data(&db).to_string();
+        let name = name.data(db).to_string();
         if name.starts_with("answer") {
-            values.push_str(&format!("{name}() = {}\n", evaluate(&db, file, &name)));
+            values.push_str(&format!("{name}() = {}\n", evaluate(db, file, &name)));
         }
     }
     snap_test!(values, fixture.path());
@@ -244,7 +250,7 @@ fn cached_evaluation_is_not_requirement_evidence() {
         fixture("relational/cached_evaluation_is_not_requirement_evidence/evaluation_first.fe");
     let mut db = database();
     let file = input(&mut db, &path, &source);
-    let owner = BodyOwner::Func(named(&db, file, "answer"));
+    let owner = BodyOwner::Func(named(&db, file, "answer"), None);
     let _ = eval_body_owner_const_with_args(
         &db,
         owner,

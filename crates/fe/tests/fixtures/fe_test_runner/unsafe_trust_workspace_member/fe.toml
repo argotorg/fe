@@ -1,0 +1,6 @@
+[ingot]
+name = "unsafe_trust_workspace_member"
+version = "0.1.0"
+
+[dependencies]
+dep = { path = "../unsafe_trust_workspace_vendor/dep" }

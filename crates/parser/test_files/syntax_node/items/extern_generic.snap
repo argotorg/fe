@@ -1,6 +1,6 @@
 ---
 source: crates/parser/tests/syntax_node.rs
-assertion_line: 15
+assertion_line: 18
 expression: node
 input_file: test_files/syntax_node/items/extern_generic.fe
 ---
@@ -12,9 +12,9 @@ Root@0..99
         WhiteSpace@6..7 " "
         ExternItemList@7..98
           LBrace@7..8 "{"
-          Func@8..40
-            Newline@8..9 "\n"
-            WhiteSpace@9..13 "    "
+          Newline@8..9 "\n"
+          WhiteSpace@9..13 "    "
+          Func@13..40
             PubKw@13..16 "pub"
             WhiteSpace@16..17 " "
             FnKw@17..19 "fn"
@@ -44,9 +44,9 @@ Root@0..99
                 Path@39..40
                   PathSegment@39..40
                     Ident@39..40 "T"
-          Func@40..96
-            Newline@40..41 "\n"
-            WhiteSpace@41..45 "    "
+          Newline@40..41 "\n"
+          WhiteSpace@41..45 "    "
+          Func@45..96
             PubKw@45..48 "pub"
             WhiteSpace@48..49 " "
             FnKw@49..51 "fn"

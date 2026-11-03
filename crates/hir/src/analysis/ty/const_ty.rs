@@ -4,27 +4,28 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, Contract, Expr, ExprId, Func, GenericArgListId, GenericParamOwner, IdentId,
-    LitKind, Partial, PatId, PathId, Stmt, TypeAlias as HirTypeAlias, TypeId as HirTypeId, UnOp,
+    BinOp, Body, Const, Expr, ExprId, GenericParamOwner, HirIngot, IdentId, ImplTrait, IntegerId,
+    LitKind, Partial, PathId, Stmt, UnOp,
 };
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::const_expr::{ConstExpr, ConstExprId, ConstInvocation, pretty_print_un_op};
 use super::{
-    adt_def::AdtDef,
     assoc_const::{AssocConstUse, InherentConstUse},
+    const_check::const_body_language_failure,
     diagnostics::{BodyDiag, FuncBodyDiag},
+    evidence::EvidenceList,
     fold::{TyFoldable, TyFolder},
     generic_defaults::DefaultApplication,
     normalize::{normalize_ty, normalize_with_trait_evidence},
     subst::substitute_complete,
     trait_def::{
-        ImplementorId, ResolvedImplInstance, TraitInstId, resolve_trait_impl_instance,
+        ResolvedImplInstance, TraitInstId, resolve_trait_impl_instance,
         selected_assoc_const_body_template,
     },
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
     ty_check::{BodyOwner, infer_body},
-    ty_def::{InvalidCause, TyId, TyParam, TyVar},
+    ty_def::{InvalidCause, TyId, TyParam, TyVar, int_literal_fits_prim},
     ty_error::first_invalid_ty_cause,
     ty_lower::{
         CompleteSubst, ParamBasis, ParamDomainId, SourceParamIndex, SubstError,
@@ -51,54 +52,6 @@ use crate::analysis::{
 use crate::hir_def::{CallableDef, ItemKind, attr::ArithmeticMode, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutHoleArgSite<'db> {
-    Path(PathId<'db>),
-    GenericArgList(GenericArgListId<'db>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct LayoutIntroSite<'db> {
-    pub root: LayoutIntroRoot<'db>,
-    pub path: Vec<LayoutIntroStep>,
-}
-
-impl<'db> LayoutIntroSite<'db> {
-    /// `param_idx` is a zero-based position in the owner's source parameter list.
-    pub(crate) fn definition(owner: GenericParamOwner<'db>, param_idx: usize) -> Self {
-        Self {
-            root: LayoutIntroRoot::Definition { owner },
-            path: vec![LayoutIntroStep::ConstParam(param_idx as u32)],
-        }
-    }
-
-    pub(crate) fn lowering(site: LayoutHoleArgSite<'db>, arg_idx: usize) -> Self {
-        Self {
-            root: LayoutIntroRoot::Lowering { site },
-            path: vec![LayoutIntroStep::ExplicitArg(arg_idx as u32)],
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub enum LayoutIntroRoot<'db> {
-    Definition { owner: GenericParamOwner<'db> },
-    Lowering { site: LayoutHoleArgSite<'db> },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutIntroStep {
-    ExplicitArg(u32),
-    /// Zero-based position in the owning declaration's source parameter list.
-    ConstParam(u32),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct LayoutHoleTrace<'db> {
-    pub introduced_at: LayoutIntroSite<'db>,
-    pub landings: Vec<LayoutInstantiationId<'db>>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstCanonMode {
@@ -152,320 +105,29 @@ impl<'db> ConstCanonEnv<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
-pub enum CallableInputLayoutHoleOrigin {
+/// A callable's input: its receiver, a value parameter or an effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
+pub enum CallableInputOrigin {
     Receiver,
     ValueParam(usize),
     Effect(usize),
 }
 
-/// The declaration that owns a callable layout boundary.
-///
-/// Unlike [`Body`], this identity is available without inspecting or lowering
-/// an implementation body, so declaration ABI queries remain body-independent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum CallableLayoutOwner<'db> {
-    Func(Func<'db>),
-    ContractInit {
-        contract: Contract<'db>,
-    },
-    ContractRecvArm {
-        contract: Contract<'db>,
-        recv_idx: u32,
-        arm_idx: u32,
-    },
-}
-
-impl<'db> CallableLayoutOwner<'db> {
-    pub fn func(self) -> Option<Func<'db>> {
-        match self {
-            Self::Func(func) => Some(func),
-            Self::ContractInit { .. } | Self::ContractRecvArm { .. } => None,
-        }
-    }
-
-    pub fn scope(self) -> ScopeId<'db> {
-        match self {
-            Self::Func(func) => func.scope(),
-            Self::ContractInit { contract } | Self::ContractRecvArm { contract, .. } => {
-                contract.scope()
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HoleId<'db> {
-    Structural(StructuralHoleId<'db>),
-    Bound(BoundHoleId<'db>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BoundHoleId<'db> {
-    Opaque,
-    LayoutShape {
-        ordinal: u32,
-        kind: LayoutShapeHoleKind,
-    },
-    CallableInput {
-        owner: CallableLayoutOwner<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-        ordinal: usize,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LayoutShapeHoleKind {
-    ExplicitWildcard,
-    DefaultHoleParam,
-    EffectKeyExistential,
-}
-
-impl StructuralHoleOrigin<'_> {
-    pub(crate) fn shape_kind(self) -> LayoutShapeHoleKind {
-        match self {
-            Self::ExplicitWildcard { .. } => LayoutShapeHoleKind::ExplicitWildcard,
-            Self::DefaultHoleParam { .. } => LayoutShapeHoleKind::DefaultHoleParam,
-            Self::EffectKeyExistential { .. } => LayoutShapeHoleKind::EffectKeyExistential,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum StructuralHoleOrigin<'db> {
-    ExplicitWildcard {
-        site: LayoutHoleArgSite<'db>,
-        arg_idx: usize,
-    },
-    DefaultHoleParam {
-        owner: GenericParamOwner<'db>,
-        /// Zero-based position in `owner`'s source parameter list, excluding implicit prefixes.
-        param_idx: usize,
-    },
-    EffectKeyExistential {
-        path: PathId<'db>,
-        arg_idx: usize,
-        owner: GenericParamOwner<'db>,
-        param_idx: usize,
-    },
-}
-
-/// A unique syntax position within a body that can introduce layout holes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum BodyHoleSite {
-    Expr(ExprId),
-    Pat(PatId),
-}
-
-/// Where a structural hole's identity is anchored.
-///
-/// During the shared, content-keyed lowering a hole is anchored at the memo
-/// key of the execution that minted it (`Template*`), including its active
-/// assumptions; since distinct memo entries have distinct keys, ordinals from
-/// different executions can never collide. Anchored entry points re-anchor
-/// template holes at a genuinely unique item position (added in later phases).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum HoleAnchor<'db> {
-    /// A default template is owned by a declaration position, not by a caller.
-    GenericDefault {
-        owner: GenericParamOwner<'db>,
-        param_idx: usize,
-    },
-    /// Minted while lowering a HIR type (the `lower_hir_ty` memo key).
-    TemplateTy {
-        ty: HirTypeId<'db>,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-    },
-    /// Minted while resolving a path outside any enclosing HIR-type lowering
-    /// (e.g. path expressions in bodies).
-    TemplatePath {
-        path: PathId<'db>,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-    },
-    /// Minted at a unique expression or pattern occurrence in a body. Unlike
-    /// content-interned HIR types, paths, and argument lists, this is already a
-    /// stable semantic source position and must not be re-anchored.
-    BodySyntax { body: Body<'db>, site: BodyHoleSite },
-    /// A hole owned by a type alias's right-hand side. Instantiating the
-    /// alias at a use site replaces these with fresh holes minted from the
-    /// use site's minter.
-    AliasTemplate(HirTypeAlias<'db>),
-    /// A unique associated-type definition in a trait impl. Besides giving
-    /// holes a position-stable owner, this tells path lowering that
-    /// `Self::Assoc` denotes an impl-local binding rather than a signature
-    /// projection.
-    ImplAssocType {
-        impl_trait: crate::hir_def::ImplTrait<'db>,
-        index: u32,
-    },
-    /// A unique callable input position used as the parent of structural
-    /// projection landings discovered for that input.
-    CallableInput {
-        owner: CallableLayoutOwner<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-    },
-    /// The declared result position of one callable. Output evidence is a
-    /// signature property and must never be keyed by a lowered body.
-    CallableOutput { owner: CallableLayoutOwner<'db> },
-    /// A canonical parent for nested evidence landings in one semantic value.
-    /// This identity is local to schema derivation and is never an allocation
-    /// identity in a contract root graph.
-    SemanticValue { body: Body<'db>, local: u32 },
-}
-
-impl<'db> HoleAnchor<'db> {
-    /// Whether this anchor is a content-keyed lowering template (as opposed
-    /// to an alias template or, in later phases, a unique item position).
-    pub(crate) fn is_lowering_template(self) -> bool {
-        matches!(self, Self::TemplateTy { .. } | Self::TemplatePath { .. })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutBoundaryIdentity<'db> {
-    ContractField {
-        contract: Contract<'db>,
-        field_index: u32,
-    },
-    AdtApplication(AdtDef<'db>),
-    AliasUse(HirTypeAlias<'db>),
-    ProviderTarget(ImplementorId<'db>),
-    ArrayElement,
-    CallableInput {
-        owner: CallableLayoutOwner<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-    },
-    CallableOutput(CallableLayoutOwner<'db>),
-    SemanticValue {
-        body: Body<'db>,
-        local: u32,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutOccurrenceStep {
-    Instantiation(u32),
-    TypeParam(u32),
-    ConstParam(u32),
-    GenericArg(u32),
-    StructField(u32),
-    EnumVariant(u32),
-    EnumPayloadField(u32),
-    TupleElem(u32),
-    ArrayDimension(u32),
-    Normalization,
-    TemplateBody,
-}
-
-pub type LayoutOccurrencePath = Vec<LayoutOccurrenceStep>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutInstantiationContext<'db> {
-    Lowering(HoleAnchor<'db>),
-    Nested(LayoutInstantiationId<'db>),
-}
-
-#[salsa::interned]
-#[derive(Debug)]
-pub struct LayoutInstantiationId<'db> {
-    pub context: LayoutInstantiationContext<'db>,
-    pub boundary: LayoutBoundaryIdentity<'db>,
-    pub occurrence: LayoutOccurrencePath,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutRootIdentity<'db> {
-    Source {
-        anchor: HoleAnchor<'db>,
-        ordinal: u32,
-    },
-    Landing {
-        source: LayoutRootId<'db>,
-        instance: LayoutInstantiationId<'db>,
-    },
-}
-
-#[salsa::interned]
-#[derive(Debug)]
-pub struct LayoutRootId<'db> {
-    pub identity: LayoutRootIdentity<'db>,
-}
-
-impl<'db> LayoutRootId<'db> {
-    pub fn source(db: &'db dyn HirAnalysisDb, anchor: HoleAnchor<'db>, ordinal: u32) -> Self {
-        Self::new(db, LayoutRootIdentity::Source { anchor, ordinal })
-    }
-
-    pub fn landing(
-        db: &'db dyn HirAnalysisDb,
-        source: Self,
-        instance: LayoutInstantiationId<'db>,
-    ) -> Self {
-        Self::new(db, LayoutRootIdentity::Landing { source, instance })
-    }
-
-    pub(crate) fn source_anchor(self, db: &'db dyn HirAnalysisDb) -> HoleAnchor<'db> {
-        match self.identity(db) {
-            LayoutRootIdentity::Source { anchor, .. } => anchor,
-            LayoutRootIdentity::Landing { source, .. } => source.source_anchor(db),
-        }
-    }
-}
-
-/// Mints source layout-root identities for one lowering execution.
-///
-/// Threaded by reference through the lowering descent so that every mint
-/// event within one execution receives a distinct ordinal; a hole cannot be
-/// minted without one, which makes "forgot to re-key after a memoized call"
-/// impossible by construction.
+/// Whether lowering evaluates anonymous const bodies now or keeps them as
+/// typed-later metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConstBodyLowering {
     Eager,
     Deferred,
 }
 
-#[derive(Debug)]
-pub(crate) struct HoleMinter<'db> {
-    anchor: HoleAnchor<'db>,
-    counter: std::cell::Cell<u32>,
-    instantiation_counter: std::cell::Cell<u32>,
-}
-
-impl<'db> HoleMinter<'db> {
-    pub(crate) fn new(anchor: HoleAnchor<'db>) -> Self {
-        Self {
-            anchor,
-            counter: std::cell::Cell::new(0),
-            instantiation_counter: std::cell::Cell::new(0),
-        }
-    }
-
-    pub(crate) fn anchor(&self) -> HoleAnchor<'db> {
-        self.anchor
-    }
-
-    pub(crate) fn mint(&self, db: &'db dyn HirAnalysisDb) -> LayoutRootId<'db> {
-        let ordinal = self.counter.get();
-        self.counter.set(ordinal + 1);
-        LayoutRootId::source(db, self.anchor, ordinal)
-    }
-
-    pub(crate) fn next_instantiation_ordinal(&self) -> u32 {
-        let ordinal = self.instantiation_counter.get();
-        self.instantiation_counter.set(ordinal + 1);
-        ordinal
-    }
-}
-
-/// Policy for lowering types and paths. Hole identity is allocated separately
-/// so capture coordinates and const-body timing cannot be inferred from it.
+/// Policy for lowering types and paths.
 #[derive(Debug)]
 pub(crate) struct LoweringContext<'db> {
-    holes: HoleMinter<'db>,
     const_bodies: ConstBodyLowering,
-    source_params: Option<GenericParamOwner<'db>>,
+    /// The impl whose associated type this lowering lowers: there `Self::A`
+    /// is the impl's own binding of `A`.
+    impl_assoc_type: Option<ImplTrait<'db>>,
     default_capture: Option<(GenericParamOwner<'db>, SourceParamIndex)>,
     /// Every path segment this lowering resolved, in resolution order, when
     /// the caller asked for them (`recording_resolutions`).
@@ -476,29 +138,35 @@ pub(crate) struct LoweringContext<'db> {
 }
 
 impl<'db> LoweringContext<'db> {
-    pub(crate) fn new(anchor: HoleAnchor<'db>) -> Self {
-        Self::for_const_bodies(anchor, ConstBodyLowering::Eager)
+    pub(crate) fn new() -> Self {
+        Self::for_const_bodies(ConstBodyLowering::Eager)
     }
 
     /// Creates lowering state for an item signature. Const bodies stay as
     /// typed-later metadata so candidate discovery never depends on body type
     /// checking or trait selection.
-    pub(crate) fn deferred(anchor: HoleAnchor<'db>) -> Self {
-        Self::for_const_bodies(anchor, ConstBodyLowering::Deferred)
+    pub(crate) fn deferred() -> Self {
+        Self::for_const_bodies(ConstBodyLowering::Deferred)
     }
 
-    pub(crate) fn for_const_bodies(
-        anchor: HoleAnchor<'db>,
-        const_bodies: ConstBodyLowering,
-    ) -> Self {
+    pub(crate) fn for_const_bodies(const_bodies: ConstBodyLowering) -> Self {
         Self {
-            holes: HoleMinter::new(anchor),
             const_bodies,
-            source_params: None,
+            impl_assoc_type: None,
             default_capture: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
         }
+    }
+
+    /// Makes this lowering lower an associated type of `impl_trait`.
+    pub(crate) fn for_impl_assoc_type(mut self, impl_trait: ImplTrait<'db>) -> Self {
+        self.impl_assoc_type = Some(impl_trait);
+        self
+    }
+
+    pub(crate) fn impl_assoc_type(&self) -> Option<ImplTrait<'db>> {
+        self.impl_assoc_type
     }
 
     /// Makes this lowering keep every path segment it resolves, with the
@@ -533,19 +201,8 @@ impl<'db> LoweringContext<'db> {
             .unwrap_or_default()
     }
 
-    pub(crate) fn holes(&self) -> &HoleMinter<'db> {
-        &self.holes
-    }
-
     pub(crate) fn const_bodies(&self) -> ConstBodyLowering {
         self.const_bodies
-    }
-
-    /// Slot discovery uses declaration indices, before hidden callable slots
-    /// exist. The same basis must be used for both paths and their predicates.
-    pub(crate) fn with_source_params(mut self, owner: Option<GenericParamOwner<'db>>) -> Self {
-        self.source_params = owner;
-        self
     }
 
     pub(crate) fn with_default_capture(
@@ -557,96 +214,8 @@ impl<'db> LoweringContext<'db> {
         self
     }
 
-    pub(crate) fn source_params(&self) -> Option<GenericParamOwner<'db>> {
-        self.source_params
-    }
-
     pub(crate) fn default_capture(&self) -> Option<(GenericParamOwner<'db>, SourceParamIndex)> {
         self.default_capture
-    }
-}
-
-/// Identity of a structural layout hole.
-///
-/// HIR ids (`TypeId`, `PathId`, `GenericArgListId`) are content-interned, so
-/// a hole's creation site alone cannot identify a syntactic occurrence:
-/// `(Slot<_>, Slot<_>)` shares one child HIR type and `(M, M)` one alias
-/// path. Source identity is therefore assigned at mint time: the `anchor`
-/// names the lowering execution (or alias template) that minted the hole and
-/// the `ordinal` distinguishes mint events within it. Structural landing
-/// identity is derived separately from the source root and an explicit
-/// instantiation instance. Diagnostic trace changes never change either
-/// identity. Two holes silently merging means aliased storage slots, so
-/// minting errs on the side of distinctness.
-#[salsa::interned]
-#[derive(Debug)]
-pub struct StructuralHoleId<'db> {
-    pub expected_ty: TyId<'db>,
-    pub root: LayoutRootId<'db>,
-    pub origin: StructuralHoleOrigin<'db>,
-    pub trace: LayoutHoleTrace<'db>,
-}
-
-impl<'db> StructuralHoleId<'db> {
-    pub(crate) fn with_intro(
-        db: &'db dyn HirAnalysisDb,
-        expected_ty: TyId<'db>,
-        root: LayoutRootId<'db>,
-        origin: StructuralHoleOrigin<'db>,
-        introduced_at: LayoutIntroSite<'db>,
-    ) -> Self {
-        Self::new(
-            db,
-            expected_ty,
-            root,
-            origin,
-            LayoutHoleTrace {
-                introduced_at,
-                landings: Vec::new(),
-            },
-        )
-    }
-
-    pub(crate) fn anchor(self, db: &'db dyn HirAnalysisDb) -> HoleAnchor<'db> {
-        self.root(db).source_anchor(db)
-    }
-
-    pub(crate) fn introduced_at(self, db: &'db dyn HirAnalysisDb) -> LayoutIntroSite<'db> {
-        self.trace(db).introduced_at
-    }
-}
-
-impl<'db> HoleId<'db> {
-    pub(crate) fn bound_callable(
-        owner: CallableLayoutOwner<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-        ordinal: usize,
-    ) -> Self {
-        Self::Bound(BoundHoleId::CallableInput {
-            owner,
-            origin,
-            ordinal,
-        })
-    }
-
-    pub(crate) fn bound_opaque() -> Self {
-        Self::Bound(BoundHoleId::Opaque)
-    }
-
-    pub(crate) fn structural(
-        db: &'db dyn HirAnalysisDb,
-        expected_ty: TyId<'db>,
-        origin: StructuralHoleOrigin<'db>,
-        introduced_at: LayoutIntroSite<'db>,
-        root: LayoutRootId<'db>,
-    ) -> Self {
-        Self::Structural(StructuralHoleId::with_intro(
-            db,
-            expected_ty,
-            root,
-            origin,
-            introduced_at,
-        ))
     }
 }
 
@@ -746,7 +315,7 @@ impl<'a, 'db> ConstBodyExprPrinter<'a, 'db> {
                 self.pretty_print(*expr)?,
                 to.to_opt()?.pretty_print(self.db)
             )),
-            Expr::Block(stmts) if stmts.len() == 1 => match stmts[0].data(self.db, self.body) {
+            Expr::Block(stmts, _) if stmts.len() == 1 => match stmts[0].data(self.db, self.body) {
                 Partial::Present(Stmt::Expr(tail_expr)) => self.pretty_print(*tail_expr),
                 Partial::Present(_) | Partial::Absent => None,
             },
@@ -775,7 +344,11 @@ pub fn evaluate_type_level_int_const_expr<'db>(
 ) -> Option<ConstTyId<'db>> {
     if !matches!(
         expr.data(db),
-        ConstExpr::ArithBinOp { .. } | ConstExpr::UnOp { .. } | ConstExpr::Cast { .. }
+        ConstExpr::ArithBinOp { .. }
+            | ConstExpr::UnOp { .. }
+            | ConstExpr::Cast { .. }
+            | ConstExpr::Compare { .. }
+            | ConstExpr::Select { .. }
     ) {
         return None;
     }
@@ -831,7 +404,7 @@ pub fn demand_concrete_array_length<'db>(
         };
         if matches!(
             const_ty.data(db),
-            ConstTyData::Hole(..) | ConstTyData::TyParam(..) | ConstTyData::TyVar(..)
+            ConstTyData::TyParam(..) | ConstTyData::TyVar(..)
         ) {
             return Ok(None);
         }
@@ -929,6 +502,7 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
             check.ground
         }
         ConstExpr::ArithBinOp { lhs, rhs, .. }
+        | ConstExpr::Compare { lhs, rhs, .. }
         | ConstExpr::ArrayRepeat {
             value: lhs,
             len: rhs,
@@ -937,6 +511,13 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
             array: lhs,
             index: rhs,
         } => ty_is_fully_ground(db, *lhs) && ty_is_fully_ground(db, *rhs),
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => [cond, then, otherwise]
+            .into_iter()
+            .all(|ty| ty_is_fully_ground(db, *ty)),
         ConstExpr::UnOp { expr, .. }
         | ConstExpr::Cast { expr, .. }
         | ConstExpr::Field { value: expr, .. } => ty_is_fully_ground(db, *expr),
@@ -970,7 +551,6 @@ fn canonicalize_const_expr_for_mode<'db>(
                 ConstExpr::Invocation(ConstInvocation {
                     key: invocation.key.fold_with(db, &mut folder),
                     args: invocation.args.clone().fold_with(db, &mut folder),
-                    parameter_owner: invocation.parameter_owner,
                 }),
             )
         }
@@ -1007,6 +587,26 @@ fn canonicalize_const_expr_for_mode<'db>(
                 to: canonicalize_ty_for_mode(db, *to, env, mode),
             },
         ),
+        ConstExpr::Compare { op, lhs, rhs } => ConstExprId::new(
+            db,
+            ConstExpr::Compare {
+                op: *op,
+                lhs: canonicalize_ty_for_mode(db, *lhs, env, mode),
+                rhs: canonicalize_ty_for_mode(db, *rhs, env, mode),
+            },
+        ),
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => ConstExprId::new(
+            db,
+            ConstExpr::Select {
+                cond: canonicalize_ty_for_mode(db, *cond, env, mode),
+                then: canonicalize_ty_for_mode(db, *then, env, mode),
+                otherwise: canonicalize_ty_for_mode(db, *otherwise, env, mode),
+            },
+        ),
         ConstExpr::ArrayRepeat { value, len } => ConstExprId::new(
             db,
             ConstExpr::ArrayRepeat {
@@ -1036,6 +636,253 @@ fn canonicalize_const_expr_for_mode<'db>(
             db,
             ConstExpr::InherentConst(env.apply_assoc_evidence(db, *use_)),
         ),
+    }
+}
+
+/// Unification identifies an associated or inherent const use by its trait
+/// instance (or impl and receiver) and name. The scope and assumptions it is
+/// solved under only decide how evaluation finds it.
+pub(crate) enum RebaseConstUseEnv<'db> {
+    /// The comparison form, once evaluation has used the environment: the
+    /// root of the ingot defining the constant (the trait's, or the inherent
+    /// impl's) and no assumptions, so the uses one constant gets in different
+    /// items and ingots compare equal. Once its implementing type is known, a
+    /// use selects the same impl from any origin: coherence keeps a trait's
+    /// impls in the trait's ingot or the implementing type's.
+    Identity,
+    /// A stored constraint's use, which is evaluated later: the root of the
+    /// ingot it was written in, where selection for a generic `Self` starts
+    /// (a downstream blanket impl lives there), and the predicates, in
+    /// comparison form, that its parameters reach. Selecting the use's impl
+    /// only proves predicates whose subject is built from those parameters,
+    /// or from parameters that such predicates mention; the rest of the list
+    /// is not evidence, and solving under it would evaluate its constants.
+    Stored(StoredPredicates<'db>),
+}
+
+pub(crate) struct StoredPredicates<'db> {
+    /// Each predicate with the parameters it mentions.
+    predicates: Vec<(TraitInstId<'db>, FxHashSet<TyParam<'db>>)>,
+    /// The predicates whose subject mentions each parameter.
+    by_subject: FxHashMap<TyParam<'db>, Vec<usize>>,
+    /// The predicates whose subject mentions no parameter, which every use
+    /// reaches.
+    unconditional: Vec<usize>,
+}
+
+/// The generic parameters `value` mentions.
+fn mentioned_params<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: &impl TyVisitable<'db>,
+) -> FxHashSet<TyParam<'db>> {
+    struct Params<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: FxHashSet<TyParam<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for Params<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_param(&mut self, param: &TyParam<'db>) {
+            self.found.insert(param.clone());
+        }
+
+        fn visit_const_param(&mut self, param: &TyParam<'db>, const_ty_ty: TyId<'db>) {
+            self.found.insert(param.clone());
+            self.visit_ty(const_ty_ty);
+        }
+    }
+
+    let mut params = Params {
+        db,
+        found: FxHashSet::default(),
+    };
+    value.visit_with(&mut params);
+    params.found
+}
+
+impl<'db> RebaseConstUseEnv<'db> {
+    /// The environment a list's uses are stored with: its predicates in
+    /// comparison form, which cannot refer back to the list, together with
+    /// the bounds they imply, such as `T: Gate` from `W: Witness<Item = T>`
+    /// where `Witness::Item: Gate`, whose subject differs from theirs.
+    pub(crate) fn stored(
+        db: &'db dyn HirAnalysisDb,
+        predicates: impl IntoIterator<Item = TraitInstId<'db>>,
+    ) -> Self {
+        let predicates = PredicateListId::new(
+            db,
+            predicates
+                .into_iter()
+                .map(|inst| inst.fold_with(db, &mut Self::Identity))
+                .collect::<Vec<_>>(),
+        );
+        let mut stored = StoredPredicates {
+            predicates: Vec::new(),
+            by_subject: FxHashMap::default(),
+            unconditional: Vec::new(),
+        };
+        for (idx, &inst) in predicates.extend_all_bounds(db).list(db).iter().enumerate() {
+            let subject_params = mentioned_params(db, &inst.self_ty(db));
+            if subject_params.is_empty() {
+                stored.unconditional.push(idx);
+            }
+            for param in subject_params {
+                stored.by_subject.entry(param).or_default().push(idx);
+            }
+            stored.predicates.push((inst, mentioned_params(db, &inst)));
+        }
+        Self::Stored(stored)
+    }
+
+    /// The scope and assumptions a use written at `origin` of a constant
+    /// defined at `defining` gets, given the parameters the use mentions.
+    fn env(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        origin: ScopeId<'db>,
+        defining: ScopeId<'db>,
+        mut reached: FxHashSet<TyParam<'db>>,
+    ) -> (ScopeId<'db>, PredicateListId<'db>) {
+        let (scope, assumptions) = match self {
+            Self::Identity => (defining, PredicateListId::empty_list(db)),
+            Self::Stored(stored) => {
+                // Each reached parameter reaches the predicates whose subject
+                // mentions it, which reach the parameters they mention.
+                let mut kept = vec![false; stored.predicates.len()];
+                let mut pending = stored.unconditional.clone();
+                let mut frontier: Vec<_> = reached.iter().cloned().collect();
+                loop {
+                    while let Some(param) = frontier.pop() {
+                        pending.extend(stored.by_subject.get(&param).into_iter().flatten());
+                    }
+                    let Some(idx) = pending.pop() else { break };
+                    if !std::mem::replace(&mut kept[idx], true) {
+                        frontier.extend(
+                            stored.predicates[idx]
+                                .1
+                                .iter()
+                                .filter(|&param| reached.insert(param.clone()))
+                                .cloned(),
+                        );
+                    }
+                }
+                let kept = stored
+                    .predicates
+                    .iter()
+                    .zip(kept)
+                    .filter_map(|((inst, _), kept)| kept.then_some(*inst))
+                    .collect::<Vec<_>>();
+                (origin, PredicateListId::new(db, kept))
+            }
+        };
+        (
+            ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db))),
+            assumptions,
+        )
+    }
+}
+
+impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
+    fn fold_const_context_key(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        key: SemanticInstanceKey<'db>,
+    ) -> SemanticInstanceKey<'db> {
+        // An empty context needs no rebasing; the owner supplies its own
+        // declared bounds. Adding the stored list would introduce unrelated
+        // sibling bounds into every retained source key.
+        if key.impl_env(db).assumptions(db).is_empty(db) {
+            return key.super_fold_with(db, self);
+        }
+        // A retained computation's source and call frames carry selection
+        // contexts too. Never fold the old assumptions: they can contain the
+        // bound currently being collected, making every cycle grow another
+        // copy of its provenance. Preserve the selected body and witnesses.
+        let env = key.impl_env(db);
+        let key = SemanticInstanceKey::of(
+            db,
+            key.owner(db),
+            key.subst(db),
+            key.effect_providers(db),
+            ImplEnv::new(
+                db,
+                env.normalization_scope(db),
+                PredicateListId::empty_list(db),
+                env.witnesses(db).clone(),
+            ),
+            key.evidence(db),
+        )
+        .super_fold_with(db, self);
+        let (scope, assumptions) = self.env(
+            db,
+            env.normalization_scope(db),
+            key.owner(db).scope(),
+            mentioned_params(db, &key),
+        );
+        SemanticInstanceKey::of(
+            db,
+            key.owner(db),
+            key.subst(db),
+            key.effect_providers(db),
+            ImplEnv::new(
+                db,
+                scope,
+                assumptions,
+                key.impl_env(db).witnesses(db).clone(),
+            ),
+            key.evidence(db),
+        )
+    }
+
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        // A use's environment is replaced, never folded: it can hold the
+        // whole list the use was lowered under.
+        let TyData::ConstTy(const_ty) = ty.data(db) else {
+            return ty.super_fold_with(db, self);
+        };
+        let ConstTyData::Abstract(expr, expected_ty) = const_ty.data(db) else {
+            return ty.super_fold_with(db, self);
+        };
+        let rebased = match expr.data(db) {
+            ConstExpr::TraitConst(use_) => {
+                let inst = use_.inst().fold_with(db, self);
+                let (scope, assumptions) = self.env(
+                    db,
+                    use_.origin_scope(),
+                    inst.def(db).scope(),
+                    mentioned_params(db, &inst),
+                );
+                ConstExpr::TraitConst(AssocConstUse::new(scope, assumptions, inst, use_.name()))
+            }
+            ConstExpr::InherentConst(use_) => {
+                let receiver_ty = use_.receiver_ty().fold_with(db, self);
+                let (scope, assumptions) = self.env(
+                    db,
+                    use_.origin_scope(),
+                    use_.impl_().scope(),
+                    mentioned_params(db, &receiver_ty),
+                );
+                ConstExpr::InherentConst(InherentConstUse::new(
+                    scope,
+                    assumptions,
+                    use_.impl_(),
+                    receiver_ty,
+                    use_.name(),
+                ))
+            }
+            _ => return ty.super_fold_with(db, self),
+        };
+        let expected_ty = expected_ty.fold_with(db, self);
+        TyId::const_ty(
+            db,
+            ConstTyId::new(
+                db,
+                ConstTyData::Abstract(ConstExprId::new(db, rebased), expected_ty),
+            ),
+        )
     }
 }
 
@@ -1094,7 +941,7 @@ pub(crate) fn evaluate_type_level_const_ty<'db>(
 
 fn const_ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId<'db>) -> bool {
     match const_ty.data(db) {
-        ConstTyData::TyVar(..) | ConstTyData::TyParam(..) | ConstTyData::Hole(..) => false,
+        ConstTyData::TyVar(..) | ConstTyData::TyParam(..) => false,
         ConstTyData::Value(value) => sem_const_is_fully_ground(db, value.value()),
         ConstTyData::Description(value) => sem_const_is_fully_ground(db, *value),
         ConstTyData::Invalid(..) => false,
@@ -1151,10 +998,7 @@ pub fn concretize_const_ty_if_ground<'db>(
             evaluate_type_level_const_expr(db, *expr, *expected_ty, env)
                 .filter(|value| const_ty_is_fully_ground(db, *value))
         }
-        ConstTyData::TyVar(..)
-        | ConstTyData::TyParam(..)
-        | ConstTyData::Hole(..)
-        | ConstTyData::Invalid(..) => None,
+        ConstTyData::TyVar(..) | ConstTyData::TyParam(..) | ConstTyData::Invalid(..) => None,
     }
 }
 
@@ -1192,7 +1036,7 @@ pub fn complete_default_const_args_for_identity<'db>(
         TyBase::Adt(adt) => collect_generic_params(db, adt.as_generic_param_owner(db)),
         TyBase::Func(func) => match *func {
             CallableDef::Func(def) => collect_generic_params(db, def.into()),
-            CallableDef::VariantCtor(_) => return ty,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => return ty,
         },
         _ => return ty,
     };
@@ -1243,10 +1087,6 @@ pub fn canonicalize_const_ty_for_mode<'db>(
             db,
             ConstTyData::TyParam(param.clone(), canonicalize_ty_for_mode(db, *ty, env, mode)),
         ),
-        ConstTyData::Hole(ty, hole_id) => ConstTyId::new(
-            db,
-            ConstTyData::Hole(canonicalize_ty_for_mode(db, *ty, env, mode), *hole_id),
-        ),
         ConstTyData::Value(value) => const_ty_from_sem_const(
             db,
             canonicalize_sem_const_for_mode(db, value.value(), env, mode),
@@ -1295,9 +1135,19 @@ pub fn canonicalize_const_ty_for_mode<'db>(
                 ty: ty.map(|ty| canonicalize_ty_for_mode(db, ty, env, mode)),
                 template_ty: *template_ty,
                 const_def: *const_def,
-                capture: capture
-                    .map_bound_values(|arg| canonicalize_ty_for_mode(db, arg, env, mode)),
-                policy: *policy,
+                capture: match capture {
+                    ConstCaptureEnv::Bound(subst) => ConstCaptureEnv::from_subst(
+                        db,
+                        subst.map_values(|arg| canonicalize_ty_for_mode(db, arg, env, mode)),
+                    ),
+                    ConstCaptureEnv::Empty | ConstCaptureEnv::Identity(_) => capture.clone(),
+                },
+                // The policy says when lowering checks the body, which a
+                // comparison of the value it denotes must not see.
+                policy: match mode {
+                    ConstCanonMode::Identity => UnevaluatedConstPolicy::Evaluate,
+                    ConstCanonMode::Stored | ConstCanonMode::Display => *policy,
+                },
             },
         ),
     };
@@ -1318,10 +1168,23 @@ pub fn canonicalize_const_ty_for_mode<'db>(
         ConstCanonMode::Stored => canonicalized,
         ConstCanonMode::Identity => concretize_const_ty_if_ground(db, canonicalized, env)
             .or_else(|| {
-                let ConstTyData::UnEvaluated { ty: Some(ty), .. } = canonicalized.data(db) else {
-                    return None;
+                // A selected constant can reduce to an open parameter even
+                // when the whole expression is not ground. Reduce it before
+                // its enclosing invocation takes on a comparison identity.
+                // Stored terms keep their selection context for later forces.
+                let ty = match canonicalized.data(db) {
+                    ConstTyData::UnEvaluated { ty: Some(ty), .. } => *ty,
+                    ConstTyData::Abstract(expr, ty)
+                        if matches!(
+                            expr.data(db),
+                            ConstExpr::TraitConst(_) | ConstExpr::InherentConst(_)
+                        ) =>
+                    {
+                        *ty
+                    }
+                    _ => return None,
                 };
-                let evaluated = canonicalized.evaluate(db, Some(*ty));
+                let evaluated = canonicalized.evaluate(db, Some(ty));
                 (evaluated != canonicalized && evaluated.ty(db).invalid_cause(db).is_none())
                     .then(|| canonicalize_const_ty_for_mode(db, evaluated, env, mode))
             })
@@ -1390,20 +1253,23 @@ pub fn canonicalize_ty_for_mode<'db>(
     env: ConstCanonEnv<'db>,
     mode: ConstCanonMode,
 ) -> TyId<'db> {
+    // A type is a DAG: `memo` canonicalizes each shared subtree once, where a
+    // tree walk is exponential in the depth of a type like `(x, x)`.
     fn canonicalize_ty_impl<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         env: ConstCanonEnv<'db>,
         mode: ConstCanonMode,
         finalize_self: bool,
+        memo: &mut FxHashMap<(TyId<'db>, bool), TyId<'db>>,
     ) -> TyId<'db> {
-        let ty = env.apply_assoc_evidence(db, ty);
-        let env = env.without_assoc_evidence();
-
-        let mut ty = match ty.data(db) {
+        if let Some(&canonical) = memo.get(&(ty, finalize_self)) {
+            return canonical;
+        }
+        let mut canonical = match ty.data(db) {
             TyData::TyApp(abs, arg) => {
-                let abs = canonicalize_ty_impl(db, *abs, env, mode, false);
-                let arg = canonicalize_ty_impl(db, *arg, env, mode, true);
+                let abs = canonicalize_ty_impl(db, *abs, env, mode, false, memo);
+                let arg = canonicalize_ty_impl(db, *arg, env, mode, true, memo);
                 match mode {
                     ConstCanonMode::Stored => TyId::app_structural(db, abs, arg),
                     ConstCanonMode::Identity | ConstCanonMode::Display => TyId::app(db, abs, arg),
@@ -1412,12 +1278,18 @@ pub fn canonicalize_ty_for_mode<'db>(
             TyData::ConstTy(const_ty) => {
                 TyId::const_ty(db, canonicalize_const_ty_for_mode(db, *const_ty, env, mode))
             }
-            TyData::AssocTy(assoc) => TyId::assoc_ty(
-                db,
-                canonicalize_trait_inst_for_mode(db, assoc.trait_.as_predicate(db), env, mode)
-                    .trait_ref(db),
-                assoc.name,
-            ),
+            TyData::AssocTy(assoc) => {
+                let canonical = TyId::assoc_ty(
+                    db,
+                    canonicalize_trait_inst_for_mode(db, assoc.trait_.as_predicate(db), env, mode)
+                        .trait_ref(db),
+                    assoc.name,
+                );
+                match assoc.mode {
+                    Some(shape_mode) => canonical.with_shape_mode(db, shape_mode),
+                    None => canonical,
+                }
+            }
             TyData::QualifiedTy(trait_inst) => TyId::qualified_ty(
                 db,
                 canonicalize_trait_inst_for_mode(db, *trait_inst, env, mode),
@@ -1430,14 +1302,23 @@ pub fn canonicalize_ty_for_mode<'db>(
         };
 
         if finalize_self && !matches!(mode, ConstCanonMode::Stored) {
-            ty = complete_default_const_args_for_identity(db, ty);
-            ty = normalize_ty(db, ty, env.scope, env.assumptions);
+            canonical = complete_default_const_args_for_identity(db, canonical);
+            canonical = normalize_ty(db, canonical, env.scope, env.assumptions);
         }
-
-        ty
+        memo.insert((ty, finalize_self), canonical);
+        canonical
     }
 
-    canonicalize_ty_impl(db, ty, env, mode, true)
+    // Associated-type evidence applies to the whole type, once.
+    let ty = env.apply_assoc_evidence(db, ty);
+    canonicalize_ty_impl(
+        db,
+        ty,
+        env.without_assoc_evidence(),
+        mode,
+        true,
+        &mut FxHashMap::default(),
+    )
 }
 
 pub fn canonicalize_trait_inst_for_mode<'db>(
@@ -1453,7 +1334,7 @@ pub fn canonicalize_trait_inst_for_mode<'db>(
         .iter()
         .map(|(name, &ty)| (*name, canonicalize_ty_for_mode(db, ty, env, mode)))
         .collect();
-    assoc_type_bindings.sort_by(|(lhs, _), (rhs, _)| lhs.data(db).cmp(rhs.data(db)));
+    assoc_type_bindings.sort_by(|(lhs, _), (rhs, _)| lhs.canonical_cmp(db, rhs));
     TraitInstId::new(
         db,
         trait_inst.def(db),
@@ -1464,6 +1345,7 @@ pub fn canonicalize_trait_inst_for_mode<'db>(
             .map(|ty| canonicalize_ty_for_mode(db, ty, env, mode))
             .collect::<Vec<_>>(),
         assoc_type_bindings.into_iter().collect::<IndexMap<_, _>>(),
+        trait_inst.mode(db),
     )
 }
 
@@ -1521,11 +1403,23 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
         return canonicalized;
     };
 
-    match const_ty.data(db) {
+    let compared = match const_ty.data(db) {
+        ConstTyData::Abstract(expr, expected_ty)
+            if !matches!(
+                expr.data(db),
+                ConstExpr::TraitConst(_) | ConstExpr::InherentConst(_)
+            ) =>
+        {
+            evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
+                .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
+        }
+        // A deferred body or a selected constant reduces as far as its
+        // specialized inputs permit, as a type argument's does when applied.
         ConstTyData::UnEvaluated {
             ty: Some(expected_ty),
             ..
-        } => {
+        }
+        | ConstTyData::Abstract(_, expected_ty) => {
             let normalized = const_ty.evaluate(db, Some(*expected_ty));
             if normalized.ty(db).invalid_cause(db).is_none()
                 && !matches!(normalized.data(db), ConstTyData::UnEvaluated { .. })
@@ -1542,26 +1436,15 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
                 canonicalized
             }
         }
-        ConstTyData::Abstract(expr, expected_ty) => {
-            evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
-                .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
-        }
         _ => canonicalized,
-    }
+    };
+    compared.fold_with(db, &mut RebaseConstUseEnv::Identity)
 }
 
 pub(crate) struct ValidatedUnEvaluatedConst<'db> {
     pub const_ty: ConstTyId<'db>,
     pub expected_ty: TyId<'db>,
     pub body_expected_ty: TyId<'db>,
-}
-
-pub(crate) fn retype_hole_const_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    const_ty: ConstTyId<'db>,
-    expected_ty: TyId<'db>,
-) -> Option<ConstTyId<'db>> {
-    matches!(const_ty.data(db), ConstTyData::Hole(..)).then(|| const_ty.with_ty(db, expected_ty))
 }
 
 /// How type lowering reports a constant whose body failed inference.
@@ -1673,6 +1556,9 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     if const_def.is_some_and(|const_def| const_def.ty(db).has_invalid(db)) {
         return Err(const_body_result_cause(db, *body, typed_body));
     }
+    if let Some(cause) = const_body_language_failure(db, *body, typed_body) {
+        return Err(cause);
+    }
 
     if const_def.is_some() {
         let owner = BodyOwner::AnonConstBody {
@@ -1707,7 +1593,6 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ConstTyId<'db> {
-    #[return_ref]
     pub data: ConstTyData<'db>,
 }
 
@@ -1735,21 +1620,30 @@ fn bigint_to_u256_word(value: &BigInt) -> Option<BigUint> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum ConstIntError {
-    Overflow,
-    DivisionByZero,
-    NegativeExponent,
+/// A fault names the expression that raised it, so the diagnostic points where
+/// full CTFE of the same body would.
+#[derive(Clone, Debug)]
+enum ConstIntError<'db> {
+    Overflow(ExprId),
+    DivisionByZero(ExprId),
+    NegativeExponent(ExprId),
+    /// A literal, as written, does not fit its expected type on every
+    /// target.
+    LiteralOutOfRange {
+        expr: ExprId,
+        literal: String,
+        ty: TyId<'db>,
+    },
     /// The expression is not a pure integer expression. Callers may fall
     /// through to full CTFE rather than reporting an arithmetic error.
     NotIntExpr,
 }
 
-fn const_int_error(fault: PrimitiveFault) -> ConstIntError {
+fn const_int_error<'db>(fault: PrimitiveFault, expr: ExprId) -> ConstIntError<'db> {
     match fault {
-        PrimitiveFault::ArithmeticOverflow => ConstIntError::Overflow,
-        PrimitiveFault::DivisionByZero => ConstIntError::DivisionByZero,
-        PrimitiveFault::NegativeExponent => ConstIntError::NegativeExponent,
+        PrimitiveFault::ArithmeticOverflow => ConstIntError::Overflow(expr),
+        PrimitiveFault::DivisionByZero => ConstIntError::DivisionByZero(expr),
+        PrimitiveFault::NegativeExponent => ConstIntError::NegativeExponent(expr),
         PrimitiveFault::InvalidPowerExponent
         | PrimitiveFault::OutsideSupportedSubset
         | PrimitiveFault::InvalidCast
@@ -1759,14 +1653,25 @@ fn const_int_error(fault: PrimitiveFault) -> ConstIntError {
 
 fn invalid_cause_from_const_int_error<'db>(
     body: Body<'db>,
-    expr: ExprId,
-    err: ConstIntError,
+    err: ConstIntError<'db>,
 ) -> Option<InvalidCause<'db>> {
     match err {
-        ConstIntError::Overflow => Some(InvalidCause::ConstEvalArithmeticOverflow { body, expr }),
-        ConstIntError::DivisionByZero => Some(InvalidCause::ConstEvalDivisionByZero { body, expr }),
-        ConstIntError::NegativeExponent => {
+        ConstIntError::Overflow(expr) => {
+            Some(InvalidCause::ConstEvalArithmeticOverflow { body, expr })
+        }
+        ConstIntError::DivisionByZero(expr) => {
+            Some(InvalidCause::ConstEvalDivisionByZero { body, expr })
+        }
+        ConstIntError::NegativeExponent(expr) => {
             Some(InvalidCause::ConstEvalNegativeExponent { body, expr })
+        }
+        ConstIntError::LiteralOutOfRange { expr, literal, ty } => {
+            Some(InvalidCause::IntLiteralOutOfRange {
+                body,
+                expr,
+                literal,
+                ty,
+            })
         }
         ConstIntError::NotIntExpr => None,
     }
@@ -1775,34 +1680,37 @@ fn invalid_cause_from_const_int_error<'db>(
 fn eval_int_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
-    expr: &Expr<'db>,
+    expr: ExprId,
     expected: Option<TyId<'db>>,
     has_captures: &dyn Fn() -> bool,
-) -> Result<BigInt, ConstIntError> {
-    match expr {
-        Expr::Block(stmts) => {
+) -> Result<BigInt, ConstIntError<'db>> {
+    let Partial::Present(data) = expr.data(db, body) else {
+        return Err(ConstIntError::NotIntExpr);
+    };
+    match data {
+        Expr::Block(stmts, _) => {
             let [stmt] = stmts.as_slice() else {
                 return Err(ConstIntError::NotIntExpr);
             };
-            let Partial::Present(stmt) = stmt.data(db, body) else {
+            let Partial::Present(Stmt::Expr(inner)) = stmt.data(db, body) else {
                 return Err(ConstIntError::NotIntExpr);
             };
-            let Stmt::Expr(expr_id) = stmt else {
-                return Err(ConstIntError::NotIntExpr);
-            };
-            let Partial::Present(inner) = expr_id.data(db, body) else {
-                return Err(ConstIntError::NotIntExpr);
-            };
-            eval_int_expr(db, body, inner, expected, has_captures)
+            eval_int_expr(db, body, *inner, expected, has_captures)
         }
-        Expr::Lit(LitKind::Int(value)) => Ok(BigInt::from(value.data(db).clone())),
+        Expr::Lit(LitKind::Int(value)) => int_literal_value(db, expr, *value, expected, false),
         Expr::Un(inner, op) => {
-            let Partial::Present(inner) = inner.data(db, body) else {
-                return Err(ConstIntError::Overflow);
+            let Partial::Present(inner_data) = inner.data(db, body) else {
+                return Err(ConstIntError::Overflow(expr));
             };
-            let value = eval_int_expr(db, body, inner, expected, has_captures)?;
+            // A negated literal is checked as negative: `-128` fits `i8`.
+            let value = match (op, inner_data) {
+                (UnOp::Minus, Expr::Lit(LitKind::Int(value))) => {
+                    int_literal_value(db, expr, *value, expected, true)?
+                }
+                _ => eval_int_expr(db, body, *inner, expected, has_captures)?,
+            };
             if matches!(op, UnOp::Minus) && expected.is_none() {
-                return Err(ConstIntError::Overflow);
+                return Err(ConstIntError::Overflow(expr));
             }
             execute_source_int_unary(
                 db,
@@ -1811,23 +1719,22 @@ fn eval_int_expr<'db>(
                 *op,
                 value,
             )
-            .map_err(const_int_error)
+            .map_err(|fault| const_int_error(fault, expr))
         }
-        Expr::Bin(lhs_id, rhs_id, op) => {
-            let Partial::Present(lhs) = lhs_id.data(db, body) else {
-                return Err(ConstIntError::Overflow);
-            };
-            let Partial::Present(rhs) = rhs_id.data(db, body) else {
-                return Err(ConstIntError::Overflow);
+        Expr::Bin(lhs, rhs, op) => {
+            let (Partial::Present(_), Partial::Present(_)) =
+                (lhs.data(db, body), rhs.data(db, body))
+            else {
+                return Err(ConstIntError::Overflow(expr));
             };
             let expected = expected.unwrap_or_else(|| TyId::u256(db));
-            let lhs = eval_int_expr(db, body, lhs, Some(expected), has_captures)?;
-            let rhs = eval_int_expr(db, body, rhs, Some(expected), has_captures)?;
+            let lhs = eval_int_expr(db, body, *lhs, Some(expected), has_captures)?;
+            let rhs = eval_int_expr(db, body, *rhs, Some(expected), has_captures)?;
             let BinOp::Arith(op) = op else {
                 return Err(ConstIntError::NotIntExpr);
             };
             execute_source_int_binary(db, expected, ArithmeticMode::Checked, *op, lhs, rhs)
-                .map_err(const_int_error)
+                .map_err(|fault| const_int_error(fault, expr))
         }
         // A path's meaning under captured generic arguments needs full CTFE.
         Expr::Path(path) => {
@@ -1871,15 +1778,37 @@ fn eval_int_expr<'db>(
     }
 }
 
+/// The magnitude of the literal `int`, which must fit the `expected` integer
+/// type, negated by `expr` or not, on every target.
+fn int_literal_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr: ExprId,
+    int: IntegerId<'db>,
+    expected: Option<TyId<'db>>,
+    negated: bool,
+) -> Result<BigInt, ConstIntError<'db>> {
+    let value = int.data(db);
+    if let Some(ty) = expected
+        && let Some(prim) = ty.as_prim(db)
+        && prim.is_integral()
+        && !int_literal_fits_prim(prim, value, negated)
+    {
+        let sign = if negated { "-" } else { "" };
+        return Err(ConstIntError::LiteralOutOfRange {
+            expr,
+            literal: format!("{sign}{value}"),
+            ty,
+        });
+    }
+    Ok(BigInt::from(value.clone()))
+}
+
 pub(super) fn try_eval_const_int_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     expr: ExprId,
     expected_ty: TyId<'db>,
 ) -> Option<BigInt> {
-    let Partial::Present(expr) = expr.data(db, body) else {
-        return None;
-    };
     eval_int_expr(
         db,
         body,
@@ -1916,21 +1845,12 @@ fn specialize_available_const_assumptions<'db>(
     PredicateListId::new(db, predicates)
 }
 
-#[salsa::tracked(cycle_initial=evaluate_const_ty_cycle_initial, cycle_fn=evaluate_const_ty_cycle_recover)]
+#[salsa::tracked(returns(copy), cycle_initial=evaluate_const_ty_cycle_initial)]
 pub(crate) fn evaluate_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     const_ty: ConstTyId<'db>,
     expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
-    if let Some(expected_ty) = expected_ty
-        && let Some(retyped) = retype_hole_const_ty(db, const_ty, expected_ty)
-    {
-        return retyped;
-    }
-    if matches!(const_ty.data(db), ConstTyData::Hole(..)) {
-        return const_ty;
-    }
-
     if let ConstTyData::Computation {
         description,
         source,
@@ -2061,6 +1981,14 @@ pub(crate) fn evaluate_const_ty<'db>(
         };
 
         let assumptions = assumptions_for_body(db, body);
+        // Eager lowering records an associated const use in the scope its
+        // type is lowered in, the item around this body; record it the same
+        // way so both lowerings name one constant. Both solve alike there.
+        let mut use_item = body.scope().parent_item(db);
+        while let Some(ItemKind::Body(parent)) = use_item {
+            use_item = parent.scope().parent_item(db);
+        }
+        let use_scope = use_item.map_or(body.scope(), ScopeId::Item);
         if let Ok(resolved_path) = resolve_path(db, path, body.scope(), assumptions, true) {
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
@@ -2095,6 +2023,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         inst.def(db),
                         args,
                         inst.assoc_type_bindings(db).clone(),
+                        inst.mode(db),
                     );
                     let inst = capture.specialize(db, inst);
                     let assumptions =
@@ -2104,7 +2033,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         let expr = ConstExprId::new(
                             db,
                             ConstExpr::TraitConst(AssocConstUse::new(
-                                body.scope(),
+                                use_scope,
                                 assumptions,
                                 inst,
                                 name,
@@ -2113,8 +2042,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
                     };
 
-                    let solve_cx =
-                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                    let solve_cx = TraitSolveCx::new(db, use_scope).with_assumptions(assumptions);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
@@ -2136,7 +2064,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         specialize_available_const_assumptions(db, assumptions, capture_subst());
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
-                            body.scope(),
+                            use_scope,
                             assumptions,
                             impl_,
                             recv_ty,
@@ -2194,7 +2122,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         Expr::Block(..) | Expr::Un(..) | Expr::Bin(..) | Expr::Lit(LitKind::Int(..))
     ) {
         let expected_int_ty = expected_ty.filter(|ty| int_ty_shape(db, *ty).is_some());
-        match eval_int_expr(db, body, &expr, expected_int_ty, &has_captures) {
+        match eval_int_expr(db, body, body.expr(db), expected_int_ty, &has_captures) {
             Ok(value) => {
                 if let Some(word) = bigint_to_u256_word(&value) {
                     let mut table = UnificationTable::new(db);
@@ -2207,17 +2135,10 @@ pub(crate) fn evaluate_const_ty<'db>(
                     };
                 }
             }
-            Err(ConstIntError::NotIntExpr) => {
-                // Expression contains constructs we can't evaluate with BigInt
-                // (e.g. function calls). Fall through to CTFE.
-            }
+            // An expression BigInt evaluation cannot handle, such as a call,
+            // falls through to CTFE.
             Err(err) => {
-                // Genuine arithmetic error (overflow, division by zero, etc.).
-                // For Block/Un/Bin, report error. For plain int literals, fall through to CTFE.
-                if matches!(expr, Expr::Block(..) | Expr::Un(..) | Expr::Bin(..))
-                    && let Some(cause) =
-                        invalid_cause_from_const_int_error(body, body.expr(db), err)
-                {
+                if let Some(cause) = invalid_cause_from_const_int_error(body, err) {
                     return ConstTyId::invalid(db, cause);
                 }
             }
@@ -2245,12 +2166,13 @@ pub(crate) fn evaluate_const_ty<'db>(
         body,
         expected: validated.body_expected_ty,
     };
-    let key = SemanticInstanceKey::new(
+    let key = SemanticInstanceKey::of(
         db,
         owner,
         capture.generic_subst(db),
         EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
+        EvidenceList::none(db),
     );
     let request = const_computation_for_instance(db, key, Vec::new());
     let evaluated = match describe_const_computation(db, request, CtfeConfig::default()) {
@@ -2301,6 +2223,11 @@ pub(crate) fn invalid_cause_from_ctfe_error<'db>(
             body,
             expr,
             message: message.clone(),
+        },
+        CtfeError::Panicked { code, .. } => InvalidCause::ConstEvalPanicked {
+            body,
+            expr,
+            code: *code,
         },
         CtfeError::DivisionByZero { .. } => InvalidCause::ConstEvalDivisionByZero { body, expr },
         CtfeError::OutOfBounds { .. } => InvalidCause::ConstEvalOutOfBounds { body, expr },
@@ -2359,7 +2286,7 @@ pub(crate) fn invalid_cause_from_eval_failure<'db>(
     }
 }
 
-fn root_ctfe_error<'a, 'db>(
+pub(crate) fn root_ctfe_error<'a, 'db>(
     db: &'db dyn HirAnalysisDb,
     owner: crate::analysis::ty::ty_check::BodyOwner<'db>,
     err: &'a CtfeError<'db>,
@@ -2374,6 +2301,7 @@ fn root_ctfe_error<'a, 'db>(
         }
         CtfeError::NotConstEvaluable { origin }
         | CtfeError::AssertionFailed { origin, .. }
+        | CtfeError::Panicked { origin, .. }
         | CtfeError::InvalidOperation { origin, .. }
         | CtfeError::InvalidBorrow { origin }
         | CtfeError::InvalidProviderUse { origin }
@@ -2401,7 +2329,7 @@ pub(crate) fn origin_expr_for_const_eval_diag<'db>(
         SemOrigin::Stmt(stmt) => {
             stmt_primary_expr_for_const_eval_diag(db, body, stmt).unwrap_or_else(|| body.expr(db))
         }
-        SemOrigin::Body(_) | SemOrigin::Synthetic => body.expr(db),
+        SemOrigin::Pat(_) | SemOrigin::Body(_) | SemOrigin::Synthetic => body.expr(db),
     }
 }
 
@@ -2411,9 +2339,9 @@ fn stmt_primary_expr_for_const_eval_diag<'db>(
     stmt: crate::hir_def::StmtId,
 ) -> Option<crate::hir_def::ExprId> {
     match stmt.data(db, body).clone().to_opt()? {
-        Stmt::Let(_, _, expr) | Stmt::Return(expr) => expr,
-        Stmt::Expr(expr) => Some(expr),
-        Stmt::For(_, expr, _, _) => Some(expr),
+        Stmt::Let(_, _, expr, _) | Stmt::Return(expr) => expr,
+        Stmt::Yield(expr) | Stmt::Expr(expr) => Some(expr),
+        Stmt::For(_, expr, ..) => Some(expr),
         Stmt::While(_, _) | Stmt::Continue | Stmt::Break => None,
     }
 }
@@ -2460,12 +2388,15 @@ pub(crate) fn const_body_assumptions<'db>(
     }
 
     match parent_item {
-        Some(ItemKind::Func(func)) => crate::semantic::func_body_assumptions(db, func),
+        // A const body has no mode: a `mut?` bound is plain in it.
+        Some(ItemKind::Func(func)) => {
+            crate::semantic::func_body_assumptions(db, func).at_mode(db, None)
+        }
         Some(ItemKind::Trait(trait_)) => {
             let declared = collect_constraints(db, trait_.into()).instantiate_identity();
             let self_predicate =
                 PredicateListId::new(db, vec![crate::semantic::trait_self_predicate(db, trait_)]);
-            declared.merge(db, self_predicate)
+            declared.merge(db, self_predicate).at_mode(db, None)
         }
         item => item.and_then(GenericParamOwner::from_item_opt).map_or_else(
             || PredicateListId::empty_list(db),
@@ -2476,20 +2407,11 @@ pub(crate) fn const_body_assumptions<'db>(
 
 fn evaluate_const_ty_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     const_ty: ConstTyId<'db>,
     _expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
     const_ty
-}
-
-fn evaluate_const_ty_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &ConstTyId<'db>,
-    _count: u32,
-    _const_ty: ConstTyId<'db>,
-    _expected_ty: Option<TyId<'db>>,
-) -> salsa::CycleRecoveryAction<ConstTyId<'db>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) fn const_ty_from_assoc_const_use<'db>(
@@ -2530,7 +2452,7 @@ pub(crate) fn const_body_resolution_reenters<'db>(
                     .body(db)
                     .to_opt()
                     .map(|next_body| (next_body, const_.ty(db), ConstCaptureEnv::Empty)),
-                ConstRef::TraitConst(assoc) => {
+                ConstRef::TraitConst { use_: assoc, .. } => {
                     // The recorded use is in the owning body's binder terms:
                     // `Self::B` in a trait default keeps `Self` as a param.
                     // Instantiate with the args this body is evaluated under
@@ -2688,11 +2610,16 @@ pub(super) fn const_ty_from_resolved_trait_const<'db>(
     resolved: ResolvedImplInstance<'db>,
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
+    if name.data(db) == "BITS"
+        && let Some(bits) = super::sol_codec::sol_codec_bits(db, resolved)
+    {
+        return Some(bits);
+    }
     let inst = resolved.trait_inst();
     let trait_ = inst.def(db);
     let (body, template_ty, subst) = selected_assoc_const_body_template(db, resolved, name)?;
     let template_ty = Some(template_ty);
-    let capture = ConstCaptureEnv::Bound(subst);
+    let capture = ConstCaptureEnv::from_subst(db, subst);
 
     let declared_ty = trait_
         .const_(db, name)
@@ -2887,7 +2814,6 @@ impl<'db> ConstTyId<'db> {
         match self.data(db) {
             ConstTyData::TyVar(_, ty) => *ty,
             ConstTyData::TyParam(_, ty) => *ty,
-            ConstTyData::Hole(ty, _) => *ty,
             ConstTyData::Value(value) => crate::analysis::semantic::sem_const_ty(db, value.value()),
             ConstTyData::Description(value) => crate::analysis::semantic::sem_const_ty(db, *value),
             ConstTyData::Invalid(ty) => *ty,
@@ -2922,7 +2848,6 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyParam(param, ty) => {
                 format!("const {}: {}", param.pretty_print(db), ty.pretty_print(db))
             }
-            ConstTyData::Hole(..) => "_".to_string(),
             ConstTyData::Value(value) => value.value().pretty_print(db),
             ConstTyData::Description(value) => value.pretty_print(db),
             ConstTyData::Invalid(_) => "<invalid>".to_string(),
@@ -3034,59 +2959,10 @@ impl<'db> ConstTyId<'db> {
         Self::new(db, data)
     }
 
-    pub fn hole(db: &'db dyn HirAnalysisDb) -> Self {
-        Self::hole_with_ty(db, TyId::invalid(db, InvalidCause::Other))
-    }
-
-    pub fn hole_with_ty(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
-        Self::hole_with_id(db, ty, HoleId::bound_opaque())
-    }
-
-    pub fn hole_with_id(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, hole_id: HoleId<'db>) -> Self {
-        Self::new(db, ConstTyData::Hole(ty, hole_id))
-    }
-
-    pub fn structural_hole(
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        origin: StructuralHoleOrigin<'db>,
-        introduced_at: LayoutIntroSite<'db>,
-        root: LayoutRootId<'db>,
-    ) -> Self {
-        Self::hole_with_id(
-            db,
-            ty,
-            HoleId::structural(db, ty, origin, introduced_at, root),
-        )
-    }
-
-    pub fn bound_callable_hole(
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        owner: CallableLayoutOwner<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-        ordinal: usize,
-    ) -> Self {
-        Self::hole_with_id(db, ty, HoleId::bound_callable(owner, origin, ordinal))
-    }
-
     pub(crate) fn swap_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
         let data = match self.data(db) {
             ConstTyData::TyVar(var, _) => ConstTyData::TyVar(var.clone(), ty),
             ConstTyData::TyParam(param, _) => ConstTyData::TyParam(param.clone(), ty),
-            ConstTyData::Hole(_, hole_id) => ConstTyData::Hole(
-                ty,
-                match hole_id {
-                    HoleId::Structural(hole_id) => HoleId::Structural(StructuralHoleId::new(
-                        db,
-                        ty,
-                        hole_id.root(db),
-                        hole_id.origin(db),
-                        hole_id.trace(db).clone(),
-                    )),
-                    HoleId::Bound(hole_id) => HoleId::Bound(*hole_id),
-                },
-            ),
             ConstTyData::Value(value) => {
                 if ty.invalid_cause(db).is_some() {
                     return Self::new(db, ConstTyData::Invalid(ty));
@@ -3168,7 +3044,7 @@ impl<'db> ConstTyId<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum ConstCaptureEnv<'db> {
     Empty,
     Identity(ConstCaptureDomain<'db>),
@@ -3177,7 +3053,7 @@ pub enum ConstCaptureEnv<'db> {
 
 /// A structural capture description. It can be recorded while the full
 /// callable slot plan is still being discovered, then materialized later.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ConstCaptureDomain<'db> {
     owner: GenericParamOwner<'db>,
     basis: ParamBasis,
@@ -3211,6 +3087,12 @@ impl<'db> ConstCaptureDomain<'db> {
                     .expect("capture prefix must name a source parameter")
             },
         )
+    }
+
+    /// Whether the captured domain has any formals, which an identity
+    /// capture reads without spelling them.
+    pub(crate) fn has_formals(self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.materialize(db).len(db) != 0
     }
 }
 
@@ -3255,11 +3137,44 @@ impl<'db> ConstCaptureEnv<'db> {
             .collect::<Result<Vec<_>, _>>();
         match values {
             Ok(_) if !affected => None,
-            Ok(values) => Some(Ok(Self::Bound(
+            Ok(values) => Some(Ok(Self::from_subst(
+                db,
                 CompleteSubst::new(domain, db, values).expect("identity capture domain"),
             ))),
             Err(error) => Some(Err(error)),
         }
+    }
+
+    /// The capture `subst` describes. A substitution that maps its domain to
+    /// the declared formals is that domain's identity, so both spellings of
+    /// one environment intern as the same type.
+    pub(crate) fn from_subst(db: &'db dyn HirAnalysisDb, subst: CompleteSubst<'db>) -> Self {
+        if subst
+            .values()
+            .iter()
+            .all(|value| value.as_generic_param(db).is_some())
+        {
+            let domain = subst.domain();
+            let schema = domain.schema(db);
+            let before = if domain.len(db) == schema.keys(db).len() {
+                Some(None)
+            } else {
+                schema
+                    .default_dependency_index(db, domain.len(db))
+                    .map(Some)
+            };
+            if let Some(before) = before {
+                let identity = Self::Identity(ConstCaptureDomain {
+                    owner: schema.owner(db),
+                    basis: schema.basis(db),
+                    before,
+                });
+                if identity.complete(db).as_ref() == Some(&subst) {
+                    return identity;
+                }
+            }
+        }
+        Self::Bound(subst)
     }
 
     pub(crate) fn identity_for_body(
@@ -3277,12 +3192,7 @@ impl<'db> ConstCaptureEnv<'db> {
         let Some(owner) = lexical_const_body_owner(db, body) else {
             return Self::Empty;
         };
-        let basis = if context.is_some_and(|context| context.source_params() == Some(owner)) {
-            ParamBasis::Source
-        } else {
-            ParamBasis::Full
-        };
-        Self::Identity(ConstCaptureDomain::full(owner, basis))
+        Self::Identity(ConstCaptureDomain::full(owner, ParamBasis::Full))
     }
 
     pub(crate) fn bound(
@@ -3296,7 +3206,8 @@ impl<'db> ConstCaptureEnv<'db> {
             basis: ParamBasis::Full,
             before,
         };
-        Self::Bound(
+        Self::from_subst(
+            db,
             CompleteSubst::new(domain.materialize(db), db, values).expect("complete const capture"),
         )
     }
@@ -3308,7 +3219,7 @@ impl<'db> ConstCaptureEnv<'db> {
             Self::Identity(plan) => {
                 let domain = plan.materialize(db);
                 let schema = domain.schema(db);
-                let values = domain
+                let values: Vec<_> = domain
                     .slots(db)
                     .map(|slot| {
                         schema
@@ -3316,6 +3227,16 @@ impl<'db> ConstCaptureEnv<'db> {
                             .expect("capture slot has a formal")
                     })
                     .collect();
+                // A cycle still discovering the owner's parameters hands out
+                // invalid formals until they settle. Until then the capture
+                // has no substitution, and its body is read in its own
+                // coordinates.
+                if values
+                    .iter()
+                    .any(|formal| matches!(formal.data(db), TyData::Invalid(_)))
+                {
+                    return None;
+                }
                 Some(CompleteSubst::new(domain, db, values).expect("identity capture domain"))
             }
         }
@@ -3345,12 +3266,10 @@ impl<'db> ConstCaptureEnv<'db> {
     where
         F: TyFolder<'db>,
     {
-        self.map_bound_values(|value| folder.fold_ty(db, value))
-    }
-
-    fn map_bound_values(&self, f: impl FnMut(TyId<'db>) -> TyId<'db>) -> Self {
         match self {
-            Self::Bound(subst) => Self::Bound(subst.map_values(f)),
+            Self::Bound(subst) => {
+                Self::from_subst(db, subst.map_values(|value| folder.fold_ty(db, value)))
+            }
             Self::Empty | Self::Identity(_) => self.clone(),
         }
     }
@@ -3380,11 +3299,10 @@ impl UnevaluatedConstPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum ConstTyData<'db> {
     TyVar(TyVar<'db>, TyId<'db>),
     TyParam(TyParam<'db>, TyId<'db>),
-    Hole(TyId<'db>, HoleId<'db>),
     Value(VerifiedConstValueId<'db>),
     Description(SemConstId<'db>),
     Invalid(TyId<'db>),
@@ -3409,16 +3327,17 @@ pub enum ConstTyData<'db> {
 #[cfg(test)]
 mod tests {
     use camino::Utf8PathBuf;
+    use common::file::File;
 
     use super::*;
     use crate::{
-        analysis::semantic::{bool_const, int_const, sem_const_from_ty, tuple_const},
+        analysis::semantic::{
+            bool_const, identity_semantic_instance_key, int_const, sem_const_from_ty, tuple_const,
+        },
         analysis::ty::{
             generic_defaults::{GenericDefault, generic_default},
-            layout_holes::{LayoutTemplateSubst, instantiate_layout_template},
             ty_def::PrimTy,
         },
-        hir_def::ConstGenericArgValue,
         test_db::{HirAnalysisTestDb, find_func},
     };
 
@@ -3437,6 +3356,87 @@ mod tests {
         }
     }
 
+    /// A `ty` const parameter of a stand-alone module: a constant only
+    /// specialization knows.
+    fn const_param<'db>(db: &'db HirAnalysisTestDb, file: File, ty: TyId<'db>) -> ConstTyId<'db> {
+        let (module, _) = db.top_mod(file);
+        let name = IdentId::new(db, "N".to_string());
+        let param = TyParam::normal_param(name, 0, Kind::Star, module.scope(), Some(0));
+        ConstTyId::new(db, ConstTyData::TyParam(param, ty))
+    }
+
+    #[test]
+    fn retained_const_contexts_rebase_without_erasing_invocation_evidence() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "retained_const_contexts.fe".into(),
+            "trait Gate {}\nconst fn value<T: Gate>() -> usize { 0 }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let func = find_func(&db, module, "value");
+        let identity = identity_semantic_instance_key(&db, BodyOwner::Func(func, None));
+        let assumptions = func.assumptions(&db);
+        let witnesses = assumptions.list(&db).clone();
+        let key = SemanticInstanceKey::new(
+            &db,
+            identity.owner(&db),
+            identity.subst(&db),
+            identity.effect_providers(&db),
+            ImplEnv::new(&db, func.scope(), assumptions, witnesses.clone()),
+            EvidenceList::none(&db),
+        );
+        let term = TyId::const_ty(
+            &db,
+            ConstTyId::new(
+                &db,
+                ConstTyData::Abstract(
+                    ConstExprId::new(
+                        &db,
+                        ConstExpr::Invocation(ConstInvocation {
+                            key,
+                            args: Vec::new(),
+                        }),
+                    ),
+                    TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+                ),
+            ),
+        );
+        let folded = term.fold_with(&db, &mut RebaseConstUseEnv::Identity);
+        assert_eq!(
+            folded, term,
+            "an invocation's evidence determines its value identity"
+        );
+        let context = RebaseConstUseEnv::Identity.fold_const_context_key(&db, key);
+        assert!(context.impl_env(&db).assumptions(&db).is_empty(&db));
+        assert_eq!(context.owner(&db), key.owner(&db));
+        assert_eq!(context.subst(&db), key.subst(&db));
+        assert_eq!(context.impl_env(&db).witnesses(&db), &witnesses);
+        let stored = RebaseConstUseEnv::stored(&db, assumptions.list(&db).iter().copied())
+            .fold_const_context_key(&db, key);
+        assert_eq!(stored.impl_env(&db).assumptions(&db), assumptions);
+        assert_eq!(stored.impl_env(&db).witnesses(&db), &witnesses);
+        let empty = SemanticInstanceKey::new(
+            &db,
+            key.owner(&db),
+            key.subst(&db),
+            key.effect_providers(&db),
+            ImplEnv::new(
+                &db,
+                func.scope(),
+                PredicateListId::empty_list(&db),
+                witnesses,
+            ),
+            EvidenceList::none(&db),
+        );
+        let folded = RebaseConstUseEnv::stored(&db, assumptions.list(&db).iter().copied())
+            .fold_const_context_key(&db, empty);
+        assert_eq!(
+            folded, empty,
+            "an empty context must not acquire sibling bounds"
+        );
+    }
+
     #[test]
     fn signed_constant_type_round_trip_preserves_value() {
         let db = HirAnalysisTestDb::default();
@@ -3449,14 +3449,12 @@ mod tests {
 
     #[test]
     fn dependent_constant_type_round_trip_preserves_term_and_nested_description() {
-        let db = HirAnalysisTestDb::default();
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(Utf8PathBuf::from("dependent_round_trip.fe"), "");
         let ty = TyId::u8(&db);
-        let hole = ConstTyId::new(
-            &db,
-            ConstTyData::Hole(ty, HoleId::Bound(BoundHoleId::Opaque)),
-        );
-        let dependent = sem_const_from_ty(&db, TyId::const_ty(&db, hole)).unwrap();
-        assert_eq!(const_ty_from_sem_const(&db, dependent), hole);
+        let param = const_param(&db, file, ty);
+        let dependent = sem_const_from_ty(&db, TyId::const_ty(&db, param)).unwrap();
+        assert_eq!(const_ty_from_sem_const(&db, dependent), param);
 
         let tuple_ty = TyId::tuple_with_elems(&db, &[ty, ty]);
         let description = tuple_const(
@@ -3492,11 +3490,11 @@ mod tests {
 
     #[test]
     fn specializing_nested_description_produces_verified_value() {
-        let db = HirAnalysisTestDb::default();
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(Utf8PathBuf::from("nested_description.fe"), "");
         let ty = TyId::u8(&db);
-        let hole = ConstTyId::hole_with_ty(&db, ty);
-        let hole_ty = TyId::const_ty(&db, hole);
-        let dependent = sem_const_from_ty(&db, hole_ty).unwrap();
+        let param_ty = TyId::const_ty(&db, const_param(&db, file, ty));
+        let dependent = sem_const_from_ty(&db, param_ty).unwrap();
         let first = int_const(&db, ty, BigInt::from(7));
         let tuple_ty = TyId::tuple_with_elems(&db, &[ty, ty]);
         let symbolic = const_ty_from_sem_const(
@@ -3507,7 +3505,7 @@ mod tests {
         let folded = TyId::const_ty(&db, symbolic).fold_with(
             &db,
             &mut ReplaceConst {
-                from: hole_ty,
+                from: param_ty,
                 to: TyId::const_ty(&db, replacement),
             },
         );
@@ -3526,56 +3524,6 @@ mod tests {
     }
 
     #[test]
-    fn retyping_structural_hole_preserves_landing_trace() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("retyped_layout_hole.fe"),
-            "fn f<const N: u256 = _>() {}",
-        );
-        let (module, _) = db.top_mod(file);
-        db.assert_no_diags(module);
-        let func = find_func(&db, module, "f");
-        let owner = func.into();
-        let anchor = HoleAnchor::GenericDefault {
-            owner,
-            param_idx: 0,
-        };
-        let root = LayoutRootId::source(&db, anchor, 0);
-        let landing = LayoutInstantiationId::new(
-            &db,
-            LayoutInstantiationContext::Lowering(anchor),
-            LayoutBoundaryIdentity::ArrayElement,
-            vec![LayoutOccurrenceStep::Instantiation(0)],
-        );
-        let trace = LayoutHoleTrace {
-            introduced_at: LayoutIntroSite::definition(owner, 0),
-            landings: vec![landing],
-        };
-        let original = ConstTyId::hole_with_id(
-            &db,
-            TyId::u256(&db),
-            HoleId::Structural(StructuralHoleId::new(
-                &db,
-                TyId::u256(&db),
-                root,
-                StructuralHoleOrigin::DefaultHoleParam {
-                    owner,
-                    param_idx: 0,
-                },
-                trace.clone(),
-            )),
-        );
-        assert_eq!(original.with_ty(&db, TyId::u256(&db)), original);
-        let retyped = original.with_ty(&db, TyId::u8(&db));
-        let ConstTyData::Hole(_, HoleId::Structural(hole)) = retyped.data(&db) else {
-            panic!("expected structural hole")
-        };
-        assert_eq!(hole.root(&db), root);
-        assert_eq!(hole.expected_ty(&db), TyId::u8(&db));
-        assert_eq!(hole.trace(&db), trace);
-    }
-
-    #[test]
     fn stored_canonicalization_preserves_unevaluated_application() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
@@ -3585,10 +3533,7 @@ mod tests {
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
         let func = find_func(&db, module, "one");
-        let GenericDefault::Const {
-            value: ConstGenericArgValue::Expr(Partial::Present(body)),
-            ..
-        } = generic_default(&db, func.into(), 0)
+        let GenericDefault::Const { value: body, .. } = generic_default(&db, func.into(), 0)
             .as_ref()
             .unwrap()
             .as_ref()
@@ -3627,7 +3572,7 @@ mod tests {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
             Utf8PathBuf::from("source_capture_full_slots.fe"),
-            "struct Slot<const ROOT: u256 = _> {}\ntrait T<X> { fn f<Y>(_ value: Slot, _ extra: Y) {} }",
+            "struct K {}\ntrait T<X> { fn f<Y>(_ extra: Y) uses (k: K) {} }",
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
@@ -3664,18 +3609,6 @@ mod tests {
             .formal_at(&db, full.slot_for(&db, own_key).unwrap())
             .unwrap();
         assert_ne!(source_formal, full_formal);
-        let layout_owner = CallableLayoutOwner::Func(func);
-        let instantiated = instantiate_layout_template(
-            &db,
-            source_formal,
-            Some(LayoutTemplateSubst::new(ParamBasis::Source, subst.clone())),
-            LayoutInstantiationContext::Lowering(HoleAnchor::CallableOutput {
-                owner: layout_owner,
-            }),
-            LayoutBoundaryIdentity::CallableOutput(layout_owner),
-            Vec::new(),
-        );
-        assert_eq!(instantiated.ty, TyId::bool(&db));
         let capture =
             ConstCaptureEnv::Identity(ConstCaptureDomain::full(func.into(), ParamBasis::Source));
         let bound = capture.bind_identity_with(&db, &subst).unwrap().unwrap();

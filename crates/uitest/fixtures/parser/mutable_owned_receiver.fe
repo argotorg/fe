@@ -1,0 +1,17 @@
+// A mutable owned receiver is `var own self`, or `var self: own T` when the
+// type is spelled; `mut self` is a mutable borrow.
+struct Foo {}
+
+impl Foo {
+    fn shorthand(mut own self) -> Self {
+        self
+    }
+
+    fn typed(mut self: own Foo) -> Self {
+        self
+    }
+
+    fn view(var self) {}
+
+    fn read(var ref self) {}
+}

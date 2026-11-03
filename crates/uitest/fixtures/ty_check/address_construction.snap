@@ -1,0 +1,53 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/address_construction.fe
+---
+error[2-0003]: `inner` is not visible
+   ┌─ address_construction.fe:11:15
+   │
+11 │     Address { inner: 1 }
+   │               ^^^^^^^^ `inner` is not visible
+   │
+   ┌─ src/evm/effects.fe:48:33
+   │
+48 │ pub struct Address { pub(ingot) inner: u256 }
+   │                                 ----- `inner` is defined here
+
+error[2-0003]: `inner` is not visible
+   ┌─ address_construction.fe:15:13
+   │
+15 │     address.inner
+   │             ^^^^^ `inner` is not visible
+   │
+   ┌─ src/evm/effects.fe:48:33
+   │
+48 │ pub struct Address { pub(ingot) inner: u256 }
+   │                                 ----- `inner` is defined here
+
+error[3-0073]: panic in const context
+   ┌─ address_construction.fe:8:24
+   │
+ 8 │ const DIRTY: Address = Address::new((1 << 160) | 1)
+   │                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ while evaluating this
+   │
+   ┌─ src/evm/effects.fe:55:13
+   │
+55 │             core::panic_code(PANIC_OVERFLOW)
+   │             -------------------------------- panics with code 0x11
+
+error[8-0055]: cast is not provably lossless
+   ┌─ address_construction.fe:19:6
+   │
+19 │     (address as u256, word as Address)
+   │      ^^^^^^^^^^^^^^^ cannot cast `Address` to `u256` with `as`
+   │
+   = cast is not allowed because the struct field is not `pub`
+
+error[8-0055]: cast is not provably lossless
+   ┌─ address_construction.fe:19:23
+   │
+19 │     (address as u256, word as Address)
+   │                       ^^^^^^^^^^^^^^^ cannot cast `u256` to `Address` with `as`
+   │
+   = cast is not allowed because the struct field is not `pub`

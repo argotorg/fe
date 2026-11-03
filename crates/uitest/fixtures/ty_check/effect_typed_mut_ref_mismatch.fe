@@ -7,14 +7,14 @@ fn needs_mut_counter() uses (slot: mut Counter) {
 }
 
 fn typed_mut_with_mut_binding_is_ok() {
-    let mut c = Counter { value: 0 }
+    var c = Counter { value: 0 }
     with (Counter = c) {
         needs_mut_counter()
     }
 }
 
 fn typed_mut_with_ref_borrow_reports_mut_mismatch() {
-    let mut c = Counter { value: 0 }
+    var c = Counter { value: 0 }
     with (Counter = ref c) {
         needs_mut_counter()
     }

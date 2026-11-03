@@ -1,9 +1,9 @@
 // Adapted from banteg/evm-compiler-bench at dfbc21ec282a27f66db7d4c81254075f1262e5a5.
 // https://github.com/banteg/evm-compiler-bench/tree/dfbc21ec282a27f66db7d4c81254075f1262e5a5/benches/implementations
 // Uses typed pointer APIs and DynArray::get for proof element access.
-use std::evm::RawMem
 use std::evm::crypto
 use core::ptr::{self, MemSpan}
+use core::abi::store_word
 use std::abi::Bytes32
 
 msg MerkleMsg {
@@ -13,19 +13,19 @@ msg MerkleMsg {
     HashPair { left: Bytes32, right: Bytes32 } -> Bytes32,
 }
 
-fn hash_pair(a: u256, b: u256) -> u256 uses (raw: mut RawMem) {
+fn hash_pair(a: u256, b: u256) -> u256 {
     let ptr = ptr::alloc_bytes(64)
-    raw.mstore(addr: ptr, value: a)
-    raw.mstore(addr: ptr::offset_bytes(ptr, 32), value: b)
-    crypto::keccak256(MemSpan::from_raw_parts(ptr, len: 64))
+    unsafe { store_word(ptr: ptr, value: a) }
+    unsafe { store_word(ptr: ptr::offset_bytes(ptr, 32), value: b) }
+    unsafe { crypto::keccak256(MemSpan::from_raw_parts(ptr, len: 64)) }
 }
 
-pub contract MerkleVerifier uses (raw: mut RawMem) {
+pub contract MerkleVerifier {
     recv MerkleMsg {
-        Verify { proof, root, leaf } -> bool uses (mut raw) {
-            let mut computed = leaf.val
+        Verify { proof, root, leaf } -> bool {
+            var computed = leaf.val
             for i in 0..proof.len() as usize {
-                let sibling = proof.get(i as u256).val
+                let sibling = proof.get(i).val
                 computed = if computed < sibling {
                     hash_pair(a: computed, b: sibling)
                 } else {
@@ -35,7 +35,7 @@ pub contract MerkleVerifier uses (raw: mut RawMem) {
             computed == root.val
         }
 
-        HashPair { left, right } -> Bytes32 uses (mut raw) {
+        HashPair { left, right } -> Bytes32 {
             let hashed = if left.val < right.val {
                 hash_pair(a: left.val, b: right.val)
             } else {

@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/trait_self_associated_type.fe
 ---
@@ -32,7 +33,7 @@ note:
    ┌─ trait_self_associated_type.fe:16:12
    │
 16 │         if self.start < self.end {
-   │            ^^^^ mut Range
+   │            ^^^^ Range
 
 note:
    ┌─ trait_self_associated_type.fe:16:12
@@ -50,7 +51,7 @@ note:
    ┌─ trait_self_associated_type.fe:16:25
    │
 16 │         if self.start < self.end {
-   │                         ^^^^ mut Range
+   │                         ^^^^ Range
 
 note:
    ┌─ trait_self_associated_type.fe:16:25
@@ -79,7 +80,7 @@ note:
    ┌─ trait_self_associated_type.fe:17:23
    │
 17 │             let val = self.start
-   │                       ^^^^ mut Range
+   │                       ^^^^ Range
 
 note:
    ┌─ trait_self_associated_type.fe:17:23
@@ -91,7 +92,7 @@ note:
    ┌─ trait_self_associated_type.fe:18:13
    │
 18 │             self.start += 1
-   │             ^^^^ mut Range
+   │             ^^^^ Range
 
 note:
    ┌─ trait_self_associated_type.fe:18:13

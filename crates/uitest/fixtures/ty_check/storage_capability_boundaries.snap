@@ -4,61 +4,76 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/storage_capability_boundaries.fe
 ---
-error[8-0011]: missing fields in record pattern
-   ┌─ storage_capability_boundaries.fe:13:16
-   │
-13 │     StorageMap {}
-   │                ^^
-   │                │
-   │                missing `seal`
-   │                Consider using `StorageMap { seal }` instead
-
-error[8-0011]: missing fields in record pattern
-   ┌─ storage_capability_boundaries.fe:25:11
-   │
-25 │     TSlot {}
-   │           ^^
-   │           │
-   │           missing `seal`
-   │           Consider using `TSlot { seal }` instead
-
-error[8-0036]: missing effect `RawStorage` required by `new`
-  ┌─ storage_capability_boundaries.fe:8:42
+error[3-0061]: `StorageMap<u256, u256>` is state-only
+  ┌─ storage_capability_boundaries.fe:9:22
   │
-8 │     let map: StorageMap<u256, u256, 0> = StorageMap::new()
-  │                                          ^^^^^^^^^^^^^^^^^ `new` requires effect `RawStorage` to be in scope
+9 │     store.balances = StorageMap {}
+  │                      ^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
   │
-  = provide it with `with (RawStorage = value)` or require it via `uses RawStorage`
+  = `StorageMap<u256, u256>` is pinned to storage by its `Pinned` implementation
+  = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
 
-error[8-0036]: missing effect `RawStorage` required by `new`
-   ┌─ storage_capability_boundaries.fe:17:5
+error[3-0061]: `TSlot<u256>` is state-only
+   ┌─ storage_capability_boundaries.fe:22:12
    │
-17 │     StorageBytes::new()
-   │     ^^^^^^^^^^^^^^^^^^^ `new` requires effect `RawStorage` to be in scope
+22 │     slot = TSlot {}
+   │            ^^^^^^^^ a state-only type cannot be constructed as a value
    │
-   = provide it with `with (RawStorage = value)` or require it via `uses RawStorage`
+   = `TSlot<u256>` is pinned to transient storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
 
-error[8-0036]: missing effect `RawStorage` required by `new`
-   ┌─ storage_capability_boundaries.fe:21:5
+error[8-0011]: missing fields in record pattern
+   ┌─ storage_capability_boundaries.fe:22:18
    │
-21 │     StoragePackedArray::new()
-   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ `new` requires effect `RawStorage` to be in scope
+22 │     slot = TSlot {}
+   │                  ^^
+   │                  │
+   │                  missing `value`
+   │                  Consider using `TSlot { value }` instead
+
+error[8-0036]: missing effect `RawStorage` required by `at`
+   ┌─ storage_capability_boundaries.fe:18:14
    │
-   = provide it with `with (RawStorage = value)` or require it via `uses RawStorage`
+18 │     unsafe { StorageMap<u256, u256>::at(0).get(1) }
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `at` requires effect `RawStorage` to be in scope
+   │
+   = require it in this function's signature with `uses (storage: RawStorage)`, so that its callers provide it
+   = or provide it to a block of this function with `with (RawStorage = value) { .. }`
+
+error[8-0037]: effect `RawStorage` must be mutable when calling `storage_at`
+   ┌─ storage_capability_boundaries.fe:42:14
+   │
+41 │ pub fn raw_write_with_read_authority() uses (storage: RawStorage) {
+   │                                              ------------------- effect `RawStorage` is provided here
+42 │     unsafe { storage_at<u256>(0) = 1 }
+   │              ^^^^^^^^^^^^^^^^^^^ `storage_at` requires `mut RawStorage`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block
 
 error[8-0066]: mutable borrow requires a mutable place
-   ┌─ storage_capability_boundaries.fe:29:5
+   ┌─ storage_capability_boundaries.fe:26:5
    │
-28 │ pub fn tslot_write_without_effect(slot: TSlot<u256, 0>) {
-   │                                   ---- `slot` does not provide mutable access
-29 │     slot.write(1)
+25 │ pub fn tslot_write_through_view(slot: TSlot<u256>) {
+   │                                 ---- `slot` does not provide mutable access
+26 │     slot.write(1)
    │     ^^^^ cannot borrow as `mut`
 
 error[8-0066]: mutable borrow requires a mutable place
-   ┌─ storage_capability_boundaries.fe:35:5
+   ┌─ storage_capability_boundaries.fe:32:5
    │
-33 │ uses (store: Store)
-   │       ----- `store` does not provide mutable access
-34 │ {
-35 │     store.balances.set(key: 1, value: 2)
+30 │ uses (store: Store)
+   │       ------------ `store` does not provide mutable access
+31 │ {
+32 │     store.balances.set(key: 1, value: 2)
    │     ^^^^^^^^^^^^^^ cannot borrow as `mut`
+
+error[8-0097]: call to unsafe function `at` requires an `unsafe` block or function
+    ┌─ storage_capability_boundaries.fe:14:5
+    │
+ 14 │     StorageMap<u256, u256>::at(0).get(1)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+    │
+    ┌─ src/evm/storage_map.fe:229:19
+    │
+229 │     pub unsafe fn at(_ slot: u256) -> mut? Self uses (storage: mut? RawStorage) {
+    │                   -- callee defined here

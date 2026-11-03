@@ -1,0 +1,40 @@
+use std::evm::{Evm, RawStorage}
+
+// A `ref` projection into a zero-length array compiles: the array has no
+// runtime value, so its element's address is a raw address of the element
+// type, and the projection, whose index always fails, never yields.
+
+struct Empty {
+    items: [u256; 0],
+}
+
+impl Empty {
+    fn at(self, _ i: usize) -> ref u256 {
+        ref self.items[i]
+    }
+}
+
+fn at(_ a: [u256; 0], _ i: usize) -> ref u256 {
+    ref a[i]
+}
+
+fn runtime_zero() -> usize uses (storage: RawStorage) {
+    unsafe { storage.sload(0).downcast_unchecked() }
+}
+
+#[test]
+fn projections_into_empty_arrays_compile() {
+    let empty: [u256; 0] = []
+    let holder = Empty { items: [] }
+    if empty.len() > 0 {
+        assert(at(empty, 0) == 0 && holder.at(0) == 0)
+    }
+}
+
+#[test(should_revert)]
+fn indexing_an_empty_array_reverts() uses (evm: mut Evm) {
+    let empty: [u256; 0] = []
+    with (RawStorage = evm) {
+        assert(at(empty, runtime_zero()) == 0)
+    }
+}

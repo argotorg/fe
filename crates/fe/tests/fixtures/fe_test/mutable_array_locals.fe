@@ -1,13 +1,13 @@
 
 fn rewrite(_ arr: [u256; 4], _ idx: usize, _ value: u256) -> [u256; 4] {
-    let mut out: [u256; 4] = arr
+    var out: [u256; 4] = arr
     out[idx] = value
     out[3] = out[0] + out[1] + out[2]
     out
 }
 
 fn sum(_ arr: [u256; 4]) -> u256 {
-    let mut total: u256 = 0
+    var total: u256 = 0
     for value in arr {
         total += value
     }
@@ -16,7 +16,7 @@ fn sum(_ arr: [u256; 4]) -> u256 {
 
 #[test]
 fn test_mutable_array_local_writes() {
-    let mut values: [u256; 4] = [10, 20, 30, 0]
+    var values: [u256; 4] = [10, 20, 30, 0]
     values[1] = 99
     values[3] = values[0] + values[1]
     assert!(values[0] == 10)

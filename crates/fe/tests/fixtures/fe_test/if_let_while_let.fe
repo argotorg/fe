@@ -21,7 +21,7 @@ fn sum_nested_if_let(_ value: Option<(Point, Option<u256>)>) -> u256 {
 }
 
 fn sum_compound_if_let(_ a: Option<Option<usize>>) -> usize {
-    if let Option::Some(b) = a && let Option::Some(c) = b {
+    if let Option::Some(ref b) = a && let Option::Some(c) = b {
         c
     } else {
         0
@@ -29,7 +29,7 @@ fn sum_compound_if_let(_ a: Option<Option<usize>>) -> usize {
 }
 
 fn sum_compound_if_let_annotated(_ a: Option<Option<usize>>) -> usize {
-    let x: usize = if let Option::Some(b) = a && let Option::Some(c) = b {
+    let x: usize = if let Option::Some(ref b) = a && let Option::Some(c) = b {
         c
     } else {
         0
@@ -39,10 +39,10 @@ fn sum_compound_if_let_annotated(_ a: Option<Option<usize>>) -> usize {
 }
 
 fn sum_while_let(_ values: [Option<usize>; 4]) -> usize {
-    let mut idx: usize = 0
-    let mut sum: usize = 0
+    var idx: usize = 0
+    var sum: usize = 0
 
-    while let Option::Some(value) = ref values[idx] {
+    while let Option::Some(value) = values[idx] {
         sum += value
         idx += 1
         if idx == 4 {
@@ -53,8 +53,8 @@ fn sum_while_let(_ values: [Option<usize>; 4]) -> usize {
     sum
 }
 
-fn sum_descending_while_let(mut _ current: own Option<u256>) -> u256 {
-    let mut sum: u256 = 0
+fn sum_descending_while_let(var _ current: own Option<u256>) -> u256 {
+    var sum: u256 = 0
 
     while let Option::Some(value) = current {
         sum += value

@@ -1,0 +1,7 @@
+use core::hint::black_box
+use core::ptr::alloc_bytes
+
+pub fn main() -> u256 {
+    black_box(alloc_bytes(32))
+    0
+}

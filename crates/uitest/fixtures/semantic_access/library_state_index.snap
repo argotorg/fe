@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/library_state_index.fe
+---
+error[16-0001]: access conflict in `fn conflict`
+   ┌─ library_state_index.fe:44:9
+   │
+43 │         let cell = mut self[key]
+   │                    ------------- access opened here
+44 │         self.touch()
+   │         ^^^^ cannot mutably access this place while a `mut` access of it is open

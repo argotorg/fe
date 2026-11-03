@@ -1,8 +1,8 @@
 use core::ptr
-use std::evm::RawMem
+use core::abi::store_word
 
 #[test]
-fn test_effect() uses (mem: mut RawMem) {
+fn test_effect() {
     let data = ptr::alloc_bytes(32)
-    mem.mstore(addr: data, value: 1)
+    unsafe { store_word(ptr: data, value: 1) }
 }

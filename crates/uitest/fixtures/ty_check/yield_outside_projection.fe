@@ -1,0 +1,4 @@
+fn plain() -> u256 {
+    yield 1
+    2
+}

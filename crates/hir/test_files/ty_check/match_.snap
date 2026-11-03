@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/match_.fe
 ---
@@ -40,7 +41,7 @@ note:
    ┌─ match_.fe:13:25
    │
 13 │             Self::Var { x, .. } => x
-   │                         ^ ref i32
+   │                         ^ i32
 
 note:
    ┌─ match_.fe:13:28
@@ -70,7 +71,7 @@ note:
    ┌─ match_.fe:14:32
    │
 14 │             Self::Var2(E2::Var(x)) => x
-   │                                ^ ref i32
+   │                                ^ i32
 
 note:
    ┌─ match_.fe:14:39
@@ -119,7 +120,7 @@ note:
    ┌─ match_.fe:21:18
    │
 21 │         E::Var { x, .. } => {
-   │                  ^ ref i32
+   │                  ^ i32
 
 note:
    ┌─ match_.fe:21:21
@@ -158,7 +159,7 @@ note:
    ┌─ match_.fe:24:25
    │
 24 │         E::Var2(E2::Var(x)) => {
-   │                         ^ ref i32
+   │                         ^ i32
 
 note:
    ┌─ match_.fe:24:32

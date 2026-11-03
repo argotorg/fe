@@ -3,7 +3,7 @@
 use pretty::DocAllocator;
 
 use crate::RewriteContext;
-use parser::ast::{self, StmtKind, prelude::AstNode};
+use parser::ast::{self, AttrListOwner, StmtKind, prelude::AstNode};
 use parser::syntax_kind::SyntaxKind;
 
 use super::expr::{format_chain_with_prefix, is_chain};
@@ -18,6 +18,7 @@ impl ToDoc for ast::Stmt {
             StmtKind::Continue(continue_stmt) => continue_stmt.to_doc(ctx),
             StmtKind::Break(break_stmt) => break_stmt.to_doc(ctx),
             StmtKind::Return(ret) => ret.to_doc(ctx),
+            StmtKind::Yield(yield_) => yield_.to_doc(ctx),
             StmtKind::Expr(expr_stmt) => expr_stmt.to_doc(ctx),
         }
     }
@@ -26,33 +27,39 @@ impl ToDoc for ast::Stmt {
 impl ToDoc for ast::LetStmt {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
+        let keyword = if self.var_token().is_some() {
+            "var"
+        } else {
+            "let"
+        };
 
         let pat = match self.pat() {
             Some(p) => p.to_doc(ctx),
-            None => return alloc.text("let"),
+            None => return alloc.text(keyword),
         };
 
         let ty_doc = self
             .type_annotation()
             .map_or_else(|| alloc.nil(), |ty| alloc.text(": ").append(ty.to_doc(ctx)));
+        let head = alloc
+            .text(keyword)
+            .append(alloc.text(" "))
+            .append(pat)
+            .append(ty_doc);
 
-        match self.initializer() {
+        let let_doc = match self.initializer() {
             Some(init) if is_chain(&init) => {
                 // Use BlockDoc to handle the entire let statement as a unit
-                let prefix = alloc
-                    .text("let ")
-                    .append(pat)
-                    .append(ty_doc)
-                    .append(alloc.text(" = "));
-                format_chain_with_prefix(prefix, &init, ctx)
+                format_chain_with_prefix(head.append(alloc.text(" = ")), &init, ctx)
             }
-            Some(init) => alloc
-                .text("let ")
-                .append(pat)
-                .append(ty_doc)
-                .append(alloc.text(" = "))
-                .append(init.to_doc(ctx)),
-            None => alloc.text("let ").append(pat).append(ty_doc),
+            Some(init) => head.append(alloc.text(" = ")).append(init.to_doc(ctx)),
+            None => head,
+        };
+        match self.else_block() {
+            Some(block) => let_doc
+                .append(alloc.text(" else "))
+                .append(block.to_doc(ctx)),
+            None => let_doc,
         }
     }
 }
@@ -62,32 +69,26 @@ impl ToDoc for ast::ForStmt {
         let alloc = &ctx.alloc;
 
         if !has_comment_tokens(self.syntax()) {
+            let attrs = self
+                .attr_list()
+                .map_or_else(|| alloc.nil(), |attrs| attrs.to_doc(ctx));
             let pat = match self.pat() {
                 Some(p) => p.to_doc(ctx),
-                None => return alloc.text("for"),
+                None => return attrs.append(alloc.text("for")),
             };
             let iterable = match self.iterable() {
                 Some(i) => i.to_doc(ctx),
-                None => return alloc.text("for ").append(pat),
+                None => return attrs.append(alloc.text("for ")).append(pat),
             };
-            let body = match self.body() {
-                Some(b) => b.to_doc(ctx),
-                None => {
-                    return alloc
-                        .text("for ")
-                        .append(pat)
-                        .append(alloc.text(" in "))
-                        .append(iterable);
-                }
-            };
-
-            return alloc
-                .text("for ")
+            let header = attrs
+                .append(alloc.text("for "))
                 .append(pat)
                 .append(alloc.text(" in "))
-                .append(iterable)
-                .append(alloc.text(" "))
-                .append(body);
+                .append(iterable);
+            return match self.body() {
+                Some(body) => header.append(alloc.text(" ")).append(body.to_doc(ctx)),
+                None => header,
+            };
         }
 
         let indent = ctx.config.indent_width as isize;
@@ -99,6 +100,10 @@ impl ToDoc for ast::ForStmt {
             self.syntax(),
             indent,
             |node| {
+                if let Some(attrs) = ast::AttrList::cast(node.clone()) {
+                    return Some(TokenPiece::new(attrs.to_doc(ctx)));
+                }
+
                 if !seen_pat && let Some(pat) = ast::Pat::cast(node.clone()) {
                     seen_pat = true;
                     return Some(TokenPiece::new(pat.to_doc(ctx)));
@@ -192,6 +197,17 @@ impl ToDoc for ast::ReturnStmt {
         );
 
         alloc.text("return").append(expr_doc)
+    }
+}
+
+impl ToDoc for ast::YieldStmt {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        let expr_doc = self.expr().map_or_else(
+            || alloc.nil(),
+            |expr| alloc.text(" ").append(expr.to_doc(ctx)),
+        );
+        alloc.text("yield").append(expr_doc)
     }
 }
 

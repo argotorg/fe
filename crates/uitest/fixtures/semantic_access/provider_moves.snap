@@ -1,0 +1,53 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/provider_moves.fe
+---
+error[16-0002]: move conflict in `fn clone_buffer`
+   ┌─ provider_moves.fe:15:52
+   │
+15 │   fn clone_buffer() -> MemBuffer uses (b: MemBuffer) {
+   │ ╭────────────────────────────────────────────────────^
+16 │ │     b
+17 │ │ }
+   │ ╰─^ cannot move out of a place reached through an access
+
+error[16-0002]: move conflict in `fn take_buffer`
+   ┌─ provider_moves.fe:19:55
+   │
+19 │   fn take_buffer() -> MemBuffer uses (b: mut MemBuffer) {
+   │ ╭───────────────────────────────────────────────────────^
+20 │ │     b
+21 │ │ }
+   │ ╰─^ cannot move out of a place reached through an access
+
+error[16-0002]: move conflict in `fn take_field`
+   ┌─ provider_moves.fe:24:5
+   │
+24 │     h.buf
+   │     ^^^^^ cannot move out of a place reached through an access
+
+error[16-0002]: move conflict in `fn spend_token`
+   ┌─ provider_moves.fe:28:11
+   │
+28 │     spend(t)
+   │           ^ cannot move out of a place reached through an access
+
+error[16-0002]: move conflict in `fn bind_buffer`
+   ┌─ provider_moves.fe:32:9
+   │
+32 │     let x = b
+   │         ^ cannot move out of a place reached through an access; bind it with `ref` to read it in place
+
+error[16-0002]: move conflict in `fn Vault::__init__`
+   ┌─ provider_moves.fe:52:25
+   │
+52 │         token.n = spend(token)
+   │                         ^^^^^ cannot move out of storage, which never holds a hole
+
+error[16-0002]: move conflict in `fn Slots::__init__`
+   ┌─ provider_moves.fe:62:24
+   │
+62 │             Slot::Full(t) => spend(t)
+   │                        ^ cannot move out of storage, which never holds a hole

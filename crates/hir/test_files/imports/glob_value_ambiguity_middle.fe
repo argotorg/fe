@@ -1,0 +1,15 @@
+// Two glob imports bring in a function `m`, but `m` as a middle segment names
+// the module, so the ambiguous value doesn't matter.
+mod a {
+    pub fn m() {}
+}
+mod b {
+    pub fn m() {}
+}
+mod m {
+    pub struct S {}
+}
+use a::*
+use b::*
+use m::S
+fn f(x: S) {}

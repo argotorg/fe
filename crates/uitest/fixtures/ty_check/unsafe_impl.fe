@@ -1,0 +1,47 @@
+use core::marker::{Pinned, Storage}
+use core::ops::{Location, StateIndex}
+
+// An `unsafe trait`'s implementations assert a contract the compiler relies
+// on, so each is an `unsafe impl`, and only those are.
+unsafe trait Trusted {
+    fn id(self) -> u256
+}
+
+struct A {}
+
+// Accepted: an `unsafe impl` of an `unsafe trait`.
+unsafe impl Trusted for A {
+    fn id(self) -> u256 {
+        1
+    }
+}
+
+struct B {}
+
+// Rejected: an `unsafe trait` is implemented with `unsafe impl`.
+impl Trusted for B {
+    fn id(self) -> u256 {
+        2
+    }
+}
+
+trait Plain {}
+
+// Rejected: a safe trait's implementation is not `unsafe`.
+unsafe impl Plain for A {}
+
+struct Cells {}
+
+impl Pinned for Cells {
+    type Space = Storage
+}
+
+// Rejected: `StateIndex` is an `unsafe trait`.
+impl StateIndex for Cells {
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + 1 + key, offset: 0 }
+    }
+}

@@ -1,0 +1,86 @@
+// A projection yields exactly once on each path that completes; the code
+// after a `yield` is its slide.
+struct Cell { v: u256, depth: u256 }
+
+impl Cell {
+    // Accepted: the slide writes the temporary back.
+    fn written_back(mut self) -> mut u256 {
+        var tmp = self.v
+        yield mut tmp
+        self.v = tmp
+    }
+
+    // Accepted: an empty variant grants nothing and needs no yield.
+    fn present(mut self, _ c: bool) -> Option<mut u256> {
+        if !c {
+            return Option::None
+        }
+        yield Option::Some(mut self.v)
+        self.depth += 1
+    }
+
+    // Rejected: the empty variant is returned only during the ramp.
+    fn late_empty(mut self, _ c: bool) -> Option<mut u256> {
+        yield Option::Some(mut self.v)
+        if c {
+            return Option::None
+        }
+        self.depth += 1
+    }
+
+    // Rejected: a second yield on one path.
+    fn twice(mut self) -> mut u256 {
+        yield mut self.v
+        yield mut self.v
+    }
+
+    // Rejected: the path where `c` is false completes without yielding.
+    fn missing(mut self, _ c: bool) -> mut u256 {
+        if c {
+            yield mut self.v
+        }
+        self.v += 1
+    }
+
+    // Rejected: the loop may run zero times, or yield again.
+    fn in_loop(mut self) -> mut u256 {
+        while self.depth > 0 {
+            yield mut self.v
+            self.depth -= 1
+        }
+    }
+
+    // Warned: writes through a frame temporary with no slide are discarded.
+    fn discarded(self) -> mut u256 {
+        var tmp = self.v
+        mut tmp
+    }
+
+    fn discarded_stmt(self) -> mut u256 {
+        var tmp = self.v
+        yield mut tmp
+    }
+
+    // Warned: a value is yielded as a frame temporary holding it.
+    fn discarded_value(self) -> mut u256 {
+        self.v + 1
+    }
+
+    // Rejected: projections are inlined, so they cannot recur.
+    fn deep(mut self) -> mut u256 {
+        if self.depth == 0 {
+            mut self.v
+        } else {
+            self.depth -= 1
+            self.deep()
+        }
+    }
+
+    fn ping(mut self) -> mut u256 {
+        self.pong()
+    }
+
+    fn pong(mut self) -> mut u256 {
+        self.ping()
+    }
+}

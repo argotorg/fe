@@ -9,7 +9,7 @@ fn head(_ pair: ref Pair) -> u256 {
 
 #[test]
 fn test_reassigned_object_root_references_follow_rebinding() {
-    let mut pair = Pair { a: 1, b: 2 }
+    var pair = Pair { a: 1, b: 2 }
     assert!(head(ref pair) == 1)
 
     pair = Pair { a: 7, b: 8 }

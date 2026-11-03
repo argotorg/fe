@@ -1,0 +1,60 @@
+// `let … else` binds when the pattern matches and otherwise runs a block
+// that must diverge. A sum-shape projection's session covers the rest of the
+// enclosing block, and its slide runs after the last use of the grant.
+struct Cell {
+    v: u256,
+}
+
+impl Cell {
+    fn entry(mut self, _ present: bool) -> Option<mut u256> {
+        if !present {
+            return Option::None
+        }
+        var tmp = self.v
+        yield Option::Some(mut tmp)
+        self.v = tmp
+    }
+}
+
+fn unwrap_or(_ o: Option<u256>, _ default: u256) -> u256 {
+    let Option::Some(x) = o else {
+        return default
+    }
+    x
+}
+
+fn bump(_ present: bool) -> u256 {
+    var cell = Cell { v: 1 }
+    let Option::Some(mut x) = cell.entry(present) else {
+        return cell.v + 100
+    }
+    x += 5
+    cell.v
+}
+
+fn sum_even(_ n: u256) -> u256 {
+    var i: u256 = 0
+    var total: u256 = 0
+    while i < n {
+        i += 1
+        let even: Option<u256> = if i % 2 == 0 { Option::Some(i) } else { Option::None }
+        let Option::Some(x) = even else {
+            continue
+        }
+        total += x
+    }
+    total
+}
+
+#[test]
+fn binds_or_diverges() {
+    assert!(unwrap_or(Option::Some(3), 7) == 3)
+    assert!(unwrap_or(Option::None, 7) == 7)
+    assert!(sum_even(4) == 6)
+}
+
+#[test]
+fn optional_projection_session() {
+    assert!(bump(true) == 6)
+    assert!(bump(false) == 101)
+}

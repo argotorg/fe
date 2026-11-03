@@ -10,19 +10,18 @@ struct Holder {
     tag: u256,
 }
 
-impl Holder {
-    fn forward(mut self, _ value: mut u256) -> mut u256 {
-        value
-    }
+// Without a `self` receiver, the result may borrow from every argument.
+fn forward(_ holder: Holder, _ value: mut u256) -> mut u256 {
+    value
 }
 
 pub contract C {
     mut holder: Holder,
 
     recv Msg {
-        ForwardLocal -> u256 uses (mut holder) {
-            let mut local = 7
-            let value = holder.forward(mut local)
+        ForwardLocal -> u256 uses (holder) {
+            var local = 7
+            let value = mut forward(holder, mut local)
             value += 5
             value
         }
@@ -35,12 +34,12 @@ pub contract C {
 
 #[test]
 fn test_method_forwards_memory_mut_borrow() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 77)
-    assert!(c.inner != 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 77)
+    assert!(c.word() != 0)
 
-    let v = evm.call(addr: c, gas: 100000, value: 0, message: Msg::ForwardLocal {})
+    let v = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::ForwardLocal {})
     assert!(v == 12)
 
-    let tag = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Tag {})
+    let tag = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Tag {})
     assert!(tag == 0)
 }

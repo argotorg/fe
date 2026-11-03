@@ -1,0 +1,32 @@
+struct Account { balance: u256 }
+
+// A `Copy` element is a copy: it is not mutable.
+fn copies(_ xs: [u256; 3]) {
+    for x in xs {
+        x += 1
+    }
+}
+
+// A non-`Copy` element has no value reading, so it is bound as a read
+// access; plainly, it is an error.
+fn plain_non_copy(_ accounts: [Account; 2]) -> u256 {
+    var total = 0
+    for account in accounts {
+        total += account.balance
+    }
+    total
+}
+
+// A `ref` element is a read access: it cannot be written through.
+fn reads(_ accounts: [Account; 2]) {
+    for ref account in accounts {
+        account.balance = 0
+    }
+}
+
+// Mutating the elements needs a mutable base.
+fn mutates(_ xs: [u256; 3]) {
+    for mut x in xs {
+        x += 1
+    }
+}

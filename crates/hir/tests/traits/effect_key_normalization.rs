@@ -1,22 +1,20 @@
 use camino::Utf8PathBuf;
 use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
 use cranelift_entity::EntityRef;
-use fe_hir::analysis::diagnostics::DiagnosticVoucher;
-use fe_hir::analysis::place::PlaceBase;
 use fe_hir::analysis::semantic::{
-    GenericSubst, SemanticInstanceKey, get_or_build_semantic_instance, instantiate_typed_body,
-    instantiated_effect_env, layout_evidence_body, resolved_provider_binding_for_instance_effect,
+    GenericSubst, SemanticInstance, instantiate_typed_body, instantiated_effect_env,
     root_semantic_instance_key, typed_body_template, validate_instantiated_effect_env_key,
 };
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
-use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
-use fe_hir::analysis::ty::trait_resolution::{Selection, TraitSolveCx};
+use fe_hir::analysis::ty::evidence::EvidenceList;
+use fe_hir::analysis::ty::evidence::prove;
+use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
 use fe_hir::analysis::ty::ty_check::{
-    BodyOwner, EffectArg, EffectArgLayoutView, EffectPassMode, TypedBody,
-    check_contract_recv_arm_body, check_func_body,
+    BodyOwner, EffectPassMode, TypedBody, check_contract_recv_arm_body, check_func_body,
 };
-use fe_hir::analysis::ty::ty_def::TyData;
+use fe_hir::analysis::ty::ty_def::{TyData, TyId};
 use fe_hir::hir_def::{CallableDef, Contract, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
+use fe_hir::semantic::param_env;
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_test_analysis_pass};
 
 fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
@@ -112,18 +110,6 @@ fn assert_single_type_effect_arg<'db>(typed_body: &TypedBody<'db>, call_expr: Ex
     assert_eq!(effect_args[0].key_kind, EffectKeyKind::Type);
 }
 
-fn assert_effect_arg_pass_mode<'db>(
-    typed_body: &TypedBody<'db>,
-    call_expr: ExprId,
-    expected: EffectPassMode,
-) {
-    let effect_args = typed_body
-        .call_effect_args(call_expr)
-        .expect("missing resolved effect args");
-    assert_eq!(effect_args.len(), 1);
-    assert_eq!(effect_args[0].pass_mode, expected);
-}
-
 fn assert_trait_effect_provider_arg<'db>(
     db: &'db HirAnalysisTestDb,
     caller: Func<'db>,
@@ -212,24 +198,6 @@ fn assert_callable_generic_arg<'db>(
     assert_eq!(generic_arg.pretty_print(db).to_string(), expected);
 }
 
-fn assert_effect_arg_uses_param_binding<'db>(
-    typed_body: &TypedBody<'db>,
-    call_expr: ExprId,
-    expected_binding: fe_hir::analysis::ty::ty_check::LocalBinding<'db>,
-) {
-    let effect_args = typed_body
-        .call_effect_args(call_expr)
-        .expect("missing resolved effect args");
-    assert_eq!(effect_args.len(), 1);
-    match &effect_args[0].arg {
-        EffectArg::Place(place) => {
-            assert_eq!(place.base, PlaceBase::Binding(expected_binding));
-            assert!(place.projections.is_empty());
-        }
-        other => panic!("expected place effect arg, got {other:?}"),
-    }
-}
-
 fn diagnostics_for<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: TopLevelMod<'db>,
@@ -256,7 +224,7 @@ trait HasSlot {
     type Assoc
 }
 
-struct Slot<T, const ROOT: u256 = _> {}
+struct Slot<T> {}
 struct S {}
 
 trait T {
@@ -369,32 +337,6 @@ impl T for S {
 }
 
 #[test]
-fn ordinary_calls_use_keyed_trait_effect_witnesses_with_layout_holes() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("ordinary_calls_use_keyed_trait_effect_witnesses_with_layout_holes.fe"),
-        r#"
-trait Cap<T> {}
-
-struct Slot<const ROOT: u256 = _> {}
-
-fn needs(_: u256) uses (cap: Cap<Slot>) {}
-
-fn caller() uses (cap: Cap<Slot>) {
-    let out: () = needs(x: 1)
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
 fn ordinary_calls_use_keyed_trait_effect_witnesses_after_assoc_normalization() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -408,7 +350,7 @@ trait HasSlot {
     type Assoc
 }
 
-struct Slot<T, const ROOT: u256 = _> {}
+struct Slot<T> {}
 
 fn needs<X>(_: u256) uses (cap: Cap<X::Assoc>)
 where
@@ -425,15 +367,16 @@ where
     );
     let (top_mod, _) = db.top_mod(file);
     let needs = find_func(&db, top_mod, "needs");
-    let requirements = needs.effect_requirements(&db);
+    let requirements = needs.effect_requirements(&db, None);
     let key = requirements[0].key.key_trait().expect("trait effect key");
-    let slot_args = key.args(&db)[1].generic_args(&db);
-    assert_eq!(slot_args.len(), 2, "associated type must normalize to Slot");
-    assert_eq!(slot_args[1], CallableDef::Func(needs).params(&db)[0]);
+    assert_eq!(
+        key.args(&db)[1].generic_args(&db),
+        &[TyId::u256(&db)],
+        "associated type must normalize to Slot<u256>"
+    );
     assert_eq!(
         place_effect_provider_param_index_map(&db, needs),
-        &[Some(1)],
-        "the layout slot must precede the provider slot",
+        &[Some(0)]
     );
     db.assert_no_diags(top_mod);
 
@@ -444,154 +387,18 @@ where
 }
 
 #[test]
-fn effect_provider_slots_are_independent_of_key_validation() {
-    for (key, layout_params, valid) in [
-        ("Slot<T::ROOT>", 0, true),
-        ("LayoutSlot<T::ROOT>", 1, true),
-        ("LayoutSlot<{ <T as HasRoot>::ROOT }>", 1, true),
-        ("LayoutSlot<T::ROOT, _>", 1, true),
-        ("LayoutSlot<{ T::ROOT + 1 }>", 1, true),
-        ("Cap<LayoutSlot<T::ROOT>>", 1, true),
-        ("NestedLayout<T::ROOT>", 1, true),
-        ("ArrayLayout<T::ROOT>", 2, true),
-        ("AliasLayout<T::ROOT>", 1, true),
-        ("*LayoutSlot<T::ROOT>", 1, true),
-        ("(LayoutSlot<T::ROOT>, LayoutSlot<T::ROOT>)", 2, true),
-        // Direct effect-key holes are already callable-bound when projections
-        // traverse the array, unlike the field-local holes in ArrayLayout.
-        ("[LayoutSlot<T::ROOT>; 2]", 1, true),
-        ("[LayoutSlot<T::ROOT>; { 1 + 1 }]", 1, true),
-        ("[LayoutSlot<T::ROOT>; 0]", 1, true),
-        ("LayoutSlot<true>", 1, false),
-        ("Slot<u256>", 0, false),
-        ("*Slot<u256>", 0, false),
-        ("Missing", 0, false),
-        ("Cap<u256, u256>", 0, false),
-    ] {
-        for validate_first in [false, true] {
-            let mut db = HirAnalysisTestDb::default();
-            let source = format!(
-                r#"
-trait HasRoot {{ const ROOT: u256 }}
-trait Cap<T> {{}}
-struct Slot<const ROOT: u256> {{}}
-struct LayoutSlot<const ROOT: u256, const SALT: u256 = _> {{}}
-struct NestedLayout<const ROOT: u256> {{ slot: LayoutSlot<ROOT> }}
-struct ArrayLayout<const ROOT: u256> {{ slots: [LayoutSlot<ROOT>; 2] }}
-type AliasLayout<const ROOT: u256> = LayoutSlot<ROOT>
-
-fn needs<T: HasRoot, U = T>()
-    uses (first: Cap<T>, middle: {key}, last: Slot<T::ROOT>)
-{{}}
-"#
-            );
-            let file = db.new_stand_alone("stable_effect_provider_slots.fe".into(), &source);
-            let (top_mod, _) = db.top_mod(file);
-            let needs = find_func(&db, top_mod, "needs");
-            if validate_first {
-                let diags = diagnostics_for(&db, top_mod);
-                assert_eq!(
-                    diags.is_empty(),
-                    valid,
-                    "key {key}, validate_first {validate_first}: {diags:#?}"
-                );
-            }
-
-            assert_eq!(
-                place_effect_provider_param_index_map(&db, needs),
-                &[
-                    Some(layout_params),
-                    Some(layout_params + 1),
-                    Some(layout_params + 2)
-                ],
-                "key {key}, validate_first {validate_first}"
-            );
-            let params = CallableDef::Func(needs).params(&db);
-            assert_eq!(params.len(), layout_params + 5);
-            for (idx, param) in params.iter().enumerate().skip(layout_params) {
-                let TyData::TyParam(param) = param.data(&db) else {
-                    panic!("expected type parameter at {idx}");
-                };
-                assert_eq!(param.idx, idx);
-            }
-            let diags = diagnostics_for(&db, top_mod);
-            assert_eq!(
-                diags.is_empty(),
-                valid,
-                "key {key}, validate_first {validate_first}: {diags:#?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn callable_layout_discovery_uses_declared_bounds_before_hidden_slots() {
-    for (declaration, provider_idx, param_count) in [
-        (
-            "fn needs<T, const ROOT: u256, U = T>(_ value: LayoutSlot<ROOT>) uses (slot: LayoutSlot<T::ROOT>) where T: HasRoot {}",
-            2,
-            6,
-        ),
-        (
-            "impl<T: HasRoot> Holder<T> { fn needs<U>() uses (slot: LayoutSlot<U::ROOT>) where U: HasRoot {} }",
-            2,
-            4,
-        ),
-        (
-            "trait Example: HasRoot { fn needs<T>() uses (slot: LayoutSlot<Self::ROOT>) {} }",
-            2,
-            4,
-        ),
-    ] {
-        for validate_first in [false, true] {
-            let mut db = HirAnalysisTestDb::default();
-            let source = format!(
-                r#"
-trait HasRoot {{ const ROOT: u256 }}
-struct LayoutSlot<const ROOT: u256, const SALT: u256 = _> {{}}
-struct Holder<T> {{ value: T }}
-{declaration}
-"#
-            );
-            let file = db.new_stand_alone("callable_layout_discovery.fe".into(), &source);
-            let (top_mod, _) = db.top_mod(file);
-            let needs = top_mod
-                .all_funcs(&db)
-                .iter()
-                .copied()
-                .find(|func| {
-                    func.name(&db)
-                        .to_opt()
-                        .is_some_and(|name| name.data(&db) == "needs")
-                })
-                .expect("missing function");
-            if validate_first {
-                db.assert_no_diags(top_mod);
-            }
-            assert_eq!(
-                place_effect_provider_param_index_map(&db, needs),
-                &[Some(provider_idx)],
-                "{declaration}"
-            );
-            assert_eq!(CallableDef::Func(needs).params(&db).len(), param_count);
-            db.assert_no_diags(top_mod);
-        }
-    }
-}
-
-#[test]
-fn effect_provider_slots_follow_inherited_and_layout_parameters() {
+fn effect_provider_slots_follow_inherited_parameters() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
-        "effect_provider_slots_follow_inherited_and_layout_parameters.fe".into(),
+        "effect_provider_slots_follow_inherited_parameters.fe".into(),
         r#"
 trait HasRoot { const ROOT: u256 }
 trait Cap<T> {}
-struct Slot<const ROOT: u256 = _> {}
+struct Slot<const ROOT: u256> {}
 struct Holder<T> { value: T }
 
 impl<T: HasRoot> Holder<T> {
-    fn needs<U = T>() uses (any: Slot, exact: Slot<T::ROOT>, cap: Cap<U>) {}
+    fn needs<U = T>() uses (fixed: Slot<0>, exact: Slot<T::ROOT>, cap: Cap<U>) {}
 }
 "#,
     );
@@ -608,12 +415,11 @@ impl<T: HasRoot> Holder<T> {
         .expect("missing associated function");
     assert_eq!(
         place_effect_provider_param_index_map(&db, needs),
-        &[Some(2), Some(3), Some(4)]
+        &[Some(1), Some(2), Some(3)]
     );
     let params = CallableDef::Func(needs).params(&db);
-    assert_eq!(params.len(), 6);
-    assert!(matches!(params[1].data(&db), TyData::ConstTy(_)));
-    assert!(matches!(params[5].data(&db), TyData::TyParam(param) if param.idx == 5));
+    assert_eq!(params.len(), 5);
+    assert!(matches!(params[4].data(&db), TyData::TyParam(param) if param.idx == 4));
     db.assert_no_diags(top_mod);
 }
 
@@ -677,7 +483,7 @@ trait HasRoot {
 
 trait Cap<T> {}
 
-struct Slot<const ROOT: u256 = _> {}
+struct Slot<const ROOT: u256> {}
 struct S {}
 
 impl HasRoot for S {
@@ -735,8 +541,6 @@ fn keyed_trait_effects_use_provider_type_for_with_bindings() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("keyed_trait_effects_use_provider_type_for_with_bindings.fe"),
         r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
 trait Logger {
     fn log(self)
 }
@@ -750,17 +554,6 @@ struct Ptr<T> {
 impl<T> Logger for Ptr<T> {
     fn log(self) {}
 }
-
-impl<T> EffectHandle for Ptr<T> {
-    type Target = T
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = *T
-
-    fn raw(self) -> *T { self.raw }
-}
-
-impl<T> EffectRef<T> for Ptr<T> {}
 
 fn needs() uses (logger: Logger) {}
 
@@ -945,8 +738,6 @@ fn keyed_trait_effects_do_not_accept_target_type_only_matches() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("keyed_trait_effects_do_not_accept_target_type_only_matches.fe"),
         r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
 trait Logger {
     fn log(self)
 }
@@ -957,24 +748,9 @@ impl Logger for Console {
     fn log(self) {}
 }
 
-struct Ptr<T> {
-    raw: u256
-}
-
-impl<T> EffectHandle for Ptr<T> {
-    type Target = T
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = u256
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-impl<T> EffectRef<T> for Ptr<T> {}
-
 fn needs() uses (logger: Logger) {}
 
-fn caller(p: Ptr<Console>) {
+fn caller(p: *Console) {
     with (Logger = p) {
         needs()
     }
@@ -984,58 +760,12 @@ fn caller(p: Ptr<Console>) {
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert!(
-        diags.iter().any(|diag| diag.message.contains(
-            "keyed effect binding `Logger` requires `Ptr<Console>` to implement `Logger`",
-        )),
+        diags.iter().any(|diag| diag
+            .message
+            .contains("keyed effect binding `Logger` requires `*Console` to implement `Logger`",)),
         "expected keyed trait binding failure, got diagnostics: {diags:#?}"
     );
 }
-
-#[test]
-fn keyed_trait_effects_do_not_accept_capability_wrapped_targets() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("keyed_trait_effects_do_not_accept_capability_wrapped_targets.fe"),
-        r#"
-trait Logger {
-    fn log(self)
-}
-
-struct Console {}
-
-impl Logger for Console {
-    fn log(self) {}
-}
-
-fn needs() uses (logger: Logger) {}
-
-fn caller(c: ref Console) {
-    with (Logger = c) {
-        needs()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags.iter().any(|diag| {
-            diag.message.contains(
-                "keyed effect binding `Logger` requires `ref Console` to implement `Logger`",
-            )
-        }),
-        "expected capability-wrapper trait binding failure, got diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_named_call_expr(&db, caller, "needs");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert!(
-        typed_body.call_effect_args(call_expr).is_none(),
-        "invalid ref provider should not resolve an effect argument"
-    );
-}
-
 #[test]
 fn invalid_keyed_with_bindings_shadow_outer_providers() {
     let mut db = HirAnalysisTestDb::default();
@@ -1481,419 +1211,6 @@ fn caller() {
 }
 
 #[test]
-fn layout_hole_type_keyed_with_bindings_shadow_outer_providers() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("layout_hole_type_keyed_with_bindings_shadow_outer_providers.fe"),
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-struct Other<const ROOT: u256 = _> {}
-
-fn needs() uses (slot: Slot) {}
-
-fn caller(good: Slot<1>, bad: Other<1>) {
-    with (Slot = good) {
-        with (Slot = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
-    assert!(
-        diags[0].message.contains("Other<1>"),
-        "unexpected diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert!(
-        typed_body.call_effect_args(call_expr).is_none(),
-        "invalid layout-hole keyed type binding should shadow the outer provider"
-    );
-}
-
-#[test]
-fn layout_hole_type_keyed_with_bindings_reject_repeated_placeholder_mismatches() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "layout_hole_type_keyed_with_bindings_reject_repeated_placeholder_mismatches.fe",
-        ),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-fn caller() {
-    let bad = (Leaf<1> {}, Leaf<2> {})
-    with (Repeated = bad) {
-        let keep: u256 = 0
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags
-            .iter()
-            .any(|diag| diag.message.contains("keyed effect binding `Repeated`")),
-        "expected repeated-placeholder mismatch to be rejected, got diagnostics: {diags:#?}"
-    );
-}
-
-#[test]
-fn layout_hole_type_identity_matching_preserves_repeated_placeholder_equality() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "layout_hole_type_identity_matching_preserves_repeated_placeholder_equality.fe",
-        ),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-fn needs() uses (slot: Repeated) {}
-
-fn caller(good: Repeated<1>, bad: Mixed<1, 2>) {
-    with (Repeated = good) {
-        with (Mixed<1, 2> = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
-fn poisoned_layout_hole_type_keys_do_not_shadow_outer_exact_providers() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("poisoned_layout_hole_type_keys_do_not_shadow_outer_exact_providers.fe"),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-fn needs() uses (slot: Mixed<1, 2>) {}
-
-fn caller(good: Mixed<1, 2>, bad: Mixed<1, 2>) {
-    with (Mixed<1, 2> = good) {
-        with (Repeated = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags
-            .iter()
-            .any(|diag| diag.message.contains("keyed effect binding `Repeated`")),
-        "expected invalid inner repeated key to be diagnosed, got diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-    assert_effect_arg_uses_param_binding(
-        &typed_body,
-        call_expr,
-        typed_body
-            .param_binding(0)
-            .expect("missing outer provider binding"),
-    );
-}
-
-#[test]
-fn layout_hole_trait_identity_matching_preserves_repeated_placeholder_equality() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "layout_hole_trait_identity_matching_preserves_repeated_placeholder_equality.fe",
-        ),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-struct Good {}
-struct Bad {}
-
-impl Cap<Repeated<1>> for Good {
-    fn cap(self) {}
-}
-
-impl Cap<Mixed<1, 2>> for Bad {
-    fn cap(self) {}
-}
-
-fn needs() uses (cap: Cap<Repeated>) {}
-
-fn caller(good: own Good, bad: own Bad) {
-    with (Cap<Repeated> = good) {
-        with (Cap<Mixed<1, 2>> = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
-fn poisoned_layout_hole_trait_keys_do_not_shadow_outer_exact_witnesses() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("poisoned_layout_hole_trait_keys_do_not_shadow_outer_exact_witnesses.fe"),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-struct Good {}
-struct Bad {}
-
-impl Cap<Mixed<1, 2>> for Good {
-    fn cap(self) {}
-}
-
-impl Cap<Mixed<1, 2>> for Bad {
-    fn cap(self) {}
-}
-
-fn needs() uses (cap: Cap<Mixed<1, 2>>) {}
-
-fn caller(good: own Good, bad: own Bad) {
-    with (Cap<Mixed<1, 2>> = good) {
-        with (Cap<Repeated> = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags.iter().any(|diag| diag
-            .message
-            .contains("keyed effect binding `Cap<Repeated>`")),
-        "expected invalid inner repeated trait key to be diagnosed, got diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs = find_func(&db, top_mod, "needs");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Good");
-}
-
-#[test]
-fn omitted_layout_hole_type_keys_store_specialized_with_bindings() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("omitted_layout_hole_type_keys_store_specialized_with_bindings.fe"),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-fn needs() uses (slot: Repeated<1>) {}
-
-fn caller(good: Repeated<1>, bad: Mixed<1, 2>) {
-    with (Repeated<1> = good) {
-        with (Mixed = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-    assert_effect_arg_uses_param_binding(
-        &typed_body,
-        call_expr,
-        typed_body
-            .param_binding(0)
-            .expect("missing outer provider binding"),
-    );
-}
-
-#[test]
-fn omitted_layout_hole_trait_keys_store_specialized_with_witnesses() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("omitted_layout_hole_trait_keys_store_specialized_with_witnesses.fe"),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-struct Good {}
-struct Bad {}
-
-impl Cap<Repeated<1>> for Good {
-    fn cap(self) {}
-}
-
-impl Cap<Mixed<1, 2>> for Bad {
-    fn cap(self) {}
-}
-
-fn needs() uses (cap: Cap<Repeated<1>>) {}
-
-fn caller(good: own Good, bad: own Bad) {
-    with (Cap<Repeated<1>> = good) {
-        with (Cap<Mixed> = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs = find_func(&db, top_mod, "needs");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Good");
-}
-
-#[test]
-fn omitted_layout_hole_type_keys_with_hidden_provider_params_are_rejected() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "omitted_layout_hole_type_keys_with_hidden_provider_params_are_rejected.fe",
-        ),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-fn needs() uses (slot: Repeated<1>) {}
-
-fn caller(good: Repeated<1>, bad: Mixed) {
-    with (Repeated<1> = good) {
-        with (Mixed = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags
-            .iter()
-            .any(|diag| diag.message.contains("keyed effect binding `Mixed`")),
-        "unexpected diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert!(
-        typed_body.call_effect_args(call_expr).is_none(),
-        "a non-rigid hidden-provider keyed binding should not satisfy the call",
-    );
-}
-
-#[test]
-fn omitted_layout_hole_trait_keys_keep_hidden_provider_params_rigid() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("omitted_layout_hole_trait_keys_keep_hidden_provider_params_rigid.fe"),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-struct Good {}
-struct Bad<const A: u256 = _, const B: u256 = _> {}
-
-impl Cap<Repeated<1>> for Good {
-    fn cap(self) {}
-}
-
-impl<const A: u256, const B: u256> Cap<Mixed<A, B>> for Bad<A, B> {
-    fn cap(self) {}
-}
-
-fn needs() uses (cap: Cap<Repeated<1>>) {}
-
-fn caller(good: own Good, bad: own Bad) {
-    with (Cap<Repeated<1>> = good) {
-        with (Cap<Mixed> = bad) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs = find_func(&db, top_mod, "needs");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Good");
-}
-
-#[test]
 fn concrete_type_keyed_with_bindings_do_not_accept_wrong_explicit_keys() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -1981,30 +1298,13 @@ fn schematic_type_keyed_with_bindings_do_not_accept_wrong_explicit_keys_via_prov
             "schematic_type_keyed_with_bindings_do_not_accept_wrong_explicit_keys_via_provider_wrappers.fe",
         ),
         r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
 struct Storage<T> {
     value: T,
 }
 
-struct Ptr<T> {
-    raw: u256
-}
-
-impl<T> EffectHandle for Ptr<T> {
-    type Target = T
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = u256
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-impl<T> EffectRef<T> for Ptr<T> {}
-
 fn needs<T>() uses (store: Storage<T>) {}
 
-fn caller(p: own Ptr<Storage<u8>>) {
+fn caller(p: *Storage<u8>) {
     with (Storage<u16> = p) {
         needs()
     }
@@ -2074,7 +1374,7 @@ struct Storage<T> {
     value: T,
 }
 
-fn make<T>() -> Storage<T> { todo() }
+fn make<T>() -> Storage<T> { unsafe { todo() } }
 fn take(x: ref Storage<u8>) {}
 fn needs<T>() uses (store: Storage<T>) {}
 
@@ -2095,11 +1395,11 @@ fn caller() {
                 && diag
                     .sub_diagnostics
                     .iter()
-                    .any(|sub| sub.message.contains("ref Storage<u8>"))
+                    .any(|sub| sub.message.contains("Storage<u8>"))
                 && diag
                     .sub_diagnostics
                     .iter()
-                    .any(|sub| sub.message.contains("ref Storage<u16>"))
+                    .any(|sub| sub.message.contains("Storage<u16>"))
         }),
         "expected later inference to conflict with the committed explicit key, got diagnostics: {diags:#?}"
     );
@@ -2127,7 +1427,7 @@ struct Storage<T> {
     value: T,
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(_: ref u8) {}
 fn needs<T>(_: T) uses (store: Storage<T>) {}
 
@@ -2179,7 +1479,7 @@ struct Bad {}
 
 impl Cap<Storage<u8>> for Good {}
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(_: ref u8) {}
 fn needs<T>(_: T) uses (cap: Cap<Storage<T>>) {}
 
@@ -2212,331 +1512,6 @@ fn caller(good: own Good, bad: own Bad) {
 }
 
 #[test]
-fn unkeyed_wrapper_type_effect_candidates_commit_specialized_wrapper_solutions() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "unkeyed_wrapper_type_effect_candidates_commit_specialized_wrapper_solutions.fe",
-        ),
-        r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
-extern {
-    fn todo() -> !
-}
-
-struct Storage<T> {
-    value: T,
-}
-
-struct Ptr<T> {
-    raw: u256
-}
-
-impl EffectHandle for Ptr<Storage<u8>> {
-    type Target = Storage<u8>
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = u256
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-impl EffectRef<Storage<u8>> for Ptr<Storage<u8>> {}
-
-fn make<T>() -> Ptr<T> { todo() }
-fn take(x: ref Ptr<Storage<u16>>) {}
-fn needs() uses (store: Storage<u8>) {}
-
-fn caller() {
-    let x = make()
-    with (x) {
-        needs()
-        take(ref x)
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags.iter().any(|diag| {
-            diag.message.contains("type mismatch")
-                && diag
-                    .sub_diagnostics
-                    .iter()
-                    .any(|sub| sub.message.contains("ref Ptr<Storage<u16>>"))
-                && diag
-                    .sub_diagnostics
-                    .iter()
-                    .any(|sub| sub.message.contains("ref Ptr<Storage<u8>>"))
-        }),
-        "expected later refinement to conflict with the committed wrapper proof, got diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs_call = find_named_call_expr(&db, caller, "needs");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, needs_call);
-}
-
-#[test]
-fn keyed_wrapper_type_effect_candidates_commit_specialized_wrapper_solutions() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "keyed_wrapper_type_effect_candidates_commit_specialized_wrapper_solutions.fe",
-        ),
-        r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
-extern {
-    fn todo() -> !
-}
-
-struct Storage<T> {
-    value: T,
-}
-
-struct Ptr<T> {
-    raw: u256
-}
-
-impl EffectHandle for Ptr<Storage<u8>> {
-    type Target = Storage<u8>
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = u256
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-impl EffectRef<Storage<u8>> for Ptr<Storage<u8>> {}
-
-fn make<T>() -> Ptr<T> { todo() }
-fn take(x: ref Ptr<Storage<u16>>) {}
-fn needs() uses (store: Storage<u8>) {}
-
-fn caller() {
-    let x = make()
-    with (Storage<u8> = x) {
-        needs()
-        take(ref x)
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags.iter().any(|diag| {
-            diag.message.contains("type mismatch")
-                && diag
-                    .sub_diagnostics
-                    .iter()
-                    .any(|sub| sub.message.contains("ref Ptr<Storage<u16>>"))
-                && diag
-                    .sub_diagnostics
-                    .iter()
-                    .any(|sub| sub.message.contains("ref Ptr<Storage<u8>>"))
-        }),
-        "expected later refinement to conflict with the committed keyed wrapper proof, got diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs_call = find_named_call_expr(&db, caller, "needs");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, needs_call);
-}
-
-#[test]
-fn wrapper_type_effect_candidates_accept_stable_specialized_providers() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("wrapper_type_effect_candidates_accept_stable_specialized_providers.fe"),
-        r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
-struct Storage<T> {
-    value: T,
-}
-
-struct Ptr<T> {
-    raw: *T
-}
-
-impl EffectHandle for Ptr<Storage<u8>> {
-    type Target = Storage<u8>
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = *Storage<u8>
-
-    fn raw(self) -> *Storage<u8> { self.raw }
-}
-
-impl EffectRef<Storage<u8>> for Ptr<Storage<u8>> {}
-
-fn needs() uses (store: Storage<u8>) {}
-
-fn caller(x: own Ptr<Storage<u8>>) {
-    with (x) {
-        needs()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
-fn unkeyed_wrapper_type_effects_renormalize_projection_targets_after_later_proofs() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_trusted_effect_handle_module(
-        Utf8PathBuf::from(
-            "unkeyed_wrapper_type_effects_renormalize_projection_targets_after_later_proofs.fe",
-        ),
-        r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
-extern {
-    fn todo() -> !
-}
-
-trait HasTy {
-    type Assoc
-}
-
-struct Storage<T> {
-    value: T,
-}
-
-struct Wrap<T> {}
-struct Ptr<T> {
-    raw: u256
-}
-struct Impl {}
-
-impl HasTy for Impl {
-    type Assoc = u8
-}
-
-impl<T> EffectHandle for Ptr<Wrap<T>>
-where
-    T: HasTy
-{
-    type Target = Storage<T::Assoc>
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = u256
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-impl EffectRef<Storage<u8>> for Ptr<Wrap<Impl>> {}
-
-fn make<T>() -> Ptr<Wrap<T>>
-where
-    T: HasTy
-{
-    todo()
-}
-fn needs() uses (store: Storage<u8>) {}
-
-fn caller() {
-    let x = make()
-    with (x) {
-        needs()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_named_call_expr(&db, caller, "needs");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
-fn keyed_wrapper_type_effects_renormalize_projection_targets_after_later_proofs() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_trusted_effect_handle_module(
-        Utf8PathBuf::from(
-            "keyed_wrapper_type_effects_renormalize_projection_targets_after_later_proofs.fe",
-        ),
-        r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
-extern {
-    fn todo() -> !
-}
-
-trait HasTy {
-    type Assoc
-}
-
-struct Storage<T> {
-    value: T,
-}
-
-struct Wrap<T> {}
-struct Ptr<T> {
-    raw: u256
-}
-struct Impl {}
-
-impl HasTy for Impl {
-    type Assoc = u8
-}
-
-impl<T> EffectHandle for Ptr<Wrap<T>>
-where
-    T: HasTy
-{
-    type Target = Storage<T::Assoc>
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = u256
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-impl EffectRef<Storage<u8>> for Ptr<Wrap<Impl>> {}
-
-fn make<T>() -> Ptr<Wrap<T>>
-where
-    T: HasTy
-{
-    todo()
-}
-fn needs() uses (store: Storage<u8>) {}
-
-fn caller() {
-    let x = make()
-    with (Storage<u8> = x) {
-        needs()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_named_call_expr(&db, caller, "needs");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
 fn keyed_trait_with_bindings_require_stable_provider_types() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -2557,7 +1532,7 @@ impl Logger for Good {
     fn log(self) {}
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(x: ref Bad) {}
 fn needs() uses (logger: Logger) {}
 
@@ -2609,15 +1584,17 @@ impl Logger for Good {
     fn log(self) {}
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(x: ref Bad) {}
 fn needs() uses (logger: Logger) {}
 
 fn caller() {
     let x = make()
-    with (x) {
-        take(ref x)
-        needs()
+    unsafe {
+        with (x) {
+            take(ref x)
+            needs()
+        }
     }
 }
 "#,
@@ -2663,15 +1640,17 @@ impl Logger for AlsoGood {
     fn log(self) {}
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(x: ref Bad) {}
 fn needs() uses (logger: Logger) {}
 
 fn caller() {
     let x = make()
-    with (x) {
-        needs()
-        take(ref x)
+    unsafe {
+        with (x) {
+            needs()
+            take(ref x)
+        }
     }
 }
 "#,
@@ -2708,8 +1687,10 @@ impl Logger for Good {
 fn needs() uses (logger: Logger) {}
 
 fn caller(x: own Good) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2742,8 +1723,10 @@ impl Logger<u8> for Good {
 fn needs<T>() uses (logger: Logger<T>) {}
 
 fn caller(x: own Good) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2794,8 +1777,10 @@ where
 {}
 
 fn caller(x: own Good) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2858,8 +1843,10 @@ where
 {}
 
 fn caller(x: own Good) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2887,329 +1874,6 @@ fn caller(x: own Good) {
 }
 
 #[test]
-fn layout_hole_type_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "layout_hole_type_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers.fe",
-        ),
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-
-fn needs() uses (slot: Slot) {}
-
-fn caller(keyed: Slot<1>, unkeyed: Slot<2>) {
-    with (Slot = keyed, unkeyed) {
-        needs()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-    assert_effect_arg_uses_param_binding(
-        &typed_body,
-        call_expr,
-        typed_body
-            .param_binding(0)
-            .expect("missing keyed param binding"),
-    );
-}
-
-#[test]
-fn concrete_layout_hole_type_keyed_bindings_shadow_outer_exact_providers() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "concrete_layout_hole_type_keyed_bindings_shadow_outer_exact_providers.fe",
-        ),
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-struct Other<const ROOT: u256 = _> {}
-
-fn needs_exact() uses (slot: Slot<1>) {}
-
-fn caller(bad: Other<1>) uses (slot: Slot<1>) {
-    with (Slot = bad) {
-        needs_exact()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
-    assert!(
-        diags[0].message.contains("Other<1>"),
-        "unexpected diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert!(
-        typed_body.call_effect_args(call_expr).is_none(),
-        "inner identity-only keyed type binding should shadow the outer exact effect param"
-    );
-}
-
-#[test]
-fn concrete_layout_hole_type_keyed_bindings_prefer_inner_identity_matches() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "concrete_layout_hole_type_keyed_bindings_prefer_inner_identity_matches.fe",
-        ),
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-
-fn needs_exact() uses (slot: Slot<1>) {}
-
-fn caller(inner: Slot<1>) uses (slot: Slot<1>) {
-    with (Slot = inner) {
-        needs_exact()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-    assert_effect_arg_uses_param_binding(
-        &typed_body,
-        call_expr,
-        typed_body
-            .param_binding(0)
-            .expect("missing explicit inner param binding"),
-    );
-}
-
-#[test]
-fn keyed_with_trait_bindings_normalize_layout_holes() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("keyed_with_trait_bindings_normalize_layout_holes.fe"),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Slot<const ROOT: u256 = _> {}
-struct Provider {}
-
-impl Cap<Slot<1>> for Provider {
-    fn cap(self) {}
-}
-
-fn needs() uses (cap: Cap<Slot>) {}
-
-fn caller(p: own Provider) {
-    with (Cap<Slot> = p) {
-        needs()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs = find_func(&db, top_mod, "needs");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Provider");
-}
-
-#[test]
-fn concrete_layout_hole_trait_keyed_bindings_shadow_outer_exact_providers() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "concrete_layout_hole_trait_keyed_bindings_shadow_outer_exact_providers.fe",
-        ),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Slot<const ROOT: u256 = _> {}
-struct Good {}
-struct Bad {}
-
-impl Cap<Slot<1>> for Good {
-    fn cap(self) {}
-}
-
-fn needs_exact() uses (cap: Cap<Slot<1>>) {}
-
-fn caller() uses (cap: Cap<Slot<1>>) {
-    with (Cap<Slot> = Bad {}) {
-        needs_exact()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
-    assert!(
-        diags[0].message.contains(
-            "keyed effect binding `Cap<Slot>` requires `Bad` to implement `Cap<Slot<_>>`"
-        ),
-        "unexpected diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert!(
-        typed_body.call_effect_args(call_expr).is_none(),
-        "inner identity-only keyed trait binding should shadow the outer exact effect param"
-    );
-}
-
-#[test]
-fn layout_hole_trait_keyed_with_bindings_shadow_outer_providers() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("layout_hole_trait_keyed_with_bindings_shadow_outer_providers.fe"),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Slot<const ROOT: u256 = _> {}
-struct Good {}
-struct Bad {}
-
-impl Cap<Slot<1>> for Good {
-    fn cap(self) {}
-}
-
-fn needs() uses (cap: Cap<Slot>) {}
-
-fn caller() {
-    with (Cap<Slot> = Good {}) {
-        with (Cap<Slot> = Bad {}) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
-    assert!(
-        diags[0].message.contains(
-            "keyed effect binding `Cap<Slot>` requires `Bad` to implement `Cap<Slot<_>>`"
-        ),
-        "unexpected diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert!(
-        typed_body.call_effect_args(call_expr).is_none(),
-        "invalid layout-hole keyed trait binding should shadow the outer provider"
-    );
-}
-
-#[test]
-fn concrete_layout_hole_trait_keyed_bindings_prefer_inner_identity_matches() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "concrete_layout_hole_trait_keyed_bindings_prefer_inner_identity_matches.fe",
-        ),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Slot<const ROOT: u256 = _> {}
-struct Inner {}
-
-impl Cap<Slot<1>> for Inner {
-    fn cap(self) {}
-}
-
-fn needs_exact() uses (cap: Cap<Slot<1>>) {}
-
-fn caller(inner: own Inner) uses (cap: Cap<Slot<1>>) {
-    with (Cap<Slot> = inner) {
-        needs_exact()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs_exact = find_func(&db, top_mod, "needs_exact");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-    assert_trait_effect_provider_arg(&db, caller, needs_exact, call_expr, "Inner");
-}
-
-#[test]
-fn layout_hole_trait_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "layout_hole_trait_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers.fe",
-        ),
-        r#"
-trait Cap<T> {
-    fn cap(self)
-}
-
-struct Slot<const ROOT: u256 = _> {}
-struct Keyed {}
-struct Unkeyed {}
-
-impl Cap<Slot<1>> for Keyed {
-    fn cap(self) {}
-}
-
-impl Cap<Slot<1>> for Unkeyed {
-    fn cap(self) {}
-}
-
-fn needs() uses (cap: Cap<Slot>) {}
-
-fn caller() {
-    with (Cap<Slot> = Keyed {}, Unkeyed {}) {
-        needs()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs = find_func(&db, top_mod, "needs");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Keyed");
-}
-
-#[test]
 fn keyed_with_trait_bindings_normalize_assoc_requirements() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -3223,7 +1887,7 @@ trait HasSlot {
     type Assoc
 }
 
-struct Slot<T, const ROOT: u256 = _> {}
+struct Slot<T> {}
 struct Provider {}
 
 impl Cap<Slot<u256>> for Provider {
@@ -3270,7 +1934,7 @@ trait Cap<T> {
     fn cap(self)
 }
 
-struct Slot<const ROOT: u256 = _> {}
+struct Slot<const ROOT: u256> {}
 struct S {}
 struct Provider {}
 
@@ -3316,7 +1980,7 @@ trait Cap<T> {
     fn cap(self)
 }
 
-struct Slot<const ROOT: u256 = _> {}
+struct Slot<const ROOT: u256> {}
 struct S {}
 struct Good {}
 struct Bad {}
@@ -3523,7 +2187,7 @@ struct Storage<T> {
     value: T,
 }
 
-fn make<T>() -> Storage<T> { todo() }
+fn make<T>() -> Storage<T> { unsafe { todo() } }
 fn needs() uses (store: Storage<u8>) {}
 
 fn caller() {
@@ -3867,53 +2531,6 @@ where
 }
 
 #[test]
-fn keyed_wrapper_type_witnesses_preserve_by_value_transport() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("keyed_wrapper_type_witnesses_preserve_by_value_transport.fe"),
-        r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
-struct Storage<T> {
-    value: T,
-}
-
-struct Ptr<T> {
-    raw: *T
-}
-
-impl EffectHandle for Ptr<Storage<u8>> {
-    type Target = Storage<u8>
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = *Storage<u8>
-
-    fn raw(self) -> *Storage<u8> { self.raw }
-}
-
-impl EffectRef<Storage<u8>> for Ptr<Storage<u8>> {}
-
-fn needs() uses (store: Storage<u8>) {}
-
-fn caller(x: own Ptr<Storage<u8>>) {
-    with (Storage<u8> = x) {
-        needs()
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_named_call_expr(&db, caller, "needs");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-    assert_effect_arg_pass_mode(&typed_body, call_expr, EffectPassMode::ByValue);
-    assert_callable_provider_arg(&db, caller, call_expr, "Ptr<Storage<u8>>");
-}
-
-#[test]
 fn family_fallback_keyed_lookup_requires_an_actual_witness_match() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -4017,46 +2634,6 @@ fn caller(unkeyed: own Unkeyed) {
 }
 
 #[test]
-fn contract_named_effects_with_omitted_layout_hole_keys_seed_specialized_witnesses() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "contract_named_effects_with_omitted_layout_hole_keys_seed_specialized_witnesses.fe",
-        ),
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-
-fn needs() uses (slot: Slot) {}
-
-msg Msg {
-    #[selector = 1]
-    Ping,
-}
-
-contract C uses (slot: Slot) {
-    recv Msg {
-        Ping uses (slot) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let contract = find_contract(&db, top_mod, "C");
-    let (diags, typed_body) = check_contract_recv_arm_body(&db, contract, 0, 0);
-    assert!(
-        diags.is_empty(),
-        "{}",
-        fe_hir::analysis::diagnostics::format_diags(&db, diags.iter())
-    );
-    let call_expr = find_call_expr_in_typed_body(&db, typed_body);
-    assert_single_type_effect_arg(typed_body, call_expr);
-}
-
-#[test]
 fn contract_named_trait_effects_seed_forwarding_witnesses() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -4092,703 +2669,6 @@ contract C uses (log: mut Log) {
     );
     let call_expr = find_call_expr_in_typed_body(&db, typed_body);
     assert_single_trait_effect_arg(typed_body, call_expr);
-}
-
-#[test]
-fn function_type_effect_params_forward_repeated_layout_hole_aliases() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("function_type_effect_params_forward_repeated_layout_hole_aliases.fe"),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-fn needs() uses (slot: Repeated<1>) {}
-
-fn caller() uses (slot: Repeated) {
-    needs()
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
-fn conflicting_function_type_effect_forwarding_does_not_accept_both_calls() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "conflicting_function_type_effect_forwarding_does_not_accept_both_calls.fe",
-        ),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-fn needs1() uses (slot: Repeated<1>) {}
-fn needs2() uses (slot: Repeated<2>) {}
-
-fn caller() uses (slot: Repeated) {
-    needs1()
-    needs2()
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags
-            .iter()
-            .any(|diag| diag.message.contains("missing effect")),
-        "expected missing effect diagnostic, got diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs1_call = find_named_call_expr(&db, caller, "needs1");
-    let needs2_call = find_named_call_expr(&db, caller, "needs2");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert!(
-        typed_body.call_effect_args(needs1_call).is_none()
-            || typed_body.call_effect_args(needs2_call).is_none(),
-        "the same forwarded type effect must not satisfy conflicting specializations",
-    );
-}
-
-#[test]
-fn repeated_function_type_effect_forwarding_reuses_the_same_specialization() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "repeated_function_type_effect_forwarding_reuses_the_same_specialization.fe",
-        ),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-fn needs1() uses (slot: Repeated<1>) {}
-fn needs2() uses (slot: Repeated<1>) {}
-
-fn caller() uses (slot: Repeated) {
-    needs1()
-    needs2()
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs1_call = find_named_call_expr(&db, caller, "needs1");
-    let needs2_call = find_named_call_expr(&db, caller, "needs2");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, needs1_call);
-    assert_single_type_effect_arg(&typed_body, needs2_call);
-}
-
-#[test]
-fn function_type_effect_params_can_specialize_distinct_hidden_layout_params_once() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "function_type_effect_params_can_specialize_distinct_hidden_layout_params_once.fe",
-        ),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-fn needs() uses (slot: Repeated<1>) {}
-
-fn caller() uses (slot: Mixed) {
-    needs()
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_type_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
-fn function_trait_effect_params_forward_repeated_layout_hole_aliases() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("function_trait_effect_params_forward_repeated_layout_hole_aliases.fe"),
-        r#"
-trait Cap<T> {}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-fn needs() uses (cap: Cap<Repeated<1>>) {}
-
-fn caller() uses (cap: Cap<Repeated>) {
-    needs()
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
-fn conflicting_function_trait_effect_forwarding_does_not_accept_both_calls() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "conflicting_function_trait_effect_forwarding_does_not_accept_both_calls.fe",
-        ),
-        r#"
-trait Cap<T> {}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-fn needs1() uses (cap: Cap<Repeated<1>>) {}
-fn needs2() uses (cap: Cap<Repeated<2>>) {}
-
-fn caller() uses (cap: Cap<Repeated>) {
-    needs1()
-    needs2()
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-    assert!(
-        diags
-            .iter()
-            .any(|diag| diag.message.contains("missing effect")),
-        "expected missing effect diagnostic, got diagnostics: {diags:#?}"
-    );
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs1_call = find_named_call_expr(&db, caller, "needs1");
-    let needs2_call = find_named_call_expr(&db, caller, "needs2");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert!(
-        typed_body.call_effect_args(needs1_call).is_none()
-            || typed_body.call_effect_args(needs2_call).is_none(),
-        "the same forwarded trait effect must not satisfy conflicting specializations",
-    );
-}
-
-#[test]
-fn repeated_function_trait_effect_forwarding_reuses_the_same_specialization() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "repeated_function_trait_effect_forwarding_reuses_the_same_specialization.fe",
-        ),
-        r#"
-trait Cap<T> {}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-fn needs1() uses (cap: Cap<Repeated<1>>) {}
-fn needs2() uses (cap: Cap<Repeated<1>>) {}
-
-fn caller() uses (cap: Cap<Repeated>) {
-    needs1()
-    needs2()
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let needs1_call = find_named_call_expr(&db, caller, "needs1");
-    let needs2_call = find_named_call_expr(&db, caller, "needs2");
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, needs1_call);
-    assert_single_trait_effect_arg(&typed_body, needs2_call);
-}
-
-#[test]
-fn function_trait_effect_params_can_specialize_distinct_hidden_layout_params_once() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "function_trait_effect_params_can_specialize_distinct_hidden_layout_params_once.fe",
-        ),
-        r#"
-trait Cap<T> {}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-fn needs() uses (cap: Cap<Repeated<1>>) {}
-
-fn caller() uses (cap: Cap<Mixed>) {
-    needs()
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_call_expr(&db, caller);
-    let typed_body = check_func_body(&db, caller).1.clone();
-    assert_single_trait_effect_arg(&typed_body, call_expr);
-}
-
-#[test]
-fn contract_named_type_effects_forward_repeated_layout_hole_aliases() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("contract_named_type_effects_forward_repeated_layout_hole_aliases.fe"),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-fn needs() uses (slot: Repeated<1>) {}
-
-msg Msg {
-    #[selector = 1]
-    Ping,
-}
-
-contract C uses (slot: Repeated) {
-    recv Msg {
-        Ping uses (slot) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let contract = find_contract(&db, top_mod, "C");
-    let (diags, typed_body) = check_contract_recv_arm_body(&db, contract, 0, 0);
-    assert!(
-        diags.is_empty(),
-        "{}",
-        fe_hir::analysis::diagnostics::format_diags(&db, diags.iter())
-    );
-    let call_expr = find_call_expr_in_typed_body(&db, typed_body);
-    assert_single_type_effect_arg(typed_body, call_expr);
-}
-
-#[test]
-fn contract_named_type_effects_do_not_overmatch_rigid_hidden_layout_params() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "contract_named_type_effects_do_not_overmatch_rigid_hidden_layout_params.fe",
-        ),
-        r#"
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-type Mixed<const A: u256 = _, const B: u256 = _> = (Leaf<A>, Leaf<B>)
-
-fn needs() uses (slot: Repeated<1>) {}
-
-msg Msg {
-    #[selector = 1]
-    Ping,
-}
-
-contract C uses (slot: Mixed) {
-    recv Msg {
-        Ping uses (slot) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let contract = find_contract(&db, top_mod, "C");
-    let (diags, typed_body) = check_contract_recv_arm_body(&db, contract, 0, 0);
-    let complete_diags = diags
-        .iter()
-        .map(|diag| diag.to_complete(&db))
-        .collect::<Vec<_>>();
-    assert!(
-        complete_diags
-            .iter()
-            .any(|diag| diag.message.contains("missing effect")),
-        "expected missing effect diagnostic, got diagnostics: {complete_diags:#?}"
-    );
-
-    let call_expr = find_call_expr_in_typed_body(&db, typed_body);
-    assert!(
-        typed_body.call_effect_args(call_expr).is_none(),
-        "contract-named forwarding witnesses must keep hidden params rigid"
-    );
-}
-
-#[test]
-fn contract_named_trait_effects_forward_repeated_layout_hole_aliases() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("contract_named_trait_effects_forward_repeated_layout_hole_aliases.fe"),
-        r#"
-use std::evm::Evm
-
-trait Cap<T> {}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-impl<const ROOT: u256> Cap<Repeated<ROOT>> for Evm {}
-
-fn needs() uses (cap: Cap<Repeated<1>>) {}
-
-msg Msg {
-    #[selector = 1]
-    Ping,
-}
-
-contract C uses (cap: Cap<Repeated>) {
-    recv Msg {
-        Ping uses (cap) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let contract = find_contract(&db, top_mod, "C");
-    let (diags, typed_body) = check_contract_recv_arm_body(&db, contract, 0, 0);
-    assert!(
-        diags.is_empty(),
-        "{}",
-        fe_hir::analysis::diagnostics::format_diags(&db, diags.iter())
-    );
-    let call_expr = find_call_expr_in_typed_body(&db, typed_body);
-    assert_single_trait_effect_arg(typed_body, call_expr);
-}
-
-#[test]
-fn contract_named_trait_effects_specialize_matching_known_root_provider() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "contract_named_trait_effects_specialize_matching_known_root_provider.fe",
-        ),
-        r#"
-use std::evm::Evm
-
-trait Cap<T> {}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-impl Cap<Repeated<2>> for Evm {}
-
-fn needs() uses (cap: Cap<Repeated<2>>) {}
-
-msg Msg {
-    #[selector = 1]
-    Ping,
-}
-
-contract C uses (cap: Cap<Repeated>) {
-    recv Msg {
-        Ping uses (cap) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let contract = find_contract(&db, top_mod, "C");
-    let (diags, typed_body) = check_contract_recv_arm_body(&db, contract, 0, 0);
-    assert!(
-        diags.is_empty(),
-        "{}",
-        fe_hir::analysis::diagnostics::format_diags(&db, diags.iter())
-    );
-    let call_expr = find_call_expr_in_typed_body(&db, typed_body);
-    assert_single_trait_effect_arg(typed_body, call_expr);
-}
-
-#[test]
-fn contract_named_trait_effects_specialize_to_known_root_provider() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("contract_named_trait_effects_specialize_to_known_root_provider.fe"),
-        r#"
-use std::evm::Evm
-
-trait Cap<T> {}
-
-struct Leaf<const ROOT: u256> {}
-type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
-
-impl Cap<Repeated<2>> for Evm {}
-
-fn needs() uses (cap: Cap<Repeated<1>>) {}
-
-msg Msg {
-    #[selector = 1]
-    Ping,
-}
-
-contract C uses (cap: Cap<Repeated>) {
-    recv Msg {
-        Ping uses (cap) {
-            needs()
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let contract = find_contract(&db, top_mod, "C");
-    let (diags, typed_body) = check_contract_recv_arm_body(&db, contract, 0, 0);
-    assert!(
-        !diags.is_empty(),
-        "specific root-provider impl should not satisfy a different repeated key"
-    );
-    let call_expr = find_call_expr_in_typed_body(&db, typed_body);
-    assert!(
-        typed_body.call_effect_args(call_expr).is_none(),
-        "contract-root seeding should specialize the trait witness to the known provider"
-    );
-}
-
-#[test]
-fn storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("storage_map_effect_forwarding_keeps_concrete_hidden_layout_args.fe"),
-        r#"
-use std::evm::{RawStorage, StorageMap}
-
-fn needs(_ addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
-{
-    balances.get(key: addr)
-}
-
-fn caller()
-    uses (storage: mut RawStorage)
-{
-    let mut balances = StorageMap<u256, u256, 0>::new()
-    with (balances) {
-        let _ = needs(1)
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let call_expr = find_named_call_expr(&db, caller, "needs");
-    assert_callable_generic_arg(&db, caller, call_expr, 0, "0");
-    assert_callable_provider_arg(&db, caller, call_expr, "StorageMap<u256, u256, 0>");
-}
-
-#[test]
-fn nested_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "nested_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args.fe",
-        ),
-        r#"
-use std::evm::{RawStorage, StorageMap}
-
-fn needs(_ addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
-{
-    balances.get(key: addr)
-}
-
-fn nested(_ addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
-{
-    needs(addr)
-}
-
-fn caller()
-    uses (storage: mut RawStorage)
-{
-    let mut balances = StorageMap<u256, u256, 0>::new()
-    with (balances) {
-        let _ = nested(1)
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let caller = find_func(&db, top_mod, "caller");
-    let nested_call = find_named_call_expr(&db, caller, "nested");
-    assert_callable_generic_arg(&db, caller, nested_call, 0, "0");
-    assert_callable_provider_arg(&db, caller, nested_call, "StorageMap<u256, u256, 0>");
-
-    let nested = find_func(&db, top_mod, "nested");
-    let root = get_or_build_semantic_instance(
-        &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(caller))
-            .expect("caller should have a root semantic instance"),
-    );
-    let nested_instance = root
-        .callees(&db)
-        .iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
-        .find(|callee| callee.key(&db).owner(&db) == BodyOwner::Func(nested))
-        .expect("missing instantiated nested callee");
-    assert_eq!(
-        nested_instance.key(&db).subst(&db).generic_args(&db)[0]
-            .pretty_print(&db)
-            .to_string(),
-        "0"
-    );
-    let env = instantiated_effect_env(&db, nested_instance).expect("missing nested effect env");
-    assert_eq!(
-        env.providers(&db)[0].provider_ty.pretty_print(&db).clone(),
-        "StorageMap<u256, u256, 0>"
-    );
-
-    let needs = find_func(&db, top_mod, "needs");
-    let needs_instance = nested_instance
-        .callees(&db)
-        .iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
-        .find(|callee| callee.key(&db).owner(&db) == BodyOwner::Func(needs))
-        .expect("missing instantiated needs callee");
-    assert_eq!(
-        needs_instance.key(&db).subst(&db).generic_args(&db)[0]
-            .pretty_print(&db)
-            .to_string(),
-        "0"
-    );
-    for instance in [root, nested_instance, needs_instance] {
-        layout_evidence_body(&db, instance).unwrap_or_else(|error| {
-            panic!(
-                "effect forwarding must layoutize {:?}: {error:?}",
-                instance.key(&db).owner(&db)
-            )
-        });
-    }
-}
-
-#[test]
-fn projected_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from(
-            "projected_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args.fe",
-        ),
-        r#"
-use std::evm::{RawStorage, StorageMap}
-
-fn needs(_ addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
-{
-    balances.get(key: addr)
-}
-
-fn nested(_ addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
-{
-    needs(addr)
-}
-
-struct Store {
-    balances: StorageMap<u256, u256>,
-}
-
-msg Msg {
-    #[selector = 1]
-    Get { addr: u256 } -> u256,
-}
-
-pub contract Test {
-    store: Store,
-
-    recv Msg {
-        Get { addr } -> u256 uses (store) {
-            with (store.balances) {
-                nested(addr)
-            }
-        }
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let contract = find_contract(&db, top_mod, "Test");
-    let nested = find_func(&db, top_mod, "nested");
-    let recv = get_or_build_semantic_instance(
-        &db,
-        fe_hir::analysis::semantic::identity_semantic_instance_key(
-            &db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: 0,
-                arm_idx: 0,
-            },
-        ),
-    );
-    let nested_instance = recv
-        .callees(&db)
-        .iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
-        .find(|callee| callee.key(&db).owner(&db) == BodyOwner::Func(nested))
-        .expect("missing instantiated nested callee");
-    assert_eq!(
-        nested_instance.key(&db).subst(&db).generic_args(&db)[0]
-            .pretty_print(&db)
-            .to_string(),
-        "0"
-    );
-
-    let needs = find_func(&db, top_mod, "needs");
-    let needs_instance = nested_instance
-        .callees(&db)
-        .iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
-        .find(|callee| callee.key(&db).owner(&db) == BodyOwner::Func(needs))
-        .expect("missing instantiated needs callee");
-    assert_eq!(
-        needs_instance.key(&db).subst(&db).generic_args(&db)[0]
-            .pretty_print(&db)
-            .to_string(),
-        "0"
-    );
-    for instance in [recv, nested_instance, needs_instance] {
-        layout_evidence_body(&db, instance).unwrap_or_else(|error| {
-            panic!(
-                "projected effect forwarding must layoutize {:?}: {error:?}",
-                instance.key(&db).owner(&db)
-            )
-        });
-    }
 }
 
 #[test]
@@ -4862,19 +2742,26 @@ fn impl_trait_method_typed_body_instantiation_substitutes_self() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let Selection::Unique(resolved) = resolve_trait_method_instance(
+    let resolved = prove(
         &db,
-        TraitSolveCx::new(&db, impl_trait.scope()),
+        TraitSolveCx::new(&db, impl_trait.scope())
+            .with_assumptions(param_env(&db, ItemKind::ImplTrait(impl_trait))),
         inst,
-        method.name(&db).to_opt().expect("missing method name"),
-    ) else {
-        panic!("missing resolved impl method");
-    };
+    )
+    .and_then(|evidence| evidence.answering(&db, inst))
+    .and_then(|selected| {
+        selected.method(
+            &db,
+            method.name(&db).to_opt().expect("missing method name"),
+            None,
+        )
+    })
+    .expect("missing resolved impl method");
     assert_eq!(resolved.body(), Some(method));
 
     let instantiated = instantiate_typed_body(
         &db,
-        typed_body_template(&db, BodyOwner::Func(method)),
+        typed_body_template(&db, BodyOwner::Func(method, None)),
         GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
     );
     let self_binding = instantiated.param_binding(0).expect("missing self binding");
@@ -4904,18 +2791,25 @@ fn impl_trait_method_self_paths_preserve_binding_ty_after_instantiation() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let Selection::Unique(resolved) = resolve_trait_method_instance(
+    let resolved = prove(
         &db,
-        TraitSolveCx::new(&db, impl_trait.scope()),
+        TraitSolveCx::new(&db, impl_trait.scope())
+            .with_assumptions(param_env(&db, ItemKind::ImplTrait(impl_trait))),
         inst,
-        method.name(&db).to_opt().expect("missing method name"),
-    ) else {
-        panic!("missing resolved impl method");
-    };
+    )
+    .and_then(|evidence| evidence.answering(&db, inst))
+    .and_then(|selected| {
+        selected.method(
+            &db,
+            method.name(&db).to_opt().expect("missing method name"),
+            None,
+        )
+    })
+    .expect("missing resolved impl method");
 
     let instantiated = instantiate_typed_body(
         &db,
-        typed_body_template(&db, BodyOwner::Func(method)),
+        typed_body_template(&db, BodyOwner::Func(method, None)),
         GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
     );
     let body = instantiated.body().expect("missing typed body");
@@ -4950,9 +2844,12 @@ fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
     db.assert_no_diags(top_mod);
 
     let use_ctx = find_func(&db, top_mod, "use_ctx");
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
-        fe_hir::analysis::semantic::identity_semantic_instance_key(&db, BodyOwner::Func(use_ctx)),
+        fe_hir::analysis::semantic::identity_semantic_instance_key(
+            &db,
+            BodyOwner::Func(use_ctx, None),
+        ),
     );
     let body = instance.body(&db);
     let args = body
@@ -4965,7 +2862,9 @@ fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
                 ..
             } => Some(args),
             fe_hir::analysis::semantic::SStmtKind::Assign { .. }
-            | fe_hir::analysis::semantic::SStmtKind::Store { .. } => None,
+            | fe_hir::analysis::semantic::SStmtKind::Store { .. }
+            | fe_hir::analysis::semantic::SStmtKind::End { .. }
+            | fe_hir::analysis::semantic::SStmtKind::Drop { .. } => None,
         })
         .unwrap_or_else(|| panic!("{body:#?}"));
     assert_eq!(args.len(), 1);
@@ -5033,7 +2932,7 @@ fn zero_effect_arg_method_calls_finalize_under_forwarded_witnesses() {
         .expect("missing impl sum method");
 
     let contract = find_contract(&db, top_mod, "ByRefTraitProviderStorageBug");
-    let recv = get_or_build_semantic_instance(
+    let recv = SemanticInstance::new(
         &db,
         fe_hir::analysis::semantic::identity_semantic_instance_key(
             &db,
@@ -5047,11 +2946,11 @@ fn zero_effect_arg_method_calls_finalize_under_forwarded_witnesses() {
     let use_ctx = recv
         .callees(&db)
         .iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .map(|callee| SemanticInstance::new(&db, callee.key))
         .find(|callee| {
             matches!(
                 callee.key(&db).owner(&db),
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
@@ -5062,11 +2961,11 @@ fn zero_effect_arg_method_calls_finalize_under_forwarded_witnesses() {
     let sum = use_ctx
         .callees(&db)
         .iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .map(|callee| SemanticInstance::new(&db, callee.key))
         .find(|callee| {
             matches!(
                 callee.key(&db).owner(&db),
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
@@ -5074,7 +2973,7 @@ fn zero_effect_arg_method_calls_finalize_under_forwarded_witnesses() {
             )
         })
         .expect("missing semantic sum callee");
-    let BodyOwner::Func(sum_owner) = sum.key(&db).owner(&db) else {
+    let BodyOwner::Func(sum_owner, _) = sum.key(&db).owner(&db) else {
         panic!("sum callee should be a function");
     };
     assert_eq!(
@@ -5109,22 +3008,30 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let Selection::Unique(resolved) = resolve_trait_method_instance(
+    let resolved = prove(
         &db,
-        TraitSolveCx::new(&db, impl_trait.scope()),
+        TraitSolveCx::new(&db, impl_trait.scope())
+            .with_assumptions(param_env(&db, ItemKind::ImplTrait(impl_trait))),
         inst,
-        method.name(&db).to_opt().expect("missing method name"),
-    ) else {
-        panic!("missing resolved impl method");
-    };
-    let instance = get_or_build_semantic_instance(
+    )
+    .and_then(|evidence| evidence.answering(&db, inst))
+    .and_then(|selected| {
+        selected.method(
+            &db,
+            method.name(&db).to_opt().expect("missing method name"),
+            None,
+        )
+    })
+    .expect("missing resolved impl method");
+    let instance = SemanticInstance::new(
         &db,
         fe_hir::analysis::semantic::SemanticInstanceKey::new(
             &db,
-            BodyOwner::Func(method),
+            BodyOwner::Func(method, None),
             GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
             fe_hir::analysis::semantic::EffectProviderSubst::empty(&db),
             fe_hir::analysis::semantic::ImplEnv::empty(&db, impl_trait.scope()),
+            EvidenceList::none(&db),
         ),
     );
     let body = instance.body(&db);
@@ -5140,14 +3047,16 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
                     ..
                 } => local.value != fe_hir::analysis::semantic::SLocalId::from_u32(0),
                 fe_hir::analysis::semantic::SStmtKind::Assign { .. }
-                | fe_hir::analysis::semantic::SStmtKind::Store { .. } => true,
+                | fe_hir::analysis::semantic::SStmtKind::Store { .. }
+                | fe_hir::analysis::semantic::SStmtKind::End { .. }
+                | fe_hir::analysis::semantic::SStmtKind::Drop { .. } => true,
             }),
         "{body:#?}"
     );
 }
 
 #[test]
-fn effect_handle_values_preserve_direct_carrier_roles_without_constructor_calls() {
+fn pointer_values_are_direct_values() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("effect_handle_field_deref.fe"),
@@ -5157,7 +3066,7 @@ fn effect_handle_values_preserve_direct_carrier_roles_without_constructor_calls(
     db.assert_no_diags(top_mod);
 
     let contract = find_contract(&db, top_mod, "EffectHandleFieldDeref");
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
         fe_hir::analysis::semantic::identity_semantic_instance_key(
             &db,
@@ -5169,14 +3078,20 @@ fn effect_handle_values_preserve_direct_carrier_roles_without_constructor_calls(
         ),
     );
     let body = instance.body(&db);
-    let fe_hir::analysis::semantic::SStmtKind::Assign {
-        expr: fe_hir::analysis::semantic::SExpr::Call { callee, .. },
-        ..
-    } = &body.blocks[0].stmts[0].kind
-    else {
-        panic!("{body:#?}");
-    };
-    let callee = get_or_build_semantic_instance(&db, callee.key);
+    // The arm's first call is `extract_ptr(holder)`.
+    let callee = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            fe_hir::analysis::semantic::SStmtKind::Assign {
+                expr: fe_hir::analysis::semantic::SExpr::Call { callee, .. },
+                ..
+            } => Some(callee.key),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{body:#?}"));
+    let callee = SemanticInstance::new(&db, callee);
     let callee_body = callee.body(&db);
     assert!(
         callee_body
@@ -5190,7 +3105,7 @@ fn effect_handle_values_preserve_direct_carrier_roles_without_constructor_calls(
                     ..
                 }
             )),
-        "ordinary effect-handle values must not call a raw constructor: {callee_body:#?}"
+        "returning a pointer field calls nothing: {callee_body:#?}"
     );
     let carrier_local = callee_body
         .blocks
@@ -5201,13 +3116,15 @@ fn effect_handle_values_preserve_direct_carrier_roles_without_constructor_calls(
             | fe_hir::analysis::semantic::STerminatorKind::Branch { .. }
             | fe_hir::analysis::semantic::STerminatorKind::MatchEnum { .. }
             | fe_hir::analysis::semantic::STerminatorKind::Assert { .. }
-            | fe_hir::analysis::semantic::STerminatorKind::Return(None) => None,
+            | fe_hir::analysis::semantic::STerminatorKind::Return(None)
+            | fe_hir::analysis::semantic::STerminatorKind::Yield { .. } => None,
         })
-        .unwrap_or_else(|| panic!("expected returned handle value: {callee_body:#?}"));
+        .unwrap_or_else(|| panic!("expected returned pointer value: {callee_body:#?}"));
+    // A pointer is data, not a carrier of the place it addresses.
     assert!(
         matches!(
             callee_body.locals[carrier_local.index()].role,
-            fe_hir::analysis::semantic::SemanticLocalRole::DirectCarrier { .. }
+            fe_hir::analysis::semantic::SemanticLocalRole::DirectValue { .. }
         ),
         "{callee_body:#?}"
     );
@@ -5224,7 +3141,7 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
     db.assert_no_diags(top_mod);
 
     let contract = find_contract(&db, top_mod, "EffectHandleFieldDeref");
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
         fe_hir::analysis::semantic::identity_semantic_instance_key(
             &db,
@@ -5247,9 +3164,9 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
             else {
                 return None;
             };
-            let instance = get_or_build_semantic_instance(&db, callee.key);
+            let instance = SemanticInstance::new(&db, callee.key);
             match instance.key(&db).owner(&db) {
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
@@ -5257,11 +3174,12 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
                 {
                     Some(instance)
                 }
-                BodyOwner::Func(_)
+                BodyOwner::Func(_, _)
                 | BodyOwner::Const(_)
                 | BodyOwner::AnonConstBody { .. }
                 | BodyOwner::ContractInit { .. }
-                | BodyOwner::ContractRecvArm { .. } => None,
+                | BodyOwner::ContractRecvArm { .. }
+                | BodyOwner::Closure { .. } => None,
             }
         })
         .unwrap_or_else(|| panic!("expected nested write_cell call in helper body: {body:#?}"));
@@ -5285,13 +3203,14 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
             "write_cell effect binding should be place-bound through its instantiated provider:\n{callee_body:#?}"
         );
     };
+    // The provider is the dereferenced storage place itself.
     assert_eq!(
         local_provider.provider_ty.pretty_print(&db).to_string(),
-        "StorPtr<Cell>"
+        "Cell"
     );
     assert_eq!(
-        local_provider.semantics.kind,
-        fe_hir::analysis::ty::ProviderKind::Handle
+        local_provider.semantics.address_space,
+        Some(fe_hir::analysis::ty::AddressSpace::Storage)
     );
     assert_eq!(local_provider.semantics.target_ty, Some(*value_ty));
     assert_eq!(value_ty.pretty_print(&db).to_string(), "Cell");
@@ -5311,14 +3230,11 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
         .iter()
         .find(|provider| provider.provider_ty == local_provider.provider_ty)
         .expect("instantiated provider binding should exist");
-    assert_eq!(
-        provider.provider_ty.pretty_print(&db).to_string(),
-        "StorPtr<Cell>"
-    );
+    assert_eq!(provider.provider_ty.pretty_print(&db).to_string(), "Cell");
 }
 
 #[test]
-fn root_effect_bindings_specialize_rawmem_to_evm() {
+fn root_effect_bindings_specialize_raw_storage_to_evm() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("explicit_raw_boundaries.fe"),
@@ -5327,10 +3243,10 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
-    let entry = find_func(&db, top_mod, "explicit_raw_boundaries");
-    let root = get_or_build_semantic_instance(
+    let entry = find_func(&db, top_mod, "main");
+    let root = SemanticInstance::new(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(entry))
+        root_semantic_instance_key(&db, BodyOwner::Func(entry, None))
             .expect("root semantic instance should exist"),
     );
     let root_effect_binding = root
@@ -5343,10 +3259,10 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
                     binding_name,
                     ..
                 },
-            ) if binding_name.data(&db) == "mem" => Some(binding),
+            ) if binding_name.data(&db) == "storage" => Some(binding),
             Some(_) | None => None,
         })
-        .expect("expected root mem effect binding");
+        .expect("expected root storage effect binding");
     assert_eq!(
         root.binding_ty(&db, root_effect_binding)
             .pretty_print(&db)
@@ -5358,11 +3274,11 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
         .body(&db)
         .callees()
         .into_iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .map(|callee| SemanticInstance::new(&db, callee.key))
         .find(|callee| {
             matches!(
                 callee.key(&db).owner(&db),
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
@@ -5380,10 +3296,10 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
                     binding_name,
                     ..
                 },
-            ) if binding_name.data(&db) == "mem" => Some(binding),
+            ) if binding_name.data(&db) == "storage" => Some(binding),
             Some(_) | None => None,
         })
-        .expect("expected specialized raw_store mem effect binding");
+        .expect("expected specialized raw_store storage effect binding");
     assert_eq!(
         raw_store
             .binding_ty(&db, raw_store_effect_binding)
@@ -5392,7 +3308,7 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
         "Evm"
     );
 
-    let mstore = raw_store
+    let sstore = raw_store
         .body(&db)
         .blocks
         .iter()
@@ -5405,22 +3321,22 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
             else {
                 return None;
             };
-            let instance = get_or_build_semantic_instance(&db, callee.key);
+            let instance = SemanticInstance::new(&db, callee.key);
             matches!(
                 instance.key(&db).owner(&db),
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
-                        .is_some_and(|name| name.data(&db) == "mstore")
+                        .is_some_and(|name| name.data(&db) == "sstore")
                         && func.body(&db).is_some()
             )
             .then_some(instance)
         })
-        .expect("expected concrete mstore impl call");
+        .expect("expected concrete sstore impl call");
     assert!(matches!(
-        mstore.key(&db).owner(&db),
-        BodyOwner::Func(func) if func.body(&db).is_some()
+        sstore.key(&db).owner(&db),
+        BodyOwner::Func(func, _) if func.body(&db).is_some()
     ));
 }
 
@@ -5435,19 +3351,19 @@ fn root_trait_effect_bindings_specialize_call_to_concrete_evm() {
     db.assert_no_diags(top_mod);
 
     let entry = find_func(&db, top_mod, "test_address_call_method");
-    let root = get_or_build_semantic_instance(
+    let root = SemanticInstance::new(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(entry))
+        root_semantic_instance_key(&db, BodyOwner::Func(entry, None))
             .expect("root semantic instance should exist"),
     );
     let address_call = root
         .callees(&db)
         .iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .map(|callee| SemanticInstance::new(&db, callee.key))
         .find(|callee| {
             matches!(
                 callee.key(&db).owner(&db),
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
@@ -5496,20 +3412,20 @@ fn with_bound_plain_effect_params_specialize_to_memory_capabilities() {
     db.assert_no_diags(top_mod);
 
     let caller = find_func(&db, top_mod, "test_non_evm_effect_param");
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(caller))
+        root_semantic_instance_key(&db, BodyOwner::Func(caller, None))
             .expect("caller root instance should exist"),
     );
     let callee = instance
         .body(&db)
         .callees()
         .into_iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .map(|callee| SemanticInstance::new(&db, callee.key))
         .find(|callee| {
             matches!(
                 callee.key(&db).owner(&db),
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
@@ -5548,175 +3464,6 @@ fn with_bound_plain_effect_params_specialize_to_memory_capabilities() {
 }
 
 #[test]
-fn root_effect_handle_bindings_specialize_provider_targets_to_underlying_values() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("explicit_raw_boundaries.fe"),
-        include_str!("../../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let entry = find_func(&db, top_mod, "explicit_raw_boundaries");
-    let root = get_or_build_semantic_instance(
-        &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(entry))
-            .expect("root semantic instance should exist"),
-    );
-    let raw_store = root
-        .body(&db)
-        .callees()
-        .into_iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
-        .find(|callee| {
-            matches!(
-                callee.key(&db).owner(&db),
-                BodyOwner::Func(func)
-                    if func
-                        .name(&db)
-                        .to_opt()
-                        .is_some_and(|name| name.data(&db) == "raw_store")
-            )
-        })
-        .expect("expected specialized raw_store callee");
-    let data_binding = raw_store
-        .body(&db)
-        .locals
-        .iter()
-        .find_map(|local| match local.source {
-            Some(
-                binding @ fe_hir::analysis::ty::ty_check::LocalBinding::EffectParam {
-                    binding_name,
-                    ..
-                },
-            ) if binding_name.data(&db) == "data" => Some(binding),
-            Some(_) | None => None,
-        })
-        .expect("expected specialized raw_store data effect binding");
-    let provider = resolved_provider_binding_for_instance_effect(&db, raw_store, data_binding)
-        .expect("specialized data effect binding should resolve a provider");
-    assert_eq!(
-        provider.semantics.kind,
-        fe_hir::analysis::ty::ProviderKind::Handle
-    );
-    assert_eq!(
-        provider
-            .semantics
-            .target_ty
-            .expect("specialized provider should keep its underlying target")
-            .pretty_print(&db)
-            .to_string(),
-        "Data"
-    );
-}
-
-fn needs_callee_keys<'db>(
-    db: &'db HirAnalysisTestDb,
-    top_mod: TopLevelMod<'db>,
-) -> Vec<SemanticInstanceKey<'db>> {
-    let caller = find_func(db, top_mod, "caller");
-    let instance = get_or_build_semantic_instance(
-        db,
-        root_semantic_instance_key(db, BodyOwner::Func(caller))
-            .expect("caller root instance should exist"),
-    );
-    instance
-        .body(db)
-        .callees()
-        .into_iter()
-        .filter(|callee| {
-            matches!(
-                callee.key.owner(db),
-                BodyOwner::Func(func)
-                    if func
-                        .name(db)
-                        .to_opt()
-                        .is_some_and(|name| name.data(db) == "needs")
-            )
-        })
-        .map(|callee| callee.key)
-        .collect()
-}
-
-#[test]
-fn free_function_effect_calls_share_instances_for_equal_provider_bindings() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("free_function_effect_calls_share_equal_provider_bindings.fe"),
-        r#"
-use std::evm::{RawStorage, StorageMap}
-
-fn needs(_ addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
-{
-    balances.get(key: addr)
-}
-
-fn caller()
-    uses (storage: mut RawStorage)
-{
-    let mut left = StorageMap<u256, u256, 0>::new()
-    let mut right = StorageMap<u256, u256, 0>::new()
-    with (left) {
-        let _ = needs(1)
-    }
-    with (right) {
-        let _ = needs(2)
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let callees = needs_callee_keys(&db, top_mod);
-    assert_eq!(callees.len(), 2);
-    assert_eq!(
-        callees[0], callees[1],
-        "call sites whose providers bind identically should share one callee instance",
-    );
-}
-
-#[test]
-fn free_function_effect_calls_monomorphize_distinct_provider_bindings() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("free_function_effect_calls_monomorphize_distinct_provider_bindings.fe"),
-        r#"
-use std::evm::{RawStorage, StorageMap}
-
-fn needs(_ addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
-{
-    balances.get(key: addr)
-}
-
-fn caller()
-    uses (storage: mut RawStorage)
-{
-    let mut left = StorageMap<u256, u256, 0>::new()
-    let mut right = StorageMap<u256, u256, 1>::new()
-    with (left) {
-        let _ = needs(1)
-    }
-    with (right) {
-        let _ = needs(2)
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let callees = needs_callee_keys(&db, top_mod);
-    assert_eq!(callees.len(), 2);
-    assert_ne!(
-        callees[0], callees[1],
-        "different free-function effect providers should produce distinct callee instances",
-    );
-}
-
-#[test]
 fn free_function_effect_bindings_keep_explicit_memory_address_space() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -5727,20 +3474,20 @@ fn free_function_effect_bindings_keep_explicit_memory_address_space() {
     db.assert_no_diags(top_mod);
 
     let caller = find_func(&db, top_mod, "test_mut_array_effect_param");
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(caller))
+        root_semantic_instance_key(&db, BodyOwner::Func(caller, None))
             .expect("caller root instance should exist"),
     );
     let write_effects_and_sum = instance
         .body(&db)
         .callees()
         .into_iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .map(|callee| SemanticInstance::new(&db, callee.key))
         .find(|callee| {
             matches!(
                 callee.key(&db).owner(&db),
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
@@ -5752,11 +3499,11 @@ fn free_function_effect_bindings_keep_explicit_memory_address_space() {
         .body(&db)
         .callees()
         .into_iter()
-        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .map(|callee| SemanticInstance::new(&db, callee.key))
         .find(|callee| {
             matches!(
                 callee.key(&db).owner(&db),
-                BodyOwner::Func(func)
+                BodyOwner::Func(func, _)
                     if func
                         .name(&db)
                         .to_opt()
@@ -5778,14 +3525,14 @@ fn free_function_effect_bindings_keep_explicit_memory_address_space() {
         .expect("write_effect resolved provider should exist");
     assert_eq!(
         provider.semantics.address_space,
-        Some(fe_hir::analysis::ty::ProviderAddressSpace::Memory),
+        Some(fe_hir::analysis::ty::AddressSpace::Memory),
         "free-function effect providers should keep explicit memory address spaces: {:#?}",
         env.providers(&db),
     );
 }
 
 #[test]
-fn local_effect_handle_calls_preserve_concrete_provider_spaces() {
+fn pointer_derefs_provide_their_pointer_spaces() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("local_effect_handle_provider_spaces.fe"),
@@ -5807,13 +3554,17 @@ fn bump_stor() uses (foo: mut Foo) {
 
 fn test_spaces() uses (st: mut RawStorage) {
     let mp = ptr::alloc<Foo>()
-    with (mp) {
-        bump_mem()
+    unsafe {
+        with (mut *mp) {
+            bump_mem()
+        }
     }
 
-    let sp: StorPtr<Foo> = st.stor_ptr(0)
-    with (sp) {
-        bump_stor()
+    let sp = 0 as u256 as StorPtr<Foo>
+    unsafe {
+        with (mut *sp) {
+            bump_stor()
+        }
     }
 }
 "#,
@@ -5830,30 +3581,25 @@ fn test_spaces() uses (st: mut RawStorage) {
         .call_effect_args(mem_call)
         .expect("bump_mem should have a resolved effect arg");
     assert_eq!(mem_args.len(), 1);
-    assert_eq!(mem_args[0].pass_mode, EffectPassMode::ByValue);
-    assert_eq!(mem_args[0].layout_view, EffectArgLayoutView::ProviderTarget);
+    assert_eq!(mem_args[0].pass_mode, EffectPassMode::ByPlace);
     assert_eq!(
         mem_args[0].provider,
-        Some(fe_hir::analysis::ty::ProviderAddressSpace::Memory)
+        Some(fe_hir::analysis::ty::AddressSpace::Memory)
     );
 
     let stor_args = typed_body
         .call_effect_args(stor_call)
         .expect("bump_stor should have a resolved effect arg");
     assert_eq!(stor_args.len(), 1);
-    assert_eq!(stor_args[0].pass_mode, EffectPassMode::ByValue);
-    assert_eq!(
-        stor_args[0].layout_view,
-        EffectArgLayoutView::ProviderTarget
-    );
+    assert_eq!(stor_args[0].pass_mode, EffectPassMode::ByPlace);
     assert_eq!(
         stor_args[0].provider,
-        Some(fe_hir::analysis::ty::ProviderAddressSpace::Storage)
+        Some(fe_hir::analysis::ty::AddressSpace::Storage)
     );
 }
 
 #[test]
-fn projected_handle_places_use_projected_provider_spaces() {
+fn derefs_of_projected_pointers_provide_the_pointer_space() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("projected_handle_provider_spaces.fe"),
@@ -5873,9 +3619,11 @@ fn write_cell(_ value: u256) uses (cell: mut Cell) {
 }
 
 fn test_projected(slot: u256, value: u256) uses (evm: mut Evm) {
-    let holder = Holder { ptr: evm.stor_ptr(slot) }
-    with (holder.ptr) {
-        write_cell(value)
+    let holder = Holder { ptr: slot as StorPtr<Cell> }
+    unsafe {
+        with (mut *holder.ptr) {
+            write_cell(value)
+        }
     }
 }
 "#,
@@ -5890,55 +3638,10 @@ fn test_projected(slot: u256, value: u256) uses (evm: mut Evm) {
         .call_effect_args(call_expr)
         .expect("write_cell should have a resolved effect arg");
     assert_eq!(effect_args.len(), 1);
-    assert_eq!(effect_args[0].pass_mode, EffectPassMode::ByValue);
-    assert_eq!(
-        effect_args[0].layout_view,
-        EffectArgLayoutView::ProviderTarget
-    );
+    assert_eq!(effect_args[0].pass_mode, EffectPassMode::ByPlace);
     assert_eq!(
         effect_args[0].provider,
-        Some(fe_hir::analysis::ty::ProviderAddressSpace::Storage)
-    );
-}
-
-#[test]
-fn handle_typed_effect_bindings_use_by_value_transport() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("handle_typed_effect_bindings_use_by_value_transport.fe"),
-        include_str!("../../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let func = find_func(&db, top_mod, "explicit_raw_boundaries");
-    let typed_body = check_func_body(&db, func).1.clone();
-    let call_expr = find_named_call_expr(&db, func, "raw_store");
-    let effect_args = typed_body
-        .call_effect_args(call_expr)
-        .expect("raw_store should have resolved effect args");
-    assert_eq!(effect_args.len(), 2);
-    assert_eq!(effect_args[0].pass_mode, EffectPassMode::ByValue);
-    assert_eq!(effect_args[0].layout_view, EffectArgLayoutView::Direct);
-    assert_eq!(
-        effect_args[0]
-            .instantiated_key_ty
-            .expect("handle effect arg should retain its matched key carrier")
-            .pretty_print(&db)
-            .to_string(),
-        "*<Data>"
-    );
-    assert_eq!(
-        effect_args[0]
-            .provider_target_ty
-            .expect("handle effect arg should lower against its underlying provider target")
-            .pretty_print(&db)
-            .to_string(),
-        "Data"
-    );
-    assert_eq!(
-        effect_args[0].provider,
-        Some(fe_hir::analysis::ty::ProviderAddressSpace::Memory)
+        Some(fe_hir::analysis::ty::AddressSpace::Storage)
     );
 }
 
@@ -5953,7 +3656,7 @@ fn root_semantic_instance_keys_are_closed_under_root_provider_subst() {
     db.assert_no_diags(top_mod);
     for name in ["init", "runtime"] {
         let func = find_func(&db, top_mod, name);
-        let key = root_semantic_instance_key(&db, BodyOwner::Func(func))
+        let key = root_semantic_instance_key(&db, BodyOwner::Func(func, None))
             .unwrap_or_else(|err| panic!("manual root `{name}` should synthesize a closed root semantic instance key: {err:?}"));
         validate_instantiated_effect_env_key(&db, key).unwrap_or_else(|err| {
             panic!(
@@ -5969,9 +3672,10 @@ fn root_semantic_instance_keys_are_closed_under_root_provider_subst() {
     let (top_mod, _) = db.top_mod(test_file);
     db.assert_no_diags(top_mod);
     let test_func = find_func(&db, top_mod, "test_contract_init_fixed_array_arg");
-    let key = root_semantic_instance_key(&db, BodyOwner::Func(test_func)).unwrap_or_else(|err| {
-        panic!("test root should synthesize a closed root semantic instance key: {err:?}")
-    });
+    let key =
+        root_semantic_instance_key(&db, BodyOwner::Func(test_func, None)).unwrap_or_else(|err| {
+            panic!("test root should synthesize a closed root semantic instance key: {err:?}")
+        });
     validate_instantiated_effect_env_key(&db, key).unwrap_or_else(|err| {
         panic!("test root should have a closed effect env under synthesized root subst: {err:?}")
     });

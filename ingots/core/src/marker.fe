@@ -1,4 +1,4 @@
-use super::abi::{Bytes, DynArray, DynString}
+use super::abi::{Bytes, DynString}
 
 // Marker traits for language-level behavior.
 //
@@ -9,12 +9,50 @@ use super::abi::{Bytes, DynArray, DynString}
 
 pub trait Copy {}
 
+/// A `Copy` type a view parameter takes by copy, a *snapshot*: a scalar or a
+/// handle, such as `Address` or a memory buffer's handle, whose copy is all a
+/// callee can observe. Primitives and raw pointers are snapshots without it.
+/// Every other value, `Copy` or not, is viewed in place: the call reads the
+/// caller's place for its duration, and a projection's result over it is the
+/// caller's place.
+pub trait Snapshot: Copy {}
+
+/// A type pinned to a state space: a value of it, and every place in it,
+/// lies in `Space` wherever it is held, so it and any type holding it are
+/// state-only. `Space` is `Storage` or `Transient`, or another pinned
+/// type's, `P::Space`. A state space starts zeroed: a slot no one wrote
+/// reads as zero, so state holds only types whose all-zero representation
+/// is a value, those without `unsafe` fields.
+/// A storage collection is pinned (`StateIndex`), and so is a cell such as
+/// `TSlot`.
+pub trait Pinned {
+    type Space
+}
+
+/// Persistent storage, as the `Space` of a pinned type.
+pub struct Storage {}
+
+/// Transient storage, as the `Space` of a pinned type.
+pub struct Transient {}
+
+/// A type whose all-zero representation is a value, so a stored value is
+/// cleared by zeroing its slots and lanes: scalars, raw pointers and
+/// aggregates of clearable types without `unsafe` fields. A type with
+/// `unsafe` fields is not, since they carry an invariant zero need not
+/// satisfy; nor is a storage collection, since its entries lie outside its
+/// own slots, so nothing holding one can be cleared. The compiler implements
+/// this trait; it cannot be implemented.
+pub trait Clearable {}
+
 // Built-in primitive types are trivially copyable.
 impl Copy for () {}
 impl<const N: usize> Copy for String<N> {}
 impl Copy for Bytes {}
 impl Copy for DynString {}
-impl<T> Copy for DynArray<T> {}
+
+// A memory buffer handle is a snapshot of where its contents lie.
+impl Snapshot for Bytes {}
+impl Snapshot for DynString {}
 impl<T, const N: usize> Copy for [T; N]
     where T: Copy
 {}
@@ -59,4 +97,44 @@ impl<T0, T1, T2, T3, T4> Copy for (T0, T1, T2, T3, T4)
 
 impl<T0, T1, T2, T3, T4, T5> Copy for (T0, T1, T2, T3, T4, T5)
     where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6> Copy for (T0, T1, T2, T3, T4, T5, T6)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7> Copy for (T0, T1, T2, T3, T4, T5, T6, T7)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy, T12: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy, T12: Copy, T13: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy, T12: Copy, T13: Copy, T14: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy, T12: Copy, T13: Copy, T14: Copy, T15: Copy
 {}

@@ -8,7 +8,7 @@ fn test_const_oob_read_reverts() {
 #[test(should_revert)]
 fn test_const_oob_write_reverts() {
     let id = 10
-    let mut arr: [u256; 2] = [10, 20]
+    var arr: [u256; 2] = [10, 20]
     arr[id] = 99
 }
 

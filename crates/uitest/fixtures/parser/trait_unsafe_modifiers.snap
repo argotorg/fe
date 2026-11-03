@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/trait_unsafe_modifiers.fe
+---
+error[1-0001]: duplicate `unsafe` modifier
+  ┌─ trait_unsafe_modifiers.fe:3:12
+  │
+3 │     unsafe unsafe fn dup(self)
+  │            ^^^^^^ unexpected
+
+error[1-0001]: expected `fn` after `unsafe` keyword
+  ┌─ trait_unsafe_modifiers.fe:4:11
+  │
+4 │     unsafe type Assoc
+  │           ^ expected `fn` after `unsafe` keyword
+
+error[1-0001]: expected `fn` after `unsafe` keyword
+  ┌─ trait_unsafe_modifiers.fe:5:11
+  │
+5 │     unsafe const C: u256
+  │           ^ expected `fn` after `unsafe` keyword
+
+error[1-0001]: `pub` modifier is not allowed in this block
+  ┌─ trait_unsafe_modifiers.fe:6:12
+  │
+6 │     unsafe pub fn bar(self)
+  │            ^^^ unexpected

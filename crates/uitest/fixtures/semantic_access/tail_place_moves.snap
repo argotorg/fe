@@ -1,0 +1,54 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/tail_place_moves.fe
+---
+error[16-0002]: move conflict in `fn body_tail`
+   ┌─ tail_place_moves.fe:35:53
+   │
+35 │   fn body_tail(_ a: MemArray<MemBuffer>) -> MemBuffer {
+   │ ╭─────────────────────────────────────────────────────^
+36 │ │     a[0]
+37 │ │ }
+   │ ╰─^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn block_arg`
+   ┌─ tail_place_moves.fe:40:10
+   │
+40 │     keep({ h.buf() })
+   │          ^^^^^^^^^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn if_in_ctor`
+   ┌─ tail_place_moves.fe:44:40
+   │
+44 │     Option::Some(if c { h.buf() } else { h.buf() })
+   │                                        ^^^^^^^^^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn field_init`
+   ┌─ tail_place_moves.fe:48:12
+   │
+48 │     W { b: { h.buf() } }
+   │            ^^^^^^^^^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn array_lit`
+   ┌─ tail_place_moves.fe:52:6
+   │
+52 │     [{ h.buf() }]
+   │      ^^^^^^^^^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn assign`
+   ┌─ tail_place_moves.fe:57:9
+   │
+57 │     y = { h.buf() }
+   │         ^^^^^^^^^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn mut_grant`
+   ┌─ tail_place_moves.fe:61:7
+   │
+60 │   fn mut_grant(_ h: mut Holder) -> H {
+   │ ╭────────────────────────────────────'
+61 │ │     { h.inner_mut() }
+   │ │       ^^^^^^^^^^^^^ this access ends while its referent is moved out
+62 │ │ }
+   │ ╰─' value is moved here

@@ -4,8 +4,8 @@ const VALUES: [u256; 20000] = [1; 20000]
 // 20000-element constant.
 const fn answer() -> u256 {
     let values = VALUES
-    let mut total: u256 = 0
-    let mut i: usize = 0
+    var total: u256 = 0
+    var i: usize = 0
     while i < 20000 {
         let value = ref values[i]
         total += values[i]

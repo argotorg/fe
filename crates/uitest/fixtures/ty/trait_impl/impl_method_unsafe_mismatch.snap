@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_impl/impl_method_unsafe_mismatch.fe
+---
+error[6-0025]: method `raw` must match the unsafety of the trait method
+   ┌─ impl_method_unsafe_mismatch.fe:10:8
+   │
+ 2 │     unsafe fn raw(self) -> u256
+   │               --- trait method is `unsafe`
+   ·
+10 │     fn raw(self) -> u256 {
+   │        ^^^ this method is not `unsafe`
+
+error[6-0025]: method `safe` must match the unsafety of the trait method
+   ┌─ impl_method_unsafe_mismatch.fe:14:15
+   │
+ 3 │     fn safe(self) -> u256
+   │        ---- trait method is not `unsafe`
+   ·
+14 │     unsafe fn safe(self) -> u256 {
+   │               ^^^^ this method is `unsafe`

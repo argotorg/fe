@@ -1,0 +1,58 @@
+// A struct holding a `TSlot` beside a storage field: each field keeps its
+// space through a projection, and a transient place forwarded through a
+// helper projection is still transient, so the write lands in transient
+// storage and the storage word at the same number is untouched.
+use std::evm::{Evm, RawStorage, SolSlot, TSlot}
+
+struct Guarded {
+    locked: TSlot<bool>,
+    value: u256,
+}
+
+fn forward(_ x: mut bool) -> mut bool {
+    mut x
+}
+
+impl Guarded {
+    fn locked_forwarded(mut self) -> mut bool {
+        forward(mut self.locked.value)
+    }
+
+    fn value_mut(mut self) -> mut u256 {
+        mut self.value
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Run -> (bool, u256, u256, u256),
+}
+
+fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+}
+
+pub contract C uses (storage: mut RawStorage) {
+    mut g: Guarded,
+
+    recv M {
+        Run -> (bool, u256, u256, u256) uses (mut g, mut storage) {
+            let l = mut g.locked_forwarded()
+            l = true
+            let v = mut g.value_mut()
+            v = 7
+            // `locked` is transient 0, `value` storage 1; storage 0 is unused.
+            (g.locked.value, g.value, read_slot(0), read_slot(1))
+        }
+    }
+}
+
+#[test]
+fn forwarded_transient_place() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: (bool, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
+    assert!(r.0)
+    assert!(r.1 == 7)
+    assert!(r.2 == 0)
+    assert!(r.3 == 7)
+}

@@ -1,7 +1,7 @@
 
 #[test]
 fn assignment_rhs_can_start_on_next_line() {
-    let mut x: u256 = 1
+    var x: u256 = 1
     x =
         2
     assert!(x == 2)
@@ -9,7 +9,7 @@ fn assignment_rhs_can_start_on_next_line() {
 
 #[test]
 fn augmented_assignment_rhs_can_start_on_next_line() {
-    let mut x: u256 = 1
+    var x: u256 = 1
     x +=
         2
     assert!(x == 3)

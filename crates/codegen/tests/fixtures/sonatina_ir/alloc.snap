@@ -5,17 +5,29 @@ input_file: crates/codegen/tests/fixtures/alloc.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %alloc_bytes(v0.i256) -> i256 {
+func inline(always) private %alloc_bytes(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.*i8 = evm_malloc v0;
-        v3.i256 = ptr_to_int v2 i256;
-        return v3;
+        v3.i1 = gt v0 18446744073709551615.i256;
+        br v3 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 65.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        jump block4;
+
+    block4:
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
-func private %bump_const() -> i256 {
+func private %main() -> i256 {
     block0:
         jump block1;
 
@@ -29,7 +41,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i256 = call %bump_const;
+        v0.i256 = call %main;
         evm_stop;
 }
 

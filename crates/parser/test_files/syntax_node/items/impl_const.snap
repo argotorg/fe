@@ -34,9 +34,9 @@ Root@0..333
             LitExpr@35..36
               Lit@35..36
                 Int@35..36 "4"
-          TraitConstItem@36..67
-            Newline@36..37 "\n"
-            WhiteSpace@37..41 "    "
+          Newline@36..37 "\n"
+          WhiteSpace@37..41 "    "
+          TraitConstItem@41..67
             PubKw@41..44 "pub"
             WhiteSpace@44..45 " "
             ConstKw@45..50 "const"
@@ -54,9 +54,9 @@ Root@0..333
             LitExpr@66..67
               Lit@66..67
                 Int@66..67 "8"
-          TraitConstItem@67..112
-            Newline@67..68 "\n"
-            WhiteSpace@68..72 "    "
+          Newline@67..68 "\n"
+          WhiteSpace@68..72 "    "
+          TraitConstItem@72..112
             PubKw@72..75 "pub"
             LParen@75..76 "("
             VisRestriction@76..82

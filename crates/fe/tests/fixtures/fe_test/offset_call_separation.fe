@@ -1,0 +1,43 @@
+use core::{Option, ptr}
+
+struct Token { value: u256 }
+struct Slot { pointer: *Option<Token> }
+struct Buffer { data: *u8, offset: u256, len: u256 }
+
+fn clear(_ state: mut Buffer) {
+    unsafe { ptr::zero_bytes(ptr: ptr::offset(state.data, state.offset.downcast_unchecked()), len: state.len.downcast_unchecked()) }
+    state.len = 0
+}
+
+fn run_children(_ state: mut Buffer) -> u256 {
+    let slot = ptr::alloc<Option<Token>>()
+    unsafe { *slot = Option::Some(Token { value: 7 }) }
+    var holder = Slot { pointer: slot }
+    var sum = 0
+    while true {
+        let value = unsafe { *holder.pointer }
+        unsafe { *holder.pointer = Option::None }
+        match value {
+            Option::Some(value,) => {
+                clear(mut state)
+                sum += value.value
+            },
+            Option::None => {
+                break
+            },
+        }
+    }
+    sum
+}
+
+#[test]
+fn offset_write_preserves_a_pointer_held_in_a_local() {
+    let data = ptr::alloc_bytes(2)
+    unsafe { *data = 12 }
+    unsafe { *ptr::offset(data, 1) = 25 }
+    var state = Buffer { data, offset: 1, len: 1 }
+    assert(run_children(mut state) == 7)
+    assert(state.len == 0)
+    unsafe { assert(*data == 12) }
+    unsafe { assert(*ptr::offset(data, 1) == 0) }
+}

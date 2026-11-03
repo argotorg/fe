@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/effects_super.fe
 ---
@@ -69,7 +70,7 @@ note:
    │
 36 │   fn example() {
    │ ╭──────────────^
-37 │ │     let mut r = Root {}
+37 │ │     var r = Root {}
 38 │ │     with (r) {
 39 │ │         do_stuff(10)
 40 │ │     }
@@ -79,14 +80,14 @@ note:
 note:
    ┌─ effects_super.fe:37:9
    │
-37 │     let mut r = Root {}
-   │         ^^^^^ Root
+37 │     var r = Root {}
+   │         ^ Root
 
 note:
-   ┌─ effects_super.fe:37:17
+   ┌─ effects_super.fe:37:13
    │
-37 │     let mut r = Root {}
-   │                 ^^^^^^^ Root
+37 │     var r = Root {}
+   │             ^^^^^^^ Root
 
 note:
    ┌─ effects_super.fe:38:5

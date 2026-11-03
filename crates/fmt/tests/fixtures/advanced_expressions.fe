@@ -9,7 +9,7 @@ pub  unsafe fn  advanced_expressions<T, U: Trait>(  arr : Array<i32,10> ,  ctx:C
     let  v=ctx.make_value( 1 , flag:  true )
     let  updated=v.update<i32>(  arr[0] )
 
-    let mut  x=0
+    var  x=0
     x+=1
     x<<=  2
 

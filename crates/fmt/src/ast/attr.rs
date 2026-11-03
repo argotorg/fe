@@ -92,21 +92,17 @@ impl ToDoc for ast::AttrArg {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
-        let key = match self.key() {
-            Some(p) => p.to_doc(ctx),
-            None => return alloc.nil(),
-        };
-
-        match self.value() {
-            Some(val) => {
-                let val_doc = match val {
-                    AttrArgValueKind::Ident(tok) => alloc.text(tok.text().to_string()),
-                    AttrArgValueKind::Lit(lit) => lit.to_doc(ctx),
-                    AttrArgValueKind::Expr(expr) => expr.to_doc(ctx),
-                };
-                key.append(alloc.text(" = ")).append(val_doc)
-            }
-            None => key,
+        let val_doc = self.value().map(|val| match val {
+            AttrArgValueKind::Ident(tok) => alloc.text(tok.text().to_string()),
+            AttrArgValueKind::Lit(lit) => lit.to_doc(ctx),
+            AttrArgValueKind::Expr(expr) => expr.to_doc(ctx),
+        });
+        match (self.key(), val_doc) {
+            (Some(key), Some(val_doc)) => key.to_doc(ctx).append(alloc.text(" = ")).append(val_doc),
+            (Some(key), None) => key.to_doc(ctx),
+            // An expression argument has no key.
+            (None, Some(val_doc)) => val_doc,
+            (None, None) => alloc.nil(),
         }
     }
 }

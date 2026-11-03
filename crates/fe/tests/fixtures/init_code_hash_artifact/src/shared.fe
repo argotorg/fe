@@ -1,8 +1,8 @@
 // Called by `Child`, `ArgChild` and `Factory`, so the children embedded in
 // `Factory` share code with their parent.
 pub fn mix(_ a: u256, _ b: u256) -> u256 {
-    let mut acc: u256 = a
-    let mut i: u256 = 0
+    var acc: u256 = a
+    var i: u256 = 0
     while i < b {
         acc = (acc * 31 + i) ^ (acc >> 3)
         i += 1

@@ -1,0 +1,55 @@
+// A closure's step parameter is an associated shape of a type whose base
+// is still being inferred. Its type unifies with the bound's although the
+// two name the shape over different inference variables; the base is
+// then unknown, which the binding reports.
+trait Dr {
+    type Base
+    shape Step
+
+    fn at(self, _ b: mut? Self::Base) -> Self::Step
+
+    fn wrap(own self) -> Wrap<Self> {
+        Wrap { inner: self }
+    }
+
+    fn keep<P: Fn(Self::Step<ref>) -> bool>(own self, _ p: own P) -> Keep<Self, P> {
+        Keep { inner: self, p }
+    }
+}
+
+struct Wrap<D> {
+    inner: D,
+}
+
+struct Keep<D, P> {
+    inner: D,
+    p: P,
+}
+
+impl<D: mut? Dr> Dr for Wrap<D> {
+    type Base = D::Base
+    shape Step = (own usize, D::Step)
+
+    fn at(self, _ b: mut? D::Base) -> (own usize, D::Step) {
+        (0, self.inner.at(mut? b))
+    }
+}
+
+struct Leaf<B> {}
+
+impl<T, const N: usize> Dr for Leaf<[T; N]> {
+    type Base = [T; N]
+    shape Step = mut? T
+
+    fn at(self, _ b: mut? [T; N]) -> mut? T {
+        mut? b[0]
+    }
+}
+
+fn f() {
+    let g = Leaf {}.wrap().keep(|(i, _)| i > 0)
+}
+
+fn named() {
+    let g = Leaf<[u256; 2]> {}.wrap().keep(|(i, _)| i > 0)
+}

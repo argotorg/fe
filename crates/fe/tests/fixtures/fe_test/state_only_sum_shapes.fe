@@ -1,0 +1,90 @@
+// A projection may yield a state-only access inside a sum shape: the variant
+// constructor at the yield site builds the shape, not an `Option` value.
+use std::evm::{Evm, StorageMap}
+
+struct Ledger {
+    open: bool,
+    balances: StorageMap<u256, u256>,
+}
+
+impl Ledger {
+    fn balances_if_open(mut self) -> Option<mut StorageMap<u256, u256>> {
+        if self.open {
+            Option::Some(mut self.balances)
+        } else {
+            Option::None
+        }
+    }
+
+    fn view_if_open(self) -> Option<ref StorageMap<u256, u256>> {
+        if self.open {
+            Option::Some(ref self.balances)
+        } else {
+            Option::None
+        }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Open,
+
+    #[selector = 2]
+    Credit { key: u256, amount: u256 } -> bool,
+
+    #[selector = 3]
+    Get { key: u256 } -> u256,
+}
+
+pub contract C {
+    mut ledger: Ledger,
+
+    recv Msg {
+        Open uses (mut ledger) {
+            ledger.open = true
+        }
+
+        Credit { key, amount } -> bool uses (mut ledger) {
+            if let Option::Some(mut map) = ledger.balances_if_open() {
+                map[key] += amount
+                true
+            } else {
+                false
+            }
+        }
+
+        Get { key } -> u256 uses (ledger) {
+            match ledger.view_if_open() {
+                Option::Some(map) => map[key]
+                Option::None => 0
+            }
+        }
+    }
+}
+
+#[test]
+fn sum_shape_grants_reach_storage() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let closed: bool = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Credit { key: 7, amount: 5 },
+    )
+    assert!(!closed)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Open {})
+    let credited: bool = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Credit { key: 7, amount: 5 },
+    )
+    assert!(credited)
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Get { key: 7 },
+    )
+    assert!(value == 5)
+}

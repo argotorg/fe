@@ -1,0 +1,48 @@
+// A `Pinned` implementation applies only to the instances its bounds admit,
+// in the contract layout as in lowering: `Cell<B>` is an ordinary storage
+// field with a slot of its own, and `Cell<A>` lives in transient storage.
+use core::marker::{Pinned, Transient}
+use std::evm::{Evm, RawStorage, read_storage_word, read_transient_word}
+
+trait X {}
+
+struct A {}
+
+impl X for A {}
+
+struct B {}
+
+struct Cell<P> {
+    pub v: u256,
+}
+
+impl<P: X> Pinned for Cell<P> {
+    type Space = Transient
+}
+
+msg M {
+    #[selector = 1]
+    Run -> (u256, u256, u256, u256),
+}
+
+pub contract C {
+    mut first: u256,
+    mut stored: Cell<B>,
+    mut temporary: Cell<A>,
+
+    recv M {
+        Run -> (u256, u256, u256, u256) uses (mut first, mut stored, mut temporary, storage: RawStorage) {
+            first = 1
+            stored.v = 2
+            temporary.v = 3
+            (read_storage_word(0), read_storage_word(1), read_transient_word(0), first)
+        }
+    }
+}
+
+#[test]
+fn bounded_pins_lay_out_each_instance() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
+    assert(r == (1, 2, 3, 1))
+}

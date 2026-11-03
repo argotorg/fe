@@ -1,0 +1,107 @@
+---
+source: crates/parser/tests/syntax_node.rs
+assertion_line: 67
+expression: node
+input_file: test_files/syntax_node/pats/binding_marker.fe
+---
+Root@0..86
+  PathPat@0..5
+    MutKw@0..3 "mut"
+    WhiteSpace@3..4 " "
+    Path@4..5
+      PathSegment@4..5
+        Ident@4..5 "x"
+  Newline@5..7 "\n\n"
+  PathPat@7..12
+    RefKw@7..10 "ref"
+    WhiteSpace@10..11 " "
+    Path@11..12
+      PathSegment@11..12
+        Ident@11..12 "x"
+  Newline@12..14 "\n\n"
+  TuplePat@14..24
+    TuplePatElemList@14..24
+      LParen@14..15 "("
+      PathPat@15..16
+        Path@15..16
+          PathSegment@15..16
+            Ident@15..16 "i"
+      Comma@16..17 ","
+      WhiteSpace@17..18 " "
+      PathPat@18..23
+        RefKw@18..21 "ref"
+        WhiteSpace@21..22 " "
+        Path@22..23
+          PathSegment@22..23
+            Ident@22..23 "x"
+      RParen@23..24 ")"
+  Newline@24..26 "\n\n"
+  PathTuplePat@26..37
+    Path@26..30
+      PathSegment@26..30
+        Ident@26..30 "Some"
+    TuplePatElemList@30..37
+      LParen@30..31 "("
+      PathPat@31..36
+        RefKw@31..34 "ref"
+        WhiteSpace@34..35 " "
+        Path@35..36
+          PathSegment@35..36
+            Ident@35..36 "x"
+      RParen@36..37 ")"
+  Newline@37..39 "\n\n"
+  RecordPat@39..65
+    Path@39..45
+      PathSegment@39..45
+        Ident@39..45 "Record"
+    WhiteSpace@45..46 " "
+    RecordPatFieldList@46..65
+      LBrace@46..47 "{"
+      WhiteSpace@47..48 " "
+      RecordPatField@48..53
+        PathPat@48..53
+          RefKw@48..51 "ref"
+          WhiteSpace@51..52 " "
+          Path@52..53
+            PathSegment@52..53
+              Ident@52..53 "a"
+      Comma@53..54 ","
+      WhiteSpace@54..55 " "
+      RecordPatField@55..60
+        PathPat@55..60
+          MutKw@55..58 "mut"
+          WhiteSpace@58..59 " "
+          Path@59..60
+            PathSegment@59..60
+              Ident@59..60 "b"
+      Comma@60..61 ","
+      WhiteSpace@61..62 " "
+      RecordPatField@62..63
+        PathPat@62..63
+          Path@62..63
+            PathSegment@62..63
+              Ident@62..63 "c"
+      WhiteSpace@63..64 " "
+      RBrace@64..65 "}"
+  Newline@65..67 "\n\n"
+  PathPat@67..72
+    VarKw@67..70 "var"
+    WhiteSpace@70..71 " "
+    Path@71..72
+      PathSegment@71..72
+        Ident@71..72 "x"
+  Newline@72..74 "\n\n"
+  PathTuplePat@74..85
+    Path@74..78
+      PathSegment@74..78
+        Ident@74..78 "Some"
+    TuplePatElemList@78..85
+      LParen@78..79 "("
+      PathPat@79..84
+        VarKw@79..82 "var"
+        WhiteSpace@82..83 " "
+        Path@83..84
+          PathSegment@83..84
+            Ident@83..84 "v"
+      RParen@84..85 ")"
+  Newline@85..86 "\n"

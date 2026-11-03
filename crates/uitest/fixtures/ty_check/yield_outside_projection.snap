@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/yield_outside_projection.fe
+---
+error[8-0100]: `yield` outside a projection
+  ┌─ yield_outside_projection.fe:2:5
+  │
+2 │     yield 1
+  │     ^^^^^^^ only a function returning `ref`, `mut` or a yield shape can yield

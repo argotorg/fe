@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 18
 expression: node
 input_file: test_files/syntax_node/items/uses.fe
 ---

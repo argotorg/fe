@@ -1,0 +1,54 @@
+// A plain `let` of a read projection copies a `Copy` referent and keeps no
+// access; an explicit `ref` or `mut` binds an access open until the binding's
+// last use.
+use core::ptr::{MemArray, MemBuffer}
+
+struct Cell {
+    word: u256,
+}
+
+impl Cell {
+    fn get(self) -> ref u256 {
+        ref self.word
+    }
+
+    fn get_mut(mut self) -> mut u256 {
+        mut self.word
+    }
+}
+
+// Accepted: `word` is a copy.
+fn copied(cell: mut Cell) -> u256 {
+    let word = cell.get()
+    cell.word = 2
+    word
+}
+
+// Accepted: `word` is a copy of the element.
+fn copied_element(words: mut MemArray<u256>) -> u256 {
+    let word = words[0]
+    words.set(0, 5)
+    word
+}
+
+// Rejected: the explicit `ref` keeps the read access open.
+fn explicit_ref(cell: mut Cell) -> u256 {
+    let word = ref cell.get()
+    cell.word = 2
+    word
+}
+
+// Rejected: a `MemBuffer` is not `Copy`, so it is bound `ref`, the access.
+fn non_copy(buffers: mut MemArray<MemBuffer>) -> u256 {
+    let buffer = ref buffers[0]
+    buffers.set(0, MemBuffer::empty())
+    buffer.len() as u256
+}
+
+// Rejected: `let word = mut …` holds the `mut` access.
+fn mut_projection(cell: mut Cell) -> u256 {
+    let word = mut cell.get_mut()
+    let before = cell.word
+    word = 3
+    before
+}

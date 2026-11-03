@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/const_where/predicate_blocks_are_access_checked.fe
+---
+error[16-0001]: access conflict in `<anon const>`
+  ┌─ predicate_blocks_are_access_checked.fe:6:13
+  │
+5 │     let a = mut x
+  │             ----- access opened here
+6 │     let b = ref x
+  │             ^^^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `<anon const>`
+   ┌─ predicate_blocks_are_access_checked.fe:14:13
+   │
+13 │     let a = mut x
+   │             ----- access opened here
+14 │     let b = ref x
+   │             ^^^^^ cannot read this place while a `mut` access of it is open

@@ -1,0 +1,55 @@
+// A `for` loop evaluates its base's index operands and its driver once: the
+// body reassigning them does not retarget the loop.
+use core::iter::{Identity, Take}
+
+struct Rows {
+    rows: [[u256; 3]; 2],
+}
+
+#[test]
+fn base_index_read_once() {
+    var grid: [[u256; 3]; 2] = [[1, 2, 3], [4, 5, 6]]
+    var i: usize = 0
+    var s: u256 = 0
+    for x in grid[i] {
+        i = 1
+        s = s * 10 + x
+    }
+    assert(s == 123)
+}
+
+#[test]
+fn reversed_base_index_read_once() {
+    var grid: [[u256; 3]; 2] = [[1, 2, 3], [4, 5, 6]]
+    var i: usize = 0
+    var s: u256 = 0
+    for ref x in grid[i].reversed() {
+        i = 1
+        s = s * 10 + x
+    }
+    assert(s == 321)
+}
+
+#[test]
+fn field_base_index_read_once() {
+    let r = Rows { rows: [[1, 2, 3], [4, 5, 6]] }
+    var i: usize = 1
+    var s: u256 = 0
+    for x in r.rows[i] {
+        i = 0
+        s = s * 10 + x
+    }
+    assert(s == 456)
+}
+
+#[test]
+fn driver_evaluated_once() {
+    let xs: [u256; 6] = [1, 2, 3, 4, 5, 6]
+    var d: Take<Identity<[u256; 6]>> = xs.take(2)
+    var s: u256 = 0
+    for x in xs.by(d) {
+        d = xs.take(5)
+        s = s * 10 + x
+    }
+    assert(s == 12)
+}

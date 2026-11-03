@@ -1,0 +1,134 @@
+use core::ptr
+use std::evm::Evm
+
+// A read-only effect of a scalar or pointer type provided by a memory place
+// is passed as a copy; a storage provider and a `mut` effect keep their
+// place.
+
+fn read() -> u256 uses (x: u256) {
+    x
+}
+
+fn read_twice() -> u256 uses (x: u256) {
+    read() + x
+}
+
+fn read_pointee() -> u256 uses (p: *u256) {
+    unsafe { *p }
+}
+
+fn read_through_ref() -> u256 uses (x: u256) {
+    let r = ref x
+    r + 1
+}
+
+fn peek() -> ref u256 uses (x: u256) {
+    ref x
+}
+
+fn bump() uses (x: mut u256) {
+    x += 1
+}
+
+struct Pair {
+    pub a: u256,
+    pub b: u256,
+}
+
+#[test]
+fn reads_a_local_provider() {
+    let v: u256 = 5
+    with (v) {
+        assert(read() == 5)
+        assert(read_twice() == 10)
+    }
+}
+
+#[test]
+fn reads_a_field_provider() {
+    let pair: (u256, u256) = (7, 8)
+    with (pair.1) {
+        assert(read() == 8)
+    }
+}
+
+#[test]
+fn reads_a_field_of_a_mutated_struct() {
+    var pair = Pair { a: 1, b: 2 }
+    pair.b = 3
+    with (pair.b) {
+        assert(read() == 3)
+    }
+}
+
+#[test]
+fn views_and_projects_the_copy() {
+    let v: u256 = 5
+    with (v) {
+        assert(read_through_ref() == 6)
+        let r = peek()
+        assert(r == 5)
+    }
+}
+
+#[test]
+fn reads_a_pointer_provider() {
+    let p = ptr::alloc<u256>()
+    unsafe { *p = 9 }
+    with (p) {
+        assert(read_pointee() == 9)
+    }
+}
+
+#[test]
+fn sees_each_provision() {
+    var v: u256 = 1
+    with (v) {
+        assert(read() == 1)
+    }
+    v = 2
+    with (v) {
+        assert(read() == 2)
+    }
+}
+
+#[test]
+fn writes_through_a_mut_effect() {
+    var v: u256 = 1
+    with (mut v) {
+        bump()
+        bump()
+    }
+    assert(v == 3)
+}
+
+msg CountMsg {
+    #[selector = 1]
+    Set { n: u256 },
+
+    #[selector = 2]
+    Get -> u256,
+}
+
+pub contract Counter {
+    mut count: u256,
+
+    recv CountMsg {
+        Set { n } uses (mut count) {
+            count = n
+            bump()
+        }
+
+        Get -> u256 uses (count) {
+            read_twice()
+        }
+    }
+}
+
+#[test]
+fn reads_and_writes_a_storage_provider() uses (evm: mut Evm) {
+    let c = evm.create2<Counter>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: CountMsg::Set { n: 20 })
+    let value: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: CountMsg::Get {})
+    assert(value == 42)
+}

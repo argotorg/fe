@@ -170,6 +170,7 @@ struct TokenDocBuilder<'a> {
     doc: Doc<'a>,
     pending_newlines: usize,
     needs_space: bool,
+    needs_line_break: bool,
     is_start: bool,
 }
 
@@ -182,6 +183,7 @@ impl<'a> TokenDocBuilder<'a> {
             doc: alloc.nil(),
             pending_newlines: 0,
             needs_space: false,
+            needs_line_break: false,
             is_start: true,
         }
     }
@@ -192,13 +194,16 @@ impl<'a> TokenDocBuilder<'a> {
     }
 
     fn bump_newlines(&mut self, token: &parser::SyntaxToken) {
-        self.pending_newlines += newline_count(self.ctx.snippet(token.text_range()));
+        // The parent document owns the separator before this node.
+        if !self.is_start {
+            self.pending_newlines += newline_count(self.ctx.snippet(token.text_range()));
+        }
     }
 
     fn push_piece(&mut self, piece: TokenPiece<'a>) {
         let alloc = &self.ctx.alloc;
 
-        if self.pending_newlines > 0 {
+        if self.pending_newlines > 0 || self.needs_line_break {
             let doc = hardlines(alloc, self.pending_newlines).append(piece.doc);
             self.append(if piece.nest {
                 doc.nest(self.indent)
@@ -214,6 +219,7 @@ impl<'a> TokenDocBuilder<'a> {
         }
 
         self.needs_space = piece.space_after;
+        self.needs_line_break = false;
         self.is_start = false;
     }
 
@@ -227,6 +233,7 @@ impl<'a> TokenDocBuilder<'a> {
             space_after: !is_line_comment,
             nest: true,
         });
+        self.needs_line_break = is_line_comment;
     }
 
     fn finish(self) -> Doc<'a> {
@@ -532,6 +539,13 @@ impl ToDoc for ast::GenericParam {
         match self.kind() {
             GenericParamKind::Type(ty_param) => ty_param.to_doc(ctx),
             GenericParamKind::Const(const_param) => const_param.to_doc(ctx),
+            GenericParamKind::Shape(shape_param) => {
+                let alloc = &ctx.alloc;
+                let name = shape_param
+                    .name()
+                    .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
+                alloc.text("shape ").append(name)
+            }
         }
     }
 }
@@ -566,9 +580,7 @@ impl ToDoc for ast::ConstGenericParam {
         let ty = self
             .ty()
             .map_or_else(|| alloc.nil(), |ty| alloc.text(": ").append(ty.to_doc(ctx)));
-        let default = if let Some(hole) = self.default_hole() {
-            alloc.text(" = ").append(alloc.text(ctx.token(&hole)))
-        } else if let Some(expr) = self.default_expr() {
+        let default = if let Some(expr) = self.default_expr() {
             alloc.text(" = ").append(expr.to_doc(ctx))
         } else {
             alloc.nil()
@@ -810,7 +822,13 @@ impl ToDoc for ast::TypeBound {
         let alloc = &ctx.alloc;
 
         if let Some(trait_bound) = self.trait_bound() {
-            trait_bound.to_doc(ctx)
+            match self.mode_token() {
+                Some(mode) => alloc
+                    .text(ctx.token(&mode))
+                    .append(alloc.text(" "))
+                    .append(trait_bound.to_doc(ctx)),
+                None => trait_bound.to_doc(ctx),
+            }
         } else if let Some(kind_bound) = self.kind_bound() {
             alloc.text(ctx.snippet_trimmed(&kind_bound))
         } else {
@@ -821,9 +839,29 @@ impl ToDoc for ast::TypeBound {
 
 impl ToDoc for ast::TraitRef {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        if let Some(shape) = self.fn_shape() {
+            let name = shape
+                .name()
+                .map_or_else(|| alloc.nil(), |name| alloc.text(name.text().to_string()));
+            // A parameter list, not a tuple: one parameter has no comma.
+            let params = shape.params().map_or_else(Vec::new, |params| {
+                params.elem_tys().map(|ty| ty.to_doc(ctx)).collect()
+            });
+            let params = alloc
+                .text("(")
+                .append(intersperse(alloc, params, alloc.text(", ")))
+                .append(alloc.text(")"));
+            let ret = match shape.ret_ty() {
+                _ if shape.infers_ret() => alloc.text(" -> _"),
+                Some(ty) => alloc.text(" -> ").append(ty.to_doc(ctx)),
+                None => alloc.nil(),
+            };
+            return name.append(params).append(ret);
+        }
         match self.path() {
             Some(p) => p.to_doc(ctx),
-            None => ctx.alloc.nil(),
+            None => alloc.nil(),
         }
     }
 }
@@ -872,7 +910,10 @@ impl ToDoc for ast::ModeType {
                 indent,
                 |node| ast::Type::cast(node).map(|ty| TokenPiece::new(ty.to_doc(ctx))),
                 |token| match token.kind() {
-                    SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => {
+                    SyntaxKind::MutKw
+                    | SyntaxKind::MaybeMutKw
+                    | SyntaxKind::RefKw
+                    | SyntaxKind::OwnKw => {
                         Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
                     }
                     _ => None,
@@ -1104,6 +1145,7 @@ impl ToDoc for ast::GenericArg {
             GenericArgKind::Type(ty_arg) => ty_arg.to_doc(ctx),
             GenericArgKind::Const(const_arg) => const_arg.to_doc(ctx),
             GenericArgKind::AssocType(assoc_arg) => assoc_arg.to_doc(ctx),
+            GenericArgKind::Mode(mode) => ctx.alloc.text(if mode.is_mut() { "mut" } else { "ref" }),
         }
     }
 }
@@ -1119,10 +1161,6 @@ impl ToDoc for ast::TypeGenericArg {
 
 impl ToDoc for ast::ConstGenericArg {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        if let Some(hole) = self.hole_token() {
-            return ctx.alloc.text(ctx.token(&hole));
-        }
-
         self.expr()
             .map_or_else(|| ctx.alloc.nil(), |e| e.to_doc(ctx))
     }
@@ -1139,8 +1177,12 @@ impl ToDoc for ast::AssocTypeGenericArg {
             return alloc.nil();
         };
 
+        let args = self
+            .generic_args()
+            .map_or_else(|| alloc.nil(), |args| args.to_doc(ctx));
         alloc
             .text(ctx.token(&name))
+            .append(args)
             .append(alloc.text(" = "))
             .append(ty.to_doc(ctx))
     }
@@ -1216,9 +1258,11 @@ impl ToDoc for ast::Expr {
         match self.kind() {
             ExprKind::Lit(lit) => lit.to_doc(ctx),
             ExprKind::Block(block) => block.to_doc(ctx),
+            ExprKind::Closure(closure) => closure.to_doc(ctx),
             ExprKind::Bin(bin) => bin.to_doc(ctx),
             ExprKind::Un(un) => un.to_doc(ctx),
             ExprKind::Cast(cast) => cast.to_doc(ctx),
+            ExprKind::Try(try_) => try_.to_doc(ctx),
             ExprKind::Call(call) => call.to_doc(ctx),
             ExprKind::MacroCall(call) => call.to_doc(ctx),
             ExprKind::MethodCall(method) => method.to_doc(ctx),
@@ -1233,6 +1277,7 @@ impl ToDoc for ast::Expr {
             ExprKind::If(if_expr) => if_expr.to_doc(ctx),
             ExprKind::Match(match_expr) => match_expr.to_doc(ctx),
             ExprKind::With(with_expr) => with_expr.to_doc(ctx),
+            ExprKind::Unsafe(unsafe_expr) => unsafe_expr.to_doc(ctx),
             ExprKind::Paren(paren) => paren.to_doc(ctx),
             ExprKind::Assign(assign) => assign.to_doc(ctx),
             ExprKind::AugAssign(aug_assign) => aug_assign.to_doc(ctx),

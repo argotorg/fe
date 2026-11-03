@@ -43,7 +43,7 @@ fn f() uses (slot: Slot<u256>) {}
 
     let func = find_func(&db, top_mod, "f");
     let key_ty = func
-        .effect_requirements(&db)
+        .effect_requirements(&db, None)
         .first()
         .and_then(|binding| binding.key.key_ty())
         .expect("missing type effect key");
@@ -82,7 +82,7 @@ fn f() uses (slot: Slot<u256>) {}
 
     let func = find_func(&db, top_mod, "f");
     let key_ty = func
-        .effect_requirements(&db)
+        .effect_requirements(&db, None)
         .first()
         .and_then(|binding| binding.key.key_ty())
         .expect("missing type effect key");
@@ -119,7 +119,7 @@ fn f() uses (slot: Slot<7>) {}
 
     let func = find_func(&db, top_mod, "f");
     let key_ty = func
-        .effect_requirements(&db)
+        .effect_requirements(&db, None)
         .first()
         .and_then(|binding| binding.key.key_ty())
         .expect("missing type effect key");
@@ -304,21 +304,6 @@ fn f(x: Alias) {}
 }
 
 #[test]
-fn type_alias_explicit_const_holes_validate_with_expected_const_type() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("type_alias_explicit_const_holes_validate_with_expected_const_type.fe"),
-        r#"
-type Alias<const N: u256> = bool
-
-fn f(x: Alias<_>) {}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-}
-
-#[test]
 fn type_alias_explicit_const_args_still_validate_type_mismatches() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -358,14 +343,8 @@ fn f(a: Outer<u8>, b: Outer<u16>) {}
     db.assert_no_diags(top_mod);
 
     let func = find_func(&db, top_mod, "f");
-    let outer_u8 = func.arg_tys(&db)[0]
-        .instantiate_identity()
-        .as_view(&db)
-        .unwrap_or_else(|| panic!("expected view parameter"));
-    let outer_u16 = func.arg_tys(&db)[1]
-        .instantiate_identity()
-        .as_view(&db)
-        .unwrap_or_else(|| panic!("expected view parameter"));
+    let outer_u8 = func.arg_tys(&db)[0].instantiate_identity();
+    let outer_u16 = func.arg_tys(&db)[1].instantiate_identity();
     let inner_from_u8 = outer_u8.field_types(&db)[0];
     let inner_from_u16 = outer_u16.field_types(&db)[0];
 
@@ -408,14 +387,8 @@ fn f(a: Alias<u8>, b: Alias<u16>) {}
     db.assert_no_diags(top_mod);
 
     let func = find_func(&db, top_mod, "f");
-    let alias_u8 = func.arg_tys(&db)[0]
-        .instantiate_identity()
-        .as_view(&db)
-        .unwrap_or_else(|| panic!("expected view parameter"));
-    let alias_u16 = func.arg_tys(&db)[1]
-        .instantiate_identity()
-        .as_view(&db)
-        .unwrap_or_else(|| panic!("expected view parameter"));
+    let alias_u8 = func.arg_tys(&db)[0].instantiate_identity();
+    let alias_u16 = func.arg_tys(&db)[1].instantiate_identity();
     let inner_from_u8 = alias_u8.field_types(&db)[1];
     let inner_from_u16 = alias_u16.field_types(&db)[1];
 

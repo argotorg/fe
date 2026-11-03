@@ -3,21 +3,14 @@ struct Data {
     y: u256,
 }
 
-struct LiveView {
-    x: ref u256,
-    y: ref u256,
-}
-
-fn live_view(_ d: ref Data) -> LiveView {
-    LiveView { x: ref d.x, y: ref d.y }
+fn live_view(_ d: Data) -> (ref u256, ref u256) {
+    (ref d.x, ref d.y)
 }
 
 #[test]
 fn test_ref_is_not_a_copy() {
     let d = Data { x: 10, y: 20 }
-    let live = live_view(ref d)
-    let live_x: ref u256 = live.x
-    let live_y: ref u256 = live.y
+    let (ref live_x, ref live_y) = live_view(d)
     assert!(live_x == d.x)
     assert!(live_y == d.y)
 }

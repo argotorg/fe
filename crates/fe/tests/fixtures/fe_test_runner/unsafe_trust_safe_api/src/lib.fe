@@ -1,0 +1,26 @@
+use std::abi::Bytes
+use std::evm::{encode_error, encode_msg_calldata}
+
+// `dep` is not trusted, but its safe API needs no trust.
+#[test]
+fn untrusted_safe_api() {
+    assert!(dep::safe_sum(2, 3) == 5)
+}
+
+// Encoding `dep`'s ABI types runs the encodings the compiler derived for
+// them, which need no trust either.
+#[test]
+fn untrusted_derived_encodings() {
+    let note = dep::Note { id: 1, body: Bytes::from_word_prefix(word: 0xaa << 248, len: 1) }
+    let calldata = encode_msg_calldata(dep::NoteMsg::Post { note })
+    // The selector, the note's offset, its head (`id` and the body's offset),
+    // and the body's length and data words.
+    assert!(calldata.len() == 4 + 32 + 64 + 64)
+    assert!(calldata.span().word_at(4) == 32)
+    assert!(calldata.span().word_at(36) == 1)
+    assert!(calldata.span().word_at(68) == 64)
+    assert!(calldata.span().word_at(100) == 1)
+    let error = encode_error(dep::Refused { code: 7 })
+    assert!(error.len() == 4 + 32)
+    assert!(error.span().word_at(4) == 7)
+}

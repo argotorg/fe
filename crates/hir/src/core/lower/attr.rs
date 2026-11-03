@@ -2,12 +2,10 @@ use parser::{
     TextRange,
     ast::{self, prelude::*},
 };
-use salsa::Accumulator as _;
 
 use super::FileLowerCtxt;
 use crate::core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*};
 
-#[salsa::accumulator]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrMisuseError {
     pub kind: AttrMisuseErrorKind,
@@ -33,6 +31,8 @@ pub(super) enum AttrForm {
         allow_bare: bool,
         allowed_args: &'static [&'static str],
     },
+    /// One expression argument: `#[slot(BASE + 1)]`, `#[slot(BASE)]`.
+    SingleExpr,
 }
 
 impl AttrForm {
@@ -55,6 +55,20 @@ impl AttrForm {
                         .key
                         .as_ref()
                         .is_some_and(|key| allowed_args.contains(&key.as_str()))
+            }
+            Self::SingleExpr => {
+                attr.value.is_none()
+                    && attr.has_args
+                    && matches!(
+                        attr.args.as_slice(),
+                        [AstAttrArgSpec {
+                            key: Some(_),
+                            value: None
+                        }] | [AstAttrArgSpec {
+                            key: None,
+                            value: Some(ast::AttrArgValueKind::Expr(_))
+                        }]
+                    )
             }
         }
     }
@@ -275,15 +289,14 @@ fn report_attr_misuse<'db>(
     kind: AttrMisuseErrorKind,
 ) {
     let db = ctxt.db();
-    AttrMisuseError {
+    ctxt.report(AttrMisuseError {
         kind,
         file: ctxt.top_mod().file(db),
         primary_range,
         attr_name,
         target: target.kind,
         item_name: target.name,
-    }
-    .accumulate(db);
+    });
 }
 
 pub(super) fn lower_attrs_without_named<'db>(
@@ -408,7 +421,10 @@ impl<'db> AttrArgValue<'db> {
                 Some(Self::Ident(IdentId::lower_token(ctxt, token)))
             }
             Some(ast::AttrArgValueKind::Lit(lit)) => LitKind::lower_ast(ctxt, lit).map(Self::Lit),
-            Some(ast::AttrArgValueKind::Expr(_)) => None,
+            Some(ast::AttrArgValueKind::Expr(expr)) => Some(Self::Expr(StringId::new(
+                ctxt.db(),
+                expr.syntax().text().to_string(),
+            ))),
             None => None,
         }
     }

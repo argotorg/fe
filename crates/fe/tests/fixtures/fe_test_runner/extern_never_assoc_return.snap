@@ -4,23 +4,8 @@ expression: output
 input_file: tests/fixtures/fe_test_runner/extern_never_assoc_return.fe
 ---
 === STDOUT ===
-Compilation errors in file://<project>/crates/fe/tests/fixtures/fe_test_runner/extern_never_assoc_return.fe
+PASS  [<time>] test_extern_never_requires_implementation
 
-error[16-0009]: pending borrow validation in `fn trigger`
-   ┌─ extern_never_assoc_return.fe:22:14
-   │
-22 │   fn trigger() {
-   │ ╭──────────────^
-23 │ │     let _x: u32 = make<Generic<u32>>()
-24 │ │ }
-   │ ╰─^ executable calls require concrete implementations or verified effect contracts
+test result: ok. 1 passed; 0 failed
 
-
-ERROR [<time>] Compilation errors in file://<project>/crates/fe/tests/fixtures/fe_test_runner/extern_never_assoc_return.fe
-
-test result: FAILED. 0 passed; 1 failed
-
-failures:
-    extern_never_assoc_return::compile
-
-=== EXIT CODE: 1 ===
+=== EXIT CODE: 0 ===

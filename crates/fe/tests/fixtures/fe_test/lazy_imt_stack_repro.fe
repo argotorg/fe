@@ -38,8 +38,8 @@ fn hash2(left: u256, right: u256) -> u256 {
 }
 
 fn default_zero(_ index: usize) -> u256 {
-    let mut z: u256 = 0
-    let mut i: usize = 0
+    var z: u256 = 0
+    var i: usize = 0
 
     while i < index {
         z = hash2(left: z, right: z)
@@ -84,8 +84,8 @@ impl LazyIMTData {
 
     fn element_get(self, _ level: usize, _ index: usize) -> (bool, u256) {
         let key = LazyIMTData::index_for_element(level, index)
-        let mut slot = (key % LAZY_MAP_CAPACITY_U256) as usize
-        let mut i: usize = 0
+        var slot = (key % LAZY_MAP_CAPACITY_U256).downcast_unchecked()
+        var i: usize = 0
 
         while i < LAZY_MAP_CAPACITY {
             if self.element_used[slot] == 0 {
@@ -108,8 +108,8 @@ impl LazyIMTData {
 
     fn element_set(mut self, _ level: usize, _ index: usize, _ value: u256) -> LazyIMTError {
         let key = LazyIMTData::index_for_element(level, index)
-        let mut slot = (key % LAZY_MAP_CAPACITY_U256) as usize
-        let mut i: usize = 0
+        var slot = (key % LAZY_MAP_CAPACITY_U256).downcast_unchecked()
+        var i: usize = 0
 
         while i < LAZY_MAP_CAPACITY {
             if self.element_used[slot] == 0 {
@@ -135,10 +135,10 @@ impl LazyIMTData {
     }
 
     pub fn insert(mut self, _ leaf: u256) -> LazyIMTError {
-        let mut index = self.number_of_leaves
+        var index = self.number_of_leaves
         self.number_of_leaves = index + 1
-        let mut h = leaf
-        let mut level: usize = 0
+        var h = leaf
+        var level: usize = 0
 
         while true {
             let err = self.element_set(level, index, h)
@@ -167,7 +167,7 @@ impl LazyIMTData {
         [u256; MAX_DEPTH_PLUS_ONE],
         LazyIMTError,
     ) {
-        let mut levels: [u256; MAX_DEPTH_PLUS_ONE] = [0; MAX_DEPTH_PLUS_ONE]
+        var levels: [u256; MAX_DEPTH_PLUS_ONE] = [0; MAX_DEPTH_PLUS_ONE]
         if depth > MAX_DEPTH {
             return (levels, LazyIMTError::DepthTooLarge)
         }
@@ -175,7 +175,7 @@ impl LazyIMTData {
             return (levels, LazyIMTError::LeafMustExist)
         }
 
-        let mut index = number_of_leaves - 1
+        var index = number_of_leaves - 1
 
         if index & 1 == 0 {
             let (ok, value) = self.element_get(0, index)
@@ -184,7 +184,7 @@ impl LazyIMTData {
             levels[0] = default_zero(0)
         }
 
-        let mut i: usize = 0
+        var i: usize = 0
         while i < depth {
             if index & 1 == 0 {
                 levels[i + 1] = hash2(left: levels[i], right: default_zero(i))
@@ -228,16 +228,16 @@ impl LazyIMTData {
         [u256; MAX_DEPTH],
         LazyIMTError,
     ) {
-        let mut elements: [u256; MAX_DEPTH] = [0; MAX_DEPTH]
+        var elements: [u256; MAX_DEPTH] = [0; MAX_DEPTH]
         let number_of_leaves = self.number_of_leaves
 
         if index >= number_of_leaves {
             return (elements, LazyIMTError::LeafMustExist)
         }
-        let mut index = index
+        var index = index
 
-        let mut target_depth: usize = 1
-        let mut val: usize = 2
+        var target_depth: usize = 1
+        var val: usize = 2
         while val < number_of_leaves {
             val = val << 1
             target_depth += 1
@@ -253,7 +253,7 @@ impl LazyIMTData {
                 return (elements, err)
             }
 
-            let mut i: usize = 0
+            var i: usize = 0
             while i < target_depth {
                 elements[i] = levels[i]
                 i += 1
@@ -278,7 +278,7 @@ impl LazyIMTData {
 
         index = index >> 1
 
-        let mut i: usize = 1
+        var i: usize = 1
         while i < depth {
             let current_level_count = number_of_leaves >> i
             if index & 1 == 0 {
@@ -311,8 +311,8 @@ fn lazy_calculate_root(
     _ proof_depth: usize,
     _ proof_elements: [u256; MAX_DEPTH],
 ) -> u256 {
-    let mut h = leaf
-    let mut i: usize = 0
+    var h = leaf
+    var i: usize = 0
 
     while i < proof_depth {
         if ((leaf_index >> i) & 1) == 1 {
@@ -328,12 +328,12 @@ fn lazy_calculate_root(
 }
 
 fn assert_lazy_merkle_proof_case(_ depth: usize, _ leaf_count: usize) {
-    let mut tree = LazyIMTData::empty()
+    var tree = LazyIMTData::empty()
     let err = tree.init(depth)
     assert!(err.code() == LazyIMTError::None.code())
 
-    let mut leaves: [u256; LAZY_TEST_MAX_DENSE_LEAVES] = [0; LAZY_TEST_MAX_DENSE_LEAVES]
-    let mut insert_index: usize = 0
+    var leaves: [u256; LAZY_TEST_MAX_DENSE_LEAVES] = [0; LAZY_TEST_MAX_DENSE_LEAVES]
+    var insert_index: usize = 0
     while insert_index < leaf_count {
         let leaf = ((insert_index + 1) * 17) as u256
         leaves[insert_index] = leaf
@@ -345,7 +345,7 @@ fn assert_lazy_merkle_proof_case(_ depth: usize, _ leaf_count: usize) {
     let (root_at_depth, err) = tree.root_at_depth(depth)
     assert!(err.code() == LazyIMTError::None.code())
 
-    let mut leaf_index: usize = 0
+    var leaf_index: usize = 0
     while leaf_index < leaf_count {
         let (proof, err) = tree.merkle_proof_elements(leaf_index, depth)
         assert!(err.code() == LazyIMTError::None.code())

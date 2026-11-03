@@ -1,0 +1,5 @@
+// `mid` is trusted, so its `allow_unsafe` for `dep` counts.
+#[test]
+fn delegated_unsafe_use() {
+    assert!(mid::via_dep(7) == 7)
+}

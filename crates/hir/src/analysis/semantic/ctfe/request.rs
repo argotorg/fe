@@ -1,4 +1,4 @@
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -23,7 +23,7 @@ use super::machine::sem_const_dependency;
 
 /// A selected body retains the complete instance environment. An unresolved
 /// associated constant retains its contextual selection recipe instead.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstEntry<'db> {
     Resolved(SemanticInstanceKey<'db>),
     Associated(AssocConstUse<'db>),
@@ -35,15 +35,18 @@ pub enum ConstEntry<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ConstComputationId<'db> {
+    #[returns(copy)]
     pub entry: ConstEntry<'db>,
-    #[return_ref]
     pub inputs: Vec<ConstDesc<'db>>,
+    #[returns(copy)]
     pub result_ty: TyId<'db>,
+    #[returns(copy)]
     pub parameter_owner: ScopeId<'db>,
+    #[returns(copy)]
     pub origin: SemOrigin<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct VerifiedConstValueId<'db>(SemConstId<'db>);
 
 impl<'db> VerifiedConstValueId<'db> {
@@ -106,7 +109,7 @@ impl<'db> SConst<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstRepr<'db> {
     Value(VerifiedConstValueId<'db>),
     Term(ConstTyId<'db>),
@@ -115,13 +118,13 @@ pub enum ConstRepr<'db> {
 
 /// Source occurrences for an extracted term. Canonical terms may be shared by
 /// distinct uses, so operation origins live on the description instead.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) struct TermCallFrame<'db> {
     pub origin: SemOrigin<'db>,
     pub callee: SemanticInstanceKey<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) struct TermProvenance<'db> {
     pub term: ConstTyId<'db>,
     pub origin: SemOrigin<'db>,
@@ -146,7 +149,7 @@ impl TermProvenance<'_> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ConstDesc<'db> {
     ty: TyId<'db>,
     parameter_owner: ScopeId<'db>,
@@ -330,7 +333,7 @@ impl<'db> TyFoldable<'db> for TermProvenance<'db> {
                 .into_iter()
                 .map(|frame| TermCallFrame {
                     origin: frame.origin,
-                    callee: frame.callee.fold_with(db, folder),
+                    callee: folder.fold_const_context_key(db, frame.callee),
                 })
                 .collect(),
             ..self
@@ -401,7 +404,7 @@ impl<'db> TyVisitable<'db> for ConstComputationId<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstUsePolicy {
     AllowDependent,
     RequireValue,
@@ -414,9 +417,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        analysis::semantic::{
-            SemConstScalar, SemConstValue, array_const, bool_const, bytes_const, int_const,
+        analysis::{
+            semantic::{
+                SemConstScalar, SemConstValue, array_const, bool_const, bytes_const, int_const,
+            },
+            ty::ty_def::{Kind, TyParam},
         },
+        hir_def::IdentId,
         test_db::HirAnalysisTestDb,
     };
 
@@ -429,7 +436,7 @@ mod tests {
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
-        let owner = crate::analysis::ty::ty_check::BodyOwner::Func(module.all_funcs(&db)[0]);
+        let owner = crate::analysis::ty::ty_check::BodyOwner::Func(module.all_funcs(&db)[0], None);
         let array_ty = crate::analysis::semantic::identity_semantic_instance_key(&db, owner)
             .typed_body(&db)
             .result_ty();
@@ -479,9 +486,16 @@ mod tests {
             vec![bool_const(&db, true), valid].into_boxed_slice(),
         );
         assert!(VerifiedConstValueId::from_complete_execution(&db, wrong_element).is_err());
+        // A constant only specialization knows.
+        let param = TyParam::implicit_param(
+            IdentId::new(&db, "N".to_string()),
+            0,
+            Kind::Star,
+            module.scope(),
+        );
         let symbolic = SemConstId::new(
             &db,
-            SemConstValue::Description(ConstTyId::hole_with_ty(&db, u8_ty)),
+            SemConstValue::Description(ConstTyId::new(&db, ConstTyData::TyParam(param, u8_ty))),
         );
         assert!(VerifiedConstValueId::from_complete_execution(&db, symbolic).is_err());
         assert!(matches!(

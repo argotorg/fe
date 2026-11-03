@@ -379,11 +379,35 @@ fn write_csv(results: &[BenchResult], out_dir: &Utf8Path) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
-    use super::parse_arg;
+    use super::{
+        compile_fe_sonatina, discover_fixtures, encode_calldata, measure_call_bytes, parse_arg,
+    };
+    use camino::Utf8PathBuf;
     use ethers_core::{
         abi::{ParamType, Token},
         types::U256,
     };
+
+    /// Every fixture's Fe contract compiles and runs each of its calls without
+    /// reverting, so a language change cannot leave `fe bench` broken unnoticed.
+    #[test]
+    fn bench_fixtures_run_on_fe() {
+        let dir = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bench_fixtures");
+        let fixtures = discover_fixtures(&dir, None).unwrap();
+        assert!(!fixtures.is_empty(), "no bench fixtures in {dir}");
+        for fixture in &fixtures {
+            let name = &fixture.name;
+            let bytecode = compile_fe_sonatina(&fixture.fe_source, name, &fixture.contract_name)
+                .unwrap_or_else(|e| panic!("[{name}] {e}"));
+            for call in &fixture.calls {
+                let signature = &call.signature;
+                let calldata = encode_calldata(signature, &call.args)
+                    .unwrap_or_else(|e| panic!("[{name}] {signature}: {e}"));
+                measure_call_bytes(&bytecode, &calldata)
+                    .unwrap_or_else(|e| panic!("[{name}] {signature}: {e}"));
+            }
+        }
+    }
 
     #[test]
     fn parse_signed_int_uses_full_word_twos_complement() {

@@ -1,0 +1,123 @@
+// A trait method's spread `..A` takes the parameters its shape lists: an
+// impl writes them out, and a call passes one argument for each.
+trait Apply<shape A> {
+    type Out
+
+    fn apply(self, ..A) -> Self::Out
+}
+
+struct Adder {
+    bias: u256,
+}
+
+impl Apply<(own u256, ref u256)> for Adder {
+    type Out = u256
+
+    fn apply(self, _ a: own u256, _ b: u256) -> u256 {
+        self.bias + a + b
+    }
+}
+
+struct Bump {
+    by: u256,
+}
+
+impl Apply<(mut u256,)> for Bump {
+    type Out = ()
+
+    fn apply(self, _ x: mut u256) {
+        x += self.by
+    }
+}
+
+struct Seven {}
+
+impl Apply<()> for Seven {
+    type Out = u256
+
+    fn apply(self) -> u256 {
+        7
+    }
+}
+
+// A part of the shape is a product.
+struct Scale {}
+
+impl Apply<(own u256, (mut u256, ref u256))> for Scale {
+    type Out = ()
+
+    fn apply(self, _ n: own u256, _ (mut a, b): (mut u256, ref u256)) {
+        a += b * n
+    }
+}
+
+struct First {}
+
+impl<T> Apply<(own T, own T)> for First {
+    type Out = T
+
+    fn apply(self, _ a: own T, _ b: own T) -> T {
+        a
+    }
+}
+
+// One type takes the method at two shapes, which the arguments choose.
+struct Count {}
+
+impl Apply<(own u256,)> for Count {
+    type Out = u256
+
+    fn apply(self, _ a: own u256) -> u256 {
+        1
+    }
+}
+
+impl Apply<(own u256, own u256)> for Count {
+    type Out = u256
+
+    fn apply(self, _ a: own u256, _ b: own u256) -> u256 {
+        2
+    }
+}
+
+fn run<F: Apply<(own u256, ref u256), Out = u256>>(_ f: own F, _ x: u256) -> u256 {
+    f.apply(1, x)
+}
+
+fn bump<F: Apply<(mut u256,)>>(_ f: own F, _ x: mut u256) {
+    f.apply(mut x)
+}
+
+fn pick<T, F: Apply<(own T, own T), Out = T>>(_ f: own F, _ a: own T, _ b: own T) -> T {
+    f.apply(a, b)
+}
+
+#[test]
+fn concrete_calls() {
+    let x: u256 = 2
+    assert(Adder { bias: 10 }.apply(1, x) == 13)
+    var y: u256 = 1
+    Bump { by: 4 }.apply(mut y)
+    assert(y == 5)
+    assert(Seven {}.apply() == 7)
+    Scale {}.apply(3, (mut y, ref x))
+    assert(y == 11)
+    let a: u8 = 3
+    assert(First {}.apply(a, 4) == 3)
+}
+
+#[test]
+fn generic_calls() {
+    assert(run(Adder { bias: 10 }, 5) == 16)
+    var y: u256 = 1
+    bump(Bump { by: 2 }, mut y)
+    assert(y == 3)
+    assert(pick(First {}, true, false))
+}
+
+#[test]
+fn arity_chooses_impl() {
+    let one: u256 = Count {}.apply(5)
+    let two: u256 = Count {}.apply(5, 6)
+    assert(one == 1 && two == 2)
+}

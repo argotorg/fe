@@ -17,7 +17,7 @@ fn runtime_mut() -> u256 uses (value: mut Compute<Item = u256>) {
 }
 
 const fn caller() -> u256 {
-    let mut number = Number { value: 1 }
+    var number = Number { value: 1 }
     with (Compute<Item = u256> = number) {
         runtime_mut()
     }

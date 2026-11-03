@@ -1,0 +1,71 @@
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+unsafe fn danger(_ p: *u256) -> u256 {
+    *p
+}
+
+trait Raw {
+    unsafe fn raw(self) -> u256
+
+    unsafe fn read(_ p: *u256) -> u256 {
+        *p
+    }
+}
+
+struct S {}
+
+impl Raw for S {
+    unsafe fn raw(self) -> u256 {
+        danger(S::make())
+    }
+}
+
+impl S {
+    fn make() -> *u256 {
+        core::ptr::alloc<u256>()
+    }
+}
+
+extern {
+    unsafe fn ext() -> u256
+}
+
+pub unsafe fn unsafe_fn_body(p: *Point, q: *u256) -> u256 {
+    *q = 1
+    p.x = *q
+    let _m = mut *q
+    danger(q) + ext() + p.y
+}
+
+pub fn unsafe_blocks(p: *Point, q: *u256, s: S) -> u256 {
+    unsafe {
+        *q = 1
+        p.y = 2
+        (*p).x = 3
+    }
+    let x = unsafe { *q + p.x }
+    let y = unsafe { danger(q) } + unsafe { s.raw() } + unsafe { ext() }
+    if unsafe { *q } == 0 {
+        return x
+    }
+    match unsafe { (*p).y } {
+        0 => y
+        _ => unsafe {
+            let z = {
+                if true { *q } else { S::read(q) }
+            }
+            z + unsafe { *q }
+        }
+    }
+}
+
+pub fn generic<T: Raw>(t: T) -> u256 {
+    unsafe { t.raw() }
+}
+
+pub fn double(p: **u256) -> u256 {
+    unsafe { *(*p) }
+}

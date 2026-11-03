@@ -4,6 +4,7 @@
 /// closes the no-code-at-address hole with a codesize check.
 
 use core::ptr
+use core::abi::store_word
 use std::evm::{RawOps, erc20}
 
 msg TokenMsg {
@@ -118,24 +119,24 @@ msg MalformedTokenMsg {
 pub contract MalformedToken {
     recv MalformedTokenMsg {
         Transfer { receiver, amount } -> bool uses (raw: mut RawOps) {
-            let mut data = ptr::MemBuffer::alloc(32)
-            raw.mstore(addr: data.ptr(), value: 0xaabbccdd << 224)
-            data.set_len(4)
+            var data = ptr::MemBuffer::alloc(32)
+            unsafe { store_word(ptr: data.ptr(), value: 0xaabbccdd << 224) }
+            unsafe { data.set_len(4) }
             raw.return_data(data: data.span())
         }
     }
 }
 
 fn alice() -> Address {
-    Address { inner: 2 }
+    Address::new(2)
 }
 
 fn bob() -> Address {
-    Address { inner: 3 }
+    Address::new(3)
 }
 
 fn call_count(token: Address) -> u256 uses (evm: mut Evm) {
-    evm.call(addr: token, gas: 100000, value: 0, message: CallCountMsg::GetCallCount {})
+    evm.call(addr: token, gas: 100000, value: Wei::zero(), message: CallCountMsg::GetCallCount {})
 }
 
 // ---------------------------------------------------------------------------
@@ -144,39 +145,39 @@ fn call_count(token: Address) -> u256 uses (evm: mut Evm) {
 
 #[test]
 fn test_safe_transfer_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
 }
 
 #[test(should_revert, selector = 0xdeadbeef)]
 fn test_safe_transfer_bubbles_token_revert() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<RevertingToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<RevertingToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
 }
 
 #[test]
 fn test_safe_transfer_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<NoReturnToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
     assert!(call_count(token) == 1)
 }
 
 #[test(should_revert)]
 fn test_safe_transfer_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<FalseToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
 }
 
 #[test(should_revert)]
 fn test_safe_transfer_reverts_on_malformed_returndata() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<MalformedToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<MalformedToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
 }
 
 #[test(should_revert)]
 fn test_safe_transfer_reverts_on_no_code_address() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
     // Unlike bare `call_with_default`, the codesize check catches this.
-    let eoa = Address { inner: 0xe0a }
+    let eoa = Address::new(0xe0a)
     erc20::safe_transfer(token: eoa, receiver: alice(), amount: 1)
 }
 
@@ -186,20 +187,20 @@ fn test_safe_transfer_reverts_on_no_code_address() uses (evm: mut Evm, ctx: Ctx,
 
 #[test]
 fn test_safe_transfer_from_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
 }
 
 #[test]
 fn test_safe_transfer_from_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<NoReturnToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
     assert!(call_count(token) == 1)
 }
 
 #[test(should_revert)]
 fn test_safe_transfer_from_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<FalseToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
 }
 
@@ -209,19 +210,19 @@ fn test_safe_transfer_from_reverts_on_false_return() uses (evm: mut Evm, ctx: Ct
 
 #[test]
 fn test_safe_approve_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_approve(token, spender: alice(), amount: 1)
 }
 
 #[test]
 fn test_safe_approve_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<NoReturnToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_approve(token, spender: alice(), amount: 1)
     assert!(call_count(token) == 1)
 }
 
 #[test(should_revert)]
 fn test_safe_approve_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<FalseToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_approve(token, spender: alice(), amount: 1)
 }

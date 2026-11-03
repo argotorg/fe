@@ -1,0 +1,64 @@
+// Storage domains: each contract field is a domain of its own, and a
+// projection instantiated with a storage-rooted receiver yields storage.
+struct Counter { value: u256 }
+
+impl Counter {
+    fn value_mut(mut self) -> mut u256 { mut self.value }
+
+    fn pick(mut self, _ flag: bool) -> mut u256 {
+        if flag {
+            mut self.value
+        } else {
+            var scratch: u256 = 0
+            mut scratch
+        }
+    }
+}
+
+// Accepted: distinct fields are disjoint domains.
+pub contract DistinctFields {
+    mut first: u256,
+    mut second: u256,
+    init() uses (mut first, mut second) {
+        let a = mut first
+        second = 1
+        a = 2
+    }
+}
+
+// Rejected: a field is written while an access of it is open.
+pub contract SameField {
+    mut first: u256,
+    init() uses (mut first) {
+        let a = mut first
+        first = 1
+        a = 2
+    }
+}
+
+// Accepted: a projection of a storage receiver yields its storage place.
+pub contract StorageProjection {
+    mut counter: Counter,
+    init() uses (mut counter) {
+        let value = mut counter.value_mut()
+        value += 1
+    }
+}
+
+// Rejected: instantiated with a storage receiver, `pick` yields storage on
+// one path and a frame local on the other.
+pub contract MixedYieldSpaces {
+    mut counter: Counter,
+    init() uses (mut counter) {
+        let value = mut counter.pick(true)
+        value = 1
+    }
+}
+
+// Accepted: instantiated with a memory receiver, both yields are memory.
+fn memory_pick() -> u256 {
+    var counter = Counter { value: 0 }
+    let value = mut counter.pick(false)
+    value = 1
+    counter.value
+}

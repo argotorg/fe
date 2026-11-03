@@ -41,7 +41,7 @@ fn test_const_nested_bool_array_index() {
 
 #[test]
 fn test_const_bool_array_for_loop() {
-    let mut count: u256 = 0
+    var count: u256 = 0
     for flag in FLAGS {
         if flag {
             count += 1

@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/inferred_literal_copy_operands.fe
+---
+error[16-0002]: move conflict in `fn record_twice`
+   ┌─ inferred_literal_copy_operands.fe:28:24
+   │
+28 │     take(boxed) + take(boxed)
+   │          -----         ^^^^^ cannot use a value after it was moved
+   │          │
+   │          value is moved here

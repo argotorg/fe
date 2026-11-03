@@ -1,0 +1,51 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/late_closure_effects.fe
+---
+error[8-0151]: `note` needs `Log` after its closure's effects are inferred
+   ┌─ late_closure_effects.fe:44:17
+   │
+43 │       let g = || {
+   │ ╭─────────────'
+44 │ │         let r = W { v: x }.note()
+   │ │                 ^^^^^^^^^^^^^^^^^ this call's effects are known only after the closure's body is checked
+45 │ │     }
+   │ ╰─────' this closure's effects are inferred from its body, without `Log`
+   │
+   = annotate the types the call depends on in the closure's body, so that it resolves there
+
+error[8-0151]: `bump` needs `mut Log` after its closure's effects are inferred
+   ┌─ late_closure_effects.fe:54:9
+   │
+52 │       let g = || {
+   │ ╭─────────────'
+53 │ │         let r = read_log()
+54 │ │         W { v: x }.bump()
+   │ │         ^^^^^^^^^^^^^^^^^ this call's effects are known only after the closure's body is checked
+55 │ │     }
+   │ ╰─────' this closure's effects are inferred from its body, without `mut Log`
+   │
+   = annotate the types the call depends on in the closure's body, so that it resolves there
+
+error[8-0151]: `apply` needs `F::E` after its closure's effects are inferred
+   ┌─ late_closure_effects.fe:82:16
+   │
+82 │     let g = || W { v: x }.apply(f)
+   │             ---^^^^^^^^^^^^^^^^^^^
+   │             │  │
+   │             │  this call's effects are known only after the closure's body is checked
+   │             this closure's effects are inferred from its body, without `F::E`
+   │
+   = annotate the types the call depends on in the closure's body, so that it resolves there
+
+error[8-0151]: `peek` needs `Store` after its closure's effects are inferred
+    ┌─ late_closure_effects.fe:109:16
+    │
+109 │     let g = || W { v: x }.peek()
+    │             ---^^^^^^^^^^^^^^^^^
+    │             │  │
+    │             │  this call's effects are known only after the closure's body is checked
+    │             this closure's effects are inferred from its body, without `Store`
+    │
+    = annotate the types the call depends on in the closure's body, so that it resolves there

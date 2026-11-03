@@ -1,0 +1,50 @@
+use core::iter::Collection
+
+// `at` is `mut?`: a use that writes through it takes it at `mut`, which needs
+// a mutable receiver.
+fn immutable_receiver() {
+    let xs: [u256; 2] = [1, 2]
+    let x = mut xs.at(0)
+    x = 3
+    xs.at(1) = 4
+}
+
+// A read binds a copy.
+fn read_is_not_a_place() {
+    var xs: [u256; 2] = [1, 2]
+    let x = xs.at(0)
+    x = 3
+}
+
+// A collection whose `at` grants only `ref` is no `mut Collection`.
+struct Fixed {
+    value: u256,
+}
+
+impl Collection for Fixed {
+    type Cursor = usize
+    type Item = u256
+
+    fn start(self) -> usize {
+        0
+    }
+
+    fn has(self, _ c: usize) -> bool {
+        c < 1
+    }
+
+    fn next(self, _ c: usize) -> usize {
+        c + 1
+    }
+
+    fn at(self, _ c: usize) -> ref u256 {
+        ref self.value
+    }
+}
+
+fn ref_only(_ fixed: mut Fixed) {
+    fixed.at(0) = 1
+    for mut x in fixed {
+        x = 2
+    }
+}

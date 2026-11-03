@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/contract_recv_generic_variant.fe
 ---
@@ -49,12 +50,12 @@ note:
    │                                                           ^^^^^^^^^^ T
 
 note:
-   ┌─ contract_recv_generic_variant.fe:21:37
+   ┌─ contract_recv_generic_variant.fe:21:53
    │
-21 │       fn encode(own self, _ ptr: *u8) {
-   │ ╭─────────────────────────────────────^
+21 │       fn encode(own self, _ out: core::abi::AbiFrame) {
+   │ ╭─────────────────────────────────────────────────────^
 22 │ │         let Self { value } = self
-23 │ │         value.encode(ptr)
+23 │ │         value.encode(out)
 24 │ │     }
    │ ╰─────^ ()
 
@@ -79,27 +80,27 @@ note:
 note:
    ┌─ contract_recv_generic_variant.fe:23:9
    │
-23 │         value.encode(ptr)
+23 │         value.encode(out)
    │         ^^^^^ T
 
 note:
    ┌─ contract_recv_generic_variant.fe:23:9
    │
-23 │         value.encode(ptr)
+23 │         value.encode(out)
    │         ^^^^^^^^^^^^^^^^^ ()
 
 note:
    ┌─ contract_recv_generic_variant.fe:23:22
    │
-23 │         value.encode(ptr)
-   │                      ^^^ *<u8>
+23 │         value.encode(out)
+   │                      ^^^ AbiFrame
 
 note:
-   ┌─ contract_recv_generic_variant.fe:30:84
+   ┌─ contract_recv_generic_variant.fe:30:121
    │
-30 │       fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-   │ ╭────────────────────────────────────────────────────────────────────────────────────^
-31 │ │         let value = T::decode_payload(d)
+30 │       fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+   │ ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────^
+31 │ │         let value = T::decode_payload(mut d, input)
 32 │ │         Self { value }
 33 │ │     }
    │ ╰─────^ GenericMsg<T>
@@ -107,26 +108,38 @@ note:
 note:
    ┌─ contract_recv_generic_variant.fe:31:13
    │
-31 │         let value = T::decode_payload(d)
+31 │         let value = T::decode_payload(mut d, input)
    │             ^^^^^ T
 
 note:
    ┌─ contract_recv_generic_variant.fe:31:21
    │
-31 │         let value = T::decode_payload(d)
-   │                     ^^^^^^^^^^^^^^^^^ fn decode_payload<T, Sol, D>
+31 │         let value = T::decode_payload(mut d, input)
+   │                     ^^^^^^^^^^^^^^^^^ fn decode_payload<T, Sol, D, I>
 
 note:
    ┌─ contract_recv_generic_variant.fe:31:21
    │
-31 │         let value = T::decode_payload(d)
-   │                     ^^^^^^^^^^^^^^^^^^^^ T
+31 │         let value = T::decode_payload(mut d, input)
+   │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ T
 
 note:
    ┌─ contract_recv_generic_variant.fe:31:39
    │
-31 │         let value = T::decode_payload(d)
-   │                                       ^ mut D
+31 │         let value = T::decode_payload(mut d, input)
+   │                                       ^^^^^ D
+
+note:
+   ┌─ contract_recv_generic_variant.fe:31:43
+   │
+31 │         let value = T::decode_payload(mut d, input)
+   │                                           ^ D
+
+note:
+   ┌─ contract_recv_generic_variant.fe:31:46
+   │
+31 │         let value = T::decode_payload(mut d, input)
+   │                                              ^^^^^ I
 
 note:
    ┌─ contract_recv_generic_variant.fe:32:9

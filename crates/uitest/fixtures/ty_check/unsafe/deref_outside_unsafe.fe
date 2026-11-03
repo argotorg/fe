@@ -1,0 +1,70 @@
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+pub fn read(p: *u256) -> u256 {
+    *p
+}
+
+pub fn write(p: *u256) {
+    *p = 1
+    *p += 1
+}
+
+pub fn borrow(p: *u256) {
+    let _r = ref *p
+    let _m = mut *p
+}
+
+pub fn scrutinee(p: *u256) -> bool {
+    match *p {
+        0 => true
+        _ => false
+    }
+}
+
+pub fn condition(p: *u256) -> bool {
+    if *p == 0 { true } else { false }
+}
+
+pub fn field_auto_deref(p: *Point) -> u256 {
+    p.x
+}
+
+pub fn field_auto_deref_write(p: *Point) {
+    p.y = 2
+}
+
+pub fn explicit_field(p: *Point) -> u256 {
+    (*p).x
+}
+
+pub fn array_elem(p: *[u256; 4]) -> u256 {
+    (*p)[1]
+}
+
+pub fn double(p: **u256) -> u256 {
+    *(*p)
+}
+
+pub fn safe_block_in_unsafe_block(p: *u256) -> u256 {
+    unsafe {
+        let x = { *p }
+        x
+    }
+}
+
+pub fn nested_item_in_unsafe_block(p: *u256) -> u256 {
+    unsafe {
+        fn inner(_ q: *u256) -> u256 {
+            *q
+        }
+        inner(p)
+    }
+}
+
+pub fn after_unsafe_block(p: *u256) -> u256 {
+    let x = unsafe { *p }
+    x + *p
+}

@@ -19,8 +19,8 @@ fn first(_ orders: MemArray<Order>) -> *Order {
 }
 
 fn orders_with_one_item() -> MemArray<Order> {
-    let mut orders = MemArray<Order>::new_uninit(1)
-    let mut items = MemArray<Item>::new_uninit(1)
+    var orders = unsafe { MemArray<Order>::new_uninit(1) }
+    var items = unsafe { MemArray<Item>::new_uninit(1) }
     items[0] = Item { a: 1, b: 2 }
     orders[0] = Order { items, n: 5 }
     orders
@@ -29,45 +29,45 @@ fn orders_with_one_item() -> MemArray<Order> {
 #[test]
 fn read_field_of_temporary_pointer() {
     let orders = orders_with_one_item()
-    assert(orders.ptr_at(0).n == 5)
-    assert(first(orders).n == 5)
-    assert(orders.ptr_at(0).items.ptr_at(0).a == 1)
+    unsafe { assert(orders.ptr_at(0).n == 5) }
+    unsafe { assert(first(orders).n == 5) }
+    unsafe { assert(orders.ptr_at(0).items.ptr_at(0).a == 1) }
     let o = orders.ptr_at(0)
-    assert(o.items.ptr_at(0).b == 2)
+    unsafe { assert(o.items.ptr_at(0).b == 2) }
 }
 
 #[test]
 fn write_field_of_temporary_pointer() {
     let orders = orders_with_one_item()
-    orders.ptr_at(0).n = 9
-    first(orders).items.ptr_at(0).b = 7
-    orders.ptr_at(0).items.ptr_at(0).a += 5
+    unsafe { orders.ptr_at(0).n = 9 }
+    unsafe { first(orders).items.ptr_at(0).b = 7 }
+    unsafe { orders.ptr_at(0).items.ptr_at(0).a += 5 }
     let o = orders.ptr_at(0)
-    assert(o.n == 9)
-    assert(o.items.ptr_at(0).a == 6)
-    assert(o.items.ptr_at(0).b == 7)
+    unsafe { assert(o.n == 9) }
+    unsafe { assert(o.items.ptr_at(0).a == 6) }
+    unsafe { assert(o.items.ptr_at(0).b == 7) }
 }
 
 #[test]
 fn field_through_pointer_field_of_temporary_pointer() {
-    let mut items = MemArray<Item>::new_uninit(1)
+    var items = unsafe { MemArray<Item>::new_uninit(1) }
     items[0] = Item { a: 3, b: 4 }
-    let mut links = MemArray<Link>::new_uninit(1)
+    var links = unsafe { MemArray<Link>::new_uninit(1) }
     links[0] = Link { next: items.ptr_at(0) }
-    assert(links.ptr_at(0).next.a == 3)
-    links.ptr_at(0).next.b = 8
-    assert(items.ptr_at(0).b == 8)
+    unsafe { assert(links.ptr_at(0).next.a == 3) }
+    unsafe { links.ptr_at(0).next.b = 8 }
+    unsafe { assert(items.ptr_at(0).b == 8) }
 }
 
 #[test]
 fn explicitly_borrow_field_of_temporary_pointer() {
     let orders = orders_with_one_item()
-    let value: mut u256 = mut orders.ptr_at(0).n
+    let value = unsafe { mut orders.ptr_at(0).n }
     value += 7
-    assert(orders.ptr_at(0).n == 12)
-    let shared: ref u256 = ref first(orders).n
+    unsafe { assert(orders.ptr_at(0).n == 12) }
+    let shared = unsafe { ref first(orders).n }
     assert(shared == 12)
-    let nested: mut u256 = mut orders.ptr_at(0).items.ptr_at(0).a
+    let nested = unsafe { mut orders.ptr_at(0).items.ptr_at(0).a }
     nested += 8
-    assert(orders.ptr_at(0).items.ptr_at(0).a == 9)
+    unsafe { assert(orders.ptr_at(0).items.ptr_at(0).a == 9) }
 }

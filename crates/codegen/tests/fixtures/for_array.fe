@@ -5,9 +5,13 @@ pub fn for_array_sum() -> u64 {
         11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
         21, 22, 23, 24, 25
     ]
-    let mut sum: u64 = 0
+    var sum: u64 = 0
     for elem in arr {
         sum = sum + elem
     }
     sum
+}
+
+pub fn main() -> u64 {
+    for_array_sum()
 }

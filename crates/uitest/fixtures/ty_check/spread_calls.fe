@@ -1,0 +1,62 @@
+// A call passes a spread one argument for each parameter its shape lists,
+// and an impl writes those parameters out.
+trait Apply<shape A> {
+    type Out
+
+    fn apply(self, ..A) -> Self::Out
+}
+
+fn calls<F: Apply<(own u256, mut u256)>>(_ f: own F) {
+    var x: u256 = 1
+    f.apply(1)
+    f.apply(1, x + 1)
+    f.apply(true, mut x)
+    f.apply(1, x)
+}
+
+// A generic shape lists no known parameters.
+fn generic<shape S, F: Apply<S>>(_ f: own F) {
+    f.apply()
+}
+
+struct Short {}
+
+impl Apply<(own u256, own u256)> for Short {
+    type Out = ()
+
+    fn apply(self, _ a: own u256) {}
+}
+
+struct Moded {}
+
+impl Apply<(own u256,)> for Moded {
+    type Out = ()
+
+    fn apply(self, _ a: u256) {}
+}
+
+// A spread's parameters have no labels.
+struct Labeled {}
+
+impl Apply<(own u256,)> for Labeled {
+    type Out = ()
+
+    fn apply(self, a: own u256) {}
+}
+
+struct Parts {}
+
+impl Apply<(own u256, (mut u256, ref bool))> for Parts {
+    type Out = ()
+
+    fn apply(self, _ a: own u256, _ (mut b, c): (mut u256, ref u256)) {}
+}
+
+// A generic shape lists no parameters an impl could write.
+struct Any {}
+
+impl<shape S> Apply<S> for Any {
+    type Out = ()
+
+    fn apply(self) {}
+}

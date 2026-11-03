@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/contract_recv_msg_event_name_collision.fe
 ---
@@ -7,7 +8,7 @@ note:
   ┌─ contract_recv_msg_event_name_collision.fe:3:5
   │
 3 │     Transfer { to: u256, amount: u256 } -> bool,
-  │     ^^^^^^^^ () | *<u8> | Transfer | __fe_I | fn abi_field_head_size<u256> | fn decode_field<Sol, u256, __fe_D> | fn decode_msg_field_from<Sol, u256, __fe_I> | fn dynamic_payload_size<u256> | fn encode_field_at<Sol, u256> | mut __fe_D | u256
+  │     ^^^^^^^^ () | AbiFrame | Transfer | __fe_D | __fe_I | fn abi_field_head_size<u256> | fn decode_field<Sol, u256, __fe_D, __fe_I> | fn decode_msg_field_from<Sol, u256, __fe_I> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256> | u256
 
 note:
    ┌─ contract_recv_msg_event_name_collision.fe:6:1
@@ -19,7 +20,7 @@ note:
    · │
 12 │ │     value: u256,
 13 │ │ }
-   │ ╰─^ () | (u256) | MemBuffer | MemSlice<u8> | Transfer | fn encode_abi_payload<(u256)> | mut __fe_L | u256
+   │ ╰─^ () | (u256) | MemBuffer | MemSlice<u8> | Transfer | __fe_L | fn encode_abi_payload<(u256)> | u256
 
 note:
    ┌─ contract_recv_msg_event_name_collision.fe:17:9

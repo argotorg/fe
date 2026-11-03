@@ -4,64 +4,64 @@ expression: diags
 input_file: fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/implied_premises.fe
 ---
 error[8-0093]: const requirement is not satisfied
-   ┌─ implied_premises.fe:16:15
+   ┌─ implied_premises.fe:18:15
    │
  5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-16 │ fn param(_ x: Bounded<0>::Out) {}
+18 │ fn param(_ x: Bounded<0>::Out) {}
    │               ^^^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ implied_premises.fe:18:22
+   ┌─ implied_premises.fe:20:22
    │
  5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-18 │ fn local() { let _x: Bounded<0>::Out = Holder<MAX> {} }
+20 │ fn local() { let _x: Bounded<0>::Out = Holder<MAX> {} }
    │                      ^^^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ implied_premises.fe:19:28
+   ┌─ implied_premises.fe:21:28
    │
  5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-19 │ fn trait_const(_ h: Holder<Bounded<0>::V>) {}
+21 │ fn trait_const(_ h: Holder<Bounded<0>::V>) {}
    │                            ^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ implied_premises.fe:20:31
+   ┌─ implied_premises.fe:22:31
    │
  5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-20 │ fn inherent_const(_ h: Holder<Bounded<0>::D>) {}
+22 │ fn inherent_const(_ h: Holder<Bounded<0>::D>) {}
    │                               ^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ implied_premises.fe:21:34
+   ┌─ implied_premises.fe:23:34
    │
  5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-21 │ fn body_trait_const() -> usize { Bounded<0>::V }
+23 │ fn body_trait_const() -> usize { Bounded<0>::V }
    │                                  ^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ implied_premises.fe:24:23
+   ┌─ implied_premises.fe:26:23
    │
  5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-24 │ fn through_alias(_ x: Same<0>::Out) {}
+26 │ fn through_alias(_ x: Same<0>::Out) {}
    │                       ^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ implied_premises.fe:25:34
+   ┌─ implied_premises.fe:27:34
    │
  5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-25 │ type Projected<const N: usize> = Bounded<N>::Out
+27 │ type Projected<const N: usize> = Bounded<N>::Out
    │                                  ^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution

@@ -1,0 +1,74 @@
+use core::ops::StateIndex
+use std::evm::{Address, StorageKey, StorageMap}
+
+// `map[k]` on a storage map is an entry place, a path under the map's place
+// with the key as a dynamic index: an access of it ends at its last use.
+
+struct Store {
+    counts: StorageMap<u256, u256>,
+    other: StorageMap<u256, u256>,
+}
+
+pub struct Ledger {
+    pub balances: StorageMap<Address, u256>,
+}
+
+impl Ledger {
+    // The method reaches the map through `self`.
+    fn credit(mut self, _ to: Address, amount: u256) {
+        self.balances[to] += amount
+    }
+}
+
+// Rejected: entries at runtime keys may be one entry.
+fn same_field(_ key: u256) uses (store: mut Store) {
+    let x = mut store.counts[key]
+    store.counts[key + 1] = 3
+    x += 1
+}
+
+// Accepted: the maps of a contract field lie in their own fields, which are
+// disjoint.
+pub contract Distinct {
+    mut store: Store,
+    init() uses (mut store) {
+        let x = mut store.counts[1]
+        store.other[1] = 3
+        x += 1
+    }
+}
+
+// Accepted: a provided `Store` lives in storage, where its two maps are
+// distinct fields.
+fn provided_fields(_ key: u256) uses (store: mut Store) {
+    let x = mut store.counts[key]
+    store.other[key] = 3
+    x += 1
+}
+
+// Accepted: the entry access ends at its last use.
+fn sequential(_ key: u256) uses (store: mut Store) {
+    let x = mut store.counts[key]
+    x += 1
+    store.counts[key] += 1
+}
+
+// Rejected: a read of the entry while a `mut` access of it is open.
+fn read_during_write(_ key: u256) -> u256 uses (store: mut Store) {
+    let x = mut store.counts[key]
+    let y = store.counts[key]
+    x += 1
+    y
+}
+
+fn touch<T>(_ x: mut T) {}
+
+fn touch_entry<C: StateIndex>(_ c: mut C, _ key: C::Key) {
+    touch(mut c[key])
+}
+
+// Accepted: an entry of a map whose key type is still generic, reached
+// through a generic collection parameter.
+fn touch_map<K: StorageKey + Copy, V>(_ m: mut StorageMap<K, V>, _ key: K) {
+    touch_entry(mut m, key)
+}

@@ -1,14 +1,14 @@
+use hir::analysis::ty::AddressSpace;
 use hir::analysis::{
-    semantic::{SemanticBody, SemanticInstance, owner_effect_bindings, same_owner_effect_binding},
-    ty::{
-        ty_check::{BodyOwner, LocalBinding, ParamSite},
-        ty_def::TyId,
-    },
+    semantic::{SemanticBody, SemanticInstance, same_owner_effect_binding},
+    ty::ty_check::{BodyOwner, LocalBinding},
 };
+use hir::hir_def::FuncParamMode;
 
 use crate::{
+    RuntimeInstanceKey,
     db::MirDb,
-    runtime::{AddressSpaceKind, RuntimeBoundarySpec, RuntimeParamPlan},
+    runtime::{RuntimeBoundarySpec, RuntimeParamPlan},
 };
 
 use super::{
@@ -53,40 +53,37 @@ pub(crate) fn runtime_param_locals<'db>(
         .collect()
 }
 
-fn runtime_visible_binding_semantic_ty<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
-    binding: LocalBinding<'db>,
-) -> TyId<'db> {
-    match binding {
-        LocalBinding::EffectParam { .. }
-        | LocalBinding::Param {
-            site: ParamSite::EffectField(_),
-            ..
-        } => semantic.binding_ty(db, binding),
-        LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
-            typed_body.binding_ty(db, binding)
-        }
-    }
+/// Whether each runtime parameter of `key` is an access of its caller's
+/// place: a view or `mut` parameter, an access part of a product, or an
+/// effect. Fe's access rules make such a place exclusive to the call or
+/// unwritten during it.
+pub fn runtime_param_accesses<'db>(db: &'db dyn MirDb, key: RuntimeInstanceKey<'db>) -> Vec<bool> {
+    let Some(semantic) = key.semantic(db) else {
+        return Vec::new();
+    };
+    runtime_visible_binding_plans(db, semantic)
+        .iter()
+        .map(|entry| match entry.binding {
+            LocalBinding::Param { mode, .. } => mode != FuncParamMode::Own,
+            LocalBinding::ParamPart { access, .. } => access.is_some(),
+            LocalBinding::EffectParam { .. } => true,
+            LocalBinding::Local { .. } => false,
+        })
+        .collect()
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn runtime_param_plans<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeParamPlan<'db>> {
     let typed_body = semantic.key(db).typed_body(db);
-    let mut plans = Vec::new();
-    let mut idx = 0;
-    while typed_body.param_binding(idx).is_some() {
-        plans.push(desired_runtime_param_plan(db, semantic, typed_body, idx));
-        idx += 1;
-    }
-    plans
+    (0..typed_body.input_bindings().len())
+        .map(|idx| desired_runtime_param_plan(db, semantic, typed_body, idx))
+        .collect()
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn runtime_visible_binding_plans<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
@@ -99,14 +96,13 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         if !matches!(plan, RuntimeParamPlan::Erased) {
             entries.push(RuntimeVisibleBindingPlan {
                 binding,
-                semantic_ty: runtime_visible_binding_semantic_ty(db, semantic, typed_body, binding),
+                semantic_ty: semantic.binding_ty(db, binding),
                 plan,
             });
         }
     };
 
-    let mut idx = 0;
-    while let Some(binding) = typed_body.param_binding(idx) {
+    for (idx, &binding) in typed_body.input_bindings().iter().enumerate() {
         push(
             binding,
             param_plans
@@ -114,7 +110,6 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
                 .cloned()
                 .unwrap_or(RuntimeParamPlan::Erased),
         );
-        idx += 1;
     }
 
     if let BodyOwner::ContractRecvArm {
@@ -131,7 +126,7 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
                 continue;
             };
             let ty = semantic.binding_ty(db, binding);
-            let plan = top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
+            let plan = top_level_class_for_ty_in_env(db, env, ty, AddressSpace::Memory)
                 .map(RuntimeBoundarySpec::ExactTransport)
                 .map(RuntimeParamPlan::Boundary)
                 .unwrap_or(RuntimeParamPlan::Erased);
@@ -139,7 +134,7 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         }
     }
 
-    for binding in owner_effect_bindings(db, owner) {
+    for binding in semantic.effect_bindings(db) {
         let plan = owner_effect_binding_boundary(db, semantic, binding)
             .map(RuntimeParamPlan::Boundary)
             .unwrap_or(RuntimeParamPlan::Erased);

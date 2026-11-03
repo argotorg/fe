@@ -1,0 +1,91 @@
+// `keccak_packed` and `encode_packed` reserve a value's declared
+// `packed_width`; an encoding that writes more reverts with `Panic(0x01)`
+// rather than write past the reservation.
+use core::ptr
+use std::evm::packed::{EncodePacked, Packed, encode_packed, keccak_packed}
+
+struct Liar {}
+
+impl EncodePacked for Liar {
+    fn packed_width(self) -> u256 {
+        0
+    }
+
+    fn pack_into(own self, _ p: own Packed) -> Packed {
+        var p = p
+        p.u256(1)
+        p.u256(2)
+        p.u256(3)
+        p.u256(4)
+        p
+    }
+}
+
+struct Honest {}
+
+impl EncodePacked for Honest {
+    fn packed_width(self) -> u256 {
+        64
+    }
+
+    fn pack_into(own self, _ p: own Packed) -> Packed {
+        var p = p
+        p.u256(1)
+        p.u256(2)
+        p
+    }
+}
+
+// A safe `packed_width` need not answer the same twice: this one reports 0
+// bytes until the free memory pointer moves, then 64.
+struct Flaky {
+    start: u256,
+}
+
+impl EncodePacked for Flaky {
+    fn packed_width(self) -> u256 {
+        if ptr::alloc_bytes(0) as usize as u256 == self.start { 0 } else { 64 }
+    }
+
+    fn pack_into(own self, _ p: own Packed) -> Packed {
+        var p = p
+        p.u256(1)
+        p.u256(2)
+        p
+    }
+}
+
+fn flaky() -> Flaky {
+    Flaky { start: ptr::alloc_bytes(0) as usize as u256 }
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn changing_width_reverts_keccak() {
+    let _ = keccak_packed(flaky())
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn changing_width_reverts_encode() {
+    let _ = encode_packed(flaky())
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn changing_width_in_tuple_reverts() {
+    let _ = keccak_packed((flaky(), 7 as u256))
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn lying_width_reverts_keccak() {
+    let _ = keccak_packed(Liar {})
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn lying_width_reverts_encode() {
+    let _ = encode_packed(Liar {})
+}
+
+#[test]
+fn honest_width_encodes() {
+    assert(encode_packed(Honest {}).len() == 64)
+    assert(encode_packed((Honest {}, 7 as u8, Honest {})).len() == 129)
+}

@@ -1,0 +1,29 @@
+// A `ref` projection may yield a view parameter by name: the grant views the
+// caller's place, as `ref outer` does, and a scalar parameter's grant views
+// the session's copy.
+struct Inner {
+    value: u256,
+}
+
+struct Outer {
+    inner: Inner,
+}
+
+fn shared(_ outer: Outer) -> ref Outer {
+    outer
+}
+
+fn word(_ x: u256) -> ref u256 {
+    x
+}
+
+#[test]
+fn view_parameters_yield_their_places() {
+    var outer = Outer { inner: Inner { value: 3 } }
+    assert!(shared(outer).inner.value == 3)
+    let seen = ref shared(outer)
+    assert!(seen.inner.value == 3)
+    outer.inner.value = 4
+    assert!(shared(outer).inner.value == 4)
+    assert!(word(5) == 5)
+}

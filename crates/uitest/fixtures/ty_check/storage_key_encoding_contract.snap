@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/storage_key_encoding_contract.fe
 ---
@@ -10,12 +11,12 @@ error[6-0002]: not all trait methods are implemented
   │                     ^^^^^^ missing implementations: encoded_len
 
 error[6-0008]: method `write_key` has incompatible return type
-   ┌─ storage_key_encoding_contract.fe:7:8
+   ┌─ storage_key_encoding_contract.fe:7:15
    │
- 7 │     fn write_key(ptr: *u8, self) -> u256 {
-   │        ^^^^^^^^^ expected `()`, found `u256`
+ 7 │     unsafe fn write_key(ptr: *u8, self) -> u256 {
+   │               ^^^^^^^^^ expected `()`, found `u256`
    │
-   ┌─ src/evm/storage_map.fe:14:8
+   ┌─ src/evm/storage_map.fe:19:15
    │
-14 │     fn write_key(ptr: *u8, self)
-   │        --------- trait requires this return type
+19 │     unsafe fn write_key(ptr: *u8, self)
+   │               --------- trait requires this return type

@@ -2,11 +2,11 @@ pub fn foo() {
     let x = 1
 }
 
-fn bar(bar: i32, mut baz: u256) -> i32 {
+fn bar(bar: i32, var baz: own u256) -> i32 {
     1
 }
 
-fn baz(from: address, mut to: address, _ val: u256, _ _: u256) -> i32 {
+fn baz(from: address, var to: own address, _ val: u256, _ _: u256) -> i32 {
     1
 }
 

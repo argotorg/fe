@@ -1,0 +1,47 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/growing_recursion.fe
+---
+error[16-0016]: instantiation limit exceeded in `fn grow`
+   ┌─ growing_recursion.fe:12:32
+   │
+12 │     if n == 0 { 0 } else { 1 + grow((x, x), n - 1) }
+   │                                ^^^^^^^^^^^^^^^^^^^ this call instantiates `grow` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
+
+error[16-0016]: instantiation limit exceeded in `fn deepen`
+   ┌─ growing_recursion.fe:17:32
+   │
+17 │     if n == 0 { 0 } else { 1 + deepen(Wrap { t: x }, n - 1) }
+   │                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `deepen` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
+
+error[16-0016]: instantiation limit exceeded in `fn ping`
+   ┌─ growing_recursion.fe:22:28
+   │
+22 │     if n == 0 { 0 } else { pong((x, 1 as u256), n - 1) }
+   │                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `pong` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
+
+error[16-0016]: instantiation limit exceeded in `fn grow`
+   ┌─ growing_recursion.fe:36:36
+   │
+36 │         if n == 0 { 0 } else { 1 + (Wrap { t: self }).grow(n - 1) }
+   │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `grow` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
+
+error[16-0016]: instantiation limit exceeded in `fn branch`
+   ┌─ growing_recursion.fe:57:28
+   │
+57 │     if n == 0 { 0 } else { branch((x, 1 as u256), n - 1) + branch((1 as u256, x), n - 1) }
+   │                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `branch` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
+
+error[16-0016]: instantiation limit exceeded in `fn tick`
+   ┌─ growing_recursion.fe:62:28
+   │
+62 │     if n == 0 { 0 } else { tock((x, 1 as u256), n - 1) + tock((1 as u256, x), n - 1) }
+   │                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `tock` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
+
+error[16-0016]: instantiation limit exceeded in `fn count_up`
+   ┌─ growing_recursion.fe:90:36
+   │
+90 │     if x == 0 { N as u256 } else { count_up<{ N + 1 }>(x - 1) }
+   │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `count_up` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes

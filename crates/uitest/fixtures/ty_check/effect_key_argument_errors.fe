@@ -1,0 +1,54 @@
+// An effect key whose path names a type or trait reports the error written
+// in its arguments, where it is written; only a key that names neither is
+// an unresolved effect.
+trait Has { type Item }
+
+trait HasT<T> {}
+
+trait HasC<const N: usize> {}
+
+struct Foo<T> {}
+
+struct FooC<const N: usize> {}
+
+fn binding() uses (p: Has<Item = Missing>) {}
+
+fn trait_arg() uses (p: HasT<Missing>) {}
+
+fn trait_const() uses (p: HasC<{ 1 / 0 }>) {}
+
+fn type_arg() uses (p: Foo<Missing>) {}
+
+fn type_const() uses (p: FooC<{ 2 / 0 }>) {}
+
+fn unresolved() uses (p: Missing) {}
+
+fn valid() uses (p: Has<Item = u8>, q: HasT<u8>, r: Foo<u8>) {}
+
+// A key's arguments must satisfy their bounds; a trait key's requirements
+// on `Self` fall to its provider, also through a default.
+trait Gate {}
+
+struct Open {}
+
+impl Gate for Open {}
+
+struct Guarded<T: Gate> {}
+
+trait Requires<T: Gate> {}
+
+trait Base {}
+
+trait Derived<T>: Base {}
+
+trait Defaulted<T = Self> where T: Gate {}
+
+fn type_bound() uses (p: Guarded<bool>) {}
+
+fn trait_bound() uses (p: Requires<bool>) {}
+
+fn bounds_hold() uses (p: Guarded<Open>, q: Requires<Open>, r: Derived<u8>, s: Defaulted) {}
+
+contract D uses (p: Guarded<bool>) {}
+
+contract C uses (p: Has<Item = Missing>) {}

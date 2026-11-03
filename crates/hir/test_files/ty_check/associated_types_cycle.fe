@@ -40,7 +40,7 @@ impl Encode<SolAbi> for [u8; 4] {
 }
 
 fn f() {
-    let mut enc1 = SolAbi::Encoder::with_encoded_size(1024)
+    var enc1 = SolAbi::Encoder::with_encoded_size(1024)
     let enc2 = SolEncoder::with_encoded_size(256)
     let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
     let selector = [0, 1, 2, 3]

@@ -1,22 +1,20 @@
 trait Pick {
-    type Out
-    const fn pick(_ value: mut u8) -> Self::Out
+    const fn pick(_ value: mut u8) -> mut u8
 }
 
 struct Alias {}
 impl Pick for Alias {
-    type Out = mut u8
     const fn pick(_ value: mut u8) -> mut u8 { mut value }
 }
 
-// `via<Alias>` returns a borrow only after its result type is instantiated.
-const fn via<T: Pick>(_ value: mut u8) -> T::Out {
+// A generic projection yields through the selected implementation.
+const fn via<T: Pick>(_ value: mut u8) -> mut u8 {
     T::pick(mut value)
 }
 
 const fn answer() -> u8 {
-    let mut x: u8 = 0
-    let a: mut u8 = via<Alias>(mut x)
+    var x: u8 = 0
+    let a = mut via<Alias>(mut x)
     a = 42
     x
 }

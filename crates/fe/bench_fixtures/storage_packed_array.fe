@@ -13,7 +13,7 @@ pub msg BenchMsg {
 }
 
 pub contract Bench {
-    mut pack: StoragePackedArray<8, 0>,
+    mut pack: StoragePackedArray<8>,
 
     recv BenchMsg {
         Set { idx, value } uses (mut pack) {

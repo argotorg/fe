@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/contract_effect_opt_in.fe
 ---
@@ -9,4 +10,5 @@ error[8-0036]: missing effect `Ctx` required by `who_called`
 9 │         who_called()
   │         ^^^^^^^^^^^^ `who_called` requires effect `Ctx` to be in scope
   │
-  = provide it with `with (Ctx = value)` or require it via `uses Ctx`
+  = require it in this function's signature with `uses (ctx: Ctx)`, so that its callers provide it
+  = or provide it to a block of this function with `with (Ctx = value) { .. }`

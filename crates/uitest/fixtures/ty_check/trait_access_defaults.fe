@@ -1,0 +1,21 @@
+// A trait declares its effect rows; each implementation gives them.
+trait Collection {
+    uses E = (storage: mut Self)
+    fn at(self) -> ref u256 uses E
+}
+
+trait Slot {
+    fn slot(mut self) -> mut u256
+}
+
+// Its rows are the trait's.
+struct Unknown { n: u256 }
+
+impl Slot for Unknown {
+    uses E = ()
+    fn slot(mut self) -> mut u256 {
+        var tmp = self.n
+        yield mut tmp
+        self.n = tmp
+    }
+}

@@ -41,7 +41,7 @@ struct ConstCanonicalizationCx<'a, 'db> {
     mode: ConstCanonicalizationMode,
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn canonicalize_semantic_consts_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -146,7 +146,7 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
             continue;
         };
         body.blocks[bb.index()] = canonicalize_block(cx, &original.blocks[bb.index()], &mut locals);
-        for succ in block_successors(&original.blocks[bb.index()].terminator.kind) {
+        for succ in original.blocks[bb.index()].terminator.kind.successors() {
             if merge_local_consts(&mut incoming[succ.index()], &locals) {
                 pending.push_back(succ);
             }
@@ -169,12 +169,20 @@ fn canonicalize_block<'db>(
     block: &SBlock<'db>,
     locals: &mut LocalConstMap<'db>,
 ) -> SBlock<'db> {
+    let stmts = block
+        .stmts
+        .iter()
+        .map(|stmt| canonicalize_stmt(cx, stmt, locals))
+        .collect();
+    // A projection's caller may write through the granted value before the
+    // slide resumes.
+    if let STerminatorKind::Yield { value, .. } = &block.terminator.kind {
+        for root in &cx.local_roots[value.value.index()] {
+            locals[root.index()] = None;
+        }
+    }
     SBlock {
-        stmts: block
-            .stmts
-            .iter()
-            .map(|stmt| canonicalize_stmt(cx, stmt, locals))
-            .collect(),
+        stmts,
         terminator: block.terminator.clone(),
     }
 }
@@ -233,6 +241,14 @@ fn canonicalize_stmt<'db>(
                 src: *src,
             }
         }
+        SStmtKind::End { access } => SStmtKind::End { access: *access },
+        // A destroyed local holds nothing to substitute.
+        SStmtKind::Drop { place } => {
+            locals[place.local.index()] = None;
+            SStmtKind::Drop {
+                place: place.clone(),
+            }
+        }
     };
     SStmt {
         id: stmt.id,
@@ -252,6 +268,7 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
         let mut changed = false;
         for statement in body.blocks.iter().flat_map(|block| &block.stmts) {
             let (dst, sources, address, writes) = match &statement.kind {
+                SStmtKind::End { .. } | SStmtKind::Drop { .. } => continue,
                 SStmtKind::Assign { dst, expr } => {
                     let mut address = None;
                     let mut writes = Vec::new();
@@ -265,7 +282,9 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
                         | SExpr::Cast { value, .. }
                         | SExpr::ArrayRepeat { value, .. }
                         | SExpr::ExtractEnumField { value, .. } => vec![value.value],
-                        SExpr::ReadPlace { place } => vec![place.local],
+                        SExpr::ReadPlace { place } | SExpr::InspectPlace { place } => {
+                            vec![place.local]
+                        }
                         SExpr::Field { base, .. } | SExpr::Index { base, .. } => vec![base.value],
                         SExpr::AggregateMake { fields, .. } | SExpr::EnumMake { fields, .. } => {
                             fields.iter().map(|field| field.value).collect()
@@ -372,31 +391,21 @@ fn canonicalize_expr<'db>(
         || matches!(cx.mode, ConstCanonicalizationMode::Runtime)
             && (matches!(expr, SExpr::Call { .. }) || !preserves_layout_index)
     {
-        let has_runtime_evidence = match expr {
-            SExpr::Call { callee, .. } => callee
-                .key
-                .layout_bundle_signature(cx.db)
-                .has_runtime_evidence(),
-            _ => false,
-        };
-        if !has_runtime_evidence {
-            match attempt_optional_const_fold(cx.db, cx.body, result_ty, expr, locals, synthetic())
-            {
-                FoldAttempt::Folded(value) => {
-                    let value = canonicalize_const_value(cx.db, value.value());
-                    if let Some(value) =
-                        reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value)
-                    {
-                        return (
-                            SExpr::Const(SConst::from_trusted_source(cx.db, value)),
-                            Some(value),
-                        );
-                    }
+        match attempt_optional_const_fold(cx.db, cx.body, result_ty, expr, locals, synthetic()) {
+            FoldAttempt::Folded(value) => {
+                let value = canonicalize_const_value(cx.db, value.value());
+                if let Some(value) =
+                    reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value)
+                {
+                    return (
+                        SExpr::Const(SConst::from_trusted_source(cx.db, value)),
+                        Some(value),
+                    );
                 }
-                FoldAttempt::NotFoldable(_) => {}
-                FoldAttempt::InvariantFailure(failure) => {
-                    panic!("optional CTFE fold invariant failed: {failure:?}")
-                }
+            }
+            FoldAttempt::NotFoldable(_) => {}
+            FoldAttempt::InvariantFailure(failure) => {
+                panic!("optional CTFE fold invariant failed: {failure:?}")
             }
         }
     }
@@ -439,7 +448,7 @@ fn canonicalize_const<'db>(
     let value = canonicalize_const_value(db, value);
     match reify_runtime_const_for_ty(db, instance, result_ty, value) {
         Some(runtime) => (SConst::from_trusted_source(db, runtime), Some(runtime)),
-        // Formal layout evidence may remain symbolic here. It is not a
+        // A formal parameter's value may remain symbolic here. It is not a
         // constant fact; runtime admission checks it before lowering.
         None => (
             if matches!(constant, SConst::Evidence(_)) {
@@ -472,23 +481,6 @@ fn merge_local_consts<'db>(
             }
             changed
         }
-    }
-}
-
-fn block_successors<'db>(term: &STerminatorKind<'db>) -> Vec<SBlockId> {
-    match term {
-        STerminatorKind::Goto(bb) => vec![*bb],
-        STerminatorKind::Branch {
-            then_bb, else_bb, ..
-        } => vec![*then_bb, *else_bb],
-        STerminatorKind::MatchEnum { cases, default, .. } => {
-            let mut succs = cases.iter().map(|(_, bb)| *bb).collect::<Vec<_>>();
-            if let Some(default) = default {
-                succs.push(*default);
-            }
-            succs
-        }
-        STerminatorKind::Assert { .. } | STerminatorKind::Return(None | Some(_)) => Vec::new(),
     }
 }
 

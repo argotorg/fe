@@ -9,25 +9,25 @@ use crate::{
     hir_def::{BinOp, Body, Expr, ExprId, FieldIndex, Partial, UnOp},
 };
 use num_traits::ToPrimitive;
-use salsa::Update;
+use salsa::SalsaValue;
 
 /// A "place" is an assignable location (an lvalue): a base binding plus zero or
 /// more resolved projections (field/index).
 ///
 /// Places are used to model effect arguments as implicit references and to
 /// select the correct load/store operations based on address space.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct Place<'db> {
     pub base: PlaceBase<'db>,
     pub projections: Vec<PlaceProjection<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PlaceBase<'db> {
     Binding(LocalBinding<'db>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PlaceProjection<'db> {
     Deref {
         result_ty: TyId<'db>,
@@ -40,9 +40,15 @@ pub enum PlaceProjection<'db> {
         index_expr: ExprId,
         result_ty: TyId<'db>,
     },
+    /// The element at a key of a collection whose elements are places
+    /// (`core::ops::StateIndex`), such as a storage map's entry.
+    Entry {
+        key_expr: ExprId,
+        result_ty: TyId<'db>,
+    },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ResolvedPlaceField<'db> {
     pub base_ty: TyId<'db>,
     pub implicit_deref_ty: Option<TyId<'db>>,
@@ -54,7 +60,8 @@ impl<'db> PlaceProjection<'db> {
         match self {
             Self::Deref { result_ty }
             | Self::Field { result_ty, .. }
-            | Self::Index { result_ty, .. } => result_ty,
+            | Self::Index { result_ty, .. }
+            | Self::Entry { result_ty, .. } => result_ty,
         }
     }
 }
@@ -71,6 +78,14 @@ impl<'db> Place<'db> {
         self.projections.push(proj);
     }
 
+    /// Whether the place reaches an entry of a collection whose elements are
+    /// places, which lies at a slot computed at runtime.
+    pub fn has_entry(&self) -> bool {
+        self.projections
+            .iter()
+            .any(|projection| matches!(projection, PlaceProjection::Entry { .. }))
+    }
+
     pub fn is_definitely_place_expr(typed_body: &TypedBody<'db>, expr: ExprId) -> bool {
         typed_body.expr_place(expr).is_some()
     }
@@ -79,18 +94,29 @@ impl<'db> Place<'db> {
         typed_body.expr_place(expr).cloned()
     }
 
-    pub fn from_expr_in_body<F, G>(
+    /// `is_entry` tells which index expressions name an entry of a
+    /// collection whose elements are places.
+    pub fn from_expr_in_body<F, G, H>(
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: ExprId,
         mut expr_binding: F,
         mut expr_ty: G,
+        mut is_entry: H,
     ) -> Option<Self>
     where
         F: FnMut(ExprId) -> Option<LocalBinding<'db>>,
         G: FnMut(ExprId) -> TyId<'db>,
+        H: FnMut(ExprId) -> bool,
     {
-        Self::from_expr_in_body_with(db, body, expr, &mut expr_binding, &mut expr_ty)
+        Self::from_expr_in_body_with(
+            db,
+            body,
+            expr,
+            &mut expr_binding,
+            &mut expr_ty,
+            &mut is_entry,
+        )
     }
 
     fn from_expr_in_body_with(
@@ -99,6 +125,7 @@ impl<'db> Place<'db> {
         expr: ExprId,
         expr_binding: &mut dyn FnMut(ExprId) -> Option<LocalBinding<'db>>,
         expr_ty: &mut dyn FnMut(ExprId) -> TyId<'db>,
+        is_entry: &mut dyn FnMut(ExprId) -> bool,
     ) -> Option<Self> {
         let Partial::Present(expr_data) = expr.data(db, body) else {
             return None;
@@ -109,8 +136,8 @@ impl<'db> Place<'db> {
                 let binding = expr_binding(expr)?;
                 Some(Place::new(PlaceBase::Binding(binding)))
             }
-            Expr::Un(base, UnOp::Mut | UnOp::Ref) => {
-                Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty)
+            Expr::Un(base, UnOp::Mut | UnOp::MaybeMut | UnOp::Ref) => {
+                Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty, is_entry)
             }
             Expr::Un(base, UnOp::Deref) => {
                 let base_ty = expr_ty(*base);
@@ -118,8 +145,14 @@ impl<'db> Place<'db> {
                     .as_capability(db)
                     .map_or(base_ty, |(_, inner)| inner);
                 ptr_ty.as_ptr(db)?;
-                let mut place =
-                    Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty)?;
+                let mut place = Place::from_expr_in_body_with(
+                    db,
+                    body,
+                    *base,
+                    expr_binding,
+                    expr_ty,
+                    is_entry,
+                )?;
                 place.push_projection(PlaceProjection::Deref {
                     result_ty: expr_ty(expr),
                 });
@@ -127,8 +160,14 @@ impl<'db> Place<'db> {
             }
             Expr::Field(base, field) => {
                 let field = field.to_opt()?;
-                let mut place =
-                    Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty)?;
+                let mut place = Place::from_expr_in_body_with(
+                    db,
+                    body,
+                    *base,
+                    expr_binding,
+                    expr_ty,
+                    is_entry,
+                )?;
                 let resolved = resolve_place_field(db, expr_ty(*base), field)?;
                 if let Some(result_ty) = resolved.implicit_deref_ty {
                     place.push_projection(PlaceProjection::Deref { result_ty });
@@ -140,14 +179,27 @@ impl<'db> Place<'db> {
                 Some(place)
             }
             Expr::Bin(base, index, op) if *op == BinOp::Index => {
-                let mut place =
-                    Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty)?;
-                if !projectable_place_ty(db, expr_ty(*base)).is_array(db) {
+                let mut place = Place::from_expr_in_body_with(
+                    db,
+                    body,
+                    *base,
+                    expr_binding,
+                    expr_ty,
+                    is_entry,
+                )?;
+                let result_ty = expr_ty(expr);
+                place.push_projection(if is_entry(expr) {
+                    PlaceProjection::Entry {
+                        key_expr: *index,
+                        result_ty,
+                    }
+                } else if projectable_place_ty(db, expr_ty(*base)).is_array(db) {
+                    PlaceProjection::Index {
+                        index_expr: *index,
+                        result_ty,
+                    }
+                } else {
                     return None;
-                }
-                place.push_projection(PlaceProjection::Index {
-                    index_expr: *index,
-                    result_ty: expr_ty(expr),
                 });
                 Some(place)
             }
@@ -159,6 +211,27 @@ impl<'db> Place<'db> {
 /// Returns `true` if `expr` names memory addressed by a pointer: `*ptr`, or a
 /// field or array element selected through a pointer or from such memory.
 /// Unlike a [`Place`], the pointer need not be a binding, as in `f().field`.
+/// Whether `expr` names a place in a projection's grant: the projection's
+/// result, or a field or element of it. `is_access` tells whether an
+/// expression grants an access.
+pub fn is_grant_place_expr(
+    db: &dyn HirAnalysisDb,
+    body: Body<'_>,
+    expr: ExprId,
+    is_access: &dyn Fn(ExprId) -> bool,
+) -> bool {
+    match expr.data(db, body) {
+        // A `?` on a sum shape grants its payload's access, as the call does.
+        Partial::Present(
+            Expr::Call(..) | Expr::MethodCall(..) | Expr::Bin(_, _, BinOp::Index) | Expr::Try(_),
+        ) if is_access(expr) => true,
+        Partial::Present(Expr::Field(base, _) | Expr::Bin(base, _, BinOp::Index)) => {
+            is_grant_place_expr(db, body, *base, is_access)
+        }
+        _ => false,
+    }
+}
+
 pub fn is_pointer_place_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -213,7 +286,7 @@ pub fn resolve_place_field<'db>(
         });
     }
 
-    let pointee = projectable_place_ty(db, base_ty.as_ptr(db)?);
+    let pointee = projectable_place_ty(db, base_ty.as_ptr(db)?.0);
     Some(ResolvedPlaceField {
         base_ty: pointee,
         implicit_deref_ty: Some(pointee),
@@ -229,6 +302,12 @@ fn field_index<'db>(
     let idx = match field {
         FieldIndex::Index(index) => {
             let idx = index.data(db).to_usize()?;
+            if base_ty.as_tuple_struct(db).is_some() {
+                if idx >= base_ty.field_types(db).len() {
+                    return None;
+                }
+                return u16::try_from(idx).ok();
+            }
             let (base_ty, ty_args) = base_ty.decompose_ty_app(db);
             if !base_ty.is_tuple(db) || idx >= ty_args.len() {
                 return None;

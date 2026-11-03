@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/aug_assign.fe
 ---
@@ -16,7 +17,7 @@ error[8-0018]: left-hand side of assignment is immutable
   ┌─ aug_assign.fe:6:5
   │
 5 │ fn foo(f: Foo) {
-  │        - try changing to `mut f`
+  │        - a view parameter is read-only; write `f: mut …` for a mutable borrow
 6 │     f -= f
   │     ^ immutable assignment
 
@@ -24,7 +25,7 @@ error[8-0018]: left-hand side of assignment is immutable
   ┌─ aug_assign.fe:7:5
   │
 5 │ fn foo(f: Foo) {
-  │        - try changing to `mut f`
+  │        - a view parameter is read-only; write `f: mut …` for a mutable borrow
 6 │     f -= f
 7 │     f.x *= 1
   │     ^^^ immutable assignment

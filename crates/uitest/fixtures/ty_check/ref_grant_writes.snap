@@ -1,0 +1,51 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/ref_grant_writes.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ ref_grant_writes.fe:54:5
+   │
+54 │     h.buf()[0] = 9
+   │     ^^^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ ref_grant_writes.fe:58:5
+   │
+58 │     h.buf()[0] += 9
+   │     ^^^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ ref_grant_writes.fe:62:5
+   │
+61 │ fn nested_index(_ m: MemArray<MemBuffer>) {
+   │                   - a view parameter is read-only; write `m: mut …` for a mutable borrow
+62 │     m[0][0] = 5
+   │     ^^^^^^^ immutable assignment
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ ref_grant_writes.fe:66:13
+   │
+65 │ fn mut_access(_ m: MemArray<MemBuffer>) {
+   │                 - `m` does not provide mutable access
+66 │     let x = mut m[0][0]
+   │             ^^^^^^^^^^^ cannot borrow as `mut`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ ref_grant_writes.fe:70:5
+   │
+70 │     s.inner().buf.truncate(0)
+   │     ^^^^^^^^^^^^^ cannot borrow as `mut`
+
+error[8-0099]: invalid yield
+   ┌─ ref_grant_writes.fe:39:9
+   │
+39 │         self.inner().v
+   │         ^^^^^^^^^^^^^^ this does not yield `mut u256`
+
+error[8-0099]: invalid yield
+   ┌─ ref_grant_writes.fe:43:9
+   │
+43 │         self.inner_mut().v
+   │         ^^^^^^^^^^^^^^^^^^ this does not yield `mut u256`

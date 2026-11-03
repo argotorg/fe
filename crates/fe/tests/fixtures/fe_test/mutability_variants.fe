@@ -1,0 +1,50 @@
+// `Collection::at` is `mut?`: `xs.at(c)` yields a view, and a `mut` access
+// where its use needs one, which the call itself takes no marker for.
+use core::iter::Collection
+
+struct Counter { n: u256 }
+
+fn increment(_ x: mut u256) {
+    x += 1
+}
+
+impl Counter {
+    fn bump(mut self) {
+        self.n += 1
+    }
+}
+
+#[test]
+fn reads_and_writes_by_method() {
+    var xs: [u256; 3] = [1, 2, 3]
+    let a = xs.at(1)
+    assert(a == 2)
+
+    xs.at(1) = 5
+    xs.at(2) += 10
+    let first = mut xs.at(0)
+    first *= 7
+    assert(xs[0] == 7 && xs[1] == 5 && xs[2] == 13)
+
+    var counters = [Counter { n: 0 }, Counter { n: 4 }]
+    counters.at(1).bump()
+    assert(counters[1].n == 5)
+    increment(mut xs.at(1))
+    assert(xs[1] == 6)
+}
+
+// Generic code takes the `mut` mode by its bound.
+fn bump_all<C: mut Collection<Item = u256>>(_ xs: mut C) uses C::E {
+    var c = xs.start()
+    while xs.has(c) {
+        xs.at(c) += 1
+        c = xs.next(c)
+    }
+}
+
+#[test]
+fn generic_variants() {
+    var xs: [u256; 2] = [1, 2]
+    bump_all(mut xs)
+    assert(xs[0] == 2 && xs[1] == 3)
+}

@@ -22,19 +22,19 @@ impl Outer {
     } 
 }
 
-pub fn foo(opt: own Option<i32>) {
-    let mut x = 1
+pub fn foo(var opt: own Option<i32>) {
+    var x = 1
     let y = 2
 
     let z = x = 2
 
-    let mut arr = [false; 10]
+    var arr = [false; 10]
     arr[1] = true
     
-    let mut tuple = (true, false, Inner { x, y })
+    var tuple = (true, false, Inner { x, y })
     tuple.2.x = 1
 
-    let mut outer = Outer { inner: Inner { x, y } }
+    var outer = Outer { inner: Inner { x, y } }
     outer.inner.x = 2
     
     match opt {
@@ -44,6 +44,6 @@ pub fn foo(opt: own Option<i32>) {
         Option::None => {}
     }
     
-    let mut g = Gen { t: false }
+    var g = Gen { t: false }
     g.t = true
 }

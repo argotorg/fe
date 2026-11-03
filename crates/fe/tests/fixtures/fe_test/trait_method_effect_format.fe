@@ -1,0 +1,34 @@
+trait Reader {
+    fn value(self) -> u256
+}
+struct Counter { n: u256 }
+impl Reader for Counter {
+    fn value(self) -> u256 {
+        self.n
+    }
+}
+
+trait Source {
+    uses E
+    fn read_a_long_declaration(self, start: u256, count: u256) -> u256 uses E
+    fn read_through_default_method(self, start: u256, count: u256) -> u256 uses E {
+        self.read_a_long_declaration(start, count)
+    }
+}
+struct Adapter {}
+impl Source for Adapter {
+    uses E = (reader: Reader)
+    fn read_a_long_declaration(self, start: u256, count: u256) -> u256 uses E {
+        reader.value() + start + count
+    }
+}
+
+#[test]
+fn trait_method_effects_survive_formatting() {
+    let reader = Counter { n: 7 }
+    with (Reader = reader) {
+        assert(
+            Adapter {}.read_through_default_method(start: 2, count: 3) == 12,
+        )
+    }
+}

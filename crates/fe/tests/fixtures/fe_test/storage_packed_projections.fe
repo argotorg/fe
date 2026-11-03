@@ -1,0 +1,103 @@
+use std::evm::{Evm, StorPtr, TStorPtr}
+
+// Projections that yield a packed storage field grant a place in its lane:
+// the write updates only the field's bytes of the shared slot.
+
+struct Pair { a: u8, b: u8 }
+
+impl Pair {
+    fn b_mut(mut self) -> mut u8 {
+        mut self.b
+    }
+
+    fn b_ref(self) -> ref u8 {
+        ref self.b
+    }
+}
+
+struct Generic<T> { a: T, b: T }
+
+impl<T> Generic<T> {
+    fn b_mut(mut self) -> mut T {
+        mut self.b
+    }
+}
+
+struct Pairs { ps: [Pair; 3] }
+
+impl Pairs {
+    fn b_mut(mut self, _ i: usize) -> mut u8 {
+        mut self.ps[i].b
+    }
+}
+
+trait Me {
+    fn me(mut self) -> mut u8
+}
+
+impl Me for u8 {
+    fn me(mut self) -> mut u8 {
+        mut self
+    }
+}
+
+fn set_b() uses (pair: mut Pair) {
+    let b = mut pair.b_mut()
+    b = 0x2a
+}
+
+fn b() -> u8 uses (pair: Pair) {
+    let b = pair.b_ref()
+    b
+}
+
+fn set_generic_b() uses (pair: mut Generic<u8>) {
+    let b = mut pair.b_mut()
+    b = 0x2a
+}
+
+fn set_element_b() uses (pairs: mut Pairs) {
+    let b = mut pairs.b_mut(1)
+    b = 0x2a
+}
+
+fn set_b_through_receiver() uses (pair: mut Pair) {
+    let b = mut pair.b.me()
+    b = 0x2a
+}
+
+#[test]
+fn test_packed_field_projections() uses (evm: mut Evm) {
+    unsafe {
+        evm.sstore(slot: 0x100, value: 0x11)
+        let pair = 0x100 as u256 as StorPtr<Pair>
+        with (mut *pair) { set_b() }
+        assert(evm.sload(0x100) == 0x2a11)
+        assert(with (*pair) { b() } == 0x2a)
+
+        let generic = 0x200 as u256 as StorPtr<Generic<u8>>
+        with (mut *generic) { set_generic_b() }
+        assert(evm.sload(0x200) == 0x2a00)
+
+        let pairs = 0x300 as u256 as StorPtr<Pairs>
+        with (mut *pairs) { set_element_b() }
+        assert(evm.sload(0x300) == 0)
+        assert(evm.sload(0x301) == 0x2a00)
+        assert(evm.sload(0x302) == 0)
+
+        evm.sstore(slot: 0x400, value: 0x11)
+        let receiver = 0x400 as u256 as StorPtr<Pair>
+        with (mut *receiver) { set_b_through_receiver() }
+        assert(evm.sload(0x400) == 0x2a11)
+    }
+}
+
+#[test]
+fn test_transient_packed_field_projection() uses (evm: mut Evm) {
+    unsafe {
+        let pair = 0x100 as u256 as TStorPtr<Pair>
+        with (mut *pair) { set_b() }
+        let word = 0x100 as u256 as TStorPtr<u256>
+        assert(*word == 0x2a00)
+    }
+}

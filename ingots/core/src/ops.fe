@@ -1,3 +1,5 @@
+use ingot::marker::{Clearable, Copy, Pinned}
+
 pub trait Add<T = Self> {
     type Output = Self
 
@@ -126,7 +128,7 @@ pub trait Eq<T = Self> {
 // Aggregate comparisons use element Eq implementations and short-circuit.
 impl<T: Eq, const N: usize> Eq for [T; N] {
     fn eq(self, _ other: [T; N]) -> bool {
-        let mut i: usize = 0
+        var i: usize = 0
         while i < N {
             if !(self[i] == other[i]) {
                 return false
@@ -196,17 +198,102 @@ pub trait Ord<T = Self> {
     fn ge(self, _ other: T) -> bool
 }
 
-// Indexing operator
-pub trait Index<I> {
-    type Output
-
-    fn index(self, _ index: I) -> Self::Output
+/// Where an element of a `StateIndex` collection lies: its slot in the
+/// collection's state space, and its bit offset within that slot's word.
+pub struct Location {
+    pub slot: u256,
+    pub offset: u256,
 }
 
-pub trait IndexMut<I> {
+/// A collection whose elements are places in a state space, as an array's
+/// are places: `c[k]` names the element at `k` with no call, a path that the
+/// access checker sees as `c` indexed by a dynamic key, and `c[k].f = v`
+/// writes one field. A collection implements it by saying where an element
+/// lives; the compiler calls `locate` once when it opens an access to the
+/// element.
+///
+/// The collection is pinned to its space (`Pinned`): it lives at one number
+/// there, and its region is its own fields at that number together with
+/// every location `locate` returns. The trait is unsafe to implement: the
+/// access checker relies on `locate` returning locations within that region,
+/// and separated lanes for distinct keys, without checking it, so each
+/// implementation is an `unsafe impl` that asserts both. A memory
+/// collection, whose elements live in an allocation it owns, implements
+/// `Index` instead.
+pub unsafe trait StateIndex: Pinned {
+    /// The index operand, evaluated once and retained by the access.
+    type Key: Copy
+    /// The element's type.
+    type Entry
+    /// The codec of elements packed into lanes: an element is a lane of
+    /// `Lanes::BITS` bits when `Lanes: LaneCodec<Entry>` with `BITS` at most
+    /// 128, and otherwise keeps its type's storage layout. `()` packs none.
+    type Lanes = ()
+
+    /// The location of the element at `key` of the collection rooted at
+    /// `root`. It declares no effects: it may read the collection's own
+    /// region, such as a length to check `key` against, and nothing else.
+    fn locate(self, _ root: u256, _ key: Self::Key) -> Location
+}
+
+/// Zeroes the element at `key` of a collection: its slots, or only its bits
+/// of a slot it shares. The element must be `Clearable`: zero is a value of
+/// it, and one holding a storage collection is not cleared by zeroing its own
+/// slots.
+pub fn clear_storage<C: StateIndex>(_ collection: mut C, _ key: C::Key)
+    where C::Entry: Clearable
+{
+    unsafe { ingot::intrinsic::clear(mut collection[key]) }
+}
+
+/// How a place-indexed collection encodes an element it packs into a lane:
+/// `BITS` bits of a storage word, `offset` bits above its low end, shared
+/// with the neighbouring elements. Reading the element loads the word and
+/// decodes it with `get`; writing it stores the word `set` returns, so only
+/// the element's bits change. A `BITS` above 128 packs nothing: the element
+/// keeps its type's storage layout, `core::intrinsic::storage_slots<T>()`
+/// slots, which a collection's `locate` steps by from one element to the
+/// next.
+pub trait LaneCodec<T> {
+    const BITS: u256
+    /// The element in `word`'s lane at bit `offset`.
+    fn get(_ word: u256, offset: u256) -> T
+    /// `word` with its lane at bit `offset` holding `value`.
+    fn set(_ word: u256, offset: u256, value: own T) -> u256
+}
+
+/// `t[i]`: at `mut` where the context needs a `mut` place (an assignment
+/// target, `mut t[i]`, or a `mut self` method's receiver), which takes
+/// `T: mut Index<I>`.
+pub trait Index<I> {
+    /// The effects of reaching an element.
+    uses E
     type Output
 
-    fn index_mut(self, _ index: I) -> mut Self::Output
+    fn index(mut? self, _ index: I) -> mut? Self::Output uses E
+}
+
+/// The number of elements of a collection indexed by position: its
+/// `Index<usize>` reaches `0..len()`.
+pub trait Len {
+    fn len(self) -> usize
+}
+
+// An array index is built-in place syntax; this impl lets generic code
+// index an array through `Index`.
+impl<T, const N: usize> Index<usize> for [T; N] {
+    type Output = T
+
+    #[inline(always)]
+    fn index(mut? self, _ index: usize) -> mut? T {
+        mut? self[index]
+    }
+}
+
+impl<T, const N: usize> Len for [T; N] {
+    fn len(self) -> usize {
+        N
+    }
 }
 
 // Augmented assignment operators (return unit)
@@ -252,4 +339,17 @@ pub trait BitOrAssign<T = Self> {
 
 pub trait BitXorAssign<T = Self> {
     fn bitxor_assign(mut self, _ other: own T)
+}
+
+/// Destroys a value when its owner gives it up: at the end of the owner's
+/// scope, when the value is overwritten, or for the fields a partial move
+/// leaves behind. `drop` runs once, then the fields it did not move out are
+/// destroyed in declaration order.
+///
+/// A drop runs where no call is written, so `drop` declares no effects, and
+/// nothing calls it directly: `core::mem::drop` ends a value early. An
+/// implementation covers the whole type, as `impl<T> Drop for Buf<T>` does,
+/// and a type with one is never `Copy`.
+pub trait Drop {
+    fn drop(own self)
 }

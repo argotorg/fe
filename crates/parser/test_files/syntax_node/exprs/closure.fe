@@ -1,0 +1,5 @@
+f(|x| x + 1)
+f(|| true || false)
+xs.fold(0, |acc: own, x| acc + x)
+f(|a, b: own u256, c: mut, _| -> u256 { a })
+f(|_: u256| 0, |_| 1)

@@ -94,6 +94,6 @@ fn signed_shr_i8_minus_one() {
 
 #[test]
 fn signed_shr_assign_i8_is_arithmetic() {
-    let mut x: i8 = -16
+    var x: i8 = -16
     signed_shr_assign_i8(mut x)
 }

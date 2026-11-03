@@ -1,0 +1,12 @@
+use core::abi::{load_word, store_word}
+use core::ptr
+
+/// Runs unsafe code. The ingot is a member of its own workspace, which does
+/// not make it the user's code.
+pub fn round_trip(_ value: u256) -> u256 {
+    let p = ptr::alloc_bytes(32)
+    unsafe {
+        store_word(ptr: p, value)
+        load_word(p)
+    }
+}

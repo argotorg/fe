@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/unsafe_fields.fe
+---
+error[1-0001]: only struct and enum variant fields can be `unsafe`
+   ┌─ unsafe_fields.fe:13:5
+   │
+13 │     unsafe total: u256,
+   │     ^^^^^^ only struct and enum variant fields can be `unsafe`
+
+error[1-0001]: only struct and enum variant fields can be `unsafe`
+   ┌─ unsafe_fields.fe:18:10
+   │
+18 │     Go { unsafe x: u256 },
+   │          ^^^^^^ only struct and enum variant fields can be `unsafe`

@@ -1,0 +1,52 @@
+trait Counter {
+    uses E
+    fn bump(mut self) uses E
+}
+
+pub struct Store { total: u256 }
+
+struct StoreCounter {}
+
+impl Counter for StoreCounter {
+    uses E = (store: mut Store)
+
+    fn bump(mut self) uses E {
+        store.total += 1
+    }
+}
+
+// The implementation's row is not empty, but its method does not use it.
+struct Unspliced {}
+
+impl Counter for Unspliced {
+    uses E = (store: mut Store)
+
+    fn bump(mut self) {}
+}
+
+// The method uses an effect its row does not give.
+struct Undeclared {}
+
+impl Counter for Undeclared {
+    fn bump(mut self) uses (store: mut Store) {
+        store.total += 1
+    }
+}
+
+fn bump<C: Counter>(_ c: mut C) uses C::E {
+    c.bump()
+}
+
+// A generic caller can forward only its own row.
+fn no_row<C: Counter>(_ c: mut C) {
+    c.bump()
+}
+
+// `Counter` has no row `F`.
+fn unknown_row<C: Counter>(_ c: mut C) uses C::F {}
+
+// A concrete row needs providers for its components.
+fn no_provider() {
+    var sc = StoreCounter {}
+    bump(mut sc)
+}

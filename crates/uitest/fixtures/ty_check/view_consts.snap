@@ -1,0 +1,41 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/view_consts.fe
+---
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_consts.fe:18:18
+   │
+18 │     pub const K: Span = Span { start: 7 }
+   │                  ^^^^ a `#[view]` type cannot be the type of a `const`
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_consts.fe:22:21
+   │
+22 │         const ZERO: Span = Span { start: 0 }
+   │                     ^^^^ a `#[view]` type cannot be the type of a `const`
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_consts.fe:27:27
+   │
+27 │         pub const ORIGIN: Span = Span { start: 0 }
+   │                           ^^^^ a `#[view]` type cannot be the type of a `const`
+
+error[3-0061]: `StorageMap<u256, u256>` is state-only
+   ┌─ view_consts.fe:32:12
+   │
+32 │ const MAP: StorageMap<u256, u256> = StorageMap {}
+   │            ^^^^^^^^^^^^^^^^^^^^^^ a state-only type cannot be the type of a `const`
+   │
+   = `StorageMap<u256, u256>` is pinned to storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `StorageMap<u256, u256>` is state-only
+   ┌─ view_consts.fe:32:37
+   │
+32 │ const MAP: StorageMap<u256, u256> = StorageMap {}
+   │                                     ^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
+   │
+   = `StorageMap<u256, u256>` is pinned to storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter

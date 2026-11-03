@@ -1,0 +1,13 @@
+// A `ref` projection's result is a read-only place.
+struct Cell { v: u256 }
+
+impl Cell {
+    fn get(self) -> ref u256 {
+        ref self.v
+    }
+}
+
+fn write_through_ref_grant(_ c: mut Cell) {
+    c.get() = 3
+    let x = mut c.get()
+}

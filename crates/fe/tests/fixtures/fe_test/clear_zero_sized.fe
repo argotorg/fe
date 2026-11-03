@@ -1,0 +1,40 @@
+// Clearing a zero-sized place stores nothing, in state as in memory.
+use core::intrinsic::clear
+use std::evm::{Evm, StorageMap, TSlot}
+
+struct Unit {}
+
+msg M {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract C {
+    mut cell: TSlot<Unit>,
+    mut counter: TSlot<u256>,
+    mut m: StorageMap<u256, Unit>,
+
+    recv M {
+        Run -> u256 uses (mut cell, mut counter, mut m) {
+            counter.write(5)
+            cell.clear()
+            m.remove(3)
+            counter.read()
+        }
+    }
+}
+
+#[test]
+fn clearing_zero_sized_state() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    assert(evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Run {}) == 5)
+}
+
+#[test]
+fn clearing_zero_sized_memory() {
+    var unit = Unit {}
+    // A zero-sized value has no bytes to zero.
+    unsafe { clear(mut unit) }
+    var empty = ()
+    unsafe { clear(mut empty) }
+}

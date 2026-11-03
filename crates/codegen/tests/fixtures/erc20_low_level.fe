@@ -1,41 +1,36 @@
 use core::ptr
-use std::evm::{Address, Ctx, Evm, RawMem, RawOps, RawStorage, StorageMap, StorPtr}
+use core::abi::store_word
+use std::evm::{Address, Ctx, Evm, RawOps, RawStorage, StorageMap, StorPtr, revert_empty}
 
 // Helpers ---------------------------------------------------------------
 
-const BALANCES_SALT: u256 = 0
-const ALLOWANCES_SALT: u256 = 1
-
 fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    ops.mstore(addr: data.ptr(), value)
+    unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
 
 fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
     // ABI encoding for a single dynamic string literal
     let data = ptr::MemBuffer::alloc(96)
-    ops.mstore(addr: data.ptr(), value: 32) // offset to data
-    ops.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: len) // string length
-    ops.mstore(addr: ptr::offset_bytes(data.ptr(), 64), value: word)
+    unsafe { store_word(ptr: data.ptr(), value: 32) } // offset to data
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: len) } // string length
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 64), value: word) }
     ops.return_data(data: data.span())
 }
 
 // ERC20 storage ---------------------------------------------------------
 
-struct Erc20<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256> {
-    balances: StorageMap<Address, u256, BALANCES_ROOT>,
-    allowances: StorageMap<(Address, Address), u256, ALLOWANCES_ROOT>,
+// The maps take the struct's slots 0 and 1, so their entries derive from
+// the slots of the place the struct lives at.
+struct Erc20 {
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
     supply: u256,
     owner: Address,
 }
 
-impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
-    Copy for Erc20<BALANCES_ROOT, ALLOWANCES_ROOT> {}
-
-impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
-    Erc20<BALANCES_ROOT, ALLOWANCES_ROOT>
-{
+impl Erc20 {
 
     fn balance_of(self, addr: Address) -> u256 {
         self.balances.get(key: addr)
@@ -45,7 +40,7 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
         self.allowances.get(key: (owner, spender))
     }
 
-    fn approve(mut own self, owner: Address, spender: Address, value: u256) {
+    fn approve(mut self, owner: Address, spender: Address, value: u256) {
         self.allowances.set(key: (owner, spender), value: value)
     }
 
@@ -53,72 +48,76 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
         self.supply
     }
 
-    fn set_owner_once(mut self, owner: Address) uses (ops: RawOps) {
+    fn set_owner_once(mut self, owner: Address) -> bool {
         if self.owner != Address::zero() {
-            ops.revert(data: ptr::MemSpan::empty())
+            return false
         }
         self.owner = owner
+        true
     }
 
-    fn transfer(mut own self, from: Address, to: Address, amount: u256) uses (ops: RawOps) {
+    // A receiver in storage cannot be held across a call to effects that
+    // may reach it, so the methods take the caller and revert without raw
+    // storage authority. They reach the maps through `self`.
+    fn transfer(mut self, from: Address, to: Address, amount: u256) {
         let from_bal = self.balance_of(addr: from)
         if from_bal < amount {
-            ops.revert(data: ptr::MemSpan::empty())
+            revert_empty()
         }
         let to_bal = self.balance_of(addr: to)
         self.balances.set(key: from, value: from_bal - amount)
         self.balances.set(key: to, value: to_bal + amount)
     }
 
-    fn transfer_from(mut own self, owner: Address, to: Address, amount: u256) uses (ctx: Ctx, ops: RawOps) {
-        let spender = ctx.caller()
+    fn transfer_from(mut self, spender: Address, owner: Address, to: Address, amount: u256) {
         let allowed = self.allowance(owner: owner, spender: spender)
         if allowed < amount {
-            ops.revert(data: ptr::MemSpan::empty())
+            revert_empty()
         }
         self.transfer(from: owner, to: to, amount: amount)
         self.allowances.set(key: (owner, spender), value: allowed - amount)
     }
 
-    fn mint(mut own self, to: Address, amount: u256) uses (ctx: Ctx, ops: RawOps) {
-        let caller = ctx.caller()
+    fn mint(mut self, caller: Address, to: Address, amount: u256) {
         if caller != self.owner {
-            ops.revert(data: ptr::MemSpan::empty())
+            revert_empty()
         }
         let bal = self.balance_of(addr: to)
         self.balances.set(key: to, value: bal + amount)
     }
 }
 
-fn do_init() uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx, ops: RawOps) {
-    erc20.set_owner_once(owner: ctx.caller())
+fn do_init() uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+    if !erc20.set_owner_once(owner: ctx.caller()) {
+        ops.revert(data: ptr::MemSpan::empty())
+    }
 }
 
-fn balance_of(addr: Address) -> u256 uses (erc20: Erc20<BALANCES_SALT, ALLOWANCES_SALT>) {
+fn balance_of(addr: Address) -> u256 uses (erc20: Erc20) {
     erc20.balances.get(key: addr)
 }
 
-fn allowance(owner: Address, spender: Address) -> u256 uses (erc20: Erc20<BALANCES_SALT, ALLOWANCES_SALT>) {
+fn allowance(owner: Address, spender: Address) -> u256 uses (erc20: Erc20) {
     erc20.allowances.get(key: (owner, spender))
 }
 
-fn transfer(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx, ops: RawOps) {
+fn transfer(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
     erc20.transfer(from: ctx.caller(), to: to, amount: amount)
     1
 }
 
-fn approve(spender: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx) {
+fn approve(spender: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx) {
     erc20.approve(owner: ctx.caller(), spender: spender, value: amount)
     1
 }
 
-fn transfer_from(from: Address, to: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx, ops: RawOps) {
-    erc20.transfer_from(owner: from, to: to, amount: amount)
+fn transfer_from(from: Address, to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+    erc20.transfer_from(spender: ctx.caller(), owner: from, to: to, amount: amount)
     1
 }
 
-fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx, ops: RawOps) {
-    erc20.mint(to: to, amount: amount)
+fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+    erc20.mint(caller: ctx.caller(), to: to, amount: amount)
     erc20.supply = erc20.supply + amount
     1
 }
@@ -127,13 +126,15 @@ fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT,
 
 #[contract_init(Erc20Contract)]
 fn init() uses (evm: mut Evm) {
-    let mut erc20: StorPtr<Erc20<BALANCES_SALT, ALLOWANCES_SALT>> = evm.stor_ptr(0)
-    with (erc20, Ctx = evm, RawOps = evm) {
-        do_init()
+    let erc20 = 0 as u256 as StorPtr<Erc20>
+    unsafe {
+        with (mut *erc20, Ctx = evm, RawOps = evm) {
+            do_init()
+        }
     }
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    let mut dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -145,56 +146,58 @@ fn init() uses (evm: mut Evm) {
 
 #[contract_runtime(Erc20Contract)]
 fn runtime() uses (evm: mut Evm) {
-    let mut erc20: StorPtr<Erc20<BALANCES_SALT, ALLOWANCES_SALT>> = evm.stor_ptr(0)
+    let erc20 = 0 as u256 as StorPtr<Erc20>
     let selector = evm.calldataload(0) >> 224
-    with (erc20, Ctx = evm, RawOps = evm) {
-        match selector {
-            0x70a08231 => { // balanceOf(address)
-                let owner = Address { inner: evm.calldataload(4) }
-                abi_encode_u256(value: balance_of(addr: owner))
+    unsafe {
+        with (mut *erc20, Ctx = evm, RawOps = evm) {
+            match selector {
+                0x70a08231 => { // balanceOf(address)
+                    let owner = Address::new(evm.calldataload(4))
+                    abi_encode_u256(value: balance_of(addr: owner))
+                }
+                0xdd62ed3e => { // allowance(address,address)
+                    let owner = Address::new(evm.calldataload(4))
+                    let spender = Address::new(evm.calldataload(36))
+                    abi_encode_u256(value: allowance(owner: owner, spender: spender))
+                }
+                0x06fdde03 => { // name()
+                    abi_encode_string(
+                        word: 0x4665546f6b656e00000000000000000000000000000000000000000000000000,
+                        len: 7,
+                    )
+                }
+                0x95d89b41 => { // symbol()
+                    abi_encode_string(
+                        word: 0x4645540000000000000000000000000000000000000000000000000000000000,
+                        len: 3,
+                    )
+                }
+                0x313ce567 => { // decimals()
+                    abi_encode_u256(value: 18)
+                }
+                0xa9059cbb => { // transfer(address,uint256)
+                    let to = Address::new(evm.calldataload(4))
+                    let amount = evm.calldataload(36)
+                    abi_encode_u256(value: transfer(to: to, amount: amount))
+                }
+                0x095ea7b3 => { // approve(address,uint256)
+                    let spender = Address::new(evm.calldataload(4))
+                    let amount = evm.calldataload(36)
+                    abi_encode_u256(value: approve(spender: spender, amount: amount))
+                }
+                0x23b872dd => { // transferFrom(address,address,uint256)
+                    let from = Address::new(evm.calldataload(4))
+                    let to = Address::new(evm.calldataload(36))
+                    let amount = evm.calldataload(68)
+                    abi_encode_u256(value: transfer_from(from: from, to: to, amount: amount))
+                }
+                0x40c10f19 => { // mint(address,uint256)
+                    let to = Address::new(evm.calldataload(4))
+                    let amount = evm.calldataload(36)
+                    abi_encode_u256(value: mint(to: to, amount: amount))
+                }
+                _ => evm.revert(data: ptr::MemSpan::empty())
             }
-            0xdd62ed3e => { // allowance(address,address)
-                let owner = Address { inner: evm.calldataload(4) }
-                let spender = Address { inner: evm.calldataload(36) }
-                abi_encode_u256(value: allowance(owner: owner, spender: spender))
-            }
-            0x06fdde03 => { // name()
-                abi_encode_string(
-                    word: 0x4665546f6b656e00000000000000000000000000000000000000000000000000,
-                    len: 7,
-                )
-            }
-            0x95d89b41 => { // symbol()
-                abi_encode_string(
-                    word: 0x4645540000000000000000000000000000000000000000000000000000000000,
-                    len: 3,
-                )
-            }
-            0x313ce567 => { // decimals()
-                abi_encode_u256(value: 18)
-            }
-            0xa9059cbb => { // transfer(address,uint256)
-                let to = Address { inner: evm.calldataload(4) }
-                let amount = evm.calldataload(36)
-                abi_encode_u256(value: transfer(to: to, amount: amount))
-            }
-            0x095ea7b3 => { // approve(address,uint256)
-                let spender = Address { inner: evm.calldataload(4) }
-                let amount = evm.calldataload(36)
-                abi_encode_u256(value: approve(spender: spender, amount: amount))
-            }
-            0x23b872dd => { // transferFrom(address,address,uint256)
-                let from = Address { inner: evm.calldataload(4) }
-                let to = Address { inner: evm.calldataload(36) }
-                let amount = evm.calldataload(68)
-                abi_encode_u256(value: transfer_from(from: from, to: to, amount: amount))
-            }
-            0x40c10f19 => { // mint(address,uint256)
-                let to = Address { inner: evm.calldataload(4) }
-                let amount = evm.calldataload(36)
-                abi_encode_u256(value: mint(to: to, amount: amount))
-            }
-            _ => evm.revert(data: ptr::MemSpan::empty())
         }
     }
 }

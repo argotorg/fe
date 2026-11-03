@@ -1,0 +1,19 @@
+// Struct and enum variant fields can be `unsafe`; contract fields and message
+// fields cannot.
+struct Buf {
+    pub unsafe len: u256,
+    unsafe ptr: *u8,
+}
+
+enum Shape {
+    Run { unsafe start: u256, len: u256 },
+}
+
+pub contract C {
+    unsafe total: u256,
+}
+
+msg M {
+    #[selector = 1]
+    Go { unsafe x: u256 },
+}

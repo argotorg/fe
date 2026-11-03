@@ -1,0 +1,11 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 17
+expression: output
+input_file: tests/fixtures/unsafe_fields.fe
+---
+struct Buf { pub unsafe len: u256, unsafe ptr: *u8, tag: u256 }
+
+enum Shape {
+    Run { unsafe start: u256, len: u256 },
+}

@@ -1,0 +1,54 @@
+// Access markers sit on the names a pattern binds, never on its scrutinee,
+// on the initializer of a pattern with components or on a loop's base. Each
+// is an error whose fix moves the marker onto every plain name, and the body
+// checks as that fix reads.
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+// S-69. Rejected: a marker on a scrutinee.
+fn scrutinee_ref(_ o: Option<Pair>) -> u256 {
+    match ref o {
+        Option::Some(p) => p.a
+        Option::None => 0
+    }
+}
+
+fn scrutinee_mut(_ o: mut Option<u256>) {
+    match mut o {
+        Option::Some(v) => v += 1
+        Option::None => {}
+    }
+    if let Option::Some(v) = mut o {
+        v += 1
+    }
+}
+
+// S-69. Rejected: a marker on a destructured initializer.
+fn destructured(_ t: mut (u256, u256), _ p: mut Pair) {
+    let (a, b) = mut t
+    a += b
+    let Pair { a, b } = mut p
+    a += b
+}
+
+// S-69. Accepted: a single name binds the access its initializer names.
+fn single_name(_ p: mut Pair) -> u256 {
+    let w = mut p.b
+    w += 1
+    let r = ref p
+    r.a + r.b
+}
+
+// S-70. Rejected: a marker on a loop's base.
+fn loop_bases(_ xs: mut [u256; 2], _ ys: [u256; 2]) -> u256 {
+    for x in mut xs {
+        x += 1
+    }
+    var total = 0
+    for y in ref ys {
+        total += y
+    }
+    total
+}

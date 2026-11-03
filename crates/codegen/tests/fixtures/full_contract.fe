@@ -1,5 +1,6 @@
 use core::ptr
-use std::evm::{Evm, RawMem, RawOps}
+use core::abi::store_word
+use std::evm::{Evm, RawOps}
 
 struct Point { x: u256, y: u256 }
 struct Square { side: u256 }
@@ -19,7 +20,7 @@ impl Square {
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    ops.mstore(addr: data.ptr(), value)
+    unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
 
@@ -27,7 +28,7 @@ fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(dispatch)
     let offset = evm.code_region_offset(dispatch)
-    let mut dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -43,7 +44,7 @@ fn dispatch() uses (evm: mut Evm) {
     if selector == 0x090251bf {
         let x = evm.calldataload(4)
         let y = evm.calldataload(36)
-        let mut p = Point { x: x, y: y }
+        var p = Point { x: x, y: y }
         p.x = p.x + 1
         p.y = p.y + 2
         let value = p.area()
@@ -51,7 +52,7 @@ fn dispatch() uses (evm: mut Evm) {
     }
     if selector == 0x7b292909 {
         let side = evm.calldataload(4)
-        let mut s = Square { side: side }
+        var s = Square { side: side }
         s.side = s.side + 3
         let value = s.area()
         with (RawOps = evm) { abi_encode(value) }

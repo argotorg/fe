@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/associated_shapes.fe
+---
+error[16-0001]: access conflict in `fn twice`
+   ┌─ associated_shapes.fe:28:14
+   │
+28 │     (d.at(), d.at())
+   │      ------  ^ cannot mutably access this place while a `mut` projection of it is open
+   │      │
+   │      projection opened here
+
+error[16-0001]: access conflict in `fn write_while_live`
+   ┌─ associated_shapes.fe:34:5
+   │
+33 │     let (mut x, y) = first(mut p)
+   │                            ----- access opened here
+34 │     p.a = 5
+   │     ^^^^^^^ cannot write to this place while a `mut` access of it is open

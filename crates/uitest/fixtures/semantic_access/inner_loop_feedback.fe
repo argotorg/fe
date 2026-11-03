@@ -1,0 +1,93 @@
+// An inner loop's feedback starts its own next iteration, not the enclosing
+// loop's: borrows and values made in the outer body stay current.
+
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn touch(_ item: mut Item) {}
+
+// Accepted: a mutable borrow stays live across an inner loop.
+fn held_input(_ other: mut [u64; 5]) {
+    var x: usize = 0
+    while x < 5 {
+        let held = mut other[x]
+        var y: usize = 0
+        while y < 5 {
+            y += 1
+        }
+        held = 1
+        x += 1
+    }
+}
+
+// Accepted: the same for a local array.
+fn held_local() {
+    var cells: [u64; 5] = [0; 5]
+    var x: usize = 0
+    while x < 5 {
+        let held = mut cells[x]
+        var y: usize = 0
+        while y < 5 {
+            y += 1
+        }
+        held = 1
+        x += 1
+    }
+}
+
+// Accepted: a shared borrow is read after an inner loop.
+fn shared_input(_ other: mut [u64; 5]) {
+    var x: usize = 0
+    while x < 5 {
+        let held = ref other[x]
+        var y: usize = 0
+        while y < 5 {
+            y += 1
+        }
+        let seen: u64 = held
+        x += 1
+    }
+}
+
+// Accepted: each outer iteration moves its own fresh value once.
+fn fresh_moved_after_inner() {
+    var x: u256 = 0
+    while x < 2 {
+        var item = Item { n: x }
+        var y: u256 = 0
+        while y < 2 {
+            y += 1
+        }
+        touch(mut item)
+        consume(item)
+        x += 1
+    }
+}
+
+// Rejected: the inner loop writes the element the outer body holds borrowed.
+fn held_written_inside(_ other: mut [u64; 5]) {
+    var x: usize = 0
+    while x < 5 {
+        let held = mut other[x]
+        var y: usize = 0
+        while y < 5 {
+            other[x] = 2
+            y += 1
+        }
+        held = 1
+        x += 1
+    }
+}
+
+// Rejected: the inner loop moves the outer value again on its next iteration.
+fn moved_inside() {
+    var x: u256 = 0
+    while x < 2 {
+        let item = Item { n: x }
+        var y: u256 = 0
+        while y < 2 {
+            consume(item)
+            y += 1
+        }
+        x += 1
+    }
+}

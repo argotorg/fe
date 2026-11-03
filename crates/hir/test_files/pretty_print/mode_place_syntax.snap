@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/pretty_print.rs
+source: crates/hir/tests/frontend/pretty_print.rs
+assertion_line: 25
 expression: output
 input_file: test_files/pretty_print/mode_place_syntax.fe
 ---
@@ -42,7 +43,7 @@ fn take_own(_x: own Foo) {}
 
 fn places() {
     let a: Foo = make_foo()
-    let mut b: Foo = make_foo()
+    var b: Foo = make_foo()
     let c: ref Foo = ref a
     let d: mut Foo = mut b
     let e: Foo = a

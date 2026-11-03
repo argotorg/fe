@@ -1,0 +1,77 @@
+// A generic function that forwards a row (`uses T::E`) is a callable value:
+// the row's components, alone or after the function's own effects, are
+// provided where the callable is called, and the function's arguments can be
+// inferred from the callee's bound.
+struct Store { n: u256 }
+
+struct Log { n: u256 }
+
+struct Other { m: u256 }
+
+trait Reader {
+    uses E
+
+    fn read(self) -> u256 uses E
+}
+
+struct R {}
+
+impl Reader for R {
+    uses E = (store: Store)
+
+    fn read(self) -> u256 uses E {
+        store.n
+    }
+}
+
+struct Q {}
+
+impl Reader for Q {
+    uses E = (other: Other, log: mut Log)
+
+    fn read(self) -> u256 uses E {
+        log.n += 10
+        other.m
+    }
+}
+
+fn read_it<T: Reader>(_ t: T) -> u256 uses T::E {
+    t.read()
+}
+
+fn logged<T: Reader>(_ t: T) -> u256 uses (log: mut Log, T::E) {
+    log.n += 1
+    t.read()
+}
+
+fn read_after<T: Reader>(_ t: T) -> u256 uses (T::E, log: mut Log) {
+    log.n += 1
+    t.read()
+}
+
+fn read_two<A: Reader, B: Reader>(_ a: A, _ b: B) -> u256 uses (A::E, B::E) {
+    a.read() + b.read()
+}
+
+fn apply<F: Fn(R) -> u256>(_ f: F, _ r: R) -> u256 uses F::E {
+    f(r)
+}
+
+fn apply2<F: Fn(R, Q) -> u256>(_ f: F) -> u256 uses F::E {
+    f(R {}, Q {})
+}
+
+#[test]
+fn row_forwarding_items() {
+    let s = Store { n: 7 }
+    let o = Other { m: 5 }
+    var l = Log { n: 0 }
+    with (Store = s, Other = o, Log = mut l) {
+        assert(apply(read_it<R>, R {}) == 7)
+        assert(apply(read_it, R {}) == 7)
+        assert(apply(logged<R>, R {}) == 7)
+        assert(apply(read_after<R>, R {}) == 7)
+        assert(apply2(read_two<R, Q>) == 12)
+    }
+    assert(l.n == 12)
+}

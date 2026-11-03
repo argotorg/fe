@@ -1,5 +1,4 @@
 use parser::ast::{self, prelude::*};
-use salsa::Accumulator as _;
 
 use super::{
     AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, FileLowerCtxt,
@@ -9,15 +8,14 @@ use super::{
 };
 use crate::{
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FuncModifiers,
+        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId,
         GenericParamListId, IdentId, LitKind, Partial, PathId, Struct, TrackedItemVariant,
-        TraitRefId, TypeId, TypeKind, Visibility,
+        TraitRefId, TypeId, TypeKind,
     },
     span::{ErrorDesugared, HirOrigin},
 };
 
 /// Error-related diagnostics accumulated during `#[error]` lowering / validation.
-#[salsa::accumulator]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ErrorDiagnostic {
     pub kind: ErrorDiagnosticKind,
@@ -46,14 +44,13 @@ pub(super) fn report_event_error_attr_conflict<'db>(
     let struct_name = ast.name().map(|n| n.text().to_string());
 
     for attr in named_attr_specs(ast.attr_list(), "error") {
-        ErrorDiagnostic {
+        ctxt.report(ErrorDiagnostic {
             kind: ErrorDiagnosticKind::EventErrorAttrConflict,
             file,
             primary_range: attr.range,
             struct_name: struct_name.clone(),
             field_name: None,
-        }
-        .accumulate(db);
+        });
     }
 }
 
@@ -81,14 +78,13 @@ pub(super) fn lower_error_struct<'db>(
         let range = ast
             .generic_params()
             .map_or_else(|| ast.syntax().text_range(), |g| g.syntax().text_range());
-        ErrorDiagnostic {
+        builder.ctxt().report(ErrorDiagnostic {
             kind: ErrorDiagnosticKind::GenericErrorStruct,
             file,
             primary_range: range,
             struct_name: struct_name.clone(),
             field_name: None,
-        }
-        .accumulate(db);
+        });
     }
 
     let where_clause =
@@ -217,7 +213,7 @@ fn parse_error_fields<'db>(
         };
 
         let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
-            AbiFieldDiagnostic {
+            ctxt.report(AbiFieldDiagnostic {
                 kind: AbiFieldDiagnosticKind::Unsupported,
                 context: AbiFieldContext::Error,
                 ty: ty.pretty_print(db),
@@ -227,8 +223,7 @@ fn parse_error_fields<'db>(
                     .map_or_else(|| field.syntax().text_range(), |t| t.syntax().text_range()),
                 struct_name: struct_name.map(|s| s.to_string()),
                 field_name: name_tok.map(|n| n.text().to_string()),
-            }
-            .accumulate(db);
+            });
             is_valid = false;
             continue;
         };
@@ -365,6 +360,7 @@ fn create_selector_const<'db>(
         body_ctxt.conds,
         body_ctxt.pats,
         body_ctxt.f_ctxt.top_mod(),
+        body_ctxt.f_ctxt.lazy_func(),
         body_ctxt.source_map,
         origin,
     );
@@ -412,8 +408,6 @@ fn lower_error_encode_impl<'db>(
     self_ty: TypeId<'db>,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
 ) {
-    let field_specs = field_specs.to_vec();
-
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
     let ty = Partial::Present(self_ty);
@@ -423,24 +417,7 @@ fn lower_error_encode_impl<'db>(
             let impl_trait =
                 builder.new_impl_trait(id, trait_ref, ty, vec![], vec![], builder.origin());
 
-            let ptr_ident = builder.ident("ptr");
-            let u8_ty = builder.ty_ident(builder.ident("u8"));
-            let ptr_ty = builder.ty_ptr(u8_ty);
-            let params = builder.params([
-                builder.param_own_self(),
-                builder.param_underscore_named(ptr_ident, ptr_ty),
-            ]);
-
-            builder.func_with_body_inline_always(
-                builder.ident("encode"),
-                builder.empty_generic_params(),
-                params,
-                None,
-                FuncModifiers::new(Visibility::Private, false, false, false),
-                |body| {
-                    body.encode_fields(&field_specs, ptr_ident);
-                },
-            );
+            builder.encode_func(field_specs);
             impl_trait
         },
     );

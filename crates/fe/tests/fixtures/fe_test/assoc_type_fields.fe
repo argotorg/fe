@@ -1,0 +1,62 @@
+// A field typed by an associated type holds the type the projection names,
+// in memory, in an enum variant and in storage.
+use std::evm::Evm
+
+trait Tr {
+    type Out
+}
+
+struct K {}
+
+impl Tr for K {
+    type Out = [u256; 3]
+}
+
+struct S<T: Tr> {
+    a: T::Out,
+}
+
+enum E<T: Tr> {
+    Full(T::Out),
+    Empty,
+}
+
+fn third(_ e: E<K>) -> u256 {
+    match e {
+        E::Full(a) => a[2]
+        E::Empty => 0
+    }
+}
+
+#[test]
+fn in_memory() {
+    var s = S<K> { a: [1, 2, 3] }
+    s.a[2] = 5
+    assert(s.a[2] == 5 && s.a[0] == 1)
+    assert(third(E<K>::Full([4, 5, 6])) == 6)
+    assert(third(E<K>::Empty) == 0)
+}
+
+msg M {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract C {
+    mut s: S<K>,
+
+    recv M {
+        Run -> u256 uses (mut s) {
+            s.a[2] = 5
+            s.a[1] = 4
+            s.a[2] + s.a[1]
+        }
+    }
+}
+
+#[test]
+fn in_storage() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
+    assert(r == 9)
+}

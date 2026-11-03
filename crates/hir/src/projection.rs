@@ -25,7 +25,7 @@ use smallvec::SmallVec;
 /// - `Ty`: The type representation (e.g., `TyId<'db>`)
 /// - `Var`: The variant representation (e.g., `EnumVariant<'db>`)
 /// - `Idx`: The dynamic index ID type (e.g., `ExprId` in HIR, `ValueId` in MIR)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Projection<Ty, Var, Idx> {
     /// Struct/tuple field by index.
     Field(usize),
@@ -52,6 +52,11 @@ pub enum Projection<Ty, Var, Idx> {
     /// Array/slice index access.
     Index(IndexSource<Idx>),
 
+    /// The element at a key of a collection whose elements are places
+    /// (`core::ops::StateIndex`): a storage map's entry or a storage array's
+    /// element, at a slot the collection computes.
+    Entry(Idx),
+
     /// Pointer dereference.
     Deref,
 }
@@ -64,7 +69,7 @@ pub enum Projection<Ty, Var, Idx> {
 ///
 /// Type parameter `Idx` is the dynamic index ID type, allowing proper
 /// placeholder-based hashing in each layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum IndexSource<Idx> {
     /// Compile-time constant index.
     Constant(usize),
@@ -84,8 +89,12 @@ pub enum IndexSource<Idx> {
 /// ```text
 /// [Field(0), VariantField { ... }, Field(1)]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ProjectionPath<Ty, Var, Idx>(SmallVec<Projection<Ty, Var, Idx>, 4>);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct ProjectionPath<Ty, Var, Idx>(
+    // SAFETY: A `SmallVec` owns its elements.
+    #[salsa_value(unsafe(prove(Projection<Ty, Var, Idx>: salsa::SalsaValue)))]
+    SmallVec<Projection<Ty, Var, Idx>, 4>,
+);
 
 impl<Ty, Var, Idx> Default for ProjectionPath<Ty, Var, Idx> {
     fn default() -> Self {
@@ -150,7 +159,10 @@ impl<Ty, Var, Idx> ProjectionPath<Ty, Var, Idx> {
         self.0.last().and_then(|proj| match proj {
             Projection::Field(idx) => Some(*idx),
             Projection::VariantField { field_idx, .. } => Some(*field_idx),
-            Projection::Index(_) | Projection::Deref | Projection::Discriminant => None,
+            Projection::Index(_)
+            | Projection::Entry(_)
+            | Projection::Deref
+            | Projection::Discriminant => None,
         })
     }
 

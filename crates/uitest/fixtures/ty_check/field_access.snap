@@ -25,7 +25,7 @@ error[8-0015]: invalid field index
    ┌─ field_access.fe:20:5
    │
 20 │     ptr.x
-   │     ^^^^^ field `x` is not found in `*<u256>`
+   │     ^^^^^ field `x` is not found in `*u256`
 
 error[8-0031]: type annotation is needed
   ┌─ field_access.fe:6:9

@@ -1,7 +1,7 @@
 /// Core functional abstractions built around higher-kinded types.
 ///
 /// This module defines:
-/// - `Fn<T, U>`: a trait representing callable values.
+/// - `Fn<shape A>` and `FnMut<shape A>`: callable values.
 /// - `Functor`: type constructors that can be mapped over.
 /// - `Applicative`: type constructors that support `pure` and `<*>`.
 /// - `Monad`: type constructors that support `bind`/`flat_map`.
@@ -9,16 +9,33 @@
 /// These traits are designed for types of kind `* -> *`, such as `Option`
 /// or partially applied types like `Result<E>`.
 
-/// A callable value from `T` to `U`.
-pub trait Fn<T, U> {
-    fn call(self, _ value: own T) -> U
+/// A callable value taking the parameters its shape `A` lists:
+/// `Fn(own T, U) -> R` is `Fn<(own T, U), Out = R>`, and `-> _` leaves
+/// `Out` open. A call `f(x)` of a callable value runs its `Fn` `call`, or
+/// its `FnMut` `call_mut`. Closures and function items implement both traits
+/// at the shape of their own parameters. `uses E` is the row of effects a
+/// call runs: those a closure's body uses, or a function's own.
+pub trait Fn<shape A> {
+    uses E
+    type Out
+
+    fn call(self, ..A) -> Self::Out uses E
+}
+
+/// A callable value whose call may mutate it: `FnMut(own T, U) -> R` is
+/// `FnMut<(own T, U), Out = R>`.
+pub trait FnMut<shape A> {
+    uses E
+    type Out
+
+    fn call_mut(mut self, ..A) -> Self::Out uses E
 }
 
 /// A type constructor that can be mapped over.
 pub trait Functor
     where Self: * -> *
 {
-    fn map<T, U, F: Fn<T, U>>(self: own Self<T>, _ func: F) -> Self<U>
+    fn map<T, U, F: Fn(own T) -> U>(self: own Self<T>, _ func: F) -> Self<U> uses F::E
 }
 
 /// A type constructor that supports `pure` and function application.
@@ -27,7 +44,7 @@ pub trait Applicative: Functor
 {
     fn pure<T>(_ value: own T) -> Self<T>
 
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U>
+    fn ap<T, U, F: Fn(own T) -> U>(self: own Self<F>, _ value: own Self<T>) -> Self<U> uses F::E
 }
 
 /// A monad in the sense of functional programming.
@@ -36,5 +53,5 @@ pub trait Applicative: Functor
 pub trait Monad: Applicative
     where Self: * -> *
 {
-    fn bind<T, U, F: Fn<T, Self<U>>>(self: own Self<T>, _ func: F) -> Self<U>
+    fn bind<T, U, F: Fn(own T) -> Self<U>>(self: own Self<T>, _ func: F) -> Self<U> uses F::E
 }

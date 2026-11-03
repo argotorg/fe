@@ -1,0 +1,83 @@
+use core::iter::{Collection, Driver, Reversed}
+
+struct Account { balance: u256 }
+
+// A chain whose value drives none of its receivers is the loop's
+// collection: `by` takes a driver over the base.
+fn not_a_driver(_ xs: [u256; 3]) {
+    for x in xs.by(true) {
+    }
+}
+
+// Only the elements a driver projects can be mutated.
+struct Firsts<B> {}
+
+impl<B: Collection<Cursor = usize>> Driver for Firsts<B> {
+    type Base = B
+    type State = usize
+    shape Step = ref B::Item
+
+    fn start(self, _ base: B) -> usize uses B::E {
+        base.start()
+    }
+
+    fn has(self, _ base: B, _ s: usize) -> bool uses B::E {
+        s == base.start() && base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: usize) -> usize uses B::E {
+        s + 1
+    }
+
+    fn at(self, _ base: B, _ s: usize) -> ref B::Item uses B::E {
+        Collection::at(base, s)
+    }
+}
+
+fn mutates_through_reads() {
+    var xs: [u256; 3] = [1, 2, 3]
+    let d = Firsts {}
+    for mut x in xs.by(d) {
+        x += 1
+    }
+}
+
+// A copied element is not a place.
+fn copies(_ xs: [u256; 3]) {
+    for x in xs.reversed() {
+        x += 1
+    }
+}
+
+// A `ref` element is a read access.
+fn reads(_ accounts: [Account; 2]) {
+    for (_, ref account) in accounts.enumerate() {
+        account.balance = 0
+    }
+}
+
+// A step of the element alone binds it alone.
+fn binds_the_element(_ xs: [u256; 3]) {
+    for (i, x) in xs.reversed() {
+    }
+}
+
+// A method chain drives a collection it passes through.
+fn chain_over_a_driver() {
+    let d = Reversed<[u256; 3]> {}
+    for x in d.take(2) {
+    }
+}
+
+// A driver runs over its own base's type.
+fn other_base(_ xs: [u256; 3]) {
+    let d = Reversed<[u256; 4]> {}
+    for x in xs.by(d) {
+    }
+}
+
+// A generic driver's base is its own unless a bound names the loop's.
+fn generic_base<C: Collection, D: Driver>(_ xs: C, _ d: own D) {
+    for x in xs.by(d) {
+    }
+}

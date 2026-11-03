@@ -24,8 +24,8 @@ pub contract FixedBuffer {
 fn fixed_buffer_hash(word: u256) -> u256 {
     let buffer = FixedMemBuffer<64>::alloc()
     let words = ptr::cast<u8, u256>(buffer.ptr())
-    *words = word
-    *ptr::offset(words, 1) = word
+    unsafe { *words = word }
+    unsafe { *ptr::offset(words, 1) = word }
     keccak256(buffer.span())
 }
 

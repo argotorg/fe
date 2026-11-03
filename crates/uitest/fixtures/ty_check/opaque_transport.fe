@@ -1,0 +1,98 @@
+// A value of an associated shape not known here is only passed on: returned,
+// or passed to a parameter of the same shape.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (mut? u256, mut? u256)
+
+    fn at(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+
+fn take<D: Driver>(_ s: D::Step<ref>) {}
+
+fn bind<D: Driver>(_ s: D::Step<ref>) {
+    let t = s
+}
+
+fn bind_marked<D: mut Driver>(_ d: mut D) {
+    match d.at() {
+        ref r => {}
+    }
+    match d.at() {
+        mut m => {}
+    }
+}
+
+fn destructure<D: Driver>(_ s: D::Step<ref>) {
+    let (a, b) = s
+}
+
+fn field<D: Driver>(_ s: D::Step<ref>) -> u256 {
+    s.0
+}
+
+fn wrong<D: Driver>(_ s: D::Step<ref>) {
+    let x: u256 = 1
+    take<D>(x)
+}
+
+fn other_mode<D: Driver>(_ s: D::Step<mut>) {
+    take<D>(s)
+}
+
+// Outside a `mut?` function, a parameter's shape needs its mode.
+fn bare<D: Driver>(_ s: D::Step) {}
+
+// A shape's parts carry its modes.
+fn moded<D: Driver>(_ s: own D::Step<ref>) {}
+
+fn take_mut<D: mut Driver>(_ s: D::Step<mut>) {}
+
+// A value is passed on at its mode: a read step is not a `mut` one.
+fn read_as_mut<D: mut Driver>(_ s: D::Step<ref>) {
+    take_mut<D>(s)
+}
+
+fn explicit_mut<D: mut Driver>(_ s: D::Step<ref>) {
+    take_mut<D>(mut s)
+}
+
+fn id<T>(_ x: own T) -> T {
+    x
+}
+
+fn view<T>(_ x: T) {}
+
+// A generic position takes values of a type, which a value of a shape
+// whose parts are not known is not.
+fn escapes<D: Driver>(_ s: D::Step<ref>) {
+    let a = id(s)
+}
+
+fn viewed<D: Driver>(_ s: D::Step<ref>) {
+    view(s)
+}
+
+fn wrapped<D: Driver>(_ s: D::Step<ref>) {
+    let o = Option::Some(s)
+}
+
+fn listed<D: Driver>(_ s: D::Step<ref>) {
+    let xs = [s]
+}
+
+fn captured<D: Driver>(_ s: D::Step<ref>) {
+    let f = || take<D>(s)
+}

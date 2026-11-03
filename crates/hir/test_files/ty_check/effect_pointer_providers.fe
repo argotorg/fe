@@ -10,25 +10,29 @@ fn bump_x() uses (x: mut u256) {
 
 fn test_mem_ptr() {
     let p = ptr::alloc<u256>()
-    with (p) {
-        let _v = read_x()
-        bump_x()
+    unsafe {
+        with (mut *p) {
+            let _v = read_x()
+            bump_x()
+        }
     }
 }
 
 fn test_calldata_ptr_readonly() uses (evm: std::evm::RawOps) {
-    let c = evm.calldata_ptr<u256>(0)
-    with (c) {
-        let _v = read_x()
+    let c = unsafe { evm.calldata_ptr<u256>(0) }
+    unsafe {
+        with (*c) {
+            let _v = read_x()
+        }
     }
 }
 
 fn read_calldata_triplet_ptr_offset() -> u256 uses (arr: std::evm::CalldataPtr<[u256; 3]>) {
-    arr.raw()
+    arr as u256
 }
 
 fn test_calldata_ptr_array_provider() uses (evm: std::evm::RawOps) {
-    let c = evm.calldata_ptr<[u256; 3]>(0)
+    let c = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
     with (c) {
         let _v = read_calldata_triplet_ptr_offset()
     }

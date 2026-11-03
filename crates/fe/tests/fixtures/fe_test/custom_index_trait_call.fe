@@ -7,8 +7,10 @@ impl Copy for WordView {}
 impl Index<u256> for WordView {
     type Output = u256
 
-    fn index(self, _ offset: u256) -> u256 {
-        self.base + offset
+    // The grant is a temporary of the projection's own frame.
+    fn index(self, _ offset: u256) -> ref u256 {
+        let word = self.base + offset
+        ref word
     }
 }
 
@@ -22,7 +24,7 @@ fn custom_index_reads_lower_as_trait_call() {
 
 #[test]
 fn array_index_remains_place_projection() {
-    let mut values: [u256; 2] = [1, 2]
+    var values: [u256; 2] = [1, 2]
 
     assert!(values[1] == 2)
     values[1] = 3

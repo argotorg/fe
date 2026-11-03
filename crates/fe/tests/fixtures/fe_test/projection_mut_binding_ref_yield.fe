@@ -1,0 +1,47 @@
+// A `mut` access binding yielded where a `ref` result is expected views the
+// place it holds, and a `mut` parameter's hole the yield does not export is
+// restored in the slide.
+use core::ptr::MemArray
+
+struct Holder {
+    a: u256,
+    b: MemArray<u256>,
+}
+
+impl Holder {
+    fn bumped(mut self) -> ref u256 {
+        let g = mut self.a
+        g += 1
+        g
+    }
+
+    fn pair(mut self) -> (u256, ref u256) {
+        let g = mut self.a
+        g += 10
+        (1, g)
+    }
+
+    fn a_while_b_held(mut self) -> mut u256 {
+        let v = self.b
+        yield mut self.a
+        self.b = v
+    }
+}
+
+#[test]
+fn mut_binding_as_ref() {
+    var h = Holder { a: 3, b: MemArray::new_zeroed(1) }
+    assert(h.bumped() == 4)
+    let (one, a) = h.pair()
+    assert(one == 1 && a == 14)
+    assert(h.a == 14)
+}
+
+#[test]
+fn hole_restored_after_the_yield() {
+    var h = Holder { a: 3, b: MemArray::new_zeroed(1) }
+    h.b[0] = 9
+    let a = mut h.a_while_b_held()
+    a += 1
+    assert(h.a == 4 && h.b[0] == 9)
+}

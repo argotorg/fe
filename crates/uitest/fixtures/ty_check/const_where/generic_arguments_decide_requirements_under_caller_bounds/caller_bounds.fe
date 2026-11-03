@@ -1,0 +1,39 @@
+// A use whose arguments name the caller's parameters is evaluated under the
+// caller's bounds, so an argument can decide a condition for every value of
+// those parameters without a premise.
+trait Space {
+    const ZEROED: bool
+}
+
+trait Key {}
+
+struct Cell<T> { value: T }
+struct Words<T> { value: T }
+struct Map<K, V> { key: K, value: V }
+
+impl<T> Space for Cell<T> { const ZEROED: bool = true }
+impl<T> Space for Words<T> { const ZEROED: bool = false }
+impl<K: Key, V> Space for Map<K, V> { const ZEROED: bool = true }
+
+fn wipe<C: Space>(_ c: C) where C::ZEROED {}
+
+fn wipe_cell<T>(_ c: Cell<T>) {
+    wipe(c)
+}
+
+// The impl deciding the condition holds only by the caller's bound on `K`.
+fn wipe_map<K: Key, V>(_ m: Map<K, V>) {
+    wipe(m)
+}
+
+// A method names its impl's parameters, under the impl's bounds.
+impl<K: Key, V> Map<K, V> {
+    fn wipe_self(self) {
+        wipe(self)
+    }
+}
+
+// Rejected: the condition is false for every `T`.
+fn wipe_words<T>(_ w: Words<T>) {
+    wipe(w)
+}

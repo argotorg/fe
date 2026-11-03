@@ -2,27 +2,28 @@ pub use option::Option
 pub use result::Result
 pub use default::Default
 pub use clone::Clone
-pub use marker::Copy
+pub use marker::{Clearable, Copy, Pinned, Snapshot}
 pub use abi::{self, *}
 pub use message::MsgVariant
 pub use error::ErrorVariant
 pub use ops::{self, *}
 pub use ptr::{self, *}
-pub use bytes::{AsBytes, keccak}
+pub use bytes::{AsBytes, ByteWriter, PackedBytes, keccak}
 pub use string::{self, concat}
 pub use intrinsic::{contract_field_slot, size_of}
-pub use functional::{Fn, Functor, Applicative, Monad}
-pub use effect_ref::{AddressSpace, EffectHandle, EffectHandleMut, EffectRef, EffectRefMut, StaticSlot}
+pub use functional::{Fn, FnMut, Functor, Applicative, Monad}
+pub use effect_ref::EffectRef
 pub use contracts::{self, *}
 pub use range::{Bound, Known, Unknown, Range}
-pub use seq::Seq
+pub use iter::{Bidirectional, Collection, Driver, Producer}
 
 extern {
     pub fn panic() -> !
     pub fn panic_with_value<T>(_: own T) -> !
     /// Aborts with a Solidity-compatible panic code (see `core::panics`).
     ///
-    /// On EVM targets this reverts with `Panic(uint256)` data; native targets trap.
+    /// On EVM targets this reverts with `Panic(uint256)` data; native targets
+    /// report the code's reason on stderr and abort.
     pub const fn panic_code(_ code: u256) -> !
     pub fn todo() -> !
 }

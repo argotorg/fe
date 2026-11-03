@@ -1,0 +1,20 @@
+// In the outer block, the glob imports bring in two `c`s, but the named
+// import of `c` shadows them, so the inner block's `use c::*` waits for it.
+pub mod a {
+    pub mod b {
+        pub use super::super::*
+    }
+    pub mod c {}
+}
+pub mod c {
+    pub struct S {}
+}
+fn f() {
+    use a::b::c as c
+    use ingot::*
+    use a::*
+    {
+        use c::*
+        let _x: S = S {}
+    }
+}

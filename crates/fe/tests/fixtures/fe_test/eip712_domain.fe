@@ -9,10 +9,11 @@
 
 use core::keccak
 use core::ptr::MemBuffer
-use std::evm::{Address, Call, Ctx, Evm, RawMem, crypto}
+use core::abi::{load_word, store_word}
+use std::evm::{Address, Call, Ctx, Evm, crypto}
 use std::evm::eip712::{self, DOMAIN_TYPEHASH, Domain}
 
-const SEAPORT: Address = Address { inner: 0x0000000000000068f116a894984e2ddb2f0000d1 }
+const SEAPORT: Address = Address::new(0x0000000000000068f116a894984e2ddb2f0000d1)
 
 // cast keccak "Seaport" / cast keccak "1.6", written as compile-time hashes.
 const SEAPORT_NAME_HASH: u256 = keccak("Seaport")
@@ -76,7 +77,7 @@ fn test_domain_separator_vectors() {
                 name_hash: NAME_HASH,
                 version_hash: VERSION_HASH,
                 chain_id: 31337,
-                verifying_contract: Address { inner: 0xcccccccccccccccccccccccccccccccccccccccc },
+                verifying_contract: Address::new(0xcccccccccccccccccccccccccccccccccccccccc),
             )
             == TEST_SEPARATOR,
     )
@@ -85,7 +86,7 @@ fn test_domain_separator_vectors() {
                 name_hash: keccak(""),
                 version_hash: keccak(""),
                 chain_id: 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
-                verifying_contract: Address { inner: 0xffffffffffffffffffffffffffffffffffffffff },
+                verifying_contract: Address::new(0xffffffffffffffffffffffffffffffffffffffff),
             )
             == EXTREME_SEPARATOR,
     )
@@ -105,8 +106,7 @@ fn test_digest_vectors() {
     )
 }
 
-// `crypto::eip712_digest` is kept as an alias of `eip712::digest` and no
-// longer needs the `RawMem` effect.
+// `crypto::eip712_digest` is kept as an alias of `eip712::digest`.
 #[test]
 fn test_digest_matches_crypto_eip712_digest() {
     assert!(
@@ -121,9 +121,9 @@ fn test_digest_matches_crypto_eip712_digest() {
 // The preimage lives in its own allocation: memory allocated before and after
 // hashing is left intact, and the digest does not depend on it.
 #[test]
-fn test_digest_leaves_neighbouring_memory_intact() uses (mem: mut RawMem) {
+fn test_digest_leaves_neighbouring_memory_intact() {
     let before = MemBuffer::alloc(32)
-    mem.mstore(addr: before.ptr(), value: 0xaa)
+    unsafe { store_word(ptr: before.ptr(), value: 0xaa) }
     assert!(
         eip712::digest(
                 domain_separator: SEAPORT_SEPARATOR,
@@ -132,7 +132,7 @@ fn test_digest_leaves_neighbouring_memory_intact() uses (mem: mut RawMem) {
             == SEAPORT_DIGEST,
     )
     let after = MemBuffer::alloc(32)
-    mem.mstore(addr: after.ptr(), value: 0xbb)
+    unsafe { store_word(ptr: after.ptr(), value: 0xbb) }
     assert!(
         eip712::digest(
                 domain_separator: SEAPORT_SEPARATOR,
@@ -140,8 +140,8 @@ fn test_digest_leaves_neighbouring_memory_intact() uses (mem: mut RawMem) {
             )
             == SEAPORT_DIGEST,
     )
-    assert!(mem.mload(before.ptr()) == 0xaa)
-    assert!(mem.mload(after.ptr()) == 0xbb)
+    unsafe { assert!(load_word(before.ptr()) == 0xaa) }
+    unsafe { assert!(load_word(after.ptr()) == 0xbb) }
 }
 
 msg SignerMsg {
@@ -226,11 +226,11 @@ fn test_domain_new_matches_free_function() uses (ctx: Ctx) {
 
 #[test]
 fn test_cached_separator_in_immutable_field() uses (evm: mut Evm, ctx: Ctx) {
-    let signer = evm.create2<Signer>(value: 0, args: (), salt: 0)
+    let signer = evm.create2<Signer>(value: Wei::zero(), args: (), salt: 0)
     let separator = evm.call(
             addr: signer,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: SignerMsg::Separator {},
         )
     assert!(separator == separator_for(signer))
@@ -238,7 +238,7 @@ fn test_cached_separator_in_immutable_field() uses (evm: mut Evm, ctx: Ctx) {
         .call(
             addr: signer,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: SignerMsg::Digest { struct_hash: STRUCT_HASH },
         )
     assert!(
@@ -250,13 +250,13 @@ fn test_cached_separator_in_immutable_field() uses (evm: mut Evm, ctx: Ctx) {
 // separator (bound to `Signer`'s address) must not be used.
 #[test]
 fn test_separator_rederived_under_delegatecall() uses (evm: mut Evm, ctx: Ctx) {
-    let signer = evm.create2<Signer>(value: 0, args: (), salt: 0)
-    let proxy = evm.create2<Proxy>(value: 0, args: (), salt: 0)
+    let signer = evm.create2<Signer>(value: Wei::zero(), args: (), salt: 0)
+    let proxy = evm.create2<Proxy>(value: Wei::zero(), args: (), salt: 0)
     let separator = evm
         .call(
             addr: proxy,
             gas: 200000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Separator { implementation: signer },
         )
     assert!(separator == separator_for(proxy))
@@ -265,7 +265,7 @@ fn test_separator_rederived_under_delegatecall() uses (evm: mut Evm, ctx: Ctx) {
         .call(
             addr: proxy,
             gas: 200000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Digest { implementation: signer, struct_hash: STRUCT_HASH },
         )
     assert!(

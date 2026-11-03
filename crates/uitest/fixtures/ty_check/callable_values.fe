@@ -1,0 +1,98 @@
+// A call `f(x)` calls a value only through `Fn` or `FnMut`: a method of
+// another trait or an inherent method named `call` does not make a type
+// callable. A field holding a callable is called as `(h.f)(x)`. A function
+// item is a callable value unless it is an `unsafe fn`, a projection or `mut?`.
+
+struct Caller { n: u256 }
+
+impl Caller {
+    fn call(self, _ x: u256) -> u256 {
+        x + self.n
+    }
+}
+
+struct Holder<F> { f: F }
+
+struct Sealed<F> { unsafe f: F }
+
+fn apply<F: Fn(u256) -> u256>(_ f: F, _ x: u256) -> u256 uses F::E {
+    f(x)
+}
+
+unsafe fn raw(_ x: u256) -> u256 {
+    x
+}
+
+fn first(_ xs: [u256; 2]) -> ref u256 {
+    ref xs[0]
+}
+
+fn two(_ a: u256, _ b: u256) -> u256 {
+    a + b
+}
+
+fn not_callable() -> u256 {
+    let x: u256 = 1
+    x(2)
+}
+
+fn inherent_call(_ c: Caller) -> u256 {
+    c(1)
+}
+
+fn wrong_arity() -> u256 {
+    let add = |a: u256, b: u256| a + b
+    add(1)
+}
+
+// An `FnMut` shape's `call_mut` takes the callee `mut`.
+fn fn_mut_through_view<F: FnMut(own u256) -> u256>(_ f: F) -> u256 uses F::E {
+    f(1)
+}
+
+fn unsafe_field_receiver<F: FnMut(own u256) -> u256>(_ s: mut Sealed<F>) -> u256 uses F::E {
+    (s.f)(1)
+}
+
+fn field_as_method<F: Fn(u256) -> u256>(_ h: Holder<F>) -> u256 uses F::E {
+    h.f(1)
+}
+
+fn unsafe_item() -> u256 {
+    apply(raw, 1)
+}
+
+fn projection_item() -> u256 {
+    apply(first, 1)
+}
+
+fn item_arity() -> u256 {
+    apply(two, 1)
+}
+
+struct Store {
+    n: u256,
+}
+
+fn read_store() -> u256 uses (store: Store) {
+    store.n
+}
+
+fn slot() -> mut? u256 uses (store: mut? Store) {
+    mut? store.n
+}
+
+fn takes_bool<F: Fn() -> bool>(_ f: F) -> bool uses (F::E) {
+    f()
+}
+
+fn takes_u256<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) {
+    f()
+}
+
+// A function with effects implements its own shape only, and a `mut?`
+// function is no callable value.
+fn effectful_items() uses (store: Store) {
+    let b = takes_bool(read_store)
+    let n = takes_u256(slot)
+}

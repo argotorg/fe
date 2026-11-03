@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/trait_effect_rebinding.fe
+---
+error[16-0001]: access conflict in `fn conflict`
+   ┌─ trait_effect_rebinding.fe:13:31
+   │
+12 │     let held = mut counter.total
+   │                ----------------- access opened here
+13 │     with (Writer = counter) { forward() }
+   │                               ^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open

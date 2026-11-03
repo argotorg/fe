@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/mutable_owned_receiver.fe
+---
+error[1-0001]: a mutable owned receiver is written `var own self`; `mut self` is a mutable borrow
+  ┌─ mutable_owned_receiver.fe:6:26
+  │
+6 │     fn shorthand(mut own self) -> Self {
+  │                          ^^^^ a mutable owned receiver is written `var own self`; `mut self` is a mutable borrow
+
+error[1-0001]: a mutable owned receiver is written `var self: own T`; `mut self` is a mutable borrow
+   ┌─ mutable_owned_receiver.fe:10:24
+   │
+10 │     fn typed(mut self: own Foo) -> Self {
+   │                        ^^^ a mutable owned receiver is written `var self: own T`; `mut self` is a mutable borrow
+
+error[1-0001]: `var` makes an owned receiver mutable: `var own self`
+   ┌─ mutable_owned_receiver.fe:14:17
+   │
+14 │     fn view(var self) {}
+   │                 ^^^^ `var` makes an owned receiver mutable: `var own self`
+
+error[1-0001]: `var` makes an owned receiver mutable: `var own self`
+   ┌─ mutable_owned_receiver.fe:16:21
+   │
+16 │     fn read(var ref self) {}
+   │                     ^^^^ `var` makes an owned receiver mutable: `var own self`

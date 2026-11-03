@@ -9,7 +9,7 @@ pub struct W {
 impl Copy for W {}
 impl Marker for W {}
 
-impl<T: Marker> WrappingSub for T {
+impl<T: Marker + Copy> WrappingSub for T {
     fn wrapping_sub(self, _ other: T) -> Self {
         self
     }

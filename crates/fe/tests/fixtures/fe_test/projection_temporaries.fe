@@ -1,0 +1,42 @@
+// A projection yields a value as a frame temporary holding it, whatever the
+// value is: a call, a method call, arithmetic or a local.
+struct W { word: u256 }
+
+fn low(_ x: u256) -> u32 {
+    x.downcast_truncate()
+}
+
+impl W {
+    fn by_call(self) -> ref u32 {
+        low(self.word)
+    }
+
+    fn by_method(self) -> ref u32 {
+        self.word.downcast_truncate()
+    }
+
+    fn by_arith(self) -> ref u256 {
+        self.word + 1
+    }
+
+    fn by_local(self) -> ref u256 {
+        let v = self.word + 1
+        v
+    }
+
+    // One yield site views the place, the other a temporary.
+    fn either(self, _ bumped: bool) -> ref u256 {
+        if bumped { self.word + 10 } else { self.word }
+    }
+}
+
+#[test]
+fn values_are_yielded_as_temporaries() {
+    let w = W { word: 7 }
+    assert(w.by_call() == 7)
+    assert(w.by_method() == 7)
+    assert(w.by_arith() == 8)
+    assert(w.by_local() == 8)
+    assert(w.either(true) == 17)
+    assert(w.either(false) == 7)
+}

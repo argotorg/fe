@@ -1,0 +1,13 @@
+fn closures(xs: [u256; 3]) -> u256 {
+    let inc = |x|x+1
+    let none = ||   true
+    let total = xs.fold(0, |acc:own,x| acc + x)
+    let typed = | a: u256 , b: own u256 , c: mut, _ |->u256 { a + b }
+    let commented = |x, // the item
+        y| x + y
+    let block = |x| {
+        let y = x * 2
+        y + 1
+    }
+    total
+}

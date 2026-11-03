@@ -159,15 +159,15 @@ fn topic0_e7noidx() {
 
 #[test]
 fn emit_many_field_events() uses (evm: mut Evm) {
-    let c = evm.create2<Probe>(value: 0, args: (), salt: 0)
-    let r0: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE6Data {})
+    let c = evm.create2<Probe>(value: Wei::zero(), args: (), salt: 0)
+    let r0: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE6Data {})
     assert!(r0 == 1)
-    let r1: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE7Data {})
+    let r1: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE7Data {})
     assert!(r1 == 2)
-    let r2: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE8Data {})
+    let r2: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE8Data {})
     assert!(r2 == 3)
-    let r3: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE16Data {})
+    let r3: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE16Data {})
     assert!(r3 == 4)
-    let r4: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE7NoIdx {})
+    let r4: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE7NoIdx {})
     assert!(r4 == 5)
 }

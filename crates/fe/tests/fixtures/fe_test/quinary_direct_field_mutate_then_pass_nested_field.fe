@@ -11,7 +11,7 @@ fn first(_ values: [[u256; 5]; 3]) -> u256 {
 
 #[test]
 fn test_mutate_field_then_pass_nested_field() {
-    let mut data = Data { values: GRID5 }
+    var data = Data { values: GRID5 }
     data.values[1][2] = 7
     assert!(first(data.values) == 7)
 }

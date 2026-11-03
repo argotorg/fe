@@ -1,4 +1,5 @@
-use std::evm::{Evm, RawMem}
+use std::evm::Evm
+use core::abi::store_word
 
 pub trait Writable {
     fn write_to(self, ptr: u256) uses (evm: mut Evm)
@@ -6,7 +7,7 @@ pub trait Writable {
 
 impl Writable for u256 {
     fn write_to(self, ptr: u256) uses (evm: mut Evm) {
-        evm.mstore(addr: ptr, value: self)
+        unsafe { store_word(ptr: ptr, value: self) }
     }
 }
 

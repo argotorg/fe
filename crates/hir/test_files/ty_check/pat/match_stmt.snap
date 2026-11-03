@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/pat/match_stmt.fe
 ---
@@ -107,19 +108,19 @@ note:
    ┌─ match_stmt.fe:21:20
    │
 21 │         Color::Rgb(r, g, b) => {
-   │                    ^ ref u8
+   │                    ^ u8
 
 note:
    ┌─ match_stmt.fe:21:23
    │
 21 │         Color::Rgb(r, g, b) => {
-   │                       ^ ref u8
+   │                       ^ u8
 
 note:
    ┌─ match_stmt.fe:21:26
    │
 21 │         Color::Rgb(r, g, b) => {
-   │                          ^ ref u8
+   │                          ^ u8
 
 note:
    ┌─ match_stmt.fe:21:32
@@ -177,19 +178,19 @@ note:
    ┌─ match_stmt.fe:29:20
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                    ^ ref u8
+   │                    ^ u8
 
 note:
    ┌─ match_stmt.fe:29:23
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                       ^ ref u8
+   │                       ^ u8
 
 note:
    ┌─ match_stmt.fe:29:26
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                          ^ ref u8
+   │                          ^ u8
 
 note:
    ┌─ match_stmt.fe:29:32
@@ -222,13 +223,13 @@ note:
    ┌─ match_stmt.fe:30:24
    │
 30 │             return r + g + b
-   │                        ^ ref u8
+   │                        ^ u8
 
 note:
    ┌─ match_stmt.fe:30:28
    │
 30 │             return r + g + b
-   │                            ^ ref u8
+   │                            ^ u8
 
 note:
    ┌─ match_stmt.fe:32:9
@@ -416,7 +417,7 @@ note:
    ┌─ match_stmt.fe:51:20
    │
 51 │         Color::Rgb(r, ..) => { // Rest pattern
-   │                    ^ ref u8
+   │                    ^ u8
 
 note:
    ┌─ match_stmt.fe:51:23
@@ -437,7 +438,7 @@ note:
    ┌─ match_stmt.fe:52:20
    │
 52 │             return r
-   │                    ^ ref u8
+   │                    ^ u8
 
 note:
    ┌─ match_stmt.fe:54:9

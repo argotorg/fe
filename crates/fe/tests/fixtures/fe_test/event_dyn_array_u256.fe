@@ -1,6 +1,6 @@
-use core::abi::{Abi, AbiSize, Encode, store_word}
+use core::abi::{Abi, AbiFrame, AbiSize, Encode, load_word, store_word}
 use std::abi::{DynArray as Values, SolCompat}
-use std::evm::{Log, RawMem, encode_abi_payload}
+use std::evm::{Log, encode_abi_payload}
 
 struct DynArray<T> { value: T }
 
@@ -10,8 +10,8 @@ impl AbiSize for DynArray<u256> {
 }
 
 impl<A: Abi> Encode<A> for DynArray<u256> {
-    fn encode(own self, _ ptr: *u8) {
-        store_word(ptr: ptr, value: self.value)
+    fn encode(own self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.value)
     }
 }
 
@@ -48,36 +48,42 @@ msg M {
     Shadowed,
 }
 
-pub contract Probe uses (log: mut Log, raw: mut RawMem) {
+pub contract Probe uses (log: mut Log) {
     recv M {
-        F uses (mut log, mut raw) {
+        F uses (mut log) {
             let ptr = core::ptr::alloc_bytes(64)
-            raw.mstore(addr: ptr, value: 1)
-            raw.mstore(addr: core::ptr::offset_bytes(ptr, 32), value: 7)
-            log.emit(
-                AddLiquidity {
-                    provider: Address::zero(),
-                    token_amounts: Values::from_abi_tail(data: ptr, len: 1, size: 64),
-                    invariant: 3,
-                },
-            )
+            unsafe { store_word(ptr: ptr, value: 1) }
+            unsafe { store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: 7) }
+            unsafe {
+                log.emit(
+                    AddLiquidity {
+                        provider: Address::zero(),
+                        token_amounts: Values::from_abi_tail(data: ptr, len: 1, size: 64),
+                        invariant: 3,
+                    },
+                )
+            }
         }
-        Single uses (mut log, mut raw) {
+        Single uses (mut log) {
             let ptr = core::ptr::alloc_bytes(64)
-            raw.mstore(addr: ptr, value: 1)
-            raw.mstore(addr: core::ptr::offset_bytes(ptr, 32), value: 7)
-            log.emit(
-                SingleDynamic { values: Values::from_abi_tail(data: ptr, len: 1, size: 64) },
-            )
+            unsafe { store_word(ptr: ptr, value: 1) }
+            unsafe { store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: 7) }
+            unsafe {
+                log.emit(
+                    SingleDynamic { values: Values::from_abi_tail(data: ptr, len: 1, size: 64) },
+                )
+            }
         }
-        FixedArray uses (mut log, mut raw) {
+        FixedArray uses (mut log) {
             let ptr = core::ptr::alloc_bytes(96)
-            raw.mstore(addr: ptr, value: 1)
-            raw.mstore(addr: core::ptr::offset_bytes(ptr, 32), value: 7)
-            raw.mstore(addr: core::ptr::offset_bytes(ptr, 64), value: 9)
-            log.emit(
-                FixedArrayElements { values: Values::from_abi_tail(data: ptr, len: 1, size: 96) },
-            )
+            unsafe { store_word(ptr: ptr, value: 1) }
+            unsafe { store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: 7) }
+            unsafe { store_word(ptr: core::ptr::offset_bytes(ptr, 64), value: 9) }
+            unsafe {
+                log.emit(
+                    FixedArrayElements { values: Values::from_abi_tail(data: ptr, len: 1, size: 96) },
+                )
+            }
         }
         Shadowed uses (mut log) {
             log.emit(ShadowedDynArray { value: DynArray { value: 11 } })
@@ -86,25 +92,25 @@ pub contract Probe uses (log: mut Log, raw: mut RawMem) {
 }
 
 #[test]
-fn test_dyn_array_u256_event() uses (log: mut Log, raw: mut RawMem) {
+fn test_dyn_array_u256_event() uses (log: mut Log) {
     assert!(
         AddLiquidity::TOPIC0 == 0xdf21883620cd435343a655a765cce604ee5e962b399aed0ebbbd63a9c7e570c4,
     )
 
     let ptr = core::ptr::alloc_bytes(64)
-    raw.mstore(addr: ptr, value: 1)
-    raw.mstore(addr: core::ptr::offset_bytes(ptr, 32), value: 7)
-    let values = Values::from_abi_tail(data: ptr, len: 1, size: 64)
+    unsafe { store_word(ptr: ptr, value: 1) }
+    unsafe { store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: 7) }
+    let values = unsafe { Values::from_abi_tail(data: ptr, len: 1, size: 64) }
     let buffer = encode_abi_payload((values, 3 as u256))
     let data = buffer.ptr()
     let len = buffer.len()
 
     // Solidity: abi.encode(uint256[](7), uint256(3)).
     assert!(len == 128)
-    assert!(raw.mload(data) == 64)
-    assert!(raw.mload(core::ptr::offset_bytes(data, 32)) == 3)
-    assert!(raw.mload(core::ptr::offset_bytes(data, 64)) == 1)
-    assert!(raw.mload(core::ptr::offset_bytes(data, 96)) == 7)
+    unsafe { assert!(load_word(data) == 64) }
+    unsafe { assert!(load_word(core::ptr::offset_bytes(data, 32)) == 3) }
+    unsafe { assert!(load_word(core::ptr::offset_bytes(data, 64)) == 1) }
+    unsafe { assert!(load_word(core::ptr::offset_bytes(data, 96)) == 7) }
 
     log.emit(
         AddLiquidity { provider: Address::zero(), token_amounts: values, invariant: 3 },

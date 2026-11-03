@@ -1,0 +1,76 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/yields.fe
+---
+error[16-0011]: invalid yield in `fn late_empty`
+   ┌─ yields.fe:26:20
+   │
+26 │             return Option::None
+   │                    ^^^^^^^^^^^^ a projection returns its empty variant only before it yields
+
+error[16-0011]: invalid yield in `fn twice`
+   ┌─ yields.fe:34:15
+   │
+34 │         yield mut self.v
+   │               ^^^^^^^^^^ this path has already yielded
+
+error[16-0011]: invalid yield in `fn missing`
+   ┌─ yields.fe:38:49
+   │
+38 │       fn missing(mut self, _ c: bool) -> mut u256 {
+   │ ╭─────────────────────────────────────────────────^
+39 │ │         if c {
+40 │ │             yield mut self.v
+41 │ │         }
+42 │ │         self.v += 1
+43 │ │     }
+   │ ╰─────^ a projection must yield on every path that completes
+
+error[16-0011]: invalid yield in `fn in_loop`
+   ┌─ yields.fe:46:38
+   │
+46 │       fn in_loop(mut self) -> mut u256 {
+   │ ╭──────────────────────────────────────^
+47 │ │         while self.depth > 0 {
+48 │ │             yield mut self.v
+49 │ │             self.depth -= 1
+50 │ │         }
+51 │ │     }
+   │ ╰─────^ a projection must yield on every path that completes
+
+warning[16-0012]: discarded writes in `fn discarded`
+   ┌─ yields.fe:56:9
+   │
+56 │         mut tmp
+   │         ^^^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back
+
+warning[16-0012]: discarded writes in `fn discarded_stmt`
+   ┌─ yields.fe:61:15
+   │
+61 │         yield mut tmp
+   │               ^^^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back
+
+warning[16-0012]: discarded writes in `fn discarded_value`
+   ┌─ yields.fe:66:9
+   │
+66 │         self.v + 1
+   │         ^^^^^^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back
+
+error[16-0013]: recursion through a projection in `fn deep`
+   ┌─ yields.fe:75:13
+   │
+75 │             self.deep()
+   │             ^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined
+
+error[16-0013]: recursion through a projection in `fn ping`
+   ┌─ yields.fe:80:9
+   │
+80 │         self.pong()
+   │         ^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined
+
+error[16-0013]: recursion through a projection in `fn pong`
+   ┌─ yields.fe:84:9
+   │
+84 │         self.ping()
+   │         ^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined

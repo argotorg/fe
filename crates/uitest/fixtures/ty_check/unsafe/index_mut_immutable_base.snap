@@ -1,0 +1,30 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/unsafe/index_mut_immutable_base.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+  ┌─ index_mut_immutable_base.fe:5:5
+  │
+4 │     let array = MemArray<u256>::new_zeroed(2)
+  │         ----- write `var array` for a mutable value
+5 │     array[0] = 1
+  │     ^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+  ┌─ index_mut_immutable_base.fe:6:5
+  │
+4 │     let array = MemArray<u256>::new_zeroed(2)
+  │         ----- write `var array` for a mutable value
+5 │     array[0] = 1
+6 │     array[1] += 1
+  │     ^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ index_mut_immutable_base.fe:10:5
+   │
+ 9 │ pub fn view_param(array: MemArray<u256>) {
+   │                   ----- a view parameter is read-only; write `array: mut …` for a mutable borrow
+10 │     array[0] = 1
+   │     ^^^^^^^^ immutable assignment

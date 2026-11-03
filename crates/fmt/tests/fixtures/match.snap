@@ -16,7 +16,7 @@ fn test_match_basic(x: i32) -> i32 {
 
 fn test_match_with_bindings(opt: Option<i32>) -> i32 {
     match opt {
-        Option::Some(value,) => value,
+        Option::Some(value) => value,
         Option::None => 0,
     }
 }
@@ -123,7 +123,7 @@ fn test_match_mixed_patterns(input: (Point, Color)) -> i32 {
 
 // Stubs for types used above
 enum Option<T> {
-    Some(T,),
+    Some(T),
     None,
 }
 

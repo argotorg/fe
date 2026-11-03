@@ -1,0 +1,69 @@
+// Each access component of a projection lies in one address space, its
+// result space: callers combine grants by their result spaces, never by
+// the projection bodies.
+struct Counter {
+    n: u256,
+    m: u256,
+}
+
+impl Counter {
+    // Yields its own place: storage when the counter is.
+    fn direct(mut self) -> mut u256 {
+        mut self.n
+    }
+
+    // Yields a frame temporary: memory whatever the counter is.
+    fn written_back(mut self) -> mut u256 {
+        var tmp = self.m
+        yield mut tmp
+        self.m = tmp
+    }
+
+    // Rejected for a storage counter: one yield site is storage, the other
+    // memory.
+    fn either(mut self, _ flag: bool) -> mut u256 {
+        if flag { self.direct() } else { self.written_back() }
+    }
+
+    // Accepted: both yield sites are memory.
+    fn either_memory(mut self, _ flag: bool) -> mut u256 {
+        var tmp = self.n
+        if flag {
+            yield self.written_back()
+        } else {
+            yield mut tmp
+        }
+        self.n = tmp
+    }
+}
+
+msg Bump {
+    #[selector = 1]
+    Either { flag: bool },
+    #[selector = 2]
+    Memory { flag: bool },
+}
+
+pub contract Holder {
+    mut counter: Counter,
+
+    recv Bump {
+        Either { flag } uses (mut counter) {
+            let x = mut counter.either(flag)
+            x += 1
+        }
+
+        Memory { flag } uses (mut counter) {
+            let x = mut counter.either_memory(flag)
+            x += 1
+        }
+    }
+}
+
+// A memory counter instantiates `either` with both sites in memory.
+fn memory_either(_ flag: bool) -> u256 {
+    var counter = Counter { n: 0, m: 0 }
+    let x = mut counter.either(flag)
+    x += 1
+    counter.n + counter.m
+}

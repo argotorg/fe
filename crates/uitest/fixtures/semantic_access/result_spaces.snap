@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/result_spaces.fe
+---
+error[16-0007]: transport violation in `fn either`
+   ┌─ result_spaces.fe:25:42
+   │
+25 │         if flag { self.direct() } else { self.written_back() }
+   │                   -------------          ^^^^^^^^^^^^^^^^^^^ this yield names memory, but another yield names storage
+   │                   │
+   │                   yields storage

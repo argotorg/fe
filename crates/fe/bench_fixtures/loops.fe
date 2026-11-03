@@ -18,15 +18,15 @@ pub msg BenchMsg {
 pub contract Bench {
     recv BenchMsg {
         Counter { n } -> u256 {
-            let mut i: u256 = 0
+            var i: u256 = 0
             while i < n {
                 i = i + 1
             }
             i
         }
         Sum { n } -> u256 {
-            let mut total: u256 = 0
-            let mut i: u256 = 1
+            var total: u256 = 0
+            var i: u256 = 1
             while i <= n {
                 total = total + i
                 i = i + 1
@@ -34,8 +34,8 @@ pub contract Bench {
             total
         }
         XorLoop { n, seed } -> u256 {
-            let mut acc: u256 = seed
-            let mut i: u256 = 0
+            var acc: u256 = seed
+            var i: u256 = 0
             while i < n {
                 acc = acc ^ (seed ^ i)
                 i = i + 1
@@ -43,15 +43,15 @@ pub contract Bench {
             acc
         }
         CounterUnchecked { n } -> u256 {
-            let mut i: u256 = 0
+            var i: u256 = 0
             while i < n {
                 i = i + 1
             }
             i
         }
         SumUnchecked { n } -> u256 {
-            let mut total: u256 = 0
-            let mut i: u256 = 1
+            var total: u256 = 0
+            var i: u256 = 1
             while i <= n {
                 total = total + i
                 i = i + 1
@@ -59,8 +59,8 @@ pub contract Bench {
             total
         }
         XorLoopUnchecked { n, seed } -> u256 {
-            let mut acc: u256 = seed
-            let mut i: u256 = 0
+            var acc: u256 = seed
+            var i: u256 = 0
             while i < n {
                 acc = acc ^ (seed ^ i)
                 i = i + 1

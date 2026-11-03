@@ -3,7 +3,7 @@
 #[test]
 fn test_array_literal_sum() {
     let arr: [u256; 5] = [10, 20, 30, 40, 50]
-    let mut sum: u256 = 0
+    var sum: u256 = 0
     for x in arr {
         sum += x
     }
@@ -21,7 +21,7 @@ fn test_array_index() {
 
 #[test]
 fn test_array_mut() {
-    let mut arr: [u256; 3] = [1, 2, 3]
+    var arr: [u256; 3] = [1, 2, 3]
     arr[1] = 99
     assert!(arr[0] == 1)
     assert!(arr[1] == 99)
@@ -32,7 +32,7 @@ fn test_array_mut() {
 fn test_multiple_arrays() {
     let a: [u256; 3] = [1, 2, 3]
     let b: [u256; 3] = [10, 20, 30]
-    let mut sum: u256 = 0
+    var sum: u256 = 0
     for x in a {
         sum += x
     }
@@ -44,7 +44,7 @@ fn test_multiple_arrays() {
 
 #[test]
 fn test_u8_array_mut() {
-    let mut arr: [u8; 4] = [1, 2, 3, 4]
+    var arr: [u8; 4] = [1, 2, 3, 4]
     arr[1] = 9
     assert!(arr[0] == 1)
     assert!(arr[1] == 9)
@@ -54,7 +54,7 @@ fn test_u8_array_mut() {
 
 #[test]
 fn test_bool_array_mut() {
-    let mut arr: [bool; 4] = [true, false, true, false]
+    var arr: [bool; 4] = [true, false, true, false]
     arr[1] = true
     arr[2] = false
     assert!(arr[0] == true)

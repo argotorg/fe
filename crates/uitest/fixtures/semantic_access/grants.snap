@@ -1,0 +1,35 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/grants.fe
+---
+error[16-0001]: access conflict in `fn retained_payload`
+   ┌─ grants.fe:26:23
+   │
+25 │             Choice::Item(ref item) => {
+   │                          -------- access opened here
+26 │                 yield mut self.c
+   │                       ^^^^^^^^^^ cannot mutably access this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn access_and_owned`
+   ┌─ grants.fe:73:25
+   │
+73 │         yield (mut tmp, tmp)
+   │                -------  ^^^ cannot move out of this place while a `mut` access of it is open
+   │                │
+   │                access opened here
+
+error[16-0002]: move conflict in `fn uninitialized`
+   ┌─ grants.fe:59:15
+   │
+59 │         yield mut tmp
+   │               ^^^^^^^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn owned_and_access`
+   ┌─ grants.fe:67:21
+   │
+67 │         yield (tmp, mut tmp)
+   │                ---  ^^^^^^^ cannot use a value after it was moved
+   │                │
+   │                value is moved here

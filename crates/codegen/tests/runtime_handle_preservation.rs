@@ -1,8 +1,8 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
-use hir::hir_def::TopLevelMod;
-use mir::runtime::{AddressSpaceKind, RefKind};
+use hir::{analysis::ty::AddressSpace, hir_def::TopLevelMod};
+use mir::runtime::RefKind;
 use mir::{
     IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
     RTerminator, RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance,
@@ -107,7 +107,7 @@ fn runtime_body_for_symbol<'db>(
         .copied()
         .find(|function| function.symbol(db).contains(symbol))
         .unwrap_or_else(|| panic!("missing runtime function `{symbol}`"));
-    function.instance(db).body(db)
+    function.instance(db).body(db).clone()
 }
 
 fn runtime_body_stmts<'a, 'db>(body: &'a RuntimeBody<'db>) -> impl Iterator<Item = &'a RStmt<'db>> {
@@ -168,41 +168,13 @@ fn transported_local_from_param(body: &RuntimeBody<'_>, param: RLocalId) -> RLoc
         .unwrap_or(param)
 }
 
-fn body_preserves_handle_field(body: &RuntimeBody<'_>, param: RLocalId, field: u16) -> bool {
-    let mut transported = transported_local_from_param(body, param);
-    for stmt in runtime_body_stmts(body) {
-        if let RStmt::Assign {
-            dst,
-            expr: RExpr::NativeRef { value },
-        } = stmt
-            && *value == transported
-        {
-            transported = *dst;
-        }
-    }
-    runtime_body_stmts(body).any(|stmt| match stmt {
-        RStmt::Assign {
-            expr: RExpr::AggregateMake { fields, .. },
-            ..
-        } => fields
-            .get(field as usize)
-            .is_some_and(|src| *src == transported),
-        RStmt::Store { dst, src } => {
-            *src == transported
-                && matches!(dst.root, PlaceRoot::Ref(_))
-                && matches!(dst.path.as_ref(), [PlaceElem::Field(stored)] if stored.0 == field)
-        }
-        _ => false,
-    })
-}
-
 fn storage_pair_ref_layout<'db>(class: &RuntimeClass<'db>) -> Option<LayoutId<'db>> {
     match class {
         RuntimeClass::Ref {
             pointee,
             kind:
                 RefKind::Provider {
-                    space: AddressSpaceKind::Storage,
+                    space: AddressSpace::Storage,
                     ..
                 },
             ..
@@ -229,7 +201,7 @@ fn local_storage_handles_preserve_storage_effect_transport() {
                     store.class,
                     RuntimeClass::Ref {
                         kind: RefKind::Provider {
-                            space: AddressSpaceKind::Storage,
+                            space: AddressSpace::Storage,
                             ..
                         },
                         ..
@@ -240,75 +212,6 @@ fn local_storage_handles_preserve_storage_effect_transport() {
         }
     );
 }
-
-#[test]
-fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
-    let src = format!(
-        "{}\nfn emit_helpers() -> u256 {{\n    let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]\n    sum_last4(arr) + sum_first4(arr)\n}}\n",
-        include_str!("../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"),
-    );
-    with_test_runtime_package!(
-        "transparent_wrapper_returns_preserve_handle_fields_in_rmir.fe",
-        src,
-        |db, package| {
-            let take_debug = package
-                .functions(&db)
-                .iter()
-                .copied()
-                .filter(|function| function.symbol(&db).contains("take"))
-                .map(|function| {
-                    let body = function.instance(&db).body(&db);
-                    format!("{}:\n{body:#?}", function.symbol(&db))
-                })
-                .collect::<Vec<_>>();
-            let take_u256 = package
-                .functions(&db)
-                .iter()
-                .copied()
-                .find(|function| {
-                    if !function.symbol(&db).contains("take") {
-                        return false;
-                    }
-                    let body = function.instance(&db).body(&db);
-                    let [_, param] = body.signature.params.as_slice() else {
-                        return false;
-                    };
-                    matches!(
-                        param.class,
-                        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }
-                    ) && body_preserves_handle_field(&body, param.local, 1)
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "generated take helper that preserves the incoming handle field\n\n{}",
-                        take_debug.join("\n\n")
-                    )
-                });
-            let body = take_u256.instance(&db).body(&db);
-            let seq_param = body.signature.params[1].local;
-
-            assert!(
-                !body
-                    .blocks
-                    .iter()
-                    .flat_map(|block| block.stmts.iter())
-                    .any(|stmt| matches!(
-                        stmt,
-                        RStmt::Assign {
-                            expr: RExpr::MaterializeToObject { .. },
-                            ..
-                        }
-                    )),
-                "transparent wrapper returns should not materialize handle fields:\n{body:#?}"
-            );
-            assert!(
-                body_preserves_handle_field(&body, seq_param, 1),
-                "transparent wrapper returns should carry the incoming borrow transport directly into the wrapper field:\n{body:#?}"
-            );
-        }
-    );
-}
-
 #[test]
 fn provider_root_trait_receivers_preserve_concrete_runtime_layouts() {
     with_runtime_package!(
@@ -354,7 +257,8 @@ fn provider_root_trait_receivers_preserve_concrete_runtime_layouts() {
                     | RStmt::Store { .. }
                     | RStmt::CopyInto { .. }
                     | RStmt::EnumSetTag { .. }
-                    | RStmt::EnumWriteVariant { .. } => None,
+                    | RStmt::EnumWriteVariant { .. }
+                    | RStmt::End { .. } => None,
                 })
                 .unwrap_or_else(|| {
                     panic!("use_ctx should call the concrete trait receiver:\n{body:#?}")
@@ -474,8 +378,12 @@ fn pointer_helpers_use_native_raw_addr_transport_in_rmir() {
         r#"
 pub fn pointer_roundtrip() -> u256 {
     let ptr = core::ptr::alloc<u256>()
-    *ptr = 7
-    *ptr
+    unsafe { *ptr = 7 }
+    unsafe { *ptr }
+}
+
+pub fn main() -> u256 {
+    pointer_roundtrip()
 }
 "#
         .to_string(),
@@ -506,7 +414,7 @@ pub fn pointer_roundtrip() -> u256 {
                             RStmt::Store {
                                 dst: RuntimePlace {
                                     root: PlaceRoot::Ptr {
-                                        space: AddressSpaceKind::Memory,
+                                        space: AddressSpace::Memory,
                                         ..
                                     },
                                     ..
@@ -528,7 +436,7 @@ pub fn pointer_roundtrip() -> u256 {
                                 expr: RExpr::Load {
                                     place: RuntimePlace {
                                         root: PlaceRoot::Ptr {
-                                            space: AddressSpaceKind::Memory,
+                                            space: AddressSpace::Memory,
                                             ..
                                         },
                                         ..
@@ -545,9 +453,9 @@ pub fn pointer_roundtrip() -> u256 {
 }
 
 #[test]
-fn default_view_pointer_params_use_direct_pointer_transport() {
+fn pointer_params_are_address_words() {
     with_runtime_package!(
-        "default_view_pointer_params_use_direct_pointer_transport.fe",
+        "pointer_params_are_address_words.fe",
         r#"
 struct Data {
     value: u256,
@@ -565,12 +473,12 @@ fn identity(data: *Data) -> *Data {
     data
 }
 
-fn replace(mut _ data: own *Data, other: *Data) -> u256 {
+fn replace(var _ data: own *Data, other: *Data) -> u256 {
     data = other
     data.value
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let data = core::ptr::alloc<Data>()
     let other = core::ptr::alloc<Data>()
     data.value = 7
@@ -581,250 +489,73 @@ pub fn entry() -> u256 {
 "#
         .to_string(),
         |db, package| {
-            let read = runtime_body_for_symbol(&db, package, "read");
-            let param = read.signature.params[0].local;
-            assert!(
+            let word_param = |body: &RuntimeBody<'_>, root: fn(&RuntimeLocalRoot<'_>) -> bool| {
+                let local = body.local(body.signature.params[0].local).unwrap();
                 matches!(
-                    (
-                        &read.local(param).unwrap().carrier,
-                        &read.local(param).unwrap().root
-                    ),
-                    (
-                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }),
-                        RuntimeLocalRoot::None,
-                    )
-                ),
-                "default-view pointer params should use their pointer value directly:\n{read:#?}"
-            );
+                    local.carrier,
+                    RuntimeCarrier::Value(RuntimeClass::Scalar(_))
+                ) && root(&local.root)
+            };
+            // A pointee place is rooted at the pointer word's address.
+            let pointee_root = |body: &RuntimeBody<'_>, place: &RuntimePlace<'_>| {
+                let PlaceRoot::Ptr {
+                    addr,
+                    space: AddressSpace::Memory,
+                    ..
+                } = place.root
+                else {
+                    return false;
+                };
+                let param = body.signature.params[0].local;
+                matches!(place.path.as_ref(), [PlaceElem::Field(_)])
+                    && runtime_body_stmts(body).any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Assign {
+                                dst,
+                                expr: RExpr::WordToRawAddr { value, .. },
+                            } if *dst == addr && *value == param
+                        )
+                    })
+            };
+
+            let read = runtime_body_for_symbol(&db, package, "read");
             assert!(
-                runtime_body_stmts(&read).any(|stmt| {
-                    matches!(
+                word_param(&read, |root| matches!(root, RuntimeLocalRoot::None))
+                    && runtime_body_stmts(&read).any(|stmt| matches!(
                         stmt,
                         RStmt::Assign {
-                            expr: RExpr::Load {
-                                place: RuntimePlace {
-                                    root: PlaceRoot::Ptr { addr, .. },
-                                    path,
-                                },
-                            },
+                            expr: RExpr::Load { place },
                             ..
-                        } if *addr == param
-                            && matches!(path.as_ref(), [PlaceElem::Field(_)])
-                    )
-                }),
-                "pointer field reads should project from the direct pointer value:\n{read:#?}"
+                        } if pointee_root(&read, place)
+                    )),
+                "pointee reads should address the pointer word directly:\n{read:#?}"
             );
 
             let write = runtime_body_for_symbol(&db, package, "write");
-            let param = write.signature.params[0].local;
             assert!(
-                matches!(
-                    (
-                        &write.local(param).unwrap().carrier,
-                        &write.local(param).unwrap().root
-                    ),
-                    (
-                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }),
-                        RuntimeLocalRoot::None,
-                    )
-                ) && runtime_body_stmts(&write).any(|stmt| {
-                    matches!(
+                word_param(&write, |root| matches!(root, RuntimeLocalRoot::None))
+                    && runtime_body_stmts(&write).any(|stmt| matches!(
                         stmt,
-                        RStmt::Store {
-                            dst: RuntimePlace {
-                                root: PlaceRoot::Ptr { addr, .. },
-                                path,
-                            },
-                            ..
-                        } if *addr == param
-                            && matches!(path.as_ref(), [PlaceElem::Field(_)])
-                    )
-                }),
+                        RStmt::Store { dst, .. } if pointee_root(&write, dst)
+                    )),
                 "pointee writes should not materialize a slot for the pointer value:\n{write:#?}"
             );
 
             let identity = runtime_body_for_symbol(&db, package, "identity");
-            let param = identity.signature.params[0].local;
             assert!(
-                matches!(
-                    (
-                        &identity.local(param).unwrap().carrier,
-                        &identity.local(param).unwrap().root,
-                    ),
-                    (
-                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }),
-                        RuntimeLocalRoot::None,
-                    )
-                ),
+                word_param(&identity, |root| matches!(root, RuntimeLocalRoot::None)),
                 "pointer value reads should not load the pointee:\n{identity:#?}"
             );
 
             let replace = runtime_body_for_symbol(&db, package, "replace");
-            let param = replace.signature.params[0].local;
             assert!(
-                matches!(
-                    (
-                        &replace.local(param).unwrap().carrier,
-                        &replace.local(param).unwrap().root,
-                    ),
-                    (
-                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }),
-                        RuntimeLocalRoot::Slot(_),
-                    )
-                ),
+                word_param(&replace, |root| matches!(root, RuntimeLocalRoot::Slot(_))),
                 "reassigned pointer values still require addressable local storage:\n{replace:#?}"
             );
         }
     );
 }
-
-#[test]
-fn object_backed_native_reference_fields_load_carriers_before_projection() {
-    let output = sonatina_ir_for_source(
-        "object_backed_native_reference_fields_load_carriers_before_projection.fe",
-        r#"struct Data {
-    x: u256,
-}
-
-struct View {
-    d: ref Data,
-}
-
-fn read(v: own View) -> u256 {
-    v.d.x
-}
-
-pub fn entry() -> u256 {
-    let data = Data { x: 1 }
-    let view = View { d: ref data }
-    read(view)
-}
-"#,
-    );
-    let read = sonatina_function_body(&output, "read");
-
-    assert!(
-        contains_op_subsequence(read, &["obj.load", "extract_value", "mload", "mload"]),
-        "stored native references must load their address/layout carrier before projecting the referent:\n{read}"
-    );
-}
-
-#[test]
-fn storage_backed_nested_handle_fields_follow_carriers_before_projecting_children() {
-    let output = sonatina_ir_for_source(
-        "storage_backed_nested_handle_fields_follow_carriers_before_projecting_children.fe",
-        include_str!("fixtures/effect_handle_field_deref.fe").to_string(),
-    );
-    let bump = sonatina_function_body(&output, "bump");
-
-    assert!(
-        contains_op_subsequence(bump, &["obj.proj", "obj.load", "evm_sload"]),
-        "nested storage-backed handle field access should load/follow the carrier before loading children:\n{bump}"
-    );
-}
-
-#[test]
-fn stored_native_field_borrows_preserve_the_native_transport() {
-    with_runtime_package!(
-        "stored_native_field_borrows_preserve_the_native_transport.fe",
-        include_str!("fixtures/effect_handle_field_deref.fe").to_string(),
-        |db, package| {
-            let bump = package
-                .functions(&db)
-                .iter()
-                .copied()
-                .find(|function| function.symbol(&db).contains("bump"))
-                .expect("generated bump runtime function");
-            let body = bump.instance(&db).body(&db);
-
-            let carrier = body
-                .blocks
-                .iter()
-                .flat_map(|block| block.stmts.iter())
-                .find_map(|stmt| match stmt {
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Load { place },
-                    } if matches!(place.root, PlaceRoot::Ref(_))
-                        && matches!(place.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 0)
-                        && matches!(
-                            body.value_class(*dst),
-                            Some(RuntimeClass::Ref {
-                                pointee,
-                                kind: RefKind::Native,
-                                ..
-                            }) if matches!(**pointee, RuntimeClass::AggregateValue { .. })
-                        ) =>
-                    {
-                        Some(*dst)
-                    }
-                    RStmt::Assign { .. }
-                    | RStmt::AssertIndexInBounds { .. }
-                    | RStmt::EnumAssertVariant { .. }
-                    | RStmt::Store { .. }
-                    | RStmt::CopyInto { .. }
-                    | RStmt::EnumSetTag { .. }
-                    | RStmt::EnumWriteVariant { .. } => None,
-                })
-                .unwrap_or_else(|| {
-                    panic!("expected nested handle carrier load in bump runtime body:\n{body:#?}")
-                });
-            let nested_field_borrow = body
-                .blocks
-                .iter()
-                .flat_map(|block| block.stmts.iter())
-                .find_map(|stmt| match stmt {
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::AddrOf { place },
-                    } if place.root == PlaceRoot::Ref(carrier)
-                        && matches!(place.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 0) =>
-                    {
-                        Some(*dst)
-                    }
-                    RStmt::Assign { .. }
-                    | RStmt::AssertIndexInBounds { .. }
-                    | RStmt::EnumAssertVariant { .. }
-                    | RStmt::Store { .. }
-                    | RStmt::CopyInto { .. }
-                    | RStmt::EnumSetTag { .. }
-                    | RStmt::EnumWriteVariant { .. } => None,
-                })
-                .unwrap_or_else(|| {
-                    panic!("expected nested field borrow from its explicit carrier in bump runtime body:\n{body:#?}")
-                });
-
-            let Some(RuntimeClass::Ref { pointee, kind, .. }) =
-                body.value_class(nested_field_borrow)
-            else {
-                panic!(
-                    "nested storage-backed field borrow should lower as a typed ref:\n{body:#?}"
-                );
-            };
-            assert!(
-                matches!(**pointee, RuntimeClass::Scalar(_)),
-                "nested storage-backed field borrow should point at the scalar field:\n{body:#?}"
-            );
-            assert!(
-                matches!(kind, RefKind::Native),
-                "nested field borrow must retain its native address/layout carrier:\n{body:#?}"
-            );
-        }
-    );
-}
-
 #[test]
 fn projected_enum_field_snapshots_preserve_full_enum_payloads() {
     let output = sonatina_ir_for_source(
@@ -850,7 +581,7 @@ fn repack(wrapper: Wrapper) -> Inner {
     Inner { flag: copy }
 }
 
-fn entry() -> Inner {
+pub fn main() -> Inner {
     repack(Wrapper {
         inner: Inner { flag: Flag::A(42) },
     })
@@ -883,7 +614,7 @@ fn sum_two(i: usize, j: usize) -> u256 {
     VALS[i] + VALS[j]
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_two(i: 0, j: 1)
 }
 "#;
@@ -940,17 +671,100 @@ fn loop_value_arguments_do_not_force_scalar_storage() {
 }
 
 #[test]
+fn arrays_viewed_for_address_taking_params_are_passed_by_address() {
+    with_runtime_package!(
+        "arrays_viewed_for_address_taking_params_are_passed_by_address.fe",
+        r#"fn sum_view(_ xs: [u256; 8]) -> u256 {
+    var s = 0
+    for x in xs {
+        s += x
+    }
+    s
+}
+
+fn sum_own(_ xs: own [u256; 8]) -> u256 {
+    var s = 0
+    for x in xs {
+        s += x
+    }
+    s
+}
+
+fn element(_ xs: [u256; 8], _ i: usize) -> u256 {
+    xs[i]
+}
+
+fn sum_calls(_ xs: [u256; 8]) -> u256 {
+    var s = 0
+    var i: usize = 0
+    while i < 8 {
+        s += element(xs, i)
+        i += 1
+    }
+    s
+}
+
+fn sum_local(_ a: u256) -> u256 {
+    let xs: [u256; 8] = [a; 8]
+    var s = 0
+    for x in xs {
+        s += x
+    }
+    s
+}
+
+fn run(_ a: u256) -> u256 {
+    let xs: [u256; 8] = [a; 8]
+    sum_view(xs) + sum_own(xs) + sum_calls(xs) + sum_local(a)
+}
+
+pub fn main() -> u256 {
+    run(1)
+}
+"#,
+        |db, package| {
+            // Copying the array into a slot of its own, as a projection's or
+            // callee's receiver, would run once per element.
+            for symbol in ["sum_view", "sum_own", "sum_calls", "sum_local"] {
+                let body = runtime_body_for_symbol(&db, package, symbol);
+                let is_array = |local: RLocalId| {
+                    body.locals[local.as_u32() as usize]
+                        .semantic_ty
+                        .pretty_print(&db)
+                        == "[u256; 8]"
+                };
+                assert!(
+                    !runtime_body_stmts(&body).any(|stmt| matches!(
+                        stmt,
+                        RStmt::Assign { dst, expr: RExpr::Use(src) }
+                            if is_array(*dst)
+                                && is_array(*src)
+                                && matches!(body.locals[dst.as_u32() as usize].root, RuntimeLocalRoot::Slot(_))
+                    )),
+                    "`{symbol}` should pass its array by address, not copy it per access:\n{body:#?}"
+                );
+            }
+            let element = runtime_body_for_symbol(&db, package, "element");
+            assert!(
+                matches!(element.signature.params[0].class, RuntimeClass::Ref { .. }),
+                "a dynamically indexed array view should arrive by address:\n{element:#?}"
+            );
+        }
+    );
+}
+
+#[test]
 fn mutated_scalar_locals_stay_rooted() {
     with_runtime_package!(
         "mutated_scalar_locals_stay_rooted.fe",
         r#"
 fn bump(size: u256) -> u256 {
-    let mut value: u256 = size
+    var value: u256 = size
     value += 1
     value
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     bump(size: 1)
 }
 "#,
@@ -1013,7 +827,7 @@ fn sum_pair(_ pair: own Pair) -> u256 {
     pair.left + pair.right
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_pair(Pair { left: 1, right: 2 })
 }
 "#,
@@ -1045,6 +859,82 @@ fn entry() -> u256 {
 }
 
 #[test]
+fn immutable_own_pointer_aggregate_param_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_pointer_aggregate_param_field_reads_stay_unrooted.fe",
+        r#"use core::abi::Bytes
+
+struct Note {
+    id: u256,
+    body: Bytes,
+}
+
+fn note_size(_ note: own Note) -> u256 {
+    note.id + note.body.len() as u256
+}
+
+pub fn main() -> u256 {
+    note_size(Note { id: 1, body: Bytes::empty() })
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "note_size");
+
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "a pointer field should not root a field-read-only owned aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "a pointer-holding owned aggregate param should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn pointer_aggregate_temporaries_stay_values() {
+    with_runtime_package!(
+        "pointer_aggregate_temporaries_stay_values.fe",
+        r#"use core::abi::store_word
+use core::ptr::MemBuffer
+
+fn buffer_len() -> usize {
+    let buffer = MemBuffer::alloc(32)
+    unsafe { store_word(ptr: buffer.ptr(), value: 42) }
+    buffer.span().len()
+}
+
+pub fn main() -> usize {
+    buffer_len()
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "buffer_len");
+            let mut buffers = body
+                .locals
+                .iter()
+                .filter(|local| local.semantic_ty.pretty_print(&db) == "MemBuffer")
+                .peekable();
+
+            assert!(
+                buffers.peek().is_some(),
+                "missing MemBuffer local:\n{body:#?}"
+            );
+            assert!(
+                buffers.all(|buffer| {
+                    matches!(
+                        buffer.carrier,
+                        RuntimeCarrier::Value(RuntimeClass::AggregateValue { .. })
+                    ) && matches!(buffer.root, RuntimeLocalRoot::None)
+                }),
+                "a read-only pointer-holding temporary should stay an unrooted aggregate value:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
 fn read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted() {
     with_runtime_package!(
         "read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted.fe",
@@ -1054,12 +944,12 @@ fn read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted() {
 }
 
 impl Pair {
-    fn sum(mut own self) -> u256 {
+    fn sum(var own self) -> u256 {
         self.left + self.right
     }
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     Pair { left: 1, right: 2 }.sum()
 }
 "#,
@@ -1104,7 +994,7 @@ fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
     first.left + second.right
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
 }
 "#,
@@ -1153,7 +1043,7 @@ fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
     consume(first) + consume(second)
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
 }
 "#,
@@ -1194,13 +1084,13 @@ fn mutating_mut_own_aggregate_receiver_stays_rooted() {
 }
 
 impl Pair {
-    fn bump(mut own self) -> Pair {
+    fn bump(var own self) -> Pair {
         self.left += 1
         self
     }
 }
 
-fn entry() -> Pair {
+pub fn main() -> Pair {
     Pair { left: 1, right: 2 }.bump()
 }
 "#,
@@ -1253,7 +1143,7 @@ impl Table {
     }
 }
 
-fn entry() -> u8 {
+pub fn main() -> u8 {
     Table { used: [1, 2, 3, 4] }.get(2)
 }
 "#,
@@ -1340,7 +1230,7 @@ impl Pair {
     }
 }
 
-pub fn entry() -> bool {
+pub fn main() -> bool {
     Pair { a: 1, b: 2 }.check(1)
 }
 "#,
@@ -1388,7 +1278,7 @@ fn linear_probe_big_struct_keeps_array_projection_reads_place_based() {
         file_url.clone(),
         Some(
             format!(
-                "{}\nfn entry() -> u256 {{\n    let mut table = Table::empty()\n    table.set(17, 99)\n    table.get(17)\n}}\n",
+                "{}\nfn entry() -> u256 {{\n    var table = Table::empty()\n    table.set(17, 99)\n    table.get(17)\n}}\n\npub fn main() -> u256 {{\n    entry()\n}}\n",
                 include_str!("../../fe/tests/fixtures/fe_test/linear_probe_big_struct.fe")
             ),
         ),
@@ -1514,8 +1404,8 @@ fn materialized_scalar_uses_do_not_keep_rawaddr_runtime_carriers() {
     x
 }
 
-fn entry() -> u8 {
-    let mut x: u8 = 2
+pub fn main() -> u8 {
+    var x: u8 = 2
     bump(mut x)
 }
 "#,
@@ -1630,9 +1520,8 @@ fn empty_revert_intrinsic_has_no_synthetic_pointer_operand() {
         "empty_revert_intrinsic_has_no_synthetic_pointer_operand.fe",
         r#"
 use std::abi::bytes_from_words_prefix
-use std::evm::RawMem
 
-fn trigger() uses (mem: mut RawMem) {
+pub fn main() {
     let _ = bytes_from_words_prefix<33, 1>([0])
 }
 "#,
@@ -1653,7 +1542,7 @@ fn trigger() uses (mem: mut RawMem) {
             let symbol = function.symbol(&db);
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
-            let function_ir = sonatina_function_body(&output, &symbol);
+            let function_ir = sonatina_function_body(&output, symbol);
             assert!(
                 function_ir.contains("evm_revert 0.i256 0.i256")
                     && !function_ir.contains("evm_malloc 0.i256"),
@@ -1717,7 +1606,7 @@ fn select(flag: bool) -> E {
     }
 }
 
-fn entry() -> u8 {
+pub fn main() -> u8 {
     match select(true) {
         E::A => 1,
         E::B => 0,
@@ -1834,16 +1723,16 @@ fn immutable_array_snapshots_retain_their_backing() {
         (
             r#"
 const VALUES: [u256; 3] = [11, 22, 33]
-pub fn entry() -> u256 { forward(VALUES) }
+pub fn main() -> u256 { forward(VALUES) }
 "#,
             "const.load",
         ),
         (
             r#"
 fn read_input() -> u256 uses (values: [u256; 3]) { forward(values) }
-pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
-    let data = evm.calldata_ptr<[u256; 3]>(0)
-    with (data) { read_input() }
+pub fn main() -> u256 uses (evm: std::evm::RawOps) {
+    let data = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
+    unsafe { with (*data) { read_input() } }
 }
 "#,
             "evm_calldata_load",
@@ -1885,15 +1774,17 @@ impl Copy for Input {}
 fn pick(_ input: Input) -> u256 { input.first }
 fn forward(_ input: Input) -> u256 { pick(input) }
 fn read_input() -> u256 uses (input: Input) { forward(input) }
-pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
-    let data = evm.calldata_ptr<Input>(0)
-    with (data) { read_input() }
+pub fn main() -> u256 uses (evm: std::evm::RawOps) {
+    let data = unsafe { evm.calldata_ptr<Input>(0) }
+    unsafe { with (*data) { read_input() } }
 }
 "#,
     );
-    let forward = sonatina_function_body(&ir, "forward");
+    // A `Copy` view argument is a copy: copying untrusted calldata validates
+    // its enum tags before the call.
+    let read_input = sonatina_function_body(&ir, "read_input");
     assert!(
-        forward.contains("unreachable"),
+        read_input.contains("unreachable"),
         "snapshotting nested enums must still validate their tags before the call:\n{ir}"
     );
 }
@@ -1910,7 +1801,7 @@ fn pick(values: ref [u256; 4], idx: usize) -> u256 {
     values[idx]
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let values: [u256; 4] = C
     let idx: usize = 2
     pick(values: ref values, idx)
@@ -1927,7 +1818,7 @@ fn pick(values: [u256; 4], idx: usize) -> u256 {
     values[idx]
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let values: [u256; 4] = C
     let idx: usize = 2
     pick(values, idx)
@@ -1950,8 +1841,8 @@ pub fn entry() -> u256 {
             "{label} should load through const data projections:\n{pick}"
         );
         assert!(
-            !ir.contains("obj.init.const"),
-            "{label} should not materialize the full array:\n{ir}"
+            !ir.contains("[i256; 4] = const.load"),
+            "{label} should not load the full array:\n{ir}"
         );
     }
 }
@@ -2061,8 +1952,10 @@ fn mutable_with_provider_reuses_materialized_root_for_later_readonly_effects() {
 fn readonly_with_provider_can_remain_const_backed() {
     with_test_runtime_package!(
         "readonly_with_provider_can_remain_const_backed.fe",
+        // Two words: a one-word constant struct is passed as the plain word.
         r#"pub struct Counter {
     pub value: u256,
+    pub step: u256,
 }
 
 fn read() -> u256 uses (counter: Counter) {
@@ -2071,10 +1964,10 @@ fn read() -> u256 uses (counter: Counter) {
 
 #[test]
 fn test_readonly_with_provider() {
-    let out: u256 = with (Counter = Counter { value: 7 }) {
+    let out: u256 = with (Counter = Counter { value: 7, step: 1 }) {
         read() + read()
     }
-    let other: u256 = with (Counter = { Counter { value: 9 } }) {
+    let other: u256 = with (Counter = { Counter { value: 9, step: 1 } }) {
         read() + read()
     }
 
@@ -2157,6 +2050,10 @@ fn borrows_of_aggregate_constant_locals_lower_as_const_refs() {
 fn entry() -> u256 {
     let xs: [u256; 2] = [10, 20]
     first(xs: ref xs)
+}
+
+pub fn main() -> u256 {
+    entry()
 }"#,
         |db, package| {
             let first = package
@@ -2299,6 +2196,10 @@ fn test_add_overflow_u8() {
     let x: u8 = 255
     let y: u8 = x + 1
 }
+
+pub fn main() {
+    test_add_overflow_u8()
+}
 "#,
         |db, package| {
             let func = package
@@ -2339,7 +2240,7 @@ fn unit_branch_mutations_do_not_use_erased_call_results() {
         r#"
 #[test]
 fn unit_branch_add_assign() {
-    let mut x: usize = 0
+    var x: usize = 0
     if true {
         x += 1
     } else {
@@ -2383,8 +2284,8 @@ fn return_array_after_projection(xs: [u8; 4]) -> [u8; 4] {
     ys
 }
 
-fn use_returned_array() -> u8 {
-    let mut xs: [u8; 4] = [1, 2, 3, 4]
+pub fn main() -> u8 {
+    var xs: [u8; 4] = [1, 2, 3, 4]
     xs = return_array_after_projection(xs)
     xs[0]
 }
@@ -2439,9 +2340,13 @@ fn return_array_after_projection(xs: [u8; 4]) -> [u8; 4] {
 }
 
 fn use_returned_array() -> u8 {
-    let mut xs: [u8; 4] = [1, 2, 3, 4]
+    var xs: [u8; 4] = [1, 2, 3, 4]
     xs = return_array_after_projection(xs)
     xs[0]
+}
+
+pub fn main() -> u8 {
+    use_returned_array()
 }
 "#,
         |db, package| {
@@ -2493,9 +2398,52 @@ fn use_returned_array() -> u8 {
 }
 
 #[test]
-fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+fn constant_aggregate_initializers_store_their_const_data_whole() {
+    with_test_runtime_package!(
+        "constant_aggregate_initializers_store_their_const_data_whole.fe",
+        r#"
+const TABLE: [u256; 4] = [1, 2, 3, 4]
+
+fn zeroed_bytes(i: usize) -> u8 {
+    var bytes: [u8; 64] = [0; 64]
+    bytes[i] = 7
+    bytes[1]
+}
+
+fn copied_table(i: usize) -> u256 {
+    var xs: [u256; 4] = TABLE
+    xs[i] = 7
+    xs[1]
+}
+
+#[test]
+fn initializers() {
+    assert(zeroed_bytes(i: 3) == 0 && copied_table(i: 1) == 7)
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
+            for (name, ty) in [("zeroed_bytes", "[i8; 64]"), ("copied_table", "[i256; 4]")] {
+                let body = sonatina_function_body(&output, name);
+                assert!(
+                    body.contains(&format!("{ty} = const.load")) && !body.contains("insert_value"),
+                    "a constant initializer should load its const data whole:\n{body}"
+                );
+                assert_eq!(
+                    body.matches("obj.alloc").count(),
+                    1,
+                    "a constant initializer should store into its binding without a temporary:\n{body}"
+                );
+            }
+        }
+    );
+}
+
+#[test]
+fn by_value_array_returns_store_whole_into_object_storage() {
     with_runtime_package!(
-        "by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+        "by_value_array_returns_store_whole_into_object_storage.fe",
         r#"
 fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
     let ys = xs
@@ -2504,32 +2452,45 @@ fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
 }
 
 fn use_returned_array() -> u256 {
-    let mut xs: [u256; 3] = [1, 2, 3]
+    var xs: [u256; 3] = [1, 2, 3]
     xs = return_array_after_projection(xs)
     xs[0]
+}
+
+pub fn main() -> u256 {
+    use_returned_array()
 }
 "#,
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             let body = sonatina_function_body(&output, "use_returned_array");
+            let result = body
+                .lines()
+                .find_map(|line| {
+                    line.contains("call %return_array_after_projection")
+                        .then(|| line.trim().split('.').next())
+                        .flatten()
+                })
+                .unwrap_or_else(|| panic!("missing array call:\n{body}"));
 
             assert!(
-                body.contains("extract_value"),
-                "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+                body.lines().any(|line| line.contains("obj.store")
+                    && line.trim().ends_with(&format!(" {result};"))),
+                "a by-value array result should store into its object whole:\n{body}"
             );
             assert!(
-                body.contains("obj.load"),
-                "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+                !body.contains("extract_value"),
+                "a by-value array result should not be copied element by element:\n{body}"
             );
         }
     );
 }
 
 #[test]
-fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+fn enum_bearing_struct_results_store_whole_into_object_storage() {
     with_test_runtime_package!(
-        "fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe",
+        "enum_bearing_struct_results_store_whole_into_object_storage.fe",
         r#"
 enum E {
     A,
@@ -2549,16 +2510,17 @@ fn build(flag: bool) -> Pair {
 
 #[test]
 fn exercise() {
-    let pair = build(true)
-    assert(pair.xs[0] == 1)
+    var pair = build(true)
+    pair.xs[1] = 5
+    assert(pair.xs[0] == 1 && pair.xs[1] == 5)
 }
 "#,
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             assert!(
-                output.contains("enum.set_tag"),
-                "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
+                !output.contains("enum.set_tag") && !output.contains("br_table"),
+                "a struct result should keep its enum field inside one whole store:\n{output}"
             );
         }
     );
@@ -2616,7 +2578,12 @@ fn capability_gated_provider_ref_conversion_preserves_transport_in_rmir() {
                             matches!(
                                 stmt,
                                 RStmt::Assign {
-                                    expr: RExpr::AddrOf { .. } | RExpr::MaterializeToObject { .. },
+                                    expr: RExpr::AddrOf {
+                                        place: RuntimePlace {
+                                            root: PlaceRoot::Slot(_),
+                                            ..
+                                        },
+                                    } | RExpr::MaterializeToObject { .. },
                                     ..
                                 } | RStmt::CopyInto { .. }
                             )
@@ -2626,4 +2593,267 @@ fn capability_gated_provider_ref_conversion_preserves_transport_in_rmir() {
             }
         }
     );
+}
+
+/// A sum shape is not a value: the caller of a projection yielding
+/// `Option<mut T>` binds the grant where the yield takes its variant, so no
+/// enum value carries it and it needs no `Native` reference, whether it is
+/// a storage place or a memory one.
+#[test]
+fn sum_shape_grants_are_bound_without_enum_values() {
+    let source = r#"
+struct Counter { value: u256 }
+
+impl Counter {
+    fn maybe(mut self, _ present: bool) -> Option<mut u256> {
+        if present { Option::Some(mut self.value) } else { Option::None }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Inc -> u256,
+}
+
+pub contract C {
+    mut counter: Counter,
+
+    recv Msg {
+        Inc -> u256 uses (mut counter) {
+            match counter.maybe(true) {
+                Option::Some(mut value) => { value += 1 }
+                Option::None => {}
+            }
+            counter.value
+        }
+    }
+}
+
+#[test]
+fn in_memory() {
+    var counter = Counter { value: 1 }
+    if let Option::Some(mut value) = counter.maybe(true) {
+        value += 1
+    }
+    assert(counter.value == 2)
+}
+"#;
+    with_top_mod_for_source("sum_shapes.fe", source, |db, top_mod| {
+        for (package, symbol) in [
+            (build_runtime_package(db, top_mod), "__C_recv_0_0"),
+            (build_test_runtime_package(db, top_mod, None), "in_memory"),
+        ] {
+            let package = package.expect("the package lowers");
+            let body = runtime_body_for_symbol(db, package, symbol);
+            assert!(
+                !runtime_body_stmts(&body).any(|stmt| matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::NativeRef { .. },
+                        ..
+                    }
+                ) || matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::EnumMake { fields, .. },
+                        ..
+                    } if !fields.is_empty()
+                )),
+                "`{symbol}` builds a reference into a value: {body:#?}"
+            );
+        }
+    });
+}
+
+fn body_has_native_ref_or_enum_payload(body: &RuntimeBody<'_>) -> bool {
+    runtime_body_stmts(body).any(|stmt| {
+        matches!(
+            stmt,
+            RStmt::Assign {
+                expr: RExpr::NativeRef { .. },
+                ..
+            }
+        ) || matches!(
+            stmt,
+            RStmt::Assign {
+                expr: RExpr::EnumMake { fields, .. },
+                ..
+            } if !fields.is_empty()
+        )
+    })
+}
+
+/// Acceptance 46: a storage struct's method is one instance whichever
+/// field or caller reaches it: the slot is the receiver's transport.
+#[test]
+fn storage_struct_method_is_one_instance_for_every_caller() {
+    let source = r#"
+struct Counter { value: u256 }
+
+impl Counter {
+    fn bump(mut self) {
+        self.value += 1
+    }
+}
+
+fn twice(_ c: mut Counter) {
+    c.bump()
+    c.bump()
+}
+
+msg Msg {
+    #[selector = 1]
+    BumpA,
+    #[selector = 2]
+    BumpB,
+    #[selector = 3]
+    Twice,
+}
+
+pub contract C {
+    mut a: Counter,
+    mut b: Counter,
+
+    recv Msg {
+        BumpA uses (mut a) { a.bump() }
+        BumpB uses (mut b) { b.bump() }
+        Twice uses (mut a) { twice(mut a) }
+    }
+}
+"#;
+    with_runtime_package!("one_instance.fe", source, |db, package| {
+        let bumps = package
+            .functions(&db)
+            .iter()
+            .filter(|function| function.symbol(&db).contains("bump"))
+            .count();
+        assert_eq!(bumps, 1, "`Counter::bump` is instantiated per caller");
+    });
+}
+
+/// Acceptance 47 and 48: grants of packed `u8` lanes, from two yield sites
+/// and through `Option<mut u8>`, are write-back copies: no native
+/// reference, and no enum value carries one.
+#[test]
+fn packed_lane_grants_are_write_back_copies() {
+    let source = r#"
+struct S { a: u8, b: u8 }
+
+impl S {
+    fn pick(mut self, _ c: bool) -> mut u8 {
+        if c { mut self.b } else { mut self.a }
+    }
+
+    fn lane(mut self, _ present: bool) -> Option<mut u8> {
+        if present { Option::Some(mut self.b) } else { Option::None }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Pick { c: bool },
+    #[selector = 2]
+    Lane,
+}
+
+pub contract C {
+    mut s: S,
+
+    recv Msg {
+        Pick { c } uses (mut s) {
+            let x = s.pick(c)
+            x = 42
+        }
+        Lane uses (mut s) {
+            if let Option::Some(mut x) = s.lane(true) {
+                x += 1
+            }
+        }
+    }
+}
+"#;
+    with_runtime_package!("packed_lane_grants.fe", source, |db, package| {
+        for symbol in ["__C_recv_0_0", "__C_recv_0_1"] {
+            let body = runtime_body_for_symbol(&db, package, symbol);
+            assert!(
+                !body_has_native_ref_or_enum_payload(&body),
+                "`{symbol}` builds a reference into a value: {body:#?}"
+            );
+        }
+    });
+}
+
+/// Acceptance 49: `days[k].steps += 1` on a map of three-slot structs loads
+/// and stores the one slot it writes.
+#[test]
+fn map_entry_field_update_touches_one_slot() {
+    let source = r#"
+use std::evm::StorageMap
+
+struct DaySummary { steps: u256, distance: u256, calories: u256 }
+
+msg Msg {
+    #[selector = 1]
+    Walk { day: u256 },
+}
+
+pub contract Tracker {
+    mut days: StorageMap<u256, DaySummary>,
+
+    recv Msg {
+        Walk { day } uses (mut days) {
+            days[day].steps += 1
+        }
+    }
+}
+"#;
+    with_runtime_package!("one_slot.fe", source, |db, package| {
+        let ir = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O1)
+            .expect("Sonatina IR");
+        let count = |op: &str| {
+            sonatina_ops(&ir).into_iter().filter(|o| *o == op).count()
+                + ir.lines()
+                    .filter(|line| line.trim_start().starts_with(op))
+                    .count()
+        };
+        assert_eq!(count("evm_sload"), 1, "{ir}");
+        assert_eq!(count("evm_sstore"), 1, "{ir}");
+    });
+}
+
+/// L-09: a mixed-space `Mutex<u256>` passed `mut` crosses as its one root
+/// number, from which the callee derives the transient lock and the storage
+/// value.
+#[test]
+fn mixed_space_mutex_passes_one_root_number() {
+    let source = r#"
+use std::evm::Mutex
+
+fn bump(_ m: mut Mutex<u256>) {
+    assert!(m.try_lock())
+    m.value() += 1
+    m.unlock()
+}
+
+msg Msg {
+    #[selector = 1]
+    Bump,
+}
+
+pub contract C {
+    mut vault: Mutex<u256>,
+
+    recv Msg {
+        Bump uses (mut vault) { bump(mut vault) }
+    }
+}
+"#;
+    with_runtime_package!("mixed_space_mutex.fe", source, |db, package| {
+        let body = runtime_body_for_symbol(&db, package, "bump");
+        assert_eq!(
+            body.signature.params.len(),
+            1,
+            "`bump` should take the mutex's root number alone"
+        );
+    });
 }

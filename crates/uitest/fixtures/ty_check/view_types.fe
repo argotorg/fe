@@ -1,0 +1,166 @@
+// A `#[view]` type exists only behind view and `mut` parameters and access
+// results; a `mut` one comes from a projection holding its owner mutably.
+mod views {
+    #[view]
+    pub struct Span {
+        pub start: u256,
+        pub len: u256,
+    }
+
+    #[view]
+    pub enum Mark {
+        Set(u256),
+        Unset,
+    }
+
+    // Accepted: its defining module builds a view's unit variant.
+    fn unset() -> u256 {
+        let mark = Mark::Unset
+        0
+    }
+
+    pub struct Owner {
+        pub start: u256,
+        pub len: u256,
+    }
+
+    impl Owner {
+        // Its defining module builds a span as a session-owned temporary.
+        pub fn span(self) -> ref Span {
+            let span = Span { start: self.start, len: self.len }
+            ref span
+        }
+
+        // Accepted: a `mut` span from a session holding the owner mutably.
+        pub fn span_mut(mut self) -> mut Span {
+            var span = Span { start: self.start, len: self.len }
+            mut span
+        }
+
+        // Rejected: a read receiver holds nothing a `mut` span could write.
+        pub fn view_mut(self) -> mut Span {
+            var span = Span { start: self.start, len: self.len }
+            mut span
+        }
+    }
+
+    // Accepted: a generic body that moves nothing takes `mut` views.
+    fn swap<T>(_ a: mut T, _ b: mut T) {}
+
+    fn reaccess() {
+        var a = Span { start: 0, len: 1 }
+        var b = Span { start: 1, len: 1 }
+        swap(mut a, mut b)
+    }
+}
+
+use views::{Mark, Owner, Span}
+
+fn viewed(_ span: Span) -> u256 {
+    span.len
+}
+
+fn owned(_ span: own Span) {}
+
+// Accepted: a `mut` view parameter.
+fn inout(_ span: mut Span) {}
+
+// Rejected: `make` returns a view by value; the `mut` yields are accepted.
+trait Make {
+    fn make() -> Span
+    fn span_mut(mut self) -> mut Span
+    fn both(mut self) -> (ref Span, mut Span)
+}
+
+struct Holder {
+    span: Span,
+}
+
+enum Either {
+    Left(Span),
+    Right,
+}
+
+fn pair(_ p: (Span, u256)) {}
+
+fn maybe(_ s: Option<Span>) {}
+
+type Spans = [Span; 2]
+
+fn spans(_ s: Spans) {}
+
+impl Copy for Span {}
+
+fn outside() -> u256 {
+    let span = Span { start: 0, len: 0 }
+    span.len
+}
+
+fn unit_outside() -> u256 {
+    let mark = Mark::Unset
+    0
+}
+
+fn take<T>(_ x: own T) {}
+
+fn take_viewed(owner: Owner) {
+    take(owner.span())
+}
+
+trait HasSpan {
+    type S
+}
+
+impl HasSpan for Owner {
+    type S = Span
+}
+
+fn take_assoc<T: HasSpan>(_ x: own T::S) {}
+
+fn take_assoc_viewed(owner: Owner) {
+    take_assoc<Owner>(owner.span())
+}
+
+#[view(read)]
+struct Malformed {}
+
+#[view]
+fn not_a_type() {}
+
+// A type argument no field holds names a view's type without holding one; a
+// field of the argument's type holds it.
+struct Names<T> {}
+
+struct Holds<T> {
+    t: T,
+}
+
+fn names(_ n: Names<Span>) {}
+
+fn holds(_ h: Holds<Span>) {}
+
+// A field holds what its own type's fields hold: an argument only `Names`
+// takes is held by none.
+struct Outer<T> {
+    names: Names<T>,
+}
+
+struct Nested<T> {
+    holds: Holds<T>,
+}
+
+fn outer(_ o: Outer<Span>) {}
+
+fn nested(_ n: Nested<Span>) {}
+
+trait Equals {
+    type Out
+}
+
+// A projection may be any type, an equality's among them, so it holds every
+// parameter.
+struct Through<A, B: Equals<Out = A>> {
+    out: B::Out,
+}
+
+fn through<B: Equals<Out = Span>>(_ t: Through<Span, B>) {}

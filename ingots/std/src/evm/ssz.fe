@@ -32,10 +32,10 @@
 ///
 /// ```ignore
 /// let root: u256 = (
-///     ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey_view),
+///     ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey.payload_span(), start: 0, len: 48),
 ///     wc_word,                            // already a 32-byte chunk
 ///     ssz::u64_chunk(amount_gwei),        // pack the uint64
-///     ssz::hash_tree_root<ssz::ByteVector<96>>(signature_view),
+///     ssz::hash_tree_root<ssz::ByteVector<96>>(signature.payload_span(), start: 0, len: 96),
 /// ).merkleize()                           // 4 chunks → balanced tree
 /// ```
 ///
@@ -46,10 +46,9 @@
 /// in current consensus types. For wider containers, extend the trait
 /// or pre-merkleize sub-trees yourself. Variable-length lists are
 /// supported via `mix_in_length` on top of a fixed-arity merkleization.
-use core::abi::{Bytes, BytesView}
+use core::abi::Bytes
 use core::ptr::MemSpan
 use core::ptr
-use super::effects::RawMem
 use super::ops
 
 struct ChunkPair {
@@ -65,7 +64,7 @@ struct ChunkPair {
 /// directly when building an incremental tree (the deposit contract's
 /// `branch[]` accumulator is the canonical example).
 #[inline(always)]
-pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
+pub fn hash_pair(left: u256, right: u256) -> u256 {
     let scratch = alloc_pair(left, right)
     hash_pair_buffer(scratch)
 }
@@ -79,7 +78,7 @@ pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
 ///
 /// Equivalent reference form (slower):
 /// ```ignore
-/// let mut chunk: u256 = 0
+/// var chunk: u256 = 0
 /// for i in 0..8 { chunk |= ((value >> (i*8)) & 0xff) << (256 - (i+1)*8 ... )) }
 /// ```
 ///
@@ -91,7 +90,7 @@ pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
 #[arithmetic(unchecked)]
 #[inline(always)]
 pub fn u64_chunk(_ value: u64) -> u256 {
-    let mut v = value as u256
+    var v = value as u256
     // Swap adjacent byte pairs:  AB CD EF GH  →  BA DC FE HG
     v = ((v & 0x00ff00ff00ff00ff) << 8) | ((v >> 8) & 0x00ff00ff00ff00ff)
     // Swap adjacent 16-bit halves: BA DC FE HG  →  DC BA HG FE
@@ -126,31 +125,26 @@ pub fn serialize_u64(_ value: u64) -> Bytes {
 /// add an `impl HashTreeRoot for ByteVector<X>` to support new sizes.
 pub struct ByteVector<const N: usize> {}
 
-/// Compute the SSZ hash-tree-root of a value given its in-memory view.
+/// Compute the SSZ hash-tree-root of a value given its bytes in memory.
 ///
 /// Implementors decide how many chunks the value occupies and how to
-/// merkleize them. The view-based input avoids copying — callers
-/// pass an existing `BytesView` (typically from a calldata- or
-/// memory-backed `Bytes`).
+/// merkleize them. The value is the `len` bytes of `input` from `start`, so
+/// callers pass a view of existing bytes (typically `Bytes::payload_span`)
+/// without copying them.
 pub trait HashTreeRoot {
-    /// Compute the SSZ root for `view`.
-    fn hash_tree_root(_: BytesView<MemSpan>) -> u256 uses (mem: mut RawMem)
+    /// Compute the SSZ root of `input`'s bytes `start..start + len`.
+    fn hash_tree_root(_ input: MemSpan, start: u256, len: u256) -> u256
 }
 
 /// User-facing entry point for `HashTreeRoot`.
 ///
-/// Use as `ssz::hash_tree_root<ssz::ByteVector<48>>(view)`. The
-/// turbofish chooses the implementation; the view supplies the bytes.
+/// Use as `ssz::hash_tree_root<ssz::ByteVector<48>>(bytes, start: 0, len: 48)`.
+/// The turbofish chooses the implementation; the span supplies the bytes.
 #[inline(always)]
-pub fn hash_tree_root<T>(_ view: BytesView<MemSpan>) -> u256
-uses (mem: mut RawMem) where T: HashTreeRoot
+pub fn hash_tree_root<T>(_ input: MemSpan, start: u256, len: u256) -> u256
+    where T: HashTreeRoot
 {
-    T::hash_tree_root(view)
-}
-
-#[inline(always)]
-fn view_base(_ view: BytesView<MemSpan>) -> *u8 {
-    ptr::offset_bytes(view.input().ptr(), view.start())
+    T::hash_tree_root(input, start, len)
 }
 
 /// `ByteVector[48]` — packs into two chunks.
@@ -163,13 +157,11 @@ fn view_base(_ view: BytesView<MemSpan>) -> *u8 {
 /// Used for BLS public keys.
 impl HashTreeRoot for ByteVector<48> {
     #[inline(always)]
-    fn hash_tree_root(_ view: BytesView<MemSpan>) -> u256
-    uses (mem: mut RawMem)
-    {
-        assert!(view.len() == 48)
-        let base = view_base(view)
-        let tail = ops::mload(ptr::offset_bytes(base, 32))
-        let scratch = alloc_pair(ops::mload(base), (tail >> 128) << 128)
+    fn hash_tree_root(_ input: MemSpan, start: u256, len: u256) -> u256 {
+        assert!(len == 48)
+        let base = input.slice(offset: start.downcast_unchecked(), len: len.downcast_unchecked()).ptr()
+        let tail = unsafe { ops::mload(ptr::offset_bytes(base, 32)) }
+        let scratch = unsafe { alloc_pair(ops::mload(base), (tail >> 128) << 128) }
         hash_pair_buffer(scratch)
     }
 }
@@ -195,16 +187,14 @@ impl HashTreeRoot for ByteVector<48> {
 /// Used for BLS signatures.
 impl HashTreeRoot for ByteVector<96> {
     #[inline(always)]
-    fn hash_tree_root(_ view: BytesView<MemSpan>) -> u256
-    uses (mem: mut RawMem)
-    {
-        assert!(view.len() == 96)
-        let base = view_base(view)
+    fn hash_tree_root(_ input: MemSpan, start: u256, len: u256) -> u256 {
+        assert!(len == 96)
+        let base = input.slice(offset: start.downcast_unchecked(), len: len.downcast_unchecked()).ptr()
         let scratch = alloc_pair(0, 0)
         let offset = pair_offset(scratch)
         let left = sha256_64_to(base, offset)
 
-        write_pair(scratch, ops::mload(ptr::offset_bytes(base, 64)), 0)
+        unsafe { write_pair(scratch, ops::mload(ptr::offset_bytes(base, 64)), 0) }
         let right = hash_pair_buffer(scratch)
 
         write_pair(scratch, left, right)
@@ -232,66 +222,66 @@ impl HashTreeRoot for ByteVector<96> {
 pub trait Merkleize {
     /// Merkleize this fixed tuple of chunk roots, padding with zero chunks to
     /// the next power of two as required by SSZ.
-    fn merkleize(self) -> u256 uses (mem: mut RawMem)
+    fn merkleize(self) -> u256
 }
 
 // Arity 1: a single chunk is its own Merkle root (the spec defines
 // `merkleize([x]) = x` — no hashing, no padding).
 impl Merkleize for (u256,) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         self.0
     }
 }
 
 // Arity 2: balanced 2-leaf tree, root = sha256(c0 || c1).
 impl Merkleize for (u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         hash_pair(left: self.0, right: self.1)
     }
 }
 
 // Arity 3..=4 pad up to a 4-leaf tree.
 impl Merkleize for (u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize4(self.0, self.1, self.2, 0)
     }
 }
 
 impl Merkleize for (u256, u256, u256, u256) {
     #[inline(always)]
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize4(self.0, self.1, self.2, self.3)
     }
 }
 
 // Arity 5..=8 pad up to an 8-leaf tree.
 impl Merkleize for (u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize8(self.0, self.1, self.2, self.3, self.4, 0, 0, 0)
     }
 }
 
 impl Merkleize for (u256, u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize8(self.0, self.1, self.2, self.3, self.4, self.5, 0, 0)
     }
 }
 
 impl Merkleize for (u256, u256, u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize8(self.0, self.1, self.2, self.3, self.4, self.5, self.6, 0)
     }
 }
 
 impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize8(self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7)
     }
 }
 
 // Arity 9..=16 pad up to a 16-leaf tree.
 impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize16(
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7,
             self.8, 0, 0, 0, 0, 0, 0, 0,
@@ -300,7 +290,7 @@ impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256) {
 }
 
 impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize16(
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7,
             self.8, self.9, 0, 0, 0, 0, 0, 0,
@@ -309,7 +299,7 @@ impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) 
 }
 
 impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize16(
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7,
             self.8, self.9, self.10, 0, 0, 0, 0, 0,
@@ -318,7 +308,7 @@ impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, 
 }
 
 impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize16(
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7,
             self.8, self.9, self.10, self.11, 0, 0, 0, 0,
@@ -327,7 +317,7 @@ impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, 
 }
 
 impl Merkleize for (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize16(
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7,
             self.8, self.9, self.10, self.11, self.12, 0, 0, 0,
@@ -339,7 +329,7 @@ impl Merkleize for (
     u256, u256, u256, u256, u256, u256, u256, u256,
     u256, u256, u256, u256, u256, u256,
 ) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize16(
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7,
             self.8, self.9, self.10, self.11, self.12, self.13, 0, 0,
@@ -351,7 +341,7 @@ impl Merkleize for (
     u256, u256, u256, u256, u256, u256, u256, u256,
     u256, u256, u256, u256, u256, u256, u256,
 ) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize16(
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7,
             self.8, self.9, self.10, self.11, self.12, self.13, self.14, 0,
@@ -363,7 +353,7 @@ impl Merkleize for (
     u256, u256, u256, u256, u256, u256, u256, u256,
     u256, u256, u256, u256, u256, u256, u256, u256,
 ) {
-    fn merkleize(self) -> u256 uses (mem: mut RawMem) {
+    fn merkleize(self) -> u256 {
         merkleize16(
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7,
             self.8, self.9, self.10, self.11, self.12, self.13, self.14, self.15,
@@ -382,7 +372,7 @@ impl Merkleize for (
 /// element count to get the canonical `List` root. The deposit
 /// contract uses it on `deposit_count` to finalize `get_deposit_root`.
 #[inline(always)]
-pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
+pub fn mix_in_length(root: u256, len: u64) -> u256 {
     hash_pair(left: root, right: u64_chunk(len))
 }
 
@@ -396,9 +386,7 @@ pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
 // the right one.
 
 #[inline(always)]
-fn merkleize4(_ a: u256, _ b: u256, _ c: u256, _ d: u256) -> u256
-uses (mem: mut RawMem)
-{
+fn merkleize4(_ a: u256, _ b: u256, _ c: u256, _ d: u256) -> u256 {
     // scratch is a 64-byte typed buffer reused across the three sha256
     // calls: first to hash (a||b) → left, then (c||d) → right, then
     // (left||right) → root. sha256_64_to writes its 32-byte digest at
@@ -417,9 +405,7 @@ uses (mem: mut RawMem)
 fn merkleize8(
     _ a: u256, _ b: u256, _ c: u256, _ d: u256,
     _ e: u256, _ f: u256, _ g: u256, _ h: u256,
-) -> u256
-uses (mem: mut RawMem)
-{
+) -> u256 {
     hash_pair(
         left: merkleize4(a, b, c, d),
         right: merkleize4(e, f, g, h),
@@ -431,9 +417,7 @@ fn merkleize16(
     _ e: u256, _ f: u256, _ g: u256, _ h: u256,
     _ i: u256, _ j: u256, _ k: u256, _ l: u256,
     _ m: u256, _ n: u256, _ o: u256, _ p: u256,
-) -> u256
-uses (mem: mut RawMem)
-{
+) -> u256 {
     hash_pair(
         left: merkleize8(a, b, c, d, e, f, g, h),
         right: merkleize8(i, j, k, l, m, n, o, p),
@@ -449,8 +433,10 @@ fn alloc_pair(_ left: u256, _ right: u256) -> *ChunkPair {
 
 #[inline(always)]
 fn write_pair(_ scratch: *ChunkPair, _ left: u256, _ right: u256) {
-    scratch.left = left
-    scratch.right = right
+    unsafe {
+        scratch.left = left
+        scratch.right = right
+    }
 }
 
 #[inline(always)]
@@ -472,19 +458,21 @@ fn hash_pair_buffer(_ scratch: *ChunkPair) -> u256 {
 // real EVM, but we don't want to trust silent truncation).
 #[inline(always)]
 fn sha256_64_to(_ offset: *u8, _ out: *u8) -> u256 {
-    let ok: u256 = ops::staticcall_precompile(
-        gas: ops::gas(),
-        addr: 2,
-        args_offset: offset,
-        args_len: 64,
-        ret_offset: out,
-        ret_len: 32,
-    )
+    let ok: u256 = unsafe {
+        ops::staticcall_precompile(
+            gas: ops::gas(),
+            addr: 2,
+            args_offset: offset,
+            args_len: 64,
+            ret_offset: out,
+            ret_len: 32,
+        )
+    }
     if ok == 0 {
         ops::revert_empty()
     }
     if ops::returndatasize() < 32 {
         ops::revert_empty()
     }
-    ops::mload(out)
+    unsafe { ops::mload(out) }
 }

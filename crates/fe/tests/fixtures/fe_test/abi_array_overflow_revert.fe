@@ -1,6 +1,7 @@
 use core::ptr::{self, MemBuffer}
+use core::abi::store_word
 use std::abi::{Bytes, Bytes32, DynArray}
-use std::evm::{Evm, RawOps, RawMem, Call}
+use std::evm::{Evm, RawOps, Call}
 msg ArrayMsg {
     #[selector = 0x11223344]
     Read { values: DynArray<Bytes32> } -> u256,
@@ -10,27 +11,27 @@ msg ArrayMsg {
 pub contract ArrayReceiver {
     recv ArrayMsg {
         Read { values } -> u256 {
-            values.len()
+            values.len() as u256
         }
         ReadDynamic { values } -> u256 {
-            values.len()
+            values.len() as u256
         }
     }
 }
 fn rejects_empty(_ offset: u256, _ length: u256, _ salt: u256)
 uses (evm: mut Evm)
 {
-    let receiver = evm.create2<ArrayReceiver>(value: 0, args: (), salt: salt)
+    let receiver = evm.create2<ArrayReceiver>(value: Wei::zero(), args: (), salt: salt)
     let data = MemBuffer::alloc(68)
-    evm.mstore(addr: data.ptr(), value: (0x11223344 as u256) << 224)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: offset)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 36), value: length)
-    let mut ret = MemBuffer::empty()
+    unsafe { store_word(ptr: data.ptr(), value: (0x11223344 as u256) << 224) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: offset) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: length) }
+    var ret = MemBuffer::empty()
     let outcome = evm
         .raw_call(
             addr: receiver,
             gas: 1000000,
-            value: 0,
+            value: Wei::zero(),
             args: data.span(),
             ret: mut ret,
         )
@@ -56,21 +57,23 @@ fn overflowing_array_end_reverts_empty() uses (evm: mut Evm) {
 
 #[test]
 fn overflowing_dynamic_element_tail_reverts_empty() uses (evm: mut Evm) {
-    let receiver = evm.create2<ArrayReceiver>(value: 0, args: (), salt: 5)
+    let receiver = evm.create2<ArrayReceiver>(value: Wei::zero(), args: (), salt: 5)
     let data = MemBuffer::alloc(100)
-    evm.mstore(addr: data.ptr(), value: (0x11223345 as u256) << 224)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: 32)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 36), value: 1)
-    evm.mstore(
-        addr: ptr::offset_bytes(data.ptr(), 68),
-        value: !(0 as u256) - 31,
-    )
-    let mut ret = MemBuffer::empty()
+    unsafe { store_word(ptr: data.ptr(), value: (0x11223345 as u256) << 224) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: 32) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: 1) }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data.ptr(), 68),
+            value: !(0 as u256) - 31,
+        )
+    }
+    var ret = MemBuffer::empty()
     let outcome = evm
         .raw_call(
             addr: receiver,
             gas: 1000000,
-            value: 0,
+            value: Wei::zero(),
             args: data.span(),
             ret: mut ret,
         )

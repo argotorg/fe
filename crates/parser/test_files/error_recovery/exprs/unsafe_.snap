@@ -1,0 +1,57 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/exprs/unsafe_.fe
+---
+Root@0..61
+  BlockExpr@0..60
+    LBrace@0..1 "{"
+    Newline@1..2 "\n"
+    WhiteSpace@2..6 "    "
+    LetStmt@6..22
+      LetKw@6..9 "let"
+      WhiteSpace@9..10 " "
+      PathPat@10..11
+        Path@10..11
+          PathSegment@10..11
+            Ident@10..11 "y"
+      WhiteSpace@11..12 " "
+      Eq@12..13 "="
+      WhiteSpace@13..14 " "
+      UnsafeExpr@14..22
+        UnsafeKw@14..20 "unsafe"
+        WhiteSpace@20..21 " "
+        Error@21..22
+          Ident@21..22 "x"
+    Newline@22..23 "\n"
+    WhiteSpace@23..27 "    "
+    LetStmt@27..47
+      LetKw@27..30 "let"
+      WhiteSpace@30..31 " "
+      PathPat@31..32
+        Path@31..32
+          PathSegment@31..32
+            Ident@31..32 "z"
+      WhiteSpace@32..33 " "
+      Eq@33..34 "="
+      WhiteSpace@34..35 " "
+      UnsafeExpr@35..47
+        UnsafeKw@35..41 "unsafe"
+        WhiteSpace@41..42 " "
+        BlockExpr@42..47
+          LBrace@42..43 "{"
+          WhiteSpace@43..44 " "
+          ExprStmt@44..45
+            PathExpr@44..45
+              Path@44..45
+                PathSegment@44..45
+                  Ident@44..45 "x"
+          WhiteSpace@45..46 " "
+          RBrace@46..47 "}"
+    Newline@47..48 "\n"
+    WhiteSpace@48..52 "    "
+    Item@52..58
+      UnsafeKw@52..58 "unsafe"
+    Newline@58..59 "\n"
+    RBrace@59..60 "}"
+  Newline@60..61 "\n"

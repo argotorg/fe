@@ -11,14 +11,14 @@ struct Transfer {
 
 fn emit_transfer(evm: mut Evm, from: Address, to: Address, amount: u256) {
     let e = Transfer { from, to, amount }
-    e.emit(evm)
+    e.emit(mut evm)
 }
 
 pub fn main() uses (evm: mut Evm) {
     emit_transfer(
         evm: mut evm,
-        from: Address { inner: 1 },
-        to: Address { inner: 2 },
+        from: Address::new(1),
+        to: Address::new(2),
         amount: 100,
     )
 }

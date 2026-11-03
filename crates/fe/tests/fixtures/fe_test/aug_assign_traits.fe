@@ -32,7 +32,7 @@ impl AddAssign for Divergent {
 
 #[test]
 fn add_assign_without_add_trait() {
-    let mut x = OnlyAssign { value: 1 }
+    var x = OnlyAssign { value: 1 }
     let y = OnlyAssign { value: 2 }
     x += y
     assert!(x.value == 4)
@@ -40,7 +40,7 @@ fn add_assign_without_add_trait() {
 
 #[test]
 fn aug_assign_prefers_add_assign_semantics() {
-    let mut x = Divergent { value: 1 }
+    var x = Divergent { value: 1 }
     let y = Divergent { value: 2 }
     x += y
     assert!(x.value == 7)
@@ -51,23 +51,23 @@ fn aug_assign_prefers_add_assign_semantics() {
 }
 
 #[test]
-fn indexed_aug_assign_uses_index_mut_and_add_assign() {
-    let mut items = core::ptr::MemArray<Divergent>::new_uninit(1)
+fn indexed_aug_assign_uses_mut_index_and_add_assign() {
+    var items = unsafe { core::ptr::MemArray<Divergent>::new_uninit(1) }
     items[0] = Divergent { value: 1 }
     let item_delta = Divergent { value: 2 }
     items[0] += item_delta
     assert!(items[0].value == 7)
 
     let pointer = core::ptr::alloc<[Divergent; 1]>()
-    pointer[0] = Divergent { value: 1 }
+    unsafe { (*pointer)[0] = Divergent { value: 1 } }
     let pointer_delta = Divergent { value: 2 }
-    pointer[0] += pointer_delta
-    assert!(pointer[0].value == 7)
+    unsafe { (*pointer)[0] += pointer_delta }
+    unsafe { assert!((*pointer)[0].value == 7) }
 }
 
 #[test]
 fn usize_shl_assign() {
-    let mut value: usize = 3
+    var value: usize = 3
     value <<= 4
     assert!(value == 48)
     value <<= 0
@@ -76,7 +76,7 @@ fn usize_shl_assign() {
 
 #[test]
 fn usize_shr_assign() {
-    let mut value: usize = 48
+    var value: usize = 48
     value >>= 4
     assert!(value == 3)
     value >>= 0
@@ -87,7 +87,7 @@ fn usize_shr_assign() {
 
 #[test]
 fn usize_bitor_assign() {
-    let mut value: usize = 0b1010
+    var value: usize = 0b1010
     value |= 0b1100
     assert!(value == 0b1110)
     value |= 0
@@ -96,7 +96,7 @@ fn usize_bitor_assign() {
 
 #[test]
 fn usize_bitand_assign() {
-    let mut value: usize = 0b1010
+    var value: usize = 0b1010
     value &= 0b1100
     assert!(value == 0b1000)
     value &= 0
@@ -105,7 +105,7 @@ fn usize_bitand_assign() {
 
 #[test]
 fn usize_bitxor_assign() {
-    let mut value: usize = 0b1010
+    var value: usize = 0b1010
     value ^= 0b1100
     assert!(value == 0b0110)
     value ^= 0

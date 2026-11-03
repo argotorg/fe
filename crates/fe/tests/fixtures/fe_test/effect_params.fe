@@ -11,8 +11,8 @@ fn bump_non_evm_effect_param() -> u256 uses (value: mut u256) {
 
 #[test]
 fn test_multiple_effect_params() {
-    let mut x: u256 = 0
-    let mut y: u256 = 0
+    var x: u256 = 0
+    var y: u256 = 0
     let total = with (x, y) {
         bump_multiple_effect_params()
     }
@@ -21,7 +21,7 @@ fn test_multiple_effect_params() {
 
 #[test]
 fn test_non_evm_effect_param() {
-    let mut value: u256 = 0
+    var value: u256 = 0
     let updated = with (value) {
         bump_non_evm_effect_param()
     }

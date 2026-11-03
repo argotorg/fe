@@ -147,8 +147,8 @@ fn string_elements_use_core_method_bodies() {
 fn pointer_elements_keep_address_equality() {
     let a = core::ptr::alloc<u256>()
     let b = core::ptr::alloc<u256>()
-    *a = 7
-    *b = 7
+    unsafe { *a = 7 }
+    unsafe { *b = 7 }
     assert!((a,) == (a,))
     assert!((a,) != (b,))
     assert!([a, b] == [a, b])

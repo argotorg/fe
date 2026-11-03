@@ -12,7 +12,7 @@ impl MyTrait for MyStruct {
 }
 
 fn get_output<T: MyTrait>() -> T::Output {
-    todo()
+    unsafe { todo() }
 }
 
 fn example() {

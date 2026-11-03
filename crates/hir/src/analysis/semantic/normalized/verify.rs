@@ -5,23 +5,18 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BorrowActivation, CallSiteId, FieldIndex, Mutability, SConst, SemOrigin,
-            SemanticInstance, VariantIndex,
-            capability::{handle::OpaqueHandleContract, shape::capability_shape},
-            get_or_build_semantic_instance,
-            lower::{effect_param_site, enum_tag_ty},
-            normalized::*,
+            FieldIndex, Mutability, SConst, SemanticInstance, VariantIndex,
+            capability::semantics::contains_capability, lower::enum_tag_ty, normalized::*,
             sem_const_ty,
         },
         ty::{
             adt_def::AdtRef,
-            provider::{ProviderLayoutEvidence, provider_semantics},
-            ty_check::{BodyOwner, EffectPassMode},
+            provider::provider_semantics,
+            ty_check::EffectPassMode,
             ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
             ty_is_copy,
         },
     },
-    core::semantic::EffectEnvView,
     hir_def::{ArithBinOp, BinOp, UnOp},
 };
 
@@ -60,7 +55,6 @@ pub enum NormalizedBodyVerifyError {
     PlaceType,
     InvalidIndexType(NValueId),
     OperandType,
-    InvalidReadMode,
     ForwardType {
         result: NValueId,
         source: NValueId,
@@ -80,13 +74,11 @@ pub enum NormalizedBodyVerifyError {
         actual: Option<BorrowKind>,
         target_matches: bool,
     },
-    InvalidBorrowActivation(NValueId),
     ExpressionType,
     ArrayRepeatRequiresCopy,
     ScalarCapability,
     ScalarOperandCapability(NValueId),
     InvalidRepack,
-    InvalidHandleOrigin,
 }
 
 pub fn verify_normalized_body<'db>(
@@ -188,6 +180,18 @@ pub fn verify_normalized_body<'db>(
                     }
                     verify_mutation(db, body, destination, true)?;
                 }
+                NStatementKind::End { access }
+                | NStatementKind::Drop {
+                    target: NDropTarget::Value(access),
+                } => {
+                    if body.value(*access).is_none() {
+                        return Err(NormalizedBodyVerifyError::MissingValue(*access));
+                    }
+                }
+                // Destroying an immutable binding's value is no mutation.
+                NStatementKind::Drop {
+                    target: NDropTarget::Place(place),
+                } => verify_place(db, body, place)?,
             }
         }
         verify_terminator(db, body, &block.terminator.kind)?;
@@ -233,43 +237,9 @@ fn verify_expr<'db>(
         return Err(error);
     }
     match expr {
-        NExpr::MakeHandle { origin, .. } => {
-            let expected = OpaqueHandleContract::for_ty(
-                db,
-                body.owner.key(db).impl_env(db).normalization_scope(db),
-                body.owner.assumptions(db),
-                result_ty,
-            )
-            .map_err(|_| NormalizedBodyVerifyError::InvalidHandleOrigin)?
-            .ok_or(NormalizedBodyVerifyError::InvalidHandleOrigin)?;
-            let valid = match origin {
-                HandleOrigin::Opaque(contract) => *contract == expected,
-                HandleOrigin::Provider(binding) => binding.provider_ty == expected.handle_ty
-                    && binding.semantics.provider_ty == expected.handle_ty
-                    && binding.semantics.target_ty == Some(expected.target_ty)
-                    && binding.semantics.address_space.is_some_and(|space| Some(space) == expected.address_space.known())
-                    && body.roots.iter().any(|root| matches!(&root.kind, NRootKind::Provider { binding: declared } if declared == binding)),
-            };
-            if !valid {
-                return Err(NormalizedBodyVerifyError::InvalidHandleOrigin);
-            }
-        }
-        NExpr::AggregateMake { .. } | NExpr::EnumMake { .. } => {
-            if OpaqueHandleContract::for_ty(
-                db,
-                body.owner.key(db).impl_env(db).normalization_scope(db),
-                body.owner.assumptions(db),
-                result_ty,
-            )
-            .map_err(|_| NormalizedBodyVerifyError::InvalidHandleOrigin)?
-            .is_some()
-            {
-                return Err(NormalizedBodyVerifyError::InvalidHandleOrigin);
-            }
-        }
         NExpr::Const(value)
             if has_capability(db, body, result_ty)?
-                && literal_allocation(db, result_ty, value).is_none() =>
+                && !is_literal_allocation(db, result_ty, value) =>
         {
             return Err(NormalizedBodyVerifyError::ScalarCapability);
         }
@@ -294,92 +264,13 @@ fn verify_expr<'db>(
                 .then_some(())
                 .ok_or(NormalizedBodyVerifyError::OperandType)
         }
-        NExpr::Load { place, mode } => {
+        NExpr::Load { place, .. } => {
             if place.ty != result_ty {
                 return Err(NormalizedBodyVerifyError::LoadType);
             }
-            if *mode == ReadMode::Move
-                && matches!(
-                    place.base,
-                    NPlaceBase::Root(root)
-                        if body.root(root).is_some_and(|root| matches!(root.kind, NRootKind::Provider { .. }))
-                )
-            {
-                return Err(NormalizedBodyVerifyError::InvalidReadMode);
-            }
             Ok(())
         }
-        NExpr::Borrow {
-            place,
-            kind,
-            activation,
-            ..
-        } => {
-            if let BorrowActivation::AtCall { call_site, callee } = *activation {
-                let NValueDefinition::Statement { block, statement } =
-                    body.values[result.index()].definition
-                else {
-                    return Err(NormalizedBodyVerifyError::InvalidBorrowActivation(result));
-                };
-                let origin = body.blocks[block.index()].statements[statement as usize].origin;
-                let valid_receiver = matches!((call_site, origin), (CallSiteId::Expr(call), SemOrigin::Expr(expr)) if call == expr)
-                    && matches!(callee.key.owner(db), BodyOwner::Func(func)
-                        if func.receiver_ty(db).is_some_and(|ty| matches!(ty.skip_binder().as_borrow(db), Some((BorrowKind::Mut, _)))));
-                let mut aliases = FxHashSet::from_iter([result]);
-                loop {
-                    let mut changed = false;
-                    for statement in body.blocks.iter().flat_map(|block| &block.statements) {
-                        if let NStatementKind::Define {
-                            result: converted,
-                            expr: NExpr::StructuralRepack { value, .. },
-                        } = &statement.kind
-                            && aliases.contains(&value.value)
-                        {
-                            changed |= aliases.insert(*converted);
-                        }
-                    }
-                    if !changed {
-                        break;
-                    }
-                }
-                let mut receivers = 0;
-                let used_elsewhere = aliases.iter().any(|alias| {
-                    body.value_is_used_with(*alias, |expr| {
-                        let mut uses = 0;
-                        expr.for_each_value_operand(|operand| {
-                            uses += usize::from(operand.value == *alias)
-                        });
-                        if uses == 0 {
-                            return false;
-                        }
-                        if matches!(expr, NExpr::StructuralRepack { .. }) {
-                            return false;
-                        }
-                        if let NExpr::Call {
-                            call_site: site,
-                            callee: target,
-                            args,
-                            ..
-                        } = expr
-                            && *site == call_site
-                            && *target == callee
-                            && args
-                                .first()
-                                .is_some_and(|receiver| receiver.value == *alias)
-                        {
-                            receivers += 1;
-                            uses != 1
-                        } else {
-                            true
-                        }
-                    })
-                });
-                if *kind != BorrowKind::Mut || !valid_receiver || used_elsewhere || receivers > 1
-                    || body.roots.iter().any(|root| matches!(root.kind, NRootKind::CapabilityRepresentation { carrier } if aliases.contains(&carrier)))
-                {
-                    return Err(NormalizedBodyVerifyError::InvalidBorrowActivation(result));
-                }
-            }
+        NExpr::Borrow { place, kind, .. } => {
             let result_borrow = result_ty.as_borrow(db);
             if result_borrow
                 .is_none_or(|(result_kind, target)| result_kind != *kind || target != place.ty)
@@ -411,7 +302,7 @@ fn verify_expr<'db>(
                     value_ty == result_ty && value_ty.is_integral(db)
                 }
                 UnOp::Not => value_ty.is_bool(db) && result_ty.is_bool(db),
-                UnOp::Mut | UnOp::Ref | UnOp::Deref => false,
+                UnOp::Mut | UnOp::MaybeMut | UnOp::Ref | UnOp::Deref => false,
             };
             valid
                 .then_some(())
@@ -448,9 +339,12 @@ fn verify_expr<'db>(
         }
         NExpr::PointerCast { value, to } => {
             let from = operand_ty(body, *value)?;
-            let valid = (from.as_ptr(db).is_some()
-                && (to.as_ptr(db).is_some() || to.is_integral(db)))
-                || (from.is_integral(db) && to.as_ptr(db).is_some());
+            let valid = match (from.as_ptr(db), to.as_ptr(db)) {
+                (Some((_, from_space)), Some((_, to_space))) => from_space == to_space,
+                (Some(_), None) => to.is_integral(db),
+                (None, Some(_)) => from.is_integral(db),
+                (None, None) => false,
+            };
             (valid && *to == result_ty)
                 .then_some(())
                 .ok_or(NormalizedBodyVerifyError::ExpressionType)
@@ -512,12 +406,13 @@ fn verify_expr<'db>(
             effect_args,
             ..
         } => {
-            let callee = get_or_build_semantic_instance(db, callee.key);
+            let callee = SemanticInstance::new(db, callee.key);
             let typed_body = callee.key(db).typed_body(db);
-            let mut param_tys = Vec::new();
-            while let Some(binding) = typed_body.param_binding(param_tys.len()) {
-                param_tys.push(callee.normalized_binding_ty(db, binding));
-            }
+            let param_tys: Vec<_> = typed_body
+                .input_bindings()
+                .iter()
+                .map(|&binding| callee.normalized_binding_ty(db, binding))
+                .collect();
             if args.len() != param_tys.len() {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
             }
@@ -527,9 +422,7 @@ fn verify_expr<'db>(
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 }
             }
-            let requirements = effect_param_site(callee.key(db).owner(db))
-                .map(|site| EffectEnvView::new(site).requirements(db))
-                .unwrap_or_default();
+            let requirements = callee.call_effect_requirements(db);
             let mut effect_bindings = FxHashSet::default();
             for arg in effect_args {
                 let Some(requirement) = requirements
@@ -554,14 +447,8 @@ fn verify_expr<'db>(
                     NEffectArgValue::Place(place) => place.ty,
                     NEffectArgValue::Value(value) => operand_ty(body, *value)?,
                 };
-                let semantics = provider_semantics(
-                    db,
-                    body.template_owner.scope(),
-                    body.owner.assumptions(db),
-                    arg_ty,
-                );
-                if !matches!(semantics.evidence, ProviderLayoutEvidence::InvalidHandle(_))
-                    && let Some(target_ty) = arg.provider_target_ty
+                let semantics = provider_semantics(db, arg_ty);
+                if let Some(target_ty) = arg.provider_target_ty
                     && !structural_types_are_boundary_compatible(
                         db,
                         body.owner,
@@ -612,13 +499,7 @@ fn verify_expr<'db>(
             }
             Ok(())
         }
-        NExpr::AggregateMake { ty, fields }
-        | NExpr::MakeHandle {
-            ty,
-            variant: None,
-            fields,
-            ..
-        } => {
+        NExpr::AggregateMake { ty, fields } => {
             let field_tys = fields
                 .iter()
                 .map(|field| operand_ty(body, *field))
@@ -634,11 +515,7 @@ fn verify_expr<'db>(
                     && element.is_some_and(|element| {
                         field_tys.iter().all(|field_ty| *field_ty == element)
                     })
-            } else if ty.is_tuple(db)
-                || ty
-                    .adt_def(db)
-                    .is_some_and(|adt| matches!(adt.adt_ref(db), AdtRef::Struct(_)))
-            {
+            } else if ty.is_product(db) {
                 body.owner.normalized_field_types(db, *ty).as_slice() == field_tys
             } else {
                 false
@@ -652,12 +529,6 @@ fn verify_expr<'db>(
             enum_ty,
             variant,
             fields,
-        }
-        | NExpr::MakeHandle {
-            ty: enum_ty,
-            variant: Some(variant),
-            fields,
-            ..
         } => {
             let adt = enum_ty
                 .adt_def(db)
@@ -731,16 +602,21 @@ fn verify_terminator<'db>(
             }
             Ok(())
         }
-        NTerminatorKind::Return(Some(value)) => {
+        NTerminatorKind::Return(Some(value)) | NTerminatorKind::Yield { value, .. } => {
             let actual = operand_ty(body, *value)?;
             let expected = body.owner.normalized_result_ty(db);
             let compatible = expected.has_invalid(db) || actual == expected;
             compatible
                 .then_some(())
-                .ok_or(NormalizedBodyVerifyError::OperandType)
+                .ok_or(NormalizedBodyVerifyError::OperandType)?;
+            match terminator {
+                NTerminatorKind::Yield { resume, .. } => verify_successor(body, resume),
+                _ => Ok(()),
+            }
         }
+        // A projection's slide completes without a value.
         NTerminatorKind::Return(None) => {
-            if body.template_owner.body(db).is_some() {
+            if body.template_owner.body(db).is_some() && !body.owner.is_projection(db) {
                 let expected = body.owner.normalized_result_ty(db);
                 (expected == TyId::unit(db) || expected.has_invalid(db))
                     .then_some(())
@@ -913,6 +789,19 @@ pub(crate) fn project_path_ty<'db>(
                         .ok_or(NormalizedBodyVerifyError::InvalidProjection)?,
                 )
             }
+            NDataProjection::Entry(key) => {
+                let (key_ty, output_ty) = instance
+                    .state_index_tys(db, ty)
+                    .ok_or(NormalizedBodyVerifyError::InvalidProjection)?;
+                let given = values
+                    .get(key.index())
+                    .ok_or(NormalizedBodyVerifyError::MissingValue(key))?
+                    .ty;
+                if instance.normalized_ty(db, given) != key_ty {
+                    return Err(NormalizedBodyVerifyError::InvalidIndexType(key));
+                }
+                output_ty
+            }
         };
     }
     Ok(ty)
@@ -934,14 +823,12 @@ fn has_capability<'db>(
     body: &NormalizedBody<'db>,
     ty: TyId<'db>,
 ) -> Result<bool, NormalizedBodyVerifyError> {
-    capability_shape(
+    Ok(contains_capability(
         db,
         body.owner.key(db).impl_env(db).normalization_scope(db),
         body.owner.assumptions(db),
         ty,
-    )
-    .map(|shape| shape.contains_capability(db))
-    .map_err(|_| NormalizedBodyVerifyError::ScalarCapability)
+    ))
 }
 
 fn verify_scalar_ty<'db>(
@@ -977,7 +864,7 @@ fn verify_scalar_result<'db>(
 
 fn ty_has_scalar_repr<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) -> bool {
     let mut visiting = FxHashSet::default();
-    while ty.is_tuple(db) || ty.is_struct(db) {
+    while ty.is_product(db) {
         if !visiting.insert(ty) {
             return false;
         }
@@ -1001,7 +888,7 @@ fn verify_mutation<'db>(
             .value(carrier)
             .and_then(|value| value.ty.as_capability(db))
             .map(|(kind, _)| kind),
-        NPlaceBase::Root(_) => None,
+        NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
     };
     let mutable = match place.base {
         NPlaceBase::Root(root) => {
@@ -1014,11 +901,10 @@ fn verify_mutation<'db>(
                     && matches!(root.kind, NRootKind::LocalSlot { .. }))
         }
         NPlaceBase::CapabilityTarget { carrier } => {
-            body.value(carrier)
-                .is_some_and(|value| value.ty.as_ptr(db).is_some())
-                || capability == Some(CapabilityKind::Mut)
+            capability == Some(CapabilityKind::Mut)
                 || carrier_has_mutable_view_authority(db, body, carrier)
         }
+        NPlaceBase::Deref { .. } => true,
     };
     if mutable {
         Ok(())
@@ -1082,7 +968,7 @@ fn value_has_mutable_view_origin<'db>(
         NExpr::Load { place, .. } | NExpr::Borrow { place, .. } | NExpr::MakeView { place, .. } => {
             match place.base {
                 NPlaceBase::CapabilityTarget { carrier } => Some(carrier),
-                NPlaceBase::Root(_) => None,
+                NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
             }
         }
         NExpr::CodeRegionRef { .. }
@@ -1093,7 +979,6 @@ fn value_has_mutable_view_origin<'db>(
         | NExpr::ScalarCast { .. }
         | NExpr::ArrayRepeat { .. }
         | NExpr::AggregateMake { .. }
-        | NExpr::MakeHandle { .. }
         | NExpr::EnumMake { .. }
         | NExpr::GetEnumTag { .. }
         | NExpr::IsEnumVariant { .. }
@@ -1104,15 +989,9 @@ fn value_has_mutable_view_origin<'db>(
     source.is_some_and(|source| value_has_mutable_view_origin(db, body, source, visiting))
 }
 
-pub(crate) struct NormalizedCfg {
-    pub predecessors: Vec<Vec<NBlockId>>,
-    pub reachable: Vec<bool>,
-    pub dominators: Vec<FxHashSet<NBlockId>>,
-}
-
-pub(crate) fn normalized_cfg(
+fn normalized_dominators(
     body: &NormalizedBody<'_>,
-) -> Result<NormalizedCfg, NormalizedBodyVerifyError> {
+) -> Result<Vec<FxHashSet<NBlockId>>, NormalizedBodyVerifyError> {
     let mut predecessors = vec![Vec::new(); body.blocks.len()];
     for (block_index, block) in body.blocks.iter().enumerate() {
         for successor in terminator_successors(&block.terminator.kind) {
@@ -1178,15 +1057,11 @@ pub(crate) fn normalized_cfg(
             break;
         }
     }
-    Ok(NormalizedCfg {
-        predecessors,
-        reachable,
-        dominators,
-    })
+    Ok(dominators)
 }
 
 fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBodyVerifyError> {
-    let dominators = normalized_cfg(body)?.dominators;
+    let dominators = normalized_dominators(body)?;
     for (block_index, block) in body.blocks.iter().enumerate() {
         let block_id = NBlockId::new(block_index);
         for (statement_index, statement) in block.statements.iter().enumerate() {
@@ -1200,6 +1075,13 @@ fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBod
                     uses.push(value.value);
                     uses.extend(body.place_values(destination));
                 }
+                NStatementKind::End { access }
+                | NStatementKind::Drop {
+                    target: NDropTarget::Value(access),
+                } => uses.push(*access),
+                NStatementKind::Drop {
+                    target: NDropTarget::Place(place),
+                } => uses.extend(body.place_values(place)),
             }
             for value in uses {
                 verify_value_dominates_use(body, &dominators, value, block_id, statement_index)?;
@@ -1227,6 +1109,7 @@ fn terminator_successors(terminator: &NTerminatorKind<'_>) -> Vec<NBlockId> {
             .map(|(_, target)| target.block)
             .chain(default.iter().map(|target| target.block))
             .collect(),
+        NTerminatorKind::Yield { resume, .. } => vec![resume.block],
         NTerminatorKind::Assert { .. } | NTerminatorKind::Return(_) => Vec::new(),
     }
 }
@@ -1260,6 +1143,10 @@ fn collect_terminator_values(terminator: &NTerminatorKind<'_>, values: &mut Vec<
             }
         }
         NTerminatorKind::Return(Some(value)) => values.push(value.value),
+        NTerminatorKind::Yield { value, resume } => {
+            values.push(value.value);
+            values.extend(resume.args.iter().map(|argument| argument.value));
+        }
         NTerminatorKind::Assert { .. } | NTerminatorKind::Return(None) => {}
     }
 }

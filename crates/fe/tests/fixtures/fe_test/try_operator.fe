@@ -1,0 +1,97 @@
+// `e?` takes the payload of a `Some` or `Ok`, or ends the enclosing function
+// with the `None` or `Err`. On a sum-shape projection it binds the payload's
+// grant, and in a projection the early exit grants nothing.
+struct Arr {
+    xs: [u256; 3],
+    len: usize,
+}
+
+impl Arr {
+    fn get_mut(mut self, _ i: usize) -> Option<mut u256> {
+        if i >= self.len {
+            return Option::None
+        }
+        Option::Some(mut self.xs[i])
+    }
+
+    fn first_mut(mut self) -> Option<mut u256> {
+        let x = mut self.get_mut(0)?
+        Option::Some(x)
+    }
+
+    fn index(self, _ i: usize) -> Option<usize> {
+        if i < self.len { Option::Some(i) } else { Option::None }
+    }
+
+    // An early exit at one yield site and a write-back slide at the other.
+    fn cached(mut self, _ i: usize) -> Option<mut u256> {
+        let at = self.index(i)?
+        var tmp = self.xs[at]
+        yield Option::Some(mut tmp)
+        self.xs[at] = tmp
+    }
+}
+
+fn add(_ a: Option<u256>, _ b: Option<u256>) -> Option<u256> {
+    Option::Some(a? + b?)
+}
+
+fn parse(_ x: u256) -> Result<u8, u256> {
+    if x > 10 { Result::Err(1) } else { Result::Ok(x) }
+}
+
+fn double(_ x: u256) -> Result<u8, u256> {
+    let v = parse(x)?
+    Result::Ok(v * 2)
+}
+
+fn bump_first(_ a: mut Arr) -> Option<u256> {
+    let x = mut a.first_mut()?
+    x += 1
+    Option::Some(x)
+}
+
+#[test]
+fn values() {
+    match add(Option::Some(1), Option::Some(2)) {
+        Option::Some(v) => assert!(v == 3)
+        Option::None => assert!(false)
+    }
+    match add(Option::Some(1), Option::None) {
+        Option::Some(_) => assert!(false)
+        Option::None => {}
+    }
+    match double(4) {
+        Result::Ok(v) => assert!(v == 8)
+        Result::Err(_) => assert!(false)
+    }
+    match double(40) {
+        Result::Ok(_) => assert!(false)
+        Result::Err(e) => assert!(e == 1)
+    }
+}
+
+#[test]
+fn sum_shapes() {
+    var a = Arr { xs: [5, 6, 7], len: 2 }
+    match bump_first(mut a) {
+        Option::Some(v) => assert!(v == 6)
+        Option::None => assert!(false)
+    }
+    assert!(a.xs[0] == 6)
+
+    var empty = Arr { xs: [5, 6, 7], len: 0 }
+    match bump_first(mut empty) {
+        Option::Some(_) => assert!(false)
+        Option::None => {}
+    }
+
+    if let Option::Some(mut x) = a.cached(1) {
+        x += 10
+    }
+    assert!(a.xs[1] == 16)
+    if let Option::Some(mut x) = a.cached(2) {
+        x += 10
+    }
+    assert!(a.xs[2] == 7)
+}

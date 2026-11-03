@@ -49,15 +49,13 @@ impl ToDoc for ast::LitPat {
 
 impl ToDoc for ast::TuplePat {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        self.elems()
-            .map_or_else(|| ctx.alloc.text("()"), |elems| elems.to_doc(ctx))
-    }
-}
-
-impl ToDoc for ast::TuplePatElemList {
-    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        if !has_comment_tokens(self.syntax()) {
-            let mut items: Vec<_> = self
+        let Some(elems) = self.elems() else {
+            return ctx.alloc.text("()");
+        };
+        // A one-element tuple keeps its comma; a variant pattern's one field,
+        // in the same list, takes none.
+        if !has_comment_tokens(elems.syntax()) {
+            let mut items: Vec<_> = elems
                 .syntax()
                 .children()
                 .filter_map(ast::Pat::cast)
@@ -67,7 +65,12 @@ impl ToDoc for ast::TuplePatElemList {
                 return singleton_tuple(ctx, "(", ")", items.pop().unwrap());
             }
         }
+        elems.to_doc(ctx)
+    }
+}
 
+impl ToDoc for ast::TuplePatElemList {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let indent = ctx.config.indent_width as isize;
         block_list_auto(ctx, self.syntax(), "(", ")", ast::Pat::cast, indent, true)
     }
@@ -80,6 +83,12 @@ impl ToDoc for ast::PathPat {
 
         if self.mut_token().is_some() {
             doc = doc.append(alloc.text("mut "));
+        } else if self.maybe_mut_token().is_some() {
+            doc = doc.append(alloc.text("mut? "));
+        } else if self.ref_token().is_some() {
+            doc = doc.append(alloc.text("ref "));
+        } else if self.var_token().is_some() {
+            doc = doc.append(alloc.text("var "));
         }
 
         if let Some(path) = self.path() {

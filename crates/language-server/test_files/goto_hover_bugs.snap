@@ -106,7 +106,7 @@ note:
    ┌─ goto_hover_bugs.fe:58:9
    │
 58 │     let init_ptr = ptr::alloc_bytes(total_len)
-   │         ^^^^^^^^ -> local: *<u8>
+   │         ^^^^^^^^ -> local: *u8
 
 note: 
    ┌─ goto_hover_bugs.fe:58:20
@@ -148,7 +148,7 @@ note:
    ┌─ goto_hover_bugs.fe:62:9
    │
 62 │     let ret_ptr = ptr::alloc_bytes(ret_len)
-   │         ^^^^^^^ -> local: *<u8>
+   │         ^^^^^^^ -> local: *u8
 
 note: 
    ┌─ goto_hover_bugs.fe:62:19
@@ -184,7 +184,7 @@ note:
    ┌─ goto_hover_bugs.fe:63:25
    │
 63 │     ops::revert(offset: ret_ptr, len: ret_len)
-   │                         ^^^^^^^ -> local: *<u8>
+   │                         ^^^^^^^ -> local: *u8
 
 note: 
    ┌─ goto_hover_bugs.fe:63:39

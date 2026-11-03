@@ -1,7 +1,7 @@
 pub use super::{
     clone::Clone,
     default::Default,
-    marker::Copy,
+    marker::{Copy, Snapshot},
     error::ErrorVariant,
     message::MsgVariant,
     num::Abs,
@@ -9,7 +9,7 @@ pub use super::{
     num::IntDowncast,
     num::UnsignedAbs,
     option::Option::{self, *},
-    ptr::{FixedMemBuffer, MemArray, MemBuffer, MemSlice, MemSpan, byte_ptr, cast, offset, offset_bytes},
+    ptr::{FixedMemBuffer, MemArray, MemBuffer, MemSlice, MemSpan, MemVec, byte_ptr, cast, offset, offset_bytes},
     result::Result::{self, *},
     todo, panic,
 }

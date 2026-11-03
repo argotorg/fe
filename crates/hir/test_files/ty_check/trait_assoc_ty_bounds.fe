@@ -21,7 +21,7 @@ impl<T> Iterator for Repeat<T> {
 }
 
 fn sum<T: Iterator<Item = i32>>(iter: T) -> i32 {
-    let mut sum = 0
+    var sum = 0
     while true {
         match iter.next() {
             Option::Some(x) => { sum += x }

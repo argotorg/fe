@@ -1,21 +1,19 @@
 //! Declaration-owned generic defaults and their application-site instantiation.
 
-use rustc_hash::FxHashMap;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{
     binder::Binder,
     const_ty::{
-        ConstBodyLowering, ConstCanonEnv, ConstCanonMode, ConstCaptureEnv, ConstTyId, HoleAnchor,
-        HoleId, LayoutIntroSite, LoweringContext, StructuralHoleId, StructuralHoleOrigin,
-        UnevaluatedConstPolicy, canonicalize_ty_for_mode,
+        ConstBodyLowering, ConstCanonEnv, ConstCanonMode, ConstCaptureEnv, ConstTyId,
+        LoweringContext, UnevaluatedConstPolicy, canonicalize_ty_for_mode,
     },
     diagnostics::{TyDiagCollection, TyLowerDiag},
-    layout_holes::rewrite_structural_holes,
+    shape::Shape,
     subst::substitute_complete,
     trait_resolution::{PredicateListId, constraint::collect_candidate_constraints},
     ty_check::check_generic_default_body_types,
-    ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
+    ty_def::{BorrowKind, InvalidCause, Kind, PrimTy, TyBase, TyData, TyId, TyParam},
     ty_error::{collect_hir_ty_diags_deferred, emit_invalid_ty_error, first_invalid_ty_cause},
     ty_lower::{
         CompleteSubst, GenericParamTypeSet, ParamBasis, SourceParamIndex, collect_generic_params,
@@ -30,7 +28,7 @@ use crate::{
         name_resolution::{EarlyNameQueryId, NameResKind, QueryDirective, resolve_query},
     },
     hir_def::{
-        ConstGenericArgValue, GenericParam, GenericParamOwner, IdentId, ItemKind, Partial, PathId,
+        Body, GenericParam, GenericParamOwner, IdentId, ItemKind, Partial, PathId,
         scope_graph::ScopeId,
     },
     semantic::trait_self_predicate,
@@ -61,11 +59,11 @@ pub(crate) fn default_assumptions<'db>(
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum GenericDefault<'db> {
     Type(Binder<'db, TyId<'db>>),
     Const {
-        value: ConstGenericArgValue<'db>,
+        value: Body<'db>,
         expected: Binder<'db, TyId<'db>>,
     },
 }
@@ -73,12 +71,12 @@ pub(crate) enum GenericDefault<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub(crate) struct DefaultLowerError<'db> {
-    #[return_ref]
     pub cause: InvalidCause<'db>,
+    #[returns(copy)]
     pub forward_ref: Option<IdentId<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) struct DefaultDiagnosticOwner<'db> {
     pub(crate) owner: GenericParamOwner<'db>,
     pub(crate) param: SourceParamIndex,
@@ -88,7 +86,7 @@ pub(crate) struct DefaultDiagnosticOwner<'db> {
 /// execution remains in the template's const nodes or in types reached at
 /// concrete demand. `Invalid` has a declaration diagnostic owned by the
 /// `(owner, param)` query key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum DefaultValidation<'db> {
     Checked(GenericDefault<'db>),
     Invalid(DefaultLowerError<'db>),
@@ -97,7 +95,7 @@ pub(crate) enum DefaultValidation<'db> {
 /// Structural discovery uses `generic_default`; consumers requiring a checked
 /// declaration use this result. Const execution remains an application or
 /// declaration-diagnostic obligation, never a prerequisite for shape discovery.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn checked_generic_default<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -121,7 +119,7 @@ pub(crate) fn checked_generic_default<'db>(
 
 /// This is a deferred semantic template, not proof that its const bodies have
 /// been validated. Declaration diagnostics check bodies independently of use.
-#[salsa::tracked(return_ref, cycle_initial=default_cycle_initial, cycle_fn=default_cycle_recover)]
+#[salsa::tracked(cycle_initial=default_cycle_initial)]
 pub(crate) fn generic_default<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -137,14 +135,14 @@ pub(crate) fn generic_default<'db>(
             let Some(hir_ty) = param.default_ty else {
                 return Ok(None);
             };
-            let minter = LoweringContext::deferred(HoleAnchor::GenericDefault { owner, param_idx })
+            let lowering_cx = LoweringContext::deferred()
                 .with_default_capture(owner, SourceParamIndex(param_idx));
             let ty = lower_hir_ty_with_minter(
                 db,
                 hir_ty,
                 owner.scope(),
                 default_assumptions(db, owner),
-                &minter,
+                &lowering_cx,
             );
             let set = collect_generic_params(db, owner);
             let formal = set
@@ -234,6 +232,7 @@ fn reject_forward_dependency<'db>(
 
 fn default_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _owner: GenericParamOwner<'db>,
     _param_idx: usize,
 ) -> Result<Option<GenericDefault<'db>>, DefaultLowerError<'db>> {
@@ -242,16 +241,6 @@ fn default_cycle_initial<'db>(
         InvalidCause::TypeLoweringCycle,
         None,
     ))
-}
-
-fn default_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Result<Option<GenericDefault<'db>>, DefaultLowerError<'db>>,
-    _count: u32,
-    _owner: GenericParamOwner<'db>,
-    _param_idx: usize,
-) -> salsa::CycleRecoveryAction<Result<Option<GenericDefault<'db>>, DefaultLowerError<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) fn type_default_diags<'db>(
@@ -311,11 +300,11 @@ pub(crate) enum DefaultApplication<'a, 'db> {
 }
 
 impl<'a, 'db> DefaultApplication<'a, 'db> {
-    fn minter(self) -> Option<&'a LoweringContext<'db>> {
+    fn lowering_cx(self) -> Option<&'a LoweringContext<'db>> {
         match self {
-            Self::StructuralMetadata(minter)
-            | Self::CheckedMetadata(minter)
-            | Self::Evaluate(minter) => Some(minter),
+            Self::StructuralMetadata(lowering_cx)
+            | Self::CheckedMetadata(lowering_cx)
+            | Self::Evaluate(lowering_cx) => Some(lowering_cx),
             Self::Identity => None,
         }
     }
@@ -330,8 +319,8 @@ impl<'a, 'db> DefaultApplication<'a, 'db> {
 
     fn const_policy(self) -> UnevaluatedConstPolicy {
         if self
-            .minter()
-            .is_some_and(|minter| minter.const_bodies() == ConstBodyLowering::Deferred)
+            .lowering_cx()
+            .is_some_and(|lowering_cx| lowering_cx.const_bodies() == ConstBodyLowering::Deferred)
         {
             UnevaluatedConstPolicy::DeferValidation
         } else if self.evaluates() {
@@ -364,6 +353,22 @@ fn check_argument<'db>(
         arg.evaluate_const_ty(db, expected)?
     } else {
         arg.check_const_ty_without_eval(db, expected)?
+    };
+    // A tuple type given for a shape lists views: `Fn<(A, B)>` takes `ref A`
+    // and `ref B`.
+    let (base, elems) = arg.decompose_ty_app(db);
+    let arg = if *kind == Kind::Shape
+        && matches!(
+            base.data(db),
+            TyData::TyBase(TyBase::Prim(PrimTy::Tuple(_)))
+        ) {
+        let params: Vec<_> = elems
+            .iter()
+            .map(|&elem| Shape::Access(BorrowKind::Ref, elem))
+            .collect();
+        TyId::params_shape(db, &params)
+    } else {
+        arg
     };
     if !kind.does_match(arg.kind(db)) {
         return Err(InvalidCause::KindMismatch {
@@ -489,7 +494,7 @@ fn default_arg<'db>(
             instantiate_type_default(db, owner, *template, subst, application)
         }
         GenericDefault::Const { value, expected } => {
-            instantiate_const_default(db, owner, index, value, *expected, subst, application)
+            instantiate_const_default(db, owner, index, *value, *expected, subst, application)
         }
     }))
 }
@@ -501,31 +506,7 @@ fn instantiate_type_default<'db>(
     subst: &CompleteSubst<'db>,
     application: DefaultApplication<'_, 'db>,
 ) -> TyId<'db> {
-    // Freshen only template-owned roots before introducing caller values.
-    let mut roots = FxHashMap::default();
-    let fresh = rewrite_structural_holes(db, template.instantiate_identity(), |hole, ty| {
-        let hole = match application.minter() {
-            Some(minter) => {
-                let root = *roots
-                    .entry(hole.root(db))
-                    .or_insert_with(|| minter.holes().mint(db));
-                ConstTyId::hole_with_id(
-                    db,
-                    ty,
-                    HoleId::Structural(StructuralHoleId::with_intro(
-                        db,
-                        ty,
-                        root,
-                        hole.origin(db),
-                        hole.introduced_at(db).clone(),
-                    )),
-                )
-            }
-            None => ConstTyId::hole_with_ty(db, ty),
-        };
-        Some(TyId::const_ty(db, hole))
-    });
-    let applied = Binder::bind(owner, fresh)
+    let applied = template
         .instantiate_subst(db, subst)
         .unwrap_or_else(|error| panic!("invalid default template for {owner:?}: {error:?}"));
     if matches!(application, DefaultApplication::Evaluate(_)) {
@@ -544,7 +525,7 @@ fn instantiate_const_default<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
     index: SourceParamIndex,
-    value: &ConstGenericArgValue<'db>,
+    value: Body<'db>,
     expected: Binder<'db, TyId<'db>>,
     subst: &CompleteSubst<'db>,
     application: DefaultApplication<'_, 'db>,
@@ -553,35 +534,20 @@ fn instantiate_const_default<'db>(
     let expected = expected
         .instantiate_subst(db, subst)
         .unwrap_or_else(|error| panic!("invalid const default type for {owner:?}: {error:?}"));
-    let value = match value {
-        ConstGenericArgValue::Expr(body) => ConstTyId::unevaluated(
-            db,
-            *body,
-            Some(template_ty),
-            Some(expected),
-            ConstCaptureEnv::bound(db, owner, Some(index), subst.values().to_vec()),
-            application.const_policy(),
-        ),
-        ConstGenericArgValue::Hole => match application.minter() {
-            Some(minter) => ConstTyId::structural_hole(
-                db,
-                expected,
-                StructuralHoleOrigin::DefaultHoleParam {
-                    owner,
-                    param_idx: index.0,
-                },
-                LayoutIntroSite::definition(owner, index.0),
-                minter.holes().mint(db),
-            ),
-            None => ConstTyId::hole_with_ty(db, expected),
-        },
-    };
+    let value = ConstTyId::unevaluated(
+        db,
+        Partial::Present(value),
+        Some(template_ty),
+        Some(expected),
+        ConstCaptureEnv::bound(db, owner, Some(index), subst.values().to_vec()),
+        application.const_policy(),
+    );
     TyId::const_ty(db, value)
 }
 
 /// Parameter dependencies are a property of the source, not of successful type
 /// lowering. In particular, an unresolved `T::Item` still refers to `T`.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn default_dependencies<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -605,7 +571,7 @@ pub(crate) fn default_dependencies<'db>(
             }
         }
         GenericParam::Const(param) => {
-            if let Some(ConstGenericArgValue::Expr(Partial::Present(body))) = param.default {
+            if let Some(body) = param.default {
                 collector.visit_body(&mut VisitorCtxt::with_body(db, body), body);
             }
         }
@@ -648,210 +614,9 @@ mod tests {
     use super::*;
     use crate::{
         analysis::semantic::runtime_size_bytes,
-        analysis::ty::{
-            const_ty::{
-                BoundHoleId, CallableLayoutOwner, ConstTyData, LayoutIntroRoot, LayoutIntroStep,
-            },
-            ty_lower::{collect_source_generic_params, func_implicit_param_plan},
-        },
-        hir_def::IdentId,
+        analysis::ty::{const_ty::ConstTyData, ty_lower::collect_source_generic_params},
         test_db::{HirAnalysisTestDb, find_func},
     };
-
-    fn assert_default_hole_provenance<'db>(
-        db: &'db HirAnalysisTestDb,
-        ty: TyId<'db>,
-        owner: GenericParamOwner<'db>,
-        source_param_idx: usize,
-        name: &str,
-    ) -> StructuralHoleId<'db> {
-        let TyData::ConstTy(value) = ty.data(db) else {
-            panic!("expected const argument");
-        };
-        let ConstTyData::Hole(_, HoleId::Structural(hole)) = value.data(db) else {
-            panic!("expected structural default hole");
-        };
-        assert_eq!(
-            hole.origin(db),
-            StructuralHoleOrigin::DefaultHoleParam {
-                owner,
-                param_idx: source_param_idx,
-            }
-        );
-        assert_eq!(
-            owner
-                .param_view(db, source_param_idx)
-                .name()
-                .to_opt()
-                .unwrap()
-                .data(db),
-            name
-        );
-        assert_eq!(
-            hole.introduced_at(db),
-            LayoutIntroSite {
-                root: LayoutIntroRoot::Definition { owner },
-                path: vec![LayoutIntroStep::ConstParam(source_param_idx as u32)],
-            }
-        );
-        *hole
-    }
-
-    #[test]
-    fn default_hole_provenance_uses_source_indices_with_implicit_prefixes() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("default_hole_provenance.fe"),
-            r#"
-struct Record<V = u256, const ROOT: u256 = _, const OTHER: u256 = _> {}
-type Alias<V = u256, const ROOT: u256 = _, const OTHER: u256 = _> = Record<V, ROOT, OTHER>
-trait Cap<V = u256, const ROOT: u256 = _, const OTHER: u256 = _> {}
-fn plain<V = u256, const ROOT: u256 = _, const OTHER: u256 = _>() {}
-
-struct Slot<const BASE: u256 = _> {}
-fn layout<V = u256, const ROOT: u256 = _, const OTHER: u256 = _>(_ slot: Slot) {}
-fn provider<V = u256, const ROOT: u256 = _, const OTHER: u256 = _>() uses (env: u256) {}
-fn combined<V = u256, const ROOT: u256 = _, const OTHER: u256 = _>(_ slot: Slot) uses (env: u256) {}
-
-struct Container<T> {}
-impl<T> Container<T> {
-    fn inherited<V = u256, const ROOT: u256 = _, const OTHER: u256 = _>() {}
-    fn inherited_combined<V = u256, const ROOT: u256 = _, const OTHER: u256 = _>(_ slot: Slot) uses (env: u256) {}
-}
-trait Parent<T> {
-    fn trait_method<V = u256, const ROOT: u256 = _, const OTHER: u256 = _>()
-}
-"#,
-        );
-        let (top_mod, _) = db.top_mod(file);
-        db.assert_no_diags(top_mod);
-        for (name, expected_prefix, provider_idx) in [
-            ("Record", 0, None),
-            ("Alias", 0, None),
-            ("Cap", 1, None),
-            ("plain", 0, None),
-            ("layout", 1, None),
-            ("provider", 1, Some(0)),
-            ("combined", 2, Some(1)),
-            ("inherited", 1, None),
-            ("inherited_combined", 3, Some(2)),
-            ("trait_method", 2, None),
-        ] {
-            let owner = top_mod
-                .children_nested(&db)
-                .find(|item| item.name(&db).is_some_and(|ident| ident.data(&db) == name))
-                .and_then(GenericParamOwner::from_item_opt)
-                .unwrap_or_else(|| panic!("missing owner {name}"));
-            let set = collect_generic_params(&db, owner);
-            assert_eq!(
-                set.offset_to_explicit_params_position(&db),
-                expected_prefix,
-                "{name}"
-            );
-            if let GenericParamOwner::Func(func) = owner {
-                assert_eq!(
-                    func_implicit_param_plan(&db, func).provider_param_index_by_effect,
-                    provider_idx.into_iter().map(Some).collect::<Vec<_>>(),
-                    "{name}"
-                );
-            }
-            let implicit = &set.params(&db)[..expected_prefix];
-            let minter = LoweringContext::new(HoleAnchor::TemplatePath {
-                path: PathId::from_ident(&db, IdentId::new(&db, name)),
-                scope: owner.scope(),
-                assumptions: PredicateListId::empty_list(&db),
-            });
-            for application in [
-                DefaultApplication::StructuralMetadata(&minter),
-                DefaultApplication::Evaluate(&minter),
-            ] {
-                let first = set.complete_args(&db, implicit, &[], application).unwrap();
-                let second = set.complete_args(&db, implicit, &[], application).unwrap();
-                assert_eq!(first.len(), 3);
-                assert_eq!(second.len(), 3);
-                assert_eq!(first[0], TyId::u256(&db));
-                let mut roots = Vec::new();
-                for args in [&first, &second] {
-                    for (source_param_idx, param_name) in [(1, "ROOT"), (2, "OTHER")] {
-                        let hole = assert_default_hole_provenance(
-                            &db,
-                            args[source_param_idx],
-                            owner,
-                            source_param_idx,
-                            param_name,
-                        );
-                        assert!(
-                            !roots.contains(&hole.root(&db)),
-                            "{name}: applications and parameters need distinct roots"
-                        );
-                        roots.push(hole.root(&db));
-                    }
-                }
-            }
-            let identity = set
-                .complete_args(&db, implicit, &[], DefaultApplication::Identity)
-                .unwrap();
-            assert_eq!(identity.len(), 3);
-            for arg in &identity[1..] {
-                let TyData::ConstTy(value) = arg.data(&db) else {
-                    panic!("expected identity const argument");
-                };
-                assert!(matches!(
-                    value.data(&db),
-                    ConstTyData::Hole(_, HoleId::Bound(BoundHoleId::Opaque))
-                ));
-            }
-        }
-    }
-
-    #[test]
-    fn default_applications_freshen_owned_roots_but_preserve_substituted_roots() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("default_roots.fe"),
-            r#"
-struct Slot<const N: u256 = _> {}
-fn defaults<T = Slot, U = Slot, V = T>() {}
-"#,
-        );
-        let (top_mod, _) = db.top_mod(file);
-        db.assert_no_diags(top_mod);
-        let func = find_func(&db, top_mod, "defaults");
-        let slot_owner = top_mod
-            .children_non_nested(&db)
-            .find(|item| item.name(&db).is_some_and(|name| name.data(&db) == "Slot"))
-            .and_then(GenericParamOwner::from_item_opt)
-            .unwrap();
-        let set = collect_generic_params(&db, func.into());
-        let minter = LoweringContext::new(HoleAnchor::CallableOutput {
-            owner: CallableLayoutOwner::Func(func),
-        });
-        for application in [
-            DefaultApplication::StructuralMetadata(&minter),
-            DefaultApplication::Evaluate(&minter),
-        ] {
-            let first = set.complete_args(&db, &[], &[], application).unwrap();
-            let second = set.complete_args(&db, &[], &[], application).unwrap();
-            let [first, second] = [first, second].map(|args| {
-                args.into_iter()
-                    .map(|ty| {
-                        assert_default_hole_provenance(
-                            &db,
-                            ty.generic_args(&db)[0],
-                            slot_owner,
-                            0,
-                            "N",
-                        )
-                        .root(&db)
-                    })
-                    .collect::<Vec<_>>()
-            });
-            assert_ne!(first[0], first[1]);
-            assert_eq!(first[0], first[2]);
-            assert_eq!(second[0], second[2]);
-            assert!(first.iter().all(|root| !second.contains(root)));
-        }
-    }
 
     #[test]
     fn default_templates_do_not_evaluate_nested_const_bodies() {
@@ -891,16 +656,14 @@ fn array<const N: usize, T = [u8; { N + 1 }]>() {}
         // The symbolic length has no concrete size until an application binds N.
         assert_eq!(runtime_size_bytes(&db, ty), Ok(None));
         let set = collect_generic_params(&db, func.into());
-        let minter = LoweringContext::deferred(HoleAnchor::CallableOutput {
-            owner: CallableLayoutOwner::Func(func),
-        });
+        let lowering_cx = LoweringContext::deferred();
         let arg = set.explicit_params(&db)[0];
         let args = set
             .complete_args(
                 &db,
                 &[],
                 &[arg],
-                DefaultApplication::StructuralMetadata(&minter),
+                DefaultApplication::StructuralMetadata(&lowering_cx),
             )
             .unwrap();
         let TyData::ConstTy(length) = args[1].generic_args(&db)[1].data(&db) else {
@@ -1031,9 +794,7 @@ fn valid<T = u256>() {}
             "nested body was treated as checked"
         );
         assert!(!check_generic_default_body_types(&db, func.into(), 0).is_empty());
-        let context = LoweringContext::new(HoleAnchor::CallableOutput {
-            owner: CallableLayoutOwner::Func(func),
-        });
+        let context = LoweringContext::new();
         let error = collect_generic_params(&db, func.into())
             .complete_args(&db, &[], &[], DefaultApplication::CheckedMetadata(&context))
             .unwrap_err();

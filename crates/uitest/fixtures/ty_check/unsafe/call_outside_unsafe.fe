@@ -1,0 +1,70 @@
+unsafe fn danger() -> u256 {
+    1
+}
+
+struct S {}
+
+impl S {
+    unsafe fn method(self) -> u256 {
+        2
+    }
+
+    unsafe fn assoc() -> u256 {
+        3
+    }
+}
+
+trait Raw {
+    unsafe fn raw(self) -> u256
+    fn safe(self) -> u256
+}
+
+impl Raw for S {
+    unsafe fn raw(self) -> u256 {
+        4
+    }
+
+    fn safe(self) -> u256 {
+        5
+    }
+}
+
+extern {
+    unsafe fn ext() -> u256
+}
+
+pub fn free_fn() -> u256 {
+    danger()
+}
+
+pub fn inherent_method(s: S) -> u256 {
+    s.method()
+}
+
+pub fn assoc_fn() -> u256 {
+    S::assoc()
+}
+
+pub fn trait_method(s: S) -> u256 {
+    s.raw() + s.safe()
+}
+
+pub fn trait_path(s: S) -> u256 {
+    Raw::raw(s)
+}
+
+pub fn generic_trait_method<T: Raw>(t: T) -> u256 {
+    t.raw()
+}
+
+pub fn extern_fn() -> u256 {
+    ext()
+}
+
+pub fn argument() -> u256 {
+    free(danger())
+}
+
+fn free(_ x: u256) -> u256 {
+    x
+}

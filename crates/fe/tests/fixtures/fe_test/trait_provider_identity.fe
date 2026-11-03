@@ -16,7 +16,7 @@ impl Tick for Counter {
 fn next() -> i32 uses (tick: mut Tick) { tick.next() }
 fn peek() -> i32 uses (tick: Tick) { tick.peek() }
 fn forwarded() -> i32 uses (tick: mut Tick) { next() + next() }
-fn generic<T: Tick>(mut _ value: own T) -> i32 {
+fn generic<T: Tick>(var _ value: own T) -> i32 {
     with (Tick = value) { forwarded() }
 }
 
@@ -35,24 +35,24 @@ fn index() -> usize uses (selection: mut Selection) {
 struct Holder { counter: Counter }
 
 fn named_and_field() -> bool {
-    let mut value = Counter { value: 0 }
+    var value = Counter { value: 0 }
     let sum = with (value) {
         let first = next()
         value.value += 10
         first + next() + peek()
     }
-    let mut holder = Holder { counter: Counter { value: 0 } }
+    var holder = Holder { counter: Counter { value: 0 } }
     let field_sum = with (Tick = holder.counter) { forwarded() }
     sum == 25 && value.value == 12 && field_sum == 3 && holder.counter.value == 2
 }
 
 fn indexed() -> bool {
-    let mut values = [Counter { value: 0 }, Counter { value: 10 }]
-    let mut selection = Selection { calls: 0 }
+    var values = [Counter { value: 0 }, Counter { value: 10 }]
+    var selection = Selection { calls: 0 }
     let sum = with (selection) {
         with (Tick = values[index()]) { forwarded() }
     }
-    let mut lane: usize = 1
+    var lane: usize = 1
     let second = with (Tick = values[lane]) {
         lane = 0
         forwarded()
@@ -62,10 +62,10 @@ fn indexed() -> bool {
 }
 
 fn constructors_and_reentry() -> bool {
-    let mut factory = Factory { calls: 0 }
+    var factory = Factory { calls: 0 }
     let total = with (factory) {
-        let mut i: i32 = 0
-        let mut sum: i32 = 0
+        var i: i32 = 0
+        var sum: i32 = 0
         while i < 3 {
             sum += with (Tick = counter()) { forwarded() }
             i += 1
@@ -77,10 +77,10 @@ fn constructors_and_reentry() -> bool {
 }
 
 fn loops_and_shadowing() -> bool {
-    let mut value = Counter { value: 0 }
+    var value = Counter { value: 0 }
     let total = with (Tick = value) {
-        let mut i: i32 = 0
-        let mut sum: i32 = 0
+        var i: i32 = 0
+        var sum: i32 = 0
         while i < 3 {
             if i == 1 { sum += next() } else { sum += next() }
             i += 1

@@ -1,0 +1,42 @@
+// Methods, items in a block and bodies (a constant's value, a static
+// assertion's condition, an array length) are items of their own, so the
+// item or body around them doesn't record their references again. No line
+// refers to the same item twice.
+type Width = usize
+
+const LEN: usize = 2
+const COPY: Width = LEN
+const FLAG: bool = true
+
+static_assert(FLAG)
+
+struct Foo {}
+struct Bar {}
+
+trait Tr {
+    fn sig(x: Foo) -> Bar
+    fn with_default(self) -> Bar {
+        Bar {}
+    }
+}
+
+impl Foo {
+    fn inherent(self, other: Bar) -> Foo {
+        Foo {}
+    }
+}
+
+impl Tr for Foo {
+    fn sig(x: Foo) -> Bar {
+        Bar {}
+    }
+}
+
+fn blocks() {
+    fn local(x: Foo) -> Bar {
+        Bar {}
+    }
+    const LOCAL: Width = COPY
+    let ty_len: [u8; LEN] = [1, 2]
+    let rep_len: [u8; 2] = [0; LEN]
+}

@@ -1,0 +1,113 @@
+// Projection sessions: a projection call reserves the places its arguments
+// name for the whole session and grants the caller one access per yielded
+// component.
+struct Pair { a: u256, b: u256 }
+
+impl Pair {
+    fn a_mut(mut self) -> mut u256 { mut self.a }
+    fn b_mut(mut self) -> mut u256 { mut self.b }
+    fn a_ref(self) -> ref u256 { ref self.a }
+    fn split(mut self) -> (mut u256, mut u256) { (mut self.a, mut self.b) }
+    fn aliased(mut self) -> (mut u256, mut u256) { (mut self.a, mut self.a) }
+    fn with_index(mut self, _ i: u256) -> (u256, mut u256) { (i, mut self.b) }
+    fn first_nonzero(mut self) -> Option<mut u256> {
+        if self.a != 0 {
+            return Option::Some(mut self.a)
+        }
+        if self.b != 0 {
+            return Option::Some(mut self.b)
+        }
+        Option::None
+    }
+}
+
+fn counter() -> mut u256 {
+    var n: u256 = 0
+    mut n
+}
+
+// Accepted: the grant is used, then the receiver again.
+fn grant_then_receiver() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    let a = mut p.a_mut()
+    a += 1
+    p.a
+}
+
+// Rejected: the session reserves its receiver while the grant is open.
+fn receiver_used_during_session() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    let a = mut p.a_mut()
+    let b = p.b
+    a = 3
+    b
+}
+
+// Rejected: two sessions both reserve one receiver mutably, even for
+// disjoint fields: a projection's footprint is its whole receiver.
+fn opaque_sub_places() {
+    var p = Pair { a: 1, b: 2 }
+    let a = mut p.a_mut()
+    let b = mut p.b_mut()
+    a = 1
+    b = 2
+}
+
+// Accepted: two `ref` sessions of one receiver coexist.
+fn shared_sessions() -> u256 {
+    let p = Pair { a: 1, b: 2 }
+    let first = p.a_ref()
+    let second = p.a_ref()
+    first + second
+}
+
+// Accepted: sessions on distinct receivers end out of creation order.
+fn sessions_end_out_of_order() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    var q = Pair { a: 3, b: 4 }
+    let a = mut p.a_mut()
+    let b = mut q.b_mut()
+    a = 5
+    p.a + b
+}
+
+// Accepted: the components of a disjoint split are used independently.
+fn disjoint_split() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    let (mut a, mut b) = p.split()
+    a = 3
+    b = 4
+    p.a + p.b
+}
+
+// Accepted: an owned component is a value, independent of the session.
+fn owned_component() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    let (i, mut b) = p.with_index(7)
+    b = i
+    p.b
+}
+
+// Accepted: a sum shape grants its access only in the matching arm.
+fn optional_projection() -> u256 {
+    var p = Pair { a: 0, b: 2 }
+    if let Option::Some(mut x) = p.first_nonzero() {
+        x += 1
+    }
+    p.b
+}
+
+// Accepted: a no-argument projection grants a session-owned local.
+fn session_owned_grant() -> u256 {
+    let c = mut counter()
+    c += 1
+    c
+}
+
+// Rejected: a `ref` access derived from a grant blocks writes through it.
+fn view_of_grant_blocks_write() -> u256 {
+    let c = mut counter()
+    let r = ref c
+    c = 1
+    r
+}

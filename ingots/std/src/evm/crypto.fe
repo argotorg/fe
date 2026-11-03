@@ -1,14 +1,15 @@
 /// Cryptographic primitives and EVM math builtins.
 ///
 /// Safe, typed wrappers around EVM precompiles and modular arithmetic opcodes.
-/// Raw memory and call operations should go through the effects system
-/// (RawMem, RawOps, Ctx traits) instead.
+/// Raw memory goes through `core::ptr` and `core::abi` under `unsafe`; calls
+/// go through the effects system (`Call`, `Ctx`).
 ///
 /// Fixed-output precompile wrappers assume the addressed precompile exists on
 /// the active fork and intentionally do not check returndata length on the hot
 /// path. Use `Call.raw_staticcall` for fork probing or explicit handling of
 /// absent precompiles.
 
+use core::intrinsic
 use core::option::Option
 use core::ptr::{self, FixedMemBuffer, MemBuffer, MemSpan}
 use core::result::Result
@@ -16,7 +17,7 @@ use super::effects::Address
 use super::ops
 
 fn offset(_ base: *u8, _ bytes: u256) -> *u8 {
-    ptr::offset_bytes(base, bytes)
+    ptr::offset_bytes(base, bytes.downcast_unchecked())
 }
 
 pub const ECRECOVER_ADDRESS: u256 = 0x01
@@ -38,18 +39,18 @@ pub const BLS12_MAP_FP_TO_G1_ADDRESS: u256 = 0x10
 pub const BLS12_MAP_FP2_TO_G2_ADDRESS: u256 = 0x11
 pub const P256VERIFY_ADDRESS: u256 = 0x100
 
-pub const BLAKE2F_INPUT_LEN: u256 = 213
-pub const KZG_POINT_EVALUATION_INPUT_LEN: u256 = 192
-pub const BLS12_G1_LEN: u256 = 128
-pub const BLS12_G2_LEN: u256 = 256
-pub const BLS12_G1_ADD_INPUT_LEN: u256 = 256
-pub const BLS12_G1_MSM_PAIR_LEN: u256 = 160
-pub const BLS12_G2_ADD_INPUT_LEN: u256 = 512
-pub const BLS12_G2_MSM_PAIR_LEN: u256 = 288
-pub const BLS12_PAIRING_PAIR_LEN: u256 = 384
-pub const BLS12_FP_LEN: u256 = 64
-pub const BLS12_FP2_LEN: u256 = 128
-pub const P256VERIFY_INPUT_LEN: u256 = 160
+pub const BLAKE2F_INPUT_LEN: usize = 213
+pub const KZG_POINT_EVALUATION_INPUT_LEN: usize = 192
+pub const BLS12_G1_LEN: usize = 128
+pub const BLS12_G2_LEN: usize = 256
+pub const BLS12_G1_ADD_INPUT_LEN: usize = 256
+pub const BLS12_G1_MSM_PAIR_LEN: usize = 160
+pub const BLS12_G2_ADD_INPUT_LEN: usize = 512
+pub const BLS12_G2_MSM_PAIR_LEN: usize = 288
+pub const BLS12_PAIRING_PAIR_LEN: usize = 384
+pub const BLS12_FP_LEN: usize = 64
+pub const BLS12_FP2_LEN: usize = 128
+pub const P256VERIFY_INPUT_LEN: usize = 160
 
 const SECP256K1_ORDER: u256 = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 const SECP256K1_HALF_ORDER: u256 = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0
@@ -61,35 +62,37 @@ pub enum PrecompileError {
 
 impl Copy for PrecompileError {}
 
-fn valid_exact_len(data: MemSpan, expected: u256) -> bool {
+fn valid_exact_len(data: MemSpan, expected: usize) -> bool {
     data.len() == expected
 }
 
-fn valid_chunks(data: MemSpan, chunk_len: u256, allow_empty: bool) -> bool {
+fn valid_chunks(data: MemSpan, chunk_len: usize, allow_empty: bool) -> bool {
     (allow_empty || !data.is_empty()) && data.len() % chunk_len == 0
 }
 
 fn staticcall_memory(
     addr: u256,
     args: MemSpan,
-    ret_len: u256,
+    ret_len: usize,
 ) -> Result<PrecompileError, MemBuffer> {
-    let mut out = MemBuffer::with_capacity(ret_len)
-    let ok: u256 = ops::staticcall_precompile(
-        gas: ops::gas(),
-        addr: addr,
-        args_offset: args.ptr(),
-        args_len: args.len(),
-        ret_offset: out.ptr(),
-        ret_len,
-    )
+    var out = MemBuffer::with_capacity(ret_len)
+    let ok: u256 = unsafe {
+        ops::staticcall_precompile(
+            gas: ops::gas(),
+            addr: addr,
+            args_offset: args.ptr(),
+            args_len: args.len() as u256,
+            ret_offset: out.ptr(),
+            ret_len: ret_len as u256,
+        )
+    }
 
     if ok == 0 {
         return Result::Err(PrecompileError::CallFailed)
     }
 
     let returned = ops::returndatasize()
-    out.set_len(if returned < ret_len { returned } else { ret_len })
+    unsafe { out.set_len(if returned < ret_len as u256 { returned.downcast_unchecked() } else { ret_len }) }
     Result::Ok(out)
 }
 
@@ -102,14 +105,16 @@ fn staticcall_fixed<const N: usize>(
     args: MemSpan,
 ) -> Result<PrecompileError, FixedMemBuffer<N>> {
     let out = FixedMemBuffer<N>::alloc()
-    let ok: u256 = ops::staticcall_precompile(
-        gas: ops::gas(),
-        addr,
-        args_offset: args.ptr(),
-        args_len: args.len(),
-        ret_offset: out.ptr(),
-        ret_len: out.len(),
-    )
+    let ok: u256 = unsafe {
+        ops::staticcall_precompile(
+            gas: ops::gas(),
+            addr,
+            args_offset: args.ptr(),
+            args_len: args.len() as u256,
+            ret_offset: out.ptr(),
+            ret_len: out.len() as u256,
+        )
+    }
 
     if ok == 0 {
         return Result::Err(PrecompileError::CallFailed)
@@ -120,17 +125,19 @@ fn staticcall_fixed<const N: usize>(
 
 fn staticcall_word(addr: u256, args: MemSpan) -> Result<PrecompileError, u256> {
     match staticcall_fixed<32>(addr, args) {
-        Result::Ok(out) => Result::Ok(ops::mload(out.ptr())),
+        Result::Ok(out) => unsafe { Result::Ok(ops::mload(out.ptr())) },
         Result::Err(err) => Result::Err(err),
     }
 }
 
 fn staticcall_pair_words(addr: u256, args: MemSpan) -> Result<PrecompileError, (u256, u256)> {
     match staticcall_fixed<64>(addr, args) {
-        Result::Ok(out) => Result::Ok((
-            ops::mload(out.ptr()),
-            ops::mload(offset(out.ptr(), 32)),
-        )),
+        Result::Ok(out) => unsafe {
+            Result::Ok((
+                ops::mload(out.ptr()),
+                ops::mload(offset(out.ptr(), 32)),
+            ))
+        },
         Result::Err(err) => Result::Err(err),
     }
 }
@@ -140,12 +147,14 @@ fn staticcall_g1_words(
     args: MemSpan,
 ) -> Result<PrecompileError, (u256, u256, u256, u256)> {
     match staticcall_fixed<128>(addr, args) {
-        Result::Ok(out) => Result::Ok((
-            ops::mload(out.ptr()),
-            ops::mload(offset(out.ptr(), 32)),
-            ops::mload(offset(out.ptr(), 64)),
-            ops::mload(offset(out.ptr(), 96)),
-        )),
+        Result::Ok(out) => unsafe {
+            Result::Ok((
+                ops::mload(out.ptr()),
+                ops::mload(offset(out.ptr(), 32)),
+                ops::mload(offset(out.ptr(), 64)),
+                ops::mload(offset(out.ptr(), 96)),
+            ))
+        },
         Result::Err(err) => Result::Err(err),
     }
 }
@@ -155,16 +164,18 @@ fn staticcall_g2_words(
     args: MemSpan,
 ) -> Result<PrecompileError, (u256, u256, u256, u256, u256, u256, u256, u256)> {
     match staticcall_fixed<256>(addr, args) {
-        Result::Ok(out) => Result::Ok((
-            ops::mload(out.ptr()),
-            ops::mload(offset(out.ptr(), 32)),
-            ops::mload(offset(out.ptr(), 64)),
-            ops::mload(offset(out.ptr(), 96)),
-            ops::mload(offset(out.ptr(), 128)),
-            ops::mload(offset(out.ptr(), 160)),
-            ops::mload(offset(out.ptr(), 192)),
-            ops::mload(offset(out.ptr(), 224)),
-        )),
+        Result::Ok(out) => unsafe {
+            Result::Ok((
+                ops::mload(out.ptr()),
+                ops::mload(offset(out.ptr(), 32)),
+                ops::mload(offset(out.ptr(), 64)),
+                ops::mload(offset(out.ptr(), 96)),
+                ops::mload(offset(out.ptr(), 128)),
+                ops::mload(offset(out.ptr(), 160)),
+                ops::mload(offset(out.ptr(), 192)),
+                ops::mload(offset(out.ptr(), 224)),
+            ))
+        },
         Result::Err(err) => Result::Err(err),
     }
 }
@@ -189,31 +200,29 @@ pub const fn mulmod(_ a: u256, _ b: u256, _ m: u256) -> u256 {
 
 /// Keccak256 hash of a memory region.
 pub fn keccak256(_ data: MemSpan) -> u256 {
-    ops::keccak256(offset: data.ptr(), len: data.len())
+    unsafe { ops::keccak256(offset: data.ptr(), len: data.len() as u256) }
 }
 
 /// Keccak256 of the concatenated 32-byte words, e.g. `keccak_words([a, b])`
 /// for Solidity's `keccak256(abi.encode(a, b))` over word-sized values.
 ///
-/// Much cheaper than `keccak_packed` for word tuples: the words are written
-/// into one buffer without the packed builder's per-field bookkeeping.
-pub fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
-    let buffer = ptr::alloc<[u256; N]>()
-    *buffer = words
-    ops::keccak256(offset: ptr::byte_ptr(buffer), len: N as u256 * 32)
+/// Much cheaper than `keccak_packed` for word tuples. The digest is a value
+/// of the words alone: the compiler folds it when the words are known and
+/// computes it once for equal words.
+pub const fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
+    intrinsic::__keccak_words(words)
 }
 
 /// Address of a contract created with `CREATE2` by `deployer`:
 /// the low 20 bytes of `keccak256(0xff ++ deployer ++ salt ++ init_code_hash)`.
 pub fn create2_address(deployer: Address, salt: u256, init_code_hash: u256) -> Address {
-    if deployer.inner >> 160 != 0 {
-        ops::revert_empty()
+    let preimage = unsafe { MemBuffer::alloc_uninit(85) }
+    unsafe {
+        ops::mstore(addr: preimage.ptr(), value: (0xff << 248) | (deployer.inner << 88))
+        ops::mstore(addr: offset(preimage.ptr(), 21), value: salt)
+        ops::mstore(addr: offset(preimage.ptr(), 53), value: init_code_hash)
+        Address { inner: ops::keccak256(offset: preimage.ptr(), len: 85) & ADDRESS_MASK }
     }
-    let preimage = MemBuffer::alloc(85)
-    ops::mstore(addr: preimage.ptr(), value: (0xff << 248) | (deployer.inner << 88))
-    ops::mstore(addr: offset(preimage.ptr(), 21), value: salt)
-    ops::mstore(addr: offset(preimage.ptr(), 53), value: init_code_hash)
-    Address { inner: ops::keccak256(offset: preimage.ptr(), len: 85) & ADDRESS_MASK }
 }
 
 const ADDRESS_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffff
@@ -283,19 +292,23 @@ pub fn ecrecover_raw(
     r: u256,
     s: u256,
 ) -> Result<PrecompileError, Option<u256>> {
-    let buffer = FixedMemBuffer<128>::alloc()
-    ops::mstore(addr: buffer.ptr(), value: hash)
-    ops::mstore(addr: offset(buffer.ptr(), 32), value: v)
-    ops::mstore(addr: offset(buffer.ptr(), 64), value: r)
-    ops::mstore(addr: offset(buffer.ptr(), 96), value: s)
-    let ok: u256 = ops::staticcall_precompile(
-        gas: ops::gas(),
-        addr: ECRECOVER_ADDRESS,
-        args_offset: buffer.ptr(),
-        args_len: buffer.len(),
-        ret_offset: buffer.ptr(),
-        ret_len: 32,
-    )
+    let buffer = unsafe { FixedMemBuffer<128>::alloc_uninit() }
+    unsafe {
+        ops::mstore(addr: buffer.ptr(), value: hash)
+        ops::mstore(addr: offset(buffer.ptr(), 32), value: v)
+        ops::mstore(addr: offset(buffer.ptr(), 64), value: r)
+        ops::mstore(addr: offset(buffer.ptr(), 96), value: s)
+    }
+    let ok: u256 = unsafe {
+        ops::staticcall_precompile(
+            gas: ops::gas(),
+            addr: ECRECOVER_ADDRESS,
+            args_offset: buffer.ptr(),
+            args_len: buffer.len() as u256,
+            ret_offset: buffer.ptr(),
+            ret_len: 32,
+        )
+    }
     if ok == 0 {
         return Result::Err(PrecompileError::CallFailed)
     }
@@ -303,7 +316,7 @@ pub fn ecrecover_raw(
         return Result::Ok(Option::None)
     }
 
-    let recovered = ops::mload(buffer.ptr())
+    let recovered = unsafe { ops::mload(buffer.ptr()) }
     if recovered == 0 {
         return Result::Ok(Option::None)
     }
@@ -322,31 +335,39 @@ pub fn ec_add(
     bx: u256,
     by: u256,
 ) -> Result<PrecompileError, (u256, u256)> {
-    let buffer = FixedMemBuffer<128>::alloc()
-    ops::mstore(addr: buffer.ptr(), value: ax)
-    ops::mstore(addr: offset(buffer.ptr(), 32), value: ay)
-    ops::mstore(addr: offset(buffer.ptr(), 64), value: bx)
-    ops::mstore(addr: offset(buffer.ptr(), 96), value: by)
+    let buffer = unsafe { FixedMemBuffer<128>::alloc_uninit() }
+    unsafe {
+        ops::mstore(addr: buffer.ptr(), value: ax)
+        ops::mstore(addr: offset(buffer.ptr(), 32), value: ay)
+        ops::mstore(addr: offset(buffer.ptr(), 64), value: bx)
+        ops::mstore(addr: offset(buffer.ptr(), 96), value: by)
+    }
     match staticcall_fixed<64>(addr: BN254_ADD_ADDRESS, args: buffer.span()) {
-        Result::Ok(out) => Result::Ok((
-            ops::mload(out.ptr()),
-            ops::mload(offset(out.ptr(), 32)),
-        )),
+        Result::Ok(out) => unsafe {
+            Result::Ok((
+                ops::mload(out.ptr()),
+                ops::mload(offset(out.ptr(), 32)),
+            ))
+        },
         Result::Err(err) => Result::Err(err),
     }
 }
 
 /// EC scalar multiplication on BN254 (precompile 0x07).
 pub fn ec_mul(px: u256, py: u256, s: u256) -> Result<PrecompileError, (u256, u256)> {
-    let buffer = FixedMemBuffer<96>::alloc()
-    ops::mstore(addr: buffer.ptr(), value: px)
-    ops::mstore(addr: offset(buffer.ptr(), 32), value: py)
-    ops::mstore(addr: offset(buffer.ptr(), 64), value: s)
+    let buffer = unsafe { FixedMemBuffer<96>::alloc_uninit() }
+    unsafe {
+        ops::mstore(addr: buffer.ptr(), value: px)
+        ops::mstore(addr: offset(buffer.ptr(), 32), value: py)
+        ops::mstore(addr: offset(buffer.ptr(), 64), value: s)
+    }
     match staticcall_fixed<64>(addr: BN254_MUL_ADDRESS, args: buffer.span()) {
-        Result::Ok(out) => Result::Ok((
-            ops::mload(out.ptr()),
-            ops::mload(offset(out.ptr(), 32)),
-        )),
+        Result::Ok(out) => unsafe {
+            Result::Ok((
+                ops::mload(out.ptr()),
+                ops::mload(offset(out.ptr(), 32)),
+            ))
+        },
         Result::Err(err) => Result::Err(err),
     }
 }
@@ -360,7 +381,7 @@ pub fn ec_mul(px: u256, py: u256, s: u256) -> Result<PrecompileError, (u256, u25
 /// Returns true if the pairing equation holds:
 /// `e(a1, b1) * e(a2, b2) * ... * e(aN, bN) == 1`
 ///
-/// Use effects (RawMem) to build the buffer, then pass it here.
+/// Build the buffer with `core::ptr::MemBuffer`, then pass it here.
 pub fn ec_pairing(_ data: MemSpan) -> Result<PrecompileError, bool> {
     if !valid_chunks(data, chunk_len: 192, allow_empty: true) {
         return Result::Err(PrecompileError::InvalidInputLength)
@@ -374,21 +395,23 @@ pub fn ec_pairing(_ data: MemSpan) -> Result<PrecompileError, bool> {
 /// Modular exponentiation (precompile 0x05).
 /// Computes `base^exp % modulus` for u256-sized inputs.
 pub fn modexp(base: u256, exp: u256, modulus: u256) -> Result<PrecompileError, u256> {
-    let buffer = FixedMemBuffer<192>::alloc()
-    ops::mstore(addr: buffer.ptr(), value: 32)
-    ops::mstore(addr: offset(buffer.ptr(), 32), value: 32)
-    ops::mstore(addr: offset(buffer.ptr(), 64), value: 32)
-    ops::mstore(addr: offset(buffer.ptr(), 96), value: base)
-    ops::mstore(addr: offset(buffer.ptr(), 128), value: exp)
-    ops::mstore(addr: offset(buffer.ptr(), 160), value: modulus)
+    let buffer = unsafe { FixedMemBuffer<192>::alloc_uninit() }
+    unsafe {
+        ops::mstore(addr: buffer.ptr(), value: 32)
+        ops::mstore(addr: offset(buffer.ptr(), 32), value: 32)
+        ops::mstore(addr: offset(buffer.ptr(), 64), value: 32)
+        ops::mstore(addr: offset(buffer.ptr(), 96), value: base)
+        ops::mstore(addr: offset(buffer.ptr(), 128), value: exp)
+        ops::mstore(addr: offset(buffer.ptr(), 160), value: modulus)
+    }
     match staticcall_fixed<32>(addr: MODEXP_ADDRESS, args: buffer.span()) {
-        Result::Ok(out) => Result::Ok(ops::mload(out.ptr())),
+        Result::Ok(out) => unsafe { Result::Ok(ops::mload(out.ptr())) },
         Result::Err(err) => Result::Err(err),
     }
 }
 
 /// Raw modular exponentiation with caller-provided input and return size.
-pub fn modexp_raw(_ data: MemSpan, ret_len: u256) -> Result<PrecompileError, MemBuffer> {
+pub fn modexp_raw(_ data: MemSpan, ret_len: usize) -> Result<PrecompileError, MemBuffer> {
     staticcall_memory(addr: MODEXP_ADDRESS, args: data, ret_len)
 }
 

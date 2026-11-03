@@ -19,7 +19,7 @@ fn read(_ buffer: Buffer) -> u256 { buffer.read() }
 
 #[test]
 fn shared_field_calls_keep_the_owner() {
-    let mut frame = Frame { memory: Buffer::new(42) }
+    var frame = Frame { memory: Buffer::new(42) }
     assert!(frame.memory.read() == 42)
     assert!(read(frame.memory) == 42)
     assert!(Buffer::read(frame.memory) == 42)
@@ -31,8 +31,8 @@ fn shared_field_calls_keep_the_owner() {
 
 #[test]
 fn shared_element_calls_keep_the_array() {
-    let mut frames = [Frame { memory: Buffer::new(3) }, Frame { memory: Buffer::new(8) }]
-    let mut index: usize = 0
+    var frames = [Frame { memory: Buffer::new(3) }, Frame { memory: Buffer::new(8) }]
+    var index: usize = 0
     while index < 2 {
         frames[index].memory.write(read(frames[index].memory) + 10)
         index += 1
@@ -51,8 +51,8 @@ fn shared_field_calls_keep_an_immutable_owner() {
 #[test]
 fn shared_pointee_calls_view_raw_memory() {
     let slot = ptr::alloc<Buffer>()
-    *slot = Buffer::new(5)
-    assert!((*slot).read() + read(*slot) == 10)
-    (*slot).write(6)
-    assert!((*slot).read() == 6)
+    unsafe { *slot = Buffer::new(5) }
+    unsafe { assert!((*slot).read() + read(*slot) == 10) }
+    unsafe { (*slot).write(6) }
+    unsafe { assert!((*slot).read() == 6) }
 }

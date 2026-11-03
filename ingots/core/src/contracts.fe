@@ -1,4 +1,4 @@
-use super::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, Encode, encode_return_alloc}
+use super::abi::{Abi, AbiSize, ByteInput, Decode, Encode, encode_return_alloc}
 use super::ptr::MemSpan
 
 /// Host interface required by compiler-generated contract entrypoints.
@@ -12,7 +12,7 @@ pub trait ContractHost {
     type InitInput: ByteInput
 
     fn input(self) -> Self::Input
-    fn init_input<F>(mut self, _: F) -> Self::InitInput
+    fn init_input<F>(mut self, _: F) -> ref Self::InitInput
 
     fn create_contract<F>(mut self, _: F) -> !
     fn abort(self) -> !
@@ -30,9 +30,10 @@ pub trait ContractHost {
         A::selector_from_prefix(input.word_at(0))
     }
 
+    /// A decoder of `input()` positioned after the selector.
     #[inline(always)]
-    fn runtime_decoder<A: Abi>(mut self) -> A::Decoder<Self::Input> {
-        A::decoder_with_base(self.input(), A::SELECTOR_SIZE)
+    fn runtime_decoder<A: Abi>(mut self) -> A::Decoder {
+        A::decoder_with_base(A::SELECTOR_SIZE)
     }
 
     fn return_value<A: Abi, T>(mut self, _ value: own T) -> !
@@ -47,8 +48,7 @@ pub trait ContractHost {
 pub fn decode_runtime_args<H, A, T>(_ host: mut H) -> T
     where H: ContractHost,
           A: Abi,
-          T: Decode<A> + AbiSize,
-          A::Decoder<H::Input>: AbiDecoder<A>
+          T: Decode<A> + AbiSize
 {
     let input = host.input()
     let base = A::SELECTOR_SIZE

@@ -1,0 +1,79 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/acceptance.fe
+---
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ acceptance.fe:101:17
+    │
+101 │ fn case21_alias(_ s: own Alias) {}
+    │                 ^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ acceptance.fe:112:11
+    │
+112 │     span: Span,
+    │           ^^^^ a `#[view]` type cannot be a field
+
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ acceptance.fe:115:14
+    │
+115 │ type Spans = [Alias; 2]
+    │              ^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[8-0036]: missing effect `Key` required by `start`
+   ┌─ acceptance.fe:63:14
+   │
+63 │     for x in xs.by(d) {
+   │              ^^ `start` requires effect `Key` to be in scope
+   │
+   = require it in this function's signature with `uses Key`, so that its callers provide it
+   = or provide it to a block of this function with `with (Key = value) { .. }`
+
+error[8-0036]: missing effect `Key` required by `has`
+   ┌─ acceptance.fe:63:14
+   │
+63 │     for x in xs.by(d) {
+   │              ^^ `has` requires effect `Key` to be in scope
+   │
+   = require it in this function's signature with `uses Key`, so that its callers provide it
+   = or provide it to a block of this function with `with (Key = value) { .. }`
+
+error[8-0036]: missing effect `Key` required by `next`
+   ┌─ acceptance.fe:63:14
+   │
+63 │     for x in xs.by(d) {
+   │              ^^ `next` requires effect `Key` to be in scope
+   │
+   = require it in this function's signature with `uses Key`, so that its callers provide it
+   = or provide it to a block of this function with `with (Key = value) { .. }`
+
+error[8-0036]: missing effect `Key` required by `at`
+   ┌─ acceptance.fe:63:14
+   │
+63 │     for x in xs.by(d) {
+   │              ^^ `at` requires effect `Key` to be in scope
+   │
+   = require it in this function's signature with `uses Key`, so that its callers provide it
+   = or provide it to a block of this function with `with (Key = value) { .. }`
+
+error[8-0105]: this call instantiates its callee at the `#[view]` type `Span`
+    ┌─ acceptance.fe:106:5
+    │
+106 │     take_assoc<Owner>(owner.span())
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[8-0105]: this call instantiates its callee at the `#[view]` type `Span`
+    ┌─ acceptance.fe:122:5
+    │
+122 │     take(owner.span())
+    │     ^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ acceptance.fe:16:15
+   │
+16 │         with (*ptr) {
+   │               ^^^^ this reads state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: RawStorage)`; `unsafe` does not grant authority

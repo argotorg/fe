@@ -1,0 +1,21 @@
+trait Raw {
+    unsafe fn raw(self) -> u256
+    fn safe(self) -> u256
+    unsafe fn both(self) -> u256
+}
+
+struct S {}
+
+impl Raw for S {
+    fn raw(self) -> u256 {
+        1
+    }
+
+    unsafe fn safe(self) -> u256 {
+        2
+    }
+
+    unsafe fn both(self) -> u256 {
+        3
+    }
+}

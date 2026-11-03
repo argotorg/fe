@@ -11,18 +11,22 @@ fn bump() uses (foo: mut Foo) {
     foo.b = foo.b + 2
 }
 
-fn test_effect_ptr_domains() uses (st: mut RawStorage) {
+pub fn main() uses (st: mut RawStorage) {
     let mp = ptr::alloc<Foo>()
-    with (mp) {
-        bump()
+    unsafe {
+        with (mut *mp) {
+            bump()
+        }
     }
 
-    let sp: StorPtr<Foo> = st.stor_ptr(0)
-    with (sp) {
-        bump()
+    let sp = 0 as u256 as StorPtr<Foo>
+    unsafe {
+        with (mut *sp) {
+            bump()
+        }
     }
 
-    let mut foo = Foo { a: 10, b: 20 }
+    var foo = Foo { a: 10, b: 20 }
     with (foo) {
         bump()
     }

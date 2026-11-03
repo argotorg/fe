@@ -32,7 +32,7 @@ fn inherent_value<const N: usize, const M: usize = Size<N>::LEN>() -> usize { M 
 
 fn identity<T = u256>(_ value: own T) -> T { value }
 
-fn sized_default<const N: usize, T = [u8; { N + 1 }]>() -> u256 { core::size_of<T>() }
+fn sized_default<const N: usize, T = [u8; { N + 1 }]>() -> u256 { core::size_of<T>() as u256 }
 fn sized_forwarded<const N: usize>() -> u256 { sized_default<N>() }
 
 trait Output { type Item }
@@ -48,7 +48,7 @@ impl<T: Output> Holder<T> {
 
 trait Root { const ROOT: u256 }
 impl Root for bool { const ROOT: u256 = 7 }
-struct Slot<const ROOT: u256, const SALT: u256 = _> { value: u256 }
+struct Slot<const ROOT: u256> { value: u256 }
 
 fn effect_default<T: Root = bool>() -> u256 uses (slot: Slot<T::ROOT>) {
     slot.value
@@ -58,7 +58,7 @@ fn array_tail<const N: usize>(_ value: ([u256; N], Slot<7>)) -> u256 {
     value.1.value
 }
 
-struct AssocSlot<const ROOT: u256 = _> { value: u256 }
+struct AssocSlot { value: u256 }
 trait HasAssocSlot {
     type Item
     fn take(_ value: Self::Item) -> u256
@@ -147,16 +147,16 @@ fn type_and_projection_defaults() {
 
 #[test]
 fn layout_and_effect_defaults() {
-    let slot = Slot<7, 9> { value: 15 }
-    with (Slot<7, 9> = slot) {
+    let slot = Slot<7> { value: 15 }
+    with (Slot<7> = slot) {
         assert!(effect_default() == 15)
         assert!(effect_default<bool>() == 15)
     }
-    assert!(array_tail<0>(([], Slot<7, 9> { value: 16 })) == 16)
-    assert!(array_tail<2>(([17, 17], Slot<7, 10> { value: 18 })) == 18)
-    assert!(generic_selected_slot<bool>(AssocSlot<7> { value: 21 }) == 21)
-    assert!(<bool as HasAssocSlot>::take(AssocSlot<7> { value: 22 }) == 22)
-    with (AssocSlot<7> = AssocSlot<7> { value: 23 }) {
+    assert!(array_tail<0>(([], Slot<7> { value: 16 })) == 16)
+    assert!(array_tail<2>(([17, 17], Slot<7> { value: 18 })) == 18)
+    assert!(generic_selected_slot<bool>(AssocSlot { value: 21 }) == 21)
+    assert!(<bool as HasAssocSlot>::take(AssocSlot { value: 22 }) == 22)
+    with (AssocSlot = AssocSlot { value: 23 }) {
         assert!(<bool as HasEffectSlot>::take_effect() == 23)
     }
     let a = EffA { value: 3 }
@@ -223,7 +223,7 @@ fn trait_function_items_keep_evidence_and_dispatch() {
 trait Out { type Item }
 impl Out for bool { type Item = u256 }
 
-fn equality_default<T: Out<Item = U>, U = T::Item>(_ t: T, _ x: U) -> U { x }
+fn equality_default<T: Out<Item = U>, U = T::Item>(_ t: T, _ x: own U) -> U { x }
 
 struct EqualityDefault<T: Out<Item = U>, U = T::Item> { t: T, x: U }
 

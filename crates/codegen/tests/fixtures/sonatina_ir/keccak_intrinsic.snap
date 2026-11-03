@@ -7,24 +7,44 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256};
 
-func private %alloc_bytes(v0.i256) -> i256 {
+func inline(always) private %alloc_bytes(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.*i8 = evm_malloc v0;
-        v3.i256 = ptr_to_int v2 i256;
+        v3.i1 = gt v0 18446744073709551615.i256;
+        br v3 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 65.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        jump block4;
+
+    block4:
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
+}
+
+func private %downcast_unchecked(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %to_word v0;
+        v3.i256 = call %from_word v2;
         return v3;
 }
 
-func private %from_raw_parts(v0.i256, v1.i256) -> @layout_0 {
+func private %from_word(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        v8.@layout_0 = insert_value v6 1.i256 v1;
-        return v8;
+        return v0;
 }
 
 func private %hash(v0.i256, v1.i256) -> i256 {
@@ -33,45 +53,38 @@ func private %hash(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v5.@layout_0 = call %from_raw_parts v0 v1;
-        v7.objref<i256> = obj.proj v2 0.i256;
-        v8.i256 = extract_value v5 0.i256;
-        obj.store v7 v8;
-        v10.objref<i256> = obj.proj v2 1.i256;
-        v11.i256 = extract_value v5 1.i256;
-        obj.store v10 v11;
-        v12.i256 = call %keccak256 v2;
-        return v12;
+        v4.i256 = call %downcast_unchecked v1;
+        jump block3;
+
+    block2:
+        v7.i256 = call %keccak256 v2;
+        jump block5;
+
+    block3:
+        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v14.@layout_0 = insert_value v11 1.i256 v4;
+        obj.store v2 v14;
+        jump block2;
+
+    block4:
+        return v7;
+
+    block5:
+        jump block4;
 }
 
-func private %keccak256(v0.objref<@layout_0>) -> i256 {
+func private %keccak256(noalias v0.objref<@layout_0>) -> i256 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v2.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v4.@layout_0 = obj.load v0;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v11.i256 = call %ptr v1;
-        v12.@layout_0 = obj.load v0;
-        v13.objref<i256> = obj.proj v2 0.i256;
-        v14.i256 = extract_value v12 0.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v2 1.i256;
-        v16.i256 = extract_value v12 1.i256;
-        obj.store v15 v16;
-        v17.i256 = call %len v2;
-        v18.i256 = evm_keccak256 v11 v17;
-        return v18;
+        v2.i256 = call %ptr v0;
+        v3.i256 = call %len v0;
+        v4.i256 = evm_keccak256 v2 v3;
+        return v4;
 }
 
-func private %len(v0.objref<@layout_0>) -> i256 {
+func private %len(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -100,7 +113,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %ptr(v0.objref<@layout_0>) -> i256 {
+func private %ptr(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -108,6 +121,14 @@ func private %ptr(v0.objref<@layout_0>) -> i256 {
         v3.objref<i256> = obj.proj v0 0.i256;
         v4.i256 = obj.load v3;
         return v4;
+}
+
+func private %to_word(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
 }
 
 

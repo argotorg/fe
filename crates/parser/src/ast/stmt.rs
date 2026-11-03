@@ -1,7 +1,7 @@
-use rowan::ast::{AstNode, support};
+use rowan::ast::AstNode;
 
-use super::ast_node;
-use crate::SyntaxKind as SK;
+use super::{ast_node, support};
+use crate::{SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
     /// A statement.
@@ -13,6 +13,7 @@ ast_node! {
     | SK::ContinueStmt
     | SK::BreakStmt
     | SK::ReturnStmt
+    | SK::YieldStmt
     | SK::ExprStmt
 }
 impl Stmt {
@@ -25,6 +26,7 @@ impl Stmt {
             SK::ContinueStmt => StmtKind::Continue(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BreakStmt => StmtKind::Break(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ReturnStmt => StmtKind::Return(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::YieldStmt => StmtKind::Yield(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ExprStmt => StmtKind::Expr(AstNode::cast(self.syntax().clone()).unwrap()),
             _ => unreachable!(),
         }
@@ -37,6 +39,11 @@ ast_node! {
     SK::LetStmt,
 }
 impl LetStmt {
+    /// Returns the `var` keyword of a mutable value binding, `var x = e`.
+    pub fn var_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::VarKw)
+    }
+
     /// Returns the pattern of the binding.
     pub fn pat(&self) -> Option<super::Pat> {
         support::child(self.syntax())
@@ -50,6 +57,15 @@ impl LetStmt {
     /// Returns the initializer.
     pub fn initializer(&self) -> Option<super::Expr> {
         support::child(self.syntax())
+    }
+
+    /// Returns the block of a `let … else`, which runs when the pattern does
+    /// not match.
+    pub fn else_block(&self) -> Option<super::BlockExpr> {
+        self.syntax()
+            .children_with_tokens()
+            .skip_while(|child| child.kind() != SK::ElseKw)
+            .find_map(|child| child.into_node().and_then(super::BlockExpr::cast))
     }
 }
 
@@ -133,6 +149,18 @@ impl ReturnStmt {
 }
 
 ast_node! {
+    /// `yield expr`
+    pub struct YieldStmt,
+    SK::YieldStmt
+}
+impl YieldStmt {
+    /// Returns the yielded expression.
+    pub fn expr(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     pub struct ExprStmt,
     SK::ExprStmt
 }
@@ -151,6 +179,7 @@ pub enum StmtKind {
     Continue(ContinueStmt),
     Break(BreakStmt),
     Return(ReturnStmt),
+    Yield(YieldStmt),
     Expr(ExprStmt),
 }
 

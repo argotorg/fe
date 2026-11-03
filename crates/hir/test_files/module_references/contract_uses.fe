@@ -1,0 +1,33 @@
+// An unlabeled `uses` entry of a contract's `init` or recv arm names a field
+// of the contract, or an effect of the contract's own `uses`, even where an
+// item of the same name is in scope.
+use std::evm::Call
+
+mod state {}
+
+fn call() -> u256 {
+    1
+}
+
+struct State {
+    value: u256,
+}
+
+msg M {
+    #[selector = 1]
+    Get -> u256,
+}
+
+pub contract C uses (call: mut Call) {
+    mut state: State
+
+    init() uses (mut state) {
+        state.value = 1
+    }
+
+    recv M {
+        Get -> u256 uses (state, mut call) {
+            state.value
+        }
+    }
+}

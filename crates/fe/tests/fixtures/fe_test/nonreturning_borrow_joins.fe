@@ -3,11 +3,11 @@ use core::ptr
 struct Frame { first: u8, value: u64, last: u8 }
 
 fn scalar(pointer: *u64, flag: bool) -> mut u64 {
-    if flag { mut *pointer } else { core::panic() }
+    unsafe { if flag { mut *pointer } else { core::panic() } }
 }
 
 fn aggregate(pointer: *Frame, flag: bool) -> mut Frame {
-    if flag { mut *pointer } else { core::panic() }
+    unsafe { if flag { mut *pointer } else { core::panic() } }
 }
 
 fn fail() { core::panic() }
@@ -17,7 +17,7 @@ fn fail_borrow() -> mut Frame { core::panic() }
 
 fn dead_continuation(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
     if flag {
-        mut *pointer
+        unsafe { mut *pointer }
     } else {
         fail_twice()
         if flag { fallback } else { fallback }
@@ -25,30 +25,30 @@ fn dead_continuation(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Fr
 }
 
 fn dead_return(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
-    if flag { return mut *pointer }
+    unsafe { if flag { return mut *pointer } }
     fail_indirect()
     fallback
 }
 
 fn diverging_result(pointer: *Frame, flag: bool) -> mut Frame {
-    if flag { mut *pointer } else { fail_borrow() }
+    unsafe { if flag { mut *pointer } else { fail_borrow() } }
 }
 
 fn after_returns(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
-    if flag { return mut *pointer } else { return mut *pointer }
+    unsafe { if flag { return mut *pointer } else { return mut *pointer } }
     fallback
 }
 
 fn constant_branch(pointer: *Frame, fallback: mut Frame) -> mut Frame {
     let done = true
-    if done { mut *pointer } else { fallback }
+    unsafe { if done { mut *pointer } else { fallback } }
 }
 
 fn correlated_branch(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
     if flag {
-        if flag { mut *pointer } else { fallback }
+        unsafe { if flag { mut *pointer } else { fallback } }
     } else {
-        mut *pointer
+        unsafe { mut *pointer }
     }
 }
 
@@ -66,47 +66,47 @@ fn dead_raw(live: mut Frame, pointer: *Frame, flag: bool) -> mut Frame {
         live
     } else {
         fail()
-        mut *pointer
+        unsafe { mut *pointer }
     }
 }
 
 pub fn main() -> i32 {
     let pointer = ptr::alloc<u64>()
-    *pointer = 41
-    let value = scalar(pointer, flag: true)
+    unsafe { *pointer = 41 }
+    let value = mut scalar(pointer, flag: true)
     value += 1
     core::assert(value == 42)
-    core::assert(*pointer == 42)
+    unsafe { core::assert(*pointer == 42) }
 
     let pointer = ptr::alloc<Frame>()
-    *pointer = Frame { first: 7, value: 1000, last: 9 }
-    let mut fallback = Frame { first: 1, value: 2, last: 3 }
-    let frame = aggregate(pointer, flag: true)
+    unsafe { *pointer = Frame { first: 7, value: 1000, last: 9 } }
+    var fallback = Frame { first: 1, value: 2, last: 3 }
+    let frame = mut aggregate(pointer, flag: true)
     frame.value += 1
-    let frame = dead_continuation(pointer, fallback: mut fallback, flag: true)
+    let frame = mut dead_continuation(pointer, fallback: mut fallback, flag: true)
     frame.value += 2
-    let frame = dead_return(pointer, fallback: mut fallback, flag: true)
+    let frame = mut dead_return(pointer, fallback: mut fallback, flag: true)
     frame.value += 3
-    let frame = diverging_result(pointer, flag: true)
+    let frame = mut diverging_result(pointer, flag: true)
     frame.value += 4
-    let frame = after_returns(pointer, fallback: mut fallback, flag: true)
+    let frame = mut after_returns(pointer, fallback: mut fallback, flag: true)
     frame.value += 5
-    let frame = constant_branch(pointer, fallback: mut fallback)
+    let frame = mut constant_branch(pointer, fallback: mut fallback)
     frame.value += 6
-    let frame = correlated_branch(pointer, fallback: mut fallback, flag: true)
+    let frame = mut correlated_branch(pointer, fallback: mut fallback, flag: true)
     frame.value += 7
-    let frame = dead_param(live: mut *pointer, dead: mut fallback, flag: true)
+    let frame = unsafe { mut dead_param(live: mut *pointer, dead: mut fallback, flag: true) }
     frame.value += 8
-    let frame = dead_param(live: mut fallback, dead: mut *pointer, flag: true)
+    let frame = unsafe { mut dead_param(live: mut fallback, dead: mut *pointer, flag: true) }
     frame.value += 9
-    let frame = dead_raw(live: mut *pointer, pointer, flag: true)
+    let frame = unsafe { mut dead_raw(live: mut *pointer, pointer, flag: true) }
     frame.value += 10
-    let frame = dead_raw(live: mut fallback, pointer, flag: true)
+    let frame = mut dead_raw(live: mut fallback, pointer, flag: true)
     frame.value += 11
     core::assert(frame.first == 1)
-    core::assert((*pointer).first == 7)
-    core::assert((*pointer).value == 1046)
-    core::assert((*pointer).last == 9)
+    unsafe { core::assert((*pointer).first == 7) }
+    unsafe { core::assert((*pointer).value == 1046) }
+    unsafe { core::assert((*pointer).last == 9) }
     core::assert(fallback.value == 22)
     0
 }

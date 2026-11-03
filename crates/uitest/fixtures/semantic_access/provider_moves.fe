@@ -1,0 +1,87 @@
+// A provider lends its place for the body: a non-`Copy` value is read in place
+// or passed on as an effect, never moved out of it, and storage never holds a
+// hole.
+use core::ptr::MemBuffer
+
+struct Token { n: u256 }
+struct Holder { buf: MemBuffer, n: u256 }
+enum Slot { Full(Token), Empty }
+
+fn spend(_ token: own Token) -> u256 {
+    token.n
+}
+
+// Rejected: each moves a non-`Copy` value out of its effect.
+fn clone_buffer() -> MemBuffer uses (b: MemBuffer) {
+    b
+}
+
+fn take_buffer() -> MemBuffer uses (b: mut MemBuffer) {
+    b
+}
+
+fn take_field() -> MemBuffer uses (h: Holder) {
+    h.buf
+}
+
+fn spend_token() -> u256 uses (t: Token) {
+    spend(t)
+}
+
+fn bind_buffer() -> u256 uses (b: MemBuffer) {
+    let x = b
+    x.len() as u256
+}
+
+// Accepted: a `Copy` field, a view argument, a `ref` binding, and the effect
+// passed on to a callee.
+fn read_in_place() -> u256 uses (h: Holder) {
+    let x = ref h.buf
+    h.n + x.len() as u256 + h.buf.len() as u256 + field_len()
+}
+
+fn field_len() -> u256 uses (h: Holder) {
+    h.buf.len() as u256
+}
+
+// Rejected: an owned argument from storage.
+pub contract Vault {
+    mut token: Token,
+
+    init() uses (mut token) {
+        token.n = spend(token)
+    }
+}
+
+// Rejected: a plain payload binding from storage.
+pub contract Slots {
+    mut slot: Slot,
+
+    init() uses (mut slot) {
+        let n = match slot {
+            Slot::Full(t) => spend(t)
+            Slot::Empty => 0
+        }
+    }
+}
+
+pub contract Reader {
+    mut slot: Slot,
+
+    // Accepted: a match that binds nothing, and a `ref` payload binding.
+    init() uses (mut slot) {
+        let full = match slot {
+            Slot::Full(_) => true
+            Slot::Empty => false
+        }
+        if full {
+            match slot {
+                Slot::Full(ref t) => {
+                    let n = t.n
+                    slot = Slot::Full(Token { n: n + 1 })
+                }
+                Slot::Empty => {}
+            }
+        }
+    }
+}

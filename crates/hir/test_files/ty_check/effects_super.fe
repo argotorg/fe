@@ -34,7 +34,7 @@ impl Storage for Root {
 impl Super for Root {}
 
 fn example() {
-    let mut r = Root {}
+    var r = Root {}
     with (r) {
         do_stuff(10)
     }

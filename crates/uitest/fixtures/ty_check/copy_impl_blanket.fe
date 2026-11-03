@@ -1,0 +1,22 @@
+use core::ptr::MemBuffer
+
+// `Copy` is implemented for each type, where its fields, views and state are
+// checked. A blanket implementation would cover a type owning memory, a
+// `#[view]` and a state-only type without any of those checks.
+trait Mark {}
+
+struct Owner {
+    b: MemBuffer,
+}
+
+impl Mark for Owner {}
+
+#[view]
+struct Window {
+    start: u256,
+}
+
+impl Mark for Window {}
+
+// Rejected.
+impl<T: Mark> Copy for T {}

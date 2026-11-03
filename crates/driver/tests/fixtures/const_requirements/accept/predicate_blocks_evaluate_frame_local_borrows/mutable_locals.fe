@@ -3,7 +3,7 @@ const fn set(value: mut usize) { value = 42 }
 // A ground predicate block is evaluated at its declaration. It passes a
 // local by mutable borrow to a const fn.
 const fn ground() -> u256 where {
-    let mut x: usize = 0
+    var x: usize = 0
     set(value: mut x)
     x == 42
 } { 1 }
@@ -11,7 +11,7 @@ const fn ground() -> u256 where {
 // A generic one is evaluated at each concrete use, here through a mutable
 // alias of a local.
 const fn bounded<const N: usize>() -> u256 where {
-    let mut x: usize = N
+    var x: usize = N
     let a = mut x
     a = a + 1
     x > 1

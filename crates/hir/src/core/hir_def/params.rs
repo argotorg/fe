@@ -1,14 +1,14 @@
 use super::{Body, IdentId, Partial, PathId};
 use crate::{
     HirDb,
-    hir_def::{GenericParamOwner, TypeId},
+    hir_def::{GenericParamOwner, TypeId, TypeKind, TypeMode},
 };
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct GenericArgListId<'db> {
-    #[return_ref]
     pub data: Vec<GenericArg<'db>>,
+    #[returns(copy)]
     pub is_given: bool,
 }
 
@@ -68,7 +68,10 @@ impl<'db> GenericArgListId<'db> {
                 self.data(db)
                     .iter()
                     .map(|p| match p {
-                        GenericArg::Const(c) => c.value.pretty_print(db),
+                        GenericArg::Const(c) => c
+                            .value
+                            .to_opt()
+                            .map_or_else(|| "<missing>".into(), |b| b.pretty_print(db)),
                         GenericArg::Type(t) => {
                             t.ty.to_opt()
                                 .map_or_else(|| "<missing>".into(), |t| t.pretty_print(db))
@@ -78,11 +81,15 @@ impl<'db> GenericArgListId<'db> {
                                 .name
                                 .to_opt()
                                 .map_or_else(|| "<missing>".into(), |n| n.data(db).to_string());
+                            let mode = a
+                                .mode
+                                .map_or_else(String::new, |mode| format!("<{}>", mode.keyword()));
                             let ty =
                                 a.ty.to_opt()
                                     .map_or_else(|| "<missing>".into(), |t| t.pretty_print(db));
-                            format!("{name} = {ty}")
+                            format!("{name}{mode} = {ty}")
                         }
+                        GenericArg::Mode(mode) => mode.keyword().to_string(),
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -94,7 +101,6 @@ impl<'db> GenericArgListId<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct GenericParamListId<'db> {
-    #[return_ref]
     pub data: Vec<GenericParam<'db>>,
 }
 
@@ -107,7 +113,6 @@ impl GenericParamListId<'_> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct FuncParamListId<'db> {
-    #[return_ref]
     pub data: Vec<FuncParam<'db>>,
 }
 
@@ -116,7 +121,6 @@ pub struct FuncParamListId<'db> {
 pub struct WhereClauseId<'db> {
     /// The clause's predicates, in source order. A predicate's position
     /// here is its index for the clause's spans.
-    #[return_ref]
     pub predicates: Vec<WhereClausePredicate<'db>>,
 }
 
@@ -142,7 +146,7 @@ impl<'db> WhereClauseId<'db> {
     }
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn where_clause_const_predicates<'db>(
     db: &'db dyn HirDb,
     clause: WhereClauseId<'db>,
@@ -158,7 +162,7 @@ fn where_clause_const_predicates<'db>(
 }
 
 /// A predicate of a `where` clause.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum WhereClausePredicate<'db> {
     /// A trait or kind bound on a type, `T: Trait`.
     Type(WherePredicate<'db>),
@@ -166,7 +170,7 @@ pub enum WhereClausePredicate<'db> {
     Const(Body<'db>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, salsa::SalsaValue)]
 pub enum GenericParam<'db> {
     Type(TypeGenericParam<'db>),
     Const(ConstGenericParam<'db>),
@@ -204,74 +208,69 @@ impl<'db> GenericParamView<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TypeGenericParam<'db> {
     pub name: Partial<IdentId<'db>>,
     pub bounds: Vec<TypeBound<'db>>,
     pub default_ty: Option<TypeId<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ConstGenericParam<'db> {
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
-    pub default: Option<ConstGenericArgValue<'db>>,
+    pub default: Option<Body<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, salsa::SalsaValue)]
 pub enum GenericArg<'db> {
     Type(TypeGenericArg<'db>),
     Const(ConstGenericArg<'db>),
     AssocType(AssocTypeGenericArg<'db>),
+    /// `ref` or `mut`: the mode an associated shape is named at,
+    /// `D::Step<ref>`.
+    Mode(TypeMode),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TypeGenericArg<'db> {
     pub ty: Partial<TypeId<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ConstGenericArg<'db> {
-    pub value: ConstGenericArgValue<'db>,
+    pub value: Partial<Body<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
-pub enum ConstGenericArgValue<'db> {
-    Expr(Partial<Body<'db>>),
-    Hole,
-}
-
-impl<'db> ConstGenericArgValue<'db> {
-    pub fn pretty_print(&self, db: &dyn HirDb) -> String {
-        match self {
-            Self::Expr(body) => body
-                .to_opt()
-                .map_or_else(|| "<missing>".into(), |b| b.pretty_print(db)),
-            Self::Hole => "_".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AssocTypeGenericArg<'db> {
     pub name: Partial<IdentId<'db>>,
+    /// The mode an associated shape is bound at: `Step<ref> = ref u256`.
+    pub mode: Option<TypeMode>,
     pub ty: Partial<TypeId<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum FuncParamMode {
-    /// Default `x: T`: readable but cannot be moved-out.
+    /// Default `x: T` (or `x: ref T`): the caller's place is read-accessible
+    /// for the call.
     View,
+    /// `x: mut T`: the caller's place is exclusively accessible for the call.
+    Mut,
     /// `x: own T`: callee takes ownership of the argument.
     Own,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct FuncParam<'db> {
+    /// The mode at `ref`. A `mut?` parameter, whose `ty` is `mut? T`, is a
+    /// view at `ref` and `mut` at `mut`.
     pub mode: FuncParamMode,
     pub is_mut: bool,
     pub has_ref_prefix: bool,
     pub has_own_prefix: bool,
+    /// `mut` before the name, which only `mut self` writes.
+    pub has_mut_prefix: bool,
     pub is_label_suppressed: bool,
     pub name: Partial<FuncParamName<'db>>,
     pub ty: Partial<TypeId<'db>>,
@@ -288,37 +287,88 @@ impl<'db> FuncParam<'db> {
             .flatten()
             .and_then(|name| match name {
                 FuncParamName::Ident(ident) => Some(ident),
-                FuncParamName::Underscore => None,
+                FuncParamName::Underscore
+                | FuncParamName::Destructured(_)
+                | FuncParamName::Spread => None,
             })
     }
 
+    /// The parameter's name as written: none for `_` or a pattern.
     pub fn name(&self) -> Option<IdentId<'db>> {
         match self.name.to_opt()? {
             FuncParamName::Ident(name) => Some(name),
-            _ => None,
+            FuncParamName::Underscore | FuncParamName::Destructured(_) | FuncParamName::Spread => {
+                None
+            }
+        }
+    }
+
+    /// The name the parameter's binding has in its body: its own, or the
+    /// hidden name a destructured parameter's body binds its pattern from.
+    pub fn binding_name(&self) -> Option<IdentId<'db>> {
+        match self.name.to_opt()? {
+            FuncParamName::Ident(name) | FuncParamName::Destructured(name) => Some(name),
+            FuncParamName::Underscore | FuncParamName::Spread => None,
         }
     }
 
     pub fn is_self_param(&self, db: &dyn HirDb) -> bool {
         self.name.to_opt().is_some_and(|name| name.is_self(db))
     }
+
+    /// Whether the parameter is a pattern its body destructures it with.
+    pub fn is_destructured(&self) -> bool {
+        matches!(self.name.to_opt(), Some(FuncParamName::Destructured(_)))
+    }
+
+    /// Whether the parameter is a spread, `..A`.
+    pub fn is_spread(&self) -> bool {
+        matches!(self.name.to_opt(), Some(FuncParamName::Spread))
+    }
+
+    /// Whether the parameter is written `mut?`: `mut? self` or `x: mut? T`.
+    pub fn is_maybe_mut(&self, db: &dyn HirDb) -> bool {
+        self.ty
+            .to_opt()
+            .is_some_and(|ty| matches!(ty.data(db), TypeKind::Mode(TypeMode::MaybeMut, _)))
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WherePredicate<'db> {
     pub ty: Partial<TypeId<'db>>,
     pub bounds: Vec<TypeBound<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum FuncParamName<'db> {
     Ident(IdentId<'db>),
     Underscore,
+    /// A pattern, `_ (a, b): T`, which the body that binds the parameter
+    /// (the function's own, or a closure's) begins by destructuring it with:
+    /// `let (a, b) = %1`. The name, which source cannot write, is the
+    /// parameter's `%` and its index.
+    Destructured(IdentId<'db>),
+    /// `..A`: the parameters the shape `A`, the parameter's type, lists, in
+    /// its place.
+    Spread,
 }
 
 impl<'db> FuncParamName<'db> {
     pub fn ident(db: &'db dyn HirDb, name: &str) -> Self {
         Self::Ident(IdentId::new(db, name))
+    }
+
+    /// The name of destructured parameter `idx`.
+    pub fn destructured(db: &'db dyn HirDb, idx: usize) -> IdentId<'db> {
+        IdentId::new(db, format!("%{idx}"))
+    }
+
+    /// Whether `path` reads a destructured parameter by its name, as the
+    /// `let` that destructures it does. Source cannot write such a path.
+    pub fn is_destructured_read(db: &'db dyn HirDb, path: PathId<'db>) -> bool {
+        path.as_ident(db)
+            .is_some_and(|name| name.data(db).starts_with('%'))
     }
 
     pub fn is_self(&self, db: &dyn HirDb) -> bool {
@@ -331,21 +381,51 @@ impl<'db> FuncParamName<'db> {
     pub fn pretty_print(&self, db: &dyn HirDb) -> String {
         match self {
             FuncParamName::Ident(name) => name.data(db).to_string(),
-            FuncParamName::Underscore => "_".to_string(),
+            FuncParamName::Underscore | FuncParamName::Destructured(_) => "_".to_string(),
+            FuncParamName::Spread => "..".to_string(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum TypeBound<'db> {
-    Trait(TraitRefId<'db>),
+    /// A trait bound, with the modes it grants the trait's `mut?` methods
+    /// at.
+    Trait(TraitRefId<'db>, ModeMarker),
     Kind(Partial<KindBound>),
+}
+
+/// The mode written before an effect or a trait bound: none, `mut`, or
+/// `mut?`, the item's mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum ModeMarker {
+    /// `uses (c: Ctx)`, `T: Trait`: read only, or the `ref` modes of a
+    /// trait's `mut?` methods.
+    None,
+    /// `uses (s: mut Storage)`, `T: mut Trait`.
+    Mut,
+    /// `uses (s: mut? Storage)`, `T: mut? Trait`: `mut` where the item is
+    /// used at `mut`.
+    MaybeMut,
+}
+
+impl ModeMarker {
+    /// The marker as written before an effect key or a trait, with its
+    /// trailing space.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Mut => "mut ",
+            Self::MaybeMut => "mut? ",
+        }
+    }
 }
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TraitRefId<'db> {
     /// The path to the trait.
+    #[returns(copy)]
     pub path: Partial<PathId<'db>>,
 }
 
@@ -366,6 +446,8 @@ impl<'db> TraitRefId<'db> {
 pub enum KindBound {
     /// `*`
     Mono,
+    /// A `shape A` parameter's kind: a callable's parameter list.
+    Shape,
     /// `* -> *`
     Abs(Partial<Box<KindBound>>, Partial<Box<KindBound>>),
 }

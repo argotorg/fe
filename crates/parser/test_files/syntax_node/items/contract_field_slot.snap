@@ -1,0 +1,155 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/contract_field_slot.fe
+---
+Root@0..177
+  ItemList@0..176
+    Item@0..176
+      Contract@0..176
+        ContractKw@0..8 "contract"
+        WhiteSpace@8..9 " "
+        Ident@9..10 "C"
+        WhiteSpace@10..11 " "
+        LBrace@11..12 "{"
+        Newline@12..13 "\n"
+        WhiteSpace@13..17 "    "
+        ContractFields@17..174
+          RecordFieldDef@17..48
+            AttrList@17..28
+              Attr@17..27
+                Pound@17..18 "#"
+                LBracket@18..19 "["
+                Path@19..23
+                  PathSegment@19..23
+                    Ident@19..23 "slot"
+                AttrArgList@23..26
+                  LParen@23..24 "("
+                  AttrArg@24..25
+                    AttrArgValue@24..25
+                      LitExpr@24..25
+                        Lit@24..25
+                          Int@24..25 "1"
+                  RParen@25..26 ")"
+                RBracket@26..27 "]"
+              Newline@27..28 "\n"
+            WhiteSpace@28..32 "    "
+            MutKw@32..35 "mut"
+            WhiteSpace@35..36 " "
+            Ident@36..42 "placed"
+            Colon@42..43 ":"
+            WhiteSpace@43..44 " "
+            PathType@44..48
+              Path@44..48
+                PathSegment@44..48
+                  Ident@44..48 "u256"
+          Comma@48..49 ","
+          Newline@49..50 "\n"
+          WhiteSpace@50..54 "    "
+          RecordFieldDef@54..87
+            AttrList@54..68
+              Attr@54..67
+                Pound@54..55 "#"
+                LBracket@55..56 "["
+                Path@56..60
+                  PathSegment@56..60
+                    Ident@56..60 "slot"
+                AttrArgList@60..66
+                  LParen@60..61 "("
+                  AttrArg@61..65
+                    Path@61..65
+                      PathSegment@61..65
+                        Ident@61..65 "BASE"
+                  RParen@65..66 ")"
+                RBracket@66..67 "]"
+              Newline@67..68 "\n"
+            WhiteSpace@68..72 "    "
+            MutKw@72..75 "mut"
+            WhiteSpace@75..76 " "
+            Ident@76..81 "based"
+            Colon@81..82 ":"
+            WhiteSpace@82..83 " "
+            PathType@83..87
+              Path@83..87
+                PathSegment@83..87
+                  Ident@83..87 "u256"
+          Comma@87..88 ","
+          Newline@88..89 "\n"
+          WhiteSpace@89..93 "    "
+          RecordFieldDef@93..173
+            AttrList@93..155
+              Attr@93..154
+                Pound@93..94 "#"
+                LBracket@94..95 "["
+                Path@95..99
+                  PathSegment@95..99
+                    Ident@95..99 "slot"
+                AttrArgList@99..153
+                  LParen@99..100 "("
+                  AttrArg@100..152
+                    AttrArgValue@100..152
+                      BinExpr@100..152
+                        CallExpr@100..134
+                          PathExpr@100..106
+                            Path@100..106
+                              PathSegment@100..106
+                                Ident@100..106 "keccak"
+                          CallArgList@106..134
+                            LParen@106..107 "("
+                            CallArg@107..133
+                              BinExpr@107..133
+                                CallExpr@107..129
+                                  PathExpr@107..113
+                                    Path@107..113
+                                      PathSegment@107..113
+                                        Ident@107..113 "keccak"
+                                  CallArgList@113..129
+                                    LParen@113..114 "("
+                                    CallArg@114..128
+                                      LitExpr@114..128
+                                        Lit@114..128
+                                          String@114..128 "\"example.main\""
+                                    RParen@128..129 ")"
+                                WhiteSpace@129..130 " "
+                                Minus@130..131 "-"
+                                WhiteSpace@131..132 " "
+                                LitExpr@132..133
+                                  Lit@132..133
+                                    Int@132..133 "1"
+                            RParen@133..134 ")"
+                        WhiteSpace@134..135 " "
+                        Amp@135..136 "&"
+                        WhiteSpace@136..137 " "
+                        UnExpr@137..152
+                          Not@137..138 "!"
+                          ParenExpr@138..152
+                            LParen@138..139 "("
+                            CastExpr@139..151
+                              LitExpr@139..143
+                                Lit@139..143
+                                  Int@139..143 "0xff"
+                              WhiteSpace@143..144 " "
+                              AsKw@144..146 "as"
+                              WhiteSpace@146..147 " "
+                              PathType@147..151
+                                Path@147..151
+                                  PathSegment@147..151
+                                    Ident@147..151 "u256"
+                            RParen@151..152 ")"
+                  RParen@152..153 ")"
+                RBracket@153..154 "]"
+              Newline@154..155 "\n"
+            WhiteSpace@155..159 "    "
+            MutKw@159..162 "mut"
+            WhiteSpace@162..163 " "
+            Ident@163..167 "main"
+            Colon@167..168 ":"
+            WhiteSpace@168..169 " "
+            PathType@169..173
+              Path@169..173
+                PathSegment@169..173
+                  Ident@169..173 "u256"
+          Comma@173..174 ","
+        Newline@174..175 "\n"
+        RBrace@175..176 "}"
+  Newline@176..177 "\n"

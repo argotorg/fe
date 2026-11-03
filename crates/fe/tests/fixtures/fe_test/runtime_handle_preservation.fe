@@ -1,4 +1,4 @@
-use core::{EffectHandle, ptr}
+use core::ptr
 use core::contracts::ContractHost
 use std::evm::{Evm, RawStorage, StorPtr}
 
@@ -17,13 +17,13 @@ uses (e: Empty)
 fn mem_value() -> u256
 uses (p: *Word)
 {
-    p.value
+    unsafe { p.value }
 }
 
-fn stor_handle_raw() -> u256
+fn stor_pointer_addr() -> u256
 uses (p: StorPtr<Empty>)
 {
-    p.raw()
+    p as u256
 }
 
 fn host_input_len<H>(_ host: mut H) -> u256
@@ -44,15 +44,17 @@ fn check_runtime_value(_ evm: mut Evm, value: u256) -> u256 {
 }
 
 #[test]
-fn test_zst_target_effect_handles_keep_runtime_carriers() uses (evm: Evm) {
+fn test_zst_target_pointer_effects_keep_runtime_carriers() uses (evm: Evm) {
     let raw = ptr::alloc<Word>()
-    *raw = Word { value: 120 }
-    let sp: StorPtr<Empty> = evm.stor_ptr(7)
-    let mem = with (raw) {
-        mem_value()
+    unsafe { *raw = Word { value: 120 } }
+    let sp = 7 as u256 as StorPtr<Empty>
+    let mem = unsafe {
+        with (raw) {
+            mem_value()
+        }
     }
     let storage = with (sp) {
-        stor_handle_raw()
+        stor_pointer_addr()
     }
 
     assert!(mem == 120)
@@ -60,14 +62,17 @@ fn test_zst_target_effect_handles_keep_runtime_carriers() uses (evm: Evm) {
 }
 
 #[test]
-fn pointers_and_effect_handles_support_read_write() uses (evm: Evm) {
+fn raw_pointers_support_read_write() uses (evm: mut Evm) {
     let mp = ptr::alloc<u256>()
-    *mp = 41
-    assert!(*mp == 41)
+    unsafe { *mp = 41 }
+    unsafe { assert!(*mp == 41) }
 
-    let sp: StorPtr<u256> = evm.stor_ptr(0xabc)
-    sp.write(42)
-    assert!(sp.read() == 42)
+    // A storage pointer is made with the raw storage authority of `evm`.
+    let sp = 0xabc as u256 as StorPtr<u256>
+    unsafe {
+        *sp = 42
+        assert!(*sp == 42)
+    }
 }
 
 #[test]
@@ -89,17 +94,22 @@ struct Data {
 }
 
 struct View {
-    d: ref Data,
+    d: Data,
+}
+
+impl View {
+    fn data(self) -> ref Data {
+        ref self.d
+    }
 }
 
 fn read_view(_ view: own View) -> u256 {
-    view.d.x
+    view.data().x
 }
 
 #[test]
-fn test_object_backed_nested_ref_fields_are_readable() {
-    let data = Data { x: 1 }
-    let view = View { d: ref data }
+fn test_object_backed_nested_ref_projections_are_readable() {
+    let view = View { d: Data { x: 1 } }
 
     assert!(read_view(view) == 1)
 }
@@ -164,7 +174,7 @@ fn test_checked_overflow_exprs_survive_unused_local_lowering() {
 
 #[test]
 fn test_unit_branch_mutations_do_not_use_erased_call_results() {
-    let mut x: usize = 0
+    var x: usize = 0
     if true {
         x += 1
     } else {
@@ -181,7 +191,7 @@ fn return_array_after_projection_u8(xs: [u8; 4]) -> [u8; 4] {
 }
 
 fn use_returned_array_u8() -> u8 {
-    let mut xs: [u8; 4] = [1, 2, 3, 4]
+    var xs: [u8; 4] = [1, 2, 3, 4]
     xs = return_array_after_projection_u8(xs)
     xs[0] + xs[2]
 }
@@ -193,7 +203,7 @@ fn return_array_after_projection_u256(xs: [u256; 3]) -> [u256; 3] {
 }
 
 fn use_returned_array_u256() -> u256 {
-    let mut xs: [u256; 3] = [1, 2, 3]
+    var xs: [u256; 3] = [1, 2, 3]
     xs = return_array_after_projection_u256(xs)
     xs[0] + xs[2]
 }

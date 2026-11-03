@@ -1,0 +1,35 @@
+// A projection yields a value as a frame temporary holding it; a place is
+// viewed in place by a `ref` result and granted by a `mut` one only when
+// named `mut`.
+struct S { v: u256 }
+
+fn low(_ x: u256) -> u32 {
+    x.downcast_truncate()
+}
+
+impl S {
+    fn by_call(self) -> ref u32 {
+        low(self.v)
+    }
+
+    fn by_arith(self) -> ref u256 {
+        self.v + 1
+    }
+
+    fn by_value(mut self) -> mut u256 {
+        self.v * 2
+    }
+
+    fn viewed(self) -> ref u256 {
+        self.v
+    }
+
+    fn named(mut self) -> mut u256 {
+        mut self.v
+    }
+
+    // Rejected: `self.v` reads the place, so its copy is not the place.
+    fn unnamed(mut self) -> mut u256 {
+        self.v
+    }
+}

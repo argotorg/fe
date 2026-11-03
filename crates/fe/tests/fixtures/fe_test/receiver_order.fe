@@ -1,0 +1,117 @@
+// A call resolves its receiver's root, then evaluates its arguments, then
+// opens the receiver's access with its mode: the arguments may write the
+// receiver, and the call sees what they wrote.
+use core::ptr::MemArray
+
+struct Pair { a: u256, b: u256 }
+impl Copy for Pair {}
+
+impl Pair {
+    fn sum(self, _ x: u256) -> u256 { self.a * 100 + x }
+    fn into_sum(own self, _ x: u256) -> u256 { self.a * 100 + x }
+}
+
+struct Inner { a: u256, items: MemArray<u256> }
+
+impl Inner {
+    fn plus(self, _ x: u256) -> u256 { self.a * 100 + x }
+    fn consume(own self, _ x: u256) -> u256 { self.a * 100 + x }
+}
+
+struct Ledger { total: u256, pair: Pair, inner: Inner }
+
+impl Ledger {
+    fn bump(mut self) -> u256 {
+        self.pair.a += 1
+        self.inner.a += 1
+        1
+    }
+    fn len(self) -> u256 { self.inner.a }
+    fn set_total(mut self, _ value: u256) { self.total = self.total * 100 + value }
+}
+
+fn make() -> Ledger {
+    Ledger {
+        total: 5,
+        pair: Pair { a: 0, b: 0 },
+        inner: Inner { a: 0, items: MemArray::new_zeroed(1) },
+    }
+}
+
+fn reset(_ target: mut Ledger) -> u256 {
+    target.total = 0
+    7
+}
+
+#[test]
+fn mut_receiver_written() {
+    var l = make()
+    l.set_total(reset(mut l))
+    assert(l.total == 7)
+    let alias = mut l
+    alias.set_total(reset(mut alias))
+    assert(l.total == 7)
+    param_receiver_written(mut l)
+    assert(l.total == 7)
+}
+
+fn param_receiver_written(_ l: mut Ledger) {
+    l.total = 9
+    l.set_total(reset(mut l))
+}
+
+#[test]
+fn view_receiver_written() {
+    var l = make()
+    assert(l.pair.sum(l.bump()) == 101)
+    assert(l.inner.plus(l.bump()) == 201)
+}
+
+#[test]
+fn owned_receiver_written() {
+    var l = make()
+    assert(l.pair.into_sum(l.bump()) == 101)
+    assert(l.inner.consume(l.len()) == 101)
+}
+
+struct Cell { v: u256 }
+impl Copy for Cell {}
+
+impl Cell {
+    fn set(mut self, _ x: u256) { self.v = x }
+    fn get(self, _ x: u256) -> u256 { self.v + x }
+}
+
+fn next(_ i: mut usize) -> u256 {
+    i += 1
+    7
+}
+
+// A receiver's index is read with the rest of its place, after the
+// arguments.
+#[test]
+fn receiver_index_after_arguments() {
+    var cells: [Cell; 2] = [Cell { v: 1 }, Cell { v: 2 }]
+    var i: usize = 0
+    cells[i].set(next(mut i))
+    assert(cells[0].v == 1 && cells[1].v == 7)
+    i = 0
+    assert(cells[i].get(next(mut i)) == 14)
+}
+
+struct Slot { cell: Cell }
+impl Copy for Slot {}
+
+fn touch(_ slots: mut MemArray<Slot>) -> u256 {
+    slots[1].cell.v = 3
+    7
+}
+
+// A receiver in a projection's grant opens the projection after the
+// arguments.
+#[test]
+fn grant_receiver_written() {
+    var slots: MemArray<Slot> = MemArray::new_zeroed(2)
+    slots[0].cell.set(touch(mut slots))
+    assert(slots[0].cell.v == 7 && slots[1].cell.v == 3)
+}

@@ -206,7 +206,7 @@ fn tree_sitter_parse_newline_lt_continuations() {
         ),
         (
             "newline_lshift_assign",
-            "fn f(x: i32, y: i32) {\n    let mut a = x\n    a\n        <<= y\n}\n",
+            "fn f(x: i32, y: i32) {\n    var a = x\n    a\n        <<= y\n}\n",
             false,
         ),
         (
@@ -304,7 +304,7 @@ fn tree_sitter_parse_qualified_first_generic_arg_in_expressions() {
         ),
         (
             "shift_assign_then_string",
-            "fn f(x: u256, y: u256) -> u256 {\n    let mut a = x\n    a <<= y\n    let s = \"a>::b\"\n    a\n}\n",
+            "fn f(x: u256, y: u256) -> u256 {\n    var a = x\n    a <<= y\n    let s = \"a>::b\"\n    a\n}\n",
         ),
     ];
     for (name, source) in shift_then_text {

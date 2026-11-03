@@ -1,6 +1,6 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
+assertion_line: 17
 expression: output
 input_file: tests/fixtures/loops.fe
 ---
@@ -10,14 +10,18 @@ fn loop_examples(arr: Array<i32, 10>) {
         if i > 8 { break }
     }
 
-    let mut x = 0
+    for (i, mut x) in arr.enumerate().take(3) {
+        x = x + i
+    }
+
+    var x = 0
     while x < 100 {
         x = x + 1
         if x % 2 == 0 { continue }
     }
 
-    let mut maybe = Some(1)
-    while let Some(v,) = maybe {
+    var maybe = Some(1)
+    while let Some(v) = maybe {
         maybe = None
         if v > 0 { break }
     }

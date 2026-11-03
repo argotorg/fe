@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/const_fn/trait_provider_errors.fe
 ---
@@ -15,7 +16,8 @@ error[8-0036]: missing effect `Compute<Item = T>` required by `consume`
 27 │     consume<u256>()
    │     ^^^^^^^^^^^^^^^ `consume` requires effect `Compute<Item = T>` to be in scope
    │
-   = provide it with `with (Compute<Item = T> = value)` or require it via `uses Compute<Item = T>`
+   = require it in this function's signature with `uses (evidence: Compute<Item = T>)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Compute<Item = T> = value) { .. }`
 
 error[8-0055]: unsupported effects in a `const fn`
    ┌─ trait_provider_errors.fe:62:20

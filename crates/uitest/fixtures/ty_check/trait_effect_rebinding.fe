@@ -1,0 +1,25 @@
+trait Reader { fn read(self) -> u256 }
+trait Writer: Reader { fn write(mut self) }
+trait Other { fn other(self) -> u256 }
+
+fn read() -> u256 uses (reader: Reader) { reader.read() }
+fn write() uses (writer: mut Writer) { writer.write() }
+fn other() -> u256 uses (other: Other) { other.other() }
+
+// Accepted: the body knows the named provider's own and inherited bounds.
+fn same() -> u256 uses (reader: Reader) {
+    with (Reader = reader) { read() }
+}
+fn parent() -> u256 uses (writer: Writer) {
+    with (Reader = writer) { same() }
+}
+
+// Rejected: the full assumptions do not invent unrelated trait evidence.
+fn unrelated() -> u256 uses (reader: Reader) {
+    with (Other = reader) { other() }
+}
+
+// Rejected: proving the trait does not upgrade a shared provider's authority.
+fn immutable() uses (writer: Writer) {
+    with (Writer = writer) { write() }
+}

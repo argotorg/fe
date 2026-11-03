@@ -29,6 +29,6 @@ const fn packed_token_config(_ kind: u8, _ paused: bool) -> u256 {
 
 const CONFIG: u256 = packed_token_config(0, false)
 
-fn main() -> u256 {
+pub fn main() -> u256 {
     CONFIG
 }

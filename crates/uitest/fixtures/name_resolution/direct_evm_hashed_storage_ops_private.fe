@@ -3,6 +3,6 @@ use std::evm::ops
 // The hashed-slot builtins trust their caller to pass a StorageMap preimage
 // hash, so only std may call them.
 fn forged_slot(slot: u256) -> u256 {
-    ops::sstore_hashed(slot, value: 1)
-    ops::sload_hashed(slot)
+    unsafe { ops::sstore_hashed(slot, value: 1) }
+    unsafe { ops::sload_hashed(slot) }
 }

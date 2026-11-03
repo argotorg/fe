@@ -1,7 +1,8 @@
 use core::option::Option
 use core::ptr
 use core::result::Result
-use std::evm::{Address, Call, Evm, RawMem, assert}
+use core::abi::{load_word, store_word}
+use std::evm::{Address, Call, Evm, assert}
 use std::evm::crypto::{
     PrecompileError,
     blake2f,
@@ -34,8 +35,8 @@ const ECRECOVER_HIGH_S: u256 = 0xf7874d0f35046703c2f0438cb6ee7eade417b862f21e5aa
 type MemBuffer = ptr::MemBuffer
 type MemSpan = ptr::MemSpan
 
-fn buffer(_ ptr: *u8, _ len: u256) -> MemSpan {
-    MemSpan::from_raw_parts(ptr, len)
+fn buffer(_ ptr: *u8, _ len: u256) -> ref MemSpan {
+    unsafe { MemSpan::from_raw_parts(ptr, len: len.downcast_unchecked()) }
 }
 
 fn expect_word(_ result: Result<PrecompileError, u256>) -> u256 {
@@ -81,16 +82,16 @@ fn expect_pair(_ result: Result<PrecompileError, (u256, u256)>) -> (u256, u256) 
 fn zero_memory(_ base: *u8, len: u256)
 uses (evm: mut Evm)
 {
-    let mut offset: u256 = 0
+    var offset: u256 = 0
     while offset < len {
-        evm.mstore(addr: ptr::offset_bytes(base, offset), value: 0)
+        unsafe { store_word(ptr: ptr::offset_bytes(base, offset.downcast_unchecked()), value: 0) }
         offset += 32
     }
 }
 
 fn expect_recovery(_ result: Result<PrecompileError, Option<u256>>) -> u256 {
     match result {
-        Result::Ok(recovered) => match recovered {
+        Result::Ok(ref recovered) => match recovered {
             Option::Some(addr) => addr,
             Option::None => {
                 assert(false)
@@ -106,7 +107,7 @@ fn expect_recovery(_ result: Result<PrecompileError, Option<u256>>) -> u256 {
 
 fn expect_no_recovery(_ result: Result<PrecompileError, Option<u256>>) {
     match result {
-        Result::Ok(recovered) => match recovered {
+        Result::Ok(ref recovered) => match recovered {
             Option::Some(_) => assert(false),
             Option::None => (),
         },
@@ -137,14 +138,18 @@ fn test_hash_and_copy_precompiles_return_results()
 uses (evm: mut Evm)
 {
     let ptr = ptr::alloc_bytes(64)
-    evm.mstore(
-        addr: ptr,
-        value: 0x1111111111111111111111111111111111111111111111111111111111111111,
-    )
-    evm.mstore(
-        addr: ptr::offset_bytes(ptr, 32),
-        value: 0x2222222222222222222222222222222222222222222222222222222222222222,
-    )
+    unsafe {
+        store_word(
+            ptr: ptr,
+            value: 0x1111111111111111111111111111111111111111111111111111111111111111,
+        )
+    }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(ptr, 32),
+            value: 0x2222222222222222222222222222222222222222222222222222222222222222,
+        )
+    }
 
     let sha = expect_word(sha256(buffer(ptr, 0)))
     assert(sha == 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
@@ -154,8 +159,8 @@ uses (evm: mut Evm)
 
     let copied = expect_bytes(identity(buffer(ptr, 64)))
     assert(copied.len() == 64)
-    assert(evm.mload(copied.ptr()) == evm.mload(ptr))
-    assert(evm.mload(ptr::offset_bytes(copied.ptr(), 32)) == evm.mload(ptr::offset_bytes(ptr, 32)))
+    unsafe { assert(load_word(copied.ptr()) == load_word(ptr)) }
+    unsafe { assert(load_word(ptr::offset_bytes(copied.ptr(), 32)) == load_word(ptr::offset_bytes(ptr, 32))) }
 }
 
 #[test]
@@ -198,15 +203,15 @@ uses (evm: mut Evm)
     assert(expect_word(modexp(base: 2, exp: 5, modulus: 13)) == 6)
 
     let raw = ptr::alloc_bytes(192)
-    evm.mstore(addr: raw, value: 32)
-    evm.mstore(addr: ptr::offset_bytes(raw, 32), value: 32)
-    evm.mstore(addr: ptr::offset_bytes(raw, 64), value: 32)
-    evm.mstore(addr: ptr::offset_bytes(raw, 96), value: 2)
-    evm.mstore(addr: ptr::offset_bytes(raw, 128), value: 5)
-    evm.mstore(addr: ptr::offset_bytes(raw, 160), value: 13)
+    unsafe { store_word(ptr: raw, value: 32) }
+    unsafe { store_word(ptr: ptr::offset_bytes(raw, 32), value: 32) }
+    unsafe { store_word(ptr: ptr::offset_bytes(raw, 64), value: 32) }
+    unsafe { store_word(ptr: ptr::offset_bytes(raw, 96), value: 2) }
+    unsafe { store_word(ptr: ptr::offset_bytes(raw, 128), value: 5) }
+    unsafe { store_word(ptr: ptr::offset_bytes(raw, 160), value: 13) }
     let raw_out = expect_bytes(modexp_raw(buffer(raw, 192), ret_len: 64))
     assert(raw_out.len() == 32)
-    assert(evm.mload(raw_out.ptr()) == 6)
+    unsafe { assert(load_word(raw_out.ptr()) == 6) }
 
     let sum = expect_pair(ec_add(ax: 0, ay: 0, bx: 0, by: 0))
     assert(sum.0 == 0)
@@ -224,10 +229,10 @@ fn test_raw_staticcall_copies_to_output_buffer()
 uses (evm: Evm)
 {
     let ptr = ptr::alloc_bytes(64)
-    ptr::zero_bytes(ptr, 64)
-    let mut ret = MemBuffer::with_capacity(32)
+    unsafe { ptr::zero_bytes(ptr, 64) }
+    var ret = MemBuffer::with_capacity(32)
     let outcome = evm.raw_staticcall(
-        addr: Address { inner: 4 },
+        addr: Address::new(4),
         gas: 1000000,
         args: buffer(ptr, 64),
         ret: mut ret,
@@ -236,7 +241,7 @@ uses (evm: Evm)
     assert(outcome.returndata_len() == 64)
     assert(ret.len() == 32)
     assert(ret.capacity() == 32)
-    assert(evm.mload(ret.ptr()) == 0)
+    unsafe { assert(load_word(ret.ptr()) == 0) }
 }
 
 #[test]

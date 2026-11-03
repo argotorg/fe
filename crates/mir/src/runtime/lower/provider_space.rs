@@ -3,27 +3,17 @@ use hir::analysis::semantic::{
     normalized::{NEffectArg, NEffectArgValue, NPlaceBase},
     resolved_provider_binding_for_instance_effect,
 };
-use hir::analysis::ty::ProviderAddressSpace;
+use hir::analysis::ty::AddressSpace;
 
-use crate::{db::MirDb, runtime::AddressSpaceKind};
+use crate::db::MirDb;
 
 use super::semantic_body::RuntimeSemanticBody;
-
-pub(super) fn address_space_from_provider(provider: ProviderAddressSpace) -> AddressSpaceKind {
-    match provider {
-        ProviderAddressSpace::Memory => AddressSpaceKind::Memory,
-        ProviderAddressSpace::Storage => AddressSpaceKind::Storage,
-        ProviderAddressSpace::Transient => AddressSpaceKind::Transient,
-        ProviderAddressSpace::Calldata => AddressSpaceKind::Calldata,
-        ProviderAddressSpace::Code => AddressSpaceKind::Code,
-    }
-}
 
 fn local_provider_address_space<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeSemanticBody<'db>,
     local: SLocalId,
-) -> Option<ProviderAddressSpace> {
+) -> Option<AddressSpace> {
     let local = body.local(local)?;
     local
         .role
@@ -41,7 +31,7 @@ pub(super) fn resolved_effect_arg_address_space<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeSemanticBody<'db>,
     arg: &NEffectArg<'db>,
-) -> AddressSpaceKind {
+) -> AddressSpace {
     let provider = arg.provider.or_else(|| match &arg.arg {
         NEffectArgValue::Value(value) => {
             local_provider_address_space(db, body, body.operand_local(*value)?)
@@ -51,9 +41,10 @@ pub(super) fn resolved_effect_arg_address_space<'db>(
             NPlaceBase::CapabilityTarget { carrier } => {
                 local_provider_address_space(db, body, body.value_local(carrier)?)
             }
+            NPlaceBase::Deref { pointer } => Some(body.normalized.value(pointer)?.ty.as_ptr(db)?.1),
         },
     });
-    address_space_from_provider(provider.unwrap_or_else(|| {
+    provider.unwrap_or_else(|| {
         let owner = body.owner().key(db).owner(db);
         let context = match &arg.arg {
             NEffectArgValue::Value(value) => format!("value={:?}", body.normalized.value(value.value)),
@@ -62,5 +53,5 @@ pub(super) fn resolved_effect_arg_address_space<'db>(
         panic!(
             "effect/provider args must carry an explicit resolved address space before rMIR lowering: owner={owner:?}; arg={arg:?}; {context}",
         )
-    }))
+    })
 }

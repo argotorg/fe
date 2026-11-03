@@ -1,0 +1,90 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/value_reads_move.fe
+---
+error[16-0002]: move conflict in `fn if_join_of_owned`
+   ┌─ value_reads_move.fe:71:15
+   │
+70 │     let a = if c { o } else { o }
+   │                             ----- value is moved here
+71 │     W { a, b: o }
+   │               ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn match_join_of_owned`
+   ┌─ value_reads_move.fe:78:15
+   │
+76 │         _ => o
+   │              - value is moved here
+77 │     }
+78 │     W { a, b: o }
+   │               ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn effect_through_join`
+   ┌─ value_reads_move.fe:83:21
+   │
+83 │     if c { x } else { x }
+   │                     ^^^^^ cannot move out of a place reached through an access
+
+error[16-0002]: move conflict in `fn block_scrutinee`
+   ┌─ value_reads_move.fe:88:13
+   │
+88 │     match { h.b } {
+   │             ^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn if_scrutinee`
+   ┌─ value_reads_move.fe:94:32
+   │
+94 │     match (if c { h.b } else { h.b }) {
+   │                                ^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn if_let_scrutinee`
+    ┌─ value_reads_move.fe:100:36
+    │
+100 │     if let Option::Some(var b) = { h.o } {
+    │                                    ^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn block_receiver`
+    ┌─ value_reads_move.fe:106:7
+    │
+106 │     { h.c }.poke()
+    │       ^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn if_receiver`
+    ┌─ value_reads_move.fe:110:26
+    │
+110 │     (if k { h.c } else { h.c }).poke()
+    │                          ^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn block_callee`
+    ┌─ value_reads_move.fe:114:7
+    │
+114 │     { h.f }(5)
+    │       ^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn block_view_arg`
+    ┌─ value_reads_move.fe:119:23
+    │
+119 │     read_first({ b }, mut b)
+    │                  -    ^^^^^ cannot use a value after it was moved
+    │                  │
+    │                  value is moved here
+
+error[16-0002]: move conflict in `fn producer_reused`
+    ┌─ value_reads_move.fe:130:20
+    │
+127 │     for y in xs.by(m) {
+    │                    - value is moved here
+    ·
+130 │     for y in xs.by(m) {
+    │                    ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn driver_reused`
+    ┌─ value_reads_move.fe:145:20
+    │
+142 │     for x in xs.by(d) {
+    │                    - value is moved here
+    ·
+145 │     for x in xs.by(d) {
+    │                    ^ cannot use a value after it was moved

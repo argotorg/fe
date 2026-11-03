@@ -1,0 +1,9 @@
+fn f(p: *u256) -> u256 {
+    unsafe { *p = 1 }
+    unsafe fn g() {}
+    let x = unsafe { *p }
+    unsafe {
+        *p = x
+    }
+    x
+}

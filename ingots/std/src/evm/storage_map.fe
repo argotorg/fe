@@ -1,8 +1,10 @@
-use super::effects::{Address, RawStorage}
-use super::crypto::keccak256
-use ingot::evm::ops::{mstore, sload_hashed, sstore_hashed}
-use ingot::evm::word::WordRepr
-use core::{EffectRef, EffectRefMut, ptr}
+use super::effects::{Address, RawStorage, storage_at}
+use super::layout::mapping_slot
+use ingot::evm::ops::mstore
+use core::num::IntWord
+use core::ptr
+use core::marker::{Clearable, Pinned, Storage}
+use core::ops::{Location, StateIndex, clear_storage}
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
 pub trait StorageKey {
@@ -11,7 +13,10 @@ pub trait StorageKey {
 
     /// Writes exactly `self.encoded_len()` bytes into the reserved region at `ptr`.
     /// Encoding must remain stable between `encoded_len` and `write_key`.
-    fn write_key(ptr: *u8, self)
+    ///
+    /// The caller must ensure that `ptr` has room for `self.encoded_len()`
+    /// bytes in a live allocation.
+    unsafe fn write_key(ptr: *u8, self)
 }
 
 impl StorageKey for u256 {
@@ -20,7 +25,7 @@ impl StorageKey for u256 {
     }
 
     #[inline(always)]
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         mstore(addr: ptr, value: self)
     }
 }
@@ -31,7 +36,7 @@ impl StorageKey for Address {
     }
 
     #[inline(always)]
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         u256::write_key(ptr: ptr, self.inner)
     }
 }
@@ -45,8 +50,8 @@ impl StorageKey for u8 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -55,8 +60,8 @@ impl StorageKey for u16 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -65,8 +70,8 @@ impl StorageKey for u32 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -75,8 +80,8 @@ impl StorageKey for u64 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -85,8 +90,8 @@ impl StorageKey for u128 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -95,12 +100,12 @@ impl StorageKey for usize {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
-// Signed integer keys — `to_word()` sign-extends, matching Solidity's
+// Signed integer keys — `IntWord::to_word` sign-extends, matching Solidity's
 // `mapping(intN => V)` convention.
 
 impl StorageKey for i8 {
@@ -108,8 +113,8 @@ impl StorageKey for i8 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -118,8 +123,8 @@ impl StorageKey for i16 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -128,8 +133,8 @@ impl StorageKey for i32 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -138,8 +143,8 @@ impl StorageKey for i64 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -148,8 +153,8 @@ impl StorageKey for i128 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -158,8 +163,8 @@ impl StorageKey for i256 {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -168,8 +173,8 @@ impl StorageKey for isize {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -180,85 +185,75 @@ impl StorageKey for bool {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+    unsafe fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, if self { 1 } else { 0 })
     }
 }
 
-/// A storage-backed mapping from keys `K` to values `V`.
+/// A storage-backed mapping from keys `K` to values `V`, laid out like a
+/// Solidity `mapping`.
 ///
-/// `SALT` is the mapping's slot seed (the `slot` component in
-/// `keccak256(key ++ slot)`), chosen explicitly for each mapping instance to
-/// prevent collisions.
-struct StorageMapSeal {}
+/// A map is a storage collection: it lives at its place in storage, which
+/// takes one slot of its container, never written, as a Solidity mapping's
+/// does, and it is never copied or moved. The value at `key` occupies the
+/// slots from `keccak256(key ++ slot)` onwards,
+/// laid out like any value of type `V` in storage, including packed struct
+/// fields, so a map in a map's value derives its slot from its entry's. The
+/// entries are persistent, so a map cannot lie in transient storage.
+/// `map[key]` names that entry's place: `map[key].f += 1` reads and writes
+/// one field, and `let e = mut map[key]` binds the entry. Keys use the stable
+/// encoding `StorageKey` defines.
+pub struct StorageMap<K, V> {}
 
-pub struct StorageMap<K, V, const SALT: u256 = _> {
-    seal: StorageMapSeal,
+impl<K, V> Pinned for StorageMap<K, V> {
+    type Space = Storage
 }
 
-impl<K, V, const SALT: u256> Copy for StorageMap<K, V, SALT> {}
+unsafe impl<K: StorageKey + Copy, V> StateIndex for StorageMap<K, V> {
+    type Key = K
+    type Entry = V
 
-#[inline(always)]
-fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
-    where K: StorageKey
-{
-    // keccak256(key ++ slot) - standard Solidity mapping layout
-    // Reserve the entire preimage before encoding: key encoders may allocate.
-    let key_len = K::encoded_len(key)
-    let scratch = ptr::alloc_bytes(key_len + 32)
-    K::write_key(ptr: scratch, key)
-    mstore(addr: ptr::offset_bytes(scratch, key_len), value: salt)
-    keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: key_len + 32))
+    #[inline(always)]
+    fn locate(self, _ root: u256, _ key: K) -> Location {
+        Location { slot: mapping_slot(root, key), offset: 0 }
+    }
 }
 
-#[inline(always)]
-fn storagemap_get_word_with_salt<K>(key: K, salt: u256) -> u256
-    where K: StorageKey
-{
-    let storage_slot = storagemap_storage_slot_with_salt(key, salt)
-    sload_hashed(storage_slot)
-}
-
-#[inline(always)]
-fn storagemap_set_word_with_salt<K>(key: K, salt: u256, word: u256)
-    where K: StorageKey
-{
-    let storage_slot = storagemap_storage_slot_with_salt(key, salt)
-    sstore_hashed(slot: storage_slot, value: word)
-}
-
-impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
-    pub(ingot) fn new_unchecked() -> Self {
-        Self { seal: StorageMapSeal {} }
+impl<K: StorageKey + Copy, V> StorageMap<K, V> {
+    /// The map whose slot is `slot`, such as a Solidity `mapping` at a known
+    /// slot.
+    ///
+    /// The caller must ensure that nothing the compiler allocates, such as a
+    /// contract field, uses `slot` or the entries' slots.
+    #[raw_place]
+    pub unsafe fn at(_ slot: u256) -> mut? Self uses (storage: mut? RawStorage) {
+        unsafe { storage_at(slot) }
     }
 
-    pub fn new() -> Self
-    uses (storage: mut RawStorage)
+    /// Copies the value at `key` out of storage, in full.
+    #[inline(always)]
+    pub fn get(self, _ key: K) -> V
+        where V: Copy
     {
-        Self::new_unchecked()
+        self[key]
     }
 
-    #[inline(always)]
-    pub(ingot) fn get_unchecked(self, _ key: K) -> V {
-        V::from_word(storagemap_get_word_with_salt(key, salt: SALT))
-    }
-
-    #[inline(always)]
-    pub fn get(self, _ key: K) -> V {
-        self.get_unchecked(key)
-    }
-
-    #[inline(always)]
-    pub(ingot) fn set_unchecked(mut self, key: K, value: own V) {
-        storagemap_set_word_with_salt(key, salt: SALT, word: value.to_word())
-    }
-
+    /// Replaces the value at `key`.
     #[inline(always)]
     pub fn set(mut self, key: K, value: own V) {
-        self.set_unchecked(key: key, value)
+        self[key] = value
+    }
+
+    /// Zeroes the value at `key`: it reads as its type's zero value, as a
+    /// key no one set does. A value holding a storage collection cannot be
+    /// removed, since zeroing its slots would leave the collection's entries.
+    #[inline(always)]
+    pub fn remove(mut self, _ key: K)
+        where V: Clearable
+    {
+        clear_storage(mut self, key)
     }
 }
-
 
 impl<A, B> StorageKey for (A, B)
 where A: StorageKey,
@@ -269,10 +264,10 @@ where A: StorageKey,
     }
 
     #[inline(always)]
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         let a_len = A::encoded_len(self.0)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
     }
 }
 
@@ -287,12 +282,12 @@ where A: StorageKey,
     }
 
     #[inline(always)]
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         let a_len = A::encoded_len(self.0)
         let b_len = B::encoded_len(self.1)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
-        C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
+        C::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len).downcast_unchecked()), self.2)
     }
 }
 
@@ -308,14 +303,14 @@ where A: StorageKey,
     }
 
     #[inline(always)]
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         let a_len = A::encoded_len(self.0)
         let b_len = B::encoded_len(self.1)
         let c_len = C::encoded_len(self.2)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
-        C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
-        D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
+        C::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len).downcast_unchecked()), self.2)
+        D::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len).downcast_unchecked()), self.3)
     }
 }
 
@@ -332,16 +327,16 @@ where A: StorageKey,
     }
 
     #[inline(always)]
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         let a_len = A::encoded_len(self.0)
         let b_len = B::encoded_len(self.1)
         let c_len = C::encoded_len(self.2)
         let d_len = D::encoded_len(self.3)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
-        C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
-        D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
-        E::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len), self.4)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
+        C::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len).downcast_unchecked()), self.2)
+        D::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len).downcast_unchecked()), self.3)
+        E::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len + d_len).downcast_unchecked()), self.4)
     }
 }
 
@@ -359,17 +354,17 @@ where A: StorageKey,
     }
 
     #[inline(always)]
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         let a_len = A::encoded_len(self.0)
         let b_len = B::encoded_len(self.1)
         let c_len = C::encoded_len(self.2)
         let d_len = D::encoded_len(self.3)
         let e_len = E::encoded_len(self.4)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
-        C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
-        D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
-        E::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len), self.4)
-        F::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len + e_len), self.5)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
+        C::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len).downcast_unchecked()), self.2)
+        D::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len).downcast_unchecked()), self.3)
+        E::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len + d_len).downcast_unchecked()), self.4)
+        F::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len + d_len + e_len).downcast_unchecked()), self.5)
     }
 }

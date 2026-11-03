@@ -1,0 +1,60 @@
+// A projection yielding a packed field of a storage struct grants a memory
+// copy of the lane, stored back into the word when the grant ends, so its
+// result space is memory, and it may choose between the lane and a frame
+// temporary. The lane stays reserved in storage meanwhile.
+use std::evm::{Evm, RawStorage, SolSlot}
+
+struct Packed {
+    a: u8,
+    b: u8,
+}
+
+impl Packed {
+    fn a_mut(mut self) -> mut u8 {
+        mut self.a
+    }
+
+    fn pick(mut self, _ lane: bool) -> mut u8 {
+        var scratch: u8 = 0
+        if lane {
+            yield mut self.a
+        } else {
+            yield mut scratch
+            self.b = scratch
+        }
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Go -> (u8, u8, u256),
+}
+
+fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+}
+
+pub contract C uses (storage: mut RawStorage) {
+    mut p: Packed,
+
+    recv M {
+        Go -> (u8, u8, u256) uses (mut p, mut storage) {
+            let a = mut p.a_mut()
+            a += 3
+            let picked = mut p.pick(true)
+            picked += 1
+            let scratch = mut p.pick(false)
+            scratch = 9
+            (p.a, p.b, read_slot(0))
+        }
+    }
+}
+
+#[test]
+fn lane_grants_are_memory_copies() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: (u8, u8, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Go {})
+    assert!(r.0 == 4)
+    assert!(r.1 == 9)
+    assert!(r.2 == 0x0904)
+}

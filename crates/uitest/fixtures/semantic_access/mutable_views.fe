@@ -1,0 +1,42 @@
+// A `mut` span holds its owner mutably for as long as it lives, and a view
+// never leaves a hole, so generic code cannot exchange two descriptors.
+use core::ptr::{MemBuffer, MemSlice}
+
+fn mutate(_ buf: mut MemBuffer) {
+    buf[0] = 3
+}
+
+// S-72. Rejected: the owner is reserved while `s` is live.
+fn reserved(_ buf: mut MemBuffer) {
+    let s = mut buf.span()
+    mutate(mut buf)
+    s[0] = 1
+}
+
+// S-72. Accepted: the span's last use comes first.
+fn released(_ buf: mut MemBuffer) {
+    let s = mut buf.span()
+    s[0] = 1
+    mutate(mut buf)
+}
+
+fn swap<T>(_ a: mut T, _ b: mut T) {
+    let t = a
+    a = b
+    b = t
+}
+
+// S-72. Rejected in the instance at the move: a view never leaves a hole.
+fn exchange(_ x: mut MemBuffer, _ y: mut MemBuffer) {
+    let a = mut x.span()
+    let b = mut y.span()
+    swap(mut a, mut b)
+}
+
+// S-72. Accepted: the halves of a split are disjoint.
+fn halves(_ s: mut MemSlice<u8>) {
+    let (mut a, mut b) = s.split_at(1)
+    a[0] = 1
+    b[0] = 2
+    a[0] = 3
+}

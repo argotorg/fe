@@ -1,12 +1,11 @@
-// A runtime `TStorPtr` handle stored as an ordinary struct field: the handle
-// value lives in persistent storage (written by `init`, read back in later
+// A `TStorPtr` raw pointer stored as an ordinary struct field: the pointer
+// lives in persistent storage (written by `init`, read back in later
 // transactions) while the flag it points at lives in transient storage.
 // For reentrancy locks prefer `std::evm::Mutex`, whose zero-sized `TSlot`
 // lock costs no storage and gets its slot from the layout; this pins the
-// runtime-handle composition itself.
-use core::effect_ref::EffectHandle
+// stored-pointer composition itself.
 use std::evm::effects::TStorPtr
-use std::evm::{Create, Evm, RawOps}
+use std::evm::{Create, Evm, RawStorage}
 
 struct Flagged {
     count: u256,
@@ -14,8 +13,8 @@ struct Flagged {
 }
 
 impl Flagged {
-    fn attach(mut self, slot: u256) uses (evm: Evm) {
-        self.flag = evm.tstor_ptr<bool>(slot)
+    fn attach(mut self, _ flag: TStorPtr<bool>) {
+        self.flag = flag
     }
 }
 
@@ -30,23 +29,28 @@ pub contract C {
     mut state: Flagged,
 
     init() uses (mut state, evm: Evm) {
-        state.attach(slot: 0xfe)
+        let flag = 0xfe as u256 as TStorPtr<bool>
+        state.attach(flag)
     }
 
     recv CMsg {
         HandleSlot -> u256 uses (state) {
-            // The handle written by `init` persists across transactions.
-            state.flag.raw()
+            // The pointer written by `init` persists across transactions.
+            state.flag as u256
         }
 
-        Bump -> u256 uses (mut state) {
-            // Set and clear the transient flag through the persisted handle;
+        Bump -> u256 uses (mut state, raw: mut RawStorage) {
+            // Set and clear the transient flag through the persisted pointer;
             // the persistent counter advances while the flag round-trips.
-            assert!(!state.flag.read())
-            state.flag.write(true)
-            assert!(state.flag.read())
-            state.flag.write(false)
-            assert!(!state.flag.read())
+            // `init` made the pointer to a slot nothing else uses, and the
+            // arm's raw storage authority covers the access.
+            unsafe {
+                assert!(!*state.flag)
+                *state.flag = true
+                assert!(*state.flag)
+                *state.flag = false
+                assert!(!*state.flag)
+            }
             state.count += 1
             state.count
         }
@@ -54,10 +58,10 @@ pub contract C {
 }
 
 #[test]
-fn handle_persists_flag_is_transient() uses (cr: mut Create, evm: mut Evm) {
-    let c = cr.create2<C>(value: 0, args: (), salt: 1)
+fn pointer_persists_flag_is_transient() uses (cr: mut Create, evm: mut Evm) {
+    let c = cr.create2<C>(value: Wei::zero(), args: (), salt: 1)
     let gas = 200000
-    let value = 0
+    let value = Wei::zero()
 
     let slot = evm.call(addr: c, gas, value, message: CMsg::HandleSlot {})
     assert!(slot == 0xfe)

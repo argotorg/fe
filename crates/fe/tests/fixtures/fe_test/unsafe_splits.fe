@@ -1,0 +1,41 @@
+// An `unsafe` block whose tail is a tuple of accesses is one session (an
+// unsafe split): its reservations are the components' together, and the
+// block promises the grants are disjoint. Two raw-slot arrays are held at
+// once this way; each `at` reserves all storage, which stays reserved until
+// both grants end.
+use core::ptr::MemArray
+use std::evm::{Evm, RawStorage, SolArray}
+
+#[test]
+fn raw_arrays_through_one_split() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let (mut a, mut b) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
+        a.push(1)
+        b.push(2)
+        a.push(3)
+        b[0] += 5
+        for x in a {
+            b.push(x * 10)
+        }
+        assert(a.len() == 2 && a[1] == 3)
+        assert(b.len() == 3 && b[0] == 7 && b[1] == 10 && b[2] == 30)
+    }
+}
+
+// `pair_mut` is an unsafe split inside a library function; a caller may
+// forward its grants and reorder them.
+fn swapped(_ xs: mut MemArray<u256>, _ i: usize, _ j: usize) -> (mut u256, mut u256) {
+    let (mut a, mut b) = xs.pair_mut(i, j)
+    (b, a)
+}
+
+#[test]
+fn pair_mut_forwarded_and_reordered() {
+    var xs = MemArray<u256>::new_zeroed(4)
+    xs[0] = 1
+    xs[3] = 2
+    let (mut first, mut second) = swapped(mut xs, 0, 3)
+    first += 10
+    second += 20
+    assert(xs[0] == 21 && xs[3] == 12)
+}

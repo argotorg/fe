@@ -1,5 +1,5 @@
-pub fn factorial(mut num: own u32) -> u32 {
-    let mut res = 1
+pub fn factorial(var num: own u32) -> u32 {
+    var res = 1
     while num > 0 {
         res *= num
         num -= 1
@@ -8,8 +8,8 @@ pub fn factorial(mut num: own u32) -> u32 {
     res
 }
 
-pub fn factorial2(mut num: own u32) -> u32 {
-    let mut res = 1
+pub fn factorial2(var num: own u32) -> u32 {
+    var res = 1
     while true {
         if num > 1 {
             res *= num
@@ -23,8 +23,8 @@ pub fn factorial2(mut num: own u32) -> u32 {
 }
 
 
-pub fn factorial3(mut num: own u32) -> u32 {
-    let mut res = 1
+pub fn factorial3(var num: own u32) -> u32 {
+    var res = 1
     while true {
         num = if num > 1 {
             res *= num

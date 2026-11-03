@@ -1,0 +1,87 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/shape_params.fe
+---
+Root@0..81
+  ItemList@0..80
+    Item@0..22
+      Trait@0..22
+        TraitKw@0..5 "trait"
+        WhiteSpace@5..6 " "
+        Ident@6..10 "Call"
+        GenericParamList@10..19
+          Lt@10..11 "<"
+          ShapeGenericParam@11..18
+            Ident@11..16 "shape"
+            WhiteSpace@16..17 " "
+            Ident@17..18 "A"
+          Gt@18..19 ">"
+        WhiteSpace@19..20 " "
+        TraitItemList@20..22
+          LBrace@20..21 "{"
+          RBrace@21..22 "}"
+    Newline@22..24 "\n\n"
+    Item@24..80
+      Func@24..80
+        FnKw@24..26 "fn"
+        WhiteSpace@26..27 " "
+        FuncSignature@27..77
+          Ident@27..32 "apply"
+          GenericParamList@32..69
+            Lt@32..33 "<"
+            ShapeGenericParam@33..40
+              Ident@33..38 "shape"
+              WhiteSpace@38..39 " "
+              Ident@39..40 "A"
+            Comma@40..41 ","
+            WhiteSpace@41..42 " "
+            TypeGenericParam@42..52
+              Ident@42..43 "T"
+              TypeBoundList@43..52
+                Colon@43..44 ":"
+                WhiteSpace@44..45 " "
+                TypeBound@45..52
+                  TraitRef@45..52
+                    Path@45..52
+                      PathSegment@45..52
+                        Ident@45..49 "Call"
+                        GenericArgList@49..52
+                          Lt@49..50 "<"
+                          TypeGenericArg@50..51
+                            PathType@50..51
+                              Path@50..51
+                                PathSegment@50..51
+                                  Ident@50..51 "A"
+                          Gt@51..52 ">"
+            Comma@52..53 ","
+            WhiteSpace@53..54 " "
+            ConstGenericParam@54..68
+              ConstKw@54..59 "const"
+              WhiteSpace@59..60 " "
+              Ident@60..61 "N"
+              Colon@61..62 ":"
+              WhiteSpace@62..63 " "
+              PathType@63..68
+                Path@63..68
+                  PathSegment@63..68
+                    Ident@63..68 "usize"
+            Gt@68..69 ">"
+          FuncParamList@69..77
+            LParen@69..70 "("
+            FnParam@70..76
+              Underscore@70..71 "_"
+              WhiteSpace@71..72 " "
+              Ident@72..73 "t"
+              Colon@73..74 ":"
+              WhiteSpace@74..75 " "
+              PathType@75..76
+                Path@75..76
+                  PathSegment@75..76
+                    Ident@75..76 "T"
+            RParen@76..77 ")"
+        WhiteSpace@77..78 " "
+        BlockExpr@78..80
+          LBrace@78..79 "{"
+          RBrace@79..80 "}"
+  Newline@80..81 "\n"

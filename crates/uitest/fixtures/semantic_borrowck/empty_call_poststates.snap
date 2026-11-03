@@ -1,6 +1,0 @@
----
-source: crates/uitest/tests/semantic_borrowck.rs
-expression: diags
-input_file: fixtures/semantic_borrowck/empty_call_poststates.fe
----
-

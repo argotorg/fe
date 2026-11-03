@@ -9,97 +9,66 @@ type @layout_0 = {i256, i256};
 
 global private const @layout_0 $const_region_0 = {0, 10};
 
-func private %for_range_sum() -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.constref<@layout_0> = const.ref $const_region_0;
-        v3.i256 = call %len v2;
-        jump block2;
-
-    block2:
-        v25.i256 = phi (0.i256 block1) (v11 block8);
-        v4.i256 = phi (0.i256 block1) (v19 block8);
-        v6.i1 = lt v4 v3;
-        br v6 block3 block5;
-
-    block3:
-        v9.i256 = call %get v2 v4;
-        (v11.i256, v12.i1) = uaddo v25 v9;
-        br v12 block6 block7;
-
-    block4:
-        (v19.i256, v20.i1) = uaddo v4 1.i256;
-        br v20 block6 block8;
-
-    block5:
-        return v25;
-
-    block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block7:
-        jump block4;
-
-    block8:
-        jump block2;
-}
-
-func private %get(v0.constref<@layout_0>, v1.i256) -> i256 {
+func inline(always) private %has(v0.constref<@layout_0>, v1.i256) -> i1 {
     block0:
         jump block1;
 
     block1:
         v4.constref<i256> = const.proj v0 0.i256;
         v5.i256 = const.load v4;
-        (v7.i256, v8.i1) = uaddo v5 v1;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v7;
+        v7.constref<i256> = const.proj v0 1.i256;
+        v8.i256 = const.load v7;
+        v10.i1 = call %range_has v1 v5 v8;
+        return v10;
 }
 
-func private %len(v0.constref<@layout_0>) -> i256 {
+func private %main() -> i256 {
     block0:
+        v0.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        v3.constref<i256> = const.proj v0 1.i256;
-        v4.i256 = const.load v3;
-        v6.constref<i256> = const.proj v0 0.i256;
-        v7.i256 = const.load v6;
-        v8.i1 = lt v4 v7;
-        br v8 block2 block3;
+        v3.constref<@layout_0> = const.ref $const_region_0;
+        v4.i256 = call %start v3;
+        jump block2;
 
     block2:
-        jump block4;
+        v26.i256 = phi (0.i256 block1) (v18 block4);
+        v6.i256 = phi (v4 block1) (v12 block4);
+        v7.i1 = call %has v3 v6;
+        br v7 block3 block5;
 
     block3:
-        v10.constref<i256> = const.proj v0 1.i256;
-        v11.i256 = const.load v10;
-        v12.constref<i256> = const.proj v0 0.i256;
-        v13.i256 = const.load v12;
-        (v14.i256, v15.i1) = usubo v11 v13;
-        br v15 block5 block6;
+        obj.store v0 v6;
+        jump block7;
 
     block4:
-        v20.i256 = phi (0.i256 block2) (v14 block6);
-        return v20;
+        v12.i256 = call %next v3 v6;
+        jump block2;
 
     block5:
+        return v26;
+
+    block6:
+        v15.i256 = obj.load v0;
+        jump block9;
+
+    block7:
+        jump block6;
+
+    block8:
+        (v18.i256, v19.i1) = uaddo v26 v15;
+        br v19 block10 block11;
+
+    block9:
+        jump block8;
+
+    block10:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block6:
+    block11:
         jump block4;
 }
 
@@ -108,8 +77,60 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i256 = call %for_range_sum;
+        v0.i256 = call %main;
         evm_stop;
+}
+
+func inline(always) private %next(v0.constref<@layout_0>, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %wrapping_add v1 1.i256;
+        return v4;
+}
+
+func inline(always) private %range_has(v0.i256, v1.i256, v2.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i1 = gt v1 v0;
+        v6.i1 = is_zero v5;
+        br v6 block5 block3;
+
+    block2:
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v9.i1 = phi (1.i1 block2) (0.i1 block3);
+        return v9;
+
+    block5:
+        v12.i1 = lt v0 v2;
+        br v12 block2 block3;
+}
+
+func inline(always) private %start(v0.constref<@layout_0>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.constref<i256> = const.proj v0 0.i256;
+        v4.i256 = const.load v3;
+        return v4;
+}
+
+func private %wrapping_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = add v0 v1;
+        return v4;
 }
 
 

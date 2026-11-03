@@ -1,52 +1,39 @@
 use cranelift_entity::{EntityRef, entity_impl};
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     analysis::{
         semantic::instance::{SemanticInstance, SemanticInstanceKey},
         ty::{
-            provider::ProviderAddressSpace,
-            ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode, LocalBinding},
+            provider::AddressSpace,
+            ty_check::{BodyOwner, EffectPassMode, ForLoopStep, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
     },
-    hir_def::{BinOp, ExprId, Func, StmtId, StringId, UnOp},
+    hir_def::{BinOp, ExprId, Func, PatId, StmtId, StringId, UnOp},
     projection::{IndexSource, Projection, ProjectionPath},
     semantic::ProviderBinding,
 };
 
 use super::{consts::SemConstId, ctfe::VerifiedConstValueId};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum Mutability {
     Mutable,
     Immutable,
 }
 
-/// When a borrow begins excluding overlapping accesses. Only implicit mutable
-/// call receivers may reserve their target until argument evaluation finishes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub enum BorrowActivation<'db> {
-    Immediate,
-    /// Keep the intended call even when evaluating another argument diverges
-    /// and lowering never emits the call expression itself.
-    AtCall {
-        call_site: CallSiteId,
-        callee: SemanticCalleeRef<'db>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct FieldIndex(pub u16);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct VariantIndex(pub u16);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct SLocalId(u32);
 entity_impl!(SLocalId);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct SBlockId(u32);
 entity_impl!(SBlockId);
 
@@ -55,26 +42,14 @@ entity_impl!(SBlockId);
 /// Constant canonicalization may replace the statement's expression, but it
 /// must preserve this identity so side tables can follow the semantic
 /// operation without relying on block/statement coordinates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct SStmtId(u32);
 entity_impl!(SStmtId);
 
 pub type SValueId = SLocalId;
 pub type SemanticProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId>;
 
-unsafe impl<'db> Update for SemanticProjectionPath<'db> {
-    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
-        let old_value = unsafe { &mut *old_pointer };
-        if *old_value == new_value {
-            false
-        } else {
-            *old_value = new_value;
-            true
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SemanticBody<'db> {
     pub owner: SemanticInstance<'db>,
     pub template_owner: BodyOwner<'db>,
@@ -82,6 +57,8 @@ pub struct SemanticBody<'db> {
     pub entry_locals: Vec<SLocalId>,
     pub locals: Vec<SLocal<'db>>,
     pub blocks: Vec<SBlock<'db>>,
+    /// The components of each unsafe split, which one session grants.
+    pub unsafe_splits: Vec<Vec<SValueId>>,
 }
 
 impl<'db> SemanticBody<'db> {
@@ -110,7 +87,7 @@ impl<'db> SemanticBody<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SLocal<'db> {
     pub ty: TyId<'db>,
     pub mutability: Mutability,
@@ -120,19 +97,19 @@ pub struct SLocal<'db> {
     pub layout_backing_sources: Vec<LayoutBackingSource<'db>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ValueProvenance<'db> {
     Ordinary,
     RootProvider(ProviderBinding<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PlaceProvenance<'db> {
     RootProvider(ProviderBinding<'db>),
     Derived(SPlace<'db>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum LayoutBackingProjection {
     Field(FieldIndex),
     VariantField {
@@ -165,7 +142,8 @@ pub(crate) fn layout_backing_query<'db>(
                 LayoutBackingProjection::Index(None)
             }
             Projection::Deref => continue,
-            Projection::Discriminant => return None,
+            // An entry lies at a slot computed at runtime.
+            Projection::Discriminant | Projection::Entry(_) => return None,
         };
         target.push(step);
         structural_path.push(projection.clone());
@@ -173,12 +151,11 @@ pub(crate) fn layout_backing_query<'db>(
     Some((target, structural_path))
 }
 
-/// Physical place provenance for layout-bearing value projections.
+/// Physical place provenance for value projections.
 ///
 /// This keeps backing storage alive and lets borrow normalization recover a
-/// projectable carrier place. It is deliberately separate from
-/// `LayoutEvidenceBody`, which transports semantic runtime-root values.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+/// projectable carrier place.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum LayoutBackingPlace<'db> {
     Local(SPlace<'db>),
     RootProvider {
@@ -194,8 +171,8 @@ pub enum LayoutBackingPlace<'db> {
 }
 
 /// Maps a projection in the current value to the place that physically backs
-/// it. This is carrier provenance, not runtime layout evidence.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+/// it: carrier provenance.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct LayoutBackingSource<'db> {
     pub target: Vec<LayoutBackingProjection>,
     pub source: LayoutBackingPlace<'db>,
@@ -223,16 +200,15 @@ impl<'db> PlaceProvenance<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticLocalKind {
     Erased,
     DirectValue,
     PlaceCarrier,
     PlaceBoundValue,
-    DirectCarrier,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticLocalRole<'db> {
     Erased,
     DirectValue {
@@ -246,10 +222,6 @@ pub enum SemanticLocalRole<'db> {
         provenance: PlaceProvenance<'db>,
         value_ty: TyId<'db>,
     },
-    DirectCarrier {
-        provider: Option<ProviderBinding<'db>>,
-        target_ty: TyId<'db>,
-    },
 }
 
 impl<'db> SemanticLocalRole<'db> {
@@ -259,7 +231,6 @@ impl<'db> SemanticLocalRole<'db> {
             Self::DirectValue { .. } => SemanticLocalKind::DirectValue,
             Self::PlaceCarrier { .. } => SemanticLocalKind::PlaceCarrier,
             Self::PlaceBoundValue { .. } => SemanticLocalKind::PlaceBoundValue,
-            Self::DirectCarrier { .. } => SemanticLocalKind::DirectCarrier,
         }
     }
 
@@ -268,7 +239,6 @@ impl<'db> SemanticLocalRole<'db> {
             Self::PlaceCarrier { value_ty, .. } | Self::PlaceBoundValue { value_ty, .. } => {
                 *value_ty
             }
-            Self::DirectCarrier { target_ty, .. } => *target_ty,
             Self::Erased | Self::DirectValue { .. } => local_ty,
         }
     }
@@ -283,72 +253,71 @@ impl<'db> SemanticLocalRole<'db> {
                 provider: Some(provider),
                 ..
             } => Some(provider.clone()),
-            Self::DirectCarrier {
-                provider: Some(provider),
-                ..
-            } => Some(provider.clone()),
             Self::Erased
             | Self::DirectValue {
                 provenance: ValueProvenance::Ordinary,
             }
-            | Self::PlaceCarrier { provider: None, .. }
-            | Self::DirectCarrier { provider: None, .. } => None,
+            | Self::PlaceCarrier { provider: None, .. } => None,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SBlock<'db> {
     pub stmts: Vec<SStmt<'db>>,
     pub terminator: STerminator<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SemanticCalleeRef<'db> {
     pub key: SemanticInstanceKey<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemOrigin<'db> {
     Expr(ExprId),
     Stmt(StmtId),
+    /// A pattern binding.
+    Pat(PatId),
     Body(BodyOwner<'db>),
     Synthetic,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum CallSiteId {
     Expr(ExprId),
-    ForLoopLen(StmtId),
-    ForLoopGet(StmtId),
+    ForLoop(StmtId, ForLoopStep),
 }
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct SemanticConstRef<'db> {
+    #[returns(copy)]
     pub instance: SemanticInstanceKey<'db>,
+    #[returns(copy)]
     pub ty: TyId<'db>,
+    #[returns(copy)]
     pub origin: SemOrigin<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ManualContractSection {
     Init,
     Runtime,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticCodeRegionRef<'db> {
     ManualContractRoot { func: Func<'db> },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticCodeRegionTarget<'db> {
     Resolved(SemanticCodeRegionRef<'db>),
     Deferred { arg: ExprId, ty: TyId<'db> },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SPlace<'db> {
     pub local: SLocalId,
     pub path: SemanticProjectionPath<'db>,
@@ -408,36 +377,58 @@ impl<'db> SPlace<'db> {
             .push(Projection::Index(IndexSource::Dynamic(index)));
     }
 
+    pub fn push_entry(&mut self, key: SValueId) {
+        self.path.push(Projection::Entry(key));
+    }
+
     pub fn push_deref(&mut self) {
         self.path.push(Projection::Deref);
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+impl SPlace<'_> {
+    /// The locals computing the place's address: its base and dynamic indices.
+    pub fn used_locals(&self) -> Vec<SLocalId> {
+        std::iter::once(self.local)
+            .chain(self.path.iter().filter_map(|projection| match projection {
+                Projection::Index(IndexSource::Dynamic(index)) | Projection::Entry(index) => {
+                    Some(*index)
+                }
+                Projection::Field(_)
+                | Projection::VariantField { .. }
+                | Projection::Discriminant
+                | Projection::Index(IndexSource::Constant(_))
+                | Projection::Deref
+                | Projection::Index(IndexSource::Any) => None,
+            }))
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: SEffectArgValue<'db>,
     pub pass_mode: EffectPassMode,
-    pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
     pub provider_target_ty: Option<TyId<'db>>,
-    pub provider: Option<ProviderAddressSpace>,
+    pub provider: Option<AddressSpace>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SEffectArgValue<'db> {
     Place(SPlace<'db>),
     Value(SOperand),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SOperandOrigin {
     Inherited,
     Expr(ExprId),
     Synthetic,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SOperand {
     pub value: SValueId,
     pub origin: SOperandOrigin,
@@ -474,11 +465,19 @@ impl SOperand {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SExpr<'db> {
+    /// Passes a value on as it is, copying it: never the read of a
+    /// non-`Copy` binding by value, which `UseValue` is, so it forwards values
+    /// a read already took, such as a join's branch values.
     Forward(SOperand),
     UseValue(SOperand),
     ReadPlace {
+        place: SPlace<'db>,
+    },
+    /// A read of a place's value that does not take it: the tests of a
+    /// pattern whose bindings take their components where they lie.
+    InspectPlace {
         place: SPlace<'db>,
     },
     CodeRegionRef {
@@ -522,8 +521,7 @@ pub enum SExpr<'db> {
     Borrow {
         place: SPlace<'db>,
         kind: BorrowKind,
-        activation: BorrowActivation<'db>,
-        provider: Option<ProviderAddressSpace>,
+        provider: Option<AddressSpace>,
     },
     GetEnumTag {
         value: SOperand,
@@ -551,7 +549,57 @@ pub enum SExpr<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+impl SExpr<'_> {
+    /// The locals the expression reads, including place addresses.
+    pub fn used_locals(&self) -> Vec<SLocalId> {
+        let mut locals = Vec::new();
+        match self {
+            Self::Forward(value)
+            | Self::UseValue(value)
+            | Self::Unary { value, .. }
+            | Self::Cast { value, .. }
+            | Self::ArrayRepeat { value, .. }
+            | Self::GetEnumTag { value }
+            | Self::IsEnumVariant { value, .. }
+            | Self::ExtractEnumField { value, .. }
+            | Self::Field { base: value, .. } => locals.push(value.value),
+            Self::ReadPlace { place }
+            | Self::InspectPlace { place }
+            | Self::Borrow { place, .. } => {
+                locals.extend(place.used_locals());
+            }
+            Self::Binary { lhs, rhs, .. }
+            | Self::Index {
+                base: lhs,
+                index: rhs,
+            } => {
+                locals.push(lhs.value);
+                locals.push(rhs.value);
+            }
+            Self::AggregateMake { fields, .. } | Self::EnumMake { fields, .. } => {
+                locals.extend(fields.iter().map(|field| field.value));
+            }
+            Self::Call {
+                args, effect_args, ..
+            } => {
+                locals.extend(args.iter().map(|arg| arg.value));
+                for arg in effect_args {
+                    match &arg.arg {
+                        SEffectArgValue::Place(place) => locals.extend(place.used_locals()),
+                        SEffectArgValue::Value(value) => locals.push(value.value),
+                    }
+                }
+            }
+            Self::CodeRegionRef { .. }
+            | Self::Const(_)
+            | Self::CodeRegionOffset { .. }
+            | Self::CodeRegionLen { .. } => {}
+        }
+        locals
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SConst<'db> {
     Value(VerifiedConstValueId<'db>),
     Description(SemConstId<'db>),
@@ -560,26 +608,44 @@ pub enum SConst<'db> {
     Ref(SemanticConstRef<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SStmt<'db> {
     pub id: SStmtId,
     pub origin: SemOrigin<'db>,
     pub kind: SStmtKind<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SStmtKind<'db> {
-    Assign { dst: SLocalId, expr: SExpr<'db> },
-    Store { dst: SPlace<'db>, src: SOperand },
+    Assign {
+        dst: SLocalId,
+        expr: SExpr<'db>,
+    },
+    Store {
+        dst: SPlace<'db>,
+        src: SOperand,
+    },
+    /// Closes the access opened by statement `access` (a borrow, a view, or
+    /// a projection call's session). Liveness elaboration places it after
+    /// the access's last use on each path.
+    End {
+        access: SStmtId,
+    },
+    /// Destroys what `place` still owns: its owner's scope ends, or a store
+    /// is about to overwrite it. Drop elaboration decides which of its parts
+    /// are initialized.
+    Drop {
+        place: SPlace<'db>,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct STerminator<'db> {
     pub origin: SemOrigin<'db>,
     pub kind: STerminatorKind<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum STerminatorKind<'db> {
     Goto(SBlockId),
     Branch {
@@ -597,4 +663,53 @@ pub enum STerminatorKind<'db> {
         message: Option<StringId<'db>>,
     },
     Return(Option<SOperand>),
+    /// A projection grants `value` to its caller and suspends. When the
+    /// caller ends the session, the slide resumes at `resume`.
+    Yield {
+        value: SOperand,
+        resume: SBlockId,
+    },
+}
+
+impl STerminatorKind<'_> {
+    pub fn successors(&self) -> Vec<SBlockId> {
+        match self {
+            Self::Goto(block) | Self::Yield { resume: block, .. } => vec![*block],
+            Self::Branch {
+                then_bb, else_bb, ..
+            } => vec![*then_bb, *else_bb],
+            Self::MatchEnum { cases, default, .. } => cases
+                .iter()
+                .map(|(_, block)| *block)
+                .chain(*default)
+                .collect(),
+            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+        }
+    }
+
+    /// Successors in the same order as [`Self::successors`].
+    pub fn successors_mut(&mut self) -> Vec<&mut SBlockId> {
+        match self {
+            Self::Goto(block) | Self::Yield { resume: block, .. } => vec![block],
+            Self::Branch {
+                then_bb, else_bb, ..
+            } => vec![then_bb, else_bb],
+            Self::MatchEnum { cases, default, .. } => cases
+                .iter_mut()
+                .map(|(_, block)| block)
+                .chain(default.as_mut())
+                .collect(),
+            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+        }
+    }
+
+    pub fn used_locals(&self) -> Vec<SLocalId> {
+        match self {
+            Self::Goto(_) | Self::Assert { .. } | Self::Return(None) => Vec::new(),
+            Self::Branch { cond: value, .. }
+            | Self::MatchEnum { value, .. }
+            | Self::Return(Some(value))
+            | Self::Yield { value, .. } => vec![value.value],
+        }
+    }
 }

@@ -4,11 +4,13 @@ use crate::{HirDb, hir_def::Partial};
 #[salsa::interned]
 #[derive(Debug)]
 pub struct PathId<'db> {
+    #[returns(copy)]
     pub kind: PathKind<'db>,
+    #[returns(copy)]
     pub parent: Option<PathId<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum PathKind<'db> {
     Ident {
         ident: Partial<IdentId<'db>>,

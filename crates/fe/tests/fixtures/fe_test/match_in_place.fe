@@ -1,0 +1,46 @@
+// A pattern on a non-`Copy` place matches it in place: a match that binds
+// nothing leaves the place whole, and a plain name takes only its component.
+use core::ptr::MemBuffer
+
+enum Status { A, B }
+struct Store { status: Status, buf: Option<MemBuffer>, n: u256 }
+
+fn store(_ status: own Status, _ len: u256) -> Store {
+    Store { status, buf: Option::Some(MemBuffer::alloc(len.downcast_unchecked())), n: 7 }
+}
+
+fn rank(_ s: own Store) -> u256 {
+    let x = match s.status {
+        Status::A => 1
+        Status::B => 2
+    }
+    let y = if let Status::B = s.status { 10 } else { 20 }
+    let len = match s.buf {
+        Option::Some(b) => b.len() as u256
+        Option::None => 0
+    }
+    x + y + len + s.n
+}
+
+fn take_buf(_ s: mut Store) -> u256 {
+    match s.buf {
+        Option::Some(b) => {
+            s.buf = Option::None
+            b.len() as u256
+        }
+        Option::None => 0
+    }
+}
+
+#[test]
+fn matches_read_in_place() {
+    assert!(rank(store(Status::A, 3)) == 1 + 20 + 3 + 7)
+    assert!(rank(store(Status::B, 5)) == 2 + 10 + 5 + 7)
+}
+
+#[test]
+fn a_restored_hole_reads_back() {
+    var s = store(Status::A, 4)
+    assert!(take_buf(mut s) == 4)
+    assert!(take_buf(mut s) == 0)
+}

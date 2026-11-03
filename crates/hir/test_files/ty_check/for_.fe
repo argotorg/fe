@@ -5,7 +5,7 @@ struct Foo {
 
 fn foo() -> i256 {
     let arr = [1, 2, 3, 4, 5]
-    let mut res = 0
+    var res = 0
     for i in arr {
         res += i
     }
@@ -14,7 +14,7 @@ fn foo() -> i256 {
 }
 
 fn bar(foo_arr: [Foo; 10]) -> i32 {
-    let mut res = 0
+    var res = 0
     for Foo {x, y} in foo_arr {
         res += x + y
     }

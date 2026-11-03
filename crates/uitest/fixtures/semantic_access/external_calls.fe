@@ -1,0 +1,134 @@
+// External executions can reenter the contract and access any persistent or
+// transient slot: a call that may start one interferes with every open
+// storage access, whether it starts the execution itself or through a
+// helper whose effects permit it.
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::{Address, Call, Evm, RawStorage}
+
+fn ping() uses (call: mut Call) {
+    var output = MemBuffer::empty()
+    let outcome = call.raw_call(
+        addr: Address::new(1), gas: 100000, value: Wei::zero(),
+        args: MemSpan::empty(), ret: mut output,
+    )
+}
+
+fn ping_evm() uses (evm: mut Evm) {
+    var output = MemBuffer::empty()
+    let outcome = evm.raw_call(
+        addr: Address::new(1), gas: 100000, value: Wei::zero(),
+        args: MemSpan::empty(), ret: mut output,
+    )
+}
+
+fn touch_raw() uses (storage: mut RawStorage) {}
+
+fn bump_then_call(_ target: mut u256) uses (call: mut Call) {
+    target += 1
+    ping()
+}
+
+// Rejected: a call crosses an open `mut` storage access.
+pub contract CallAcrossMut {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        let held = mut value
+        var output = MemBuffer::empty()
+        let outcome = call.raw_call(
+            addr: Address::new(1), gas: 100000, value: Wei::zero(),
+            args: MemSpan::empty(), ret: mut output,
+        )
+        held = 1
+    }
+}
+
+// Rejected: a call can write through an open `ref` storage access.
+pub contract CallAcrossRef {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        let held = ref value
+        ping()
+        let observed: u256 = held
+    }
+}
+
+// Rejected: the external call is hidden behind a helper whose `Evm` effect
+// permits it.
+pub contract HiddenCall {
+    mut value: u256,
+    init() uses (mut value, evm: mut Evm) {
+        let held = mut value
+        ping_evm()
+        held = 1
+    }
+}
+
+// Rejected: raw storage authority overlaps every storage field.
+pub contract RawStorageOverlap {
+    mut value: u256,
+    init() uses (mut value, storage: mut RawStorage) {
+        let held = mut value
+        touch_raw()
+        held = 1
+    }
+}
+
+// Accepted: a reentrant call between closed storage accesses.
+pub contract CallBetweenAccesses {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        let before = mut value
+        before = 1
+        ping()
+        let after = mut value
+        after += 1
+    }
+}
+
+// Rejected: even a static call reads through an open `mut` storage access.
+pub contract StaticAcrossMut {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        let held = mut value
+        var output = MemBuffer::empty()
+        let outcome = call.raw_staticcall(
+            addr: Address::new(1), gas: 100000,
+            args: MemSpan::empty(), ret: mut output,
+        )
+        held = 1
+    }
+}
+
+// Accepted: a static call and a `ref` storage access both read.
+pub contract StaticAcrossRef {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        let held = ref value
+        var output = MemBuffer::empty()
+        let outcome = call.raw_staticcall(
+            addr: Address::new(1), gas: 100000,
+            args: MemSpan::empty(), ret: mut output,
+        )
+        let observed: u256 = held
+    }
+}
+
+// Accepted: a precompile cannot call back into the contract.
+pub contract PrecompileAcrossMut {
+    mut value: u256,
+    init() uses (mut value) {
+        let held = mut value
+        let digest = std::evm::crypto::sha256(MemSpan::empty())
+        held = 1
+    }
+}
+
+// Rejected: a storage place passed to a callee whose effects permit
+// reentrant calls: a callee's data parameters must be compatible with its
+// effects.
+pub contract ArgumentAcrossCall {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        bump_then_call(mut value)
+    }
+}

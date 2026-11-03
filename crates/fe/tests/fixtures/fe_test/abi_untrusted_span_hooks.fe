@@ -1,0 +1,63 @@
+// A user type's `AbiSpan`/`AbiSize` are safe traits, so the decoder bounds
+// what they report by the input: a payload end past the input is a decode
+// error, not a copy from past the input.
+use core::abi::{AbiSize, AbiSpan, ByteInput, Decode}
+use std::abi::DynArray
+use core::ptr::{MemArray, MemBuffer}
+use std::abi::Sol
+
+// Reports a payload end far past any input.
+struct FarEnd {
+    x: u256,
+}
+
+impl AbiSize for FarEnd {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = true
+}
+
+impl AbiSpan<Sol> for FarEnd {
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        pos + 0x2000
+    }
+}
+
+// Reports an empty head, so its tail may start at the end of the input, and a
+// one-word payload there.
+struct NoHead {
+    x: u256,
+}
+
+impl AbiSize for NoHead {
+    const HEAD_SIZE: u256 = 0
+    const IS_DYNAMIC: bool = true
+}
+
+impl AbiSpan<Sol> for NoHead {
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        pos + 32
+    }
+}
+
+/// An array tail of one element whose tail is at `offset` after the heads,
+/// in an input of `len` bytes.
+fn one_element(len: u256, offset: u256) -> MemBuffer {
+    var input = MemBuffer::alloc(len.downcast_unchecked())
+    var words = MemArray<u256>::new_zeroed(2)
+    words[0] = 1
+    words[1] = offset
+    input.copy_from(dest_offset: 0, words.span())
+    input
+}
+
+#[test(should_revert)]
+fn payload_end_past_input_is_a_decode_error() {
+    let input = one_element(len: 96, offset: 0x20)
+    let _ = <DynArray<FarEnd> as Decode<Sol>>::decode_from(input.span(), 0)
+}
+
+#[test(should_revert)]
+fn empty_head_at_input_end_is_a_decode_error() {
+    let input = one_element(len: 64, offset: 0x20)
+    let _ = <DynArray<NoHead> as Decode<Sol>>::decode_from(input.span(), 0)
+}

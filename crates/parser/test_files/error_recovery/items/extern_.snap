@@ -1,6 +1,6 @@
 ---
 source: crates/parser/tests/error_recovery.rs
-assertion_line: 15
+assertion_line: 17
 expression: node
 input_file: test_files/error_recovery/items/extern_.fe
 ---
@@ -12,9 +12,9 @@ Root@0..93
         WhiteSpace@6..7 " "
         ExternItemList@7..48
           LBrace@7..8 "{"
-          Func@8..30
-            Newline@8..9 "\n"
-            WhiteSpace@9..13 "    "
+          Newline@8..9 "\n"
+          WhiteSpace@9..13 "    "
+          Func@13..30
             PubKw@13..16 "pub"
             WhiteSpace@16..17 " "
             UnsafeKw@17..23 "unsafe"
@@ -23,9 +23,9 @@ Root@0..93
             WhiteSpace@26..27 " "
             FuncSignature@27..30
               Ident@27..30 "Foo"
-          Func@30..48
-            Newline@30..32 "\n\n"
-            WhiteSpace@32..36 "    "
+          Newline@30..32 "\n\n"
+          WhiteSpace@32..36 "    "
+          Func@36..48
             PubKw@36..39 "pub"
             WhiteSpace@39..40 " "
             FnKw@40..42 "fn"

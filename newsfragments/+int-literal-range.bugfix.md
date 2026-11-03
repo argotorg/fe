@@ -1,0 +1,1 @@
+An integer literal that does not fit its type, such as `let x: u8 = 300` or a `256` pattern matched against a `u8`, is now rejected; it was silently truncated. A `usize` or `isize` literal must fit in 64 bits.

@@ -1,0 +1,24 @@
+// A recv arm's path goes where the arm resolves it: in a named block, a
+// single segment is the msg's item, even where another item has its name.
+pub struct Transfer {}
+
+msg Token {
+    #[selector = 0x01]
+    Transfer { amount: u256 } -> bool,
+}
+
+pub contract Wallet {
+    recv Token {
+        Transfer { amount } -> bool {
+            amount > 0
+        }
+    }
+}
+
+pub contract Other {
+    recv {
+        Token::Transfer { amount } -> bool {
+            amount > 1
+        }
+    }
+}

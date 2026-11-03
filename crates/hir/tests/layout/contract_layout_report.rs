@@ -1,11 +1,12 @@
-use crate::layout_test_support::parse_ok;
+use crate::layout_test_support::{parse_module, parse_ok};
 use fe_hir::{
-    analysis::ty::ProviderAddressSpace,
+    analysis::{initialize_analysis_pass, ty::AddressSpace},
     core::semantic::{
-        ContractLayoutEntry, ContractLayoutEntryKind, ContractLayoutParameterOrigin,
+        ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind, ContractLayoutError,
         ContractLayoutValue,
     },
-    test_db::{HirAnalysisTestDb, find_contract},
+    hir_def::IdentId,
+    test_db::{HirAnalysisTestDb, find_contract, format_diagnostics},
 };
 
 fn entry<'a, 'db>(
@@ -24,87 +25,6 @@ fn scalar_value(db: &HirAnalysisTestDb, entry: &ContractLayoutEntry<'_>) -> Stri
         panic!("expected scalar layout value: {entry:#?}");
     };
     value.data(db).to_string()
-}
-
-#[test]
-fn report_distinguishes_inline_fields_from_explicit_and_inferred_parameters() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-struct CounterStore {
-    global: u256,
-    counts: StorageMap<u256, u256>,
-}
-struct Slot<const ROOT: u256 = _> {}
-struct UsizeSlot<const ROOT: usize = _> {}
-
-pub contract Counter {
-    mut store: CounterStore,
-    mut foo: u256,
-    mut baz: StorageMap<u256, u256, 0>,
-    mut usize_root: UsizeSlot,
-    mut fixed: Slot<7>,
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "Counter");
-    let report = contract.layout_report(&db).unwrap();
-    let paths = report
-        .entries
-        .iter()
-        .map(|entry| entry.path.display(&db))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        paths,
-        [
-            "baz.SALT",
-            "store.global",
-            "store.counts.SALT",
-            "foo",
-            "usize_root.ROOT",
-            "fixed.ROOT",
-        ]
-    );
-
-    let expected = [
-        (
-            "baz.SALT",
-            "0",
-            ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit),
-        ),
-        ("store.global", "1", ContractLayoutEntryKind::InlineField),
-        (
-            "store.counts.SALT",
-            "2",
-            ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred),
-        ),
-        ("foo", "3", ContractLayoutEntryKind::InlineField),
-        (
-            "usize_root.ROOT",
-            "4",
-            ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred),
-        ),
-        (
-            "fixed.ROOT",
-            "7",
-            ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit),
-        ),
-    ];
-    for (path, value, kind) in expected {
-        let entry = entry(&db, &report.entries, path);
-        assert_eq!(scalar_value(&db, entry), value, "{path}");
-        assert_eq!(entry.kind, kind, "{path}");
-        assert_eq!(entry.address_space, ProviderAddressSpace::Storage, "{path}");
-        let ty = if path == "usize_root.ROOT" {
-            "usize"
-        } else {
-            "u256"
-        };
-        assert_eq!(entry.ty.pretty_print(&db).to_string(), ty, "{path}");
-    }
 }
 
 #[test]
@@ -156,88 +76,17 @@ contract C {
 }
 
 #[test]
-fn report_labels_shared_parameters_and_mutually_exclusive_variants() {
+fn report_numbers_storage_and_transient_fields_apart() {
     parse_ok!(
         db,
         top_mod,
         r#"
-struct Slot<const ROOT: u256 = _> {}
-struct Shared<const ROOT: u256 = _> {
-    left: Slot<ROOT>,
-    right: Slot<ROOT>,
-}
-struct Explicit<const LEFT: u256 = _, const RIGHT: u256 = _> {}
-enum Choice {
-    Named { value: Slot },
-    Tuple(Slot),
-}
-
-contract C {
-    mut shared: Shared,
-    mut choice: Choice,
-    mut explicit: Explicit<4, 4>,
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let report = contract.layout_report(&db).unwrap();
-
-    for path in ["shared.left.ROOT", "shared.right.ROOT"] {
-        let entry = entry(&db, &report.entries, path);
-        assert_eq!(scalar_value(&db, entry), "0", "{path}");
-        assert_eq!(
-            entry.kind,
-            ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred)
-        );
-    }
-    assert_eq!(
-        scalar_value(&db, entry(&db, &report.entries, "choice.<tag>")),
-        "1"
-    );
-    for path in ["choice::Named.value.ROOT", "choice::Tuple.0.ROOT"] {
-        let entry = entry(&db, &report.entries, path);
-        assert_eq!(scalar_value(&db, entry), "2", "{path}");
-        assert_eq!(
-            entry.kind,
-            ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred)
-        );
-    }
-    for path in ["explicit.LEFT", "explicit.RIGHT"] {
-        let entry = entry(&db, &report.entries, path);
-        assert_eq!(scalar_value(&db, entry), "4", "{path}");
-        assert_eq!(
-            entry.kind,
-            ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit)
-        );
-    }
-}
-
-#[test]
-fn report_keeps_address_spaces_independent() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::TStorPtr
-use core::effect_ref::{AddressSpace, StaticSlot}
-
-struct Slot<const ROOT: u256 = _> {}
-struct Holder { ptr: TStorPtr<Slot> }
-struct Plain<const ROOT: u256> {}
-struct Routed<const SPACE: AddressSpace, const ROOT: u256> {}
-impl<const SPACE: AddressSpace, const ROOT: u256> StaticSlot for Routed<SPACE, ROOT> {
-    const SPACE: AddressSpace = SPACE
-}
-type Both<const ROOT: u256 = _> = (
-    Plain<ROOT>,
-    Routed<AddressSpace::TransientStorage, ROOT>,
-)
+use std::evm::TSlot
 
 contract C {
     mut stored: u256,
-    mut temporary: TStorPtr<u256>,
-    mut holder: Holder,
-    mut explicit: Both<7>,
+    mut temporary: TSlot<u256>,
+    mut later: u256,
     immutable: u256,
 }
 "#,
@@ -245,16 +94,281 @@ contract C {
     let contract = find_contract(&db, top_mod, "C");
     let report = contract.layout_report(&db).unwrap();
     for (path, space, value) in [
-        ("stored", ProviderAddressSpace::Storage, "0"),
-        ("temporary", ProviderAddressSpace::Transient, "0"),
-        ("holder.ptr.slot", ProviderAddressSpace::Storage, "1"),
-        ("holder.ptr.ROOT", ProviderAddressSpace::Transient, "1"),
-        ("explicit.0.ROOT", ProviderAddressSpace::Storage, "7"),
-        ("explicit.1.ROOT", ProviderAddressSpace::Transient, "7"),
-        ("immutable", ProviderAddressSpace::Code, "0"),
+        ("stored", AddressSpace::Storage, "0"),
+        // A transient cell is numbered among transient fields, so it leaves
+        // the storage numbering alone.
+        ("temporary", AddressSpace::Transient, "0"),
+        ("later", AddressSpace::Storage, "1"),
+        ("immutable", AddressSpace::Code, "0"),
     ] {
         let entry = entry(&db, &report.entries, path);
         assert_eq!(entry.address_space, space, "{path}");
         assert_eq!(scalar_value(&db, entry), value, "{path}");
     }
+}
+
+#[test]
+fn report_places_explicit_slot_fields() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use core::keccak
+use std::evm::TSlot
+
+struct Pair { left: u256, right: u256 }
+
+contract C {
+    mut first: u256,
+    #[slot(1)]
+    mut placed: u256,
+    mut pair: Pair,
+    #[slot(keccak(keccak("example.main") - 1) & !(0xff as u256))]
+    mut main: Pair,
+    #[slot(1)]
+    mut flag: TSlot<bool>,
+    mut after: TSlot<bool>,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let report = contract.layout_report(&db).unwrap();
+    // `pair` skips slot 1, which `placed` takes. `main` is at ERC-7201's
+    // slot for the namespace `example.main`. Transient slot 1 is free for
+    // `flag`, and `after` takes the transient slot before it.
+    for (path, space, value) in [
+        ("first", AddressSpace::Storage, "0"),
+        ("placed", AddressSpace::Storage, "1"),
+        ("pair.left", AddressSpace::Storage, "2"),
+        ("pair.right", AddressSpace::Storage, "3"),
+        (
+            "main.left",
+            AddressSpace::Storage,
+            "10958655983261152271848436692291137275443024275653522991983264966744321209600",
+        ),
+        (
+            "main.right",
+            AddressSpace::Storage,
+            "10958655983261152271848436692291137275443024275653522991983264966744321209601",
+        ),
+        ("flag", AddressSpace::Transient, "1"),
+        ("after", AddressSpace::Transient, "0"),
+    ] {
+        let entry = entry(&db, &report.entries, path);
+        assert_eq!(entry.address_space, space, "{path}");
+        assert_eq!(scalar_value(&db, entry), value, "{path}");
+    }
+}
+
+#[test]
+fn overlapping_explicit_slots_reject_the_later_field() {
+    parse_module!(
+        db,
+        top_mod,
+        r#"
+struct Pair { left: u256, right: u256 }
+
+contract C {
+    #[slot(4)]
+    mut a: Pair,
+    #[slot(5)]
+    mut b: u256,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let result = contract.storage_layout(&db);
+    assert!(result.allocated.is_none());
+    assert_eq!(
+        result.field_errors(&IdentId::new(&db, "b".to_string())),
+        Some(
+            [ContractLayoutError::ExplicitSlotOverlap {
+                other: IdentId::new(&db, "a".to_string())
+            }]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn a_transient_cell_takes_its_slot_in_transient_storage_too() {
+    parse_module!(
+        db,
+        top_mod,
+        r#"
+use std::evm::TSlot
+
+contract Overlapping {
+    #[slot(5)]
+    mut cell: TSlot<u256>,
+    #[slot(5)]
+    mut flag: TSlot<bool>,
+}
+
+contract Skipping {
+    #[slot(0)]
+    mut cell: TSlot<u256>,
+    mut flag: TSlot<bool>,
+}
+"#,
+    );
+    // The cell's value lives in transient slot 5, which `flag` also names.
+    let overlapping = find_contract(&db, top_mod, "Overlapping").storage_layout(&db);
+    assert_eq!(
+        overlapping.field_errors(&IdentId::new(&db, "flag".to_string())),
+        Some(
+            [ContractLayoutError::ExplicitSlotOverlap {
+                other: IdentId::new(&db, "cell".to_string())
+            }]
+            .as_slice()
+        )
+    );
+    // `flag` skips transient slot 0, which the cell's value takes.
+    let skipping = find_contract(&db, top_mod, "Skipping").storage_layout(&db);
+    let fields = &skipping
+        .allocated
+        .as_ref()
+        .expect("contract layout should be allocated")
+        .fields;
+    assert_eq!(
+        fields[&IdentId::new(&db, "flag".to_string())].slot_offset,
+        1
+    );
+}
+
+#[test]
+fn a_transient_cell_takes_a_number_per_word_of_its_value() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use std::evm::TSlot
+
+struct Pair { left: u256, right: u256 }
+
+contract C {
+    mut words: TSlot<[u256; 4]>,
+    mut pair: TSlot<Pair>,
+    mut flag: TSlot<bool>,
+    mut unit: TSlot<()>,
+    mut pairs: [TSlot<Pair>; 2],
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.storage_layout(&db);
+    let fields = &layout
+        .allocated
+        .as_ref()
+        .expect("contract layout should be allocated")
+        .fields;
+    // A cell's value lies from the cell's number on, so it takes a number
+    // per word, and at least one.
+    for (name, offset, count) in [
+        ("words", 0, 4),
+        ("pair", 4, 2),
+        ("flag", 6, 1),
+        ("unit", 7, 1),
+        ("pairs", 8, 4),
+    ] {
+        let field = &fields[&IdentId::new(&db, name.to_string())];
+        assert_eq!(field.slot_offset, offset, "{name}");
+        assert_eq!(field.slot_count, count, "{name}");
+    }
+}
+
+#[test]
+fn mutex_fields_are_placed_before_transient_cells() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use std::evm::{Mutex, TSlot}
+
+contract C {
+    mut t0: TSlot<bool>,
+    mut t1: TSlot<bool>,
+    mut m: Mutex<u256>,
+    mut m2: Mutex<u256>,
+    mut after: TSlot<bool>,
+    mut stored: u256,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.storage_layout(&db);
+    let fields = &layout
+        .allocated
+        .as_ref()
+        .expect("contract layout should be allocated")
+        .fields;
+    // A mutex mixes spaces, so it is placed among the storage fields and
+    // takes its range in both; the transient cells fill the transient
+    // numbers left free, and move no storage field.
+    for (name, offset, count) in [
+        ("t0", 4, 1),
+        ("t1", 5, 1),
+        ("m", 0, 2),
+        ("m2", 2, 2),
+        ("after", 6, 1),
+        ("stored", 4, 1),
+    ] {
+        let field = &fields[&IdentId::new(&db, name.to_string())];
+        assert_eq!(field.slot_offset, offset, "{name}");
+        assert_eq!(field.slot_count, count, "{name}");
+    }
+}
+
+#[test]
+fn layout_extent_overflow_rejects_without_panicking() {
+    parse_module!(
+        db,
+        top_mod,
+        r#"
+contract C {
+    huge: [u256; 576460752303423488],
+}
+"#,
+    );
+    let rendered = format_diagnostics(&db, &initialize_analysis_pass().run_on_module(&db, top_mod));
+    assert!(
+        rendered.contains("contract-field layout extent overflowed"),
+        "{rendered}"
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let result = contract.storage_layout(&db);
+    assert!(result.allocated.is_none());
+    assert_eq!(
+        result.field_errors(&IdentId::new(&db, "huge".to_string())),
+        Some([ContractLayoutError::LayoutExtentOverflow].as_slice())
+    );
+}
+
+#[test]
+fn duplicate_contract_field_names_block_layout_without_panicking() {
+    parse_module!(
+        db,
+        top_mod,
+        r#"
+contract DuplicateFields {
+    mut value: u256,
+    mut value: u256,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "DuplicateFields");
+    let result = contract.storage_layout(&db);
+    assert!(result.allocated.is_none());
+    assert_eq!(result.field_results.len(), 2);
+    for index in 0..2 {
+        assert!(matches!(
+            result.field_errors_for_id(ContractFieldId { contract, index }),
+            Some([ContractLayoutError::InvalidFieldType])
+        ));
+    }
+    let rendered = format_diagnostics(&db, &initialize_analysis_pass().run_on_module(&db, top_mod));
+    assert!(
+        rendered.contains("duplicate field name in contract `DuplicateFields`"),
+        "unexpected diagnostics:\n{rendered}"
+    );
 }

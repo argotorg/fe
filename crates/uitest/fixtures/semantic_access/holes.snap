@@ -1,0 +1,41 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/holes.fe
+---
+error[16-0002]: move conflict in `fn dynamic_move`
+   ┌─ holes.fe:25:13
+   │
+25 │     consume(items[i])
+   │             ^^^^^^^^ cannot move out of an element at a dynamic index
+
+error[16-0002]: move conflict in `fn unrestored`
+   ┌─ holes.fe:33:16
+   │
+33 │     let slot = mut items[0]
+   │                ^^^^^^^^^^^^ this access ends while its referent is moved out
+34 │     consume(slot)
+   │             ---- value is moved here
+
+error[16-0002]: move conflict in `fn hole_passed`
+   ┌─ holes.fe:43:11
+   │
+42 │     let saved = slot
+   │                 ---- value is moved here
+43 │     touch(mut slot)
+   │           ^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn hole_read`
+   ┌─ holes.fe:52:13
+   │
+51 │     let saved = slot
+   │                 ---- value is moved here
+52 │     let n = slot.n
+   │             ^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn Holder::recv[0][0]`
+   ┌─ holes.fe:73:25
+   │
+73 │             let saved = slot
+   │                         ^^^^ cannot move out of storage, which never holds a hole

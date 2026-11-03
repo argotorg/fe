@@ -1,26 +1,24 @@
-use std::collections::HashSet;
+use hir::analysis::ty::AddressSpace;
 
 use hir::analysis::{
     semantic::{
-        EvalOutcome, SConst, SemConstId, SemConstScalar, SemConstValue, SemanticConstRef,
-        SemanticInstance, VariantIndex, eval_const_ref, normalize_int_to_shape,
-        normalized::{NExpr, NStatementKind},
-        reify_runtime_const_for_ty, sem_const_ty,
+        EvalOutcome, SemConstId, SemConstScalar, SemConstValue, SemanticConstRef, SemanticInstance,
+        VariantIndex, eval_const_ref, normalize_int_to_shape, reify_runtime_const_for_ty,
+        sem_const_ty,
     },
-    ty::ty_def::TyId,
+    ty::{ty_def::TyId, ty_is_snapshot},
 };
 
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, RuntimeClass,
-        ScalarClass, ScalarRepr,
+        ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, RuntimeClass, ScalarClass,
+        ScalarRepr,
     },
 };
 
 use super::{
     layout::layout_for_ty_in_env,
-    semantic_body::RuntimeSemanticBody,
     type_info::{
         RuntimeTypeEnv, runtime_zero_sized_ty, scalar_class_for_ty_in_env,
         top_level_class_for_ty_in_env,
@@ -50,36 +48,6 @@ pub(super) fn reified_const_ref_value_for_ty<'db>(
         .expect("runtime constant reification was validated before lowering")
 }
 
-pub(super) fn collect_const_ref_regions<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    body: &RuntimeSemanticBody<'db>,
-) -> HashSet<ConstRegionId<'db>> {
-    body.normalized
-        .blocks
-        .iter()
-        .flat_map(|block| block.statements.iter())
-        .filter_map(|stmt| {
-            let NStatementKind::Define { result, expr } = &stmt.kind else {
-                return None;
-            };
-            let NExpr::Const(SConst::Ref(cref)) = expr else {
-                return None;
-            };
-            aggregate_const_ref_region(
-                db,
-                env,
-                reified_const_ref_value_for_ty(
-                    db,
-                    body.owner(),
-                    *cref,
-                    body.normalized.value(*result)?.ty,
-                ),
-            )
-        })
-        .collect()
-}
-
 pub(super) fn runtime_const_value_class<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
@@ -93,7 +61,7 @@ pub(super) fn runtime_const_value_class<'db>(
     allow_const_ref_storage
         .then(|| aggregate_const_ref_class(db, env, value))
         .flatten()
-        .or_else(|| top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory))
+        .or_else(|| top_level_class_for_ty_in_env(db, env, ty, AddressSpace::Memory))
 }
 
 pub(crate) fn const_scalar_from_value<'db>(
@@ -190,30 +158,38 @@ pub(super) fn aggregate_const_ref_class<'db>(
     value: SemConstId<'db>,
 ) -> Option<RuntimeClass<'db>> {
     let ty = sem_const_ty(db, value);
-    if runtime_zero_sized_ty(db, ty, env.scope, env.assumptions)
-        || !matches!(
-            value.value(db),
-            SemConstValue::Tuple { .. }
-                | SemConstValue::Struct { .. }
-                | SemConstValue::Array { .. }
-        )
-    {
+    let aggregate = match value.value(db) {
+        SemConstValue::Tuple { .. }
+        | SemConstValue::Struct { .. }
+        | SemConstValue::Array { .. } => true,
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bytes(_),
+            ..
+        } => ty.is_array(db),
+        _ => false,
+    };
+    if !aggregate || runtime_zero_sized_ty(db, ty, env.scope, env.assumptions) {
         return None;
     }
     let node = lower_const_node(db, env, value)?;
-    if !const_node_supports_data_ref(db, &node) {
+    if !const_node_supports_data_ref(db, &node)
+        || (is_single_scalar_aggregate(&node)
+            && env
+                .scope
+                .is_some_and(|scope| ty_is_snapshot(db, scope, ty, env.assumptions)))
+    {
         return None;
     }
     Some(RuntimeClass::const_ref(layout_for_ty_in_env(db, env, ty)))
 }
 
-pub(super) fn aggregate_const_ref_region<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    value: SemConstId<'db>,
-) -> Option<ConstRegionId<'db>> {
-    aggregate_const_ref_class(db, env, value)?;
-    lower_const_region(db, env, value)
+/// A one-field snapshot wrapper such as `Wei { amount: 0 }` is passed by copy
+/// and is as cheap as the scalar itself. A const region would turn it into a
+/// pointer for every call it is passed to, and a call taking a constant would
+/// get its own instance. Other one-field aggregates, such as `(true,)`, are
+/// viewed in place, which a const region serves at no cost.
+fn is_single_scalar_aggregate(node: &ConstNode<'_>) -> bool {
+    matches!(node, ConstNode::Aggregate { fields, .. } if matches!(&**fields, [ConstNode::Scalar(_)]))
 }
 
 fn const_node_supports_data_ref<'db>(db: &'db dyn MirDb, node: &ConstNode<'db>) -> bool {

@@ -25,5 +25,5 @@ impl core::abi::AbiSize for Unauthorized {
 impl core::abi::Encode<std::abi::Sol> for Unauthorized {
 
     #[inline(always)]
-    fn encode(own self, _ ptr: *u8) {}
+    fn encode(own self, _ __fe_out: core::abi::AbiFrame) {}
 }

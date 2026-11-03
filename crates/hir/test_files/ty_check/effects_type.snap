@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/effects_type.fe
 ---
@@ -8,7 +9,7 @@ note:
    │
  5 │   pub fn example() {
    │ ╭──────────────────^
- 6 │ │     let mut st = Storage { value: 0 }
+ 6 │ │     var st = Storage { value: 0 }
  7 │ │     with (st) {
  8 │ │         mint_twice(5)
  9 │ │     }
@@ -18,20 +19,20 @@ note:
 note:
   ┌─ effects_type.fe:6:9
   │
-6 │     let mut st = Storage { value: 0 }
-  │         ^^^^^^ Storage
+6 │     var st = Storage { value: 0 }
+  │         ^^ Storage
 
 note:
-  ┌─ effects_type.fe:6:18
+  ┌─ effects_type.fe:6:14
   │
-6 │     let mut st = Storage { value: 0 }
-  │                  ^^^^^^^^^^^^^^^^^^^^ Storage
+6 │     var st = Storage { value: 0 }
+  │              ^^^^^^^^^^^^^^^^^^^^ Storage
 
 note:
-  ┌─ effects_type.fe:6:35
+  ┌─ effects_type.fe:6:31
   │
-6 │     let mut st = Storage { value: 0 }
-  │                                   ^ u64
+6 │     var st = Storage { value: 0 }
+  │                               ^ u64
 
 note:
   ┌─ effects_type.fe:7:5

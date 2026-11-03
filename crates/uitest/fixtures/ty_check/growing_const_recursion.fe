@@ -1,0 +1,7 @@
+// A constant computed by recursion that grows its generic arguments meets the
+// instance limit, which evaluation reports as recursing too deeply.
+const fn shallow<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { 1 + shallow((x, 1 as u256), n - 1) }
+}
+
+const SHALLOW: u256 = shallow(1 as u256, 3)

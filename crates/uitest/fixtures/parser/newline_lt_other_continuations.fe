@@ -2,7 +2,7 @@ fn f(x: i32, y: i32) {
     let a = x
         <= y
 
-    let mut b = x
+    var b = x
     b
         <<= y
 }

@@ -1,0 +1,37 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/capability_argument_footprints.fe
+---
+error[16-0001]: access conflict in `fn V::recv[0][0]`
+   ┌─ capability_argument_footprints.fe:68:13
+   │
+67 │             let held = mut value
+   │                        --------- access opened here
+68 │             f(mut evm)
+   │             ^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn V::recv[0][1]`
+   ┌─ capability_argument_footprints.fe:79:21
+   │
+78 │             let held = mut value
+   │                        --------- access opened here
+79 │             let _ = peek(evm)
+   │                     ^^^^^^^^^ this call may read storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn V::recv[0][5]`
+    ┌─ capability_argument_footprints.fe:103:13
+    │
+102 │             let held = mut value
+    │                        --------- access opened here
+103 │             apply_with(|e: mut Evm| e.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a }), mut evm)
+    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn V::recv[0][6]`
+    ┌─ capability_argument_footprints.fe:109:13
+    │
+108 │             let held = mut value
+    │                        --------- access opened here
+109 │             via_bound(mut evm, a)
+    │             ^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open

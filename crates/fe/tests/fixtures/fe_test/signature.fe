@@ -4,6 +4,7 @@
 // `cast wallet sign --no-hash --private-key <anvil key 0> <digest>`.
 use core::option::Option
 use core::ptr::{self, MemBuffer, MemSpan}
+use core::abi::store_word
 use std::abi::{Bytes, Bytes32, sol}
 use std::evm::{Address, Call, Evm, RawOps, assert, signature}
 
@@ -43,7 +44,7 @@ pub contract Wallet {
         IsValidSignature { hash, signature } -> u256 {
             match signature::recover(digest: hash.val, signature.payload_span()) {
                 Option::Some(signer) => {
-                    if signer.inner == OWNER {
+                    if signer.word() == OWNER {
                         return MAGIC_WORD
                     }
                 }
@@ -73,9 +74,9 @@ pub contract WrongMagic {
 pub contract ShortMagic {
     recv Erc1271Msg {
         IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
-            let mut data = MemBuffer::alloc(32)
-            raw.mstore(addr: data.ptr(), value: MAGIC_WORD)
-            data.set_len(4)
+            var data = MemBuffer::alloc(32)
+            unsafe { store_word(ptr: data.ptr(), value: MAGIC_WORD) }
+            unsafe { data.set_len(4) }
             raw.return_data(data: data.span())
         }
     }
@@ -86,7 +87,7 @@ pub contract RevertMagic {
     recv Erc1271Msg {
         IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
             let data = MemBuffer::alloc(32)
-            raw.mstore(addr: data.ptr(), value: MAGIC_WORD)
+            unsafe { store_word(ptr: data.ptr(), value: MAGIC_WORD) }
             raw.revert(data: data.span())
         }
     }
@@ -97,40 +98,48 @@ pub contract LongMagic {
     recv Erc1271Msg {
         IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
             let data = MemBuffer::alloc(64)
-            raw.mstore(addr: data.ptr(), value: MAGIC_WORD)
-            raw.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: 0xdead)
+            unsafe { store_word(ptr: data.ptr(), value: MAGIC_WORD) }
+            unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 0xdead) }
             raw.return_data(data: data.span())
         }
     }
 }
 
 // Exactly 65 bytes are allocated, so `parse` must not read past the span.
-fn sig65(r: u256, s: u256, v: u256) -> MemSpan uses (evm: mut Evm) {
+// These spans view frame-local buffers, so their sessions reserve no
+// storage: the helpers write memory without an `Evm` effect.
+fn sig65(r: u256, s: u256, v: u256) -> ref MemSpan {
     let data = MemBuffer::alloc(65)
-    evm.mstore(addr: data.ptr(), value: r)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: s)
-    evm.mstore8(addr: ptr::offset_bytes(data.ptr(), 64), value: v.downcast_truncate())
+    unsafe {
+        store_word(ptr: data.ptr(), value: r)
+        store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: s)
+        *ptr::offset_bytes(data.ptr(), 64) = v.downcast_truncate()
+    }
     data.span()
 }
 
-fn sig64(r: u256, vs: u256) -> MemSpan uses (evm: mut Evm) {
+fn sig64(r: u256, vs: u256) -> ref MemSpan {
     let data = MemBuffer::alloc(64)
-    evm.mstore(addr: data.ptr(), value: r)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: vs)
-    MemSpan::from_raw_parts(ptr: data.ptr(), len: 64)
+    unsafe {
+        store_word(ptr: data.ptr(), value: r)
+        store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: vs)
+    }
+    data.span()
 }
 
-fn blob(len: u256) -> MemSpan uses (evm: mut Evm) {
+fn blob(len: u256) -> ref MemSpan {
     let data = MemBuffer::alloc(96)
-    evm.mstore(addr: data.ptr(), value: R_1)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: S_1)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 64), value: 0x1c1c << 240)
-    MemSpan::from_raw_parts(ptr: data.ptr(), len)
+    unsafe {
+        store_word(ptr: data.ptr(), value: R_1)
+        store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: S_1)
+        store_word(ptr: ptr::offset_bytes(data.ptr(), 64), value: 0x1c1c << 240)
+        MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked())
+    }
 }
 
 fn is_addr(_ value: Option<Address>, _ expected: u256) -> bool {
     match value {
-        Option::Some(addr) => addr.inner == expected,
+        Option::Some(addr) => addr.word() == expected,
         Option::None => false,
     }
 }
@@ -211,12 +220,12 @@ fn high_s_only_recovers_raw() uses (evm: mut Evm) {
 
 #[test]
 fn erc1271_checks_magic_exactly() uses (evm: mut Evm) {
-    let wallet = evm.create2<Wallet>(value: 0, args: (), salt: 0)
-    let dirty = evm.create2<DirtyMagic>(value: 0, args: (), salt: 1)
-    let wrong = evm.create2<WrongMagic>(value: 0, args: (), salt: 2)
-    let short = evm.create2<ShortMagic>(value: 0, args: (), salt: 3)
-    let reverting = evm.create2<RevertMagic>(value: 0, args: (), salt: 4)
-    let long = evm.create2<LongMagic>(value: 0, args: (), salt: 5)
+    let wallet = evm.create2<Wallet>(value: Wei::zero(), args: (), salt: 0)
+    let dirty = evm.create2<DirtyMagic>(value: Wei::zero(), args: (), salt: 1)
+    let wrong = evm.create2<WrongMagic>(value: Wei::zero(), args: (), salt: 2)
+    let short = evm.create2<ShortMagic>(value: Wei::zero(), args: (), salt: 3)
+    let reverting = evm.create2<RevertMagic>(value: Wei::zero(), args: (), salt: 4)
+    let long = evm.create2<LongMagic>(value: Wei::zero(), args: (), salt: 5)
     let good = sig65(r: R_1, s: S_1, v: 28)
     let compact = sig64(r: R_1, vs: VS_1)
     let foreign = sig65(r: OTHER_R_1, s: OTHER_S_1, v: 28)
@@ -234,10 +243,10 @@ fn erc1271_checks_magic_exactly() uses (evm: mut Evm) {
         assert(signature::is_valid_erc1271_signature_now(long, digest: DIGEST_1, signature: blob(len: 0)))
 
         // Accounts without code never validate, not even for their own key.
-        assert(!signature::is_valid_erc1271_signature_now(Address { inner: OWNER }, digest: DIGEST_1, signature: good))
+        assert(!signature::is_valid_erc1271_signature_now(Address::new(OWNER), digest: DIGEST_1, signature: good))
         // The identity precompile echoes the calldata, whose first word is the
         // magic word when the digest's high 224 bits are zero; it has no code.
-        let identity = Address { inner: 0x04 }
+        let identity = Address::new(0x04)
         assert(!signature::is_valid_erc1271_signature_now(identity, digest: 0x1234, signature: good))
         assert(!signature::is_valid_signature_now(identity, digest: 0x1234, signature: good))
     }
@@ -245,10 +254,10 @@ fn erc1271_checks_magic_exactly() uses (evm: mut Evm) {
 
 #[test]
 fn is_valid_signature_now_ecdsa_then_erc1271() uses (evm: mut Evm) {
-    let wallet = evm.create2<Wallet>(value: 0, args: (), salt: 0)
-    let long = evm.create2<LongMagic>(value: 0, args: (), salt: 1)
-    let owner = Address { inner: OWNER }
-    let other = Address { inner: OTHER }
+    let wallet = evm.create2<Wallet>(value: Wei::zero(), args: (), salt: 0)
+    let long = evm.create2<LongMagic>(value: Wei::zero(), args: (), salt: 1)
+    let owner = Address::new(OWNER)
+    let other = Address::new(OTHER)
     let good = sig65(r: R_1, s: S_1, v: 28)
     let compact = sig64(r: R_1, vs: VS_1)
     let twin = sig65(r: R_1, s: HIGH_S_1, v: 27)

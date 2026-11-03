@@ -1,0 +1,23 @@
+extern {
+    fn memset(_ p: *u8, _ c: i32, _ n: i64) -> *u8
+    fn getchar() -> i32
+}
+
+// Rejected: nothing checks what a foreign function does.
+fn fill(_ p: *u8) -> *u8 {
+    memset(p, 0, 1)
+}
+
+fn read() -> i32 {
+    getchar()
+}
+
+// Accepted: in an `unsafe` block the code vouches for the call.
+fn vouched(_ p: *u8) -> *u8 {
+    unsafe { memset(p, 0, 1) }
+}
+
+// Accepted: core's own declarations are not foreign.
+fn step(_ p: *u8) -> *u8 {
+    core::ptr::offset_bytes(p, 1)
+}

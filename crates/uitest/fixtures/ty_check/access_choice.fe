@@ -1,0 +1,8 @@
+// A runtime choice between accesses is made by a projection, whose
+// branches are yield sites.
+struct S { a: u256, b: u256 }
+
+fn choose(_ s: mut S, _ c: bool) {
+    let x = if c { mut s.a } else { mut s.b }
+    x = 1
+}

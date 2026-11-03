@@ -14,14 +14,18 @@ impl<T> Copy for Arr<T> {}
 
 impl<T> Arr<T> {
     fn new(_ len: u256) -> Self {
-        Arr { ptr: MemArray<T>::new_uninit(len).ptr_at(0), len }
+        // The array outlives this frame, so its owner is forgotten.
+        let array = unsafe { MemArray<T>::new_uninit(len.downcast_unchecked()) }
+        let ptr = array.ptr_at(0)
+        core::mem::forget(array)
+        Arr { ptr, len }
     }
 
     fn at(self, _ i: u256) -> *T {
         if i >= self.len {
             core::panic()
         }
-        ptr::offset(self.ptr, i)
+        ptr::offset(self.ptr, i.downcast_unchecked())
     }
 }
 
@@ -42,17 +46,17 @@ impl Copy for Pair {}
 
 fn update(_ items: Arr<Item>, _ value: u256) {
     let item = items.at(0)
-    item.t = item.t + value
+    unsafe { item.t = item.t + value }
 }
 
 fn step(_ pairs: Arr<Pair>, _ i: u256) {
     let pair = pairs.at(i)
-    update(pair.a, 1)
-    update(pair.b, 2)
+    unsafe { update(pair.a, 1) }
+    unsafe { update(pair.b, 2) }
 }
 
 fn apply(_ pairs: Arr<Pair>, n: u256) {
-    let mut i: u256 = 0
+    var i: u256 = 0
     while i < n {
         step(pairs, i)
         i += 1
@@ -60,32 +64,32 @@ fn apply(_ pairs: Arr<Pair>, n: u256) {
 }
 
 fn apply_inline(_ pairs: Arr<Pair>, n: u256) {
-    let mut i: u256 = 0
+    var i: u256 = 0
     while i < n {
         let pair = pairs.at(i)
-        update(pair.a, 20)
-        update(pair.b, 40)
+        unsafe { update(pair.a, 20) }
+        unsafe { update(pair.b, 40) }
         i += 1
     }
 }
 
 fn apply_straight(_ pairs: Arr<Pair>) {
     let pair = pairs.at(1)
-    update(pair.a, 200)
-    update(pair.b, 200)
-    update(pair.a, 200)
-    update(pair.b, 200)
+    unsafe { update(pair.a, 200) }
+    unsafe { update(pair.b, 200) }
+    unsafe { update(pair.a, 200) }
+    unsafe { update(pair.b, 200) }
 }
 
 fn pairs(_ n: u256) -> Arr<Pair> {
     let pairs = Arr<Pair>::new(n)
-    let mut i: u256 = 0
+    var i: u256 = 0
     while i < n {
         let a = Arr<Item>::new(1)
         let b = Arr<Item>::new(1)
-        *a.at(0) = Item { t: 0, id: i }
-        *b.at(0) = Item { t: 0, id: i }
-        *pairs.at(i) = Pair { a, b, n: i }
+        unsafe { *a.at(0) = Item { t: 0, id: i } }
+        unsafe { *b.at(0) = Item { t: 0, id: i } }
+        unsafe { *pairs.at(i) = Pair { a, b, n: i } }
         i += 1
     }
     pairs
@@ -93,7 +97,7 @@ fn pairs(_ n: u256) -> Arr<Pair> {
 
 fn item(_ pairs: Arr<Pair>, _ i: u256, second: bool) -> *Item {
     let pair = pairs.at(i)
-    let items = if second { pair.b } else { pair.a }
+    let items = unsafe { if second { pair.b } else { pair.a } }
     items.at(0)
 }
 
@@ -107,9 +111,9 @@ fn writes_through_stored_pointers_in_loops() {
     let first_b = item(pairs, 0, second: true)
     let last_a = item(pairs, 1, second: false)
     let last_b = item(pairs, 1, second: true)
-    assert(first_a.t == 21)
-    assert(first_b.t == 42)
-    assert(last_a.t == 421)
-    assert(last_b.t == 442)
-    assert(last_b.id == 1)
+    unsafe { assert(first_a.t == 21) }
+    unsafe { assert(first_b.t == 42) }
+    unsafe { assert(last_a.t == 421) }
+    unsafe { assert(last_b.t == 442) }
+    unsafe { assert(last_b.id == 1) }
 }

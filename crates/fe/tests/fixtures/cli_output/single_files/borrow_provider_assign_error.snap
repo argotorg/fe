@@ -1,20 +1,19 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 3113
 expression: output
 input_file: tests/fixtures/cli_output/single_files/borrow_provider_assign_error.fe
 ---
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/borrow_provider_assign_error.fe
 
-error[8-0077]: incompatible borrow providers
+error[8-0070]: an access is not a value
    ┌─ borrow_provider_assign_error.fe:13:22
    │
-12 │             let target: mut u256 = mut local
-   │                 ------ the previous value here is memory-backed
 13 │             target = mut value
-   │                      ^^^^^^^^^ this borrow is storage-backed
+   │                      ^^^^^^^^^ this access is used as a value
    │
-   = Fe cannot assign or join `mut`/`ref` values backed by different providers into one value
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
 
 
 === EXIT CODE: 1 ===

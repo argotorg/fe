@@ -1,6 +1,6 @@
 #[test]
 fn unconditional_continue_advances_sequence() {
-    let mut visits: usize = 0
+    var visits: usize = 0
     for i in 0..5 {
         visits += 1
         assert!(visits <= 5)
@@ -11,8 +11,8 @@ fn unconditional_continue_advances_sequence() {
 
 #[test]
 fn nested_continue_advances_only_inner_sequence() {
-    let mut visits: usize = 0
-    let mut sum: usize = 0
+    var visits: usize = 0
+    var sum: usize = 0
     for outer in 0..3 {
         for inner in 0..4 {
             visits += 1
@@ -27,7 +27,7 @@ fn nested_continue_advances_only_inner_sequence() {
 
 #[test]
 fn continue_and_break_preserve_sequence_order() {
-    let mut visits: usize = 0
+    var visits: usize = 0
     for i in 0..8 {
         visits += 1
         assert!(visits <= 5)
@@ -40,10 +40,10 @@ fn continue_and_break_preserve_sequence_order() {
 
 #[test]
 fn while_continue_does_not_advance_enclosing_sequence() {
-    let mut visits: usize = 0
-    let mut sum: usize = 0
+    var visits: usize = 0
+    var sum: usize = 0
     for outer in 0..3 {
-        let mut inner: usize = 0
+        var inner: usize = 0
         while inner < 3 {
             inner += 1
             visits += 1
@@ -58,7 +58,7 @@ fn while_continue_does_not_advance_enclosing_sequence() {
 
 #[test]
 fn unconditional_break_leaves_after_first_element() {
-    let mut visits: usize = 0
+    var visits: usize = 0
     for i in 0..5 {
         visits += 1
         break
@@ -131,8 +131,8 @@ fn continue_arm_advances_when_other_arms_exit() {
 
 #[test]
 fn continue_or_break_in_every_arm() {
-    let mut visits: usize = 0
-    let mut last: usize = 0
+    var visits: usize = 0
+    var last: usize = 0
     for i in 0..8 {
         visits += 1
         assert!(visits <= 4)
@@ -148,8 +148,8 @@ fn continue_or_break_in_every_arm() {
 
 #[test]
 fn only_inner_body_always_exits() {
-    let mut outer_visits: usize = 0
-    let mut inner_visits: usize = 0
+    var outer_visits: usize = 0
+    var inner_visits: usize = 0
     for outer in 0..3 {
         outer_visits += 1
         for inner in 0..4 {

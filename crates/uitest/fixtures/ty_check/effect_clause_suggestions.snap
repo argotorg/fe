@@ -1,0 +1,38 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/effect_clause_suggestions.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ effect_clause_suggestions.fe:20:13
+   │
+19 │         Set { v } uses (total) {
+   │                         ----- write `mut total` in `uses` to write it
+20 │             total = v
+   │             ^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ effect_clause_suggestions.fe:23:13
+   │
+22 │         Bump uses (balances) {
+   │                    -------- write `mut balances` in `uses` to write it
+23 │             balances[1] += 1
+   │             ^^^^^^^^^^^ immutable assignment
+
+error[8-0036]: missing effect `RawStorage` required by `raw`
+   ┌─ effect_clause_suggestions.fe:32:14
+   │
+32 │     unsafe { raw() }
+   │              ^^^^^ `raw` requires effect `RawStorage` to be in scope
+   │
+   = require it in this function's signature with `uses (storage: RawStorage)`, so that its callers provide it
+   = or provide it to a block of this function with `with (RawStorage = value) { .. }`
+
+error[8-0116]: contract field `total` is not in this handler's `uses`
+   ┌─ effect_clause_suggestions.fe:26:13
+   │
+26 │             total
+   │             ^^^^^ `total` is not reachable here
+   │
+   = name it in the handler's `uses` clause: `uses (total)` to read it, `uses (mut total)` to write it

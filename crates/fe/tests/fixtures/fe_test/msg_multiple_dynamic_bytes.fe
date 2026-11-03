@@ -1,12 +1,13 @@
 use std::abi::sol
-use std::evm::{Ctx, Evm, RawMem}
+use std::evm::{Ctx, Evm}
+use core::abi::store_word
 
 msg M {
     #[selector = sol("foo(bytes,bytes)")]
     Foo { a: Bytes, b: Bytes },
 }
 
-pub contract C uses (ctx: Ctx, mem: mut RawMem) {
+pub contract C uses (ctx: Ctx) {
     init() {}
 
     recv M {
@@ -14,24 +15,22 @@ pub contract C uses (ctx: Ctx, mem: mut RawMem) {
     }
 }
 
-fn build_bytes() -> Bytes
-uses (mem: mut RawMem)
-{
+fn build_bytes() -> Bytes {
     let data = core::ptr::alloc_bytes(64)
-    mem.mstore(addr: data, value: 32)
-    Bytes::from_abi_tail(data: data, len: 32, size: 64)
+    unsafe { store_word(ptr: data, value: 32) }
+    unsafe { Bytes::from_abi_tail(data: data, len: 32, size: 64) }
 }
 
 #[test]
 fn test_msg_call_with_two_dynamic_bytes_fields()
-uses (evm: mut Evm, mem: mut RawMem)
+uses (evm: mut Evm)
 {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
 
     evm.call(
         addr: c,
         gas: 2000000,
-        value: 0,
+        value: Wei::zero(),
         message: M::Foo { a: build_bytes(), b: build_bytes() },
     )
 }

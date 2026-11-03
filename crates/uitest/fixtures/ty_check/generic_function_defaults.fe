@@ -19,7 +19,7 @@ fn partial_const_default<const N: usize, const M: usize = plus_one(N)>(
     _ value: [u8; M],
 ) {}
 
-fn direct_dependent_explicit_hole<
+fn direct_dependent_default<
     const N: usize,
     const M: usize = N,
 >(_ value: [u8; M]) {}
@@ -27,12 +27,6 @@ fn direct_dependent_explicit_hole<
 fn bounded_mixed_defaults<T: Copy = u256, const N: usize = 1>(
     _ value: [T; N],
 ) {}
-
-struct LayoutCarrier<const ROOT: u256 = _> {}
-
-fn implicit_layout_prefix<T = u256>(_ carrier: LayoutCarrier, _ value: T) {}
-
-fn defaulted_layout_hole<const ROOT: u256 = _>() {}
 
 enum DefaultVariant<T = u256> {
     Value(T),
@@ -88,12 +82,9 @@ fn exercise_defaults(
     partial_type_default<u256, bool>(true)
     partial_const_default<1>([0, 1])
     partial_const_default<1, 3>([0, 1, 2])
-    let dependent_hole_value: [u8; 2] = [0, 1]
-    direct_dependent_explicit_hole<_>(dependent_hole_value)
+    let dependent_value: [u8; 2] = [0, 1]
+    direct_dependent_default<2>(dependent_value)
     bounded_mixed_defaults([1])
-    implicit_layout_prefix(LayoutCarrier {}, 1)
-    defaulted_layout_hole()
-    defaulted_layout_hole()
     receiver.inherited_type_default()
     generic_receiver.generic_inherent_self_default(Receiver { value: 1 })
     plain_receiver.inherent_self_default(PlainReceiver {})

@@ -1,0 +1,46 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/loop_items.fe
+---
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ loop_items.fe:18:9
+   │
+17 │ fn view_base(_ xs: [u256; 2]) {
+   │                -- `xs` does not provide mutable access
+18 │     for mut x in xs {
+   │         ^^^^^ cannot borrow as `mut`
+
+error[8-0072]: a projection's yield shape must be destructured
+   ┌─ loop_items.fe:42:9
+   │
+42 │     for ref t in xs.enumerate() {
+   │         ^^^^^ bind the shape's components with a tuple or variant pattern
+
+error[8-0072]: a projection's yield shape must be destructured
+   ┌─ loop_items.fe:44:9
+   │
+44 │     for mut t in xs.enumerate() {
+   │         ^^^^^ bind the shape's components with a tuple or variant pattern
+
+error[8-0119]: a read access needs a `ref` binding
+   ┌─ loop_items.fe:35:13
+   │
+35 │     for (i, account) in accounts.enumerate() {
+   │             ^^^^^^^ this binds a read access of `Account`, which is not `Copy`
+   │
+   = mark the binding `ref` to hold the access, as `let x = ref …`, `(i, ref x)` or `for ref x in …`
+
+error[8-0120]: a `mut` binding needs a place or an access
+   ┌─ loop_items.fe:25:10
+   │
+25 │     for (mut i, x) in xs.enumerate() {
+   │          ^^^^^ this binds an owned value
+   │
+   = write `var` for a mutable value
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ loop_items.fe:51:9
+   │
+51 │     for ref x in xs.by(d) {
+   │         ^^^^^ its parts are not known here: return it, or pass it to a parameter of the same shape

@@ -1,0 +1,72 @@
+// A place of a pinned type lies in the pin's space at its number, whatever
+// holds it: the fields of a transient cell are transient as a contract field,
+// as a field of a storage struct, and through a `mut` parameter, and the
+// storage words at the same numbers are untouched.
+use core::marker::{Pinned, Transient}
+use std::evm::{Evm, RawStorage, SolSlot}
+
+struct Cell {
+    pub on: bool,
+    pub count: u256,
+}
+
+impl Pinned for Cell {
+    type Space = Transient
+}
+
+struct Guarded {
+    cell: Cell,
+    value: u256,
+}
+
+fn bump(_ cell: mut Cell) {
+    cell.on = true
+    cell.count += 1
+}
+
+msg M {
+    #[selector = 1]
+    Run -> (bool, u256, bool, u256, u256, u256),
+}
+
+fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+}
+
+pub contract C uses (storage: mut RawStorage) {
+    // `guarded` is storage 0 to 2: `cell` takes transient 0 and 1 and leaves
+    // storage 0 and 1 unused, and `value` is storage 2. `top` fills
+    // transient 3 and 4.
+    mut guarded: Guarded,
+    mut top: Cell,
+
+    recv M {
+        Run -> (bool, u256, bool, u256, u256, u256) uses (mut top, mut guarded, mut storage) {
+            top.count = 6
+            bump(mut top)
+            guarded.value = 9
+            bump(mut guarded.cell)
+            guarded.cell.count += 1
+            (
+                top.on,
+                top.count,
+                guarded.cell.on,
+                guarded.cell.count,
+                read_slot(0) + read_slot(1) + read_slot(3) + read_slot(4),
+                read_slot(2),
+            )
+        }
+    }
+}
+
+#[test]
+fn pinned_fields_keep_their_space() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: (bool, u256, bool, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
+    assert!(r.0)
+    assert!(r.1 == 7)
+    assert!(r.2)
+    assert!(r.3 == 2)
+    assert!(r.4 == 0)
+    assert!(r.5 == 9)
+}

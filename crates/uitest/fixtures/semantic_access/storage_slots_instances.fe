@@ -1,0 +1,15 @@
+use core::intrinsic::storage_slots
+
+fn slots<T>() -> u256 {
+    storage_slots<T>()
+}
+
+// Rejected: `slots<[[u256; 2**32]; 2**32]>` asks for more storage slots than a layout can count.
+fn too_many() -> u256 {
+    slots<[[u256; 0x100000000]; 0x100000000]>()
+}
+
+// Accepted.
+fn three() -> u256 {
+    slots<[u256; 3]>()
+}

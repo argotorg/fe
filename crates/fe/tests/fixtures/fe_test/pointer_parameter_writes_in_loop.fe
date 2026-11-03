@@ -16,14 +16,14 @@ impl<T> Copy for Arr<T> {}
 
 impl<T> Arr<T> {
     fn alloc(_ len: u256) -> Self {
-        Arr { ptr: ptr::cast<u8, T>(ptr::alloc_bytes(len * 64)), len }
+        Arr { ptr: ptr::cast<u8, T>(ptr::alloc_bytes((len * 64).downcast_saturate())), len }
     }
 
     fn at(self, _ i: u256) -> *T {
         if i >= self.len {
             core::panic()
         }
-        ptr::offset(self.ptr, i)
+        ptr::offset(self.ptr, i.downcast_unchecked())
     }
 }
 
@@ -56,21 +56,21 @@ impl Book {
     }
 
     fn item(self, _ order: *Order, _ i: u256) -> *Item {
-        self.items.at(order.start + i)
+        unsafe { self.items.at(order.start + i) }
     }
 }
 
 fn store_word(_ at: *u8, _ value: u256) {
     let word = ptr::cast<u8, u256>(at)
-    *word = value
+    unsafe { *word = value }
 }
 
 fn load_word(_ at: *u8) -> u256 {
-    *ptr::cast<u8, u256>(at)
+    unsafe { *ptr::cast<u8, u256>(at) }
 }
 
 fn record(_ buf: *u8, _ value: u256) -> u256 {
-    let at = ptr::offset_bytes(buf, (value & 3) * 0xc0)
+    let at = ptr::offset_bytes(buf, ((value & 3) * 0xc0).downcast_unchecked())
     store_word(at, value)
     store_word(ptr::offset_bytes(at, 0x20), value)
     store_word(ptr::offset_bytes(at, 0x40), value)
@@ -92,38 +92,42 @@ fn dispatch(_ buf: *u8, _ kind: u256, _ value: u256) -> u256 {
 
 fn settle_item(_ book: Book, order: *Order, index: u256, acc: u256, buf: *u8) -> u256 {
     let item = book.item(order, index)
-    let mut current = acc
-    if item.amount != 0 {
-        current = dispatch(buf, item.original, item.amount)
+    var current = acc
+    unsafe {
+        if item.amount != 0 {
+            current = dispatch(buf, item.original, item.amount)
+        }
+        item.amount = item.original
+        if item.original != 0 {
+            current = dispatch(buf, current, item.amount)
+        }
+        item.original = current
     }
-    item.amount = item.original
-    if item.original != 0 {
-        current = dispatch(buf, current, item.amount)
-    }
-    item.original = current
     store_word(book.blob, current)
     current
 }
 
 fn check_item(_ book: Book, order: *Order, index: u256) {
     let item = book.item(order, index)
-    if item.amount > item.original {
-        core::panic()
+    unsafe {
+        if item.amount > item.original {
+            core::panic()
+        }
+        item.amount = item.original
     }
-    item.amount = item.original
 }
 
 fn settle(_ book: Book, available: Arr<bool>, index: u256, acc: u256, buf: *u8) -> u256 {
     let order = book.order(index)
-    *available.at(index) = order.len != 0
-    let mut current = acc
-    let mut j: u256 = 0
-    while j < order.len {
+    unsafe { *available.at(index) = order.len != 0 }
+    var current = acc
+    var j: u256 = 0
+    while j < unsafe { order.len } {
         current = settle_item(book, order, index: j, acc: current, buf)
         j += 1
     }
     j = 0
-    while j < order.len {
+    while j < unsafe { order.len } {
         check_item(book, order, index: j)
         current = dispatch(book.blob, current, j)
         j += 1
@@ -132,8 +136,8 @@ fn settle(_ book: Book, available: Arr<bool>, index: u256, acc: u256, buf: *u8) 
 }
 
 fn settle_all(_ book: Book, available: Arr<bool>, acc: u256, buf: *u8) -> u256 {
-    let mut current = acc
-    let mut i: u256 = 0
+    var current = acc
+    var i: u256 = 0
     while i < book.orders.len {
         current = settle(book, available, index: i, acc: current, buf)
         i += 1
@@ -142,8 +146,8 @@ fn settle_all(_ book: Book, available: Arr<bool>, acc: u256, buf: *u8) -> u256 {
 }
 
 fn settle_rounds(_ book: Book, available: Arr<bool>, rounds: u256, buf: *u8) -> u256 {
-    let mut current: u256 = 0
-    let mut r: u256 = 0
+    var current: u256 = 0
+    var r: u256 = 0
     while r < rounds {
         current = settle_all(book, available, acc: current, buf)
         r += 1
@@ -154,20 +158,20 @@ fn settle_rounds(_ book: Book, available: Arr<bool>, rounds: u256, buf: *u8) -> 
 #[test]
 fn writes_through_pointer_parameters_in_loops() {
     let orders = Arr<Order>::alloc(1)
-    *orders.at(0) = Order { start: 0, len: 2 }
+    unsafe { *orders.at(0) = Order { start: 0, len: 2 } }
     let items = Arr<Item>::alloc(2)
-    *items.at(0) = Item { amount: 5, original: 1 }
-    *items.at(1) = Item { amount: 0, original: 0 }
+    unsafe { *items.at(0) = Item { amount: 5, original: 1 } }
+    unsafe { *items.at(1) = Item { amount: 0, original: 0 } }
     let book = Book { orders, items, used: 2, blob: ptr::alloc_bytes(0x300) }
     let available = Arr<bool>::alloc(1)
     let buf = ptr::alloc_bytes(0x300)
     let result = settle_rounds(book, available, rounds: 1, buf)
     assert(result == 4)
-    assert(*available.at(0))
+    unsafe { assert(*available.at(0)) }
     let first = items.at(0)
     let second = items.at(1)
-    assert(first.amount == 4)
-    assert(second.original == 4)
+    unsafe { assert(first.amount == 4) }
+    unsafe { assert(second.original == 4) }
     assert(load_word(book.blob) == 4)
     assert(load_word(ptr::offset_bytes(buf, 0x2a0)) == 3)
     assert(load_word(ptr::offset_bytes(book.blob, 0x240)) == 3)

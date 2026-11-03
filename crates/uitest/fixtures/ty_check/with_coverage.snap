@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/with_coverage.fe
+---
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ with_coverage.fe:16:15
+   │
+16 │         with (*ptr) {
+   │               ^^^^ this reads state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: RawStorage)`; `unsafe` does not grant authority
+
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ with_coverage.fe:36:19
+   │
+36 │         with (mut *ptr) {
+   │                   ^^^^ this writes state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: mut RawStorage)`; `unsafe` does not grant authority
+
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ with_coverage.fe:50:15
+   │
+50 │         with (*store.ptr) {
+   │               ^^^^^^^^^^ this reads state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: RawStorage)`; `unsafe` does not grant authority

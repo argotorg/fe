@@ -1,30 +1,30 @@
 ---
 source: crates/parser/tests/syntax_node.rs
-assertion_line: 15
+assertion_line: 18
 expression: node
 input_file: test_files/syntax_node/items/mod.fe
 ---
-Root@0..146
-  ItemList@0..146
-    Item@0..107
-      Mod@0..107
+Root@0..150
+  ItemList@0..150
+    Item@0..111
+      Mod@0..111
         PubKw@0..3 "pub"
         WhiteSpace@3..4 " "
         ModKw@4..7 "mod"
         WhiteSpace@7..8 " "
         Ident@8..11 "foo"
         WhiteSpace@11..12 " "
-        ItemList@12..107
+        ItemList@12..111
           LBrace@12..13 "{"
           Newline@13..14 "\n"
           WhiteSpace@14..18 "    "
-          Item@18..78
-            Func@18..78
+          Item@18..82
+            Func@18..82
               FnKw@18..20 "fn"
               WhiteSpace@20..21 " "
-              FuncSignature@21..60
+              FuncSignature@21..64
                 Ident@21..28 "foo_foo"
-                FuncParamList@28..53
+                FuncParamList@28..57
                   LParen@28..29 "("
                   FnParam@29..37
                     Ident@29..32 "bar"
@@ -36,76 +36,79 @@ Root@0..146
                           Ident@34..37 "i32"
                   Comma@37..38 ","
                   WhiteSpace@38..39 " "
-                  FnParam@39..52
-                    MutKw@39..42 "mut"
+                  FnParam@39..56
+                    VarKw@39..42 "var"
                     WhiteSpace@42..43 " "
                     Ident@43..46 "baz"
                     Colon@46..47 ":"
                     WhiteSpace@47..48 " "
-                    PathType@48..52
-                      Path@48..52
-                        PathSegment@48..52
-                          Ident@48..52 "u256"
-                  RParen@52..53 ")"
-                WhiteSpace@53..54 " "
-                Arrow@54..56 "->"
-                WhiteSpace@56..57 " "
-                PathType@57..60
-                  Path@57..60
-                    PathSegment@57..60
-                      Ident@57..60 "i32"
-              WhiteSpace@60..61 " "
-              BlockExpr@61..78
-                LBrace@61..62 "{"
-                Newline@62..63 "\n"
-                WhiteSpace@63..71 "        "
-                ExprStmt@71..72
-                  LitExpr@71..72
-                    Lit@71..72
-                      Int@71..72 "1"
-                Newline@72..73 "\n"
-                WhiteSpace@73..77 "    "
-                RBrace@77..78 "}"
-          Newline@78..79 "\n"
-          WhiteSpace@79..83 "    "
-          Newline@83..84 "\n"
-          WhiteSpace@84..88 "    "
-          Item@88..105
-            Struct@88..105
-              PubKw@88..91 "pub"
-              WhiteSpace@91..92 " "
-              StructKw@92..98 "struct"
-              WhiteSpace@98..99 " "
-              Ident@99..102 "Foo"
+                    ModeType@48..56
+                      OwnKw@48..51 "own"
+                      WhiteSpace@51..52 " "
+                      PathType@52..56
+                        Path@52..56
+                          PathSegment@52..56
+                            Ident@52..56 "u256"
+                  RParen@56..57 ")"
+                WhiteSpace@57..58 " "
+                Arrow@58..60 "->"
+                WhiteSpace@60..61 " "
+                PathType@61..64
+                  Path@61..64
+                    PathSegment@61..64
+                      Ident@61..64 "i32"
+              WhiteSpace@64..65 " "
+              BlockExpr@65..82
+                LBrace@65..66 "{"
+                Newline@66..67 "\n"
+                WhiteSpace@67..75 "        "
+                ExprStmt@75..76
+                  LitExpr@75..76
+                    Lit@75..76
+                      Int@75..76 "1"
+                Newline@76..77 "\n"
+                WhiteSpace@77..81 "    "
+                RBrace@81..82 "}"
+          Newline@82..83 "\n"
+          WhiteSpace@83..87 "    "
+          Newline@87..88 "\n"
+          WhiteSpace@88..92 "    "
+          Item@92..109
+            Struct@92..109
+              PubKw@92..95 "pub"
+              WhiteSpace@95..96 " "
+              StructKw@96..102 "struct"
               WhiteSpace@102..103 " "
-              RecordFieldDefList@103..105
-                LBrace@103..104 "{"
-                RBrace@104..105 "}"
-          Newline@105..106 "\n"
-          RBrace@106..107 "}"
-    Newline@107..109 "\n\n"
-    Item@109..146
-      Mod@109..146
-        PubKw@109..112 "pub"
-        WhiteSpace@112..113 " "
-        ModKw@113..116 "mod"
+              Ident@103..106 "Foo"
+              WhiteSpace@106..107 " "
+              RecordFieldDefList@107..109
+                LBrace@107..108 "{"
+                RBrace@108..109 "}"
+          Newline@109..110 "\n"
+          RBrace@110..111 "}"
+    Newline@111..113 "\n\n"
+    Item@113..150
+      Mod@113..150
+        PubKw@113..116 "pub"
         WhiteSpace@116..117 " "
-        Ident@117..120 "bar"
+        ModKw@117..120 "mod"
         WhiteSpace@120..121 " "
-        ItemList@121..146
-          LBrace@121..122 "{"
-          Newline@122..123 "\n"
-          WhiteSpace@123..127 "    "
-          Item@127..144
-            Struct@127..144
-              PubKw@127..130 "pub"
-              WhiteSpace@130..131 " "
-              StructKw@131..137 "struct"
-              WhiteSpace@137..138 " "
-              Ident@138..141 "Bar"
+        Ident@121..124 "bar"
+        WhiteSpace@124..125 " "
+        ItemList@125..150
+          LBrace@125..126 "{"
+          Newline@126..127 "\n"
+          WhiteSpace@127..131 "    "
+          Item@131..148
+            Struct@131..148
+              PubKw@131..134 "pub"
+              WhiteSpace@134..135 " "
+              StructKw@135..141 "struct"
               WhiteSpace@141..142 " "
-              RecordFieldDefList@142..144
-                LBrace@142..143 "{"
-                RBrace@143..144 "}"
-          Newline@144..145 "\n"
-          RBrace@145..146 "}"
+              Ident@142..145 "Bar"
+              WhiteSpace@145..146 " "
+              RecordFieldDefList@146..148
+                LBrace@146..147 "{"
+                RBrace@147..148 "}"
+          Newline@148..149 "\n"
+          RBrace@149..150 "}"

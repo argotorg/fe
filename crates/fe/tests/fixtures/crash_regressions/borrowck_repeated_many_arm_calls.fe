@@ -56,7 +56,7 @@ impl Tagged for Many {
 }
 
 fn sum() -> usize {
-    let mut total: usize = 0
+    var total: usize = 0
     total += Many::V0.ordinal()
     total += Many::V1.ordinal()
     total += Many::V2.ordinal()

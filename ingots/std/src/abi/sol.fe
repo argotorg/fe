@@ -7,7 +7,6 @@ use core::abi::{
     AbiSize,
     ByteInput,
     BytesView,
-    Cursor,
     Decode,
     StringView,
     abi_single_root_head_size,
@@ -41,7 +40,7 @@ fn canonical_signed_word(word: u256, mask: u256, sign_bit: u256) -> u256 {
     revert_empty()
 }
 
-/// Compute the 4-byte Solidity selector for a signature string.
+/// Compute the 4-byte Solidity selector from the fixed-width packed encoding.
 ///
 /// For example, `sol("transfer(address,uint256)") == 0xa9059cbb`.
 pub const fn sol<T: AsBytes>(_ sig: T) -> u32 {
@@ -160,44 +159,31 @@ impl Abi for Sol {
         }
     }
 
-    fn decoder_new<I: ByteInput>(_ input: own I) -> Self::Decoder<I> {
-        SolDecoder::new(input)
+    fn decoder_new() -> SolDecoder {
+        SolDecoder::with_base(0)
     }
 
-    fn decoder_with_base<I: ByteInput>(_ input: own I, _ base: u256) -> Self::Decoder<I> {
-        SolDecoder::with_base(input, base)
+    fn decoder_with_base(_ base: u256) -> SolDecoder {
+        SolDecoder::with_base(base)
     }
-
-    fn alloc(_ size: u256) -> *u8 { ptr::alloc_bytes(size) }
 }
 
-pub struct SolDecoder<I> {
-    pub cur: Cursor<I>,
+/// A Solidity ABI decoder: a position in the input and the base that
+/// dynamic offsets are relative to.
+pub struct SolDecoder {
+    pub pos: u256,
     pub base: u256,
 }
 
-impl<I> SolDecoder<I>
-    where I: ByteInput
-{
+impl SolDecoder {
     #[inline(always)]
-    pub fn new(_ input: own I) -> Self {
-        SolDecoder {
-            cur: Cursor::new(input),
-            base: 0,
-        }
-    }
-
-    #[inline(always)]
-    pub fn with_base(_ input: own I, _ base: u256) -> Self {
-        SolDecoder {
-            cur: Cursor::new(input).fork(base),
-            base,
-        }
+    pub fn with_base(_ base: u256) -> Self {
+        SolDecoder { pos: base, base }
     }
 }
 
 /// Decode a Solidity ABI payload from an arbitrary byte input starting at byte 0.
-pub fn decode_input<T, I>(_ input: own I) -> T
+pub fn decode_input<T, I>(_ input: I) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     decode_input_at(input, 0)
@@ -207,7 +193,7 @@ pub fn decode_input<T, I>(_ input: own I) -> T
 ///
 /// The input stays raw; `base` chooses where the ABI payload begins. Dynamic
 /// offsets remain relative to `base`, matching Solidity ABI rules.
-pub fn decode_input_at<T, I>(_ input: own I, _ base: u256) -> T
+pub fn decode_input_at<T, I>(_ input: I, _ base: u256) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     let input_len = input.len()
@@ -220,14 +206,14 @@ pub fn decode_input_at<T, I>(_ input: own I, _ base: u256) -> T
 /// a single dynamic output such as `string` or `string[2]`. Tuples decode as a
 /// parameter list without that wrapper, matching Solidity multi-value returns
 /// such as `returns (string, uint64)`.
-pub fn decode_output<T, I>(_ input: own I) -> T
+pub fn decode_output<T, I>(_ input: I) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     decode_output_at(input, 0)
 }
 
 /// Decode a Solidity ABI return/output payload from an arbitrary byte input.
-pub fn decode_output_at<T, I>(_ input: own I, _ base: u256) -> T
+pub fn decode_output_at<T, I>(_ input: I, _ base: u256) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     let input_len = input.len()
@@ -243,7 +229,7 @@ pub fn decode_output_at<T, I>(_ input: own I, _ base: u256) -> T
 /// This is intended for zero-copy inspection of calldata or returndata without
 /// constructing an owned buffer.
 pub fn decode_bytes_view<I>(_ input: own I) -> BytesView<I>
-    where I: ByteInput
+    where I: ByteInput + Copy
 {
     decode_bytes_view_at(input, base: 0, head_pos: 0)
 }
@@ -254,11 +240,13 @@ pub fn decode_bytes_view<I>(_ input: own I) -> BytesView<I>
 /// offset of the dynamic head within that payload.
 ///
 /// Malformed offsets and lengths, including ones whose sums would overflow,
-/// revert with empty returndata.
+/// revert with empty returndata. An input is shorter than `2**64` bytes
+/// (`ByteSource::size`), so offset and length words of `2**64` or more are
+/// rejected, like in Solidity.
 // The explicit wrap checks below replace checked-arithmetic panics.
 #[arithmetic(unchecked)]
 pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> BytesView<I>
-    where I: ByteInput
+    where I: ByteInput + Copy
 {
     let input_len = input.len()
     if base > input_len {
@@ -275,8 +263,7 @@ pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> By
         revert_empty()
     }
 
-    let tail_rel = input.word_at(head_at)
-    let tail_at = base + tail_rel
+    let tail_at = base + input.word_at(head_at)
     if tail_at < base {
         revert_empty()
     }
@@ -297,12 +284,12 @@ pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> By
         revert_empty()
     }
 
-    BytesView::new(input, start: data_start, len: data_len)
+    BytesView::new(input, start: data_start, len: data_len.downcast_unchecked())
 }
 
 /// Decode a Solidity ABI `string` payload view from `input` at byte 0.
 pub fn decode_string_view<I>(_ input: own I) -> StringView<I>
-    where I: ByteInput
+    where I: ByteInput + Copy
 {
     decode_string_view_at(input, base: 0, head_pos: 0)
 }
@@ -312,20 +299,12 @@ pub fn decode_string_view<I>(_ input: own I) -> StringView<I>
 /// `base` selects the start of the ABI payload and `head_pos` selects the byte
 /// offset of the dynamic head within that payload.
 pub fn decode_string_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> StringView<I>
-    where I: ByteInput
+    where I: ByteInput + Copy
 {
     StringView { bytes: decode_bytes_view_at(input, base: base, head_pos: head_pos) }
 }
 
-impl<I> AbiDecoder<Sol> for SolDecoder<I>
-    where I: ByteInput
-{
-    type Input = I
-
-    fn input(self) -> Self::Input {
-        self.cur.input
-    }
-
+impl AbiDecoder<Sol> for SolDecoder {
     fn base(self) -> u256 {
         self.base
     }
@@ -335,47 +314,40 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
     }
 
     fn pos(self) -> u256 {
-        self.cur.pos
+        self.pos
     }
 
     fn set_pos(mut self, _ new_pos: u256) {
-        self.cur.pos = new_pos
+        self.pos = new_pos
     }
 
-    fn read_u8(mut self) -> u8 {
-        let len = self.cur.input.len()
-        let new_pos = self.cur.pos + 1
-        if new_pos < self.cur.pos || new_pos > len {
+    fn read_u8<I: ByteInput>(mut self, _ input: I) -> u8 {
+        let new_pos = self.pos + 1
+        if new_pos < self.pos || new_pos > input.len() {
             revert_empty()
         }
-        let b = self.cur.input.byte_at(self.cur.pos)
-        self.cur.pos = new_pos
+        let b = input.byte_at(self.pos)
+        self.pos = new_pos
         b
     }
 
     #[inline(always)]
-    fn read_word(mut self) -> u256 {
-        let len = self.cur.input.len()
-        let new_pos = self.cur.pos + 32
-        if new_pos < self.cur.pos || new_pos > len {
+    fn read_word<I: ByteInput>(mut self, _ input: I) -> u256 {
+        let new_pos = self.pos + 32
+        if new_pos < self.pos || new_pos > input.len() {
             revert_empty()
         }
-        let w = self.cur.input.word_at(self.cur.pos)
-        self.cur.pos = new_pos
+        let w = input.word_at(self.pos)
+        self.pos = new_pos
         w
     }
 
     #[arithmetic(unchecked)]
-    fn peek_word(self, _ at: u256) -> u256 {
-        let len = self.cur.input.len()
+    fn peek_word<I: ByteInput>(self, _ input: I, _ at: u256) -> u256 {
         let end = at + 32
-        if end < at || end > len {
+        if end < at || end > input.len() {
             revert_empty()
         }
-        self.cur.input.word_at(at)
-    }
-
-    fn alloc(mut self, _ size: u256) -> *u8 {
-        ptr::alloc_bytes(size)
+        input.word_at(at)
     }
 }

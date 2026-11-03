@@ -1,0 +1,77 @@
+// Importing a trait brings the methods of all its super-traits into scope, not
+// only those of its direct super-traits, including a super-trait whose name an
+// associated type of the subtrait shadows.
+
+mod grand {
+    pub trait Base {
+        fn width(self) -> usize
+    }
+
+    pub trait Middle: Base {}
+
+    pub trait Top: Middle {}
+
+    impl Base for u8 {
+        fn width(self) -> usize { 1 }
+    }
+
+    impl Middle for u8 {}
+
+    impl Top for u8 {}
+}
+
+mod shadowed {
+    pub trait Parent {
+        fn width(self) -> usize
+    }
+
+    impl Parent for u16 {
+        fn width(self) -> usize { 1 }
+    }
+
+    pub trait Child: Parent {
+        type Parent
+    }
+
+    impl Child for u16 {
+        type Parent = u16
+    }
+}
+
+mod rival {
+    pub trait Rival {
+        fn width(self) -> usize
+    }
+
+    impl Rival for u8 {
+        fn width(self) -> usize { 2 }
+    }
+
+    impl Rival for u16 {
+        fn width(self) -> usize { 2 }
+    }
+}
+
+// `Base` is in scope through `Top`, so it is selected over the unimported
+// `Rival`.
+mod selects_base {
+    use super::grand::Top
+
+    fn width(_ x: u8) -> usize { x.width() }
+}
+
+// `Base` and `Rival` are both in scope.
+mod ambiguous_grand {
+    use super::grand::Top
+    use super::rival::Rival
+
+    fn width(_ x: u8) -> usize { x.width() }
+}
+
+// `Parent` and `Rival` are both in scope.
+mod ambiguous_shadowed {
+    use super::shadowed::Child
+    use super::rival::Rival
+
+    fn width(_ x: u16) -> usize { x.width() }
+}

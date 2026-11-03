@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::ast::AstNode;
 
-use super::ast_node;
+use super::{ast_node, support};
 use crate::{SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -90,6 +90,22 @@ impl PathPat {
     /// Returns the `mut` keyword if the patter is mutable.
     pub fn mut_token(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::MutKw)
+    }
+
+    /// Returns the `mut?` keyword if the pattern binds an access at the
+    /// item's mode.
+    pub fn maybe_mut_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::MaybeMutKw)
+    }
+
+    /// Returns the `ref` keyword if the pattern binds a read access.
+    pub fn ref_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::RefKw)
+    }
+
+    /// Returns the `var` keyword if the pattern binds a mutable value.
+    pub fn var_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::VarKw)
     }
 }
 

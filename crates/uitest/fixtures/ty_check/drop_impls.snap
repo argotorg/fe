@@ -1,0 +1,129 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/drop_impls.fe
+---
+error[3-0059]: `Window` is a `#[view]` type
+    ┌─ drop_impls.fe:164:15
+    │
+164 │ impl Drop for Window {
+    │               ^^^^^^ a `#[view]` type cannot be `Drop`
+
+error[3-0059]: `Window` is a `#[view]` type
+    ┌─ drop_impls.fe:165:13
+    │
+165 │     fn drop(own self) {}
+    │             ^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[6-0037]: `Drop` cannot be implemented for `Wrap<u8>`
+   ┌─ drop_impls.fe:27:15
+   │
+27 │ impl Drop for Wrap<u8> {
+   │               ^^^^^^^^ not a struct or enum applied to the implementation's own distinct parameters
+   │
+   = a drop runs for every value of a type, so its implementation covers the whole type, as `impl<T> Drop for Buf<T>` does
+
+error[6-0037]: `Drop` cannot be implemented for `Same<T, T>`
+   ┌─ drop_impls.fe:37:18
+   │
+37 │ impl<T> Drop for Same<T, T> {
+   │                  ^^^^^^^^^^ not a struct or enum applied to the implementation's own distinct parameters
+   │
+   = a drop runs for every value of a type, so its implementation covers the whole type, as `impl<T> Drop for Buf<T>` does
+
+error[6-0038]: `Drop` for `Bounded<T>` has bounds `Bounded<T>` does not declare
+   ┌─ drop_impls.fe:48:26
+   │
+48 │ impl<T: Marker> Drop for Bounded<T> {
+   │                          ^^^^^^^^^^ not declared by `Bounded<T>`: `T: Marker`
+   │
+   = a drop runs for every value of a type, so its implementation needs only the type's own bounds
+
+error[6-0039]: `Copied` cannot implement both `Copy` and `Drop`
+   ┌─ drop_impls.fe:68:15
+   │
+68 │ impl Drop for Copied {
+   │               ^^^^^^ `Copied` has a `Copy` implementation
+   │
+   = a copy duplicates whatever the value owns, and each copy would destroy it again
+
+error[6-0039]: `Conditional<T>` cannot implement both `Copy` and `Drop`
+   ┌─ drop_impls.fe:80:18
+   │
+80 │ impl<T> Drop for Conditional<T> {
+   │                  ^^^^^^^^^^^^^^ `Conditional<T>` has a `Copy` implementation
+   │
+   = a copy duplicates whatever the value owns, and each copy would destroy it again
+
+error[6-0039]: `CopiedEffectful` cannot implement both `Copy` and `Drop`
+    ┌─ drop_impls.fe:102:15
+    │
+102 │ impl Drop for CopiedEffectful {
+    │               ^^^^^^^^^^^^^^^ `CopiedEffectful` has a `Copy` implementation
+    │
+    = a copy duplicates whatever the value owns, and each copy would destroy it again
+
+error[6-0040]: `drop` cannot declare effects
+   ┌─ drop_impls.fe:90:23
+   │
+90 │     fn drop(own self) uses (total: mut u256) {
+   │                       ^^^^^^^^^^^^^^^^^^^^^^ a drop runs where no call is written, so nothing provides these
+   │
+   = a destructor may use only the value it destroys and what that value holds
+
+error[6-0040]: `drop` cannot declare effects
+    ┌─ drop_impls.fe:103:23
+    │
+103 │     fn drop(own self) uses (total: mut u256) {
+    │                       ^^^^^^^^^^^^^^^^^^^^^^ a drop runs where no call is written, so nothing provides these
+    │
+    = a destructor may use only the value it destroys and what that value holds
+
+error[6-0040]: `drop` cannot declare effects
+    ┌─ drop_impls.fe:114:23
+    │
+114 │     fn drop(own self) uses F::E {
+    │                       ^^^^^^^^^ a drop runs where no call is written, so nothing provides these
+    │
+    = a destructor may use only the value it destroys and what that value holds
+
+error[8-0036]: missing effect `Ctx` required by `needs_ctx`
+    ┌─ drop_impls.fe:143:9
+    │
+143 │         needs_ctx()
+    │         ^^^^^^^^^^^ `needs_ctx` requires effect `Ctx` to be in scope
+    │
+    = a `drop` declares no effects: it runs where no call is written, so no caller provides one
+    = provide it to a block of this `drop` with `with (Ctx = value) { .. }`
+
+error[8-0106]: missing effect row `F::E` required by `call`
+    ┌─ drop_impls.fe:126:9
+    │
+126 │         (self.f)()
+    │         ^^^^^^^^^^ `call` requires the row `F::E`
+    │
+    = a `drop` declares no effects: it runs where no call is written, so nothing provides a row whose implementation is not known here
+
+error[8-0152]: `Drop::drop` cannot be called directly
+    ┌─ drop_impls.fe:170:5
+    │
+170 │     buf.drop()
+    │     ^^^^^^^^^^ a value is destroyed once, where its owner gives it up
+    │
+    = call `core::mem::drop` to destroy a value early
+
+error[8-0152]: `Drop::drop` cannot be called directly
+    ┌─ drop_impls.fe:174:5
+    │
+174 │     Drop::drop(buf)
+    │     ^^^^^^^^^^^^^^^ a value is destroyed once, where its owner gives it up
+    │
+    = call `core::mem::drop` to destroy a value early
+
+error[8-0152]: `Drop::drop` cannot be called directly
+    ┌─ drop_impls.fe:178:13
+    │
+178 │     let f = Buf::drop
+    │             ^^^^^^^^^ a value is destroyed once, where its owner gives it up
+    │
+    = call `core::mem::drop` to destroy a value early

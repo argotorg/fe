@@ -1,0 +1,40 @@
+use std::evm::{RawStorage, TSlot, read_storage_word, read_transient_word}
+
+// Rejected: even a copied read overlaps an open mutable state access.
+pub contract PersistentConflict {
+    mut value: u256,
+    init() uses (mut value, storage: RawStorage) {
+        let held = mut value
+        let copied = read_storage_word(0)
+        held = copied
+    }
+}
+
+pub contract TransientConflict {
+    mut value: TSlot<u256>,
+    init() uses (mut value, storage: RawStorage) {
+        let held = mut value.value
+        let copied = read_transient_word(0)
+        held = copied
+    }
+}
+
+// Raw authority's footprint is conservative: it reads both persistent and
+// transient state, whichever space the slot is in.
+pub contract CrossSpaceConflict {
+    mut value: TSlot<u256>,
+    init() uses (mut value, storage: RawStorage) {
+        let held = mut value.value
+        let copied = read_storage_word(0)
+        held = copied
+    }
+}
+
+pub contract SharedReads {
+    mut value: u256,
+    init() uses (value, storage: RawStorage) {
+        let held = ref value
+        let copied = read_storage_word(0)
+        assert(held == copied)
+    }
+}

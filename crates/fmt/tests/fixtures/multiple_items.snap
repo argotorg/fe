@@ -1,5 +1,6 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 17
 expression: output
 input_file: tests/fixtures/multiple_items.fe
 ---
@@ -9,7 +10,7 @@ fn new_point(x: i32, y: i32) -> Point {
     Point { x: x, y: y }
 }
 
-pub fn move_x(mut p: Point, dx: i32) -> Point {
+pub fn move_x(var p: own Point, dx: i32) -> Point {
     p.x = p.x + dx
     p
 }

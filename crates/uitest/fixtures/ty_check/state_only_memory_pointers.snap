@@ -1,0 +1,50 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/state_only_memory_pointers.fe
+---
+error[3-0061]: `MemArray<SCell>` is state-only
+   ┌─ state_only_memory_pointers.fe:16:10
+   │
+16 │ fn cells(_ cells: own MemArray<SCell>) {}
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a state-only type cannot be an `own` parameter
+   │
+   = `MemArray<SCell>` holds `SCell`, which is pinned to storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `MemArray<TSlot<u256>>` is state-only
+   ┌─ state_only_memory_pointers.fe:18:10
+   │
+18 │ fn slots(_ slots: own MemArray<TSlot<u256>>) {}
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a state-only type cannot be an `own` parameter
+   │
+   = `MemArray<TSlot<u256>>` holds `TSlot<u256>`, which is pinned to transient storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `MemArray<StorageMap<u256, u256>>` is state-only
+   ┌─ state_only_memory_pointers.fe:20:9
+   │
+20 │ fn maps(_ maps: own MemArray<StorageMap<u256, u256>>) {}
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a state-only type cannot be an `own` parameter
+   │
+   = `MemArray<StorageMap<u256, u256>>` holds `StorageMap<u256, u256>`, which is pinned to storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `*SCell` is state-only
+   ┌─ state_only_memory_pointers.fe:24:9
+   │
+24 │     let _p = ptr::cast<u256, SCell>(words.ptr())
+   │         ^^ a state-only type cannot be bound by value
+   │
+   = `*SCell` holds `SCell`, which is pinned to storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `*SCell` is state-only
+   ┌─ state_only_memory_pointers.fe:24:14
+   │
+24 │     let _p = ptr::cast<u256, SCell>(words.ptr())
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a state-only type cannot be passed or returned by value
+   │
+   = `*SCell` holds `SCell`, which is pinned to storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter

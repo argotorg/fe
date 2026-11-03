@@ -1,0 +1,42 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/mutability_variants.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ mutability_variants.fe:46:5
+   │
+46 │     fixed.at(0) = 1
+   │     ^^^^^^^^^^^ `Fixed` doesn't implement `mut Collection`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ mutability_variants.fe:47:18
+   │
+47 │     for mut x in fixed {
+   │                  ^^^^^ `Fixed` doesn't implement `mut Collection`
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ mutability_variants.fe:16:5
+   │
+15 │     let x = xs.at(0)
+   │         - write `var x` for a mutable value
+16 │     x = 3
+   │     ^ immutable assignment
+
+error[8-0066]: mutable borrow requires a mutable place
+  ┌─ mutability_variants.fe:7:17
+  │
+6 │     let xs: [u256; 2] = [1, 2]
+  │         -- `xs` does not provide mutable access
+7 │     let x = mut xs.at(0)
+  │                 ^^ cannot borrow as `mut`
+
+error[8-0066]: mutable borrow requires a mutable place
+  ┌─ mutability_variants.fe:9:5
+  │
+6 │     let xs: [u256; 2] = [1, 2]
+  │         -- `xs` does not provide mutable access
+  ·
+9 │     xs.at(1) = 4
+  │     ^^ cannot borrow as `mut`

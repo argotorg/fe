@@ -10,10 +10,10 @@ const MAX_TICK: i32 =  887272
 // Builds the 20-entry factor table by iterative squaring in Q128.128.
 //   table[k] ≈ floor(2^128 / 1.0001^(2^k))
 const fn tick_factors() -> [u256; 20] {
-    let mut table: [u256; 20] = [0; 20]
+    var table: [u256; 20] = [0; 20]
     // Seed: 1 / 1.0001 in Q128.128 (identical to Uniswap's k=0 constant).
-    let mut x: u256 = 0xfffcb933bd6fad37aa2d162d1a594001
-    let mut k: usize = 0
+    var x: u256 = 0xfffcb933bd6fad37aa2d162d1a594001
+    var k: usize = 0
     while k < 20 {
         table[k] = x
         // ceil(x^2 / 2^128) — keeps the iteration on the right side of Uniswap.
@@ -31,13 +31,13 @@ const TICK_FACTORS: [u256; 20] = tick_factors()
 pub const fn get_sqrt_ratio_at_tick(_ tick: i32) -> u256 {
     let abs_tick: u32 = tick.unsigned_abs()
 
-    let mut ratio: u256 = if (abs_tick & 0x1) != 0 {
+    var ratio: u256 = if (abs_tick & 0x1) != 0 {
         TICK_FACTORS[0]
     } else {
         1 << 128
     }
 
-    let mut k: u32 = 1
+    var k: u32 = 1
     while k < 20 {
         if (abs_tick >> k) & 1 != 0 {
             ratio = (ratio * TICK_FACTORS[k.downcast_unchecked()]) >> 128
@@ -101,7 +101,7 @@ fn factor_0_is_bit_exact() {
 // below the precision that survives the final `>> 32` truncation.
 #[test]
 fn factors_drift_under_2_to_16() {
-    let mut k: usize = 0
+    var k: usize = 0
     while k < 20 {
         assert(abs_diff(TICK_FACTORS[k], UNISWAP_FACTORS[k]) < (1 << 16))
         k += 1

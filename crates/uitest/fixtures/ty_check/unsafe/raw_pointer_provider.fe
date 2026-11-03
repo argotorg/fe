@@ -1,0 +1,37 @@
+struct Counter { value: u256 }
+
+fn bump() uses (counter: mut Counter) {
+    counter.value += 1
+}
+
+// Rejected: providing a pointee dereferences the pointer.
+pub fn raw_pointer(p: own *Counter) {
+    with (mut *p) {
+        bump()
+    }
+}
+
+pub fn inside_unsafe(p: own *Counter) {
+    unsafe {
+        with (mut *p) {
+            bump()
+        }
+    }
+}
+
+pub fn capability(var counter: own Counter) {
+    with (mut counter) {
+        bump()
+    }
+}
+
+fn read_pointer() -> *Counter uses (p: *Counter) {
+    p
+}
+
+// Accepted: a pointer provided as a value dereferences nothing.
+pub fn value_only(p: own *Counter) -> *Counter {
+    with (p) {
+        read_pointer()
+    }
+}

@@ -1,35 +1,22 @@
 use common::layout::enum_tag_bits;
 use cranelift_entity::{EntityRef, entity_impl};
+use hir::analysis::ty::AddressSpace;
 use hir::analysis::{
-    semantic::{FieldIndex, LayoutEvidenceConstant, SemOrigin, SemanticInstance},
-    ty::{CallableLayoutParamPort, ty_def::TyId},
+    semantic::{FieldIndex, SemOrigin, SemanticInstance},
+    ty::ty_def::TyId,
 };
 use hir::hir_def::{BinOp, Contract, Func, TopLevelMod, UnOp};
 use hir::projection::IndexSource;
 use hir::semantic::{ContractFieldId, ProviderBinding};
-use salsa::Update;
+use ruint::aliases::U256;
+use salsa::SalsaValue;
 
 use crate::{
     db::MirDb,
     instance::{RuntimeInstance, RuntimeInstanceKey},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub enum AddressSpaceKind {
-    Memory,
-    Storage,
-    Transient,
-    Calldata,
-    Code,
-}
-
-impl AddressSpaceKind {
-    pub fn is_byte_addressed(self) -> bool {
-        matches!(self, Self::Memory | Self::Calldata | Self::Code)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeClass<'db> {
     Scalar(ScalarClass<'db>),
     AggregateValue {
@@ -41,49 +28,51 @@ pub enum RuntimeClass<'db> {
         view: RefView<'db>,
     },
     RawAddr {
-        space: AddressSpaceKind,
+        space: AddressSpace,
         pointee: Option<RawPointeeId<'db>>,
     },
 }
 
-/// The deferred or exact target of a raw address.
-///
-/// Identity is the immutable key: comparing or hashing a pointee never
-/// resolves its target. `Stored` names a closed, normalized source type whose
-/// stored class is classified on demand, which lets a recursive type point at
-/// itself before its own layout is complete. `Exact` carries an already-derived
-/// class, including specializations that no source type reconstructs.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum RawPointeeKey<'db> {
-    Stored(TyId<'db>),
-    Exact(RuntimeClass<'db>),
-}
-
+/// The target of a raw address.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct RawPointeeId<'db> {
-    #[return_ref]
-    pub key: RawPointeeKey<'db>,
-}
-
-impl<'db> RawPointeeId<'db> {
-    pub fn exact(db: &'db dyn MirDb, class: RuntimeClass<'db>) -> Self {
-        Self::new(db, RawPointeeKey::Exact(class))
-    }
-
-    /// The class this pointee denotes. Stored targets are classified one
-    /// level deep; their own raw fields remain deferred.
-    pub fn target(self, db: &'db dyn MirDb) -> RuntimeClass<'db> {
-        match self.key(db) {
-            RawPointeeKey::Exact(class) => class.clone(),
-            RawPointeeKey::Stored(_) => crate::runtime::lower::resolve_stored_raw_pointee(db, self),
-        }
-    }
+    pub target: RuntimeClass<'db>,
 }
 
 impl<'db> RuntimeClass<'db> {
     pub fn is_transport(&self) -> bool {
         matches!(self, Self::Ref { .. } | Self::RawAddr { .. })
+    }
+
+    /// Whether dereferencing this transport yields `target`. An opaque raw
+    /// address and a non-transport target nothing.
+    pub fn targets(&self, db: &'db dyn MirDb, target: &RuntimeClass<'db>) -> bool {
+        match self {
+            Self::Ref { pointee, .. } => **pointee == *target,
+            Self::RawAddr {
+                pointee: Some(pointee),
+                ..
+            } => pointee.target(db) == target,
+            Self::RawAddr { pointee: None, .. } | Self::Scalar(_) | Self::AggregateValue { .. } => {
+                false
+            }
+        }
+    }
+
+    pub fn contains_ref(&self, db: &'db dyn MirDb) -> bool {
+        match self {
+            Self::Scalar(_) | Self::RawAddr { .. } => false,
+            Self::Ref { .. } => true,
+            Self::AggregateValue { layout } => match layout.data(db) {
+                Layout::Struct(layout) => layout.fields.iter().any(|field| field.contains_ref(db)),
+                Layout::Array(layout) => layout.elem.contains_ref(db),
+                Layout::Enum(layout) => layout
+                    .variants
+                    .iter()
+                    .any(|variant| variant.fields.iter().any(|field| field.contains_ref(db))),
+            },
+        }
     }
 
     pub fn contains_transport(&self, db: &'db dyn MirDb) -> bool {
@@ -138,7 +127,7 @@ impl<'db> RuntimeClass<'db> {
     pub fn provider_ref(
         layout: LayoutId<'db>,
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     ) -> Self {
         Self::Ref {
             pointee: Box::new(Self::AggregateValue { layout }),
@@ -147,14 +136,14 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
-    pub fn raw_addr(db: &'db dyn MirDb, space: AddressSpaceKind, pointee: Self) -> Self {
+    pub fn raw_addr(db: &'db dyn MirDb, space: AddressSpace, pointee: Self) -> Self {
         Self::RawAddr {
             space,
-            pointee: Some(RawPointeeId::exact(db, pointee)),
+            pointee: Some(RawPointeeId::new(db, pointee)),
         }
     }
 
-    pub fn opaque_raw_addr(space: AddressSpaceKind) -> Self {
+    pub fn opaque_raw_addr(space: AddressSpace) -> Self {
         Self::RawAddr {
             space,
             pointee: None,
@@ -201,7 +190,7 @@ impl<'db> RuntimeClass<'db> {
             RuntimeClass::RawAddr {
                 pointee: Some(pointee),
                 ..
-            } => Some(pointee.target(db)),
+            } => Some(pointee.target(db).clone()),
             RuntimeClass::Scalar(_)
             | RuntimeClass::AggregateValue { .. }
             | RuntimeClass::RawAddr { pointee: None, .. } => None,
@@ -217,7 +206,7 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
-    pub fn address_space(&self) -> Option<AddressSpaceKind> {
+    pub fn address_space(&self) -> Option<AddressSpace> {
         match self {
             RuntimeClass::Ref {
                 kind: RefKind::Provider { space, .. },
@@ -254,7 +243,9 @@ impl<'db> RuntimeClass<'db> {
                 false
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(db) {
-                Layout::Struct(data) => data.fields.iter().all(|field| field.is_zero_sized(db)),
+                Layout::Struct(data) => {
+                    !data.pinned && data.fields.iter().all(|field| field.is_zero_sized(db))
+                }
                 Layout::Array(data) => data.len == 0 || data.elem.is_zero_sized(db),
                 Layout::Enum(_) => false,
             },
@@ -320,7 +311,7 @@ impl<'db> RuntimeClass<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RefKind<'db> {
     /// An address/layout descriptor for a native reference stored in a typed slot.
     /// Unlike static views, this representation preserves any supported referent.
@@ -329,14 +320,34 @@ pub enum RefKind<'db> {
     Object,
     Provider {
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RefView<'db> {
     Whole,
     EnumVariant(VariantId<'db>),
+}
+
+/// The bytes of a storage word that hold a packed scalar struct field, a
+/// lane, counted from the low-order end (see
+/// `common::layout::storage_fields_layout`). A lane has no address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub struct StorageLaneView {
+    pub byte_offset: u8,
+    pub byte_width: u8,
+    /// Whether other fields share the word, so a write must preserve it.
+    pub shared: bool,
+}
+
+impl StorageLaneView {
+    pub fn lane(self) -> common::layout::StorageLane {
+        common::layout::StorageLane {
+            byte_offset: u32::from(self.byte_offset),
+            byte_width: u32::from(self.byte_width),
+        }
+    }
 }
 
 fn layouts_share_runtime_rep<'db>(
@@ -384,13 +395,13 @@ fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db
         (
             RefKind::Object,
             RefKind::Provider {
-                space: AddressSpaceKind::Memory,
+                space: AddressSpace::Memory,
                 ..
             },
         )
         | (
             RefKind::Provider {
-                space: AddressSpaceKind::Memory,
+                space: AddressSpace::Memory,
                 ..
             },
             RefKind::Object,
@@ -402,7 +413,7 @@ fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeCarrier<'db> {
     Erased,
     Value(RuntimeClass<'db>),
@@ -417,7 +428,7 @@ impl<'db> RuntimeCarrier<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ScalarClass<'db> {
     pub repr: ScalarRepr,
     pub role: ScalarRole<'db>,
@@ -429,7 +440,7 @@ impl ScalarClass<'_> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ScalarRepr {
     Bool,
     Int { bits: u16, signed: bool },
@@ -437,10 +448,14 @@ pub enum ScalarRepr {
     Address { bits: u16 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ScalarRole<'db> {
     Plain,
-    EnumTag { enum_layout: LayoutId<'db> },
+    EnumTag {
+        enum_layout: LayoutId<'db>,
+    },
+    /// A memory address, which native targets hold as a pointer.
+    Pointer,
 }
 
 #[salsa::interned]
@@ -465,48 +480,52 @@ impl<'db> LayoutId<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum LayoutKey<'db> {
     Struct(StructLayout<'db>),
     Array(ArrayLayout<'db>),
     Enum(EnumLayoutKey<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum Layout<'db> {
     Struct(StructLayout<'db>),
     Array(ArrayLayout<'db>),
     Enum(EnumLayout<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct StructLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
+    /// The layout of a pinned type (a `core::marker::Pinned` implementor):
+    /// its root number identifies its region, so it takes at least
+    /// one storage slot and is never zero-sized, even without fields.
+    pub pinned: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ArrayLayout<'db> {
     pub elem: RuntimeClass<'db>,
     pub len: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct EnumLayout<'db> {
     pub tag: ScalarClass<'db>,
     pub variants: Box<[EnumVariantLayout<'db>]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct EnumLayoutKey<'db> {
     pub variants: Box<[EnumVariantLayout<'db>]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct EnumVariantLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct VariantId<'db> {
     pub enum_layout: LayoutId<'db>,
     pub index: u16,
@@ -528,7 +547,7 @@ fn enum_tag_repr(variant_count: usize) -> ScalarRepr {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ConstRegion<'db> {
     pub layout: LayoutId<'db>,
     pub value: ConstNode<'db>,
@@ -537,6 +556,7 @@ pub struct ConstRegion<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ConstRegionId<'db> {
+    #[returns(copy)]
     pub layout: LayoutId<'db>,
     pub value: ConstNode<'db>,
 }
@@ -550,7 +570,7 @@ impl<'db> ConstRegionId<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstNode<'db> {
     Scalar(ConstScalar),
     Aggregate {
@@ -559,7 +579,7 @@ pub enum ConstNode<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstScalar {
     Bool(bool),
     Int {
@@ -605,17 +625,17 @@ impl ConstScalar {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct RLocalId(u32);
 entity_impl!(RLocalId);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct RBlockId(u32);
 entity_impl!(RBlockId);
 
 pub type RValueId = RLocalId;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeBody<'db> {
     pub owner: RuntimeInstance<'db>,
     pub key: RuntimeInstanceKey<'db>,
@@ -653,29 +673,29 @@ pub struct LoweredRuntimeBody<'db> {
     pub referenced_code_regions: Vec<RuntimeCodeRegion<'db>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RLocal<'db> {
     pub semantic_ty: TyId<'db>,
     pub carrier: RuntimeCarrier<'db>,
     pub root: RuntimeLocalRoot<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeLocalRoot<'db> {
     None,
     Slot(RuntimeClass<'db>),
     Ref(RuntimeClass<'db>),
     Ptr {
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct RuntimeProviderBindingId(u32);
 entity_impl!(RuntimeProviderBindingId);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeProviderBinding<'db> {
     pub provider: ProviderBinding<'db>,
     pub value: RLocalId,
@@ -683,31 +703,31 @@ pub struct RuntimeProviderBinding<'db> {
     pub place_class: RuntimeClass<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeInterfaceSignature<'db> {
     pub params: Vec<RuntimeParam<'db>>,
     pub ret: Option<RuntimeClass<'db>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeExitBehavior {
     MayReturn,
     NeverReturns,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeParam<'db> {
     pub local: RLocalId,
     pub class: RuntimeClass<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RBlock<'db> {
     pub stmts: Vec<RStmt<'db>>,
     pub terminator: RTerminator<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeCallEdge<'db> {
     pub callee: RuntimeInstance<'db>,
 }
@@ -715,10 +735,11 @@ pub struct RuntimeCallEdge<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct RuntimeCodeRegion<'db> {
+    #[returns(copy)]
     pub key: RuntimeCodeRegionKey<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeCodeRegionKey<'db> {
     ContractInit { contract: Contract<'db> },
     ContractRuntime { contract: Contract<'db> },
@@ -728,34 +749,38 @@ pub enum RuntimeCodeRegionKey<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ResolvedCodeRegion<'db> {
+    #[returns(copy)]
     pub region: RuntimeCodeRegion<'db>,
     pub symbol: String,
     pub source: RuntimeSectionRef,
+    #[returns(copy)]
     pub root: RuntimeFunction<'db>,
 }
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct RuntimePackage<'db> {
+    #[returns(copy)]
     pub top_mod: TopLevelMod<'db>,
     pub functions: Vec<RuntimeFunction<'db>>,
+    #[returns(copy)]
     pub plan: RuntimePackagePlan<'db>,
 }
 
 impl<'db> RuntimePackage<'db> {
-    pub fn objects(self, db: &'db dyn MirDb) -> Vec<RuntimeObject<'db>> {
+    pub fn objects(self, db: &'db dyn MirDb) -> &'db [RuntimeObject<'db>] {
         self.plan(db).objects(db)
     }
 
-    pub fn const_regions(self, db: &'db dyn MirDb) -> Vec<ConstRegionId<'db>> {
+    pub fn const_regions(self, db: &'db dyn MirDb) -> &'db [ConstRegionId<'db>] {
         self.plan(db).const_regions(db)
     }
 
-    pub fn code_regions(self, db: &'db dyn MirDb) -> Vec<ResolvedCodeRegion<'db>> {
+    pub fn code_regions(self, db: &'db dyn MirDb) -> &'db [ResolvedCodeRegion<'db>] {
         self.plan(db).code_regions(db)
     }
 
-    pub fn root_objects(self, db: &'db dyn MirDb) -> Vec<RuntimeObject<'db>> {
+    pub fn root_objects(self, db: &'db dyn MirDb) -> &'db [RuntimeObject<'db>] {
         self.plan(db).root_objects(db)
     }
 
@@ -771,28 +796,32 @@ pub struct RuntimePackagePlan<'db> {
     pub const_regions: Vec<ConstRegionId<'db>>,
     pub code_regions: Vec<ResolvedCodeRegion<'db>>,
     pub root_objects: Vec<RuntimeObject<'db>>,
+    #[returns(copy)]
     pub primary_object: Option<RuntimeObject<'db>>,
 }
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct RuntimeFunction<'db> {
+    #[returns(copy)]
     pub instance: RuntimeInstance<'db>,
     pub symbol: String,
+    #[returns(copy)]
     pub linkage: RuntimeLinkage,
+    #[returns(copy)]
     pub inline_hint: RuntimeInlineHint,
     pub owner: RuntimeFunctionOwner<'db>,
     pub referenced_const_regions: Vec<ConstRegionId<'db>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeLinkage {
     Private,
     Internal,
     External,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeInlineHint {
     Auto,
     Hint,
@@ -800,13 +829,13 @@ pub enum RuntimeInlineHint {
     Never,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeFunctionOwner<'db> {
     Semantic(SemanticInstance<'db>),
     Synthetic(RuntimeSyntheticSpec<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeSyntheticSpec<'db> {
     MainRoot {
         callee: RuntimeInstance<'db>,
@@ -840,7 +869,7 @@ pub enum RuntimeSyntheticSpec<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractInitAbiPlan<'db> {
     pub contract: Contract<'db>,
     pub payable: bool,
@@ -849,7 +878,7 @@ pub struct ContractInitAbiPlan<'db> {
     pub init_args: InitArgsPlan<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractRecvAbiPlan<'db> {
     pub contract: Contract<'db>,
     pub selector: Option<u32>,
@@ -861,32 +890,24 @@ pub struct ContractRecvAbiPlan<'db> {
 }
 
 /// Runtime arguments that a synthetic boundary supplies on behalf of a
-/// semantic owner. Physical effect carriers and layout evidence are separate
-/// ABI lanes and are deliberately planned independently.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+/// semantic owner: its physical effect carriers.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct EntrySemanticArgsPlan<'db> {
     pub effects: Box<[EntryEffectArgPlan<'db>]>,
-    pub layout_evidence: Box<[EntryLayoutEvidenceArgPlan<'db>]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub struct EntryLayoutEvidenceArgPlan<'db> {
-    pub target: CallableLayoutParamPort,
-    pub value: LayoutEvidenceConstant<'db>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum EntryEffectArgPlan<'db> {
     ContractField(ContractFieldBinding<'db>),
     TargetRootProvider(TargetRootProviderBinding<'db>),
 }
 
 /// Location of a contract field within its backing address space.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractFieldSlot {
     /// Word offset within the field's address space (storage, transient, or
     /// the init-time memory immutables buffer).
-    Words(u128),
+    Words(U256),
     /// Byte offset relative to the end of the deployed code (always
     /// negative), addressing the immutable data section appended after the
     /// runtime bytecode.
@@ -902,7 +923,7 @@ impl std::fmt::Display for ContractFieldSlot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractFieldBinding<'db> {
     /// Nominal source identity retained for package-level HIR/MIR seam checks.
     pub field: ContractFieldId<'db>,
@@ -913,20 +934,20 @@ pub struct ContractFieldBinding<'db> {
     pub init_immutable: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TargetRootProviderBinding<'db> {
     pub declared_ty: TyId<'db>,
     pub class: RuntimeClass<'db>,
     pub materialization: TargetRootProviderMaterialization<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum TargetRootProviderMaterialization<'db> {
     MemoryObject { layout: LayoutId<'db> },
     MemoryRawAddr { layout: LayoutId<'db> },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeBoundarySpec<'db> {
     ExactTransport(RuntimeClass<'db>),
     ExactShape(RuntimeClass<'db>),
@@ -947,7 +968,7 @@ impl<'db> RuntimeBoundarySpec<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeParamPlan<'db> {
     Erased,
     Boundary(RuntimeBoundarySpec<'db>),
@@ -958,21 +979,21 @@ pub enum RuntimeParamPlan<'db> {
     PassActual,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum BorrowAccess {
     ReadOnly,
     ReadWrite,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct BorrowTransportSet {
     pub allow_object: bool,
     pub allow_const: bool,
-    pub provider_spaces: Box<[AddressSpaceKind]>,
+    pub provider_spaces: Box<[AddressSpace]>,
     pub allow_raw_addr: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum InitArgsPlan<'db> {
     None,
     DecodeInitTail {
@@ -982,7 +1003,7 @@ pub enum InitArgsPlan<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeInputPlan<'db> {
     None,
     DecodeHostPayload {
@@ -993,7 +1014,7 @@ pub enum RuntimeInputPlan<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeReturnPlan<'db> {
     Unit,
     Value {
@@ -1003,13 +1024,13 @@ pub enum RuntimeReturnPlan<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct DispatchArm<'db> {
     pub selector: u32,
     pub wrapper: RuntimeInstance<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum DispatchDefault<'db> {
     RevertEmpty,
     Call { wrapper: RuntimeInstance<'db> },
@@ -1022,7 +1043,7 @@ pub struct RuntimeObject<'db> {
     pub sections: Vec<RuntimeSection<'db>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeSection<'db> {
     pub name: RuntimeSectionName,
     pub entry: RuntimeFunction<'db>,
@@ -1030,15 +1051,17 @@ pub struct RuntimeSection<'db> {
     pub const_regions: Vec<ConstRegionId<'db>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeSectionName {
     Init,
     Runtime,
     Main,
     Test(String),
+    /// A native object's `#[export]` function, defined under this symbol.
+    Export(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeEmbed {
     pub source: RuntimeSectionRef,
     pub as_symbol: String,
@@ -1046,7 +1069,7 @@ pub struct RuntimeEmbed {
 
 /// Refers to a section by the stable `(object name, section name)` pair so the
 /// reference stays valid when objects are rebuilt (re-interned).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeSectionRef {
     Local {
         object: String,
@@ -1074,25 +1097,25 @@ impl RuntimeSectionRef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PlaceRoot<'db> {
     Slot(RLocalId),
     Ref(RValueId),
     Provider(RuntimeProviderBindingId),
     Ptr {
         addr: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimePlace<'db> {
     pub root: PlaceRoot<'db>,
     pub path: Box<[PlaceElem<'db>]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PlaceElem<'db> {
     Field(FieldIndex),
     Index(IndexSource<RValueId>),
@@ -1103,14 +1126,14 @@ pub enum PlaceElem<'db> {
     Deref,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ResolvedRuntimePlace<'db> {
     pub root_kind: ResolvedPlaceRootKind<'db>,
     pub result_class: RuntimeClass<'db>,
     pub path: Box<[ResolvedPlaceElem<'db>]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ResolvedPlaceRootKind<'db> {
     Slot {
         local: RLocalId,
@@ -1128,12 +1151,12 @@ pub enum ResolvedPlaceRootKind<'db> {
     },
     Ptr {
         addr: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ResolvedPlaceElem<'db> {
     Field {
         field: FieldIndex,
@@ -1154,7 +1177,7 @@ pub enum ResolvedPlaceElem<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RuntimeBuiltin<'db> {
     Mload {
         addr: RValueId,
@@ -1175,6 +1198,11 @@ pub enum RuntimeBuiltin<'db> {
     ZeroMem {
         dst: RValueId,
         len: RValueId,
+    },
+    /// Writes `bytes` into memory from `dst` on, zero-padded to whole words.
+    StoreConstBytes {
+        dst: RValueId,
+        bytes: Box<[u8]>,
     },
     Msize,
     Sload {
@@ -1222,6 +1250,11 @@ pub enum RuntimeBuiltin<'db> {
         offset: RValueId,
         len: RValueId,
     },
+    /// `keccak256` of the words, each as 32 big-endian bytes, in order: a
+    /// value of the words alone, read from no memory.
+    KeccakWords {
+        words: Box<[RValueId]>,
+    },
     AddMod {
         lhs: RValueId,
         rhs: RValueId,
@@ -1233,6 +1266,14 @@ pub enum RuntimeBuiltin<'db> {
         modulus: RValueId,
     },
     LeadingZeros {
+        value: RValueId,
+    },
+    /// Reverses the bytes of an integer.
+    SwapBytes {
+        value: RValueId,
+    },
+    /// Returns a scalar unchanged while hiding it from the optimizer.
+    BlackBox {
         value: RValueId,
     },
     Byte {
@@ -1289,7 +1330,13 @@ pub enum RuntimeBuiltin<'db> {
     Malloc {
         size: RValueId,
     },
-    NativePtrIsNull {
+    /// Like `Malloc`, but yields a null address when the host cannot
+    /// allocate.
+    TryMalloc {
+        size: RValueId,
+    },
+    /// Releases an allocation from `Malloc` or `TryMalloc`.
+    Free {
         ptr: RValueId,
     },
     PtrOffsetBytes {
@@ -1370,14 +1417,14 @@ pub enum RuntimeBuiltin<'db> {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SaturatingBinOp {
     Add,
     Sub,
     Mul,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum IntrinsicArithBinOp {
     Add,
     Sub,
@@ -1387,7 +1434,7 @@ pub enum IntrinsicArithBinOp {
     Pow,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RExpr<'db> {
     Use(RValueId),
     ConstScalar(ConstScalar),
@@ -1427,11 +1474,16 @@ pub enum RExpr<'db> {
     ProviderRefFromRaw {
         raw: RValueId,
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
+    },
+    /// The object at a raw memory address, which native targets lay out as
+    /// objects.
+    ObjectFromRaw {
+        raw: RValueId,
     },
     WordToRawAddr {
         value: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     },
     ProviderRefToRaw {
         value: RValueId,
@@ -1483,7 +1535,7 @@ pub enum RExpr<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RStmt<'db> {
     Assign {
         dst: RLocalId,
@@ -1514,9 +1566,14 @@ pub enum RStmt<'db> {
         variant: VariantId<'db>,
         fields: Box<[RValueId]>,
     },
+    /// Finishes the projection session whose call assigned `session`: the
+    /// session's slide runs here once the call is inlined.
+    End {
+        session: RLocalId,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RTerminator<'db> {
     Goto(RBlockId),
     Branch {
@@ -1548,12 +1605,443 @@ pub enum RTerminator<'db> {
         len: RValueId,
     },
     RevertEmpty,
+    /// Reverts with Solidity `Panic(uint256)` data for the word `code`.
+    Panic {
+        code: RValueId,
+    },
     SelfDestruct {
         beneficiary: RValueId,
     },
     Trap,
     Return(Option<RValueId>),
+    /// A projection grants `value` to its caller; the caller's `End` of the
+    /// session resumes at `resume`, which runs the slide and returns.
+    Yield {
+        value: Option<RValueId>,
+        resume: RBlockId,
+    },
     Stop,
+}
+
+impl<'db> RuntimePlace<'db> {
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut RValueId> {
+        let root = match &mut self.root {
+            PlaceRoot::Slot(local) | PlaceRoot::Ref(local) | PlaceRoot::Ptr { addr: local, .. } => {
+                Some(local)
+            }
+            PlaceRoot::Provider(_) => None,
+        };
+        root.into_iter()
+            .chain(self.path.iter_mut().filter_map(|elem| match elem {
+                PlaceElem::Index(IndexSource::Dynamic(index)) => Some(index),
+                PlaceElem::Index(_)
+                | PlaceElem::Field(_)
+                | PlaceElem::VariantField { .. }
+                | PlaceElem::Deref => None,
+            }))
+    }
+}
+
+impl<'db> RuntimeBuiltin<'db> {
+    /// Whether running the builtin can be observed beyond its result: it
+    /// writes memory or state, calls out, logs, frees, can revert, or hides
+    /// its operand from the optimizer.
+    pub fn has_effect(&self) -> bool {
+        match self {
+            Self::Mstore { .. }
+            | Self::Mstore8 { .. }
+            | Self::Mcopy { .. }
+            | Self::ZeroMem { .. }
+            | Self::StoreConstBytes { .. }
+            | Self::Sstore { .. }
+            | Self::ReturnDataCopy { .. }
+            | Self::CallDataCopy { .. }
+            | Self::CodeCopy { .. }
+            | Self::ExtCodeCopy { .. }
+            | Self::BlackBox { .. }
+            | Self::Free { .. }
+            | Self::Call { .. }
+            | Self::StaticCall { .. }
+            | Self::DelegateCall { .. }
+            | Self::Create { .. }
+            | Self::Create2 { .. }
+            | Self::Log0 { .. }
+            | Self::Log1 { .. }
+            | Self::Log2 { .. }
+            | Self::Log3 { .. }
+            | Self::Log4 { .. } => true,
+            Self::IntrinsicArith { checked, .. } => *checked,
+            Self::Mload { .. }
+            | Self::Msize
+            | Self::Sload { .. }
+            | Self::CallValue
+            | Self::ReturnDataSize
+            | Self::CallDataSize
+            | Self::CallDataLoad { .. }
+            | Self::CodeSize
+            | Self::ExtCodeSize { .. }
+            | Self::ExtCodeHash { .. }
+            | Self::Keccak256 { .. }
+            | Self::KeccakWords { .. }
+            | Self::AddMod { .. }
+            | Self::MulMod { .. }
+            | Self::LeadingZeros { .. }
+            | Self::SwapBytes { .. }
+            | Self::Byte { .. }
+            | Self::SignExtend { .. }
+            | Self::Saturating { .. }
+            | Self::Address
+            | Self::Caller
+            | Self::Origin
+            | Self::GasPrice
+            | Self::CoinBase
+            | Self::Balance { .. }
+            | Self::Timestamp
+            | Self::Number
+            | Self::PrevRandao
+            | Self::GasLimit
+            | Self::ChainId
+            | Self::BaseFee
+            | Self::SelfBalance
+            | Self::BlockHash { .. }
+            | Self::BlobHash { .. }
+            | Self::BlobBaseFee
+            | Self::Gas
+            | Self::CurrentCodeRegionLen
+            | Self::CodeRegionOffset { .. }
+            | Self::CodeRegionLen { .. }
+            | Self::Malloc { .. }
+            | Self::TryMalloc { .. }
+            | Self::PtrOffsetBytes { .. }
+            | Self::CallDataSelector
+            | Self::MakeContractFieldRef { .. } => false,
+        }
+    }
+
+    pub fn values_mut(&mut self) -> Vec<&mut RValueId> {
+        match self {
+            Self::Mload { addr }
+            | Self::ExtCodeSize { addr }
+            | Self::ExtCodeHash { addr }
+            | Self::Balance { addr }
+            | Self::StoreConstBytes { dst: addr, .. } => vec![addr],
+            Self::Sload { slot: value }
+            | Self::CallDataLoad { offset: value }
+            | Self::LeadingZeros { value }
+            | Self::SwapBytes { value }
+            | Self::BlackBox { value }
+            | Self::BlockHash { block: value }
+            | Self::BlobHash { index: value }
+            | Self::Malloc { size: value }
+            | Self::TryMalloc { size: value }
+            | Self::Free { ptr: value } => vec![value],
+            Self::Mstore { addr: a, value: b }
+            | Self::Mstore8 { addr: a, value: b }
+            | Self::ZeroMem { dst: a, len: b }
+            | Self::Sstore { slot: a, value: b }
+            | Self::Keccak256 { offset: a, len: b }
+            | Self::Byte { pos: a, value: b }
+            | Self::SignExtend { byte: a, value: b }
+            | Self::IntrinsicArith { lhs: a, rhs: b, .. }
+            | Self::Saturating { lhs: a, rhs: b, .. }
+            | Self::PtrOffsetBytes { ptr: a, offset: b }
+            | Self::Log0 { offset: a, len: b } => vec![a, b],
+            Self::Mcopy {
+                dst: a,
+                src: b,
+                len: c,
+            }
+            | Self::ReturnDataCopy {
+                dst: a,
+                offset: b,
+                len: c,
+            }
+            | Self::CallDataCopy {
+                dst: a,
+                offset: b,
+                len: c,
+            }
+            | Self::CodeCopy {
+                dst: a,
+                offset: b,
+                len: c,
+            }
+            | Self::AddMod {
+                lhs: a,
+                rhs: b,
+                modulus: c,
+            }
+            | Self::MulMod {
+                lhs: a,
+                rhs: b,
+                modulus: c,
+            }
+            | Self::Create {
+                value: a,
+                offset: b,
+                len: c,
+            }
+            | Self::Log1 {
+                offset: a,
+                len: b,
+                topic0: c,
+            } => vec![a, b, c],
+            Self::ExtCodeCopy {
+                addr: a,
+                dst: b,
+                offset: c,
+                len: d,
+            }
+            | Self::Create2 {
+                value: a,
+                offset: b,
+                len: c,
+                salt: d,
+            }
+            | Self::Log2 {
+                offset: a,
+                len: b,
+                topic0: c,
+                topic1: d,
+            } => vec![a, b, c, d],
+            Self::Log3 {
+                offset,
+                len,
+                topic0,
+                topic1,
+                topic2,
+            } => vec![offset, len, topic0, topic1, topic2],
+            Self::Log4 {
+                offset,
+                len,
+                topic0,
+                topic1,
+                topic2,
+                topic3,
+            } => vec![offset, len, topic0, topic1, topic2, topic3],
+            Self::StaticCall {
+                gas,
+                addr,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            }
+            | Self::DelegateCall {
+                gas,
+                addr,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            } => vec![gas, addr, args_offset, args_len, ret_offset, ret_len],
+            Self::Call {
+                gas,
+                addr,
+                value,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            } => vec![gas, addr, value, args_offset, args_len, ret_offset, ret_len],
+            Self::KeccakWords { words } => words.iter_mut().collect(),
+            Self::Msize
+            | Self::CallValue
+            | Self::ReturnDataSize
+            | Self::CallDataSize
+            | Self::CodeSize
+            | Self::Address
+            | Self::Caller
+            | Self::Origin
+            | Self::GasPrice
+            | Self::CoinBase
+            | Self::Timestamp
+            | Self::Number
+            | Self::PrevRandao
+            | Self::GasLimit
+            | Self::ChainId
+            | Self::BaseFee
+            | Self::SelfBalance
+            | Self::BlobBaseFee
+            | Self::Gas
+            | Self::CurrentCodeRegionLen
+            | Self::CodeRegionOffset { .. }
+            | Self::CodeRegionLen { .. }
+            | Self::CallDataSelector
+            | Self::MakeContractFieldRef { .. } => Vec::new(),
+        }
+    }
+}
+
+impl<'db> RExpr<'db> {
+    /// The values the expression reads, including those in its places.
+    pub fn values_mut(&mut self) -> Vec<&mut RValueId> {
+        match self {
+            Self::Use(value)
+            | Self::Unary { value, .. }
+            | Self::Cast { value, .. }
+            | Self::MaterializeToObject { src: value }
+            | Self::NativeRef { value }
+            | Self::ProviderRefFromRaw { raw: value, .. }
+            | Self::ObjectFromRaw { raw: value }
+            | Self::WordToRawAddr { value, .. }
+            | Self::ProviderRefToRaw { value }
+            | Self::RetagRef { value }
+            | Self::AggregateExtract { value, .. }
+            | Self::EnumTagOfValue { value }
+            | Self::EnumIsVariant { value, .. }
+            | Self::EnumExtract { value, .. }
+            | Self::EnumAssertVariantRef { root: value, .. } => vec![value],
+            Self::Binary { lhs, rhs, .. } => vec![lhs, rhs],
+            Self::MaterializePlaceToObject { place }
+            | Self::AddrOf { place }
+            | Self::Load { place }
+            | Self::EnumGetTag { place } => place.values_mut().collect(),
+            Self::AggregateMake { fields, .. }
+            | Self::Call { args: fields, .. }
+            | Self::EnumMake { fields, .. } => fields.iter_mut().collect(),
+            Self::Builtin(builtin) => builtin.values_mut(),
+            Self::ConstScalar(_)
+            | Self::Placeholder { .. }
+            | Self::ConstRef { .. }
+            | Self::AllocObject { .. } => Vec::new(),
+        }
+    }
+}
+
+impl<'db> RExpr<'db> {
+    pub fn place_mut(&mut self) -> Option<&mut RuntimePlace<'db>> {
+        match self {
+            Self::MaterializePlaceToObject { place }
+            | Self::AddrOf { place }
+            | Self::Load { place }
+            | Self::EnumGetTag { place } => Some(place),
+            Self::Use(_)
+            | Self::ConstScalar(_)
+            | Self::Placeholder { .. }
+            | Self::Builtin(_)
+            | Self::Unary { .. }
+            | Self::Binary { .. }
+            | Self::Cast { .. }
+            | Self::ConstRef { .. }
+            | Self::AllocObject { .. }
+            | Self::MaterializeToObject { .. }
+            | Self::NativeRef { .. }
+            | Self::ProviderRefFromRaw { .. }
+            | Self::ObjectFromRaw { .. }
+            | Self::WordToRawAddr { .. }
+            | Self::ProviderRefToRaw { .. }
+            | Self::RetagRef { .. }
+            | Self::AggregateExtract { .. }
+            | Self::AggregateMake { .. }
+            | Self::Call { .. }
+            | Self::EnumMake { .. }
+            | Self::EnumTagOfValue { .. }
+            | Self::EnumIsVariant { .. }
+            | Self::EnumExtract { .. }
+            | Self::EnumAssertVariantRef { .. } => None,
+        }
+    }
+}
+
+impl<'db> RStmt<'db> {
+    pub fn place_mut(&mut self) -> Option<&mut RuntimePlace<'db>> {
+        match self {
+            Self::Assign { expr, .. } => expr.place_mut(),
+            Self::Store { dst, .. } | Self::CopyInto { dst, .. } => Some(dst),
+            Self::AssertIndexInBounds { .. }
+            | Self::EnumAssertVariant { .. }
+            | Self::EnumSetTag { .. }
+            | Self::EnumWriteVariant { .. }
+            | Self::End { .. } => None,
+        }
+    }
+
+    /// The locals the statement reads or writes, including those in its places.
+    pub fn locals_mut(&mut self) -> Vec<&mut RLocalId> {
+        match self {
+            Self::Assign { dst, expr } => {
+                let mut locals = expr.values_mut();
+                locals.push(dst);
+                locals
+            }
+            Self::AssertIndexInBounds { index, .. } => match index {
+                IndexSource::Dynamic(index) => vec![index],
+                IndexSource::Constant(_) | IndexSource::Any => Vec::new(),
+            },
+            Self::EnumAssertVariant { value, .. }
+            | Self::EnumSetTag { root: value, .. }
+            | Self::End { session: value } => vec![value],
+            Self::Store { dst, src } | Self::CopyInto { dst, src } => {
+                let mut locals: Vec<_> = dst.values_mut().collect();
+                locals.push(src);
+                locals
+            }
+            Self::EnumWriteVariant { root, fields, .. } => {
+                std::iter::once(root).chain(fields.iter_mut()).collect()
+            }
+        }
+    }
+}
+
+impl<'db> RTerminator<'db> {
+    pub fn values_mut(&mut self) -> Vec<&mut RValueId> {
+        match self {
+            Self::Branch { cond: value, .. }
+            | Self::SwitchScalar { discr: value, .. }
+            | Self::MatchEnumTag { tag: value, .. }
+            | Self::SelfDestruct { beneficiary: value }
+            | Self::Panic { code: value }
+            | Self::Return(Some(value))
+            | Self::Yield {
+                value: Some(value), ..
+            } => vec![value],
+            Self::TerminalCall { args, .. } => args.iter_mut().collect(),
+            Self::ReturnData { offset, len } | Self::Revert { offset, len } => vec![offset, len],
+            Self::Goto(_)
+            | Self::RevertEmpty
+            | Self::Trap
+            | Self::Return(None)
+            | Self::Yield { value: None, .. }
+            | Self::Stop => Vec::new(),
+        }
+    }
+
+    pub fn successors(&self) -> Vec<RBlockId> {
+        self.clone()
+            .successors_mut()
+            .into_iter()
+            .map(|block| *block)
+            .collect()
+    }
+
+    pub fn successors_mut(&mut self) -> Vec<&mut RBlockId> {
+        match self {
+            Self::Goto(target) | Self::Yield { resume: target, .. } => vec![target],
+            Self::Branch {
+                then_bb, else_bb, ..
+            } => vec![then_bb, else_bb],
+            Self::SwitchScalar { cases, default, .. } => cases
+                .iter_mut()
+                .map(|(_, target)| target)
+                .chain(std::iter::once(default))
+                .collect(),
+            Self::MatchEnumTag { cases, default, .. } => cases
+                .iter_mut()
+                .map(|(_, target)| target)
+                .chain(default.iter_mut())
+                .collect(),
+            Self::TerminalCall { .. }
+            | Self::ReturnData { .. }
+            | Self::Revert { .. }
+            | Self::RevertEmpty
+            | Self::Panic { .. }
+            | Self::SelfDestruct { .. }
+            | Self::Trap
+            | Self::Return(_)
+            | Self::Stop => Vec::new(),
+        }
+    }
 }
 
 pub trait RuntimeProgramView<'db> {
@@ -1567,7 +2055,7 @@ pub trait RuntimeProgramView<'db> {
 
 impl<'db> RuntimeProgramView<'db> for &'db dyn MirDb {
     fn interface_signature(&self, id: RuntimeInstance<'db>) -> RuntimeInterfaceSignature<'db> {
-        id.interface_signature(*self)
+        id.interface_signature(*self).clone()
     }
 
     fn exit_behavior(&self, id: RuntimeInstance<'db>) -> RuntimeExitBehavior {
@@ -1575,7 +2063,7 @@ impl<'db> RuntimeProgramView<'db> for &'db dyn MirDb {
     }
 
     fn body(&self, id: RuntimeInstance<'db>) -> RuntimeBody<'db> {
-        id.body(*self)
+        id.body(*self).clone()
     }
 
     fn layout(&self, id: LayoutId<'db>) -> Layout<'db> {

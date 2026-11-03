@@ -1,0 +1,8 @@
+// Creating a `dep::Vault` embeds its bodies, and its recv arm runs unsafe
+// code that nothing trusts `dep` to use.
+use std::evm::Evm
+
+#[test]
+fn untrusted_created_contract() uses (evm: mut Evm) {
+    evm.create2<dep::Vault>(value: Wei::zero(), args: (), salt: 0)
+}

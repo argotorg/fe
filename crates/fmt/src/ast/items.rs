@@ -3,8 +3,9 @@
 use pretty::DocAllocator;
 
 use crate::RewriteContext;
-use parser::ast::{
-    self, ImplItemKind, ItemKind, ItemModifierOwner, TraitItemKind, prelude::AstNode,
+use parser::{
+    SyntaxKind,
+    ast::{self, ImplItemKind, ItemKind, ItemModifierOwner, TraitItemKind, prelude::AstNode},
 };
 
 use super::types::{
@@ -30,6 +31,14 @@ fn token_piece_basic<'a>(
     let text = alloc.text(token.text().to_string());
     Some(match token.kind() {
         FnKw => TokenPiece::new(alloc.nil()),
+        // `pub(ingot)`: the restriction follows without a space.
+        PubKw
+            if token
+                .next_sibling_or_token()
+                .is_some_and(|next| next.kind() == LParen) =>
+        {
+            TokenPiece::new(text)
+        }
         PubKw | UnsafeKw | MutKw | StructKw | ContractKw | EnumKw | TraitKw | MsgKw | ModKw
         | UseKw | ConstKw | StaticAssertKw | TypeKw | ExternKw => {
             TokenPiece::new(text).space_after()
@@ -71,6 +80,12 @@ fn token_doc_item_node_piece<'a>(
 
     first_some!(
         piece!(ast::AttrList),
+        // The `(` of a restriction is a token of the item; the node holds the
+        // rest, such as `ingot)`.
+        ast::VisRestriction::cast(node.clone()).map(|restriction| {
+            TokenPiece::new(vis_restriction_body(&restriction, ctx).append(ctx.alloc.text(")")))
+                .space_after()
+        }),
         piece!(ast::FuncSignature),
         piece!(ast::FuncParamList),
         piece!(ast::GenericParamList),
@@ -82,6 +97,8 @@ fn token_doc_item_node_piece<'a>(
         piece!(ast::Pat),
         piece!(ast::TraitRef, space_before),
         piece!(ast::Type, space_before),
+        // A block is an expression: it takes its own arm first, with its space.
+        piece!(ast::BlockExpr, space_before),
         piece!(ast::Expr),
         piece!(ast::TupleType),
         piece!(ast::RecordFieldDefList, space_before),
@@ -92,7 +109,6 @@ fn token_doc_item_node_piece<'a>(
         piece!(ast::RecvArmList, space_before),
         piece!(ast::MsgVariantList, space_before),
         piece!(ast::MsgVariantParams, space_before),
-        piece!(ast::BlockExpr, space_before),
         ast::ItemList::cast(node.clone()).map(|items| {
             TokenPiece::new(block_items_doc(items.syntax(), ast::Item::cast, ctx)).space_before()
         }),
@@ -116,16 +132,58 @@ fn attrs_doc<'a, N: ast::AttrListOwner + AstNode>(
     }
 }
 
+/// The inside of a visibility restriction: `ingot` in `pub(ingot)`.
+fn vis_restriction_body<'a>(
+    restriction: &ast::VisRestriction,
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    if restriction.ingot_kw().is_some() {
+        alloc.text("ingot")
+    } else if restriction.super_kw().is_some() {
+        alloc.text("super")
+    } else if restriction.in_kw().is_some() {
+        let path = restriction
+            .path()
+            .map_or_else(|| alloc.nil(), |path| path.to_doc(ctx));
+        alloc.text("in ").append(path)
+    } else {
+        alloc.nil()
+    }
+}
+
+/// `pub `, `pub(ingot) `, or nothing.
+fn visibility_doc<'a>(
+    pub_kw: Option<parser::SyntaxToken>,
+    restriction: Option<ast::VisRestriction>,
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    if pub_kw.is_none() {
+        return alloc.nil();
+    }
+    let restriction = restriction.map_or_else(
+        || alloc.nil(),
+        |restriction| {
+            alloc
+                .text("(")
+                .append(vis_restriction_body(&restriction, ctx))
+                .append(alloc.text(")"))
+        },
+    );
+    alloc
+        .text("pub")
+        .append(restriction)
+        .append(alloc.text(" "))
+}
+
 /// Helper to build item modifier document (pub, unsafe).
 fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(
     node: &N,
     ctx: &'a RewriteContext<'a>,
 ) -> Doc<'a> {
     let alloc = &ctx.alloc;
-    let mut doc = alloc.nil();
-    if node.pub_kw().is_some() {
-        doc = doc.append(alloc.text("pub "));
-    }
+    let mut doc = visibility_doc(node.pub_kw(), node.vis_restriction(), ctx);
     if node.unsafe_kw().is_some() {
         doc = doc.append(alloc.text("unsafe "));
     }
@@ -187,10 +245,36 @@ fn block_items_doc<'a, T: ToDoc>(
     for child in syntax.children_with_tokens() {
         let entry_doc = match child {
             NodeOrToken::Node(node) => {
-                let Some(item) = cast_fn(node) else {
-                    continue;
-                };
-                Some(item.to_doc(ctx))
+                // Modifier checkpoints can include leading trivia in the item.
+                // Count its separator here, alongside trivia owned by the list.
+                pending_newlines += node
+                    .children_with_tokens()
+                    .take_while(|child| {
+                        matches!(child, NodeOrToken::Token(token) if matches!(token.kind(), SyntaxKind::Newline | SyntaxKind::WhiteSpace))
+                    })
+                    .filter_map(NodeOrToken::into_token)
+                    .map(|token| newline_count(token.text()))
+                    .sum::<usize>();
+                if node.kind() == SyntaxKind::AttrList {
+                    // A module's inner attributes (`#![...]`), one per line,
+                    // each kept exactly as written so string arguments keep
+                    // their whitespace.
+                    Some(intersperse(
+                        alloc,
+                        node.children()
+                            .filter(|attr| attr.kind() == SyntaxKind::Attr)
+                            .map(|attr| {
+                                alloc.text(ctx.snippet(attr.text_range()).trim().to_string())
+                            })
+                            .collect::<Vec<_>>(),
+                        alloc.hardline(),
+                    ))
+                } else {
+                    let Some(item) = cast_fn(node) else {
+                        continue;
+                    };
+                    Some(item.to_doc(ctx))
+                }
             }
             NodeOrToken::Token(token) => match token.kind() {
                 SyntaxKind::Newline => {
@@ -402,6 +486,22 @@ fn func_sig_to_doc<'a>(
 
     let has_uses = sig.uses_clause().is_some();
     let has_where = sig.where_clause().is_some();
+    // A bare `uses E` on its own line in a trait declares an associated row.
+    // Keep only that ambiguous form attached to a trait declaration's signature.
+    let keep_uses_inline = sig
+        .syntax()
+        .parent()
+        .and_then(|func| func.parent())
+        .and_then(|items| items.parent())
+        .is_some_and(|parent| ast::Trait::can_cast(parent.kind()))
+        && sig.uses_clause().is_some_and(|uses| {
+            uses.syntax()
+                .descendants_with_tokens()
+                .filter_map(|element| element.into_token())
+                .map(|token| token.kind())
+                .filter(|kind| !kind.is_trivia() && *kind != SyntaxKind::Newline)
+                .eq([SyntaxKind::UsesKw, SyntaxKind::Ident])
+        });
 
     // Build the core signature (before uses/where) to measure its length
     let core_sig = alloc
@@ -422,14 +522,17 @@ fn func_sig_to_doc<'a>(
     // Force clauses to new lines if:
     // - uses_new_line/where_new_line config is set, OR
     // - the core signature is already long (> 60 chars)
-    let force_uses_break = has_uses && (ctx.config.uses_new_line || core_flat_len > 60);
+    let force_uses_break =
+        has_uses && !keep_uses_inline && (ctx.config.uses_new_line || core_flat_len > 60);
     let force_where_break = has_where && (ctx.config.where_new_line || core_flat_len > 60);
     let force_clause_break = force_uses_break || force_where_break;
 
     let uses_doc = sig.uses_clause().map_or_else(
         || alloc.nil(),
         |u| {
-            if force_uses_break {
+            if keep_uses_inline {
+                alloc.text(" ").append(u.to_doc(ctx))
+            } else if force_uses_break {
                 alloc.hardline().append(u.to_doc(ctx))
             } else {
                 alloc.line().append(u.to_doc(ctx))
@@ -645,10 +748,50 @@ impl ToDoc for ast::FuncParamList {
 impl ToDoc for ast::FuncParam {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
+
+        if has_comment_tokens(self.syntax()) {
+            return token_doc(
+                ctx,
+                self.syntax(),
+                0,
+                |node| {
+                    let doc = match ast::Type::cast(node.clone()) {
+                        Some(ty) => ty.to_doc(ctx),
+                        None => ast::Pat::cast(node)?.to_doc(ctx),
+                    };
+                    Some(TokenPiece::new(doc))
+                },
+                |token| {
+                    let piece = TokenPiece::new(alloc.text(ctx.token(&token)));
+                    match token.kind() {
+                        SyntaxKind::Ident | SyntaxKind::SelfKw | SyntaxKind::Underscore => {
+                            Some(piece.space_before())
+                        }
+                        SyntaxKind::MutKw
+                        | SyntaxKind::MaybeMutKw
+                        | SyntaxKind::VarKw
+                        | SyntaxKind::RefKw
+                        | SyntaxKind::OwnKw
+                        | SyntaxKind::Colon => Some(piece.space_after()),
+                        _ => None,
+                    }
+                },
+            );
+        }
+
         let mut doc = alloc.nil();
 
+        if self.spread_token().is_some() {
+            doc = doc.append(alloc.text(".."));
+        }
         if self.mut_token().is_some() {
             doc = doc.append(alloc.text("mut "));
+        }
+        if self.maybe_mut_token().is_some() {
+            doc = doc.append(alloc.text("mut? "));
+        }
+        if self.var_token().is_some() {
+            doc = doc.append(alloc.text("var "));
         }
         if self.ref_token().is_some() {
             doc = doc.append(alloc.text("ref "));
@@ -666,9 +809,15 @@ impl ToDoc for ast::FuncParam {
         if let Some(name) = name {
             doc = doc.append(alloc.text(ctx.snippet(name.syntax().text_range()).trim()));
         }
+        if let Some(pat) = self.pat() {
+            doc = doc.append(pat.to_doc(ctx));
+        }
 
         if let Some(ty) = self.ty() {
-            doc = doc.append(alloc.text(": ")).append(ty.to_doc(ctx));
+            if self.spread_token().is_none() {
+                doc = doc.append(alloc.text(": "));
+            }
+            doc = doc.append(ty.to_doc(ctx));
         }
 
         doc
@@ -690,6 +839,16 @@ impl ToDoc for ast::Struct {
         let generics = generics_doc(self, ctx);
         let where_clause = where_doc(self, ctx);
 
+        if let Some(fields) = self.fields().filter(|f| f.is_tuple()) {
+            return attrs
+                .append(modifier)
+                .append(alloc.text("struct "))
+                .append(name)
+                .append(generics)
+                .append(fields.to_doc(ctx))
+                .append(where_clause);
+        }
+
         let fields_doc = self.fields().map_or_else(
             || alloc.text(" {}"),
             |f| alloc.text(" ").append(f.to_doc(ctx)),
@@ -708,6 +867,17 @@ impl ToDoc for ast::Struct {
 impl ToDoc for ast::RecordFieldDefList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let indent = ctx.config.indent_width as isize;
+        if self.is_tuple() {
+            return block_list_auto(
+                ctx,
+                self.syntax(),
+                "(",
+                ")",
+                ast::RecordFieldDef::cast,
+                indent,
+                true,
+            );
+        }
         block_list_spaced_auto(
             ctx,
             self.syntax(),
@@ -776,17 +946,23 @@ impl ToDoc for ast::RecordFieldDef {
 
         let mut doc = attrs;
 
-        if self.pub_kw().is_some() {
-            doc = doc.append(alloc.text("pub "));
+        doc = doc.append(visibility_doc(self.pub_kw(), self.vis_restriction(), ctx));
+
+        if self.unsafe_kw().is_some() {
+            doc = doc.append(alloc.text("unsafe "));
         }
 
         if self.mut_kw().is_some() {
             doc = doc.append(alloc.text("mut "));
         }
 
-        if let Some(name) = self.name() {
-            doc = doc.append(alloc.text(ctx.token(&name)));
-        }
+        let Some(name) = self.name() else {
+            // A tuple struct field has no name.
+            return self
+                .ty()
+                .map_or(doc.clone(), |ty| doc.append(ty.to_doc(ctx)));
+        };
+        doc = doc.append(alloc.text(ctx.token(&name)));
 
         if let Some(ty) = self.ty() {
             doc = doc.append(alloc.text(": ")).append(ty.to_doc(ctx));
@@ -1095,7 +1271,17 @@ impl ToDoc for ast::VariantDef {
 
         let kind_doc = match self.kind() {
             ast::VariantKind::Unit => alloc.nil(),
-            ast::VariantKind::Tuple(tuple_type) => tuple_type.to_doc(ctx),
+            // A variant's one field takes no comma, unlike a one-element
+            // tuple type.
+            ast::VariantKind::Tuple(fields) => block_list_auto(
+                ctx,
+                fields.syntax(),
+                "(",
+                ")",
+                ast::Type::cast,
+                ctx.config.indent_width as isize,
+                true,
+            ),
             ast::VariantKind::Record(fields) => {
                 if has_comment_tokens(fields.syntax()) {
                     return attrs.append(name.clone()).append(alloc.text(" ")).append(
@@ -1181,7 +1367,54 @@ impl ToDoc for ast::TraitItem {
             TraitItemKind::Func(func) => func.to_doc(ctx),
             TraitItemKind::Type(ty) => ty.to_doc(ctx),
             TraitItemKind::Const(c) => c.to_doc(ctx),
+            TraitItemKind::Uses(row) => row.to_doc(ctx),
+            TraitItemKind::Shape(shape) => shape.to_doc(ctx),
         }
+    }
+}
+
+impl ToDoc for ast::TraitShapeItem {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        token_doc_item_like_if_comments!(self, ctx);
+
+        let name = self
+            .name()
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
+        let ty_doc = self.ty().map_or_else(
+            || alloc.nil(),
+            |ty| alloc.text(" = ").append(ty.to_doc(ctx)),
+        );
+
+        attrs_doc(self, ctx)
+            .append(alloc.text("shape "))
+            .append(name)
+            .append(ty_doc)
+    }
+}
+
+impl ToDoc for ast::TraitUsesItem {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        token_doc_item_like_if_comments!(self, ctx);
+
+        let name = self
+            .name()
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
+        let effects = if let Some(params) = self.param_list() {
+            alloc.text(" = ").append(params.to_doc(ctx))
+        } else if let Some(param) = self.param() {
+            alloc.text(" = ").append(param.to_doc(ctx))
+        } else {
+            alloc.nil()
+        };
+
+        attrs_doc(self, ctx)
+            .append(alloc.text("uses "))
+            .append(name)
+            .append(effects)
     }
 }
 
@@ -1313,6 +1546,7 @@ impl ToDoc for ast::ImplTrait {
         );
 
         attrs
+            .append(modifier_doc(self, ctx))
             .append(alloc.text("impl"))
             .append(generics)
             .append(trait_doc)

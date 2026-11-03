@@ -1,0 +1,46 @@
+// A loop that enumerates zero-sized elements builds `(index, ref element)`
+// pairs whose element half has no runtime value.
+use core::ptr::{MemArray, MemSlice}
+
+struct Empty {}
+
+impl Copy for Empty {}
+
+fn count<T: Copy>(_ values: MemSlice<T>) -> u256 {
+    var n: u256 = 0
+    for (i, value) in values.enumerate() {
+        let _ = value
+        n += i as u256 + 1
+    }
+    n
+}
+
+#[test]
+fn enumerates_unit_and_empty_arrays() {
+    let units: [(); 3] = [(), (), ()]
+    var n: u256 = 0
+    for (i, unit) in units.enumerate() {
+        let _ = unit
+        n += i as u256
+    }
+    assert(n == 3)
+    let empties: [Empty; 2] = [Empty {}, Empty {}]
+    var m: u256 = 0
+    for (i, ref empty) in empties.enumerate() {
+        let _ = empty
+        m += i as u256 + 1
+    }
+    assert(m == 3)
+}
+
+#[test]
+fn enumerates_zero_sized_memory_elements() {
+    assert(count(MemArray<()>::new_zeroed(3).as_slice()) == 6)
+    assert(count(MemArray<[u256; 0]>::new_zeroed(2).as_slice()) == 3)
+    var n: u256 = 0
+    for (i, value) in MemArray<Empty>::new_zeroed(2).enumerate() {
+        let _ = value
+        n += i as u256 + 1
+    }
+    assert(n == 3)
+}

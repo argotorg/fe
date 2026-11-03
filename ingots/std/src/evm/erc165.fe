@@ -17,7 +17,7 @@ msg Erc165Msg {
 /// `supportsInterface(interface_id)` without checking ERC-165 support first:
 /// true for a successful call returning at least one nonzero word.
 pub fn supports_interface_unchecked(_ account: Address, interface_id: u32) -> bool uses (call: Call) {
-    let mut ret = MemBuffer::with_capacity(32)
+    var ret = MemBuffer::with_capacity(32)
     let message = Erc165Msg::SupportsInterface { interfaceId: Bytes4 { val: interface_id as u256 } }
     let outcome = call.try_static_into(addr: account, gas: 30000, message, ret: mut ret)
     outcome.success() && outcome.returndata_len() >= 32 && ret.span().word_at(0) != 0

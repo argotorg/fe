@@ -17,10 +17,6 @@ fn bounded_mixed_defaults<T: Copy = u256, const N: usize = 1>(
     _ value: [T; N],
 ) {}
 
-struct LayoutCarrier<const ROOT: u256 = _> {}
-
-fn implicit_layout_prefix<T = u256>(_ carrier: LayoutCarrier, _ value: T) {}
-
 struct Receiver<T> {
     value: T,
 }
@@ -54,7 +50,6 @@ impl TraitDefault for TraitReceiver {
 fn exercise_mismatches(
     receiver: Receiver<u256>,
     plain_receiver: PlainReceiver,
-    carrier: LayoutCarrier,
 ) {
     let default_const_mismatch: [u8; 3] = [0, 1, 2]
     let dependent_const_mismatch: [u8; 3] = [0, 1, 2]
@@ -64,7 +59,6 @@ fn exercise_mismatches(
     two_required_then_default<u256>()
     defaulted_type<u256, bool>(1)
     bounded_mixed_defaults([true])
-    implicit_layout_prefix(carrier, true)
     receiver.generic_inherent_self_default(true)
     plain_receiver.inherent_self_default(true)
     PlainReceiver::associated_self_default(true)

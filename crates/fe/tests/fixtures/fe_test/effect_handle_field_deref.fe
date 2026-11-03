@@ -20,10 +20,6 @@ struct Holder {
     tag: u256,
 }
 
-struct CellMover {
-    cell: mut Cell,
-}
-
 fn extract_ptr(_ holder: own Holder) -> StorPtr<Cell> {
     holder.ptr
 }
@@ -37,11 +33,10 @@ fn write_cell(_ value: u256) -> u256 uses (cell: mut Cell) {
     cell.value
 }
 
-impl CellMover {
-    fn bump(mut self, _ by: u256) -> u256 {
-        self.cell.value += by
-        self.cell.value
-    }
+// A `mut` parameter instantiated with a storage-rooted argument.
+fn bump(_ cell: mut Cell, _ by: u256) -> u256 {
+    cell.value += by
+    cell.value
 }
 
 pub contract C {
@@ -53,24 +48,26 @@ pub contract C {
 
     recv Msg {
         SeedSlot { slot, value } -> u256 uses (evm: mut Evm) {
-            let ptr: StorPtr<Cell> = evm.stor_ptr(slot)
-            with (ptr) {
-                write_cell(value)
+            let ptr = slot as StorPtr<Cell>
+            unsafe {
+                with (mut *ptr) {
+                    write_cell(value)
+                }
             }
         }
 
         ReadViaHolder { slot } -> u256 uses (evm: mut Evm) {
-            let holder = Holder { ptr: evm.stor_ptr(slot), tag: 1 }
+            let holder = Holder { ptr: slot as StorPtr<Cell>, tag: 1 }
             let ptr = extract_ptr(holder)
-            with (ptr) {
-                read_cell()
+            unsafe {
+                with (*ptr) {
+                    read_cell()
+                }
             }
         }
 
         BumpMover { by } -> u256 uses (mut live) {
-            let cell = mut live
-            let mut mover = CellMover { cell }
-            mover.bump(by)
+            bump(mut live, by)
         }
 
         SnapshotCell -> u256 uses (live) {
@@ -81,26 +78,26 @@ pub contract C {
 
 #[test]
 fn test_effect_handle_field_deref() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 34)
-    assert!(c.inner != 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 34)
+    assert!(c.word() != 0)
 
-    let seeded = evm.call(addr: c, gas: 100000, value: 0, message: Msg::SeedSlot {
+    let seeded = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::SeedSlot {
         slot: 17,
         value: 123,
     })
     assert!(seeded == 123)
 
-    let read = evm.call(addr: c, gas: 100000, value: 0, message: Msg::ReadViaHolder {
+    let read = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::ReadViaHolder {
         slot: 17,
     })
     assert!(read == 123)
 
-    let first = evm.call(addr: c, gas: 100000, value: 0, message: Msg::BumpMover { by: 7 })
+    let first = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::BumpMover { by: 7 })
     assert!(first == 7)
 
-    let second = evm.call(addr: c, gas: 100000, value: 0, message: Msg::BumpMover { by: 5 })
+    let second = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::BumpMover { by: 5 })
     assert!(second == 12)
 
-    let snap = evm.call(addr: c, gas: 100000, value: 0, message: Msg::SnapshotCell {})
+    let snap = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::SnapshotCell {})
     assert!(snap == 12)
 }

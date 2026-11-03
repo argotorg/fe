@@ -1,0 +1,63 @@
+// A field packed into a storage word with others is a lane, which no
+// reference points at: a projection yielding one grants a memory copy, and
+// the slide of the site that was taken masks the copy back into the word.
+use std::evm::Evm
+
+struct S { a: u8, b: u8 }
+
+impl S {
+    fn pick(mut self, _ c: bool) -> mut u8 {
+        if c { mut self.b } else { mut self.a }
+    }
+
+    fn maybe(mut self, _ c: bool) -> Option<mut u8> {
+        if c { Option::Some(mut self.b) } else { Option::None }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Pick { c: bool } -> u256,
+    #[selector = 2]
+    Maybe { c: bool } -> u256,
+}
+
+pub contract C {
+    mut s: S,
+
+    recv Msg {
+        Pick { c } -> u256 uses (mut s) {
+            s.a = 1
+            s.b = 2
+            let x = mut s.pick(c)
+            x = 42
+            s.a as u256 * 1000 + s.b as u256
+        }
+        Maybe { c } -> u256 uses (mut s) {
+            s.a = 1
+            s.b = 2
+            if let Option::Some(mut x) = s.maybe(c) {
+                x += 40
+            }
+            s.a as u256 * 1000 + s.b as u256
+        }
+    }
+}
+
+#[test]
+fn each_site_writes_back_its_own_lane() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let b: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Pick { c: true })
+    assert!(b == 1042)
+    let a: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Pick { c: false })
+    assert!(a == 42002)
+}
+
+#[test]
+fn an_optional_lane_grant_writes_back() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let some: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Maybe { c: true })
+    assert!(some == 1042)
+    let none: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Maybe { c: false })
+    assert!(none == 1002)
+}

@@ -1,0 +1,47 @@
+// A value whose type implements `Drop` is destroyed whole.
+use core::ops::Drop
+
+struct Inner { id: u256 }
+impl Drop for Inner {
+    fn drop(own self) {}
+}
+
+fn take(_ inner: own Inner) {}
+
+struct Wrapper { inner: Inner, n: u256 }
+
+// Accepted: a type's own `drop` takes its fields, and the rest are destroyed.
+impl Drop for Wrapper {
+    fn drop(own self) {
+        take(self.inner)
+    }
+}
+
+// Rejected: a field cannot move out of a `Drop` type.
+fn steal(_ wrapper: own Wrapper) {
+    take(wrapper.inner)
+}
+
+// Rejected: a binding cannot take a field of a `Drop` type either.
+fn destructure(_ wrapper: own Wrapper) {
+    let Wrapper { inner, .. } = wrapper
+    take(inner)
+}
+
+// Accepted: a `Copy` field is copied, not moved.
+fn read(_ wrapper: own Wrapper) -> u256 {
+    wrapper.n
+}
+
+struct Whole { inner: Inner }
+
+fn keep(_ whole: own Whole) {
+    core::mem::forget(whole)
+}
+
+// Rejected: `drop` destroys `self` field by field and never moves it whole.
+impl Drop for Whole {
+    fn drop(own self) {
+        keep(self)
+    }
+}

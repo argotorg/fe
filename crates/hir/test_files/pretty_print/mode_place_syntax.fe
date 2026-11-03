@@ -29,7 +29,7 @@ fn take_own(_x: own Foo) {}
 
 fn places() {
     let a: Foo = make_foo()
-    let mut b: Foo = make_foo()
+    var b: Foo = make_foo()
     let c: ref Foo = ref a
     let d: mut Foo = mut b
     let e: Foo = a

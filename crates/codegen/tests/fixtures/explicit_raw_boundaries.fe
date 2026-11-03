@@ -1,5 +1,6 @@
 use core::ptr
-use std::evm::RawMem
+use core::abi::store_word
+use std::evm::RawStorage
 
 struct Data {
     value: u256,
@@ -9,18 +10,25 @@ fn bump() uses (value: mut u256) {
     value += 1
 }
 
-fn raw_store() uses (data: *Data, mem: mut RawMem) {
-    mem.mstore(addr: ptr::byte_ptr(data), value: 8)
+fn raw_store() uses (data: *Data, storage: mut RawStorage) {
+    unsafe {
+        store_word(ptr: ptr::byte_ptr(data), value: 8)
+        storage.sstore(slot: 0, value: 8)
+    }
 }
 
-pub fn explicit_raw_boundaries() uses (mem: mut RawMem) {
+pub fn main() uses (storage: mut RawStorage) {
     let value_ptr = ptr::alloc<u256>()
-    with (value_ptr) {
-        bump()
+    unsafe {
+        with (mut *value_ptr) {
+            bump()
+        }
     }
 
     let data = ptr::alloc<Data>()
-    with (data, mem) {
-        raw_store()
+    unsafe {
+        with (data, storage) {
+            raw_store()
+        }
     }
 }

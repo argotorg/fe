@@ -10,6 +10,9 @@ use url::Url;
 pub struct DependencyArguments {
     pub name: Option<SmolStr>,
     pub version: Option<Version>,
+    /// `allow_unsafe = true`: the depending ingot trusts this dependency's
+    /// unsafe code (and, if it is itself trusted, extends that trust).
+    pub allow_unsafe: bool,
 }
 
 pub type DependencyAlias = SmolStr;

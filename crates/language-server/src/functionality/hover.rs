@@ -5,13 +5,12 @@ use common::file::File;
 use hir::{
     HirDb,
     analysis::ty::{
-        ProviderAddressSpace,
+        AddressSpace,
         ty_check::{EffectParamSite, LocalBinding, ParamSite},
     },
     core::semantic::{
-        ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
-        ContractLayoutParameterOrigin, ContractLayoutValue, EffectEnvView, FieldView,
-        ProviderSource,
+        ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind, ContractLayoutValue,
+        EffectEnvView, FieldView, ProviderSource,
         reference::{ReferenceView, Target},
     },
     hir_def::{Contract, FieldParent, ItemKind, PathId, scope_graph::ScopeId},
@@ -50,10 +49,11 @@ fn contract_from_effect_site<'db>(
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => Some(contract),
-        EffectParamSite::Func(func) => match func.scope().parent_item(db) {
+        EffectParamSite::Func(func, _) => match func.scope().parent_item(db) {
             Some(ItemKind::Contract(contract)) => Some(contract),
             _ => None,
         },
+        EffectParamSite::Closure(_) => None,
     }
 }
 
@@ -63,7 +63,7 @@ fn effect_key_path_at_site<'db>(
     idx: usize,
 ) -> Option<PathId<'db>> {
     match site {
-        EffectParamSite::Func(func) => func.effect_params(db).nth(idx)?.key_path(db),
+        EffectParamSite::Func(func, _) => func.effect_params(db).nth(idx)?.key_path(db),
         EffectParamSite::Contract(contract) => contract.effect_params(db).nth(idx)?.key_path(db),
         EffectParamSite::ContractInit { contract } => contract
             .init(db)?
@@ -86,6 +86,10 @@ fn effect_key_path_at_site<'db>(
             .key_ty
             .to_opt()?
             .as_path(db),
+        EffectParamSite::Closure(_) => EffectEnvView::new(site)
+            .requirements(db)
+            .get(idx)?
+            .binding_path(db),
     }
 }
 
@@ -157,13 +161,13 @@ fn contract_field_id_from_local_binding<'db>(
     }
 }
 
-fn address_space_heading(space: ProviderAddressSpace) -> &'static str {
+fn address_space_heading(space: AddressSpace) -> &'static str {
     match space {
-        ProviderAddressSpace::Memory => "Memory",
-        ProviderAddressSpace::Storage => "Storage",
-        ProviderAddressSpace::Transient => "Transient Storage",
-        ProviderAddressSpace::Calldata => "Calldata",
-        ProviderAddressSpace::Code => "Immutable (Code)",
+        AddressSpace::Memory => "Memory",
+        AddressSpace::Storage => "Storage",
+        AddressSpace::Transient => "Transient Storage",
+        AddressSpace::Calldata => "Calldata",
+        AddressSpace::Code => "Immutable (Code)",
     }
 }
 
@@ -207,16 +211,23 @@ fn layout_entry_markdown(db: &DriverDataBase, entry: &ContractLayoutEntry<'_>) -
     });
     let kind = match entry.kind {
         ContractLayoutEntryKind::InlineField => "inline field",
+        ContractLayoutEntryKind::Collection => "storage collection",
         ContractLayoutEntryKind::EnumTag => "enum tag",
-        ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit) => {
-            "explicit parameter"
-        }
-        ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred) => {
-            "inferred parameter"
-        }
     };
+    // A packed field names the bytes of its slot, counted from the low-order
+    // end like Solidity's storage layout `offset`.
+    let lane = entry
+        .lane
+        .map(|lane| {
+            format!(
+                " bytes {}..{}",
+                lane.byte_offset,
+                u16::from(lane.byte_offset) + u16::from(lane.byte_width)
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "- `{value}`{}: `{}` ({kind}, `{}`)",
+        "- `{value}`{lane}{}: `{}` ({kind}, `{}`)",
         dimensions.unwrap_or_default(),
         entry.path.display(db),
         entry.ty.pretty_print(db),
@@ -231,11 +242,11 @@ fn allocated_layout_markdown<'db>(
     let entries = entries.collect::<Vec<_>>();
     let mut markdown = format!("### {title}");
     for space in [
-        ProviderAddressSpace::Storage,
-        ProviderAddressSpace::Transient,
-        ProviderAddressSpace::Code,
-        ProviderAddressSpace::Memory,
-        ProviderAddressSpace::Calldata,
+        AddressSpace::Storage,
+        AddressSpace::Transient,
+        AddressSpace::Code,
+        AddressSpace::Memory,
+        AddressSpace::Calldata,
     ] {
         let entries = entries
             .iter()
@@ -336,7 +347,7 @@ fn layout_definition_hover(
     top_mod: hir::hir_def::TopLevelMod<'_>,
     cursor: Cursor,
 ) -> Option<Hover> {
-    for item in top_mod.scope_graph(db).items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         let ItemKind::Contract(contract) = item else {
             continue;
         };

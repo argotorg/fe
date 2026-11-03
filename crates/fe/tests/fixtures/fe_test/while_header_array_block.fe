@@ -1,7 +1,7 @@
 
 fn count_until(_ limit: u256) -> u256 {
-    let mut value: u256 = 0
-    let mut steps: u256 = 0
+    var value: u256 = 0
+    var steps: u256 = 0
 
     while {
         let pair: [u256; 2] = [value, value + 1]

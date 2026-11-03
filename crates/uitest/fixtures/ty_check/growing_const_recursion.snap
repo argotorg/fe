@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/growing_const_recursion.fe
+---
+error[3-0027]: const evaluation exceeded the recursion limit
+  ┌─ growing_const_recursion.fe:7:23
+  │
+7 │ const SHALLOW: u256 = shallow(1 as u256, 3)
+  │                       ^^^^^^^^^^^^^^^^^^^^^ const evaluation recurses too deeply

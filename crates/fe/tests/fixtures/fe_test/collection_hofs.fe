@@ -1,0 +1,86 @@
+// Higher-order collection operations take callables by their mode shape:
+// `fold` owns the accumulator and views each element, `filter` drives over
+// the elements a predicate holds for, and `map` produces owned values.
+use core::iter::{Collection, FromProducer}
+use core::option::Option
+use core::ptr::MemArray
+
+struct Add {}
+
+impl FnMut(own u256, u256) -> u256 for Add {
+    fn call_mut(mut self, _ acc: own u256, _ x: u256) -> u256 {
+        acc + x
+    }
+}
+
+struct IsEven {}
+
+impl Fn(u256) -> bool for IsEven {
+    fn call(self, _ x: u256) -> bool {
+        x % 2 == 0
+    }
+}
+
+struct Double {}
+
+impl FnMut(u256) -> u256 for Double {
+    fn call_mut(mut self, _ x: u256) -> u256 {
+        x * 2
+    }
+}
+
+struct Account { balance: u256 }
+
+struct Totals { sum: u256, count: u256 }
+
+struct Tally {}
+
+impl FnMut(own Totals, Account) -> Totals for Tally {
+    fn call_mut(mut self, _ acc: own Totals, _ account: Account) -> Totals {
+        Totals { sum: acc.sum + account.balance, count: acc.count + 1 }
+    }
+}
+
+#[test]
+fn folds_and_queries() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    var add = Add {}
+    assert!(xs.fold(0, mut add) == 10)
+    assert!(xs.any(IsEven {}))
+    assert!(xs.count(IsEven {}) == 2)
+    match xs.find(IsEven {}) {
+        Option::Some(i) => assert!(i == 1)
+        Option::None => assert!(false)
+    }
+
+    // A non-`Copy` accumulator and non-`Copy` elements.
+    let accounts = [Account { balance: 5 }, Account { balance: 7 }]
+    var tally = Tally {}
+    let totals = accounts.fold(Totals { sum: 0, count: 0 }, mut tally)
+    assert!(totals.sum == 12 && totals.count == 2)
+}
+
+#[test]
+fn filters_and_maps() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    var evens = 0
+    for x in xs.filter(IsEven {}) {
+        evens += x
+    }
+    assert!(evens == 6)
+
+    var weighted = 0
+    for (i, x) in xs.filter(IsEven {}).enumerate() {
+        weighted += (i as u256 + 1) * x
+    }
+    assert!(weighted == 2 + 8)
+
+    var doubled = 0
+    for y in xs.map(Double {}) {
+        doubled += y
+    }
+    assert!(doubled == 20)
+
+    let collected = MemArray::collect(xs, xs.filter(IsEven {}).map(Double {}))
+    assert!(collected.len() == 2 && collected[0] == 4 && collected[1] == 8)
+}

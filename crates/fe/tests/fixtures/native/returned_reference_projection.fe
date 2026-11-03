@@ -16,15 +16,15 @@ fn fresh(_ count: mut u256) -> Outer {
     Outer { inner: Inner { value: 0 } }
 }
 pub fn main() -> i32 {
-    let mut outer = Outer { inner: Inner { value: 0 } }
-    let mut count: u256 = 0
+    var outer = Outer { inner: Inner { value: 0 } }
+    var count: u256 = 0
     view(mut outer, mut count).inner.add(3)
     core::assert(outer.inner.value == 3 && count == 1)
     core::assert(shared(ref outer).inner.read() == 3)
-    let mut values = [Inner { value: 10 }, Inner { value: 20 }]
+    var values = [Inner { value: 10 }, Inner { value: 20 }]
     array(mut values)[1].add(7)
     core::assert(values[0].value == 10 && values[1].value == 27)
-    let mut tuple = (Inner { value: 30 }, Inner { value: 40 })
+    var tuple = (Inner { value: 30 }, Inner { value: 40 })
     pair(mut tuple).0.add(9)
     core::assert(tuple.0.value == 39 && tuple.1.value == 40)
     fresh(mut count).inner.add(100)

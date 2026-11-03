@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 416
 expression: output
 input_file: crates/codegen/tests/fixtures/tuple_single_element_peeling.fe
 ---
@@ -46,13 +47,14 @@ func private %match_single_element_tuple(v0.constref<@layout_1>) -> i8 {
         jump block3;
 
     block2:
-        v2.i8 = phi (1.i8 block4) (0.i8 block5);
-        return v2;
+        v1.i8 = phi (1.i8 block4) (0.i8 block5);
+        return v1;
 
     block3:
-        v5.constref<i1> = const.proj v0 0.i256;
-        v6.i1 = const.load v5;
-        v8.i1 = eq v6 1.i1;
+        v4.constref<i1> = const.proj v0 0.i256;
+        v6.constref<i1> = const.proj v0 0.i256;
+        v7.i1 = const.load v6;
+        v8.i1 = eq v7 1.i1;
         br v8 block4 block6;
 
     block4:

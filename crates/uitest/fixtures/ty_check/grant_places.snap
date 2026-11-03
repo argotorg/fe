@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/grant_places.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ grant_places.fe:11:5
+   │
+11 │     c.get() = 3
+   │     ^^^^^^^ immutable assignment
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ grant_places.fe:12:13
+   │
+12 │     let x = mut c.get()
+   │             ^^^^^^^^^^^ cannot borrow as `mut`

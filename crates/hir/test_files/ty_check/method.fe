@@ -5,7 +5,7 @@ mod evm {
 }
 
 pub fn todo() -> ! {
-    evm::abort()
+    unsafe { evm::abort() }
 }
 
 pub enum Option<T> {
@@ -21,7 +21,7 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn get_or_insert(mut own self, inner: own T) -> T {
+    pub fn get_or_insert(var own self, inner: own T) -> T {
         match self {
             Self::Some(t) => t
             Self::None => {
@@ -35,7 +35,7 @@ impl<T> Option<T> {
 impl Option {
     pub fn unwrap<T>(self: own Self<T>) -> T {
         match self {
-            Self::None => evm::abort()
+            Self::None => unsafe { evm::abort() }
             Self::Some(t) => t
         }
     }
@@ -46,7 +46,7 @@ fn get_t<T>() -> T {
 }
 
 fn foo() -> Option<bool> {
-    let mut x: Option<i32> = Option::Some(1)
+    var x: Option<i32> = Option::Some(1)
     let y: Option<i32> = Option::Some(2)
     let func_obj = get_t
     y.get_or_insert(inner: func_obj())

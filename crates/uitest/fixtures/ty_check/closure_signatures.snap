@@ -1,0 +1,71 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/closure_signatures.fe
+---
+error[2-0002]: `Nonexistent` is not found
+   ┌─ closure_signatures.fe:11:21
+   │
+11 │     let ret = || -> Nonexistent { 5 }
+   │                     ^^^^^^^^^^^ `Nonexistent` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ closure_signatures.fe:12:21
+   │
+12 │     let param = |x: Nope| -> u256 { 0 }
+   │                     ^^^^ `Nope` is not found
+
+error[3-0058]: `ref` and `mut` are not types
+   ┌─ closure_signatures.fe:16:21
+   │
+16 │     let ret = || -> mut u256 { 5 }
+   │                     ^^^^^^^^ modes are only allowed on parameters and in projection returns
+
+error[3-0058]: `ref` and `mut` are not types
+   ┌─ closure_signatures.fe:17:21
+   │
+17 │     let param = |x: own mut u256| -> u256 { 0 }
+   │                     ^^^^^^^^^^^^ modes are only allowed on parameters and in projection returns
+
+error[3-0059]: `MemSlice<u8>` is a `#[view]` type
+   ┌─ closure_signatures.fe:43:35
+   │
+43 │     let inferred = |b: MemBuffer| b.span()
+   │                                   ^^^^^^^^ a `#[view]` type cannot be returned by value
+
+error[3-0059]: `MemSlice<u8>` is a `#[view]` type
+   ┌─ closure_signatures.fe:45:31
+   │
+45 │     observe(|b: MemBuffer| -> MemSpan { b.span() }, mut buf)
+   │                               ^^^^^^^ a `#[view]` type cannot be returned by value
+
+error[3-0059]: `MemSlice<u8>` is a `#[view]` type
+   ┌─ closure_signatures.fe:51:21
+   │
+51 │     let own_view = |s: own MemSpan| -> u256 { 0 }
+   │                     ^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[3-0059]: `MemSlice<u8>` is a `#[view]` type
+   ┌─ closure_signatures.fe:52:25
+   │
+52 │     let view_part = |s: (MemSpan, u256)| -> u256 { 0 }
+   │                         ^^^^^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[3-0061]: `Ledger` is state-only
+   ┌─ closure_signatures.fe:44:31
+   │
+44 │     let give = |l: Ledger| -> Ledger { l }
+   │                               ^^^^^^ a state-only type cannot be returned by value
+   │
+   = `Ledger` holds `StorageMap<u256, u256>`, which is pinned to storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Ledger` is state-only
+   ┌─ closure_signatures.fe:53:23
+   │
+53 │     let own_ledger = |l: own Ledger| -> u256 { 0 }
+   │                       ^^^^^^^^^^^^^ a state-only type cannot be an `own` parameter
+   │
+   = `Ledger` holds `StorageMap<u256, u256>`, which is pinned to storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter

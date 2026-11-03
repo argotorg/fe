@@ -1,0 +1,68 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/pointer_spaces.fe
+---
+error[12-0001]: unsupported `#[pointer]` attribute on type alias `Slot`
+  ┌─ pointer_spaces.fe:4:1
+  │
+4 │ #[pointer(storage)]
+  │ ^^^^^^^^^^^^^^^^^^^ `#[pointer]` is only supported on type aliases in `core`
+
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ pointer_spaces.fe:21:17
+   │
+21 │     mut memory: *u256,
+   │                 ^^^^^ `*u256` is a memory pointer
+   │
+   = memory lasts for one call, so a later one could not follow the pointer
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ pointer_spaces.fe:28:9
+   │
+26 │ fn calldata(c: core::ptr::CalldataPtr<u256>) -> u256 {
+   │             - `c` points into calldata, which is read-only
+27 │     unsafe {
+28 │         *c = 1
+   │         ^^ immutable assignment
+
+error[8-0055]: cast is not provably lossless
+   ┌─ pointer_spaces.fe:12:13
+   │
+12 │     let _ = p as StorPtr<u256>
+   │             ^^^^^^^^^^^^^^^^^^ cannot cast `*u256` to `StorPtr<u256>` with `as`
+   │
+   = a pointer cannot change its address space
+
+error[8-0055]: cast is not provably lossless
+   ┌─ pointer_spaces.fe:13:13
+   │
+13 │     let _ = s as *u256
+   │             ^^^^^^^^^^ cannot cast `StorPtr<u256>` to `*u256` with `as`
+   │
+   = a pointer cannot change its address space
+
+error[8-0055]: cast is not provably lossless
+   ┌─ pointer_spaces.fe:14:13
+   │
+14 │     let _ = t as StorPtr<u256>
+   │             ^^^^^^^^^^^^^^^^^^ cannot cast `TStorPtr<u256>` to `StorPtr<u256>` with `as`
+   │
+   = a pointer cannot change its address space
+
+error[8-0055]: cast is not provably lossless
+   ┌─ pointer_spaces.fe:16:13
+   │
+16 │     let _ = s as u8
+   │             ^^^^^^^ cannot cast `StorPtr<u256>` to `u8` with `as`
+   │
+   = a memory pointer converts only to and from its `usize` address, and a state pointer to and from its `u256` slot or offset
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ pointer_spaces.fe:39:15
+   │
+37 │ fn provide_calldata(c: core::ptr::CalldataPtr<u256>) {
+   │                     - `c` does not provide mutable access
+38 │     unsafe {
+39 │         with (mut *c) {
+   │               ^^^^^^ cannot borrow as `mut`

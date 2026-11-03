@@ -6,8 +6,8 @@ use super::{
     fold::TyFoldable,
     normalize::normalize_from_assumptions,
     trait_def::{ImplementorId, TraitInstId},
-    ty_def::{TyData, TyFlags, TyId},
-    visitor::{TyVisitable, TyVisitor},
+    ty_def::{BorrowKind, TyData, TyFlags, TyId},
+    visitor::{TyVisitable, TyVisitor, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -22,19 +22,21 @@ use crate::analysis::{
 };
 use crate::{
     Ingot,
-    hir_def::{HirIngot, scope_graph::ScopeId},
+    hir_def::{HirIngot, ModeMarker, scope_graph::ScopeId},
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
 use rustc_hash::FxHashSet;
-use salsa::Update;
+use salsa::SalsaValue;
 
 pub(crate) mod constraint;
 mod table_solver;
 
+pub(crate) use table_solver::answering_assumption;
+
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TraitSolverQuery<'db> {
     pub goal: TraitInstId<'db>,
     pub assumptions: PredicateListId<'db>,
@@ -93,7 +95,7 @@ impl<'db> CanonicalGoalQuery<'db> {
     ) -> U
     where
         S: crate::analysis::ty::unify::UnificationStore<'db>,
-        U: TyFoldable<'db> + Update,
+        U: TyFoldable<'db> + SalsaValue,
     {
         self.original.extract_solution(table, solution)
     }
@@ -117,7 +119,7 @@ pub enum Selection<T> {
     NotFound,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TraitSolveCx<'db> {
     origin_ingot: Ingot<'db>,
     assumptions: PredicateListId<'db>,
@@ -282,11 +284,7 @@ pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
     }
 }
 
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=is_query_satisfiable_cycle_recover,
-    cycle_initial=is_query_satisfiable_cycle_initial
-)]
+#[salsa::tracked(cycle_initial=is_query_satisfiable_cycle_initial)]
 fn is_query_satisfiable<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: Ingot<'db>,
@@ -301,6 +299,7 @@ fn is_query_satisfiable<'db>(
 
 fn is_query_satisfiable_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _origin_ingot: Ingot<'db>,
     _query: Canonical<TraitSolverQuery<'db>>,
 ) -> GoalSatisfiability<'db> {
@@ -314,20 +313,7 @@ fn is_query_satisfiable_cycle_initial<'db>(
     }
 }
 
-fn is_query_satisfiable_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &GoalSatisfiability<'db>,
-    _count: u32,
-    _origin_ingot: Ingot<'db>,
-    _query: Canonical<TraitSolverQuery<'db>>,
-) -> salsa::CycleRecoveryAction<GoalSatisfiability<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-#[salsa::tracked(
-    cycle_fn=query_has_solution_cycle_recover,
-    cycle_initial=query_has_solution_cycle_initial
-)]
+#[salsa::tracked(returns(copy), cycle_initial=query_has_solution_cycle_initial)]
 fn query_has_solution<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: Ingot<'db>,
@@ -343,24 +329,13 @@ fn query_has_solution<'db>(
 
 fn query_has_solution_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _origin_ingot: Ingot<'db>,
     _query: Canonical<TraitSolverQuery<'db>>,
     _target: Canonical<TraitInstId<'db>>,
     _relation: TargetSolutionMatch,
 ) -> TargetSolutionStatus {
     TargetSolutionStatus::Incomplete
-}
-
-fn query_has_solution_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TargetSolutionStatus,
-    _count: u32,
-    _origin_ingot: Ingot<'db>,
-    _query: Canonical<TraitSolverQuery<'db>>,
-    _target: Canonical<TraitInstId<'db>>,
-    _relation: TargetSolutionMatch,
-) -> salsa::CycleRecoveryAction<TargetSolutionStatus> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) fn goal_query_has_solution<'db>(
@@ -416,9 +391,27 @@ pub fn is_goal_satisfiable<'db>(
     is_goal_query_satisfiable(db, solve_cx, &query)
 }
 
+/// Whether `goal` holds. Answers to a goal without inference variables are
+/// proofs of the one instance, so several of them, as an impl and an
+/// assumption restating its bound give, still decide it; with variables they
+/// may be different instances.
+pub fn goal_holds<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> bool {
+    match is_goal_satisfiable(db, solve_cx, goal) {
+        GoalSatisfiability::Satisfied(_) => true,
+        GoalSatisfiability::NeedsConfirmation { solutions, .. } => {
+            !solutions.is_empty() && !goal.args(db).iter().any(|ty| ty.has_var(db))
+        }
+        GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
+    }
+}
+
 /// Checks if the given type is well-formed, i.e., the arguments of the given
 /// type applications satisfies the constraints under the given assumptions.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn check_ty_wf<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -522,7 +515,6 @@ fn check_const_ty_wf<'db>(
         }
         ConstTyData::TyVar(..)
         | ConstTyData::TyParam(..)
-        | ConstTyData::Hole(..)
         | ConstTyData::Invalid(..)
         | ConstTyData::UnEvaluated { .. } => {}
     }
@@ -603,6 +595,7 @@ fn check_const_expr_wf<'db>(
             }
         }
         ConstExpr::ArithBinOp { lhs, rhs, .. }
+        | ConstExpr::Compare { lhs, rhs, .. }
         | ConstExpr::ArrayRepeat {
             value: lhs,
             len: rhs,
@@ -612,6 +605,18 @@ fn check_const_expr_wf<'db>(
             index: rhs,
         } => {
             for ty in [*lhs, *rhs] {
+                let wf = check_ty_wf(db, solve_cx, ty);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+        }
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            for ty in [*cond, *then, *otherwise] {
                 let wf = check_ty_wf(db, solve_cx, ty);
                 if !wf.is_wf() {
                     return wf;
@@ -686,7 +691,7 @@ fn unsatisfied_goal<'db>(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SalsaValue)]
 pub(crate) enum WellFormedness<'db> {
     WellFormed,
     IllFormed {
@@ -703,19 +708,38 @@ impl WellFormedness<'_> {
 
 /// Checks if the given trait instance are well-formed, i.e., the arguments of
 /// the trait satisfies all constraints under the given assumptions.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn check_trait_inst_wf<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> WellFormedness<'db> {
-    for &arg in trait_inst.args(db) {
-        let wf = check_ty_wf(db, solve_cx, arg);
-        if !wf.is_wf() {
-            return wf;
-        }
-    }
-    for &ty in trait_inst.assoc_type_bindings(db).values() {
+    trait_inst_wf(db, solve_cx, trait_inst, true)
+}
+
+/// [`check_trait_inst_wf`] for a trait reference whose `Self` stands for a
+/// type not known where it is written, as an associated type's bound or an
+/// effect key's trait: the trait's requirements that mention that `Self`,
+/// once instantiated, fall to what provides it.
+pub(crate) fn check_trait_inst_wf_without_self<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    trait_inst: TraitInstId<'db>,
+) -> WellFormedness<'db> {
+    trait_inst_wf(db, solve_cx, trait_inst, false)
+}
+
+fn trait_inst_wf<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    trait_inst: TraitInstId<'db>,
+    with_self: bool,
+) -> WellFormedness<'db> {
+    let args = &trait_inst.args(db)[usize::from(!with_self)..];
+    for &ty in args
+        .iter()
+        .chain(trait_inst.assoc_type_bindings(db).values())
+    {
         let wf = check_ty_wf(db, solve_cx, ty);
         if !wf.is_wf() {
             return wf;
@@ -724,6 +748,7 @@ pub(crate) fn check_trait_inst_wf<'db>(
 
     let constraints =
         collect_constraints(db, trait_inst.def(db).into()).instantiate(db, trait_inst.args(db));
+    let self_ty = trait_inst.self_ty(db);
     let assumptions = solve_cx.assumptions();
 
     // Normalize constraints after instantiation to resolve associated types
@@ -732,6 +757,7 @@ pub(crate) fn check_trait_inst_wf<'db>(
         let normalized_list: Vec<_> = constraints
             .list(db)
             .iter()
+            .filter(|&&goal| with_self || !mentions_ty(db, goal, self_ty))
             .map(|&goal| goal.normalize(db, scope, assumptions))
             .collect();
         PredicateListId::new(db, normalized_list)
@@ -750,13 +776,46 @@ pub(crate) fn check_trait_inst_wf<'db>(
     WellFormedness::WellFormed
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+/// Whether `value` mentions `ty`, in a projection or constant as well.
+pub(crate) fn mentions_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: impl TyVisitable<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    struct Finder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        found: bool,
+    }
+    impl<'db> TyVisitor<'db> for Finder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if ty == self.ty {
+                self.found = true;
+            } else if !self.found {
+                walk_ty(self, ty);
+            }
+        }
+    }
+    let mut finder = Finder {
+        db,
+        ty,
+        found: false,
+    };
+    value.visit_with(&mut finder);
+    finder.found
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct TraitGoalSolution<'db> {
     pub(crate) inst: TraitInstId<'db>,
     pub(crate) implementor: ImplementorId<'db>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum TraitSolveCompletion {
     /// The complete least-fixpoint answer set was computed.
     Saturated,
@@ -784,7 +843,7 @@ impl TraitSolveCompletion {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub enum GoalSatisfiability<'db> {
     /// Goal is satisfied with the unique solution.
     Satisfied(Solution<TraitGoalSolution<'db>>),
@@ -817,7 +876,6 @@ impl GoalSatisfiability<'_> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct PredicateListId<'db> {
-    #[return_ref]
     pub list: Vec<TraitInstId<'db>>,
 }
 
@@ -841,6 +899,25 @@ impl<'db> PredicateListId<'db> {
 
     pub fn empty_list(db: &'db dyn HirAnalysisDb) -> Self {
         Self::new(db, Vec::new())
+    }
+
+    /// The predicates of an item used at `mode`: its `mut?` bounds are
+    /// `mut` at `mut`, and plain otherwise.
+    pub fn at_mode(self, db: &'db dyn HirAnalysisDb, mode: Option<BorrowKind>) -> Self {
+        if self
+            .list(db)
+            .iter()
+            .all(|pred| pred.mode(db) != ModeMarker::MaybeMut)
+        {
+            return self;
+        }
+        Self::new(
+            db,
+            self.list(db)
+                .iter()
+                .map(|pred| pred.at_mode(db, mode))
+                .collect::<Vec<_>>(),
+        )
     }
 
     pub fn is_empty(self, db: &'db dyn HirAnalysisDb) -> bool {
@@ -901,7 +978,19 @@ impl<'db> PredicateListId<'db> {
                         hir_trait.scope(),
                         evidence,
                     );
-                    if predicate_has_recursive_assoc_projection(db, trait_inst) {
+                    // An equality can make the bound a concrete one,
+                    // `[u256; 3]: Collection` from `H: Holds<Base = [u256; 3]>`.
+                    // An implementation proves that, so it is not assumed: as
+                    // a written bound on a concrete type would be (6-0005), it
+                    // would be a second candidate for every method of the impl.
+                    // A bound still generic in an argument or a binding,
+                    // `Reader: Read<T>`, is evidence no implementation gives.
+                    let concrete = |ty: &TyId<'db>| {
+                        !ty.has_invalid(db) && !ty.has_param(db) && !ty.has_projection(db)
+                    };
+                    let concrete = trait_inst.args(db).iter().all(concrete)
+                        && trait_inst.assoc_type_bindings(db).values().all(concrete);
+                    if concrete || predicate_has_recursive_assoc_projection(db, trait_inst) {
                         continue;
                     }
                     if all_predicates.insert(trait_inst) {
@@ -917,10 +1006,7 @@ impl<'db> PredicateListId<'db> {
 
 // Normalizing implied bounds can resolve traits under assumptions that lead
 // back here. Iterate from the unextended list; extension only adds bounds.
-#[salsa::tracked(
-    cycle_initial = extend_all_bounds_cycle_initial,
-    cycle_fn = extend_all_bounds_cycle_recover
-)]
+#[salsa::tracked(returns(copy), cycle_initial = extend_all_bounds_cycle_initial)]
 fn extend_all_bounds_query<'db>(
     db: &'db dyn HirAnalysisDb,
     predicates: PredicateListId<'db>,
@@ -930,18 +1016,10 @@ fn extend_all_bounds_query<'db>(
 
 fn extend_all_bounds_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     predicates: PredicateListId<'db>,
 ) -> PredicateListId<'db> {
     predicates
-}
-
-fn extend_all_bounds_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &PredicateListId<'db>,
-    _count: u32,
-    _predicates: PredicateListId<'db>,
-) -> salsa::CycleRecoveryAction<PredicateListId<'db>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 fn predicate_has_recursive_assoc_projection<'db>(
@@ -1089,12 +1167,14 @@ mod tests {
             named_trait(&db, top_mod, "A"),
             vec![TyId::bool(&db)],
             IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
         );
         let b = TraitInstId::new(
             &db,
             named_trait(&db, top_mod, "B"),
             vec![TyId::bool(&db)],
             IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
         );
         let left = PredicateListId::new(&db, vec![a, b, a]);
         let right = PredicateListId::new(&db, vec![b, a]);
@@ -1113,8 +1193,13 @@ mod tests {
             let ty_param = collect_generic_params(db, func.into()).explicit_params(db)[0];
             let assumptions =
                 collect_func_def_constraints(db, func.into(), true).instantiate_identity();
-            let goal =
-                TraitInstId::new(db, needs_a, vec![TyId::unit(db), ty_param], IndexMap::new());
+            let goal = TraitInstId::new(
+                db,
+                needs_a,
+                vec![TyId::unit(db), ty_param],
+                IndexMap::new(),
+                crate::hir_def::ModeMarker::None,
+            );
             let query = CanonicalGoalQuery::new(db, goal, assumptions);
             let solve_cx = TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions);
             (query, solve_cx)
@@ -1219,7 +1304,13 @@ impl Foo for Ambiguous {}
         let foo = named_trait(&db, top_mod, "Foo");
         let solve = |name| {
             let self_ty = named_struct_ty(&db, top_mod, name);
-            let goal = TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new());
+            let goal = TraitInstId::new(
+                &db,
+                foo,
+                vec![self_ty],
+                IndexMap::new(),
+                crate::hir_def::ModeMarker::None,
+            );
             is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal)
         };
 
@@ -1256,7 +1347,13 @@ impl<T> Foo for T where Wrap<T>: Foo {}
         let deep_root = nested_ty(&db, wrap, dead, 300);
 
         for self_ty in [dead, deep_root] {
-            let goal = TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new());
+            let goal = TraitInstId::new(
+                &db,
+                foo,
+                vec![self_ty],
+                IndexMap::new(),
+                crate::hir_def::ModeMarker::None,
+            );
             assert!(matches!(
                 is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal),
                 GoalSatisfiability::NeedsConfirmation {
@@ -1292,16 +1389,33 @@ impl Foo for Subject {}
         let wrap = named_struct_ty(&db, top_mod, "Wrap");
         let deep = nested_ty(&db, wrap, leaf, 300);
 
-        let deep_goal = TraitInstId::new(&db, foo, vec![deep], IndexMap::new());
+        let deep_goal = TraitInstId::new(
+            &db,
+            foo,
+            vec![deep],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
         assert!(matches!(
             is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), deep_goal,),
             GoalSatisfiability::Satisfied(_)
         ));
 
-        let unrelated_deep_assumption =
-            TraitInstId::new(&db, noise, vec![subject, deep], IndexMap::new());
+        let unrelated_deep_assumption = TraitInstId::new(
+            &db,
+            noise,
+            vec![subject, deep],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
         let assumptions = PredicateListId::new(&db, vec![unrelated_deep_assumption]);
-        let shallow_goal = TraitInstId::new(&db, foo, vec![subject], IndexMap::new());
+        let shallow_goal = TraitInstId::new(
+            &db,
+            foo,
+            vec![subject],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
         assert!(matches!(
             is_goal_satisfiable(
                 &db,
@@ -1344,7 +1458,13 @@ fn probe<T: Seed>() {}
         let ty_param = collect_generic_params(&db, probe.into()).explicit_params(&db)[0];
         let assumptions =
             collect_func_def_constraints(&db, probe.into(), true).instantiate_identity();
-        let goal = TraitInstId::new(&db, grow, vec![ty_param], IndexMap::new());
+        let goal = TraitInstId::new(
+            &db,
+            grow,
+            vec![ty_param],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
 
         assert!(matches!(
             is_goal_satisfiable(
@@ -1387,7 +1507,13 @@ impl<SelfT, T> Goal<T> for SelfT where SelfT: Accept<T>, SelfT: Choose<T> {}
         let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
         let mut table = UnificationTable::new(&db);
         let selected = table.new_var(TyVarSort::General, &Kind::Star);
-        let goal = TraitInstId::new(&db, goal_trait, vec![subject, selected], IndexMap::new());
+        let goal = TraitInstId::new(
+            &db,
+            goal_trait,
+            vec![subject, selected],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
         let query = CanonicalGoalQuery::new(&db, goal, assumptions);
         let GoalSatisfiability::Satisfied(solution) =
             is_goal_query_satisfiable(&db, solve_cx, &query)
@@ -1395,7 +1521,13 @@ impl<SelfT, T> Goal<T> for SelfT where SelfT: Accept<T>, SelfT: Choose<T> {}
             panic!("the second constraint must observe the first constraint's binding");
         };
         let actual = query.extract_solution(&mut table, solution).inst;
-        let expected = TraitInstId::new(&db, goal_trait, vec![subject, a], IndexMap::new());
+        let expected = TraitInstId::new(
+            &db,
+            goal_trait,
+            vec![subject, a],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
 
         assert_eq!(Canonical::new(&db, actual), Canonical::new(&db, expected));
     }
@@ -1424,7 +1556,13 @@ impl Foo for Third {}
         let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
         let mut table = UnificationTable::new(&db);
         let self_ty = table.new_var(TyVarSort::General, &Kind::Star);
-        let goal = TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new());
+        let goal = TraitInstId::new(
+            &db,
+            foo,
+            vec![self_ty],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
         let query = CanonicalGoalQuery::new(&db, goal, assumptions);
         let GoalSatisfiability::NeedsConfirmation {
             solutions,
@@ -1450,7 +1588,13 @@ impl Foo for Third {}
                 let self_ty = named_struct_ty(&db, top_mod, name);
                 Canonical::new(
                     &db,
-                    TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new()),
+                    TraitInstId::new(
+                        &db,
+                        foo,
+                        vec![self_ty],
+                        IndexMap::new(),
+                        crate::hir_def::ModeMarker::None,
+                    ),
                 )
             })
             .find(|candidate| !returned.contains(candidate))
@@ -1480,7 +1624,13 @@ fn unsupported<T>() {}
             let func = find_func(&db, top_mod, name);
             let parameter = collect_generic_params(&db, func.into()).explicit_params(&db)[0];
             let self_ty = TyId::app(&db, wrap, parameter);
-            let goal = TraitInstId::new(&db, picks, vec![self_ty], IndexMap::new());
+            let goal = TraitInstId::new(
+                &db,
+                picks,
+                vec![self_ty],
+                IndexMap::new(),
+                crate::hir_def::ModeMarker::None,
+            );
             let constraints =
                 collect_func_def_constraints(&db, func.into(), true).instantiate_identity();
             let assumptions = PredicateListId::new(
@@ -1534,6 +1684,7 @@ fn probe<T>() {}
             named_trait(&db, top_mod, "Picks"),
             vec![self_ty],
             IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
         );
         let solve = TraitSolveCx::new(&db, func.scope())
             .with_assumptions(PredicateListId::new(&db, vec![goal]));
@@ -1566,6 +1717,7 @@ fn probe<T: Picks>() {}
             named_trait(&db, top_mod, "Picks"),
             vec![self_ty],
             IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
         );
         let solve = TraitSolveCx::new(&db, func.scope()).with_assumptions(assumptions);
         assert!(matches!(

@@ -1,0 +1,32 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/raw_place.fe
+---
+error[16-0014]: invalid `#[raw_place]` projection `fn with_slide`
+   ┌─ raw_place.fe:24:11
+   │
+24 │     p.b = 1
+   │           ^ a `#[raw_place]` projection runs no code after its yield
+
+error[16-0014]: invalid `#[raw_place]` projection `fn frame_local`
+   ┌─ raw_place.fe:31:5
+   │
+31 │     mut x
+   │     ^^^^^ a `#[raw_place]` projection yields a place of its own frame
+
+error[16-0014]: invalid `#[raw_place]` projection `fn forwards_ordinary`
+   ┌─ raw_place.fe:42:5
+   │
+42 │     second(mut p)
+   │     ^^^^^^^^^^^^^ a `#[raw_place]` projection keeps no access or session of its own open across its yield
+
+error[16-0014]: invalid `#[raw_place]` projection `fn not_a_projection`
+   ┌─ raw_place.fe:47:40
+   │
+47 │   fn not_a_projection(_ p: Pair) -> u256 {
+   │ ╭────────────────────────────────────────^
+48 │ │     p.a
+49 │ │ }
+   │ ╰─^ a `#[raw_place]` function must be a projection

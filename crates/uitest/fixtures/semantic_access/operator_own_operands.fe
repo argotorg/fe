@@ -1,0 +1,36 @@
+use core::ptr::MemBuffer
+use core::ops::{AddAssign, Not}
+
+// An operator method's `own` operands move, as a call's `own` arguments do.
+struct B {
+    buf: MemBuffer,
+}
+
+impl Not for B {
+    type Output = B
+
+    fn not(own self) -> B {
+        self
+    }
+}
+
+impl AddAssign<B> for B {
+    fn add_assign(mut self, _ other: own B) {
+        self.buf = other.buf
+    }
+}
+
+// Rejected: `!h` moves `h` out of a view.
+fn steal(_ h: B) -> B {
+    !h
+}
+
+// Rejected: `x += h` moves `h` out of a view.
+fn steal_into(_ x: mut B, _ h: B) {
+    x += h
+}
+
+// Accepted: an owned operand moves.
+fn owned(_ h: own B) -> B {
+    !h
+}

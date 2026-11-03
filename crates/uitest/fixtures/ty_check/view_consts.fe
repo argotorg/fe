@@ -1,0 +1,35 @@
+use std::evm::StorageMap
+
+// A const is an owned value, copied at each use: a `#[view]` value made in
+// its module would escape it, and generic code could pass it as `own`.
+trait HasZero {
+    const ZERO: Self
+}
+
+mod views {
+    use super::HasZero
+
+    #[view]
+    pub struct Span {
+        pub start: u256,
+    }
+
+    // Rejected.
+    pub const K: Span = Span { start: 7 }
+
+    // Rejected.
+    impl HasZero for Span {
+        const ZERO: Span = Span { start: 0 }
+    }
+
+    impl Span {
+        // Rejected.
+        pub const ORIGIN: Span = Span { start: 0 }
+    }
+}
+
+// Rejected: a state-only type has no values at all.
+const MAP: StorageMap<u256, u256> = StorageMap {}
+
+// Accepted.
+const WORD: u256 = 7

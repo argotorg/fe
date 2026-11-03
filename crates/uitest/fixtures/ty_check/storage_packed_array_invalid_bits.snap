@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/storage_packed_array_invalid_bits.fe
 ---
@@ -9,9 +10,9 @@ error[6-0003]: trait bound is not satisfied
 12 │     a.get(0)
    │       ^^^ `PackedBits<7>` doesn't implement `ValidPackedBits`
    │
-   ┌─ src/evm/storage_packed_array.fe:78:29
+   ┌─ src/evm/storage_packed_array.fe:92:29
    │
-78 │     where PackedBits<BITS>: ValidPackedBits
+92 │     where PackedBits<BITS>: ValidPackedBits
    │                             --------------- required by this bound on `get`
 
 error[6-0003]: trait bound is not satisfied
@@ -20,9 +21,9 @@ error[6-0003]: trait bound is not satisfied
 16 │     a.get(0)
    │       ^^^ `PackedBits<24>` doesn't implement `ValidPackedBits`
    │
-   ┌─ src/evm/storage_packed_array.fe:78:29
+   ┌─ src/evm/storage_packed_array.fe:92:29
    │
-78 │     where PackedBits<BITS>: ValidPackedBits
+92 │     where PackedBits<BITS>: ValidPackedBits
    │                             --------------- required by this bound on `get`
 
 error[6-0003]: trait bound is not satisfied
@@ -31,9 +32,9 @@ error[6-0003]: trait bound is not satisfied
 20 │     a.get(0)
    │       ^^^ `PackedBits<0>` doesn't implement `ValidPackedBits`
    │
-   ┌─ src/evm/storage_packed_array.fe:78:29
+   ┌─ src/evm/storage_packed_array.fe:92:29
    │
-78 │     where PackedBits<BITS>: ValidPackedBits
+92 │     where PackedBits<BITS>: ValidPackedBits
    │                             --------------- required by this bound on `get`
 
 error[6-0003]: trait bound is not satisfied
@@ -42,7 +43,7 @@ error[6-0003]: trait bound is not satisfied
 24 │     a.get(0)
    │       ^^^ `PackedBits<256>` doesn't implement `ValidPackedBits`
    │
-   ┌─ src/evm/storage_packed_array.fe:78:29
+   ┌─ src/evm/storage_packed_array.fe:92:29
    │
-78 │     where PackedBits<BITS>: ValidPackedBits
+92 │     where PackedBits<BITS>: ValidPackedBits
    │                             --------------- required by this bound on `get`

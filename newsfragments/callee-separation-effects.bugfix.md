@@ -1,1 +1,0 @@
-Use verified callee separation preconditions when resolving ordinary call effects. Impossible pointer clobbers no longer create false borrow or move conflicts for independent local buffers; callers still establish the preconditions physically.

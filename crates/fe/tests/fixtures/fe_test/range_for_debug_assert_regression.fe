@@ -1,6 +1,6 @@
 
 fn triangular(_ n: usize) -> usize {
-    let mut total: usize = 0
+    var total: usize = 0
     for i in 0..n {
         total += i
     }

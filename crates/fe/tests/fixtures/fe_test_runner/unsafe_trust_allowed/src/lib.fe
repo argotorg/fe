@@ -1,0 +1,13 @@
+// `allow_unsafe = true` trusts `dep`, including the bodies of a contract of
+// its that this ingot creates.
+use std::evm::Evm
+
+#[test]
+fn allowed_unsafe_use() {
+    assert!(dep::round_trip(7) == 7)
+}
+
+#[test]
+fn allowed_created_contract() uses (evm: mut Evm) {
+    evm.create2<dep::Vault>(value: Wei::zero(), args: (), salt: 0)
+}

@@ -36,7 +36,7 @@ impl Pair<u32> {
 }
 
 fn mk<T>() -> Pair<T> {
-    todo()
+    unsafe { todo() }
 }
 
 extern {

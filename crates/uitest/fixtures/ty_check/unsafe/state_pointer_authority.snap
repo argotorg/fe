@@ -1,0 +1,61 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/unsafe/state_pointer_authority.fe
+---
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ state_pointer_authority.fe:10:14
+   │
+10 │     unsafe { *p }
+   │              ^^ this reads state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: RawStorage)`; `unsafe` does not grant authority
+
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ state_pointer_authority.fe:14:14
+   │
+14 │     unsafe { *t = true }
+   │              ^^ this writes state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: mut RawStorage)`; `unsafe` does not grant authority
+
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ state_pointer_authority.fe:19:19
+   │
+19 │         with (mut *p) {
+   │                   ^^ this writes state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: mut RawStorage)`; `unsafe` does not grant authority
+
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ state_pointer_authority.fe:27:14
+   │
+27 │     unsafe { *p = 1 }
+   │              ^^ this writes state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: mut RawStorage)`; `unsafe` does not grant authority
+
+error[8-0107]: an access through a state pointer needs the function's own authority
+   ┌─ state_pointer_authority.fe:55:5
+   │
+55 │     *p
+   │     ^^ this reads state the function's `uses` does not cover
+   │
+   = require it via `uses (storage: RawStorage)`; `unsafe` does not grant authority
+
+error[8-0107]: an access through a state pointer in a closure needs the closure's own authority
+   ┌─ state_pointer_authority.fe:65:23
+   │
+65 │     apply(|| unsafe { *(0 as u256 as StorPtr<u256>) = 9 })
+   │                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this writes state the closure's row does not cover
+   │
+   = a closure takes none of the enclosing function's authority; use `storage_at`, or a function with `uses (storage: mut RawStorage)`, whose requirement the closure's row takes
+
+error[8-0107]: an access through a state pointer in a closure needs the closure's own authority
+   ┌─ state_pointer_authority.fe:70:25
+   │
+70 │     let f = || unsafe { *p = 9 }
+   │                         ^^ this writes state the closure's row does not cover
+   │
+   = a closure takes none of the enclosing function's authority; use `storage_at`, or a function with `uses (storage: mut RawStorage)`, whose requirement the closure's row takes

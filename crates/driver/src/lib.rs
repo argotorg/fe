@@ -239,15 +239,7 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
         missing.push("missing required core ingot".to_string());
     }
 
-    let std_ingot = db.builtin_std();
-    if let Ok(std_file) = std_ingot.root_file(db) {
-        let top_mod = db.top_mod(std_file);
-        missing.extend(
-            core_requirements::check_std_type_requirements(db, top_mod.scope())
-                .into_iter()
-                .map(|req| req.to_string()),
-        );
-    } else {
+    if db.builtin_std().root_file(db).is_err() {
         missing.push("missing required std ingot".to_string());
     }
 
@@ -257,6 +249,7 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
 fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     tracing::info!(target: "resolver", "Starting ingot resolution for: {}", ingot_url);
     let checkout_root = remote_checkout_root(ingot_url);
+    db.dependency_graph().register_root_ingot(db, ingot_url);
     let mut handler = IngotHandler::new(db);
     let mut ingot_graph_resolver = GraphResolverImpl::new(ingot_resolver(checkout_root));
 
@@ -284,7 +277,7 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
             if let Some(ingot) = db.workspace().containing_ingot(db, url.clone())
                 && let Some(config) = ingot.config(db)
             {
-                configs.insert(url.clone(), config);
+                configs.insert(url.clone(), config.clone());
             }
         }
 

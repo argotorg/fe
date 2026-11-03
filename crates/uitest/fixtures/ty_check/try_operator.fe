@@ -1,0 +1,13 @@
+fn not_a_sum(_ x: u256) -> Option<u256> {
+    let y = x?
+    Option::Some(y)
+}
+
+fn wrong_return(_ o: Option<u256>) -> u256 {
+    o?
+}
+
+fn wrong_error(_ r: Result<bool, u256>) -> Result<u8, u256> {
+    let v = r?
+    Result::Ok(v)
+}

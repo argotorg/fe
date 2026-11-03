@@ -26,10 +26,10 @@ impl Outer {
     } 
 }
 
-fn foo<T>(x: i32, mut y: own u32, opt: Option<T>, opt2: Option<i32>) {
+fn foo<T>(x: i32, var y: own u32, opt: Option<T>, opt2: Option<i32>) {
     x = 1
     
-    let mut g = Gen { t: false }
+    var g = Gen { t: false }
     g.t = 1
 
     Gen { t: false }.t = true

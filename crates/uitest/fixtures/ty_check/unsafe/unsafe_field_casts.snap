@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unsafe/unsafe_field_casts.fe
+---
+error[8-0126]: initializing an `unsafe` field requires an `unsafe` block
+   ┌─ unsafe_field_casts.fe:15:5
+   │
+15 │     p as Cell
+   │     ^^^^^^^^^ `p` is an `unsafe` field
+   │
+   = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
+
+error[8-0126]: initializing an `unsafe` field requires an `unsafe` block
+   ┌─ unsafe_field_casts.fe:20:5
+   │
+20 │     w as Cell
+   │     ^^^^^^^^^ `p` is an `unsafe` field
+   │
+   = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise

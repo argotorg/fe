@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/storage_slots_instances.fe
+---
+error[16-0010]: invalid concrete type in `fn slots`
+  ┌─ storage_slots_instances.fe:4:5
+  │
+4 │     storage_slots<T>()
+  │     ^^^^^^^^^^^^^^^^^^ `[[u256; 4294967296]; 4294967296]` cannot be laid out in storage: layout extent overflowed

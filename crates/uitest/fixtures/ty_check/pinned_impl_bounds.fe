@@ -1,0 +1,95 @@
+use core::marker::{Pinned, Transient}
+
+// A `Pinned` implementation pins only the instances its bounds admit.
+trait Ready {}
+
+struct Yes {}
+
+impl Ready for Yes {}
+
+struct No {}
+
+struct Gated<P> {
+    base: u256,
+}
+
+impl<P: Ready> Pinned for Gated<P> {
+    type Space = Transient
+}
+
+// Accepted: the implementation does not apply to `Gated<No>`.
+fn make_gated_no() -> Gated<No> {
+    Gated { base: 0 }
+}
+
+// Rejected: it pins `Gated<Yes>`.
+fn make_gated_yes() {
+    let _gated: Gated<Yes> = Gated { base: 0 }
+}
+
+// Rejected: some `Gated<P>` is pinned.
+fn make_any_gated<P>() {
+    let _gated: Gated<P> = Gated { base: 0 }
+}
+
+struct Forwarding<P> {
+    base: u256,
+}
+
+impl<P: Pinned> Pinned for Forwarding<P> {
+    type Space = P::Space
+}
+
+// Accepted: `u256` is not pinned, so no implementation applies to
+// `Forwarding<u256>`.
+fn make_forwarding() -> Forwarding<u256> {
+    Forwarding { base: 0 }
+}
+
+// A pin can forward another forwarding pin: `Nested`'s space is
+// `Forwarding<P>`'s, which is `P`'s.
+struct Nested<P, S> {
+    base: u256,
+}
+
+impl<P: Pinned<Space = S>, S> Pinned for Nested<P, S> {
+    type Space = Forwarding<P>::Space
+}
+
+// Accepted: `u256` is not pinned.
+fn make_nested() -> Nested<u256, Transient> {
+    Nested { base: 0 }
+}
+
+// Rejected: `Gated<Yes>` is pinned to transient storage, and so is
+// `Nested<Gated<Yes>, Transient>`.
+fn make_nested_gated() {
+    let _nested: Nested<Gated<Yes>, Transient> = Nested { base: 0 }
+}
+
+// A blanket implementation pins only the types its bound admits.
+trait Mark {}
+
+struct Marked {
+    v: u256,
+}
+
+impl Mark for Marked {}
+
+impl<T: Mark> Pinned for T {
+    type Space = Transient
+}
+
+struct Plain {
+    v: u256,
+}
+
+// Accepted: `Plain` is not `Mark`.
+fn make_plain() -> Plain {
+    Plain { v: 1 }
+}
+
+// Rejected: `Marked` is pinned.
+fn make_marked() {
+    let _marked = Marked { v: 1 }
+}

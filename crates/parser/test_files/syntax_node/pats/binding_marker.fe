@@ -1,0 +1,13 @@
+mut x
+
+ref x
+
+(i, ref x)
+
+Some(ref x)
+
+Record { ref a, mut b, c }
+
+var x
+
+Some(var v)

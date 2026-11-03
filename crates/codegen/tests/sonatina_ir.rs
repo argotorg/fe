@@ -7,11 +7,20 @@
 //! Snapshots are stored in `fixtures/sonatina_ir/`.
 
 use common::InputDb;
+#[cfg(feature = "cranelift")]
+use common::compilation::Target;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
+#[cfg(feature = "cranelift")]
+use fe_codegen::emit_module_native_ir;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
+#[cfg(feature = "cranelift")]
+use salsa::Setter;
 use std::{collections::HashSet, path::Path};
-use test_utils::_macro_support::_insta::{self, Settings};
+use test_utils::{
+    _macro_support::_insta::{self, Settings},
+    fixture_shards,
+};
 use tracing::info;
 use url::Url;
 
@@ -32,6 +41,85 @@ fn with_top_mod_for_source<T>(
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
     f(&db, top_mod)
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_keeps_measured_work_between_gas_reads.fe")]
+fn black_box_keeps_measured_work_between_gas_reads(fixture: Fixture<&str>) {
+    for level in [OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+            emit_module_sonatina_ir_optimized(db, top_mod, level, None)
+                .expect("optimized Sonatina IR should emit")
+        });
+
+        // Each recv arm reads the gas twice in one block; collect the instruction
+        // names between the two reads.
+        let measured: Vec<Vec<&str>> = ir
+            .split("\n\n")
+            .filter_map(|block| {
+                let insts: Vec<&str> = block
+                    .lines()
+                    .filter_map(|line| line.split(" = ").nth(1)?.split_whitespace().next())
+                    .map(|inst| inst.trim_end_matches(';'))
+                    .collect();
+                let first = insts.iter().position(|&inst| inst == "evm_gas")?;
+                let len = insts[first + 1..]
+                    .iter()
+                    .position(|&inst| inst == "evm_gas")?;
+                Some(insts[first + 1..first + 1 + len].to_vec())
+            })
+            .collect();
+        let [kept, discarded] = [true, false].map(|boxed| {
+            measured
+                .iter()
+                .find(|insts| insts.contains(&"black_box") == boxed)
+                .unwrap_or_else(|| panic!("missing measured arm (black_box: {boxed}):\n{ir}"))
+        });
+
+        assert!(
+            kept.iter()
+                .position(|&inst| inst == "xor")
+                .is_some_and(|work| {
+                    kept[..work].contains(&"black_box") && kept[work..].contains(&"black_box")
+                }),
+            "the boxed input, the work and the boxed result must stay between the gas reads: \
+         {kept:?}\n{ir}"
+        );
+        assert!(
+            !discarded.contains(&"xor"),
+            "discarded pure work is expected to be removed: {discarded:?}\n{ir}"
+        );
+    }
+}
+
+#[cfg(feature = "cranelift")]
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_native_target_unsupported.fe")]
+fn black_box_reports_unsupported_native_target(fixture: Fixture<&str>) {
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let file = db.workspace().touch(
+        &mut db,
+        Url::from_file_path(fixture.path()).expect("fixture path should be absolute"),
+        Some(fixture.content().to_string()),
+    );
+    let err = emit_module_native_ir(&db, db.top_mod(file), OptLevel::O0)
+        .expect_err("the native target has no BlackBox instruction");
+    assert!(err.to_string().contains("BlackBox"), "{err}");
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_rejects_*.fe")]
+fn black_box_rejects_non_scalar_arguments(fixture: Fixture<&str>) {
+    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+        let diagnostics = db.run_on_top_mod(top_mod);
+        assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(db));
+        emit_module_sonatina_ir(db, top_mod).expect_err("black_box only accepts scalars")
+    });
+    let message = err.to_string();
+    assert!(
+        message.contains("`core::hint::black_box` requires a scalar argument"),
+        "unexpected error message:\n{message}"
+    );
 }
 
 fn sonatina_function_names(ir: &str) -> Vec<String> {
@@ -89,6 +177,67 @@ fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a s
     let body = &ir[start..];
     let end = body.find("\n}\n").map_or(body.len(), |end| end + 2);
     Some(&body[..end])
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "packed_hash_words.fe")]
+fn packed_hash_exports_only_numeric_words(fixture: Fixture<&str>) {
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        for level in [OptLevel::O1, OptLevel::O2] {
+            let ir = emit_module_sonatina_ir_optimized(db, top_mod, level, None)
+                .expect("packed hash IR should emit");
+            let body = sonatina_function_body(&ir, "%contract_runtime_root_Hashes(")
+                .expect("hash runtime should emit");
+            assert!(
+                !body.contains("mstore8"),
+                "byte stores in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("[i8;"),
+                "expanded byte object in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("obj."),
+                "unscalarized hash input in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("phi "),
+                "conversion loop in {level:?}:\n{body}"
+            );
+            // Four ABI return stores, in addition to each preimage's numeric words.
+            assert_eq!(
+                body.matches("mstore ").count(),
+                1 + 1 + 2 + 3 + 4,
+                "stores in {level:?}:\n{body}"
+            );
+            let mut widths = Vec::new();
+            for block in body.split("\n    block") {
+                if let Some((preimage, hash)) = block.split_once("evm_keccak256 ") {
+                    let width: usize = hash
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .last()
+                        .unwrap()
+                        .trim_end_matches(".i256;")
+                        .parse()
+                        .unwrap();
+                    assert_eq!(
+                        preimage.matches("mstore ").count(),
+                        width.div_ceil(32),
+                        "preimage in {level:?}:\n{block}"
+                    );
+                    assert!(
+                        !block.contains("br "),
+                        "conversion branch in {level:?}:\n{block}"
+                    );
+                    widths.push(width);
+                }
+            }
+            widths.sort_unstable();
+            assert_eq!(widths, [5, 32, 64, 69]);
+        }
+    });
 }
 
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "zero_sized_const_aggregates_do_not_emit_const_regions.fe")]
@@ -203,73 +352,30 @@ fn fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend(fixture: Fixt
     );
 }
 
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "wildcard_storage_map_root_reports_runtime_root_error.fe")]
-fn wildcard_storage_map_root_reports_runtime_root_error(fixture: Fixture<&str>) {
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "storage_map_root_effect_reports_runtime_root_error.fe")]
+fn storage_map_root_effect_reports_runtime_root_error(fixture: Fixture<&str>) {
     let err = with_top_mod_for_source(&fixture, |db, top_mod| {
         emit_module_sonatina_ir(db, top_mod)
-            .expect_err("wildcard StorageMap roots should be rejected")
+            .expect_err("a standalone root cannot take a StorageMap effect")
     });
     let message = err.to_string();
     assert!(
-        message.contains("standalone runtime root")
-            && message.contains("inferred layout const")
-            && message.contains("no caller to supply a concrete provider")
+        message.contains("standalone root")
+            && message.contains("no caller to supply ordinary effect parameters")
             && message.contains("with (...)"),
         "unexpected error message:\n{message}"
     );
 }
 
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "explicit_storage_map_root_compiles_without_a_runtime_provider.fe")]
-fn explicit_storage_map_root_compiles_without_a_runtime_provider(fixture: Fixture<&str>) {
-    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
-        emit_module_sonatina_ir(db, top_mod).expect("explicit root should compile")
-    });
-    assert!(
-        output.contains("call %storagemap_get_word_with_salt v0 0.i256"),
-        "explicit root was not lowered as the concrete StorageMap salt:\n{output}"
-    );
-}
-
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "inferred_storage_map_roots_skip_explicit_contract_salts.fe")]
-fn inferred_storage_map_roots_skip_explicit_contract_salts(fixture: Fixture<&str>) {
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "storage_map_free_function_compiles_with_concrete_provider.fe")]
+fn storage_map_free_function_compiles_with_concrete_provider(fixture: Fixture<&str>) {
     let output = with_top_mod_for_source(&fixture, |db, top_mod| {
         emit_module_sonatina_ir(db, top_mod)
-            .expect("mixed explicit and inferred roots should compile")
-    });
-    for salt in ["0.i256", "1.i256", "2.i256"] {
-        assert!(
-            output.lines().any(|line| {
-                line.contains("call %storagemap_get_word_with_salt") && line.contains(salt)
-            }),
-            "missing StorageMap salt {salt}:\n{output}"
-        );
-    }
-}
-
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "wildcard_storage_map_free_function_compiles_with_concrete_provider.fe")]
-fn wildcard_storage_map_free_function_compiles_with_concrete_provider(fixture: Fixture<&str>) {
-    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
-        emit_module_sonatina_ir(db, top_mod)
-            .expect("wildcard StorageMap helpers should compile from a concrete provider")
+            .expect("StorageMap helpers should compile from a concrete provider")
     });
     assert!(
         output.contains("func private %get_balance") && output.contains("object @C"),
         "concrete-provider StorageMap helper should emit real Sonatina IR:\n{output}"
-    );
-}
-
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "generic_noesc_storage_specialization_is_rejected_during_runtime_lowering.fe")]
-fn generic_noesc_storage_specialization_is_rejected_during_runtime_lowering(
-    fixture: Fixture<&str>,
-) {
-    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
-        emit_module_sonatina_ir(db, top_mod)
-            .expect_err("runtime lowering should reject specialized noesc storage escape")
-    });
-    let message = err.to_string();
-    assert!(
-        message.contains("noesc violation in `fn store_generic`"),
-        "unexpected error message:\n{message}"
     );
 }
 
@@ -385,31 +491,25 @@ fn runtime_abi_head_guard_matches_modern_solidity_signed_size_check(fixture: Fix
     );
 }
 
-// NOTE: `dir_test` discovers fixtures at compile time; new fixture files will be picked up on a
-// clean build (e.g. CI) or whenever this test target is recompiled.
-//
 // Sonatina IR tests only run on fixtures that the backend currently supports. Unsupported
 // fixtures will produce LowerError::Unsupported, which we skip gracefully.
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/tests/fixtures",
-    glob: "*.fe"
-)]
-fn sonatina_ir_snap(fixture: Fixture<&str>) {
+fixture_shards!(
+    sonatina_ir_snap,
+    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"),
+    "*.fe",
+    DriverDataBase::default,
+    check_sonatina_ir,
+);
+
+fn check_sonatina_ir(db: &mut DriverDataBase, fixture: &test_utils::fixtures::Fixture) {
     let _logging = test_utils::setup_test_tracing();
-    let mut db = DriverDataBase::default();
     let file_url = Url::from_file_path(fixture.path()).expect("fixture path should be absolute");
-    db.workspace().touch(
-        &mut db,
-        file_url.clone(),
-        Some(fixture.content().to_string()),
-    );
     let file = db
         .workspace()
-        .get(&db, &file_url)
-        .expect("file should be loaded");
+        .touch(db, file_url, Some(fixture.content().to_string()));
     let top_mod = db.top_mod(file);
 
-    let output = match emit_module_sonatina_ir(&db, top_mod) {
+    let output = match emit_module_sonatina_ir(db, top_mod) {
         Ok(ir) => ir,
         Err(fe_codegen::LowerError::Unsupported(msg)) => {
             info!("SKIP {}: unsupported ({msg})", fixture.path());
@@ -432,39 +532,18 @@ fn sonatina_ir_snap(fixture: Fixture<&str>) {
     });
 }
 
-/// End-to-end guard for the generic-storage-field aliasing fix: a hole-bearing
-/// storage type passed as one generic argument and reused by two struct fields
-/// (`struct Pair<T> { left: T, right: T }` as `Pair<StorageMap<..>>`) must lower
-/// to *distinct* storage roots. Before the fix both fields shared one root,
-/// silently merging their storage in deployed bytecode.
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "repeated_generic_storage_fields_lower_to_distinct_slots.fe")]
-fn repeated_generic_storage_fields_lower_to_distinct_slots(fixture: Fixture<&str>) {
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "maybe_mut_bodies_share_callees.fe")]
+fn maybe_mut_bodies_share_callees(fixture: Fixture<&str>) {
     let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
         emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
     });
 
-    // `pair.left.set` and `pair.right.get` each lower to a storage-map access
-    // salted by the field's root slot. The two salts must differ. The salt is
-    // the literal `N.i256` operand on the `call %storagemap_*_with_salt` line.
-    let salt = |op: &str| -> String {
-        let needle = format!("call %storagemap_{op}_word_with_salt");
-        let line = ir
-            .lines()
-            .find(|l| l.contains(&needle))
-            .unwrap_or_else(|| panic!("missing {needle}:\n{ir}"));
-        line.split_whitespace()
-            .find_map(|tok| {
-                tok.trim_end_matches(';')
-                    .strip_suffix(".i256")
-                    .filter(|n| n.parse::<u64>().is_ok())
-            })
-            .unwrap_or_else(|| panic!("no salt literal on line `{line}`"))
-            .to_string()
-    };
-    let set_salt = salt("set");
-    let get_salt = salt("get");
-    assert_ne!(
-        set_salt, get_salt,
-        "left/right storage roots aliased (both salt {set_salt})"
+    let notes = ir
+        .lines()
+        .filter(|line| line.starts_with("func ") && line.contains("note"))
+        .count();
+    assert_eq!(
+        notes, 1,
+        "both bodies of `slot` should call one instance of `note`:\n{ir}"
     );
 }

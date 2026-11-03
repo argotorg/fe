@@ -48,11 +48,5 @@ error[3-0025]: division by zero in const context
 35 │     V([u8; { 10 / N }]),
    │              ^^^^^^ cannot divide by zero
 
-error[3-0025]: division by zero in const context
-   ┌─ contract_adt_field_const_div_zero.fe:40:15
-   │
-40 │     b: [u8; { 10 / N }],
-   │               ^^^^^^ cannot divide by zero
-
 
 === EXIT CODE: 1 ===

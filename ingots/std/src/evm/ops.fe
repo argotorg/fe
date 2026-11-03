@@ -3,46 +3,53 @@
 /// Most functions in this module are internal to `std`; higher-level access is
 /// provided via `std::evm::effects`. Public functions expose pure raw EVM
 /// operations for low-level code that needs an exact opcode shape.
+///
+/// Raw memory operations require live allocations. Numeric state operations
+/// require appropriate tracked authority or a proof of disjoint access. These
+/// unsafe primitives stay behind the standard library's checked capabilities.
 extern {
     // -------------------------------------------------------------------------
     // Memory
     // -------------------------------------------------------------------------
-    pub(ingot) fn mload(_: *u8) -> u256
-    pub(ingot) fn mstore(addr: *u8, value: u256)
-    pub(ingot) fn mstore8(addr: *u8, value: u8)
+    pub(ingot) unsafe fn mload(_: *u8) -> u256
+    pub(ingot) unsafe fn mstore(addr: *u8, value: u256)
+    pub(ingot) unsafe fn mstore8(addr: *u8, value: u8)
     pub(ingot) fn msize() -> u256
 
     // -------------------------------------------------------------------------
     // Storage
     // -------------------------------------------------------------------------
-    pub(ingot) fn sload(_: u256) -> u256
-    pub(ingot) fn sstore(slot: u256, value: u256)
+    /// Copies an arbitrary word, including declared state. The caller must
+    /// hold tracked shared/exclusive state authority or prove that no live
+    /// mutable access conflicts. No typed place is constructed.
+    pub(ingot) unsafe fn sload(_: u256) -> u256
+    pub(ingot) unsafe fn sstore(slot: u256, value: u256)
     // Trusted: `slot` must be exactly the `keccak256` output of a
     // `storage_map` preimage (`key_encoding ++ salt`), with no arithmetic after
     // hashing. The borrow checker assumes such a slot never equals a
     // compiler-allocated contract-field slot. Only the `storage_map` word
     // helpers call these.
-    pub(ingot) fn sload_hashed(_: u256) -> u256
-    pub(ingot) fn sstore_hashed(slot: u256, value: u256)
+    pub(ingot) unsafe fn sload_hashed(_: u256) -> u256
+    pub(ingot) unsafe fn sstore_hashed(slot: u256, value: u256)
 
     // -------------------------------------------------------------------------
     // Calldata / returndata
     // -------------------------------------------------------------------------
     pub(ingot) fn calldataload(_: u256) -> u256
-    pub(ingot) fn calldatacopy(dest: *u8, offset: u256, len: u256)
+    pub(ingot) unsafe fn calldatacopy(dest: *u8, offset: u256, len: u256)
     pub(ingot) fn calldatasize() -> u256
-    pub(ingot) fn returndatacopy(dest: *u8, offset: u256, len: u256)
+    pub(ingot) unsafe fn returndatacopy(dest: *u8, offset: u256, len: u256)
     pub(ingot) fn returndatasize() -> u256
 
     // -------------------------------------------------------------------------
     // Code / hashing
     // -------------------------------------------------------------------------
-    pub(ingot) fn codecopy(dest: *u8, offset: u256, len: u256)
+    pub(ingot) unsafe fn codecopy(dest: *u8, offset: u256, len: u256)
     pub(ingot) fn codesize() -> u256
-    pub(ingot) fn extcodecopy(addr: u256, dest: *u8, offset: u256, len: u256)
+    pub(ingot) unsafe fn extcodecopy(addr: u256, dest: *u8, offset: u256, len: u256)
     pub(ingot) fn extcodesize(_ addr: u256) -> u256
     pub(ingot) fn extcodehash(_ addr: u256) -> u256
-    pub(ingot) fn keccak256(offset: *u8, len: u256) -> u256
+    pub(ingot) unsafe fn keccak256(offset: *u8, len: u256) -> u256
     pub fn byte(pos: u256, value: u256) -> u256
     pub fn signextend(byte: u256, value: u256) -> u256
 
@@ -71,7 +78,7 @@ extern {
     // -------------------------------------------------------------------------
     // Calls / create
     // -------------------------------------------------------------------------
-    pub(ingot) fn call(
+    pub(ingot) unsafe fn call(
         gas: u256,
         addr: u256,
         value: u256,
@@ -80,7 +87,7 @@ extern {
         ret_offset: *u8,
         ret_len: u256,
     ) -> u256
-    pub(ingot) fn staticcall(
+    pub(ingot) unsafe fn staticcall(
         gas: u256,
         addr: u256,
         args_offset: *u8,
@@ -91,7 +98,7 @@ extern {
     /// `STATICCALL` to a precompile. Unlike `staticcall`, the borrow checker
     /// does not treat it as reading contract state, since a precompile cannot
     /// call back into the contract. `addr` must be a precompile address.
-    pub(ingot) fn staticcall_precompile(
+    pub(ingot) unsafe fn staticcall_precompile(
         gas: u256,
         addr: u256,
         args_offset: *u8,
@@ -99,7 +106,7 @@ extern {
         ret_offset: *u8,
         ret_len: u256,
     ) -> u256
-    pub(ingot) fn delegatecall(
+    pub(ingot) unsafe fn delegatecall(
         gas: u256,
         addr: u256,
         args_offset: *u8,
@@ -107,24 +114,24 @@ extern {
         ret_offset: *u8,
         ret_len: u256,
     ) -> u256
-    pub(ingot) fn create(value: u256, offset: *u8, len: u256) -> u256
-    pub(ingot) fn create2(value: u256, offset: *u8, len: u256, salt: u256) -> u256
+    pub(ingot) unsafe fn create(value: u256, offset: *u8, len: u256) -> u256
+    pub(ingot) unsafe fn create2(value: u256, offset: *u8, len: u256, salt: u256) -> u256
 
     // -------------------------------------------------------------------------
     // Logs
     // -------------------------------------------------------------------------
-    pub(ingot) fn log0(offset: *u8, len: u256)
-    pub(ingot) fn log1(offset: *u8, len: u256, topic0: u256)
-    pub(ingot) fn log2(offset: *u8, len: u256, topic0: u256, topic1: u256)
-    pub(ingot) fn log3(offset: *u8, len: u256, topic0: u256, topic1: u256, topic2: u256)
-    pub(ingot) fn log4(offset: *u8, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
+    pub(ingot) unsafe fn log0(offset: *u8, len: u256)
+    pub(ingot) unsafe fn log1(offset: *u8, len: u256, topic0: u256)
+    pub(ingot) unsafe fn log2(offset: *u8, len: u256, topic0: u256, topic1: u256)
+    pub(ingot) unsafe fn log3(offset: *u8, len: u256, topic0: u256, topic1: u256, topic2: u256)
+    pub(ingot) unsafe fn log4(offset: *u8, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
 
     // -------------------------------------------------------------------------
     // Control flow
     // -------------------------------------------------------------------------
-    pub(ingot) fn revert(offset: *u8, len: u256) -> !
+    pub(ingot) unsafe fn revert(offset: *u8, len: u256) -> !
     pub(ingot) fn revert_empty() -> !
-    pub(ingot) fn return_data(offset: *u8, len: u256) -> !
+    pub(ingot) unsafe fn return_data(offset: *u8, len: u256) -> !
     pub(ingot) fn selfdestruct(_: u256) -> !
     pub(ingot) fn stop() -> !
 }

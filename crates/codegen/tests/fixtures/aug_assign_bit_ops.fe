@@ -1,5 +1,5 @@
 pub fn aug_assign_bit_ops(x: u256, y: u256) -> u256 {
-    let mut acc: u256 = x
+    var acc: u256 = x
     acc **= y
     acc <<= 3
     acc >>= 1

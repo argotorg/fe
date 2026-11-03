@@ -1,0 +1,113 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/view_types.fe
+---
+error[12-0001]: unsupported `#[view]` attribute on fn `not_a_type`
+    ┌─ view_types.fe:127:1
+    │
+127 │ #[view]
+    │ ^^^^^^^ `#[view]` is only supported on structs and enums
+
+error[12-0002]: invalid `#[view]` attribute form on struct `Malformed`
+    ┌─ view_types.fe:124:1
+    │
+124 │ #[view(read)]
+    │ ^^^^^^^^^^^^^ expected `#[view]`
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:41:34
+   │
+41 │         pub fn view_mut(self) -> mut Span {
+   │                                  ^^^^^^^^ a `#[view]` type cannot be yielded by `mut` from a projection that holds nothing mutably
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:63:10
+   │
+63 │ fn owned(_ span: own Span) {}
+   │          ^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:70:18
+   │
+70 │     fn make() -> Span
+   │                  ^^^^ a `#[view]` type cannot be returned by value
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:76:11
+   │
+76 │     span: Span,
+   │           ^^^^ a `#[view]` type cannot be a field
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:80:10
+   │
+80 │     Left(Span),
+   │          ^^^^ a `#[view]` type cannot be a field
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:84:14
+   │
+84 │ fn pair(_ p: (Span, u256)) {}
+   │              ^^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:86:15
+   │
+86 │ fn maybe(_ s: Option<Span>) {}
+   │               ^^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:88:14
+   │
+88 │ type Spans = [Span; 2]
+   │              ^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:92:15
+   │
+92 │ impl Copy for Span {}
+   │               ^^^^ a `#[view]` type cannot be `Copy`
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:95:16
+   │
+95 │     let span = Span { start: 0, len: 0 }
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be constructed outside its defining module
+
+error[3-0059]: `Mark` is a `#[view]` type
+    ┌─ view_types.fe:100:16
+    │
+100 │     let mark = Mark::Unset
+    │                ^^^^^^^^^^^ a `#[view]` type cannot be constructed outside its defining module
+
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ view_types.fe:140:15
+    │
+140 │ fn holds(_ h: Holds<Span>) {}
+    │               ^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ view_types.fe:154:16
+    │
+154 │ fn nested(_ n: Nested<Span>) {}
+    │                ^^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ view_types.fe:166:40
+    │
+166 │ fn through<B: Equals<Out = Span>>(_ t: Through<Span, B>) {}
+    │                                        ^^^^^^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[8-0105]: this call instantiates its callee at the `#[view]` type `Span`
+    ┌─ view_types.fe:107:5
+    │
+107 │     take(owner.span())
+    │     ^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[8-0105]: this call instantiates its callee at the `#[view]` type `Span`
+    ┌─ view_types.fe:121:5
+    │
+121 │     take_assoc<Owner>(owner.span())
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter

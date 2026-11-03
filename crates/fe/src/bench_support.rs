@@ -118,6 +118,8 @@ pub fn compile_fe_sonatina_bytecode(
         let diags = db.run_on_ingot(ingot);
         if !diags.is_empty() {
             diags.emit(db);
+        }
+        if diags.has_errors(db) {
             return Err(format!("fe/sonatina diagnostics for {name_owned}"));
         }
 

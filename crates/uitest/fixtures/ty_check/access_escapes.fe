@@ -1,0 +1,46 @@
+// An access is not a value: it lives in a binding, an argument or a
+// projection's grant, and never escapes into a field, storage, an owned
+// argument or a function's result.
+struct Holder { value: u256 }
+
+struct Item { n: u256 }
+
+fn consume(_ item: own Item) {}
+
+// Rejected: an access as a field's value.
+fn field_escape() -> Holder {
+    var x: u256 = 1
+    Holder { value: mut x }
+}
+
+// Rejected: an access as an owned argument.
+fn own_escape() {
+    var item = Item { n: 1 }
+    consume(mut item)
+}
+
+// Rejected: an access as a function's result, which is a value.
+fn result_escape(_ item: mut Item) -> Item {
+    mut item
+}
+
+// Rejected: an access assigned to storage.
+pub contract Store {
+    mut slot: u256,
+    init() uses (mut slot) {
+        var x: u256 = 0
+        slot = mut x
+    }
+}
+
+// Accepted: a projection yields an access to its caller, which uses it.
+fn field_of(_ holder: mut Holder) -> mut u256 {
+    mut holder.value
+}
+
+fn yields_ok() -> u256 {
+    var holder = Holder { value: 1 }
+    let value = mut field_of(mut holder)
+    value += 1
+    holder.value
+}

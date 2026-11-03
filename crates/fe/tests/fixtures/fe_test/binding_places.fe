@@ -1,0 +1,113 @@
+// Bindings take components where they lie: `mut` writes through to the
+// place, `ref` reads it, `var` is a mutable copy, and a plain name moves out
+// of an owned place or, as a restored hole, through a `mut` access.
+use core::ptr::MemBuffer
+
+struct Pair {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+struct Cell {
+    word: u256,
+}
+
+impl Cell {
+    fn get_mut(mut self) -> Option<mut u256> {
+        Option::Some(mut self.word)
+    }
+}
+
+fn per_component(_ p: mut Pair) -> u256 {
+    match p {
+        Pair { ref a, mut b, .. } => {
+            b = a + p.c
+            a
+        }
+    }
+}
+
+fn bump(_ o: mut Option<u256>) {
+    match o {
+        Option::Some(mut v) => v += 1
+        Option::None => {}
+    }
+}
+
+fn bump_cell(_ cell: mut Cell) {
+    match cell.get_mut() {
+        Option::Some(mut v) => v += 10
+        Option::None => {}
+    }
+}
+
+fn first(_ o: Option<u256>) -> u256 {
+    let Option::Some(ref x) = o else {
+        return 0
+    }
+    x
+}
+
+fn take(_ x: mut Option<MemBuffer>) -> Option<MemBuffer> {
+    let v = x
+    x = Option::None
+    v
+}
+
+fn len_of(_ o: own Option<MemBuffer>) -> u256 {
+    match o {
+        Option::Some(buf) => buf.len() as u256
+        Option::None => 0
+    }
+}
+
+fn add_one(var _ x: own u256) -> u256 {
+    x += 1
+    x
+}
+
+#[test]
+fn components_bind_where_they_lie() {
+    var p = Pair { a: 2, b: 0, c: 5 }
+    assert!(per_component(mut p) == 2)
+    assert!(p.b == 7 && p.c == 5)
+
+    var o = Option::Some(41)
+    bump(mut o)
+    assert!(first(o) == 42)
+
+    var cell = Cell { word: 1 }
+    bump_cell(mut cell)
+    assert!(cell.word == 11)
+}
+
+#[test]
+fn moves_and_copies() {
+    var held = Option::Some(MemBuffer::alloc(3))
+    let taken = take(mut held)
+    assert!(len_of(taken) == 3)
+    assert!(len_of(held) == 0)
+
+    let words: [u256; 3] = [1, 2, 3]
+    var total: u256 = 0
+    for var word in words {
+        word += 1
+        total += word
+    }
+    assert!(total == 9)
+    assert!(words[0] == 1)
+    assert!(add_one(4) == 5)
+}
+
+#[test]
+fn items_choose_the_traversal() {
+    var xs: [u256; 4] = [1, 2, 3, 4]
+    for mut x in xs {
+        x *= 2
+    }
+    for (i, mut x) in xs.enumerate().take(3) {
+        x += i as u256
+    }
+    assert!(xs[0] == 2 && xs[1] == 5 && xs[2] == 8 && xs[3] == 8)
+}

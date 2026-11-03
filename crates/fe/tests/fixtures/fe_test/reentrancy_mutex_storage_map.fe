@@ -25,7 +25,7 @@ pub contract A uses (ctx: Ctx, call: mut Call) {
         Start { b, user } -> u256 uses (ctx, mut call) {
             let self_addr = ctx.address()
             let gas = 150000
-            let value = 0
+            let value = Wei::zero()
 
             // this calls B::Enter -> A::Callback -> B::Protected
             let _ = call.call(addr: b, gas, value, message: BMsg::Enter { a: self_addr, user: user })
@@ -39,7 +39,7 @@ pub contract A uses (ctx: Ctx, call: mut Call) {
             call.call(
                 addr: b,
                 gas: 150000,
-                value: 0,
+                value: Wei::zero(),
                 message: BMsg::Protected { user: user },
             )
         }
@@ -52,37 +52,31 @@ pub contract B {
     recv BMsg {
         Enter { a, user } -> u256 uses (mut guarded_balances, ctx: Ctx, call: mut Call) {
             guarded_balances.lock()
-            let pre = guarded_balances.peek().get(key: user)
+            // Each view of the guarded map ends before the call.
+            let pre = guarded_balances.value().get(key: user)
             call.call(
                 addr: a,
                 gas: 150000,
-                value: 0,
+                value: Wei::zero(),
                 message: AMsg::Callback { b: ctx.address(), user: user },
             )
-            let post = guarded_balances.peek().get(key: user)
+            let post = guarded_balances.value().get(key: user)
             assert!(post == pre)
             guarded_balances.unlock()
             post
         }
 
         Protected { user } -> u256 uses (mut guarded_balances) {
-            let mut result = guarded_balances.peek().get(key: user)
-            let mut did_lock = false
-            match guarded_balances.try_lock() {
-                Option::Some(mut balances) => {
-                    result = balances.get(key: user)
-                    did_lock = true
-                }
-                Option::None => ()
-            }
-            if did_lock {
+            let locked = guarded_balances.try_lock()
+            let result = guarded_balances.value().get(key: user)
+            if locked {
                 guarded_balances.unlock()
             }
             result
         }
 
         Get { user } -> u256 uses (guarded_balances) {
-            guarded_balances.peek().get(key: user)
+            guarded_balances.value().get(key: user)
         }
 
         IsLocked -> bool uses (guarded_balances) {
@@ -100,14 +94,14 @@ pub contract B {
 
 #[test]
 fn test_reentrancy_guard_mutex_storage_map() uses (cr: mut Create, evm: mut Evm) {
-    let a = cr.create2<A>(value: 0, args: (), salt: 11)
-    let b = cr.create2<B>(value: 0, args: (), salt: 12)
-    assert!(a.inner != 0)
-    assert!(b.inner != 0)
+    let a = cr.create2<A>(value: Wei::zero(), args: (), salt: 11)
+    let b = cr.create2<B>(value: Wei::zero(), args: (), salt: 12)
+    assert!(a.word() != 0)
+    assert!(b.word() != 0)
 
-    let user = Address { inner: 0x1111 }
+    let user = Address::new(0x1111)
     let gas = 200000
-    let value = 0
+    let value = Wei::zero()
 
     // lock state starts clear
     let initially_locked = evm.call(addr: b, gas, value, message: BMsg::IsLocked {})

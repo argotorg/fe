@@ -18,7 +18,7 @@ struct BoundedStruct<T> where T: Clone { value: T }
 
 // Enum with where clause
 enum BoundedEnum<T> where T: Clone {
-    Some(T,),
+    Some(T),
     None,
 }
 

@@ -1,0 +1,30 @@
+use core::marker::{Pinned, Storage}
+use core::ptr::{self, MemArray, StorPtr, TStorPtr}
+use std::evm::{StorageMap, TSlot}
+
+// A memory pointer's target lies in memory, where a pinned type never is: a
+// type holding one to a pinned type is state-only too.
+struct SCell {
+    pub v: u256,
+}
+
+impl Pinned for SCell {
+    type Space = Storage
+}
+
+// Rejected: each array would hold its pinned elements in memory.
+fn cells(_ cells: own MemArray<SCell>) {}
+
+fn slots(_ slots: own MemArray<TSlot<u256>>) {}
+
+fn maps(_ maps: own MemArray<StorageMap<u256, u256>>) {}
+
+// Rejected: a memory pointer to a pinned type.
+fn cell_pointer(_ words: MemArray<u256>) {
+    let _p = ptr::cast<u256, SCell>(words.ptr())
+}
+
+// Accepted: storage and transient pointers point into state.
+fn state_pointers(_ slot: u256) -> (StorPtr<SCell>, TStorPtr<TSlot<u256>>) {
+    (slot as StorPtr<SCell>, slot as TStorPtr<TSlot<u256>>)
+}

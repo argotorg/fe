@@ -185,18 +185,22 @@ impl AccessControl {
     pub fn new() -> Self {
         AccessControl { roles: Map::new() }
     }
+
     pub fn has_role(self, role: u256, account: Address) -> bool {
         self.roles[(role, account)]
     }
+
     pub fn require(self, role: u256) uses (ctx: Ctx) {
         assert!(
             self.roles[(role, ctx.caller())],
             "access denied: missing role",
         )
     }
+
     pub fn grant(mut self, role: u256, to: Address) {
         self.roles[(role, to)] = true
     }
+
     pub fn revoke(mut self, role: u256, from: Address) {
         self.roles[(role, from)] = false
     }

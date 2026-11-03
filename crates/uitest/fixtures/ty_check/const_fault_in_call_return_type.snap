@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_fault_in_call_return_type.fe
+---
+error[8-0096]: arithmetic overflow in const context
+   ┌─ const_fault_in_call_return_type.fe:24:5
+   │
+ 5 │ fn shrink<const N: usize>() -> S<{ N - 5 }> {
+   │                                    ----- checked arithmetic overflowed during const evaluation
+   ·
+24 │     shrink<2>()
+   │     ^^^^^^^^^^^ in the return type of this call
+
+error[8-0096]: arithmetic overflow in const context
+   ┌─ const_fault_in_call_return_type.fe:28:5
+   │
+ 9 │ fn shrink_inferred<const N: usize>(_ s: S<N>) -> S<{ N - 5 }> {
+   │                                                      ----- checked arithmetic overflowed during const evaluation
+   ·
+28 │     shrink_inferred(S<2> {})
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^ in the return type of this call
+
+error[8-0096]: division by zero in const context
+   ┌─ const_fault_in_call_return_type.fe:32:5
+   │
+13 │ fn divide<const N: usize>() -> S<{ 10 / N }> {
+   │                                    ------ cannot divide by zero
+   ·
+32 │     divide<0>()
+   │     ^^^^^^^^^^^ in the return type of this call
+
+error[8-0096]: arithmetic overflow in const context
+   ┌─ const_fault_in_call_return_type.fe:36:5
+   │
+18 │     fn shrink_method(self) -> S<{ N - 5 }> {
+   │                                   ----- checked arithmetic overflowed during const evaluation
+   ·
+36 │     s.shrink_method()
+   │     ^^^^^^^^^^^^^^^^^ in the return type of this call

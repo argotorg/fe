@@ -25,8 +25,7 @@ completions:
   - Decode (Interface)
   - Default (Interface)
   - Drawable (Interface)
-  - DynArrayAccess (Interface)
-  - DynVec (Struct)
+  - Duration (Struct)
   - Encode (Interface)
   - Err (EnumMember)
   - ErrorVariant (Interface)
@@ -50,23 +49,26 @@ completions:
   - Panic (Struct)
   - Point (Struct)
   - Result (Enum)
+  - Snapshot (Interface)
   - Sol (Struct)
   - Some (EnumMember)
   - StorageMap (Struct)
   - Text (Class)
+  - Timestamp (Struct)
   - UnsignedAbs (Interface)
   - Vec (Class)
+  - Wei (Struct)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
-  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *<T>) -> *<u8>]
-  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
+  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *T) -> *u8]
+  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *T) -> *U]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - import_test (Module) -> "import_test::"
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
-  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *<T>, count: u256) -> *<T>]
-  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *<T>, offset: u256) -> *<T>]
+  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *T, count: usize) -> *T]
+  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *T, offset: usize) -> *T]
   - other_stuff (Module) -> "other_stuff::"
   - panic (Function) -> "panic()$0" [fn panic() -> !]
   - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
@@ -74,6 +76,7 @@ completions:
   - self (Variable) [self: Point]
   - shadow_test (Module) -> "shadow_test::"
   - sol (Function) -> "sol(${1:sig})$0" [fn sol(sig: T) -> u32]
+  - sum_pair (Function) -> "sum_pair(${1:arg0})$0" [fn sum_pair(arg0: (i32, i32)) -> i32]
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
   - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
   - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
@@ -106,7 +109,7 @@ note:
 completions:
   - Address (Struct)
   - Bytes (Struct)
-  - DynVec (Struct)
+  - Duration (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
@@ -125,7 +128,9 @@ completions:
   - Sol (Struct)
   - StorageMap (Struct)
   - Text (Class)
+  - Timestamp (Struct)
   - Vec (Class)
+  - Wei (Struct)
 
 note: 
    ┌─ completion.fe:63:18
@@ -140,19 +145,20 @@ completions:
   - Some (EnumMember)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
-  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *<T>) -> *<u8>]
-  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
+  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *T) -> *u8]
+  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *T) -> *U]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
-  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *<T>, count: u256) -> *<T>]
-  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *<T>, offset: u256) -> *<T>]
+  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *T, count: usize) -> *T]
+  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *T, offset: usize) -> *T]
   - panic (Function) -> "panic()$0" [fn panic() -> !]
   - result (Variable) [result: _]
   - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
   - revert_error (Function) -> "revert_error(${1:error})$0" [fn revert_error(error: T) -> !]
   - sol (Function) -> "sol(${1:sig})$0" [fn sol(sig: T) -> u32]
+  - sum_pair (Function) -> "sum_pair(${1:arg0})$0" [fn sum_pair(arg0: (i32, i32)) -> i32]
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
   - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
   - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
@@ -183,7 +189,7 @@ note:
 completions:
   - Address (Struct)
   - Bytes (Struct)
-  - DynVec (Struct)
+  - Duration (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
@@ -202,7 +208,9 @@ completions:
   - Sol (Struct)
   - StorageMap (Struct)
   - Text (Class)
+  - Timestamp (Struct)
   - Vec (Class)
+  - Wei (Struct)
 
 note: 
    ┌─ completion.fe:78:13
@@ -217,20 +225,21 @@ completions:
   - Some (EnumMember)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
-  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *<T>) -> *<u8>]
-  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
+  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *T) -> *u8]
+  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *T) -> *U]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - local_var (Variable) [local_var: {integer}]
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
-  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *<T>, count: u256) -> *<T>]
-  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *<T>, offset: u256) -> *<T>]
+  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *T, count: usize) -> *T]
+  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *T, offset: usize) -> *T]
   - panic (Function) -> "panic()$0" [fn panic() -> !]
   - param (Variable) [param: i32]
   - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
   - revert_error (Function) -> "revert_error(${1:error})$0" [fn revert_error(error: T) -> !]
   - sol (Function) -> "sol(${1:sig})$0" [fn sol(sig: T) -> u32]
+  - sum_pair (Function) -> "sum_pair(${1:arg0})$0" [fn sum_pair(arg0: (i32, i32)) -> i32]
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
   - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
   - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
@@ -250,7 +259,7 @@ note:
 completions:
   - Address (Struct)
   - Bytes (Struct)
-  - DynVec (Struct)
+  - Duration (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
   - Helper (Struct)
@@ -267,7 +276,9 @@ completions:
   - Sol (Struct)
   - StorageMap (Struct)
   - Text (Class)
+  - Timestamp (Struct)
   - Vec (Class)
+  - Wei (Struct)
 
 note: 
     ┌─ completion.fe:107:16
@@ -278,7 +289,7 @@ note:
 completions:
   - Address (Struct)
   - Bytes (Struct)
-  - DynVec (Struct)
+  - Duration (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+104:use utils::Helpable}
@@ -297,4 +308,89 @@ completions:
   - Sol (Struct)
   - StorageMap (Struct)
   - Text (Class)
+  - Timestamp (Struct)
   - Vec (Class)
+  - Wei (Struct)
+
+note: 
+    ┌─ completion.fe:113:5
+    │
+113 │     
+    │     ^ cursor 10
+
+completions:
+  - Abi (Interface)
+  - AbiDecoder (Interface)
+  - AbiSize (Interface)
+  - Abs (Interface)
+  - Address (Struct)
+  - Bounded (Interface)
+  - Bytes (Struct)
+  - Call (Interface)
+  - Clone (Interface)
+  - Copy (Interface)
+  - Create (Interface)
+  - Ctx (Interface)
+  - Decode (Interface)
+  - Default (Interface)
+  - Drawable (Interface)
+  - Duration (Struct)
+  - Encode (Interface)
+  - Err (EnumMember)
+  - ErrorVariant (Interface)
+  - Evm (Struct)
+  - FixedMemBuffer (Struct)
+  - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
+  - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
+  - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
+  - IntDowncast (Interface)
+  - Log (Interface)
+  - MemArray (Struct)
+  - MemBuffer (Struct)
+  - MemSlice (Struct)
+  - MemSpan (Class)
+  - MemVec (Struct)
+  - MsgVariant (Interface)
+  - None (EnumMember)
+  - Ok (EnumMember)
+  - Option (Enum)
+  - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
+  - Panic (Struct)
+  - Point (Struct)
+  - Result (Enum)
+  - Snapshot (Interface)
+  - Sol (Struct)
+  - Some (EnumMember)
+  - StorageMap (Struct)
+  - Text (Class)
+  - Timestamp (Struct)
+  - UnsignedAbs (Interface)
+  - Vec (Class)
+  - Wei (Struct)
+  - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
+  - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
+  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *T) -> *u8]
+  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *T) -> *U]
+  - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
+  - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
+  - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
+  - import_test (Module) -> "import_test::"
+  - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
+  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *T, count: usize) -> *T]
+  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *T, offset: usize) -> *T]
+  - other_stuff (Module) -> "other_stuff::"
+  - panic (Function) -> "panic()$0" [fn panic() -> !]
+  - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
+  - revert_error (Function) -> "revert_error(${1:error})$0" [fn revert_error(error: T) -> !]
+  - shadow_test (Module) -> "shadow_test::"
+  - sol (Function) -> "sol(${1:sig})$0" [fn sol(sig: T) -> u32]
+  - sum_pair (Function) -> "sum_pair(${1:arg0})$0" [fn sum_pair(arg0: (i32, i32)) -> i32]
+  - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
+  - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
+  - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
+  - test_path_completion (Function) -> "test_path_completion()$0" [fn test_path_completion()]
+  - test_return_type (Function) -> "test_return_type()$0" [fn test_return_type() -> invalid(PathResolutionFailed(_))]
+  - test_shadowing (Function) -> "test_shadowing()$0" [use shadow_test::test_shadowing [fn test_shadowing()]] {+0:use shadow_test::test_shadowing}
+  - test_type_annotation (Function) -> "test_type_annotation()$0" [fn test_type_annotation()]
+  - todo (Function) -> "todo()$0" [fn todo() -> !]
+  - utils (Module) -> "utils::"

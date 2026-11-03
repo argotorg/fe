@@ -1,0 +1,95 @@
+// Recursion that grows its generic arguments makes a new instance at every
+// call. A call whose instance's arguments nest more than 64 levels deep, or
+// have more than 65,536 types as trees, is rejected.
+struct Wrap<T> {
+    t: T,
+}
+
+impl<T: Copy> Copy for Wrap<T> {}
+
+// Rejected: the argument doubles at each call.
+fn grow<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { 1 + grow((x, x), n - 1) }
+}
+
+// Rejected: the argument is wrapped at each call.
+fn deepen<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { 1 + deepen(Wrap { t: x }, n - 1) }
+}
+
+// Rejected: two functions grow it between them.
+fn ping<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { pong((x, 1 as u256), n - 1) }
+}
+
+fn pong<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { ping(x, n - 1) }
+}
+
+// Rejected: a blanket implementation grows it through its own method.
+trait Grow {
+    fn grow(self, _ n: u256) -> u256
+}
+
+impl<T: Copy> Grow for T {
+    fn grow(self, _ n: u256) -> u256 {
+        if n == 0 { 0 } else { 1 + (Wrap { t: self }).grow(n - 1) }
+    }
+}
+
+// Accepted: recursion with the same arguments, and a finite chain of
+// growing calls.
+fn same<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { 1 + same(x, n - 1) }
+}
+
+fn depth2<T: Copy>(_ x: T) -> u256 {
+    depth1((x, x))
+}
+
+fn depth1<T: Copy>(_ x: T) -> u256 {
+    1
+}
+
+// Rejected: two calls grow it in different ways, so exponentially many
+// instances stay within the limits. Rejection follows one chain to the limit.
+fn branch<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { branch((x, 1 as u256), n - 1) + branch((1 as u256, x), n - 1) }
+}
+
+// Rejected: two functions grow it two ways between them.
+fn tick<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { tock((x, 1 as u256), n - 1) + tock((1 as u256, x), n - 1) }
+}
+
+fn tock<T: Copy>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { tick(x, n - 1) }
+}
+
+// Rejected at the growing call, not at the caller's.
+fn calls_branch() -> u256 {
+    branch(1 as u256, 2)
+}
+
+// Accepted: deeply nested arguments that do not grow. Depth counts nesting
+// levels, so 32 levels of pairs and 6 levels of 12-tuples are well within it.
+fn id<T>(_ x: own T) -> T {
+    x
+}
+
+fn nested() {
+    let pairs: ((((((((((((((((((((((((((((((((u256, u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8), u8) = ((((((((((((((((((((((((((((((((1, 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0), 0)
+    let _ = id(pairs)
+    let twelves: ((((((u256, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8), u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8), u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8), u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8), u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8), u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8) = ((((((1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let _ = id(twelves)
+}
+
+// Rejected: a const argument that grows at every call makes a new instance
+// at each, as a growing type does.
+fn count_up<const N: usize>(_ x: u256) -> u256 {
+    if x == 0 { N as u256 } else { count_up<{ N + 1 }>(x - 1) }
+}
+
+fn calls_count_up() -> u256 {
+    count_up<0>(3)
+}

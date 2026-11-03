@@ -13,27 +13,27 @@ struct Pt {
 }
 
 // Array: projected read, whole reassignment, and returned.
-pub fn permute(mut _ s: own [u256; 3]) -> [u256; 3] {
+pub fn permute(var _ s: own [u256; 3]) -> [u256; 3] {
     let x: u256 = s[0]
     s = [x, s[1], s[2]]
     s
 }
 
 // Struct: field read, whole reassignment, and returned.
-pub fn bump(mut _ p: own Pt) -> Pt {
+pub fn bump(var _ p: own Pt) -> Pt {
     let old_x: u256 = p.x
     p = Pt { x: old_x + 1, y: p.y }
     p
 }
 
 // Index mutation only (no whole reassignment) still needs owned storage.
-pub fn set_first(mut _ s: own [u256; 3], _ v: u256) -> [u256; 3] {
+pub fn set_first(var _ s: own [u256; 3], _ v: u256) -> [u256; 3] {
     s[0] = v
     s
 }
 
 // Nested aggregate owned parameter.
-pub fn rotate(mut _ s: own [[u256; 2]; 2]) -> [[u256; 2]; 2] {
+pub fn rotate(var _ s: own [[u256; 2]; 2]) -> [[u256; 2]; 2] {
     let head: [u256; 2] = s[0]
     s = [s[1], head]
     s

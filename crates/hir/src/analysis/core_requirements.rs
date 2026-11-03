@@ -13,7 +13,6 @@ use crate::{
 pub enum CoreRequirementKind {
     Trait,
     TraitMethod,
-    Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,9 +42,6 @@ impl std::fmt::Display for MissingCoreRequirement {
                     "missing required core trait method `{}` on `{}`",
                     method, self.path
                 )
-            }
-            CoreRequirementKind::Type => {
-                write!(f, "missing required core type `{}`", self.path)
             }
         }
     }
@@ -87,14 +83,8 @@ const CORE_OP_REQUIREMENTS: &[(&str, &str)] = &[
 
 const CORE_TRAIT_REQUIREMENTS: &[&str] = &[
     "core::EffectRef",
-    "core::EffectRefMut",
     "core::message::MsgVariant",
     "core::abi::Decode",
-];
-
-const STD_TYPE_REQUIREMENTS: &[&str] = &[
-    "std::evm::effects::StorPtr",
-    "std::evm::effects::CalldataPtr",
 ];
 
 pub fn check_core_requirements<'db>(
@@ -141,25 +131,6 @@ pub fn check_core_requirements<'db>(
     missing
 }
 
-pub fn check_std_type_requirements<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-) -> Vec<MissingCoreRequirement> {
-    let mut missing = Vec::new();
-
-    for &path in STD_TYPE_REQUIREMENTS {
-        if resolve_type_in_scope(db, scope, path).is_none() {
-            missing.push(MissingCoreRequirement {
-                path: path.to_string(),
-                kind: CoreRequirementKind::Type,
-                detail: None,
-            });
-        }
-    }
-
-    missing
-}
-
 fn resolve_trait_in_scope<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -187,24 +158,4 @@ fn resolve_trait_in_scope<'db>(
     };
     let trait_def = nameres.trait_()?;
     Some(trait_def)
-}
-
-fn resolve_type_in_scope<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    path: &str,
-) -> Option<()> {
-    let mut segments = path.split("::");
-    let root = segments.next()?;
-    let mut path_id = lib_root_path(db, scope, root);
-
-    for segment in segments {
-        path_id = path_id.push_str(db, segment);
-    }
-
-    let assumptions = PredicateListId::empty_list(db);
-    match resolve_path(db, path_id, scope, assumptions, true).ok()? {
-        PathRes::Ty(_) | PathRes::TyAlias(_, _) => Some(()),
-        _ => None,
-    }
 }

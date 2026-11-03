@@ -2,7 +2,7 @@ extern {
     fn todo() -> !
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 
 struct S {}
 impl S { fn foo(self) -> i32 { 0 } }

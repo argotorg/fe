@@ -1,0 +1,17 @@
+struct S {}
+
+impl S {
+    // A comment before a method with modifiers.
+    pub fn h(self) -> Option<u256> { Option::None }
+
+    // Another, before an unsafe one.
+    pub unsafe fn u(self) -> u256 { 1 }
+
+    // And one with a where clause.
+    pub fn w(self) -> u256 where u256: Copy { 2 }
+}
+
+trait T {
+    // A trait method with a modifier.
+    unsafe fn t(self) -> u256
+}

@@ -1,0 +1,3 @@
+trait Call<shape A> {}
+
+fn apply<shape A, T: Call<A>, const N: usize>(_ t: T) {}

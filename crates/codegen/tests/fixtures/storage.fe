@@ -1,5 +1,6 @@
 use core::ptr
-use std::evm::{Evm, RawMem, RawOps, RawStorage, StorPtr}
+use core::abi::store_word
+use std::evm::{Evm, RawOps, RawStorage, StorPtr}
 
 enum User {
     Alice,
@@ -29,7 +30,7 @@ fn transfer_result_code(res: TransferResult) -> u256 {
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    ops.mstore(addr: data.ptr(), value)
+    unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
 
@@ -118,7 +119,7 @@ fn transfer_from_bob(amount: u256) -> TransferResult
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    let mut dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -130,44 +131,46 @@ fn init() uses (evm: mut Evm) {
 
 #[contract_runtime(Coin)]
 fn runtime() uses (evm: mut Evm) {
-    let mut store: StorPtr<CoinStore> = evm.stor_ptr(0)
-    let mut supply: StorPtr<TotalSupply> = evm.stor_ptr(2)
-    with (store, supply, RawOps = evm) {
-        let selector = evm.calldataload(0) >> 224
-        match selector {
-            0xab7ccc1c => {
-                // credit(uint256,uint256)
-                let who_raw = evm.calldataload(4)
-                let amount = evm.calldataload(36)
-                let new_balance = match who_raw {
-                    0 => credit_alice(amount)
-                    _ => credit_bob(amount)
+    let store = 0 as u256 as StorPtr<CoinStore>
+    let supply = 2 as u256 as StorPtr<TotalSupply>
+    unsafe {
+        with (mut *store, mut *supply, RawOps = evm) {
+            let selector = evm.calldataload(0) >> 224
+            match selector {
+                0xab7ccc1c => {
+                    // credit(uint256,uint256)
+                    let who_raw = evm.calldataload(4)
+                    let amount = evm.calldataload(36)
+                    let new_balance = match who_raw {
+                        0 => credit_alice(amount)
+                        _ => credit_bob(amount)
+                    }
+                    abi_encode(value: new_balance)
                 }
-                abi_encode(value: new_balance)
-            }
-            0x6c65aae5 => {
-                // balance_of(uint256)
-                let who_raw = evm.calldataload(4)
-                let value = balance_of_raw(who_raw)
-                abi_encode(value: value)
-            }
-            0x0cf79e0a => {
-                // transfer(uint256,uint256)
-                let who_raw = evm.calldataload(4)
-                let amount = evm.calldataload(36)
-                let res = match who_raw {
-                    0 => transfer_from_alice(amount)
-                    _ => transfer_from_bob(amount)
+                0x6c65aae5 => {
+                    // balance_of(uint256)
+                    let who_raw = evm.calldataload(4)
+                    let value = balance_of_raw(who_raw)
+                    abi_encode(value: value)
                 }
-                let code = transfer_result_code(res: res)
-                abi_encode(value: code)
+                0x0cf79e0a => {
+                    // transfer(uint256,uint256)
+                    let who_raw = evm.calldataload(4)
+                    let amount = evm.calldataload(36)
+                    let res = match who_raw {
+                        0 => transfer_from_alice(amount)
+                        _ => transfer_from_bob(amount)
+                    }
+                    let code = transfer_result_code(res: res)
+                    abi_encode(value: code)
+                }
+                0x3940e9ee => {
+                    // total_supply()
+                    let supply = total_supply()
+                    abi_encode(value: supply)
+                }
+                _ => evm.return_data(data: ptr::MemSpan::empty())
             }
-            0x3940e9ee => {
-                // total_supply()
-                let supply = total_supply()
-                abi_encode(value: supply)
-            }
-            _ => evm.return_data(data: ptr::MemSpan::empty())
         }
     }
 }

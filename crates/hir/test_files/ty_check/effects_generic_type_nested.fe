@@ -36,7 +36,7 @@ pub fn nested_storage() -> (u8, u16, u8) {
 }
 
 pub fn mutable_storage() {
-    let mut storage = Storage<u8> { value: 10 }
+    var storage = Storage<u8> { value: 10 }
     with (Storage<u8> = storage) {
         write_u8(val: 20)
         let _ = read_u8()

@@ -1,0 +1,681 @@
+// The draft-13 acceptance list ("Acceptance tests"), numbered as the spec
+// lists it, for the cases the access/session checker decides. Type-level
+// cases are in `ty_check/acceptance.fe` and run-time results in
+// `fe_test/acceptance.fe`.
+use core::iter::{Collection, Identity}
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::{Address, Call, Evm, RawStorage, StorageMap}
+
+fn ping() uses (call: mut Call) {
+    var output = MemBuffer::empty()
+    let outcome = call.raw_call(
+        addr: Address::new(1), gas: 100000, value: Wei::zero(),
+        args: MemSpan::empty(), ret: mut output,
+    )
+}
+
+struct Cell { v: u256 }
+
+impl Cell {
+    fn direct(mut self) -> mut u256 {
+        mut self.v
+    }
+
+    fn written_back(mut self) -> mut u256 {
+        var tmp = self.v
+        yield mut tmp
+        self.v = tmp
+    }
+}
+
+// 1. Accepted: whether the body yields directly or writes back in a slide,
+// the caller uses the grant, then the receiver.
+fn case01_direct() -> u256 {
+    var c = Cell { v: 1 }
+    let x = mut c.direct()
+    x += 1
+    c.v
+}
+
+fn case01_slide() -> u256 {
+    var c = Cell { v: 1 }
+    let x = mut c.written_back()
+    x += 1
+    c.v
+}
+
+// 1. Rejected either way: the session reserves the receiver while its grant
+// is open.
+fn case01_direct_conflict() -> u256 {
+    var c = Cell { v: 1 }
+    let x = mut c.direct()
+    let v = c.v
+    x += 1
+    v
+}
+
+fn case01_slide_conflict() -> u256 {
+    var c = Cell { v: 1 }
+    let x = mut c.written_back()
+    let v = c.v
+    x += 1
+    v
+}
+
+fn counter() -> mut u256 {
+    var n: u256 = 0
+    mut n
+}
+
+// 2. Accepted: a no-argument projection yields a mutable local.
+fn case02_session_owned() -> u256 {
+    let c = mut counter()
+    c += 1
+    c
+}
+
+// 2. Rejected: a view descendant blocks writes through the parent grant.
+fn case02_view_blocks_write() -> u256 {
+    let c = mut counter()
+    let r = ref c
+    c = 1
+    r
+}
+
+struct Pair { a: u256, b: u256 }
+
+impl Pair {
+    fn split(mut self) -> (mut u256, mut u256) {
+        (mut self.a, mut self.b)
+    }
+
+    // 3. Rejected: `(mut x, mut x)` yields one place twice.
+    fn aliased(mut self) -> (mut u256, mut u256) {
+        (mut self.a, mut self.a)
+    }
+}
+
+// 3. Accepted: the components of a structurally disjoint split are used
+// independently.
+fn case03_split() -> u256 {
+    var p = Pair { a: 1, b: 2 }
+    let (mut a, mut b) = p.split()
+    a = 3
+    b = 4
+    p.a + p.b
+}
+
+fn inner(_ c: mut Cell) -> mut u256 {
+    mut c.v
+}
+
+fn outer(_ c: mut Cell) -> mut u256 {
+    let x = mut inner(mut c)
+    yield mut x
+    x += 1
+}
+
+// 4. Accepted: an outer slide uses the inner grant it retains.
+fn case04_retained_inner_grant() -> u256 {
+    var c = Cell { v: 1 }
+    let x = mut outer(mut c)
+    x = 5
+    c.v
+}
+
+// 5. Accepted: two independent sessions end out of creation order.
+fn case05_out_of_order() -> u256 {
+    var p = Cell { v: 1 }
+    var q = Cell { v: 2 }
+    let a = mut p.direct()
+    let b = mut q.direct()
+    a = 3
+    b = 4
+    p.v + q.v
+}
+
+fn ping_evm() uses (evm: mut Evm) {
+    var output = MemBuffer::empty()
+    let outcome = evm.raw_call(
+        addr: Address::new(1), gas: 100000, value: Wei::zero(),
+        args: MemSpan::empty(), ret: mut output,
+    )
+}
+
+fn touch_raw() uses (storage: mut RawStorage) {}
+
+// 6. Rejected: an external call hidden behind an ordinary helper whose
+// effects permit it, while a caller storage access is open.
+pub contract Case06HiddenCall {
+    mut value: u256,
+    init() uses (mut value, evm: mut Evm) {
+        let held = mut value
+        ping_evm()
+        held = 1
+    }
+}
+
+// 7. Rejected: a per-field access against a containing `RawStorage` domain.
+pub contract Case07RawStorage {
+    mut value: u256,
+    init() uses (mut value, storage: mut RawStorage) {
+        let held = mut value
+        touch_raw()
+        held = 1
+    }
+}
+
+struct Account { balance: u256 }
+struct Totals { sum: u256, count: u256 }
+
+fn add(_ acc: own Totals, _ account: Account) -> Totals {
+    Totals { sum: acc.sum + account.balance, count: acc.count + 1 }
+}
+
+// 9. Accepted: a fold with a non-`Copy` owned accumulator and a non-`Copy`
+// projected item.
+fn case09_fold(_ accounts: [Account; 2]) -> Totals {
+    var acc = Totals { sum: 0, count: 0 }
+    for ref account in accounts {
+        acc = add(acc, account)
+    }
+    acc
+}
+
+// 10. Accepted: a reentrant call between closed storage accesses.
+pub contract Case10CallBetween {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        let before = mut value
+        before = 1
+        ping()
+        let after = mut value
+        after += 1
+    }
+}
+
+enum Choice {
+    Item(Cell),
+    Empty,
+}
+
+struct Slot { c: Choice }
+
+impl Slot {
+    // 12. Rejected: a `mut` enum is yielded while a payload view is retained
+    // for the slide; the caller could replace the enum under it.
+    fn case12_payload_view(mut self) -> mut Choice {
+        let view = ref self.c
+        yield mut self.c
+        match view {
+            Choice::Item(item) => {
+                let _ = item.v
+            }
+            Choice::Empty => {}
+        }
+    }
+}
+
+// 13. Rejected: an exported referent is uninitialized at the yield.
+fn case13_uninitialized() -> mut u256 {
+    var x: u256
+    yield mut x
+    x = 1
+}
+
+struct Balance { has: bool, amount: u256 }
+
+fn entry(_ b: mut Balance) -> Option<mut u256> {
+    if !b.has {
+        return Option::None
+    }
+    var tmp = b.amount
+    yield Option::Some(mut tmp)
+    b.amount = tmp
+}
+
+// 14. Accepted: an optional storage projection is used before an external
+// call in its successful arm: the session finishes at the grant's last use.
+pub contract Case14OptionalBeforeCall {
+    mut balance: Balance,
+    init() uses (mut balance, call: mut Call) {
+        if let Option::Some(mut b) = entry(mut balance) {
+            b -= 1
+            ping()
+        }
+    }
+}
+
+struct Vault { value: u256 }
+
+fn snapshot(_ v: mut Vault) -> mut u256 {
+    var tmp = v.value
+    yield mut tmp
+    v.value = tmp
+}
+
+fn bump_and_ping(_ x: mut u256) uses (call: mut Call) {
+    x += 1
+    ping()
+}
+
+// 17. Rejected: a function receiving a frame grant performs external
+// interference; the argument does not exempt the call from the parent
+// session's storage reservation.
+pub contract Case17FrameGrant {
+    mut vault: Vault,
+    init() uses (mut vault, call: mut Call) {
+        let x = mut snapshot(mut vault)
+        bump_and_ping(mut x)
+        x += 1
+    }
+}
+
+struct Key { n: u256 }
+
+struct Keyed { len: u256 }
+
+impl Collection for Keyed {
+    uses E = (key: Key)
+    type Cursor = u256
+    type Item = u256
+
+    fn start(self) -> u256 uses E {
+        0
+    }
+
+    fn has(self, _ c: u256) -> bool uses E {
+        c < self.len
+    }
+
+    fn next(self, _ c: u256) -> u256 uses E {
+        c + 1
+    }
+
+    fn at(self, _ c: u256) -> ref u256 uses E {
+        let item = key.n + c
+        ref item
+    }
+}
+
+// 19. Accepted: `Identity` over an effectful base declares the base's
+// effects, which the loop's caller provides.
+fn case19_identity(_ xs: Keyed) -> u256 uses (key: Key) {
+    let d = Identity {}
+    var sum = 0
+    for x in xs.by(d) {
+        sum += x
+    }
+    sum
+}
+
+fn ramp_and_slide_call() -> mut u256 uses (call: mut Call) {
+    var n: u256 = 0
+    ping()
+    yield mut n
+    ping()
+}
+
+fn helper_call() uses (call: mut Call) {
+    ping()
+}
+
+fn through_helper() -> mut u256 uses (call: mut Call) {
+    var n: u256 = 0
+    helper_call()
+    yield mut n
+    helper_call()
+}
+
+fn with_loan() -> ref u256 uses (vault: mut Vault, call: mut Call) {
+    let held = mut vault.value
+    ping()
+    held += 1
+    let n: u256 = 0
+    yield ref n
+}
+
+// 22. Accepted: an external call from a projection's own ramp or slide,
+// directly or through a helper, with only its effect reservation present.
+// (Each session reserves every storage domain until it finishes.)
+pub contract Case22OwnReservation {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        let n = mut ramp_and_slide_call()
+        n += 1
+        let first = n
+        let m = mut through_helper()
+        m += first
+        let total = m
+        value = total
+    }
+}
+
+// 22. Rejected: the same with an outstanding storage data access.
+pub contract Case22OutstandingAccess {
+    mut vault: Vault,
+    init() uses (mut vault, call: mut Call) {
+        let n = with_loan()
+        let _ = n
+    }
+}
+
+// 23. Accepted: `Identity` and `Reversed` forward a storage-yielding base;
+// the elements' result space is the base's, storage here.
+pub contract Case23StorageBase {
+    mut words: [u256; 3],
+    init() uses (mut words) {
+        for mut word in words.reversed() {
+            word += 1
+        }
+        let d = Identity {}
+        for mut word in words.by(d) {
+            word *= 2
+        }
+    }
+}
+
+struct Item { n: u256 }
+
+fn consume(_ item: own Item) {}
+
+// 25. Rejected: `move a[i]; a[j] := v; move a[i]`.
+fn case25_dynamic_moves(_ i: usize, _ j: usize) {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    consume(items[i])
+    items[j] = Item { n: 3 }
+    consume(items[i])
+}
+
+// 25. Accepted: the same through one stable `mut a[i]` access, restored.
+fn case25_stable_access(_ i: usize) -> u256 {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    let slot = mut items[i]
+    let saved = slot
+    slot = Item { n: 3 }
+    consume(saved)
+    items[0].n
+}
+
+struct State { n: u256 }
+
+fn update_state() uses (state: mut State) {
+    state.n += 1
+}
+
+// 27. Rejected: a local provider aliases an outstanding local view; the
+// effect's footprint is the provider's place.
+fn case27_provider_aliases_view() -> u256 {
+    var p = State { n: 0 }
+    let r = ref p
+    with (State = p) {
+        update_state()
+    }
+    r.n
+}
+
+// 27. Accepted: the view ends before the provider is used.
+fn case27_view_closed() -> u256 {
+    var p = State { n: 0 }
+    let r = ref p
+    let before = r.n
+    with (State = p) {
+        update_state()
+    }
+    before + p.n
+}
+
+// 33. Rejected: a read projection of a storage-rooted `Copy` array yields its
+// storage place, like the mutable one, so an external call conflicts with the
+// access a `ref` binding keeps.
+pub contract Case33CopyArraySpace {
+    mut cells: [u256; 4],
+    init() uses (cells, call: mut Call) {
+        let x = ref cells.at(0)
+        ping()
+        assert(x == 0)
+    }
+}
+
+// 33. Rejected: the mutable projection yields the same storage place.
+pub contract Case33CopyArrayMutSpace {
+    mut cells: [u256; 4],
+    init() uses (mut cells, call: mut Call) {
+        let x = mut cells.at(0)
+        ping()
+        x = 1
+    }
+}
+
+fn first(_ xs: [u256; 4]) -> ref u256 {
+    ref xs[0]
+}
+
+// 36. Rejected: a projection over a `Copy` array views it in place, so its
+// session reserves the array until the last use of a `ref` binding.
+fn case36_copy_array_view() -> u256 {
+    var xs: [u256; 4] = [1, 2, 3, 4]
+    let x = ref first(xs)
+    xs[1] = 5
+    x
+}
+
+fn echo(_ n: u256) -> ref u256 {
+    ref n
+}
+
+// 37. Accepted: a scalar is a snapshot, so the result is the session's own
+// copy and the caller may change the original.
+fn case37_scalar_snapshot() -> u256 {
+    var n: u256 = 1
+    let x = echo(n)
+    n = 2
+    x + n
+}
+
+// 29. Accepted: writes through a `mut` parameter and a nested `mut` binding.
+fn case29_writes(_ p: mut Pair) {
+    p.a += 1
+    let h = mut p.b
+    h += 2
+}
+
+// 30. Accepted: two overlapping reads.
+fn case30_reads(_ p: mut Pair) -> u256 {
+    let r = ref p
+    let s = ref p.a
+    r.b + s
+}
+
+// 30. Rejected: an unrelated write against an open read.
+fn case30_write_under_read(_ p: mut Pair) -> u256 {
+    let r = ref p.a
+    p.a = 2
+    r
+}
+
+// 31. Accepted: a stable access resolves its place once, so restoring through
+// it restores the element first named however the index changes.
+fn case31_stable_place() -> u256 {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    var i: usize = 0
+    let slot = mut items[i]
+    i = 1
+    let saved = slot
+    slot = Item { n: 3 }
+    consume(saved)
+    items[i].n
+}
+
+// 34. Accepted: forwarding and reordering the disjoint grants of `pair_mut`.
+fn case34_reordered(_ xs: mut MemArray<u256>, _ i: usize, _ j: usize) -> (mut u256, mut u256) {
+    let (mut a, mut b) = xs.pair_mut(i, j)
+    (mut b, mut a)
+}
+
+// 34. Rejected: duplicating one `mut` grant.
+fn case34_duplicated(_ xs: mut MemArray<u256>, _ i: usize, _ j: usize) -> (mut u256, mut u256) {
+    let (mut a, mut b) = xs.pair_mut(i, j)
+    (mut a, mut a)
+}
+
+fn take(_ v: u256) -> u256 {
+    v
+}
+
+// 35. Accepted: passing a copied referent does not end its source access.
+fn case35_copied_argument(_ p: mut Pair) -> u256 {
+    let x = mut p.a
+    let y = take(x)
+    x += y
+    p.a
+}
+
+fn first_of(_ p: mut Pair) -> mut u256 {
+    mut p.a
+}
+
+fn bump(_ x: mut u256) {
+    x += 1
+}
+
+// 38. Accepted: writes through an input-rooted `mut` grant, directly and
+// through a helper.
+fn case38_grant_writes(_ p: mut Pair) {
+    let x = mut first_of(mut p)
+    x += 1
+    bump(mut x)
+}
+
+// 38. Rejected: an independent access to the reserved owner while the grant
+// is live.
+fn case38_owner_access(_ p: mut Pair) {
+    let x = mut first_of(mut p)
+    p.b = 1
+    x += 1
+}
+
+struct Halves { left: Item, right: Item }
+
+// 39. Rejected: a hole opened on one branch persists past the join, so the
+// access closes with it unrestored.
+fn case39_one_branch(_ flag: bool) -> u256 {
+    var halves = Halves { left: Item { n: 1 }, right: Item { n: 2 } }
+    let h = mut halves
+    if flag {
+        consume(h.left)
+    }
+    h.right.n
+}
+
+// 39. Accepted: restored unconditionally after the join.
+fn case39_restored(_ flag: bool) -> u256 {
+    var halves = Halves { left: Item { n: 1 }, right: Item { n: 2 } }
+    let h = mut halves
+    if flag {
+        consume(h.left)
+    }
+    h.left = Item { n: 5 }
+    h.left.n
+}
+
+// 39. Accepted: replacing the whole referent restores every hole.
+fn case39_replaced(_ flag: bool) -> u256 {
+    var halves = Halves { left: Item { n: 1 }, right: Item { n: 2 } }
+    let h = mut halves
+    if flag {
+        consume(h.left)
+    }
+    h = Halves { left: Item { n: 7 }, right: Item { n: 8 } }
+    h.left.n
+}
+
+fn first_item(_ items: [Item; 2]) -> ref Item {
+    ref items[0]
+}
+
+// 32. The same projection's result lies where its input does: in storage an
+// external call conflicts with it (rejected), in memory it does not.
+pub contract Case32StoragePlacement {
+    mut items: [Item; 2],
+    init() uses (items, call: mut Call) {
+        let x = ref first_item(items)
+        ping()
+        assert(x.n == 0)
+    }
+}
+
+fn case32_memory_placement() uses (call: mut Call) {
+    let items = [Item { n: 1 }, Item { n: 2 }]
+    let x = ref first_item(items)
+    ping()
+    assert(x.n == 1)
+}
+
+struct Ledger {
+    balances: StorageMap<Address, u256>,
+    total: u256,
+}
+
+fn credit(_ m: mut StorageMap<Address, u256>, _ who: Address, _ amount: u256) {
+    m[who] += amount
+}
+
+fn credit_and_reset(_ m: mut StorageMap<Address, u256>, _ who: Address) uses (ledger: mut Ledger) {
+    m[who] += 1
+    ledger.balances[who] = 0
+}
+
+struct Book {
+    owners: StorageMap<u256, Address>,
+    prices: StorageMap<u256, u256>,
+}
+
+impl Book {
+    // Both maps are reached through `self`; the method declares no effects.
+    fn list(mut self, _ id: u256, _ owner: Address, _ price: u256) {
+        self.owners[id] = owner
+        self.prices[id] = price
+    }
+}
+
+// 41. Accepted: a method on a storage struct holding two maps writes both
+// through `mut self` with no `uses` clause.
+pub contract Case41TwoMaps {
+    mut book: Book,
+    init() uses (mut book) {
+        book.list(1, Address::new(2), 3)
+    }
+}
+
+// 44. Accepted: a map passed as a `mut` argument is written through the
+// parameter.
+pub contract Case44Credit {
+    mut ledger: Ledger,
+    init() uses (mut ledger) {
+        credit(mut ledger.balances, Address::new(1), 5)
+        ledger.total += 5
+    }
+}
+
+// 44. Rejected: the caller writes the map while the call holds it, in a later
+// argument or through an effect it provides.
+pub contract Case44WriteDuringCall {
+    mut ledger: Ledger,
+    init() uses (mut ledger) {
+        let who = Address::new(1)
+        credit(mut ledger.balances, who, {
+            ledger.balances[who] = 0
+            5
+        })
+    }
+}
+
+pub contract Case44EffectDuringCall {
+    mut ledger: Ledger,
+    init() uses (mut ledger) {
+        with (mut ledger) {
+            credit_and_reset(mut ledger.balances, Address::new(1))
+        }
+    }
+}

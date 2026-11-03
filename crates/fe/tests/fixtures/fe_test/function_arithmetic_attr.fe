@@ -16,7 +16,7 @@ fn unchecked_add_wraps_u8() {
 #[arithmetic(unchecked)]
 #[test]
 fn unchecked_aug_assign_wraps_u8() {
-    let mut x: u8 = 255
+    var x: u8 = 255
     x += 1
     assert!(x == 0)
 }

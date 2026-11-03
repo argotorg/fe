@@ -1,0 +1,66 @@
+// A trait's const argument may be a path to a constant, as a type's may.
+trait Gate<const W: u256> {
+    fn width(self) -> u256
+}
+
+struct S {}
+
+impl Gate<3> for S {
+    fn width(self) -> u256 {
+        3
+    }
+}
+
+impl Gate<4> for S {
+    fn width(self) -> u256 {
+        4
+    }
+}
+
+const THREE: u256 = 3
+
+const FOUR: u256 = 4
+
+fn width_at_three<T: Gate<THREE>>(_ t: T) -> u256 {
+    t.width()
+}
+
+fn width_at_four<T>(_ t: T) -> u256 where T: Gate<FOUR> {
+    t.width()
+}
+
+enum Mode {
+    Fast,
+    Slow,
+}
+
+trait Run<const M: Mode> {
+    fn run(self) -> u256
+}
+
+impl Run<Mode::Fast> for S {
+    fn run(self) -> u256 {
+        1
+    }
+}
+
+impl Run<Mode::Slow> for S {
+    fn run(self) -> u256 {
+        2
+    }
+}
+
+fn run_slow<T: Run<Mode::Slow>>(_ t: T) -> u256 {
+    t.run()
+}
+
+#[test]
+fn constant_selects_the_impl() {
+    assert(width_at_three(S {}) == 3)
+    assert(width_at_four(S {}) == 4)
+}
+
+#[test]
+fn unit_variant_selects_the_impl() {
+    assert(run_slow(S {}) == 2)
+}

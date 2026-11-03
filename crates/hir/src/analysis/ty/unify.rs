@@ -12,12 +12,16 @@ use super::{
     const_expr::{ConstExpr, ConstExprId},
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
-    ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
+    ty_def::{
+        ApplicableTyProp, ClosureTy, Kind, MAX_INLINE_STRING_BYTES, TyBase, TyData, TyId, TyVar,
+        TyVarSort, inference_keys,
+    },
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::const_ty::{ConstTyData, normalize_const_tys_for_comparison},
+    ty::const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId, normalize_const_tys_for_comparison},
 };
+use crate::core::semantic::EffectRequirementKey;
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;
 
@@ -138,6 +142,69 @@ where
                 self.unify_ty(*ty1_2, *ty2_2)
             }
 
+            // Closure types unify structurally: the same definition with
+            // unifiable component types and row is the same closure. One side
+            // may still carry inference variables from the body checking it,
+            // or in its row's keys, where a method probe instantiates the
+            // row's providers.
+            (
+                TyData::TyBase(TyBase::Closure(closure1)),
+                TyData::TyBase(TyBase::Closure(closure2)),
+            ) => {
+                let db = self.db;
+                let components = |closure: ClosureTy<'db>| {
+                    closure
+                        .parent_args(db)
+                        .iter()
+                        .chain(closure.captures(db))
+                        .copied()
+                        .chain(
+                            closure
+                                .params(db)
+                                .iter()
+                                .flat_map(|param| param.leaves(db))
+                                .map(|(_, ty)| ty),
+                        )
+                        .chain([closure.ret_ty(db)])
+                        .collect::<Vec<_>>()
+                };
+                let (params1, params2) = (closure1.params(db), closure2.params(db));
+                let (lhs, rhs) = (components(*closure1), components(*closure2));
+                let (lhs_row, rhs_row) = (closure1.effects(db), closure2.effects(db));
+                if closure1.def(db) != closure2.def(db)
+                    || params1.len() != params2.len()
+                    || !params1
+                        .iter()
+                        .zip(params2)
+                        .all(|(param1, param2)| param1.same_modes(db, param2))
+                    || lhs.len() != rhs.len()
+                    || lhs_row.len() != rhs_row.len()
+                {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                for (lhs, rhs) in lhs.into_iter().zip(rhs) {
+                    self.unify_ty(lhs, rhs)?;
+                }
+                lhs_row
+                    .iter()
+                    .zip(rhs_row)
+                    .try_for_each(|(lhs, rhs)| match (&lhs.key, &rhs.key) {
+                        (EffectRequirementKey::Type(lhs), EffectRequirementKey::Type(rhs)) => {
+                            self.unify_ty(*lhs, *rhs)
+                        }
+                        (EffectRequirementKey::Trait(lhs), EffectRequirementKey::Trait(rhs)) => {
+                            lhs.unify(self, *rhs)
+                        }
+                        (EffectRequirementKey::Row(lhs), EffectRequirementKey::Row(rhs))
+                            if lhs.row == rhs.row =>
+                        {
+                            lhs.inst.unify(self, rhs.inst)
+                        }
+                        (EffectRequirementKey::Other, EffectRequirementKey::Other) => Ok(()),
+                        _ => Err(UnificationError::TypeMismatch),
+                    })
+            }
+
             (TyData::TyParam(_), TyData::TyParam(_)) | (TyData::TyBase(_), TyData::TyBase(_)) => {
                 if ty1 == ty2 {
                     Ok(())
@@ -181,22 +248,33 @@ where
 
                     (_, ConstTyData::TyVar(var, _)) => self.unify_var_value(var, ty1),
 
-                    (ConstTyData::Hole(..), _) | (_, ConstTyData::Hole(..)) => Ok(()),
+                    _ if const_ty1 == const_ty2 => Ok(()),
 
-                    (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
-                    | (ConstTyData::Value(..), ConstTyData::Value(..))
-                    | (ConstTyData::Description(..), ConstTyData::Description(..))
-                    | (ConstTyData::Abstract(..), ConstTyData::Abstract(..)) => {
-                        if const_ty1 == const_ty2 {
-                            Ok(())
-                        } else {
-                            match (const_ty1.data(self.db), const_ty2.data(self.db)) {
-                                (
-                                    ConstTyData::Abstract(expr1, _),
-                                    ConstTyData::Abstract(expr2, _),
-                                ) => self.unify_const_expr(*expr1, *expr2),
-                                _ => Err(UnificationError::TypeMismatch),
+                    (ConstTyData::Abstract(expr1, _), ConstTyData::Abstract(expr2, _)) => {
+                        self.unify_const_expr(*expr1, *expr2)
+                    }
+
+                    // One deferred body is the same constant under equal
+                    // captures; an identity capture stands for its formals.
+                    (
+                        ConstTyData::UnEvaluated {
+                            body: body1,
+                            capture: capture1,
+                            ..
+                        },
+                        ConstTyData::UnEvaluated {
+                            body: body2,
+                            capture: capture2,
+                            ..
+                        },
+                    ) if body1 == body2 => {
+                        match (capture1.complete(self.db), capture2.complete(self.db)) {
+                            (Some(subst1), Some(subst2)) if subst1.domain() == subst2.domain() => {
+                                subst1.values().iter().zip(subst2.values()).try_for_each(
+                                    |(&value1, &value2)| self.unify_ty(value1, value2),
+                                )
                             }
+                            _ => Err(UnificationError::TypeMismatch),
                         }
                     }
 
@@ -206,7 +284,7 @@ where
             (TyData::AssocTy(a1), TyData::AssocTy(a2)) => {
                 if a1 == a2 {
                     Ok(())
-                } else if a1.name == a2.name {
+                } else if a1.name == a2.name && a1.mode == a2.mode {
                     self.unify(a1.trait_, a2.trait_)
                 } else {
                     Err(UnificationError::TypeMismatch)
@@ -282,6 +360,40 @@ where
                 }
                 self.unify_ty(*inner1, *inner2)
             }
+            (
+                Compare {
+                    op: op1,
+                    lhs: lhs1,
+                    rhs: rhs1,
+                },
+                Compare {
+                    op: op2,
+                    lhs: lhs2,
+                    rhs: rhs2,
+                },
+            ) => {
+                if op1 != op2 {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.unify_ty(*lhs1, *lhs2)?;
+                self.unify_ty(*rhs1, *rhs2)
+            }
+            (
+                Select {
+                    cond: c1,
+                    then: t1,
+                    otherwise: o1,
+                },
+                Select {
+                    cond: c2,
+                    then: t2,
+                    otherwise: o2,
+                },
+            ) => {
+                self.unify_ty(*c1, *c2)?;
+                self.unify_ty(*t1, *t2)?;
+                self.unify_ty(*o1, *o2)
+            }
             (ArrayRepeat { value: v1, len: n1 }, ArrayRepeat { value: v2, len: n2 }) => {
                 self.unify_ty(*n1, *n2)?;
                 self.unify_ty(*v1, *v2)
@@ -321,7 +433,6 @@ where
                 if k1.owner(self.db) != k2.owner(self.db)
                     || k1.effect_providers(self.db) != k2.effect_providers(self.db)
                     || k1.impl_env(self.db) != k2.impl_env(self.db)
-                    || i1.parameter_owner != i2.parameter_owner
                     || ga1.len() != ga2.len()
                     || i1.args.len() != i2.args.len()
                 {
@@ -356,7 +467,7 @@ where
             TyData::ConstTy(const_ty) => {
                 if let ConstTyData::TyParam(_, ty) = const_ty.data(self.db) {
                     let key = self.new_key(ty.kind(self.db), TyVarSort::General);
-                    TyId::const_ty_var(self.db, *ty, key)
+                    TyId::const_ty_var(self.db, *ty, TyVarSort::General, key)
                 } else {
                     panic!()
                 }
@@ -371,7 +482,7 @@ where
         let key = self.new_key(&kind, sort);
 
         match ty_prop.const_ty {
-            Some(const_ty) => TyId::const_ty_var(self.db, const_ty, key),
+            Some(const_ty) => TyId::const_ty_var(self.db, const_ty, sort, key),
             None => TyId::ty_var(self.db, TyVarSort::General, kind, key),
         }
     }
@@ -449,7 +560,8 @@ where
                 self.table.unify_var_var(var1.key, var2.key)
             }
 
-            (TyVarSort::String { .. }, TyVarSort::String { .. }) => {
+            (TyVarSort::String { .. }, TyVarSort::String { .. })
+            | (TyVarSort::StringLen { .. }, TyVarSort::StringLen { .. }) => {
                 self.table.unify_var_var(var1.key, var2.key)
             }
 
@@ -527,22 +639,89 @@ where
                     return Ok(());
                 };
 
-                let Some(n_value) = const_ty.integer_value(self.db) else {
-                    return Ok(());
-                };
+                // No `String<N>` holds more bytes than an inline string.
+                if min_len > MAX_INLINE_STRING_BYTES {
+                    return Err(UnificationError::TypeMismatch);
+                }
 
-                if BigInt::from(min_len) <= n_value {
+                // An inferred length, such as `N` of a generic `String<N>`
+                // parameter: it must hold the literal and defaults to its length.
+                if let ConstTyData::TyVar(len_var, _) = const_ty.data(self.db)
+                    && self.narrow_string_len(len_var.key, min_len)
+                {
+                    return self
+                        .table
+                        .unify_var_value(root_var.key, InferenceValue::Bound(value));
+                }
+
+                if self.literal_fits_len(*const_ty, min_len) {
                     self.table
                         .unify_var_value(root_var.key, InferenceValue::Bound(value))
                 } else {
                     Err(UnificationError::TypeMismatch)
                 }
             }
+
+            TyVarSort::StringLen { min_len } => {
+                if let TyData::ConstTy(const_ty) = value.data(self.db)
+                    && !self.literal_fits_len(*const_ty, min_len)
+                {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.table
+                    .unify_var_value(root_var.key, InferenceValue::Bound(value))
+            }
+        }
+    }
+
+    /// Whether a string literal of `min_len` bytes fits the length `len`. Any
+    /// length holds an empty literal; otherwise the length must be an integer
+    /// of at least `min_len`, as a symbolic one, such as a generic `M` or
+    /// `{M + 1}`, may be instantiated shorter.
+    fn literal_fits_len(&self, len: ConstTyId<'db>, min_len: usize) -> bool {
+        if min_len == 0 {
+            return true;
+        }
+        // Compare the length as const unification does: evaluated if it can be.
+        let len = match normalize_const_tys_for_comparison(self.db, TyId::const_ty(self.db, len))
+            .data(self.db)
+        {
+            TyData::ConstTy(len) => *len,
+            _ => len,
+        };
+        len.integer_value(self.db)
+            .is_some_and(|n| n >= BigInt::from(min_len))
+    }
+
+    /// Require the unbound const variable `key` to be a string length of at
+    /// least `min_len`. Returns false if it is not such a variable.
+    fn narrow_string_len(&mut self, key: InferenceKey<'db>, min_len: usize) -> bool {
+        let InferenceValue::Unbound(kind, sort) = self.table.probe_value(key) else {
+            return false;
+        };
+        let min_len = match sort {
+            TyVarSort::General => min_len,
+            TyVarSort::StringLen { min_len: current } => current.max(min_len),
+            TyVarSort::Integral | TyVarSort::String { .. } => return false,
+        };
+        self.table
+            .unify_var_value(
+                key,
+                InferenceValue::Unbound(kind, TyVarSort::StringLen { min_len }),
+            )
+            .is_ok()
+    }
+
+    /// The sort of `key` if it is still unbound.
+    pub(crate) fn unbound_sort(&mut self, key: InferenceKey<'db>) -> Option<TyVarSort> {
+        match self.table.probe_value(key) {
+            InferenceValue::Unbound(_, sort) => Some(sort),
+            InferenceValue::Bound(_) => None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct InferenceKey<'db>(pub(super) u32, pub(super) PhantomData<&'db ()>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -653,20 +832,14 @@ impl<'db> Unifiable<'db> for TraitInstId<'db> {
         // (with bindings) should be able to satisfy a less specific constraint
         // (without bindings).
 
-        // First, unify all bindings that are present in both
-        for (name, &self_assoc_ty) in self.assoc_type_bindings(db) {
-            if let Some(&other_assoc_ty) = other.assoc_type_bindings(db).get(name) {
-                table.unify_ty(self_assoc_ty, other_assoc_ty)?;
-            }
-        }
-
-        // For bindings that are only in other, we need to check if self can satisfy them
-        for (name, &_other_assoc_ty) in other.assoc_type_bindings(db) {
-            if !self.assoc_type_bindings(db).contains_key(name) {
-                // other has a binding that self doesn't have
-                // This means other is more specific than self, so unification fails
-                return Err(UnificationError::TypeMismatch);
-            }
+        // Each of other's bindings must be one of self's, which may bind an
+        // associated shape at every mode where other names one. A binding
+        // other lacks makes it less specific.
+        for (&binding, &other_assoc_ty) in other.assoc_type_bindings(db) {
+            let self_assoc_ty = self
+                .bound_assoc_ty(db, binding)
+                .ok_or(UnificationError::TypeMismatch)?;
+            table.unify_ty(self_assoc_ty, other_assoc_ty)?;
         }
 
         Ok(())
@@ -744,7 +917,7 @@ where
                     match self.table.probe_impl(var.key) {
                         Either::Left(ty) => (ty, var.key),
                         Either::Right(var) => {
-                            return TyId::const_ty_var(db, *ty, var.key);
+                            return TyId::const_ty_var(db, *ty, var.sort, var.key);
                         }
                     }
                 }
@@ -802,6 +975,24 @@ where
         self.params.insert(ty, var);
         var
     }
+
+    // An identity capture names the parameters its body reads, so it binds
+    // to the variables their explicit occurrences are instantiated with.
+    fn fold_const_capture(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        capture: &ConstCaptureEnv<'db>,
+    ) -> ConstCaptureEnv<'db> {
+        if let ConstCaptureEnv::Identity(_) = capture
+            && let Some(identity) = capture.complete(db)
+        {
+            return ConstCaptureEnv::from_subst(
+                db,
+                identity.map_values(|formal| self.fold_ty(db, formal)),
+            );
+        }
+        capture.fold_ranges(db, self)
+    }
 }
 
 #[cfg(test)]
@@ -823,6 +1014,7 @@ mod tests {
         let len = TyId::const_ty_var(
             &db,
             TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+            TyVarSort::General,
             table.new_key(&Kind::Star, TyVarSort::General),
         );
         let array = TyId::app_structural(&db, TyId::array(&db, elem), len);

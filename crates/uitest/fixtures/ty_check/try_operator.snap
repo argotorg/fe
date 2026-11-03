@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/try_operator.fe
+---
+error[8-0103]: `?` needs an `Option` or a `Result`
+  ┌─ try_operator.fe:2:13
+  │
+2 │     let y = x?
+  │             ^ this has type `u256`
+
+error[8-0104]: `?` cannot return from this function
+  ┌─ try_operator.fe:7:5
+  │
+7 │     o?
+  │     ^^ `?` on `Option<u256>` may exit early, but `u256` cannot carry its `None` or `Err`
+
+error[8-0104]: `?` cannot return from this function
+   ┌─ try_operator.fe:11:13
+   │
+11 │     let v = r?
+   │             ^^ `?` on `Result<bool, u256>` may exit early, but `Result<u8, u256>` cannot carry its `None` or `Err`

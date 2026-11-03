@@ -1,0 +1,19 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 20
+expression: output
+input_file: tests/fixtures/one_element_lists.fe
+---
+// A one-element tuple keeps its comma; a variant's one field takes none.
+enum Wrapped {
+    One(u256),
+    Pair((u256,)),
+}
+
+fn singles(_ w: Wrapped, _ t: (u256,)) -> (u256,) {
+    let (a,) = t
+    match w {
+        Wrapped::One(v) => (v,),
+        Wrapped::Pair((v,)) => (a + v,),
+    }
+}

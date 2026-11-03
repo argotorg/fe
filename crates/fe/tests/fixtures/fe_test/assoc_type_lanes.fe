@@ -1,0 +1,51 @@
+// A field of an associated type is the type it names in every layout: `S<K>`
+// packs `a: K::Out = u8` and `b: u8` into one word, as a plain struct of two
+// `u8`s does, and a projection of `a` into memory copies that lane.
+use std::evm::{Evm, RawStorage, read_storage_word}
+
+trait Tr {
+    type Out
+}
+
+struct K {}
+
+impl Tr for K {
+    type Out = u8
+}
+
+struct S<T: Tr> {
+    a: T::Out,
+    b: u8,
+}
+
+impl S<K> {
+    fn a_mem(mut self) -> mut u8 {
+        mut self.a
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract C {
+    mut s: S<K>,
+
+    recv M {
+        Run -> u256 uses (mut s, storage: RawStorage) {
+            s.a = 1
+            s.b = 2
+            let a = mut s.a_mem()
+            a += 5
+            read_storage_word(0)
+        }
+    }
+}
+
+#[test]
+fn associated_type_field_is_a_lane() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let word = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
+    assert(word == 6 | (2 << 8))
+}

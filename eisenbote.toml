@@ -1,0 +1,36 @@
+# Settings for eisenbote (https://github.com/fe-lang/eisenbote), which
+# assembles CHANGELOG.md from newsfragments/. See newsfragments/README.md.
+directory = "newsfragments"
+filename = "CHANGELOG.md"
+issue_format = "[#{issue}](https://github.com/argotorg/fe/issues/{issue})"
+start_string = "[//]: # (release notes start)"
+title_format = "## {version} ({project_date})"
+
+[[type]]
+directory = "feature"
+name = "Features"
+
+[[type]]
+directory = "bugfix"
+name = "Bugfixes"
+
+[[type]]
+directory = "performance"
+name = "Performance improvements"
+
+[[type]]
+directory = "doc"
+name = "Improved Documentation"
+
+[[type]]
+directory = "removal"
+name = "Deprecations and Removals"
+
+[[type]]
+directory = "internal"
+name = "Internal Changes - for Fe Contributors"
+
+[[type]]
+directory = "misc"
+name = "Miscellaneous changes"
+showcontent = false

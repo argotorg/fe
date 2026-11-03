@@ -17,8 +17,8 @@ impl Table {
     }
 
     fn set(mut self, _ key: u256, _ value: u256) {
-        let mut slot = (key % CAP_U256) as usize
-        let mut i: usize = 0
+        var slot = (key % CAP_U256).downcast_unchecked()
+        var i: usize = 0
 
         while i < CAP {
             if self.used[slot] == 0 {
@@ -42,8 +42,8 @@ impl Table {
     }
 
     fn get(self, _ key: u256) -> u256 {
-        let mut slot = (key % CAP_U256) as usize
-        let mut i: usize = 0
+        var slot = (key % CAP_U256).downcast_unchecked()
+        var i: usize = 0
 
         while i < CAP {
             if self.used[slot] == 0 {
@@ -67,7 +67,7 @@ impl Table {
 
 #[test]
 fn linear_probe_big_struct_roundtrip() {
-    let mut table = Table::empty()
+    var table = Table::empty()
     table.set(17, 99)
     assert!(table.get(17) == 99)
 }

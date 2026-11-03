@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/state_only_places.fe
+---
+error[16-0001]: access conflict in `fn map_entry`
+   ┌─ state_only_places.fe:22:5
+   │
+21 │     let entry = mut m[1]
+   │                 -------- access opened here
+22 │     ping()
+   │     ^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn store_field`
+   ┌─ state_only_places.fe:29:5
+   │
+28 │     let total = mut s.total
+   │                 ----------- access opened here
+29 │     ping()
+   │     ^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn mutex_value`
+   ┌─ state_only_places.fe:37:5
+   │
+36 │     let value = mut vault.value()
+   │                     ----- access opened here
+37 │     ping()
+   │     ^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn state_param`
+   ┌─ state_only_places.fe:53:5
+   │
+51 │   fn state_param(_ s: mut Store) uses (call: mut Call) {
+   │ ╭──────────────────────────────────────────────────────'
+52 │ │     s.total = 1
+53 │ │     ping()
+   │ │     ^^^^^^ this call may write storage while a `mut` parameter of it is open
+54 │ │ }
+   │ ╰─' parameter opened here

@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/mutable_views.fe
+---
+error[16-0001]: access conflict in `fn reserved`
+   ┌─ mutable_views.fe:12:12
+   │
+11 │     let s = mut buf.span()
+   │                 ---------- projection opened here
+12 │     mutate(mut buf)
+   │            ^^^^^^^ cannot mutably access this place while a `mut` projection of it is open
+
+error[16-0002]: move conflict in `fn swap`
+   ┌─ mutable_views.fe:24:13
+   │
+24 │     let t = a
+   │             ^ cannot move out of `MemSlice<u8>`, a `#[view]` value, which never leaves a hole

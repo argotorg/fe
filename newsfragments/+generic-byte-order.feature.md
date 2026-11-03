@@ -1,0 +1,1 @@
+`core::num::to_be` and `from_be` accept any integer type, the new `to_le` and `from_le` convert to and from little-endian order, and the new `swap_bytes` reverses the bytes of any integer. `MemSpan` and `MemBuffer` gain `read_be`, `read_le`, `write_be` and `write_le`, which read or write an integer of any width at any byte offset, reverting unless all its bytes are in range.

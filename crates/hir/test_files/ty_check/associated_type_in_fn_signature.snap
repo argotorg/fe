@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/associated_type_in_fn_signature.fe
 ---
@@ -8,42 +8,54 @@ note:
    │
 32 │       fn get_output<T: Abi>(self) -> T::Encoder::Output {
    │ ╭───────────────────────────────────────────────────────^
-33 │ │         todo()
+33 │ │         unsafe { todo() }
 34 │ │     }
    │ ╰─────^ T::Encoder::Output
 
 note:
    ┌─ associated_type_in_fn_signature.fe:33:9
    │
-33 │         todo()
-   │         ^^^^ fn todo
+33 │         unsafe { todo() }
+   │         ^^^^^^^^^^^^^^^^^ T::Encoder::Output
 
 note:
-   ┌─ associated_type_in_fn_signature.fe:33:9
+   ┌─ associated_type_in_fn_signature.fe:33:18
    │
-33 │         todo()
-   │         ^^^^^^ T::Encoder::Output
+33 │         unsafe { todo() }
+   │                  ^^^^ fn todo
+
+note:
+   ┌─ associated_type_in_fn_signature.fe:33:18
+   │
+33 │         unsafe { todo() }
+   │                  ^^^^^^ T::Encoder::Output
 
 note:
    ┌─ associated_type_in_fn_signature.fe:37:49
    │
 37 │   fn use_encoder<T: Encoder>(enc: T) -> T::Output {
    │ ╭─────────────────────────────────────────────────^
-38 │ │     todo()
+38 │ │     unsafe { todo() }
 39 │ │ }
    │ ╰─^ T::Output
 
 note:
    ┌─ associated_type_in_fn_signature.fe:38:5
    │
-38 │     todo()
-   │     ^^^^ fn todo
+38 │     unsafe { todo() }
+   │     ^^^^^^^^^^^^^^^^^ T::Output
 
 note:
-   ┌─ associated_type_in_fn_signature.fe:38:5
+   ┌─ associated_type_in_fn_signature.fe:38:14
    │
-38 │     todo()
-   │     ^^^^^^ T::Output
+38 │     unsafe { todo() }
+   │              ^^^^ fn todo
+
+note:
+   ┌─ associated_type_in_fn_signature.fe:38:14
+   │
+38 │     unsafe { todo() }
+   │              ^^^^^^ T::Output
 
 note:
    ┌─ associated_type_in_fn_signature.fe:41:26

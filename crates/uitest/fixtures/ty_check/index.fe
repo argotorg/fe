@@ -4,12 +4,9 @@ struct Bar {}
 impl core::ops::Index<i32> for Bar {
     type Output = bool
 
-    fn index(self, _ i: i32) -> bool {
-        if i % 2 == 0 {
-            true
-        } else {
-            false
-        }
+    fn index(self, _ i: i32) -> ref bool {
+        let even = i % 2 == 0
+        ref even
     }
 }
 

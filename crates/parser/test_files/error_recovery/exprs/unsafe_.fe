@@ -1,0 +1,5 @@
+{
+    let y = unsafe x
+    let z = unsafe { x }
+    unsafe
+}

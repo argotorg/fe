@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use camino::Utf8PathBuf;
 use common::{
     InputDb,
+    compilation::Target,
     config::{Config, WorkspaceConfig},
 };
 use driver::DriverDataBase;
@@ -40,6 +41,7 @@ pub fn check(
     path: &Utf8PathBuf,
     ingot: Option<&str>,
     force_standalone: bool,
+    target: Target,
     profile: &str,
     dump_mir: bool,
     report_out: Option<&Utf8PathBuf>,
@@ -53,6 +55,7 @@ pub fn check(
     db.compilation_settings()
         .set_profile(&mut db)
         .to(profile.into());
+    db.compilation_settings().set_target(&mut db).to(target);
 
     let report_root = report_out
         .map(|out| -> Result<_, String> {
@@ -377,12 +380,12 @@ fn check_ingot_and_dependencies(
             let formatted = diagnostics.hir.format_diags(db);
             write_report_file(report, "errors/diagnostics.txt", &formatted);
         }
-        has_errors = true;
+        has_errors = diagnostics.hir.has_errors(db);
     }
 
     if !diagnostics.mir.is_empty() {
         db.emit_complete_diagnostics(&diagnostics.mir);
-        has_errors = true;
+        has_errors |= diagnostics.mir_has_errors();
     }
 
     if !diagnostics.dependencies.is_empty() {
@@ -447,23 +450,25 @@ fn check_single_file(
         let mut has_errors = false;
 
         if !diagnostics.hir.is_empty() {
-            eprintln!("errors in {file_url}");
-            eprintln!();
+            has_errors = diagnostics.hir.has_errors(db);
+            if has_errors {
+                eprintln!("errors in {file_url}");
+                eprintln!();
+            }
             diagnostics.hir.emit(db);
             if let Some(report) = report {
                 let formatted = diagnostics.hir.format_diags(db);
                 write_report_file(report, "errors/diagnostics.txt", &formatted);
             }
-            has_errors = true;
         }
 
         if !diagnostics.mir.is_empty() {
-            if !has_errors {
+            if !has_errors && diagnostics.mir_has_errors() {
                 eprintln!("errors in {file_url}");
                 eprintln!();
             }
             db.emit_complete_diagnostics(&diagnostics.mir);
-            has_errors = true;
+            has_errors |= diagnostics.mir_has_errors();
         }
         if !diagnostics.dependencies.is_empty() {
             let formatted = diagnostics.dependencies.format(db);

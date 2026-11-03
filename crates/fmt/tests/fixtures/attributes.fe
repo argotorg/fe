@@ -34,3 +34,11 @@ struct MyStruct { x: i32 }
 // Long attribute args that might wrap
 #[cfg(first_very_long_arg = "value", second_long_arg = "another", third = 123)]
 fn long_args() {}
+
+// Expression arguments
+contract Placed {
+    #[slot(BASE+1)]
+    mut based: u256,
+    #[slot( keccak(keccak("example.main") - 1)&!(0xff as u256) )]
+    mut main: u256,
+}

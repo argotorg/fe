@@ -11,7 +11,7 @@ const fn borrowed(_ idx: usize) -> u8 {
 }
 
 const fn borrowed_mut(_ idx: usize) -> u8 {
-    let mut values: [u8; 2] = [1, 2]
+    var values: [u8; 2] = [1, 2]
     let a = mut values[idx]
     42
 }

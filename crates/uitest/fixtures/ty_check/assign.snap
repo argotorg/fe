@@ -38,31 +38,23 @@ error[8-0018]: left-hand side of assignment is immutable
    ┌─ assign.fe:25:9
    │
 24 │     fn set_inner(self, x: i32, y: u32) {
-   │                  ---- try changing to `mut self`
+   │                  ---- write `mut self` for a mutable borrow
 25 │         self.inner = Inner { x, y }
    │         ^^^^^^^^^^ immutable assignment
 
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ assign.fe:30:5
    │
-29 │ fn foo<T>(x: i32, mut y: own u32, opt: Option<T>, opt2: Option<i32>) {
-   │           - try changing to `mut x`
+29 │ fn foo<T>(x: i32, var y: own u32, opt: Option<T>, opt2: Option<i32>) {
+   │           - a view parameter is read-only; write `x: mut …` for a mutable borrow
 30 │     x = 1
    │     ^ immutable assignment
-
-error[8-0018]: left-hand side of assignment is immutable
-   ┌─ assign.fe:44:13
-   │
-43 │         Some(mut t) => {
-   │              ----- try changing to `mut t`
-44 │             t = 1
-   │             ^ immutable assignment
 
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ assign.fe:51:13
    │
 50 │         Some(x) => {
-   │              - try changing to `mut x`
+   │              - write `var x` for a mutable value
 51 │             x = 1
    │             ^ immutable assignment
 
@@ -74,3 +66,12 @@ error[8-0031]: type annotation is needed
    │     │
    │     type annotation is needed
    │     no default type is provided for an integer type. consider giving integer type
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ assign.fe:43:14
+   │
+29 │ fn foo<T>(x: i32, var y: own u32, opt: Option<T>, opt2: Option<i32>) {
+   │                                   --- `opt` does not provide mutable access
+   ·
+43 │         Some(mut t) => {
+   │              ^^^^^ cannot borrow as `mut`

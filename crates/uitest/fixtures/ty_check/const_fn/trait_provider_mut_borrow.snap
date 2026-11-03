@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/const_fn/trait_provider_mut_borrow.fe
 ---
@@ -7,7 +8,7 @@ error[8-0066]: mutable borrow requires a mutable place
    ┌─ trait_provider_mut_borrow.fe:16:5
    │
 15 │ const fn bump_through_receiver() -> u256 uses (table: Lookup) {
-   │                                                ----- `table` does not provide mutable access
+   │                                                ------------- `table` does not provide mutable access
 16 │     table.bump()
    │     ^^^^^ cannot borrow as `mut`
 
@@ -15,6 +16,6 @@ error[8-0066]: mutable borrow requires a mutable place
    ┌─ trait_provider_mut_borrow.fe:21:20
    │
 20 │ const fn bump_through_borrow() -> u256 uses (table: Lookup) {
-   │                                              ----- `table` does not provide mutable access
+   │                                              ------------- `table` does not provide mutable access
 21 │     let borrowed = mut table
    │                    ^^^^^^^^^ cannot borrow as `mut`

@@ -1,0 +1,109 @@
+// `for` runs the `Collection` protocol: `start`, then for each cursor `next`
+// and `at`. The body sees a copy of a `Copy` element, the element's `ref`
+// access otherwise, and its `mut` access in `for mut x in xs`.
+use core::iter::Collection
+use core::ptr::MemArray
+
+struct Account { balance: u256, owner: u256 }
+
+// A collection whose elements are temporaries: the squares below `n`.
+struct Squares { n: usize }
+
+impl Collection for Squares {
+    type Cursor = usize
+    type Item = usize
+
+    fn start(self) -> usize {
+        0
+    }
+
+    fn has(self, _ c: usize) -> bool {
+        c < self.n
+    }
+
+    fn next(self, _ c: usize) -> usize {
+        c + 1
+    }
+
+    fn at(self, _ c: usize) -> ref usize {
+        let square = c * c
+        yield ref square
+    }
+}
+
+fn total<C: Collection<Item = u256>>(_ xs: C) -> u256 uses C::E {
+    var sum = 0
+    for x in xs {
+        sum += x
+    }
+    sum
+}
+
+#[test]
+fn copies_of_copy_elements() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    var sum = 0
+    for x in xs {
+        sum += x
+    }
+    assert!(sum == 10)
+    assert!(total(xs) == 10)
+}
+
+#[test]
+fn ranges_and_custom_collections() {
+    var sum = 0
+    for i in 0..4 {
+        sum += i
+    }
+    let squares = Squares { n: 4 }
+    for square in squares {
+        sum += square
+    }
+    assert!(sum == 6 + 14)
+}
+
+#[test]
+fn accesses_of_non_copy_elements() {
+    let accounts = [Account { balance: 5, owner: 1 }, Account { balance: 7, owner: 2 }]
+    var sum = 0
+    for ref account in accounts {
+        sum += account.balance * account.owner
+    }
+    assert!(sum == 19)
+}
+
+#[test]
+fn mutating_in_place() {
+    var xs: [u256; 3] = [1, 2, 3]
+    for mut x in xs {
+        x *= 10
+    }
+    assert!(xs[0] == 10 && xs[1] == 20 && xs[2] == 30)
+
+    var accounts = [Account { balance: 5, owner: 1 }, Account { balance: 7, owner: 2 }]
+    for mut account in accounts {
+        account.balance += account.owner
+    }
+    assert!(accounts[0].balance == 6 && accounts[1].balance == 9)
+
+    var words = MemArray<u256>::new_zeroed(3)
+    for mut word in words {
+        word += 2
+    }
+    var sum = 0
+    for word in words {
+        sum += word
+    }
+    assert!(sum == 6)
+}
+
+#[test]
+fn destructuring_patterns() {
+    let pairs: [(u256, u256); 2] = [(1, 2), (3, 4)]
+    var sum = 0
+    for (a, b) in pairs {
+        sum += a * b
+    }
+    assert!(sum == 14)
+}

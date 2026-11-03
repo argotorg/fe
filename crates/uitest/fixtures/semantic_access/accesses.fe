@@ -1,0 +1,135 @@
+// Access bindings: an access is open from its binding to its last use, and
+// overlapping open accesses conflict unless both read.
+struct Point { x: u256, y: u256 }
+
+fn set(_ target: mut u256, _ value: u256) {
+    target = value
+}
+
+fn both(_ first: mut u256, _ second: mut u256) {
+    first = 1
+    second = 2
+}
+
+// Accepted: accesses of disjoint fields coexist.
+fn disjoint_fields() {
+    var p = Point { x: 0, y: 0 }
+    let hx = mut p.x
+    let hy = mut p.y
+    hx = 1
+    hy = 2
+}
+
+// Rejected: a place is read while a `mut` access of it is open.
+fn read_while_mut_open() -> u256 {
+    var p = Point { x: 0, y: 0 }
+    let hx = mut p.x
+    let v = p.x
+    hx = 1
+    v
+}
+
+// Rejected: a place is written while a `ref` access of it is open.
+fn write_while_ref_open() -> u256 {
+    var x: u256 = 0
+    let r = ref x
+    x = 1
+    r
+}
+
+// Accepted: an access ends at its last use.
+fn ends_at_last_use() -> u256 {
+    var x: u256 = 0
+    let h = mut x
+    h = 1
+    x
+}
+
+// Accepted: an access used on one branch only ends on the other at once.
+fn ends_per_path(_ c: bool) -> u256 {
+    var x: u256 = 0
+    let h = mut x
+    if c {
+        h = 1
+    } else {
+        x = 2
+    }
+    x
+}
+
+// Accepted: constant indices are disjoint.
+fn constant_indices() {
+    var a: [u256; 2] = [0, 0]
+    let first = mut a[0]
+    let second = mut a[1]
+    first = 1
+    second = 2
+}
+
+// Rejected: dynamic indices may denote the same element.
+fn dynamic_indices(_ i: usize, _ j: usize) {
+    var a: [u256; 2] = [0, 0]
+    let first = mut a[i]
+    let second = mut a[j]
+    first = 1
+    second = 2
+}
+
+// Rejected: one place is passed for two `mut` parameters.
+fn duplicate_mut_arguments() {
+    var x: u256 = 0
+    both(mut x, mut x)
+}
+
+// Accepted: disjoint fields are passed for two `mut` parameters.
+fn disjoint_mut_arguments() {
+    var p = Point { x: 0, y: 0 }
+    both(mut p.x, mut p.y)
+}
+
+// Rejected: an access stays open across a loop that writes its place.
+fn written_in_loop() {
+    var x: u256 = 0
+    let h = mut x
+    var i: u256 = 0
+    while i < 2 {
+        x = i
+        i += 1
+    }
+    set(mut h, 1)
+}
+
+// Accepted: an access opened inside a loop ends before the back edge.
+fn opened_in_loop() -> u256 {
+    var x: u256 = 0
+    var i: u256 = 0
+    while i < 2 {
+        let h = mut x
+        h += i
+        i += 1
+    }
+    x
+}
+
+// Accepted: a nested access is exempt from its ancestors, which are usable
+// again once it ends.
+fn nested_accesses() -> u256 {
+    var x: u256 = 0
+    let a = mut x
+    let b = mut a
+    let c = mut b
+    c = 1
+    b = 2
+    a = 3
+    x
+}
+
+// Rejected: a parent access is used while a nested access is open.
+fn parent_used_while_nested_open() -> u256 {
+    var p = Point { x: 0, y: 0 }
+    let h = mut p
+    let g = mut h.x
+    let v = h.x
+    g = 1
+    v
+}

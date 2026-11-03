@@ -1,0 +1,23 @@
+// Contract state holds only what outlives a transaction: no memory pointer,
+// and no persistent collection inside transient storage, whose entries would
+// persist after the transient value holding them is gone.
+use core::ptr::{MemArray, MemBuffer}
+use std::evm::{StorPtr, StorageMap, TSlot}
+
+struct Ledger {
+    balances: StorageMap<u256, u256>,
+}
+
+pub contract State {
+    // Rejected.
+    mut buf: MemBuffer,
+    mut items: MemArray<u256>,
+    mut cell: TSlot<StorageMap<u256, u256>>,
+    mut ledger: TSlot<Ledger>,
+    // Accepted: transient values beside persistent ones.
+    mut lock: TSlot<bool>,
+    mut balances: StorageMap<u256, u256>,
+    mut flags: StorageMap<u256, TSlot<bool>>,
+    // Accepted: a storage pointer is a slot number.
+    mut saved: StorPtr<u256>,
+}

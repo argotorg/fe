@@ -1,0 +1,31 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 17
+expression: output
+input_file: tests/fixtures/binding_markers.fe
+---
+fn markers(c: Cells, p: Pair) {
+    for ref x in c {
+        let (i, ref y) = c.at(0)
+    }
+    match p {
+        Pair { ref a, mut b, .. } => {},
+    }
+    if let Some(ref v) = p.opt {}
+    let z = ref p
+    var w = p.a
+}
+
+impl Pair {
+    fn take(var own self) -> Pair {
+        self
+    }
+    fn retag(var self: own Pair) -> Pair {
+        self
+    }
+}
+
+fn items(xs: Cells) {
+    for mut x in xs {}
+    for (i, mut x) in xs.enumerate() {}
+}

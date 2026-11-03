@@ -1040,10 +1040,10 @@ const fn apply_sbox6(state: [Fr; 6], full_round: bool) -> [Fr; 6] {
 }
 
 const fn mix3(state: [Fr; 3]) -> [Fr; 3] {
-    let mut mixed: [Fr; 3] = [Fr::new(0); 3]
-    let mut row: usize = 0
+    var mixed: [Fr; 3] = [Fr::new(0); 3]
+    var row: usize = 0
     while row < 3 {
-        let mut col: usize = 0
+        var col: usize = 0
         while col < 3 {
             mixed[row] = mixed[row] + state[col] * POSEIDON_T3_MDS[row][col]
             col += 1
@@ -1054,10 +1054,10 @@ const fn mix3(state: [Fr; 3]) -> [Fr; 3] {
 }
 
 const fn mix6(state: [Fr; 6]) -> [Fr; 6] {
-    let mut mixed: [Fr; 6] = [Fr::new(0); 6]
-    let mut row: usize = 0
+    var mixed: [Fr; 6] = [Fr::new(0); 6]
+    var row: usize = 0
     while row < 6 {
-        let mut col: usize = 0
+        var col: usize = 0
         while col < 6 {
             mixed[row] = mixed[row] + state[col] * POSEIDON_T6_MDS[row][col]
             col += 1
@@ -1067,8 +1067,8 @@ const fn mix6(state: [Fr; 6]) -> [Fr; 6] {
     mixed
 }
 
-const fn permute3(mut _ state: own [Fr; 3]) -> [Fr; 3] {
-    let mut round: usize = 0
+const fn permute3(var _ state: own [Fr; 3]) -> [Fr; 3] {
+    var round: usize = 0
     while round < POSEIDON_T3_ROUNDS {
         state = apply_round_constants3(state, round)
         state = apply_sbox3(
@@ -1085,8 +1085,8 @@ const fn permute3(mut _ state: own [Fr; 3]) -> [Fr; 3] {
     state
 }
 
-const fn permute6(mut _ state: own [Fr; 6]) -> [Fr; 6] {
-    let mut round: usize = 0
+const fn permute6(var _ state: own [Fr; 6]) -> [Fr; 6] {
+    var round: usize = 0
     while round < POSEIDON_T6_ROUNDS {
         state = apply_round_constants6(state, round)
         state = apply_sbox6(

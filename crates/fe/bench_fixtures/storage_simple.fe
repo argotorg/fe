@@ -11,7 +11,7 @@ pub msg BenchMsg {
 }
 
 pub contract Bench {
-    mut data: StorageMap<u256, u256, 0>,
+    mut data: StorageMap<u256, u256>,
 
     recv BenchMsg {
         Store { key, value } uses (mut data) {

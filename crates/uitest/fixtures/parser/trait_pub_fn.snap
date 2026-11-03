@@ -14,11 +14,3 @@ error[1-0001]: `pub` modifier is not allowed in this block
   │
 3 │     pub unsafe fn bar(self)
   │     ^^^ unexpected
-
-error[1-0001]: `unsafe` modifier is not allowed in this block
-  ┌─ trait_pub_fn.fe:3:9
-  │
-3 │     pub unsafe fn bar(self)
-  │         ^^^^^^ unexpected
-
-

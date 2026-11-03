@@ -1,158 +1,63 @@
-use common::indexmap::IndexMap;
-use num_bigint::{BigInt, BigUint};
+use common::{
+    indexmap::IndexMap,
+    layout::{StorageFieldShape, StorageLane, storage_fields_layout},
+};
+use num_bigint::BigUint;
 use num_traits::ToPrimitive;
+use ruint::aliases::U256;
 use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
+    HirDb,
     analysis::{
         HirAnalysisDb,
-        semantic::{RuntimeSizeError, int_const, runtime_size_bytes_with_source},
+        semantic::{RuntimeSizeError, runtime_size_bytes_with_source},
         ty::{
-            ProviderAddressSpace,
+            AddressSpace,
             adt_def::{
-                AdtDef, AdtRef, ConcreteTypeView, instantiate_adt_field_layout,
-                instantiate_adt_field_shape, instantiate_adt_field_source_for_concrete_demand,
+                AdtDef, AdtRef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand,
             },
-            binder::Binder,
-            const_ty::{
-                ConcreteArrayLengthError, ConstCanonEnv, ConstCanonMode, ConstTyData, ConstTyId,
-                HoleAnchor, LayoutBoundaryIdentity, LayoutInstantiationContext,
-                LayoutInstantiationId, LayoutOccurrenceStep, LayoutRootId, LoweringContext,
-                StructuralHoleOrigin, canonicalize_ty_for_mode, const_ty_from_sem_const,
-                demand_concrete_array_length,
-            },
-            layout_holes::{
-                LayoutInstantiation, LayoutTemplateSubst, LayoutViewRecurrence,
-                classify_layout_view_recurrence, instantiate_layout_template,
-                layout_hole_fallback_ty, layout_root_descends_from, layout_root_id,
-                layout_root_lineage, layout_shape_key, rewrite_structural_holes,
-                structural_hole_id,
-            },
-            normalize::{normalize_layout_root_uses, normalize_ty},
-            provider::{
-                ProviderLayoutFailure, ProviderLayoutResolution, StaticSlotLayoutResolution,
-                resolve_effect_handle_layout, resolve_static_slot_layout,
-            },
-            trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance},
+            const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
+            normalize::normalize_ty,
+            provider::pinned_space,
+            state_index_tys,
             trait_resolution::PredicateListId,
+            ty_check::contract_field_slot,
             ty_def::{PrimTy, TyBase, TyData, TyId},
-            ty_lower::{
-                CompleteSubst, ParamBasis, ParamDomainId, ParamSchemaId,
-                lower_layout_root_uses_in_hir_ty, lower_opt_hir_ty,
-            },
+            ty_lower::lower_opt_hir_ty,
         },
     },
-    hir_def::{Contract, EnumVariant, FieldParent, IdentId, IntegerId, VariantKind},
+    hir_def::{
+        Contract, EnumVariant, FieldParent, IdentId, IntegerId, VariantKind, scope_graph::ScopeId,
+    },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct ContractFieldId<'db> {
     pub contract: Contract<'db>,
     pub index: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct StoragePlace<'db> {
-    pub field: ContractFieldId<'db>,
-    pub steps: Vec<PlaceStep>,
-}
-
-impl<'db> StoragePlace<'db> {
-    pub fn root(field: ContractFieldId<'db>) -> Self {
-        Self {
-            field,
-            steps: Vec::new(),
-        }
-    }
-
-    pub fn with_step(&self, step: PlaceStep) -> Self {
-        let mut steps = self.steps.clone();
-        steps.push(step);
-        Self {
-            field: self.field,
-            steps,
-        }
+impl<'db> ContractFieldId<'db> {
+    /// The field's scope. The id's index counts only the named fields.
+    pub fn scope(self, db: &'db dyn HirDb) -> Option<ScopeId<'db>> {
+        let (idx, _) = self
+            .contract
+            .hir_fields(db)
+            .data(db)
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| field.name.is_present())
+            .nth(self.index as usize)?;
+        Some(ScopeId::Field(
+            FieldParent::Contract(self.contract),
+            idx as u16,
+        ))
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum PlaceStep {
-    StructField(u32),
-    TupleElem(u32),
-    EnumVariant(u32),
-    EnumPayloadField(u32),
-    ConstParam(u32),
-    ArrayElem(usize),
-    ProviderTarget,
-    DeclaredWrapper,
-    TransparentInner,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub struct RootOccurrenceId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub struct ConcreteRootOccurrenceId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub struct RootCellId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum RootRole {
-    Counted,
-    MaterializeOnly,
-}
-
-impl RootRole {
-    fn join(self, other: Self) -> Self {
-        if matches!(self, Self::Counted) || matches!(other, Self::Counted) {
-            Self::Counted
-        } else {
-            Self::MaterializeOnly
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub struct RootAllocation {
-    pub space: ProviderAddressSpace,
-    pub slot: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct RootOccurrence<'db> {
-    pub id: RootOccurrenceId,
-    pub root: LayoutRootId<'db>,
-    pub placeholder: TyId<'db>,
-    pub place: StoragePlace<'db>,
-    pub selector: Vec<PlaceStep>,
-    pub role: RootRole,
-    pub space: ProviderAddressSpace,
-    pub order: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct ConcreteRootOccurrence<'db> {
-    pub id: ConcreteRootOccurrenceId,
-    pub value: IntegerId<'db>,
-    pub ty: TyId<'db>,
-    pub owner: TyId<'db>,
-    pub place: StoragePlace<'db>,
-    pub selector: Vec<PlaceStep>,
-    pub role: RootRole,
-    pub space: ProviderAddressSpace,
-    pub order: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct ExplicitRootReservation<'db> {
-    pub value: IntegerId<'db>,
-    pub space: ProviderAddressSpace,
-    pub occurrences: Vec<(ContractFieldId<'db>, ConcreteRootOccurrenceId)>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractLayoutReport<'db> {
     pub entries: Vec<ContractLayoutEntry<'db>>,
 }
@@ -168,30 +73,44 @@ impl<'db> ContractLayoutReport<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractLayoutEntry<'db> {
     pub field: ContractFieldId<'db>,
     pub path: ContractLayoutPath<'db>,
     pub ty: TyId<'db>,
-    pub address_space: ProviderAddressSpace,
+    pub address_space: AddressSpace,
     pub value: ContractLayoutValue<'db>,
+    /// For a scalar packed with others into one slot, its bytes in the slot.
+    pub lane: Option<ContractLayoutLane>,
     pub kind: ContractLayoutEntryKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+/// The bytes of a storage slot that hold a packed scalar, counted from the
+/// low-order end like Solidity's `offset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub struct ContractLayoutLane {
+    pub byte_offset: u8,
+    pub byte_width: u8,
+}
+
+impl From<StorageLane> for ContractLayoutLane {
+    fn from(lane: StorageLane) -> Self {
+        Self {
+            byte_offset: lane.byte_offset as u8,
+            byte_width: lane.byte_width as u8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutEntryKind {
     InlineField,
+    /// A storage collection, whose place is its identity.
+    Collection,
     EnumTag,
-    Parameter(ContractLayoutParameterOrigin),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum ContractLayoutParameterOrigin {
-    Explicit,
-    Inferred,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutValue<'db> {
     Scalar(IntegerId<'db>),
     Indexed {
@@ -211,7 +130,7 @@ impl<'db> ContractLayoutValue<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractLayoutPath<'db> {
     pub field: IdentId<'db>,
     pub segments: Vec<ContractLayoutPathSegment<'db>>,
@@ -237,10 +156,6 @@ impl<'db> ContractLayoutPath<'db> {
                 ContractLayoutPathSegment::ArrayElement { dimension, .. } => {
                     path.push_str(&format!("[i{dimension}]"));
                 }
-                ContractLayoutPathSegment::ConstParameter { name, .. } => {
-                    path.push('.');
-                    path.push_str(name.data(db));
-                }
                 ContractLayoutPathSegment::EnumTag => path.push_str(".<tag>"),
             }
         }
@@ -255,262 +170,55 @@ impl<'db> ContractLayoutPath<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutPathSegment<'db> {
     Member { name: IdentId<'db>, index: u32 },
     TupleElement(u32),
     Variant { name: IdentId<'db>, index: u32 },
     ArrayElement { dimension: u32, len: usize },
-    ConstParameter { name: IdentId<'db>, index: u32 },
     EnumTag,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
-pub struct RootCell<'db> {
-    pub id: RootCellId,
-    pub root: LayoutRootId<'db>,
-    pub occurrences: Vec<RootOccurrenceId>,
-    pub role: RootRole,
-    pub space: ProviderAddressSpace,
-    pub allocation: Option<RootAllocation>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct EnumOverlayGroup<'db> {
-    pub enum_place: StoragePlace<'db>,
-    pub lane: u32,
-    pub members: Vec<RootCellId>,
-    pub space: ProviderAddressSpace,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct LayoutBindingLeaf {
-    pub selector: Vec<PlaceStep>,
-    pub target: RootCellId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub enum LayoutBinding {
-    Bound(Vec<LayoutBindingLeaf>),
-    NonPhysical,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutViewKind {
-    Declared,
-    Target,
-    SlotBasis,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutProjection {
-    Field(u16),
-    VariantField { variant: u16, field: u16 },
-    Index,
-    ConstParam(u16),
-    EffectTarget,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update, Default)]
-pub struct LayoutSelection {
-    pub selector: Vec<PlaceStep>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub enum LayoutViewError<'db> {
-    RootNotClassified { root: LayoutRootId<'db> },
-    NonPhysicalRoot { root: LayoutRootId<'db> },
-    RootNeedsLanding { root: LayoutRootId<'db> },
-    MissingAllocation { root: LayoutRootId<'db> },
-    InvalidProjection,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
-pub struct AssignedLayoutTy<'db> {
-    pub template: TyId<'db>,
-    pub bindings: IndexMap<LayoutRootId<'db>, LayoutBinding>,
-}
-
-impl<'db> AssignedLayoutTy<'db> {
-    pub fn all_roots_classified(&self, db: &'db dyn HirAnalysisDb) -> bool {
-        crate::analysis::ty::layout_holes::collect_unique_structural_holes_in_order(
-            db,
-            self.template,
-        )
-        .into_iter()
-        .all(|hole| self.bindings.contains_key(&hole.root(db)))
-    }
-
-    pub fn binding(&self, root: LayoutRootId<'db>) -> Option<&LayoutBinding> {
-        self.bindings.get(&root)
-    }
-
-    /// Returns the source-level type shape without consuming any assigned root
-    /// value. Callers that need an operational root must use `root_value` or a
-    /// concrete/projected view instead.
-    pub fn shape_ty(&self) -> TyId<'db> {
-        self.template
-    }
-
-    pub fn shape_key(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> crate::analysis::ty::LayoutShapeKey<'db> {
-        layout_shape_key(db, self.template)
-    }
-}
-
-fn matching_binding_leaves<'a>(
-    leaves: &'a [LayoutBindingLeaf],
-    selector: &[PlaceStep],
-) -> Vec<&'a LayoutBindingLeaf> {
-    if selector.is_empty() {
-        return leaves.iter().collect();
-    }
-    leaves
-        .iter()
-        .filter(|leaf| leaf.selector.starts_with(selector))
-        .collect()
-}
-
-fn layout_projection_path(
-    selector: &[PlaceStep],
-    include_effect_targets: bool,
-) -> Option<Vec<LayoutProjection>> {
-    let mut projections = Vec::new();
-    let mut steps = selector.iter();
-    while let Some(step) = steps.next() {
-        match *step {
-            PlaceStep::StructField(field) | PlaceStep::TupleElem(field) => {
-                projections.push(LayoutProjection::Field(field.try_into().ok()?));
-            }
-            PlaceStep::EnumVariant(variant) => {
-                let PlaceStep::EnumPayloadField(field) = *steps.next()? else {
-                    return None;
-                };
-                projections.push(LayoutProjection::VariantField {
-                    variant: variant.try_into().ok()?,
-                    field: field.try_into().ok()?,
-                });
-            }
-            PlaceStep::ArrayElem(_) => projections.push(LayoutProjection::Index),
-            PlaceStep::ConstParam(param) => {
-                projections.push(LayoutProjection::ConstParam(param.try_into().ok()?));
-            }
-            PlaceStep::ProviderTarget if include_effect_targets => {
-                projections.push(LayoutProjection::EffectTarget);
-            }
-            PlaceStep::ProviderTarget => {}
-            PlaceStep::DeclaredWrapper | PlaceStep::TransparentInner => {}
-            PlaceStep::EnumPayloadField(_) => return None,
-        }
-    }
-    Some(projections)
-}
-
-fn project_layout_template<'db>(
-    db: &'db dyn HirAnalysisDb,
-    mut ty: TyId<'db>,
-    selector: &[PlaceStep],
-) -> Result<TyId<'db>, LayoutViewError<'db>> {
-    let mut enum_variant = None;
-    for step in selector {
-        match *step {
-            PlaceStep::ProviderTarget | PlaceStep::DeclaredWrapper => {}
-            PlaceStep::TransparentInner => {
-                ty = ty
-                    .as_capability(db)
-                    .map(|(_, inner)| inner)
-                    .ok_or(LayoutViewError::InvalidProjection)?;
-            }
-            PlaceStep::StructField(field_idx) => {
-                let adt = ty.adt_def(db).ok_or(LayoutViewError::InvalidProjection)?;
-                if !matches!(adt.adt_ref(db), AdtRef::Struct(_)) {
-                    return Err(LayoutViewError::InvalidProjection);
-                }
-                ty = instantiate_adt_field_shape(
-                    db,
-                    adt,
-                    0,
-                    field_idx as usize,
-                    ty.generic_args(db),
-                );
-            }
-            PlaceStep::TupleElem(elem_idx) => {
-                if !ty.is_tuple(db) {
-                    return Err(LayoutViewError::InvalidProjection);
-                }
-                ty = *ty
-                    .generic_args(db)
-                    .get(elem_idx as usize)
-                    .ok_or(LayoutViewError::InvalidProjection)?;
-            }
-            PlaceStep::EnumVariant(variant_idx) => {
-                let adt = ty.adt_def(db).ok_or(LayoutViewError::InvalidProjection)?;
-                if !matches!(adt.adt_ref(db), AdtRef::Enum(_)) {
-                    return Err(LayoutViewError::InvalidProjection);
-                }
-                enum_variant = Some((adt, variant_idx as usize, ty.generic_args(db).to_vec()));
-            }
-            PlaceStep::EnumPayloadField(field_idx) => {
-                let (adt, variant_idx, args) = enum_variant
-                    .take()
-                    .ok_or(LayoutViewError::InvalidProjection)?;
-                ty = instantiate_adt_field_shape(db, adt, variant_idx, field_idx as usize, &args);
-            }
-            PlaceStep::ArrayElem(_) => {
-                if !ty.is_array(db) {
-                    return Err(LayoutViewError::InvalidProjection);
-                }
-                ty = *ty
-                    .generic_args(db)
-                    .first()
-                    .ok_or(LayoutViewError::InvalidProjection)?;
-            }
-            PlaceStep::ConstParam(param_idx) => {
-                ty = *ty
-                    .generic_args(db)
-                    .get(param_idx as usize)
-                    .ok_or(LayoutViewError::InvalidProjection)?;
-            }
-        }
-    }
-    if enum_variant.is_some() {
-        return Err(LayoutViewError::InvalidProjection);
-    }
-    Ok(ty)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct AssignedRootValue<'db> {
-    pub space: ProviderAddressSpace,
-    pub slot: usize,
-    pub ty: TyId<'db>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutError<'db> {
     InvalidFieldType,
-    InvalidConcreteArrayLength { invalid: TyId<'db> },
-    InconsistentConcreteArrayLength { array: TyId<'db> },
-    ExplicitContractLayoutHole { placeholder: TyId<'db> },
-    NonSlotContractLayoutHole { placeholder: TyId<'db> },
-    UnresolvedConcreteLayoutRoot { value: TyId<'db> },
-    AmbiguousProviderLayout,
-    UnresolvedProviderTarget,
-    UnresolvedProviderSpace,
-    InvalidProviderRaw { failure: ProviderLayoutFailure },
-    NonRegularProviderCycle,
-    UnresolvedStaticSlotSpace { owner: TyId<'db> },
-    AmbiguousStaticSlot { owner: TyId<'db> },
-    ConflictingLayoutRootSpaces { root: LayoutRootId<'db> },
-    LayoutRootArray { array: TyId<'db> },
+    InvalidConcreteArrayLength {
+        invalid: TyId<'db>,
+    },
+    InconsistentConcreteArrayLength {
+        array: TyId<'db>,
+    },
+    /// `#[slot(e)]` whose `e` is not a constant `u256`.
+    InvalidExplicitSlot,
+    /// `#[slot(e)]` on a field that lives in code, which has no slots.
+    ExplicitSlotInCode,
+    /// `#[slot(e)]` whose slots overlap those of the explicitly placed `other`.
+    ExplicitSlotOverlap {
+        other: IdentId<'db>,
+    },
     LayoutExtentOverflow,
-    IncompleteAdtLayoutProjection { ty: TyId<'db> },
-    AmbiguousLayoutBindingSelector { root: LayoutRootId<'db> },
-    InconsistentLayoutRootType { root: LayoutRootId<'db> },
-    LayoutRootNeedsLanding { root: LayoutRootId<'db> },
-    InternalLayoutGraph,
+    IncompleteAdtLayoutProjection {
+        ty: TyId<'db>,
+    },
+    /// A field holding a pointer into memory or calldata, which last at
+    /// most one call.
+    CallPointerInState {
+        pointer: TyId<'db>,
+    },
+    /// A persistent collection inside a transient collection's contents.
+    PersistentUnderTransient {
+        collection: TyId<'db>,
+    },
+    /// A type whose all-zero representation is not a value, which a state
+    /// space holds until it is written.
+    ZeroInvalidInState {
+        invalid: TyId<'db>,
+    },
+    /// A collection entry type that cannot be laid out, for `reason`.
+    EntryLayout {
+        entry: TyId<'db>,
+        reason: &'static str,
+    },
 }
 
 impl ContractLayoutError<'_> {
@@ -521,502 +229,72 @@ impl ContractLayoutError<'_> {
             Self::InconsistentConcreteArrayLength { .. } => {
                 "canonical and source array lengths disagree"
             }
-            Self::ExplicitContractLayoutHole { .. } => {
-                "explicit `_` const arguments are not layout roots"
-            }
-            Self::NonSlotContractLayoutHole { .. } => {
-                "an unresolved const is not a `u256` or `usize` layout root"
-            }
-            Self::UnresolvedConcreteLayoutRoot { .. } => {
-                "an explicit layout root did not evaluate to a concrete integer"
-            }
-            Self::AmbiguousProviderLayout => "provider layout selection is ambiguous",
-            Self::UnresolvedProviderTarget => "provider target type is unresolved",
-            Self::UnresolvedProviderSpace => "provider address space is unresolved",
-            Self::InvalidProviderRaw { .. } => "provider raw transport is invalid",
-            Self::NonRegularProviderCycle => {
-                "provider target recursion changes its layout arguments"
-            }
-            Self::UnresolvedStaticSlotSpace { .. } => "static-slot address space is unresolved",
-            Self::AmbiguousStaticSlot { .. } => "static-slot implementation is ambiguous",
-            Self::ConflictingLayoutRootSpaces { .. } => {
-                "one layout root has conflicting address spaces"
-            }
-            Self::LayoutRootArray { .. } => "array elements carry layout roots",
+            Self::InvalidExplicitSlot => "the explicit slot is not a constant `u256`",
+            Self::ExplicitSlotInCode => "a code field has no slot",
+            Self::ExplicitSlotOverlap { .. } => "the explicit slots overlap another field's",
             Self::LayoutExtentOverflow => "layout extent overflowed",
             Self::IncompleteAdtLayoutProjection { .. } => "layout projection is incomplete",
-            Self::AmbiguousLayoutBindingSelector { .. } => "layout binding selector is ambiguous",
-            Self::InconsistentLayoutRootType { .. } => {
-                "one layout root has inconsistent const types"
+            Self::CallPointerInState { .. } => {
+                "contract state holds a pointer into memory or calldata"
             }
-            Self::LayoutRootNeedsLanding { .. } => "layout root needs a concrete landing",
-            Self::InternalLayoutGraph => "layout graph failed internal validation",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LayoutInvariantError<'db> {
-    InvalidScalarCell {
-        field: ContractFieldId<'db>,
-        cell: RootCellId,
-    },
-    MissingScalarAllocation {
-        field: ContractFieldId<'db>,
-        cell: RootCellId,
-    },
-    InvalidOverlayGroup {
-        field: ContractFieldId<'db>,
-        lane: u32,
-    },
-    AllocationOverlap {
-        space: ProviderAddressSpace,
-        first_field: ContractFieldId<'db>,
-        second_field: ContractFieldId<'db>,
-    },
-    InvalidFieldExtent {
-        field: ContractFieldId<'db>,
-    },
-    InvalidAddressSpaceHighWater {
-        space: ProviderAddressSpace,
-    },
-    UnclassifiedViewRoot {
-        field: ContractFieldId<'db>,
-        view: LayoutViewKind,
-    },
-    InvalidOccurrenceGraph {
-        field: ContractFieldId<'db>,
-        occurrence: RootOccurrenceId,
-    },
-    InvalidConcreteOccurrence {
-        field: ContractFieldId<'db>,
-        occurrence: ConcreteRootOccurrenceId,
-    },
-    InvalidExplicitReservation {
-        space: ProviderAddressSpace,
-    },
-    ExplicitReservationOverlap {
-        space: ProviderAddressSpace,
-        field: ContractFieldId<'db>,
-        value: IntegerId<'db>,
-    },
-    InvalidRootBinding {
-        field: ContractFieldId<'db>,
-        root: LayoutRootId<'db>,
-    },
-    InvalidPlaceBinding {
-        field: ContractFieldId<'db>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
-struct AllocationLane<'db> {
-    members: Vec<RootCellId>,
-    overlays: Vec<AllocationOverlay<'db>>,
-    space: ProviderAddressSpace,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
-struct AllocationOverlay<'db> {
-    place: StoragePlace<'db>,
-    lane: u32,
-    members: Vec<RootCellId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
-pub struct FieldStorageLayout<'db> {
-    pub field: ContractFieldId<'db>,
-    pub name: IdentId<'db>,
-    pub is_mut: bool,
-    pub is_provider: bool,
-    pub address_space: ProviderAddressSpace,
-    pub slot_offset: usize,
-    pub slot_count: usize,
-    pub inline_span: usize,
-    inline_leaves: Vec<InlineLayoutLeaf<'db>>,
-    pub declared: AssignedLayoutTy<'db>,
-    pub target: AssignedLayoutTy<'db>,
-    pub slot_basis: AssignedLayoutTy<'db>,
-    pub occurrences: Vec<RootOccurrence<'db>>,
-    pub concrete_occurrences: Vec<ConcreteRootOccurrence<'db>>,
-    pub cells: Vec<RootCell<'db>>,
-    pub overlay_groups: Vec<EnumOverlayGroup<'db>>,
-    pub place_roots: IndexMap<StoragePlace<'db>, Vec<RootCellId>>,
-    pub root_bindings: IndexMap<LayoutRootId<'db>, LayoutBinding>,
-}
-
-impl<'db> FieldStorageLayout<'db> {
-    pub fn view(&self, kind: LayoutViewKind) -> &AssignedLayoutTy<'db> {
-        match kind {
-            LayoutViewKind::Declared => &self.declared,
-            LayoutViewKind::Target => &self.target,
-            LayoutViewKind::SlotBasis => &self.slot_basis,
-        }
-    }
-
-    pub fn selection_for_projections(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        kind: LayoutViewKind,
-        projections: &[LayoutProjection],
-    ) -> Result<LayoutSelection, LayoutViewError<'db>> {
-        let mut ty = self.view(kind).template;
-        let mut selector = self.view_selector(kind);
-        for projection in projections {
-            while let Some((_, inner)) = ty.as_capability(db) {
-                selector.push(PlaceStep::TransparentInner);
-                ty = inner;
+            Self::PersistentUnderTransient { .. } => {
+                "a persistent collection lies in transient storage"
             }
-            let steps = match *projection {
-                LayoutProjection::Field(index) if ty.is_tuple(db) => {
-                    vec![PlaceStep::TupleElem(index as u32)]
-                }
-                LayoutProjection::Field(index)
-                    if ty
-                        .adt_def(db)
-                        .is_some_and(|adt| matches!(adt.adt_ref(db), AdtRef::Struct(_))) =>
-                {
-                    vec![PlaceStep::StructField(index as u32)]
-                }
-                LayoutProjection::VariantField { variant, field }
-                    if ty
-                        .adt_def(db)
-                        .is_some_and(|adt| matches!(adt.adt_ref(db), AdtRef::Enum(_))) =>
-                {
-                    vec![
-                        PlaceStep::EnumVariant(variant as u32),
-                        PlaceStep::EnumPayloadField(field as u32),
-                    ]
-                }
-                LayoutProjection::Field(_) | LayoutProjection::VariantField { .. } => {
-                    return Err(LayoutViewError::InvalidProjection);
-                }
-                LayoutProjection::Index if ty.is_array(db) => vec![PlaceStep::ArrayElem(0)],
-                LayoutProjection::Index => return Err(LayoutViewError::InvalidProjection),
-                LayoutProjection::ConstParam(param) => {
-                    vec![PlaceStep::ConstParam(param as u32)]
-                }
-                LayoutProjection::EffectTarget => vec![PlaceStep::ProviderTarget],
-            };
-            ty = project_layout_template(db, ty, &steps)?;
-            selector.extend(steps);
+            Self::ZeroInvalidInState { .. } => "contract state holds a type zero is no value of",
+            Self::EntryLayout { .. } => "a collection entry cannot be laid out",
         }
-        Ok(LayoutSelection { selector })
-    }
-
-    fn view_selector(&self, kind: LayoutViewKind) -> Vec<PlaceStep> {
-        match (self.is_provider, kind) {
-            (true, LayoutViewKind::Declared) => vec![PlaceStep::DeclaredWrapper],
-            (true, LayoutViewKind::Target | LayoutViewKind::SlotBasis) => {
-                vec![PlaceStep::ProviderTarget]
-            }
-            (false, _) => Vec::new(),
-        }
-    }
-
-    pub fn project(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        kind: LayoutViewKind,
-        selection: &LayoutSelection,
-    ) -> Result<AssignedLayoutTy<'db>, LayoutViewError<'db>> {
-        let template = project_layout_template(db, self.view(kind).template, &selection.selector)?;
-        let view = assigned_view(db, template, &self.root_bindings);
-        let mut bindings = IndexMap::new();
-        for (root, binding) in view.bindings {
-            let binding = match binding {
-                LayoutBinding::NonPhysical => LayoutBinding::NonPhysical,
-                LayoutBinding::Bound(leaves) => {
-                    let leaves = matching_binding_leaves(&leaves, &selection.selector);
-                    if leaves.is_empty() {
-                        return Err(LayoutViewError::RootNeedsLanding { root });
-                    }
-                    LayoutBinding::Bound(leaves.into_iter().cloned().collect())
-                }
-            };
-            bindings.insert(root, binding);
-        }
-        Ok(AssignedLayoutTy { template, bindings })
-    }
-
-    pub fn projected_concrete_ty(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        kind: LayoutViewKind,
-        selection: &LayoutSelection,
-    ) -> Result<TyId<'db>, LayoutViewError<'db>> {
-        let view = self.project(db, kind, selection)?;
-        self.try_concrete_ty(db, &view, selection)
-    }
-
-    pub fn root_target_for_place(&self, place: &StoragePlace<'db>) -> Option<RootCellId> {
-        let [target] = self.place_roots.get(place)?.as_slice() else {
-            return None;
-        };
-        Some(*target)
-    }
-
-    pub fn root_targets_for_place(&self, place: &StoragePlace<'db>) -> &[RootCellId] {
-        self.place_roots.get(place).map_or(&[], Vec::as_slice)
-    }
-
-    pub fn root_allocation_for_place(&self, place: &StoragePlace<'db>) -> Option<RootAllocation> {
-        let cell = self.root_target_for_place(place)?;
-        self.cells.get(cell.0 as usize)?.allocation
-    }
-
-    pub fn assigned_slot_for_place(&self, place: &StoragePlace<'db>) -> Option<usize> {
-        self.root_allocation_for_place(place)
-            .map(|allocation| allocation.slot)
-    }
-
-    pub fn assigned_root_value(
-        &self,
-        cell: RootCellId,
-        ty: TyId<'db>,
-    ) -> Option<AssignedRootValue<'db>> {
-        let allocation = self.cells.get(cell.0 as usize)?.allocation?;
-        Some(AssignedRootValue {
-            space: allocation.space,
-            slot: allocation.slot,
-            ty,
-        })
-    }
-
-    pub fn root_value(
-        &self,
-        view: &AssignedLayoutTy<'db>,
-        root: LayoutRootId<'db>,
-        ty: TyId<'db>,
-        selection: &LayoutSelection,
-    ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
-        let binding = view
-            .binding(root)
-            .ok_or(LayoutViewError::RootNotClassified { root })?;
-        let LayoutBinding::Bound(leaves) = binding else {
-            return Err(LayoutViewError::NonPhysicalRoot { root });
-        };
-        let leaves = matching_binding_leaves(leaves, &selection.selector);
-        self.root_value_from_leaves(root, ty, &leaves)
-    }
-
-    /// Resolves a root from a source-level projection path. Layout-only graph edges such as
-    /// provider-target and transparent-wrapper transitions are intentionally invisible to the
-    /// caller but remain authoritative in the binding leaves matched here.
-    pub fn root_value_for_visible_projections(
-        &self,
-        kind: LayoutViewKind,
-        root: LayoutRootId<'db>,
-        ty: TyId<'db>,
-        projections: &[LayoutProjection],
-    ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
-        self.root_value_for_projections(kind, root, ty, projections, false)
-    }
-
-    /// Resolves a root using the complete semantic layout-view path.
-    ///
-    /// Unlike source-visible projections, nested effect-target transitions
-    /// remain explicit so physical wrapper roots cannot satisfy target ports
-    /// (or vice versa) merely because the source syntax hides a dereference.
-    pub fn root_value_for_evidence_projections(
-        &self,
-        kind: LayoutViewKind,
-        root: LayoutRootId<'db>,
-        ty: TyId<'db>,
-        projections: &[LayoutProjection],
-    ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
-        self.root_value_for_projections(kind, root, ty, projections, true)
-    }
-
-    fn root_value_for_projections(
-        &self,
-        kind: LayoutViewKind,
-        root: LayoutRootId<'db>,
-        ty: TyId<'db>,
-        projections: &[LayoutProjection],
-        include_effect_targets: bool,
-    ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
-        let binding = self
-            .root_bindings
-            .get(&root)
-            .ok_or(LayoutViewError::RootNotClassified { root })?;
-        let LayoutBinding::Bound(leaves) = binding else {
-            return Err(LayoutViewError::NonPhysicalRoot { root });
-        };
-        let view_selector = self.view_selector(kind);
-        let leaves = leaves
-            .iter()
-            .filter(|leaf| {
-                leaf.selector
-                    .strip_prefix(view_selector.as_slice())
-                    .and_then(|selector| layout_projection_path(selector, include_effect_targets))
-                    .is_some_and(|candidate| candidate.starts_with(projections))
-            })
-            .collect::<Vec<_>>();
-        self.root_value_from_leaves(root, ty, &leaves)
-    }
-
-    /// Resolves a source projection whose semantic root remains runtime-selected.
-    ///
-    /// This is intentionally strict: the visible projection must identify one
-    /// physical value across the complete field layout. Multiple semantic roots
-    /// are accepted only when they resolve to the same assigned transport.
-    pub fn unique_root_value_for_visible_projections(
-        &self,
-        kind: LayoutViewKind,
-        ty: TyId<'db>,
-        projections: &[LayoutProjection],
-    ) -> Option<AssignedRootValue<'db>> {
-        self.unique_root_value_for_projections(kind, ty, projections, false)
-    }
-
-    pub fn unique_root_value_for_evidence_projections(
-        &self,
-        kind: LayoutViewKind,
-        ty: TyId<'db>,
-        projections: &[LayoutProjection],
-    ) -> Option<AssignedRootValue<'db>> {
-        self.unique_root_value_for_projections(kind, ty, projections, true)
-    }
-
-    fn unique_root_value_for_projections(
-        &self,
-        kind: LayoutViewKind,
-        ty: TyId<'db>,
-        projections: &[LayoutProjection],
-        include_effect_targets: bool,
-    ) -> Option<AssignedRootValue<'db>> {
-        let mut values = self.root_bindings.keys().filter_map(|root| {
-            self.root_value_for_projections(kind, *root, ty, projections, include_effect_targets)
-                .ok()
-        });
-        let value = values.next()?;
-        values.all(|candidate| candidate == value).then_some(value)
-    }
-
-    fn root_value_from_leaves(
-        &self,
-        root: LayoutRootId<'db>,
-        ty: TyId<'db>,
-        leaves: &[&LayoutBindingLeaf],
-    ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
-        let Some(target) = leaves.first().map(|leaf| leaf.target) else {
-            return Err(LayoutViewError::RootNeedsLanding { root });
-        };
-        if leaves.iter().any(|leaf| leaf.target != target) {
-            return Err(LayoutViewError::RootNeedsLanding { root });
-        }
-        self.assigned_root_value(target, ty)
-            .ok_or(LayoutViewError::MissingAllocation { root })
-    }
-
-    pub fn try_concrete_ty(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        view: &AssignedLayoutTy<'db>,
-        selection: &LayoutSelection,
-    ) -> Result<TyId<'db>, LayoutViewError<'db>> {
-        let mut error = None;
-        let ty = rewrite_structural_holes(db, view.template, |hole, hole_ty| {
-            if error.is_some() {
-                return None;
-            }
-            match self.root_value(
-                view,
-                hole.root(db),
-                layout_hole_fallback_ty(db, hole_ty),
-                selection,
-            ) {
-                Ok(AssignedRootValue { slot, ty, .. }) => Some(slot_const_ty(db, slot, ty)),
-                Err(view_error) => {
-                    error = Some(view_error);
-                    None
-                }
-            }
-        });
-        error.map_or(Ok(ty), Err)
-    }
-
-    pub fn declared_concrete_ty(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        selection: &LayoutSelection,
-    ) -> Result<TyId<'db>, LayoutViewError<'db>> {
-        self.try_concrete_ty(db, &self.declared, selection)
-    }
-
-    pub fn target_concrete_ty(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        selection: &LayoutSelection,
-    ) -> Result<TyId<'db>, LayoutViewError<'db>> {
-        self.try_concrete_ty(db, &self.target, selection)
-    }
-
-    /// Type used to identify a whole contract-field effect binding. Scalar
-    /// layouts retain their assigned literals. A whole view that intentionally
-    /// requires a structural landing or has only non-physical roots uses its
-    /// source shape together with the binding's `layout_env`.
-    /// Graph/allocation failures remain errors and are never erased.
-    pub fn target_effect_binding_ty(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Result<TyId<'db>, LayoutViewError<'db>> {
-        match self.target_concrete_ty(db, &LayoutSelection::default()) {
-            Ok(ty) => Ok(ty),
-            Err(
-                LayoutViewError::NonPhysicalRoot { .. } | LayoutViewError::RootNeedsLanding { .. },
-            ) => Ok(self.target.shape_ty()),
-            Err(error) => Err(error),
-        }
-    }
-
-    pub fn slot_basis_concrete_ty(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        selection: &LayoutSelection,
-    ) -> Result<TyId<'db>, LayoutViewError<'db>> {
-        self.try_concrete_ty(db, &self.slot_basis, selection)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+/// A contract field's layout before the contract places it: its address
+/// space, the slots it spans and the parts that take them.
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ValidatedFieldLayoutPlan<'db> {
     field: ContractFieldId<'db>,
     name: IdentId<'db>,
     is_mut: bool,
-    is_provider: bool,
-    address_space: ProviderAddressSpace,
-    inline_span: usize,
+    address_space: AddressSpace,
+    declared: TyId<'db>,
+    /// The slot `#[slot(e)]` places the field at.
+    explicit_slot: Option<U256>,
+    slot_count: usize,
+    /// The spaces the field's slot numbers are taken in: its own, when a
+    /// part of it lies outside a pinned type, and those its pinned types are
+    /// pinned to, which keep their contents at their own slot numbers there
+    /// (a `TSlot`'s value in transient storage).
+    spaces: Vec<AddressSpace>,
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
-    declared_template: TyId<'db>,
-    target_template: TyId<'db>,
-    slot_basis_template: TyId<'db>,
-    occurrences: Vec<RootOccurrence<'db>>,
-    concrete_occurrences: Vec<ConcreteRootOccurrence<'db>>,
-    cells: Vec<RootCell<'db>>,
-    overlay_groups: Vec<EnumOverlayGroup<'db>>,
-    place_roots: IndexMap<StoragePlace<'db>, Vec<RootCellId>>,
-    bindings: IndexMap<LayoutRootId<'db>, LayoutBinding>,
-    counted_lanes: Vec<AllocationLane<'db>>,
-    materialize_only_lanes: Vec<AllocationLane<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+pub struct FieldStorageLayout<'db> {
+    pub field: ContractFieldId<'db>,
+    pub name: IdentId<'db>,
+    pub is_mut: bool,
+    pub address_space: AddressSpace,
+    /// The field's declared type.
+    pub declared: TyId<'db>,
+    /// The field's first slot, or for a code field its first word.
+    pub slot_offset: U256,
+    pub slot_count: usize,
+    inline_leaves: Vec<InlineLayoutLeaf<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct AllocatedContractStorageLayout<'db> {
     pub fields: IndexMap<IdentId<'db>, FieldStorageLayout<'db>>,
-    pub explicit_reservations: Vec<ExplicitRootReservation<'db>>,
-    pub high_water_by_address_space: FxHashMap<ProviderAddressSpace, usize>,
+    /// The words the code fields take.
+    pub code_slot_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ContractFieldLayoutResult<'db> {
     pub field: ContractFieldId<'db>,
     pub name: IdentId<'db>,
     pub result: Result<ValidatedFieldLayoutPlan<'db>, Vec<ContractLayoutError<'db>>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ContractStorageLayoutResult<'db> {
     pub field_results: Vec<ContractFieldLayoutResult<'db>>,
     pub allocated: Option<AllocatedContractStorageLayout<'db>>,
@@ -1060,680 +338,156 @@ impl<'db> ContractStorageLayoutResult<'db> {
             .flat_map(|layout| layout.fields.values())
     }
 
+    /// The fields whose layout is valid, by name: index, `is_mut` and
+    /// declared type.
     pub(crate) fn semantic_fields(
         &self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<(
-        IdentId<'db>,
-        ContractFieldId<'db>,
-        bool,
-        bool,
-        AssignedLayoutTy<'db>,
-        AssignedLayoutTy<'db>,
-    )> {
-        if let Some(layout) = &self.allocated {
-            return layout
-                .fields
-                .iter()
-                .map(|(name, field)| {
-                    (
-                        *name,
-                        field.field,
-                        field.is_mut,
-                        field.is_provider,
-                        field.declared.clone(),
-                        field.target.clone(),
-                    )
-                })
-                .collect();
-        }
+    ) -> Vec<(IdentId<'db>, ContractFieldId<'db>, bool, TyId<'db>)> {
         self.field_results
             .iter()
             .filter_map(|field| {
                 let plan = field.result.as_ref().ok()?;
-                Some((
-                    field.name,
-                    plan.field,
-                    plan.is_mut,
-                    plan.is_provider,
-                    assigned_view(db, plan.declared_template, &plan.bindings),
-                    assigned_view(db, plan.target_template, &plan.bindings),
-                ))
+                Some((field.name, plan.field, plan.is_mut, plan.declared))
             })
             .collect()
     }
 }
 
-fn slot_const_ty<'db>(db: &'db dyn HirAnalysisDb, value: usize, ty: TyId<'db>) -> TyId<'db> {
-    TyId::const_ty(
-        db,
-        const_ty_from_sem_const(db, int_const(db, ty, BigInt::from(value))),
-    )
-}
-
-fn const_ty_to_usize<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
-    demand_concrete_array_length(db, ty, ty)
-        .ok()
-        .flatten()
-        .and_then(|int| int.to_usize())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WalkMode {
-    Counted,
-    MaterializeOnly,
-}
-
-impl From<WalkMode> for RootRole {
-    fn from(mode: WalkMode) -> Self {
-        match mode {
-            WalkMode::Counted => Self::Counted,
-            WalkMode::MaterializeOnly => Self::MaterializeOnly,
-        }
+/// The bytes a scalar struct or tuple field takes in a packed storage slot:
+/// booleans and integers narrower than a word, like Solidity's value types.
+/// Everything else takes whole slots. Runtime lowering classifies scalars
+/// the same way (`mir::runtime::storage_scalar_bytes`).
+fn storage_packable_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<u32> {
+    let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
+        return None;
+    };
+    match prim {
+        PrimTy::Bool | PrimTy::U8 | PrimTy::I8 => Some(1),
+        PrimTy::U16 | PrimTy::I16 => Some(2),
+        PrimTy::U32 | PrimTy::I32 => Some(4),
+        PrimTy::U64 | PrimTy::I64 => Some(8),
+        PrimTy::U128 | PrimTy::I128 => Some(16),
+        _ => None,
     }
 }
 
-#[derive(Clone, Debug)]
-enum WalkEvent<'db> {
-    Root(RootOccurrenceId),
-    Enum {
-        place: StoragePlace<'db>,
-        variants: Vec<Vec<WalkEvent<'db>>>,
-    },
-}
-
-#[derive(Clone, Debug)]
-struct WalkOutput<'db> {
-    inline_span: usize,
-    inline_leaves: Vec<InlineLayoutLeaf<'db>>,
-    events: Vec<WalkEvent<'db>>,
-}
-
-impl<'db> WalkOutput<'db> {
-    fn empty() -> Self {
-        Self {
-            inline_span: 0,
-            inline_leaves: Vec::new(),
-            events: Vec::new(),
-        }
-    }
-
-    fn scalar(ty: TyId<'db>, place: StoragePlace<'db>, dimensions: &[usize]) -> Self {
-        Self {
-            inline_span: 1,
-            inline_leaves: vec![InlineLayoutLeaf {
-                place,
-                ty,
-                offset: 0,
-                dimensions: dimensions.to_vec(),
-                strides: vec![0; dimensions.len()],
-                kind: InlineLayoutLeafKind::Field,
-            }],
-            events: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 enum InlineLayoutLeafKind {
     Field,
+    Collection,
     EnumTag,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+/// A part of a field that takes slots: a scalar, a storage collection or an
+/// enum tag, at `offset` slots from the field's first, repeated along each
+/// enclosing array's dimension at its stride.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 struct InlineLayoutLeaf<'db> {
-    place: StoragePlace<'db>,
+    path: Vec<ContractLayoutPathSegment<'db>>,
     ty: TyId<'db>,
     offset: usize,
+    /// The bytes of slot `offset` holding a packed scalar.
+    lane: Option<ContractLayoutLane>,
     dimensions: Vec<usize>,
     strides: Vec<usize>,
     kind: InlineLayoutLeafKind,
 }
 
 #[derive(Clone, Debug)]
-struct ConcreteApplication<'db> {
-    ty: TyId<'db>,
-    direct_roots: FxHashSet<LayoutRootId<'db>>,
+struct WalkOutput<'db> {
+    span: usize,
+    leaves: Vec<InlineLayoutLeaf<'db>>,
+    /// The bytes of a scalar that packs with its neighbours in a struct or
+    /// tuple; `None` for values that take whole slots.
+    packable_bytes: Option<u32>,
 }
 
-#[derive(Clone, Debug)]
-struct ConcreteRootSite<'db> {
-    owner: TyId<'db>,
-    place: StoragePlace<'db>,
-    mode: WalkMode,
-    default_space: ProviderAddressSpace,
-}
-
-#[derive(Clone, Copy)]
-struct ProviderTargetEdge<'db> {
-    impl_instance: ResolvedImplInstance<'db>,
-    target_template: TyId<'db>,
-    space: ProviderAddressSpace,
-}
-
-#[derive(Clone)]
-struct ExpandingProvider<'db> {
-    ty: TyId<'db>,
-    implementation: ImplementorId<'db>,
-    /// Root and concrete occurrence counts when the expansion began.
-    occurrences: (usize, usize),
-    /// Stack index of the outermost expansion that this one closes a
-    /// back-edge to, directly or through a nested expansion; its own index if
-    /// none. This expansion reaches every root that one reaches.
-    recurs_to: usize,
-    /// Arrays whose elements reach this expansion's roots, which are known
-    /// only once its outermost recurrence finishes.
-    back_edge_arrays: Vec<TyId<'db>>,
-}
-
-fn instantiate_provider_target_layout<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: crate::hir_def::scope_graph::ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    parent_instance: LayoutInstantiationId<'db>,
-    impl_instance: ResolvedImplInstance<'db>,
-    target_template: TyId<'db>,
-) -> Result<LayoutInstantiation<'db>, ContractLayoutError<'db>> {
-    let boundary = LayoutBoundaryIdentity::ProviderTarget(impl_instance.selected());
-    let schema = match impl_instance.selected().origin(db) {
-        ImplementorOrigin::Hir(impl_trait) => Some(ParamSchemaId::full(db, impl_trait.into())),
-        ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => None,
-    };
-    if schema.is_none() && !impl_instance.impl_args(db).is_empty() {
-        return Err(ContractLayoutError::InternalLayoutGraph);
-    }
-    let subst = schema
-        .map(|schema| {
-            CompleteSubst::new(
-                ParamDomainId::full(db, schema),
-                db,
-                impl_instance.impl_args(db).to_vec(),
-            )
-        })
-        .transpose()
-        .map_err(|_| ContractLayoutError::InternalLayoutGraph)?;
-    let target = instantiate_layout_template(
-        db,
-        target_template,
-        subst.map(|mapping| LayoutTemplateSubst::new(ParamBasis::Full, mapping)),
-        LayoutInstantiationContext::Nested(parent_instance),
-        boundary,
-        vec![LayoutOccurrenceStep::Instantiation(0)],
-    );
-    let normalized_root_uses = normalize_layout_root_uses(db, target.ty, scope, assumptions);
-    let normalized = normalize_ty(db, target.ty, scope, assumptions);
-    // Normalization can expose structural roots owned by another associated
-    // type definition. Re-land the complete equality partition under this
-    // provider occurrence so every root carries the exact provider boundary.
-    let mut target = instantiate_layout_template(
-        db,
-        normalized,
-        None,
-        LayoutInstantiationContext::Nested(target.instance),
-        boundary,
-        vec![LayoutOccurrenceStep::Normalization],
-    );
-    let target_ident = IdentId::new(db, "Target".to_string());
-    for root_use in impl_instance.assoc_ty_layout_root_uses(db, target_ident) {
-        let Some(schema) = schema else { continue };
-        let value = Binder::bind(schema.owner(db), root_use.value)
-            .instantiate(db, impl_instance.impl_args(db));
-        if layout_root_id(db, value).is_some() {
-            continue;
-        }
-        let root_use = crate::analysis::ty::layout_holes::LayoutRootUse {
-            value,
-            owner: root_use.owner.map(|owner| {
-                normalize_ty(
-                    db,
-                    Binder::bind(schema.owner(db), owner)
-                        .instantiate(db, impl_instance.impl_args(db)),
-                    scope,
-                    assumptions,
-                )
-            }),
-            selector: root_use.selector,
-        };
-        if !target.root_uses.contains(&root_use) {
-            target.root_uses.push(root_use);
+impl<'db> WalkOutput<'db> {
+    fn empty() -> Self {
+        Self {
+            span: 0,
+            leaves: Vec::new(),
+            packable_bytes: None,
         }
     }
-    for mut root_use in normalized_root_uses {
-        if layout_root_id(db, root_use.value).is_some() {
-            continue;
-        }
-        root_use.owner = root_use.owner.or(Some(target.ty));
-        if !target.root_uses.contains(&root_use) {
-            target.root_uses.push(root_use);
-        }
-    }
-    if target.ty.has_invalid(db)
-        || target.ty.has_param(db)
-        || target.ty.has_var(db)
-        || ty_has_incomplete_adt_application(db, target.ty)
-    {
-        Err(ContractLayoutError::UnresolvedProviderTarget)
-    } else {
-        Ok(target)
-    }
-}
 
-struct FieldCollector<'db> {
-    db: &'db dyn HirAnalysisDb,
-    scope: crate::hir_def::scope_graph::ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    active_space: ProviderAddressSpace,
-    occurrences: Vec<RootOccurrence<'db>>,
-    concrete_occurrences: Vec<ConcreteRootOccurrence<'db>>,
-    errors: Vec<ContractLayoutError<'db>>,
-    applications: Vec<ConcreteApplication<'db>>,
-    reached_concrete_sites: Vec<ConcreteRootSite<'db>>,
-    visiting: FxHashSet<(TyId<'db>, StoragePlace<'db>)>,
-    expanding_providers: Vec<ExpandingProvider<'db>>,
-    /// Enclosing arrays, each with the provider expansion depth at its start.
-    arrays: Vec<(TyId<'db>, usize)>,
-    nonterminal_occurrences: FxHashSet<RootOccurrenceId>,
-}
-
-impl<'db> FieldCollector<'db> {
-    fn new(
+    fn leaf(
         db: &'db dyn HirAnalysisDb,
-        scope: crate::hir_def::scope_graph::ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-        active_space: ProviderAddressSpace,
+        ty: TyId<'db>,
+        path: &[ContractLayoutPathSegment<'db>],
+        dimensions: &[usize],
+        kind: InlineLayoutLeafKind,
     ) -> Self {
         Self {
-            db,
-            scope,
-            assumptions,
-            active_space,
-            occurrences: Vec::new(),
-            concrete_occurrences: Vec::new(),
-            errors: Vec::new(),
-            applications: Vec::new(),
-            reached_concrete_sites: Vec::new(),
-            visiting: FxHashSet::default(),
-            expanding_providers: Vec::new(),
-            arrays: Vec::new(),
-            nonterminal_occurrences: FxHashSet::default(),
+            span: 1,
+            leaves: vec![InlineLayoutLeaf {
+                path: path.to_vec(),
+                ty,
+                offset: 0,
+                lane: None,
+                dimensions: dimensions.to_vec(),
+                strides: vec![0; dimensions.len()],
+                kind,
+            }],
+            packable_bytes: match kind {
+                InlineLayoutLeafKind::Field => storage_packable_bytes(db, ty),
+                InlineLayoutLeafKind::Collection | InlineLayoutLeafKind::EnumTag => None,
+            },
         }
     }
+}
 
+/// Lays out one contract field's value: the slots each part takes, from
+/// the field's first.
+struct FieldWalker<'db> {
+    db: &'db dyn HirAnalysisDb,
+    errors: Vec<ContractLayoutError<'db>>,
+}
+
+impl<'db> FieldWalker<'db> {
     fn push_error(&mut self, error: ContractLayoutError<'db>) {
         if self.errors.contains(&error) {
             return;
         }
-        let position = match &error {
-            ContractLayoutError::NonRegularProviderCycle => 0,
-            ContractLayoutError::InvalidConcreteArrayLength { .. } => self
-                .errors
+        // A field's array length error is the one its diagnostic reports.
+        let position = if matches!(
+            error,
+            ContractLayoutError::InvalidConcreteArrayLength { .. }
+        ) {
+            self.errors
                 .iter()
                 .position(|prior| {
                     !matches!(
                         prior,
-                        ContractLayoutError::NonRegularProviderCycle
-                            | ContractLayoutError::InvalidConcreteArrayLength { .. }
+                        ContractLayoutError::InvalidConcreteArrayLength { .. }
                     )
                 })
-                .unwrap_or(self.errors.len()),
-            _ => self.errors.len(),
+                .unwrap_or(self.errors.len())
+        } else {
+            self.errors.len()
         };
         self.errors.insert(position, error);
-    }
-
-    fn concrete_owner(&self, root: LayoutRootId<'db>) -> Option<TyId<'db>> {
-        self.applications.iter().rev().find_map(|application| {
-            application
-                .direct_roots
-                .iter()
-                .any(|candidate| layout_root_descends_from(self.db, root, *candidate))
-                .then_some(application.ty)
-        })
-    }
-
-    fn root_space(&mut self, root: LayoutRootId<'db>) -> Option<ProviderAddressSpace> {
-        let Some(owner) = self.concrete_owner(root) else {
-            return Some(self.active_space);
-        };
-        self.root_space_for_owner(owner, self.active_space)
-    }
-
-    fn root_space_for_owner(
-        &mut self,
-        owner: TyId<'db>,
-        default_space: ProviderAddressSpace,
-    ) -> Option<ProviderAddressSpace> {
-        match resolve_static_slot_layout(self.db, self.scope, self.assumptions, owner) {
-            StaticSlotLayoutResolution::NotStaticSlot => Some(default_space),
-            StaticSlotLayoutResolution::Resolved(space) => Some(space),
-            StaticSlotLayoutResolution::Ambiguous => {
-                self.push_error(ContractLayoutError::AmbiguousStaticSlot { owner });
-                None
-            }
-            StaticSlotLayoutResolution::UnresolvedSpace => {
-                self.push_error(ContractLayoutError::UnresolvedStaticSlotSpace { owner });
-                None
-            }
-        }
-    }
-
-    fn emit_root(
-        &mut self,
-        placeholder: TyId<'db>,
-        place: StoragePlace<'db>,
-        selector: Vec<PlaceStep>,
-        mode: WalkMode,
-    ) -> Option<WalkEvent<'db>> {
-        let hole = structural_hole_id(self.db, placeholder)?;
-        if matches!(
-            hole.origin(self.db),
-            StructuralHoleOrigin::ExplicitWildcard { .. }
-        ) {
-            self.push_error(ContractLayoutError::ExplicitContractLayoutHole { placeholder });
-            return None;
-        }
-        let expected = layout_hole_fallback_ty(self.db, hole.expected_ty(self.db));
-        if !matches!(
-            expected.data(self.db),
-            TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
-        ) {
-            self.push_error(ContractLayoutError::NonSlotContractLayoutHole { placeholder });
-            return None;
-        }
-        let root = hole.root(self.db);
-        let space = self.root_space(root)?;
-        let id = RootOccurrenceId(self.occurrences.len() as u32);
-        self.occurrences.push(RootOccurrence {
-            id,
-            root,
-            placeholder,
-            place,
-            selector,
-            role: mode.into(),
-            space,
-            order: id.0,
-        });
-        Some(WalkEvent::Root(id))
-    }
-
-    fn emit_concrete_root(
-        &mut self,
-        value: TyId<'db>,
-        site: ConcreteRootSite<'db>,
-        selector: Vec<PlaceStep>,
-    ) {
-        let ConcreteRootSite {
-            owner,
-            place,
-            mode,
-            default_space,
-        } = site;
-        let canon_env = ConstCanonEnv::new(self.scope, self.assumptions, None);
-        let value = canonicalize_ty_for_mode(self.db, value, canon_env, ConstCanonMode::Identity);
-        let TyData::ConstTy(const_ty) = value.data(self.db) else {
-            self.push_error(ContractLayoutError::InternalLayoutGraph);
-            return;
-        };
-        let expected_ty = const_ty.ty(self.db);
-        if expected_ty.has_invalid(self.db) {
-            self.push_error(ContractLayoutError::InvalidFieldType);
-            return;
-        }
-        if !matches!(
-            expected_ty.data(self.db),
-            TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
-        ) {
-            return;
-        }
-        let Ok(value) = value.evaluate_const_ty(self.db, Some(expected_ty)) else {
-            self.push_error(ContractLayoutError::InvalidFieldType);
-            return;
-        };
-        let value = canonicalize_ty_for_mode(self.db, value, canon_env, ConstCanonMode::Identity);
-        if value.has_invalid(self.db) {
-            self.push_error(ContractLayoutError::InvalidFieldType);
-            return;
-        }
-        let TyData::ConstTy(const_ty) = value.data(self.db) else {
-            self.push_error(ContractLayoutError::InternalLayoutGraph);
-            return;
-        };
-        let Some(value) = const_ty
-            .integer_value(self.db)
-            .and_then(|value| value.to_biguint())
-        else {
-            self.push_error(ContractLayoutError::UnresolvedConcreteLayoutRoot { value });
-            return;
-        };
-        let ty = const_ty.ty(self.db);
-        if ty != expected_ty {
-            self.push_error(ContractLayoutError::InternalLayoutGraph);
-            return;
-        }
-        let value = IntegerId::new(self.db, value);
-        let Some(space) = self.root_space_for_owner(owner, default_space) else {
-            return;
-        };
-        if self.concrete_occurrences.iter().any(|occurrence| {
-            occurrence.value == value
-                && occurrence.ty == ty
-                && occurrence.owner == owner
-                && occurrence.place == place
-                && occurrence.selector == selector
-                && occurrence.role == mode.into()
-                && occurrence.space == space
-        }) {
-            return;
-        }
-        let id = ConcreteRootOccurrenceId(self.concrete_occurrences.len() as u32);
-        self.concrete_occurrences.push(ConcreteRootOccurrence {
-            id,
-            value,
-            ty,
-            owner,
-            place,
-            selector,
-            role: mode.into(),
-            space,
-            order: id.0,
-        });
-    }
-
-    fn emit_reached_concrete_uses(
-        &mut self,
-        instantiation: &LayoutInstantiation<'db>,
-        reached_start: usize,
-        mode: WalkMode,
-    ) {
-        for root_use in &instantiation.root_uses {
-            if root_use.root(self.db).is_some() {
-                continue;
-            }
-            let owner = root_use.owner.unwrap_or(instantiation.ty);
-            let reached = self.reached_concrete_sites[reached_start..]
-                .iter()
-                .filter(|reached| reached.owner == owner && reached.mode == mode)
-                .cloned()
-                .collect::<Vec<_>>();
-            for reached in reached {
-                let mut selector = reached.place.steps.clone();
-                let parameter = root_use
-                    .selector
-                    .iter()
-                    .rev()
-                    .find_map(|step| match step {
-                        LayoutOccurrenceStep::GenericArg(index) => Some(*index),
-                        _ => None,
-                    })
-                    .or_else(|| {
-                        root_use.selector.iter().rev().find_map(|step| match step {
-                            LayoutOccurrenceStep::ConstParam(index) => Some(*index),
-                            _ => None,
-                        })
-                    });
-                if let Some(index) = parameter
-                    && !matches!(selector.last(), Some(PlaceStep::ConstParam(last)) if *last == index)
-                {
-                    selector.push(PlaceStep::ConstParam(index));
-                }
-                self.emit_concrete_root(root_use.value, reached, selector);
-            }
-        }
-    }
-
-    fn walk_instantiation(
-        &mut self,
-        instantiation: &LayoutInstantiation<'db>,
-        source: TyId<'db>,
-        place: StoragePlace<'db>,
-        dimensions: &[usize],
-        mode: WalkMode,
-    ) -> WalkOutput<'db> {
-        let reached_start = self.reached_concrete_sites.len();
-        let output = self.walk_ty(
-            ConcreteTypeView::new(instantiation.ty, source),
-            instantiation.instance,
-            place,
-            dimensions,
-            mode,
-        );
-        self.emit_reached_concrete_uses(instantiation, reached_start, mode);
-        output
-    }
-
-    fn walk_provider_wrapper_instantiation(
-        &mut self,
-        instantiation: &LayoutInstantiation<'db>,
-        place: StoragePlace<'db>,
-        dimensions: &[usize],
-        mode: WalkMode,
-    ) -> WalkOutput<'db> {
-        let reached_start = self.reached_concrete_sites.len();
-        self.reached_concrete_sites.push(ConcreteRootSite {
-            owner: instantiation.ty,
-            place: place.clone(),
-            mode,
-            default_space: self.active_space,
-        });
-        let output = if self.visiting.insert((instantiation.ty, place.clone())) {
-            let output = self.walk_ty_representation(
-                ConcreteTypeView::new(instantiation.ty, instantiation.ty),
-                instantiation.instance,
-                place.clone(),
-                dimensions,
-                mode,
-            );
-            self.visiting.remove(&(instantiation.ty, place));
-            output
-        } else {
-            WalkOutput::scalar(instantiation.ty, place, dimensions)
-        };
-        self.emit_reached_concrete_uses(instantiation, reached_start, mode);
-        output
-    }
-
-    fn direct_root_args(
-        &self,
-        adt: AdtDef<'db>,
-        args: &[TyId<'db>],
-    ) -> FxHashSet<LayoutRootId<'db>> {
-        adt.params(self.db)
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, param)| {
-                matches!(param.data(self.db), TyData::ConstTy(_))
-                    .then(|| args.get(idx).and_then(|arg| layout_root_id(self.db, *arg)))
-                    .flatten()
-            })
-            .collect()
     }
 
     fn walk_ty(
         &mut self,
         views: ConcreteTypeView<'db>,
-        parent_instance: LayoutInstantiationId<'db>,
-        place: StoragePlace<'db>,
+        path: &[ContractLayoutPathSegment<'db>],
         dimensions: &[usize],
-        mode: WalkMode,
-    ) -> WalkOutput<'db> {
-        let ty = views.canonical;
-        if let Some(event) = self.emit_root(ty, place.clone(), place.steps.clone(), mode) {
-            return WalkOutput {
-                inline_span: 0,
-                inline_leaves: Vec::new(),
-                events: vec![event],
-            };
-        }
-        self.reached_concrete_sites.push(ConcreteRootSite {
-            owner: ty,
-            place: place.clone(),
-            mode,
-            default_space: self.active_space,
-        });
-        if !self.visiting.insert((ty, place.clone())) {
-            return WalkOutput::scalar(ty, place, dimensions);
-        }
-
-        let provider = ty
-            .adt_def(self.db)
-            .map(|_| resolve_effect_handle_layout(self.db, self.scope, self.assumptions, ty));
-        let output = match provider {
-            Some(ProviderLayoutResolution::Resolved {
-                impl_instance,
-                target_template,
-                space,
-            }) => self.walk_embedded_provider(
-                views,
-                parent_instance,
-                place.clone(),
-                dimensions,
-                mode,
-                ProviderTargetEdge {
-                    impl_instance,
-                    target_template,
-                    space,
-                },
-            ),
-            Some(ProviderLayoutResolution::Invalid(failure)) => {
-                self.push_error(contract_layout_error_for_provider_failure(failure));
-                WalkOutput::empty()
-            }
-            Some(ProviderLayoutResolution::NotHandle) | None => {
-                self.walk_ty_representation(views, parent_instance, place.clone(), dimensions, mode)
-            }
-        };
-        self.visiting.remove(&(ty, place));
-        output
-    }
-
-    fn walk_ty_representation(
-        &mut self,
-        views: ConcreteTypeView<'db>,
-        parent_instance: LayoutInstantiationId<'db>,
-        place: StoragePlace<'db>,
-        dimensions: &[usize],
-        mode: WalkMode,
     ) -> WalkOutput<'db> {
         let ConcreteTypeView {
             canonical: ty,
             source,
         } = views;
         if let Some((kind, inner)) = ty.as_capability(self.db) {
-            let Some((source_kind, source_inner)) = source.as_capability(self.db) else {
+            let Some((_, source_inner)) = source
+                .as_capability(self.db)
+                .filter(|(source_kind, _)| *source_kind == kind)
+            else {
                 self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
                 return WalkOutput::empty();
             };
-            if kind != source_kind {
-                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
-                return WalkOutput::empty();
-            }
-            self.walk_ty(
-                ConcreteTypeView::new(inner, source_inner),
-                parent_instance,
-                place.with_step(PlaceStep::TransparentInner),
-                dimensions,
-                mode,
-            )
+            self.walk_ty(ConcreteTypeView::new(inner, source_inner), path, dimensions)
         } else if let TyData::ConstTy(const_ty) = ty.data(self.db) {
             let TyData::ConstTy(source_const_ty) = source.data(self.db) else {
                 self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
@@ -1741,245 +495,170 @@ impl<'db> FieldCollector<'db> {
             };
             self.walk_ty(
                 ConcreteTypeView::new(const_ty.ty(self.db), source_const_ty.ty(self.db)),
-                parent_instance,
-                place.clone(),
+                path,
                 dimensions,
-                mode,
             )
         } else if ty.is_tuple(self.db) {
-            if !source.is_tuple(self.db) {
-                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
-                return WalkOutput::empty();
-            }
             let source_fields = source.field_types(self.db);
             let fields = ty.field_types(self.db);
-            if fields.len() != source_fields.len() {
+            if !source.is_tuple(self.db) || fields.len() != source_fields.len() {
                 self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
                 return WalkOutput::empty();
             }
-            self.walk_sequence(
-                fields.into_iter().zip(source_fields).enumerate().map(
-                    |(idx, (elem, source_elem))| {
-                        (
-                            LayoutInstantiation {
-                                ty: elem,
-                                root_uses: Vec::new(),
-                                instance: parent_instance,
-                            },
-                            source_elem,
-                            place.with_step(PlaceStep::TupleElem(idx as u32)),
-                        )
-                    },
-                ),
-                dimensions,
-                mode,
-            )
-        } else if ty.is_array(self.db) {
-            self.walk_array(views, parent_instance, place.clone(), dimensions, mode)
-        } else if let Some(adt) = ty.adt_def(self.db) {
-            self.walk_adt(views, adt, parent_instance, place.clone(), dimensions, mode)
-        } else {
-            let inline_span = if ty.is_never(self.db)
-                || ty.is_zero_sized(self.db)
-                || matches!(
-                    ty.base_ty(self.db).data(self.db),
-                    TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_))
-                ) {
-                0
-            } else {
-                1
-            };
-            if inline_span == 0 {
-                WalkOutput::empty()
-            } else {
-                WalkOutput::scalar(ty, place, dimensions)
-            }
-        }
-    }
-
-    fn walk_embedded_provider(
-        &mut self,
-        views: ConcreteTypeView<'db>,
-        parent_instance: LayoutInstantiationId<'db>,
-        place: StoragePlace<'db>,
-        dimensions: &[usize],
-        mode: WalkMode,
-        target_edge: ProviderTargetEdge<'db>,
-    ) -> WalkOutput<'db> {
-        let ty = views.canonical;
-        match classify_layout_view_recurrence(
-            self.db,
-            ty,
-            target_edge.impl_instance.selected(),
-            self.expanding_providers
-                .iter()
+            let items = fields
+                .into_iter()
+                .zip(source_fields)
                 .enumerate()
-                .rev()
-                .map(|(idx, frame)| (idx, frame.ty, frame.implementation)),
-        ) {
-            LayoutViewRecurrence::BackEdge { ancestor } => {
-                if let Some(&(array, depth)) = self.arrays.last()
-                    && ancestor < depth
-                {
-                    let frame = &mut self.expanding_providers[ancestor];
-                    if !frame.back_edge_arrays.contains(&array) {
-                        frame.back_edge_arrays.push(array);
-                    }
+                .map(|(idx, (elem, source_elem))| {
+                    (
+                        ConcreteTypeView::new(elem, source_elem),
+                        ContractLayoutPathSegment::TupleElement(idx as u32),
+                    )
+                })
+                .collect();
+            self.walk_sequence(items, path, dimensions, true)
+        } else if ty.as_closure(self.db).is_some() {
+            // A closure lies in storage as a product of its captures, as MIR
+            // stores it.
+            let source_captures = source.field_types(self.db);
+            let captures = ty.field_types(self.db);
+            if source.as_closure(self.db).is_none() || captures.len() != source_captures.len() {
+                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
+                return WalkOutput::empty();
+            }
+            let items = captures
+                .into_iter()
+                .zip(source_captures)
+                .enumerate()
+                .map(|(idx, (capture, source_capture))| {
+                    (
+                        ConcreteTypeView::new(capture, source_capture),
+                        ContractLayoutPathSegment::TupleElement(idx as u32),
+                    )
+                })
+                .collect();
+            self.walk_sequence(items, path, dimensions, true)
+        } else if ty.is_array(self.db) {
+            self.walk_array(views, path, dimensions)
+        } else if let Some(adt) = ty.adt_def(self.db) {
+            let output = self.walk_adt(views, adt, path, dimensions);
+            // A pinned type is reported at its place, which is its identity,
+            // rather than by the slots its private fields take. It takes whole
+            // slots, at least one even without fields: its root number derives
+            // its region, so siblings need distinct ones.
+            if ty.pin(self.db).is_some() {
+                WalkOutput {
+                    span: output.span.max(1),
+                    ..WalkOutput::leaf(
+                        self.db,
+                        ty,
+                        path,
+                        dimensions,
+                        InlineLayoutLeafKind::Collection,
+                    )
                 }
-                let frame = self
-                    .expanding_providers
-                    .last_mut()
-                    .expect("a back-edge closes inside a provider expansion");
-                frame.recurs_to = frame.recurs_to.min(ancestor);
-                return self.walk_ty_representation(
-                    views,
-                    parent_instance,
-                    place,
-                    dimensions,
-                    mode,
-                );
+            } else {
+                output
             }
-            LayoutViewRecurrence::NonRegular { .. } => {
-                self.push_error(ContractLayoutError::NonRegularProviderCycle);
-                return self.walk_ty_representation(
-                    views,
-                    parent_instance,
-                    place,
-                    dimensions,
-                    mode,
-                );
-            }
-            LayoutViewRecurrence::Expand => {}
-        }
-        self.expanding_providers.push(ExpandingProvider {
-            ty,
-            implementation: target_edge.impl_instance.selected(),
-            occurrences: (self.occurrences.len(), self.concrete_occurrences.len()),
-            recurs_to: self.expanding_providers.len(),
-            back_edge_arrays: Vec::new(),
-        });
-
-        let declared_start = self.occurrences.len();
-        let mut output =
-            self.walk_ty_representation(views, parent_instance, place.clone(), dimensions, mode);
-        let target = match instantiate_provider_target_layout(
-            self.db,
-            self.scope,
-            self.assumptions,
-            parent_instance,
-            target_edge.impl_instance,
-            target_edge.target_template,
-        ) {
-            Ok(target) => target,
-            Err(error) => {
-                self.push_error(error);
-                self.finish_provider_expansion();
-                return output;
-            }
-        };
-        let target_start = self.occurrences.len();
-        let enclosing_space = self.active_space;
-        self.active_space = target_edge.space;
-        let target_output = self.walk_instantiation(
-            &target,
-            target.ty,
-            place.with_step(PlaceStep::ProviderTarget),
-            dimensions,
-            mode,
-        );
-        self.active_space = enclosing_space;
-
-        let direct_roots = ty
-            .adt_def(self.db)
-            .map(|adt| self.direct_root_args(adt, ty.generic_args(self.db)))
-            .unwrap_or_default();
-        let target_roots = self.occurrences[target_start..]
-            .iter()
-            .map(|occurrence| occurrence.root)
-            .collect::<Vec<_>>();
-        let nonterminal = self.occurrences[declared_start..target_start]
-            .iter()
-            .filter(|occurrence| {
-                direct_roots.contains(&occurrence.root)
-                    && target_roots
-                        .iter()
-                        .any(|root| layout_root_descends_from(self.db, *root, occurrence.root))
-            })
-            .map(|occurrence| occurrence.id)
-            .collect::<Vec<_>>();
-        self.nonterminal_occurrences.extend(nonterminal);
-        output.events.extend(target_output.events);
-        self.finish_provider_expansion();
-        output
-    }
-
-    /// Ends the innermost provider expansion. An expansion that recurs to an
-    /// enclosing one reaches every root of the enclosing one, so it defers its
-    /// back-edge and arrays to its parent. The outermost expansion of a
-    /// recurrence reaches exactly the roots it produced, so its arrays carry
-    /// roots exactly when it produced any.
-    fn finish_provider_expansion(&mut self) {
-        let frame = self
-            .expanding_providers
-            .pop()
-            .expect("a provider expansion must be active");
-        if frame.recurs_to < self.expanding_providers.len()
-            && let Some(parent) = self.expanding_providers.last_mut()
+        // A contract value is its address, a word, as MIR lays it out.
+        } else if ty.is_never(self.db)
+            || ty.is_zero_sized(self.db)
+            || matches!(
+                ty.base_ty(self.db).data(self.db),
+                TyData::TyBase(TyBase::Func(_))
+            )
         {
-            parent.recurs_to = parent.recurs_to.min(frame.recurs_to);
-            for array in frame.back_edge_arrays {
-                if !parent.back_edge_arrays.contains(&array) {
-                    parent.back_edge_arrays.push(array);
-                }
-            }
-        } else if (self.occurrences.len(), self.concrete_occurrences.len()) != frame.occurrences {
-            for array in frame.back_edge_arrays {
-                self.push_error(ContractLayoutError::LayoutRootArray { array });
-            }
+            WalkOutput::empty()
+        } else {
+            WalkOutput::leaf(self.db, ty, path, dimensions, InlineLayoutLeafKind::Field)
         }
     }
 
+    /// Lays out a struct's or tuple's fields (`packed`) or an enum payload.
+    /// Packed sequences place narrow scalars like Solidity places struct
+    /// members, see `common::layout::storage_fields_layout`.
     fn walk_sequence(
         &mut self,
-        items: impl IntoIterator<Item = (LayoutInstantiation<'db>, TyId<'db>, StoragePlace<'db>)>,
+        items: Vec<(ConcreteTypeView<'db>, ContractLayoutPathSegment<'db>)>,
+        path: &[ContractLayoutPathSegment<'db>],
         dimensions: &[usize],
-        mode: WalkMode,
+        packed: bool,
     ) -> WalkOutput<'db> {
-        let mut inline_span = 0usize;
-        let mut inline_leaves = Vec::new();
-        let mut events = Vec::new();
-        for (instantiation, source, place) in items {
-            let mut output =
-                self.walk_instantiation(&instantiation, source, place, dimensions, mode);
-            let Some(next) = inline_span.checked_add(output.inline_span) else {
+        let outputs: Vec<_> = items
+            .into_iter()
+            .map(|(views, segment)| {
+                let mut item_path = path.to_vec();
+                item_path.push(segment);
+                self.walk_ty(views, &item_path, dimensions)
+            })
+            .collect();
+        let placements = if packed {
+            let shapes = outputs.iter().map(|output| match output.packable_bytes {
+                Some(bytes) => StorageFieldShape::Scalar { bytes },
+                None => StorageFieldShape::Aggregate {
+                    slots: output.span as u64,
+                },
+            });
+            match storage_fields_layout(shapes) {
+                Ok(layout) => Some(layout),
+                Err(_) => {
+                    self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                    return WalkOutput::empty();
+                }
+            }
+        } else {
+            None
+        };
+        let mut span = 0usize;
+        let mut leaves = Vec::new();
+        for (idx, mut output) in outputs.into_iter().enumerate() {
+            let (start, lane) = match &placements {
+                Some(layout) => {
+                    let placement = layout.placements[idx];
+                    let Ok(slot) = usize::try_from(placement.slot) else {
+                        self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                        continue;
+                    };
+                    (slot, placement.lane.map(ContractLayoutLane::from))
+                }
+                None => (span, None),
+            };
+            let Some(end) = start.checked_add(output.span) else {
                 self.push_error(ContractLayoutError::LayoutExtentOverflow);
                 continue;
             };
-            for leaf in &mut output.inline_leaves {
-                let Some(offset) = leaf.offset.checked_add(inline_span) else {
+            for leaf in &mut output.leaves {
+                let Some(offset) = leaf.offset.checked_add(start) else {
                     self.push_error(ContractLayoutError::LayoutExtentOverflow);
                     continue;
                 };
                 leaf.offset = offset;
+                if lane.is_some() {
+                    leaf.lane = lane;
+                }
             }
-            inline_span = next;
-            inline_leaves.extend(output.inline_leaves);
-            events.extend(output.events);
+            span = span.max(end);
+            leaves.extend(output.leaves);
+        }
+        if let Some(layout) = &placements {
+            let Ok(slots) = usize::try_from(layout.slots) else {
+                self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                return WalkOutput::empty();
+            };
+            span = slots;
         }
         WalkOutput {
-            inline_span,
-            inline_leaves,
-            events,
+            span,
+            leaves,
+            packable_bytes: None,
         }
     }
 
     fn walk_array(
         &mut self,
         views: ConcreteTypeView<'db>,
-        parent_instance: LayoutInstantiationId<'db>,
-        place: StoragePlace<'db>,
+        path: &[ContractLayoutPathSegment<'db>],
         dimensions: &[usize],
-        mode: WalkMode,
     ) -> WalkOutput<'db> {
         let ConcreteTypeView {
             canonical: ty,
@@ -1991,11 +670,17 @@ impl<'db> FieldCollector<'db> {
             self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             return WalkOutput::empty();
         }
-        let element = args[0];
-        let source_element = source_args[0];
+        let element = ConcreteTypeView::new(args[0], source_args[0]);
         let len = match demand_concrete_array_length(self.db, args[1], source_args[1]) {
-            Ok(Some(len)) => len.to_usize(),
             Ok(None) => None,
+            Ok(Some(len)) => {
+                // A length the layout cannot count.
+                let Some(len) = len.to_usize() else {
+                    self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                    return WalkOutput::empty();
+                };
+                Some(len)
+            }
             Err(ConcreteArrayLengthError::Invalid(cause)) => {
                 self.push_error(ContractLayoutError::InvalidConcreteArrayLength {
                     invalid: TyId::invalid(self.db, cause),
@@ -2008,10 +693,8 @@ impl<'db> FieldCollector<'db> {
             }
         };
         if (len.is_none() || len == Some(0))
-            && let Err(RuntimeSizeError::InvalidType(cause)) = runtime_size_bytes_with_source(
-                self.db,
-                ConcreteTypeView::new(element, source_element),
-            )
+            && let Err(RuntimeSizeError::InvalidType(cause)) =
+                runtime_size_bytes_with_source(self.db, element)
         {
             self.push_error(ContractLayoutError::InvalidConcreteArrayLength {
                 invalid: TyId::invalid(self.db, cause),
@@ -2019,57 +702,31 @@ impl<'db> FieldCollector<'db> {
             return WalkOutput::empty();
         }
         let Some(len) = len else {
-            if contains_layout_roots(self.db, element) {
-                self.push_error(ContractLayoutError::LayoutRootArray { array: ty });
-            } else {
-                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
-            }
+            self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             return WalkOutput::empty();
         };
-        let element = instantiate_layout_template(
-            self.db,
-            element,
-            None,
-            LayoutInstantiationContext::Nested(parent_instance),
-            LayoutBoundaryIdentity::ArrayElement,
-            vec![LayoutOccurrenceStep::ArrayDimension(dimensions.len() as u32)],
-        );
-        let mut element_dimensions = dimensions.to_vec();
-        element_dimensions.push(len);
-        let occurrences = (self.occurrences.len(), self.concrete_occurrences.len());
-        self.arrays.push((ty, self.expanding_providers.len()));
-        let mut output = self.walk_ty(
-            ConcreteTypeView::new(element.ty, source_element),
-            element.instance,
-            place.with_step(PlaceStep::ArrayElem(0)),
-            &element_dimensions,
-            mode,
-        );
-        self.arrays.pop();
-        // Every element shares one element type, so the elements cannot carry
-        // distinct layout roots. This holds at every extent, including zero.
-        if (self.occurrences.len(), self.concrete_occurrences.len()) != occurrences {
-            self.push_error(ContractLayoutError::LayoutRootArray { array: ty });
-            return WalkOutput::empty();
-        }
         if len == 0 {
             return WalkOutput::empty();
         }
-        let Some(inline_span) = output.inline_span.checked_mul(len) else {
+        let mut element_path = path.to_vec();
+        element_path.push(ContractLayoutPathSegment::ArrayElement {
+            dimension: dimensions.len() as u32,
+            len,
+        });
+        let mut element_dimensions = dimensions.to_vec();
+        element_dimensions.push(len);
+        let mut output = self.walk_ty(element, &element_path, &element_dimensions);
+        let Some(span) = output.span.checked_mul(len) else {
             self.push_error(ContractLayoutError::LayoutExtentOverflow);
-            return WalkOutput {
-                inline_span: 0,
-                inline_leaves: output.inline_leaves,
-                events: output.events,
-            };
+            return WalkOutput::empty();
         };
-        for leaf in &mut output.inline_leaves {
-            leaf.strides[dimensions.len()] = output.inline_span;
+        for leaf in &mut output.leaves {
+            leaf.strides[dimensions.len()] = output.span;
         }
         WalkOutput {
-            inline_span,
-            inline_leaves: output.inline_leaves,
-            events: output.events,
+            span,
+            leaves: output.leaves,
+            packable_bytes: None,
         }
     }
 
@@ -2077,16 +734,14 @@ impl<'db> FieldCollector<'db> {
         &mut self,
         views: ConcreteTypeView<'db>,
         adt: AdtDef<'db>,
-        parent_instance: LayoutInstantiationId<'db>,
-        place: StoragePlace<'db>,
+        path: &[ContractLayoutPathSegment<'db>],
         dimensions: &[usize],
-        mode: WalkMode,
     ) -> WalkOutput<'db> {
         let ConcreteTypeView {
             canonical: ty,
             source,
         } = views;
-        if adt.recursive_cycle(self.db).is_some() {
+        if adt.recursive_cycle_through_arguments(self.db).is_some() {
             self.push_error(ContractLayoutError::InvalidFieldType);
             return WalkOutput::empty();
         }
@@ -2099,159 +754,106 @@ impl<'db> FieldCollector<'db> {
             self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             return WalkOutput::empty();
         }
-        let direct_roots = self.direct_root_args(adt, args);
-        self.applications
-            .push(ConcreteApplication { ty, direct_roots });
-        let mut direct_events = Vec::new();
-        for (idx, param) in adt.params(self.db).iter().enumerate() {
-            if !matches!(param.data(self.db), TyData::ConstTy(_)) {
-                continue;
-            }
-            if let Some(&arg) = args.get(idx)
-                && let Some(event) = self.emit_root(
-                    arg,
-                    place.clone(),
-                    place.with_step(PlaceStep::ConstParam(idx as u32)).steps,
-                    mode,
-                )
-            {
-                direct_events.push(event);
-            } else if adt
-                .param_set(self.db)
-                .const_param_default_is_layout_hole(self.db, idx)
-                && let Some(&arg) = args.get(idx)
-                && structural_hole_id(self.db, arg).is_none()
-            {
-                self.emit_concrete_root(
-                    arg,
-                    ConcreteRootSite {
-                        owner: ty,
-                        place: place.clone(),
-                        mode,
-                        default_space: self.active_space,
-                    },
-                    place.with_step(PlaceStep::ConstParam(idx as u32)).steps,
-                );
-            }
-        }
-        let direct_ids = direct_events
-            .iter()
-            .filter_map(|event| match event {
-                WalkEvent::Root(id) => Some(*id),
-                WalkEvent::Enum { .. } => None,
-            })
-            .collect::<Vec<_>>();
-        let child_occurrence_start = self.occurrences.len();
-
-        let output = match adt.adt_ref(self.db) {
-            AdtRef::Struct(_) => {
-                let fields = &adt.fields(self.db)[0];
-                let mut items = Vec::with_capacity(fields.num_types());
-                for field_idx in 0..fields.num_types() {
-                    let inst = instantiate_adt_field_layout(
-                        self.db,
-                        adt,
-                        0,
-                        field_idx,
-                        args,
-                        parent_instance,
-                        vec![LayoutOccurrenceStep::StructField(field_idx as u32)],
-                    );
-                    let source_field = instantiate_adt_field_source_for_concrete_demand(
-                        self.db,
-                        adt,
-                        0,
-                        field_idx,
-                        source_args,
-                    );
-                    let field_place = place.with_step(PlaceStep::StructField(field_idx as u32));
-                    items.push((inst, source_field, field_place));
+        let db = self.db;
+        // A field's type normalized, as MIR lays out an associated type's
+        // field, `<K as Tr>::Out`, as the type it names.
+        let normalize = |ty| normalize_ty(db, ty, adt.scope(db), PredicateListId::empty_list(db));
+        let field = |variant: usize, field: usize| {
+            let view = instantiate_adt_field_for_concrete_demand(
+                db,
+                adt,
+                variant,
+                field,
+                args,
+                source_args,
+            );
+            ConcreteTypeView::new(normalize(view.canonical), normalize(view.source))
+        };
+        match adt.adt_ref(self.db) {
+            AdtRef::Struct(struct_) => {
+                let mut items = Vec::new();
+                for (idx, view) in FieldParent::Struct(struct_).fields(self.db).enumerate() {
+                    let Some(name) = view.name(self.db) else {
+                        self.push_error(ContractLayoutError::InvalidFieldType);
+                        return WalkOutput::empty();
+                    };
+                    let index = idx as u32;
+                    items.push((
+                        field(0, idx),
+                        ContractLayoutPathSegment::Member { name, index },
+                    ));
                 }
-                let mut output = self.walk_sequence(items, dimensions, mode);
-                direct_events.append(&mut output.events);
-                output.events = direct_events;
-                output
+                self.walk_sequence(items, path, dimensions, true)
             }
-            AdtRef::Enum(_) => {
-                let mut variants = Vec::new();
-                let mut inline_leaves = vec![InlineLayoutLeaf {
-                    place: place.clone(),
+            AdtRef::Enum(enum_) => {
+                let mut tag_path = path.to_vec();
+                tag_path.push(ContractLayoutPathSegment::EnumTag);
+                let mut leaves = WalkOutput::leaf(
+                    self.db,
                     ty,
-                    offset: 0,
-                    dimensions: dimensions.to_vec(),
-                    strides: vec![0; dimensions.len()],
-                    kind: InlineLayoutLeafKind::EnumTag,
-                }];
+                    &tag_path,
+                    dimensions,
+                    InlineLayoutLeafKind::EnumTag,
+                )
+                .leaves;
                 let mut max_payload = 0usize;
                 for (variant_idx, variant) in adt.fields(self.db).iter().enumerate() {
-                    let variant_place = place.with_step(PlaceStep::EnumVariant(variant_idx as u32));
+                    let variant_def = EnumVariant::new(enum_, variant_idx);
+                    let Some(name) = variant_def.ident(self.db) else {
+                        self.push_error(ContractLayoutError::InvalidFieldType);
+                        return WalkOutput::empty();
+                    };
+                    let mut variant_path = path.to_vec();
+                    variant_path.push(ContractLayoutPathSegment::Variant {
+                        name,
+                        index: variant_idx as u32,
+                    });
                     let mut items = Vec::with_capacity(variant.num_types());
                     for field_idx in 0..variant.num_types() {
-                        let inst = instantiate_adt_field_layout(
-                            self.db,
-                            adt,
-                            variant_idx,
-                            field_idx,
-                            args,
-                            parent_instance,
-                            vec![
-                                LayoutOccurrenceStep::EnumVariant(variant_idx as u32),
-                                LayoutOccurrenceStep::EnumPayloadField(field_idx as u32),
-                            ],
-                        );
-                        let source_field = instantiate_adt_field_source_for_concrete_demand(
-                            self.db,
-                            adt,
-                            variant_idx,
-                            field_idx,
-                            source_args,
-                        );
-                        let field_place =
-                            variant_place.with_step(PlaceStep::EnumPayloadField(field_idx as u32));
-                        items.push((inst, source_field, field_place));
+                        let index = field_idx as u32;
+                        let segment = match variant_def.kind(self.db) {
+                            VariantKind::Record(_) => {
+                                let Some(name) = FieldParent::Variant(variant_def)
+                                    .fields(self.db)
+                                    .nth(field_idx)
+                                    .and_then(|field| field.name(self.db))
+                                else {
+                                    self.push_error(ContractLayoutError::InvalidFieldType);
+                                    return WalkOutput::empty();
+                                };
+                                ContractLayoutPathSegment::Member { name, index }
+                            }
+                            VariantKind::Tuple(_) | VariantKind::Unit => {
+                                ContractLayoutPathSegment::TupleElement(index)
+                            }
+                        };
+                        items.push((field(variant_idx, field_idx), segment));
                     }
-                    let mut output = self.walk_sequence(items, dimensions, mode);
-                    max_payload = max_payload.max(output.inline_span);
-                    for leaf in &mut output.inline_leaves {
+                    // Enum payloads are not packed: runtime lowering offsets
+                    // payload fields by whole words.
+                    let mut output = self.walk_sequence(items, &variant_path, dimensions, false);
+                    max_payload = max_payload.max(output.span);
+                    for leaf in &mut output.leaves {
                         let Some(offset) = leaf.offset.checked_add(1) else {
                             self.push_error(ContractLayoutError::LayoutExtentOverflow);
                             continue;
                         };
                         leaf.offset = offset;
                     }
-                    inline_leaves.extend(output.inline_leaves);
-                    variants.push(output.events);
+                    leaves.extend(output.leaves);
                 }
-                let inline_span = max_payload.checked_add(1).unwrap_or_else(|| {
+                let span = max_payload.checked_add(1).unwrap_or_else(|| {
                     self.push_error(ContractLayoutError::LayoutExtentOverflow);
                     0
                 });
-                direct_events.push(WalkEvent::Enum { place, variants });
                 WalkOutput {
-                    inline_span,
-                    inline_leaves,
-                    events: direct_events,
+                    span,
+                    leaves,
+                    packable_bytes: None,
                 }
             }
-        };
-        for direct_id in direct_ids {
-            let direct_root = self.occurrences[direct_id.0 as usize].root;
-            if self
-                .occurrences
-                .iter()
-                .skip(child_occurrence_start)
-                .any(|occurrence| layout_root_descends_from(self.db, occurrence.root, direct_root))
-            {
-                self.nonterminal_occurrences.insert(direct_id);
-            }
         }
-        self.applications.pop();
-        output
     }
-}
-
-fn contains_layout_roots<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    !crate::analysis::ty::layout_holes::collect_unique_structural_holes_in_order(db, ty).is_empty()
 }
 
 fn ty_has_incomplete_adt_application<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
@@ -2276,9 +878,6 @@ fn ty_has_incomplete_adt_application<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
 }
 
 fn affine_extent(dimensions: &[usize], strides: &[usize]) -> Option<usize> {
-    if dimensions.len() != strides.len() {
-        return None;
-    }
     dimensions
         .iter()
         .zip(strides)
@@ -2286,440 +885,6 @@ fn affine_extent(dimensions: &[usize], strides: &[usize]) -> Option<usize> {
             offset.checked_add(dimension.checked_sub(1)?.checked_mul(*stride)?)
         })?
         .checked_add(1)
-}
-
-fn collect_event_cells<'db>(
-    events: &[WalkEvent<'db>],
-    occurrence_cells: &[Option<RootCellId>],
-    seen: &mut FxHashSet<RootCellId>,
-    cells: &mut Vec<RootCellId>,
-) {
-    for event in events {
-        match event {
-            WalkEvent::Root(occurrence) => {
-                if let Some(cell) = occurrence_cells
-                    .get(occurrence.0 as usize)
-                    .copied()
-                    .flatten()
-                    && seen.insert(cell)
-                {
-                    cells.push(cell);
-                }
-            }
-            WalkEvent::Enum { variants, .. } => {
-                for variant in variants {
-                    collect_event_cells(variant, occurrence_cells, seen, cells);
-                }
-            }
-        }
-    }
-}
-
-fn mutually_exclusive_enum_place<'db>(
-    first: &StoragePlace<'db>,
-    second: &StoragePlace<'db>,
-) -> Option<StoragePlace<'db>> {
-    if first.field != second.field {
-        return None;
-    }
-    let mut common = Vec::new();
-    for (first_step, second_step) in first.steps.iter().zip(&second.steps) {
-        if first_step == second_step {
-            common.push(*first_step);
-            continue;
-        }
-        return matches!(
-            (first_step, second_step),
-            (PlaceStep::EnumVariant(first), PlaceStep::EnumVariant(second)) if first != second
-        )
-        .then_some(StoragePlace {
-            field: first.field,
-            steps: common,
-        });
-    }
-    None
-}
-
-/// Returns every enum place that proves at least one occurrence pair mutually
-/// exclusive, but only when *all* occurrence pairs are mutually exclusive.
-/// Identity-equal roots can occur in several variants, so checking one pair or
-/// one positional enum lane is not sufficient to prove an allocation overlay.
-fn cell_overlay_witnesses<'db>(
-    occurrences: &[RootOccurrence<'db>],
-    cells: &[RootCell<'db>],
-    first: RootCellId,
-    second: RootCellId,
-) -> Option<Vec<StoragePlace<'db>>> {
-    let first_occurrences = &cells.get(first.0 as usize)?.occurrences;
-    let second_occurrences = &cells.get(second.0 as usize)?.occurrences;
-    let mut witnesses = Vec::new();
-    for first in first_occurrences {
-        let first = occurrences.get(first.0 as usize)?;
-        for second in second_occurrences {
-            let second = occurrences.get(second.0 as usize)?;
-            let witness = mutually_exclusive_enum_place(&first.place, &second.place)?;
-            if !witnesses.contains(&witness) {
-                witnesses.push(witness);
-            }
-        }
-    }
-    (!witnesses.is_empty()).then_some(witnesses)
-}
-
-fn finalize_lanes<'db>(
-    events: &[WalkEvent<'db>],
-    occurrence_cells: &[Option<RootCellId>],
-    occurrences: &[RootOccurrence<'db>],
-    cells: &[RootCell<'db>],
-    role: RootRole,
-) -> Vec<AllocationLane<'db>> {
-    let mut event_cells = Vec::new();
-    collect_event_cells(
-        events,
-        occurrence_cells,
-        &mut FxHashSet::default(),
-        &mut event_cells,
-    );
-    let mut lanes = Vec::<AllocationLane<'db>>::new();
-    for cell in event_cells {
-        let Some(data) = cells.get(cell.0 as usize) else {
-            continue;
-        };
-        if data.role != role {
-            continue;
-        }
-        if let Some(lane) = lanes.iter_mut().find(|lane| {
-            lane.space == data.space
-                && lane.members.iter().all(|member| {
-                    cell_overlay_witnesses(occurrences, cells, *member, cell).is_some()
-                })
-        }) {
-            lane.members.push(cell);
-        } else {
-            lanes.push(AllocationLane {
-                members: vec![cell],
-                overlays: Vec::new(),
-                space: data.space,
-            });
-        }
-    }
-    for (lane_idx, lane) in lanes.iter_mut().enumerate() {
-        let mut overlay_members: IndexMap<StoragePlace<'db>, Vec<RootCellId>> = IndexMap::new();
-        for (idx, first) in lane.members.iter().enumerate() {
-            for second in lane.members.iter().skip(idx + 1) {
-                let witnesses = cell_overlay_witnesses(occurrences, cells, *first, *second)
-                    .expect("one allocation lane must contain only mutually exclusive cells");
-                for witness in witnesses {
-                    let members = overlay_members.entry(witness).or_default();
-                    for member in [*first, *second] {
-                        if !members.contains(&member) {
-                            members.push(member);
-                        }
-                    }
-                }
-            }
-        }
-        lane.overlays = overlay_members
-            .into_iter()
-            .map(|(place, members)| AllocationOverlay {
-                place,
-                lane: lane_idx as u32,
-                members,
-            })
-            .collect();
-    }
-    lanes
-}
-
-fn assigned_view<'db>(
-    db: &'db dyn HirAnalysisDb,
-    template: TyId<'db>,
-    bindings: &IndexMap<LayoutRootId<'db>, LayoutBinding>,
-) -> AssignedLayoutTy<'db> {
-    let mut view_bindings = IndexMap::new();
-    for hole in
-        crate::analysis::ty::layout_holes::collect_unique_structural_holes_in_order(db, template)
-    {
-        let root = hole.root(db);
-        if let Some(binding) = bindings.get(&root) {
-            view_bindings.insert(root, binding.clone());
-        }
-    }
-    AssignedLayoutTy {
-        template,
-        bindings: view_bindings,
-    }
-}
-
-fn remap_walk_events<'db>(
-    events: Vec<WalkEvent<'db>>,
-    occurrence_map: &[Option<RootOccurrenceId>],
-) -> Vec<WalkEvent<'db>> {
-    events
-        .into_iter()
-        .filter_map(|event| match event {
-            WalkEvent::Root(id) => occurrence_map
-                .get(id.0 as usize)
-                .copied()
-                .flatten()
-                .map(WalkEvent::Root),
-            WalkEvent::Enum { place, variants } => Some(WalkEvent::Enum {
-                place,
-                variants: variants
-                    .into_iter()
-                    .map(|variant| remap_walk_events(variant, occurrence_map))
-                    .collect(),
-            }),
-        })
-        .collect()
-}
-
-struct CollectedFieldLayoutPlan<'db> {
-    field: ContractFieldId<'db>,
-    name: IdentId<'db>,
-    is_mut: bool,
-    is_provider: bool,
-    address_space: ProviderAddressSpace,
-    inline_span: usize,
-    inline_leaves: Vec<InlineLayoutLeaf<'db>>,
-    declared_template: TyId<'db>,
-    target_template: TyId<'db>,
-    slot_basis_template: TyId<'db>,
-    view_roots: Vec<LayoutRootId<'db>>,
-    occurrences: Vec<RootOccurrence<'db>>,
-    concrete_occurrences: Vec<ConcreteRootOccurrence<'db>>,
-    nonterminal_occurrences: FxHashSet<RootOccurrenceId>,
-    counted_events: Vec<WalkEvent<'db>>,
-    materialize_events: Vec<WalkEvent<'db>>,
-}
-
-fn finish_field_plan<'db>(
-    db: &'db dyn HirAnalysisDb,
-    collected: CollectedFieldLayoutPlan<'db>,
-) -> Result<ValidatedFieldLayoutPlan<'db>, Vec<ContractLayoutError<'db>>> {
-    let CollectedFieldLayoutPlan {
-        field,
-        name,
-        is_mut,
-        is_provider,
-        address_space,
-        inline_span,
-        inline_leaves,
-        declared_template,
-        target_template,
-        slot_basis_template,
-        view_roots,
-        occurrences,
-        concrete_occurrences,
-        nonterminal_occurrences,
-        counted_events,
-        materialize_events,
-    } = collected;
-    let counted_roots = occurrences
-        .iter()
-        .filter(|occurrence| {
-            occurrence.role == RootRole::Counted
-                && !nonterminal_occurrences.contains(&occurrence.id)
-        })
-        .map(|occurrence| occurrence.root)
-        .collect::<Vec<_>>();
-    let active = occurrences
-        .iter()
-        .map(|occurrence| {
-            !nonterminal_occurrences.contains(&occurrence.id)
-                && (occurrence.role == RootRole::Counted
-                    || !counted_roots
-                        .iter()
-                        .any(|root| layout_root_descends_from(db, *root, occurrence.root)))
-        })
-        .collect::<Vec<_>>();
-    let mut occurrence_map = vec![None; occurrences.len()];
-    let mut next_occurrence = 0u32;
-    let occurrences = occurrences
-        .into_iter()
-        .filter(|occurrence| active[occurrence.id.0 as usize])
-        .map(|mut occurrence| {
-            let old = occurrence.id;
-            let id = RootOccurrenceId(next_occurrence);
-            next_occurrence += 1;
-            occurrence.id = id;
-            occurrence.order = id.0;
-            occurrence_map[old.0 as usize] = Some(id);
-            occurrence
-        })
-        .collect::<Vec<_>>();
-    let counted_events = remap_walk_events(counted_events, &occurrence_map);
-    let materialize_events = remap_walk_events(materialize_events, &occurrence_map);
-
-    let mut cells = Vec::<RootCell<'db>>::new();
-    let mut cell_by_root = FxHashMap::<LayoutRootId<'db>, RootCellId>::default();
-    let mut occurrence_cells = vec![None; occurrences.len()];
-    let mut place_roots: IndexMap<StoragePlace<'db>, Vec<RootCellId>> = IndexMap::new();
-    let mut expected_by_root = FxHashMap::default();
-    let mut errors = Vec::new();
-
-    for occurrence in &occurrences {
-        let expected = structural_hole_id(db, occurrence.placeholder)
-            .map(|hole| layout_hole_fallback_ty(db, hole.expected_ty(db)))
-            .expect("root occurrences must retain their structural placeholder");
-        if let Some(previous) = expected_by_root.insert(occurrence.root, expected)
-            && previous != expected
-        {
-            errors.push(ContractLayoutError::InconsistentLayoutRootType {
-                root: occurrence.root,
-            });
-        }
-        let cell = if let Some(id) = cell_by_root.get(&occurrence.root).copied() {
-            let cell = &mut cells[id.0 as usize];
-            if cell.space != occurrence.space {
-                errors.push(ContractLayoutError::ConflictingLayoutRootSpaces {
-                    root: occurrence.root,
-                });
-            }
-            cell.role = cell.role.join(occurrence.role);
-            cell.occurrences.push(occurrence.id);
-            id
-        } else {
-            let id = RootCellId(cells.len() as u32);
-            cells.push(RootCell {
-                id,
-                root: occurrence.root,
-                occurrences: vec![occurrence.id],
-                role: occurrence.role,
-                space: occurrence.space,
-                allocation: None,
-            });
-            cell_by_root.insert(occurrence.root, id);
-            id
-        };
-        occurrence_cells[occurrence.id.0 as usize] = Some(cell);
-        let place_cells = place_roots.entry(occurrence.place.clone()).or_default();
-        if !place_cells.contains(&cell) {
-            place_cells.push(cell);
-        }
-    }
-
-    let counted_lanes = finalize_lanes(
-        &counted_events,
-        &occurrence_cells,
-        &occurrences,
-        &cells,
-        RootRole::Counted,
-    );
-    let materialize_only_lanes = finalize_lanes(
-        &materialize_events,
-        &occurrence_cells,
-        &occurrences,
-        &cells,
-        RootRole::MaterializeOnly,
-    );
-
-    let mut bound_leaves: IndexMap<LayoutRootId<'db>, Vec<LayoutBindingLeaf>> = IndexMap::new();
-    for occurrence in &occurrences {
-        let Some(target) = occurrence_cells[occurrence.id.0 as usize] else {
-            continue;
-        };
-        let leaf = LayoutBindingLeaf {
-            selector: occurrence.selector.clone(),
-            target,
-        };
-        for root in layout_root_lineage(db, occurrence.root) {
-            let leaves = bound_leaves.entry(root).or_default();
-            if let Some(previous) = leaves
-                .iter()
-                .find(|candidate| candidate.selector == leaf.selector)
-                && previous.target != leaf.target
-            {
-                errors.push(ContractLayoutError::AmbiguousLayoutBindingSelector { root });
-            } else if !leaves.contains(&leaf) {
-                leaves.push(leaf.clone());
-            }
-        }
-    }
-
-    let mut bindings = bound_leaves
-        .into_iter()
-        .map(|(root, leaves)| (root, LayoutBinding::Bound(leaves)))
-        .collect::<IndexMap<_, _>>();
-    for root in view_roots {
-        bindings.entry(root).or_insert(LayoutBinding::NonPhysical);
-    }
-
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    let mut overlay_groups = Vec::new();
-    for lane in counted_lanes.iter().chain(&materialize_only_lanes) {
-        for overlay in &lane.overlays {
-            let group = EnumOverlayGroup {
-                enum_place: overlay.place.clone(),
-                lane: overlay.lane,
-                members: overlay.members.clone(),
-                space: lane.space,
-            };
-            if !overlay_groups.contains(&group) {
-                overlay_groups.push(group);
-            }
-        }
-    }
-
-    Ok(ValidatedFieldLayoutPlan {
-        field,
-        name,
-        is_mut,
-        is_provider,
-        address_space,
-        inline_span,
-        inline_leaves,
-        declared_template,
-        target_template,
-        slot_basis_template,
-        occurrences,
-        concrete_occurrences,
-        cells,
-        overlay_groups,
-        place_roots,
-        bindings,
-        counted_lanes,
-        materialize_only_lanes,
-    })
-}
-
-fn validate_template_roots<'db>(
-    db: &'db dyn HirAnalysisDb,
-    template: TyId<'db>,
-    errors: &mut Vec<ContractLayoutError<'db>>,
-) {
-    for hole in
-        crate::analysis::ty::layout_holes::collect_unique_structural_holes_in_order(db, template)
-    {
-        let placeholder = TyId::const_ty(
-            db,
-            ConstTyId::hole_with_id(
-                db,
-                hole.expected_ty(db),
-                crate::analysis::ty::const_ty::HoleId::Structural(hole),
-            ),
-        );
-        let error = if matches!(
-            hole.origin(db),
-            StructuralHoleOrigin::ExplicitWildcard { .. }
-        ) {
-            Some(ContractLayoutError::ExplicitContractLayoutHole { placeholder })
-        } else if !matches!(
-            layout_hole_fallback_ty(db, hole.expected_ty(db)).data(db),
-            TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
-        ) {
-            Some(ContractLayoutError::NonSlotContractLayoutHole { placeholder })
-        } else {
-            None
-        };
-        if let Some(error) = error
-            && !errors.contains(&error)
-        {
-            errors.push(error);
-        }
-    }
 }
 
 fn collect_field_plan<'db>(
@@ -2739,649 +904,476 @@ fn collect_field_plan<'db>(
         .filter(|field| field.name.is_present())
         .nth(field_index as usize)?;
     let name = field.name.unwrap();
-    let field_id = ContractFieldId {
-        contract,
-        index: field_index,
-    };
-    let default_space = if field.is_mut {
-        ProviderAddressSpace::Storage
-    } else {
-        ProviderAddressSpace::Code
-    };
-    let lowered = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
-    if lowered.has_invalid(db) || ty_has_incomplete_adt_application(db, lowered) {
+    let declared = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
+    if declared.has_invalid(db) || ty_has_incomplete_adt_application(db, declared) {
         return Some((name, Err(vec![ContractLayoutError::InvalidFieldType])));
     }
-    let hir_ty = field.type_ref().to_opt()?;
-    let mut declared = instantiate_layout_template(
-        db,
-        lowered,
-        None,
-        LayoutInstantiationContext::Lowering(HoleAnchor::TemplateTy {
-            ty: hir_ty,
-            scope,
-            assumptions,
-        }),
-        LayoutBoundaryIdentity::ContractField {
-            contract,
-            field_index,
+    let address_space = if field.is_mut {
+        AddressSpace::Storage
+    } else {
+        AddressSpace::Code
+    };
+    let explicit_slot = match field.slot {
+        Some(_) if address_space == AddressSpace::Code => {
+            return Some((name, Err(vec![ContractLayoutError::ExplicitSlotInCode])));
+        }
+        Some(body) => match contract_field_slot(db, body) {
+            Ok(slot) => Some(slot),
+            Err(_) => return Some((name, Err(vec![ContractLayoutError::InvalidExplicitSlot]))),
         },
-        vec![LayoutOccurrenceStep::Instantiation(0)],
-    );
-    let minter = LoweringContext::new(HoleAnchor::TemplateTy {
-        ty: hir_ty,
-        scope,
-        assumptions,
-    });
-    declared.root_uses.extend(lower_layout_root_uses_in_hir_ty(
+        None => None,
+    };
+    let mut walker = FieldWalker {
         db,
-        hir_ty,
-        scope,
-        assumptions,
-        &minter,
-    ));
-
-    let (is_provider, address_space, target) =
-        match resolve_effect_handle_layout(db, scope, assumptions, declared.ty) {
-            ProviderLayoutResolution::NotHandle => (false, default_space, declared.clone()),
-            ProviderLayoutResolution::Resolved {
-                impl_instance,
-                target_template,
-                space,
-            } => {
-                let target = match instantiate_provider_target_layout(
-                    db,
-                    scope,
-                    assumptions,
-                    declared.instance,
-                    impl_instance,
-                    target_template,
-                ) {
-                    Ok(target) => target,
-                    Err(error) => return Some((name, Err(vec![error]))),
-                };
-                (true, space, target)
-            }
-            ProviderLayoutResolution::Invalid(failure) => {
-                return Some((
-                    name,
-                    Err(vec![contract_layout_error_for_provider_failure(failure)]),
-                ));
-            }
-        };
-
-    let mut collector = FieldCollector::new(db, scope, assumptions, address_space);
-    validate_template_roots(db, declared.ty, &mut collector.errors);
-    validate_template_roots(db, target.ty, &mut collector.errors);
-    let root_place = StoragePlace::root(field_id);
-    let basis_place = if is_provider {
-        root_place.with_step(PlaceStep::ProviderTarget)
-    } else {
-        root_place.clone()
+        errors: Vec::new(),
     };
-    let counted = collector.walk_instantiation(
-        &target,
-        target.ty,
-        basis_place.clone(),
-        &[],
-        WalkMode::Counted,
-    );
-    let materialize = if is_provider {
-        collector.walk_provider_wrapper_instantiation(
-            &declared,
-            root_place.with_step(PlaceStep::DeclaredWrapper),
-            &[],
-            WalkMode::MaterializeOnly,
-        )
-    } else {
-        WalkOutput::empty()
-    };
-    if !collector.errors.is_empty() {
-        return Some((name, Err(collector.errors)));
-    }
-    let mut view_roots = Vec::new();
-    for root in declared
-        .root_uses
-        .iter()
-        .chain(&target.root_uses)
-        .filter_map(|root_use| root_use.root(db))
+    let output = walker.walk_ty(ConcreteTypeView::identity(declared), &[], &[]);
+    // Every contract field outlives the call: code-backed ones too.
+    if walker.errors.is_empty()
+        && let Some(pointer) = call_pointer_in_state(db, scope, declared)
     {
-        if !view_roots.contains(&root) {
-            view_roots.push(root);
+        walker.push_error(ContractLayoutError::CallPointerInState { pointer });
+    }
+    if walker.errors.is_empty()
+        && let Some(invalid) = zero_invalid_in_state(db, scope, declared)
+    {
+        walker.push_error(ContractLayoutError::ZeroInvalidInState { invalid });
+    }
+    if walker.errors.is_empty()
+        && let Some((entry, error)) = entry_layout_error(db, scope, declared)
+    {
+        walker.push_error(ContractLayoutError::EntryLayout {
+            entry,
+            reason: error.summary(),
+        });
+    }
+    if walker.errors.is_empty()
+        && address_space == AddressSpace::Storage
+        && let Some(collection) = persistent_under_transient(db, scope, declared)
+    {
+        walker.push_error(ContractLayoutError::PersistentUnderTransient { collection });
+    }
+    if !walker.errors.is_empty() {
+        return Some((name, Err(walker.errors)));
+    }
+    // The field takes its numbers in its own space only when some part of
+    // it lies outside a pinned type: a `TSlot` field leaves its storage
+    // number free. It takes them in every space its parts and its
+    // collections' entries are pinned to, since each roots there at its
+    // number.
+    let mut spaces = Vec::new();
+    if output
+        .leaves
+        .iter()
+        .any(|leaf| leaf.kind != InlineLayoutLeafKind::Collection)
+    {
+        spaces.push(address_space);
+    }
+    for space in state_spaces(db, scope, declared) {
+        if !spaces.contains(&space) {
+            spaces.push(space);
         }
     }
     Some((
         name,
-        finish_field_plan(
-            db,
-            CollectedFieldLayoutPlan {
-                field: field_id,
-                name,
-                is_mut: field.is_mut,
-                is_provider,
-                address_space,
-                inline_span: counted.inline_span,
-                inline_leaves: counted.inline_leaves,
-                declared_template: declared.ty,
-                target_template: target.ty,
-                slot_basis_template: target.ty,
-                view_roots,
-                occurrences: collector.occurrences,
-                concrete_occurrences: collector.concrete_occurrences,
-                nonterminal_occurrences: collector.nonterminal_occurrences,
-                counted_events: counted.events,
-                materialize_events: materialize.events,
+        Ok(ValidatedFieldLayoutPlan {
+            field: ContractFieldId {
+                contract,
+                index: field_index,
             },
-        ),
+            name,
+            is_mut: field.is_mut,
+            address_space,
+            declared,
+            explicit_slot,
+            slot_count: output.span,
+            spaces,
+            inline_leaves: output.leaves,
+        }),
     ))
 }
 
-fn contract_layout_error_for_provider_failure<'db>(
-    failure: ProviderLayoutFailure,
-) -> ContractLayoutError<'db> {
-    match failure {
-        ProviderLayoutFailure::Ambiguous => ContractLayoutError::AmbiguousProviderLayout,
-        ProviderLayoutFailure::UnresolvedTarget => ContractLayoutError::UnresolvedProviderTarget,
-        ProviderLayoutFailure::UnresolvedSpace => ContractLayoutError::UnresolvedProviderSpace,
-        ProviderLayoutFailure::UnresolvedRaw
-        | ProviderLayoutFailure::UnsupportedRaw
-        | ProviderLayoutFailure::UntrustedRaw => {
-            ContractLayoutError::InvalidProviderRaw { failure }
-        }
+/// The slots a value of `ty` takes in storage, as the layout places a
+/// contract field of its type, or why `ty` has no storage layout.
+#[salsa::tracked(returns(clone))]
+pub(crate) fn storage_slot_span<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Result<usize, ContractLayoutError<'db>> {
+    let mut walker = FieldWalker {
+        db,
+        errors: Vec::new(),
+    };
+    let output = walker.walk_ty(ConcreteTypeView::identity(ty), &[], &[]);
+    match walker.errors.into_iter().next() {
+        Some(error) => Err(error),
+        None => Ok(output.span),
     }
 }
 
-fn field_block_extents<'db>(
-    plan: &ValidatedFieldLayoutPlan<'db>,
-) -> Result<IndexMap<ProviderAddressSpace, usize>, ContractLayoutError<'db>> {
-    let mut extents = IndexMap::new();
-    extents.insert(plan.address_space, plan.inline_span);
-    for lane in plan
-        .counted_lanes
-        .iter()
-        .chain(&plan.materialize_only_lanes)
-    {
-        let total = extents.entry(lane.space).or_insert(0usize);
-        *total = total
-            .checked_add(1)
-            .ok_or(ContractLayoutError::LayoutExtentOverflow)?;
+/// Which fields of struct or tuple `ty` are lanes where a value of `ty` lies
+/// in storage or transient storage: packed scalars that share their word or
+/// lie above its low byte, as MIR's `storage_field_lane` decides. A retained
+/// grant to a lane is a memory copy.
+#[salsa::tracked]
+pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
+    if !ty.is_tuple(db) && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db)) {
+        return Vec::new();
     }
-    Ok(extents)
-}
-
-fn find_unreserved_block(
-    cursor: usize,
-    extent: usize,
-    reservations: &[usize],
-) -> Option<(usize, usize)> {
-    if extent == 0 {
-        return Some((cursor, cursor));
-    }
-    let mut base = cursor;
-    loop {
-        let end = base.checked_add(extent)?;
-        let Some(reserved) = reservations
-            .iter()
-            .copied()
-            .find(|reserved| *reserved >= base && *reserved < end)
-        else {
-            return Some((base, end));
-        };
-        base = reserved.checked_add(1)?;
-    }
-}
-
-fn explicit_reservations<'db>(
-    field_results: &[ContractFieldLayoutResult<'db>],
-) -> Vec<ExplicitRootReservation<'db>> {
-    let mut reservations: IndexMap<
-        (ProviderAddressSpace, IntegerId<'db>),
-        Vec<(ContractFieldId<'db>, ConcreteRootOccurrenceId)>,
-    > = IndexMap::new();
-    for field in field_results {
-        let plan = field
-            .result
-            .as_ref()
-            .expect("reservation collection requires every field to validate");
-        for occurrence in &plan.concrete_occurrences {
-            reservations
-                .entry((occurrence.space, occurrence.value))
-                .or_default()
-                .push((plan.field, occurrence.id));
-        }
-    }
-    reservations
+    let mut walker = FieldWalker {
+        db,
+        errors: Vec::new(),
+    };
+    let shapes: Vec<_> = ty
+        .field_types(db)
         .into_iter()
-        .map(|((space, value), occurrences)| ExplicitRootReservation {
-            value,
-            space,
-            occurrences,
+        .map(|field| {
+            let output = walker.walk_ty(ConcreteTypeView::identity(field), &[], &[]);
+            match output.packable_bytes {
+                Some(bytes) => StorageFieldShape::Scalar { bytes },
+                None => StorageFieldShape::Aggregate {
+                    slots: output.span as u64,
+                },
+            }
+        })
+        .collect();
+    let Ok(layout) = storage_fields_layout(shapes) else {
+        return Vec::new();
+    };
+    layout
+        .placements
+        .iter()
+        .map(|placement| {
+            placement
+                .lane
+                .is_some_and(|lane| placement.shared || lane.byte_offset != 0)
         })
         .collect()
 }
 
-fn allocate_lanes<'db>(
-    plan: &mut ValidatedFieldLayoutPlan<'db>,
-    lanes: &[AllocationLane<'db>],
-    cursors: &mut FxHashMap<ProviderAddressSpace, usize>,
-) -> Result<(), ContractLayoutError<'db>> {
-    for lane in lanes {
-        let slot = *cursors.entry(lane.space).or_insert(0);
-        let next = slot
-            .checked_add(1)
-            .ok_or(ContractLayoutError::LayoutExtentOverflow)?;
-        for member in &lane.members {
-            plan.cells
-                .get_mut(member.0 as usize)
-                .ok_or(ContractLayoutError::InternalLayoutGraph)?
-                .allocation = Some(RootAllocation {
-                space: lane.space,
-                slot,
-            });
-        }
-        cursors.insert(lane.space, next);
-    }
-    Ok(())
-}
+/// How deep the search for a persistent collection under a transient one
+/// follows nested types: a collection's element type may grow without bound,
+/// as in `struct G<T> { m: StorageMap<u256, G<[T; 1]>> }`.
+const MAX_STATE_NESTING: usize = 64;
 
-fn allocate_contract<'db>(
+/// The types a value of `ty` holds in state: its fields, its tuple or array
+/// elements, and a collection's entries (`StateIndex::Entry`), which lie
+/// outside its own slots.
+fn state_parts<'db>(
     db: &'db dyn HirAnalysisDb,
-    field_results: &[ContractFieldLayoutResult<'db>],
-) -> Result<AllocatedContractStorageLayout<'db>, (ContractFieldId<'db>, ContractLayoutError<'db>)> {
-    let explicit_reservations = explicit_reservations(field_results);
-    let mut reserved_slots: FxHashMap<ProviderAddressSpace, Vec<usize>> = FxHashMap::default();
-    for reservation in &explicit_reservations {
-        if let Some(slot) = reservation.value.data(db).to_usize() {
-            reserved_slots
-                .entry(reservation.space)
-                .or_default()
-                .push(slot);
-        }
-    }
-    for slots in reserved_slots.values_mut() {
-        slots.sort_unstable();
-        slots.dedup();
-    }
-    let mut counters: FxHashMap<ProviderAddressSpace, usize> = FxHashMap::default();
-    let mut fields = IndexMap::new();
-    for field in field_results {
-        let mut plan = field
-            .result
-            .as_ref()
-            .expect("allocation requires every field to validate")
-            .clone();
-        let extents = field_block_extents(&plan).map_err(|error| (field.field, error))?;
-        let mut bases = FxHashMap::default();
-        let mut cursors = FxHashMap::default();
-        for (space, extent) in extents {
-            let cursor = *counters.entry(space).or_insert(0);
-            let (base, end) = find_unreserved_block(
-                cursor,
-                extent,
-                reserved_slots.get(&space).map_or(&[], Vec::as_slice),
-            )
-            .ok_or((field.field, ContractLayoutError::LayoutExtentOverflow))?;
-            bases.insert(space, base);
-            cursors.insert(space, base);
-            if extent != 0 {
-                if space == ProviderAddressSpace::Code && end.checked_mul(32).is_none() {
-                    return Err((field.field, ContractLayoutError::LayoutExtentOverflow));
-                }
-                counters.insert(space, end);
-            }
-        }
-        let slot_offset = bases[&plan.address_space];
-        let slot_count = counters
-            .get(&plan.address_space)
-            .copied()
-            .unwrap_or(slot_offset)
-            .checked_sub(slot_offset)
-            .ok_or((field.field, ContractLayoutError::LayoutExtentOverflow))?;
-        let field_cursor = cursors
-            .get_mut(&plan.address_space)
-            .expect("the primary field block must have a cursor");
-        *field_cursor = field_cursor
-            .checked_add(plan.inline_span)
-            .ok_or((field.field, ContractLayoutError::LayoutExtentOverflow))?;
-        let counted_lanes = plan.counted_lanes.clone();
-        allocate_lanes(&mut plan, &counted_lanes, &mut cursors)
-            .map_err(|error| (field.field, error))?;
-        let materialize_only_lanes = plan.materialize_only_lanes.clone();
-        allocate_lanes(&mut plan, &materialize_only_lanes, &mut cursors)
-            .map_err(|error| (field.field, error))?;
-        debug_assert!(
-            cursors.iter().all(|(space, cursor)| {
-                counters.get(space).copied().unwrap_or(*cursor) == *cursor
-            })
-        );
-        let declared = assigned_view(db, plan.declared_template, &plan.bindings);
-        let target = assigned_view(db, plan.target_template, &plan.bindings);
-        let slot_basis = assigned_view(db, plan.slot_basis_template, &plan.bindings);
-        debug_assert!(declared.all_roots_classified(db));
-        debug_assert!(target.all_roots_classified(db));
-        debug_assert!(slot_basis.all_roots_classified(db));
-        fields.insert(
-            field.name,
-            FieldStorageLayout {
-                field: plan.field,
-                name: plan.name,
-                is_mut: plan.is_mut,
-                is_provider: plan.is_provider,
-                address_space: plan.address_space,
-                slot_offset,
-                slot_count,
-                inline_span: plan.inline_span,
-                inline_leaves: plan.inline_leaves,
-                declared,
-                target,
-                slot_basis,
-                occurrences: plan.occurrences,
-                concrete_occurrences: plan.concrete_occurrences,
-                cells: plan.cells,
-                overlay_groups: plan.overlay_groups,
-                place_roots: plan.place_roots,
-                root_bindings: plan.bindings,
-            },
-        );
-    }
-    Ok(AllocatedContractStorageLayout {
-        fields,
-        explicit_reservations,
-        high_water_by_address_space: counters,
-    })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum IntervalOwner<'db> {
-    Inline(ContractFieldId<'db>),
-    Cell(ContractFieldId<'db>, RootCellId),
-}
-
-#[derive(Debug, Clone, Copy)]
-struct AllocationInterval<'db> {
-    field: ContractFieldId<'db>,
-    owner: IntervalOwner<'db>,
-    start: usize,
-    end: usize,
-}
-
-fn occurrence_placeholder_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    occurrence: &RootOccurrence<'db>,
-) -> Option<TyId<'db>> {
-    let hole = structural_hole_id(db, occurrence.placeholder)?;
-    let expected = layout_hole_fallback_ty(db, hole.expected_ty(db));
-    (hole.root(db) == occurrence.root
-        && !matches!(
-            hole.origin(db),
-            StructuralHoleOrigin::ExplicitWildcard { .. }
-        )
-        && matches!(
-            expected.data(db),
-            TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
-        ))
-    .then_some(expected)
-}
-
-struct ResolvedStoragePlace<'db> {
+    scope: ScopeId<'db>,
     ty: TyId<'db>,
-    space: ProviderAddressSpace,
-    segments: Vec<ContractLayoutPathSegment<'db>>,
+) -> Vec<TyId<'db>> {
+    let assumptions = PredicateListId::empty_list(db);
+    let mut parts: Vec<_> = state_index_tys(db, scope, ty, assumptions)
+        .map(|(_, entry)| entry)
+        .into_iter()
+        .collect();
+    if let Some(adt) = ty.adt_def(db) {
+        let args = ty.generic_args(db);
+        parts.extend(
+            adt.fields(db)
+                .iter()
+                .flat_map(|variant| variant.iter_types(db))
+                .map(|field| field.instantiate(db, args)),
+        );
+    } else if ty.is_tuple(db) || ty.is_array(db) {
+        parts.extend(
+            ty.generic_args(db)
+                .iter()
+                .copied()
+                .filter(|arg| !matches!(arg.data(db), TyData::ConstTy(_))),
+        );
+    } else if ty.as_closure(db).is_some() {
+        parts.extend(ty.field_types(db));
+    }
+    parts
+        .into_iter()
+        .map(|part| normalize_ty(db, part, scope, assumptions))
+        .collect()
 }
 
-fn resolve_storage_place<'db>(
+/// The persistent collection `ty` keeps inside a transient collection's
+/// contents, as the map of a `TSlot<StorageMap<K, V>>`, whose entries would
+/// persist after the value holding them is gone.
+fn persistent_under_transient<'db>(
     db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    place: &StoragePlace<'db>,
-) -> Option<ResolvedStoragePlace<'db>> {
-    if place.field != field.field {
-        return None;
-    }
-    let mut steps = place.steps.as_slice();
-    let mut ty = field.target.template;
-    if field.is_provider
-        && let Some((first, rest)) = steps.split_first()
-    {
-        match first {
-            PlaceStep::ProviderTarget => steps = rest,
-            PlaceStep::DeclaredWrapper => {
-                ty = field.declared.template;
-                steps = rest;
-            }
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    fn walk<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        ty: TyId<'db>,
+        mut transient: bool,
+        depth: usize,
+        seen: &mut FxHashSet<(TyId<'db>, bool)>,
+    ) -> Option<TyId<'db>> {
+        if depth > MAX_STATE_NESTING || !seen.insert((ty, transient)) {
+            return None;
+        }
+        match pinned_space(db, scope, PredicateListId::empty_list(db), ty) {
+            Some(AddressSpace::Storage) if transient => return Some(ty),
+            Some(AddressSpace::Transient) => transient = true,
             _ => {}
         }
+        state_parts(db, scope, ty)
+            .into_iter()
+            .find_map(|part| walk(db, scope, part, transient, depth + 1, seen))
     }
-    let mut space = field.address_space;
-    let mut enum_variant = None;
-    let mut segments = Vec::new();
-    let mut dimension = 0u32;
-    for step in steps {
-        match *step {
-            PlaceStep::ProviderTarget => {
-                let ProviderLayoutResolution::Resolved {
-                    impl_instance,
-                    space: target_space,
-                    ..
-                } = resolve_effect_handle_layout(
-                    db,
-                    field.field.contract.scope(),
-                    PredicateListId::empty_list(db),
-                    ty,
-                )
-                else {
-                    return None;
-                };
-                let target_ident = IdentId::new(db, "Target".to_string());
-                ty = normalize_ty(
-                    db,
-                    impl_instance.instantiated_assoc_ty(db, target_ident)?,
-                    field.field.contract.scope(),
-                    PredicateListId::empty_list(db),
-                );
-                space = target_space;
+    walk(db, scope, ty, false, 0, &mut FxHashSet::default())
+}
+
+/// The state spaces a value of `ty` has parts pinned to, in its own slots or
+/// in a collection's entries.
+fn state_spaces<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Vec<AddressSpace> {
+    fn walk<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        ty: TyId<'db>,
+        depth: usize,
+        seen: &mut FxHashSet<TyId<'db>>,
+        spaces: &mut Vec<AddressSpace>,
+    ) {
+        if depth > MAX_STATE_NESTING || !seen.insert(ty) {
+            return;
+        }
+        if let Some(space) = pinned_space(db, scope, PredicateListId::empty_list(db), ty)
+            && !spaces.contains(&space)
+        {
+            spaces.push(space);
+        }
+        for part in state_parts(db, scope, ty) {
+            walk(db, scope, part, depth + 1, seen, spaces);
+        }
+    }
+    let mut spaces = Vec::new();
+    walk(db, scope, ty, 0, &mut FxHashSet::default(), &mut spaces);
+    spaces
+}
+
+/// The first memory or calldata pointer a value of `ty` keeps in state, in
+/// its own slots or in a collection's entries: it would outlive the
+/// allocation or the call it points into.
+fn call_pointer_in_state<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    fn walk<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        ty: TyId<'db>,
+        depth: usize,
+        seen: &mut FxHashSet<TyId<'db>>,
+    ) -> Option<TyId<'db>> {
+        if depth > MAX_STATE_NESTING || !seen.insert(ty) {
+            return None;
+        }
+        if matches!(
+            ty.as_ptr(db),
+            Some((_, AddressSpace::Memory | AddressSpace::Calldata))
+        ) {
+            return Some(ty);
+        }
+        state_parts(db, scope, ty)
+            .into_iter()
+            .find_map(|part| walk(db, scope, part, depth + 1, seen))
+    }
+    walk(db, scope, ty, 0, &mut FxHashSet::default())
+}
+
+/// The first type a value of `ty` holds in state, in its own slots or in a
+/// collection's entries, whose all-zero representation is not a value: one
+/// with `unsafe` fields. A state space starts zeroed, so a slot no one wrote
+/// would read as such a value.
+fn zero_invalid_in_state<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    fn walk<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        ty: TyId<'db>,
+        depth: usize,
+        seen: &mut FxHashSet<TyId<'db>>,
+    ) -> Option<TyId<'db>> {
+        if depth > MAX_STATE_NESTING || !seen.insert(ty) {
+            return None;
+        }
+        if ty.adt_def(db).is_some_and(|adt| adt.has_unsafe_field(db)) {
+            return Some(ty);
+        }
+        state_parts(db, scope, ty)
+            .into_iter()
+            .find_map(|part| walk(db, scope, part, depth + 1, seen))
+    }
+    walk(db, scope, ty, 0, &mut FxHashSet::default())
+}
+
+/// The first collection entry type a value of `ty` holds in state that has no
+/// storage layout, with why: an entry is laid out like a field, at the slots
+/// its collection locates.
+fn entry_layout_error<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<(TyId<'db>, ContractLayoutError<'db>)> {
+    fn walk<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        ty: TyId<'db>,
+        depth: usize,
+        seen: &mut FxHashSet<TyId<'db>>,
+    ) -> Option<(TyId<'db>, ContractLayoutError<'db>)> {
+        if depth > MAX_STATE_NESTING || !seen.insert(ty) {
+            return None;
+        }
+        let assumptions = PredicateListId::empty_list(db);
+        if let Some((_, entry)) = state_index_tys(db, scope, ty, assumptions) {
+            let entry = normalize_ty(db, entry, scope, assumptions);
+            if let Err(error) = storage_slot_span(db, entry) {
+                return Some((entry, error));
             }
-            PlaceStep::DeclaredWrapper => {}
-            PlaceStep::TransparentInner => {
-                ty = ty.as_capability(db)?.1;
+        }
+        state_parts(db, scope, ty)
+            .into_iter()
+            .find_map(|part| walk(db, scope, part, depth + 1, seen))
+    }
+    walk(db, scope, ty, 0, &mut FxHashSet::default())
+}
+
+/// Places each field: a field with `#[slot(e)]` at `e`, any other at the next
+/// number of its space's counter, skipping the numbers fields placed before
+/// it take in any space it takes numbers in. Each space counts its own
+/// fields, but every field that lies at least partly in storage or code is
+/// placed before the fields that lie only in transient storage, which fit
+/// around them: a transient field never moves a persistent one. A field
+/// that mixes spaces takes its whole range in each, since one number roots
+/// all of it.
+fn allocate_contract<'db>(
+    field_results: &[ContractFieldLayoutResult<'db>],
+) -> Result<AllocatedContractStorageLayout<'db>, (ContractFieldId<'db>, ContractLayoutError<'db>)> {
+    let plans: Vec<_> = field_results
+        .iter()
+        .map(|field| {
+            field
+                .result
+                .as_ref()
+                .expect("allocation requires every field to validate")
+        })
+        .collect();
+    // The numbers placed fields take, by space: explicit fields first.
+    let mut taken: FxHashMap<AddressSpace, Vec<(U256, U256, IdentId<'db>)>> = FxHashMap::default();
+    for plan in &plans {
+        let Some(slot) = plan.explicit_slot else {
+            continue;
+        };
+        let end = slot
+            .checked_add(U256::from(plan.slot_count))
+            .ok_or((plan.field, ContractLayoutError::LayoutExtentOverflow))?;
+        for space in &plan.spaces {
+            let ranges = taken.entry(*space).or_default();
+            if let Some(&(_, _, other)) = ranges
+                .iter()
+                .find(|(start, stop, _)| slot < *stop && *start < end)
+            {
+                return Err((
+                    plan.field,
+                    ContractLayoutError::ExplicitSlotOverlap { other },
+                ));
             }
-            PlaceStep::StructField(field_idx) => {
-                let adt = ty.adt_def(db)?;
-                let AdtRef::Struct(struct_) = adt.adt_ref(db) else {
-                    return None;
-                };
-                let name = FieldParent::Struct(struct_)
-                    .fields(db)
-                    .nth(field_idx as usize)
-                    .and_then(|field| field.name(db))?;
-                segments.push(ContractLayoutPathSegment::Member {
-                    name,
-                    index: field_idx,
-                });
-                ty = instantiate_adt_field_shape(
-                    db,
-                    adt,
-                    0,
-                    field_idx as usize,
-                    ty.generic_args(db),
-                );
-            }
-            PlaceStep::TupleElem(elem_idx) => {
-                if !ty.is_tuple(db) {
-                    return None;
-                }
-                segments.push(ContractLayoutPathSegment::TupleElement(elem_idx));
-                ty = *ty.generic_args(db).get(elem_idx as usize)?;
-            }
-            PlaceStep::EnumVariant(variant_idx) => {
-                let adt = ty.adt_def(db)?;
-                let AdtRef::Enum(enum_) = adt.adt_ref(db) else {
-                    return None;
-                };
-                let variant = EnumVariant::new(enum_, variant_idx as usize);
-                segments.push(ContractLayoutPathSegment::Variant {
-                    name: variant.ident(db)?,
-                    index: variant_idx,
-                });
-                enum_variant = Some((adt, variant, ty.generic_args(db).to_vec()));
-            }
-            PlaceStep::EnumPayloadField(field_idx) => {
-                let (adt, variant, args) = enum_variant.take()?;
-                match variant.kind(db) {
-                    VariantKind::Record(_) => {
-                        let name = FieldParent::Variant(variant)
-                            .fields(db)
-                            .nth(field_idx as usize)
-                            .and_then(|field| field.name(db))?;
-                        segments.push(ContractLayoutPathSegment::Member {
-                            name,
-                            index: field_idx,
-                        });
-                    }
-                    VariantKind::Tuple(_) => {
-                        segments.push(ContractLayoutPathSegment::TupleElement(field_idx))
-                    }
-                    VariantKind::Unit => return None,
-                }
-                ty = instantiate_adt_field_shape(
-                    db,
-                    adt,
-                    variant.idx as usize,
-                    field_idx as usize,
-                    &args,
-                );
-            }
-            PlaceStep::ArrayElem(_) => {
-                if !ty.is_array(db) {
-                    return None;
-                }
-                let args = ty.generic_args(db);
-                segments.push(ContractLayoutPathSegment::ArrayElement {
-                    dimension,
-                    len: args
-                        .get(1)
-                        .copied()
-                        .and_then(|len| const_ty_to_usize(db, len))?,
-                });
-                dimension += 1;
-                ty = *args.first()?;
-            }
-            PlaceStep::ConstParam(param_idx) => {
-                let adt = ty.adt_def(db)?;
-                let param = adt.params(db).get(param_idx as usize)?;
-                let TyData::ConstTy(param) = param.data(db) else {
-                    return None;
-                };
-                let ConstTyData::TyParam(param, _) = param.data(db) else {
-                    return None;
-                };
-                segments.push(ContractLayoutPathSegment::ConstParameter {
-                    name: param.name,
-                    index: param_idx,
-                });
-                ty = *ty.generic_args(db).get(param_idx as usize)?;
+            if slot < end {
+                ranges.push((slot, end, plan.name));
             }
         }
     }
-    enum_variant.is_none().then_some(ResolvedStoragePlace {
-        ty,
-        space,
-        segments,
+    let transient_only =
+        |plan: &ValidatedFieldLayoutPlan<'db>| plan.spaces.as_slice() == [AddressSpace::Transient];
+    let mut counters: FxHashMap<AddressSpace, U256> = FxHashMap::default();
+    let mut code_slot_count = 0;
+    let mut offsets = vec![U256::ZERO; plans.len()];
+    for transient_pass in [false, true] {
+        for (idx, plan) in plans.iter().enumerate() {
+            if transient_only(plan) != transient_pass {
+                continue;
+            }
+            if let Some(slot) = plan.explicit_slot {
+                offsets[idx] = slot;
+                continue;
+            }
+            let count = U256::from(plan.slot_count);
+            let space = if transient_pass {
+                AddressSpace::Transient
+            } else {
+                plan.address_space
+            };
+            let counter = counters.entry(space).or_insert(U256::ZERO);
+            let mut start = *counter;
+            while let Some(&(_, stop, _)) = plan
+                .spaces
+                .iter()
+                .filter_map(|space| taken.get(space))
+                .flatten()
+                .find(|(first, stop, _)| {
+                    !count.is_zero() && start < *stop && *first < start.saturating_add(count)
+                })
+            {
+                start = stop;
+            }
+            let end = start
+                .checked_add(count)
+                .ok_or((plan.field, ContractLayoutError::LayoutExtentOverflow))?;
+            if !count.is_zero() {
+                *counter = end;
+                for space in &plan.spaces {
+                    taken
+                        .entry(*space)
+                        .or_default()
+                        .push((start, end, plan.name));
+                }
+            }
+            if space == AddressSpace::Code {
+                code_slot_count = usize::try_from(end)
+                    .ok()
+                    .filter(|end| end.checked_mul(32).is_some())
+                    .ok_or((plan.field, ContractLayoutError::LayoutExtentOverflow))?;
+            }
+            offsets[idx] = start;
+        }
+    }
+    let fields = plans
+        .iter()
+        .zip(offsets)
+        .map(|(plan, slot_offset)| {
+            (
+                plan.name,
+                FieldStorageLayout {
+                    field: plan.field,
+                    name: plan.name,
+                    is_mut: plan.is_mut,
+                    address_space: plan.address_space,
+                    declared: plan.declared,
+                    slot_offset,
+                    slot_count: plan.slot_count,
+                    inline_leaves: plan.inline_leaves.clone(),
+                },
+            )
+        })
+        .collect();
+    Ok(AllocatedContractStorageLayout {
+        fields,
+        code_slot_count,
     })
 }
 
-fn storage_place_ty_and_space<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    place: &StoragePlace<'db>,
-) -> Option<(TyId<'db>, ProviderAddressSpace)> {
-    let resolved = resolve_storage_place(db, field, place)?;
-    Some((resolved.ty, resolved.space))
-}
-
-fn resolve_storage_place_with_dimensions<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    place: &StoragePlace<'db>,
-    dimensions: &[usize],
-) -> Option<ResolvedStoragePlace<'db>> {
-    let resolved = resolve_storage_place(db, field, place)?;
-    resolved
-        .segments
-        .iter()
-        .filter_map(|segment| match segment {
-            ContractLayoutPathSegment::ArrayElement { len, .. } => Some(*len),
-            _ => None,
-        })
-        .eq(dimensions.iter().copied())
-        .then_some(resolved)
-}
-
-/// Resolves the const type of a layout parameter. Layout roots never sit
-/// under an array element, so the place must not cross one.
-fn resolved_layout_parameter_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    place: &StoragePlace<'db>,
-) -> Option<TyId<'db>> {
-    let resolved = resolve_storage_place_with_dimensions(db, field, place, &[])?;
-    let TyData::ConstTy(const_ty) = resolved.ty.data(db) else {
-        return None;
-    };
-    Some(const_ty.ty(db))
-}
-
-fn contract_layout_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    place: &StoragePlace<'db>,
-) -> ContractLayoutPath<'db> {
-    let segments = resolve_storage_place(db, field, place)
-        .expect("allocated layout paths are independently validated")
-        .segments;
-    ContractLayoutPath {
-        field: field.name,
-        segments,
-    }
-}
-
-fn layout_integer<'db>(db: &'db dyn HirAnalysisDb, value: usize) -> IntegerId<'db> {
-    IntegerId::new(db, BigUint::from(value))
-}
-
-fn indexed_layout_value<'db>(
-    db: &'db dyn HirAnalysisDb,
-    base: usize,
-    dimensions: &[usize],
-    strides: &[usize],
-    extent: usize,
-) -> ContractLayoutValue<'db> {
-    ContractLayoutValue::Indexed {
-        base: layout_integer(db, base),
-        dimensions: dimensions.to_vec(),
-        strides: strides.to_vec(),
-        extent,
-    }
-}
-
-fn inferred_parameter_entry<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    occurrence: &RootOccurrence<'db>,
-    address_space: ProviderAddressSpace,
-    value: ContractLayoutValue<'db>,
-) -> ContractLayoutEntry<'db> {
-    let place = StoragePlace {
-        field: occurrence.place.field,
-        steps: occurrence.selector.clone(),
-    };
-    ContractLayoutEntry {
-        field: field.field,
-        path: contract_layout_path(db, field, &place),
-        ty: occurrence_placeholder_ty(db, occurrence).unwrap_or(occurrence.placeholder),
-        address_space,
-        value,
-        kind: ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred),
-    }
+fn layout_integer<'db>(db: &'db dyn HirAnalysisDb, value: U256) -> IntegerId<'db> {
+    IntegerId::new(db, BigUint::from_bytes_be(&value.to_be_bytes::<32>()))
 }
 
 fn allocated_contract_layout_report<'db>(
@@ -3391,78 +1383,49 @@ fn allocated_contract_layout_report<'db>(
     let mut entries = Vec::new();
     for field in fields.values() {
         for leaf in &field.inline_leaves {
-            let base = field
-                .slot_offset
-                .checked_add(leaf.offset)
-                .expect("validated inline layout offset must fit in usize");
+            // Slots wrap modulo `2**256`, like Solidity's.
+            let base = field.slot_offset.wrapping_add(U256::from(leaf.offset));
             let value = if leaf.dimensions.is_empty() {
                 ContractLayoutValue::Scalar(layout_integer(db, base))
             } else {
-                indexed_layout_value(
-                    db,
-                    base,
-                    &leaf.dimensions,
-                    &leaf.strides,
-                    affine_extent(&leaf.dimensions, &leaf.strides)
-                        .expect("validated inline layout must have a finite extent"),
-                )
-            };
-            let mut path = contract_layout_path(db, field, &leaf.place);
-            let kind = match leaf.kind {
-                InlineLayoutLeafKind::Field => ContractLayoutEntryKind::InlineField,
-                InlineLayoutLeafKind::EnumTag => {
-                    path.segments.push(ContractLayoutPathSegment::EnumTag);
-                    ContractLayoutEntryKind::EnumTag
+                ContractLayoutValue::Indexed {
+                    base: layout_integer(db, base),
+                    dimensions: leaf.dimensions.clone(),
+                    strides: leaf.strides.clone(),
+                    extent: affine_extent(&leaf.dimensions, &leaf.strides)
+                        .expect("an allocated field's leaves have a finite extent"),
                 }
             };
             entries.push(ContractLayoutEntry {
                 field: field.field,
-                path,
+                path: ContractLayoutPath {
+                    field: field.name,
+                    segments: leaf.path.clone(),
+                },
                 ty: leaf.ty,
-                address_space: field.address_space,
+                // A collection lies in the space it is pinned to.
+                address_space: match leaf.kind {
+                    InlineLayoutLeafKind::Collection => leaf.ty.pin(db),
+                    InlineLayoutLeafKind::Field | InlineLayoutLeafKind::EnumTag => None,
+                }
+                .unwrap_or(field.address_space),
                 value,
-                kind,
+                lane: leaf.lane,
+                kind: match leaf.kind {
+                    InlineLayoutLeafKind::Field => ContractLayoutEntryKind::InlineField,
+                    InlineLayoutLeafKind::Collection => ContractLayoutEntryKind::Collection,
+                    InlineLayoutLeafKind::EnumTag => ContractLayoutEntryKind::EnumTag,
+                },
             });
-        }
-        for occurrence in &field.concrete_occurrences {
-            let place = StoragePlace {
-                field: occurrence.place.field,
-                steps: occurrence.selector.clone(),
-            };
-            entries.push(ContractLayoutEntry {
-                field: field.field,
-                path: contract_layout_path(db, field, &place),
-                ty: occurrence.ty,
-                address_space: occurrence.space,
-                value: ContractLayoutValue::Scalar(occurrence.value),
-                kind: ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit),
-            });
-        }
-        for cell in &field.cells {
-            let Some(allocation) = cell.allocation else {
-                continue;
-            };
-            for occurrence in &cell.occurrences {
-                let occurrence = &field.occurrences[occurrence.0 as usize];
-                entries.push(inferred_parameter_entry(
-                    db,
-                    field,
-                    occurrence,
-                    allocation.space,
-                    ContractLayoutValue::Scalar(layout_integer(db, allocation.slot)),
-                ));
-            }
         }
     }
-    let mut seen = FxHashSet::default();
-    entries.retain(|entry| seen.insert(entry.clone()));
     entries.sort_by(|first, second| {
         let space_order = |space| match space {
-            ProviderAddressSpace::Storage => 0,
-            ProviderAddressSpace::Transient => 1,
-            ProviderAddressSpace::Code => 2,
-            ProviderAddressSpace::Memory => 3,
-            ProviderAddressSpace::Calldata => 4,
+            AddressSpace::Storage => 0,
+            AddressSpace::Transient => 1,
+            AddressSpace::Code => 2,
+            AddressSpace::Memory => 3,
+            AddressSpace::Calldata => 4,
         };
         space_order(first.address_space)
             .cmp(&space_order(second.address_space))
@@ -3477,7 +1440,7 @@ fn allocated_contract_layout_report<'db>(
     ContractLayoutReport { entries }
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn build_contract_layout_report<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
@@ -3486,489 +1449,7 @@ pub(crate) fn build_contract_layout_report<'db>(
     Some(allocated_contract_layout_report(db, fields))
 }
 
-fn storage_owner_space<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    place: &StoragePlace<'db>,
-    owner: TyId<'db>,
-) -> Option<ProviderAddressSpace> {
-    let (_, default_space) = storage_place_ty_and_space(db, field, place)?;
-    owner_space_in_field(db, field, owner, default_space)
-}
-
-fn storage_place_root_space<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    place: &StoragePlace<'db>,
-) -> Option<ProviderAddressSpace> {
-    let (owner, default_space) = storage_place_ty_and_space(db, field, place)?;
-    owner_space_in_field(db, field, owner, default_space)
-}
-
-fn owner_space_in_field<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    owner: TyId<'db>,
-    default_space: ProviderAddressSpace,
-) -> Option<ProviderAddressSpace> {
-    match resolve_static_slot_layout(
-        db,
-        field.field.contract.scope(),
-        PredicateListId::empty_list(db),
-        owner,
-    ) {
-        StaticSlotLayoutResolution::NotStaticSlot => Some(default_space),
-        StaticSlotLayoutResolution::Resolved(space) => Some(space),
-        StaticSlotLayoutResolution::Ambiguous | StaticSlotLayoutResolution::UnresolvedSpace => None,
-    }
-}
-
-/// Validates the completed graph independently of allocation construction.
-/// Identity-equal occurrences are represented by one unit, and the only
-/// permitted overlap between distinct units is membership in one explicit
-/// enum overlay group.
-pub fn validate_allocated_contract_layout<'db>(
-    db: &'db dyn HirAnalysisDb,
-    layout: &AllocatedContractStorageLayout<'db>,
-) -> Result<(), LayoutInvariantError<'db>> {
-    let mut intervals: FxHashMap<ProviderAddressSpace, Vec<AllocationInterval<'db>>> =
-        FxHashMap::default();
-    let mut permitted_overlaps = FxHashSet::default();
-    let mut expected_reservations: IndexMap<
-        (ProviderAddressSpace, IntegerId<'db>),
-        Vec<(ContractFieldId<'db>, ConcreteRootOccurrenceId)>,
-    > = IndexMap::new();
-    let mut seen_fields = FxHashSet::default();
-
-    for (field_idx, (name, field)) in layout.fields.iter().enumerate() {
-        if *name != field.name
-            || field.field.index as usize != field_idx
-            || !seen_fields.insert(field.field)
-            || (field.inline_span == 0) != field.inline_leaves.is_empty()
-        {
-            return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
-        }
-        for leaf in &field.inline_leaves {
-            let Some(extent) = affine_extent(&leaf.dimensions, &leaf.strides) else {
-                return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
-            };
-            if leaf.place.field != field.field
-                || leaf.dimensions.contains(&0)
-                || resolve_storage_place_with_dimensions(db, field, &leaf.place, &leaf.dimensions)
-                    .is_none()
-                || leaf
-                    .offset
-                    .checked_add(extent)
-                    .is_none_or(|end| end > field.inline_span)
-            {
-                return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
-            }
-        }
-        for (view, assigned) in [
-            (LayoutViewKind::Declared, &field.declared),
-            (LayoutViewKind::Target, &field.target),
-            (LayoutViewKind::SlotBasis, &field.slot_basis),
-        ] {
-            if !assigned.all_roots_classified(db) {
-                return Err(LayoutInvariantError::UnclassifiedViewRoot {
-                    field: field.field,
-                    view,
-                });
-            }
-        }
-        let mut occurrence_cells = FxHashMap::default();
-        let mut expected_by_root = FxHashMap::default();
-        let mut scalar_roots = FxHashSet::default();
-
-        for (idx, occurrence) in field.concrete_occurrences.iter().enumerate() {
-            let valid_ty = matches!(
-                occurrence.ty.data(db),
-                TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
-            );
-            let owner_space = storage_owner_space(db, field, &occurrence.place, occurrence.owner);
-            let selector = StoragePlace {
-                field: occurrence.place.field,
-                steps: occurrence.selector.clone(),
-            };
-            if occurrence.id.0 as usize != idx
-                || occurrence.order != occurrence.id.0
-                || occurrence.place.field != field.field
-                || !occurrence.selector.starts_with(&occurrence.place.steps)
-                || !valid_ty
-                || resolved_layout_parameter_ty(db, field, &selector) != Some(occurrence.ty)
-                || owner_space != Some(occurrence.space)
-            {
-                return Err(LayoutInvariantError::InvalidConcreteOccurrence {
-                    field: field.field,
-                    occurrence: occurrence.id,
-                });
-            }
-            expected_reservations
-                .entry((occurrence.space, occurrence.value))
-                .or_default()
-                .push((field.field, occurrence.id));
-        }
-
-        if field.inline_span != 0 {
-            let end = field
-                .slot_offset
-                .checked_add(field.inline_span)
-                .ok_or(LayoutInvariantError::InvalidFieldExtent { field: field.field })?;
-            intervals
-                .entry(field.address_space)
-                .or_default()
-                .push(AllocationInterval {
-                    field: field.field,
-                    owner: IntervalOwner::Inline(field.field),
-                    start: field.slot_offset,
-                    end,
-                });
-        }
-
-        for (cell_idx, cell) in field.cells.iter().enumerate() {
-            if cell.id.0 as usize != cell_idx
-                || cell.occurrences.is_empty()
-                || !scalar_roots.insert(cell.root)
-            {
-                return Err(LayoutInvariantError::InvalidScalarCell {
-                    field: field.field,
-                    cell: cell.id,
-                });
-            }
-            let mut role = RootRole::MaterializeOnly;
-            for occurrence in &cell.occurrences {
-                let Some(data) = field.occurrences.get(occurrence.0 as usize) else {
-                    return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                        field: field.field,
-                        occurrence: *occurrence,
-                    });
-                };
-                let Some(expected) = occurrence_placeholder_ty(db, data) else {
-                    return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                        field: field.field,
-                        occurrence: *occurrence,
-                    });
-                };
-                let selector = StoragePlace {
-                    field: data.place.field,
-                    steps: data.selector.clone(),
-                };
-                if data.id != *occurrence
-                    || data.root != cell.root
-                    || data.space != cell.space
-                    || storage_place_root_space(db, field, &data.place) != Some(data.space)
-                    || data.place.field != field.field
-                    || !data.selector.starts_with(&data.place.steps)
-                    || resolved_layout_parameter_ty(db, field, &selector) != Some(expected)
-                    || occurrence_cells.insert(*occurrence, cell.id).is_some()
-                {
-                    return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                        field: field.field,
-                        occurrence: *occurrence,
-                    });
-                }
-                if let Some(previous) = expected_by_root.insert(data.root, expected)
-                    && previous != expected
-                {
-                    return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                        field: field.field,
-                        occurrence: *occurrence,
-                    });
-                }
-                role = role.join(data.role);
-            }
-            if role != cell.role {
-                return Err(LayoutInvariantError::InvalidScalarCell {
-                    field: field.field,
-                    cell: cell.id,
-                });
-            }
-            let allocation =
-                cell.allocation
-                    .ok_or(LayoutInvariantError::MissingScalarAllocation {
-                        field: field.field,
-                        cell: cell.id,
-                    })?;
-            if allocation.space != cell.space {
-                return Err(LayoutInvariantError::InvalidScalarCell {
-                    field: field.field,
-                    cell: cell.id,
-                });
-            }
-            let end = allocation
-                .slot
-                .checked_add(1)
-                .ok_or(LayoutInvariantError::InvalidFieldExtent { field: field.field })?;
-            intervals
-                .entry(allocation.space)
-                .or_default()
-                .push(AllocationInterval {
-                    field: field.field,
-                    owner: IntervalOwner::Cell(field.field, cell.id),
-                    start: allocation.slot,
-                    end,
-                });
-        }
-
-        if occurrence_cells.len() != field.occurrences.len()
-            || field
-                .occurrences
-                .iter()
-                .enumerate()
-                .any(|(idx, occurrence)| {
-                    occurrence.id.0 as usize != idx
-                        || occurrence.order != occurrence.id.0
-                        || !occurrence_cells.contains_key(&occurrence.id)
-                })
-        {
-            let occurrence = field
-                .occurrences
-                .iter()
-                .find(|occurrence| !occurrence_cells.contains_key(&occurrence.id))
-                .map_or(RootOccurrenceId(u32::MAX), |occurrence| occurrence.id);
-            return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                field: field.field,
-                occurrence,
-            });
-        }
-
-        let mut expected_bindings = IndexMap::new();
-        let mut expected_places: IndexMap<StoragePlace<'db>, Vec<RootCellId>> = IndexMap::new();
-        for occurrence in &field.occurrences {
-            let target = occurrence_cells[&occurrence.id];
-            let targets = expected_places.entry(occurrence.place.clone()).or_default();
-            if !targets.contains(&target) {
-                targets.push(target);
-            }
-            let leaf = LayoutBindingLeaf {
-                selector: occurrence.selector.clone(),
-                target,
-            };
-            for root in layout_root_lineage(db, occurrence.root) {
-                let binding = expected_bindings
-                    .entry(root)
-                    .or_insert_with(|| LayoutBinding::Bound(Vec::new()));
-                let LayoutBinding::Bound(leaves) = binding else {
-                    return Err(LayoutInvariantError::InvalidRootBinding {
-                        field: field.field,
-                        root,
-                    });
-                };
-                if !leaves.contains(&leaf) {
-                    leaves.push(leaf.clone());
-                }
-            }
-        }
-        for assigned in [&field.declared, &field.target, &field.slot_basis] {
-            for hole in crate::analysis::ty::layout_holes::collect_unique_structural_holes_in_order(
-                db,
-                assigned.template,
-            ) {
-                expected_bindings
-                    .entry(hole.root(db))
-                    .or_insert(LayoutBinding::NonPhysical);
-            }
-        }
-        let binding_mismatch = field.root_bindings.len() != expected_bindings.len()
-            || expected_bindings
-                .iter()
-                .any(|(root, binding)| field.root_bindings.get(root) != Some(binding));
-        if binding_mismatch {
-            let Some(root) = expected_bindings
-                .keys()
-                .chain(field.root_bindings.keys())
-                .find(|root| expected_bindings.get(*root) != field.root_bindings.get(*root))
-                .copied()
-            else {
-                return Err(LayoutInvariantError::InvalidPlaceBinding { field: field.field });
-            };
-            return Err(LayoutInvariantError::InvalidRootBinding {
-                field: field.field,
-                root,
-            });
-        }
-        for (view, assigned) in [
-            (LayoutViewKind::Declared, &field.declared),
-            (LayoutViewKind::Target, &field.target),
-            (LayoutViewKind::SlotBasis, &field.slot_basis),
-        ] {
-            if assigned != &assigned_view(db, assigned.template, &expected_bindings) {
-                return Err(LayoutInvariantError::UnclassifiedViewRoot {
-                    field: field.field,
-                    view,
-                });
-            }
-        }
-        if field.place_roots.len() != expected_places.len()
-            || expected_places
-                .iter()
-                .any(|(place, targets)| field.place_roots.get(place) != Some(targets))
-        {
-            return Err(LayoutInvariantError::InvalidPlaceBinding { field: field.field });
-        }
-
-        for group in &field.overlay_groups {
-            if group.enum_place.field != field.field || group.members.len() < 2 {
-                return Err(LayoutInvariantError::InvalidOverlayGroup {
-                    field: field.field,
-                    lane: group.lane,
-                });
-            }
-            let mut base = None;
-            let mut seen_members = FxHashSet::default();
-            for member in &group.members {
-                if !seen_members.insert(*member) {
-                    return Err(LayoutInvariantError::InvalidOverlayGroup {
-                        field: field.field,
-                        lane: group.lane,
-                    });
-                }
-                let invalid = LayoutInvariantError::InvalidOverlayGroup {
-                    field: field.field,
-                    lane: group.lane,
-                };
-                let cell = field.cells.get(member.0 as usize).ok_or(invalid.clone())?;
-                let allocation = cell.allocation.ok_or(invalid.clone())?;
-                if cell.space != group.space || base.is_some_and(|base| base != allocation.slot) {
-                    return Err(invalid);
-                }
-                base = Some(allocation.slot);
-            }
-            let mut witnessed_members = FxHashSet::default();
-            for (idx, member) in group.members.iter().enumerate() {
-                for other in group.members.iter().skip(idx + 1) {
-                    let Some(witnesses) =
-                        cell_overlay_witnesses(&field.occurrences, &field.cells, *member, *other)
-                    else {
-                        return Err(LayoutInvariantError::InvalidOverlayGroup {
-                            field: field.field,
-                            lane: group.lane,
-                        });
-                    };
-                    if witnesses.contains(&group.enum_place) {
-                        witnessed_members.insert(*member);
-                        witnessed_members.insert(*other);
-                    }
-                    permitted_overlaps.insert((
-                        IntervalOwner::Cell(field.field, *member),
-                        IntervalOwner::Cell(field.field, *other),
-                    ));
-                    permitted_overlaps.insert((
-                        IntervalOwner::Cell(field.field, *other),
-                        IntervalOwner::Cell(field.field, *member),
-                    ));
-                }
-            }
-            if witnessed_members.len() != group.members.len() {
-                return Err(LayoutInvariantError::InvalidOverlayGroup {
-                    field: field.field,
-                    lane: group.lane,
-                });
-            }
-        }
-
-        let expected_end = field
-            .slot_offset
-            .checked_add(field.slot_count)
-            .ok_or(LayoutInvariantError::InvalidFieldExtent { field: field.field })?;
-        let mut primary_range = None;
-        for (space, space_intervals) in &intervals {
-            let mut field_intervals = space_intervals
-                .iter()
-                .filter(|interval| interval.field == field.field)
-                .collect::<Vec<_>>();
-            field_intervals.sort_by_key(|interval| (interval.start, interval.end));
-            let Some(first) = field_intervals.first() else {
-                continue;
-            };
-            let mut end = first.end;
-            for interval in field_intervals.iter().skip(1) {
-                if interval.start > end {
-                    return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
-                }
-                end = end.max(interval.end);
-            }
-            if *space == field.address_space {
-                primary_range = Some((first.start, end));
-            }
-        }
-        if primary_range.unwrap_or((field.slot_offset, field.slot_offset))
-            != (field.slot_offset, expected_end)
-        {
-            return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
-        }
-    }
-
-    if layout.explicit_reservations.len() != expected_reservations.len() {
-        let space = layout
-            .explicit_reservations
-            .first()
-            .map_or(ProviderAddressSpace::Storage, |reservation| {
-                reservation.space
-            });
-        return Err(LayoutInvariantError::InvalidExplicitReservation { space });
-    }
-    let mut seen_reservations = FxHashSet::default();
-    for reservation in &layout.explicit_reservations {
-        if !seen_reservations.insert((reservation.space, reservation.value))
-            || expected_reservations.get(&(reservation.space, reservation.value))
-                != Some(&reservation.occurrences)
-        {
-            return Err(LayoutInvariantError::InvalidExplicitReservation {
-                space: reservation.space,
-            });
-        }
-        if let Some(value) = reservation.value.data(db).to_usize()
-            && let Some(interval) = intervals
-                .get(&reservation.space)
-                .into_iter()
-                .flatten()
-                .find(|interval| value >= interval.start && value < interval.end)
-        {
-            return Err(LayoutInvariantError::ExplicitReservationOverlap {
-                space: reservation.space,
-                field: interval.field,
-                value: reservation.value,
-            });
-        }
-    }
-
-    for (space, space_intervals) in &mut intervals {
-        space_intervals.sort_by_key(|interval| (interval.start, interval.end));
-        for (idx, first) in space_intervals.iter().enumerate() {
-            for second in space_intervals.iter().skip(idx + 1) {
-                if second.start >= first.end {
-                    break;
-                }
-                if !permitted_overlaps.contains(&(first.owner, second.owner)) {
-                    return Err(LayoutInvariantError::AllocationOverlap {
-                        space: *space,
-                        first_field: first.field,
-                        second_field: second.field,
-                    });
-                }
-            }
-        }
-        let actual = space_intervals
-            .iter()
-            .map(|interval| interval.end)
-            .max()
-            .unwrap_or(0);
-        if layout.high_water_by_address_space.get(space).copied() != Some(actual) {
-            return Err(LayoutInvariantError::InvalidAddressSpaceHighWater { space: *space });
-        }
-    }
-    for (space, high_water) in &layout.high_water_by_address_space {
-        if (*space == ProviderAddressSpace::Code && high_water.checked_mul(32).is_none())
-            || (*high_water != 0 && !intervals.contains_key(space))
-        {
-            return Err(LayoutInvariantError::InvalidAddressSpaceHighWater { space: *space });
-        }
-    }
-    Ok(())
-}
-
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn build_contract_storage_layout<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
@@ -4000,17 +1481,8 @@ pub(crate) fn build_contract_storage_layout<'db>(
         }
     }
     let allocated = if field_results.iter().all(|field| field.result.is_ok()) {
-        match allocate_contract(db, &field_results) {
-            Ok(layout) => match validate_allocated_contract_layout(db, &layout) {
-                Ok(()) => Some(layout),
-                Err(error) => {
-                    debug_assert!(false, "invalid completed contract layout graph: {error:?}");
-                    if let Some(field) = field_results.first_mut() {
-                        field.result = Err(vec![ContractLayoutError::InternalLayoutGraph]);
-                    }
-                    None
-                }
-            },
+        match allocate_contract(&field_results) {
+            Ok(layout) => Some(layout),
             Err((field, error)) => {
                 if let Some(result) = field_results
                     .iter_mut()

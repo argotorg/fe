@@ -1,0 +1,127 @@
+// An `unsafe` field holds a value its type's safe methods trust: initializing
+// or writing it needs an `unsafe` context, and reading it is safe, from any
+// module that can see it.
+mod buf {
+    pub struct Buf {
+        pub unsafe len: u256,
+        unsafe cap: u256,
+        tag: u256,
+    }
+
+    pub struct Holder {
+        unsafe items: [u256; 2],
+        unsafe opt: Option<u256>,
+    }
+
+    pub enum Shape {
+        Run { unsafe start: u256, len: u256 },
+        Empty,
+    }
+
+    impl Buf {
+        // Rejected: initializing `len` and `cap`.
+        pub fn new(_ cap: u256) -> Buf {
+            Buf { len: 0, cap, tag: 0 }
+        }
+
+        // Accepted: in an `unsafe` block.
+        pub fn new_checked(_ cap: u256) -> Buf {
+            unsafe { Buf { len: 0, cap, tag: 0 } }
+        }
+
+        // Rejected: an assignment, a compound assignment and a `mut` access.
+        // Accepted: writing the ordinary `tag`, and writing `len` in an
+        // `unsafe` block.
+        pub fn shrink(mut self, _ len: u256) {
+            self.len = len
+            self.len -= 1
+            let l = mut self.len
+            l = 3
+            self.tag = 1
+            if len < self.len {
+                unsafe { self.len = len }
+            }
+        }
+
+        // Rejected: a `mut` binding of `len` writes it.
+        pub fn destructure(mut self) {
+            let Buf { mut len, tag, .. } = self
+            len = tag
+        }
+
+        // Rejected: a `mut self` method on `len`, and a `with` provider
+        // through `len` that a `mut` effect writes. Accepted: a provider
+        // only read, and one written in an `unsafe` block.
+        pub fn poke(mut self) -> u256 {
+            self.len.bump()
+            with (self.len) { count() }
+            let n = with (self.cap) { peek() }
+            with (self.cap) {
+                unsafe { count() }
+            }
+            n
+        }
+    }
+
+    trait Bump {
+        fn bump(mut self)
+    }
+
+    impl Bump for u256 {
+        fn bump(mut self) {
+            self += 1
+        }
+    }
+
+    fn count() uses (x: mut u256) {
+        x += 1
+    }
+
+    fn peek() -> u256 uses (x: u256) {
+        x
+    }
+
+    impl Holder {
+        // Rejected: an element write, and a loop and a match that open the
+        // fields mutably.
+        pub fn bump(mut self) {
+            self.items[0] = 0
+            for mut x in self.items {
+                x += 1
+            }
+            match self.opt {
+                Option::Some(mut v) => v += 1
+                Option::None => {}
+            }
+        }
+
+        // Accepted: reading through the fields.
+        pub fn total(self) -> u256 {
+            var total = 0
+            for x in self.items {
+                total += x
+            }
+            total
+        }
+    }
+
+    // Rejected: initializing a variant's `start`.
+    pub fn shape() -> Shape {
+        Shape::Run { start: 1, len: 2 }
+    }
+}
+
+use buf::Buf
+
+// Accepted: a `pub unsafe` field is readable outside its module.
+// Rejected: writing it.
+fn outside(_ b: mut Buf) -> u256 {
+    let n = b.len
+    b.len = 2
+    n
+}
+
+// Accepted: an `unsafe fn` body is an unsafe context.
+unsafe fn trusted(_ b: mut Buf) {
+    b.len = 0
+}

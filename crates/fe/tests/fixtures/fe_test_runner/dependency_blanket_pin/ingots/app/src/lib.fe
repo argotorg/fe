@@ -1,0 +1,15 @@
+// A dependency's blanket `Pinned` implementation does not pin this ingot's
+// types, which its bound does not admit.
+struct Point {
+    x: u256,
+}
+
+fn make() -> Point {
+    Point { x: 1 }
+}
+
+#[test]
+fn plain_type_is_a_memory_value() {
+    let p = make()
+    assert(p.x == 1)
+}

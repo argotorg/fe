@@ -1,6 +1,7 @@
+use fe_hir::analysis::semantic::SemanticInstance;
 use fe_hir::analysis::{
     analysis_pass::AnalysisPassManager,
-    semantic::{get_or_build_semantic_instance, identity_semantic_instance_key},
+    semantic::identity_semantic_instance_key,
     ty::ty_check::BodyOwner,
     ty::{AdtDefAnalysisPass, FuncAnalysisPass},
 };
@@ -86,9 +87,9 @@ fn cached_answers(
             ));
         }
         if func.body(db).is_some() {
-            let instance = get_or_build_semantic_instance(
+            let instance = SemanticInstance::new(
                 db,
-                identity_semantic_instance_key(db, BodyOwner::Func(func)),
+                identity_semantic_instance_key(db, BodyOwner::Func(func, None)),
             );
             for callee in instance
                 .call_sites(db)
@@ -112,39 +113,6 @@ fn cached_answers(
     }
     answers.sort();
     answers
-}
-
-#[test]
-fn cached_parameter_types_follow_signature_layout_and_const_edits() {
-    let versions = [
-        "struct S {}\nfn target(_ x: S) {}\nfn caller() { target(S {}) }",
-        "struct S { value: u256 }\nfn target(_ x: S) {}\nfn caller() { target(S { value: 1 }) }",
-        "struct S {}\nfn target(_ x: S, _ y: bool) {}\nfn caller() { target(S {}, true) }",
-        "struct S<const N: usize = _> {}\nfn target(_ x: S) {}\nfn caller() { target(S<3> {}) }",
-        "struct S<const N: usize = _> {}\nfn target(_ x: S, _ y: S) {}\nfn caller() { target(S<3> {}, S<4> {}) }",
-        "const N: usize = 2\nfn target(_ x: [u256; N]) {}\nfn caller() { target([1, 2]) }",
-        "const N: usize = 3\nfn target(_ x: [u256; N]) {}\nfn caller() { target([1, 2, 3]) }",
-        "enum S { Value(u256) }\nfn target(_ x: S) {}\nfn caller() { target(S::Value(1)) }",
-        "enum S { Value(bool, u256) }\nfn target(_ x: S) {}\nfn caller() { target(S::Value(true, 1)) }",
-    ];
-    for individual_first in [false, true] {
-        let mut db = HirAnalysisTestDb::default();
-        let path = "cached_parameters.fe";
-        let file = db.new_stand_alone(path.into(), versions[0]);
-        for source in versions.iter().chain(versions.iter().rev()) {
-            file.set_text(&mut db).to((*source).into());
-            let (module, _) = db.top_mod(file);
-            let actual = cached_answers(&db, module, individual_first);
-            let mut fresh = HirAnalysisTestDb::default();
-            let fresh_file = fresh.new_stand_alone(path.into(), source);
-            let (fresh_module, _) = fresh.top_mod(fresh_file);
-            assert_eq!(
-                actual,
-                cached_answers(&fresh, fresh_module, !individual_first),
-                "{source}"
-            );
-        }
-    }
 }
 
 #[test]

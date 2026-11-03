@@ -1,1 +1,2 @@
 *.snap whitespace=-blank-at-eol
+crates/fmt/tests/fixtures/uses_new_line_crlf.fe -text whitespace=cr-at-eol

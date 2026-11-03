@@ -1,0 +1,49 @@
+// A field takes its numbers in every space its collections' entries lie in:
+// the entries of `locks` are transient, so `locks` takes transient number 0
+// as well as storage number 0, and the transient map `pending` takes the
+// next transient number. Their entries never share a slot.
+use core::marker::{Pinned, Transient}
+use core::ops::{Location, StateIndex}
+use std::evm::{Evm, RawStorage, StorageMap, TSlot, keccak_words, read_transient_word}
+
+struct TMap {}
+
+impl Pinned for TMap {
+    type Space = Transient
+}
+
+unsafe impl StateIndex for TMap {
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: keccak_words([key, root]), offset: 0 }
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Run -> (u256, u256, u256, u256),
+}
+
+pub contract C {
+    mut locks: StorageMap<u256, TSlot<u256>>,
+    mut nested: StorageMap<u256, StorageMap<u256, TSlot<u256>>>,
+    mut pending: TMap,
+
+    recv M {
+        Run -> (u256, u256, u256, u256) uses (mut locks, mut nested, mut pending, storage: RawStorage) {
+            locks[5].value = 1
+            nested[5][5].value = 3
+            pending[5] = 2
+            (locks[5].value, nested[5][5].value, pending[5], read_transient_word(keccak_words([5, 2])))
+        }
+    }
+}
+
+#[test]
+fn entry_spaces_take_numbers() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
+    assert(r == (1, 3, 2, 2))
+}

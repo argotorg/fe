@@ -155,7 +155,11 @@ pub fn reconstruct_project(metadata: &Value, dest: &Utf8Path) -> Result<Utf8Path
                         "dependency `{alias}` of ingot `{name}` points at unknown namespace \"{target}\""
                     ));
                 }
-                toml.push_str(&format!("{alias} = {{ path = \"../{target}\" }}\n"));
+                // The recorded build already passed the unsafe-trust check, and trust
+                // does not affect codegen, so every dependency is trusted here.
+                toml.push_str(&format!(
+                    "{alias} = {{ path = \"../{target}\", allow_unsafe = true }}\n"
+                ));
             }
         }
         fs::write(dir.join("fe.toml").as_std_path(), toml)

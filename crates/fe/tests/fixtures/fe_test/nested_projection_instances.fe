@@ -1,0 +1,35 @@
+// A projection may call its own function at another instance, which is
+// another projection: `Wrap<Wrap<One>>::at` calls `Wrap<One>::at`, and both
+// inline.
+trait Holder {
+    fn at(mut? self) -> mut? u256
+}
+
+struct One {
+    x: u256,
+}
+
+impl Holder for One {
+    fn at(mut? self) -> mut? u256 {
+        mut? self.x
+    }
+}
+
+struct Wrap<H> {
+    inner: H,
+}
+
+impl<H: mut? Holder> Holder for Wrap<H> {
+    fn at(mut? self) -> mut? u256 {
+        self.inner.at()
+    }
+}
+
+#[test]
+fn nested_instances() {
+    var w = Wrap { inner: Wrap { inner: One { x: 1 } } }
+    w.at() += 41
+    assert(w.inner.inner.x == 42)
+    let x: u256 = w.at()
+    assert(x == 42)
+}

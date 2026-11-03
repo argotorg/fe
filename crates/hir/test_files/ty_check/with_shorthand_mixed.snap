@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/with_shorthand_mixed.fe
 ---
@@ -105,7 +106,7 @@ note:
    │
 33 │   pub fn provide_both() {
    │ ╭───────────────────────^
-34 │ │     let mut st = Storage { value: 0 }
+34 │ │     var st = Storage { value: 0 }
 35 │ │     with (st, Console {}) {
 36 │ │         do_both()
 37 │ │     }
@@ -115,20 +116,20 @@ note:
 note:
    ┌─ with_shorthand_mixed.fe:34:9
    │
-34 │     let mut st = Storage { value: 0 }
-   │         ^^^^^^ Storage
+34 │     var st = Storage { value: 0 }
+   │         ^^ Storage
 
 note:
-   ┌─ with_shorthand_mixed.fe:34:18
+   ┌─ with_shorthand_mixed.fe:34:14
    │
-34 │     let mut st = Storage { value: 0 }
-   │                  ^^^^^^^^^^^^^^^^^^^^ Storage
+34 │     var st = Storage { value: 0 }
+   │              ^^^^^^^^^^^^^^^^^^^^ Storage
 
 note:
-   ┌─ with_shorthand_mixed.fe:34:35
+   ┌─ with_shorthand_mixed.fe:34:31
    │
-34 │     let mut st = Storage { value: 0 }
-   │                                   ^ u64
+34 │     var st = Storage { value: 0 }
+   │                               ^ u64
 
 note:
    ┌─ with_shorthand_mixed.fe:35:5

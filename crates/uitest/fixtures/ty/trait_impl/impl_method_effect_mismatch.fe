@@ -14,3 +14,16 @@ impl T for Missing {
 impl T for Mutable {
     fn f(self) uses (a: mut A) {}
 }
+
+pub trait Counter {
+    uses E
+}
+
+pub trait Pair<B: Counter, C: Counter> {
+    fn f(self) uses B::E
+}
+
+// A row is its type's: `C::E` does not stand for `B::E`.
+impl<B: Counter, C: Counter> Pair<B, C> for Missing {
+    fn f(self) uses C::E {}
+}

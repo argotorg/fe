@@ -1,0 +1,228 @@
+---
+source: crates/hir/tests/frontend/ty_check.rs
+expression: res
+input_file: test_files/ty_check/assoc_ty_bound_shadowed_by_name.fe
+---
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:18:58
+   │
+18 │       fn read_with<D: Decoder<Self>>(var d: own D) -> u256 {
+   │ ╭──────────────────────────────────────────────────────────^
+19 │ │         d.read()
+20 │ │     }
+   │ ╰─────^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:19:9
+   │
+19 │         d.read()
+   │         ^ D
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:19:9
+   │
+19 │         d.read()
+   │         ^^^^^^^^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:23:28
+   │
+23 │   fn first<A: Abi>() -> u256 {
+   │ ╭────────────────────────────^
+24 │ │     var d = A::decoder()
+25 │ │     d.read()
+26 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:24:9
+   │
+24 │     var d = A::decoder()
+   │         ^ A::Decoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:24:13
+   │
+24 │     var d = A::decoder()
+   │             ^^^^^^^^^^ fn decoder<A>
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:24:13
+   │
+24 │     var d = A::decoder()
+   │             ^^^^^^^^^^^^ A::Decoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:25:5
+   │
+25 │     d.read()
+   │     ^ A::Decoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:25:5
+   │
+25 │     d.read()
+   │     ^^^^^^^^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:28:56
+   │
+28 │   fn second<A: Abi, D: Decoder<A>>(var d: own D) -> u256 {
+   │ ╭────────────────────────────────────────────────────────^
+29 │ │     d.read()
+30 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:29:5
+   │
+29 │     d.read()
+   │     ^ D
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:29:5
+   │
+29 │     d.read()
+   │     ^^^^^^^^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:32:28
+   │
+32 │   fn third<A: Abi>() -> u256 {
+   │ ╭────────────────────────────^
+33 │ │     second<A, A::Decoder>(d: A::decoder())
+34 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:33:5
+   │
+33 │     second<A, A::Decoder>(d: A::decoder())
+   │     ^^^^^^^^^^^^^^^^^^^^^ fn second<A, A::Decoder>
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:33:5
+   │
+33 │     second<A, A::Decoder>(d: A::decoder())
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:33:30
+   │
+33 │     second<A, A::Decoder>(d: A::decoder())
+   │                              ^^^^^^^^^^ fn decoder<A>
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:33:30
+   │
+33 │     second<A, A::Decoder>(d: A::decoder())
+   │                              ^^^^^^^^^^^^ A::Decoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:41:31
+   │
+41 │       fn read(mut self) -> u256 {
+   │ ╭───────────────────────────────^
+42 │ │         1
+43 │ │     }
+   │ ╰─────^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:42:9
+   │
+42 │         1
+   │         ^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:54:32
+   │
+54 │       fn decoder() -> SolDecoder {
+   │ ╭────────────────────────────────^
+55 │ │         SolDecoder {}
+56 │ │     }
+   │ ╰─────^ SolDecoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:55:9
+   │
+55 │         SolDecoder {}
+   │         ^^^^^^^^^^^^^ SolDecoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:58:23
+   │
+58 │       fn output() -> u8 {
+   │ ╭───────────────────────^
+59 │ │         0
+60 │ │     }
+   │ ╰─────^ u8
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:59:9
+   │
+59 │         0
+   │         ^ u8
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:63:23
+   │
+63 │   fn concrete() -> u256 {
+   │ ╭───────────────────────^
+64 │ │     var d = Sol::decoder()
+65 │ │     d.read() + Sol::read_with(d: SolDecoder {})
+66 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:64:9
+   │
+64 │     var d = Sol::decoder()
+   │         ^ SolDecoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:64:13
+   │
+64 │     var d = Sol::decoder()
+   │             ^^^^^^^^^^^^ fn decoder<Sol>
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:64:13
+   │
+64 │     var d = Sol::decoder()
+   │             ^^^^^^^^^^^^^^ SolDecoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:65:5
+   │
+65 │     d.read() + Sol::read_with(d: SolDecoder {})
+   │     ^ SolDecoder
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:65:5
+   │
+65 │     d.read() + Sol::read_with(d: SolDecoder {})
+   │     ^^^^^^^^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:65:5
+   │
+65 │     d.read() + Sol::read_with(d: SolDecoder {})
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:65:16
+   │
+65 │     d.read() + Sol::read_with(d: SolDecoder {})
+   │                ^^^^^^^^^^^^^^ fn read_with<Sol, SolDecoder>
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:65:16
+   │
+65 │     d.read() + Sol::read_with(d: SolDecoder {})
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:65:34
+   │
+65 │     d.read() + Sol::read_with(d: SolDecoder {})
+   │                                  ^^^^^^^^^^^^^ SolDecoder

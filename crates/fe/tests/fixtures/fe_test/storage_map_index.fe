@@ -1,0 +1,95 @@
+// `map[k]` on a storage map names the entry's place: `map[k] += v` reads
+// and writes the entry's slot, under the `store` effect the map lies in.
+use std::evm::{Evm, StorageMap}
+
+msg Counter {
+    #[selector = 0x01]
+    Bump { key: u256, by: u256 } -> u256,
+    #[selector = 0x02]
+    Get { key: u256 } -> u256,
+    #[selector = 0x03]
+    Double { key: u256 } -> u256,
+}
+
+struct Store {
+    counts: StorageMap<u256, u256>,
+    other: StorageMap<u256, u256>,
+}
+
+fn double(_ key: u256) uses (map: mut StorageMap<u256, u256>) {
+    map[key] *= 2
+}
+
+pub contract Counts {
+    mut store: Store
+
+    recv Counter {
+        Bump { key, by } -> u256 uses (mut store) {
+            store.counts[key] += by
+            store.other[key] = store.counts[key] * 2
+            store.counts[key]
+        }
+        Get { key } -> u256 uses store {
+            store.counts[key] + store.other[key]
+        }
+        Double { key } -> u256 uses (mut store) {
+            // Distinct fields are disjoint: `other` stays writable while
+            // `counts`' element is open.
+            let count = mut store.counts[key]
+            store.other[key] = count
+            count += 1
+            with (mut store.counts) {
+                double(key)
+            }
+            store.counts[key]
+        }
+    }
+}
+
+// Maps of one type in distinct effects: each index takes its own receiver's
+// field.
+pub contract Pair {
+    mut first: StorageMap<u256, u256>,
+    mut second: StorageMap<u256, u256>,
+
+    recv Counter {
+        Bump { key, by } -> u256 uses (mut first, mut second) {
+            first[key] += by
+            second[key] = first[key] + 1
+            first[key]
+        }
+        Get { key } -> u256 uses (first, second) {
+            first[key] * 100 + second[key]
+        }
+        Double { key } -> u256 uses (mut first) {
+            first[key] *= 2
+            first[key]
+        }
+    }
+}
+
+#[test]
+fn same_typed_maps() uses (evm: mut Evm) {
+    let addr = evm.create2<Pair>(value: Wei::zero(), args: (), salt: 0)
+    let a: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Bump { key: 3, by: 4 })
+    assert!(a == 4)
+    let b: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Double { key: 3 })
+    assert!(b == 8)
+    let c: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Get { key: 3 })
+    assert!(c == 805)
+}
+
+#[test]
+fn indexing_writes_back() uses (evm: mut Evm) {
+    let addr = evm.create2<Counts>(value: Wei::zero(), args: (), salt: 0)
+    let a: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Bump { key: 1, by: 5 })
+    assert!(a == 5)
+    let b: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Bump { key: 1, by: 2 })
+    assert!(b == 7)
+    let c: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Get { key: 1 })
+    assert!(c == 21)
+    let d: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Double { key: 1 })
+    assert!(d == 16)
+    let e: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Get { key: 1 })
+    assert!(e == 23)
+}

@@ -3,31 +3,29 @@
 //! `StorageMap` binds a mapping to a compile-time slot. `SolMapping` derives
 //! slots exactly like Solidity for a root known only at runtime, including
 //! nested mappings: `mapping(K1 => mapping(K2 => V))` at slot `s` stores
-//! `m[a][b]` at `SolMapping::at(s).nested(a).slot_of(b)`.
-use core::ptr::{self, MemBuffer}
-use super::crypto::keccak256
-use super::ops::mstore
+//! `m[a][b]` at `unsafe { SolMapping::at(s) }.nested(a).slot_of(b)`.
+use super::layout::mapping_slot
 use super::storage_map::StorageKey
 
 pub struct SolMapping {
-    pub slot: u256,
+    slot: u256,
 }
 
 impl Copy for SolMapping {}
+impl Snapshot for SolMapping {}
 
 impl SolMapping {
     /// The mapping stored at `slot`.
-    pub fn at(_ slot: u256) -> Self {
+    ///
+    /// The caller must ensure that no compiler-allocated storage, such as a
+    /// contract field, overlaps the slots this value accesses.
+    pub unsafe fn at(_ slot: u256) -> Self {
         SolMapping { slot }
     }
 
     /// Storage slot of `mapping[key]`: `keccak256(abi.encode(key, slot))`.
     pub fn slot_of<K: StorageKey>(self, _ key: K) -> u256 {
-        let key_len = K::encoded_len(key)
-        let preimage = MemBuffer::alloc(key_len + 32)
-        K::write_key(ptr: preimage.ptr(), key)
-        mstore(addr: ptr::offset_bytes(preimage.ptr(), key_len), value: self.slot)
-        keccak256(preimage.span())
+        mapping_slot(self.slot, key)
     }
 
     /// The nested mapping stored at `mapping[key]`.

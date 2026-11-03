@@ -1,0 +1,50 @@
+// A span is a view its projection grants: it reserves the owner it was
+// derived from until its last use, as any `ref` access does, and a span
+// derived from a span reserves the same owner.
+use core::ptr::{MemBuffer, MemSpan}
+
+fn length(_ span: MemSpan) -> usize {
+    span.len()
+}
+
+// Rejected: the owner is written while its span is live.
+fn write_while_viewed() -> usize {
+    var buffer = MemBuffer::with_capacity(4)
+    let span = buffer.span()
+    buffer.reserve(8)
+    span.len()
+}
+
+// Accepted: the span's last use ends its view.
+fn write_after_view() -> usize {
+    var buffer = MemBuffer::with_capacity(4)
+    let n = buffer.span().len()
+    buffer.reserve(8)
+    n + buffer.len()
+}
+
+// Rejected: a span of a span still reserves the owner.
+fn sub_span_reserves_owner() -> usize {
+    var buffer = MemBuffer::with_capacity(4)
+    let head = buffer.span().head(1)
+    buffer.reserve(8)
+    head.len()
+}
+
+// Accepted: a span and its owner are both read at once.
+fn read_together() -> usize {
+    let buffer = MemBuffer::with_capacity(4)
+    let span = buffer.span()
+    length(span) + buffer.len()
+}
+
+// Rejected: a span passed to a call keeps the owner reserved while the call
+// may write it through a `mut` argument.
+fn copy_into(_ dest: mut MemBuffer, _ source: MemSpan) {
+    dest.extend_from(source)
+}
+
+fn self_copy() {
+    var buffer = MemBuffer::with_capacity(4)
+    copy_into(mut buffer, buffer.span())
+}

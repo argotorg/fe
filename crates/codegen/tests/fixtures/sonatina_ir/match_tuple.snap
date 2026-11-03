@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 416
 expression: output
 input_file: crates/codegen/tests/fixtures/match_tuple.fe
 ---
@@ -47,26 +48,29 @@ func private %match_bool_tuple(v0.constref<@layout_1>) -> i8 {
         jump block3;
 
     block2:
-        v2.i8 = phi (3.i8 block7) (1.i8 block8) (2.i8 block10) (0.i8 block11);
-        return v2;
+        v1.i8 = phi (3.i8 block7) (1.i8 block8) (2.i8 block10) (0.i8 block11);
+        return v1;
 
     block3:
-        v5.constref<i1> = const.proj v0 1.i256;
-        v6.i1 = const.load v5;
-        v8.i1 = eq v6 1.i1;
+        v4.constref<i1> = const.proj v0 1.i256;
+        v6.constref<i1> = const.proj v0 1.i256;
+        v7.i1 = const.load v6;
+        v8.i1 = eq v7 1.i1;
         br v8 block4 block6;
 
     block4:
         v11.constref<i1> = const.proj v0 0.i256;
-        v12.i1 = const.load v11;
-        v13.i1 = eq v12 1.i1;
-        br v13 block7 block9;
+        v12.constref<i1> = const.proj v0 0.i256;
+        v13.i1 = const.load v12;
+        v14.i1 = eq v13 1.i1;
+        br v14 block7 block9;
 
     block5:
-        v15.constref<i1> = const.proj v0 0.i256;
-        v16.i1 = const.load v15;
-        v17.i1 = eq v16 1.i1;
-        br v17 block10 block12;
+        v16.constref<i1> = const.proj v0 0.i256;
+        v17.constref<i1> = const.proj v0 0.i256;
+        v18.i1 = const.load v17;
+        v19.i1 = eq v18 1.i1;
+        br v19 block10 block12;
 
     block6:
         jump block5;
@@ -98,20 +102,22 @@ func private %match_mixed_tuple(v0.constref<@layout_2>) -> i8 {
         jump block3;
 
     block2:
-        v2.i8 = phi (0.i8 block5) (10.i8 block7) (11.i8 block8) (12.i8 block9);
-        return v2;
+        v1.i8 = phi (0.i8 block5) (10.i8 block7) (11.i8 block8) (12.i8 block9);
+        return v1;
 
     block3:
-        v5.constref<i1> = const.proj v0 0.i256;
-        v6.i1 = const.load v5;
-        v8.i1 = eq v6 1.i1;
+        v4.constref<i1> = const.proj v0 0.i256;
+        v6.constref<i1> = const.proj v0 0.i256;
+        v7.i1 = const.load v6;
+        v8.i1 = eq v7 1.i1;
         br v8 block4 block6;
 
     block4:
         v11.constref<i8> = const.proj v0 1.i256;
-        v12.i8 = const.load v11;
-        v14.i1 = eq v12 0.i8;
-        br v14 block7 block10;
+        v13.constref<i8> = const.proj v0 1.i256;
+        v14.i8 = const.load v13;
+        v15.i1 = eq v14 0.i8;
+        br v15 block7 block10;
 
     block5:
         jump block2;
@@ -129,8 +135,10 @@ func private %match_mixed_tuple(v0.constref<@layout_2>) -> i8 {
         jump block2;
 
     block10:
-        v20.i1 = eq v12 1.i8;
-        br v20 block8 block11;
+        v21.constref<i8> = const.proj v0 1.i256;
+        v22.i8 = const.load v21;
+        v23.i1 = eq v22 1.i8;
+        br v23 block8 block11;
 
     block11:
         jump block9;
@@ -144,13 +152,14 @@ func private %match_tuple_with_wildcard(v0.constref<@layout_1>) -> i8 {
         jump block3;
 
     block2:
-        v2.i8 = phi (1.i8 block4) (0.i8 block5);
-        return v2;
+        v1.i8 = phi (1.i8 block4) (0.i8 block5);
+        return v1;
 
     block3:
-        v5.constref<i1> = const.proj v0 0.i256;
-        v6.i1 = const.load v5;
-        v8.i1 = eq v6 1.i1;
+        v4.constref<i1> = const.proj v0 0.i256;
+        v6.constref<i1> = const.proj v0 0.i256;
+        v7.i1 = const.load v6;
+        v8.i1 = eq v7 1.i1;
         br v8 block4 block6;
 
     block4:

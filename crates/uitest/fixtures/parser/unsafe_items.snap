@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/unsafe_items.fe
+---
+error[1-0001]: expected `fn`, `trait` or `impl` after `unsafe` keyword
+  ┌─ unsafe_items.fe:3:7
+  │
+3 │ unsafe struct Foo {}
+  │       ^ expected `fn`, `trait` or `impl` after `unsafe` keyword
+
+error[1-0001]: an inherent `impl` cannot be `unsafe`; only a trait's can
+  ┌─ unsafe_items.fe:4:12
+  │
+4 │ unsafe impl Foo {}
+  │            ^ an inherent `impl` cannot be `unsafe`; only a trait's can

@@ -40,7 +40,7 @@ impl AddAssign for Ok {
     }
 }
 
-fn assign_yes(mut ok: own Ok) -> Ok {
+fn assign_yes(var ok: own Ok) -> Ok {
     ok += Ok::Yes
     ok
 }
@@ -72,12 +72,13 @@ impl Add<i32> for Point {
 
 impl Index<usize> for Point {
     type Output = Option<i32>
-    fn index(self, _ i: usize) -> Option<i32> {
-        match i {
+    fn index(self, _ i: usize) -> ref Option<i32> {
+        let value = match i {
             0 => Some(self.x)
             1 => Some(self.y)
             _ => None
         }
+        ref value
     }
 }
 
@@ -86,7 +87,7 @@ fn f(a: Point, b: Point) {
     let c2 = Add::add(a, b)
     // let c3 = Add::add(a, 100) TODO: fix `type annotation is needed`
     let d = c + as_i32(100)
-    let x = d[0]
+    let x = ref d[0]
 }
 
 fn as_i32(_ x: i32) -> i32 { x }

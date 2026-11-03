@@ -1,0 +1,5 @@
+// `mid` vouches for `dep`, but nothing trusts `mid`.
+#[test]
+fn untrusted_voucher() {
+    assert!(mid::via_dep(7) == 7)
+}

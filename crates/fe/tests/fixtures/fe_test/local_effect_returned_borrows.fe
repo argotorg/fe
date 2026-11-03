@@ -1,0 +1,34 @@
+// A callee that returns a borrow of its effect, provided by a local, is
+// called with the class it was inferred to take.
+
+fn slot() -> mut u256 uses (x: mut u256) {
+    mut x
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn view() -> ref Pair uses (pair: Pair) {
+    ref pair
+}
+
+#[test]
+fn writes_through_a_returned_borrow() {
+    var count: u256 = 1
+    with (mut count) {
+        let r = mut slot()
+        r = 5
+    }
+    assert(count == 5)
+}
+
+#[test]
+fn reads_through_a_returned_view() {
+    let pair = Pair { a: 3, b: 4 }
+    with (pair) {
+        let v = ref view()
+        assert(v.b == 4)
+    }
+}

@@ -9,21 +9,17 @@ use std::text::{self, TextBuilder}
 fn from_hex(_ hex: DynString) -> Bytes {
     let len = hex.len() / 2
     let buffer = MemBuffer::alloc(len)
-    let mut i: u256 = 0
-    while i < len {
+    for i in 0..len {
         let byte = text::parse_hex_uint(hex.slice(start: 2 * i, len: 2)).unwrap()
-        *ptr::offset_bytes(buffer.ptr(), i) = byte.downcast_truncate()
-        i += 1
+        unsafe { *ptr::offset_bytes(buffer.ptr(), i) = byte.downcast_truncate() }
     }
     Bytes::from_payload(source: buffer.span())
 }
 
 fn to_hex(_ bytes: Bytes) -> DynString {
-    let mut builder = TextBuilder::new()
-    let mut i: u256 = 0
-    while i < bytes.len() {
+    var builder = TextBuilder::new()
+    for i in 0..bytes.len() {
         builder = builder.push(text::hex(bytes.byte_at(i) as u256, 1))
-        i += 1
     }
     builder.finish()
 }
@@ -31,9 +27,9 @@ fn to_hex(_ bytes: Bytes) -> DynString {
 // The 256 bytes 0x00, 0x01, ..., 0xff.
 fn all_bytes() -> Bytes {
     let buffer = MemBuffer::alloc(256)
-    let mut i: u256 = 0
+    var i: u256 = 0
     while i < 256 {
-        *ptr::offset_bytes(buffer.ptr(), i) = i.downcast_truncate()
+        unsafe { *ptr::offset_bytes(buffer.ptr(), i.downcast_unchecked()) = i.downcast_truncate() }
         i += 1
     }
     Bytes::from_payload(source: buffer.span())

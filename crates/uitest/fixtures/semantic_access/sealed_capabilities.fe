@@ -1,0 +1,95 @@
+// Only the zero-sized `Evm` implements the sealed std EVM capabilities, so a
+// `Ctx` or `Log` provider holds nothing, even as a generic helper's effect:
+// reading the context or emitting a log never conflicts with an open storage
+// access. A capability that can start an external execution still interferes
+// with every open storage access.
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::{Address, Call, Ctx, Log, StorageMap}
+
+struct Record { owner: u256 }
+
+#[event]
+struct Claimed { owner: u256 }
+
+impl Record {
+    fn claim(mut self) uses (ctx: Ctx) {
+        self.owner = ctx.caller().word()
+    }
+}
+
+// Accepted: the context is read while an entry is open.
+fn read_context() uses (records: mut StorageMap<u256, Record>, ctx: Ctx) {
+    let record = mut records[7]
+    record.owner = ctx.caller().word()
+}
+
+// Accepted: a method of the entry reads the context.
+fn claim_entry() uses (records: mut StorageMap<u256, Record>, ctx: Ctx) {
+    let record = mut records[7]
+    record.claim()
+    record.owner += 1
+}
+
+// Accepted: a log is emitted while an entry is open.
+fn emit_with_entry() uses (records: mut StorageMap<u256, Record>, log: mut Log) {
+    let record = mut records[7]
+    log.emit(Claimed { owner: record.owner })
+    record.owner = 2
+}
+
+fn ping() uses (call: mut Call) {
+    var output = MemBuffer::empty()
+    let outcome = call.raw_call(
+        addr: Address::new(1), gas: 100000, value: Wei::zero(),
+        args: MemSpan::empty(), ret: mut output,
+    )
+}
+
+// Rejected: a call crosses an open entry.
+fn call_with_entry() uses (records: mut StorageMap<u256, Record>, call: mut Call) {
+    let record = mut records[7]
+    var output = MemBuffer::empty()
+    let outcome = call.raw_call(
+        addr: Address::new(1), gas: 100000, value: Wei::zero(),
+        args: MemSpan::empty(), ret: mut output,
+    )
+    record.owner = 2
+}
+
+// Rejected: a helper whose effects permit a call crosses an open entry.
+fn hidden_call_with_entry() uses (records: mut StorageMap<u256, Record>, call: mut Call) {
+    let record = mut records[7]
+    ping()
+    record.owner = 2
+}
+
+// Rejected: a caller may give two effects of one type the same provider.
+fn same_type() uses (a: mut StorageMap<u256, u256>, b: StorageMap<u256, u256>) {
+    let entry = mut a[1]
+    entry = b[1]
+}
+
+msg Msg {
+    #[selector = 1]
+    Run -> u256,
+}
+
+// Accepted: a handler does the same with its root providers, and its calls
+// instantiate the helpers with them.
+pub contract Registry uses (ctx: Ctx, log: mut Log) {
+    mut records: StorageMap<u256, Record>,
+
+    recv Msg {
+        Run -> u256 uses (mut records, ctx, mut log) {
+            let record = mut records[1]
+            record.owner = ctx.caller().word()
+            record.claim()
+            log.emit(Claimed { owner: record.owner })
+            record.owner = 2
+            read_context()
+            claim_entry()
+            emit_with_entry()
+            0
+        }
+    }
+}

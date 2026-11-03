@@ -1,57 +1,30 @@
-use std::iter;
-
 use crate::core::hir_def::{
-    Body, CallableDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId, GenericParam,
-    GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
+    Body, CallableDef, Expr, GenericArg, GenericArgListId, GenericParam, GenericParamOwner,
+    GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
     TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
     scope_graph::ScopeId,
 };
-use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::Update;
+use salsa::SalsaValue;
 use smallvec::smallvec;
 
 use super::{
-    adt_def::{AdtDef, AdtRef, instantiate_adt_field_layout, instantiate_adt_field_shape},
     assoc_const::{AssocConstUse, InherentConstUse},
     const_ty::{
-        CallableInputLayoutHoleOrigin, CallableLayoutOwner, ConstBodyLowering, ConstCaptureEnv,
-        ConstTyData, ConstTyId, HoleAnchor, HoleId, LayoutBoundaryIdentity, LayoutHoleArgSite,
-        LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite, LayoutOccurrencePath,
-        LayoutOccurrenceStep, LayoutRootId, LoweringContext, StructuralHoleOrigin,
+        ConstBodyLowering, ConstCaptureEnv, ConstTyData, ConstTyId, LoweringContext,
         UnevaluatedConstPolicy, const_ty_from_sem_const,
     },
-    effects::{ResolvedEffectKey, TraitKeySchema, lower_effect_key_schema},
-    fold::TyFoldable,
     generic_defaults::DefaultApplication,
-    layout_bundle::{
-        CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleComponent,
-        LayoutBundleComponentDeclaration, LayoutBundleComponentKey, LayoutBundleComponentTransport,
-        LayoutBundleInterface, LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema,
-        LayoutBundleTransport, LayoutBundleUnrepresentable, LayoutEvidencePath,
-        LayoutEvidencePathStep, LayoutPortKey, LayoutRootPort, LayoutViewAlias,
-    },
-    layout_holes::{
-        LayoutInstantiation, LayoutRootUse, LayoutTemplateSubst, LayoutViewRecurrence,
-        callable_input_layout_bindings_by_origin, classify_layout_view_recurrence,
-        collect_unique_app_bound_structural_holes_in_order,
-        collect_unique_layout_placeholders_in_order, instantiate_layout_template,
-        layout_hole_fallback_ty, layout_root_descends_from, layout_root_id,
-        reanchor_template_holes, rewrite_structural_holes, structural_hole_id,
-        structural_layout_type_embeds, substitute_layout_holes_by_placeholder,
-        substitute_layout_holes_by_placeholder_in,
-    },
-    normalize::{normalize_from_assumptions, normalize_ty},
-    provider::{EffectHandleResolution, resolve_effect_handle},
-    trait_def::{ImplementorId, TraitInstId},
+    normalize::normalize_ty,
+    provider::AddressSpace,
+    shape::lower_shape_list,
+    trait_def::TraitInstId,
     trait_resolution::{
         PredicateListId,
         constraint::{
-            collect_callable_shape_constraints, collect_candidate_constraints, collect_constraints,
-            collect_func_decl_constraints,
+            collect_candidate_constraints, collect_constraints, collect_func_decl_constraints,
         },
     },
-    ty_def::{InvalidCause, Kind, PrimTy, TyBase, TyData, TyId, TyParam},
-    visitor::{TyVisitable, TyVisitor},
+    ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{
     NameDomain, NameResKind, PathRes, TypePosition, path_resolver::PathResolutionResult,
@@ -64,19 +37,15 @@ use crate::analysis::{
 };
 
 /// Lowers the given HirTy to `TyId`.
-#[salsa::tracked(cycle_fn=lower_hir_ty_cycle_recover, cycle_initial=lower_hir_ty_cycle_initial)]
+#[salsa::tracked(returns(copy), cycle_initial=lower_hir_ty_cycle_initial)]
 pub fn lower_hir_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    let minter = LoweringContext::new(HoleAnchor::TemplateTy {
-        ty,
-        scope,
-        assumptions,
-    });
-    lower_hir_ty_impl(db, ty, scope, assumptions, &minter)
+    let lowering_cx = LoweringContext::new();
+    lower_hir_ty_impl(db, ty, scope, assumptions, &lowering_cx)
 }
 
 fn lower_hir_ty_impl<'db>(
@@ -84,30 +53,27 @@ fn lower_hir_ty_impl<'db>(
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
     let lower_child =
-        |child_ty, _slot| lower_opt_hir_ty_impl(db, child_ty, scope, assumptions, minter);
+        |child_ty, _slot| lower_opt_hir_ty_impl(db, child_ty, scope, assumptions, lowering_cx);
 
-    match ty.data(db) {
-        HirTyKind::Ptr(pointee) => {
-            let pointee = lower_child(*pointee, 0);
-            let ptr = TyId::ptr(db);
-            TyId::app(db, ptr, pointee)
+    let lowered = match ty.data(db) {
+        HirTyKind::Ptr(pointee) => TyId::ptr_to(db, lower_child(*pointee, 0)),
+
+        HirTyKind::Mode(TypeMode::Own, inner) => lower_child(*inner, 0),
+        HirTyKind::Mode(TypeMode::Mut | TypeMode::MaybeMut | TypeMode::Ref, _) => {
+            TyId::invalid(db, InvalidCause::ModeNotType)
         }
 
-        HirTyKind::Mode(mode, inner) => {
-            let inner = lower_child(*inner, 0);
-            match mode {
-                TypeMode::Mut => TyId::borrow_mut_of(db, inner),
-                TypeMode::Ref => TyId::borrow_ref_of(db, inner),
-                TypeMode::Own => inner,
-            }
-        }
-
-        HirTyKind::Path(path) => {
-            lower_path_impl(db, scope, *path, assumptions, TypePosition::Type, minter)
-        }
+        HirTyKind::Path(path) => lower_path_impl(
+            db,
+            scope,
+            *path,
+            assumptions,
+            TypePosition::Type,
+            lowering_cx,
+        ),
 
         HirTyKind::Tuple(tuple_id) => {
             let elems = tuple_id.data(db);
@@ -115,7 +81,7 @@ fn lower_hir_ty_impl<'db>(
             let tuple = TyId::tuple(db, len);
             elems.iter().enumerate().fold(tuple, |acc, (idx, &elem)| {
                 let elem_ty = lower_child(elem, idx);
-                if !elem_ty.has_star_kind(db) {
+                if !elem_ty.is_star_kind(db) {
                     return TyId::invalid(db, InvalidCause::NotFullyApplied);
                 }
 
@@ -125,13 +91,20 @@ fn lower_hir_ty_impl<'db>(
 
         HirTyKind::Array(hir_elem_ty, len) => {
             let elem_ty = lower_child(*hir_elem_ty, 0);
-            let len_ty = lower_opt_const_body(db, *len, scope, assumptions, minter);
+            let len_ty = lower_opt_const_body(db, *len, scope, assumptions, lowering_cx);
             let len_ty = TyId::const_ty(db, len_ty);
             let array = TyId::array(db, elem_ty);
             TyId::app(db, array, len_ty)
         }
 
         HirTyKind::Never => TyId::never(db),
+    };
+    // A `#[view]` type exists only behind accesses, never inside a value.
+    match lowered.view_part(db) {
+        Some(view) if !lowered.has_invalid(db) => {
+            TyId::invalid(db, InvalidCause::ViewPart { view })
+        }
+        _ => lowered,
     }
 }
 
@@ -148,33 +121,21 @@ pub(crate) fn lower_hir_ty_with_resolutions<'db>(
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
 ) -> (TyId<'db>, Vec<(PathId<'db>, PathRes<'db>)>) {
-    let minter = LoweringContext::for_const_bodies(
-        HoleAnchor::TemplateTy {
-            ty,
-            scope,
-            assumptions,
-        },
-        const_bodies,
-    )
-    .recording_resolutions();
-    let lowered = lower_hir_ty_impl(db, ty, scope, assumptions, &minter);
-    (lowered, minter.into_resolutions())
+    let lowering_cx = LoweringContext::for_const_bodies(const_bodies).recording_resolutions();
+    let lowered = lower_hir_ty_impl(db, ty, scope, assumptions, &lowering_cx);
+    (lowered, lowering_cx.into_resolutions())
 }
 
-/// Lowers `ty` minting structural-hole identities through the caller's
-/// minter, so holes are keyed to the enclosing lowering execution instead of
-/// this type's content-interned identity. Use this instead of the memoized
-/// [`lower_hir_ty`] whenever the result flows into a larger type under
-/// construction: a memoized result reused at two positions carries the same
-/// hole identities at both.
+/// Lowers `ty` with the caller's lowering context, which sets how const
+/// bodies lower and can record the paths the lowering resolves.
 pub(crate) fn lower_hir_ty_with_minter<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
-    lower_hir_ty_impl(db, ty, scope, assumptions, minter)
+    lower_hir_ty_impl(db, ty, scope, assumptions, lowering_cx)
 }
 
 /// Lowers an item-signature type without validating or evaluating anonymous
@@ -186,12 +147,8 @@ pub(crate) fn lower_hir_ty_deferred<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    let minter = LoweringContext::deferred(HoleAnchor::TemplateTy {
-        ty,
-        scope,
-        assumptions,
-    });
-    lower_hir_ty_impl(db, ty, scope, assumptions, &minter)
+    let lowering_cx = LoweringContext::deferred();
+    lower_hir_ty_impl(db, ty, scope, assumptions, &lowering_cx)
 }
 
 pub(crate) fn lower_hir_ty_in_mode<'db>(
@@ -207,16 +164,6 @@ pub(crate) fn lower_hir_ty_in_mode<'db>(
     }
 }
 
-pub(crate) fn lower_opt_hir_ty_with_minter<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: Partial<HirTyId<'db>>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
-) -> TyId<'db> {
-    lower_opt_hir_ty_impl(db, ty, scope, assumptions, minter)
-}
-
 pub fn lower_opt_hir_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: Partial<HirTyId<'db>>,
@@ -226,85 +173,8 @@ pub fn lower_opt_hir_ty<'db>(
     let Some(hir_ty) = ty.to_opt() else {
         return TyId::invalid(db, InvalidCause::ParseError);
     };
-    // Anchor at the same memo key the tracked entry would use, so holes get
-    // the same identity whether or not this lowering is memoized.
-    let minter = LoweringContext::new(HoleAnchor::TemplateTy {
-        ty: hir_ty,
-        scope,
-        assumptions,
-    });
-    lower_hir_ty_impl(db, hir_ty, scope, assumptions, &minter)
-}
-
-pub(crate) fn lower_layout_root_uses_in_hir_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: HirTyId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
-) -> Vec<super::layout_holes::LayoutRootUse<'db>> {
-    let mut uses = Vec::new();
-    collect_layout_root_uses_in_hir_ty(db, ty, scope, assumptions, minter, &mut uses);
-    uses
-}
-
-fn collect_layout_root_uses_in_hir_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: HirTyId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
-    uses: &mut Vec<super::layout_holes::LayoutRootUse<'db>>,
-) {
-    match ty.data(db) {
-        HirTyKind::Ptr(pointee) | HirTyKind::Mode(_, pointee) => {
-            if let Some(pointee) = pointee.to_opt() {
-                collect_layout_root_uses_in_hir_ty(db, pointee, scope, assumptions, minter, uses);
-            }
-        }
-        HirTyKind::Tuple(tuple) => {
-            for elem in tuple.data(db).iter().filter_map(|elem| elem.to_opt()) {
-                collect_layout_root_uses_in_hir_ty(db, elem, scope, assumptions, minter, uses);
-            }
-        }
-        HirTyKind::Array(element, _) => {
-            if let Some(element) = element.to_opt() {
-                collect_layout_root_uses_in_hir_ty(db, element, scope, assumptions, minter, uses);
-            }
-        }
-        HirTyKind::Path(path) => {
-            let Some(path) = path.to_opt() else {
-                return;
-            };
-            let args = lower_generic_arg_list(
-                db,
-                path.generic_args(db),
-                scope,
-                assumptions,
-                LayoutHoleArgSite::Path(path),
-                minter,
-            );
-            if let Ok(PathRes::TyAlias(alias, _)) =
-                resolve_path_with_minter(db, path, scope, assumptions, false, minter)
-            {
-                let instantiated = alias.instantiate_layout(db, &args, minter);
-                uses.extend(
-                    instantiated
-                        .root_uses
-                        .into_iter()
-                        .filter(|root_use| root_use.root(db).is_none()),
-                );
-            }
-            for arg in path.generic_args(db).data(db) {
-                if let GenericArg::Type(arg) = arg
-                    && let Some(arg) = arg.ty.to_opt()
-                {
-                    collect_layout_root_uses_in_hir_ty(db, arg, scope, assumptions, minter, uses);
-                }
-            }
-        }
-        HirTyKind::Never => {}
-    }
+    let lowering_cx = LoweringContext::new();
+    lower_hir_ty_impl(db, hir_ty, scope, assumptions, &lowering_cx)
 }
 
 fn lower_opt_hir_ty_impl<'db>(
@@ -312,11 +182,11 @@ fn lower_opt_hir_ty_impl<'db>(
     ty: Partial<HirTyId<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
     ty.to_opt().map_or_else(
         || TyId::invalid(db, InvalidCause::ParseError),
-        |hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions, minter),
+        |hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions, lowering_cx),
     )
 }
 
@@ -328,7 +198,7 @@ fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> O
     ) -> Option<PathId<'db>> {
         match expr {
             Expr::Path(path) => path.to_opt(),
-            Expr::Block(stmts) => {
+            Expr::Block(stmts, _) => {
                 let [stmt] = stmts.as_slice() else {
                     return None;
                 };
@@ -350,10 +220,8 @@ fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> O
 
 /// Extends `assumptions` with the enclosing trait's implicit `Self: Trait`
 /// predicate, mirroring the body-checking environment. Signature-position
-/// const bodies like `Slot<{ Self::N }>` in a trait method must resolve
-/// `Self::N` to a trait const the same way the body checker later does, or
-/// the const falls back to an unevaluated body whose CTFE cannot resolve the
-/// trait const reference.
+/// paths and const bodies like `Slot<Self::N>` and `Slot<{ Self::N }>` must
+/// resolve the trait's constants using the same implicit bound.
 fn with_enclosing_trait_self_predicate<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -382,17 +250,17 @@ fn with_enclosing_trait_self_predicate<'db>(
     assumptions
 }
 
-fn lower_opt_const_body<'db>(
+pub(crate) fn lower_opt_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Partial<Body<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> ConstTyId<'db> {
     let Some(body) = body.to_opt() else {
         return ConstTyId::invalid(db, InvalidCause::ParseError);
     };
-    if minter.const_bodies() == ConstBodyLowering::Deferred {
+    if lowering_cx.const_bodies() == ConstBodyLowering::Deferred {
         if let Some(path) = const_body_simple_path(db, body)
             && path.parent(db).is_none()
             && matches!(
@@ -403,7 +271,7 @@ fn lower_opt_const_body<'db>(
                 Ok(NameResKind::Scope(ScopeId::GenericParam(..)))
             )
             && let Ok(PathRes::Ty(ty)) =
-                resolve_path_with_minter(db, path, scope, assumptions, true, minter)
+                resolve_path_with_minter(db, path, scope, assumptions, true, lowering_cx)
             && let TyData::ConstTy(const_ty) = ty.data(db)
         {
             return *const_ty;
@@ -413,11 +281,11 @@ fn lower_opt_const_body<'db>(
             Partial::Present(body),
             None,
             None,
-            ConstCaptureEnv::identity_for_body(db, body, Some(minter)),
+            ConstCaptureEnv::identity_for_body(db, body, Some(lowering_cx)),
             UnevaluatedConstPolicy::DeferValidation,
         );
     }
-    lower_const_body_path(db, body, scope, assumptions, minter)
+    lower_const_body_path(db, body, scope, assumptions, lowering_cx)
         .unwrap_or_else(|| ConstTyId::from_body(db, body, None, None))
 }
 
@@ -430,14 +298,8 @@ pub(crate) fn const_body_names_a_constant<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    const_body_simple_path(db, body).is_some_and(|path| {
-        let minter = LoweringContext::new(HoleAnchor::TemplatePath {
-            path,
-            scope,
-            assumptions,
-        });
-        lower_const_body_path(db, body, scope, assumptions, &minter).is_some()
-    })
+    const_body_simple_path(db, body).is_some()
+        && lower_const_body_path(db, body, scope, assumptions, &LoweringContext::new()).is_some()
 }
 
 /// How an anonymous constant that is a lone path lowers: to the constant,
@@ -448,13 +310,13 @@ pub(crate) fn lower_const_body_path<'db>(
     body: Body<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> Option<ConstTyId<'db>> {
     let path = const_body_simple_path(db, body)?;
     let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     Some(
-        match minter.without_recording(|| {
-            resolve_path_with_minter(db, path, scope, assumptions, true, minter)
+        match lowering_cx.without_recording(|| {
+            resolve_path_with_minter(db, path, scope, assumptions, true, lowering_cx)
         }) {
             Ok(PathRes::Const(const_def, ty)) => {
                 if let Some(body) = const_def.body(db).to_opt() {
@@ -468,8 +330,13 @@ pub(crate) fn lower_const_body_path<'db>(
                 if let Some(self_arg) = args.first_mut() {
                     *self_arg = recv_ty;
                 }
-                let inst =
-                    TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
+                let inst = TraitInstId::new(
+                    db,
+                    inst.def(db),
+                    args,
+                    inst.assoc_type_bindings(db).clone(),
+                    inst.mode(db),
+                );
 
                 if let Some(expected_ty) = inst
                     .def(db)
@@ -512,12 +379,12 @@ fn lower_path_impl<'db>(
     path: Partial<PathId<'db>>,
     assumptions: PredicateListId<'db>,
     position: TypePosition,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
     let Some(path) = path.to_opt() else {
         return TyId::invalid(db, InvalidCause::ParseError);
     };
-    lower_type_position_path(db, path, scope, assumptions, position, minter)
+    lower_type_position_path(db, path, scope, assumptions, position, lowering_cx)
         .unwrap_or_else(|_| TyId::invalid(db, InvalidCause::PathResolutionFailed { path }))
 }
 
@@ -531,10 +398,17 @@ pub(crate) fn lower_type_position_path<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     position: TypePosition,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
-    let res =
-        resolve_type_position_path_with_minter(db, path, scope, assumptions, position, minter)?;
+    let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
+    let res = resolve_type_position_path_with_minter(
+        db,
+        path,
+        scope,
+        assumptions,
+        position,
+        lowering_cx,
+    )?;
     Ok(match res {
         PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty) => ty,
         PathRes::Const(const_def, ty) => {
@@ -550,8 +424,13 @@ pub(crate) fn lower_type_position_path<'db>(
             if let Some(self_arg) = args.first_mut() {
                 *self_arg = recv_ty;
             }
-            let inst =
-                TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
+            let inst = TraitInstId::new(
+                db,
+                inst.def(db),
+                args,
+                inst.assoc_type_bindings(db).clone(),
+                inst.mode(db),
+            );
 
             if let Some(expected_ty) = inst
                 .def(db)
@@ -613,6 +492,7 @@ pub(crate) fn lower_type_position_path<'db>(
 
 fn lower_hir_ty_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _ty: HirTyId<'db>,
     _scope: ScopeId<'db>,
     _assumptions: PredicateListId<'db>,
@@ -625,20 +505,6 @@ fn lower_hir_ty_cycle_initial<'db>(
     TyId::invalid(db, InvalidCause::TypeLoweringCycle)
 }
 
-fn lower_hir_ty_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TyId<'db>,
-    _count: u32,
-    _ty: HirTyId<'db>,
-    _scope: ScopeId<'db>,
-    _assumptions: PredicateListId<'db>,
-) -> salsa::CycleRecoveryAction<TyId<'db>> {
-    // Keep iterating until we reach a fixpoint; the initial value is
-    // already marked invalid, so subsequent iterations will converge
-    // quickly without panicking.
-    salsa::CycleRecoveryAction::Iterate
-}
-
 fn lower_const_ty_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -649,15 +515,22 @@ fn lower_const_ty_ty<'db>(
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     };
 
-    if !path
-        .to_opt()
-        .is_none_or(|p| p.generic_args(db).is_empty(db))
-    {
+    let Some(path) = path.to_opt() else {
+        return TyId::invalid(db, InvalidCause::ParseError);
+    };
+    if !path.generic_args(db).is_empty(db) {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     }
     let ty = normalize_ty(
         db,
-        lower_path(db, scope, *path, assumptions),
+        lower_path_impl(
+            db,
+            scope,
+            Partial::Present(path),
+            assumptions,
+            TypePosition::Type,
+            &LoweringContext::new(),
+        ),
         scope,
         assumptions,
     );
@@ -671,23 +544,6 @@ fn lower_const_ty_ty<'db>(
     } else {
         TyId::invalid(db, InvalidCause::InvalidConstParamTy)
     }
-}
-
-fn lower_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    path: Partial<PathId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    let Some(p) = path.to_opt() else {
-        return TyId::invalid(db, InvalidCause::ParseError);
-    };
-    let minter = LoweringContext::new(HoleAnchor::TemplatePath {
-        path: p,
-        scope,
-        assumptions,
-    });
-    lower_path_impl(db, scope, path, assumptions, TypePosition::Type, &minter)
 }
 
 pub(crate) fn generic_param_owner_assumptions<'db>(
@@ -706,10 +562,7 @@ pub(crate) fn generic_param_owner_assumptions<'db>(
 }
 
 /// Collects the generic parameters of the given generic parameter owner.
-#[salsa::tracked(
-    cycle_initial=collect_generic_params_cycle_initial,
-    cycle_fn=collect_generic_params_cycle_recover
-)]
+#[salsa::tracked(returns(copy), cycle_initial=collect_generic_params_cycle_initial)]
 pub(crate) fn collect_generic_params<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -719,7 +572,7 @@ pub(crate) fn collect_generic_params<'db>(
 
 /// Stable declaration parameters for shape discovery. This query must never
 /// depend on the hidden slots whose number is being discovered.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn collect_source_generic_params<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -729,6 +582,7 @@ pub(crate) fn collect_source_generic_params<'db>(
 
 fn collect_generic_params_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     owner: GenericParamOwner<'db>,
 ) -> GenericParamTypeSet<'db> {
     // Explicit parameters are available before signature-derived parameters.
@@ -742,2029 +596,12 @@ fn collect_generic_params_cycle_initial<'db>(
     }
 }
 
-fn collect_generic_params_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &GenericParamTypeSet<'db>,
-    _count: u32,
-    _owner: GenericParamOwner<'db>,
-) -> salsa::CycleRecoveryAction<GenericParamTypeSet<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct CallableInputLayoutHoleGroup<'db> {
-    pub(crate) origin: CallableInputLayoutHoleOrigin,
-    pub(crate) placeholders: Vec<TyId<'db>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct CallableInputLayoutBackingSource {
-    pub origin: CallableInputLayoutHoleOrigin,
-    pub projection: LayoutBundlePath,
-}
-
-#[derive(Default)]
-struct CallableLayoutProjections<'db> {
-    placeholders: Vec<TyId<'db>>,
-    /// The structural placeholder bound to each root component, if any.
-    component_placeholders: Vec<Option<TyId<'db>>>,
-    /// Nonterminal declaration ports replaced by each terminal component.
-    /// This preserves specialization topology without transporting both an
-    /// aggregate carrier alias and its physical descendant.
-    component_refined_ports: Vec<Vec<LayoutPortKey>>,
-    schema: LayoutBundleSchema<'db>,
-    transport: LayoutBundleTransport,
-    tys: FxHashMap<LayoutBundlePath, TyId<'db>>,
-    paths: Vec<LayoutBundlePath>,
-    index_lengths: FxHashMap<LayoutBundlePath, Vec<usize>>,
-    port_tys: FxHashMap<LayoutPortKey, TyId<'db>>,
-}
-
-struct CallableLayoutProjectionCollector<'db> {
-    db: &'db dyn HirAnalysisDb,
-    site: CallableLayoutSchemaSite<'db>,
-    assumptions: PredicateListId<'db>,
-    next_ordinal: usize,
-    placeholders: Vec<TyId<'db>>,
-    seen_placeholders: FxHashSet<TyId<'db>>,
-    placeholder_roots: FxHashMap<TyId<'db>, LayoutRootId<'db>>,
-    transport_declarations: FxHashMap<TyId<'db>, LayoutBundleComponentDeclaration<'db>>,
-    tys: FxHashMap<LayoutBundlePath, TyId<'db>>,
-    paths: Vec<LayoutBundlePath>,
-    index_lengths: FxHashMap<LayoutBundlePath, Vec<usize>>,
-    value_occurrences: Vec<CallableLayoutOccurrence<'db>>,
-    port_tys: FxHashMap<LayoutPortKey, TyId<'db>>,
-    adt_stack: Vec<CallableLayoutAdtFrame<'db>>,
-    view_aliases: Vec<LayoutViewAlias>,
-    unrepresentable: Option<LayoutBundleUnrepresentable>,
-    /// Enclosing arrays, each with the ADT stack depth at its start. Array
-    /// elements carry no layout components, so their roots are only
-    /// detected, never recorded.
-    arrays: Vec<(LayoutEvidencePath, usize)>,
-    expand_effect_targets: bool,
-    bound_roots: FxHashMap<LayoutRootId<'db>, TyId<'db>>,
-}
-
-struct CallableLayoutAdtFrame<'db> {
-    ty: TyId<'db>,
-    family: CallableLayoutExpansionFamily<'db>,
-    evidence_path: LayoutEvidencePath,
-    /// Value occurrence count when the expansion began.
-    occurrences: usize,
-    /// Stack index of the outermost expansion that this one closes a
-    /// back-edge to, directly or through a nested expansion; its own index if
-    /// none. This expansion reaches every root that one reaches.
-    recurs_to: usize,
-    /// Arrays whose elements reach this expansion's roots, which are known
-    /// only once its outermost recurrence finishes.
-    back_edge_arrays: Vec<LayoutEvidencePath>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CallableLayoutExpansionFamily<'db> {
-    Adt(AdtDef<'db>),
-    Provider(ImplementorId<'db>),
-}
-
-#[derive(Clone)]
-struct CallableLayoutOccurrence<'db> {
-    representative: LayoutBundleComponentKey<'db>,
-    declaration: LayoutBundleComponentDeclaration<'db>,
-    ty: TyId<'db>,
-    port: LayoutPortKey,
-    structural_root: Option<LayoutRootId<'db>>,
-    can_refine_to_descendant: bool,
-}
-
-fn callable_layout_occurrence_descends_from<'db>(
-    db: &'db dyn HirAnalysisDb,
-    candidate: &CallableLayoutOccurrence<'db>,
-    ancestor: &CallableLayoutOccurrence<'db>,
-) -> bool {
-    ancestor.can_refine_to_descendant
-        && ancestor.declaration == candidate.declaration
-        && ancestor.ty == candidate.ty
-        && ancestor.port.value_path.len() < candidate.port.value_path.len()
-        && candidate
-            .port
-            .value_path
-            .starts_with(&ancestor.port.value_path)
-        && !candidate.port.value_path[ancestor.port.value_path.len()..]
-            .contains(&LayoutEvidencePathStep::EffectTarget)
-        && match (ancestor.structural_root, candidate.structural_root) {
-            (Some(ancestor), Some(root)) => layout_root_descends_from(db, root, ancestor),
-            (None, None) => ancestor.representative == candidate.representative,
-            (Some(_), None) | (None, Some(_)) => false,
-        }
-}
-
-#[derive(Clone, Copy)]
-enum CallableLayoutSchemaSite<'db> {
-    Input {
-        owner: CallableLayoutOwner<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-    },
-    Output {
-        owner: CallableLayoutOwner<'db>,
-    },
-    Value {
-        body: crate::hir_def::Body<'db>,
-        local: u32,
-    },
-}
-
-impl<'db> CallableLayoutSchemaSite<'db> {
-    fn func(self, db: &'db dyn HirAnalysisDb) -> Option<crate::hir_def::Func<'db>> {
-        match self {
-            Self::Input { owner, .. } | Self::Output { owner } => owner.func(),
-            Self::Value { body, .. } => body.containing_func(db),
-        }
-    }
-
-    /// Associated functions clone their parent generic parameters into the
-    /// function's lowered parameter list. Canonicalize those clones back to
-    /// the parent declaration so signature and body schemas share one stable
-    /// layout declaration identity.
-    fn canonical_param(self, db: &'db dyn HirAnalysisDb, value: TyId<'db>) -> TyId<'db> {
-        let TyData::ConstTy(const_ty) = value.data(db) else {
-            return value;
-        };
-        let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
-            return value;
-        };
-        let Some((_, parent)) = self
-            .func(db)
-            .filter(|func| {
-                func.is_associated_func(db)
-                    && param.owner == func.scope()
-                    && param.idx < func_inherited_param_precursors(db, *func).len()
-            })
-            .and_then(|func| {
-                GenericParamOwner::Func(func)
-                    .parent(db)
-                    .map(|parent| (func, parent))
-            })
-        else {
-            return value;
-        };
-        collect_generic_params(db, parent)
-            .params(db)
-            .get(param.idx)
-            .copied()
-            .unwrap_or(value)
-    }
-
-    fn scope(self) -> ScopeId<'db> {
-        match self {
-            Self::Input { owner, .. } | Self::Output { owner } => owner.scope(),
-            Self::Value { body, .. } => body.scope(),
-        }
-    }
-
-    fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        generic_param_owner_assumptions(db, self.scope())
-    }
-}
-
-/// Returns const parameters whose value is physically forwarded into a field.
-///
-/// This declaration-level proof is intentionally separate from instantiated
-/// root equality: distinct formal parameters may specialize to the same root,
-/// but only the parameter named by a field may be refined to that descendant.
-fn forwarded_layout_params<'db>(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> FxHashSet<usize> {
-    fn collect<'db>(
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        candidates: &FxHashMap<TyId<'db>, usize>,
-        stack: &mut Vec<AdtDef<'db>>,
-        forwarded: &mut FxHashSet<usize>,
-    ) {
-        let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
-        if let Some(candidate) = candidates.get(&ty) {
-            forwarded.insert(*candidate);
-            return;
-        }
-        if ty.is_tuple(db) {
-            for field in ty.field_types(db) {
-                collect(db, field, candidates, stack, forwarded);
-            }
-            return;
-        }
-        if ty.is_array(db) {
-            if ty.array_len(db).is_some_and(|len| len > 0)
-                && let Some(element) = ty.generic_args(db).first()
-            {
-                collect(db, *element, candidates, stack, forwarded);
-            }
-            return;
-        }
-        let Some(adt) = ty.adt_def(db) else {
-            return;
-        };
-        let args = ty.generic_args(db);
-        for arg in args.iter().copied() {
-            collect(db, arg, candidates, stack, forwarded);
-        }
-        if stack.contains(&adt) {
-            return;
-        }
-        stack.push(adt);
-        for (variant_idx, variant) in adt.fields(db).iter().enumerate() {
-            for field_idx in 0..variant.num_types() {
-                collect(
-                    db,
-                    instantiate_adt_field_shape(db, adt, variant_idx, field_idx, args),
-                    candidates,
-                    stack,
-                    forwarded,
-                );
-            }
-        }
-        stack.pop();
-    }
-
-    let params = adt.params(db);
-    let candidates = params
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, param)| matches!(param.data(db), TyData::ConstTy(_)))
-        .map(|(idx, param)| (param, idx))
-        .collect::<FxHashMap<_, _>>();
-    let mut forwarded = FxHashSet::default();
-    let mut stack = vec![adt];
-    for (variant_idx, variant) in adt.fields(db).iter().enumerate() {
-        for field_idx in 0..variant.num_types() {
-            collect(
-                db,
-                instantiate_adt_field_shape(db, adt, variant_idx, field_idx, params),
-                &candidates,
-                &mut stack,
-                &mut forwarded,
-            );
-        }
-    }
-    forwarded
-}
-
-impl<'db> CallableLayoutProjectionCollector<'db> {
-    fn record_ty(
-        &mut self,
-        path: &LayoutBundlePath,
-        ty: TyId<'db>,
-        index_lengths: &[usize],
-    ) -> TyId<'db> {
-        let ty = self.bind_ty(ty);
-        if self.tys.insert(path.clone(), ty).is_none() {
-            self.paths.push(path.clone());
-        }
-        self.index_lengths
-            .insert(path.clone(), index_lengths.to_vec());
-        ty
-    }
-
-    fn collect_placeholder(&mut self, placeholder: TyId<'db>) {
-        if self.seen_placeholders.insert(placeholder) {
-            self.placeholders.push(placeholder);
-        }
-    }
-
-    fn bind_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
-        let db = self.db;
-        let site = self.site;
-        let bound_roots = &mut self.bound_roots;
-        let next_ordinal = &mut self.next_ordinal;
-        let mut created = Vec::new();
-        let ty = rewrite_structural_holes(db, ty, |hole, hole_ty| {
-            let root = hole.root(db);
-            if let Some(placeholder) = bound_roots.get(&root) {
-                return Some(*placeholder);
-            }
-            let ordinal = *next_ordinal;
-            *next_ordinal += 1;
-            let placeholder = match site {
-                CallableLayoutSchemaSite::Input { owner, origin } => TyId::const_ty(
-                    db,
-                    ConstTyId::bound_callable_hole(
-                        db,
-                        layout_hole_fallback_ty(db, hole_ty),
-                        owner,
-                        origin,
-                        ordinal,
-                    ),
-                ),
-                CallableLayoutSchemaSite::Output { .. }
-                | CallableLayoutSchemaSite::Value { .. } => TyId::const_ty(
-                    db,
-                    ConstTyId::hole_with_id(db, hole_ty, HoleId::Structural(hole)),
-                ),
-            };
-            bound_roots.insert(root, placeholder);
-            created.push((
-                placeholder,
-                root,
-                LayoutBundleComponentDeclaration::Structural {
-                    origin: hole.origin(db),
-                    introduced_at: hole.introduced_at(db).clone(),
-                },
-            ));
-            Some(placeholder)
-        });
-        for (placeholder, root, declaration) in created {
-            self.collect_placeholder(placeholder);
-            self.placeholder_roots.insert(placeholder, root);
-            self.transport_declarations.insert(placeholder, declaration);
-        }
-        ty
-    }
-
-    fn walk(
-        &mut self,
-        ty: TyId<'db>,
-        parent: LayoutInstantiationId<'db>,
-        path: &mut LayoutBundlePath,
-        evidence_path: &mut LayoutEvidencePath,
-        index_lengths: &mut Vec<usize>,
-        materialized: bool,
-    ) {
-        self.bind_ty(ty);
-        let ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
-        if ty.is_tuple(self.db) {
-            for (idx, field) in ty.field_types(self.db).into_iter().enumerate() {
-                let Ok(idx) = u16::try_from(idx) else {
-                    continue;
-                };
-                path.push(LayoutBundlePathStep::Field(idx));
-                evidence_path.push(LayoutEvidencePathStep::Field(idx));
-                if materialized {
-                    self.record_ty(path, field, index_lengths);
-                }
-                self.walk(
-                    field,
-                    parent,
-                    path,
-                    evidence_path,
-                    index_lengths,
-                    materialized,
-                );
-                evidence_path.pop();
-                path.pop();
-            }
-            return;
-        }
-        if ty.is_array(self.db) {
-            if let Some(&element) = ty.generic_args(self.db).first() {
-                // The element is traversed even when the extent is deferred or
-                // zero: roots must be detected at every extent, and skipping
-                // the traversal would renumber roots in later sibling fields.
-                // Only the projected-type tables need a known nonzero extent.
-                let extent = ty
-                    .array_len(self.db)
-                    .filter(|&len| materialized && len != 0);
-                let element = instantiate_layout_template(
-                    self.db,
-                    element,
-                    None,
-                    LayoutInstantiationContext::Nested(parent),
-                    LayoutBoundaryIdentity::ArrayElement,
-                    vec![LayoutOccurrenceStep::ArrayDimension(
-                        path.iter()
-                            .filter(|step| matches!(step, LayoutBundlePathStep::Index))
-                            .count() as u32,
-                    )],
-                );
-                let occurrences = self.value_occurrences.len();
-                self.arrays
-                    .push((evidence_path.clone(), self.adt_stack.len()));
-                path.push(LayoutBundlePathStep::Index);
-                if let Some(len) = extent {
-                    index_lengths.push(len);
-                    self.record_ty(path, element.ty, index_lengths);
-                }
-                self.walk(
-                    element.ty,
-                    element.instance,
-                    path,
-                    evidence_path,
-                    index_lengths,
-                    extent.is_some(),
-                );
-                if extent.is_some() {
-                    index_lengths.pop();
-                }
-                path.pop();
-                self.arrays.pop();
-                if self.value_occurrences.len() != occurrences {
-                    self.value_occurrences.truncate(occurrences);
-                    self.unrepresentable
-                        .get_or_insert(LayoutBundleUnrepresentable::RootArray {
-                            array: evidence_path.clone(),
-                        });
-                }
-            }
-            return;
-        }
-        let Some(adt) = ty.adt_def(self.db) else {
-            return;
-        };
-        let effect_target = self
-            .expand_effect_targets
-            .then(|| resolve_effect_handle(self.db, self.site.scope(), self.assumptions, ty));
-        let family = match &effect_target {
-            Some(EffectHandleResolution::Resolved { impl_instance, .. }) => {
-                CallableLayoutExpansionFamily::Provider(impl_instance.selected())
-            }
-            Some(EffectHandleResolution::NotHandle | EffectHandleResolution::Invalid(_)) | None => {
-                CallableLayoutExpansionFamily::Adt(adt)
-            }
-        };
-        match classify_layout_view_recurrence(
-            self.db,
-            ty,
-            family,
-            self.adt_stack
-                .iter()
-                .enumerate()
-                .rev()
-                // Nominal repetition through ordinary fields can be finite
-                // even when the enclosed types are unrelated. Keep structural
-                // ancestors that exhibit growth. Provider families retain the
-                // stricter selected-implementation recurrence contract.
-                .filter(|(_, frame)| {
-                    !matches!(
-                        (family, frame.family),
-                        (
-                            CallableLayoutExpansionFamily::Adt(_),
-                            CallableLayoutExpansionFamily::Adt(_)
-                        )
-                    ) || structural_layout_type_embeds(self.db, frame.ty, ty)
-                })
-                .map(|(idx, frame)| (idx, frame.ty, frame.family)),
-        ) {
-            LayoutViewRecurrence::BackEdge { ancestor } => {
-                if let Some((array, depth)) = self.arrays.last()
-                    && ancestor < *depth
-                {
-                    let array = array.clone();
-                    let frame = &mut self.adt_stack[ancestor];
-                    if !frame.back_edge_arrays.contains(&array) {
-                        frame.back_edge_arrays.push(array);
-                    }
-                }
-                let frame = self
-                    .adt_stack
-                    .last_mut()
-                    .expect("a back-edge closes inside an ADT expansion");
-                frame.recurs_to = frame.recurs_to.min(ancestor);
-                let canonical = self.adt_stack[ancestor].evidence_path.clone();
-                let alias = LayoutViewAlias {
-                    alias: evidence_path.clone(),
-                    canonical,
-                };
-                if materialized
-                    && self.arrays.is_empty()
-                    && alias.alias != alias.canonical
-                    && !self.view_aliases.contains(&alias)
-                {
-                    self.view_aliases.push(alias);
-                }
-                return;
-            }
-            // A non-regular cycle has no finite view, so whether an array
-            // element reaches a root through it is unknown. It is rejected
-            // wherever it occurs.
-            LayoutViewRecurrence::NonRegular { ancestor } => {
-                let frame = &self.adt_stack[ancestor];
-                self.unrepresentable.get_or_insert_with(|| {
-                    LayoutBundleUnrepresentable::NonRegularViewCycle {
-                        canonical: frame.evidence_path.clone(),
-                        recursive: evidence_path.clone(),
-                    }
-                });
-                return;
-            }
-            LayoutViewRecurrence::Expand => {}
-        }
-        self.adt_stack.push(CallableLayoutAdtFrame {
-            ty,
-            family,
-            evidence_path: evidence_path.clone(),
-            occurrences: self.value_occurrences.len(),
-            recurs_to: self.adt_stack.len(),
-            back_edge_arrays: Vec::new(),
-        });
-        let args = ty.generic_args(self.db);
-        let forwarded_params = forwarded_layout_params(self.db, adt);
-        for (param_idx, arg) in args.iter().copied().enumerate() {
-            if !matches!(arg.data(self.db), TyData::ConstTy(_)) {
-                continue;
-            }
-            let Ok(param_step) = u16::try_from(param_idx) else {
-                continue;
-            };
-            path.push(LayoutBundlePathStep::ConstParam(param_step));
-            let declared_layout_param = adt
-                .param_set(self.db)
-                .const_param_default_is_slot_layout_hole(self.db, param_idx);
-            let bound_arg = if materialized {
-                self.record_ty(path, arg, index_lengths)
-            } else {
-                self.bind_ty(arg)
-            };
-            let placeholders = collect_unique_layout_placeholders_in_order(self.db, bound_arg);
-            if placeholders.is_empty() && self.arrays.is_empty() {
-                self.port_tys
-                    .entry(LayoutPortKey {
-                        value_path: evidence_path.clone(),
-                        root: LayoutRootPort {
-                            param: param_idx,
-                            ordinal: 0,
-                        },
-                    })
-                    .or_insert(bound_arg);
-            }
-            for (ordinal, placeholder) in placeholders.iter().copied().enumerate() {
-                let Some(root) = self.placeholder_roots.get(&placeholder) else {
-                    continue;
-                };
-                let Some(declaration) = self.transport_declarations.get(&placeholder) else {
-                    continue;
-                };
-                let TyData::ConstTy(const_ty) = placeholder.data(self.db) else {
-                    continue;
-                };
-                let ConstTyData::Hole(ty, _) = const_ty.data(self.db) else {
-                    continue;
-                };
-                self.value_occurrences.push(CallableLayoutOccurrence {
-                    representative: LayoutBundleComponentKey::Root(*root),
-                    declaration: declaration.clone(),
-                    ty: layout_hole_fallback_ty(self.db, *ty),
-                    port: LayoutPortKey {
-                        value_path: evidence_path.clone(),
-                        root: LayoutRootPort {
-                            param: param_idx,
-                            ordinal,
-                        },
-                    },
-                    structural_root: Some(*root),
-                    can_refine_to_descendant: forwarded_params.contains(&param_idx),
-                });
-                if self.arrays.is_empty() {
-                    self.port_tys.insert(
-                        LayoutPortKey {
-                            value_path: evidence_path.clone(),
-                            root: LayoutRootPort {
-                                param: param_idx,
-                                ordinal,
-                            },
-                        },
-                        bound_arg,
-                    );
-                }
-            }
-            if declared_layout_param
-                && placeholders.is_empty()
-                && let TyData::ConstTy(const_ty) = arg.data(self.db)
-            {
-                let (key, ty) = match const_ty.data(self.db) {
-                    ConstTyData::Hole(_, HoleId::Structural(_)) => (None, None),
-                    ConstTyData::Hole(ty, _)
-                    | ConstTyData::TyParam(_, ty)
-                    | ConstTyData::TyVar(_, ty)
-                    | ConstTyData::Abstract(_, ty) => (
-                        Some(LayoutBundleComponentKey::Param(arg)),
-                        Some(layout_hole_fallback_ty(self.db, *ty)),
-                    ),
-                    ConstTyData::Value(..)
-                    | ConstTyData::Description(..)
-                    | ConstTyData::Invalid(..)
-                    | ConstTyData::Computation { .. } => (
-                        Some(if arg.has_param(self.db) || arg.has_var(self.db) {
-                            LayoutBundleComponentKey::Param(arg)
-                        } else {
-                            LayoutBundleComponentKey::Static(arg)
-                        }),
-                        Some(layout_hole_fallback_ty(self.db, const_ty.ty(self.db))),
-                    ),
-                    ConstTyData::UnEvaluated { ty: Some(ty), .. } => (
-                        Some(if arg.has_param(self.db) || arg.has_var(self.db) {
-                            LayoutBundleComponentKey::Param(arg)
-                        } else {
-                            LayoutBundleComponentKey::Static(arg)
-                        }),
-                        Some(layout_hole_fallback_ty(self.db, *ty)),
-                    ),
-                    ConstTyData::UnEvaluated { ty: None, .. } => (None, None),
-                };
-                if let Some((key, ty)) = key.zip(ty) {
-                    let declaration = match key {
-                        LayoutBundleComponentKey::Root(_) => unreachable!(
-                            "direct layout arguments cannot contain an unbound structural root"
-                        ),
-                        LayoutBundleComponentKey::Param(value) => {
-                            LayoutBundleComponentDeclaration::Param(
-                                self.site.canonical_param(self.db, value),
-                            )
-                        }
-                        LayoutBundleComponentKey::Static(value) => {
-                            LayoutBundleComponentDeclaration::Static(value)
-                        }
-                    };
-                    self.value_occurrences.push(CallableLayoutOccurrence {
-                        representative: key,
-                        declaration,
-                        ty,
-                        port: LayoutPortKey {
-                            value_path: evidence_path.clone(),
-                            root: LayoutRootPort {
-                                param: param_idx,
-                                ordinal: placeholders.len(),
-                            },
-                        },
-                        structural_root: None,
-                        can_refine_to_descendant: forwarded_params.contains(&param_idx),
-                    });
-                    if self.arrays.is_empty() {
-                        self.port_tys.insert(
-                            LayoutPortKey {
-                                value_path: evidence_path.clone(),
-                                root: LayoutRootPort {
-                                    param: param_idx,
-                                    ordinal: placeholders.len(),
-                                },
-                            },
-                            bound_arg,
-                        );
-                    }
-                }
-            }
-            path.pop();
-        }
-        match adt.adt_ref(self.db) {
-            AdtRef::Struct(_) => {
-                for field_idx in 0..adt.fields(self.db)[0].num_types() {
-                    let Ok(field_idx) = u16::try_from(field_idx) else {
-                        continue;
-                    };
-                    let field = instantiate_adt_field_layout(
-                        self.db,
-                        adt,
-                        0,
-                        field_idx as usize,
-                        args,
-                        parent,
-                        vec![LayoutOccurrenceStep::StructField(field_idx as u32)],
-                    );
-                    path.push(LayoutBundlePathStep::Field(field_idx));
-                    evidence_path.push(LayoutEvidencePathStep::Field(field_idx));
-                    if materialized {
-                        self.record_ty(path, field.ty, index_lengths);
-                    }
-                    self.walk(
-                        field.ty,
-                        field.instance,
-                        path,
-                        evidence_path,
-                        index_lengths,
-                        materialized,
-                    );
-                    evidence_path.pop();
-                    path.pop();
-                }
-            }
-            AdtRef::Enum(_) => {
-                for (variant_idx, variant) in adt.fields(self.db).iter().enumerate() {
-                    let Ok(variant_idx) = u16::try_from(variant_idx) else {
-                        continue;
-                    };
-                    path.push(LayoutBundlePathStep::Variant(variant_idx));
-                    evidence_path.push(LayoutEvidencePathStep::Variant(variant_idx));
-                    for field_idx in 0..variant.num_types() {
-                        let Ok(field_idx) = u16::try_from(field_idx) else {
-                            continue;
-                        };
-                        let field = instantiate_adt_field_layout(
-                            self.db,
-                            adt,
-                            variant_idx as usize,
-                            field_idx as usize,
-                            args,
-                            parent,
-                            vec![
-                                LayoutOccurrenceStep::EnumVariant(variant_idx as u32),
-                                LayoutOccurrenceStep::EnumPayloadField(field_idx as u32),
-                            ],
-                        );
-                        path.push(LayoutBundlePathStep::Field(field_idx));
-                        evidence_path.push(LayoutEvidencePathStep::Field(field_idx));
-                        if materialized {
-                            self.record_ty(path, field.ty, index_lengths);
-                        }
-                        self.walk(
-                            field.ty,
-                            field.instance,
-                            path,
-                            evidence_path,
-                            index_lengths,
-                            materialized,
-                        );
-                        evidence_path.pop();
-                        path.pop();
-                    }
-                    evidence_path.pop();
-                    path.pop();
-                }
-            }
-        }
-        if let Some(EffectHandleResolution::Resolved {
-            impl_instance,
-            target_ty,
-            ..
-        }) = effect_target
-        {
-            let target = instantiate_layout_template(
-                self.db,
-                target_ty,
-                None,
-                LayoutInstantiationContext::Nested(parent),
-                LayoutBoundaryIdentity::ProviderTarget(impl_instance.selected()),
-                vec![LayoutOccurrenceStep::Normalization],
-            );
-            evidence_path.push(LayoutEvidencePathStep::EffectTarget);
-            self.walk(
-                target.ty,
-                target.instance,
-                path,
-                evidence_path,
-                index_lengths,
-                materialized,
-            );
-            evidence_path.pop();
-        }
-        // An expansion that recurs to an enclosing one reaches every root of
-        // the enclosing one, so it defers its back-edge and arrays to its
-        // parent. The outermost expansion of a recurrence reaches exactly the
-        // roots it produced, so its arrays carry roots exactly when it
-        // produced any.
-        let frame = self
-            .adt_stack
-            .pop()
-            .expect("an ADT expansion must be active");
-        if frame.recurs_to < self.adt_stack.len()
-            && let Some(parent) = self.adt_stack.last_mut()
-        {
-            parent.recurs_to = parent.recurs_to.min(frame.recurs_to);
-            for array in frame.back_edge_arrays {
-                if !parent.back_edge_arrays.contains(&array) {
-                    parent.back_edge_arrays.push(array);
-                }
-            }
-        } else if self.value_occurrences.len() != frame.occurrences
-            && let Some(array) = frame.back_edge_arrays.into_iter().next()
-        {
-            self.unrepresentable
-                .get_or_insert(LayoutBundleUnrepresentable::RootArray { array });
-        }
-    }
-
-    fn finish(self) -> CallableLayoutProjections<'db> {
-        let value_occurrences = self
-            .value_occurrences
-            .iter()
-            .enumerate()
-            .filter(|(idx, occurrence)| {
-                !self
-                    .value_occurrences
-                    .iter()
-                    .enumerate()
-                    .any(|(candidate_idx, candidate)| {
-                        idx != &candidate_idx
-                            && callable_layout_occurrence_descends_from(
-                                self.db, candidate, occurrence,
-                            )
-                    })
-            })
-            .map(|(_, occurrence)| occurrence.clone())
-            .collect::<Vec<_>>();
-        let mut all_components = Vec::<(
-            LayoutBundleComponent<'db>,
-            Option<TyId<'db>>,
-            Vec<LayoutPortKey>,
-        )>::new();
-        let mut component_by_port = FxHashMap::<LayoutPortKey, usize>::default();
-        for occurrence in value_occurrences {
-            let placeholder = match &occurrence.representative {
-                LayoutBundleComponentKey::Root(root) => self
-                    .placeholders
-                    .iter()
-                    .copied()
-                    .find(|placeholder| self.placeholder_roots.get(placeholder) == Some(root)),
-                LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_) => None,
-            };
-            let refined_ports = self
-                .value_occurrences
-                .iter()
-                .filter(|ancestor| {
-                    callable_layout_occurrence_descends_from(self.db, &occurrence, ancestor)
-                })
-                .map(|ancestor| ancestor.port.clone())
-                .collect::<Vec<_>>();
-            if let Some(existing) = component_by_port.get(&occurrence.port).copied() {
-                let (component, _, existing_refined_ports) = &mut all_components[existing];
-                assert_eq!(
-                    component.representative, occurrence.representative,
-                    "one layout port has multiple root values"
-                );
-                assert_eq!(
-                    component.declaration, occurrence.declaration,
-                    "one layout port has multiple root declarations"
-                );
-                assert_eq!(
-                    component.ty, occurrence.ty,
-                    "one layout port has multiple scalar types"
-                );
-                for port in refined_ports {
-                    if !existing_refined_ports.contains(&port) {
-                        existing_refined_ports.push(port);
-                    }
-                }
-            } else {
-                component_by_port.insert(occurrence.port.clone(), all_components.len());
-                all_components.push((
-                    LayoutBundleComponent {
-                        port: occurrence.port,
-                        declaration: occurrence.declaration,
-                        representative: occurrence.representative,
-                        ty: occurrence.ty,
-                        supplied_const_params: Vec::new(),
-                        dependent_const_params: Vec::new(),
-                    },
-                    placeholder,
-                    refined_ports,
-                ));
-            }
-        }
-
-        let mut components = Vec::with_capacity(all_components.len());
-        let mut component_placeholders = Vec::with_capacity(all_components.len());
-        let mut component_refined_ports = Vec::with_capacity(all_components.len());
-        for (component, placeholder, refined_ports) in all_components {
-            components.push(component);
-            component_placeholders.push(placeholder);
-            component_refined_ports.push(refined_ports);
-        }
-
-        let schema = LayoutBundleSchema {
-            components,
-            view_aliases: self.view_aliases,
-            unrepresentable: self.unrepresentable,
-        };
-        let transport = LayoutBundleTransport::inferred(&schema);
-        debug_assert!(
-            schema.unrepresentable.is_some() || schema.validate().is_ok(),
-            "callable layout collector produced an invalid schema: {schema:#?}",
-        );
-        CallableLayoutProjections {
-            placeholders: self.placeholders,
-            component_placeholders,
-            component_refined_ports,
-            schema,
-            transport,
-            tys: self.tys,
-            paths: self.paths,
-            index_lengths: self.index_lengths,
-            port_tys: self.port_tys,
-        }
-    }
-}
-
-fn callable_layout_projections_for_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    site: CallableLayoutSchemaSite<'db>,
-    ty: TyId<'db>,
-) -> CallableLayoutProjections<'db> {
-    callable_layout_projections_for_ty_with_effect_targets(db, site, ty, true, site.assumptions(db))
-}
-
-fn callable_layout_projections_for_ty_with_effect_targets<'db>(
-    db: &'db dyn HirAnalysisDb,
-    site: CallableLayoutSchemaSite<'db>,
-    ty: TyId<'db>,
-    expand_effect_targets: bool,
-    assumptions: PredicateListId<'db>,
-) -> CallableLayoutProjections<'db> {
-    let (anchor, boundary) = match site {
-        CallableLayoutSchemaSite::Input { owner, origin } => (
-            HoleAnchor::CallableInput { owner, origin },
-            LayoutBoundaryIdentity::CallableInput { owner, origin },
-        ),
-        CallableLayoutSchemaSite::Output { owner } => (
-            HoleAnchor::CallableOutput { owner },
-            LayoutBoundaryIdentity::CallableOutput(owner),
-        ),
-        CallableLayoutSchemaSite::Value { body, local } => (
-            HoleAnchor::SemanticValue { body, local },
-            LayoutBoundaryIdentity::SemanticValue { body, local },
-        ),
-    };
-    let root = if matches!(site, CallableLayoutSchemaSite::Value { .. }) {
-        LayoutInstantiation {
-            ty,
-            root_uses: Vec::new(),
-            instance: LayoutInstantiationId::new(
-                db,
-                LayoutInstantiationContext::Lowering(anchor),
-                boundary,
-                vec![LayoutOccurrenceStep::Instantiation(0)],
-            ),
-        }
-    } else {
-        instantiate_layout_template(
-            db,
-            ty,
-            None,
-            LayoutInstantiationContext::Lowering(anchor),
-            boundary,
-            vec![LayoutOccurrenceStep::Instantiation(0)],
-        )
-    };
-    let mut collector = CallableLayoutProjectionCollector {
-        db,
-        site,
-        assumptions,
-        next_ordinal: 0,
-        placeholders: Vec::new(),
-        seen_placeholders: FxHashSet::default(),
-        placeholder_roots: FxHashMap::default(),
-        transport_declarations: FxHashMap::default(),
-        tys: FxHashMap::default(),
-        paths: Vec::new(),
-        index_lengths: FxHashMap::default(),
-        value_occurrences: Vec::new(),
-        port_tys: FxHashMap::default(),
-        adt_stack: Vec::new(),
-        view_aliases: Vec::new(),
-        unrepresentable: None,
-        arrays: Vec::new(),
-        expand_effect_targets,
-        bound_roots: FxHashMap::default(),
-    };
-    collector.walk(
-        root.ty,
-        root.instance,
-        &mut Vec::new(),
-        &mut Vec::new(),
-        &mut Vec::new(),
-        true,
-    );
-    collector.finish()
-}
-
-fn bind_callable_input_layout_holes<'db, T>(
-    db: &'db dyn HirAnalysisDb,
-    value: T,
-    func: crate::hir_def::Func<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-) -> T
-where
-    T: TyFoldable<'db> + TyVisitable<'db> + Copy,
-{
-    let mut ordinals = FxHashMap::default();
-    for hole in collect_unique_app_bound_structural_holes_in_order(db, value) {
-        let next = ordinals.len();
-        ordinals.entry(hole.root(db)).or_insert(next);
-    }
-
-    rewrite_structural_holes(db, value, |hole_id, hole_ty| {
-        ordinals.get(&hole_id.root(db)).map(|ordinal| {
-            TyId::const_ty(
-                db,
-                ConstTyId::bound_callable_hole(
-                    db,
-                    hole_ty,
-                    CallableLayoutOwner::Func(func),
-                    origin,
-                    *ordinal,
-                ),
-            )
-        })
-    })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+/// The parameters a function adds after its inherited ones: one provider per
+/// keyed effect, in effect order.
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(crate) struct FuncImplicitParamPlan<'db> {
     pub(crate) implicit_precursors: Vec<TyParamPrecursor<'db>>,
-    pub(crate) bindings_by_origin:
-        FxHashMap<CallableInputLayoutHoleOrigin, Vec<(TyId<'db>, TyId<'db>)>>,
     pub(crate) provider_param_index_by_effect: Vec<Option<usize>>,
-}
-
-/// Checked layout metadata is downstream of slot discovery, never an input to
-/// generic parameter allocation.
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
-struct CallableInputLayoutPlan<'db> {
-    params: FuncImplicitParamPlan<'db>,
-    layout_bundle_interfaces_by_origin:
-        FxHashMap<CallableInputLayoutHoleOrigin, LayoutBundleInterface<'db>>,
-    layout_projected_tys_by_origin:
-        FxHashMap<CallableInputLayoutHoleOrigin, FxHashMap<LayoutBundlePath, TyId<'db>>>,
-    layout_port_tys_by_origin:
-        FxHashMap<CallableInputLayoutHoleOrigin, FxHashMap<LayoutPortKey, TyId<'db>>>,
-    carrier_projected_tys_by_origin:
-        FxHashMap<CallableInputLayoutHoleOrigin, FxHashMap<LayoutBundlePath, TyId<'db>>>,
-    projected_paths_by_origin: FxHashMap<CallableInputLayoutHoleOrigin, Vec<LayoutBundlePath>>,
-    projected_index_lengths_by_origin:
-        FxHashMap<CallableInputLayoutHoleOrigin, FxHashMap<LayoutBundlePath, Vec<usize>>>,
-}
-
-/// Deferred lowering discovers slots, so its predicates must not depend on the
-/// completed callable parameter list.
-fn callable_input_assumptions<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    const_bodies: ConstBodyLowering,
-) -> PredicateListId<'db> {
-    match const_bodies {
-        ConstBodyLowering::Eager => {
-            collect_func_decl_constraints(db, func.into(), true).instantiate_identity()
-        }
-        ConstBodyLowering::Deferred => collect_callable_shape_constraints(db, func),
-    }
-}
-
-fn callable_input_layout_types<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    const_bodies: ConstBodyLowering,
-) -> Vec<(CallableInputLayoutHoleOrigin, TyId<'db>)> {
-    let assumptions = callable_input_assumptions(db, func, const_bodies);
-    let lower_ty = |hir_ty| match const_bodies {
-        ConstBodyLowering::Eager => normalize_from_assumptions(
-            db,
-            lower_hir_ty(db, hir_ty, func.scope(), assumptions),
-            func.scope(),
-            assumptions,
-        ),
-        ConstBodyLowering::Deferred => lower_callable_input_shape_ty(db, func, hir_ty, assumptions),
-    };
-    let mut inputs = Vec::new();
-    if func.is_method(db)
-        && let Some(param) = func.params(db).next()
-    {
-        let origin = CallableInputLayoutHoleOrigin::Receiver;
-        let ty = if param.self_ty_fallback(db) {
-            func.expected_self_ty(db)
-        } else {
-            param.hir_ty(db).map(lower_ty)
-        };
-        if let Some(ty) = ty {
-            inputs.push((origin, ty));
-        }
-    }
-    for param in func.params(db).filter(|param| !param.is_self_param(db)) {
-        let Some(hir_ty) = param.hir_ty(db) else {
-            continue;
-        };
-        let origin = CallableInputLayoutHoleOrigin::ValueParam(param.index());
-        let ty = lower_ty(hir_ty);
-        inputs.push((origin, ty));
-    }
-    for effect in func.effect_params(db) {
-        let Some(key_ty) = effect.key_ty(db) else {
-            continue;
-        };
-        let ResolvedEffectKey::Type(schema) = lower_callable_input_effect_key(
-            db,
-            func,
-            effect.index(),
-            key_ty,
-            assumptions,
-            const_bodies,
-        ) else {
-            continue;
-        };
-        let origin = CallableInputLayoutHoleOrigin::Effect(effect.index());
-        inputs.push((origin, schema.carrier));
-    }
-    inputs
-}
-
-fn callable_input_layout_projections<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    const_bodies: ConstBodyLowering,
-) -> Vec<(
-    CallableInputLayoutHoleOrigin,
-    CallableLayoutProjections<'db>,
-)> {
-    let assumptions = callable_input_assumptions(db, func, const_bodies);
-    callable_input_layout_types(db, func, const_bodies)
-        .into_iter()
-        .map(|(origin, ty)| {
-            (
-                origin,
-                callable_layout_projections_for_ty_with_effect_targets(
-                    db,
-                    CallableLayoutSchemaSite::Input {
-                        owner: CallableLayoutOwner::Func(func),
-                        origin,
-                    },
-                    ty,
-                    true,
-                    assumptions,
-                ),
-            )
-        })
-        .collect()
-}
-
-fn callable_input_carrier_projections<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-) -> Vec<(
-    CallableInputLayoutHoleOrigin,
-    CallableLayoutProjections<'db>,
-)> {
-    let assumptions = callable_input_assumptions(db, func, ConstBodyLowering::Eager);
-    callable_input_layout_types(db, func, ConstBodyLowering::Eager)
-        .into_iter()
-        .map(|(origin, ty)| {
-            (
-                origin,
-                callable_layout_projections_for_ty_with_effect_targets(
-                    db,
-                    CallableLayoutSchemaSite::Input {
-                        owner: CallableLayoutOwner::Func(func),
-                        origin,
-                    },
-                    ty,
-                    false,
-                    assumptions,
-                ),
-            )
-        })
-        .collect()
-}
-
-fn bind_callable_layout_bundle_interface<'db>(
-    db: &'db dyn HirAnalysisDb,
-    site: CallableLayoutSchemaSite<'db>,
-    projection: &CallableLayoutProjections<'db>,
-    bindings: &[(TyId<'db>, TyId<'db>)],
-) -> LayoutBundleInterface<'db> {
-    let mut schema = projection.schema.clone();
-    bind_direct_layout_const_params(db, &mut schema);
-    bind_projected_component_const_metadata(db, site, &mut schema, &projection.port_tys);
-    for (component, placeholder) in schema
-        .components
-        .iter_mut()
-        .zip(&projection.component_placeholders)
-    {
-        let Some(param) = placeholder.and_then(|placeholder| {
-            bindings
-                .iter()
-                .find_map(|(candidate, param)| (*candidate == placeholder).then_some(*param))
-        }) else {
-            continue;
-        };
-        if !component.supplied_const_params.contains(&param) {
-            component.supplied_const_params.push(param);
-        }
-        if !component.dependent_const_params.contains(&param) {
-            component.dependent_const_params.push(param);
-        }
-        if matches!(component.representative, LayoutBundleComponentKey::Root(_)) {
-            component.representative = LayoutBundleComponentKey::Param(param);
-        }
-    }
-    LayoutBundleInterface {
-        schema,
-        transport: projection.transport.clone(),
-    }
-}
-
-fn bind_direct_layout_const_params<'db>(
-    db: &'db dyn HirAnalysisDb,
-    schema: &mut LayoutBundleSchema<'db>,
-) {
-    for component in &mut schema.components {
-        if let LayoutBundleComponentKey::Param(param) = component.representative
-            && matches!(
-                param.data(db),
-                TyData::ConstTy(const_ty)
-                    if matches!(const_ty.data(db), ConstTyData::TyParam(_, _))
-            )
-            && !component.supplied_const_params.contains(&param)
-        {
-            component.supplied_const_params.push(param);
-            if !component.dependent_const_params.contains(&param) {
-                component.dependent_const_params.push(param);
-            }
-        }
-    }
-}
-
-struct FormalConstDependencyCollector<'db> {
-    db: &'db dyn HirAnalysisDb,
-    params: Vec<TyId<'db>>,
-}
-
-impl<'db> TyVisitor<'db> for FormalConstDependencyCollector<'db> {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.db
-    }
-
-    fn visit_const_param(&mut self, param: &TyParam<'db>, const_ty_ty: TyId<'db>) {
-        let param = TyId::const_ty(
-            self.db,
-            ConstTyId::new(self.db, ConstTyData::TyParam(param.clone(), const_ty_ty)),
-        );
-        if !self.params.contains(&param) {
-            self.params.push(param);
-        }
-    }
-}
-
-fn bind_projected_component_const_metadata<'db>(
-    db: &'db dyn HirAnalysisDb,
-    site: CallableLayoutSchemaSite<'db>,
-    schema: &mut LayoutBundleSchema<'db>,
-    port_tys: &FxHashMap<LayoutPortKey, TyId<'db>>,
-) {
-    for component in &mut schema.components {
-        let Some(ty) = port_tys.get(&component.port) else {
-            continue;
-        };
-        let mut collector = FormalConstDependencyCollector {
-            db,
-            params: Vec::new(),
-        };
-        ty.visit_with(&mut collector);
-        for param in collector.params {
-            let param = site.canonical_param(db, param);
-            if param.const_ty_ty(db) == Some(component.ty)
-                && !component.dependent_const_params.contains(&param)
-            {
-                component.dependent_const_params.push(param);
-            }
-        }
-        let param = site.canonical_param(db, *ty);
-        if matches!(
-            param.data(db),
-            TyData::ConstTy(const_ty) if matches!(const_ty.data(db), ConstTyData::TyParam(_, _))
-        ) && param.const_ty_ty(db) == Some(component.ty)
-        {
-            if !component.supplied_const_params.contains(&param) {
-                component.supplied_const_params.push(param);
-            }
-            if !component.dependent_const_params.contains(&param) {
-                component.dependent_const_params.push(param);
-            }
-        }
-    }
-}
-
-fn preserve_declared_component_metadata<'db>(
-    db: &'db dyn HirAnalysisDb,
-    site: CallableLayoutSchemaSite<'db>,
-    schema: &mut LayoutBundleSchema<'db>,
-    component_refined_ports: &[Vec<LayoutPortKey>],
-    declared: &LayoutBundleSchema<'db>,
-    declared_port_tys: &FxHashMap<LayoutPortKey, TyId<'db>>,
-) {
-    let declared_by_port = declared
-        .components
-        .iter()
-        .map(|component| (&component.port, component))
-        .collect::<FxHashMap<_, _>>();
-    for (component, refined_ports) in schema.components.iter_mut().zip(component_refined_ports) {
-        if let Some(declared) = declared_by_port.get(&component.port).copied() {
-            component.declaration = declared.declaration.clone();
-            component.supplied_const_params = declared.supplied_const_params.clone();
-            component.dependent_const_params = declared.dependent_const_params.clone();
-        } else {
-            for declared in refined_ports
-                .iter()
-                .filter_map(|port| declared_by_port.get(port).copied())
-            {
-                for param in &declared.supplied_const_params {
-                    if !component.supplied_const_params.contains(param) {
-                        component.supplied_const_params.push(*param);
-                    }
-                }
-                for param in &declared.dependent_const_params {
-                    if !component.dependent_const_params.contains(param) {
-                        component.dependent_const_params.push(*param);
-                    }
-                }
-            }
-        }
-    }
-    bind_projected_component_const_metadata(db, site, schema, declared_port_tys);
-}
-
-fn output_witness_layout_interface<'db>(
-    inputs: &[CallableLayoutBundleInput<'db>],
-    output: &LayoutBundleInterface<'db>,
-) -> LayoutBundleInterface<'db> {
-    let components = output
-        .runtime_components()
-        .filter_map(|(_, component)| {
-            (!inputs
-                .iter()
-                .flat_map(|input| &input.interface.schema.components)
-                .any(|candidate| component.formally_derivable_from(candidate)))
-            .then_some(component.clone())
-        })
-        .collect::<Vec<_>>();
-    let schema = LayoutBundleSchema {
-        components,
-        view_aliases: output.schema.view_aliases.clone(),
-        unrepresentable: output.schema.unrepresentable.clone(),
-    };
-    LayoutBundleInterface::all_runtime(schema)
-}
-
-pub fn callable_layout_bundle_signature<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-) -> CallableLayoutBundleSignature<'db> {
-    let projections = callable_input_layout_projections(db, func, ConstBodyLowering::Eager);
-    let plan = callable_input_layout_plan(db, func);
-    let inputs = projections
-        .into_iter()
-        .filter_map(|(origin, _)| {
-            let interface = plan
-                .layout_bundle_interfaces_by_origin
-                .get(&origin)?
-                .clone();
-            (!interface.schema.is_empty())
-                .then_some(CallableLayoutBundleInput { origin, interface })
-        })
-        .collect::<Vec<_>>();
-    let mut output = callable_layout_projections_for_ty(
-        db,
-        CallableLayoutSchemaSite::Output {
-            owner: CallableLayoutOwner::Func(func),
-        },
-        func.return_ty(db),
-    );
-    bind_direct_layout_const_params(db, &mut output.schema);
-    bind_projected_component_const_metadata(
-        db,
-        CallableLayoutSchemaSite::Output {
-            owner: CallableLayoutOwner::Func(func),
-        },
-        &mut output.schema,
-        &output.port_tys,
-    );
-    let output = LayoutBundleInterface {
-        schema: output.schema,
-        transport: output.transport,
-    };
-    let output_witnesses = output_witness_layout_interface(&inputs, &output);
-    CallableLayoutBundleSignature {
-        inputs,
-        output_witnesses,
-        output,
-    }
-}
-
-fn specialized_layout_component_key<'db>(
-    db: &'db dyn HirAnalysisDb,
-    value: TyId<'db>,
-) -> LayoutBundleComponentKey<'db> {
-    if let Some(root) = layout_root_id(db, value) {
-        LayoutBundleComponentKey::Root(root)
-    } else if value.has_param(db) || value.has_var(db) {
-        LayoutBundleComponentKey::Param(value)
-    } else {
-        LayoutBundleComponentKey::Static(value)
-    }
-}
-
-/// Retains the declaration's terminal component topology when specialization
-/// makes independent const arguments equal. Components introduced by an
-/// opaque generic type still use the specialized topology. Instantiated const
-/// equality must never decide whether a declaration-relative port exists.
-fn preserve_declared_component_ports<'db>(
-    projection: &mut CallableLayoutProjections<'db>,
-    declared: &LayoutBundleInterface<'db>,
-) -> Vec<LayoutPortKey> {
-    let projected_ports = projection
-        .schema
-        .components
-        .iter()
-        .zip(&projection.component_refined_ports)
-        .flat_map(|(component, refined)| iter::once(&component.port).chain(refined))
-        .cloned()
-        .collect::<FxHashSet<_>>();
-    let missing = declared
-        .schema
-        .indexed_components()
-        .filter(|(_, declared)| !projected_ports.contains(&declared.port))
-        .map(|(_, component)| component.clone())
-        .collect::<Vec<_>>();
-    let missing_ports = missing
-        .iter()
-        .map(|component| component.port.clone())
-        .collect::<Vec<_>>();
-    for component in missing {
-        projection.schema.components.push(component);
-        projection.component_placeholders.push(None);
-        projection.component_refined_ports.push(Vec::new());
-    }
-    for alias in &declared.schema.view_aliases {
-        if !projection.schema.view_aliases.contains(alias) {
-            projection.schema.view_aliases.push(alias.clone());
-        }
-    }
-    if projection.schema.unrepresentable.is_none() {
-        projection.schema.unrepresentable = declared.schema.unrepresentable.clone();
-    }
-    let declared_transport = declared
-        .schema
-        .indexed_components()
-        .map(|(id, component)| {
-            (
-                component.port.clone(),
-                declared
-                    .transport
-                    .component(id)
-                    .expect("declared layout interface must have aligned transport"),
-            )
-        })
-        .collect::<FxHashMap<_, _>>();
-    projection.transport.components = projection
-        .schema
-        .components
-        .iter()
-        .zip(&projection.component_refined_ports)
-        .map(|(component, refined)| {
-            declared_transport
-                .get(&component.port)
-                .or_else(|| refined.iter().find_map(|port| declared_transport.get(port)))
-                .copied()
-                .unwrap_or(LayoutBundleComponentTransport::Runtime)
-        })
-        .collect();
-    missing_ports
-}
-
-fn specialize_component_representative<'db>(
-    db: &'db dyn HirAnalysisDb,
-    component: &mut LayoutBundleComponent<'db>,
-    owner: GenericParamOwner<'db>,
-    args: &[TyId<'db>],
-) {
-    if let LayoutBundleComponentKey::Param(value) = component.representative {
-        let value = Binder::bind(owner, value).instantiate(db, args);
-        component.representative = specialized_layout_component_key(db, value);
-    }
-    component.ty = Binder::bind(owner, component.ty).instantiate(db, args);
-}
-
-fn specialize_callable_input_layout_interface<'db>(
-    db: &'db dyn HirAnalysisDb,
-    site: CallableLayoutSchemaSite<'db>,
-    mut projection: CallableLayoutProjections<'db>,
-    declared: Option<&LayoutBundleInterface<'db>>,
-    declared_port_tys: Option<&FxHashMap<LayoutPortKey, TyId<'db>>>,
-    bindings: &[(TyId<'db>, TyId<'db>)],
-    args: &[TyId<'db>],
-) -> LayoutBundleInterface<'db> {
-    let restored_ports = if let Some(declared) = declared {
-        preserve_declared_component_ports(&mut projection, declared)
-    } else {
-        projection.transport = LayoutBundleTransport::all_runtime(&projection.schema);
-        Vec::new()
-    };
-    for (component, placeholder) in projection
-        .schema
-        .components
-        .iter_mut()
-        .zip(&projection.component_placeholders)
-    {
-        if let Some((_, bound)) = placeholder.and_then(|placeholder| {
-            bindings
-                .iter()
-                .find(|(candidate, _)| *candidate == placeholder)
-        }) {
-            let value = match bound.data(db) {
-                TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                    ConstTyData::TyParam(param, _) => {
-                        args.get(param.idx).copied().unwrap_or(*bound)
-                    }
-                    _ => *bound,
-                },
-                _ => *bound,
-            };
-            component.representative = specialized_layout_component_key(db, value);
-        }
-        if restored_ports.contains(&component.port) {
-            let CallableLayoutSchemaSite::Input {
-                owner: CallableLayoutOwner::Func(func),
-                ..
-            } = site
-            else {
-                unreachable!("input layout interface has a function owner")
-            };
-            specialize_component_representative(db, component, func.into(), args);
-        }
-    }
-    let component_refined_ports = projection.component_refined_ports;
-    let mut schema = projection.schema;
-    if let Some(declared) = declared {
-        preserve_declared_component_metadata(
-            db,
-            site,
-            &mut schema,
-            &component_refined_ports,
-            &declared.schema,
-            declared_port_tys.expect("declared input schema must have projected types"),
-        );
-    }
-    debug_assert!(
-        schema.unrepresentable.is_some() || schema.validate().is_ok(),
-        "layout specialization produced an invalid schema: {schema:#?}",
-    );
-    LayoutBundleInterface {
-        schema,
-        transport: projection.transport,
-    }
-}
-
-/// Derives the complete layout ABI for one monomorphized callable type.
-///
-/// Generic type parameters are expanded only after substitution, so an opaque
-/// declaration such as `fn peek<T>(self: Mutex<T>) -> T` transports layout
-/// components introduced by the concrete `T`. Ports remain anchored to the
-/// declaration's input/output sites and therefore still match caller values.
-pub(crate) fn specialized_callable_layout_bundle_signature<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    args: &[TyId<'db>],
-) -> CallableLayoutBundleSignature<'db> {
-    specialized_callable_layout_bundle_signature_with_normalizer(db, func, args, |ty| ty)
-}
-
-pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    args: &[TyId<'db>],
-    normalize: impl Fn(TyId<'db>) -> TyId<'db>,
-) -> CallableLayoutBundleSignature<'db> {
-    let plan = callable_input_layout_plan(db, func);
-    let inputs = callable_input_layout_types(db, func, ConstBodyLowering::Eager)
-        .into_iter()
-        .filter_map(|(origin, ty)| {
-            let bindings: &[(TyId<'db>, TyId<'db>)] = plan
-                .params
-                .bindings_by_origin
-                .get(&origin)
-                .map_or(&[], Vec::as_slice);
-            let placeholder_args = bindings.iter().copied().collect::<FxHashMap<_, _>>();
-            let ty = substitute_layout_holes_by_placeholder(db, ty, &placeholder_args);
-            let ty = Binder::bind(func.into(), ty).instantiate(db, args);
-            let ty = normalize(ty);
-            let projection = callable_layout_projections_for_ty(
-                db,
-                CallableLayoutSchemaSite::Input {
-                    owner: CallableLayoutOwner::Func(func),
-                    origin,
-                },
-                ty,
-            );
-            let interface = specialize_callable_input_layout_interface(
-                db,
-                CallableLayoutSchemaSite::Input {
-                    owner: CallableLayoutOwner::Func(func),
-                    origin,
-                },
-                projection,
-                plan.layout_bundle_interfaces_by_origin.get(&origin),
-                plan.layout_port_tys_by_origin.get(&origin),
-                bindings,
-                args,
-            );
-            (!interface.schema.is_empty())
-                .then_some(CallableLayoutBundleInput { origin, interface })
-        })
-        .collect::<Vec<_>>();
-    let output_ty = normalize(Binder::bind(func.into(), func.return_ty(db)).instantiate(db, args));
-    let output_ty = normalize(output_ty);
-    let mut output = callable_layout_projections_for_ty(
-        db,
-        CallableLayoutSchemaSite::Output {
-            owner: CallableLayoutOwner::Func(func),
-        },
-        output_ty,
-    );
-    let mut declared_output = callable_layout_projections_for_ty(
-        db,
-        CallableLayoutSchemaSite::Output {
-            owner: CallableLayoutOwner::Func(func),
-        },
-        func.return_ty(db),
-    );
-    bind_direct_layout_const_params(db, &mut declared_output.schema);
-    let declared_output_interface = LayoutBundleInterface {
-        schema: declared_output.schema.clone(),
-        transport: declared_output.transport.clone(),
-    };
-    let restored_ports = preserve_declared_component_ports(&mut output, &declared_output_interface);
-    for component in &mut output.schema.components {
-        if restored_ports.contains(&component.port) {
-            specialize_component_representative(db, component, func.into(), args);
-        }
-    }
-    let component_refined_ports = output.component_refined_ports;
-    let output_transport = output.transport;
-    let mut output_schema = output.schema;
-    preserve_declared_component_metadata(
-        db,
-        CallableLayoutSchemaSite::Output {
-            owner: CallableLayoutOwner::Func(func),
-        },
-        &mut output_schema,
-        &component_refined_ports,
-        &declared_output.schema,
-        &declared_output.port_tys,
-    );
-    debug_assert!(
-        output_schema.unrepresentable.is_some() || output_schema.validate().is_ok(),
-        "layout output specialization produced an invalid schema: {output_schema:#?}",
-    );
-    let output = LayoutBundleInterface {
-        schema: output_schema,
-        transport: output_transport,
-    };
-    let output_witnesses = output_witness_layout_interface(&inputs, &output);
-    CallableLayoutBundleSignature {
-        inputs,
-        output_witnesses,
-        output,
-    }
-}
-
-pub(crate) fn callable_layout_bundle_input_interface<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: CallableLayoutOwner<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-    ty: TyId<'db>,
-) -> LayoutBundleInterface<'db> {
-    let site = CallableLayoutSchemaSite::Input { owner, origin };
-    let mut projection = callable_layout_projections_for_ty(db, site, ty);
-    bind_direct_layout_const_params(db, &mut projection.schema);
-    bind_projected_component_const_metadata(db, site, &mut projection.schema, &projection.port_tys);
-    LayoutBundleInterface {
-        schema: projection.schema,
-        transport: projection.transport,
-    }
-}
-
-pub fn layout_bundle_schema_for_semantic_value<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: crate::hir_def::Body<'db>,
-    local: u32,
-    ty: TyId<'db>,
-    template_ty: TyId<'db>,
-) -> LayoutBundleSchema<'db> {
-    let mut schema =
-        callable_layout_projections_for_ty(db, CallableLayoutSchemaSite::Value { body, local }, ty);
-    let mut template = callable_layout_projections_for_ty(
-        db,
-        CallableLayoutSchemaSite::Value { body, local },
-        template_ty,
-    );
-    bind_direct_layout_const_params(db, &mut template.schema);
-    let template_interface = LayoutBundleInterface {
-        schema: template.schema.clone(),
-        transport: template.transport.clone(),
-    };
-    preserve_declared_component_ports(&mut schema, &template_interface);
-    let component_refined_ports = schema.component_refined_ports;
-    let mut schema = schema.schema;
-    preserve_declared_component_metadata(
-        db,
-        CallableLayoutSchemaSite::Value { body, local },
-        &mut schema,
-        &component_refined_ports,
-        &template.schema,
-        &template.port_tys,
-    );
-    schema
-}
-
-pub(crate) fn lower_callable_input_param_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-    hir_ty: HirTyId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    let ty = normalize_from_assumptions(
-        db,
-        lower_hir_ty(db, hir_ty, func.scope(), assumptions),
-        func.scope(),
-        assumptions,
-    );
-    bind_callable_input_layout_holes(db, ty, func, origin)
-}
-
-pub(crate) fn resolve_callable_input_effect_key<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    effect_idx: usize,
-    key_ty: HirTyId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> ResolvedEffectKey<'db> {
-    lower_callable_input_effect_key(
-        db,
-        func,
-        effect_idx,
-        key_ty,
-        assumptions,
-        ConstBodyLowering::Eager,
-    )
-}
-
-fn lower_callable_input_effect_key<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    effect_idx: usize,
-    key_ty: HirTyId<'db>,
-    assumptions: PredicateListId<'db>,
-    const_bodies: ConstBodyLowering,
-) -> ResolvedEffectKey<'db> {
-    let key = match const_bodies {
-        ConstBodyLowering::Eager => {
-            super::effects::resolve_effect_key(db, key_ty, func.scope(), assumptions)
-        }
-        ConstBodyLowering::Deferred => {
-            let minter = LoweringContext::deferred(HoleAnchor::TemplateTy {
-                ty: key_ty,
-                scope: func.scope(),
-                assumptions,
-            })
-            .with_source_params(Some(func.into()));
-            lower_effect_key_schema(db, key_ty, func.scope(), assumptions, &minter)
-        }
-    };
-    match key {
-        ResolvedEffectKey::Type(mut schema) => {
-            schema.carrier = bind_callable_input_layout_holes(
-                db,
-                schema.carrier,
-                func,
-                CallableInputLayoutHoleOrigin::Effect(effect_idx),
-            );
-            ResolvedEffectKey::Type(schema)
-        }
-        ResolvedEffectKey::Trait(schema) => {
-            let inst = bind_callable_input_layout_holes(
-                db,
-                schema.into_trait_inst(db),
-                func,
-                CallableInputLayoutHoleOrigin::Effect(effect_idx),
-            );
-            ResolvedEffectKey::Trait(TraitKeySchema::from_canonical_trait_binding(db, inst))
-        }
-        ResolvedEffectKey::Invalid => ResolvedEffectKey::Invalid,
-        ResolvedEffectKey::Other => ResolvedEffectKey::Other,
-    }
-}
-
-pub(crate) fn instantiate_callable_effect_layout_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    effect_idx: usize,
-    actual_key_ty: TyId<'db>,
-    subst_args: &mut [TyId<'db>],
-) {
-    let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-    let Some(key_ty) = func
-        .effect_params(db)
-        .nth(effect_idx)
-        .and_then(|effect| effect.key_ty(db))
-    else {
-        return;
-    };
-    let ResolvedEffectKey::Type(expected_key) =
-        resolve_callable_input_effect_key(db, func, effect_idx, key_ty, assumptions)
-    else {
-        return;
-    };
-    let bindings = callable_input_layout_bindings_by_origin(db, CallableDef::Func(func));
-    let Some(bindings) = bindings.get(&CallableInputLayoutHoleOrigin::Effect(effect_idx)) else {
-        return;
-    };
-    let mut actual_layout_args = Vec::with_capacity(bindings.len());
-    if !collect_layout_arg_bindings(
-        db,
-        expected_key.carrier,
-        actual_key_ty,
-        &mut actual_layout_args,
-    ) {
-        return;
-    }
-
-    for (expected, actual_arg) in actual_layout_args {
-        let Some((_, implicit_arg)) = bindings
-            .iter()
-            .find(|(placeholder, implicit)| *placeholder == expected || *implicit == expected)
-        else {
-            continue;
-        };
-        let implicit_idx = implicit_arg.as_generic_param(db).map(|param| param.idx);
-        if let Some(implicit_idx) = implicit_idx
-            && let Some(slot) = subst_args.get_mut(implicit_idx)
-        {
-            *slot = actual_arg;
-        }
-    }
-}
-
-pub(crate) fn same_layout_argument<'db>(
-    db: &'db dyn HirAnalysisDb,
-    lhs: TyId<'db>,
-    rhs: TyId<'db>,
-) -> bool {
-    match (
-        super::layout_holes::layout_root_placeholder(db, lhs),
-        super::layout_holes::layout_root_placeholder(db, rhs),
-    ) {
-        (Some(lhs), Some(rhs)) => lhs == rhs,
-        _ => lhs == rhs,
-    }
-}
-
-pub(crate) fn collect_layout_arg_bindings<'db>(
-    db: &'db dyn HirAnalysisDb,
-    expected: TyId<'db>,
-    actual: TyId<'db>,
-    out: &mut Vec<(TyId<'db>, TyId<'db>)>,
-) -> bool {
-    let is_layout_arg = match expected.data(db) {
-        TyData::ConstTy(const_ty) => match const_ty.data(db) {
-            ConstTyData::Hole(..) => true,
-            ConstTyData::TyParam(param, _) => param.is_implicit(),
-            _ => false,
-        },
-        _ => false,
-    };
-    if is_layout_arg {
-        if let Some((_, bound)) = out.iter().find(|(placeholder, _)| *placeholder == expected) {
-            return same_layout_argument(db, *bound, actual);
-        }
-        out.push((expected, actual));
-        return true;
-    }
-
-    let (expected_base, expected_args) = expected.decompose_ty_app(db);
-    let (actual_base, actual_args) = actual.decompose_ty_app(db);
-    if expected_args.len() != actual_args.len() {
-        return false;
-    }
-    if expected_args.is_empty() {
-        return expected == actual;
-    }
-    if expected_base != actual_base {
-        return false;
-    }
-    expected_args
-        .iter()
-        .zip(actual_args)
-        .all(|(expected, actual)| collect_layout_arg_bindings(db, *expected, *actual, out))
-}
-
-fn lower_callable_input_shape_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    hir_ty: HirTyId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    let minter = LoweringContext::deferred(HoleAnchor::TemplateTy {
-        ty: hir_ty,
-        scope: func.scope(),
-        assumptions,
-    })
-    .with_source_params(Some(func.into()));
-    normalize_from_assumptions(
-        db,
-        lower_hir_ty_with_minter(db, hir_ty, func.scope(), assumptions, &minter),
-        func.scope(),
-        assumptions,
-    )
-}
-
-pub(crate) fn callable_input_layout_hole_groups<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-) -> Vec<CallableInputLayoutHoleGroup<'db>> {
-    let mut groups = Vec::new();
-    let assumptions = collect_callable_shape_constraints(db, func);
-
-    if func.is_method(db)
-        && let Some(param) = func.params(db).next()
-    {
-        let receiver_ty = if param.self_ty_fallback(db) {
-            func.expected_self_ty(db)
-        } else {
-            param.hir_ty(db).map(|hir_ty| {
-                bind_callable_input_layout_holes(
-                    db,
-                    lower_callable_input_shape_ty(db, func, hir_ty, assumptions),
-                    func,
-                    CallableInputLayoutHoleOrigin::Receiver,
-                )
-            })
-        };
-        if let Some(receiver_ty) = receiver_ty {
-            let placeholders = collect_unique_layout_placeholders_in_order(db, receiver_ty);
-            if !placeholders.is_empty() {
-                groups.push(CallableInputLayoutHoleGroup {
-                    origin: CallableInputLayoutHoleOrigin::Receiver,
-                    placeholders,
-                });
-            }
-        }
-    }
-    for param in func.params(db) {
-        if param.is_self_param(db) {
-            continue;
-        }
-        let Some(hir_ty) = param.hir_ty(db) else {
-            continue;
-        };
-
-        let ty = bind_callable_input_layout_holes(
-            db,
-            lower_callable_input_shape_ty(db, func, hir_ty, assumptions),
-            func,
-            CallableInputLayoutHoleOrigin::ValueParam(param.index()),
-        );
-        let placeholders = collect_unique_layout_placeholders_in_order(db, ty);
-        if placeholders.is_empty() {
-            continue;
-        }
-
-        groups.push(CallableInputLayoutHoleGroup {
-            origin: CallableInputLayoutHoleOrigin::ValueParam(param.index()),
-            placeholders,
-        });
-    }
-
-    for effect in func.effect_params(db) {
-        let Some(key_ty) = effect.key_ty(db) else {
-            continue;
-        };
-        let placeholders = match lower_callable_input_effect_key(
-            db,
-            func,
-            effect.index(),
-            key_ty,
-            assumptions,
-            ConstBodyLowering::Deferred,
-        ) {
-            ResolvedEffectKey::Type(schema) => {
-                collect_unique_layout_placeholders_in_order(db, schema.carrier)
-            }
-            ResolvedEffectKey::Trait(schema) => {
-                collect_unique_layout_placeholders_in_order(db, schema.into_trait_inst(db))
-            }
-            ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => continue,
-        };
-        if placeholders.is_empty() {
-            continue;
-        }
-
-        groups.push(CallableInputLayoutHoleGroup {
-            origin: CallableInputLayoutHoleOrigin::Effect(effect.index()),
-            placeholders,
-        });
-    }
-
-    groups
-}
-
-fn callable_input_layout_param_name<'db>(
-    db: &'db dyn HirAnalysisDb,
-    origin: CallableInputLayoutHoleOrigin,
-    layout_idx: usize,
-) -> IdentId<'db> {
-    match origin {
-        CallableInputLayoutHoleOrigin::Receiver => {
-            IdentId::new(db, format!("__self_layout{layout_idx}"))
-        }
-        CallableInputLayoutHoleOrigin::ValueParam(param_idx) => {
-            IdentId::new(db, format!("__arglayout{param_idx}_{layout_idx}"))
-        }
-        CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
-            IdentId::new(db, format!("__efflayout{effect_idx}_{layout_idx}"))
-        }
-    }
 }
 
 fn func_inherited_param_precursors<'db>(
@@ -2785,53 +622,8 @@ pub(crate) fn func_implicit_param_plan<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
 ) -> FuncImplicitParamPlan<'db> {
-    let mut groups = callable_input_layout_hole_groups(db, func);
-    let projections = callable_input_layout_projections(db, func, ConstBodyLowering::Deferred);
-    for (origin, projection) in &projections {
-        let origin = *origin;
-        if let Some(group) = groups.iter_mut().find(|group| group.origin == origin) {
-            for &placeholder in &projection.placeholders {
-                if !group.placeholders.contains(&placeholder) {
-                    group.placeholders.push(placeholder);
-                }
-            }
-        } else if !projection.placeholders.is_empty() {
-            groups.push(CallableInputLayoutHoleGroup {
-                origin,
-                placeholders: projection.placeholders.clone(),
-            });
-        }
-    }
     let prefix_len = func_inherited_param_precursors(db, func).len();
     let mut implicit_precursors = Vec::new();
-    let mut bindings_by_origin = FxHashMap::default();
-
-    for group in groups {
-        let mut bindings = Vec::with_capacity(group.placeholders.len());
-        for (layout_idx, placeholder) in group.placeholders.into_iter().enumerate() {
-            let TyData::ConstTy(const_ty) = placeholder.data(db) else {
-                unreachable!("callable layout placeholder was not a const type");
-            };
-            let ConstTyData::Hole(hole_ty, _) = const_ty.data(db) else {
-                unreachable!("callable layout placeholder was not a hole");
-            };
-            let precursor = TyParamPrecursor::implicit_const_param(
-                db,
-                Partial::Present(callable_input_layout_param_name(
-                    db,
-                    group.origin,
-                    layout_idx,
-                )),
-                layout_hole_fallback_ty(db, *hole_ty),
-            );
-            let lowered_idx = prefix_len + implicit_precursors.len();
-            let implicit_arg = precursor.evaluate(db, func.scope(), lowered_idx, 0);
-            implicit_precursors.push(precursor);
-            bindings.push((placeholder, implicit_arg));
-        }
-        bindings_by_origin.insert(group.origin, bindings);
-    }
-
     let mut provider_param_index_by_effect = vec![None; func.effects(db).data(db).len()];
     // Reserve providers from syntax, including invalid keys. Key validation depends
     // on the explicit parameters after this prefix; letting it add/remove slots
@@ -2851,533 +643,12 @@ pub(crate) fn func_implicit_param_plan<'db>(
 
     FuncImplicitParamPlan {
         implicit_precursors,
-        bindings_by_origin,
         provider_param_index_by_effect,
     }
 }
 
-#[salsa::tracked(return_ref)]
-fn callable_input_layout_plan<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-) -> CallableInputLayoutPlan<'db> {
-    let params = func_implicit_param_plan(db, func);
-    let bindings_by_origin = &params.bindings_by_origin;
-    let projections = callable_input_layout_projections(db, func, ConstBodyLowering::Eager);
-    let mut layout_projected_tys_by_origin = FxHashMap::default();
-    let mut layout_port_tys_by_origin = FxHashMap::default();
-    let mut carrier_projected_tys_by_origin = FxHashMap::default();
-    let mut projected_paths_by_origin = FxHashMap::default();
-    let mut projected_index_lengths_by_origin = FxHashMap::default();
-    let mut layout_bundle_interfaces_by_origin = FxHashMap::default();
-    for (origin, projection) in projections {
-        let args = bindings_by_origin
-            .get(&origin)
-            .into_iter()
-            .flatten()
-            .copied()
-            .collect::<FxHashMap<_, _>>();
-        let interface = bind_callable_layout_bundle_interface(
-            db,
-            CallableLayoutSchemaSite::Input {
-                owner: CallableLayoutOwner::Func(func),
-                origin,
-            },
-            &projection,
-            bindings_by_origin.get(&origin).map_or(&[], Vec::as_slice),
-        );
-        let tys = projection
-            .tys
-            .into_iter()
-            .map(|(path, ty)| (path, substitute_layout_holes_by_placeholder(db, ty, &args)))
-            .collect();
-        let port_tys = projection
-            .port_tys
-            .into_iter()
-            .map(|(port, ty)| (port, substitute_layout_holes_by_placeholder(db, ty, &args)))
-            .collect();
-        layout_projected_tys_by_origin.insert(origin, tys);
-        layout_port_tys_by_origin.insert(origin, port_tys);
-        projected_index_lengths_by_origin.insert(origin, projection.index_lengths);
-        projected_paths_by_origin.insert(origin, projection.paths);
-        layout_bundle_interfaces_by_origin.insert(origin, interface);
-    }
-    for (origin, projection) in callable_input_carrier_projections(db, func) {
-        let args = bindings_by_origin
-            .get(&origin)
-            .into_iter()
-            .flatten()
-            .copied()
-            .collect::<FxHashMap<_, _>>();
-        let tys = projection
-            .tys
-            .into_iter()
-            .map(|(path, ty)| (path, substitute_layout_holes_by_placeholder(db, ty, &args)))
-            .collect();
-        carrier_projected_tys_by_origin.insert(origin, tys);
-    }
-
-    CallableInputLayoutPlan {
-        params,
-        layout_bundle_interfaces_by_origin,
-        layout_projected_tys_by_origin,
-        layout_port_tys_by_origin,
-        carrier_projected_tys_by_origin,
-        projected_paths_by_origin,
-        projected_index_lengths_by_origin,
-    }
-}
-
-pub fn callable_input_layout_bundle_schema<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-) -> Option<LayoutBundleSchema<'db>> {
-    callable_input_layout_plan(db, func)
-        .layout_bundle_interfaces_by_origin
-        .get(&origin)
-        .map(|interface| interface.schema.clone())
-}
-
-/// Returns terminal callable input projections that can physically back a
-/// returned value containing the given generic layout parameter.
-///
-/// This is ownership provenance for borrow checking, not runtime layout
-/// evidence. Aggregate ancestors are omitted when a descendant names the
-/// concrete carrier place. Projections through array elements are retained so
-/// callers can decide whether a unique backing place exists.
-pub fn callable_input_layout_backing_sources<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    param_idx: usize,
-) -> Vec<CallableInputLayoutBackingSource> {
-    let plan = callable_input_layout_plan(db, func);
-    let mut sources = Vec::new();
-    let mut origins = Vec::new();
-    for (idx, ty) in func.arg_tys(db).iter().enumerate() {
-        let origin = if func.is_method(db) && idx == 0 {
-            CallableInputLayoutHoleOrigin::Receiver
-        } else {
-            CallableInputLayoutHoleOrigin::ValueParam(idx)
-        };
-        origins.push(origin);
-        if value_contains_generic_param(db, ty.skip_binder(), param_idx) {
-            sources.push(CallableInputLayoutBackingSource {
-                origin,
-                projection: Vec::new(),
-            });
-        }
-    }
-    let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-    for effect in func.effect_params(db) {
-        let Some(key_ty) = effect.key_ty(db) else {
-            continue;
-        };
-        let resolved =
-            resolve_callable_input_effect_key(db, func, effect.index(), key_ty, assumptions);
-        let origin = CallableInputLayoutHoleOrigin::Effect(effect.index());
-        let bindings = plan
-            .params
-            .bindings_by_origin
-            .get(&origin)
-            .into_iter()
-            .flatten()
-            .copied()
-            .collect::<FxHashMap<_, _>>();
-        let contains = match resolved {
-            ResolvedEffectKey::Type(schema) => value_contains_generic_param(
-                db,
-                &substitute_layout_holes_by_placeholder(db, schema.carrier, &bindings),
-                param_idx,
-            ),
-            ResolvedEffectKey::Trait(schema) => value_contains_generic_param(
-                db,
-                &substitute_layout_holes_by_placeholder_in(
-                    db,
-                    schema.into_trait_inst(db),
-                    &bindings,
-                ),
-                param_idx,
-            ),
-            ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => false,
-        };
-        if contains {
-            sources.push(CallableInputLayoutBackingSource {
-                origin,
-                projection: Vec::new(),
-            });
-        }
-    }
-    origins.extend((0..func.effects(db).data(db).len()).map(CallableInputLayoutHoleOrigin::Effect));
-    for origin in origins {
-        let Some(paths) = plan.projected_paths_by_origin.get(&origin) else {
-            continue;
-        };
-        let projected_tys = &plan.layout_projected_tys_by_origin[&origin];
-        for path in paths {
-            if value_contains_generic_param(db, &projected_tys[path], param_idx) {
-                let source = CallableInputLayoutBackingSource {
-                    origin,
-                    projection: path.clone(),
-                };
-                if !sources.contains(&source) {
-                    sources.push(source);
-                }
-            }
-        }
-    }
-    sources
-        .iter()
-        .filter(|source| {
-            let lexical_descendant = sources.iter().any(|descendant| {
-                descendant.origin == source.origin
-                    && descendant.projection.len() > source.projection.len()
-                    && descendant.projection.starts_with(&source.projection)
-            });
-            let nonterminal_const = matches!(
-                source.projection.last(),
-                Some(LayoutBundlePathStep::ConstParam(_))
-            ) && {
-                let owner = &source.projection[..source.projection.len() - 1];
-                sources.iter().any(|descendant| {
-                    descendant.origin == source.origin
-                        && descendant.projection.starts_with(owner)
-                        && matches!(
-                            descendant.projection.get(owner.len()),
-                            Some(
-                                LayoutBundlePathStep::Field(_)
-                                    | LayoutBundlePathStep::Variant(_)
-                                    | LayoutBundlePathStep::Index
-                            )
-                        )
-                })
-            };
-            !lexical_descendant && !nonterminal_const
-        })
-        .cloned()
-        .collect()
-}
-
-pub fn callable_input_layout_backing_index_lengths<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    source: &CallableInputLayoutBackingSource,
-) -> Option<Vec<usize>> {
-    if source.projection.is_empty() {
-        return Some(Vec::new());
-    }
-    let plan = callable_input_layout_plan(db, func);
-    plan.projected_index_lengths_by_origin
-        .get(&source.origin)?
-        .get(&source.projection)
-        .cloned()
-}
-
-fn value_contains_generic_param<'db, T>(
-    db: &'db dyn HirAnalysisDb,
-    value: &T,
-    param_idx: usize,
-) -> bool
-where
-    T: TyVisitable<'db>,
-{
-    struct Finder<'db> {
-        db: &'db dyn HirAnalysisDb,
-        param_idx: usize,
-        found: bool,
-    }
-
-    impl<'db> TyVisitor<'db> for Finder<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_param(&mut self, param: &TyParam<'db>) {
-            if param.idx == self.param_idx {
-                self.found = true;
-            }
-        }
-
-        fn visit_const_param(&mut self, param: &TyParam<'db>, _: TyId<'db>) {
-            self.visit_param(param);
-        }
-    }
-
-    let mut finder = Finder {
-        db,
-        param_idx,
-        found: false,
-    };
-    value.visit_with(&mut finder);
-    finder.found
-}
-
-fn layout_projection_paths_in_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    param_idx: usize,
-) -> Vec<(LayoutBundlePath, Vec<usize>)> {
-    struct Collector<'db> {
-        db: &'db dyn HirAnalysisDb,
-        param_idx: usize,
-        adt_stack: Vec<AdtDef<'db>>,
-        out: Vec<(LayoutBundlePath, Vec<usize>)>,
-    }
-
-    impl<'db> Collector<'db> {
-        fn contains(&self, ty: TyId<'db>) -> bool {
-            value_contains_generic_param(self.db, &ty, self.param_idx)
-        }
-
-        fn walk(
-            &mut self,
-            ty: TyId<'db>,
-            path: &mut LayoutBundlePath,
-            index_lengths: &mut Vec<usize>,
-        ) {
-            let ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
-            if !self.contains(ty) {
-                return;
-            }
-            if ty.is_tuple(self.db) {
-                let mut found_descendant = false;
-                for (idx, field) in ty.field_types(self.db).into_iter().enumerate() {
-                    if !self.contains(field) {
-                        continue;
-                    }
-                    let Ok(idx) = u16::try_from(idx) else {
-                        continue;
-                    };
-                    found_descendant = true;
-                    path.push(LayoutBundlePathStep::Field(idx));
-                    self.walk(field, path, index_lengths);
-                    path.pop();
-                }
-                if !found_descendant {
-                    self.out.push((path.clone(), index_lengths.clone()));
-                }
-                return;
-            }
-            if ty.is_array(self.db) {
-                let Some(&element) = ty.generic_args(self.db).first() else {
-                    return;
-                };
-                if !self.contains(element) {
-                    self.out.push((path.clone(), index_lengths.clone()));
-                    return;
-                }
-                let Some(len) = ty.array_len(self.db) else {
-                    return;
-                };
-                path.push(LayoutBundlePathStep::Index);
-                index_lengths.push(len);
-                self.walk(element, path, index_lengths);
-                index_lengths.pop();
-                path.pop();
-                return;
-            }
-            let Some(adt) = ty.adt_def(self.db) else {
-                self.out.push((path.clone(), index_lengths.clone()));
-                return;
-            };
-            if self.adt_stack.contains(&adt) {
-                self.out.push((path.clone(), index_lengths.clone()));
-                return;
-            }
-            self.adt_stack.push(adt);
-            let args = ty.generic_args(self.db);
-            let mut found_descendant = false;
-            for (param_idx, arg) in args.iter().copied().enumerate() {
-                if !matches!(arg.data(self.db), TyData::ConstTy(_)) || !self.contains(arg) {
-                    continue;
-                }
-                let Ok(param_idx) = u16::try_from(param_idx) else {
-                    continue;
-                };
-                found_descendant = true;
-                path.push(LayoutBundlePathStep::ConstParam(param_idx));
-                self.out.push((path.clone(), index_lengths.clone()));
-                path.pop();
-            }
-            match adt.adt_ref(self.db) {
-                AdtRef::Struct(_) => {
-                    for field_idx in 0..adt.fields(self.db)[0].num_types() {
-                        let field = instantiate_adt_field_shape(self.db, adt, 0, field_idx, args);
-                        if !self.contains(field) {
-                            continue;
-                        }
-                        let Ok(field_idx) = u16::try_from(field_idx) else {
-                            continue;
-                        };
-                        found_descendant = true;
-                        path.push(LayoutBundlePathStep::Field(field_idx));
-                        self.walk(field, path, index_lengths);
-                        path.pop();
-                    }
-                }
-                AdtRef::Enum(_) => {
-                    for (variant_idx, variant) in adt.fields(self.db).iter().enumerate() {
-                        let Ok(variant_step) = u16::try_from(variant_idx) else {
-                            continue;
-                        };
-                        for field_idx in 0..variant.num_types() {
-                            let field = instantiate_adt_field_shape(
-                                self.db,
-                                adt,
-                                variant_idx,
-                                field_idx,
-                                args,
-                            );
-                            if !self.contains(field) {
-                                continue;
-                            }
-                            let Ok(field_step) = u16::try_from(field_idx) else {
-                                continue;
-                            };
-                            found_descendant = true;
-                            path.push(LayoutBundlePathStep::Variant(variant_step));
-                            path.push(LayoutBundlePathStep::Field(field_step));
-                            self.walk(field, path, index_lengths);
-                            path.pop();
-                            path.pop();
-                        }
-                    }
-                }
-            }
-            self.adt_stack.pop();
-            if !found_descendant {
-                self.out.push((path.clone(), index_lengths.clone()));
-            }
-        }
-    }
-
-    let mut collector = Collector {
-        db,
-        param_idx,
-        adt_stack: Vec::new(),
-        out: Vec::new(),
-    };
-    collector.walk(ty, &mut Vec::new(), &mut Vec::new());
-    collector.out
-}
-
-pub(crate) fn layout_param_projection_paths_in_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    param_idx: usize,
-) -> Vec<(LayoutBundlePath, Vec<usize>)> {
-    layout_projection_paths_in_ty(db, ty, param_idx)
-}
-
-pub(crate) fn callable_input_projected_layout_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-    path: &[LayoutBundlePathStep],
-) -> Option<TyId<'db>> {
-    callable_input_layout_plan(db, func)
-        .layout_projected_tys_by_origin
-        .get(&origin)?
-        .get(path)
-        .copied()
-}
-
-pub(crate) fn callable_input_carrier_projected_layout_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-    path: &[LayoutBundlePathStep],
-) -> Option<TyId<'db>> {
-    callable_input_layout_plan(db, func)
-        .carrier_projected_tys_by_origin
-        .get(&origin)?
-        .get(path)
-        .copied()
-}
-
-pub(crate) fn callable_input_layout_origin_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-) -> Option<TyId<'db>> {
-    match origin {
-        CallableInputLayoutHoleOrigin::Receiver | CallableInputLayoutHoleOrigin::ValueParam(_) => {
-            let idx = match origin {
-                CallableInputLayoutHoleOrigin::Receiver => 0,
-                CallableInputLayoutHoleOrigin::ValueParam(idx) => idx,
-                CallableInputLayoutHoleOrigin::Effect(_) => unreachable!(),
-            };
-            func.arg_ty(db, idx).map(|ty| ty.instantiate_identity())
-        }
-        CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
-            let assumptions =
-                collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-            let key_ty = func.effect_params(db).nth(effect_idx)?.key_ty(db)?;
-            let ResolvedEffectKey::Type(schema) =
-                resolve_callable_input_effect_key(db, func, effect_idx, key_ty, assumptions)
-            else {
-                return None;
-            };
-            let bindings = func_implicit_param_plan(db, func)
-                .bindings_by_origin
-                .get(&origin)
-                .into_iter()
-                .flatten()
-                .copied()
-                .collect::<FxHashMap<_, _>>();
-            Some(substitute_layout_holes_by_placeholder(
-                db,
-                schema.carrier,
-                &bindings,
-            ))
-        }
-    }
-}
-
-pub(crate) fn callable_input_layout_projection_paths<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-) -> Vec<LayoutBundlePath> {
-    callable_input_layout_plan(db, func)
-        .projected_paths_by_origin
-        .get(&origin)
-        .cloned()
-        .unwrap_or_default()
-}
-
-pub(crate) fn instantiate_callable_projection_layout_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: crate::hir_def::Func<'db>,
-    origin: CallableInputLayoutHoleOrigin,
-    path: &[LayoutBundlePathStep],
-    actual_ty: TyId<'db>,
-    subst_args: &mut [TyId<'db>],
-) {
-    let Some(expected_ty) = callable_input_projected_layout_ty(db, func, origin, path) else {
-        return;
-    };
-    let mut bindings = Vec::new();
-    if !collect_layout_arg_bindings(db, expected_ty, actual_ty, &mut bindings) {
-        return;
-    }
-    for (expected, actual) in bindings {
-        let TyData::ConstTy(const_ty) = expected.data(db) else {
-            continue;
-        };
-        let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
-            continue;
-        };
-        if param.is_implicit()
-            && let Some(slot) = subst_args.get_mut(param.idx)
-        {
-            *slot = actual;
-        }
-    }
-}
-
 /// Lowers the given type alias to [`TyAlias`].
-#[salsa::tracked(return_ref, cycle_fn=lower_type_alias_cycle_recover, cycle_initial=lower_type_alias_cycle_initial)]
+#[salsa::tracked(cycle_initial=lower_type_alias_cycle_initial)]
 pub(crate) fn lower_type_alias<'db>(
     db: &'db dyn HirAnalysisDb,
     alias: HirTypeAlias<'db>,
@@ -3385,7 +656,7 @@ pub(crate) fn lower_type_alias<'db>(
     crate::core::semantic::lower_type_alias_body(db, alias)
 }
 
-#[salsa::tracked(return_ref, cycle_fn=lower_type_alias_cycle_recover, cycle_initial=lower_type_alias_cycle_initial)]
+#[salsa::tracked(cycle_initial=lower_type_alias_cycle_initial)]
 pub(crate) fn lower_type_alias_deferred<'db>(
     db: &'db dyn HirAnalysisDb,
     alias: HirTypeAlias<'db>,
@@ -3421,7 +692,6 @@ fn lower_type_alias_from_hir_in_mode<'db>(
         return TyAlias {
             alias,
             alias_to: Binder::bind(alias.into(), TyId::invalid(db, InvalidCause::ParseError)),
-            layout_root_uses: Vec::new(),
             param_set,
         };
     };
@@ -3431,13 +701,11 @@ fn lower_type_alias_from_hir_in_mode<'db>(
         ConstBodyLowering::Deferred => collect_candidate_constraints(db, alias.into()),
     }
     .instantiate_identity();
-    let minter = LoweringContext::for_const_bodies(HoleAnchor::AliasTemplate(alias), const_bodies);
-    let layout_root_uses =
-        lower_layout_root_uses_in_hir_ty(db, hir_ty, alias.scope(), assumptions, &minter);
+    let lowering_cx = LoweringContext::for_const_bodies(const_bodies);
     let alias_to = match const_bodies {
         ConstBodyLowering::Eager => lower_hir_ty(db, hir_ty, alias.scope(), assumptions),
         ConstBodyLowering::Deferred => {
-            lower_hir_ty_impl(db, hir_ty, alias.scope(), assumptions, &minter)
+            lower_hir_ty_impl(db, hir_ty, alias.scope(), assumptions, &lowering_cx)
         }
     };
     let alias_to = if let TyData::Invalid(InvalidCause::AliasCycle(cycle)) = alias_to.data(db) {
@@ -3451,21 +719,24 @@ fn lower_type_alias_from_hir_in_mode<'db>(
     } else if alias_to.has_invalid(db) {
         // Should be reported by TypeAliasAnalysisPass
         TyId::invalid(db, InvalidCause::Other)
+    } else if let Some(space) = crate::core::semantic::type_alias_pointer_space(db, alias) {
+        match alias_to.as_ptr(db) {
+            Some((target, AddressSpace::Memory)) => TyId::ptr_in(db, space, target),
+            _ => TyId::invalid(db, InvalidCause::Other),
+        }
     } else {
-        // Mark template ownership: use sites replace alias-anchored holes
-        // with fresh holes from their own minter.
-        reanchor_template_holes(db, alias_to, HoleAnchor::AliasTemplate(alias))
+        alias_to
     };
     TyAlias {
         alias,
         alias_to: Binder::bind(alias.into(), alias_to),
-        layout_root_uses,
         param_set,
     }
 }
 
 fn lower_type_alias_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     alias: HirTypeAlias<'db>,
 ) -> TyAlias<'db> {
     TyAlias {
@@ -3474,22 +745,12 @@ fn lower_type_alias_cycle_initial<'db>(
             alias.into(),
             TyId::invalid(db, InvalidCause::AliasCycle(smallvec![alias])),
         ),
-        layout_root_uses: Vec::new(),
         param_set: GenericParamTypeSet::empty(db, alias.scope()),
     }
 }
 
-fn lower_type_alias_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TyAlias<'db>,
-    _count: u32,
-    _alias: HirTypeAlias<'db>,
-) -> salsa::CycleRecoveryAction<TyAlias<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 #[doc(hidden)]
-#[salsa::tracked(return_ref, cycle_initial=evaluate_params_precursor_cycle_initial, cycle_fn=evaluate_params_precursor_cycle_recover)]
+#[salsa::tracked(cycle_initial=evaluate_params_precursor_cycle_initial)]
 pub(crate) fn evaluate_params_precursor<'db>(
     db: &'db dyn HirAnalysisDb,
     set: GenericParamTypeSet<'db>,
@@ -3503,6 +764,7 @@ pub(crate) fn evaluate_params_precursor<'db>(
 
 fn evaluate_params_precursor_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     set: GenericParamTypeSet<'db>,
 ) -> Vec<TyId<'db>> {
     set.params_precursor(db)
@@ -3511,26 +773,16 @@ fn evaluate_params_precursor_cycle_initial<'db>(
         .collect()
 }
 
-fn evaluate_params_precursor_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Vec<TyId<'db>>,
-    _count: u32,
-    _set: GenericParamTypeSet<'db>,
-) -> salsa::CycleRecoveryAction<Vec<TyId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 /// Represents a lowered type alias. `TyAlias` itself isn't a type, but
 /// can be instantiated to a `TyId` by substituting its type
 /// parameters with actual types.
 ///
 /// NOTE: `TyAlias` can't become an alias to partial applied types, i.e., the
 /// right hand side of the alias declaration must be a fully applied type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TyAlias<'db> {
     pub alias: HirTypeAlias<'db>,
     pub alias_to: Binder<'db, TyId<'db>>,
-    pub layout_root_uses: Vec<LayoutRootUse<'db>>,
     pub param_set: GenericParamTypeSet<'db>,
 }
 
@@ -3543,17 +795,8 @@ impl<'db> TyAlias<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         args: &[TyId<'db>],
-        minter: &LoweringContext<'db>,
+        lowering_cx: &LoweringContext<'db>,
     ) -> TyId<'db> {
-        self.instantiate_layout(db, args, minter).ty
-    }
-
-    pub(crate) fn instantiate_layout(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        args: &[TyId<'db>],
-        minter: &LoweringContext<'db>,
-    ) -> super::layout_holes::LayoutInstantiation<'db> {
         let expected = self.param_set.explicit_param_count(db);
         debug_assert!(
             args.len() <= expected,
@@ -3565,7 +808,7 @@ impl<'db> TyAlias<'db> {
                 db,
                 &[],
                 args,
-                DefaultApplication::StructuralMetadata(minter),
+                DefaultApplication::StructuralMetadata(lowering_cx),
             )
             .map_err(|error| error.cause)
             .and_then(|args| {
@@ -3578,157 +821,11 @@ impl<'db> TyAlias<'db> {
                     Ok(args)
                 }
             });
-        let completed = match completed {
-            Ok(args) => args,
-            Err(cause) => {
-                return instantiate_layout_template(
-                    db,
-                    TyId::invalid(db, cause),
-                    None,
-                    LayoutInstantiationContext::Lowering(minter.holes().anchor()),
-                    LayoutBoundaryIdentity::AliasUse(self.alias),
-                    vec![LayoutOccurrenceStep::Instantiation(
-                        minter.holes().next_instantiation_ordinal(),
-                    )],
-                );
-            }
-        };
-
-        let occurrence = vec![LayoutOccurrenceStep::Instantiation(
-            minter.holes().next_instantiation_ordinal(),
-        )];
-        let mut instantiated = instantiate_layout_template(
-            db,
-            self.alias_to.instantiate_identity(),
-            Some(LayoutTemplateSubst::new(
-                ParamBasis::Full,
-                CompleteSubst::for_owner(db, self.alias.into(), completed.clone())
-                    .expect("completed alias args match its schema"),
-            )),
-            LayoutInstantiationContext::Lowering(minter.holes().anchor()),
-            LayoutBoundaryIdentity::AliasUse(self.alias),
-            occurrence.clone(),
-        );
-        for root_use in &self.layout_root_uses {
-            let mut selector = occurrence.clone();
-            selector.extend(&root_use.selector);
-            let root_use = LayoutRootUse {
-                value: Binder::bind(self.alias.into(), root_use.value).instantiate(db, &completed),
-                owner: root_use.owner.map(|owner| {
-                    Binder::bind(self.alias.into(), owner).instantiate(db, &completed)
-                }),
-                selector,
-            };
-            if !instantiated.root_uses.contains(&root_use) {
-                instantiated.root_uses.push(root_use);
-            }
+        match completed {
+            Ok(args) => self.alias_to.instantiate(db, &args),
+            Err(cause) => TyId::invalid(db, cause),
         }
-        let root_params = self
-            .params(db)
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, _)| {
-                self.param_set
-                    .const_param_default_is_slot_layout_hole(db, idx)
-                    .then_some(idx)
-            })
-            .collect::<FxHashSet<_>>();
-        for root_use in layout_param_root_uses(
-            db,
-            self.alias_to.instantiate_identity(),
-            ParamSchemaId::full(db, self.alias.into()),
-            self.params(db),
-            &completed,
-            &root_params,
-            occurrence,
-        ) {
-            if !instantiated.root_uses.contains(&root_use) {
-                instantiated.root_uses.push(root_use);
-            }
-        }
-        instantiated
     }
-}
-
-struct LayoutParamRootUseCollector<'a, 'db> {
-    db: &'db dyn HirAnalysisDb,
-    concrete_roots: FxHashMap<TyId<'db>, (usize, TyId<'db>)>,
-    schema: ParamSchemaId<'db>,
-    args: &'a [TyId<'db>],
-    occurrence: LayoutOccurrencePath,
-    path: LayoutOccurrencePath,
-    visiting: FxHashSet<TyId<'db>>,
-    uses: Vec<LayoutRootUse<'db>>,
-}
-
-impl<'a, 'db> LayoutParamRootUseCollector<'a, 'db> {
-    fn collect(&mut self, ty: TyId<'db>, direct_owner: Option<TyId<'db>>) {
-        if let Some((idx, value)) = self.concrete_roots.get(&ty) {
-            let mut selector = self.occurrence.clone();
-            selector.extend(self.path.iter().copied());
-            selector.push(LayoutOccurrenceStep::ConstParam(*idx as u32));
-            self.uses.push(LayoutRootUse {
-                value: *value,
-                owner: direct_owner,
-                selector,
-            });
-            return;
-        }
-        if !self.visiting.insert(ty) {
-            return;
-        }
-        let (_, ty_args) = ty.decompose_ty_app(self.db);
-        if !ty_args.is_empty() {
-            let owner =
-                Binder::bind(self.schema.owner(self.db), ty).instantiate(self.db, self.args);
-            let tuple = ty.is_tuple(self.db);
-            for (idx, arg) in ty_args.iter().enumerate() {
-                self.path.push(if tuple {
-                    LayoutOccurrenceStep::TupleElem(idx as u32)
-                } else {
-                    LayoutOccurrenceStep::GenericArg(idx as u32)
-                });
-                self.collect(*arg, Some(owner));
-                self.path.pop();
-            }
-        }
-        self.visiting.remove(&ty);
-    }
-}
-
-pub(crate) fn layout_param_root_uses<'db>(
-    db: &'db dyn HirAnalysisDb,
-    template: TyId<'db>,
-    schema: ParamSchemaId<'db>,
-    params: &[TyId<'db>],
-    args: &[TyId<'db>],
-    root_params: &FxHashSet<usize>,
-    occurrence: LayoutOccurrencePath,
-) -> Vec<LayoutRootUse<'db>> {
-    let concrete_roots = params
-        .iter()
-        .zip(args)
-        .enumerate()
-        .filter_map(|(idx, (param, value))| {
-            (root_params.contains(&idx) && structural_hole_id(db, *value).is_none())
-                .then_some((*param, (idx, *value)))
-        })
-        .collect::<FxHashMap<_, _>>();
-    if concrete_roots.is_empty() {
-        return Vec::new();
-    }
-    let mut collector = LayoutParamRootUseCollector {
-        db,
-        concrete_roots,
-        schema,
-        args,
-        occurrence,
-        path: Vec::new(),
-        visiting: FxHashSet::default(),
-        uses: Vec::new(),
-    };
-    collector.collect(template, None);
-    collector.uses
 }
 
 pub(crate) fn lower_generic_arg_list<'db>(
@@ -3736,46 +833,37 @@ pub(crate) fn lower_generic_arg_list<'db>(
     args: GenericArgListId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    hole_site: LayoutHoleArgSite<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> Vec<TyId<'db>> {
     args.data(db)
         .iter()
-        .enumerate()
-        .map(|(arg_idx, arg)| match arg {
+        .map(|arg| match arg {
             // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
             // even when `String` expects a const generic arg, so a path is lowered as the
             // constant it names, if it names one.
-            GenericArg::Type(ty_arg) => match ty_arg.ty.to_opt().map(|ty| ty.data(db)) {
-                Some(HirTyKind::Path(path)) => lower_path_impl(
+            GenericArg::Type(ty_arg) => match ty_arg.ty.to_opt().map(|ty| (ty, ty.data(db))) {
+                Some((_, HirTyKind::Path(path))) => lower_path_impl(
                     db,
                     scope,
                     *path,
                     assumptions,
                     TypePosition::GenericArg,
-                    minter,
+                    lowering_cx,
                 ),
-                _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, minter),
-            },
-            GenericArg::Const(const_arg) => match const_arg.value {
-                ConstGenericArgValue::Expr(body) => {
-                    let const_ty = lower_opt_const_body(db, body, scope, assumptions, minter);
-                    TyId::const_ty(db, const_ty)
+                // A tuple whose parts carry modes or name a shape is a
+                // parameter list, a shape: `Fn<(own A, B)>`.
+                Some((ty, HirTyKind::Tuple(_)))
+                    if let Some(list) = lower_shape_list(db, ty, scope, assumptions) =>
+                {
+                    list
                 }
-                ConstGenericArgValue::Hole => TyId::const_ty(
-                    db,
-                    ConstTyId::structural_hole(
-                        db,
-                        TyId::invalid(db, InvalidCause::Other),
-                        StructuralHoleOrigin::ExplicitWildcard {
-                            site: hole_site,
-                            arg_idx,
-                        },
-                        LayoutIntroSite::lowering(hole_site, arg_idx),
-                        minter.holes().mint(db),
-                    ),
-                ),
+                _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, lowering_cx),
             },
+            GenericArg::Mode(_) => TyId::invalid(db, InvalidCause::ModeArgNotShape),
+            GenericArg::Const(const_arg) => TyId::const_ty(
+                db,
+                lower_opt_const_body(db, const_arg.value, scope, assumptions, lowering_cx),
+            ),
 
             GenericArg::AssocType(_assoc_type_arg) => {
                 // TODO: ?
@@ -3788,36 +876,33 @@ pub(crate) fn lower_generic_arg_list<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct GenericParamTypeSet<'db> {
-    #[return_ref]
     pub(crate) params_precursor: Vec<TyParamPrecursor<'db>>,
+    #[returns(copy)]
     pub(crate) scope: ScopeId<'db>,
+    #[returns(copy)]
     offset_to_explicit: usize,
+    #[returns(copy)]
     pub(crate) basis: ParamBasis,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ParamBasis {
     Source,
     Full,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SourceParamIndex(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct LoweredSlot(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ParamKey<'db> {
     TraitSelf(crate::hir_def::Trait<'db>),
     Source {
         owner: GenericParamOwner<'db>,
         index: SourceParamIndex,
-    },
-    CallableLayout {
-        func: crate::hir_def::Func<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-        ordinal: usize,
     },
     EffectProvider {
         func: crate::hir_def::Func<'db>,
@@ -3830,9 +915,10 @@ pub enum ParamKey<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ParamSchemaId<'db> {
+    #[returns(copy)]
     pub owner: GenericParamOwner<'db>,
+    #[returns(copy)]
     pub basis: ParamBasis,
-    #[return_ref]
     pub keys: Vec<ParamKey<'db>>,
 }
 
@@ -3953,6 +1039,19 @@ impl<'db> ParamSchemaId<'db> {
             )
         })
     }
+
+    /// The source parameter whose allowed default dependencies are the
+    /// leading `len` slots; the inverse of `allowed_default_dependencies`.
+    pub(crate) fn default_dependency_index(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        len: usize,
+    ) -> Option<SourceParamIndex> {
+        let set = self.param_set(db);
+        len.checked_sub(set.offset_to_explicit_params_position(db))
+            .filter(|&index| index < set.explicit_param_count(db))
+            .map(SourceParamIndex)
+    }
 }
 
 /// The leading `len` slots of one parameter schema: the full schema, a
@@ -3960,7 +1059,9 @@ impl<'db> ParamSchemaId<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ParamDomainId<'db> {
+    #[returns(copy)]
     pub schema: ParamSchemaId<'db>,
+    #[returns(copy)]
     pub len: usize,
 }
 
@@ -4073,7 +1174,7 @@ impl<'db> PartialSubst<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct CompleteSubst<'db> {
     domain: ParamDomainId<'db>,
     values: Vec<TyId<'db>>,
@@ -4168,7 +1269,7 @@ impl<'db> CompleteSubst<'db> {
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn param_schema<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -4196,21 +1297,6 @@ pub fn param_schema<'db>(
 
     if let (GenericParamOwner::Func(func), ParamBasis::Full) = (owner, basis) {
         let plan = func_implicit_param_plan(db, func);
-        for (origin, bindings) in &plan.bindings_by_origin {
-            for (ordinal, (_, arg)) in bindings.iter().enumerate() {
-                let TyData::ConstTy(const_ty) = arg.data(db) else {
-                    unreachable!("layout plan argument is not a const parameter");
-                };
-                let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
-                    unreachable!("layout plan argument is not a const parameter");
-                };
-                keys[param.idx] = Some(ParamKey::CallableLayout {
-                    func,
-                    origin: *origin,
-                    ordinal,
-                });
-            }
-        }
         for (effect_idx, slot) in plan.provider_param_index_by_effect.iter().enumerate() {
             if let Some(slot) = slot {
                 keys[*slot] = Some(ParamKey::EffectProvider { func, effect_idx });
@@ -4256,47 +1342,6 @@ impl<'db> GenericParamTypeSet<'db> {
             .iter()
             .rposition(|param| param.default_hir_ty.is_none() && param.default_hir_const.is_none())
             .map_or(0, |idx| idx + 1)
-    }
-
-    pub(crate) fn explicit_const_param_default_hole_ty(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        explicit_idx: usize,
-    ) -> Option<TyId<'db>> {
-        let idx = self.offset_to_explicit(db) + explicit_idx;
-        let param = self.params_precursor(db).get(idx)?;
-        matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole))
-            .then(|| param.declared_const_ty(db, self.scope(db)))
-            .flatten()
-    }
-
-    pub(crate) fn const_param_default_is_layout_hole(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        param_idx: usize,
-    ) -> bool {
-        self.params_precursor(db)
-            .get(param_idx)
-            .is_some_and(|param| {
-                matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole))
-            })
-    }
-
-    pub(crate) fn const_param_default_is_slot_layout_hole(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        param_idx: usize,
-    ) -> bool {
-        self.params_precursor(db)
-            .get(param_idx)
-            .filter(|param| matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole)))
-            .and_then(|param| param.declared_const_ty(db, self.scope(db)))
-            .is_some_and(|ty| {
-                matches!(
-                    ty.data(db),
-                    TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
-                )
-            })
     }
 
     pub(crate) fn empty(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
@@ -4455,22 +1500,21 @@ impl<'db> GenericParamCollector<'db> {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TyParamPrecursor<'db> {
     name: Partial<IdentId<'db>>,
     kind: Option<Kind>,
     variant: Variant<'db>,
     default_hir_ty: Option<HirTyId<'db>>, // Only used for type params
-    default_hir_const: Option<ConstGenericArgValue<'db>>, // Only used for const params
+    default_hir_const: Option<Body<'db>>, // Only used for const params
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum Variant<'db> {
     TraitSelf,
     Normal,
     Const(Option<HirTyId<'db>>),
     EffectProvider,
-    ImplicitConst(TyId<'db>),
 }
 
 impl<'db> TyParamPrecursor<'db> {
@@ -4521,11 +1565,6 @@ impl<'db> TyParamPrecursor<'db> {
                 TyId::new(db, TyData::ConstTy(const_ty))
             }
             Variant::Const(None) => TyId::invalid(db, InvalidCause::Other),
-            Variant::ImplicitConst(const_ty_ty) => {
-                let param = TyParam::implicit_param(name, lowered_idx, kind, scope);
-                let const_ty = ConstTyId::new(db, ConstTyData::TyParam(param, const_ty_ty));
-                TyId::new(db, TyData::ConstTy(const_ty))
-            }
         }
     }
 
@@ -4546,7 +1585,7 @@ impl<'db> TyParamPrecursor<'db> {
     fn const_ty_param(
         name: Partial<IdentId<'db>>,
         ty: Option<HirTyId<'db>>,
-        default: Option<ConstGenericArgValue<'db>>,
+        default: Option<Body<'db>>,
     ) -> Self {
         Self {
             name,
@@ -4562,20 +1601,6 @@ impl<'db> TyParamPrecursor<'db> {
             name,
             kind: Some(Kind::Star),
             variant: Variant::EffectProvider,
-            default_hir_ty: None,
-            default_hir_const: None,
-        }
-    }
-
-    fn implicit_const_param(
-        db: &'db dyn HirAnalysisDb,
-        name: Partial<IdentId<'db>>,
-        ty: TyId<'db>,
-    ) -> Self {
-        Self {
-            name,
-            kind: Some(ty.kind(db).clone()),
-            variant: Variant::ImplicitConst(ty),
             default_hir_ty: None,
             default_hir_const: None,
         }
@@ -4597,7 +1622,7 @@ impl<'db> TyParamPrecursor<'db> {
     }
 
     fn is_const_ty(&self) -> bool {
-        matches!(self.variant, Variant::Const(_) | Variant::ImplicitConst(_))
+        matches!(self.variant, Variant::Const(_))
     }
 
     fn declared_const_ty(
@@ -4616,6 +1641,7 @@ impl<'db> TyParamPrecursor<'db> {
 pub(super) fn lower_kind(kind: &HirKindBound) -> Kind {
     match kind {
         HirKindBound::Mono => Kind::Star,
+        HirKindBound::Shape => Kind::Shape,
         HirKindBound::Abs(lhs, rhs) => match (lhs, rhs) {
             (Partial::Present(lhs), Partial::Present(rhs)) => {
                 Kind::Abs(Box::new((lower_kind(lhs), lower_kind(rhs))))
@@ -4633,7 +1659,7 @@ pub(super) fn lower_kind(kind: &HirKindBound) -> Kind {
 
 /// Helper for extracting a lowered kind from a slice of HIR `TypeBound`s.
 /// Returns the first kind bound if present.
-pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kind> {
+pub(crate) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kind> {
     for bound in bounds {
         if let TypeBound::Kind(Partial::Present(k)) = bound {
             return Some(lower_kind(k));

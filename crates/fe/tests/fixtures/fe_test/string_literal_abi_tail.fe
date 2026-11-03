@@ -1,0 +1,12 @@
+use core::abi::{DynString, encode_single_root_alloc}
+use std::abi::Sol
+
+// A string literal's ABI tail is its big-endian length word, then its bytes.
+#[test]
+fn string_literal_tail_is_big_endian() {
+    let s: DynString = "hello"
+    let encoded = encode_single_root_alloc<Sol, DynString>(s)
+    assert(encoded.read_word(0) == 32)
+    assert(encoded.read_word(32) == 5)
+    assert(encoded.span().byte_at(64) == 0x68)
+}

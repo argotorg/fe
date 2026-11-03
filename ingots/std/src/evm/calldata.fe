@@ -1,7 +1,7 @@
-use core::abi::{AbiSize, ByteInput, Decode}
+use core::abi::{AbiSize, ByteSource, Decode}
 use core::Copy
 use core::num::IntDowncast
-use ingot::abi::Sol
+use ingot::abi::{ArrayView, Sol, decode_array_view_at}
 use ingot::abi::sol::{decode_input}
 use ingot::evm::ops::{calldataload, calldatacopy, calldatasize, revert_empty}
 
@@ -14,6 +14,7 @@ use ingot::evm::ops::{calldataload, calldatacopy, calldatasize, revert_empty}
 pub struct CallData { pub base: u256 }
 
 impl Copy for CallData {}
+impl Snapshot for CallData {}
 
 impl CallData {
     #[inline(always)]
@@ -30,16 +31,27 @@ impl CallData {
     pub fn decode<T>(self) -> T where T: Decode<Sol> + AbiSize {
         decode_input(self)
     }
+
+    /// Lazy view of the ABI `T[]` whose head word is at `head_pos` (relative
+    /// to `base`); offsets are resolved relative to `base`.
+    ///
+    /// With `CallData::with_base(4)`, `head_pos: k * 32` is the `k`-th
+    /// argument of an external call, which is how a `recv` arm with a raw
+    /// selector reads a `T[] calldata` argument without decoding all of it.
+    /// See `decode_array_view_at` for the validation performed.
+    pub fn array_view<T>(self, _ head_pos: u256) -> ArrayView<CallData, T> where T: AbiSize {
+        decode_array_view_at(self, base: 0, head_pos: head_pos)
+    }
 }
 
-impl ByteInput for CallData {
+impl ByteSource for CallData {
     #[inline(always)]
-    fn len(self) -> u256 {
+    fn size(self) -> u64 {
         let total = calldatasize()
         if self.base > total {
             0
         } else {
-            total - self.base
+            (total - self.base).downcast_truncate()
         }
     }
 
@@ -59,7 +71,7 @@ impl ByteInput for CallData {
         (word >> shift).downcast_truncate()
     }
 
-    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
         let input_len = self.len()
         if src_offset > input_len || len > input_len - src_offset {
             revert_empty()
@@ -70,7 +82,7 @@ impl ByteInput for CallData {
 
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn copy_to_memory_unchecked(self, dest: *u8, src_offset: u256, len: u256) {
+    unsafe fn copy_to_memory_unchecked(self, dest: *u8, src_offset: u256, len: u256) {
         calldatacopy(dest: dest, offset: self.base + src_offset, len: len)
     }
 }

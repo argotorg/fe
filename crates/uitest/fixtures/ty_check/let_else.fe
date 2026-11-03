@@ -1,0 +1,18 @@
+// A `let` whose pattern may not match needs an `else` block, and the block
+// must diverge.
+fn refutable(_ o: Option<u256>) -> u256 {
+    let Option::Some(x) = o
+    x
+}
+
+fn completes(_ o: Option<u256>) -> u256 {
+    let Option::Some(x) = o else {}
+    x
+}
+
+fn accepted(_ o: Option<u256>) -> u256 {
+    let Option::Some(x) = o else {
+        return 0
+    }
+    x
+}

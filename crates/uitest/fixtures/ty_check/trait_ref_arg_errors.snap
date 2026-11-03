@@ -1,0 +1,88 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_ref_arg_errors.fe
+---
+error[2-0002]: `Missing` is not found
+  ┌─ trait_ref_arg_errors.fe:8:18
+  │
+8 │ fn inline<T: Has<Missing>>() {}
+  │                  ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Nested` is not found
+  ┌─ trait_ref_arg_errors.fe:9:23
+  │
+9 │ fn nested<T: Has<Wrap<Nested>>>() {}
+  │                       ^^^^^^ `Nested` is not found
+
+error[2-0002]: `InClause` is not found
+   ┌─ trait_ref_arg_errors.fe:10:29
+   │
+10 │ fn clause<T>() where T: Has<InClause> {}
+   │                             ^^^^^^^^ `InClause` is not found
+
+error[2-0002]: `InSuper` is not found
+   ┌─ trait_ref_arg_errors.fe:11:18
+   │
+11 │ trait Super: Has<InSuper> {}
+   │                  ^^^^^^^ `InSuper` is not found
+
+error[2-0002]: `InAssocBound` is not found
+   ┌─ trait_ref_arg_errors.fe:12:30
+   │
+12 │ trait Assoc { type Item: Has<InAssocBound> }
+   │                              ^^^^^^^^^^^^ `InAssocBound` is not found
+
+error[2-0002]: `InHeader` is not found
+   ┌─ trait_ref_arg_errors.fe:13:10
+   │
+13 │ impl Has<InHeader> for X {}
+   │          ^^^^^^^^ `InHeader` is not found
+
+error[2-0002]: `InBinding` is not found
+   ┌─ trait_ref_arg_errors.fe:14:19
+   │
+14 │ impl Bound<Item = InBinding> for X { type Item = u8 }
+   │                   ^^^^^^^^^ `InBinding` is not found
+
+error[2-0011]: incorrect number of generic arguments for `Has`; expected 1, given 2
+   ┌─ trait_ref_arg_errors.fe:24:15
+   │
+24 │ fn surplus<T: Has<u8, [u8; true]>>() {}
+   │               ^^^ expected 1 arguments, but 2 were given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ trait_ref_arg_errors.fe:20:20
+   │
+20 │ fn mistyped<T: Has<[u8; true]>>() {}
+   │                    ^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ trait_ref_arg_errors.fe:21:38
+   │
+21 │ fn mistyped_clause<T>() where T: Has<[u8; true]> {}
+   │                                      ^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ trait_ref_arg_errors.fe:22:26
+   │
+22 │ trait MistypedSuper: Has<[u8; true]> {}
+   │                          ^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ trait_ref_arg_errors.fe:23:38
+   │
+23 │ trait MistypedAssoc { type Item: Has<[u8; true]> }
+   │                                      ^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ trait_ref_arg_errors.fe:24:23
+   │
+24 │ fn surplus<T: Has<u8, [u8; true]>>() {}
+   │                       ^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[5-0006]: associated type bindings are not allowed in an impl header
+   ┌─ trait_ref_arg_errors.fe:14:12
+   │
+14 │ impl Bound<Item = InBinding> for X { type Item = u8 }
+   │            ^^^^^^^^^^^^^^^^ define `Item` in the impl body with `type Item = ...`

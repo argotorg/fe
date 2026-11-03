@@ -1,147 +1,212 @@
-//! Solidity dynamic storage arrays (`T[]`) at a runtime slot.
+//! Solidity dynamic storage arrays (`T[]`).
 //!
 //! A `T[]` state variable at slot `s` stores its length in `s` and its
-//! elements from `keccak256(abi.encode(s))` on. Elements of 16 bytes or
-//! fewer are packed like Solidity: `32 / size` of them share a slot, element
-//! `i` sitting `(i % (32 / size)) * size` bytes above the low end of slot
-//! `keccak256(abi.encode(s)) + i / (32 / size)`. Wider elements take one
-//! slot each.
+//! elements from `keccak256(abi.encode(s))` on, like Solidity. An element of
+//! 16 bytes or fewer with a Solidity encoding (`SolPacked`) shares a slot:
+//! `32 / size` of them fit, element `i` sitting `(i % (32 / size)) * size`
+//! bytes above the low end of slot `keccak256(abi.encode(s)) + i / (32 / size)`.
+//! Any other element takes the slots its storage layout spans, one after
+//! another.
+//!
+//! `arr[i]` is the element's place: `arr[i] = v` writes only its bytes, and
+//! `arr[i].count += 1` one field. It reverts with `Panic(0x32)` if
+//! `i >= arr.len()`.
 //!
 //! ```fe
-//! // `address[] owners;` at slot 2
-//! let owners = SolArray<Address>::at(2)
+//! // `address[] owners;` at slot 2, which no contract field uses
+//! let owners = unsafe { mut SolArray<Address>::at(2) }
 //! owners.push(owner)
-//! let first = owners.get(0)
+//! let first = owners[0]
 //! ```
-use core::abi::{AbiSize, DynArray, Encode, store_word}
-use core::ops::WrappingAdd
+use core::abi::{AbiFrame, AbiSize, Encode, store_word}
+use ingot::abi::DynArray
+use core::iter::{Bidirectional, Collection}
+use core::marker::{Clearable, Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex, WrappingAdd, WrappingSub, clear_storage}
 use core::ptr
 use ingot::abi::{Sol, StaticAbiElement}
-use super::effects::{RawStorage, revert_error}
+use super::effects::{RawStorage, revert_error, storage_at}
 use super::panic::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY, PANIC_POP_EMPTY, Panic}
-use super::sol_slot::{SolPacked, SolSlot, data_slot, field_mask}
+use super::layout::{array_data_slot, element_location}
+use super::sol_slot::{SolPacked, field_mask}
 
 // Solidity refuses to `push` onto a storage array of 2**64 - 1 elements.
 const MAX_LEN: u256 = 0xffffffffffffffff
 
-pub struct SolArray<T> { pub slot: u256 }
+pub struct SolArray<T> {
+    len: u256,
+}
 
-impl<T> Copy for SolArray<T> {}
+/// How a `SolArray` packs its elements: Solidity's encoding (`SolPacked`), in
+/// lanes when it is at most 128 bits. Any other element is stored at whole
+/// slots, as its type's storage layout places it (`storage_slots<T>()`); for
+/// an element without an encoding the compiler implements `LaneCodec<T>`,
+/// with `BITS` 256 times those slots.
+pub struct SolLanes {}
 
-impl<T: SolPacked> SolArray<T> {
+impl<T: SolPacked> LaneCodec<T> for SolLanes {
+    const BITS: u256 = T::BITS
+
+    fn get(_ word: u256, offset: u256) -> T {
+        T::from_packed((word >> offset) & field_mask(T::BITS))
+    }
+
+    fn set(_ word: u256, offset: u256, value: own T) -> u256 {
+        let mask = field_mask(T::BITS) << offset
+        (word & !mask) | ((value.to_packed() << offset) & mask)
+    }
+}
+
+impl<T> Pinned for SolArray<T> {
+    type Space = Storage
+}
+
+unsafe impl<T> StateIndex for SolArray<T> {
+    type Key = u256
+    type Entry = T
+    type Lanes = SolLanes
+
+    fn locate(self, _ root: u256, _ index: u256) -> Location {
+        if index >= self.len {
+            revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
+        }
+        element_location<T>(array_data_slot(root), index, bits: <Self::Lanes as LaneCodec<T>>::BITS)
+    }
+}
+
+impl<T> SolArray<T> {
     /// The array whose length is stored at `slot`.
-    pub fn at(_ slot: u256) -> Self {
-        SolArray { slot }
+    ///
+    /// The caller must ensure that nothing the compiler allocates, such as a
+    /// contract field, uses `slot` or the elements' slots.
+    #[raw_place]
+    pub unsafe fn at(_ slot: u256) -> mut? Self uses (storage: mut? RawStorage) {
+        unsafe { storage_at(slot) }
     }
 
     /// Number of elements.
-    pub fn len(self) -> u256 uses (storage: RawStorage) {
-        storage.sload(self.slot)
-    }
-
-    /// The slot holding element `index`, without a bounds check. Wraps
-    /// modulo `2**256`, like Solidity's storage slot arithmetic.
-    pub fn element_slot(self, _ index: u256) -> u256 {
-        data_slot(self.slot).wrapping_add(index / self.per_slot())
-    }
-
-    /// The byte offset of element `index` within `element_slot(index)`:
-    /// always 0 for elements wider than 16 bytes.
-    pub fn element_offset(self, _ index: u256) -> u256 {
-        (index % self.per_slot()) * (T::BITS / 8)
+    pub fn len(self) -> u256 {
+        self.len
     }
 
     /// Element `index`. Reverts with `Panic(0x32)` if `index >= len()`.
-    pub fn get(self, _ index: u256) -> T uses (storage: RawStorage) {
-        self.check_index(index)
-        SolSlot::at(self.element_slot(index)).read(offset: self.element_offset(index))
+    pub fn get(self, _ index: u256) -> T
+        where T: Copy
+    {
+        self[index]
     }
 
     /// Replaces element `index`, keeping elements packed into the same slot.
     /// Reverts with `Panic(0x32)` if `index >= len()`.
-    pub fn set(self, index: u256, value: own T) uses (storage: mut RawStorage) {
-        self.check_index(index)
-        SolSlot::at(self.element_slot(index)).write(offset: self.element_offset(index), value)
+    pub fn set(mut self, index: u256, value: own T) {
+        self[index] = value
     }
 
     /// Appends `value`. Reverts with `Panic(0x41)` if the array already has
     /// 2**64 - 1 elements, like Solidity.
-    pub fn push(self, _ value: own T) uses (storage: mut RawStorage) {
-        let len = self.len()
+    pub fn push(mut self, _ value: own T) {
+        let len = self.len
         if len >= MAX_LEN {
             revert_error(Panic::from(PANIC_OUT_OF_MEMORY))
         }
-        SolSlot::at(self.element_slot(len)).write(offset: self.element_offset(len), value)
-        storage.sstore(slot: self.slot, value: len + 1)
+        self.len = len + 1
+        self[len] = value
     }
 
-    /// Removes the last element and zeroes its storage, like Solidity's
-    /// `pop()`. Reverts with `Panic(0x31)` if the array is empty.
-    pub fn pop(self) uses (storage: mut RawStorage) {
-        let len = self.len()
+    /// Removes the last element, zeroing its storage like Solidity's `pop()`.
+    /// Reverts with `Panic(0x31)` if the array is empty.
+    pub fn pop(mut self)
+        where T: Clearable
+    {
+        let len = self.len
         if len == 0 {
             revert_error(Panic::from(PANIC_POP_EMPTY))
         }
-        let last = len - 1
-        SolSlot::at(self.element_slot(last))
-            .write(
-                offset: self.element_offset(last),
-                value: T::from_packed(0),
-            )
-        storage.sstore(slot: self.slot, value: last)
+        clear_storage(mut self, len - 1)
+        self.len = len - 1
+    }
+
+    /// Zeroes the element at `i`, leaving the length: it reads as its type's
+    /// zero value. Reverts with `Panic(0x32)` if `i` is out of bounds.
+    pub fn clear_at(mut self, _ i: u256)
+        where T: Clearable
+    {
+        clear_storage(mut self, i)
+    }
+
+    /// Removes every element, zeroing their storage, so that growing the
+    /// array again exposes no old element. Costs a slot write per element,
+    /// and a read too for elements packed into shared slots.
+    pub fn clear(mut self)
+        where T: Clearable
+    {
+        let len = self.len
+        var i: u256 = 0
+        while i < len {
+            clear_storage(mut self, i)
+            i += 1
+        }
+        self.len = 0
     }
 
     /// All elements in index order, as an ABI `T[]` in memory, like
     /// Solidity's `return arr;` for a storage array.
     ///
-    /// Costs one `sload` per storage slot (packed elements share one) and
-    /// allocates `32 * (len() + 1)` bytes, so the gas grows with the length
-    /// without bound. Meant for view calls; a state-changing function calling
-    /// it can be made to run out of gas by growing the array.
+    /// Costs an `sload` per element and allocates `32 * (len() + 1)` bytes,
+    /// so the gas grows with the length without bound. Meant for view calls;
+    /// a state-changing function calling it can be made to run out of gas by
+    /// growing the array.
     pub fn to_dyn_array(self) -> DynArray<T>
-    uses (storage: RawStorage) where T: StaticAbiElement + Encode<Sol> + AbiSize
+        where T: SolPacked + Copy + StaticAbiElement + Encode<Sol> + AbiSize
     {
-        read_dyn_array(
-            first_slot: data_slot(self.slot),
-            len: self.len(),
-            per_slot: self.per_slot(),
-        )
-    }
-
-    fn per_slot(self) -> u256 {
-        32 / (T::BITS / 8)
-    }
-
-    fn check_index(self, _ index: u256) uses (storage: RawStorage) {
-        if index >= self.len() {
-            revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
+        let len = self.len
+        let size = 32 + len * 32
+        let data = ptr::alloc_bytes(size.downcast_saturate())
+        unsafe {
+            ptr::zero_bytes(data, size.downcast_unchecked())
+            store_word(ptr: data, value: len)
         }
+        var i: u256 = 0
+        while i < len {
+            let value = self[i]
+            // The element's zeroed word, which only this encoding writes.
+            value.encode(unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, (32 + i * 32).downcast_unchecked()), len: 32) })
+            i += 1
+        }
+        unsafe { DynArray::from_abi_tail(data, len: len.downcast_unchecked(), size) }
     }
 }
 
-/// Reads `len` elements laid out from `first_slot` on with `per_slot` of them
-/// packed into each slot (element `i` at byte `(i % per_slot) * size` of
-/// slot `first_slot + i / per_slot`) into an ABI `T[]`, loading each slot
-/// once.
-pub(ingot) fn read_dyn_array<T>(first_slot: u256, len: u256, per_slot: u256) -> DynArray<T>
-uses (storage: RawStorage)
-where T: SolPacked + StaticAbiElement + Encode<Sol> + AbiSize
-{
-    let size = 32 + len * 32
-    let data = ptr::alloc_bytes(size)
-    store_word(ptr: data, value: len)
-    let bits = T::BITS
-    let mask = field_mask(bits)
-    let mut word: u256 = 0
-    let mut i: u256 = 0
-    while i < len {
-        let lane = i % per_slot
-        if lane == 0 {
-            word = storage.sload(first_slot.wrapping_add(i / per_slot))
-        }
-        let value = T::from_packed((word >> (lane * bits)) & mask)
-        value.encode(ptr::offset_bytes(data, 32 + i * 32))
-        i += 1
+impl<T> Collection for SolArray<T> {
+    type Cursor = u256
+    type Item = T
+
+    // Index cursors wrap, as core's do: the position before index 0 and the
+    // last position of an empty array are both `u256::MAX`, so `c < len`
+    // tests a position in either direction.
+    fn start(self) -> u256 {
+        0
     }
-    DynArray::from_abi_tail(data, len, size)
+
+    fn has(self, _ c: u256) -> bool {
+        c < self.len
+    }
+
+    fn next(self, _ c: u256) -> u256 {
+        c.wrapping_add(1)
+    }
+
+    fn at(mut? self, _ c: u256) -> mut? T {
+        mut? self[c]
+    }
+}
+
+impl<T> Bidirectional for SolArray<T> {
+    fn last(self) -> u256 {
+        self.len.wrapping_sub(1)
+    }
+
+    fn prev(self, _ c: u256) -> u256 {
+        c.wrapping_sub(1)
+    }
 }

@@ -799,7 +799,7 @@ impl RuntimeInstance {
     /// Gives the deployed contract the specified balance (in wei).
     ///
     /// This is useful for tests that need the contract to send ETH
-    /// via internal calls (e.g. `evm.call(value: 1, ...)`).
+    /// via internal calls (e.g. `evm.call(value: wei(1), ...)`).
     pub fn fund_contract(&mut self, amount: U256) {
         let address = self.address;
         self.fund_account(address, amount);
@@ -1505,7 +1505,7 @@ pub contract CanonicalHarness {
         }
 
         ReadAddress { value } -> u256 {
-            value.inner
+            value.word()
         }
     }
 }
@@ -1526,6 +1526,7 @@ pub contract CanonicalHarness {
 use std::abi::sol
 use std::abi::sol::{decode_bytes_view, decode_bytes_view_at, decode_string_view}
 use core::ptr
+use core::abi::store_word
 use std::evm::{CallData, Evm}
 
 const BYTES_LEN_SELECTOR: u32 = sol("bytesLen(bytes)")
@@ -1545,14 +1546,14 @@ fn runtime() uses (evm: mut Evm) {
     if sel == BYTES_LEN_SELECTOR {
         let view = decode_bytes_view(CallData::with_base(4))
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr(), value: view.len())
+        unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
 
     if sel == SECOND_BYTES_LEN_SELECTOR {
         let view = decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 32)
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr(), value: view.len())
+        unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
 
@@ -1560,14 +1561,14 @@ fn runtime() uses (evm: mut Evm) {
         let view = decode_string_view(CallData::with_base(4))
         let first: u256 = if view.is_empty() { 0 } else { view.byte_at(0) as u256 }
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr(), value: first)
+        unsafe { store_word(ptr: out.ptr(), value: first) }
         evm.return_data(data: out.span())
     }
 
     if sel == STRING_LEN_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr(), value: view.len())
+        unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
 
@@ -1598,7 +1599,7 @@ const CLEAR_SELECTOR: u32 = sol("clear()")
 const EMIT_SELECTOR: u32 = sol("emit(bytes)")
 const TOPIC0: u256 = 0x1234
 
-type Blobs = StorageBytes<u256, 0, 1>
+type Blobs = StorageBytes<u256>
 
 #[contract_init(StorageBytesHarness)]
 fn init() uses (evm: mut Evm) {
@@ -1609,7 +1610,8 @@ fn init() uses (evm: mut Evm) {
 fn runtime() uses (evm: mut Evm) {
     let sel = evm.selector()
     with (RawStorage = evm) {
-        let mut blobs: Blobs = Blobs::new()
+        // The blobs' maps take slots 0 and 1.
+        let blobs = unsafe { mut Blobs::at(0) }
 
         if sel == SET_SELECTOR {
             let view = decode_bytes_view(CallData::with_base(4))
@@ -1666,7 +1668,7 @@ msg EmitThenTextMsg {
 pub contract EmitThenText {
     recv EmitThenTextMsg {
         EmitAndReturn { data } -> Text {
-            emit_bytes_event_view(topic0: TOPIC0, view: data.view())
+            emit_bytes_event_view(topic0: TOPIC0, view: data.payload_span())
             "emit-and-return-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
         }
     }
@@ -1726,7 +1728,8 @@ pub contract RawStaticTarget {
         r#"
 use std::abi::sol
 use core::ptr
-use std::evm::{Evm, Address, Ctx, RawMem, staticcall_decode}
+use core::abi::store_word
+use std::evm::{Address, Call, Ctx, staticcall_decode}
 
 const WORD_SELECTOR: u32 = sol("word()")
 const FLAG_SELECTOR: u32 = sol("flag()")
@@ -1741,15 +1744,15 @@ msg RawStaticCallerMsg {
 
 pub contract RawStaticCaller {
     recv RawStaticCallerMsg {
-        CallWord { target } -> u256 uses (evm: mut Evm) {
+        CallWord { target } -> u256 uses (ctx: Ctx, call: Call) {
             let args = ptr::MemBuffer::alloc(4)
-            evm.mstore(addr: args.ptr(), value: (WORD_SELECTOR as u256) << 224)
-            staticcall_decode(addr: target, gas: evm.gas(), args: args.span())
+            unsafe { store_word(ptr: args.ptr(), value: (WORD_SELECTOR as u256) << 224) }
+            staticcall_decode(addr: target, gas: ctx.gas(), args: args.span())
         }
-        CallFlag { target } -> bool uses (evm: mut Evm) {
+        CallFlag { target } -> bool uses (ctx: Ctx, call: Call) {
             let args = ptr::MemBuffer::alloc(4)
-            evm.mstore(addr: args.ptr(), value: (FLAG_SELECTOR as u256) << 224)
-            staticcall_decode(addr: target, gas: evm.gas(), args: args.span())
+            unsafe { store_word(ptr: args.ptr(), value: (FLAG_SELECTOR as u256) << 224) }
+            staticcall_decode(addr: target, gas: ctx.gas(), args: args.span())
         }
     }
 }
@@ -1771,6 +1774,7 @@ pub contract RawStaticCaller {
         r#"
 use std::abi::sol
 use core::ptr
+use core::abi::store_word
 use std::evm::Evm
 
 const FLAG_SELECTOR: u32 = sol("flag()")
@@ -1784,7 +1788,7 @@ fn init() uses (evm: mut Evm) {
 fn runtime() uses (evm: mut Evm) {
     if evm.selector() == FLAG_SELECTOR {
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr(), value: 2)
+        unsafe { store_word(ptr: out.ptr(), value: 2) }
         evm.return_data(data: out.span())
     }
 
@@ -1927,7 +1931,7 @@ msg ViewMsg {
 pub contract StringViewHead {
     recv ViewMsg {
         Head { text } -> u8 {
-            text.view().byte_at(0)
+            text.payload_span().byte_at(0)
         }
     }
 }
@@ -2042,7 +2046,7 @@ pub contract NestedTupleInit {
     mut store: PairStore
 
     init(text: Text, count: u64) uses (mut store) {
-        store.text_len = text.len()
+        store.text_len = text.len() as u256
         store.first_byte = if text.is_empty() { 0 } else { text.as_bytes().byte_at(0) }
         store.count = count
     }
@@ -2076,7 +2080,7 @@ msg TupleHeadGuardMsg {
 pub contract TupleHeadGuard {
     recv TupleHeadGuardMsg {
         Read { pair } -> u256 {
-            (pair.0 as u256) + pair.1.len()
+            (pair.0 as u256) + pair.1.len() as u256
         }
     }
 }
@@ -2243,7 +2247,7 @@ pub contract DynamicChild {
     mut store: DynamicStore
 
     init(text: Text, count: u64) uses (mut store) {
-        store.text_len = text.len()
+        store.text_len = text.len() as u256
         store.first_byte = if text.is_empty() { 0 } else { text.as_bytes().byte_at(0) }
         store.count = count
     }
@@ -2266,11 +2270,11 @@ pub contract DynamicChild {
 pub contract Create2Parent uses (create: mut Create) {
     recv ParentMsg {
         DeployStatic -> u256 uses (mut create) {
-            create.create2<StaticChild>(value: 0, args: (7,), salt: 1).inner
+            create.create2<StaticChild>(value: Wei::zero(), args: (7,), salt: 1).word()
         }
 
         DeployDynamic { text, count } -> u256 uses (mut create) {
-            create.create2<DynamicChild>(value: 0, args: (text, count), salt: 2).inner
+            create.create2<DynamicChild>(value: Wei::zero(), args: (text, count), salt: 2).word()
         }
     }
 }

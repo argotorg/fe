@@ -1,0 +1,37 @@
+// Diagnostics suggest the exact clause: the `uses` entry a handler needs,
+// its `mut`, and a callee's own effect entry, apart from a local `with`.
+use std::evm::{RawStorage, StorageMap}
+
+msg Msg {
+    #[selector = 1]
+    Set { v: u256 },
+    #[selector = 2]
+    Bump,
+    #[selector = 3]
+    Read -> u256,
+}
+
+pub contract C {
+    mut total: u256,
+    mut balances: StorageMap<u256, u256>,
+
+    recv Msg {
+        Set { v } uses (total) {
+            total = v
+        }
+        Bump uses (balances) {
+            balances[1] += 1
+        }
+        Read -> u256 {
+            total
+        }
+    }
+}
+
+fn raw_read() -> u256 {
+    unsafe { raw() }
+}
+
+unsafe fn raw() -> u256 uses (storage: RawStorage) {
+    unsafe { storage.sload(0) }
+}

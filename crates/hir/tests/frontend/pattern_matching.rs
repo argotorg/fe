@@ -125,10 +125,6 @@ fn misc_pattern_tests(fixture: Fixture<&str>) {
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/pattern_matching",
-    glob: "edge_cases/*.fe"
-)]
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/test_files/pattern_matching",
     glob: "stress_tests/*.fe"
 )]
 fn stress_pattern_tests(fixture: Fixture<&str>) {

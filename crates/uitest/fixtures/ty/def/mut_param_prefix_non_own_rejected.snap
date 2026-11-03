@@ -4,38 +4,42 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/mut_param_prefix_non_own_rejected.fe
 ---
-error[3-0031]: invalid `mut` parameter syntax
-  ┌─ mut_param_prefix_non_own_rejected.fe:3:14
+error[1-0001]: a mutable owned parameter is written `var x: own T`; `x: mut T` is a mutable borrow
+  ┌─ mut_param_prefix_non_own_rejected.fe:3:18
   │
 3 │ fn bad_plain(mut x: Foo) {}
-  │              ^^^ `mut x: T` is only allowed when `T` is `own ...`
-  │
-  = use `x: mut T` for mutable borrow parameters
-  = or use `mut x: own T` for mutable owned parameters
+  │                  ^ a mutable owned parameter is written `var x: own T`; `x: mut T` is a mutable borrow
 
-error[3-0031]: invalid `mut` parameter syntax
-  ┌─ mut_param_prefix_non_own_rejected.fe:5:12
+error[1-0001]: a mutable owned parameter is written `var x: own T`; `x: mut T` is a mutable borrow
+  ┌─ mut_param_prefix_non_own_rejected.fe:5:16
   │
 5 │ fn bad_ref(mut x: ref Foo) {}
-  │            ^^^ `mut x: T` is only allowed when `T` is `own ...`
-  │
-  = use `x: mut T` for mutable borrow parameters
-  = or use `mut x: own T` for mutable owned parameters
+  │                ^ a mutable owned parameter is written `var x: own T`; `x: mut T` is a mutable borrow
 
-error[3-0031]: invalid `mut` parameter syntax
-  ┌─ mut_param_prefix_non_own_rejected.fe:7:12
+error[1-0001]: a mutable owned parameter is written `var x: own T`; `x: mut T` is a mutable borrow
+  ┌─ mut_param_prefix_non_own_rejected.fe:7:16
   │
 7 │ fn bad_mut(mut x: mut Foo) {}
-  │            ^^^ `mut x: T` is only allowed when `T` is `own ...`
-  │
-  = use `x: mut T` for mutable borrow parameters
-  = or use `mut x: own T` for mutable owned parameters
+  │                ^ a mutable owned parameter is written `var x: own T`; `x: mut T` is a mutable borrow
 
-error[3-0031]: invalid `mut` parameter syntax
-  ┌─ mut_param_prefix_non_own_rejected.fe:9:19
+error[1-0001]: a mutable owned parameter is written `var x: own T`; `x: mut T` is a mutable borrow
+  ┌─ mut_param_prefix_non_own_rejected.fe:9:23
   │
 9 │ fn bad_underscore(mut _: Foo) {}
-  │                   ^^^ `mut x: T` is only allowed when `T` is `own ...`
-  │
-  = use `x: mut T` for mutable borrow parameters
-  = or use `mut x: own T` for mutable owned parameters
+  │                       ^ a mutable owned parameter is written `var x: own T`; `x: mut T` is a mutable borrow
+
+error[3-0031]: `var` makes an owned parameter mutable
+   ┌─ mut_param_prefix_non_own_rejected.fe:11:18
+   │
+11 │ fn bad_var_plain(var x: Foo) {}
+   │                  ^^^ `var x: T` is only allowed when `T` is `own ...`
+   │
+   = use `x: mut T` for a mutable borrow, or `var x: own T` for a mutable owned parameter
+
+error[3-0031]: `var` makes an owned parameter mutable
+   ┌─ mut_param_prefix_non_own_rejected.fe:13:16
+   │
+13 │ fn bad_var_mut(var x: mut Foo) {}
+   │                ^^^ `var x: T` is only allowed when `T` is `own ...`
+   │
+   = use `x: mut T` for a mutable borrow, or `var x: own T` for a mutable owned parameter

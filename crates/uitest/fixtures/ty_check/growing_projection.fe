@@ -1,0 +1,62 @@
+// Each step defines `Out` through a projection on a larger type, so resolving
+// it never repeats and never finishes.
+trait Tr {
+    type Out
+}
+
+struct W<T> {
+    t: T,
+}
+
+impl<T> Tr for W<T> {
+    type Out = <W<(T, T)> as Tr>::Out
+}
+
+struct L<T> {
+    t: T,
+}
+
+impl<T> Tr for L<T> {
+    type Out = <L<(T,)> as Tr>::Out
+}
+
+fn doubling(x: <W<u8> as Tr>::Out) {}
+
+fn linear() -> <L<u8> as Tr>::Out {
+    1
+}
+
+fn annotated() {
+    let _: <W<u8> as Tr>::Out = true
+}
+
+// Each step is small, but a call instantiates one projection per wrapper,
+// nested more deeply than the limit allows. The call is reported, not
+// accepted as any type.
+trait Nest {
+    type Out
+}
+
+struct N<T> {
+    t: T,
+}
+
+impl<T: Nest> Nest for N<T> {
+    type Out = T::Out
+}
+
+impl Nest for u8 {
+    type Out = u8
+}
+
+fn get<T: Nest>() -> T::Out {
+    get<T>()
+}
+
+fn too_deep() -> bool {
+    get<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>()
+}
+
+fn shallow() -> u8 {
+    get<N<N<N<u8>>>>()
+}

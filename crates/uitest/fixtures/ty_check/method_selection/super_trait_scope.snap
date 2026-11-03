@@ -1,0 +1,24 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/method_selection/super_trait_scope.fe
+---
+error[8-0026]: multiple trait candidates found
+   ┌─ super_trait_scope.fe:68:36
+   │
+68 │     fn width(_ x: u8) -> usize { x.width() }
+   │                                    ^^^^^
+   │                                    │
+   │                                    `width` is ambiguous
+   │                                    candidate: `Base::width`
+   │                                    candidate: `Rival::width`
+
+error[8-0026]: multiple trait candidates found
+   ┌─ super_trait_scope.fe:76:37
+   │
+76 │     fn width(_ x: u16) -> usize { x.width() }
+   │                                     ^^^^^
+   │                                     │
+   │                                     `width` is ambiguous
+   │                                     candidate: `Parent::width`
+   │                                     candidate: `Rival::width`

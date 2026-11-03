@@ -1,7 +1,8 @@
 use core::ptr
+use core::abi::store_word
 use std::evm::{Evm, StorageBytes}
 
-type Blobs = StorageBytes<u256, 0, 1>
+type Blobs = StorageBytes<u256>
 
 msg BlobMsg {
     #[selector = 0x01]
@@ -15,7 +16,7 @@ pub contract Blob {
 
     recv BlobMsg {
         Set { data } uses (mut blobs) {
-            blobs.store_view(key: 0, view: data.view())
+            blobs.store_view(key: 0, view: data.payload_span())
         }
 
         Get -> Bytes uses (blobs) {
@@ -29,15 +30,17 @@ uses (evm: mut Evm)
 {
     let payload_len: u256 = 32
     let payload_size: u256 = 64
-    let data_ptr = ptr::alloc_bytes(payload_size)
+    let data_ptr = ptr::alloc_bytes(payload_size.downcast_saturate())
 
-    evm.mstore(addr: data_ptr, value: payload_len)
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 32),
-        value: 0x1111111111111111111111111111111111111111111111111111111111111111,
-    )
+    unsafe { store_word(ptr: data_ptr, value: payload_len) }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 32),
+            value: 0x1111111111111111111111111111111111111111111111111111111111111111,
+        )
+    }
 
-    Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: payload_size)
+    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: payload_size) }
 }
 
 fn two_word_payload() -> Bytes
@@ -45,32 +48,36 @@ uses (evm: mut Evm)
 {
     let payload_len: u256 = 33
     let payload_size: u256 = 96
-    let data_ptr = ptr::alloc_bytes(payload_size)
+    let data_ptr = ptr::alloc_bytes(payload_size.downcast_saturate())
 
-    evm.mstore(addr: data_ptr, value: payload_len)
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 32),
-        value: 0x1111111111111111111111111111111111111111111111111111111111111111,
-    )
-    evm.mstore(
-        addr: ptr::offset_bytes(data_ptr, 64),
-        value: 0x2200000000000000000000000000000000000000000000000000000000000000,
-    )
+    unsafe { store_word(ptr: data_ptr, value: payload_len) }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 32),
+            value: 0x1111111111111111111111111111111111111111111111111111111111111111,
+        )
+    }
+    unsafe {
+        store_word(
+            ptr: ptr::offset_bytes(data_ptr, 64),
+            value: 0x2200000000000000000000000000000000000000000000000000000000000000,
+        )
+    }
 
-    Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: payload_size)
+    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: payload_size) }
 }
 
 #[test]
 fn test_storage_bytes_encode_return_one_word_control()
 uses (evm: mut Evm)
 {
-    let blob = evm.create2<Blob>(value: 0, args: (), salt: 0)
-    assert!(blob.inner != 0)
+    let blob = evm.create2<Blob>(value: Wei::zero(), args: (), salt: 0)
+    assert!(blob.word() != 0)
 
     let payload = one_word_payload()
-    evm.call(addr: blob, gas: 1000000, value: 0, message: BlobMsg::Set { data: payload })
+    evm.call(addr: blob, gas: 1000000, value: Wei::zero(), message: BlobMsg::Set { data: payload })
 
-    let returned: Bytes = evm.call(addr: blob, gas: 1000000, value: 0, message: BlobMsg::Get {})
+    let returned: Bytes = evm.call(addr: blob, gas: 1000000, value: Wei::zero(), message: BlobMsg::Get {})
     assert!(returned.len() == 32)
     assert!(returned.byte_at(0) == 0x11)
     assert!(returned.byte_at(31) == 0x11)
@@ -80,13 +87,13 @@ uses (evm: mut Evm)
 fn test_storage_bytes_encode_return_two_words_repro()
 uses (evm: mut Evm)
 {
-    let blob = evm.create2<Blob>(value: 0, args: (), salt: 0)
-    assert!(blob.inner != 0)
+    let blob = evm.create2<Blob>(value: Wei::zero(), args: (), salt: 0)
+    assert!(blob.word() != 0)
 
     let payload = two_word_payload()
-    evm.call(addr: blob, gas: 1000000, value: 0, message: BlobMsg::Set { data: payload })
+    evm.call(addr: blob, gas: 1000000, value: Wei::zero(), message: BlobMsg::Set { data: payload })
 
-    let returned: Bytes = evm.call(addr: blob, gas: 1000000, value: 0, message: BlobMsg::Get {})
+    let returned: Bytes = evm.call(addr: blob, gas: 1000000, value: Wei::zero(), message: BlobMsg::Get {})
     assert!(returned.len() == 33)
     assert!(returned.byte_at(0) == 0x11)
     assert!(returned.byte_at(31) == 0x11)

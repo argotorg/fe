@@ -35,11 +35,6 @@ enum E<const N: usize> {
     V([u8; { 10 / N }]),
 }
 
-struct WithHole<const N: usize, const M: usize = _> {
-    a: [u8; M],
-    b: [u8; { 10 / N }],
-}
-
 pub contract Direct {
     mut value: S<0>,
 }
@@ -66,8 +61,4 @@ pub contract ArrayOfArrays {
 
 pub contract Enum {
     mut value: E<0>,
-}
-
-pub contract Hole {
-    mut value: WithHole<0>,
 }

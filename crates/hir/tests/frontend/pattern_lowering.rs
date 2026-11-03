@@ -2,10 +2,9 @@ use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
         semantic::{
-            SExpr, SStmtKind, STerminatorKind, get_or_build_semantic_instance,
-            identity_semantic_instance_key,
+            SExpr, SStmtKind, STerminatorKind, SemanticInstance, identity_semantic_instance_key,
         },
-        ty::ty_check::{BodyOwner, LocalBinding, check_contract_recv_arm_body, check_func_body},
+        ty::ty_check::{BodyOwner, check_contract_recv_arm_body, check_func_body},
     },
     hir_def::ItemKind,
     test_db::HirAnalysisTestDb,
@@ -49,139 +48,29 @@ fn first_assignment_ty<'db>(
         })
         .expect("missing matching assignment")
 }
-
 #[test]
-fn option_mut_payload_extract_keeps_capability_carrier_type() {
+fn nested_wrapper_optional_projection_match_keeps_access_payload_type() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "pattern_lowering.fe".into(),
         r#"
-fn take(opt: Option<mut u256>) -> u256 {
-    match opt {
-        Option::Some(value) => value
-        Option::None => 0
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let func = find_func(&db, top_mod, "take");
-    let (diags, _) = check_func_body(&db, func).clone();
-    assert!(diags.is_empty(), "{diags:?}");
-
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-    );
-    let body = instance.body(&db);
-
-    assert_eq!(
-        first_assignment_ty(&db, body, |expr| matches!(
-            expr,
-            SExpr::ExtractEnumField { .. }
-        )),
-        "mut u256"
-    );
-}
-
-#[test]
-fn borrowed_record_projection_keeps_ref_carrier_type() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "pattern_lowering.fe".into(),
-        r#"
-struct Pair {
-    a: u256,
-}
-
-fn read(x: ref Pair) -> u256 {
-    match x {
-        Pair { a } => a
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let func = find_func(&db, top_mod, "read");
-    let (diags, _) = check_func_body(&db, func).clone();
-    assert!(diags.is_empty(), "{diags:?}");
-
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-    );
-    let body = instance.body(&db);
-
-    assert_eq!(
-        first_assignment_ty(&db, body, |expr| matches!(expr, SExpr::Field { .. })),
-        "ref u256"
-    );
-}
-
-#[test]
-fn default_view_binding_reads_the_parameter_place() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "pattern_lowering.fe".into(),
-        r#"
-struct Boxed {
-    value: u256,
-}
-
-fn read(boxed: Boxed) -> u256 {
-    let rebound = boxed
-    rebound.value
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let func = find_func(&db, top_mod, "read");
-    let (diags, _) = check_func_body(&db, func).clone();
-    assert!(diags.is_empty(), "{diags:?}");
-
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-    );
-    let body = instance.body(&db);
-    let (dst, place) = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.stmts)
-        .find_map(|stmt| match &stmt.kind {
-            SStmtKind::Assign {
-                dst,
-                expr: SExpr::ReadPlace { place },
-            } if place.path.is_empty() => Some((*dst, place)),
-            _ => None,
-        })
-        .expect("borrowed binding must read the parameter place");
-
-    assert_eq!(
-        body.locals[dst.index()].ty.pretty_print(&db).to_string(),
-        "ref Boxed"
-    );
-    assert!(matches!(
-        body.locals[place.local.index()].source,
-        Some(LocalBinding::Param { .. })
-    ));
-}
-
-#[test]
-fn nested_wrapper_mutex_match_keeps_capability_payload_type() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "pattern_lowering.fe".into(),
-        r#"
-use std::evm::Mutex
-
 msg Msg {
     #[selector = 1]
     Take -> u256,
 }
 
+struct Cell {
+    value: u256,
+}
+
+impl Cell {
+    fn try_get(mut self) -> Option<mut u256> {
+        Option::Some(mut self.value)
+    }
+}
+
 struct Wrapper {
-    inner: Mutex<u256>,
+    inner: Cell,
 }
 
 pub contract C {
@@ -189,7 +78,7 @@ pub contract C {
 
     recv Msg {
         Take -> u256 uses (mut wrapped) {
-            match wrapped.inner.try_lock() {
+            match wrapped.inner.try_get() {
                 Option::Some(value) => value
                 Option::None => 0
             }
@@ -213,7 +102,7 @@ pub contract C {
     let (diags, _) = check_contract_recv_arm_body(&db, contract, 0, 0).clone();
     assert!(diags.is_empty(), "{diags:?}");
 
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
         identity_semantic_instance_key(
             &db,
@@ -234,46 +123,6 @@ pub contract C {
         "mut u256"
     );
 }
-
-#[test]
-fn view_enum_destructuring_keeps_ref_payload_type() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "pattern_lowering.fe".into(),
-        r#"
-enum Maybe {
-    Some(u256),
-    None,
-}
-
-fn read(x: Maybe) -> u256 {
-    match x {
-        Maybe::Some(value) => 0
-        Maybe::None => 0
-    }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let func = find_func(&db, top_mod, "read");
-    let (diags, _) = check_func_body(&db, func).clone();
-    assert!(diags.is_empty(), "{diags:?}");
-
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-    );
-    let body = instance.body(&db);
-
-    assert_eq!(
-        first_assignment_ty(&db, body, |expr| matches!(
-            expr,
-            SExpr::ExtractEnumField { .. }
-        )),
-        "ref u256"
-    );
-}
-
 #[test]
 fn empty_enum_match_lowers_to_terminal_failure() {
     let mut db = HirAnalysisTestDb::default();
@@ -292,9 +141,9 @@ fn eliminate(value: Empty) -> u8 {
     let (diags, _) = check_func_body(&db, func).clone();
     assert!(diags.is_empty(), "{diags:?}");
 
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
     );
     let body = instance.body(&db);
 

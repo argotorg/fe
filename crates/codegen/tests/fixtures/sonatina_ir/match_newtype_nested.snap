@@ -11,7 +11,7 @@ type @layout_1 = {@layout_0};
 global private const @layout_0 $const_region_0 = {10};
 global private const @layout_1 $const_region_1 = {{10}};
 
-func private %f() -> i256 {
+func private %main() -> i256 {
     block0:
         jump block1;
 
@@ -19,9 +19,8 @@ func private %f() -> i256 {
         v1.constref<@layout_0> = const.ref $const_region_0;
         v2.constref<@layout_1> = const.ref $const_region_1;
         v3.constref<@layout_1> = const.ref $const_region_1;
-        v4.objref<@layout_1> = obj.alloc @layout_1;
-        obj.init.const v4 v3;
-        v5.@layout_1 = obj.load v4;
+        v4.constref<@layout_1> = const.ref $const_region_1;
+        v5.@layout_1 = const.load v4;
         v6.i256 = call %match_newtype_nested v5;
         return v6;
 }
@@ -31,7 +30,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i256 = call %f;
+        v0.i256 = call %main;
         evm_stop;
 }
 
@@ -43,22 +42,24 @@ func private %match_newtype_nested(v0.@layout_1) -> i256 {
         jump block3;
 
     block2:
-        v1.i256 = phi (0.i256 block5) (v6 block6);
-        return v1;
+        v2.i256 = phi (0.i256 block5) (v11 block6);
+        return v2;
 
     block3:
-        v4.@layout_0 = extract_value v0 0.i256;
+        v5.@layout_0 = extract_value v0 0.i256;
         jump block4;
 
     block4:
-        v6.i256 = extract_value v4 0.i256;
-        v7.i1 = eq v6 0.i256;
-        br v7 block5 block7;
+        v7.i256 = extract_value v5 0.i256;
+        v8.i1 = eq v7 0.i256;
+        br v8 block5 block7;
 
     block5:
         jump block2;
 
     block6:
+        v10.@layout_0 = extract_value v0 0.i256;
+        v11.i256 = extract_value v10 0.i256;
         jump block2;
 
     block7:

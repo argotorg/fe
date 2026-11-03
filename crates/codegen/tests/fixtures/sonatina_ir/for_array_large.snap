@@ -7,70 +7,71 @@ target = "evm-ethereum-osaka"
 
 global private const [i64; 10] $const_region_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-func private %for_array_large_sum() -> i64 {
+func inline(always) private %has(v0.constref<[i64; 10]>, v1.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i1 = lt v1 10.i256;
+        return v4;
+}
+
+func private %main() -> i64 {
     block0:
         jump block1;
 
     block1:
         v10.constref<[i64; 10]> = const.ref $const_region_0;
         v11.constref<[i64; 10]> = const.ref $const_region_0;
-        v14.i256 = call %len v11;
+        v13.i256 = call %start v11;
         jump block2;
 
     block2:
-        v36.i64 = phi (0.i64 block1) (v22 block8);
-        v15.i256 = phi (0.i256 block1) (v30 block8);
-        v17.i1 = lt v15 v14;
-        br v17 block3 block5;
+        v42.i64 = phi (0.i64 block1) (v34 block4);
+        v15.i256 = phi (v13 block1) (v21 block4);
+        v16.i1 = call %has v11 v15;
+        br v16 block3 block5;
 
     block3:
-        v20.i64 = call %get v11 v15;
-        (v22.i64, v23.i1) = uaddo v36 v20;
-        br v23 block6 block7;
+        jump block7;
 
     block4:
-        (v30.i256, v31.i1) = uaddo v15 1.i256;
-        br v31 block6 block8;
+        v21.i256 = call %next v11 v15;
+        jump block2;
 
     block5:
-        return v36;
+        return v42;
 
     block6:
+        v24.i64 = const.load v31;
+        jump block9;
+
+    block7:
+        v27.i1 = lt v15 10.i256;
+        v28.i1 = is_zero v27;
+        br v28 block10 block11;
+
+    block8:
+        (v34.i64, v35.i1) = uaddo v42 v24;
+        br v35 block12 block13;
+
+    block9:
+        jump block8;
+
+    block10:
+        evm_revert 0.i256 0.i256;
+
+    block11:
+        v31.constref<i64> = const.index v11 v15;
+        jump block6;
+
+    block12:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block7:
+    block13:
         jump block4;
-
-    block8:
-        jump block2;
-}
-
-func private %get(v0.constref<[i64; 10]>, v1.i256) -> i64 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i1 = lt v1 10.i256;
-        v5.i1 = is_zero v4;
-        br v5 block2 block3;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        v8.constref<i64> = const.index v0 v1;
-        v9.i64 = const.load v8;
-        return v9;
-}
-
-func private %len(v0.constref<[i64; 10]>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 10.i256;
 }
 
 func private %main_root() {
@@ -78,8 +79,34 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i64 = call %for_array_large_sum;
+        v0.i64 = call %main;
         evm_stop;
+}
+
+func inline(always) private %next(v0.constref<[i64; 10]>, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %wrapping_add v1 1.i256;
+        return v4;
+}
+
+func inline(always) private %start(v0.constref<[i64; 10]>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return 0.i256;
+}
+
+func private %wrapping_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = add v0 v1;
+        return v4;
 }
 
 

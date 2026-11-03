@@ -1,4 +1,4 @@
-use core::abi::{AbiSize, AbiSpan, AbiDecoder, ByteInput, Decode, Encode}
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, AbiSpan, ByteInput, Decode, Encode, load_word, store_word}
 use std::abi::{Sol, sol}
 use std::evm::Address
 pub struct Pair { pub a: Address, pub b: Address }
@@ -13,15 +13,15 @@ impl AbiSpan<Sol> for Pair {
     }
 }
 impl Decode<Sol> for Pair {
-    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self {
-        let a = <Address as Decode<Sol>>::decode_payload(mut d)
-        let b = <Address as Decode<Sol>>::decode_payload(mut d)
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let a = <Address as Decode<Sol>>::decode_payload(mut d, input)
+        let b = <Address as Decode<Sol>>::decode_payload(mut d, input)
         Self { a, b }
     }
 }
 impl Encode<Sol> for Pair {
-    fn encode(own self, _ ptr: *u8) {
-        <(Address, Address) as Encode<Sol>>::encode((self.a, self.b), ptr)
+    fn encode(own self, _ out: AbiFrame) {
+        <(Address, Address) as Encode<Sol>>::encode((self.a, self.b), out)
     }
 }
 msg PairMsg {
@@ -37,28 +37,28 @@ pub contract PairProbe {
 }
 
 use core::ptr::{self, MemBuffer}
-use std::evm::{Evm, RawMem, Call}
+use std::evm::{Evm, Call}
 fn check_pair(_ a: u256, _ b: u256, _ valid: bool) uses (evm: mut Evm) {
-    let receiver = evm.create2<PairProbe>(value: 0, args: (), salt: 0)
-    assert!(receiver.inner != 0)
+    let receiver = evm.create2<PairProbe>(value: Wei::zero(), args: (), salt: 0)
+    assert!(receiver.word() != 0)
     let data = MemBuffer::alloc(68)
-    evm.mstore(addr: data.ptr(), value: (0x11223344 as u256) << 224)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: a)
-    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 36), value: b)
-    let mut ret = MemBuffer::alloc(64)
+    unsafe { store_word(ptr: data.ptr(), value: (0x11223344 as u256) << 224) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: a) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: b) }
+    var ret = MemBuffer::alloc(64)
     let outcome = evm
         .raw_call(
             addr: receiver,
             gas: 1000000,
-            value: 0,
+            value: Wei::zero(),
             args: data.span(),
             ret: mut ret,
         )
     assert!(outcome.success() == valid)
     if valid {
         assert!(outcome.returndata_len() == 64)
-        assert!(evm.mload(ret.ptr()) == a)
-        assert!(evm.mload(ptr::offset_bytes(ret.ptr(), 32)) == b)
+        unsafe { assert!(load_word(ret.ptr()) == a) }
+        unsafe { assert!(load_word(ptr::offset_bytes(ret.ptr(), 32)) == b) }
     } else {
         assert!(outcome.returndata_len() == 0)
     }

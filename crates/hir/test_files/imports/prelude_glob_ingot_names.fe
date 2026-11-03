@@ -1,0 +1,9 @@
+// A glob import of modules named `core` and `std` doesn't hide the prelude.
+use foo::*
+mod foo {
+    pub mod core {}
+    pub mod std {}
+}
+fn f() -> Option<Address> {
+    Option::None
+}

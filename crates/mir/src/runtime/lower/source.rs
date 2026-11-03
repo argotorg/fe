@@ -1,18 +1,14 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        SLocal, SLocalId, SemanticLocalKind,
+        SLocal, SLocalId, SemanticInstance, SemanticLocalKind,
         normalized::{
             NDataPath, NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootKind,
             NStatementKind, NValueDefinition, NValueId,
         },
     },
-    ty::{
-        pattern_types::{PatternProjectionStep, project_pattern_child_source_ty},
-        ty_def::TyId,
-    },
+    ty::ty_def::TyId,
 };
-use hir::hir_def::EnumVariant;
 
 use crate::{
     db::MirDb,
@@ -38,36 +34,33 @@ pub(super) fn place_index_bounds<'db>(
 ) -> Vec<(NIndex, usize)> {
     body.normalized
         .place_base_ty(db, place.base)
-        .map(|ty| data_path_index_bounds(db, ty, &place.path))
+        .map(|ty| data_path_index_bounds(db, body.owner(), ty, &place.path))
         .unwrap_or_default()
 }
 
+/// The static bounds of `path`'s array indices. An entry's key has none: its
+/// collection checks it when it locates the element.
 pub(super) fn data_path_index_bounds<'db>(
     db: &'db dyn MirDb,
+    instance: SemanticInstance<'db>,
     mut ty: TyId<'db>,
     path: &NDataPath,
 ) -> Vec<(NIndex, usize)> {
     let mut bounds = Vec::new();
+    ty = instance.normalized_ty(db, ty);
     for projection in path.iter() {
         while let Some((_, inner)) = ty.as_capability(db) {
             ty = inner;
         }
         ty = match projection {
-            NDataProjection::Field(index) => Some(project_pattern_child_source_ty(
-                db,
-                ty,
-                PatternProjectionStep::Field(usize::from(index.0)),
-            )),
-            NDataProjection::VariantField { variant, field } => ty.as_enum(db).map(|enum_| {
-                project_pattern_child_source_ty(
-                    db,
-                    ty,
-                    PatternProjectionStep::VariantField {
-                        variant: EnumVariant::new(enum_, usize::from(variant.0)),
-                        field_idx: usize::from(field.0),
-                    },
-                )
-            }),
+            NDataProjection::Field(index) => instance
+                .normalized_field_types(db, ty)
+                .get(usize::from(index.0))
+                .copied(),
+            NDataProjection::VariantField { variant, field } => instance
+                .normalized_enum_variant_field_tys(db, ty, *variant)
+                .get(usize::from(field.0))
+                .copied(),
             NDataProjection::Index(index) => {
                 let len = runtime_array_len(db, ty)
                     .expect("valid runtime array length")
@@ -76,8 +69,13 @@ pub(super) fn data_path_index_bounds<'db>(
                 if len == 0 {
                     return bounds;
                 }
-                ty.generic_args(db).first().copied()
+                ty.generic_args(db)
+                    .first()
+                    .map(|elem| instance.normalized_ty(db, *elem))
             }
+            NDataProjection::Entry(_) => instance
+                .state_index_tys(db, ty)
+                .map(|(_, element_ty)| element_ty),
         }
         .expect("verified normalized data path");
     }
@@ -157,6 +155,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
                 .env
                 .value_local(carrier)
                 .is_some_and(|local| self.local_has_transport_carrier(local)),
+            NPlaceBase::Deref { pointer } => self.env.value_local(pointer).is_some(),
             NPlaceBase::Root(root_id) => {
                 let Some(root) = self.env.body().normalized.root(root_id) else {
                     return false;
@@ -232,7 +231,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
             .is_some()
     }
 
-    pub(super) fn handle_like_semantic_value_is_available(&self, local: SLocalId) -> bool {
+    pub(super) fn transport_semantic_value_is_available(&self, local: SLocalId) -> bool {
         let Some(local_data) = self.env.body().local(local) else {
             return false;
         };
@@ -273,7 +272,6 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
             {
                 true
             }
-            SemanticLocalKind::DirectCarrier => self.handle_like_semantic_value_is_available(local),
             SemanticLocalKind::DirectValue
             | SemanticLocalKind::PlaceCarrier
             | SemanticLocalKind::PlaceBoundValue => {
@@ -387,6 +385,7 @@ fn is_self_rooted_value_place(
     }
     match place.base {
         NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier) == Some(local),
+        NPlaceBase::Deref { .. } => false,
         NPlaceBase::Root(root) => {
             matches!(
                 body.normalized.root(root).map(|root| &root.kind),
@@ -442,7 +441,10 @@ fn normalized_value_place<'db>(
                     place.ty = data.ty;
                     place
                 }),
-                NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
+                NStatementKind::Define { .. }
+                | NStatementKind::Store { .. }
+                | NStatementKind::End { .. }
+                | NStatementKind::Drop { .. } => None,
             },
             NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => None,
         }
@@ -482,7 +484,10 @@ pub(super) fn local_read_places_extractable_from_value(
                     place_root_local(body, place) != Some(local)
                         || place.path.iter().all(value_extractable_projection)
                 }
-                NStatementKind::Define { .. } | NStatementKind::Store { .. } => true,
+                NStatementKind::Define { .. }
+                | NStatementKind::Store { .. }
+                | NStatementKind::End { .. }
+                | NStatementKind::Drop { .. } => true,
             })
     })
 }
@@ -490,6 +495,7 @@ pub(super) fn local_read_places_extractable_from_value(
 fn place_root_local(body: &RuntimeSemanticBody<'_>, place: &NPlace<'_>) -> Option<SLocalId> {
     match place.base {
         NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier),
+        NPlaceBase::Deref { .. } => None,
         NPlaceBase::Root(root) => body.root_local(root),
     }
 }

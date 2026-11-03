@@ -41,17 +41,19 @@ pub fn domain_separator(
     chain_id: u256,
     verifying_contract: Address,
 ) -> u256 {
-    let buf = FixedMemBuffer<160>::alloc()
+    let buf = unsafe { FixedMemBuffer<160>::alloc_uninit() }
     let p = buf.ptr()
-    ops::mstore(addr: p, value: DOMAIN_TYPEHASH)
-    ops::mstore(addr: ptr::offset_bytes(p, 32), value: name_hash)
-    ops::mstore(addr: ptr::offset_bytes(p, 64), value: version_hash)
-    ops::mstore(addr: ptr::offset_bytes(p, 96), value: chain_id)
-    ops::mstore(
-        addr: ptr::offset_bytes(p, 128),
-        value: verifying_contract.inner,
-    )
-    ops::keccak256(offset: p, len: 160)
+    unsafe {
+        ops::mstore(addr: p, value: DOMAIN_TYPEHASH)
+        ops::mstore(addr: ptr::offset_bytes(p, 32), value: name_hash)
+        ops::mstore(addr: ptr::offset_bytes(p, 64), value: version_hash)
+        ops::mstore(addr: ptr::offset_bytes(p, 96), value: chain_id)
+        ops::mstore(
+            addr: ptr::offset_bytes(p, 128),
+            value: verifying_contract.inner,
+        )
+        ops::keccak256(offset: p, len: 160)
+    }
 }
 
 /// EIP-712 typed-data digest,
@@ -59,14 +61,16 @@ pub fn domain_separator(
 /// OpenZeppelin's `MessageHashUtils.toTypedDataHash`.
 ///
 /// Writes the 66-byte preimage into a fresh allocation with three word stores,
-/// without the `RawMem` effect or the packed-encoding builder.
+/// without the packed-encoding builder.
 pub fn digest(domain_separator: u256, struct_hash: u256) -> u256 {
-    let buf = FixedMemBuffer<66>::alloc()
+    let buf = unsafe { FixedMemBuffer<66>::alloc_uninit() }
     let p = buf.ptr()
-    ops::mstore(addr: p, value: 0x1901 << 240)
-    ops::mstore(addr: ptr::offset_bytes(p, 2), value: domain_separator)
-    ops::mstore(addr: ptr::offset_bytes(p, 34), value: struct_hash)
-    ops::keccak256(offset: p, len: 66)
+    unsafe {
+        ops::mstore(addr: p, value: 0x1901 << 240)
+        ops::mstore(addr: ptr::offset_bytes(p, 2), value: domain_separator)
+        ops::mstore(addr: ptr::offset_bytes(p, 34), value: struct_hash)
+        ops::keccak256(offset: p, len: 66)
+    }
 }
 
 /// An EIP-712 domain with the separator cached for the chain and contract

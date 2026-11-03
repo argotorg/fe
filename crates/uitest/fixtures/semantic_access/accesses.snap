@@ -1,0 +1,54 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/accesses.fe
+---
+error[16-0001]: access conflict in `fn read_while_mut_open`
+   ┌─ accesses.fe:27:13
+   │
+26 │     let hx = mut p.x
+   │              ------- access opened here
+27 │     let v = p.x
+   │             ^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn write_while_ref_open`
+   ┌─ accesses.fe:36:5
+   │
+35 │     let r = ref x
+   │             ----- access opened here
+36 │     x = 1
+   │     ^^^^^ cannot write to this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn dynamic_indices`
+   ┌─ accesses.fe:73:18
+   │
+72 │     let first = mut a[i]
+   │                 -------- access opened here
+73 │     let second = mut a[j]
+   │                  ^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn duplicate_mut_arguments`
+   ┌─ accesses.fe:81:17
+   │
+81 │     both(mut x, mut x)
+   │          -----  ^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │          │
+   │          access opened here
+
+error[16-0001]: access conflict in `fn written_in_loop`
+   ┌─ accesses.fe:96:9
+   │
+93 │     let h = mut x
+   │             ----- access opened here
+   ·
+96 │         x = i
+   │         ^^^^^ cannot write to this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn parent_used_while_nested_open`
+    ┌─ accesses.fe:132:13
+    │
+131 │     let g = mut h.x
+    │             ------- access opened here
+132 │     let v = h.x
+    │             ^^^ cannot read this place while a `mut` access of it is open

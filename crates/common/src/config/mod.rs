@@ -682,6 +682,45 @@ util = { name = "utils" }
     }
 
     #[test]
+    fn parses_allow_unsafe_dependency_flag() {
+        let toml = r#"
+[ingot]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+trusted = { path = "../trusted", allow_unsafe = true }
+plain = { path = "../plain" }
+bad = { path = "../bad", allow_unsafe = "yes" }
+"#;
+        let Config::Ingot(config) = Config::parse(toml).expect("config parses") else {
+            panic!("expected ingot config");
+        };
+        let (dependencies, diagnostics) =
+            config.dependencies(&Url::parse("file:///workspace/root/").unwrap());
+        let allows = |alias: &str| {
+            dependencies
+                .iter()
+                .find(|dependency| dependency.alias == alias)
+                .expect("dependency parsed")
+                .arguments
+                .allow_unsafe
+        };
+        assert!(allows("trusted"));
+        assert!(!allows("plain"));
+        assert!(!allows("bad"));
+        assert_eq!(
+            config.diagnostics,
+            vec![ConfigDiagnostic::UnexpectedTomlData {
+                field: "dependencies.bad.allow_unsafe".into(),
+                found: "string".into(),
+                expected: Some("boolean".into()),
+            }],
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
     fn parses_alias_only_dependency() {
         let toml = r#"
 [ingot]

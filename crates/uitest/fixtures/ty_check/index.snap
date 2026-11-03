@@ -1,18 +1,19 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/index.fe
 ---
 error[8-0000]: type mismatch
-   ┌─ index.fe:17:7
+   ┌─ index.fe:14:7
    │
-17 │     x[false]
+14 │     x[false]
    │       ^^^^^ expected `usize`, but `bool` is given
 
 error[8-0016]: `core::ops::Index` trait is not implemented
-   ┌─ index.fe:19:5
+   ┌─ index.fe:16:5
    │
-19 │     f[1]
+16 │     f[1]
    │     ^^^^
    │     │
    │     `[]` can't be applied to `Foo`

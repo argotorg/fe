@@ -1,0 +1,32 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/match_in_place.fe
+---
+error[16-0002]: move conflict in `fn payload_twice`
+   ┌─ match_in_place.fe:42:9
+   │
+38 │         Option::Some(b) => b.len()
+   │                      - value is moved here
+   ·
+42 │         Option::Some(b) => b.len()
+   │         ^^^^^^^^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn from_view`
+   ┌─ match_in_place.fe:51:22
+   │
+51 │         Option::Some(b) => keep(b)
+   │                      ^ cannot move out of a place reached through a `ref` access; bind it with `ref` to read it in place
+
+error[16-0002]: move conflict in `fn from_view_let`
+   ┌─ match_in_place.fe:57:17
+   │
+57 │     let Store { buf, .. } = s
+   │                 ^^^ cannot move out of a place reached through a `ref` access; bind it with `ref` to read it in place
+
+error[16-0002]: move conflict in `fn from_mut`
+   ┌─ match_in_place.fe:72:22
+   │
+72 │         Option::Some(b) => keep(b)
+   │                      ^ a `mut` parameter moved out of here must be reinitialized before the function returns; bind it with `mut` or `ref` to use it in place

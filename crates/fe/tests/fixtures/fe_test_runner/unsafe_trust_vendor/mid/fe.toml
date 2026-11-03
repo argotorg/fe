@@ -1,0 +1,6 @@
+[ingot]
+name = "mid"
+version = "0.1.0"
+
+[dependencies]
+dep = { path = "../dep", allow_unsafe = true }

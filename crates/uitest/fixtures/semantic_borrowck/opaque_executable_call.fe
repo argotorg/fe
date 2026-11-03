@@ -1,9 +1,0 @@
-extern { fn opaque() }
-
-// Rejected: the untrusted signature cannot complete executable validation.
-fn executable() { opaque() }
-
-fn known() {}
-
-// Accepted: the compiler can check the concrete function body.
-fn validated_executable() { known() }

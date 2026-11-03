@@ -1,12 +1,19 @@
-use common::layout::TargetDataLayout;
+use common::{
+    compilation::Target,
+    layout::{
+        EnumMemoryLayout, MemoryLayout, PlacedFields, StorageFieldShape, StorageFieldsLayout,
+        StorageLane, StorageLayoutError, TargetDataLayout, storage_fields_layout,
+    },
+};
 use hir::analysis::semantic::FieldIndex;
+use hir::analysis::ty::AddressSpace;
 use rustc_hash::FxHashSet;
 
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, ArrayLayout, ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId,
-        LowerError, RuntimeClass, ScalarClass, ScalarRepr, StructLayout, VariantId,
+        ArrayLayout, ConstNode, ConstRegionId, ConstScalar, EnumLayout, Layout, LayoutId,
+        LowerError, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole, StructLayout, VariantId,
     },
 };
 
@@ -15,6 +22,29 @@ pub enum RuntimeMemoryLayoutError {
     Overflow,
     Recursive,
     InvalidProjection(&'static str),
+}
+
+impl From<StorageLayoutError> for RuntimeMemoryLayoutError {
+    fn from(error: StorageLayoutError) -> Self {
+        match error {
+            StorageLayoutError::Overflow => Self::Overflow,
+            StorageLayoutError::InvalidScalarWidth(_) => Self::InvalidProjection("storage scalar"),
+        }
+    }
+}
+
+/// Where a struct field lives relative to the start of its struct.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FieldPlacement {
+    /// Offset in the space's address unit (bytes or words).
+    pub offset: u64,
+    /// For storage, the bytes of the word at `offset` that hold a packed
+    /// scalar. `None` means the field starts at a word boundary and takes
+    /// whole words.
+    pub lane: Option<StorageLane>,
+    /// Whether the word at `offset` also holds other fields, so a write must
+    /// preserve the rest of it.
+    pub shared: bool,
 }
 
 impl From<RuntimeMemoryLayoutError> for LowerError {
@@ -46,7 +76,7 @@ pub struct RuntimeMemoryLayout<'db> {
 }
 
 impl<'db> RuntimeMemoryLayout<'db> {
-    pub fn for_space(db: &'db dyn MirDb, space: AddressSpaceKind) -> Self {
+    pub fn for_space(db: &'db dyn MirDb, space: AddressSpace) -> Self {
         Self {
             db,
             unit: if space.is_byte_addressed() {
@@ -58,7 +88,7 @@ impl<'db> RuntimeMemoryLayout<'db> {
     }
 
     pub fn raw(db: &'db dyn MirDb) -> Self {
-        Self::for_space(db, AddressSpaceKind::Memory)
+        Self::for_space(db, AddressSpace::Memory)
     }
 
     pub fn class_size(self, class: &RuntimeClass<'db>) -> Result<u64, RuntimeMemoryLayoutError> {
@@ -83,16 +113,90 @@ impl<'db> RuntimeMemoryLayout<'db> {
         self.struct_field_offset(&layout, field.0 as usize)
     }
 
+    /// The offset of a struct field. In storage a packed field shares its
+    /// word with others; use `struct_field_placement` to find its lane.
     pub fn struct_field_offset(
         self,
         layout: &StructLayout<'db>,
         field: usize,
     ) -> Result<u64, RuntimeMemoryLayoutError> {
+        Ok(self.struct_field_placement(layout, field)?.offset)
+    }
+
+    pub fn field_placement(
+        self,
+        class: &RuntimeClass<'db>,
+        field: FieldIndex,
+    ) -> Result<FieldPlacement, RuntimeMemoryLayoutError> {
+        let layout = class
+            .aggregate_layout()
+            .ok_or(RuntimeMemoryLayoutError::InvalidProjection("field"))?;
+        let Layout::Struct(layout) = layout.data(self.db) else {
+            return Err(RuntimeMemoryLayoutError::InvalidProjection("field"));
+        };
+        self.struct_field_placement(&layout, field.0 as usize)
+    }
+
+    pub fn struct_field_placement(
+        self,
+        layout: &StructLayout<'db>,
+        field: usize,
+    ) -> Result<FieldPlacement, RuntimeMemoryLayoutError> {
         layout
             .fields
             .get(field)
             .ok_or(RuntimeMemoryLayoutError::InvalidProjection("field"))?;
-        self.class_sizes_sum(&layout.fields[..field], &mut FxHashSet::default())
+        match self.unit {
+            RuntimeMemoryUnit::Byte => Ok(FieldPlacement {
+                offset: self
+                    .placed_fields(&layout.fields, &mut FxHashSet::default())?
+                    .offsets[field],
+                lane: None,
+                shared: false,
+            }),
+            RuntimeMemoryUnit::Word => {
+                let placement = self
+                    .storage_struct_layout(layout, &mut FxHashSet::default())?
+                    .placements[field];
+                Ok(FieldPlacement {
+                    offset: placement.slot,
+                    lane: placement.lane,
+                    shared: placement.shared,
+                })
+            }
+        }
+    }
+
+    /// The packed storage layout of a struct's fields, like Solidity's.
+    fn storage_struct_layout(
+        self,
+        layout: &StructLayout<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<StorageFieldsLayout, RuntimeMemoryLayoutError> {
+        let shapes = layout
+            .fields
+            .iter()
+            .map(|field| self.storage_field_shape(field, visiting))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(storage_fields_layout(shapes)?)
+    }
+
+    fn storage_field_shape(
+        self,
+        class: &RuntimeClass<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<StorageFieldShape, RuntimeMemoryLayoutError> {
+        Ok(match class {
+            RuntimeClass::Scalar(scalar) => StorageFieldShape::Scalar {
+                bytes: storage_scalar_bytes(scalar),
+            },
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                StorageFieldShape::Scalar { bytes: 32 }
+            }
+            RuntimeClass::AggregateValue { layout } => StorageFieldShape::Aggregate {
+                slots: self.layout_size_inner(*layout, visiting)?,
+            },
+        })
     }
 
     pub fn array_element_offset(
@@ -135,9 +239,20 @@ impl<'db> RuntimeMemoryLayout<'db> {
             .fields
             .get(field)
             .ok_or(RuntimeMemoryLayoutError::InvalidProjection("variant field"))?;
-        self.scalar_size(&layout.tag)
-            .checked_add(self.class_sizes_sum(&variant.fields[..field], &mut FxHashSet::default())?)
-            .ok_or(RuntimeMemoryLayoutError::Overflow)
+        match self.unit {
+            RuntimeMemoryUnit::Byte => {
+                let visiting = &mut FxHashSet::default();
+                let payload_offset = self.enum_memory_layout(&layout, visiting)?.payload_offset;
+                payload_offset
+                    .checked_add(self.placed_fields(&variant.fields, visiting)?.offsets[field])
+                    .ok_or(RuntimeMemoryLayoutError::Overflow)
+            }
+            RuntimeMemoryUnit::Word => 1u64
+                .checked_add(
+                    self.class_sizes_sum(&variant.fields[..field], &mut FxHashSet::default())?,
+                )
+                .ok_or(RuntimeMemoryLayoutError::Overflow),
+        }
     }
 
     fn class_size_inner(
@@ -145,10 +260,12 @@ impl<'db> RuntimeMemoryLayout<'db> {
         class: &RuntimeClass<'db>,
         visiting: &mut FxHashSet<LayoutId<'db>>,
     ) -> Result<u64, RuntimeMemoryLayoutError> {
-        match class {
-            RuntimeClass::Scalar(scalar) => Ok(self.scalar_size(scalar)),
-            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => Ok(self.pointer_size()),
-            RuntimeClass::AggregateValue { layout } => self.layout_size_inner(*layout, visiting),
+        match (self.unit, class) {
+            (RuntimeMemoryUnit::Byte, _) => Ok(self.memory_layout(class, visiting)?.size),
+            (RuntimeMemoryUnit::Word, RuntimeClass::AggregateValue { layout }) => {
+                self.layout_size_inner(*layout, visiting)
+            }
+            (RuntimeMemoryUnit::Word, _) => Ok(1),
         }
     }
 
@@ -157,29 +274,35 @@ impl<'db> RuntimeMemoryLayout<'db> {
         layout: LayoutId<'db>,
         visiting: &mut FxHashSet<LayoutId<'db>>,
     ) -> Result<u64, RuntimeMemoryLayoutError> {
+        if let RuntimeMemoryUnit::Byte = self.unit {
+            return Ok(self.layout_memory_layout(layout, visiting)?.size);
+        }
         if !visiting.insert(layout) {
             return Err(RuntimeMemoryLayoutError::Recursive);
         }
         let size = match layout.data(self.db) {
-            Layout::Struct(data) => self.class_sizes_sum(&data.fields, visiting),
+            Layout::Struct(data) => self
+                .storage_struct_layout(&data, visiting)
+                .map(|layout| layout.slots.max(u64::from(data.pinned))),
             Layout::Array(data) => self
                 .class_size_inner(&data.elem, visiting)?
                 .checked_mul(data.len)
                 .ok_or(RuntimeMemoryLayoutError::Overflow),
-            Layout::Enum(data) => self
-                .scalar_size(&data.tag)
-                .checked_add(
-                    data.variants
-                        .iter()
-                        .map(|variant| self.class_sizes_sum(&variant.fields, visiting))
-                        .try_fold(0u64, |max, size| Ok(max.max(size?)))?,
-                )
+            Layout::Enum(data) => data
+                .variants
+                .iter()
+                .map(|variant| self.class_sizes_sum(&variant.fields, visiting))
+                .try_fold(0u64, |max, size| {
+                    Ok::<_, RuntimeMemoryLayoutError>(max.max(size?))
+                })?
+                .checked_add(1)
                 .ok_or(RuntimeMemoryLayoutError::Overflow),
         };
         visiting.remove(&layout);
         size
     }
 
+    /// The words `classes` take in storage, one after another.
     fn class_sizes_sum(
         self,
         classes: &[RuntimeClass<'db>],
@@ -191,27 +314,110 @@ impl<'db> RuntimeMemoryLayout<'db> {
         })
     }
 
-    fn scalar_size(self, scalar: &ScalarClass<'_>) -> u64 {
-        match self.unit {
-            RuntimeMemoryUnit::Byte => scalar_raw_memory_size_bytes(scalar),
-            RuntimeMemoryUnit::Word => 1,
+    fn target(self) -> Target {
+        self.db.compilation_settings().target(self.db)
+    }
+
+    /// The memory layout of `class` in byte-addressed memory.
+    fn memory_layout(
+        self,
+        class: &RuntimeClass<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<MemoryLayout, RuntimeMemoryLayoutError> {
+        match class {
+            RuntimeClass::Scalar(scalar) => {
+                Ok(self.target().scalar_memory_layout(scalar_bits(scalar)))
+            }
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                Ok(self.target().pointer_memory_layout())
+            }
+            RuntimeClass::AggregateValue { layout } => self.layout_memory_layout(*layout, visiting),
         }
     }
 
-    fn pointer_size(self) -> u64 {
-        match self.unit {
-            RuntimeMemoryUnit::Byte => 32,
-            RuntimeMemoryUnit::Word => 1,
+    fn layout_memory_layout(
+        self,
+        layout: LayoutId<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<MemoryLayout, RuntimeMemoryLayoutError> {
+        if !visiting.insert(layout) {
+            return Err(RuntimeMemoryLayoutError::Recursive);
         }
+        let memory_layout = match layout.data(self.db) {
+            Layout::Struct(data) => self
+                .placed_fields(&data.fields, visiting)?
+                .struct_layout()
+                .ok_or(RuntimeMemoryLayoutError::Overflow),
+            Layout::Array(data) => {
+                let elem = self.memory_layout(&data.elem, visiting)?;
+                elem.size
+                    .checked_mul(data.len)
+                    .map(|size| MemoryLayout {
+                        size,
+                        align: elem.align,
+                    })
+                    .ok_or(RuntimeMemoryLayoutError::Overflow)
+            }
+            Layout::Enum(data) => self
+                .enum_memory_layout(&data, visiting)
+                .map(|layout| layout.layout),
+        };
+        visiting.remove(&layout);
+        memory_layout
+    }
+
+    fn placed_fields(
+        self,
+        classes: &[RuntimeClass<'db>],
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<PlacedFields, RuntimeMemoryLayoutError> {
+        let fields = classes
+            .iter()
+            .map(|class| self.memory_layout(class, visiting))
+            .collect::<Result<Vec<_>, _>>()?;
+        PlacedFields::new(fields).ok_or(RuntimeMemoryLayoutError::Overflow)
+    }
+
+    fn enum_memory_layout(
+        self,
+        layout: &EnumLayout<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<EnumMemoryLayout, RuntimeMemoryLayoutError> {
+        let variants = layout
+            .variants
+            .iter()
+            .map(|variant| self.placed_fields(&variant.fields, visiting))
+            .collect::<Result<Vec<_>, _>>()?;
+        let tag = self.target().scalar_memory_layout(scalar_bits(&layout.tag));
+        EnumMemoryLayout::new(tag, &variants).ok_or(RuntimeMemoryLayoutError::Overflow)
     }
 }
 
-pub fn scalar_raw_memory_size_bytes(scalar: &ScalarClass<'_>) -> u64 {
+/// The bytes a scalar struct field takes in storage. Plain booleans and
+/// integers narrower than a word are packed with their neighbours, like
+/// Solidity's value types; everything else takes a whole slot.
+pub fn storage_scalar_bytes(scalar: &ScalarClass<'_>) -> u32 {
+    match (scalar.repr, &scalar.role) {
+        (ScalarRepr::Bool, ScalarRole::Plain) => 1,
+        (ScalarRepr::Int { bits, .. }, ScalarRole::Plain) if bits < 256 && bits % 8 == 0 => {
+            u32::from(bits / 8)
+        }
+        _ => 32,
+    }
+}
+
+/// The bits of a scalar's value.
+fn scalar_bits(scalar: &ScalarClass<'_>) -> u16 {
     match scalar.repr {
         ScalarRepr::Bool => 1,
-        ScalarRepr::Int { bits, .. } | ScalarRepr::Address { bits } => u64::from(bits.div_ceil(8)),
-        ScalarRepr::FixedBytes { len } => u64::from(len),
+        ScalarRepr::Int { bits, .. } | ScalarRepr::Address { bits } => bits,
+        ScalarRepr::FixedBytes { len } => len * 8,
     }
+}
+
+/// The bytes a scalar takes in `target`'s memory.
+pub fn scalar_raw_memory_size_bytes(target: Target, scalar: &ScalarClass<'_>) -> u64 {
+    target.scalar_memory_layout(scalar_bits(scalar)).size
 }
 
 fn layout_size_bytes<'db>(
@@ -451,7 +657,7 @@ fn serialize_const_node_with_size<'db>(
             if let Some(RuntimeClass::AggregateValue { layout }) =
                 pointee.map(|pointee| pointee.target(db))
             {
-                return serialize_const_node_to_layout_bytes(db, layout, node, target);
+                return serialize_const_node_to_layout_bytes(db, *layout, node, target);
             }
             let ConstNode::Scalar(scalar) = node else {
                 return Err(LowerError::Unsupported(
@@ -602,7 +808,9 @@ fn enum_tag_scalar(node: ConstNode<'_>) -> Result<ConstScalar, LowerError> {
 
 #[cfg(test)]
 mod tests {
+    use common::InputDb;
     use driver::DriverDataBase;
+    use salsa::Setter;
 
     use super::*;
     use crate::runtime::{
@@ -641,19 +849,63 @@ mod tests {
         let db = DriverDataBase::default();
         let struct_layout = StructLayout {
             fields: vec![scalar(8), scalar(256)].into_boxed_slice(),
+            pinned: false,
         };
         let array_layout = ArrayLayout {
             elem: scalar(16),
             len: 3,
         };
 
-        let bytes = RuntimeMemoryLayout::for_space(&db, AddressSpaceKind::Memory);
+        let bytes = RuntimeMemoryLayout::for_space(&db, AddressSpace::Memory);
         assert_eq!(bytes.struct_field_offset(&struct_layout, 1), Ok(1));
         assert_eq!(bytes.array_element_offset(&array_layout, 2), Ok(4));
 
-        let words = RuntimeMemoryLayout::for_space(&db, AddressSpaceKind::Storage);
+        let words = RuntimeMemoryLayout::for_space(&db, AddressSpace::Storage);
         assert_eq!(words.struct_field_offset(&struct_layout, 1), Ok(1));
         assert_eq!(words.array_element_offset(&array_layout, 2), Ok(2));
+    }
+
+    #[test]
+    fn native_layout_aligns_fields_like_sonatina_objects() {
+        let mut db = DriverDataBase::default();
+        db.compilation_settings()
+            .set_target(&mut db)
+            .to(Target::Native);
+        let struct_layout = StructLayout {
+            fields: vec![scalar(8), scalar(256), scalar(24)].into_boxed_slice(),
+            pinned: false,
+        };
+        let pair = LayoutId::new(&db, LayoutKey::Struct(struct_layout.clone()));
+        let bytes = RuntimeMemoryLayout::raw(&db);
+        // The u256 aligns to 16 bytes; a u24 takes an i32's four.
+        assert_eq!(bytes.struct_field_offset(&struct_layout, 1), Ok(16));
+        assert_eq!(bytes.struct_field_offset(&struct_layout, 2), Ok(48));
+        assert_eq!(bytes.layout_size(pair), Ok(64));
+
+        let variants =
+            [vec![scalar(8)], vec![scalar(64), scalar(16)]].map(|fields| EnumVariantLayout {
+                fields: fields.into_boxed_slice(),
+            });
+        let choice = LayoutId::new(
+            &db,
+            LayoutKey::Enum(EnumLayoutKey {
+                variants: variants.into(),
+            }),
+        );
+        let field = |index, field| {
+            bytes.variant_field_offset(
+                VariantId {
+                    enum_layout: choice,
+                    index,
+                },
+                FieldIndex(field),
+            )
+        };
+        // A one-byte tag, then both payloads from the u64's alignment.
+        assert_eq!(field(0, 0), Ok(8));
+        assert_eq!(field(1, 0), Ok(8));
+        assert_eq!(field(1, 1), Ok(16));
+        assert_eq!(bytes.layout_size(choice), Ok(24));
     }
 
     #[test]
@@ -680,7 +932,7 @@ mod tests {
         assert_eq!(bytes.layout_size(layout), Ok(3));
         assert_eq!(bytes.variant_field_offset(variant, FieldIndex(0)), Ok(2));
 
-        let words = RuntimeMemoryLayout::for_space(&db, AddressSpaceKind::Storage);
+        let words = RuntimeMemoryLayout::for_space(&db, AddressSpace::Storage);
         assert_eq!(words.layout_size(layout), Ok(2));
         assert_eq!(words.variant_field_offset(variant, FieldIndex(0)), Ok(1));
 

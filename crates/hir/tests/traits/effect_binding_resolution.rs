@@ -1,6 +1,6 @@
 use fe_hir::analysis::semantic::owner_effect_bindings;
 use fe_hir::analysis::ty::ty_check::{BodyOwner, EffectParamSite, LocalBinding};
-use fe_hir::analysis::ty::{ProviderAddressSpace, ProviderKind, RootProviderScope};
+use fe_hir::analysis::ty::{AddressSpace, ProviderKind, RootProviderScope};
 use fe_hir::semantic::{EffectEnvView, ProviderSource};
 use fe_hir::test_db::HirAnalysisTestDb;
 
@@ -31,7 +31,7 @@ fn f() -> u256 uses (foo: Foo) {
         })
         .expect("expected function `f`");
 
-    let bindings = owner_effect_bindings(&db, BodyOwner::Func(func));
+    let bindings = owner_effect_bindings(&db, BodyOwner::Func(func, None));
     let [binding] = bindings.as_slice() else {
         panic!("expected exactly one effect binding");
     };
@@ -82,7 +82,7 @@ pub contract C {
     ));
     assert_eq!(
         resolved.provider.semantics.address_space,
-        Some(ProviderAddressSpace::Storage)
+        Some(AddressSpace::Storage)
     );
 }
 

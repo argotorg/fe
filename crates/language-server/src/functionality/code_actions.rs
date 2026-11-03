@@ -75,7 +75,7 @@ fn collect_return_type_actions<'db>(
     actions: &mut Vec<CodeAction>,
 ) {
     // Find functions at the cursor position
-    for item in top_mod.scope_graph(db).items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         let ItemKind::Func(func) = item else {
             continue;
         };

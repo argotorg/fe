@@ -1,100 +1,12 @@
-use ingot::Copy
-
-/// Effect reference traits.
+/// Effect reference trait.
 ///
-/// Fe models effects as implicit "provider" generic parameters. The `EffectRef<T>` marker traits
-/// express that a provider type can satisfy a read-only (or mutable) effect whose domain is `T`,
-/// while `EffectHandle` captures concrete pointer/handle providers with a runtime representation.
-///
-/// Memory pointers implement these traits directly. Backends define concrete
-/// provider handles for their own address spaces.
+/// Fe models effects as implicit "provider" generic parameters, and a
+/// provider is a place. The `EffectRef<T>` marker trait expresses that a
+/// provider type can satisfy an effect whose domain is `T`; whether the
+/// effect may be written is checked at the term level. A raw pointer's
+/// target, `*p`, is a place like any other.
 
-/// The address space an effect provider points into.
-///
-/// Backends decide how each space maps onto their runtime model:
-/// - `Memory`: transient linear memory.
-/// - `Calldata`: an immutable input byte buffer (e.g. EVM CALLDATALOAD).
-/// - `Code`: immutable code data.
-/// - `Storage`: the target's persistent storage/state.
-/// - `TransientStorage`: a temporary store scoped to a call frame or
-///   transaction (e.g. EVM TLOAD/TSTORE).
-pub enum AddressSpace {
-    Memory,
-    Calldata,
-    Code,
-    Storage,
-    TransientStorage,
-}
-
-/// Marker: `Self` can satisfy a read-only effect whose domain is `Target`.
+/// Marker: `Self` can satisfy an effect whose domain is `Target`.
 pub trait EffectRef<Target> {}
 
-/// Marker: `Self` can satisfy a *mutable* effect whose domain is `Target`.
-pub trait EffectRefMut<Target>: EffectRef<Target> {}
-
-/// A concrete pointer/handle provider with a runtime representation.
-///
-/// This is the place to keep raw-handle and address-space metadata.
-pub trait EffectHandle {
-    type Target
-
-    /// The address space the raw handle points into.
-    const SPACE: AddressSpace
-
-    /// The raw pointer/handle type used by the backend.
-    ///
-    /// User-defined handles must use `*Target` in `Memory`. Integer-backed
-    /// handles are reserved for core and standard-library address spaces.
-    type Raw
-
-    /// Return the raw pointer/handle used by the backend (e.g. memory address or storage slot).
-    fn raw(self) -> Self::Raw
-}
-
-/// Marker: a handle that supports mutable access.
-pub trait EffectHandleMut: EffectHandle {}
-
-/// Reads the value a handle points at.
-///
-/// The handle argument anchors the effect key to the handle's `Target`, so
-/// the provided effect resolves unambiguously; provide the handle with
-/// `with` or call through the handle's `read` method.
-pub fn read<H: EffectHandle>(_ handle: H) -> H::Target uses (value: H::Target)
-    where H::Target: Copy
-{
-    value
-}
-
-/// Writes the value a handle points at.
-pub fn write<H: EffectHandle>(_ handle: H, _ value: H::Target) uses (target: mut H::Target) {
-    target = value
-}
-
-/// Marker for zero-sized pointer types whose const slot parameter is
-/// assigned by the contract layout.
-///
-/// When a layout hole (`= _`) instantiates the slot parameter of an
-/// implementing type inside a contract field, the layout draws the slot
-/// number from `SPACE`'s slot counter instead of the containing field's, so
-/// statically assigned slots never collide with other state in that space.
-pub trait StaticSlot {
-    const SPACE: AddressSpace
-}
-
 impl<T> EffectRef<T> for T {}
-// Mutability is checked at the term level.
-impl<T> EffectRefMut<T> for T {}
-
-impl<T> EffectHandle for *T {
-    type Target = T
-
-    const SPACE: AddressSpace = AddressSpace::Memory
-    type Raw = *T
-
-    fn raw(self) -> *T {
-        self
-    }
-}
-impl<T> EffectHandleMut for *T {}
-impl<T> EffectRef<T> for *T {}
-impl<T> EffectRefMut<T> for *T {}

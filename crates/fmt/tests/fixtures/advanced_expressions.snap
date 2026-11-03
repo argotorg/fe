@@ -1,6 +1,6 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
+assertion_line: 17
 expression: output
 input_file: tests/fixtures/advanced_expressions.fe
 ---
@@ -16,7 +16,7 @@ where T: Trait2, U: Trait3
     let v = ctx.make_value(1, flag: true)
     let updated = v.update<i32>(arr[0])
 
-    let mut x = 0
+    var x = 0
     x += 1
     x <<= 2
 

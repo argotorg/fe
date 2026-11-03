@@ -1,0 +1,17 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 17
+expression: output
+input_file: tests/fixtures/access_items.fe
+---
+trait Collection {
+    uses E
+    fn at(self, _ c: u256) -> ref u256 uses E
+}
+
+impl Collection for Words {
+    uses E = (storage: mut Self)
+    fn at(self, _ c: u256) -> (u256, ref u256) uses E {
+        self.get(c)
+    }
+}

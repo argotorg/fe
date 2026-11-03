@@ -1,0 +1,54 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/reentrant_footprints.fe
+---
+error[16-0001]: access conflict in `fn V::recv[0][0]`
+   ┌─ reentrant_footprints.fe:80:13
+   │
+79 │             let held = mut value
+   │                        --------- access opened here
+80 │             run(CallPinger {}, a)
+   │             ^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn V::recv[0][1]`
+   ┌─ reentrant_footprints.fe:86:13
+   │
+85 │             let held = mut value
+   │                        --------- access opened here
+86 │             apply(|| call.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a }))
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn V::recv[0][2]`
+   ┌─ reentrant_footprints.fe:92:13
+   │
+91 │             let held = mut value
+   │                        --------- access opened here
+92 │             ping_with(mut evm, a)
+   │             ^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn V::recv[0][3]`
+   ┌─ reentrant_footprints.fe:98:13
+   │
+97 │             let held = mut value
+   │                        --------- access opened here
+98 │             poke(mut evm, a)
+   │             ^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn V::recv[0][6]`
+    ┌─ reentrant_footprints.fe:116:21
+    │
+115 │             let held = mut value
+    │                        --------- access opened here
+116 │             let _ = caller_of(evm)
+    │                     ^^^^^^^^^^^^^^ this call may read storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn V::recv[0][7]`
+    ┌─ reentrant_footprints.fe:123:13
+    │
+121 │             let held = mut value
+    │                        --------- access opened here
+122 │             let f = || call.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a })
+123 │             f()
+    │             ^^^ this call may write storage while a `mut` access of it is open

@@ -1,0 +1,60 @@
+// A name that a body binds, such as `self`, a parameter, a closure's
+// parameter or an effect, refers to that binding: not to an item of the same
+// name, nor, for `self`, to the module around it.
+use core::iter::Collection
+
+mod m {
+    pub struct S {}
+
+    impl S {
+        pub fn f(self) -> u256 {
+            self.g()
+        }
+        pub fn g(self) -> u256 {
+            1
+        }
+    }
+}
+
+mod n {}
+
+fn acc() -> u256 {
+    1
+}
+
+fn ctx() -> u256 {
+    1
+}
+
+fn start() -> u256 {
+    1
+}
+
+trait Ctx {
+    fn caller(self) -> u256
+}
+
+fn param(n: u256) -> u256 {
+    n
+}
+
+fn closure_param(_ xs: [u256; 2]) -> u256 {
+    xs.fold(0, |acc, x| acc + x)
+}
+
+fn effect() -> u256 uses (ctx: Ctx) {
+    ctx.caller()
+}
+
+struct State {
+    value: u256,
+}
+
+// A field that a contract's `uses` names is bound to that field.
+pub contract C {
+    mut state: State
+
+    init(start: u256) uses (mut state) {
+        state.value = start
+    }
+}

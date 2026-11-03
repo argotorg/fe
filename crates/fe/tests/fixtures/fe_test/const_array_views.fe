@@ -7,7 +7,7 @@ fn pick(_ arr: [u256; 8], _ idx: usize) -> u256 {
 }
 
 fn tail_sum(_ arr: [u256; 8]) -> u256 {
-    let mut sum: u256 = 0
+    var sum: u256 = 0
     for i in 4..8 {
         sum += arr[i]
     }

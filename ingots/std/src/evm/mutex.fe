@@ -2,33 +2,33 @@ use super::effects::TSlot
 
 /// A storage-backed value guarded by a transient reentrancy lock.
 ///
-/// The lock bit lives in transient storage at a slot assigned by the
-/// contract layout (through the zero-sized `lock` field), alongside runtime
-/// `TStorPtr` provider fields, so lock slots never collide with other
-/// transient state. The protected value is only reachable through
-/// [`Mutex::lock`] / [`Mutex::try_lock`] borrows; [`Mutex::peek`] offers an
-/// unguarded read for `Copy` values (e.g. read-only handlers), which does
-/// not protect against read-only reentrancy.
+/// The lock bit lives in transient storage at the slot number its `lock`
+/// field takes, which no other storage or transient state shares. [`Mutex::lock`] and [`Mutex::unlock`] bracket a window
+/// across external calls; entry points that may be reentered take the lock
+/// with [`Mutex::try_lock`] and back off when it is held. The value is
+/// reached through short projections, which cannot be held across the
+/// external call the lock guards.
 pub struct Mutex<T> {
     value: T,
     lock: TSlot<bool>,
 }
 
 impl<T> Mutex<T> {
-    pub fn lock(mut self) -> mut T {
+    /// Takes the lock, reverting if it is already held.
+    pub fn lock(mut self) {
         if self.lock.read() {
             assert!(false)
         }
         self.lock.write(true)
-        mut self.value
     }
 
-    pub fn try_lock(mut self) -> Option<mut T> {
+    /// Takes the lock if it is free, and returns whether it did.
+    pub fn try_lock(mut self) -> bool {
         if self.lock.read() {
-            return Option::None
+            return false
         }
         self.lock.write(true)
-        Option::Some(mut self.value)
+        true
     }
 
     pub fn unlock(mut self) {
@@ -39,12 +39,14 @@ impl<T> Mutex<T> {
         self.lock.read()
     }
 
-    /// Reads the protected value without taking the lock.
-    ///
-    /// The lock guards mutation windows across external calls; copies of
-    /// `Copy` values (scalars, zero-sized storage handles) can be read
-    /// without it. This does not protect against observing intermediate
-    /// state during reentrancy.
+    pub fn value(mut? self) -> mut? T {
+        mut? self.value
+    }
+
+    /// Copies the protected value out without taking the lock, to keep
+    /// across an external call: an access of it cannot be held there. This
+    /// does not protect against observing intermediate state during
+    /// reentrancy.
     pub fn peek(self) -> T
     where
         T: Copy,

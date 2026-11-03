@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/state_only_bindings.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ state_only_bindings.fe:26:13
+   │
+25 │         if let Choice::Primary(map) = self {
+   │                                --- `map` is a read access; bind it with `mut` to write through it
+26 │             map[key] = 1
+   │             ^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ state_only_bindings.fe:59:5
+   │
+58 │     let (_, map) = ledger.tagged()
+   │             --- `map` is a read access; bind it with `mut` to write through it
+59 │     map[key] = 1
+   │     ^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ state_only_bindings.fe:71:9
+   │
+70 │     if let Option::Some(map) = ledger.maybe(true) {
+   │                         --- `map` is a read access; bind it with `mut` to write through it
+71 │         map[key] = 1
+   │         ^^^^^^^^ immutable assignment

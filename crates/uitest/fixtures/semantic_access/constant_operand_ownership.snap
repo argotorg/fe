@@ -1,0 +1,95 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/constant_operand_ownership.fe
+---
+error[16-0001]: access conflict in `fn move_while_borrowed`
+   ┌─ constant_operand_ownership.fe:97:9
+   │
+96 │     let r = ref b
+   │             ----- access opened here
+97 │     let moved = b
+   │         ^^^^^ cannot move out of this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn read_while_mut_borrowed`
+    ┌─ constant_operand_ownership.fe:105:13
+    │
+104 │     let r = mut x
+    │             ----- access opened here
+105 │     let y = x + 1
+    │             ^ cannot read this place while a `mut` access of it is open
+
+error[16-0002]: move conflict in `fn double_move`
+   ┌─ constant_operand_ownership.fe:14:9
+   │
+13 │     let first = b
+   │         ----- value is moved here
+14 │     let second = b
+   │         ^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn aggregate_then_move`
+   ┌─ constant_operand_ownership.fe:22:9
+   │
+21 │     let t = (b,)
+   │              - value is moved here
+22 │     let moved = b
+   │         ^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn use_after_move`
+   ┌─ constant_operand_ownership.fe:30:5
+   │
+29 │     let moved = b
+   │         ----- value is moved here
+30 │     b.v + moved.v
+   │     ^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn call_then_move`
+   ┌─ constant_operand_ownership.fe:37:21
+   │
+36 │     let first = consume(b)
+   │                         - value is moved here
+37 │     first + consume(b)
+   │                     ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn match_twice`
+   ┌─ constant_operand_ownership.fe:48:9
+   │
+44 │         Option::Some(b) => b.v
+   │                      - value is moved here
+   ·
+48 │         Option::Some(b) => b.v
+   │         ^^^^^^^^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn if_let_twice`
+   ┌─ constant_operand_ownership.fe:61:12
+   │
+58 │     if let Option::Some(b) = o {
+   │                         - value is moved here
+   ·
+61 │     if let Option::Some(b) = o {
+   │            ^^^^^^^^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn nested_payload_twice`
+   ┌─ constant_operand_ownership.fe:75:9
+   │
+71 │         Option::Some(b) => b.v
+   │                      - value is moved here
+   ·
+75 │         Holder { inner: Option::Some(b) } => b.v
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn loop_move`
+   ┌─ constant_operand_ownership.fe:87:26
+   │
+87 │         total += consume(b)
+   │                          ^
+   │                          │
+   │                          cannot use a value after it was moved
+   │                          value is moved here
+
+error[16-0002]: move conflict in `fn payload_moved_through_access`
+    ┌─ constant_operand_ownership.fe:174:22
+    │
+174 │         Option::Some(b) => b.v
+    │                      ^ cannot move out of a place reached through a `ref` access; bind it with `ref` to read it in place

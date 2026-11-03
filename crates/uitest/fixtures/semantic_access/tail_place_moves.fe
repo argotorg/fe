@@ -1,0 +1,66 @@
+// A non-`Copy` place read in a block, branch or match tail is moved like the
+// place itself, so moving it out of a `ref` access is rejected wherever the
+// tail value is consumed.
+use core::option::Option
+use core::ptr::{MemArray, MemBuffer}
+
+struct H {
+    b: MemBuffer,
+}
+
+impl H {
+    fn buf(self) -> ref MemBuffer {
+        ref self.b
+    }
+}
+
+struct Holder {
+    inner: H,
+}
+
+impl Holder {
+    fn inner_mut(mut self) -> mut H {
+        mut self.inner
+    }
+}
+
+struct W {
+    b: MemBuffer,
+}
+
+fn keep(_ b: own MemBuffer) -> MemBuffer {
+    b
+}
+
+fn body_tail(_ a: MemArray<MemBuffer>) -> MemBuffer {
+    a[0]
+}
+
+fn block_arg(_ h: H) -> MemBuffer {
+    keep({ h.buf() })
+}
+
+fn if_in_ctor(_ h: H, _ c: bool) -> Option<MemBuffer> {
+    Option::Some(if c { h.buf() } else { h.buf() })
+}
+
+fn field_init(_ h: H) -> W {
+    W { b: { h.buf() } }
+}
+
+fn array_lit(_ h: H) -> [MemBuffer; 1] {
+    [{ h.buf() }]
+}
+
+fn assign(_ h: H) {
+    var y = MemBuffer::alloc(1)
+    y = { h.buf() }
+}
+
+fn mut_grant(_ h: mut Holder) -> H {
+    { h.inner_mut() }
+}
+
+fn fine(_ h: own H) -> MemBuffer {
+    { h.b }
+}

@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/tuple_of_accesses.fe
+---
+error[8-0115]: a tuple does not hold accesses
+  ┌─ tuple_of_accesses.fe:6:26
+  │
+6 │     let (mut x, mut y) = (xs.at(0), ys.at(0))
+  │                          ^^^^^^^^^^^^^^^^^^^^ this tuple's elements are accesses
+  │
+  = bind each access with its own `let`; accesses that are disjoint by a promise the checker cannot see form an unsafe split, `unsafe { (a, b) }`
+
+error[8-0120]: a `mut` binding needs a place or an access
+  ┌─ tuple_of_accesses.fe:6:10
+  │
+6 │     let (mut x, mut y) = (xs.at(0), ys.at(0))
+  │          ^^^^^ this binds an owned value
+  │
+  = write `var` for a mutable value
+
+error[8-0120]: a `mut` binding needs a place or an access
+  ┌─ tuple_of_accesses.fe:6:17
+  │
+6 │     let (mut x, mut y) = (xs.at(0), ys.at(0))
+  │                 ^^^^^ this binds an owned value
+  │
+  = write `var` for a mutable value

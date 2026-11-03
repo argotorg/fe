@@ -1,0 +1,47 @@
+use std::evm::{RawStorage, StorageMap, StorPtr}
+
+struct Position {
+    owner: u256,
+    debt: u256,
+}
+
+fn bump_debt() uses (p: mut Position) {
+    p.debt += 1
+}
+
+pub struct Book {
+    pub positions: StorageMap<u256, Position>,
+    pub total: u256,
+}
+
+msg BookMsg {
+    #[selector = 1]
+    RawPointer { slot: u256 } -> u256,
+    #[selector = 2]
+    Entry { key: u256 } -> u256,
+}
+
+pub contract Ledger {
+    mut book: Book,
+
+    recv BookMsg {
+        // Rejected: a pointer built at an arbitrary slot may name the slot of
+        // the field an access holds.
+        RawPointer { slot } -> u256 uses (mut book, raw: mut RawStorage) {
+            let total = mut book.total
+            let p = slot as StorPtr<Position>
+            unsafe { with (mut *p) { bump_debt() } }
+            total += 1
+            total
+        }
+
+        // Accepted: a map's entry is a path under the map, apart from the
+        // book's other fields.
+        Entry { key } -> u256 uses (mut book) {
+            let total = mut book.total
+            with (mut book.positions[key]) { bump_debt() }
+            total += 1
+            total
+        }
+    }
+}

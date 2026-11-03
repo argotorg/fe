@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/trait_assoc_ty_bounds.fe
 ---
@@ -41,7 +42,7 @@ note:
    │
 23 │   fn sum<T: Iterator<Item = i32>>(iter: T) -> i32 {
    │ ╭─────────────────────────────────────────────────^
-24 │ │     let mut sum = 0
+24 │ │     var sum = 0
 25 │ │     while true {
 26 │ │         match iter.next() {
    · │
@@ -52,14 +53,14 @@ note:
 note:
    ┌─ trait_assoc_ty_bounds.fe:24:9
    │
-24 │     let mut sum = 0
-   │         ^^^^^^^ i32
+24 │     var sum = 0
+   │         ^^^ i32
 
 note:
-   ┌─ trait_assoc_ty_bounds.fe:24:19
+   ┌─ trait_assoc_ty_bounds.fe:24:15
    │
-24 │     let mut sum = 0
-   │                   ^ i32
+24 │     var sum = 0
+   │               ^ i32
 
 note:
    ┌─ trait_assoc_ty_bounds.fe:25:11

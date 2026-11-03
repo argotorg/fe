@@ -1,9 +1,9 @@
 use core::ptr
+use core::abi::store_word
 use std::abi::sol::decode_input
-use std::evm::RawMem
 
 #[test]
-fn test_dynamic_array_payload_end_uses_max_element_end() uses (raw: mut RawMem) {
+fn test_dynamic_array_payload_end_uses_max_element_end() {
     // bytes[] payload:
     //   len = 2
     //   offset0 = 64, offset1 = 96
@@ -11,15 +11,15 @@ fn test_dynamic_array_payload_end_uses_max_element_end() uses (raw: mut RawMem) 
     //
     // The offsets are monotonic, but element0 extends past element1.
     let ptr = ptr::alloc_bytes(224)
-    raw.mstore(addr: ptr, value: 2)
-    raw.mstore(addr: ptr::offset_bytes(ptr, 32), value: 64)
-    raw.mstore(addr: ptr::offset_bytes(ptr, 64), value: 96)
-    raw.mstore(addr: ptr::offset_bytes(ptr, 96), value: 96)
-    raw.mstore(addr: ptr::offset_bytes(ptr, 128), value: 0)
-    raw.mstore(addr: ptr::offset_bytes(ptr, 160), value: 0)
-    raw.mstore(addr: ptr::offset_bytes(ptr, 192), value: 0)
+    unsafe { store_word(ptr: ptr, value: 2) }
+    unsafe { store_word(ptr: ptr::offset_bytes(ptr, 32), value: 64) }
+    unsafe { store_word(ptr: ptr::offset_bytes(ptr, 64), value: 96) }
+    unsafe { store_word(ptr: ptr::offset_bytes(ptr, 96), value: 96) }
+    unsafe { store_word(ptr: ptr::offset_bytes(ptr, 128), value: 0) }
+    unsafe { store_word(ptr: ptr::offset_bytes(ptr, 160), value: 0) }
+    unsafe { store_word(ptr: ptr::offset_bytes(ptr, 192), value: 0) }
 
-    let input = ptr::MemSpan::from_raw_parts(ptr, len: 224)
+    let input = unsafe { ptr::MemSpan::from_raw_parts(ptr, len: 224) }
     let decoded: Vec<Bytes> = decode_input(input)
 
     assert!(decoded.len() == 2)

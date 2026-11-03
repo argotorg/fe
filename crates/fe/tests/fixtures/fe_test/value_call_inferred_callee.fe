@@ -1,0 +1,61 @@
+// A callee that is any value expression is called through its callable
+// shape, also while its type still holds inference variables: a closure whose
+// result is an unsuffixed literal, a generic function item, a block, an
+// identity call, a field. A callee's effects are provided where it is called.
+struct Log {
+    v: u256,
+}
+
+fn note2(_ t: u256, _ d: u256) -> u256 uses (l: mut Log) {
+    l.v = l.v * 10 + d
+    t
+}
+
+fn note<T>(_ t: own T, _ d: u256) -> T uses (l: mut Log) {
+    l.v = l.v * 10 + d
+    t
+}
+
+fn id<T>(_ t: own T) -> T {
+    t
+}
+
+struct S<F> {
+    f: F,
+}
+
+#[test]
+fn inferred_closure_results() {
+    let f = || 3
+    let r: u256 = f()
+    let s = f()
+    assert(r == 3 && s == 3)
+    let t: u256 = { || 4 }()
+    assert(t == 4)
+    let y: u256 = 5
+    assert((|x| x)(y) == 5)
+}
+
+#[test]
+fn generic_item_callees() {
+    assert({ id }(7 as u256) == 7)
+}
+
+#[test]
+fn effectful_item_callees() {
+    var l = Log { v: 0 }
+    with (Log = l) {
+        assert({ note2 }(5, 2) == 5)
+        assert(id(note2)(5, 3) == 5)
+        assert(id(note<u256>)(5, 4) == 5)
+        let k = || note2
+        assert(k()(5, 5) == 5)
+    }
+    assert(l.v == 2345)
+}
+
+#[test]
+fn field_callee() {
+    let s = S { f: id<u256> }
+    assert((s.f)(7) == 7)
+}

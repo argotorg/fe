@@ -1,19 +1,26 @@
 use common::ingot::IngotKind;
+use num_traits::ToPrimitive;
+use rustc_hash::FxHashSet;
 
 use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
         ty::{
-            ProviderAddressSpace,
-            trait_resolution::PredicateListId,
-            ty_def::{BorrowKind, TyBase, TyData, TyId},
+            const_ty::demand_concrete_specialized_const_ty,
+            trait_def::TraitInstId,
+            trait_resolution::{
+                GoalSatisfiability, PredicateListId, TraitSolveCx, goal_holds, is_goal_satisfiable,
+            },
+            ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
+            visitor::{TyVisitable, TyVisitor, walk_ty},
         },
     },
     hir_def::{
-        ArithBinOp, BinOp, CallableDef, CompBinOp, Func, IdentId, ItemKind, PathId, Trait, UnOp,
-        scope_graph::ScopeId,
+        ArithBinOp, BinOp, CallableDef, CompBinOp, Func, FuncParamMode, IdentId, ItemKind, PathId,
+        Trait, UnOp, scope_graph::ScopeId,
     },
+    semantic::EffectRequirementKey,
 };
 
 /// Resolve a trait in the core library by an explicit trait path, excluding the "core" root segment.
@@ -43,7 +50,6 @@ pub fn resolve_core_trait<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct LibPath<'db> {
-    #[return_ref]
     pub string: String,
 }
 
@@ -58,6 +64,15 @@ pub fn resolve_lib_type_path<'db>(
 ) -> Option<TyId<'db>> {
     let path_id = LibPath::new(db, path.to_string());
     resolve_lib_path(db, scope, path_id)
+}
+
+/// The concrete value of `n`, a specialized `usize` const such as the `N` of
+/// `__keccak256<N>`, whose signature fixes the type of its input.
+pub fn concrete_usize<'db>(db: &'db dyn HirAnalysisDb, n: TyId<'db>) -> Option<usize> {
+    let usize_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    demand_concrete_specialized_const_ty(db, n, usize_ty)?
+        .integer_value(db)?
+        .to_usize()
 }
 
 /// Resolve a function by a fully-qualified `core::...` or `std::...` path string.
@@ -116,30 +131,6 @@ pub fn contract_metadata_kind<'db>(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicPointerReturn {
-    FreshMemory,
-    InputPointee,
-    InputArrayElem,
-    InputMemArrayElem,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicMemoryTarget {
-    Value(u32),
-    Pointee(u32),
-    /// A numeric address argument rather than a typed pointer argument.
-    Address {
-        input: u32,
-        space: ProviderAddressSpace,
-    },
-    /// A numeric storage slot that is exactly a `StorageMap` preimage hash.
-    /// It is assumed never to equal a compiler-allocated contract-field slot.
-    HashedStorageSlot(u32),
-    /// Any compatible location in the current execution context, independent of arguments.
-    WholeSpace(ProviderAddressSpace),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemoryAccessKind {
     Read,
@@ -157,317 +148,14 @@ impl MemoryAccessKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicMemoryExtent {
-    Typed,
-    Bytes(usize),
-    Argument(u32),
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IntrinsicMemoryAccess {
-    pub target: IntrinsicMemoryTarget,
-    pub kind: MemoryAccessKind,
-    pub extent: IntrinsicMemoryExtent,
-}
-
-impl IntrinsicMemoryAccess {
-    const fn value(input: u32, kind: MemoryAccessKind) -> Self {
-        Self {
-            target: IntrinsicMemoryTarget::Value(input),
-            kind,
-            extent: IntrinsicMemoryExtent::Typed,
-        }
-    }
-
-    const fn pointee(input: u32, kind: MemoryAccessKind, extent: IntrinsicMemoryExtent) -> Self {
-        Self {
-            target: IntrinsicMemoryTarget::Pointee(input),
-            kind,
-            extent,
-        }
-    }
-
-    const fn address(
-        input: u32,
-        space: ProviderAddressSpace,
-        kind: MemoryAccessKind,
-        extent: IntrinsicMemoryExtent,
-    ) -> Self {
-        Self {
-            target: IntrinsicMemoryTarget::Address { input, space },
-            kind,
-            extent,
-        }
-    }
-
-    const fn hashed_storage_slot(input: u32, kind: MemoryAccessKind) -> Self {
-        Self {
-            target: IntrinsicMemoryTarget::HashedStorageSlot(input),
-            kind,
-            extent: IntrinsicMemoryExtent::Typed,
-        }
-    }
-
-    const fn whole_space(space: ProviderAddressSpace, kind: MemoryAccessKind) -> Self {
-        Self {
-            target: IntrinsicMemoryTarget::WholeSpace(space),
-            kind,
-            extent: IntrinsicMemoryExtent::Unknown,
-        }
-    }
-}
-
-pub type IntrinsicMemoryContract = &'static [IntrinsicMemoryAccess];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IntrinsicContract {
-    pub pointer_return: Option<IntrinsicPointerReturn>,
-    pub memory: Option<IntrinsicMemoryContract>,
-}
-
-const RAW_MEM_READS: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Read, IntrinsicMemoryExtent::Bytes(32)),
-];
-const RAW_MEM_WRITES: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::value(0, MemoryAccessKind::MutAccess),
-    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write, IntrinsicMemoryExtent::Bytes(32)),
-];
-const RAW_MEM_BYTE_WRITES: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::value(0, MemoryAccessKind::MutAccess),
-    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write, IntrinsicMemoryExtent::Bytes(1)),
-];
-// Releasing an allocation requires exclusive access, but does not read its bytes.
-// The private std wrapper consumes its owner and never exports the raw address.
-const RELEASE_ALLOCATION: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    0,
-    MemoryAccessKind::Write,
-    IntrinsicMemoryExtent::Unknown,
-)];
-const READ_POINTEE_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    0,
-    MemoryAccessKind::Read,
-    IntrinsicMemoryExtent::Argument(1),
-)];
-const WRITE_POINTEE_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    0,
-    MemoryAccessKind::Write,
-    IntrinsicMemoryExtent::Argument(2),
-)];
-const READ_WORD_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    0,
-    MemoryAccessKind::Read,
-    IntrinsicMemoryExtent::Bytes(32),
-)];
-const WRITE_WORD_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    0,
-    MemoryAccessKind::Write,
-    IntrinsicMemoryExtent::Bytes(32),
-)];
-const WRITE_BYTE_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    0,
-    MemoryAccessKind::Write,
-    IntrinsicMemoryExtent::Bytes(1),
-)];
-const ZERO_MEMORY: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    0,
-    MemoryAccessKind::Write,
-    IntrinsicMemoryExtent::Argument(1),
-)];
-const COPY_MEMORY: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(
-        1,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(2),
-    ),
-    IntrinsicMemoryAccess::pointee(
-        0,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Argument(2),
-    ),
-];
-const COPY_CALLDATA: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::address(
-        1,
-        ProviderAddressSpace::Calldata,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(2),
-    ),
-    IntrinsicMemoryAccess::pointee(
-        0,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Argument(2),
-    ),
-];
-const COPY_CODE: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::address(
-        1,
-        ProviderAddressSpace::Code,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(2),
-    ),
-    IntrinsicMemoryAccess::pointee(
-        0,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Argument(2),
-    ),
-];
-const COPY_EXTERNAL_CODE: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::address(
-        2,
-        ProviderAddressSpace::Code,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(3),
-    ),
-    IntrinsicMemoryAccess::pointee(
-        1,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Argument(3),
-    ),
-];
-// Unrestricted external execution can access current state directly (delegatecall)
-// or through callbacks (call/create). Static execution propagates its write ban,
-// but callbacks can still read state. Caller-frame memory is limited to buffers.
-const CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(
-        3,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(4),
-    ),
-    IntrinsicMemoryAccess::pointee(
-        5,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Argument(6),
-    ),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
-];
-const STATIC_CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(
-        2,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(3),
-    ),
-    IntrinsicMemoryAccess::pointee(
-        4,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Argument(5),
-    ),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
-];
-// Precompiles run no contract code, so unlike `staticcall` they cannot call
-// back into the current contract and read its state.
-const STATIC_CALL_PRECOMPILE_EFFECTS: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(
-        2,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(3),
-    ),
-    IntrinsicMemoryAccess::pointee(
-        4,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Argument(5),
-    ),
-];
-const DELEGATE_CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(
-        2,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(3),
-    ),
-    IntrinsicMemoryAccess::pointee(
-        4,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Argument(5),
-    ),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
-];
-const CREATE_EFFECTS: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(
-        1,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Argument(2),
-    ),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
-];
-const READ_VALUE_0: &[IntrinsicMemoryAccess] =
-    &[IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read)];
-const READ_STORAGE: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::address(
-    0,
-    ProviderAddressSpace::Storage,
-    MemoryAccessKind::Read,
-    IntrinsicMemoryExtent::Typed,
-)];
-const WRITE_STORAGE: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::address(
-    0,
-    ProviderAddressSpace::Storage,
-    MemoryAccessKind::Write,
-    IntrinsicMemoryExtent::Typed,
-)];
-const READ_HASHED_STORAGE: &[IntrinsicMemoryAccess] =
-    &[IntrinsicMemoryAccess::hashed_storage_slot(
-        0,
-        MemoryAccessKind::Read,
-    )];
-const WRITE_HASHED_STORAGE: &[IntrinsicMemoryAccess] =
-    &[IntrinsicMemoryAccess::hashed_storage_slot(
-        0,
-        MemoryAccessKind::Write,
-    )];
-const RAW_STORAGE_READS: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::address(
-        1,
-        ProviderAddressSpace::Storage,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Typed,
-    ),
-];
-const RAW_STORAGE_WRITES: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::value(0, MemoryAccessKind::MutAccess),
-    IntrinsicMemoryAccess::address(
-        1,
-        ProviderAddressSpace::Storage,
-        MemoryAccessKind::Write,
-        IntrinsicMemoryExtent::Typed,
-    ),
-];
-const READ_CALLDATA_WORD: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::address(
-    0,
-    ProviderAddressSpace::Calldata,
-    MemoryAccessKind::Read,
-    IntrinsicMemoryExtent::Bytes(32),
-)];
-const RAW_CALLDATA_READS: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::address(
-        1,
-        ProviderAddressSpace::Calldata,
-        MemoryAccessKind::Read,
-        IntrinsicMemoryExtent::Bytes(32),
-    ),
-];
-const NO_MEMORY_ACCESSES: IntrinsicMemoryContract = &[];
-
 macro_rules! define_runtime_intrinsics {
-    ($($variant:ident => ($ingot:ident, [$($segment:literal),+], $memory:expr, $pointer:expr)),+ $(,)?) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+    ($($variant:ident => ($ingot:ident, [$($segment:literal),+])),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
         pub enum RuntimeBuiltinFuncKind {
             $($variant),+
         }
 
-        #[salsa::tracked]
+        #[salsa::tracked(returns(copy))]
         pub fn runtime_builtin_func_kind<'db>(
             db: &'db dyn HirAnalysisDb,
             func: Func<'db>,
@@ -492,92 +180,90 @@ macro_rules! define_runtime_intrinsics {
                 .then_some(builtin)
         }
 
-        fn runtime_intrinsic_contract(kind: RuntimeBuiltinFuncKind) -> IntrinsicContract {
-            match kind {
-                $(RuntimeBuiltinFuncKind::$variant => IntrinsicContract {
-                    pointer_return: $pointer,
-                    memory: Some($memory),
-                }),+
-            }
-        }
     };
 }
 
 define_runtime_intrinsics! {
-    Malloc => (Core, ["ptr", "alloc_raw"], NO_MEMORY_ACCESSES, Some(IntrinsicPointerReturn::FreshMemory)),
-    PtrOffsetBytes => (Core, ["ptr", "offset_bytes"], NO_MEMORY_ACCESSES, Some(IntrinsicPointerReturn::InputPointee)),
-    PtrEq => (Core, ["ptr", "addr_eq"], NO_MEMORY_ACCESSES, None),
-    NativePtrIsNull => (Std, ["native", "bytes", "is_null"], NO_MEMORY_ACCESSES, None),
-    Mload => (Std, ["evm", "ops", "mload"], READ_WORD_0, None),
-    Mstore => (Std, ["evm", "ops", "mstore"], WRITE_WORD_0, None),
-    Mstore8 => (Std, ["evm", "ops", "mstore8"], WRITE_BYTE_0, None),
-    Mcopy => (Core, ["ptr", "copy_mem"], COPY_MEMORY, None),
-    ZeroMem => (Core, ["ptr", "zero_mem"], ZERO_MEMORY, None),
-    Msize => (Std, ["evm", "ops", "msize"], NO_MEMORY_ACCESSES, None),
-    Sload => (Std, ["evm", "ops", "sload"], READ_STORAGE, None),
-    Sstore => (Std, ["evm", "ops", "sstore"], WRITE_STORAGE, None),
-    SloadHashed => (Std, ["evm", "ops", "sload_hashed"], READ_HASHED_STORAGE, None),
-    SstoreHashed => (Std, ["evm", "ops", "sstore_hashed"], WRITE_HASHED_STORAGE, None),
-    CallDataLoad => (Std, ["evm", "ops", "calldataload"], READ_CALLDATA_WORD, None),
-    CallDataCopy => (Std, ["evm", "ops", "calldatacopy"], COPY_CALLDATA, None),
-    CallDataSize => (Std, ["evm", "ops", "calldatasize"], NO_MEMORY_ACCESSES, None),
-    ReturnDataCopy => (Std, ["evm", "ops", "returndatacopy"], WRITE_POINTEE_0, None),
-    ReturnDataSize => (Std, ["evm", "ops", "returndatasize"], NO_MEMORY_ACCESSES, None),
-    CodeCopy => (Std, ["evm", "ops", "codecopy"], COPY_CODE, None),
-    CodeSize => (Std, ["evm", "ops", "codesize"], NO_MEMORY_ACCESSES, None),
-    ExtCodeCopy => (Std, ["evm", "ops", "extcodecopy"], COPY_EXTERNAL_CODE, None),
-    ExtCodeSize => (Std, ["evm", "ops", "extcodesize"], NO_MEMORY_ACCESSES, None),
-    ExtCodeHash => (Std, ["evm", "ops", "extcodehash"], NO_MEMORY_ACCESSES, None),
-    Keccak256 => (Std, ["evm", "ops", "keccak256"], READ_POINTEE_0, None),
-    AddMod => (Core, ["num", "addmod"], NO_MEMORY_ACCESSES, None),
-    MulMod => (Core, ["num", "mulmod"], NO_MEMORY_ACCESSES, None),
-    LeadingZeros => (Core, ["num", "leading_zeros"], NO_MEMORY_ACCESSES, None),
-    Byte => (Std, ["evm", "ops", "byte"], NO_MEMORY_ACCESSES, None),
-    SignExtend => (Std, ["evm", "ops", "signextend"], NO_MEMORY_ACCESSES, None),
-    Address => (Std, ["evm", "ops", "address"], NO_MEMORY_ACCESSES, None),
-    Caller => (Std, ["evm", "ops", "caller"], NO_MEMORY_ACCESSES, None),
-    CallValue => (Std, ["evm", "ops", "callvalue"], NO_MEMORY_ACCESSES, None),
-    Origin => (Std, ["evm", "ops", "origin"], NO_MEMORY_ACCESSES, None),
-    GasPrice => (Std, ["evm", "ops", "gasprice"], NO_MEMORY_ACCESSES, None),
-    CoinBase => (Std, ["evm", "ops", "coinbase"], NO_MEMORY_ACCESSES, None),
-    Balance => (Std, ["evm", "ops", "balance"], NO_MEMORY_ACCESSES, None),
-    Timestamp => (Std, ["evm", "ops", "timestamp"], NO_MEMORY_ACCESSES, None),
-    Number => (Std, ["evm", "ops", "number"], NO_MEMORY_ACCESSES, None),
-    PrevRandao => (Std, ["evm", "ops", "prevrandao"], NO_MEMORY_ACCESSES, None),
-    GasLimit => (Std, ["evm", "ops", "gaslimit"], NO_MEMORY_ACCESSES, None),
-    ChainId => (Std, ["evm", "ops", "chainid"], NO_MEMORY_ACCESSES, None),
-    BaseFee => (Std, ["evm", "ops", "basefee"], NO_MEMORY_ACCESSES, None),
-    SelfBalance => (Std, ["evm", "ops", "selfbalance"], NO_MEMORY_ACCESSES, None),
-    BlockHash => (Std, ["evm", "ops", "blockhash"], NO_MEMORY_ACCESSES, None),
-    BlobHash => (Std, ["evm", "ops", "blobhash"], NO_MEMORY_ACCESSES, None),
-    BlobBaseFee => (Std, ["evm", "ops", "blobbasefee"], NO_MEMORY_ACCESSES, None),
-    Gas => (Std, ["evm", "ops", "gas"], NO_MEMORY_ACCESSES, None),
-    Call => (Std, ["evm", "ops", "call"], CALL_EFFECTS, None),
-    StaticCall => (Std, ["evm", "ops", "staticcall"], STATIC_CALL_EFFECTS, None),
-    StaticCallPrecompile => (
-        Std,
-        ["evm", "ops", "staticcall_precompile"],
-        STATIC_CALL_PRECOMPILE_EFFECTS,
-        None
-    ),
-    DelegateCall => (Std, ["evm", "ops", "delegatecall"], DELEGATE_CALL_EFFECTS, None),
-    Create => (Std, ["evm", "ops", "create"], CREATE_EFFECTS, None),
-    Create2 => (Std, ["evm", "ops", "create2"], CREATE_EFFECTS, None),
-    Log0 => (Std, ["evm", "ops", "log0"], READ_POINTEE_0, None),
-    Log1 => (Std, ["evm", "ops", "log1"], READ_POINTEE_0, None),
-    Log2 => (Std, ["evm", "ops", "log2"], READ_POINTEE_0, None),
-    Log3 => (Std, ["evm", "ops", "log3"], READ_POINTEE_0, None),
-    Log4 => (Std, ["evm", "ops", "log4"], READ_POINTEE_0, None),
-    Revert => (Std, ["evm", "ops", "revert"], READ_POINTEE_0, None),
-    RevertEmpty => (Std, ["evm", "ops", "revert_empty"], NO_MEMORY_ACCESSES, None),
-    ReturnData => (Std, ["evm", "ops", "return_data"], READ_POINTEE_0, None),
-    SelfDestruct => (Std, ["evm", "ops", "selfdestruct"], NO_MEMORY_ACCESSES, None),
-    Stop => (Std, ["evm", "ops", "stop"], NO_MEMORY_ACCESSES, None),
-    Panic => (Core, ["panic"], NO_MEMORY_ACCESSES, None),
-    PanicWithValue => (Core, ["panic_with_value"], NO_MEMORY_ACCESSES, None),
-    PanicCode => (Core, ["panic_code"], NO_MEMORY_ACCESSES, None),
-    Todo => (Core, ["todo"], NO_MEMORY_ACCESSES, None),
-    IntrinsicKeccak256 => (Core, ["intrinsic", "__keccak256"], READ_VALUE_0, None),
+    Malloc => (Core, ["ptr", "alloc_raw"]),
+    TryMalloc => (Core, ["ptr", "try_alloc_raw"]),
+    Free => (Core, ["ptr", "dealloc_raw"]),
+    Forget => (Core, ["mem", "forget"]),
+    NeedsDrop => (Core, ["mem", "needs_drop"]),
+    PtrOffsetBytes => (Core, ["ptr", "offset_bytes"]),
+    PtrEq => (Core, ["ptr", "addr_eq"]),
+    Mload => (Std, ["evm", "ops", "mload"]),
+    Mstore => (Std, ["evm", "ops", "mstore"]),
+    Mstore8 => (Std, ["evm", "ops", "mstore8"]),
+    Mcopy => (Core, ["ptr", "copy_mem"]),
+    ZeroMem => (Core, ["ptr", "zero_mem"]),
+    Msize => (Std, ["evm", "ops", "msize"]),
+    Sload => (Std, ["evm", "ops", "sload"]),
+    Sstore => (Std, ["evm", "ops", "sstore"]),
+    SloadHashed => (Std, ["evm", "ops", "sload_hashed"]),
+    SstoreHashed => (Std, ["evm", "ops", "sstore_hashed"]),
+    CallDataLoad => (Std, ["evm", "ops", "calldataload"]),
+    CallDataCopy => (Std, ["evm", "ops", "calldatacopy"]),
+    CallDataSize => (Std, ["evm", "ops", "calldatasize"]),
+    ReturnDataCopy => (Std, ["evm", "ops", "returndatacopy"]),
+    ReturnDataSize => (Std, ["evm", "ops", "returndatasize"]),
+    CodeCopy => (Std, ["evm", "ops", "codecopy"]),
+    CodeSize => (Std, ["evm", "ops", "codesize"]),
+    ExtCodeCopy => (Std, ["evm", "ops", "extcodecopy"]),
+    ExtCodeSize => (Std, ["evm", "ops", "extcodesize"]),
+    ExtCodeHash => (Std, ["evm", "ops", "extcodehash"]),
+    Keccak256 => (Std, ["evm", "ops", "keccak256"]),
+    AddMod => (Core, ["num", "addmod"]),
+    MulMod => (Core, ["num", "mulmod"]),
+    LeadingZeros => (Core, ["num", "leading_zeros"]),
+    ToBigEndian => (Core, ["num", "to_be"]),
+    FromBigEndian => (Core, ["num", "from_be"]),
+    ToLittleEndian => (Core, ["num", "to_le"]),
+    FromLittleEndian => (Core, ["num", "from_le"]),
+    SwapBytes => (Core, ["num", "swap_bytes"]),
+    BlackBox => (Core, ["hint", "black_box"]),
+    Byte => (Std, ["evm", "ops", "byte"]),
+    SignExtend => (Std, ["evm", "ops", "signextend"]),
+    Address => (Std, ["evm", "ops", "address"]),
+    Caller => (Std, ["evm", "ops", "caller"]),
+    CallValue => (Std, ["evm", "ops", "callvalue"]),
+    Origin => (Std, ["evm", "ops", "origin"]),
+    GasPrice => (Std, ["evm", "ops", "gasprice"]),
+    CoinBase => (Std, ["evm", "ops", "coinbase"]),
+    Balance => (Std, ["evm", "ops", "balance"]),
+    Timestamp => (Std, ["evm", "ops", "timestamp"]),
+    Number => (Std, ["evm", "ops", "number"]),
+    PrevRandao => (Std, ["evm", "ops", "prevrandao"]),
+    GasLimit => (Std, ["evm", "ops", "gaslimit"]),
+    ChainId => (Std, ["evm", "ops", "chainid"]),
+    BaseFee => (Std, ["evm", "ops", "basefee"]),
+    SelfBalance => (Std, ["evm", "ops", "selfbalance"]),
+    BlockHash => (Std, ["evm", "ops", "blockhash"]),
+    BlobHash => (Std, ["evm", "ops", "blobhash"]),
+    BlobBaseFee => (Std, ["evm", "ops", "blobbasefee"]),
+    Gas => (Std, ["evm", "ops", "gas"]),
+    Call => (Std, ["evm", "ops", "call"]),
+    StaticCall => (Std, ["evm", "ops", "staticcall"]),
+    StaticCallPrecompile => (Std, ["evm", "ops", "staticcall_precompile"]),
+    DelegateCall => (Std, ["evm", "ops", "delegatecall"]),
+    Create => (Std, ["evm", "ops", "create"]),
+    Create2 => (Std, ["evm", "ops", "create2"]),
+    Log0 => (Std, ["evm", "ops", "log0"]),
+    Log1 => (Std, ["evm", "ops", "log1"]),
+    Log2 => (Std, ["evm", "ops", "log2"]),
+    Log3 => (Std, ["evm", "ops", "log3"]),
+    Log4 => (Std, ["evm", "ops", "log4"]),
+    Revert => (Std, ["evm", "ops", "revert"]),
+    RevertEmpty => (Std, ["evm", "ops", "revert_empty"]),
+    ReturnData => (Std, ["evm", "ops", "return_data"]),
+    SelfDestruct => (Std, ["evm", "ops", "selfdestruct"]),
+    Stop => (Std, ["evm", "ops", "stop"]),
+    Panic => (Core, ["panic"]),
+    PanicWithValue => (Core, ["panic_with_value"]),
+    PanicCode => (Core, ["panic_code"]),
+    Todo => (Core, ["todo"]),
+    IntrinsicKeccak256 => (Core, ["intrinsic", "__keccak256"]),
+    IntrinsicKeccakWords => (Core, ["intrinsic", "__keccak_words"]),
+    Clear => (Core, ["intrinsic", "clear"]),
 }
 
 #[derive(Clone, Copy)]
@@ -596,13 +282,15 @@ pub(crate) enum NumericExternIntrinsic {
 #[derive(Clone, Copy)]
 pub(crate) enum CtfeExternIntrinsic {
     SizeOf,
-    AsBytes,
+    StorageSlots,
     Keccak256,
+    KeccakWords,
     Bitcast,
     Numeric(NumericExternIntrinsic),
     AddMod,
     MulMod,
     LeadingZeros,
+    PanicCode,
 }
 
 pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
@@ -618,14 +306,17 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(RuntimeBuiltinFuncKind::LeadingZeros) => {
             return Some(CtfeExternIntrinsic::LeadingZeros);
         }
+        Some(RuntimeBuiltinFuncKind::PanicCode) => return Some(CtfeExternIntrinsic::PanicCode),
         _ => {}
     }
     if lib_func_matches(db, func, "core::intrinsic::size_of") {
         Some(CtfeExternIntrinsic::SizeOf)
-    } else if lib_func_matches(db, func, "core::intrinsic::__as_bytes") {
-        Some(CtfeExternIntrinsic::AsBytes)
+    } else if lib_func_matches(db, func, "core::intrinsic::storage_slots") {
+        Some(CtfeExternIntrinsic::StorageSlots)
     } else if lib_func_matches(db, func, "core::intrinsic::__keccak256") {
         Some(CtfeExternIntrinsic::Keccak256)
+    } else if lib_func_matches(db, func, "core::intrinsic::__keccak_words") {
+        Some(CtfeExternIntrinsic::KeccakWords)
     } else if lib_func_matches(db, func, "core::num::__bitcast") {
         Some(CtfeExternIntrinsic::Bitcast)
     } else {
@@ -742,134 +433,174 @@ fn has_integer_numeric_suffix(suffix: &str) -> bool {
     )
 }
 
-pub fn intrinsic_contract<'db>(
+/// Sealed std capabilities whose methods start external executions, which can
+/// reenter the contract and access any persistent or transient slot.
+const REENTRANT_CAPABILITIES: [&str; 3] = [
+    "std::evm::effects::Call",
+    "std::evm::effects::Create",
+    "std::evm::effects::Super",
+];
+
+/// The sealed std capability that addresses persistent slots directly.
+const RAW_STORAGE_CAPABILITY: &str = "std::evm::effects::RawStorage";
+
+/// Whether `trait_` is `target` or has it as a transitive super-trait.
+fn trait_reaches<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>, target: Trait<'db>) -> bool {
+    trait_ == target
+        || trait_
+            .super_trait_bounds(db)
+            .any(|bound| trait_reaches(db, bound.def(db), target))
+}
+
+/// The persistent and transient state an external execution started by `func`
+/// can access. A call or creation can reenter the contract and write any slot;
+/// a static call only reads; precompiles cannot call back. Methods of reentrant
+/// std capabilities start such executions; shared receiver authority only
+/// permits reads, while mutable or owned authority can write.
+pub fn external_call_state_access<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
-) -> Option<IntrinsicContract> {
+    mode: Option<BorrowKind>,
+) -> Option<MemoryAccessKind> {
+    match runtime_builtin_func_kind(db, func) {
+        Some(
+            RuntimeBuiltinFuncKind::Call
+            | RuntimeBuiltinFuncKind::DelegateCall
+            | RuntimeBuiltinFuncKind::Create
+            | RuntimeBuiltinFuncKind::Create2,
+        ) => return Some(MemoryAccessKind::Write),
+        Some(RuntimeBuiltinFuncKind::StaticCall) => return Some(MemoryAccessKind::Read),
+        Some(_) => return None,
+        None => {}
+    }
     let func = func.trait_method_def(db).unwrap_or(func);
-    if let Some(runtime) = runtime_builtin_func_kind(db, func) {
-        return Some(runtime_intrinsic_contract(runtime));
-    }
-    let numeric = core_numeric_const_intrinsic(db, func).is_some()
-        || lib_func_matches(db, func, "core::num::__bitcast");
-    if func.top_mod(db).ingot(db).kind(db) == IngotKind::Std && func.body(db).is_none() {
-        if lib_func_matches(db, func, "std::native::bytes::malloc") {
-            return Some(IntrinsicContract {
-                pointer_return: Some(IntrinsicPointerReturn::FreshMemory),
-                memory: Some(NO_MEMORY_ACCESSES),
-            });
-        }
-        if lib_func_matches(db, func, "std::native::bytes::free") {
-            return Some(IntrinsicContract {
-                pointer_return: None,
-                memory: Some(RELEASE_ALLOCATION),
-            });
-        }
-    }
-    // These exact std declarations call host C I/O and process accounting.
-    // They can observe/change host state, but cannot access or retain Fe memory.
-    // A same-named user extern or a scalar-only signature carries no such trust.
-    let host_import = func.top_mod(db).ingot(db).kind(db) == IngotKind::Std
-        && func.body(db).is_none()
-        && ["std::io::getchar", "std::io::putchar", "std::native::clock"]
-            .iter()
-            .any(|path| lib_func_matches(db, func, path));
-    if numeric
-        || host_import
-        || [
-            "core::intrinsic::size_of",
-            "core::intrinsic::contract_field_slot",
-        ]
+    let containing_trait = func.containing_trait(db)?;
+    if !REENTRANT_CAPABILITIES
         .iter()
-        .any(|path| lib_func_matches(db, func, path))
+        .any(|path| resolve_lib_trait_path(db, func.scope(), path) == Some(containing_trait))
     {
-        return Some(IntrinsicContract {
-            pointer_return: None,
-            memory: Some(NO_MEMORY_ACCESSES),
-        });
+        return None;
     }
-    if lib_func_matches(db, func, "core::intrinsic::__as_bytes") {
-        return Some(IntrinsicContract {
-            pointer_return: None,
-            memory: Some(READ_VALUE_0),
-        });
-    }
-    let pointer_return = if lib_func_matches(db, func, "core::ptr::array_elem") {
-        Some(IntrinsicPointerReturn::InputArrayElem)
-    } else if lib_func_matches(db, func, "core::ptr::mem_array_elem") {
-        Some(IntrinsicPointerReturn::InputMemArrayElem)
-    } else {
-        None
-    };
-    let memory = raw_mem_contract(db, func);
-    (pointer_return.is_some() || memory.is_some()).then_some(IntrinsicContract {
-        pointer_return,
-        memory,
-    })
+    Some(
+        if CallableDef::Func(func).param_mode(db, 0, mode) == FuncParamMode::View {
+            MemoryAccessKind::Read
+        } else {
+            MemoryAccessKind::Write
+        },
+    )
 }
 
-fn raw_mem_contract<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-) -> Option<IntrinsicMemoryContract> {
-    if lib_func_matches(db, func, "std::evm::effects::RawMem::mload") {
-        Some(RAW_MEM_READS)
-    } else if lib_func_matches(db, func, "std::evm::effects::RawMem::mstore") {
-        Some(RAW_MEM_WRITES)
-    } else if lib_func_matches(db, func, "std::evm::effects::RawMem::mstore8") {
-        Some(RAW_MEM_BYTE_WRITES)
-    } else if lib_func_matches(db, func, "std::evm::effects::RawStorage::sload") {
-        Some(RAW_STORAGE_READS)
-    } else if lib_func_matches(db, func, "std::evm::effects::RawStorage::sstore") {
-        Some(RAW_STORAGE_WRITES)
-    } else if lib_func_matches(db, func, "std::evm::effects::RawOps::calldataload") {
-        Some(RAW_CALLDATA_READS)
-    } else if [
-        "std::evm::effects::RawOps::calldatasize",
-        "std::evm::effects::RawOps::returndatasize",
-        "std::evm::effects::RawOps::codesize",
-        "std::evm::effects::RawOps::code_region_offset",
-        "std::evm::effects::RawOps::code_region_len",
-    ]
-    .iter()
-    .any(|path| lib_func_matches(db, func, path))
-    {
-        // Sealed EVM metadata operations have no storage or memory effects.
-        Some(NO_MEMORY_ACCESSES)
-    } else {
-        None
-    }
-}
-
-/// Returns whether `func` declares or implements a sealed EVM capability trait method.
-///
-/// These receivers are implemented by the zero-sized `std::evm::Evm` token, so
-/// memory reachable through another argument cannot alias receiver storage.
-pub fn is_std_evm_effect_method<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> bool {
-    let func = func.trait_method_def(db).unwrap_or(func);
-    let Some(containing_trait) = func.containing_trait(db) else {
-        return false;
-    };
-    is_std_evm_effect_trait(db, func.scope(), containing_trait)
-}
-
-pub fn is_std_evm_effect_trait<'db>(
+/// The persistent and transient state an effect keyed by `key` reaches in
+/// every slot: a reentrant capability can start external executions and a raw
+/// storage capability addresses slots directly. Immutable authority only
+/// reads.
+pub fn effect_key_state_access<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    effect: Trait<'db>,
+    assumptions: PredicateListId<'db>,
+    key: EffectRequirementKey<'db>,
+    is_mut: bool,
+) -> Option<MemoryAccessKind> {
+    let reaches = |path: &&str| {
+        let Some(target) = resolve_lib_trait_path(db, scope, path) else {
+            return false;
+        };
+        match key {
+            EffectRequirementKey::Trait(inst) => trait_reaches(db, inst.def(db), target),
+            EffectRequirementKey::Type(ty) => matches!(
+                is_goal_satisfiable(
+                    db,
+                    TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                    TraitInstId::new_simple(db, target, vec![ty]),
+                ),
+                GoalSatisfiability::Satisfied(_)
+            ),
+            // A row reaches what its components reach, once it expands.
+            EffectRequirementKey::Row(_) | EffectRequirementKey::Other => false,
+        }
+    };
+    REENTRANT_CAPABILITIES
+        .iter()
+        .chain([&RAW_STORAGE_CAPABILITY])
+        .any(reaches)
+        .then_some(if is_mut {
+            MemoryAccessKind::Write
+        } else {
+            MemoryAccessKind::Read
+        })
+}
+
+/// The seal of the std EVM capabilities, which only the zero-sized
+/// `std::evm::Evm` implements.
+const EVM_CAPABILITY_SEAL: &str = "std::evm::effects::EvmCapabilitySeal";
+
+/// Whether every bound `assumptions` place on the type parameters of `ty`
+/// is a sealed std EVM capability trait, which only `std::evm::Evm`
+/// implements: a generic body then reaches no more through a value of `ty`
+/// than those bounds give it, whatever `ty` is instantiated with. A bound of
+/// any other trait could be implemented to reach more.
+pub fn bounded_by_sealed_capabilities<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    ty: TyId<'db>,
 ) -> bool {
-    [
-        "std::evm::effects::Ctx",
-        "std::evm::effects::RawMem",
-        "std::evm::effects::RawStorage",
-        "std::evm::effects::RawOps",
-        "std::evm::effects::Log",
-        "std::evm::effects::Create",
-        "std::evm::effects::Call",
-        "std::evm::effects::Super",
-    ]
-    .into_iter()
-    .any(|path| resolve_lib_trait_path(db, scope, path) == Some(effect))
+    struct Params<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: FxHashSet<TyId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Params<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if matches!(ty.data(self.db), TyData::TyParam(_)) {
+                self.found.insert(ty);
+            }
+            walk_ty(self, ty)
+        }
+    }
+    let params = |ty: TyId<'db>| {
+        let mut params = Params {
+            db,
+            found: FxHashSet::default(),
+        };
+        ty.visit_with(&mut params);
+        params.found
+    };
+    let Some(seal) = resolve_lib_trait_path(db, scope, EVM_CAPABILITY_SEAL) else {
+        return false;
+    };
+    // An effect's provider evidence (`EffectRef`) names its binding, not a
+    // trait an implementation could make reach more.
+    let effect_ref = resolve_core_trait(db, scope, &["EffectRef"]);
+    let own = params(ty);
+    !own.is_empty()
+        && assumptions.list(db).iter().all(|bound| {
+            effect_ref.is_some_and(|effect_ref| trait_reaches(db, bound.def(db), effect_ref))
+                || !bound
+                    .args(db)
+                    .iter()
+                    .any(|arg| !params(*arg).is_disjoint(&own))
+                || trait_reaches(db, bound.def(db), seal)
+        })
+}
+
+/// Whether `ty` implements the std EVM capability seal, so a place of it holds
+/// nothing even when `ty` is a type parameter bounded by `Ctx` or `Log`.
+pub fn is_sealed_evm_capability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    resolve_lib_trait_path(db, scope, EVM_CAPABILITY_SEAL).is_some_and(|seal| {
+        goal_holds(
+            db,
+            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+            TraitInstId::new_simple(db, seal, vec![ty]),
+        )
+    })
 }
 
 fn runtime_builtin_func_path<'db>(
@@ -1011,7 +742,7 @@ pub fn resolve_core_range_types<'db>(
     })
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn resolve_lib_path<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -1031,7 +762,7 @@ fn resolve_lib_path<'db>(
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn resolve_lib_func<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -1057,7 +788,7 @@ fn resolve_lib_func<'db>(
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn resolve_lib_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,

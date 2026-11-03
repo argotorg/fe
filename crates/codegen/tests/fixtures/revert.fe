@@ -1,9 +1,10 @@
 use core::ptr
-use std::evm::{RawMem, RawOps}
+use core::abi::store_word
+use std::evm::RawOps
 
 fn fail() uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    ops.mstore(addr: data.ptr(), value: 42)
+    unsafe { store_word(ptr: data.ptr(), value: 42) }
     ops.revert(data: data.span())
 }
 

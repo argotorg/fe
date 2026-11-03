@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/copy_impl_blanket.fe
+---
+error[6-0032]: `Copy` cannot be implemented for a type parameter
+   ┌─ copy_impl_blanket.fe:22:24
+   │
+22 │ impl<T: Mark> Copy for T {}
+   │                        ^ this would make every type the bounds admit `Copy`
+   │
+   = a `Copy` type's fields must be `Copy`, and a `#[view]` or state-only type has no copies; implement `Copy` for each type, where those are checked

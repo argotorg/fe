@@ -51,7 +51,7 @@ fn on_trait_method(c: Counter) -> u256 {
 }
 
 fn explicit_ref(c: Counter) -> u256 {
-    let r: ref Counter = ref c
+    let r = ref c
     r.get()
 }
 

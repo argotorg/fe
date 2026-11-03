@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/yield_values.fe
+---
+error[8-0099]: invalid yield
+   ┌─ yield_values.fe:33:9
+   │
+33 │         self.v
+   │         ^^^^^^ this does not yield `mut u256`

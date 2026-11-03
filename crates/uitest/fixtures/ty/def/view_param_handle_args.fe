@@ -8,22 +8,22 @@ fn take_u8(_ x: u8) -> u8 {
 
 fn take_no_copy(_: NoCopy) {}
 
-fn copy_from_ref(mut value: own u8) -> u8 {
-    let r: ref u8 = ref value
+fn copy_from_ref(var value: own u8) -> u8 {
+    let r = ref value
     take_u8(r)
 }
 
-fn copy_from_mut(mut value: own u8) -> u8 {
-    let m: mut u8 = mut value
+fn copy_from_mut(var value: own u8) -> u8 {
+    let m = mut value
     take_u8(m)
 }
 
-fn no_copy_from_ref(mut value: own NoCopy) {
-    let r: ref NoCopy = ref value
+fn no_copy_from_ref(var value: own NoCopy) {
+    let r = ref value
     take_no_copy(r)
 }
 
-fn no_copy_from_mut(mut value: own NoCopy) {
-    let m: mut NoCopy = mut value
+fn no_copy_from_mut(var value: own NoCopy) {
+    let m = mut value
     take_no_copy(m)
 }

@@ -106,7 +106,7 @@ note:
    ┌─ goto_origin_range.fe:34:9
    │
 34 │     let init_ptr = ptr::alloc_bytes(total_len)
-   │         ^^^^^^^^ -> local: *<u8>
+   │         ^^^^^^^^ -> local: *u8
 
 note: 
    ┌─ goto_origin_range.fe:34:20
@@ -142,7 +142,7 @@ note:
    ┌─ goto_origin_range.fe:35:25
    │
 35 │     ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
-   │                         ^^^^^^^^ -> local: *<u8>
+   │                         ^^^^^^^^ -> local: *u8
 
 note: 
    ┌─ goto_origin_range.fe:35:43
@@ -178,7 +178,7 @@ note:
    ┌─ goto_origin_range.fe:38:9
    │
 38 │     let ret_ptr = ptr::alloc_bytes(ret_len)
-   │         ^^^^^^^ -> local: *<u8>
+   │         ^^^^^^^ -> local: *u8
 
 note: 
    ┌─ goto_origin_range.fe:38:19
@@ -214,7 +214,7 @@ note:
    ┌─ goto_origin_range.fe:39:25
    │
 39 │     ops::revert(offset: ret_ptr, len: ret_len)
-   │                         ^^^^^^^ -> local: *<u8>
+   │                         ^^^^^^^ -> local: *u8
 
 note: 
    ┌─ goto_origin_range.fe:39:39

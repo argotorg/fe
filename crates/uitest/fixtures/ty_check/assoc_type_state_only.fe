@@ -1,0 +1,27 @@
+use std::evm::TSlot
+
+// A field of an associated type holds the type it names: a pinned one makes
+// the struct state-only, as a field of that type written directly does.
+trait Tr {
+    type Out
+}
+
+struct K {}
+
+impl Tr for K {
+    type Out = TSlot<u256>
+}
+
+struct S<T: Tr> {
+    pub a: T::Out,
+}
+
+struct D {
+    pub a: TSlot<u256>,
+}
+
+// Rejected: `S<K>` holds a `TSlot<u256>`.
+fn by_value_assoc(_ x: own S<K>) {}
+
+// Rejected: `D` holds a `TSlot<u256>`.
+fn by_value_direct(_ x: own D) {}

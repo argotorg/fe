@@ -1,0 +1,104 @@
+// An encoding writes through an `AbiFrame`, which checks every write against
+// the sizes `AbiSize` reported. An encoding that disagrees with them panics
+// instead of writing past its frame.
+use core::abi::{AbiFrame, AbiSize, Encode, encode_alloc, encode_field}
+use std::abi::{Bytes, Sol}
+
+// Reports one word but writes two.
+struct Overlong {}
+
+impl AbiSize for Overlong {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl Encode<Sol> for Overlong {
+    fn encode(own self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: 1)
+        out.store_word(at: 32, value: 2)
+    }
+}
+
+// Reports a one-word payload but writes a two-word one.
+struct Undersized {}
+
+impl AbiSize for Undersized {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = true
+
+    fn payload_size(self) -> u256 {
+        32
+    }
+}
+
+impl Encode<Sol> for Undersized {
+    fn encode(own self, _ out: AbiFrame) {
+        out.copy_from(at: 0, Bytes::from_word_prefix(word: 0xaa << 248, len: 1).encoded_span())
+    }
+}
+
+// Writes only its second word; the first stays zero.
+struct Sparse {}
+
+impl AbiSize for Sparse {
+    const HEAD_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = false
+}
+
+impl Encode<Sol> for Sparse {
+    fn encode(own self, _ out: AbiFrame) {
+        out.slice(offset: 32, len: 32).store_word(at: 0, value: 7)
+    }
+}
+
+// Reports a payload with no room after its head for its field's tail.
+struct ShortTails {}
+
+impl AbiSize for ShortTails {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = true
+
+    fn payload_size(self) -> u256 {
+        32
+    }
+}
+
+impl Encode<Sol> for ShortTails {
+    fn encode(own self, _ out: AbiFrame) {
+        let bytes = Bytes::from_word_prefix(word: 0xaa << 248, len: 1)
+        let _ = encode_field<Sol, Bytes>(bytes, out, head_pos: 0, tails: out.tail(32))
+    }
+}
+
+#[test]
+fn writes_within_the_frame() {
+    let buffer = encode_alloc<Sol, (u256, Sparse, u256)>((1, Sparse {}, 2))
+    let span = buffer.span()
+    assert!(buffer.len() == 128)
+    assert!(span.word_at(0) == 1)
+    assert!(span.word_at(32) == 0)
+    assert!(span.word_at(64) == 7)
+    assert!(span.word_at(96) == 2)
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn writing_past_the_frame_panics() {
+    let _ = encode_alloc<Sol, Overlong>(Overlong {})
+}
+
+// The field's frame ends where the next field's head starts.
+#[test(should_revert, selector = 0x4e487b71)]
+fn writing_past_a_field_panics() {
+    let _ = encode_alloc<Sol, (Overlong, u256)>((Overlong {}, 3))
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn writing_past_a_tail_panics() {
+    let _ = encode_alloc<Sol, (u256, Undersized)>((1, Undersized {}))
+}
+
+// A field's tail must fit in what earlier tails left of the frame.
+#[test(should_revert, selector = 0x4e487b71)]
+fn a_tail_past_the_frame_panics() {
+    let _ = encode_alloc<Sol, ShortTails>(ShortTails {})
+}

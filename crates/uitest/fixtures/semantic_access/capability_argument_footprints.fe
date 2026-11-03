@@ -1,0 +1,113 @@
+// A capability passed as a data argument reaches what the callee can do
+// with it: what its parameter's sealed std capability bounds give, or, for
+// any other parameter, what the argument's own type reaches. A closure call
+// is checked the same way.
+use std::evm::{Address, Call, Ctx, Evm, Log, RawStorage, read_storage_word}
+
+msg AMsg {
+    #[selector = 1]
+    Poke { v: Address },
+}
+
+#[event]
+struct Changed {
+    v: u256,
+}
+
+fn who<C: Ctx>(_ c: C) -> Address {
+    c.caller()
+}
+
+fn who_eff<C: Ctx>() -> Address uses (c: C) {
+    c.caller()
+}
+
+fn apply_with<T, F: Fn(mut T)>(_ f: F, _ t: mut T) uses F::E {
+    f(mut t)
+}
+
+trait Pinger {
+    fn ping(mut self, _ a: Address)
+}
+
+impl Pinger for Evm {
+    fn ping(mut self, _ a: Address) {
+        self.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a })
+    }
+}
+
+fn via_bound<P: Pinger>(_ p: mut P, _ a: Address) {
+    p.ping(a)
+}
+
+msg VMsg {
+    #[selector = 2]
+    ClosureCall { a: Address },
+    #[selector = 3]
+    ClosureRead,
+    #[selector = 4]
+    SealedBound,
+    #[selector = 5]
+    SealedEffect,
+    #[selector = 6]
+    EmitEvent,
+    #[selector = 7]
+    Routed { a: Address },
+    #[selector = 8]
+    UserBound { a: Address },
+}
+
+pub contract V uses (evm: mut Evm) {
+    mut value: u256,
+
+    recv VMsg {
+        // Rejected: a `mut Evm` passed to a closure calls out.
+        ClosureCall { a } uses (mut value, mut evm) {
+            let f = |e: mut Evm| e.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a })
+            let held = mut value
+            f(mut evm)
+            held = 1
+        }
+        // Rejected: a view `Evm` passed to a closure reads storage.
+        ClosureRead uses (mut value, evm) {
+            let peek = |s: Evm| -> u256 {
+                with (RawStorage = s) {
+                    read_storage_word(0)
+                }
+            }
+            let held = mut value
+            let _ = peek(evm)
+            held = 1
+        }
+        // Accepted: a parameter bounded by `Ctx` reaches no state.
+        SealedBound uses (mut value, ctx: Ctx) {
+            let held = mut value
+            let _ = who(ctx)
+            held = 1
+        }
+        // Accepted: an effect keyed by a parameter bounded by `Ctx`.
+        SealedEffect uses (mut value, evm) {
+            let held = mut value
+            let _ = with (Evm = evm) { who_eff<Evm>() }
+            held = 1
+        }
+        // Accepted: an event takes its log as a `L: Log` argument.
+        EmitEvent uses (mut value, log: mut Log) {
+            let held = mut value
+            Changed { v: 1 }.emit(mut log)
+            held = 1
+        }
+        // Rejected: an unbounded parameter routed to a callable that calls out.
+        Routed { a } uses (mut value, mut evm) {
+            let held = mut value
+            apply_with(|e: mut Evm| e.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a }), mut evm)
+            held = 1
+        }
+        // Rejected: a user trait implemented for `Evm` calls out.
+        UserBound { a } uses (mut value, mut evm) {
+            let held = mut value
+            via_bound(mut evm, a)
+            held = 1
+        }
+    }
+}

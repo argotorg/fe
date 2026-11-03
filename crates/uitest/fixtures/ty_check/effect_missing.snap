@@ -10,7 +10,8 @@ error[8-0036]: missing effect `Storage` required by `needs_storage`
 21 │     needs_storage()
    │     ^^^^^^^^^^^^^^^ `needs_storage` requires effect `Storage` to be in scope
    │
-   = provide it with `with (Storage = value)` or require it via `uses Storage`
+   = require it in this function's signature with `uses (Storage)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Storage = value) { .. }`
 
 error[8-0036]: missing effect `Storage` required by `run`
    ┌─ effect_missing.fe:25:5
@@ -18,4 +19,5 @@ error[8-0036]: missing effect `Storage` required by `run`
 25 │     worker.run()
    │     ^^^^^^^^^^^^ `run` requires effect `Storage` to be in scope
    │
-   = provide it with `with (Storage = value)` or require it via `uses Storage`
+   = require it in this function's signature with `uses (storage: mut Storage)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Storage = value) { .. }`

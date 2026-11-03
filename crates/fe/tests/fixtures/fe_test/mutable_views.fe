@@ -1,0 +1,52 @@
+// Mutable views write their owners: a `mut` span from `span` or `slice`, a
+// generic `mut MemSlice` parameter, the halves of `split_at` at `mut`, and
+// owner-side byte indexing on `MemBuffer`.
+use core::ptr::{MemArray, MemBuffer, MemSlice}
+
+fn fill<T: Copy>(_ s: mut MemSlice<T>, _ v: T) {
+    for mut x in s {
+        x = v
+    }
+}
+
+#[test]
+fn mutable_views_write_their_owners() {
+    var buf = MemBuffer::alloc(8)
+    let s = mut buf.span()
+    s[0] = 10
+    assert!(buf[0] == 10)
+    let part = mut buf.slice(offset: 2, len: 3)
+    fill(mut part, 7)
+    assert!(buf[1] == 0 && buf[2] == 7 && buf[4] == 7 && buf[5] == 0)
+    buf[7] = 9
+    assert!(buf.span().byte_at(7) == 9)
+
+    var xs = MemArray<u256>::new_zeroed(4)
+    let all = mut xs.as_slice()
+    let (mut head, mut tail) = all.split_at(1)
+    head[0] = 1
+    tail[0] = 2
+    tail.at(2) += 3
+    assert!(xs[0] == 1 && xs[1] == 2 && xs[2] == 0 && xs[3] == 3)
+}
+
+#[test]
+fn splits_read_and_check_their_bounds() {
+    var buf = MemBuffer::alloc(4)
+    buf[1] = 5
+    buf[2] = 6
+    let (head, tail) = buf.span().split_at(2)
+    assert!(head.len() == 2 && tail.len() == 2)
+    assert!(head.byte_at(1) == 5 && tail.byte_at(0) == 6)
+    let s = mut buf.span()
+    if let Option::Some((mut a, mut b)) = s.try_split_at(1) {
+        a[0] = 1
+        b[0] = 2
+    }
+    assert!(buf[0] == 1 && buf[1] == 2)
+    let missing = match buf.span().try_split_at(9) {
+        Option::Some(_) => false
+        Option::None => true
+    }
+    assert!(missing)
+}

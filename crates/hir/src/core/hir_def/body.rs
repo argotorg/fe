@@ -8,43 +8,48 @@ use std::hash::Hash;
 use cranelift_entity::{EntityRef, PrimaryMap, SecondaryMap};
 use parser::ast::{self, prelude::*};
 use rustc_hash::FxHashMap;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{
     Cond, CondId, Expr, ExprId, Func, ItemKind, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
-    TrackedItemId, scope_graph::ScopeId,
+    TrackedItemId,
+    scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
     HirDb,
+    lower::func_body_graph_impl,
     span::{HirOrigin, item::LazyBodySpan},
     visitor::prelude::*,
 };
 
 #[salsa::tracked]
-#[derive(Debug)]
+#[derive(Debug, PartialOrd, Ord)]
 pub struct Body<'db> {
     //    #[id]
+    #[returns(copy)]
     id: TrackedItemId<'db>,
 
     /// The expression that evaluates to the value of the body.
     /// In case of a function body, this is always be the block expression.
+    #[returns(copy)]
     pub expr: ExprId,
 
+    #[returns(copy)]
     pub body_kind: BodyKind,
 
-    #[return_ref]
     pub stmts: NodeStore<StmtId, Partial<Stmt<'db>>>,
-    #[return_ref]
     pub exprs: NodeStore<ExprId, Partial<Expr<'db>>>,
-    #[return_ref]
     pub conds: NodeStore<CondId, Partial<Cond>>,
-    #[return_ref]
     pub pats: NodeStore<PatId, Partial<Pat<'db>>>,
+    #[returns(copy)]
     pub top_mod: TopLevelMod<'db>,
+    /// The function whose lazily lowered body contains this body, and whose
+    /// body scope graph holds this body's scopes. `None` for a body lowered
+    /// with its module.
+    #[returns(copy)]
+    pub(crate) lazy_func: Option<Func<'db>>,
 
-    #[return_ref]
     pub(crate) source_map: BodySourceMap,
-    #[return_ref]
     pub(crate) origin: HirOrigin<ast::Expr>,
 }
 
@@ -55,6 +60,16 @@ impl<'db> Body<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    /// Returns the scope graph that holds this body's scopes.
+    pub fn scope_graph(self, db: &'db dyn HirDb) -> &'db ScopeGraph<'db> {
+        match self.lazy_func(db) {
+            Some(func) => func_body_graph_impl(db, func)
+                .as_ref()
+                .expect("a lazily lowered body has a scope graph"),
+            None => self.top_mod(db).scope_graph(db),
+        }
     }
 
     /// Find the function that contains this body.
@@ -68,6 +83,20 @@ impl<'db> Body<'db> {
             Some(ScopeId::Item(ItemKind::Func(func))) if func.body(db) == Some(self) => Some(func),
             _ => None,
         }
+    }
+
+    /// Whether this body is a side of a static assertion's comparison: an
+    /// operand of the condition lowered a second time, so that it can be
+    /// evaluated on its own for the failure message. Its source is part of
+    /// the condition's.
+    pub fn is_static_assert_comparison_side(self, db: &'db dyn HirDb) -> bool {
+        matches!(
+            self.scope().parent(db),
+            Some(ScopeId::Item(ItemKind::StaticAssert(assert_)))
+                if assert_
+                    .comparison(db)
+                    .is_some_and(|comparison| comparison.lhs == self || comparison.rhs == self)
+        )
     }
 
     #[doc(hidden)]
@@ -99,8 +128,11 @@ pub enum BodyKind {
     Anonymous,
 }
 
-#[derive(Debug, Hash, Clone)]
-pub struct NodeStore<K, V>(PrimaryMap<K, V>)
+#[derive(Debug, Hash, Clone, PartialEq, Eq, SalsaValue)]
+pub struct NodeStore<K, V>(
+    // SAFETY: A `PrimaryMap` owns its values; its keys are plain indices.
+    #[salsa_value(unsafe(prove(V: SalsaValue)))] PrimaryMap<K, V>,
+)
 where
     K: EntityRef;
 
@@ -148,30 +180,6 @@ where
 
     fn index(&self, k: K) -> &V {
         &self.0[k]
-    }
-}
-
-unsafe impl<K, V> Update for NodeStore<K, V>
-where
-    K: EntityRef + Update,
-    V: Update,
-{
-    unsafe fn maybe_update(old_ptr: *mut Self, new_val: Self) -> bool {
-        unsafe {
-            let old_val = &mut *old_ptr;
-            if old_val.len() != new_val.len() {
-                *old_val = new_val;
-                return true;
-            }
-
-            let mut changed = false;
-            for (k, v) in new_val.0.into_iter() {
-                let old_val = &mut old_val[k];
-                changed |= Update::maybe_update(old_val, v);
-            }
-
-            changed
-        }
     }
 }
 

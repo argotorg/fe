@@ -1,0 +1,28 @@
+// An unsafe split's access components are places or calls of `#[raw_place]`
+// projections: an ordinary projection may keep accesses for code after its
+// yield, which one split session cannot merge.
+
+struct Pair { a: u256, b: u256 }
+
+#[raw_place]
+fn first(_ p: mut Pair) -> mut u256 {
+    mut p.a
+}
+
+fn second(_ p: mut Pair) -> mut u256 {
+    mut p.b
+}
+
+// Accepted: a `#[raw_place]` call and a place.
+fn split_raw(_ p: mut Pair, _ q: mut Pair) {
+    let (mut a, mut b) = unsafe { (first(mut p), mut q.b) }
+    a = 1
+    b = 2
+}
+
+// Rejected: an ordinary projection as a component.
+fn split_ordinary(_ p: mut Pair, _ q: mut Pair) {
+    let (mut a, mut b) = unsafe { (second(mut p), first(mut q)) }
+    a = 1
+    b = 2
+}

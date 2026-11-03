@@ -1,10 +1,11 @@
+use hir::analysis::ty::AddressSpace;
 use hir::analysis::ty::ty_def::TyId;
 
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, PlaceElem, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RuntimeCarrier,
-        RuntimeClass, RuntimeLocalRoot, RuntimePlace,
+        PlaceElem, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RuntimeCarrier, RuntimeClass,
+        RuntimeLocalRoot, RuntimePlace,
     },
 };
 
@@ -117,5 +118,5 @@ fn tuple_extract_source<'db>(
 }
 
 pub(crate) fn memory_fallback_class<'db>() -> RuntimeClass<'db> {
-    RuntimeClass::opaque_raw_addr(AddressSpaceKind::Memory)
+    RuntimeClass::opaque_raw_addr(AddressSpace::Memory)
 }

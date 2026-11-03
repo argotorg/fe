@@ -76,7 +76,7 @@ fn init_arg(_ x: mut u256, v: u256) {
 }
 
 fn init_arg_forward(_ x: mut u256, v: u256) {
-    init_arg(x, v: v)
+    init_arg(mut x, v: v)
 }
 
 contract InitViaEffectHelper {
@@ -121,6 +121,59 @@ contract InitViaMutArgForwardHelper {
     }
 }
 
+// A product's `mut` part is an argument of its own: it initializes what it
+// writes, and a later argument is not taken for one of its parts.
+fn init_part(_ (mut x, v): (mut u256, own u256)) {
+    x = v
+}
+
+fn init_after_parts(_ (mut a, mut b): (mut u256, mut u256), _ c: mut u256) {
+    c = 9
+}
+
+contract InitViaProductPart {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_part((mut x, v))
+    }
+}
+
+contract InitSkipsProductPart {
+    x: u256
+
+    init() uses (mut x) {
+        var a: u256 = 1
+        var c: u256 = 2
+        init_after_parts((mut a, mut x), mut c)
+    }
+}
+
+fn init_nested_part(_ ((n, mut x), v): ((own u256, mut u256), own u256)) {
+    x = n + v
+}
+
+fn init_after_nested(_ ((n, mut a), v): ((own u256, mut u256), own u256), _ c: mut u256) {
+    c = n + v
+}
+
+contract InitViaNestedProductPart {
+    x: u256
+
+    init() uses (mut x) {
+        init_nested_part(((1, mut x), 2))
+    }
+}
+
+contract InitSkipsNestedProductPart {
+    x: u256
+
+    init() uses (mut x) {
+        var c: u256 = 0
+        init_after_nested(((1, mut x), 2), mut c)
+    }
+}
+
 contract InitViaBreakDrivenLoop {
     x: u256
 
@@ -158,7 +211,7 @@ contract InitForLoopInvalidatesConditionFact {
     x: u256
 
     init(v: u256) uses (mut x) {
-        let mut run = true
+        var run = true
         for _ in 0..1 {
             run = false
         }
@@ -212,7 +265,7 @@ contract InitViaAugAssign {
     }
 }
 
-fn own_write(mut v: own u256) {
+fn own_write(var v: own u256) {
     v = 1
 }
 
@@ -262,7 +315,7 @@ contract InitBranchCondMutatedThroughBorrow {
     x: u256
 
     init(v: u256) uses (mut x) {
-        let mut b = true
+        var b = true
         let r = mut b
         r = false
         if b {
@@ -279,7 +332,7 @@ contract InitBranchCondMutatedThroughCall {
     x: u256
 
     init(v: u256) uses (mut x) {
-        let mut b = true
+        var b = true
         make_false(b: mut b)
         if b {
             x = v
@@ -291,7 +344,7 @@ contract InitBranchCondMutatedBothArmsAssign {
     x: u256
 
     init(v: u256) uses (mut x) {
-        let mut b = true
+        var b = true
         let r = mut b
         r = false
         if b {

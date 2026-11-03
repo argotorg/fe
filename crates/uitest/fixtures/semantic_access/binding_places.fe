@@ -1,0 +1,176 @@
+// Bindings and their accesses: a copy keeps nothing open, a `ref` or `mut`
+// binding holds its component's path, a `#[view]` binding holds its owner,
+// and a plain name moves where the move rules allow, through a `mut` access
+// as a hole restored before that access closes.
+use core::ptr::{MemArray, MemBuffer}
+
+struct Pair {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+struct Cell {
+    word: u256,
+}
+
+impl Cell {
+    fn get_mut(mut self) -> Option<mut u256> {
+        Option::Some(mut self.word)
+    }
+}
+
+fn at(_ words: MemArray<u256>, _ k: u256) -> (u256, ref u256) {
+    (k, ref words[k.downcast_unchecked()])
+}
+
+// S-59. Accepted: `v` is a copy.
+fn copied(_ words: mut MemArray<u256>) -> u256 {
+    let v = words[0]
+    words.set(0, 5)
+    v
+}
+
+// S-59. Rejected: `ref` holds the element.
+fn held(_ words: mut MemArray<u256>) -> u256 {
+    let v = ref words[0]
+    words.set(0, 5)
+    v
+}
+
+// S-61. Accepted: a copied element keeps no access across the body.
+fn copied_loop() -> u256 {
+    var words = MemArray<u256>::new_zeroed(2)
+    var total = 0
+    for word in words {
+        words.set(0, 1)
+        total += word
+    }
+    total
+}
+
+// S-62. Accepted: `mut v` on a `mut` grant writes through.
+fn write_through(_ cell: mut Cell) {
+    match cell.get_mut() {
+        Option::Some(mut v) => v += 1
+        Option::None => {}
+    }
+}
+
+// S-64. Rejected: the plain view bindings reborrow, so `buf` stays reserved
+// while `t` lives.
+fn view_reborrow(_ buf: mut MemBuffer) -> u256 {
+    let s = buf.span()
+    let t = s
+    buf.truncate(0)
+    t.len() as u256
+}
+
+// S-65. Rejected: `a` holds `p.a` for reading.
+fn write_bound(_ p: mut Pair) -> u256 {
+    match p {
+        Pair { ref a, mut b, .. } => {
+            b = 1
+            p.a = 2
+            a
+        }
+    }
+}
+
+// S-65. Accepted: nothing holds `p.c`, which the arm reads and writes.
+fn write_free(_ p: mut Pair) -> u256 {
+    match p {
+        Pair { ref a, mut b, .. } => {
+            b = p.c
+            p.c = 1
+            a
+        }
+    }
+}
+
+// S-65. Accepted: `ref` in a `let … else` on a place.
+fn let_else(_ o: Option<u256>) -> u256 {
+    let Option::Some(ref x) = o else {
+        return 0
+    }
+    x
+}
+
+// S-66. Accepted: a `Copy` component is a copy.
+fn component_copy(_ words: mut MemArray<u256>) -> u256 {
+    let (i, x) = at(words, 0)
+    words.set(0, 5)
+    i + x
+}
+
+// S-66. Rejected: a `ref` component holds the element.
+fn component_ref(_ words: mut MemArray<u256>) -> u256 {
+    let (i, ref x) = at(words, 0)
+    words.set(0, 5)
+    i + x
+}
+
+fn consume(_ buf: own MemBuffer) -> u256 {
+    buf.len() as u256
+}
+
+// S-67. Accepted: a partial move out of an owned place.
+fn owned_move(_ o: own Option<MemBuffer>) -> u256 {
+    match o {
+        Option::Some(buf) => consume(buf)
+        Option::None => 0
+    }
+}
+
+// S-67. Accepted: the hole in `o` is restored before return.
+fn restored(_ o: mut Option<MemBuffer>) -> u256 {
+    let n = match o {
+        Option::Some(buf) => consume(buf)
+        Option::None => 0
+    }
+    o = Option::None
+    n
+}
+
+// S-67. Rejected: the hole in `o` is open at return.
+fn unrestored(_ o: mut Option<MemBuffer>) -> u256 {
+    match o {
+        Option::Some(buf) => consume(buf)
+        Option::None => 0
+    }
+}
+
+// S-67. Rejected: a view parameter cannot be moved from.
+fn view_move(_ o: Option<MemBuffer>) -> u256 {
+    match o {
+        Option::Some(buf) => consume(buf)
+        Option::None => 0
+    }
+}
+
+// S-67. Accepted: `take`, a hole through a `mut` access restored before it
+// closes.
+fn take(_ x: mut Option<MemBuffer>) -> Option<MemBuffer> {
+    let v = x
+    x = Option::None
+    v
+}
+
+struct Holder {
+    buf: MemBuffer,
+}
+
+impl Holder {
+    fn maybe_buf(mut self) -> Option<mut MemBuffer> {
+        Option::Some(mut self.buf)
+    }
+}
+
+// S-71. Rejected: a plain non-`Copy` component of an anonymous `mut` grant
+// moves out with nothing to restore it through.
+fn grant_move(_ h: mut Holder) -> u256 {
+    match h.maybe_buf() {
+        Option::Some(buf) => consume(buf)
+        Option::None => 0
+    }
+}

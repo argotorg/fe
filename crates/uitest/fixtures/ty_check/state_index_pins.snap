@@ -1,0 +1,125 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/state_index_pins.fe
+---
+error[3-0061]: `Cells` is state-only
+   ┌─ state_index_pins.fe:35:9
+   │
+35 │     let _cells = Cells { len: 0 }
+   │         ^^^^^^ a state-only type cannot be bound by value
+   │
+   = `Cells` is pinned to storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Cells` is state-only
+   ┌─ state_index_pins.fe:35:18
+   │
+35 │     let _cells = Cells { len: 0 }
+   │                  ^^^^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
+   │
+   = `Cells` is pinned to storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Cell<InStorage>` is state-only
+   ┌─ state_index_pins.fe:79:9
+   │
+79 │     let _cell: Cell<InStorage> = Cell { base: 0 }
+   │         ^^^^^ a state-only type cannot be bound by value
+   │
+   = `Cell<InStorage>` is pinned to storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Cell<InStorage>` is state-only
+   ┌─ state_index_pins.fe:79:34
+   │
+79 │     let _cell: Cell<InStorage> = Cell { base: 0 }
+   │                                  ^^^^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
+   │
+   = `Cell<InStorage>` is pinned to storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Cell<InTransient>` is state-only
+   ┌─ state_index_pins.fe:84:9
+   │
+84 │     let _cell: Cell<InTransient> = Cell { base: 0 }
+   │         ^^^^^ a state-only type cannot be bound by value
+   │
+   = `Cell<InTransient>` is pinned to transient storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Cell<InTransient>` is state-only
+   ┌─ state_index_pins.fe:84:36
+   │
+84 │     let _cell: Cell<InTransient> = Cell { base: 0 }
+   │                                    ^^^^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
+   │
+   = `Cell<InTransient>` is pinned to transient storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Cell<P>` is state-only
+   ┌─ state_index_pins.fe:89:9
+   │
+89 │     let _cell: Cell<P> = Cell { base: 0 }
+   │         ^^^^^ a state-only type cannot be bound by value
+   │
+   = `Cell<P>` is pinned to a state space for some of its parameters
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Cell<P>` is state-only
+   ┌─ state_index_pins.fe:89:26
+   │
+89 │     let _cell: Cell<P> = Cell { base: 0 }
+   │                          ^^^^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
+   │
+   = `Cell<P>` is pinned to a state space for some of its parameters
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Split<InStorage>` is state-only
+    ┌─ state_index_pins.fe:109:9
+    │
+109 │     let _split: Split<InStorage> = Split { base: 0 }
+    │         ^^^^^^ a state-only type cannot be bound by value
+    │
+    = `Split<InStorage>` is pinned to storage by its `Pinned` implementation
+    = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Split<InStorage>` is state-only
+    ┌─ state_index_pins.fe:109:36
+    │
+109 │     let _split: Split<InStorage> = Split { base: 0 }
+    │                                    ^^^^^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
+    │
+    = `Split<InStorage>` is pinned to storage by its `Pinned` implementation
+    = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[6-0009]: method has stricter bounds than trait
+   ┌─ state_index_pins.fe:51:8
+   │
+51 │     fn locate(self, _ root: u256, _ key: u256) -> Location uses (ctx: Ctx) {
+   │        ^^^^^^ method has stricter bounds than the declared method in the trait: `ctx: Ctx`
+
+error[6-0029]: a type is pinned to a state space
+   ┌─ state_index_pins.fe:30:18
+   │
+30 │     type Space = u256
+   │                  ^^^^ this type is not `Storage` or `Transient`
+   │
+   = give `type Space = Storage` or `type Space = Transient` (`core::marker`), or another pinned type's space, `P::Space`
+
+error[6-0029]: a type is pinned to a state space
+    ┌─ state_index_pins.fe:120:18
+    │
+120 │     type Space = P::Space
+    │                  ^^^^^^^^ this type is not `Storage` or `Transient`
+    │
+    = give `type Space = Storage` or `type Space = Transient` (`core::marker`), or another pinned type's space, `P::Space`
+
+error[6-0029]: a type is pinned to a state space
+    ┌─ state_index_pins.fe:179:18
+    │
+179 │     type Space = S
+    │                  ^ this type is not `Storage` or `Transient`
+    │
+    = give `type Space = Storage` or `type Space = Transient` (`core::marker`), or another pinned type's space, `P::Space`

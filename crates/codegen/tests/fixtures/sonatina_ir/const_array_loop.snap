@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 431
 expression: output
 input_file: crates/codegen/tests/fixtures/const_array_loop.fe
 ---
@@ -33,9 +34,9 @@ func private %sum_loop(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v29.i256 = phi (0.i256 block1) (v20 block11);
-        v3.i256 = phi (0.i256 block1) (v25 block11);
-        v4.i1 = lt v3 v0;
+        v30.i256 = phi (0.i256 block1) (v21 block11);
+        v2.i256 = phi (0.i256 block1) (v26 block11);
+        v4.i1 = lt v2 v0;
         br v4 block3 block4;
 
     block3:
@@ -43,7 +44,7 @@ func private %sum_loop(v0.i256) -> i256 {
         br v7 block5 block6;
 
     block4:
-        return v29;
+        return v30;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -51,20 +52,20 @@ func private %sum_loop(v0.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        v12.i256 = evm_umod v3 3.i256;
-        v13.constref<[i256; 3]> = const.ref $const_region_0;
-        v14.i1 = lt v12 3.i256;
-        v15.i1 = is_zero v14;
-        br v15 block7 block8;
+        v12.i256 = evm_umod v2 3.i256;
+        v14.constref<[i256; 3]> = const.ref $const_region_0;
+        v15.i1 = lt v12 3.i256;
+        v16.i1 = is_zero v15;
+        br v16 block7 block8;
 
     block7:
         evm_revert 0.i256 0.i256;
 
     block8:
-        v17.constref<i256> = const.index v13 v12;
-        v18.i256 = const.load v17;
-        (v20.i256, v21.i1) = uaddo v29 v18;
-        br v21 block9 block10;
+        v18.constref<i256> = const.index v14 v12;
+        v19.i256 = const.load v18;
+        (v21.i256, v22.i1) = uaddo v30 v19;
+        br v22 block9 block10;
 
     block9:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -72,8 +73,8 @@ func private %sum_loop(v0.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block10:
-        (v25.i256, v26.i1) = uaddo v3 1.i256;
-        br v26 block9 block11;
+        (v26.i256, v27.i1) = uaddo v2 1.i256;
+        br v27 block9 block11;
 
     block11:
         jump block2;

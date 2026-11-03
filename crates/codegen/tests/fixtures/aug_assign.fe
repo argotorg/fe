@@ -1,5 +1,5 @@
 pub fn aug_assign(x: u64, y: u64) -> u64 {
-    let mut acc: u64 = x
+    var acc: u64 = x
     acc += y
     acc *= 2
     acc / 2

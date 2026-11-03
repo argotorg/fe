@@ -1,0 +1,24 @@
+// An error inside a trait reference's type argument is reported where it is
+// written, once, in every position a trait reference can take.
+trait Has<T> {}
+trait Bound { type Item }
+struct Wrap<T> {}
+struct X {}
+
+fn inline<T: Has<Missing>>() {}
+fn nested<T: Has<Wrap<Nested>>>() {}
+fn clause<T>() where T: Has<InClause> {}
+trait Super: Has<InSuper> {}
+trait Assoc { type Item: Has<InAssocBound> }
+impl Has<InHeader> for X {}
+impl Bound<Item = InBinding> for X { type Item = u8 }
+
+fn called() { inline<u8>() }
+
+// An argument that resolves but does not lower is reported where it is
+// written too, and a surplus argument is one too many whatever it is.
+fn mistyped<T: Has<[u8; true]>>() {}
+fn mistyped_clause<T>() where T: Has<[u8; true]> {}
+trait MistypedSuper: Has<[u8; true]> {}
+trait MistypedAssoc { type Item: Has<[u8; true]> }
+fn surplus<T: Has<u8, [u8; true]>>() {}

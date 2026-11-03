@@ -1,5 +1,3 @@
-use std::evm::StorPtr
-
 msg M {
     #[selector = 0]
     Touch -> u256,
@@ -15,42 +13,6 @@ contract ImmutableFallbackFieldMutUse {
     recv M {
         Touch -> u256 uses (mut x) {
             x
-        }
-    }
-}
-
-contract ImmutableHandleFieldMutUse {
-    cache: StorPtr<u256>
-
-    recv M {
-        Touch -> u256 uses (mut cache) {
-            cache = 5
-            cache
-        }
-    }
-}
-
-contract ImmutableHandleFieldInitMutUse {
-    cache: StorPtr<u256>
-
-    init() uses (mut cache) {
-        cache = 1
-    }
-
-    recv M {
-        Touch -> u256 uses (cache) {
-            cache
-        }
-    }
-}
-
-contract MutHandleFieldMutUse {
-    mut cache: StorPtr<u256>
-
-    recv M {
-        Touch -> u256 uses (mut cache) {
-            cache = 5
-            cache
         }
     }
 }

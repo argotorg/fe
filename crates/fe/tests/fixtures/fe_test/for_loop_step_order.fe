@@ -1,0 +1,78 @@
+// A loop advances only after the current iteration: `at`'s ramp, the body,
+// `at`'s slide, then `next`. `break` leaves without advancing, and
+// `continue` advances.
+use core::iter::Collection
+
+// `next` reverts when it advances past `stop`, or, when `check_written`,
+// before the write-back of the element it advances past has landed.
+struct Tracked {
+    items: [u256; 3],
+    written: usize,
+    stop: usize,
+    check_written: bool,
+}
+
+impl Collection for Tracked {
+    type Cursor = usize
+    type Item = u256
+
+    fn start(self) -> usize {
+        0
+    }
+
+    fn has(self, _ c: usize) -> bool {
+        c < 3
+    }
+
+    fn next(self, _ c: usize) -> usize {
+        assert!(c < self.stop)
+        assert!(!self.check_written || self.written == c + 1)
+        c + 1
+    }
+
+    fn at(self, _ c: usize) -> ref u256 {
+        let item = self.items[c]
+        yield ref item
+    }
+
+    // At `mut`, the element is written back and its position recorded.
+    fn at(mut self, _ c: usize) -> mut u256 {
+        var item = self.items[c]
+        yield mut item
+        self.items[c] = item
+        self.written = c + 1
+    }
+}
+
+#[test]
+fn break_does_not_advance() {
+    let xs = Tracked { items: [1, 2, 3], written: 0, stop: 0, check_written: false }
+    var seen = 0
+    for x in xs {
+        seen = x
+        break
+    }
+    assert!(seen == 1)
+}
+
+#[test]
+fn continue_advances() {
+    let xs = Tracked { items: [1, 2, 3], written: 0, stop: 3, check_written: false }
+    var sum = 0
+    for x in xs {
+        if x == 2 {
+            continue
+        }
+        sum += x
+    }
+    assert!(sum == 4)
+}
+
+#[test]
+fn slide_runs_before_next() {
+    var xs = Tracked { items: [1, 2, 3], written: 0, stop: 3, check_written: true }
+    for mut x in xs {
+        x += 10
+    }
+    assert!(xs.items[0] == 11 && xs.items[2] == 13 && xs.written == 3)
+}

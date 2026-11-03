@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_ty_bound_default_self.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_ty_bound_default_self.fe:14:14
+   │
+14 │     type A = X
+   │              ^ `X` doesn't implement `Combine<X>`

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unsafe/raw_pointer_provider.fe
+---
+error[8-0096]: dereference of raw pointer requires an `unsafe` block or function
+  ┌─ raw_pointer_provider.fe:9:15
+  │
+9 │     with (mut *p) {
+  │               ^^ dereference of raw pointer

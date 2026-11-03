@@ -23,14 +23,14 @@ impl core::abi::AbiSize for CustomMsg {
 }
 
 impl core::abi::Encode<std::abi::Sol> for CustomMsg {
-    fn encode(own self, _ ptr: *u8) {
-        self.data.encode(ptr)
+    fn encode(own self, _ out: core::abi::AbiFrame) {
+        self.data.encode(out)
     }
 }
 
 impl core::abi::Decode<std::abi::Sol> for CustomMsg {
-    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-        let data = u64::decode_payload(d)
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let data = u64::decode_payload(mut d, input)
         Self { data }
     }
 }

@@ -1,0 +1,119 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/unsafe.fe
+---
+Root@0..100
+  UnsafeExpr@0..13
+    UnsafeKw@0..6 "unsafe"
+    WhiteSpace@6..7 " "
+    BlockExpr@7..13
+      LBrace@7..8 "{"
+      WhiteSpace@8..9 " "
+      ExprStmt@9..11
+        UnExpr@9..11
+          Star@9..10 "*"
+          PathExpr@10..11
+            Path@10..11
+              PathSegment@10..11
+                Ident@10..11 "p"
+      WhiteSpace@11..12 " "
+      RBrace@12..13 "}"
+  Newline@13..15 "\n\n"
+  UnsafeExpr@15..55
+    UnsafeKw@15..21 "unsafe"
+    WhiteSpace@21..22 " "
+    BlockExpr@22..55
+      LBrace@22..23 "{"
+      Newline@23..24 "\n"
+      WhiteSpace@24..28 "    "
+      LetStmt@28..38
+        LetKw@28..31 "let"
+        WhiteSpace@31..32 " "
+        PathPat@32..33
+          Path@32..33
+            PathSegment@32..33
+              Ident@32..33 "x"
+        WhiteSpace@33..34 " "
+        Eq@34..35 "="
+        WhiteSpace@35..36 " "
+        UnExpr@36..38
+          Star@36..37 "*"
+          PathExpr@37..38
+            Path@37..38
+              PathSegment@37..38
+                Ident@37..38 "p"
+      Newline@38..39 "\n"
+      WhiteSpace@39..43 "    "
+      ExprStmt@43..53
+        AssignExpr@43..53
+          UnExpr@43..45
+            Star@43..44 "*"
+            PathExpr@44..45
+              Path@44..45
+                PathSegment@44..45
+                  Ident@44..45 "p"
+          WhiteSpace@45..46 " "
+          Eq@46..47 "="
+          WhiteSpace@47..48 " "
+          BinExpr@48..53
+            PathExpr@48..49
+              Path@48..49
+                PathSegment@48..49
+                  Ident@48..49 "x"
+            WhiteSpace@49..50 " "
+            Plus@50..51 "+"
+            WhiteSpace@51..52 " "
+            LitExpr@52..53
+              Lit@52..53
+                Int@52..53 "1"
+      Newline@53..54 "\n"
+      RBrace@54..55 "}"
+  Newline@55..57 "\n\n"
+  FieldExpr@57..75
+    UnsafeExpr@57..69
+      UnsafeKw@57..63 "unsafe"
+      WhiteSpace@63..64 " "
+      BlockExpr@64..69
+        LBrace@64..65 "{"
+        WhiteSpace@65..66 " "
+        ExprStmt@66..67
+          PathExpr@66..67
+            Path@66..67
+              PathSegment@66..67
+                Ident@66..67 "p"
+        WhiteSpace@67..68 " "
+        RBrace@68..69 "}"
+    Dot@69..70 "."
+    Ident@70..75 "field"
+  Newline@75..77 "\n\n"
+  BinExpr@77..99
+    UnsafeExpr@77..95
+      UnsafeKw@77..83 "unsafe"
+      WhiteSpace@83..84 " "
+      BlockExpr@84..95
+        LBrace@84..85 "{"
+        WhiteSpace@85..86 " "
+        ExprStmt@86..93
+          CallExpr@86..93
+            PathExpr@86..90
+              Path@86..90
+                PathSegment@86..90
+                  Ident@86..90 "read"
+            CallArgList@90..93
+              LParen@90..91 "("
+              CallArg@91..92
+                PathExpr@91..92
+                  Path@91..92
+                    PathSegment@91..92
+                      Ident@91..92 "p"
+              RParen@92..93 ")"
+        WhiteSpace@93..94 " "
+        RBrace@94..95 "}"
+    WhiteSpace@95..96 " "
+    Plus@96..97 "+"
+    WhiteSpace@97..98 " "
+    LitExpr@98..99
+      Lit@98..99
+        Int@98..99 "1"
+  Newline@99..100 "\n"

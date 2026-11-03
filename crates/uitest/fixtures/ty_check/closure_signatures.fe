@@ -1,0 +1,61 @@
+// A closure's annotations are types, and its signature takes `#[view]` and
+// state-only types only where a function's may.
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::StorageMap
+
+struct Ledger {
+    balances: StorageMap<u256, u256>,
+}
+
+fn unknown() {
+    let ret = || -> Nonexistent { 5 }
+    let param = |x: Nope| -> u256 { 0 }
+}
+
+fn modes() {
+    let ret = || -> mut u256 { 5 }
+    let param = |x: own mut u256| -> u256 { 0 }
+}
+
+trait First {
+    fn first(self) -> u8
+}
+
+impl First for MemSpan {
+    fn first(self) -> u8 {
+        self[0]
+    }
+}
+
+// Nothing in this signature mentions a view, so only the closure's own
+// signature can reject a view result.
+fn observe<F: Fn(MemBuffer) -> R, R: First>(_ f: F, _ b: mut MemBuffer) -> bool uses F::E {
+    let s = f(b)
+    let before = s.first()
+    b[0] = 9
+    s.first() == before
+}
+
+// Rejected: each closure returns a view or a state-only value by value,
+// annotated or inferred.
+fn results(_ ledger: Ledger) -> bool {
+    var buf = MemBuffer::alloc(1)
+    let inferred = |b: MemBuffer| b.span()
+    let give = |l: Ledger| -> Ledger { l }
+    observe(|b: MemBuffer| -> MemSpan { b.span() }, mut buf)
+}
+
+// Rejected: a view taken `own` or as part of another type, and a state-only
+// type taken `own`.
+fn params() {
+    let own_view = |s: own MemSpan| -> u256 { 0 }
+    let view_part = |s: (MemSpan, u256)| -> u256 { 0 }
+    let own_ledger = |l: own Ledger| -> u256 { 0 }
+}
+
+// Accepted: view parameters take views and state-only types.
+fn viewed(_ ledger: Ledger, _ buf: MemBuffer) -> u256 {
+    let read = |l: Ledger| -> u256 { l.balances[1] }
+    let first = |s: MemSpan| -> u8 { s[0] }
+    read(ledger) + first(buf.span()) as u256
+}

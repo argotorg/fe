@@ -1,0 +1,67 @@
+use core::abi::{load_word, store_word}
+use core::marker::{Pinned, Storage}
+use core::ops::{Location, StateIndex}
+use core::ptr
+use std::abi::Bytes
+
+pub fn safe_sum(_ a: u256, _ b: u256) -> u256 {
+    a + b
+}
+
+pub fn round_trip(_ value: u256) -> u256 {
+    let p = ptr::alloc_bytes(32)
+    unsafe {
+        store_word(ptr: p, value)
+        load_word(p)
+    }
+}
+
+/// Slots of storage after the collection's root. Construction is safe;
+/// only indexing runs unsafe code: the `locate` of its `unsafe impl`, whose
+/// correctness the impl asserts.
+pub struct Slots<T> {}
+
+impl<T> Pinned for Slots<T> {
+    type Space = Storage
+}
+
+unsafe impl<T> StateIndex for Slots<T> {
+    type Key = u256
+    type Entry = T
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + 1 + key, offset: 0 }
+    }
+}
+
+msg VaultMsg {
+    #[selector = 1]
+    Peek -> u256,
+}
+
+/// Its `init` is safe; its recv arm runs unsafe code.
+pub contract Vault {
+    init() {}
+
+    recv VaultMsg {
+        Peek -> u256 { round_trip(7) }
+    }
+}
+
+/// ABI types whose encodings the compiler derives. Encoding them runs no
+/// `unsafe` code of this ingot's.
+#[abi]
+pub struct Note {
+    pub id: u256,
+    pub body: Bytes,
+}
+
+pub msg NoteMsg {
+    #[selector = 2]
+    Post { note: Note } -> u256,
+}
+
+#[error]
+pub struct Refused {
+    pub code: u256,
+}

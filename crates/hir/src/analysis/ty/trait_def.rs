@@ -8,46 +8,39 @@ use crate::{
             lower_impl_trait_header,
         },
         trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
+        ty_check::BodyOwner,
     },
     hir_def::{
-        Body, Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, Trait,
-        scope_graph::ScopeId,
+        Body, Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, ModeMarker, Trait,
     },
 };
 use common::{
     indexmap::{IndexMap, IndexSet},
     ingot::{Ingot, IngotKind},
 };
-use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::Update;
+use rustc_hash::FxHashMap;
+use salsa::SalsaValue;
 
 use super::{
-    binder::Binder,
     canonical::Canonical,
-    const_ty::CallableInputLayoutHoleOrigin,
+    closure::{CallableTrait, callable_params},
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{TyFoldable, TyFolder},
-    layout_holes::LayoutRootUse,
-    normalize::normalize_ty,
-    subst::substitute_complete,
+    shape::Shape,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
         TraitSolveCx, constraint::collect_candidate_constraints, is_goal_satisfiable,
         normalize_trait_inst_preserving_validity,
     },
-    ty_def::{TyBase, TyData, TyId},
-    ty_lower::{
-        CompleteSubst, ParamBasis, ParamDomainId, ParamKey, ParamSchemaId, PartialSubst,
-        callable_input_layout_origin_ty, collect_layout_arg_bindings, layout_param_root_uses,
-        param_schema, same_layout_argument,
-    },
+    ty_def::{BorrowKind, ShapeMode, TyBase, TyData, TyId},
+    ty_lower::{CompleteSubst, ParamBasis, ParamDomainId, ParamKey, PartialSubst, param_schema},
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::HirAnalysisDb;
 
 /// Returns [`TraitEnv`] for the given ingot.
-#[salsa::tracked(return_ref, cycle_fn=ingot_trait_env_cycle_recover, cycle_initial=ingot_trait_env_cycle_initial)]
+#[salsa::tracked(cycle_initial=ingot_trait_env_cycle_initial)]
 pub(crate) fn ingot_trait_env<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> TraitEnv<'db> {
     TraitEnv::collect(db, ingot)
 }
@@ -59,7 +52,12 @@ pub(crate) fn ingot_trait_env<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>
 /// projections) often only become unifiable after normalization, and unification
 /// rejects unresolved associated types. The solver normalizes before unifying
 /// candidates, so any filtering here must be an over-approximation.
-#[salsa::tracked(return_ref)]
+///
+/// The implementors are headers; their associated types are not lowered.
+/// Lowering `type Space = Inner<P>::Space` proves the bounds of `Inner`'s
+/// impl, `P: Pinned`, which looks up this trait's impls again. Consumers lower
+/// the associated types they read, one binding at a time.
+#[salsa::tracked]
 pub(crate) fn impls_for_trait_def<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -72,9 +70,7 @@ pub(crate) fn impls_for_trait_def<'db>(
         out.extend(contract_virtual_impls(db, ingot).iter().copied());
     }
 
-    out.into_iter()
-        .map(|implementor| complete_impl_trait(db, implementor))
-        .collect()
+    out
 }
 
 /// Different nominal heads cannot unify after freshening or saturation.
@@ -102,7 +98,7 @@ fn impl_self_ty_may_match<'db>(
 /// important: receiver-only lookup necessarily includes every blanket and
 /// otherwise unindexed impl, whose signatures may themselves require method
 /// lookup while being lowered.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn impls_for_trait_and_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -148,7 +144,7 @@ pub(crate) fn impls_for_trait_and_ty<'db>(
 /// the caller's current module ingot and can miss impls that live in either:
 /// - the trait's ingot, or
 /// - the implementor type's ingot.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn impls_for_trait_in_ingots<'db>(
     db: &'db dyn HirAnalysisDb,
     primary: Ingot<'db>,
@@ -182,7 +178,7 @@ fn is_std_evm_contract_trait_def<'db>(db: &'db dyn HirAnalysisDb, trait_def: Tra
     true
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn contract_virtual_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -197,7 +193,7 @@ fn contract_virtual_impls<'db>(
     for top_mod in ingot.all_modules(db) {
         for &contract in top_mod.all_contracts(db).iter() {
             let self_ty = TyId::contract(db, contract);
-            let trait_inst = TraitInstId::new(db, contract_trait, vec![self_ty], IndexMap::new());
+            let trait_inst = TraitInstId::new_simple(db, contract_trait, vec![self_ty]);
 
             let init_args_ty = contract.init_args_ty(db);
             let mut types = IndexMap::new();
@@ -217,7 +213,7 @@ fn contract_virtual_impls<'db>(
     out
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn std_evm_contract_trait_def<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -244,15 +240,22 @@ fn std_evm_contract_trait_def<'db>(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ImplementorOrigin<'db> {
     Hir(ImplTrait<'db>),
     VirtualContract(Contract<'db>),
     Assumption,
+    /// A callable value's implementation of its callable traits: a
+    /// closure's or a function item's (`ty::closure`).
+    Callable,
+    /// The compiler's structural implementation of a marker trait
+    /// (`ty::clearable`).
+    Structural,
 }
 
 fn ingot_trait_env_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     ingot: Ingot<'db>,
 ) -> TraitEnv<'db> {
     // Return an empty trait environment when we detect a cycle
@@ -264,17 +267,7 @@ fn ingot_trait_env_cycle_initial<'db>(
     }
 }
 
-fn ingot_trait_env_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TraitEnv<'db>,
-    _count: u32,
-    _ingot: Ingot<'db>,
-) -> salsa::CycleRecoveryAction<TraitEnv<'db>> {
-    // Continue iterating to try to resolve the cycle
-    salsa::CycleRecoveryAction::Iterate
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ResolvedImplInstance<'db> {
     selected: ImplementorId<'db>,
     instantiated: ImplementorId<'db>,
@@ -282,8 +275,26 @@ pub struct ResolvedImplInstance<'db> {
 }
 
 impl<'db> ResolvedImplInstance<'db> {
+    /// The implementation `selected`, as `instantiated` for `trait_inst`,
+    /// answering `trait_inst`.
+    pub(crate) fn new(
+        selected: ImplementorId<'db>,
+        instantiated: ImplementorId<'db>,
+        trait_inst: TraitInstId<'db>,
+    ) -> Self {
+        Self {
+            selected,
+            instantiated,
+            trait_inst,
+        }
+    }
+
     pub fn selected(self) -> ImplementorId<'db> {
         self.selected
+    }
+
+    pub(crate) fn instantiated(self) -> ImplementorId<'db> {
+        self.instantiated
     }
 
     pub fn trait_inst(self) -> TraitInstId<'db> {
@@ -298,26 +309,70 @@ impl<'db> ResolvedImplInstance<'db> {
         self.selected.params(db)
     }
 
-    /// Resolves an implemented trait method using this already-selected impl.
+    /// The trait method `name` of this already-selected impl, called at
+    /// `mode`, with the body it runs. Absent when the trait has no such
+    /// method.
     ///
-    /// The returned generic arguments match the selected implementation for an
+    /// The body's generic arguments match the selected implementation for an
     /// explicit method and the resolved trait instance for a default method.
-    fn method_instance(
+    pub fn method(
         self,
         db: &'db dyn HirAnalysisDb,
         name: IdentId<'db>,
-    ) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
+        mode: Option<BorrowKind>,
+    ) -> Option<ResolvedMethodInstance<'db>> {
         let implementor = self.selected();
-        if let Some(func) = implementor.methods(db).get(&name).copied() {
-            return Some((func, self.impl_args(db).to_vec()));
-        }
-        let func = implementor
+        let declaration = implementor
             .trait_def(db)
             .method_defs(db)
             .get(&name)
-            .copied()
-            .filter(|method| method.body(db).is_some())?;
-        Some((func, self.trait_inst().args(db).to_vec()))
+            .copied()?;
+        let (body, body_args) = if let Some(func) = implementor.method_at(db, name, mode) {
+            (Some(func), self.impl_args(db).to_vec())
+        } else {
+            (
+                declaration.body(db).is_some().then_some(declaration),
+                self.trait_inst().args(db).to_vec(),
+            )
+        };
+        let (body_to_nominal, effect_pairs) = body.map_or_else(
+            || (Vec::new(), Some(Vec::new())),
+            |body| {
+                if body == declaration {
+                    (
+                        (0..param_schema(db, body.into(), ParamBasis::Full)
+                            .keys(db)
+                            .len())
+                            .map(Some)
+                            .collect(),
+                        None,
+                    )
+                } else {
+                    let correspondence = method_param_correspondence(
+                        db,
+                        body.as_callable(db).expect("selected method is callable"),
+                        BodyOwner::func_at(db, body, mode).mode(),
+                        declaration
+                            .as_callable(db)
+                            .expect("trait method is callable"),
+                        BodyOwner::func_at(db, declaration, mode).mode(),
+                        implementor.trait_inst(db),
+                    );
+                    (
+                        correspondence.body_to_trait_slots.clone(),
+                        Some(correspondence.trait_effect_to_body.clone()),
+                    )
+                }
+            },
+        );
+        Some(ResolvedMethodInstance {
+            resolved: self,
+            declaration,
+            body,
+            body_args,
+            body_to_nominal,
+            effect_pairs,
+        })
     }
 
     pub fn assoc_ty_template(
@@ -328,107 +383,12 @@ impl<'db> ResolvedImplInstance<'db> {
         self.selected.assoc_ty(db, name)
     }
 
-    pub fn assoc_ty_layout_root_uses(
+    /// The selected implementation's conditions, instantiated for the goal.
+    pub(crate) fn instantiated_constraints(
         self,
         db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-    ) -> Vec<LayoutRootUse<'db>> {
-        let mut uses = match self.selected.origin(db) {
-            ImplementorOrigin::Hir(impl_trait) => {
-                if let Some(assoc) = impl_trait
-                    .assoc_types(db)
-                    .find(|assoc| assoc.name(db) == Some(name))
-                {
-                    assoc.layout_root_uses(db)
-                } else {
-                    let trait_inst = self.selected.trait_(db);
-                    let trait_args = trait_inst.args(db);
-                    self.selected
-                        .trait_def(db)
-                        .assoc_types(db)
-                        .find(|assoc| assoc.name(db) == Some(name))
-                        .map_or_else(Vec::new, |assoc| {
-                            assoc
-                                .layout_root_uses(db)
-                                .into_iter()
-                                .map(|root_use| LayoutRootUse {
-                                    value: Binder::bind(trait_inst.def(db).into(), root_use.value)
-                                        .instantiate(db, trait_args),
-                                    owner: root_use.owner.map(|owner| {
-                                        Binder::bind(trait_inst.def(db).into(), owner)
-                                            .instantiate(db, trait_args)
-                                    }),
-                                    selector: root_use.selector,
-                                })
-                                .collect()
-                        })
-                }
-            }
-            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => Vec::new(),
-        };
-        let Some(template) = self.assoc_ty_template(db, name) else {
-            return uses;
-        };
-        let ImplementorOrigin::Hir(impl_trait) = self.selected.origin(db) else {
-            return uses;
-        };
-        let root_params = self.forwarded_layout_root_params(db);
-        for root_use in layout_param_root_uses(
-            db,
-            template,
-            ParamSchemaId::full(db, impl_trait.into()),
-            self.impl_params(db),
-            self.impl_params(db),
-            &root_params,
-            Vec::new(),
-        ) {
-            if !uses.contains(&root_use) {
-                uses.push(root_use);
-            }
-        }
-        uses
-    }
-
-    fn forwarded_layout_root_params(self, db: &'db dyn HirAnalysisDb) -> FxHashSet<usize> {
-        fn collect<'db>(
-            db: &'db dyn HirAnalysisDb,
-            ty: TyId<'db>,
-            impl_params: &[TyId<'db>],
-            visiting: &mut FxHashSet<TyId<'db>>,
-            roots: &mut FxHashSet<usize>,
-        ) {
-            if !visiting.insert(ty) {
-                return;
-            }
-            let args = ty.generic_args(db);
-            if let Some(adt) = ty.adt_def(db)
-                && args.len() == adt.params(db).len()
-            {
-                for (idx, arg) in args.iter().enumerate() {
-                    if adt
-                        .param_set(db)
-                        .const_param_default_is_slot_layout_hole(db, idx)
-                        && let Some(impl_idx) = impl_params.iter().position(|param| param == arg)
-                    {
-                        roots.insert(impl_idx);
-                    }
-                }
-            }
-            for arg in args {
-                collect(db, *arg, impl_params, visiting, roots);
-            }
-            visiting.remove(&ty);
-        }
-
-        let mut roots = FxHashSet::default();
-        collect(
-            db,
-            self.selected.self_ty(db),
-            self.impl_params(db),
-            &mut FxHashSet::default(),
-            &mut roots,
-        );
-        roots
+    ) -> PredicateListId<'db> {
+        self.instantiated.constraints(db)
     }
 
     pub fn instantiated_assoc_ty(
@@ -463,7 +423,7 @@ impl<'db> TyVisitable<'db> for ResolvedImplInstance<'db> {
     }
 }
 
-fn instantiate_selected_impl<'db>(
+pub(crate) fn instantiate_selected_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     selected: ImplementorId<'db>,
     inst: TraitInstId<'db>,
@@ -476,9 +436,19 @@ fn instantiate_selected_impl<'db>(
         });
     }
 
+    // The selection proved the goal's associated-type bindings, which only
+    // normalization relates to the implementation's; its arguments follow
+    // from the trait's.
     let mut table = UnificationTable::new(db);
     let instantiated = table.instantiate_with_fresh_vars(selected);
-    table.unify(instantiated.trait_inst(db), inst).ok()?;
+    for (&impl_arg, &arg) in instantiated
+        .trait_inst(db)
+        .args(db)
+        .iter()
+        .zip(inst.args(db))
+    {
+        table.unify(impl_arg, arg).ok()?;
+    }
     Some(ResolvedImplInstance {
         selected,
         instantiated: instantiated.fold_with(db, &mut table),
@@ -499,7 +469,7 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
 }
 
 /// An implementation selection, without candidates for an ambiguous one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum ImplSelection<'db> {
     Unique(ResolvedImplInstance<'db>),
     Ambiguous,
@@ -507,7 +477,7 @@ enum ImplSelection<'db> {
 }
 
 /// Call sites and method checks select the same implementations repeatedly.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn resolve_trait_impl_instance_query<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -539,9 +509,9 @@ pub struct ResolvedMethodInstance<'db> {
     body: Option<Func<'db>>,
     body_args: Vec<TyId<'db>>,
     body_to_nominal: Vec<Option<usize>>,
-    effect_pairs: Vec<(usize, usize)>,
-    normalization_scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
+    /// The declaration's effects paired with the body's, absent when the body
+    /// is the declaration.
+    effect_pairs: Option<Vec<(usize, usize)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -563,17 +533,17 @@ pub enum MethodArgMapError<'db> {
         first: u32,
         second: u32,
     },
-    CheckedInputArity {
-        expected: usize,
-        given: usize,
-    },
-    ConflictingLayoutRole(ParamKey<'db>),
     SignatureArity {
         func: Func<'db>,
         expected_generics: usize,
         given_generics: usize,
         declared_inputs: usize,
         parameter_inputs: usize,
+    },
+    /// A spread instantiated with a shape that lists no parameters.
+    SpreadNotListed {
+        func: Func<'db>,
+        shape: TyId<'db>,
     },
     SignatureMismatch {
         nominal: Func<'db>,
@@ -599,8 +569,8 @@ impl<'db> ResolvedMethodInstance<'db> {
         &self.body_args
     }
 
-    pub fn effect_pairs(&self) -> &[(usize, usize)] {
-        &self.effect_pairs
+    pub fn effect_pairs(&self) -> Option<&[(usize, usize)]> {
+        self.effect_pairs.as_deref()
     }
 
     pub fn origin(&self, db: &'db dyn HirAnalysisDb) -> ImplementorOrigin<'db> {
@@ -614,8 +584,6 @@ impl<'db> ResolvedMethodInstance<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         nominal_args: &[TyId<'db>],
-        checked_inputs: Option<&[TyId<'db>]>,
-        checked_effect_inputs: Option<&[(usize, TyId<'db>)]>,
     ) -> Result<CompleteSubst<'db>, MethodArgMapError<'db>> {
         let body = self.body.ok_or(MethodArgMapError::MissingBody)?;
         let nominal_schema = param_schema(db, self.declaration.into(), ParamBasis::Full);
@@ -648,155 +616,16 @@ impl<'db> ResolvedMethodInstance<'db> {
             if let Some(nominal_slot) = self.body_to_nominal.get(body_slot).copied().flatten() {
                 args.bind(db, key, nominal_args[nominal_slot])
                     .expect("selected nominal parameter key");
-            } else if !matches!(key, ParamKey::CallableLayout { .. }) {
+            } else if !matches!(key, ParamKey::EffectProvider { func, effect_idx }
+                    if func.effect_from_row(db, effect_idx))
+            {
                 return Err(MethodArgMapError::MissingNominalRole(key));
             }
         }
-        if let Some(checked_inputs) = checked_inputs
-            && checked_inputs.len() != body.params(db).count()
-        {
-            return Err(MethodArgMapError::CheckedInputArity {
-                expected: body.params(db).count(),
-                given: checked_inputs.len(),
-            });
-        }
-        if checked_inputs.is_some() || checked_effect_inputs.is_some() {
-            let mut predicates: IndexSet<_> = self.assumptions.list(db).iter().copied().collect();
-            predicates.insert(self.resolved.trait_inst());
-            let assumptions = PredicateListId::new(db, predicates.into_iter().collect::<Vec<_>>());
-            let value_inputs =
-                checked_inputs
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                    .map(|(idx, &ty)| {
-                        let origin = if body.is_method(db) && idx == 0 {
-                            CallableInputLayoutHoleOrigin::Receiver
-                        } else {
-                            CallableInputLayoutHoleOrigin::ValueParam(idx)
-                        };
-                        (origin, ty)
-                    });
-            let effect_inputs = checked_effect_inputs
-                .into_iter()
-                .flatten()
-                .map(|&(nominal, ty)| {
-                    self.effect_pairs
-                        .iter()
-                        .find(|(index, _)| *index == nominal)
-                        .map(|&(_, body_idx)| (CallableInputLayoutHoleOrigin::Effect(body_idx), ty))
-                        .ok_or(MethodArgMapError::MissingEffectRole(nominal))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            for (origin, actual_ty) in value_inputs.chain(effect_inputs) {
-                let Some(formal_ty) = callable_input_layout_origin_ty(db, body, origin) else {
-                    continue;
-                };
-                let formal_ty = normalize_ty(
-                    db,
-                    substitute_complete(db, formal_ty, &args.residualize(db))
-                        .expect("selected input template must match body schema"),
-                    self.normalization_scope,
-                    assumptions,
-                );
-                let actual_ty = normalize_ty(db, actual_ty, self.normalization_scope, assumptions);
-                let mut bindings = Vec::new();
-                if !collect_layout_arg_bindings(db, formal_ty, actual_ty, &mut bindings) {
-                    continue;
-                }
-                for (formal, actual) in bindings {
-                    let Some(key @ ParamKey::CallableLayout { .. }) =
-                        body_schema.original_key(db, formal)
-                    else {
-                        continue;
-                    };
-                    if let Some(existing) = args.get(db, key) {
-                        if !same_layout_argument(db, existing, actual) {
-                            return Err(MethodArgMapError::ConflictingLayoutRole(key));
-                        }
-                    } else {
-                        args.bind(db, key, actual)
-                            .expect("selected layout parameter key");
-                    }
-                }
-            }
-        }
-        // Every non-layout slot is bound by now. A receiver can carry layout
-        // components through its runtime bundle even when its nominal type
-        // exposes no const argument, so unbound layout slots keep their body
-        // formals; call layout evidence binds them.
+        // The call provides the effects of an implementation's rows, so their
+        // provider slots keep their body formals.
         Ok(args.residualize(db))
     }
-}
-
-/// Selects a trait method while retaining implementation versus generic-bound
-/// origin. `body` is absent when only a declaration is available.
-pub fn resolve_trait_method_instance<'db>(
-    db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    inst: TraitInstId<'db>,
-    method: IdentId<'db>,
-) -> Selection<ResolvedMethodInstance<'db>> {
-    let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
-        Selection::Unique(resolved) => resolved,
-        Selection::Ambiguous(_) => return Selection::Ambiguous(IndexSet::new()),
-        Selection::NotFound => return Selection::NotFound,
-    };
-    let Some(declaration) = resolved
-        .selected()
-        .trait_def(db)
-        .method_defs(db)
-        .get(&method)
-        .copied()
-    else {
-        return Selection::NotFound;
-    };
-    let (body, body_args) = resolved.method_instance(db, method).map_or_else(
-        || (None, resolved.trait_inst().args(db).to_vec()),
-        |(func, args)| (Some(func), args),
-    );
-    let (body_to_nominal, effect_pairs) = body.map_or_else(
-        || (Vec::new(), Vec::new()),
-        |body| {
-            if body == declaration {
-                (
-                    (0..param_schema(db, body.into(), ParamBasis::Full)
-                        .keys(db)
-                        .len())
-                        .map(Some)
-                        .collect(),
-                    (0..body.effect_requirements(db).len())
-                        .map(|idx| (idx, idx))
-                        .collect(),
-                )
-            } else {
-                let correspondence = method_param_correspondence(
-                    db,
-                    body.as_callable(db).expect("selected method is callable"),
-                    declaration
-                        .as_callable(db)
-                        .expect("trait method is callable"),
-                    resolved.selected().trait_inst(db),
-                );
-                (
-                    correspondence.body_to_trait_slots,
-                    correspondence.trait_effect_to_body,
-                )
-            }
-        },
-    );
-    let normalization_scope =
-        solve_cx.normalization_scope_for_trait_inst(db, resolved.trait_inst());
-    Selection::Unique(ResolvedMethodInstance {
-        resolved,
-        declaration,
-        body,
-        body_args,
-        body_to_nominal,
-        effect_pairs,
-        normalization_scope,
-        assumptions: solve_cx.assumptions(),
-    })
 }
 
 /// Returns all implementors for the given `ty` whose constraints are fully proven.
@@ -806,36 +635,39 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<ImplementorId<'db>> {
-    impls_for_ty_with_constraint_mode(db, ingot, None, ty, assumptions, false)
+    let mut table = UnificationTable::new(db);
+    let ty = ty.extract_identity(&mut table);
+    impls_with_constraint_mode(db, ingot, &mut table, ty, None, assumptions, false)
 }
 
-/// Returns implementors of `trait_def` whose self type can apply to `ty` and
-/// whose constraints are not known to be unsatisfied.
-pub(crate) fn impls_for_trait_and_ty_with_possible_constraints<'db>(
+/// Returns implementors of `inst`'s trait that can apply to `inst` and whose
+/// constraints, under `inst`'s arguments, are not known to be unsatisfied.
+pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-    trait_def: Trait<'db>,
-    ty: Canonical<TyId<'db>>,
+    inst: Canonical<TraitInstId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<ImplementorId<'db>> {
-    impls_for_ty_with_constraint_mode(db, ingot, Some(trait_def), ty, assumptions, true)
+    let mut table = UnificationTable::new(db);
+    let inst = inst.extract_identity(&mut table);
+    let ty = inst.self_ty(db);
+    impls_with_constraint_mode(db, ingot, &mut table, ty, Some(inst), assumptions, true)
 }
 
-fn impls_for_ty_with_constraint_mode<'db>(
+fn impls_with_constraint_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-    trait_def: Option<Trait<'db>>,
-    ty: Canonical<TyId<'db>>,
+    table: &mut UnificationTable<'db>,
+    ty: TyId<'db>,
+    trait_inst: Option<TraitInstId<'db>>,
     assumptions: PredicateListId<'db>,
     allow_needs_confirmation: bool,
 ) -> Vec<ImplementorId<'db>> {
-    let mut table = UnificationTable::new(db);
-    let ty = ty.extract_identity(&mut table);
-
     let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
         return vec![];
     }
+    let trait_def = trait_inst.map(|inst| inst.def(db));
     let env = ingot_trait_env(db, ingot);
     let mut raw_impls = match trait_def {
         Some(trait_def) => env.impls_for_trait(db, trait_def),
@@ -859,7 +691,18 @@ fn impls_for_ty_with_constraint_mode<'db>(
             let inst = table.instantiate_with_fresh_vars(*impl_);
             let impl_ty = table.instantiate_to_term(inst.self_ty(db));
             let ty_term = table.instantiate_to_term(ty);
-            let unifies = table.unify(impl_ty, ty_term).is_ok();
+            // The constraints are checked under the target's arguments too:
+            // `impl<T, R: Read<T>> Read<T> for Buf<R>` needs its `T`.
+            let unifies =
+                table.unify(impl_ty, ty_term).is_ok()
+                    && trait_inst.is_none_or(|target| {
+                        inst.trait_(db).args(db).iter().zip(target.args(db)).all(
+                            |(&impl_arg, &arg)| {
+                                let arg = table.instantiate_to_term(arg);
+                                table.unify(impl_arg, arg).is_ok()
+                            },
+                        )
+                    });
 
             if unifies {
                 let impl_constraints = inst.constraints(db);
@@ -869,7 +712,7 @@ fn impls_for_ty_with_constraint_mode<'db>(
                 }
 
                 for &constraint in impl_constraints.list(db) {
-                    let constraint = constraint.fold_with(db, &mut table);
+                    let constraint = constraint.fold_with(db, table);
                     let satisfiability = is_goal_satisfiable(db, solve_cx, constraint);
                     let constraint_holds =
                         matches!(satisfiability, GoalSatisfiability::Satisfied(_))
@@ -892,7 +735,7 @@ fn impls_for_ty_with_constraint_mode<'db>(
 }
 
 /// Returns all implementors for the given `ty`.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn impls_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -927,18 +770,6 @@ pub(crate) fn impls_for_ty<'db>(
         })
         .map(|implementor| complete_impl_trait(db, implementor))
         .collect()
-}
-
-/// Looks up the selected associated-const body, including an inherited trait
-/// default, if the trait impl is unique.
-pub fn assoc_const_body_for_trait_inst<'db>(
-    db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    inst: TraitInstId<'db>,
-    const_name: IdentId<'db>,
-) -> Option<Body<'db>> {
-    assoc_const_body_template_for_trait_inst(db, solve_cx, inst, const_name)
-        .map(|(body, _, _)| body)
 }
 
 /// Returns the selected body, its declared template type, and the checked
@@ -980,7 +811,9 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
                     .ok()?,
                 ))
             }),
-        ImplementorOrigin::VirtualContract(_) => None,
+        ImplementorOrigin::VirtualContract(_)
+        | ImplementorOrigin::Callable
+        | ImplementorOrigin::Structural => None,
         ImplementorOrigin::Assumption => return None,
     };
     explicit.or_else(|| {
@@ -995,31 +828,9 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
     })
 }
 
-/// Whether `inst` is satisfied by a uniquely-selected concrete impl rather than
-/// only by an assumption (e.g. `T: Trait` inside a generic function).
-///
-/// This gates use of a trait associated const's default value: the default may
-/// stand in for the const only when a concrete impl is selected (and inherits
-/// it). For an assumption-satisfied instance the const must stay abstract, so a
-/// concrete impl that overrides it specializes correctly instead of being fixed
-/// to the default.
-pub fn trait_inst_selects_concrete_impl<'db>(
-    db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    inst: TraitInstId<'db>,
-) -> bool {
-    match resolve_trait_impl_instance(db, solve_cx, inst) {
-        Selection::Unique(resolved) => !matches!(
-            resolved.selected().origin(db),
-            ImplementorOrigin::Assumption
-        ),
-        Selection::Ambiguous(_) | Selection::NotFound => false,
-    }
-}
-
 /// Represents the trait environment of an ingot, which maintain all trait
 /// implementors which can be used in the ingot.
-#[derive(Debug, PartialEq, Eq, Clone, Update)]
+#[derive(Debug, PartialEq, Eq, Clone, SalsaValue)]
 pub(crate) struct TraitEnv<'db> {
     /// Syntax-only impl candidates grouped by trait definition.
     pub(crate) impls: FxHashMap<Trait<'db>, Vec<ImplTrait<'db>>>,
@@ -1108,18 +919,18 @@ impl<'db> TraitEnv<'db> {
 /// Represents a slim, internal view of a trait impl, derived from an
 /// `ImplTrait` item and its lowered trait instance.
 #[salsa::interned]
-#[derive(Debug)]
+#[derive(Debug, PartialOrd, Ord)]
 pub struct ImplementorId<'db> {
     /// The trait instance that this impl realizes.
+    #[returns(copy)]
     pub(crate) trait_: TraitInstId<'db>,
 
     /// The type parameters of this implementor.
-    #[return_ref]
     pub(crate) params: Vec<TyId<'db>>,
 
-    #[return_ref]
     pub(crate) types: IndexMap<IdentId<'db>, TyId<'db>>,
 
+    #[returns(copy)]
     pub(crate) origin: ImplementorOrigin<'db>,
 }
 
@@ -1146,6 +957,12 @@ impl<'db> ImplementorId<'db> {
             ),
             ImplementorOrigin::Assumption => {
                 panic!("requested HIR impl-trait for assumption-based implementor")
+            }
+            ImplementorOrigin::Callable => {
+                panic!("requested HIR impl-trait for a callable value's builtin implementor")
+            }
+            ImplementorOrigin::Structural => {
+                panic!("requested HIR impl-trait for a structural builtin implementor")
             }
         }
     }
@@ -1178,7 +995,7 @@ impl<'db> ImplementorId<'db> {
 
         let mut assoc_type_bindings = trait_inst.assoc_type_bindings(db).clone();
         for (name, ty) in self.types(db) {
-            assoc_type_bindings.insert(*name, *ty);
+            assoc_type_bindings.insert(AssocBinding::of(*name), *ty);
         }
 
         TraitInstId::new(
@@ -1186,6 +1003,7 @@ impl<'db> ImplementorId<'db> {
             trait_inst.def(db),
             trait_inst.args(db).to_vec(),
             assoc_type_bindings,
+            trait_inst.mode(db),
         )
     }
 
@@ -1197,18 +1015,64 @@ impl<'db> ImplementorId<'db> {
                 collect_candidate_constraints(db, impl_trait.into())
                     .instantiate(db, self.params(db))
             }
-            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
-                PredicateListId::empty_list(db)
-            }
+            ImplementorOrigin::VirtualContract(_)
+            | ImplementorOrigin::Assumption
+            | ImplementorOrigin::Callable
+            | ImplementorOrigin::Structural => PredicateListId::empty_list(db),
         }
     }
 
-    /// Method map for this impl, keyed by name.
+    /// Method map for this impl, keyed by name: for a method with one body
+    /// per mode, its `ref` body.
     pub(crate) fn methods(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> &'db IndexMap<IdentId<'db>, Func<'db>> {
-        collect_implementor_methods(db, self)
+        &collect_implementor_methods(db, self).methods
+    }
+
+    /// The impl's body of the method `name` at `mode`: the `mut` body of a
+    /// method with one body per mode at `mut`, and its method otherwise.
+    pub(crate) fn method_at(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        mode: Option<BorrowKind>,
+    ) -> Option<Func<'db>> {
+        let methods = collect_implementor_methods(db, self);
+        mode.filter(|&mode| mode == BorrowKind::Mut)
+            .and_then(|_| methods.mut_bodies.get(&name))
+            .or_else(|| methods.methods.get(&name))
+            .copied()
+    }
+
+    /// Whether the implementation gives the trait's `mut?` method `trait_m`,
+    /// named `name`, its `mut` mode: by a `mut?` method, a `mut` body, or
+    /// the trait method's default body.
+    fn gives_mut_mode(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        trait_m: Func<'db>,
+    ) -> bool {
+        let methods = collect_implementor_methods(db, self);
+        methods.mut_bodies.contains_key(&name)
+            || methods
+                .methods
+                .get(&name)
+                .map_or(trait_m.body(db).is_some(), |method| method.is_maybe_mut(db))
+    }
+
+    /// Whether the implementation gives the trait's `mut?` methods their
+    /// `mut` modes, so `T: mut Trait` holds by it under its `mut?` bounds:
+    /// each such method is `mut?` or keeps its `mut?` default body. A
+    /// compiler-made implementor's trait has no `mut?` methods.
+    pub(crate) fn gives_mut(self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.trait_def(db)
+            .method_defs(db)
+            .iter()
+            .filter(|(_, method)| method.is_maybe_mut(db))
+            .all(|(&name, &method)| self.gives_mut_mode(db, name, method))
     }
 
     /// Compare impl methods vs. trait methods and report missing/mismatched ones.
@@ -1228,6 +1092,16 @@ impl<'db> ImplementorId<'db> {
             .filter_map(|(name, &trait_method)| trait_method.body(db).is_none().then_some(*name))
             .collect();
 
+        let methods = collect_implementor_methods(db, self);
+        for (first, other) in &methods.conflicts {
+            diags.push(
+                ImplDiag::ConflictMethodImpl {
+                    primary: other.as_callable(db).unwrap(),
+                    conflict_with: first.as_callable(db).unwrap(),
+                }
+                .into(),
+            );
+        }
         for (name, impl_m) in impl_methods {
             let Some(trait_m) = trait_methods.get(name) else {
                 diags.push(
@@ -1240,14 +1114,46 @@ impl<'db> ImplementorId<'db> {
                 );
                 continue;
             };
+            let trait_m = trait_m.as_callable(db).unwrap();
             compare_impl_method(
                 db,
                 impl_m.as_callable(db).unwrap(),
-                trait_m.as_callable(db).unwrap(),
+                trait_m,
                 self.trait_inst(db),
+                BorrowKind::Ref,
                 &mut diags,
             );
+            if let Some(mut_body) = methods.mut_bodies.get(name) {
+                compare_impl_method(
+                    db,
+                    mut_body.as_callable(db).unwrap(),
+                    trait_m,
+                    self.trait_inst(db),
+                    BorrowKind::Mut,
+                    &mut diags,
+                );
+            }
             required_methods.remove(name);
+        }
+
+        // Either every `mut?` method of the trait has its `mut` mode here, or
+        // none has.
+        let modes: Vec<_> = trait_methods
+            .iter()
+            .filter(|(_, method)| method.is_maybe_mut(db))
+            .map(|(&name, &method)| (name, self.gives_mut_mode(db, name, method)))
+            .collect();
+        if let Some(&(given, _)) = modes.iter().find(|(_, gives)| *gives)
+            && let Some(&(missing, _)) = modes.iter().find(|(_, gives)| !gives)
+        {
+            diags.push(
+                ImplDiag::PartialMutImpl {
+                    primary: self.hir_impl_trait(db).span().trait_ref().into(),
+                    given,
+                    missing,
+                }
+                .into(),
+            );
         }
 
         if !required_methods.is_empty() {
@@ -1316,8 +1222,8 @@ pub(crate) fn does_impl_trait_conflict<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TraitRefId<'db> {
+    #[returns(copy)]
     pub key: Trait<'db>,
-    #[return_ref]
     pub args: Vec<TyId<'db>>,
 }
 
@@ -1345,18 +1251,56 @@ impl<'db> TraitRefId<'db> {
     }
 }
 
+/// What an associated equality binds: an associated type, or an associated
+/// shape, at one mode (`Step<ref> = ref u256`) or at every mode as an impl
+/// gives it (`shape Step = mut? u256`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
+pub struct AssocBinding<'db> {
+    pub name: IdentId<'db>,
+    pub mode: Option<ShapeMode>,
+}
+
+impl<'db> AssocBinding<'db> {
+    /// The binding of the associated type `name`, or of the associated shape
+    /// `name` at every mode.
+    pub fn of(name: IdentId<'db>) -> Self {
+        Self { name, mode: None }
+    }
+
+    /// The order equalities are compared in: by name, then mode.
+    pub fn canonical_cmp(&self, db: &'db dyn HirAnalysisDb, other: &Self) -> std::cmp::Ordering {
+        (self.name.data(db), self.mode).cmp(&(other.name.data(db), other.mode))
+    }
+
+    pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
+        let mode = match self.mode {
+            Some(ShapeMode::Ref) => "<ref>",
+            Some(ShapeMode::Mut) => "<mut>",
+            Some(ShapeMode::Inherit) | None => "",
+        };
+        format!("{}{mode}", self.name.data(db))
+    }
+}
+
 /// A trait predicate, including associated equality evidence when present.
 #[salsa::interned]
-#[derive(Debug)]
+#[derive(Debug, PartialOrd, Ord)]
 pub struct TraitInstId<'db> {
+    #[returns(copy)]
     pub key: Trait<'db>,
     /// Regular type and const parameters: [Self, ExplicitTypeParam1, ..., ExplicitConstParamN]
-    #[return_ref]
     pub args: Vec<TyId<'db>>,
 
-    /// Associated type bounds specified by user, eg `Iterator<Item=i32>`
-    #[return_ref]
-    pub assoc_type_bindings: IndexMap<IdentId<'db>, TyId<'db>>,
+    /// Associated equalities specified by user, eg `Iterator<Item=i32>` or
+    /// `Driver<Step<ref> = ref u256>`
+    pub assoc_type_bindings: IndexMap<AssocBinding<'db>, TyId<'db>>,
+
+    /// The modes the predicate grants the trait's `mut?` methods at:
+    /// `T: Trait` grants `ref`, `T: mut Trait` both. `mut?` (`T: mut? Trait`)
+    /// is `mut` where the item it bounds is used at `mut`, and stands only
+    /// in an item's declared bounds.
+    #[returns(copy)]
+    pub mode: ModeMarker,
 }
 
 impl<'db> TraitInstId<'db> {
@@ -1365,7 +1309,63 @@ impl<'db> TraitInstId<'db> {
     }
 
     pub fn new_simple(db: &'db dyn HirAnalysisDb, def: Trait<'db>, args: Vec<TyId<'db>>) -> Self {
-        Self::new(db, def, args, IndexMap::new())
+        Self::new(db, def, args, IndexMap::new(), ModeMarker::None)
+    }
+
+    /// The predicate with `mode` in place of its own.
+    pub fn with_mode(self, db: &'db dyn HirAnalysisDb, mode: ModeMarker) -> Self {
+        Self::new(
+            db,
+            self.def(db),
+            self.args(db).clone(),
+            self.assoc_type_bindings(db).clone(),
+            mode,
+        )
+    }
+
+    /// The predicate with `self_ty` as its `Self` argument.
+    pub fn with_self_ty(self, db: &'db dyn HirAnalysisDb, self_ty: TyId<'db>) -> Self {
+        let mut args = self.args(db).clone();
+        match args.first_mut() {
+            Some(arg) => *arg = self_ty,
+            None => args.push(self_ty),
+        }
+        Self::new(
+            db,
+            self.def(db),
+            args,
+            self.assoc_type_bindings(db).clone(),
+            self.mode(db),
+        )
+    }
+
+    /// The predicate a bound of an item used at `mode` is: a `mut?` bound is
+    /// `mut` at `mut`, and plain otherwise.
+    pub fn at_mode(self, db: &'db dyn HirAnalysisDb, mode: Option<BorrowKind>) -> Self {
+        match (self.mode(db), mode) {
+            (ModeMarker::MaybeMut, Some(BorrowKind::Mut)) => self.with_mode(db, ModeMarker::Mut),
+            (ModeMarker::MaybeMut, _) => self.with_mode(db, ModeMarker::None),
+            _ => self,
+        }
+    }
+
+    /// The goal that the predicate's self type grants the trait's `mut?`
+    /// methods at `mut`: `T: mut Trait`, which the predicate's associated
+    /// equalities, checked with it, need not repeat.
+    pub fn mut_goal(self, db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(
+            db,
+            self.def(db),
+            self.args(db).clone(),
+            IndexMap::new(),
+            ModeMarker::Mut,
+        )
+    }
+
+    /// Whether the predicate grants the `mut` modes of the trait's `mut?`
+    /// methods.
+    pub fn is_mut(self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.mode(db) == ModeMarker::Mut
     }
 
     /// Extract positional identity only. The caller remains responsible for
@@ -1384,22 +1384,37 @@ impl<'db> TraitInstId<'db> {
             .iter()
             .map(|ty| table.new_var_from_param(*ty))
             .collect::<Vec<_>>();
-        Self::new(db, def, args, IndexMap::new())
+        Self::new_simple(db, def, args)
     }
 
-    pub fn assoc_ty_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<(IdentId<'db>, TyId<'db>)> {
+    pub fn assoc_ty_bindings(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<(AssocBinding<'db>, TyId<'db>)> {
         self.assoc_type_bindings(db)
             .iter()
-            .map(|(&name, &ty)| (name, ty))
+            .map(|(&binding, &ty)| (binding, ty))
             .collect()
     }
 
+    /// The type the predicate binds `binding` to: its own equality, or, for
+    /// an associated shape at a mode, the shape it binds at every mode, at
+    /// that mode.
     pub fn bound_assoc_ty(
         self,
         db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
+        binding: AssocBinding<'db>,
     ) -> Option<TyId<'db>> {
-        self.assoc_type_bindings(db).get(&name).copied()
+        let bindings = self.assoc_type_bindings(db);
+        if let Some(&ty) = bindings.get(&binding) {
+            return Some(ty);
+        }
+        let shape = *bindings.get(&AssocBinding::of(binding.name))?;
+        Some(
+            binding
+                .mode
+                .map_or(shape, |mode| shape.at_shape_mode(db, mode)),
+        )
     }
 
     pub fn project_assoc_ty(
@@ -1427,6 +1442,7 @@ impl<'db> TraitInstId<'db> {
             self.def(db),
             normalized_args,
             self.assoc_type_bindings(db).clone(),
+            self.mode(db),
         )
     }
 
@@ -1435,13 +1451,36 @@ impl<'db> TraitInstId<'db> {
             let inst = self.pretty_print(db, false);
             let self_ty = self.self_ty(db);
             format!("{}: {}", self_ty.pretty_print(db), inst)
+        } else if let Some(callable) = CallableTrait::of(db, self.def(db))
+            && let Some(params) = callable_params(db, self)
+        {
+            // A callable trait whose shape lists its parameters prints as the
+            // sugar that names it, `Fn(own A, B) -> R`; `-> _` when the
+            // result is left open.
+            let ret =
+                self.bound_assoc_ty(db, AssocBinding::of(IdentId::new(db, "Out".to_string())));
+            let params: Vec<_> = params
+                .iter()
+                .map(|param| match param {
+                    Shape::Access(BorrowKind::Ref, ty) => ty.pretty_print(db).to_string(),
+                    _ => param.pretty_print_product(db),
+                })
+                .collect();
+            let name = if callable.mut_receiver { "FnMut" } else { "Fn" };
+            let ret = match ret {
+                Some(ret) if ret == TyId::unit(db) => String::new(),
+                Some(ret) => format!(" -> {}", ret.pretty_print(db)),
+                None => " -> _".to_string(),
+            };
+            format!("{name}({}){ret}", params.join(", "))
         } else {
-            let mut s = self
-                .def(db)
-                .name(db)
-                .to_opt()
-                .map_or("<unknown>", |n| n.data(db).as_str())
-                .to_string();
+            let mut s = self.mode(db).prefix().to_string();
+            s.push_str(
+                self.def(db)
+                    .name(db)
+                    .to_opt()
+                    .map_or("<unknown>", |n| n.data(db).as_str()),
+            );
 
             let mut args = self.args(db).iter().map(|ty| ty.pretty_print(db));
             // Skip the first type parameter since it's the implementor type.
@@ -1467,12 +1506,12 @@ impl<'db> TraitInstId<'db> {
                 }
 
                 let mut first_assoc = true;
-                for (name, ty) in self.assoc_type_bindings(db) {
+                for (binding, ty) in self.assoc_type_bindings(db) {
                     if !first_assoc {
                         s.push_str(", ");
                     }
                     first_assoc = false;
-                    s.push_str(name.data(db));
+                    s.push_str(&binding.pretty_print(db));
                     s.push_str(" = ");
                     s.push_str(ty.pretty_print(db));
                 }
@@ -1581,7 +1620,13 @@ fn probe(value: own Wrapper<u16>) {}
             .expect("missing probe parameter")
             .ty(&db);
         let projected_arg = self_ty.generic_args(&db)[0];
-        let inst = TraitInstId::new(&db, trait_, vec![self_ty, projected_arg], IndexMap::new());
+        let inst = TraitInstId::new(
+            &db,
+            trait_,
+            vec![self_ty, projected_arg],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
         let Selection::Unique(resolved) =
             resolve_trait_impl_instance(&db, TraitSolveCx::new(&db, func.scope()), inst)
         else {

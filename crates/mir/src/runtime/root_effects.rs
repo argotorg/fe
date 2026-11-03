@@ -1,12 +1,10 @@
 use hir::{
     analysis::{
         semantic::{
-            SemanticInstance, assigned_provider_layout_evidence, owner_effect_bindings,
-            resolved_provider_binding_for_instance_effect,
+            SemanticInstance, owner_effect_bindings, resolved_provider_binding_for_instance_effect,
         },
         ty::{
-            CallableLayoutParamPort, CallableLayoutPort, ProviderAddressSpace,
-            const_ty::CallableInputLayoutHoleOrigin,
+            AddressSpace,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::TyId,
         },
@@ -19,9 +17,9 @@ use rustc_hash::FxHashMap;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan,
-        EntryLayoutEvidenceArgPlan, EntrySemanticArgsPlan, RefKind, RefView, RuntimeClass,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan, EntrySemanticArgsPlan,
+        RefKind, RefView, RuntimeClass, TargetRootProviderBinding,
+        TargetRootProviderMaterialization,
         lower::{
             classify::{
                 provider_erases_runtime_root, provider_source_erases_zero_sized_effect_value,
@@ -84,65 +82,8 @@ pub(crate) fn entry_semantic_args_plan<'db>(
             .transpose()
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let signature = semantic.key(db).layout_bundle_signature(db);
-    let mut layout_evidence = Vec::new();
-    for input in &signature.inputs {
-        if input.interface.runtime_descriptor_count() == 0 {
-            continue;
-        }
-        let CallableInputLayoutHoleOrigin::Effect(_) = input.origin else {
-            return Err(LowerError::Unsupported(format!(
-                "{} cannot synthesize runtime layout evidence for non-effect input {:?}",
-                context.label(db),
-                input.origin,
-            )));
-        };
-        let providers = resolved
-            .iter()
-            .filter(|(binding, _)| binding.callable_input_origin(db) == Some(input.origin))
-            .map(|(_, provider)| provider)
-            .collect::<Vec<_>>();
-        let [provider] = providers.as_slice() else {
-            return Err(LowerError::Unsupported(format!(
-                "{} has no unique provider for runtime layout-evidence input {:?}",
-                context.label(db),
-                input.origin,
-            )));
-        };
-        let values = assigned_provider_layout_evidence(db, provider, &input.interface.schema)
-            .map_err(|error| {
-                LowerError::Unsupported(format!(
-                    "{} cannot resolve assigned layout evidence for input {:?}: {error:?}",
-                    context.label(db),
-                    input.origin,
-                ))
-            })?;
-        for (_, component) in input.interface.runtime_components() {
-            let Some(value) = values.component(&component.port) else {
-                return Err(LowerError::Unsupported(format!(
-                    "{} has no assigned value for layout-evidence component {:?}",
-                    context.label(db),
-                    component.port,
-                )));
-            };
-            layout_evidence.push(EntryLayoutEvidenceArgPlan {
-                target: CallableLayoutParamPort::Input(CallableLayoutPort {
-                    origin: input.origin,
-                    component: component.port.clone(),
-                }),
-                value: value.clone(),
-            });
-        }
-    }
-    if signature.output_witnesses.runtime_descriptor_count() != 0 {
-        return Err(LowerError::Unsupported(format!(
-            "{} requires caller-supplied output layout witnesses",
-            context.label(db),
-        )));
-    }
     Ok(EntrySemanticArgsPlan {
         effects: effects.into_boxed_slice(),
-        layout_evidence: layout_evidence.into_boxed_slice(),
     })
 }
 
@@ -265,7 +206,7 @@ fn contract_field_binding<'db>(
     let binding_ty = semantic.binding_ty(db, binding);
     let field_space = field.address_space;
     let init_immutable = matches!(semantic.key(db).owner(db), BodyOwner::ContractInit { .. })
-        && field_space == ProviderAddressSpace::Code;
+        && field_space == AddressSpace::Code;
     let class = runtime_effect_binding_plan(db, semantic, binding)
         .map(|plan| plan.class)
         .ok_or_else(|| {
@@ -291,7 +232,7 @@ fn contract_field_binding<'db>(
     };
     let slot = match &kind {
         RefKind::Provider {
-            space: AddressSpaceKind::Code,
+            space: AddressSpace::Code,
             ..
         } => {
             let total_bytes = i128::try_from(total_code_slots)
@@ -324,13 +265,7 @@ fn contract_field_binding<'db>(
                 },
             )?)
         }
-        _ => ContractFieldSlot::Words(u128::try_from(field.slot_offset).map_err(|_| {
-            LowerError::Unsupported(format!(
-                "contract field offset overflow for `{}` in {}",
-                field.name.data(db),
-                context.label(db),
-            ))
-        })?),
+        _ => ContractFieldSlot::Words(field.slot_offset),
     };
     Ok(ContractFieldBinding {
         field: field.field,
@@ -348,11 +283,11 @@ pub(crate) fn target_root_provider_materialization<'db>(
 ) -> Option<TargetRootProviderMaterialization<'db>> {
     match class {
         RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Memory,
+            space: AddressSpace::Memory,
             pointee: Some(pointee),
         } => match pointee.target(db) {
             RuntimeClass::AggregateValue { layout } => {
-                Some(TargetRootProviderMaterialization::MemoryRawAddr { layout })
+                Some(TargetRootProviderMaterialization::MemoryRawAddr { layout: *layout })
             }
             RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
                 None
@@ -363,7 +298,7 @@ pub(crate) fn target_root_provider_materialization<'db>(
             kind:
                 RefKind::Object
                 | RefKind::Provider {
-                    space: AddressSpaceKind::Memory,
+                    space: AddressSpace::Memory,
                     ..
                 },
             view: RefView::Whole,
@@ -393,7 +328,9 @@ fn unsupported_entry_effect<'db>(
 fn binding_display_name<'db>(db: &'db dyn MirDb, binding: LocalBinding<'db>) -> String {
     match binding {
         LocalBinding::EffectParam { binding_name, .. } => binding_name.data(db).to_string(),
-        LocalBinding::Local { .. } | LocalBinding::Param { .. } => "<unknown>".to_string(),
+        LocalBinding::Local { .. }
+        | LocalBinding::Param { .. }
+        | LocalBinding::ParamPart { .. } => "<unknown>".to_string(),
     }
 }
 

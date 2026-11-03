@@ -1,0 +1,80 @@
+// A place inside a projection's grant is a place: a `ref` grant's places
+// are read-only, and a `mut` grant's are written or yielded through `mut`.
+use core::ptr::{MemArray, MemBuffer}
+
+struct Holder {
+    buf: MemBuffer,
+}
+
+impl Holder {
+    fn buf(self) -> ref MemBuffer {
+        ref self.buf
+    }
+
+    fn buf_mut(mut self) -> mut MemBuffer {
+        mut self.buf
+    }
+}
+
+struct Inner {
+    v: u256,
+    buf: MemBuffer,
+}
+
+struct Outer {
+    inner: Inner,
+}
+
+impl Outer {
+    fn inner(self) -> ref Inner {
+        ref self.inner
+    }
+
+    fn inner_mut(mut self) -> mut Inner {
+        mut self.inner
+    }
+
+    // Rejected: an unmarked place yields no `mut` access.
+    fn sneaky(self) -> mut u256 {
+        self.inner().v
+    }
+
+    fn unmarked(mut self) -> mut u256 {
+        self.inner_mut().v
+    }
+
+    // Accepted: a `mut` grant's place, yielded through `mut`.
+    fn marked(mut self) -> mut u256 {
+        mut self.inner_mut().v
+    }
+}
+
+// Rejected: writes through `ref` grants.
+fn index_assign(_ h: Holder) {
+    h.buf()[0] = 9
+}
+
+fn augmented(_ h: Holder) {
+    h.buf()[0] += 9
+}
+
+fn nested_index(_ m: MemArray<MemBuffer>) {
+    m[0][0] = 5
+}
+
+fn mut_access(_ m: MemArray<MemBuffer>) {
+    let x = mut m[0][0]
+}
+
+fn mut_receiver(_ s: Outer) {
+    s.inner().buf.truncate(0)
+}
+
+// Accepted: writes through `mut` grants.
+fn through_mut(_ h: mut Holder, _ s: mut Outer, _ m: mut MemArray<MemBuffer>) {
+    h.buf_mut()[0] = 9
+    h.buf_mut()[0] += 1
+    m[0][0] = 5
+    s.inner_mut().buf.truncate(0)
+    s.inner_mut().v = 3
+}

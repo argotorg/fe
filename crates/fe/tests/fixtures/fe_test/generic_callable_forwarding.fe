@@ -1,0 +1,63 @@
+// A generic function passes another generic function, which forwards its row
+// `C::E` and may have effects of its own, as a callable value to a generic
+// callee, which calls it with the row's providers.
+struct Store { n: u256 }
+
+struct Log { n: u256 }
+
+trait Tr {
+    uses E
+    type Cursor
+
+    fn start(self) -> Self::Cursor uses E
+}
+
+struct W { v: u256 }
+
+impl Copy for W {}
+
+impl Tr for W {
+    uses E = (store: Store)
+    type Cursor = u256
+
+    fn start(self) -> u256 uses E {
+        self.v + store.n
+    }
+}
+
+fn hof<C: Tr, P: Fn(u256) -> bool>(_ c: C, _ p: P, _ n: u256) -> bool uses (C::E, P::E) {
+    let cur = c.start()
+    p(n)
+}
+
+fn total<C: Tr>(_ c: C) -> u256 uses C::E {
+    if hof(c, |x| x == 7, 7) { 1 } else { 0 }
+}
+
+fn counted<C: Tr>(_ c: C) -> u256 uses (log: mut Log, C::E) {
+    log.n += 1
+    total(c)
+}
+
+fn apply_t<C, F: Fn(C) -> u256>(_ f: F, _ c: C) -> u256 uses F::E {
+    f(c)
+}
+
+fn generic_fwd<C: Tr>(_ c: C) -> u256 uses C::E {
+    apply_t(total<C>, c)
+}
+
+fn generic_counted<C: Tr>(_ c: C) -> u256 uses (log: mut Log, C::E) {
+    apply_t(counted<C>, c)
+}
+
+#[test]
+fn forwards() {
+    let s = Store { n: 2 }
+    var l = Log { n: 0 }
+    with (Store = s, Log = mut l) {
+        assert(generic_fwd(W { v: 5 }) == 1)
+        assert(generic_counted(W { v: 5 }) == 1)
+    }
+    assert(l.n == 1)
+}

@@ -1,0 +1,147 @@
+// A packed map as a library collection: eight 32-bit counters to a word,
+// each word hashed with its index like Solady's `LibMap`, so any key stays
+// in the map's region. Implementing `Pinned` with `Space` `Storage` pins it
+// to storage: no attribute, and no raw storage authority at its uses.
+use core::marker::{Pinned, Storage}
+use core::iter::Collection
+use core::ops::{LaneCodec, Location, StateIndex}
+use std::evm::{Address, Evm, RawStorage, SolSlot, keccak_words}
+
+/// A `u32` in 32 bits of a word.
+struct U32Lanes {}
+
+impl LaneCodec<u32> for U32Lanes {
+    const BITS: u256 = 32
+
+    fn get(_ word: u256, offset: u256) -> u32 {
+        ((word >> offset) & 0xffffffff).downcast_truncate()
+    }
+
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        (word & !(0xffffffff << offset)) | ((value as u256) << offset)
+    }
+}
+
+struct Counters {
+    total: u256,
+}
+
+impl Pinned for Counters {
+    type Space = Storage
+}
+
+unsafe impl StateIndex for Counters {
+    type Key = u256
+    type Entry = u32
+    type Lanes = U32Lanes
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        let bits = <Self::Lanes as LaneCodec<Self::Entry>>::BITS
+        let per_word = 256 / bits
+        Location { slot: keccak_words([key / per_word, root]), offset: (key % per_word) * bits }
+    }
+}
+
+impl Counters {
+    fn get(self, _ key: u256) -> u32 {
+        self[key]
+    }
+}
+
+// The first ten counters, as a collection whose elements are lanes: their
+// grants are memory copies.
+impl Collection for Counters {
+    type Cursor = u256
+    type Item = u32
+
+    fn start(self) -> u256 {
+        0
+    }
+
+    fn has(self, _ c: u256) -> bool {
+        c < 10
+    }
+
+    fn next(self, _ c: u256) -> u256 {
+        c + 1
+    }
+
+    fn at(mut? self, _ c: u256) -> mut? u32 {
+        mut? self[c]
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Bump { key: u256 } -> u32,
+    #[selector = 2]
+    Words {} -> (u256, u256, u256, u256),
+    #[selector = 3]
+    Sweep {} -> (u256, u32),
+}
+
+fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+}
+
+pub contract C uses (storage: mut RawStorage) {
+    mut first: u256,
+    mut counters: Counters,
+
+    recv M {
+        Bump { key } -> u32 uses (mut counters, mut first) {
+            let counter = mut counters[key]
+            // An entry is a place of its own: another field may be written
+            // while it is open.
+            first += 1
+            counter += 1
+            counters.total += 1
+            counters.get(key)
+        }
+
+        Sweep {} -> (u256, u32) uses (mut counters) {
+            for mut counter in counters {
+                counter += 10
+            }
+            var sum: u256 = 0
+            for counter in counters {
+                sum += counter as u256
+            }
+            (sum, counters[1])
+        }
+
+        Words {} -> (u256, u256, u256, u256) uses (mut storage) {
+            (
+                read_slot(keccak_words([0, 1])),
+                read_slot(keccak_words([1, 1])),
+                read_slot(0),
+                read_slot(1),
+            )
+        }
+    }
+}
+
+fn bump(_ c: Address, _ key: u256) -> u32 uses (evm: mut Evm) {
+    evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Bump { key })
+}
+
+#[test]
+fn library_collection_packs_lanes() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    assert!(bump(c, 1) == 1)
+    assert!(bump(c, 1) == 2)
+    assert!(bump(c, 7) == 1)
+    assert!(bump(c, 9) == 1)
+    let words: (u256, u256, u256, u256) =
+        evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Words {})
+    // Keys 1 and 7 share word 0; key 9 is lane 1 of word 1.
+    assert!(words.0 == (2 << 32) | (1 << 224))
+    assert!(words.1 == 1 << 32)
+    assert!(words.2 == 4)
+    // `total` is the map's own slot.
+    assert!(words.3 == 4)
+    // Counters 1, 7 and 9 hold 2, 1 and 1; each of the ten gains 10.
+    let swept: (u256, u32) = evm.call(addr: c, gas: 500000, value: Wei::zero(), message: M::Sweep {})
+    assert!(swept.0 == 104)
+    assert!(swept.1 == 12)
+}

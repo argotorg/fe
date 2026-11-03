@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::ast::AstNode;
 
-use super::{TraitRef, TupleType, TypeBoundList, ast_node, use_tree::UsePath};
+use super::{TraitRef, TupleType, TypeBoundList, ast_node, support, use_tree::UsePath};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -396,8 +396,60 @@ impl TraitConstItem {
 }
 
 ast_node! {
+    /// `uses E` in a trait definition, optionally with a default row, or
+    /// `uses E = (store: mut Store)` in a trait implementation.
+    pub struct TraitUsesItem,
+    SK::TraitUsesItem,
+}
+impl super::AttrListOwner for TraitUsesItem {}
+impl TraitUsesItem {
+    /// Returns the name of the row
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    /// Whether the item gives the row's effects, after `=`.
+    pub fn eq(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Eq)
+    }
+
+    /// `= (a: A, b: mut B)`
+    pub fn param_list(&self) -> Option<super::UsesParamList> {
+        support::child(self.syntax())
+    }
+
+    /// `= A` or `= mut A`
+    pub fn param(&self) -> Option<super::UsesParam> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `shape Step` in a trait definition, or `shape Step = (own usize,
+    /// D::Step)` in a trait implementation: an associated shape.
+    pub struct TraitShapeItem,
+    SK::TraitShapeItem,
+}
+impl super::AttrListOwner for TraitShapeItem {}
+impl TraitShapeItem {
+    /// The shape's name, after the `shape` keyword.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| token.kind() == SK::Ident)
+            .nth(1)
+    }
+
+    /// The shape an implementation gives it, after `=`.
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     pub struct TraitItem,
-    SK::Func | SK::TraitTypeItem | SK::TraitConstItem
+    SK::Func | SK::TraitTypeItem | SK::TraitConstItem | SK::TraitUsesItem | SK::TraitShapeItem
 }
 impl TraitItem {
     pub fn kind(&self) -> TraitItemKind {
@@ -409,6 +461,12 @@ impl TraitItem {
             SK::TraitConstItem => {
                 TraitItemKind::Const(TraitConstItem::cast(self.syntax().clone()).unwrap())
             }
+            SK::TraitUsesItem => {
+                TraitItemKind::Uses(TraitUsesItem::cast(self.syntax().clone()).unwrap())
+            }
+            SK::TraitShapeItem => {
+                TraitItemKind::Shape(TraitShapeItem::cast(self.syntax().clone()).unwrap())
+            }
             _ => unreachable!(),
         }
     }
@@ -418,6 +476,8 @@ pub enum TraitItemKind {
     Func(Func),
     Type(TraitTypeItem),
     Const(TraitConstItem),
+    Uses(TraitUsesItem),
+    Shape(TraitShapeItem),
 }
 
 ast_node! {
@@ -449,6 +509,7 @@ ast_node! {
 impl super::GenericParamsOwner for Impl {}
 impl super::WhereClauseOwner for Impl {}
 impl super::AttrListOwner for Impl {}
+impl super::ItemModifierOwner for Impl {}
 impl Impl {
     /// Returns the type of the impl.
     /// `Foo::Bar<T>` in `impl Foo::Bar<T> where .. { .. }`
@@ -472,6 +533,7 @@ ast_node! {
 impl super::GenericParamsOwner for ImplTrait {}
 impl super::WhereClauseOwner for ImplTrait {}
 impl super::AttrListOwner for ImplTrait {}
+impl super::ItemModifierOwner for ImplTrait {}
 impl ImplTrait {
     /// Returns the trait of the impl.
     /// `Foo` in `impl<T> Foo for Bar<T> { .. }`
@@ -566,13 +628,23 @@ impl Extern {
 }
 
 ast_node! {
+    /// The field list of a struct: either `{x: i32, y: u32}` for a record
+    /// struct, or `(pub u8, u16)` for a tuple struct. Tuple fields have no
+    /// name.
     pub struct RecordFieldDefList,
-    SK::RecordFieldDefList,
+    SK::RecordFieldDefList | SK::TupleFieldDefList,
     IntoIterator<Item=RecordFieldDef>
 }
+impl RecordFieldDefList {
+    /// Returns `true` if this is the field list of a tuple struct.
+    pub fn is_tuple(&self) -> bool {
+        self.syntax().kind() == SK::TupleFieldDefList
+    }
+}
+
 ast_node! {
     pub struct RecordFieldDef,
-    SK::RecordFieldDef,
+    SK::RecordFieldDef | SK::TupleFieldDef,
 }
 
 impl super::AttrListOwner for RecordFieldDef {}
@@ -590,6 +662,11 @@ impl RecordFieldDef {
     /// Returns the mut keyword if exists.
     pub fn mut_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::MutKw)
+    }
+
+    /// Returns the `unsafe` keyword of an `unsafe` field, if any.
+    pub fn unsafe_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::UnsafeKw)
     }
 
     /// Returns the name of the field.
@@ -936,6 +1013,27 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn tuple_struct() {
+        let source = r#"
+                pub struct Pair<T>(pub T, (u8, i32)) where T: Trait
+            "#;
+        let s: Struct = parse_item(source);
+        assert_eq!(s.name().unwrap().text(), "Pair");
+        assert_eq!(s.generic_params().unwrap().iter().count(), 1);
+        assert!(s.where_clause().is_some());
+        let fields = s.fields().unwrap();
+        assert!(fields.is_tuple());
+        let fields: Vec<_> = fields.into_iter().collect();
+        assert_eq!(fields.len(), 2);
+        assert!(fields[0].pub_kw().is_some());
+        assert!(fields[0].name().is_none());
+        assert!(matches!(fields[0].ty().unwrap().kind(), TypeKind::Path(_)));
+        assert!(fields[1].pub_kw().is_none());
+        assert!(matches!(fields[1].ty().unwrap().kind(), TypeKind::Tuple(_)));
     }
 
     #[test]

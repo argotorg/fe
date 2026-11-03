@@ -24,4 +24,5 @@ error[8-0036]: missing effect `Ctx` required by `address`
 18 │     address()
    │     ^^^^^^^^^ `address` requires effect `Ctx` to be in scope
    │
-   = provide it with `with (Ctx = value)` or require it via `uses Ctx`
+   = require it in this function's signature with `uses (ctx: Ctx)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Ctx = value) { .. }`

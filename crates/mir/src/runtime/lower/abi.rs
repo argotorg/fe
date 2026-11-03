@@ -1,100 +1,39 @@
 use cranelift_entity::EntityRef;
-use hir::analysis::ty::{CallableLayoutParamPort, LayoutBundleComponentId, ty_def::TyId};
 
 use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::{
-        LayoutId, LayoutKey, RLocalId, RuntimeClass, RuntimeInterfaceSignature, RuntimeParam,
-        StructLayout, synthetic::runtime_synthetic_interface_signature,
+        RLocalId, RuntimeClass, RuntimeInterfaceSignature, RuntimeParam,
+        synthetic::runtime_synthetic_interface_signature,
     },
 };
 
 use super::{
     interface::runtime_param_locals,
-    layout_evidence::layout_root_scalar_class,
     returns::{declaration_runtime_return_class, declared_return_class_admits},
     semantic_body::RuntimeSemanticBody,
-    type_info::RuntimeTypeEnv,
 };
 
-#[derive(Clone, Debug)]
-pub(crate) struct RuntimeAbiEvidenceParam<'db> {
-    pub source: CallableLayoutParamPort,
-    /// The layout root's const type.
-    pub ty: TyId<'db>,
-    pub param: RuntimeParam<'db>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RuntimeAbiEvidenceResult<'db> {
-    pub component_id: LayoutBundleComponentId,
-    /// The layout root's const type.
-    pub ty: TyId<'db>,
-    pub class: RuntimeClass<'db>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RuntimeAbiReturn<'db> {
-    pub visible: Option<RuntimeClass<'db>>,
-    pub evidence: Vec<RuntimeAbiEvidenceResult<'db>>,
-    pub class: Option<RuntimeClass<'db>>,
-    pub layout: Option<LayoutId<'db>>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RuntimeAbiPlan<'db> {
-    pub visible_params: Vec<RuntimeParam<'db>>,
-    pub evidence_params: Vec<RuntimeAbiEvidenceParam<'db>>,
-    pub returns: RuntimeAbiReturn<'db>,
-}
-
-impl<'db> RuntimeAbiPlan<'db> {
-    pub fn signature(&self) -> RuntimeInterfaceSignature<'db> {
-        RuntimeInterfaceSignature {
-            params: self
-                .visible_params
-                .iter()
-                .cloned()
-                .chain(self.evidence_params.iter().map(|param| param.param.clone()))
-                .collect(),
-            ret: self.returns.class.clone(),
-        }
-    }
-}
-
-pub(crate) fn runtime_declaration_abi_plan<'db>(
+pub(crate) fn runtime_declaration_signature<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
-) -> RuntimeAbiPlan<'db> {
-    let RuntimeInstanceSource::Semantic(semantic) = key.source(db) else {
+) -> RuntimeInterfaceSignature<'db> {
+    let RuntimeInstanceSource::Semantic(_) = key.source(db) else {
         let RuntimeInstanceSource::Synthetic(synthetic) = key.source(db) else {
             unreachable!()
         };
-        let signature = runtime_synthetic_interface_signature(synthetic.spec(db).clone());
-        return RuntimeAbiPlan {
-            visible_params: signature.params,
-            evidence_params: Vec::new(),
-            returns: RuntimeAbiReturn {
-                visible: signature.ret.clone(),
-                evidence: Vec::new(),
-                class: signature.ret,
-                layout: None,
-            },
-        };
+        return runtime_synthetic_interface_signature(synthetic.spec(db).clone());
     };
-
-    let visible = declaration_runtime_return_class(db, key);
-    semantic_runtime_abi_plan(db, key, semantic, visible)
+    semantic_runtime_signature(db, key, declaration_runtime_return_class(db, key))
 }
 
-fn semantic_runtime_abi_plan<'db>(
+fn semantic_runtime_signature<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
-    semantic: hir::analysis::semantic::SemanticInstance<'db>,
-    visible: Option<RuntimeClass<'db>>,
-) -> RuntimeAbiPlan<'db> {
-    let visible_params = key
+    ret: Option<RuntimeClass<'db>>,
+) -> RuntimeInterfaceSignature<'db> {
+    let params = key
         .params(db)
         .iter()
         .enumerate()
@@ -102,65 +41,19 @@ fn semantic_runtime_abi_plan<'db>(
             local: RLocalId::from_u32(index as u32),
             class: class.clone(),
         })
-        .collect::<Vec<_>>();
-    let signature = semantic.key(db).layout_bundle_signature(db);
-    let env = RuntimeTypeEnv::for_semantic(db, semantic);
-    let first_local = visible_params.len();
-    let evidence_params = signature
-        .runtime_params()
-        .enumerate()
-        .map(|(index, param)| RuntimeAbiEvidenceParam {
-            source: param.source,
-            ty: param.component.ty,
-            param: RuntimeParam {
-                local: RLocalId::from_u32(first_local as u32 + index as u32),
-                class: RuntimeClass::Scalar(layout_root_scalar_class(db, env, param.component.ty)),
-            },
-        })
-        .collect::<Vec<_>>();
-
-    let evidence = signature
-        .runtime_results()
-        .map(|result| RuntimeAbiEvidenceResult {
-            component_id: result.component_id,
-            ty: result.component.ty,
-            class: RuntimeClass::Scalar(layout_root_scalar_class(db, env, result.component.ty)),
-        })
-        .collect::<Vec<_>>();
-    let (class, layout) = if evidence.is_empty() {
-        (visible.clone(), None)
-    } else {
-        let fields = visible
-            .iter()
-            .cloned()
-            .chain(evidence.iter().map(|result| result.class.clone()))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let layout = LayoutId::new(db, LayoutKey::Struct(StructLayout { fields }));
-        (Some(RuntimeClass::AggregateValue { layout }), Some(layout))
-    };
-
-    RuntimeAbiPlan {
-        visible_params,
-        evidence_params,
-        returns: RuntimeAbiReturn {
-            visible,
-            evidence,
-            class,
-            layout,
-        },
-    }
+        .collect();
+    RuntimeInterfaceSignature { params, ret }
 }
 
 /// The body implements its declaration contract. The declaration is computed
 /// without the body, so it may be wider than the class the body returns, which
 /// return lowering then adapts; it must never be narrower.
-pub(crate) fn runtime_body_abi_plan<'db>(
+pub(crate) fn runtime_body_signature<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
     body: &RuntimeSemanticBody<'db>,
     returned: Option<&RuntimeClass<'db>>,
-) -> RuntimeAbiPlan<'db> {
+) -> RuntimeInterfaceSignature<'db> {
     let semantic = key
         .semantic(db)
         .expect("runtime body ABI requires a semantic instance");
@@ -185,8 +78,8 @@ pub(crate) fn runtime_body_abi_plan<'db>(
             key.params(db),
         );
     }
-    let mut plan = semantic_runtime_abi_plan(db, key, semantic, declared);
-    for (param, local) in plan.visible_params.iter_mut().zip(runtime_param_locals(
+    let mut signature = semantic_runtime_signature(db, key, declared);
+    for (param, local) in signature.params.iter_mut().zip(runtime_param_locals(
         db,
         semantic,
         &body.source,
@@ -194,8 +87,5 @@ pub(crate) fn runtime_body_abi_plan<'db>(
     )) {
         param.local = RLocalId::from_u32(local.index() as u32);
     }
-    for (index, evidence) in plan.evidence_params.iter_mut().enumerate() {
-        evidence.param.local = RLocalId::from_u32(body.locals.len() as u32 + index as u32);
-    }
-    plan
+    signature
 }

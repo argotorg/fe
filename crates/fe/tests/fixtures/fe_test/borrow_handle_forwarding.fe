@@ -18,17 +18,17 @@ fn consume_wallet(_ w: own Wallet) -> (u256, u8) {
 
 #[test]
 fn test_borrow_handle_forwarding() {
-    let mut w = Wallet {
+    var w = Wallet {
         balance: 100,
         nonce: 1,
     }
 
-    let b_ref: ref u256 = ref w.balance
+    let b_ref = ref w.balance
     assert!(read_balance(b_ref) == 100)
 
     {
-        let n_handle: mut u8 = mut w.nonce
-        bump_nonce(n_handle)
+        let n_handle = mut w.nonce
+        bump_nonce(mut n_handle)
         n_handle += 2
     }
     assert!(w.nonce == 4)

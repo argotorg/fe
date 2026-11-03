@@ -1,0 +1,52 @@
+// An all-zero `Option` is `None` and an all-zero `Result` is `Ok` of zero:
+// the first variant has tag 0, so never-written state and zeroed memory hold it.
+use core::ptr::MemArray
+use std::evm::{Evm, StorageMap}
+
+msg M {
+    #[selector = 1]
+    Absent -> u256,
+    #[selector = 2]
+    Present -> u256,
+}
+
+pub contract C {
+    mut options: StorageMap<u256, Option<u256>>,
+    mut results: StorageMap<u256, Result<u256, u256>>,
+
+    recv M {
+        Absent -> u256 uses (options, results) {
+            let option = match options[3] {
+                Option::None => 1
+                Option::Some(_) => 0
+            }
+            let result = match results[3] {
+                Result::Ok(value) => 10 + value
+                Result::Err(_) => 0
+            }
+            option + result
+        }
+        Present -> u256 uses (mut options) {
+            options[3] = Option::Some(0)
+            match options[3] {
+                Option::Some(value) => 100 + value
+                Option::None => 0
+            }
+        }
+    }
+}
+
+#[test]
+fn never_written_state_is_none_and_ok() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    assert(evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Absent {}) == 11)
+    assert(evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Present {}) == 100)
+}
+
+#[test]
+fn zeroed_memory_is_none_and_ok() {
+    let options = MemArray<Option<u256>>::new_zeroed(1)
+    assert(options[0].is_none())
+    let results = MemArray<Result<u256, u256>>::new_zeroed(1)
+    assert(results[0].is_ok())
+}

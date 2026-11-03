@@ -1,4 +1,8 @@
-use salsa::Update;
+// Diagnostics and CTFE stops are returned on the slow path; salsa's 8-byte ids
+// put them just past clippy's 128-byte `Err` threshold.
+#![allow(clippy::result_large_err)]
+
+use salsa::SalsaValue;
 
 use crate::analysis::{
     semantic::{SemOrigin, SemanticInstanceKey},
@@ -14,7 +18,7 @@ use super::{
     request::{ConstComputationId, VerifiedConstValueId},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstDemandKind {
     Value,
     Boolean,
@@ -26,7 +30,7 @@ pub enum ConstDemandKind {
     CallableSelection,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstDependency<'db> {
     Value(TyId<'db>),
     Type(TyId<'db>),
@@ -36,7 +40,7 @@ pub enum ConstDependency<'db> {
     InherentSelection(InherentConstUse<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct BlockedInfo<'db> {
     pub demand: ConstDemandKind,
     pub first_dependency: ConstDependency<'db>,
@@ -61,7 +65,7 @@ impl<'db> BlockedInfo<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum EvalFailure<'db> {
     Ctfe(CtfeError<'db>),
     Invariant {
@@ -70,14 +74,14 @@ pub enum EvalFailure<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum EvalOutcome<'db, T: Update + PartialEq> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum EvalOutcome<'db, T> {
     Ready(T),
     Blocked(BlockedInfo<'db>),
     Failed(EvalFailure<'db>),
 }
 
-impl<'db, T: Update + PartialEq> EvalOutcome<'db, T> {
+impl<'db, T> EvalOutcome<'db, T> {
     pub(crate) fn into_result(self) -> EvalResult<'db, T> {
         match self {
             Self::Ready(value) => Ok(value),
@@ -94,7 +98,7 @@ impl<'db, T: Update + PartialEq> EvalOutcome<'db, T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum EvalStop<'db> {
     Blocked(BlockedInfo<'db>),
     Failed(EvalFailure<'db>),
@@ -102,14 +106,14 @@ pub(crate) enum EvalStop<'db> {
 
 pub(crate) type EvalResult<'db, T> = Result<T, EvalStop<'db>>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum FoldMissReason<'db> {
     UnknownRuntimeInput,
     Dependent(BlockedInfo<'db>),
     ReachedFailure(CtfeError<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum FoldAttempt<'db> {
     Folded(VerifiedConstValueId<'db>),
     NotFoldable(FoldMissReason<'db>),
@@ -122,7 +126,7 @@ impl<'db> From<CtfeError<'db>> for EvalStop<'db> {
     }
 }
 
-impl<'db, T: Update + PartialEq> From<EvalResult<'db, T>> for EvalOutcome<'db, T> {
+impl<'db, T> From<EvalResult<'db, T>> for EvalOutcome<'db, T> {
     fn from(result: EvalResult<'db, T>) -> Self {
         match result {
             Ok(value) => Self::Ready(value),

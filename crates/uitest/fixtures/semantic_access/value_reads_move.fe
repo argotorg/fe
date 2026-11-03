@@ -1,0 +1,181 @@
+use core::option::Option
+use core::ptr::MemBuffer
+
+// Evaluating an expression as a value takes it: a non-`Copy` value read
+// moves, wherever the read appears, through any wrapper and through any
+// access. Nothing copies an owner.
+struct W {
+    a: MemBuffer,
+    b: MemBuffer,
+}
+
+struct H {
+    b: MemBuffer,
+    o: Option<MemBuffer>,
+}
+
+struct Buf {
+    b: MemBuffer,
+    m: u256,
+}
+
+struct C {
+    buf: MemBuffer,
+}
+
+impl C {
+    fn poke(mut self) {
+        self.buf[0] = 5
+    }
+}
+
+struct HC {
+    c: C,
+}
+
+struct Bump {
+    buf: MemBuffer,
+}
+
+impl FnMut(u256) -> _ for Bump {
+    uses E = ()
+    type Out = u256
+    fn call_mut(mut self, _ a: u256) -> u256 {
+        self.buf[0] = 5
+        0
+    }
+}
+
+struct Above {
+    buf: MemBuffer,
+}
+
+impl Fn(u256) -> bool for Above {
+    fn call(self, _ x: u256) -> bool {
+        x > 1
+    }
+}
+
+struct HF {
+    f: Bump,
+}
+
+fn read_first(_ x: Buf, _ b: mut Buf) -> u256 {
+    b.b[0] = 7
+    x.b[0] as u256
+}
+
+// Rejected: `o` moves into `a`, then is used again.
+fn if_join_of_owned(_ o: own MemBuffer, _ c: bool) -> W {
+    let a = if c { o } else { o }
+    W { a, b: o }
+}
+
+fn match_join_of_owned(_ o: own MemBuffer, _ k: u256) -> W {
+    let a = match k {
+        _ => o
+    }
+    W { a, b: o }
+}
+
+// Rejected: a read-only effect's owner moves out.
+fn effect_through_join(_ c: bool) -> MemBuffer uses (x: MemBuffer) {
+    if c { x } else { x }
+}
+
+// Rejected: each moves out of a view.
+fn block_scrutinee(_ h: H) -> MemBuffer {
+    match { h.b } {
+        b => b
+    }
+}
+
+fn if_scrutinee(_ h: H, _ c: bool) -> MemBuffer {
+    match (if c { h.b } else { h.b }) {
+        b => b
+    }
+}
+
+fn if_let_scrutinee(_ h: H) {
+    if let Option::Some(var b) = { h.o } {
+        b[0] = 8
+    }
+}
+
+fn block_receiver(_ h: HC) {
+    { h.c }.poke()
+}
+
+fn if_receiver(_ h: HC, _ k: bool) {
+    (if k { h.c } else { h.c }).poke()
+}
+
+fn block_callee(_ h: HF) -> u256 {
+    { h.f }(5)
+}
+
+// Rejected: the argument moves out of `b`, which the next argument names.
+fn block_view_arg(_ b: mut Buf) -> u256 {
+    read_first({ b }, mut b)
+}
+
+// Rejected: a producer moves into its first loop.
+fn producer_reused() -> u256 {
+    let xs: [u256; 3] = [1, 2, 3]
+    let m = xs.map(Bump { buf: MemBuffer::alloc(1) })
+    var s: u256 = 0
+    for y in xs.by(m) {
+        s += y
+    }
+    for y in xs.by(m) {
+        s += y
+    }
+    s
+}
+
+// Rejected: a driver that is not `Copy` moves into its first loop, as a
+// producer does.
+fn driver_reused() -> u256 {
+    let xs: [u256; 3] = [1, 2, 3]
+    let d = xs.filter(Above { buf: MemBuffer::alloc(1) })
+    var s: u256 = 0
+    for x in xs.by(d) {
+        s += x
+    }
+    for x in xs.by(d) {
+        s += x
+    }
+    s
+}
+
+// Accepted: distinct owners, `Copy` values, an owned scrutinee, a fresh
+// value as a view argument, and the place forms.
+fn join_of_distinct(_ x: own MemBuffer, _ y: own MemBuffer, _ c: bool) -> MemBuffer {
+    if c { x } else { y }
+}
+
+fn copy_join(_ h: Buf, _ c: bool) -> u256 {
+    let m = if c { h.m } else { h.m }
+    m + h.m
+}
+
+fn owned_scrutinee(_ o: own MemBuffer) -> MemBuffer {
+    match { o } {
+        b => b
+    }
+}
+
+fn fresh_view_arg(_ b: mut Buf) -> u256 {
+    read_first(
+        {
+            Buf { b: MemBuffer::alloc(1), m: 0 }
+        },
+        mut b,
+    )
+}
+
+fn place_scrutinee(_ h: H) -> u256 {
+    match h.b {
+        ref b => b[0] as u256
+    }
+}

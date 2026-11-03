@@ -29,37 +29,37 @@ fn pow_assign_overflow_u8(_ v: mut u8) {
 
 #[test(should_revert)]
 fn add_assign_overflow_u8_reverts() {
-    let mut x: u8 = 255
+    var x: u8 = 255
     add_assign_overflow_u8(mut x)
 }
 
 #[test(should_revert)]
 fn sub_assign_underflow_u8_reverts() {
-    let mut x: u8 = 0
+    var x: u8 = 0
     sub_assign_underflow_u8(mut x)
 }
 
 #[test(should_revert)]
 fn mul_assign_overflow_u8_reverts() {
-    let mut x: u8 = 16
+    var x: u8 = 16
     mul_assign_overflow_u8(mut x)
 }
 
 #[test(should_revert)]
 fn div_assign_zero_u8_reverts() {
-    let mut x: u8 = 1
+    var x: u8 = 1
     div_assign_zero_u8(mut x)
 }
 
 #[test(should_revert)]
 fn rem_assign_zero_u8_reverts() {
-    let mut x: u8 = 1
+    var x: u8 = 1
     rem_assign_zero_u8(mut x)
 }
 
 #[test(should_revert)]
 fn pow_assign_overflow_u8_reverts() {
-    let mut x: u8 = 2
+    var x: u8 = 2
     pow_assign_overflow_u8(mut x)
 }
 

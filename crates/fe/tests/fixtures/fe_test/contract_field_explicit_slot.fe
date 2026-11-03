@@ -1,0 +1,104 @@
+use core::keccak
+use std::evm::{Evm, RawStorage, SolSlot, TSlot}
+
+const BASE: u256 = 0x100
+
+// EIP-7201's slot for the namespace `example.main`.
+const EXAMPLE_MAIN: u256 = 0x183a6125c38840424c4a85fa12bab2ab606c4b6d0e7cc73c0c06ba5300eab500
+
+const fn namespaced(_ id: u256) -> u256 {
+    (id - 1) & 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00
+}
+
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+msg M {
+    #[selector = 1]
+    Set {} -> (u256, u256, u256, u256, u256, bool),
+    #[selector = 2]
+    Namespaced {} -> u256,
+    #[selector = 3]
+    Cell {} -> (u256, u256, u256),
+}
+
+fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+}
+
+pub contract C uses (storage: mut RawStorage) {
+    mut first: u256,
+    #[slot(1)]
+    mut placed: u256,
+    mut pair: Pair,
+    #[slot(BASE + 1)]
+    mut based: u256,
+    #[slot(namespaced(0x1234))]
+    mut spaced: Pair,
+    // ERC-7201 namespaced storage, computed in place.
+    #[slot(keccak(keccak("example.main") - 1) & !(0xff as u256))]
+    mut main: u256,
+    // Transient storage is its own space: slot 1 there is free.
+    #[slot(1)]
+    mut flag: TSlot<bool>,
+    // A `TSlot` takes its number only in transient storage, so a storage
+    // field may share it.
+    #[slot(BASE + 2)]
+    mut cell: TSlot<u256>,
+    #[slot(BASE + 2)]
+    mut beside: u256,
+
+    recv M {
+        Set {} -> (u256, u256, u256, u256, u256, bool)
+          uses (mut first, mut placed, mut pair, mut based, mut spaced, mut flag, mut storage)
+        {
+            first = 10
+            placed = 11
+            pair = Pair { left: 12, right: 13 }
+            based = 14
+            spaced.right = 15
+            flag.value = true
+            (
+                read_slot(0),
+                read_slot(1),
+                read_slot(3),
+                read_slot(BASE + 1),
+                read_slot(namespaced(0x1234) + 1),
+                flag.value,
+            )
+        }
+
+        Namespaced {} -> u256 uses (mut main, mut storage) {
+            main = 17
+            read_slot(EXAMPLE_MAIN)
+        }
+
+        Cell {} -> (u256, u256, u256) uses (mut cell, mut beside, mut storage) {
+            cell.value = 21
+            beside = 22
+            (cell.value, beside, read_slot(BASE + 2))
+        }
+    }
+}
+
+#[test]
+fn explicit_slots_place_fields() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let values: (u256, u256, u256, u256, u256, bool) =
+        evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Set {})
+    assert!(values.0 == 10)
+    assert!(values.1 == 11)
+    // `pair` skips slot 1, which `placed` takes, so its right half is slot 3.
+    assert!(values.2 == 13)
+    assert!(values.3 == 14)
+    assert!(values.4 == 15)
+    assert!(values.5)
+    let main: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Namespaced {})
+    assert!(main == 17)
+    let cell: (u256, u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Cell {})
+    assert!(cell.0 == 21)
+    assert!(cell.1 == 22)
+    assert!(cell.2 == 22)
+}

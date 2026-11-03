@@ -1,0 +1,12 @@
+const fn word_len(_ n: usize) -> usize {
+    n / 32 + if n % 32 == 0 { 0 } else { 1 }
+}
+trait Bytes { const N: usize }
+struct Blob<const N: usize> {}
+impl<const N: usize> Bytes for Blob<N> { const N: usize = N }
+fn wrong_parameter<const A: usize, const B: usize>(
+    _ value: [u256; word_len(Blob<A>::N)],
+) -> [u256; word_len(B)] { value }
+fn wrong_offset<const N: usize>(
+    _ value: [u256; word_len(Blob<N>::N)],
+) -> [u256; word_len({ N + 32 })] { value }

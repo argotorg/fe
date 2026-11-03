@@ -11,7 +11,7 @@ use crate::{
             resolved_provider_binding_for_instance_effect,
         },
         ty::{
-            ProviderAddressSpace, ProviderKind,
+            AddressSpace, ProviderKind,
             effects::EffectKeyKind,
             provider::provider_semantics,
             ty_check::{
@@ -83,10 +83,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         body_value
     }
 
-    fn effect_arg_provider_space(
-        &self,
-        arg: &ResolvedEffectArg<'db>,
-    ) -> Option<ProviderAddressSpace> {
+    fn effect_arg_provider_space(&self, arg: &ResolvedEffectArg<'db>) -> Option<AddressSpace> {
         arg.provider.or_else(|| match &arg.arg {
             EffectArg::Place(place) => {
                 let PlaceBase::Binding(binding) = place.base;
@@ -127,14 +124,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 return provider.semantics.kind == ProviderKind::RootObject;
             }
         }
-        provider_semantics(
-            self.db,
-            self.body.scope(),
-            self.assumptions,
-            self.expr_ty(expr),
-        )
-        .kind
-            == ProviderKind::RootObject
+        provider_semantics(self.db, self.expr_ty(expr)).kind == ProviderKind::RootObject
     }
 
     fn lower_effect_arg(&mut self, arg: &ResolvedEffectArg<'db>) -> SEffectArg<'db> {
@@ -178,7 +168,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         SEffectArgValue::Value(SOperand::inherited(local))
                     }
                 }
-                EffectArg::Value(_) => unreachable!("with provider is missing its source"),
+                EffectArg::Value(expr) => SEffectArgValue::Value(self.lower_expr_operand(*expr)),
                 EffectArg::Unknown => {
                     SEffectArgValue::Value(SOperand::synthetic(self.unit_value()))
                 }
@@ -192,7 +182,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 arg.pass_mode
             },
             arg: value,
-            layout_view: arg.layout_view,
             required_mut: arg.required_mut,
             provider_target_ty: arg.provider_target_ty,
             provider: self.effect_arg_provider_space(arg),
@@ -244,13 +233,7 @@ pub(super) fn provisional_owner_effect_bindings<'db>(
                         site,
                         requirement.binding_idx,
                     )?;
-                    Some(LocalBinding::EffectParam {
-                        site: requirement.binding_site,
-                        idx: requirement.binding_idx as usize,
-                        binding_name: requirement.binding_name,
-                        provider_idx,
-                        is_mut: requirement.is_mut,
-                    })
+                    Some(LocalBinding::effect(&requirement, provider_idx))
                 })
                 .collect::<Vec<_>>()
         })
@@ -259,8 +242,9 @@ pub(super) fn provisional_owner_effect_bindings<'db>(
 
 pub fn effect_param_site<'db>(owner: BodyOwner<'db>) -> Option<EffectParamSite<'db>> {
     match owner {
-        BodyOwner::Func(func) => Some(EffectParamSite::Func(func)),
+        BodyOwner::Func(func, mode) => Some(EffectParamSite::Func(func, mode)),
         BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => None,
+        BodyOwner::Closure { def, .. } => Some(EffectParamSite::Closure(def)),
         BodyOwner::ContractInit { contract } => Some(EffectParamSite::ContractInit { contract }),
         BodyOwner::ContractRecvArm {
             contract,

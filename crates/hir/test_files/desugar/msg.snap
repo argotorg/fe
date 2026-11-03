@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/desugar.rs
+source: crates/hir/tests/frontend/desugar.rs
+assertion_line: 28
 expression: output
 input_file: test_files/desugar/msg.fe
 ---
@@ -31,13 +32,13 @@ mod CounterMsg {
     impl core::abi::Encode<std::abi::Sol> for Increment {
 
         #[inline(always)]
-        fn encode(own self, _ ptr: *u8) {}
+        fn encode(own self, _ __fe_out: core::abi::AbiFrame) {}
     }
 
     impl core::abi::Decode<std::abi::Sol> for Increment {
 
         #[inline(always)]
-        fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>>(_ __fe_msg_decode_decoder: mut __fe_D) -> Self {
+        fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>, __fe_I: core::abi::ByteInput>(_ __fe_msg_decode_decoder: mut __fe_D, _ __fe_msg_decode_input: __fe_I) -> Self {
             return Self {  }
         }
 
@@ -67,13 +68,13 @@ mod CounterMsg {
     impl core::abi::Encode<std::abi::Sol> for Get {
 
         #[inline(always)]
-        fn encode(own self, _ ptr: *u8) {}
+        fn encode(own self, _ __fe_out: core::abi::AbiFrame) {}
     }
 
     impl core::abi::Decode<std::abi::Sol> for Get {
 
         #[inline(always)]
-        fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>>(_ __fe_msg_decode_decoder: mut __fe_D) -> Self {
+        fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>, __fe_I: core::abi::ByteInput>(_ __fe_msg_decode_decoder: mut __fe_D, _ __fe_msg_decode_input: __fe_I) -> Self {
             return Self {  }
         }
 
@@ -105,19 +106,19 @@ mod CounterMsg {
     impl core::abi::Encode<std::abi::Sol> for Set {
 
         #[inline(always)]
-        fn encode(own self, _ ptr: *u8) {
-            let mut __fe_tail = <Self as core::abi::AbiSize>::HEAD_SIZE
-            let mut __fe_head_pos = 0
+        fn encode(own self, _ __fe_out: core::abi::AbiFrame) {
+            var __fe_tails = __fe_out.tail(<Self as core::abi::AbiSize>::HEAD_SIZE)
+            var __fe_head_pos = 0
             let __fe_field_0 = self.val
-            core::abi::encode_field_at<std::abi::Sol, u64>(__fe_field_0, ptr, head_pos: __fe_head_pos, tail: __fe_tail)
+            core::abi::encode_field<std::abi::Sol, u64>(__fe_field_0, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
         }
     }
 
     impl core::abi::Decode<std::abi::Sol> for Set {
 
         #[inline(always)]
-        fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>>(_ __fe_msg_decode_decoder: mut __fe_D) -> Self {
-            let val: u64 = core::abi::decode_field<std::abi::Sol, u64, __fe_D>(__fe_msg_decode_decoder)
+        fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>, __fe_I: core::abi::ByteInput>(_ __fe_msg_decode_decoder: mut __fe_D, _ __fe_msg_decode_input: __fe_I) -> Self {
+            let val: u64 = core::abi::decode_field<std::abi::Sol, u64, __fe_D, __fe_I>(mut __fe_msg_decode_decoder, __fe_msg_decode_input)
             return Self { val: val }
         }
 

@@ -1,0 +1,102 @@
+// An index can be a constant only once a projection is inlined with a
+// constant argument, or once the value of the local it is read from is known.
+// In range, it reads and writes that element; out of range, the access
+// reverts where it happens, and the code after it, which uses the element, is
+// never reached.
+
+fn at(_ a: [u256; 2], _ i: usize) -> ref u256 {
+    ref a[i]
+}
+
+fn at_mut(_ a: mut [u256; 2], _ i: usize) -> mut u256 {
+    mut a[i]
+}
+
+fn third<const N: usize>(_ a: [u256; N]) -> ref u256 {
+    ref a[3]
+}
+
+#[test]
+fn constant_indices_in_range() {
+    let a: [u256; 2] = [1, 2]
+    assert(at(a, 1) == 2)
+    var m: [u256; 2] = [3, 4]
+    at_mut(mut m, 0) = 9
+    assert(m[0] == 9 && m[1] == 4)
+}
+
+#[test(should_revert)]
+fn a_constant_index_out_of_range_reverts() {
+    let a: [u256; 2] = [1, 2]
+    assert(at(a, 5) == 0)
+}
+
+#[test(should_revert)]
+fn a_constant_mutable_index_out_of_range_reverts() {
+    var m: [u256; 2] = [3, 4]
+    at_mut(mut m, 7) = 1
+}
+
+#[test(should_revert)]
+fn a_constant_index_past_a_generic_length_reverts() {
+    let a: [u256; 2] = [1, 2]
+    assert(third(a) == 0)
+}
+
+fn at_copy(_ a: [u256; 2], _ i: usize) -> ref u256 {
+    let j = i
+    ref a[j]
+}
+
+struct S {
+    arr: [u256; 2],
+    log: u256,
+}
+
+impl S {
+    fn logged(mut self, _ i: usize) -> mut u256 {
+        let j = i
+        yield mut self.arr[j]
+        self.log += 1
+    }
+
+    fn either(mut self, _ i: usize, _ first: bool) -> mut u256 {
+        if first {
+            yield mut self.arr[i]
+            self.log = i as u256
+        } else {
+            yield mut self.log
+        }
+    }
+}
+
+fn reassigned(_ a: [u256; 2], _ c: bool) -> u256 {
+    var i: usize = 0
+    i = 5
+    if c { a[i] } else { 0 }
+}
+
+#[test]
+fn a_constant_index_on_a_path_not_taken_is_not_reached() {
+    assert(reassigned([1, 2], false) == 0)
+}
+
+#[test(should_revert)]
+fn a_constant_index_through_a_copy_reverts() {
+    let a: [u256; 2] = [1, 2]
+    assert(at_copy(a, 5) == 0)
+}
+
+#[test(should_revert)]
+fn a_constant_index_before_a_slide_reverts() {
+    var s = S { arr: [1, 2], log: 0 }
+    let x = mut s.logged(5)
+    x = 3
+}
+
+#[test(should_revert)]
+fn a_constant_index_at_one_of_two_yields_reverts() {
+    var s = S { arr: [1, 2], log: 0 }
+    let y = mut s.either(5, true)
+    y = 7
+}

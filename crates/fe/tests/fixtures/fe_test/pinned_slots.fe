@@ -1,0 +1,122 @@
+// A pinned type takes a whole slot of its own even without fields: its
+// number identifies its region, so sibling collections need distinct ones,
+// as Solidity reserves a mapping's slot. A plain zero-sized type takes none.
+use core::marker::{Pinned, Storage}
+use core::ops::{Location, StateIndex}
+use std::evm::{Address, Evm, RawStorage, SolSlot, keccak_words, storage_at}
+
+/// Words hashed with the map's number, like Solady's `LibMap`.
+struct Words {}
+
+impl Pinned for Words {
+    type Space = Storage
+}
+
+unsafe impl StateIndex for Words {
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ w: u256) -> Location {
+        Location { slot: keccak_words([w, root]), offset: 0 }
+    }
+}
+
+impl Words {
+    /// The words rooted at `slot`.
+    #[raw_place]
+    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+}
+
+struct Marker {}
+
+/// `words` takes slot 1 of its own between the packable scalars.
+struct Packed {
+    flag: bool,
+    words: Words,
+    count: u8,
+}
+
+msg M {
+    #[selector = 1]
+    Write {},
+    #[selector = 2]
+    Read {} -> (u256, u256, u256, u256, u256, u256),
+    #[selector = 3]
+    Entries {} -> (u256, u256, u256, u256),
+}
+
+fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+}
+
+pub contract C uses (storage: mut RawStorage) {
+    mut first: u256,
+    mut marker: Marker,
+    mut a: Words,
+    mut b: Words,
+    mut s: Packed,
+    mut after: u256,
+
+    recv M {
+        Write {} uses (mut first, mut a, mut b, mut s, mut after) {
+            first = 1
+            a[0] = 5
+            b[0] = 6
+            s.flag = true
+            s.words[0] = 8
+            s.count = 7
+            after = 9
+        }
+
+        Read {} -> (u256, u256, u256, u256, u256, u256) uses (mut storage) {
+            (read_slot(0), read_slot(1), read_slot(3), read_slot(4), read_slot(5), read_slot(6))
+        }
+
+        Entries {} -> (u256, u256, u256, u256) uses (a, b, mut storage) {
+            (
+                read_slot(keccak_words([0, 1])),
+                read_slot(keccak_words([0, 2])),
+                read_slot(keccak_words([0, 4])),
+                a[0] + b[0],
+            )
+        }
+    }
+}
+
+#[test]
+fn pinned_types_take_their_own_slots() uses (evm: mut Evm) {
+    let c: Address = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Write {})
+    let slots: (u256, u256, u256, u256, u256, u256) =
+        evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Read {})
+    // `first` at 0; `marker` takes no slot, so `a` is at 1 and `b` at 2, and
+    // their own slots are never written.
+    assert!(slots.0 == 1)
+    assert!(slots.1 == 0)
+    // `s` starts at 3: `flag` there, `words` alone at 4, `count` at 5.
+    assert!(slots.2 == 1)
+    assert!(slots.3 == 0)
+    assert!(slots.4 == 7)
+    assert!(slots.5 == 9)
+    let entries: (u256, u256, u256, u256) =
+        evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Entries {})
+    assert!(entries.0 == 5)
+    assert!(entries.1 == 6)
+    assert!(entries.2 == 8)
+    assert!(entries.3 == 11)
+}
+
+// A fieldless collection placed at a raw slot: its place is the handle's
+// target, which takes nothing of the handle's own layout.
+#[test]
+fn raw_slot_fieldless_collection() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let words = unsafe { Words::at(77) }
+        words[3] = 12
+        assert(words[3] == 12)
+        assert(read_slot(keccak_words([3, 77])) == 12)
+        assert(read_slot(77) == 0)
+    }
+}

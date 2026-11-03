@@ -13,7 +13,7 @@ error[8-0000]: type mismatch
    ┌─ unary.fe:12:6
    │
 12 │     *4
-   │      ^ expected `*<_>`, but `{integer}` is given
+   │      ^ expected `*_`, but `{integer}` is given
 
 error[8-0016]: `core::ops::Neg` trait is not implemented
   ┌─ unary.fe:6:14

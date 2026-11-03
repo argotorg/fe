@@ -1,0 +1,105 @@
+// The layout the frontend computes and the one MIR lowers agree: a field of
+// an associated type takes the slots of the type it names, a contract-typed
+// field one word, and a `SolArray` steps an element it keeps whole by the
+// slots its layout takes, whatever its `SolPacked` width.
+use std::evm::{Evm, RawStorage, SolArray, SolSlot}
+use std::evm::sol_slot::SolPacked
+
+trait Tr {
+    type Out
+}
+
+struct K {}
+
+impl Tr for K {
+    type Out = (u256, u256, u256)
+}
+
+struct S<T: Tr> {
+    a: T::Out,
+}
+
+pub contract Other {}
+
+struct Wide {
+    a: u256,
+    u: Other,
+    b: u256,
+}
+
+msg M {
+    #[selector = 1]
+    Run -> (u256, u256, u256, u256),
+}
+
+fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+}
+
+pub contract C uses (storage: mut RawStorage) {
+    mut s: S<K>,
+    mut w: Wide,
+    mut after: u256,
+
+    recv M {
+        Run -> (u256, u256, u256, u256) uses (mut s, mut w, mut after, mut storage) {
+            s.a.2 = 5
+            w.b = 7
+            after = 9
+            // `s` takes slots 0 to 2, `w` 3 to 5, `after` 6.
+            (read_slot(2), read_slot(5), read_slot(6), read_slot(3))
+        }
+    }
+}
+
+#[test]
+fn layouts_agree() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: (u256, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
+    assert!(r.0 == 5)
+    assert!(r.1 == 7)
+    assert!(r.2 == 9)
+    assert!(r.3 == 0)
+}
+
+#[test]
+fn sol_array_assoc_stride() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let arr = unsafe { mut SolArray<S<K>>::at(0x100) }
+        arr.push(S<K> { a: (1, 2, 3) })
+        arr.push(S<K> { a: (4, 5, 6) })
+        arr.push(S<K> { a: (7, 8, 9) })
+        arr[0].a.2 = 50
+        assert(arr[1].a.0 == 4 && arr[0].a.2 == 50 && arr[2].a.0 == 7)
+    }
+}
+
+
+struct Big {
+    a: u256,
+    b: u256,
+}
+
+impl Copy for Big {}
+
+impl SolPacked for Big {
+    const BITS: u256 = 200
+
+    fn to_packed(own self) -> u256 {
+        self.a
+    }
+
+    fn from_packed(_ bits: u256) -> Self {
+        Big { a: bits, b: 0 }
+    }
+}
+
+#[test]
+fn sol_array_wide_packed_stride() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let arr = unsafe { mut SolArray<Big>::at(0x200) }
+        arr.push(Big { a: 1, b: 2 })
+        arr.push(Big { a: 3, b: 4 })
+        assert(arr.get(0).b == 2 && arr.get(1).a == 3 && arr.get(1).b == 4)
+    }
+}

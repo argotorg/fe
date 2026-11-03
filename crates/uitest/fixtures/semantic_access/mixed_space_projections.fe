@@ -1,0 +1,85 @@
+// A struct mixing persistent and transient fields keeps each field's space:
+// a projection of a `TSlot` entry exports transient storage, one of a
+// storage field storage, and a component whose yields lie in both is
+// rejected. A `Mutex` is such a struct: its lock is a transient value, and
+// its value's grant closes before an external call. A map entry named once
+// is tested and written through one binding.
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::{Address, Call, Mutex, StorageMap, TSlot}
+
+struct Guarded {
+    locked: TSlot<bool>,
+    hits: TSlot<u256>,
+    value: u256,
+}
+
+impl Guarded {
+    fn locked_mut(mut self) -> mut bool {
+        mut self.locked.value
+    }
+
+    fn value_mut(mut self) -> mut u256 {
+        mut self.value
+    }
+
+    // Accepted: a transient place forwarded through a helper keeps its space,
+    // the space of the direct yield.
+    fn locked_forwarded(mut self, _ c: bool) -> mut bool {
+        if c { forward(mut self.locked.value) } else { mut self.locked.value }
+    }
+
+    // Rejected: the yields lie in storage and transient storage.
+    fn pick(mut self, _ c: bool) -> mut u256 {
+        if c { mut self.value } else { mut self.hits.value }
+    }
+}
+
+fn forward(_ x: mut bool) -> mut bool {
+    mut x
+}
+
+msg M {
+    #[selector = 1]
+    Run { to: Address } -> u256,
+}
+
+fn call_out(_ to: Address) uses (call: mut Call) {
+    var output = MemBuffer::empty()
+    let _ = call.raw_call(addr: to, gas: 0, value: Wei::zero(), args: MemSpan::empty(), ret: mut output)
+}
+
+// Accepted: each field's projection, the vault's value grant and the named
+// entry all close before the call.
+pub contract C {
+    mut g: Guarded,
+    mut vault: Mutex<u256>,
+    mut balances: StorageMap<Address, u256>,
+
+    recv M {
+        Run { to } -> u256 uses (mut g, mut vault, mut balances, call: mut Call) {
+            let l = mut g.locked_mut()
+            l = true
+            let v = mut g.value_mut()
+            v += 1
+            assert!(vault.try_lock())
+            let w = mut vault.value()
+            w += 1
+            let b = mut balances[to]
+            if b >= 1 {
+                b -= 1
+            }
+            call_out(to)
+            vault.unlock()
+            g.value
+        }
+    }
+}
+
+// Rejected: the vault's value grant is still open at the call.
+fn held_across(_ to: Address) uses (vault: mut Mutex<u256>, call: mut Call) {
+    assert!(vault.try_lock())
+    let w = mut vault.value()
+    call_out(to)
+    w += 1
+    vault.unlock()
+}

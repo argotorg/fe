@@ -1,0 +1,77 @@
+// A place may be moved out of only through a stable `mut` access that
+// restores it before the access ends; `[*]` names no definite element, and
+// storage never holds a hole.
+struct Item {
+    n: u256,
+}
+
+fn consume(_ item: own Item) {}
+
+fn touch(_ item: mut Item) {}
+
+// Accepted: one stable `mut` access moves its referent out and restores it.
+fn restored(_ i: usize) -> u256 {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    let slot = mut items[i]
+    let saved = slot
+    slot = Item { n: 3 }
+    consume(saved)
+    items[0].n
+}
+
+// Rejected: a move out of an element at a dynamic index.
+fn dynamic_move(_ i: usize, _ j: usize) {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    consume(items[i])
+    items[j] = Item { n: 3 }
+    consume(items[i])
+}
+
+// Rejected: the access ends while its referent is moved out.
+fn unrestored() -> u256 {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    let slot = mut items[0]
+    consume(slot)
+    items[1].n
+}
+
+// Rejected: a `mut` argument needs an initialized referent.
+fn hole_passed() {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    let slot = mut items[0]
+    let saved = slot
+    touch(mut slot)
+    slot = saved
+}
+
+// Rejected: a read through the access sees the hole.
+fn hole_read() -> u256 {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    let slot = mut items[0]
+    let saved = slot
+    let n = slot.n
+    slot = saved
+    n
+}
+
+msg Ping {
+    #[selector = 1]
+    Swap,
+}
+
+pub contract Holder {
+    mut item: Item,
+
+    init() uses (mut item) {
+        item.n = 1
+    }
+
+    // Rejected: storage never holds a hole.
+    recv Ping {
+        Swap uses (mut item) {
+            let slot = mut item
+            let saved = slot
+            slot = Item { n: saved.n + 1 }
+        }
+    }
+}

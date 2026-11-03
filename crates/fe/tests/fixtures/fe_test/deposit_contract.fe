@@ -18,7 +18,6 @@ use std::evm::{
     Evm,
     Log,
     Merkleize,
-    RawMem,
 }
 use std::abi::{
     Bytes,
@@ -69,7 +68,7 @@ struct DepositStore {
     zero_hashes: [u256; DEPOSIT_CONTRACT_TREE_DEPTH],
 }
 
-pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
+pub contract DepositContract uses (ctx: Ctx, log: mut Log) {
     mut store: DepositStore,
 
     // Precompute zero_hashes for empty subtrees. The Solidity original leaves
@@ -77,7 +76,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
     // We have to match that exact layout — otherwise every root is shifted
     // one level.
     init()
-    uses (mut store, mut mem)
+    uses (mut store)
     {
         for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
             let cur: u256 = store.zero_hashes[height]
@@ -88,22 +87,22 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
     recv DepositMsg {
         #[payable]
         Deposit { pubkey, withdrawal_credentials, signature, deposit_data_root }
-        uses (mut store, ctx, mut mem, mut log)
+        uses (mut store, ctx, mut log)
         {
             assert!(pubkey.len() == 48, "DepositContract: invalid pubkey length")
             assert!(withdrawal_credentials.len() == 32, "DepositContract: invalid withdrawal_credentials length")
             assert!(signature.len() == 96, "DepositContract: invalid signature length")
 
-            let value: u256 = ctx.value()
+            let value: Wei = ctx.value()
             assert!(value >= ether(1), "DepositContract: deposit value too low")
-            assert!(value % gwei(1) == 0, "DepositContract: deposit value not multiple of gwei")
+            assert!(value % gwei(1) == Wei::zero(), "DepositContract: deposit value not multiple of gwei")
             let deposit_amount: u256 = value / gwei(1)
             assert!(deposit_amount <= u64::MASK, "DepositContract: deposit value too high")
             // Truncating cast matches Solidity's `uint64(x)`. The assert above
             // guarantees no information is lost.
             let amount_gwei: u64 = deposit_amount.downcast_truncate()
 
-            let mut node: u256 = compute_deposit_data_root(
+            var node: u256 = compute_deposit_data_root(
                 pubkey,
                 withdrawal_credentials,
                 signature,
@@ -128,7 +127,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
             assert!(store.deposit_count < MAX_DEPOSIT_COUNT, "DepositContract: merkle tree full")
             store.deposit_count += 1
 
-            let mut size: u256 = store.deposit_count
+            var size: u256 = store.deposit_count
             for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                 if size & 1 == 1 {
                     store.branch[height] = node
@@ -142,9 +141,9 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
             assert!(false)
         }
 
-        GetDepositRoot -> u256 uses (store, mut mem) {
-            let mut node: u256 = 0
-            let mut size: u256 = store.deposit_count
+        GetDepositRoot -> u256 uses (store) {
+            var node: u256 = 0
+            var size: u256 = store.deposit_count
             for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                 if size & 1 == 1 {
                     node = ssz::hash_pair(left: store.branch[height], right: node)
@@ -159,7 +158,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
             ssz::mix_in_length(root: node, len: store.deposit_count.downcast_truncate())
         }
 
-        GetDepositCount -> Bytes uses (store, mut mem) {
+        GetDepositCount -> Bytes uses (store) {
             let count: u64 = store.deposit_count.downcast_truncate()
             ssz::serialize_u64(count)
         }
@@ -178,15 +177,13 @@ pub fn compute_deposit_data_root(
     withdrawal_credentials: Bytes,
     signature: Bytes,
     amount_gwei: u64,
-) -> u256
-uses (mem: mut RawMem)
-{
+) -> u256 {
     assert!(withdrawal_credentials.len() == 32)
     (
-        ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey.view()),
+        ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey.payload_span(), start: 0, len: pubkey.len() as u256),
         withdrawal_credentials.word_at(0),
         ssz::u64_chunk(amount_gwei),
-        ssz::hash_tree_root<ssz::ByteVector<96>>(signature.view()),
+        ssz::hash_tree_root<ssz::ByteVector<96>>(signature.payload_span(), start: 0, len: signature.len() as u256),
     )
         .merkleize()
 }
@@ -195,32 +192,28 @@ uses (mem: mut RawMem)
 // check `GetDepositCount` results without depending on exact byte layout.
 fn le_bytes_to_u64(_ b: Bytes) -> u64 {
     assert!(b.len() == 8)
-    let mut v: u256 = 0
-    let mut i: u256 = 0
-    while i < 8 {
-        v |= (b.byte_at(i) as u256) << (i * 8)
-        i += 1
+    var v: u256 = 0
+    for i in 0..8 {
+        v |= (b.byte_at(i) as u256) << (i as u256 * 8)
     }
     v.downcast_truncate()
 }
 
 // Build a 48-byte pubkey `Bytes` from two u256 words: `hi` holds bytes 0..32
 // big-endian and `lo` holds bytes 32..48 left-aligned (low 16 bytes zero).
-fn pubkey_bytes(hi: u256, lo: u256) -> Bytes uses (mem: mut RawMem) {
+fn pubkey_bytes(hi: u256, lo: u256) -> Bytes {
     bytes_from_words_prefix<48, 2>([hi, lo])
 }
 
 // Build a 96-byte signature `Bytes` from three u256 words.
-fn signature_bytes(s0: u256, s1: u256, s2: u256) -> Bytes
-uses (mem: mut RawMem)
-{
+fn signature_bytes(s0: u256, s1: u256, s2: u256) -> Bytes {
     bytes_from_words([s0, s1, s2])
 }
 
 // Build a 32-byte `Bytes` from a single u256 word. Used for the
 // `withdrawal_credentials` parameter, which Solidity types as `bytes`
 // validated to length 32.
-fn word_bytes(w: u256) -> Bytes uses (mem: mut RawMem) {
+fn word_bytes(w: u256) -> Bytes {
     bytes_from_word(w)
 }
 
@@ -244,12 +237,12 @@ const S2: u256 = 0x3333333333333333333333333333333333333333333333333333333333333
 
 #[test]
 fn test_supports_interface() uses (evm: mut Evm) {
-    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+    let c = evm.create2<DepositContract>(value: Wei::zero(), args: (), salt: 0)
 
     let erc165: bool = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: DepositMsg::SupportsInterface {
             interface_id: interface_id(id: 0x01ffc9a7),
         },
@@ -259,7 +252,7 @@ fn test_supports_interface() uses (evm: mut Evm) {
     let deposit: bool = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: DepositMsg::SupportsInterface {
             interface_id: interface_id(id: 0x85640907),
         },
@@ -269,7 +262,7 @@ fn test_supports_interface() uses (evm: mut Evm) {
     let unknown: bool = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: DepositMsg::SupportsInterface {
             interface_id: interface_id(id: 0xffffffff),
         },
@@ -279,12 +272,12 @@ fn test_supports_interface() uses (evm: mut Evm) {
 
 // Try to make a deposit without sending any ETH — this must revert (value < 1 ETH).
 #[test(should_revert)]
-fn test_deposit_rejects_zero_value() uses (evm: mut Evm, mem: mut RawMem) {
-    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+fn test_deposit_rejects_zero_value() uses (evm: mut Evm) {
+    let c = evm.create2<DepositContract>(value: Wei::zero(), args: (), salt: 0)
     evm.call(
         addr: c,
         gas: 500000,
-        value: 0,
+        value: Wei::zero(),
         message: DepositMsg::Deposit {
             pubkey: pubkey_bytes(hi: P_HI, lo: P_LO),
             withdrawal_credentials: word_bytes(w: WC),
@@ -296,9 +289,9 @@ fn test_deposit_rejects_zero_value() uses (evm: mut Evm, mem: mut RawMem) {
 
 // Deposit with a value that's not a multiple of 1 gwei must revert.
 #[test(should_revert, balance = 2_000_000_000_000_000_000)]
-fn test_deposit_rejects_non_gwei_amount() uses (evm: mut Evm, mem: mut RawMem) {
-    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
-    let amount_wei: u256 = ether(1) + wei(1) // 1 ETH + 1 wei
+fn test_deposit_rejects_non_gwei_amount() uses (evm: mut Evm) {
+    let c = evm.create2<DepositContract>(value: Wei::zero(), args: (), salt: 0)
+    let amount_wei: Wei = ether(1) + wei(1) // 1 ETH + 1 wei
     let amount_gwei: u64 = (amount_wei / gwei(1)).downcast_truncate()
     let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
     let wc = word_bytes(w: WC)
@@ -325,15 +318,15 @@ fn test_deposit_rejects_non_gwei_amount() uses (evm: mut Evm, mem: mut RawMem) {
 // Valid deposit: count transitions 0 → 1 and the root changes.
 #[test(balance = 4_000_000_000_000_000_000)]
 fn test_deposit_success_updates_root_and_count()
-uses (evm: mut Evm, mem: mut RawMem)
+uses (evm: mut Evm)
 {
-    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+    let c = evm.create2<DepositContract>(value: Wei::zero(), args: (), salt: 0)
 
     let count0: Bytes = evm
         .call(
             addr: c,
             gas: 200000,
-            value: 0,
+            value: Wei::zero(),
             message: DepositMsg::GetDepositCount {},
         )
     assert!(le_bytes_to_u64(count0) == 0)
@@ -341,11 +334,11 @@ uses (evm: mut Evm, mem: mut RawMem)
         .call(
             addr: c,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: DepositMsg::GetDepositRoot {},
         )
 
-    let amount_wei: u256 = ether(1)
+    let amount_wei: Wei = ether(1)
     let amount_gwei: u64 = (amount_wei / gwei(1)).downcast_truncate()
     let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
     let wc = word_bytes(w: WC)
@@ -373,7 +366,7 @@ uses (evm: mut Evm, mem: mut RawMem)
         .call(
             addr: c,
             gas: 200000,
-            value: 0,
+            value: Wei::zero(),
             message: DepositMsg::GetDepositCount {},
         )
     assert!(le_bytes_to_u64(count1) == 1)
@@ -382,7 +375,7 @@ uses (evm: mut Evm, mem: mut RawMem)
         .call(
             addr: c,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: DepositMsg::GetDepositRoot {},
         )
     assert!(root1 != root0)
@@ -392,9 +385,9 @@ uses (evm: mut Evm, mem: mut RawMem)
 // must be rejected, even if their ETH value and other inputs are otherwise valid.
 #[test(should_revert, balance = 2_000_000_000_000_000_000)]
 fn test_deposit_rejects_mismatched_data_root()
-uses (evm: mut Evm, mem: mut RawMem)
+uses (evm: mut Evm)
 {
-    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+    let c = evm.create2<DepositContract>(value: Wei::zero(), args: (), salt: 0)
     evm.call(
         addr: c,
         gas: 5_000_000,
@@ -411,17 +404,17 @@ uses (evm: mut Evm, mem: mut RawMem)
 
 // Two valid deposits: count 0→1→2, and each root is distinct.
 #[test(balance = 4_000_000_000_000_000_000)]
-fn test_two_deposits_advance_state() uses (evm: mut Evm, mem: mut RawMem) {
-    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+fn test_two_deposits_advance_state() uses (evm: mut Evm) {
+    let c = evm.create2<DepositContract>(value: Wei::zero(), args: (), salt: 0)
     let root0: u256 = evm
         .call(
             addr: c,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: DepositMsg::GetDepositRoot {},
         )
 
-    let amount_wei: u256 = ether(1)
+    let amount_wei: Wei = ether(1)
     let amount_gwei: u64 = (amount_wei / gwei(1)).downcast_truncate()
     let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
     let wc = word_bytes(w: WC)
@@ -448,7 +441,7 @@ fn test_two_deposits_advance_state() uses (evm: mut Evm, mem: mut RawMem) {
         .call(
             addr: c,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: DepositMsg::GetDepositRoot {},
         )
 
@@ -467,14 +460,14 @@ fn test_two_deposits_advance_state() uses (evm: mut Evm, mem: mut RawMem) {
         .call(
             addr: c,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: DepositMsg::GetDepositRoot {},
         )
     let count2: Bytes = evm
         .call(
             addr: c,
             gas: 200000,
-            value: 0,
+            value: Wei::zero(),
             message: DepositMsg::GetDepositCount {},
         )
 

@@ -1,0 +1,27 @@
+// Contract state outlives every call, so it holds no memory or calldata
+// pointer: not in a field's own slots, nor in a collection's entries.
+use core::ptr::MemBuffer
+use std::evm::{CalldataPtr, SolArray, StorageMap, TSlot}
+
+struct Holds {
+    buf: MemBuffer,
+}
+
+msg M {
+    #[selector = 1]
+    Go -> u256,
+}
+
+pub contract C {
+    mut a: StorageMap<u256, *u256>,
+    mut b: StorageMap<u256, MemBuffer>,
+    mut c: SolArray<MemBuffer>,
+    mut d: StorageMap<u256, Holds>,
+    mut e: StorageMap<u256, StorageMap<u256, CalldataPtr<u256>>>,
+    mut f: TSlot<MemBuffer>,
+    mut ok: StorageMap<u256, u256>,
+
+    recv M {
+        Go -> u256 { 0 }
+    }
+}

@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/effect_rows.fe
+---
+error[16-0001]: access conflict in `fn bump_while_open`
+   ┌─ effect_rows.fe:21:5
+   │
+20 │     let total = mut store.total
+   │                 --------------- access opened here
+21 │     c.bump()
+   │     ^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn aliased`
+   ┌─ effect_rows.fe:49:9
+   │
+49 │         bump_with(mut sc, mut store)
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │         │                 │
+   │         │                 access opened here
+   │         cannot mutably access this place while a `mut` access of it is open

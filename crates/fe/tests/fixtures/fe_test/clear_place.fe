@@ -1,0 +1,143 @@
+// `core::intrinsic::clear` zeroes a place's representation: bytes in memory,
+// words in storage and transient storage, and only its own bits of a word
+// it shares. Storage collections clear their elements with the safe
+// `core::ops::clear_storage`.
+use core::intrinsic::clear
+use core::keccak
+use std::evm::{
+    Address, Evm, RawStorage, SolArray, SolEnumerableSet, StorPtr, StorageMap, TSlot,
+}
+
+struct Pair {
+    small: u8,
+    other: u8,
+    big: u256,
+}
+
+enum Shape {
+    Dot,
+    Line(u256),
+    Square(u256, u256),
+}
+
+fn load(_ slot: u256) -> u256 uses (storage: RawStorage) {
+    unsafe { storage.sload(slot) }
+}
+
+fn pointer_at(_ slot: u256) -> StorPtr<u256> {
+    slot as StorPtr<u256>
+}
+
+#[test]
+fn clear_zeroes_memory_places() {
+    var word: u256 = 5
+    unsafe { clear(mut word) }
+    assert(word == 0)
+
+    var pair = Pair { small: 1, other: 2, big: 3 }
+    unsafe { clear(mut pair.small) }
+    assert(pair.small == 0 && pair.other == 2 && pair.big == 3)
+    unsafe { clear(mut pair) }
+    assert(pair.other == 0 && pair.big == 0)
+
+    // An enum's zero representation is its first variant.
+    var shape = Shape::Square(3, 4)
+    unsafe { clear(mut shape) }
+    assert(match shape {
+        Shape::Dot => true,
+        _ => false,
+    })
+
+    var items: [u256; 3] = [1, 2, 3]
+    unsafe { clear(mut items[1]) }
+    assert(items[0] == 1 && items[1] == 0 && items[2] == 3)
+}
+
+#[test]
+fn clear_zeroes_storage_places() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let pairs = unsafe { mut SolArray<Pair>::at(0) }
+        pairs.push(Pair { small: 1, other: 2, big: 3 })
+        pairs.push(Pair { small: 4, other: 5, big: 6 })
+        // A packed field clears only its bytes of the word it shares.
+        unsafe { clear(mut pairs[1].small) }
+        assert(pairs[1].small == 0 && pairs[1].other == 5 && pairs[1].big == 6)
+        // A struct element clears all its words.
+        unsafe { clear(mut pairs[0]) }
+
+        let data = keccak(0 as u256)
+        assert(load(data) == 0 && load(data + 1) == 0)
+        assert(load(data + 2) == 0x0500 && load(data + 3) == 6)
+        // A storage pointer held in memory is its slot.
+        var pointer = pointer_at(5)
+        unsafe { clear(mut pointer) }
+        assert(pointer as u256 == 0)
+    }
+}
+
+msg ClearMsg {
+    #[selector = 1]
+    Run {} -> (u256, u256, u256),
+}
+
+pub contract Cells {
+    mut cell: TSlot<Pair>,
+
+    recv ClearMsg {
+        Run {} -> (u256, u256, u256) uses (mut cell) {
+            cell.value = Pair { small: 7, other: 8, big: 9 }
+            unsafe { clear(mut cell.value.small) }
+            let other = cell.value.other as u256
+            let small = cell.value.small as u256
+            unsafe { clear(mut cell.value) }
+            let big = cell.value.big
+            cell.value = Pair { small: 1, other: 2, big: 3 }
+            cell.clear()
+            (small + cell.value.small as u256, other, big + cell.value.big)
+        }
+    }
+}
+
+#[test]
+fn clear_zeroes_transient_places() uses (evm: mut Evm) {
+    let cells = evm.create2<Cells>(value: Wei::zero(), args: (), salt: 0)
+    let values: (u256, u256, u256) =
+        evm.call(addr: cells, gas: 300000, value: Wei::zero(), message: ClearMsg::Run {})
+    assert(values.0 == 0)
+    assert(values.1 == 8)
+    assert(values.2 == 0)
+}
+
+#[test]
+fn collections_clear_their_elements() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let balances = unsafe { mut StorageMap<u256, u256>::at(7) }
+        balances[1] = 10
+        balances[2] = 20
+        balances.remove(1)
+        assert(balances[1] == 0 && balances[2] == 20)
+
+        let pairs = unsafe { mut SolArray<Pair>::at(8) }
+        pairs.push(Pair { small: 1, other: 2, big: 3 })
+        pairs.push(Pair { small: 4, other: 5, big: 6 })
+        // `clear_at` zeroes one element and leaves the length.
+        pairs.clear_at(0)
+        assert(pairs.len() == 2)
+        assert(pairs[0].small == 0 && pairs[0].big == 0 && pairs[1].big == 6)
+        pairs.clear()
+        assert(pairs.len() == 0)
+        let data = keccak(8 as u256)
+        assert(load(8) == 0)
+        assert(load(data) == 0 && load(data + 1) == 0)
+        assert(load(data + 2) == 0 && load(data + 3) == 0)
+
+        let owners = unsafe { mut SolEnumerableSet<Address>::at(9) }
+        assert(owners.add(Address::new(10)))
+        assert(owners.add(Address::new(11)))
+        owners.clear()
+        assert(owners.len() == 0)
+        assert(!owners.contains(Address::new(10)))
+        assert(owners.add(Address::new(11)))
+        assert(owners.len() == 1)
+    }
+}

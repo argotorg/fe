@@ -5,9 +5,11 @@ fn read_x() -> u256 uses (x: u256) {
 }
 
 fn test_calldata_ptr_domain(evm: mut Evm) {
-    let c = evm.calldata_ptr<u256>(0)
-    with (c) {
-        let _v = read_x()
+    let c = unsafe { evm.calldata_ptr<u256>(0) }
+    unsafe {
+        with (*c) {
+            let _v = read_x()
+        }
     }
 }
 

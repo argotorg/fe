@@ -1,0 +1,100 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_binding_paths.fe
+---
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:51:27
+   │
+51 │ fn undefined<G: Get<Out = Nope>>() {}
+   │                           ^^^^ `Nope` is not found
+
+error[2-0002]: `T` is not found
+   ┌─ assoc_binding_paths.fe:54:28
+   │
+54 │ fn unbound<G: Get<Out = Q::T>, Q>() {}
+   │                            ^ `T` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:60:26
+   │
+60 │ fn undefined_arg<P: Conv<Nope>>() {}
+   │                          ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:63:38
+   │
+63 │ fn nested_option<G: Get<Out = Option<Nope>>>() {}
+   │                                      ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:65:37
+   │
+65 │ fn nested_tuple<G: Get<Out = (u256, Nope)>>() {}
+   │                                     ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:67:31
+   │
+67 │ fn nested_array<G: Get<Out = [Nope; 2]>>() {}
+   │                               ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:69:33
+   │
+69 │ fn nested_pointer<G: Get<Out = *Nope>>() {}
+   │                                 ^^^^ `Nope` is not found
+
+error[2-0002]: `T` is not found
+   ┌─ assoc_binding_paths.fe:71:36
+   │
+71 │ fn nested_unbound<G: Get<Out = (Q::T,)>, Q>() {}
+   │                                    ^ `T` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:75:30
+   │
+75 │ fn nested_arg<P: Conv<Option<Nope>>>() {}
+   │                              ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:77:40
+   │
+77 │ fn nested_in_where<P>() where P: Conv<(Nope,)> {}
+   │                                        ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:83:22
+   │
+83 │     type Item: Conv<(Nope,)>
+   │                      ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:86:12
+   │
+86 │ impl Conv<(Nope,)> for S {}
+   │            ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ assoc_binding_paths.fe:88:42
+   │
+88 │ fn qualified<G: Out<u8>>(_ x: <G as Out<(Nope,)>>::O) {}
+   │                                          ^^^^ `Nope` is not found
+
+error[2-0006]: expected type item here
+   ┌─ assoc_binding_paths.fe:57:28
+   │
+57 │ fn not_a_type<G: Get<Out = helper>>() {}
+   │                            ^^^^^^ expected type here, but found fn `helper`
+
+error[2-0006]: expected type item here
+   ┌─ assoc_binding_paths.fe:73:40
+   │
+73 │ fn nested_function<G: Get<Out = (u256, helper)>>() {}
+   │                                        ^^^^^^ expected type here, but found fn `helper`
+
+error[2-0006]: expected type item here
+   ┌─ assoc_binding_paths.fe:80:36
+   │
+80 │ fn constant_as_type<P: Conv<(W<N>, N)>>() {}
+   │                                    ^ expected type here, but found const `N`

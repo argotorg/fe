@@ -1,5 +1,4 @@
 use parser::ast::{self, prelude::*};
-use salsa::Accumulator as _;
 
 use super::{
     FileLowerCtxt,
@@ -13,17 +12,17 @@ use super::{
 use crate::{
     HirDb,
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, Expr, ExprId, FieldDefListId, FuncModifiers,
-        FuncParam, FuncParamMode, FuncParamName, GenericArgListId, GenericParamListId, IdentId,
-        ImplTrait, LitKind, Partial, Pat, PathId, PathKind, Stmt, StringId, Struct,
-        TrackedItemVariant, TraitRefId, TupleTypeId, TypeBound, TypeId, TypeKind, Visibility,
-        WhereClauseId, WhereClausePredicate, WherePredicate, expr::CallArg,
+        AssocConstDef, AttrListId, BindingMarker, Body, BodyKind, Expr, ExprId, FieldDefListId,
+        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericArgListId,
+        GenericParamListId, IdentId, ImplTrait, LitKind, ModeMarker, Partial, Pat, PathId,
+        PathKind, Stmt, StringId, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeBound,
+        TypeId, TypeKind, Visibility, WhereClauseId, WhereClausePredicate, WherePredicate,
+        expr::CallArg,
     },
     span::{AbiStructDesugared, HirOrigin},
 };
 
 /// Diagnostics for `#[abi]` struct declarations.
-#[salsa::accumulator]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AbiStructDiagnostic {
     pub kind: AbiStructDiagnosticKind,
@@ -53,12 +52,11 @@ pub(super) fn report_abi_attr_conflict<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: 
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
     for attr in named_attr_specs(ast.attr_list(), "abi") {
-        AbiStructDiagnostic {
+        ctxt.report(AbiStructDiagnostic {
             kind: AbiStructDiagnosticKind::AttrConflict,
             file,
             primary_range: attr.range,
-        }
-        .accumulate(db);
+        });
     }
 }
 
@@ -97,15 +95,14 @@ pub(super) fn lower_abi_struct<'db>(
     let struct_ = builder.struct_item(name, attributes, vis, generic_params, where_clause, fields);
 
     if !generic_params.data(db).is_empty() {
-        AbiStructDiagnostic {
+        ctxt.report(AbiStructDiagnostic {
             kind: AbiStructDiagnosticKind::GenericStruct,
             file,
             primary_range: ast
                 .generic_params()
                 .map(|g| g.syntax().text_range())
                 .unwrap_or_else(|| ast.syntax().text_range()),
-        }
-        .accumulate(db);
+        });
         return struct_;
     }
 
@@ -129,7 +126,6 @@ pub(super) fn lower_abi_struct<'db>(
     lower_abi_span_impl(&mut builder, self_ty, &field_specs);
     lower_encode_impl(&mut builder, self_ty, &field_specs);
     lower_decode_impl(&mut builder, self_ty, &field_specs);
-    lower_static_abi_impl(&mut builder, self_ty, &field_specs);
     lower_sol_compat_impl(&mut builder, self_ty, &field_specs);
 
     struct_
@@ -148,7 +144,7 @@ fn field_bounds<'db>(
         .map(|(_, ty)| {
             WhereClausePredicate::Type(WherePredicate {
                 ty: Partial::Present(*ty),
-                bounds: vec![TypeBound::Trait(trait_ref)],
+                bounds: vec![TypeBound::Trait(trait_ref, ModeMarker::None)],
             })
         })
         .collect();
@@ -201,6 +197,7 @@ fn lower_abi_span_impl<'db>(
             is_mut: false,
             has_ref_prefix: false,
             has_own_prefix: false,
+            has_mut_prefix: false,
             is_label_suppressed: false,
             name: Partial::Present(FuncParamName::Ident(name)),
             ty: Partial::Present(u256_ty),
@@ -213,7 +210,8 @@ fn lower_abi_span_impl<'db>(
         let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
 
         // Self::payload_end_with_input_len(input, base:, pos:, input_len: input.len())
-        let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+        let (generic_params, [input_ty]) =
+            builder.type_params_with_trait_bounds([("I", byte_input)]);
         let params = builder.params([
             builder.param_underscore_named(input_ident, input_ty),
             labeled(base_ident),
@@ -256,7 +254,8 @@ fn lower_abi_span_impl<'db>(
             },
         );
 
-        let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+        let (generic_params, [input_ty]) =
+            builder.type_params_with_trait_bounds([("I", byte_input)]);
         let params = builder.params([
             builder.param_underscore_named(input_ident, input_ty),
             labeled(base_ident),
@@ -290,9 +289,9 @@ fn lower_abi_span_impl<'db>(
                 let frame_end = body.call_expr(callee, args);
                 let end_pat = body.push_pat(Pat::Path(
                     Partial::Present(PathId::from_ident(db, end_ident)),
-                    true,
+                    BindingMarker::Var,
                 ));
-                body.emit_stmt(Stmt::Let(end_pat, Some(u256_ty), Some(frame_end)));
+                body.emit_stmt(Stmt::Let(end_pat, Some(u256_ty), Some(frame_end), None));
 
                 // end = abi_record_field_end<Sol, F, I>(input, pos, head_pos, input_len, end)
                 for (idx, (_, field_ty)) in field_specs.iter().copied().enumerate() {
@@ -328,60 +327,14 @@ fn lower_abi_span_impl<'db>(
     });
 }
 
-/// `impl StaticAbi for S where F0: StaticAbi, ...`: the struct is static
-/// exactly when all of its fields are.
-fn lower_static_abi_impl<'db>(
-    builder: &mut HirBuilder<'_, 'db, AbiStructDesugared>,
-    self_ty: TypeId<'db>,
-    field_specs: &FieldSpecs<'db>,
-) {
-    let db = builder.db();
-    let static_abi = TraitRefId::new(
-        db,
-        Partial::Present(builder.path_from_root(builder.roots().std, &["abi", "StaticAbi"])),
-    );
-    let where_clause = field_bounds(db, field_specs, static_abi);
-    let idx = builder.ctxt().next_impl_trait_idx();
-    builder.with_item_scope(TrackedItemVariant::ImplTrait(idx), |builder, id| {
-        ImplTrait::new(
-            db,
-            id,
-            Partial::Present(static_abi),
-            Partial::Present(self_ty),
-            builder.empty_attrs(),
-            builder.empty_generic_params(),
-            where_clause,
-            vec![],
-            vec![],
-            builder.top_mod(),
-            builder.origin(),
-        )
-    });
-}
-
 fn lower_encode_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, AbiStructDesugared>,
     self_ty: TypeId<'db>,
     field_specs: &FieldSpecs<'db>,
 ) {
     let trait_ref = builder.core_abi_trait_ref_sol("Encode");
-    let field_specs = field_specs.to_vec();
     builder.impl_trait(trait_ref, self_ty, |builder| {
-        let ptr_ident = builder.ident("ptr");
-        let u8_ty = builder.ty_ident(builder.ident("u8"));
-        let ptr_ty = builder.ty_ptr(u8_ty);
-        let params = builder.params([
-            builder.param_own_self(),
-            builder.param_underscore_named(ptr_ident, ptr_ty),
-        ]);
-        builder.func_with_body_inline_always(
-            builder.ident("encode"),
-            builder.empty_generic_params(),
-            params,
-            None,
-            FuncModifiers::new(Visibility::Private, false, false, false),
-            |body| body.encode_fields(&field_specs, ptr_ident),
-        );
+        builder.encode_func(field_specs)
     });
 }
 
@@ -398,10 +351,15 @@ fn lower_decode_impl<'db>(
         .collect::<Vec<_>>();
     builder.impl_trait(trait_ref, self_ty, |builder| {
         let abi_decoder = builder.core_abi_trait_ref_sol("AbiDecoder");
-        let (generic_params, decoder_ty) = builder.type_param_with_trait_bound("D", abi_decoder);
+        let byte_input = builder.core_abi_trait_ref("ByteInput");
+        let (generic_params, payload_tys) =
+            builder.type_params_with_trait_bounds([("D", abi_decoder), ("I", byte_input)]);
         let decoder_ident = builder.generated_ident("abi_struct_decoder");
-        let params =
-            builder.params([builder.param_mut_underscore_named(decoder_ident, decoder_ty)]);
+        let input_ident = builder.generated_ident("abi_struct_input");
+        let params = builder.params([
+            builder.param_mut_underscore_named(decoder_ident, payload_tys[0]),
+            builder.param_underscore_named(input_ident, payload_tys[1]),
+        ]);
         builder.func_generic_inline_always(
             "decode_payload",
             generic_params,
@@ -410,7 +368,7 @@ fn lower_decode_impl<'db>(
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
                 for (name, ty) in field_specs.iter().copied() {
-                    body.decode_into(name, ty, decoder_ident, decoder_ty);
+                    body.decode_into(name, ty, [decoder_ident, input_ident], payload_tys);
                 }
                 body.return_record_self(&field_names);
             },
@@ -420,13 +378,12 @@ fn lower_decode_impl<'db>(
         // cursor. Check the head once and preserve the bound on dynamic tails.
         // Let the backend budget these generated direct decoders.
         let u256_ty = builder.ty_ident(builder.ident("u256"));
-        let input_ident = builder.generated_ident("abi_struct_input");
         let pos_ident = builder.generated_ident("abi_struct_pos");
         let input_len_ident = builder.generated_ident("abi_struct_input_len");
-        let byte_input = builder.core_abi_trait_ref("ByteInput");
         let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
 
-        let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+        let (generic_params, [input_ty]) =
+            builder.type_params_with_trait_bounds([("I", byte_input)]);
         let params = builder.params([
             builder.param_underscore_named(input_ident, input_ty),
             builder.param_underscore_named(pos_ident, u256_ty),
@@ -463,7 +420,8 @@ fn lower_decode_impl<'db>(
         );
 
         for name in ["decode_from", "decode_from_bounded"] {
-            let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+            let (generic_params, [input_ty]) =
+                builder.type_params_with_trait_bounds([("I", byte_input)]);
             let with_input_len = name == "decode_from_bounded";
             let mut params = vec![
                 builder.param_underscore_named(input_ident, input_ty),
@@ -623,6 +581,7 @@ fn lower_sol_compat_impl<'db>(
             body_ctxt.conds,
             body_ctxt.pats,
             body_ctxt.f_ctxt.top_mod(),
+            body_ctxt.f_ctxt.lazy_func(),
             body_ctxt.source_map,
             origin.clone(),
         );
@@ -652,6 +611,8 @@ fn lower_sol_compat_impl<'db>(
             where_clause,
             types,
             vec![sol_type],
+            vec![],
+            false,
             builder.top_mod(),
             builder.origin(),
         )

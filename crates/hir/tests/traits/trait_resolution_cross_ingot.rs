@@ -190,8 +190,13 @@ fn test_types(_ subject: Subject) {}
 
     let assumptions = PredicateListId::empty_list(&db);
     let solve_cx = TraitSolveCx::new(&db, test_types.scope()).with_assumptions(assumptions);
-    let direct_choose =
-        TraitInstId::new(&db, choose_trait, vec![subject, external], IndexMap::new());
+    let direct_choose = TraitInstId::new(
+        &db,
+        choose_trait,
+        vec![subject, external],
+        IndexMap::new(),
+        fe_hir::hir_def::ModeMarker::None,
+    );
     let direct_choose_result =
         fe_hir::analysis::ty::trait_resolution::is_goal_satisfiable(&db, solve_cx, direct_choose);
     assert!(
@@ -202,7 +207,13 @@ fn test_types(_ subject: Subject) {}
     );
     let mut table = UnificationTableBase::<InPlace<InferenceKey<'_>>>::new(&db);
     let selected = table.new_var(TyVarSort::General, &Kind::Star);
-    let goal = TraitInstId::new(&db, goal_trait, vec![subject, selected], IndexMap::new());
+    let goal = TraitInstId::new(
+        &db,
+        goal_trait,
+        vec![subject, selected],
+        IndexMap::new(),
+        fe_hir::hir_def::ModeMarker::None,
+    );
     let query = CanonicalGoalQuery::new(&db, goal, assumptions);
 
     let result = is_goal_query_satisfiable(&db, solve_cx, &query);

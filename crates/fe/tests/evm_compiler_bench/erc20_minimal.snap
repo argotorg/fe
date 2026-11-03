@@ -1,0 +1,7 @@
+---
+source: crates/fe/tests/erc20_deployment.rs
+assertion_line: 115
+expression: report
+---
+initcode bytes: 993
+runtime bytes: 869

@@ -1,0 +1,140 @@
+use std::evm::Evm
+use std::evm::effects::StorPtr
+
+// A cast sees through transparent newtypes, a one-element tuple or a struct
+// with one visible field, on both sides.
+
+struct W {
+    pub x: u256,
+}
+
+struct O {
+    pub y: u256,
+}
+
+struct Byte {
+    pub b: u8,
+}
+
+struct Nested {
+    pub w: W,
+}
+
+struct Pair {
+    pub a: u256,
+    pub b: u256,
+}
+
+struct PairBox {
+    pub pair: Pair,
+}
+
+struct MemWrap {
+    pub p: *u256,
+}
+
+struct MemOther {
+    pub q: *u256,
+}
+
+struct StorWrap {
+    pub p: StorPtr<u256>,
+}
+
+struct StorOther {
+    pub q: StorPtr<u256>,
+}
+
+#[test]
+fn unwraps_and_wraps() {
+    let w = W { x: 64 }
+    assert(w as u256 == 64)
+    let v: u256 = 65
+    assert((v as W).x == 65)
+    assert((W { x: 66 } as O).y == 66)
+    let t: (u256,) = (67,)
+    assert((t as W).x == 67)
+}
+
+#[test]
+fn converts_the_leaf() {
+    let b = Byte { b: 68 }
+    assert(b as u256 == 68)
+    assert((Byte { b: 69 } as O).y == 69)
+}
+
+#[test]
+fn sees_through_every_layer() {
+    let n = Nested { w: W { x: 70 } }
+    assert(n as u256 == 70)
+    let v: u256 = 71
+    assert((v as Nested).w.x == 71)
+}
+
+#[test]
+fn keeps_an_aggregate_leaf() {
+    let pair = PairBox { pair: Pair { a: 1, b: 2 } } as Pair
+    assert(pair.a == 1 && pair.b == 2)
+}
+
+#[test]
+fn rewraps_pointers() {
+    let addr: usize = 64
+    let mem = MemWrap { p: addr as *u256 } as MemOther
+    assert(mem.q as usize == 64)
+    let slot: u256 = 7
+    let stor = StorWrap { p: slot as StorPtr<u256> } as StorOther
+    assert(stor.q as u256 == 7)
+}
+
+fn view_unwrap(_ w: W) -> u256 {
+    w as u256
+}
+
+fn own_rewrap(_ w: own W) -> O {
+    w as O
+}
+
+fn effect_unwrap() -> u256 uses (w: W) {
+    w as u256
+}
+
+#[test]
+fn casts_parameters_and_effects() {
+    let w = W { x: 7 }
+    assert(view_unwrap(w) == 7)
+    assert(own_rewrap(W { x: 8 }).y == 8)
+    with (w) {
+        assert(effect_unwrap() == 7)
+    }
+}
+
+msg CountMsg {
+    #[selector = 1]
+    Set { n: u256 },
+
+    #[selector = 2]
+    Get -> u256,
+}
+
+pub contract Counter {
+    mut count: W,
+
+    recv CountMsg {
+        Set { n } uses (mut count) {
+            count = n as W
+        }
+
+        Get -> u256 uses (count) {
+            count as u256
+        }
+    }
+}
+
+#[test]
+fn casts_contract_fields() uses (evm: mut Evm) {
+    let c = evm.create2<Counter>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: CountMsg::Set { n: 42 })
+    let value: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: CountMsg::Get {})
+    assert(value == 42)
+}

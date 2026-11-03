@@ -1,14 +1,14 @@
 [package]
 name = "fe"
-version = "26.4.0"
+version = "26.5.0"
 edition.workspace = true
 
 [features]
-borrowck-profile = ["hir/borrowck-profile"]
 default = ["doc-server", "lsp"]
 doc-server = ["dep:tokio", "dep:axum"]
 lsp = ["dep:language-server", "dep:tokio"]
 cranelift = ["codegen/cranelift", "dep:libc"]
+sp1 = ["cranelift", "codegen/sp1", "dep:sonatina-sp1"]
 
 [dependencies]
 clap.workspace = true
@@ -32,6 +32,7 @@ cranelift-entity.workspace = true
 rustc-hash.workspace = true
 semantic-indexing.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
+sonatina-sp1 = { workspace = true, optional = true }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
 solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
 # fe-web for model, assets, and static site generation

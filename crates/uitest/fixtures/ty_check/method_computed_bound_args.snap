@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/method_computed_bound_args.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ method_computed_bound_args.fe:46:5
+   │
+13 │     fn need<const N: usize, U: Has<{ N + 1 }>>() {}
+   │                                -------------- required by this bound on `need`
+   ·
+46 │     Plain::need<4, X>()
+   │     ^^^^^^^^^^^^^^^^^ `X` doesn't implement `Has<5>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ method_computed_bound_args.fe:46:17
+   │
+46 │     Plain::need<4, X>()
+   │                 ^ `X` doesn't implement `Has<5>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ method_computed_bound_args.fe:47:5
+   │
+19 │     fn need<const N: usize, U: Has<{ N + 1 }>>() {}
+   │                                -------------- required by this bound on `need`
+   ·
+47 │     Generic<u8>::need<4, X>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ `X` doesn't implement `Has<5>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ method_computed_bound_args.fe:47:23
+   │
+47 │     Generic<u8>::need<4, X>()
+   │                       ^ `X` doesn't implement `Has<5>`

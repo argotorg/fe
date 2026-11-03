@@ -1,0 +1,78 @@
+use core::ptr
+use std::evm::{RawStorage, StorPtr, TStorPtr, storage_at}
+
+fn bump() uses (value: mut u256) {
+    value += 1
+}
+
+// Rejected: `unsafe` vouches for the slot, not for the authority to reach it.
+fn read_hidden(_ p: StorPtr<u256>) -> u256 {
+    unsafe { *p }
+}
+
+fn write_hidden(_ t: TStorPtr<bool>) {
+    unsafe { *t = true }
+}
+
+fn provide_hidden(_ p: StorPtr<u256>) {
+    unsafe {
+        with (mut *p) {
+            bump()
+        }
+    }
+}
+
+// Rejected: reading authority does not cover a write.
+fn write_with_read_authority(_ p: StorPtr<u256>) uses (storage: RawStorage) {
+    unsafe { *p = 1 }
+}
+
+// Accepted: the function's own `uses` covers the access.
+fn read_declared(_ p: StorPtr<u256>) -> u256 uses (storage: RawStorage) {
+    unsafe { *p }
+}
+
+fn provide_declared(_ p: StorPtr<u256>) uses (storage: mut RawStorage) {
+    unsafe {
+        with (mut *p) {
+            bump()
+        }
+    }
+}
+
+// Accepted: memory is the function's own.
+fn memory(_ p: *u256) {
+    unsafe {
+        *p = 1
+        with (mut *p) {
+            bump()
+        }
+    }
+}
+
+// Rejected inside an `unsafe fn` too.
+unsafe fn unsafe_hidden(_ p: StorPtr<u256>) -> u256 {
+    *p
+}
+
+fn apply<F: Fn()>(_ f: F) uses F::E {
+    f()
+}
+
+// Rejected: a closure takes none of the enclosing function's authority; its
+// own row gives it none.
+fn closure_deref() uses (storage: mut RawStorage) {
+    apply(|| unsafe { *(0 as u256 as StorPtr<u256>) = 9 })
+}
+
+fn closure_captured_pointer() uses (storage: mut RawStorage) {
+    let p = 0 as u256 as StorPtr<u256>
+    let f = || unsafe { *p = 9 }
+    f()
+}
+
+// Accepted: a write through `storage_at` puts `storage: mut RawStorage` in
+// the closure's row, which its caller provides.
+fn closure_storage_at() uses (storage: mut RawStorage) {
+    apply(|| unsafe { storage_at<u256>(0) = 9 })
+}

@@ -1,0 +1,27 @@
+// A move a match's decision tree makes is reported at the arm whose
+// pattern makes it.
+struct Inner { v: u256 }
+enum E { A(Inner), B }
+
+fn consume(_ x: own Inner) {}
+
+fn take(_ e: own E) {}
+
+fn twice(_ e: mut E) {
+    match e {
+        E::A(inner) => consume(inner)
+        E::B => {}
+    }
+    match e {
+        E::A(inner) => consume(inner)
+        E::B => {}
+    }
+}
+
+fn after_move(_ e: own E) -> u256 {
+    take(e)
+    match e {
+        E::A(inner) => inner.v
+        E::B => 0
+    }
+}

@@ -3,16 +3,16 @@ source: crates/uitest/tests/parser.rs
 expression: diags
 input_file: crates/uitest/fixtures/parser/struct_missing_body.fe
 ---
-error[1-0001]: expected `{`, `where` or `<`
+error[1-0001]: expected `{`, `where`, `(` or `<`
   ┌─ struct_missing_body.fe:2:9
   │
 2 │ struct S
-  │         ^ expected `{`, `where` or `<`
+  │         ^ expected `{`, `where`, `(` or `<`
 
-error[1-0001]: expected `{` or `where`
+error[1-0001]: expected `{`, `where` or `(`
   ┌─ struct_missing_body.fe:4:12
   │
 4 │ struct T<U>
-  │            ^ expected `{` or `where`
+  │            ^ expected `{`, `where` or `(`
 
 

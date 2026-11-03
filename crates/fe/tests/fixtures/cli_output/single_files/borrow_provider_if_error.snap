@@ -1,20 +1,27 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 3171
 expression: output
 input_file: tests/fixtures/cli_output/single_files/borrow_provider_if_error.fe
 ---
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/borrow_provider_if_error.fe
 
-error[8-0077]: incompatible borrow providers
-   ┌─ borrow_provider_if_error.fe:13:63
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ borrow_provider_if_error.fe:14:13
    │
-13 │             let target: mut u256 = if pick { mut value } else { mut local }
-   │                                            -------------      ^^^^^^^^^^^^^ this borrow is memory-backed
-   │                                            │                   
-   │                                            the previous value here is storage-backed
+13 │             let target = if pick { mut value } else { mut local }
+   │                 ------ write `var target` for a mutable value
+14 │             target += 1
+   │             ^^^^^^ immutable assignment
+
+error[8-0117]: a runtime choice between accesses needs a projection
+   ┌─ borrow_provider_if_error.fe:13:26
    │
-   = Fe cannot assign or join `mut`/`ref` values backed by different providers into one value
+13 │             let target = if pick { mut value } else { mut local }
+   │                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this chooses between accesses at runtime
+   │
+   = move the choice into a projection, whose branches are yield sites: `fn pick(mut self, _ c: bool) -> mut T { if c { mut self.a } else { mut self.b } }`
 
 
 === EXIT CODE: 1 ===

@@ -8,9 +8,11 @@ use super::{
     ErrProof, Parser, Recovery, define_scope,
     expr::{parse_condition_expr, parse_expr, parse_expr_no_struct},
     item::ItemScope,
+    param::ClosureParamListScope,
     parse_list, parse_pat,
     stmt::parse_stmt,
     token_stream::TokenStream,
+    type_::parse_type,
 };
 use crate::{
     ExpectedKind, SyntaxKind, TextRange,
@@ -21,7 +23,7 @@ use crate::{
 pub(super) fn is_expr_atom_head(kind: SyntaxKind) -> bool {
     use SyntaxKind::*;
     match kind {
-        IfKw | MatchKw | LBrace | LParen | LBracket => true,
+        IfKw | MatchKw | UnsafeKw | LBrace | LParen | LBracket | Pipe | Pipe2 => true,
         kind if lit::is_lit(kind) => true,
         kind if path::is_path_segment(kind) => true,
         _ => false,
@@ -37,6 +39,8 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
     match parser.current_kind() {
         Some(IfKw) => parser.parse_cp(IfExprScope::default(), None),
         Some(MatchKw) => parser.parse_cp(MatchExprScope::default(), None),
+        Some(UnsafeKw) => parser.parse_cp(UnsafeExprScope::default(), None),
+        Some(Pipe | Pipe2) => parser.parse_cp(ClosureExprScope::default(), None),
         Some(SyntaxKind::Ident) => {
             // Contextual 'with': only treat as with-block when:
             // ident text is "with" AND we can parse a WithParamList AND next is '{'
@@ -75,6 +79,27 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
     }
 }
 
+define_scope! { ClosureExprScope, ClosureExpr }
+impl super::Parse for ClosureExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // `||` is an empty parameter list.
+        if !parser.bump_if(SyntaxKind::Pipe2) {
+            parser.set_scope_recovery_stack(&[SyntaxKind::Pipe, SyntaxKind::LBrace]);
+            parser.parse(ClosureParamListScope::default())?;
+            parser.pop_recovery_stack();
+        }
+
+        if parser.bump_if(SyntaxKind::Arrow) {
+            parse_type(parser, None)?;
+        }
+
+        parse_expr(parser)?;
+        Ok(())
+    }
+}
+
 define_scope! {
     pub(crate) BlockExprScope,
     BlockExpr,
@@ -86,7 +111,8 @@ define_scope! {
         WhileKw,
         ContinueKw,
         BreakKw,
-        ReturnKw
+        ReturnKw,
+        YieldKw
     )
 }
 impl super::Parse for BlockExprScope {
@@ -102,10 +128,12 @@ impl super::Parse for BlockExprScope {
                 break;
             }
 
-            if parser
-                .current_kind()
-                .map(SyntaxKind::is_item_head)
-                .unwrap_or_default()
+            // `unsafe {` starts an `unsafe` block, not an `unsafe fn` item.
+            if parser.current_kind().is_some_and(SyntaxKind::is_item_head)
+                && !matches!(
+                    parser.peek_n_non_trivia(2).as_slice(),
+                    [SyntaxKind::UnsafeKw, SyntaxKind::LBrace]
+                )
             {
                 parser.parse(ItemScope::default())?;
                 continue;
@@ -182,6 +210,19 @@ impl super::Parse for WithExprScope {
         }
         parser.parse(BlockExprScope::default())?;
         Ok(())
+    }
+}
+
+define_scope! { UnsafeExprScope, UnsafeExpr }
+impl super::Parse for UnsafeExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::UnsafeKw);
+        if parser.current_kind() != Some(SyntaxKind::LBrace) {
+            return parser.error_and_recover("expected `{` after `unsafe`");
+        }
+        parser.parse(BlockExprScope::default())
     }
 }
 
@@ -299,7 +340,12 @@ impl super::Parse for MatchArmScope {
         // arms by wrapping them in an implicit block expression.
         if matches!(
             parser.current_kind(),
-            Some(SyntaxKind::ReturnKw | SyntaxKind::BreakKw | SyntaxKind::ContinueKw)
+            Some(
+                SyntaxKind::ReturnKw
+                    | SyntaxKind::YieldKw
+                    | SyntaxKind::BreakKw
+                    | SyntaxKind::ContinueKw
+            )
         ) {
             parser.parse(ImplicitBlockExprScope::default())
         } else {
@@ -344,7 +390,7 @@ impl super::Parse for PathExprScope {
         })?;
 
         if parser.current_kind() == Some(SyntaxKind::LBrace) && self.allow_record_init {
-            self.set_kind(SyntaxKind::RecordInitExpr);
+            parser.set_scope_kind(SyntaxKind::RecordInitExpr);
             parser.parse(RecordFieldListScope::default())?;
         }
         Ok(())
@@ -393,7 +439,7 @@ impl super::Parse for ParenScope {
         parser.bump_expected(SyntaxKind::LParen);
 
         if parser.bump_if(SyntaxKind::RParen) {
-            self.set_kind(SyntaxKind::TupleExpr);
+            parser.set_scope_kind(SyntaxKind::TupleExpr);
             return Ok(());
         }
 
@@ -405,7 +451,7 @@ impl super::Parse for ParenScope {
             parser.expect(&[SyntaxKind::RParen, SyntaxKind::Comma], None)?;
 
             if parser.bump_if(SyntaxKind::Comma) {
-                self.set_kind(SyntaxKind::TupleExpr);
+                parser.set_scope_kind(SyntaxKind::TupleExpr);
                 continue;
             }
             break;
@@ -437,7 +483,7 @@ impl super::Parse for ArrayScope {
         )?;
 
         if parser.bump_if(SyntaxKind::SemiColon) {
-            self.set_kind(SyntaxKind::ArrayRepExpr);
+            parser.set_scope_kind(SyntaxKind::ArrayRepExpr);
             parse_expr(parser)?;
         } else {
             while parser.bump_if(SyntaxKind::Comma) {

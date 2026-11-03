@@ -1,0 +1,25 @@
+use core::ptr::MemArray
+
+pub fn immutable_binding() {
+    let array = MemArray<u256>::new_zeroed(2)
+    array[0] = 1
+    array[1] += 1
+}
+
+pub fn view_param(array: MemArray<u256>) {
+    array[0] = 1
+}
+
+pub fn mutable_binding() {
+    var array = MemArray<u256>::new_zeroed(2)
+    array[0] = 1
+    array[1] += 1
+}
+
+pub fn owned_param(var array: own MemArray<u256>) {
+    array[0] = 1
+}
+
+pub fn mut_capability(array: mut MemArray<u256>) {
+    array[0] = 1
+}

@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_effect_rebinding.fe
+---
+error[8-0037]: effect `Writer` must be mutable when calling `write`
+   ┌─ trait_effect_rebinding.fe:24:30
+   │
+24 │     with (Writer = writer) { write() }
+   │                    ------    ^^^^^^^ `write` requires `mut Writer`
+   │                    │
+   │                    effect `Writer` is provided here
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0075]: keyed effect binding `Other` requires `reader` to implement `Other`
+   ┌─ trait_effect_rebinding.fe:19:19
+   │
+19 │     with (Other = reader) { other() }
+   │                   ^^^^^^ `reader` does not implement `Other` for effect `Other`

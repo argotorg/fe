@@ -1,0 +1,76 @@
+// A value expression takes the value it evaluates to: a join, a wrapped
+// scrutinee, a temporary receiver or argument owns what it moved, and writes
+// through it reach that owner alone.
+use core::option::Option
+use core::ptr::MemBuffer
+
+struct C {
+    buf: MemBuffer,
+}
+
+impl C {
+    fn poke(mut self) -> u256 {
+        self.buf[0] = 5
+        self.buf[0] as u256
+    }
+}
+
+struct Count {
+    n: u256,
+}
+
+impl FnMut(u256) -> _ for Count {
+    uses E = ()
+    type Out = u256
+    fn call_mut(mut self, _ x: u256) -> u256 {
+        self.n += 1
+        x * 10 + self.n
+    }
+}
+
+fn first(_ b: MemBuffer) -> u256 {
+    b[0] as u256
+}
+
+fn pick(_ x: own MemBuffer, _ y: own MemBuffer, _ c: bool) -> MemBuffer {
+    if c { x } else { y }
+}
+
+#[test]
+fn join_moves_its_branch() {
+    var b = pick(MemBuffer::alloc(1), MemBuffer::alloc(1), true)
+    b[0] = 9
+    assert(b[0] == 9)
+}
+
+#[test]
+fn wrapped_scrutinee_owns_its_payload() {
+    let o = Option::Some(MemBuffer::alloc(1))
+    match { o } {
+        Option::Some(var b) => {
+            b[0] = 4
+            assert(b[0] == 4)
+        }
+        Option::None => assert(false)
+    }
+}
+
+#[test]
+fn temporary_receiver_and_argument() {
+    let c = C { buf: MemBuffer::alloc(1) }
+    assert({ c }.poke() == 5)
+    var fresh = MemBuffer::alloc(1)
+    fresh[0] = 3
+    assert(first({ fresh }) == 3)
+}
+
+#[test]
+fn producer_moves_into_its_loop() {
+    let xs: [u256; 3] = [1, 2, 3]
+    let m = xs.map(Count { n: 0 })
+    var s: u256 = 0
+    for y in xs.by(m) {
+        s += y
+    }
+    assert(s == 10 + 1 + 20 + 2 + 30 + 3)
+}

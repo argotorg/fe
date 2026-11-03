@@ -1,0 +1,44 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/view_param_noncopy_projection_move.fe
+---
+error[16-0002]: move conflict in `fn unwrap`
+   ┌─ view_param_noncopy_projection_move.fe:11:13
+   │
+11 │     let p = w.p
+   │             ^^^ cannot move out of a place reached through a `ref` access; bind it with `ref` to read it in place
+
+error[16-0002]: move conflict in `fn whole_return`
+   ┌─ view_param_noncopy_projection_move.fe:24:5
+   │
+24 │     value
+   │     ^^^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn whole_let`
+   ┌─ view_param_noncopy_projection_move.fe:28:24
+   │
+28 │     let copied: Pair = value
+   │                        ^^^^^ cannot move out of a place reached through a `ref` access; bind it with `ref` to read it in place
+
+error[16-0002]: move conflict in `fn whole_assign`
+   ┌─ view_param_noncopy_projection_move.fe:32:14
+   │
+32 │     target = value
+   │              ^^^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn whole_generic`
+   ┌─ view_param_noncopy_projection_move.fe:36:5
+   │
+36 │     value
+   │     ^^^^^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn index_noncopy`
+   ┌─ view_param_noncopy_projection_move.fe:45:92
+   │
+45 │   fn index_noncopy(slice: core::ptr::MemSlice<core::ptr::MemBuffer>) -> core::ptr::MemBuffer {
+   │ ╭────────────────────────────────────────────────────────────────────────────────────────────^
+46 │ │     slice[0]
+47 │ │ }
+   │ ╰─^ cannot move out of a place reached through a `ref` access

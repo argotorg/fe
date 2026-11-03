@@ -9,9 +9,11 @@ impl Wrapper {
 
     fn bad_mut_plain<T>(mut self: Self<T>) {}
 
-    fn bad_mut_own_bare(mut self: own Self) {}
+    fn bad_var_own_bare(var self: own Self) {}
 
-    fn ok_mut_own_self_generic<T>(mut self: own Self<T>) {}
+    fn bad_var_view<T>(var self: Self<T>) {}
 
-    fn ok_mut_own_named<T>(mut self: own Wrapper<T>) {}
+    fn ok_var_own_self_generic<T>(var self: own Self<T>) {}
+
+    fn ok_var_own_named<T>(var self: own Wrapper<T>) {}
 }

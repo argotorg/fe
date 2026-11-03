@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/operator_own_operands.fe
+---
+error[16-0002]: move conflict in `fn steal`
+   ┌─ operator_own_operands.fe:25:6
+   │
+25 │     !h
+   │      ^ cannot move out of a place reached through a `ref` access
+
+error[16-0002]: move conflict in `fn steal_into`
+   ┌─ operator_own_operands.fe:30:10
+   │
+30 │     x += h
+   │          ^ cannot move out of a place reached through a `ref` access

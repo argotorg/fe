@@ -1,9 +1,9 @@
 //! A binary min-heap in contract storage, after Solady's `MinHeapLib`.
 //!
 //! Solady's heap stores `uint256` only; [`StorageHeap<T>`] holds any type
-//! that has an order (`Ord`) and fits a storage word (`WordRepr`), such as
-//! integers or a struct packed into a word. Wrapping the element in
-//! [`Reverse`] turns it into a max-heap:
+//! that implements `Ord` and `Copy`, using its native storage layout,
+//! including packed structs and values spanning several words. Wrapping the
+//! element in [`Reverse`] turns it into a max-heap:
 //!
 //! ```fe
 //! use std::evm::heap::{Enqueued, Reverse, StorageHeap}
@@ -24,11 +24,12 @@
 //! }
 //! ```
 //!
-//! Every operation costs `O(log n)` storage reads and writes.
+//! Heap updates visit `O(log n)` elements. Each element is read or written
+//! in full, so storage accesses also scale with its native storage footprint.
+use core::marker::Clearable
 use core::ops::{Eq, Ord}
-use super::effects::revert_error
+use super::effects::{RawStorage, revert_error, storage_at}
 use super::storage_map::StorageMap
-use super::word::WordRepr
 
 /// `pop` or `replace` on an empty heap. Selector `0xa6ca772e`, as in
 /// Solady.
@@ -72,20 +73,23 @@ impl<T: Ord> Ord for Reverse<T> {
     }
 }
 
-impl<T: WordRepr> WordRepr for Reverse<T> {
-    fn from_word(_ word: u256) -> Self {
-        Reverse { value: T::from_word(word) }
-    }
-    fn to_word(own self) -> u256 {
-        self.value.to_word()
+/// A min-heap of `T` in storage: `root` and `pop` return the smallest
+/// element. Like any storage collection it lives at its storage place, and
+/// its operations reach its items through `self`.
+pub struct StorageHeap<T> { len: u256, items: StorageMap<u256, T> }
+
+impl<T> StorageHeap<T> {
+    /// The heap whose length is stored at `slot`.
+    ///
+    /// The caller must ensure that nothing the compiler allocates, such as a
+    /// contract field, uses `slot` or the items' slots.
+    #[raw_place]
+    pub unsafe fn at(_ slot: u256) -> mut? Self uses (storage: mut? RawStorage) {
+        unsafe { storage_at(slot) }
     }
 }
 
-/// A min-heap of `T` in storage: `root` and `pop` return the smallest
-/// element.
-pub struct StorageHeap<T> { len: u256, items: StorageMap<u256, T> }
-
-impl<T> StorageHeap<T> where T: WordRepr + Ord + Copy {
+impl<T> StorageHeap<T> where T: Ord + Copy {
     pub fn len(self) -> u256 {
         self.len
     }
@@ -108,15 +112,18 @@ impl<T> StorageHeap<T> where T: WordRepr + Ord + Copy {
         self.sift_up(index, value)
     }
 
-    /// Removes and returns the smallest element. Reverts with
-    /// `HeapIsEmpty()` if the heap is empty.
-    pub fn pop(mut self) -> T {
+    /// Removes and returns the smallest element, zeroing the slot it vacates.
+    /// Reverts with `HeapIsEmpty()` if the heap is empty.
+    pub fn pop(mut self) -> T
+        where T: Clearable
+    {
         let len = self.len
         if len == 0 {
             revert_error(HeapIsEmpty {})
         }
         let smallest = self.items.get(0)
         let last = self.items.get(len - 1)
+        self.items.remove(len - 1)
         self.len = len - 1
         if len > 1 {
             self.sift_down(0, last)
@@ -168,7 +175,7 @@ impl<T> StorageHeap<T> where T: WordRepr + Ord + Copy {
 
     // Places `value` at the hole `index`, moving it up past larger parents.
     fn sift_up(mut self, _ index: u256, _ value: T) {
-        let mut hole = index
+        var hole = index
         while hole > 0 {
             let parent = (hole - 1) / 2
             let parent_value = self.items.get(parent)
@@ -185,11 +192,11 @@ impl<T> StorageHeap<T> where T: WordRepr + Ord + Copy {
     // children, within the first `len` elements.
     fn sift_down(mut self, _ index: u256, _ value: T) {
         let len = self.len
-        let mut hole = index
+        var hole = index
         while true {
-            let mut child = 2 * hole + 1
+            var child = 2 * hole + 1
             if child >= len { break }
-            let mut child_value = self.items.get(child)
+            var child_value = self.items.get(child)
             if child + 1 < len {
                 let right = self.items.get(child + 1)
                 if right.lt(child_value) {

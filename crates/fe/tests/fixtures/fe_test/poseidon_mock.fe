@@ -43,7 +43,7 @@ fn sigma_full(_ state: [u256; 3]) -> [u256; 3] {
 }
 
 fn mix(_ state: [u256; 3]) -> [u256; 3] {
-    let mut out: [u256; 3] = [0, 0, 0]
+    var out: [u256; 3] = [0, 0, 0]
     for i in 0..3 {
         for j in 0..3 {
             out[i] = out[i] + M[i][j] * state[j]
@@ -53,8 +53,8 @@ fn mix(_ state: [u256; 3]) -> [u256; 3] {
 }
 
 pub fn mock_hash(left: u256, right: u256) -> u256 {
-    let mut state: [u256; 3] = [left, right, 0]
-    let mut round_cst: usize = 0
+    var state: [u256; 3] = [left, right, 0]
+    var round_cst: usize = 0
 
     for _ in 0..N_ROUNDS {
         state = ark(state, round_cst)

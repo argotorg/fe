@@ -166,7 +166,7 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                 ))),
             )));
         }
-        let cfg = runtime_cfg(&body);
+        let cfg = runtime_cfg(body);
         let indexed_predecessors = cfg
             .predecessors
             .iter()
@@ -343,6 +343,7 @@ fn runtime_stmt_display(stmt: &RStmt<'_>) -> String {
             variant,
             fields,
         } => format!("write_variant {root:?}, {variant:?}, {fields:?}"),
+        RStmt::End { session } => format!("end {session:?}"),
     }
 }
 
@@ -366,6 +367,7 @@ fn runtime_expr_display(expr: &RExpr<'_>) -> String {
             provider_ty,
             space,
         } => format!("provider_ref_from_raw {raw:?}, {provider_ty:?}, {space:?}"),
+        RExpr::ObjectFromRaw { raw } => format!("object_from_raw {raw:?}"),
         RExpr::WordToRawAddr { value, space } => {
             format!("word_to_raw_addr {value:?}, {space:?}")
         }
@@ -429,9 +431,13 @@ fn runtime_terminator_display(terminator: &RTerminator<'_>) -> String {
         RTerminator::ReturnData { offset, len } => format!("return_data {offset:?}, {len:?}"),
         RTerminator::Revert { offset, len } => format!("revert {offset:?}, {len:?}"),
         RTerminator::RevertEmpty => "revert_empty".to_string(),
+        RTerminator::Panic { code } => format!("panic {code:?}"),
         RTerminator::SelfDestruct { beneficiary } => format!("selfdestruct {beneficiary:?}"),
         RTerminator::Trap => "trap".to_string(),
         RTerminator::Return(value) => format!("return {value:?}"),
+        RTerminator::Yield { value, resume } => {
+            format!("yield {value:?}, resume bb{}", resume.index())
+        }
         RTerminator::Stop => "stop".to_string(),
     }
 }
@@ -548,10 +554,17 @@ fn terminator_edges(from: RBlockId, terminator: &RTerminator<'_>) -> Vec<Runtime
             }
             edges
         }
+        RTerminator::Yield { resume, .. } => vec![RuntimeCfgEdge {
+            from,
+            to: *resume,
+            kind: CfgEdgeKind::Jump,
+            condition: None,
+        }],
         RTerminator::TerminalCall { .. }
         | RTerminator::ReturnData { .. }
         | RTerminator::Revert { .. }
         | RTerminator::RevertEmpty
+        | RTerminator::Panic { .. }
         | RTerminator::SelfDestruct { .. }
         | RTerminator::Trap
         | RTerminator::Return(_)
@@ -562,7 +575,8 @@ fn terminator_edges(from: RBlockId, terminator: &RTerminator<'_>) -> Vec<Runtime
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{AddressSpaceKind, RValueId};
+    use crate::runtime::RValueId;
+    use hir::analysis::ty::AddressSpace;
 
     #[test]
     fn raw_pointer_operations_have_explicit_trace_displays() {
@@ -574,7 +588,7 @@ mod tests {
         assert_eq!(
             runtime_expr_display(&RExpr::WordToRawAddr {
                 value,
-                space: AddressSpaceKind::Memory,
+                space: AddressSpace::Memory,
             }),
             format!("word_to_raw_addr {value:?}, Memory")
         );
@@ -760,9 +774,9 @@ fn local_binding_trace_info<'db>(
         is_mut: binding.is_mut(),
         storage_class: match binding {
             LocalBinding::Local { .. } => VariableStorageClass::Local,
-            LocalBinding::Param { .. } | LocalBinding::EffectParam { .. } => {
-                VariableStorageClass::Parameter
-            }
+            LocalBinding::Param { .. }
+            | LocalBinding::ParamPart { .. }
+            | LocalBinding::EffectParam { .. } => VariableStorageClass::Parameter,
         },
     }
 }
@@ -783,6 +797,7 @@ fn local_binding_name<'db>(
                 .unwrap_or_else(|| "_".to_string())
         }
         LocalBinding::Param { idx, .. } => format!("%param{idx}"),
+        LocalBinding::ParamPart { idx, part, .. } => format!("%param{idx}.{part}"),
         LocalBinding::EffectParam {
             binding_name, idx, ..
         } => {
@@ -1025,6 +1040,6 @@ fn sem_origin_hir_key(
             )
             .expect("HIR stmt origin key must be valid"),
         ),
-        SemOrigin::Body(_) | SemOrigin::Synthetic => None,
+        SemOrigin::Pat(_) | SemOrigin::Body(_) | SemOrigin::Synthetic => None,
     }
 }

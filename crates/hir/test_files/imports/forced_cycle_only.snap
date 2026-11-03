@@ -1,0 +1,22 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/forced_cycle_only.fe
+---
+note:
+  ┌─ forced_cycle_only.fe:6:5
+  │
+6 │     pub use super::c as c
+  │     ^^^^^^^^^^^^^^^^^^^^^ forced_cycle_only::c
+
+note:
+  ┌─ forced_cycle_only.fe:8:1
+  │
+8 │ pub use c::c::*
+  │ ^^^^^^^^^^^^^^^ forced_cycle_only::c as c | forced_cycle_only::c::K as K
+
+note:
+   ┌─ forced_cycle_only.fe:10:5
+   │
+10 │     pub use super::K as X
+   │     ^^^^^^^^^^^^^^^^^^^^^ forced_cycle_only::c::K

@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
@@ -7,22 +8,22 @@ note:
    ┌─ contract_recv_variants.fe:11:5
    │
 11 │     Deposit { amount: u64 } -> u64,
-   │     ^^^^^^^ () | *<u8> | Deposit | __fe_I | fn decode_field<Sol, u64, __fe_D> | fn decode_msg_field_from<Sol, u64, __fe_I> | fn dynamic_payload_size<u64> | fn encode_field_at<Sol, u64> | mut __fe_D | u256 | u64
+   │     ^^^^^^^ () | AbiFrame | Deposit | __fe_D | __fe_I | fn decode_field<Sol, u64, __fe_D, __fe_I> | fn decode_msg_field_from<Sol, u64, __fe_I> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64> | u256 | u64
 
 note:
    ┌─ contract_recv_variants.fe:13:5
    │
 13 │     Withdraw { amount: u64 } -> bool,
-   │     ^^^^^^^^ () | *<u8> | Withdraw | __fe_I | fn decode_field<Sol, u64, __fe_D> | fn decode_msg_field_from<Sol, u64, __fe_I> | fn dynamic_payload_size<u64> | fn encode_field_at<Sol, u64> | mut __fe_D | u256 | u64
+   │     ^^^^^^^^ () | AbiFrame | Withdraw | __fe_D | __fe_I | fn decode_field<Sol, u64, __fe_D, __fe_I> | fn decode_msg_field_from<Sol, u64, __fe_I> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64> | u256 | u64
 
 note:
-   ┌─ contract_recv_variants.fe:31:41
+   ┌─ contract_recv_variants.fe:31:57
    │
-31 │           fn encode(own self, _ ptr: *u8) {
-   │ ╭─────────────────────────────────────────^
+31 │           fn encode(own self, _ out: core::abi::AbiFrame) {
+   │ ╭─────────────────────────────────────────────────────────^
 32 │ │             let Self { to, amount } = self
-33 │ │             to.encode(ptr)
-34 │ │             amount.encode(core::ptr::offset_bytes(ptr, 32))
+33 │ │             to.encode(out.slice(offset: 0, len: 32))
+34 │ │             amount.encode(out.slice(offset: 32, len: 32))
 35 │ │         }
    │ ╰─────────^ ()
 
@@ -53,64 +54,82 @@ note:
 note:
    ┌─ contract_recv_variants.fe:33:13
    │
-33 │             to.encode(ptr)
+33 │             to.encode(out.slice(offset: 0, len: 32))
    │             ^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:33:13
    │
-33 │             to.encode(ptr)
-   │             ^^^^^^^^^^^^^^ ()
+33 │             to.encode(out.slice(offset: 0, len: 32))
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
 
 note:
    ┌─ contract_recv_variants.fe:33:23
    │
-33 │             to.encode(ptr)
-   │                       ^^^ *<u8>
+33 │             to.encode(out.slice(offset: 0, len: 32))
+   │                       ^^^ AbiFrame
+
+note:
+   ┌─ contract_recv_variants.fe:33:23
+   │
+33 │             to.encode(out.slice(offset: 0, len: 32))
+   │                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ AbiFrame
+
+note:
+   ┌─ contract_recv_variants.fe:33:41
+   │
+33 │             to.encode(out.slice(offset: 0, len: 32))
+   │                                         ^ u256
+
+note:
+   ┌─ contract_recv_variants.fe:33:49
+   │
+33 │             to.encode(out.slice(offset: 0, len: 32))
+   │                                                 ^^ u256
 
 note:
    ┌─ contract_recv_variants.fe:34:13
    │
-34 │             amount.encode(core::ptr::offset_bytes(ptr, 32))
+34 │             amount.encode(out.slice(offset: 32, len: 32))
    │             ^^^^^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:34:13
    │
-34 │             amount.encode(core::ptr::offset_bytes(ptr, 32))
-   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+34 │             amount.encode(out.slice(offset: 32, len: 32))
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
 
 note:
    ┌─ contract_recv_variants.fe:34:27
    │
-34 │             amount.encode(core::ptr::offset_bytes(ptr, 32))
-   │                           ^^^^^^^^^^^^^^^^^^^^^^^ fn offset_bytes<u8>
+34 │             amount.encode(out.slice(offset: 32, len: 32))
+   │                           ^^^ AbiFrame
 
 note:
    ┌─ contract_recv_variants.fe:34:27
    │
-34 │             amount.encode(core::ptr::offset_bytes(ptr, 32))
-   │                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ *<u8>
+34 │             amount.encode(out.slice(offset: 32, len: 32))
+   │                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ AbiFrame
 
 note:
-   ┌─ contract_recv_variants.fe:34:51
+   ┌─ contract_recv_variants.fe:34:45
    │
-34 │             amount.encode(core::ptr::offset_bytes(ptr, 32))
-   │                                                   ^^^ *<u8>
+34 │             amount.encode(out.slice(offset: 32, len: 32))
+   │                                             ^^ u256
 
 note:
-   ┌─ contract_recv_variants.fe:34:56
+   ┌─ contract_recv_variants.fe:34:54
    │
-34 │             amount.encode(core::ptr::offset_bytes(ptr, 32))
-   │                                                        ^^ u256
+34 │             amount.encode(out.slice(offset: 32, len: 32))
+   │                                                      ^^ u256
 
 note:
-   ┌─ contract_recv_variants.fe:39:88
+   ┌─ contract_recv_variants.fe:39:125
    │
-39 │           fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-   │ ╭────────────────────────────────────────────────────────────────────────────────────────^
-40 │ │             let to = u64::decode_payload(d)
-41 │ │             let amount = u64::decode_payload(d)
+39 │           fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+   │ ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────^
+40 │ │             let to = u64::decode_payload(mut d, input)
+41 │ │             let amount = u64::decode_payload(mut d, input)
 42 │ │             Self { to, amount }
 43 │ │         }
    │ ╰─────────^ Transfer
@@ -118,50 +137,74 @@ note:
 note:
    ┌─ contract_recv_variants.fe:40:17
    │
-40 │             let to = u64::decode_payload(d)
+40 │             let to = u64::decode_payload(mut d, input)
    │                 ^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:40:22
    │
-40 │             let to = u64::decode_payload(d)
-   │                      ^^^^^^^^^^^^^^^^^^^ fn decode_payload<u64, Sol, D>
+40 │             let to = u64::decode_payload(mut d, input)
+   │                      ^^^^^^^^^^^^^^^^^^^ fn decode_payload<u64, Sol, D, I>
 
 note:
    ┌─ contract_recv_variants.fe:40:22
    │
-40 │             let to = u64::decode_payload(d)
-   │                      ^^^^^^^^^^^^^^^^^^^^^^ u64
+40 │             let to = u64::decode_payload(mut d, input)
+   │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:40:42
    │
-40 │             let to = u64::decode_payload(d)
-   │                                          ^ mut D
+40 │             let to = u64::decode_payload(mut d, input)
+   │                                          ^^^^^ D
+
+note:
+   ┌─ contract_recv_variants.fe:40:46
+   │
+40 │             let to = u64::decode_payload(mut d, input)
+   │                                              ^ D
+
+note:
+   ┌─ contract_recv_variants.fe:40:49
+   │
+40 │             let to = u64::decode_payload(mut d, input)
+   │                                                 ^^^^^ I
 
 note:
    ┌─ contract_recv_variants.fe:41:17
    │
-41 │             let amount = u64::decode_payload(d)
+41 │             let amount = u64::decode_payload(mut d, input)
    │                 ^^^^^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:41:26
    │
-41 │             let amount = u64::decode_payload(d)
-   │                          ^^^^^^^^^^^^^^^^^^^ fn decode_payload<u64, Sol, D>
+41 │             let amount = u64::decode_payload(mut d, input)
+   │                          ^^^^^^^^^^^^^^^^^^^ fn decode_payload<u64, Sol, D, I>
 
 note:
    ┌─ contract_recv_variants.fe:41:26
    │
-41 │             let amount = u64::decode_payload(d)
-   │                          ^^^^^^^^^^^^^^^^^^^^^^ u64
+41 │             let amount = u64::decode_payload(mut d, input)
+   │                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:41:46
    │
-41 │             let amount = u64::decode_payload(d)
-   │                                              ^ mut D
+41 │             let amount = u64::decode_payload(mut d, input)
+   │                                              ^^^^^ D
+
+note:
+   ┌─ contract_recv_variants.fe:41:50
+   │
+41 │             let amount = u64::decode_payload(mut d, input)
+   │                                                  ^ D
+
+note:
+   ┌─ contract_recv_variants.fe:41:53
+   │
+41 │             let amount = u64::decode_payload(mut d, input)
+   │                                                     ^^^^^ I
 
 note:
    ┌─ contract_recv_variants.fe:42:13
@@ -182,12 +225,12 @@ note:
    │                        ^^^^^^ u64
 
 note:
-   ┌─ contract_recv_variants.fe:61:41
+   ┌─ contract_recv_variants.fe:61:57
    │
-61 │           fn encode(own self, _ ptr: *u8) {
-   │ ╭─────────────────────────────────────────^
+61 │           fn encode(own self, _ out: core::abi::AbiFrame) {
+   │ ╭─────────────────────────────────────────────────────────^
 62 │ │             let Self { addr } = self
-63 │ │             addr.encode(ptr)
+63 │ │             addr.encode(out)
 64 │ │         }
    │ ╰─────────^ ()
 
@@ -212,27 +255,27 @@ note:
 note:
    ┌─ contract_recv_variants.fe:63:13
    │
-63 │             addr.encode(ptr)
+63 │             addr.encode(out)
    │             ^^^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:63:13
    │
-63 │             addr.encode(ptr)
+63 │             addr.encode(out)
    │             ^^^^^^^^^^^^^^^^ ()
 
 note:
    ┌─ contract_recv_variants.fe:63:25
    │
-63 │             addr.encode(ptr)
-   │                         ^^^ *<u8>
+63 │             addr.encode(out)
+   │                         ^^^ AbiFrame
 
 note:
-   ┌─ contract_recv_variants.fe:68:88
+   ┌─ contract_recv_variants.fe:68:125
    │
-68 │           fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-   │ ╭────────────────────────────────────────────────────────────────────────────────────────^
-69 │ │             let addr = u64::decode_payload(d)
+68 │           fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+   │ ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────^
+69 │ │             let addr = u64::decode_payload(mut d, input)
 70 │ │             Self { addr }
 71 │ │         }
    │ ╰─────────^ Balance
@@ -240,26 +283,38 @@ note:
 note:
    ┌─ contract_recv_variants.fe:69:17
    │
-69 │             let addr = u64::decode_payload(d)
+69 │             let addr = u64::decode_payload(mut d, input)
    │                 ^^^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:69:24
    │
-69 │             let addr = u64::decode_payload(d)
-   │                        ^^^^^^^^^^^^^^^^^^^ fn decode_payload<u64, Sol, D>
+69 │             let addr = u64::decode_payload(mut d, input)
+   │                        ^^^^^^^^^^^^^^^^^^^ fn decode_payload<u64, Sol, D, I>
 
 note:
    ┌─ contract_recv_variants.fe:69:24
    │
-69 │             let addr = u64::decode_payload(d)
-   │                        ^^^^^^^^^^^^^^^^^^^^^^ u64
+69 │             let addr = u64::decode_payload(mut d, input)
+   │                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:69:44
    │
-69 │             let addr = u64::decode_payload(d)
-   │                                            ^ mut D
+69 │             let addr = u64::decode_payload(mut d, input)
+   │                                            ^^^^^ D
+
+note:
+   ┌─ contract_recv_variants.fe:69:48
+   │
+69 │             let addr = u64::decode_payload(mut d, input)
+   │                                                ^ D
+
+note:
+   ┌─ contract_recv_variants.fe:69:51
+   │
+69 │             let addr = u64::decode_payload(mut d, input)
+   │                                                   ^^^^^ I
 
 note:
    ┌─ contract_recv_variants.fe:70:13
@@ -274,12 +329,12 @@ note:
    │                    ^^^^ u64
 
 note:
-   ┌─ contract_recv_variants.fe:93:37
+   ┌─ contract_recv_variants.fe:93:53
    │
-93 │       fn encode(own self, _ ptr: *u8) {
-   │ ╭─────────────────────────────────────^
+93 │       fn encode(own self, _ out: core::abi::AbiFrame) {
+   │ ╭─────────────────────────────────────────────────────^
 94 │ │         let Self { key } = self
-95 │ │         key.encode(ptr)
+95 │ │         key.encode(out)
 96 │ │     }
    │ ╰─────^ ()
 
@@ -304,27 +359,27 @@ note:
 note:
    ┌─ contract_recv_variants.fe:95:9
    │
-95 │         key.encode(ptr)
+95 │         key.encode(out)
    │         ^^^ u64
 
 note:
    ┌─ contract_recv_variants.fe:95:9
    │
-95 │         key.encode(ptr)
+95 │         key.encode(out)
    │         ^^^^^^^^^^^^^^^ ()
 
 note:
    ┌─ contract_recv_variants.fe:95:20
    │
-95 │         key.encode(ptr)
-   │                    ^^^ *<u8>
+95 │         key.encode(out)
+   │                    ^^^ AbiFrame
 
 note:
-    ┌─ contract_recv_variants.fe:100:84
+    ┌─ contract_recv_variants.fe:100:121
     │
-100 │       fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-    │ ╭────────────────────────────────────────────────────────────────────────────────────^
-101 │ │         let key = u64::decode_payload(d)
+100 │       fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+    │ ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────^
+101 │ │         let key = u64::decode_payload(mut d, input)
 102 │ │         Self { key }
 103 │ │     }
     │ ╰─────^ CustomQuery
@@ -332,26 +387,38 @@ note:
 note:
     ┌─ contract_recv_variants.fe:101:13
     │
-101 │         let key = u64::decode_payload(d)
+101 │         let key = u64::decode_payload(mut d, input)
     │             ^^^ u64
 
 note:
     ┌─ contract_recv_variants.fe:101:19
     │
-101 │         let key = u64::decode_payload(d)
-    │                   ^^^^^^^^^^^^^^^^^^^ fn decode_payload<u64, Sol, D>
+101 │         let key = u64::decode_payload(mut d, input)
+    │                   ^^^^^^^^^^^^^^^^^^^ fn decode_payload<u64, Sol, D, I>
 
 note:
     ┌─ contract_recv_variants.fe:101:19
     │
-101 │         let key = u64::decode_payload(d)
-    │                   ^^^^^^^^^^^^^^^^^^^^^^ u64
+101 │         let key = u64::decode_payload(mut d, input)
+    │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u64
 
 note:
     ┌─ contract_recv_variants.fe:101:39
     │
-101 │         let key = u64::decode_payload(d)
-    │                                       ^ mut D
+101 │         let key = u64::decode_payload(mut d, input)
+    │                                       ^^^^^ D
+
+note:
+    ┌─ contract_recv_variants.fe:101:43
+    │
+101 │         let key = u64::decode_payload(mut d, input)
+    │                                           ^ D
+
+note:
+    ┌─ contract_recv_variants.fe:101:46
+    │
+101 │         let key = u64::decode_payload(mut d, input)
+    │                                              ^^^^^ I
 
 note:
     ┌─ contract_recv_variants.fe:102:9

@@ -1,0 +1,86 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/moves.fe
+---
+error[16-0002]: move conflict in `fn use_after_move`
+   ┌─ moves.fe:11:13
+   │
+10 │     consume(item)
+   │             ---- value is moved here
+11 │     consume(item)
+   │             ^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn whole_after_partial_move`
+   ┌─ moves.fe:22:39
+   │
+22 │   fn whole_after_partial_move() -> Pair {
+   │ ╭───────────────────────────────────────^
+23 │ │     let pair = Pair { a: Item { n: 1 }, b: Item { n: 2 } }
+24 │ │     consume(pair.a)
+   │ │             ------ value is moved here
+25 │ │     pair
+26 │ │ }
+   │ ╰─^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn moved_on_one_branch`
+   ┌─ moves.fe:42:13
+   │
+40 │         consume(item)
+   │                 ---- value is moved here
+41 │     }
+42 │     consume(item)
+   │             ^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn moved_in_loop`
+   ┌─ moves.fe:50:17
+   │
+50 │         consume(item)
+   │                 ^^^^
+   │                 │
+   │                 cannot use a value after it was moved
+   │                 value is moved here
+
+error[16-0002]: move conflict in `fn use_before_init`
+   ┌─ moves.fe:66:39
+   │
+66 │   fn use_before_init(_ c: bool) -> u256 {
+   │ ╭───────────────────────────────────────^
+67 │ │     var x: u256
+68 │ │     if c {
+69 │ │         x = 1
+70 │ │     }
+71 │ │     x
+72 │ │ }
+   │ ╰─^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn assign_into_moved`
+   ┌─ moves.fe:86:5
+   │
+85 │     let moved = pair
+   │         ----- value is moved here
+86 │     pair.a = Item { n: 3 }
+   │     ^^^^^^^^^^^^^^^^^^^^^^ cannot assign to part of a moved value
+
+error[16-0002]: move conflict in `fn call_moves_twice`
+   ┌─ moves.fe:94:24
+   │
+94 │     consume_both(item, item)
+   │                  ----  ^^^^ cannot use a value after it was moved
+   │                  │
+   │                  value is moved here
+
+error[16-0002]: move conflict in `fn aggregate_moves_twice`
+    ┌─ moves.fe:100:24
+    │
+100 │     Pair { a: item, b: item }
+    │               ----     ^^^^ cannot use a value after it was moved
+    │               │
+    │               value is moved here
+
+error[16-0002]: move conflict in `fn take`
+    ┌─ moves.fe:118:5
+    │
+118 │     slot
+    │     ^^^^ a `mut` parameter moved out of here must be reinitialized before the function returns

@@ -1,25 +1,26 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/inherent_method_projection_target_mismatch.fe
 ---
-error[2-0010]: no method named `selected` found for View `View`
+error[2-0010]: no method named `selected` found for struct `Pair`
    ┌─ inherent_method_projection_target_mismatch.fe:10:10
    │
 10 │     pair.selected(true)
-   │          ^^^^^^^^ method not found in `View`
+   │          ^^^^^^^^ method not found in `Pair`
 
-error[2-0010]: no method named `selected` found for View `View`
+error[2-0010]: no method named `selected` found for struct `Pair`
    ┌─ inherent_method_projection_target_mismatch.fe:18:10
    │
 18 │     pair.selected(true)
-   │          ^^^^^^^^ method not found in `View`
+   │          ^^^^^^^^ method not found in `Pair`
 
-error[2-0010]: no method named `selected` found for View `View`
+error[2-0010]: no method named `selected` found for struct `Pair`
    ┌─ inherent_method_projection_target_mismatch.fe:22:10
    │
 22 │     pair.selected(1)
-   │          ^^^^^^^^ method not found in `View`
+   │          ^^^^^^^^ method not found in `Pair`
 
 error[8-0000]: type mismatch
    ┌─ inherent_method_projection_target_mismatch.fe:14:19

@@ -1,0 +1,24 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/callable_shapes.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ callable_shapes.fe:8:5
+  │
+5 │ fn view<F: Fn(u256) -> u256>(_ f: F) {}
+  │            ---------------- required by this bound on `view`
+  ·
+8 │     view(|x: own u256| x)
+  │     ^^^^ `|own u256| -> u256` doesn't implement `Fn(u256) -> u256`
+
+error[8-0146]: the callee's parameters are not known
+   ┌─ callable_shapes.fe:13:6
+   │
+13 │     f()
+   │      ^^ its spread is `..S`, which lists no known parameters
+   │
+   ┌─ src/functional.fe:22:8
+   │
+22 │     fn call(self, ..A) -> Self::Out uses E
+   │        ---- function defined here

@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/copied_state_words.fe
+---
+error[16-0001]: access conflict in `fn PersistentConflict::__init__`
+  ┌─ copied_state_words.fe:8:22
+  │
+7 │         let held = mut value
+  │                    --------- access opened here
+8 │         let copied = read_storage_word(0)
+  │                      ^^^^^^^^^^^^^^^^^^^^ this call may read storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn TransientConflict::__init__`
+   ┌─ copied_state_words.fe:17:22
+   │
+16 │         let held = mut value.value
+   │                    --------------- access opened here
+17 │         let copied = read_transient_word(0)
+   │                      ^^^^^^^^^^^^^^^^^^^^^^ this call may read storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn CrossSpaceConflict::__init__`
+   ┌─ copied_state_words.fe:28:22
+   │
+27 │         let held = mut value.value
+   │                    --------------- access opened here
+28 │         let copied = read_storage_word(0)
+   │                      ^^^^^^^^^^^^^^^^^^^^ this call may read storage while a `mut` access of it is open

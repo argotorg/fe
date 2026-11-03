@@ -1,12 +1,13 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/aug_assign.fe
 ---
 note:
    ┌─ aug_assign.fe:5:54
    │
- 5 │   pub fn foo(mut foo: own Foo, mut b: own bool) -> i32 {
+ 5 │   pub fn foo(var foo: own Foo, var b: own bool) -> i32 {
    │ ╭──────────────────────────────────────────────────────^
  6 │ │     foo.x *= 2
  7 │ │     b |= false
@@ -61,14 +62,14 @@ note:
 note:
   ┌─ aug_assign.fe:9:9
   │
-9 │     let mut x = 1
-  │         ^^^^^ i32
+9 │     var x = 1
+  │         ^ i32
 
 note:
-  ┌─ aug_assign.fe:9:17
+  ┌─ aug_assign.fe:9:13
   │
-9 │     let mut x = 1
-  │                 ^ i32
+9 │     var x = 1
+  │             ^ i32
 
 note:
    ┌─ aug_assign.fe:10:5
@@ -151,14 +152,14 @@ note:
 note:
    ┌─ aug_assign.fe:16:9
    │
-16 │     let mut usize_acc: usize = 0
-   │         ^^^^^^^^^^^^^ usize
+16 │     var usize_acc: usize = 0
+   │         ^^^^^^^^^ usize
 
 note:
-   ┌─ aug_assign.fe:16:32
+   ┌─ aug_assign.fe:16:28
    │
-16 │     let mut usize_acc: usize = 0
-   │                                ^ usize
+16 │     var usize_acc: usize = 0
+   │                            ^ usize
 
 note:
    ┌─ aug_assign.fe:17:5
@@ -187,32 +188,32 @@ note:
 note:
    ┌─ aug_assign.fe:20:9
    │
-20 │     let mut arr = [x, 1, 2]
-   │         ^^^^^^^ [i32; 3]
+20 │     var arr = [x, 1, 2]
+   │         ^^^ [i32; 3]
+
+note:
+   ┌─ aug_assign.fe:20:15
+   │
+20 │     var arr = [x, 1, 2]
+   │               ^^^^^^^^^ [i32; 3]
+
+note:
+   ┌─ aug_assign.fe:20:16
+   │
+20 │     var arr = [x, 1, 2]
+   │                ^ i32
 
 note:
    ┌─ aug_assign.fe:20:19
    │
-20 │     let mut arr = [x, 1, 2]
-   │                   ^^^^^^^^^ [i32; 3]
+20 │     var arr = [x, 1, 2]
+   │                   ^ i32
 
 note:
-   ┌─ aug_assign.fe:20:20
+   ┌─ aug_assign.fe:20:22
    │
-20 │     let mut arr = [x, 1, 2]
-   │                    ^ i32
-
-note:
-   ┌─ aug_assign.fe:20:23
-   │
-20 │     let mut arr = [x, 1, 2]
-   │                       ^ i32
-
-note:
-   ┌─ aug_assign.fe:20:26
-   │
-20 │     let mut arr = [x, 1, 2]
-   │                          ^ i32
+20 │     var arr = [x, 1, 2]
+   │                      ^ i32
 
 note:
    ┌─ aug_assign.fe:21:5

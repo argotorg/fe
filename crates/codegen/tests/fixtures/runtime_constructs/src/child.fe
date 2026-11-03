@@ -1,11 +1,12 @@
 use core::ptr
+use core::abi::store_word
 use std::evm::Evm
 
 #[contract_init(Child)]
 pub fn child_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(child_runtime)
     let offset = evm.code_region_offset(child_runtime)
-    let mut dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -18,6 +19,6 @@ pub fn child_init() uses (evm: mut Evm) {
 #[contract_runtime(Child)]
 pub fn child_runtime() uses (evm: mut Evm) {
     let data = ptr::MemBuffer::alloc(32)
-    evm.mstore(addr: data.ptr(), value: 0xbeef)
+    unsafe { store_word(ptr: data.ptr(), value: 0xbeef) }
     evm.return_data(data: data.span())
 }

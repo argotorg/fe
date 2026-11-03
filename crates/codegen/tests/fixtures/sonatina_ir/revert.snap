@@ -13,85 +13,85 @@ func private %alloc(v0.i256) -> @layout_0 {
         jump block1;
 
     block1:
-        v2.*i8 = evm_malloc v0;
-        v3.i256 = ptr_to_int v2 i256;
-        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
-        v8.@layout_0 = insert_value v6 1.i256 v0;
-        v10.@layout_0 = insert_value v8 2.i256 v0;
-        return v10;
+        v2.@layout_0 = call %alloc_uninit v0;
+        v4.i256 = extract_value v2 0.i256;
+        call %zero_bytes v4 v0;
+        return v2;
 }
 
-func private %standalone_revert__revert__fail__gcd5c_7ef9() {
+func inline(always) private %alloc_bytes(v0.i256) -> i256 {
     block0:
-        v0.objref<@layout_0> = obj.alloc @layout_0;
-        v1.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
-        v3.@layout_0 = call %alloc 32.i256;
-        v5.objref<i256> = obj.proj v0 0.i256;
-        v6.i256 = extract_value v3 0.i256;
-        obj.store v5 v6;
-        v8.objref<i256> = obj.proj v0 1.i256;
-        v9.i256 = extract_value v3 1.i256;
-        obj.store v8 v9;
-        v11.objref<i256> = obj.proj v0 2.i256;
-        v12.i256 = extract_value v3 2.i256;
-        obj.store v11 v12;
-        v13.i256 = call %impl_MemBuffer__ptr v0;
-        call %mstore v13 42.i256;
-        v16.@layout_1 = call %span v0;
-        v17.objref<i256> = obj.proj v1 0.i256;
-        v18.i256 = extract_value v16 0.i256;
-        obj.store v17 v18;
-        v19.objref<i256> = obj.proj v1 1.i256;
-        v20.i256 = extract_value v16 1.i256;
-        obj.store v19 v20;
-        call %revert v1;
+        v3.i1 = gt v0 18446744073709551615.i256;
+        br v3 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 65.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        jump block4;
+
+    block4:
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
+}
+
+func private %alloc_uninit(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %alloc_bytes v0;
+        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
+        v7.@layout_0 = insert_value v5 1.i256 v0;
+        v9.@layout_0 = insert_value v7 2.i256 v0;
+        return v9;
+}
+
+func private %cast(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %fail() {
+    block0:
+        v0.objref<@layout_1> = obj.alloc @layout_1;
+        jump block1;
+
+    block1:
+        v2.@layout_0 = call %alloc 32.i256;
+        v3.i256 = call %impl_MemBuffer__ptr v2;
+        call %store_word v3 42.i256;
+        jump block3;
+
+    block2:
+        call %revert v0;
         unreachable;
+
+    block3:
+        v9.i256 = extract_value v2 0.i256;
+        v11.i256 = extract_value v2 1.i256;
+        jump block5;
+
+    block4:
+        jump block2;
+
+    block5:
+        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v9;
+        v17.@layout_1 = insert_value v15 1.i256 v11;
+        obj.store v0 v17;
+        jump block4;
 }
 
-func private %standalone_revert__revert__fail__gcd5c_e19f() {
-    block0:
-        v0.objref<@layout_0> = obj.alloc @layout_0;
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        jump block1;
-
-    block1:
-        v3.@layout_0 = call %alloc 32.i256;
-        v5.objref<i256> = obj.proj v0 0.i256;
-        v6.i256 = extract_value v3 0.i256;
-        obj.store v5 v6;
-        v8.objref<i256> = obj.proj v0 1.i256;
-        v9.i256 = extract_value v3 1.i256;
-        obj.store v8 v9;
-        v11.objref<i256> = obj.proj v0 2.i256;
-        v12.i256 = extract_value v3 2.i256;
-        obj.store v11 v12;
-        v13.i256 = call %impl_MemBuffer__ptr v0;
-        call %mstore v13 42.i256;
-        v16.@layout_1 = call %span v0;
-        v17.objref<i256> = obj.proj v1 0.i256;
-        v18.i256 = extract_value v16 0.i256;
-        obj.store v17 v18;
-        v19.objref<i256> = obj.proj v1 1.i256;
-        v20.i256 = extract_value v16 1.i256;
-        obj.store v19 v20;
-        call %revert v1;
-        unreachable;
-}
-
-func private %from_raw_parts(v0.i256, v1.i256) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
-        v8.@layout_1 = insert_value v6 1.i256 v1;
-        return v8;
-}
-
-func private %len(v0.objref<@layout_1>) -> i256 {
+func private %len(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -106,7 +106,7 @@ func private %main() {
         jump block1;
 
     block1:
-        call %standalone_revert__revert__fail__gcd5c_7ef9;
+        call %fail;
         unreachable;
 }
 
@@ -119,72 +119,52 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %mstore(v0.i256, v1.i256) {
+func private %ptr__g79ff(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
     block1:
-        mstore v0 v1 i256;
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+
+func private %impl_MemBuffer__ptr(v0.@layout_0) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func private %revert(noalias v0.objref<@layout_1>) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %ptr__g79ff v0;
+        v3.i256 = call %len v0;
+        evm_revert v2 v3;
+}
+
+func private %store_word(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %cast v0;
+        mstore v4 v1 i256;
         return;
 }
 
-func private %impl_MemBuffer__ptr(v0.objref<@layout_0>) -> i256 {
+func private %zero_bytes(v0.i256, v1.i256) {
     block0:
         jump block1;
 
     block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %revert(v0.objref<@layout_1>) {
-    block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        v2.objref<@layout_1> = obj.alloc @layout_1;
-        jump block1;
-
-    block1:
-        v4.@layout_1 = obj.load v0;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v11.i256 = call %ptr__g79ff v1;
-        v12.@layout_1 = obj.load v0;
-        v13.objref<i256> = obj.proj v2 0.i256;
-        v14.i256 = extract_value v12 0.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v2 1.i256;
-        v16.i256 = extract_value v12 1.i256;
-        obj.store v15 v16;
-        v17.i256 = call %len v2;
-        evm_revert v11 v17;
-}
-
-func private %span(v0.objref<@layout_0>) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        v6.objref<i256> = obj.proj v0 1.i256;
-        v7.i256 = obj.load v6;
-        v8.@layout_1 = call %from_raw_parts v4 v7;
-        return v8;
+        memzero v0 v1;
+        return;
 }
 
 

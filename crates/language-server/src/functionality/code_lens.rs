@@ -138,12 +138,11 @@ fn compute_code_lens_data(db: &driver::DriverDataBase, file_url: &url::Url) -> V
     };
 
     let top_mod = map_file_to_mod(db, file);
-    let scope_graph = top_mod.scope_graph(db);
     let ingot = top_mod.ingot(db);
 
     let mut lenses = Vec::new();
 
-    for item in scope_graph.items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         match item {
             ItemKind::Func(func) => {
                 let target = Target::Scope(func.scope());
@@ -251,11 +250,10 @@ mod tests {
         db: &'db DriverDataBase,
         top_mod: hir::hir_def::TopLevelMod<'db>,
     ) -> Vec<(String, String, usize)> {
-        let scope_graph = top_mod.scope_graph(db);
         let ingot = top_mod.ingot(db);
         let mut results = Vec::new();
 
-        for item in scope_graph.items_dfs(db) {
+        for &item in top_mod.all_items(db) {
             let (name, kind, count) = match item {
                 ItemKind::Func(func) => {
                     let target = Target::Scope(func.scope());

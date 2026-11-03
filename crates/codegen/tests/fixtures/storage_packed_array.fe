@@ -6,28 +6,28 @@ msg Msg {
 }
 
 fn get_status(_ id: u256) -> u256
-    uses (status: StoragePackedArray<8, 0>)
+    uses (status: StoragePackedArray<8>)
 {
     status.get(id)
 }
 
 fn set_status(id: u256, value: u256)
-    uses (status: mut StoragePackedArray<8, 0>)
+    uses (status: mut StoragePackedArray<8>)
 {
     status.set(i: id, value)
 }
 
 fn search_status(needle: u256, start: u256, end: u256) -> u256
-    uses (status: StoragePackedArray<8, 0>)
+    uses (status: StoragePackedArray<8>)
 {
-    match status.search(needle: needle, start: start, end: end) {
-        Option::Some(i) => return i
-        Option::None => return 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    let Option::Some(i) = status.search(needle: needle, start: start, end: end) else {
+        core::panic()
     }
+    i
 }
 
 contract C {
-    status: StoragePackedArray<8, 0>
+    mut status: StoragePackedArray<8>
 
     recv Msg {
         Get -> u256 uses (mut status) {

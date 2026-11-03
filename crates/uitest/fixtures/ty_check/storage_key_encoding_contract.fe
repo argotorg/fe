@@ -4,8 +4,8 @@ struct OldKey { value: u256 }
 
 // Rejected: missing encoded_len and the obsolete write_key return type.
 impl StorageKey for OldKey {
-    fn write_key(ptr: *u8, self) -> u256 {
-        *ptr::cast<u8, u256>(ptr) = self.value
+    unsafe fn write_key(ptr: *u8, self) -> u256 {
+        unsafe { *ptr::cast<u8, u256>(ptr) = self.value }
         32
     }
 }
@@ -16,7 +16,7 @@ struct SizedKey { value: u256 }
 impl StorageKey for SizedKey {
     fn encoded_len(self) -> u256 { 32 }
 
-    fn write_key(ptr: *u8, self) {
-        *ptr::cast<u8, u256>(ptr) = self.value
+    unsafe fn write_key(ptr: *u8, self) {
+        unsafe { *ptr::cast<u8, u256>(ptr) = self.value }
     }
 }

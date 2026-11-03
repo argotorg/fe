@@ -2,9 +2,9 @@ fn fibonacci(n: u32) -> u32 {
     if n <= 1 {
         return n
     }
-    let mut previous: u32 = 0
-    let mut current: u32 = 1
-    let mut index: u32 = 2
+    var previous: u32 = 0
+    var current: u32 = 1
+    var index: u32 = 2
     while index <= n {
         let next: u32 = previous + current
         previous = current

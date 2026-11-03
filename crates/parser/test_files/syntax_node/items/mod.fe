@@ -1,5 +1,5 @@
 pub mod foo {
-    fn foo_foo(bar: i32, mut baz: u256) -> i32 {
+    fn foo_foo(bar: i32, var baz: own u256) -> i32 {
         1
     }
     

@@ -8,7 +8,11 @@ break
         }
     }
 
-    let mut  x=0
+    for  (i,mut  x)  in  arr .enumerate().take(3)  {
+        x = x + i
+    }
+
+    var  x=0
     while   x  <  100  {
         x=x+1
         if  x  %  2==0{
@@ -16,7 +20,7 @@ break
         }
     }
 
-    let mut maybe = Some(1)
+    var maybe = Some(1)
     while  let   Some(v)=maybe{
         maybe = None
         if v > 0 {

@@ -1,4 +1,4 @@
-use core::abi::{Abi, AbiSize, Encode, store_word}
+use core::abi::{Abi, AbiFrame, AbiSize, Encode}
 use std::abi::SolCompat
 
 fn runtime_name() -> String<3> {
@@ -13,8 +13,8 @@ impl AbiSize for Bad {
 }
 
 impl<A: Abi> Encode<A> for Bad {
-    fn encode(own self, _ ptr: *u8) {
-        store_word(ptr: ptr, value: self.word)
+    fn encode(own self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.word)
     }
 }
 

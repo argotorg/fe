@@ -14,7 +14,6 @@ pub enum AbiFieldDiagnosticKind {
 }
 
 /// Diagnostics for unsupported field types in ABI-bearing structs.
-#[salsa::accumulator]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AbiFieldDiagnostic {
     pub kind: AbiFieldDiagnosticKind,

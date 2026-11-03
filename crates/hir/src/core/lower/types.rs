@@ -2,7 +2,8 @@ use parser::ast::{self};
 
 use super::FileLowerCtxt;
 use crate::core::hir_def::{
-    Body, Partial, PathId, TraitRefId, TupleTypeId, TypeId, TypeKind, TypeMode,
+    AssocTypeGenericArg, Body, GenericArg, GenericArgListId, IdentId, Partial, PathId, TraitRefId,
+    TupleTypeId, TypeGenericArg, TypeId, TypeKind, TypeMode,
 };
 
 impl<'db> TypeId<'db> {
@@ -21,6 +22,7 @@ impl<'db> TypeId<'db> {
             ast::TypeKind::Mode(ty) => {
                 let mode = match ty.mode() {
                     Some(ast::TypeMode::Mut(_)) => TypeMode::Mut,
+                    Some(ast::TypeMode::MaybeMut(_)) => TypeMode::MaybeMut,
                     Some(ast::TypeMode::Ref(_)) => TypeMode::Ref,
                     Some(ast::TypeMode::Own(_)) => TypeMode::Own,
                     None => TypeMode::Ref,
@@ -71,7 +73,35 @@ impl<'db> TupleTypeId<'db> {
 
 impl<'db> TraitRefId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitRef) -> Self {
-        let path = ast.path().map(|ast| PathId::lower_ast(ctxt, ast));
+        let path = match ast.fn_shape() {
+            // `Fn(own A, B) -> R` is `Fn<(own A, B), Out = R>`: the parameter
+            // list is the shape argument, `-> _` leaves `Out` open, and no
+            // result is `()`.
+            Some(shape) => shape.name().zip(shape.params()).map(|(name, params)| {
+                let db = ctxt.db();
+                let params = TupleTypeId::lower_ast(ctxt, params).to_ty(db);
+                let mut args = vec![GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(params),
+                })];
+                if !shape.infers_ret() {
+                    let ret = shape.ret_ty().map_or_else(
+                        || TupleTypeId::new(db, Vec::new()).to_ty(db),
+                        |ty| TypeId::lower_ast(ctxt, ty),
+                    );
+                    args.push(GenericArg::AssocType(AssocTypeGenericArg {
+                        name: Partial::Present(IdentId::new(db, "Out".to_string())),
+                        mode: None,
+                        ty: Partial::Present(ret),
+                    }));
+                }
+                ctxt.core_path().push_str(db, "functional").push_str_args(
+                    db,
+                    name.text(),
+                    GenericArgListId::new(db, args, true),
+                )
+            }),
+            None => ast.path().map(|ast| PathId::lower_ast(ctxt, ast)),
+        };
         Self::new(ctxt.db(), Partial::from(path))
     }
 

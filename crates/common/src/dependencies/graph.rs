@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use petgraph::Direction::Incoming;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Dfs, EdgeRef};
 use salsa::Setter;
@@ -25,6 +26,9 @@ pub struct DependencyGraph {
     workspace_root_by_member: HashMap<Url, Url>,
     expected_member_metadata: HashMap<Url, (SmolStr, Version)>,
     forced_dependency_arithmetic: HashMap<Url, ArithmeticMode>,
+    /// The ingots and workspaces a build was asked for, not reached as
+    /// dependencies.
+    root_ingots: HashSet<Url>,
 }
 
 #[salsa::tracked]
@@ -41,6 +45,7 @@ impl DependencyGraph {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         )
     }
 
@@ -62,8 +67,8 @@ impl DependencyGraph {
         if self.node_map(db).contains_key(url) {
             return;
         }
-        let mut graph = self.graph(db);
-        let mut node_map = self.node_map(db);
+        let mut graph = self.graph(db).clone();
+        let mut node_map = self.node_map(db).clone();
         Self::allocate_node(&mut graph, &mut node_map, url);
         self.set_graph(db).to(graph);
         self.set_node_map(db).to(node_map);
@@ -76,7 +81,7 @@ impl DependencyGraph {
         name: SmolStr,
         version: Version,
     ) {
-        let mut map = self.ingots_by_metadata(db);
+        let mut map = self.ingots_by_metadata(db).clone();
         map.entry((name, version)).or_insert_with(|| url.clone());
         self.set_ingots_by_metadata(db).to(map);
     }
@@ -98,7 +103,7 @@ impl DependencyGraph {
         workspace_root: &Url,
         member: WorkspaceMemberRecord,
     ) {
-        let mut members = self.workspace_members(db);
+        let mut members = self.workspace_members(db).clone();
         let entry = members.entry(workspace_root.clone()).or_default();
         if let Some(existing) = entry.iter_mut().find(|record| record.url == member.url) {
             *existing = member.clone();
@@ -116,7 +121,7 @@ impl DependencyGraph {
         workspace_root: &Url,
         member_url: &Url,
     ) {
-        let mut roots = self.workspace_root_by_member(db);
+        let mut roots = self.workspace_root_by_member(db).clone();
         roots.insert(member_url.clone(), workspace_root.clone());
         self.set_workspace_root_by_member(db).to(roots);
     }
@@ -141,7 +146,7 @@ impl DependencyGraph {
     /// that match nothing yet).  Without this the root would be invisible to
     /// `workspace_roots()`.
     pub fn ensure_workspace_root(&self, db: &mut dyn InputDb, workspace_root: &Url) {
-        let mut members = self.workspace_members(db);
+        let mut members = self.workspace_members(db).clone();
         if members.contains_key(workspace_root) {
             return;
         }
@@ -178,7 +183,7 @@ impl DependencyGraph {
         name: SmolStr,
         version: Version,
     ) {
-        let mut map = self.expected_member_metadata(db);
+        let mut map = self.expected_member_metadata(db).clone();
         map.insert(url.clone(), (name, version));
         self.set_expected_member_metadata(db).to(map);
     }
@@ -195,13 +200,82 @@ impl DependencyGraph {
         self.node_map(db).contains_key(url)
     }
 
+    /// Records `url` as an ingot or workspace a build was asked for.
+    pub fn register_root_ingot(&self, db: &mut dyn InputDb, url: &Url) {
+        let mut roots = self.root_ingots(db).clone();
+        if roots.insert(url.clone()) {
+            self.set_root_ingots(db).to(roots);
+        }
+    }
+
+    /// Whether `url` is the user's own code rather than a dependency: an
+    /// ingot a build was asked for or a member of its workspace, an ingot
+    /// nothing in the graph depends on, or one the graph does not know (a
+    /// standalone file). A member of a dependency's own workspace is a
+    /// dependency.
+    pub fn is_trust_root(&self, db: &dyn InputDb, url: &Url) -> bool {
+        let Some(&idx) = self.node_map(db).get(url) else {
+            return true;
+        };
+        let members = self.workspace_root_by_member(db);
+        let workspace = |url: &Url| members.get(url).unwrap_or(url).clone();
+        self.root_ingots(db)
+            .iter()
+            .any(|root| root == url || workspace(root) == workspace(url))
+            || self
+                .graph(db)
+                .edges_directed(idx, Incoming)
+                .next()
+                .is_none()
+    }
+
+    /// The ingots that depend on `url`, each with whether it declares the
+    /// dependency with `allow_unsafe = true`.
+    pub fn dependents(&self, db: &dyn InputDb, url: &Url) -> Vec<(Url, bool)> {
+        let Some(&idx) = self.node_map(db).get(url) else {
+            return Vec::new();
+        };
+        let graph = self.graph(db);
+        graph
+            .edges_directed(idx, Incoming)
+            .map(|edge| (graph[edge.source()].clone(), edge.weight().1.allow_unsafe))
+            .collect()
+    }
+
+    /// The ingots whose unsafe code trusted code may use: the trust roots,
+    /// `core` and `std`, and every dependency that a trusted ingot declares
+    /// with `allow_unsafe = true`. An untrusted ingot's `allow_unsafe` grants
+    /// nothing.
+    pub fn trusted_ingots(&self, db: &dyn InputDb) -> HashSet<Url> {
+        let graph = self.graph(db);
+        let mut pending: Vec<_> = graph
+            .node_indices()
+            .filter(|&idx| {
+                matches!(graph[idx].scheme(), "builtin-core" | "builtin-std")
+                    || self.is_trust_root(db, &graph[idx])
+            })
+            .collect();
+        let mut trusted = HashSet::new();
+        while let Some(idx) = pending.pop() {
+            if trusted.insert(graph[idx].clone()) {
+                pending.extend(
+                    graph
+                        .edges(idx)
+                        .filter(|edge| edge.weight().1.allow_unsafe)
+                        .map(|edge| edge.target()),
+                );
+            }
+        }
+        trusted
+    }
+
     pub fn force_dependency_arithmetic(
         &self,
         db: &mut dyn InputDb,
         url: &Url,
         arithmetic: ArithmeticMode,
     ) {
-        let mut forced = self.forced_dependency_arithmetic(db);
+        let mut forced = self.forced_dependency_arithmetic(db).clone();
         forced.insert(url.clone(), arithmetic);
         self.set_forced_dependency_arithmetic(db).to(forced);
     }
@@ -222,8 +296,8 @@ impl DependencyGraph {
         alias: DependencyAlias,
         arguments: DependencyArguments,
     ) {
-        let mut graph = self.graph(db);
-        let mut node_map = self.node_map(db);
+        let mut graph = self.graph(db).clone();
+        let mut node_map = self.node_map(db).clone();
         let source_idx = Self::allocate_node(&mut graph, &mut node_map, source);
         let target_idx = Self::allocate_node(&mut graph, &mut node_map, target);
 
@@ -247,7 +321,7 @@ impl DependencyGraph {
     }
 
     pub fn petgraph(&self, db: &dyn InputDb) -> DiGraph<Url, EdgeWeight> {
-        self.graph(db)
+        self.graph(db).clone()
     }
 
     pub fn cyclic_subgraph(&self, db: &dyn InputDb) -> DiGraph<Url, EdgeWeight> {
@@ -347,11 +421,11 @@ impl DependencyGraph {
         local_url: Url,
         remote: RemoteFiles,
     ) {
-        let mut git_map = self.git_locations(db);
+        let mut git_map = self.git_locations(db).clone();
         git_map.insert(local_url.clone(), remote.clone());
         self.set_git_locations(db).to(git_map);
 
-        let mut reverse = self.reverse_git_map(db);
+        let mut reverse = self.reverse_git_map(db).clone();
         reverse.insert(remote, local_url);
         self.set_reverse_git_map(db).to(reverse);
     }
@@ -383,5 +457,39 @@ mod tests {
 
         let found = graph.ingot_by_name_version(&db, &"foo".into(), &version);
         assert_eq!(found, Some(url));
+    }
+
+    #[test]
+    fn trust_flows_only_from_trusted_ingots() {
+        let mut db = TestDatabase::default();
+        let graph = DependencyGraph::default(&db);
+        let url = |name: &str| Url::parse(&format!("file:///workspace/{name}/")).unwrap();
+        let depend = |db: &mut TestDatabase, from: &str, to: &str, allow_unsafe: bool| {
+            let arguments = DependencyArguments {
+                allow_unsafe,
+                ..Default::default()
+            };
+            graph.add_dependency(db, &url(from), &url(to), to.into(), arguments);
+        };
+        // root trusts a, which vouches for b; root does not trust c, whose
+        // vouching for d therefore grants nothing.
+        depend(&mut db, "root", "a", true);
+        depend(&mut db, "a", "b", true);
+        depend(&mut db, "root", "c", false);
+        depend(&mut db, "c", "d", true);
+
+        let trusted = graph.trusted_ingots(&db);
+        for name in ["root", "a", "b"] {
+            assert!(trusted.contains(&url(name)), "{name} should be trusted");
+        }
+        for name in ["c", "d"] {
+            assert!(
+                !trusted.contains(&url(name)),
+                "{name} should not be trusted"
+            );
+        }
+        assert!(graph.is_trust_root(&db, &url("root")));
+        assert!(!graph.is_trust_root(&db, &url("a")));
+        assert_eq!(graph.dependents(&db, &url("d")), vec![(url("c"), true)]);
     }
 }

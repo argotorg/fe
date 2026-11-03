@@ -1,0 +1,49 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_shadowed_trait_bound.fe
+---
+note: 
+  ┌─ goto_shadowed_trait_bound.fe:2:17
+  │
+2 │     fn read(mut self) -> u256
+  │                 ^^^^ -> goto_shadowed_trait_bound::Decoder
+
+note: 
+   ┌─ goto_shadowed_trait_bound.fe:12:19
+   │
+12 │     type Decoder: Decoder<Self>
+   │                   ^^^^^^^------
+   │                   │
+   │                   full segment (includes generics)
+   │                   -> goto_shadowed_trait_bound::Decoder
+
+note: 
+   ┌─ goto_shadowed_trait_bound.fe:13:19
+   │
+13 │     type Encoder: Encoder
+   │                   ^^^^^^^ -> goto_shadowed_trait_bound::Encoder
+
+note: 
+   ┌─ goto_shadowed_trait_bound.fe:14:21
+   │
+14 │     fn decoder() -> Self::Decoder
+   │                     ^^^^ -> goto_shadowed_trait_bound::Abi
+
+note: 
+   ┌─ goto_shadowed_trait_bound.fe:14:27
+   │
+14 │     fn decoder() -> Self::Decoder
+   │                           ^^^^^^^ -> goto_shadowed_trait_bound::Abi::Decoder
+
+note: 
+   ┌─ goto_shadowed_trait_bound.fe:15:20
+   │
+15 │     fn output() -> <Self::Encoder as Encoder>::Output
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ -> goto_shadowed_trait_bound::Encoder
+
+note: 
+   ┌─ goto_shadowed_trait_bound.fe:15:48
+   │
+15 │     fn output() -> <Self::Encoder as Encoder>::Output
+   │                                                ^^^^^^ -> goto_shadowed_trait_bound::Encoder::Output

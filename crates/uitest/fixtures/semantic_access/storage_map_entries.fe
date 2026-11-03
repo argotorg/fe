@@ -1,0 +1,44 @@
+// A map's entries are paths under the map's place, with the key as a
+// dynamic index: `m[k]` and `m[j]` may overlap, two literal keys do not.
+use std::evm::StorageMap
+
+// Accepted: a `mut` binding names the map's place.
+pub contract Named {
+    mut m: StorageMap<u256, u256>,
+    init() uses (mut m) {
+        let h = mut m
+        h[1] += 5
+    }
+}
+
+// Rejected: an entry access is open while the map is written through
+// another binding of it.
+pub contract Overlapping {
+    mut m: StorageMap<u256, u256>,
+    init() uses (mut m) {
+        let x = mut m[1]
+        let h = mut m
+        h[2] = 5
+        x += 1
+    }
+}
+
+// Accepted: entries at distinct literal keys are disjoint paths.
+pub contract LiteralKeys {
+    mut m: StorageMap<u256, u256>,
+    init() uses (mut m) {
+        let x = mut m[1]
+        m[2] = 5
+        x += 1
+    }
+}
+
+// Rejected: entries at runtime keys may be the same entry.
+pub contract RuntimeKeys {
+    mut m: StorageMap<u256, u256>,
+    init(a: u256, b: u256) uses (mut m) {
+        let x = mut m[a]
+        m[b] = 5
+        x += 1
+    }
+}

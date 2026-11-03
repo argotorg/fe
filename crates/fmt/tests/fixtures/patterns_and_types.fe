@@ -4,7 +4,7 @@ fn  pattern_tests( )  {
     // Simple patterns
     let  x=1
     let  _=2
-    let  mut  y=3
+    var  y=3
 
     // Tuple patterns
     let  (a,b,c)=(1,2,3)

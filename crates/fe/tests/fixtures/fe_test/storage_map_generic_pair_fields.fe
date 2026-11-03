@@ -1,0 +1,31 @@
+use std::evm::{Address, Evm, StorageMap}
+
+// A generic struct instantiated with a map holds one map per field, each at
+// the field's own slot, so the two fields never share entries.
+struct Pair<T> {
+    left: T,
+    right: T,
+}
+
+msg Msg {
+    #[selector = 1]
+    Swap { user: Address, amount: u256 } -> u256,
+}
+
+pub contract C {
+    mut pair: Pair<StorageMap<Address, u256>>,
+
+    recv Msg {
+        Swap { user, amount } -> u256 uses (mut pair) {
+            pair.left.set(key: user, value: amount)
+            pair.right.get(key: user)
+        }
+    }
+}
+
+#[test]
+fn generic_pair_fields_hold_distinct_maps() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let user = Address::new(7)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Swap { user, amount: 5 }) == 0)
+}

@@ -1,0 +1,55 @@
+use std::evm::{Evm, TSlot}
+
+// A transient cell's value takes a number per word, so a value of several
+// words keeps clear of the cells after it.
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+msg CellsMsg {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract Cells {
+    mut words: TSlot<[u256; 2]>,
+    mut flag: TSlot<u256>,
+    mut pair: TSlot<Pair>,
+    mut pairs: [TSlot<Pair>; 2],
+    mut last: TSlot<u256>,
+
+    recv CellsMsg {
+        Run -> u256 uses (mut words, mut flag, mut pair, mut pairs, mut last) {
+            words.value = [1, 2]
+            flag.value = 3
+            pair.value = Pair { a: 4, b: 5 }
+            pairs[0].value = Pair { a: 6, b: 7 }
+            pairs[1].value = Pair { a: 8, b: 9 }
+            last.value = 10
+            let w = words.value
+            assert(w[0] == 1 && w[1] == 2)
+            assert(flag.value == 3)
+            assert(pair.value.a == 4 && pair.value.b == 5)
+            assert(pairs[0].value.a == 6 && pairs[0].value.b == 7)
+            assert(pairs[1].value.a == 8 && pairs[1].value.b == 9)
+            assert(last.value == 10)
+            // Clearing a cell zeroes all its words and nothing after them.
+            words.clear()
+            let w = words.value
+            assert(w[0] == 0 && w[1] == 0)
+            assert(flag.value == 3)
+            pairs[0].clear()
+            assert(pairs[1].value.a == 8)
+            w[0] + flag.value + pairs[1].value.b
+        }
+    }
+}
+
+#[test]
+fn multi_word_values_keep_their_words() uses (evm: mut Evm) {
+    let cells = evm.create2<Cells>(value: Wei::zero(), args: (), salt: 0)
+    let value: u256 = evm.call(addr: cells, gas: 300000, value: Wei::zero(), message: CellsMsg::Run {})
+    assert(value == 12)
+}

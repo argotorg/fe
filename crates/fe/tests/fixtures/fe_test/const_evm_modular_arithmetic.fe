@@ -19,10 +19,10 @@ const fn field_mul(lhs: u256, rhs: u256) -> u256 {
 }
 
 const fn poseidon_style_mix(state: [u256; 3]) -> [u256; 3] {
-    let mut out: [u256; 3] = [0, 0, 0]
-    let mut i: usize = 0
+    var out: [u256; 3] = [0, 0, 0]
+    var i: usize = 0
     while i < 3 {
-        let mut j: usize = 0
+        var j: usize = 0
         while j < 3 {
             out[i] = field_add(lhs: out[i], rhs: field_mul(lhs: MIX[i][j], rhs: state[j]))
             j += 1

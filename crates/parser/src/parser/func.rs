@@ -22,7 +22,7 @@ define_scope! {
     SyntaxKind::FuncSignature
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum FuncDefScope {
     #[default]
     Normal,
@@ -90,6 +90,7 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::ConstKw,
             SyntaxKind::PubKw,
             SyntaxKind::UnsafeKw,
+            SyntaxKind::Pound,
             SyntaxKind::DocComment,
             SyntaxKind::DocCommentAttr,
             SyntaxKind::Newline,
@@ -98,6 +99,10 @@ impl super::Parse for FuncSignatureScope {
         let body = self.fn_def_scope.body();
         if body != ItemBlock::Absent {
             recovery_tokens.push(SyntaxKind::LBrace);
+        }
+        // A bodyless trait method also ends where an associated type begins.
+        if self.fn_def_scope == FuncDefScope::TraitDef {
+            recovery_tokens.push(SyntaxKind::TypeKw);
         }
         parser.set_scope_recovery_stack(&recovery_tokens);
 
@@ -123,7 +128,7 @@ impl super::Parse for FuncSignatureScope {
         }
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_uses_clause_opt(parser)?;
+        parse_uses_clause_opt(parser, self.fn_def_scope)?;
 
         parser.expect_and_pop_recovery_stack()?;
         parse_where_clause_opt(parser, body)?;
@@ -137,10 +142,35 @@ impl super::Parse for FuncSignatureScope {
 /// Supports two forms:
 /// - `uses (ctx: Ctx, st: mut Storage)`
 /// - `uses TypePath`
-fn parse_uses_clause_opt<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
-    // Allow `uses` to appear on a new line after the signature
-    let newline_as_trivia = parser.set_newline_as_trivia(true);
-    let r = if parser.current_kind() == Some(SyntaxKind::UsesKw) {
+///
+/// The clause may start on a new line, except where a trait or trait
+/// implementation item could: a line `uses E` in a trait, or `uses E = ..`
+/// in an implementation, is an associated effect row item.
+fn parse_uses_clause_opt<S: TokenStream>(
+    parser: &mut Parser<S>,
+    fn_def_scope: FuncDefScope,
+) -> Result<(), Recovery<ErrProof>> {
+    let newline_as_trivia = parser.set_newline_as_trivia(false);
+    let starts_line = parser.current_kind() == Some(SyntaxKind::Newline);
+    parser.set_newline_as_trivia(true);
+    let row_item = starts_line
+        && matches!(fn_def_scope, FuncDefScope::TraitDef | FuncDefScope::Impl)
+        && parser.current_kind() == Some(SyntaxKind::UsesKw)
+        && parser.dry_run(|parser| {
+            parser.bump_expected(SyntaxKind::UsesKw);
+            let newline_as_trivia = parser.set_newline_as_trivia(false);
+            let row_item = parser.bump_if(SyntaxKind::Ident)
+                && match parser.current_kind() {
+                    Some(SyntaxKind::Eq) => true,
+                    Some(SyntaxKind::Newline | SyntaxKind::RBrace) | None => {
+                        fn_def_scope == FuncDefScope::TraitDef
+                    }
+                    _ => false,
+                };
+            parser.set_newline_as_trivia(newline_as_trivia);
+            row_item
+        });
+    let r = if parser.current_kind() == Some(SyntaxKind::UsesKw) && !row_item {
         parser.parse(UsesClauseScope::default())
     } else {
         Ok(())
@@ -149,20 +179,24 @@ fn parse_uses_clause_opt<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), R
     r
 }
 
+/// The effects of a row: `(a: A, b: mut B)`, `A` or `mut A`.
+pub(crate) fn parse_uses_row<S: TokenStream>(
+    parser: &mut Parser<S>,
+) -> Result<(), Recovery<ErrProof>> {
+    if parser.current_kind() == Some(SyntaxKind::LParen) {
+        parser.parse(UsesParamListScope::default())
+    } else {
+        parser.parse(UsesParamScope::default())
+    }
+}
+
 define_scope! { pub(crate) UsesClauseScope, SyntaxKind::UsesClause }
 impl super::Parse for UsesClauseScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<TS: TokenStream>(&mut self, parser: &mut Parser<TS>) -> Result<(), Self::Error> {
         parser.bump_expected(SyntaxKind::UsesKw);
-
-        if parser.current_kind() == Some(SyntaxKind::LParen) {
-            parser.parse(UsesParamListScope::default())?
-        } else {
-            // Single bare param using same rules as list items (supports `mut Type`)
-            parser.parse(UsesParamScope::default())?;
-        }
-        Ok(())
+        parse_uses_row(parser)
     }
 }
 
@@ -190,9 +224,9 @@ impl super::Parse for UsesParamScope {
 
         // Cases to support inside parens:
         // - `Ctx`
-        // - `mut Storage`
+        // - `mut Storage`, `mut? Storage`
         // - `c: Ctx`
-        // - `f: mut Foo`
+        // - `f: mut Foo`, `f: mut? Foo`
         //
         // Legacy typed form `mut f: Foo` is rejected with a targeted parse error.
         let lookahead = parser.peek_n_non_trivia(3);
@@ -247,7 +281,7 @@ impl super::Parse for UsesParamScope {
 }
 
 fn parse_typed_uses_key<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
-    if parser.bump_if(SyntaxKind::MutKw) {
+    if parser.bump_if(SyntaxKind::MutKw) || parser.bump_if(SyntaxKind::MaybeMutKw) {
         parse_type(parser, None)?;
         return Ok(());
     }
@@ -262,7 +296,9 @@ fn parse_typed_uses_key<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Re
             _ => unreachable!(),
         };
         parser.add_error(ParseError::Msg(
-            format!("typed `uses` parameters only support `mut`; remove `{mode}` or use `mut`"),
+            format!(
+                "typed `uses` parameters only support `mut` and `mut?`; remove `{mode}` or use `mut`"
+            ),
             TextRange::empty(pos),
         ));
         return Ok(());

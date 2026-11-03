@@ -1,0 +1,99 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/func_param_patterns.fe
+---
+Root@0..78
+  ItemList@0..77
+    Item@0..36
+      Func@0..36
+        FnKw@0..2 "fn"
+        WhiteSpace@2..3 " "
+        FuncSignature@3..33
+          Ident@3..11 "no_label"
+          FuncParamList@11..33
+            LParen@11..12 "("
+            FnParam@12..32
+              TuplePat@12..18
+                TuplePatElemList@12..18
+                  LParen@12..13 "("
+                  PathPat@13..14
+                    Path@13..14
+                      PathSegment@13..14
+                        Ident@13..14 "a"
+                  Comma@14..15 ","
+                  WhiteSpace@15..16 " "
+                  PathPat@16..17
+                    Path@16..17
+                      PathSegment@16..17
+                        Ident@16..17 "b"
+                  RParen@17..18 ")"
+              Colon@18..19 ":"
+              WhiteSpace@19..20 " "
+              TupleType@20..32
+                LParen@20..21 "("
+                PathType@21..25
+                  Path@21..25
+                    PathSegment@21..25
+                      Ident@21..25 "u256"
+                Comma@25..26 ","
+                WhiteSpace@26..27 " "
+                PathType@27..31
+                  Path@27..31
+                    PathSegment@27..31
+                      Ident@27..31 "u256"
+                RParen@31..32 ")"
+            RParen@32..33 ")"
+        WhiteSpace@33..34 " "
+        BlockExpr@34..36
+          LBrace@34..35 "{"
+          RBrace@35..36 "}"
+    Newline@36..37 "\n"
+    Item@37..77
+      Func@37..77
+        FnKw@37..39 "fn"
+        WhiteSpace@39..40 " "
+        FuncSignature@40..74
+          Ident@40..46 "marker"
+          FuncParamList@46..74
+            LParen@46..47 "("
+            FnParam@47..73
+              Underscore@47..48 "_"
+              WhiteSpace@48..49 " "
+              TuplePat@49..59
+                VarKw@49..52 "var"
+                WhiteSpace@52..53 " "
+                TuplePatElemList@53..59
+                  LParen@53..54 "("
+                  PathPat@54..55
+                    Path@54..55
+                      PathSegment@54..55
+                        Ident@54..55 "a"
+                  Comma@55..56 ","
+                  WhiteSpace@56..57 " "
+                  PathPat@57..58
+                    Path@57..58
+                      PathSegment@57..58
+                        Ident@57..58 "b"
+                  RParen@58..59 ")"
+              Colon@59..60 ":"
+              WhiteSpace@60..61 " "
+              TupleType@61..73
+                LParen@61..62 "("
+                PathType@62..66
+                  Path@62..66
+                    PathSegment@62..66
+                      Ident@62..66 "u256"
+                Comma@66..67 ","
+                WhiteSpace@67..68 " "
+                PathType@68..72
+                  Path@68..72
+                    PathSegment@68..72
+                      Ident@68..72 "u256"
+                RParen@72..73 ")"
+            RParen@73..74 ")"
+        WhiteSpace@74..75 " "
+        BlockExpr@75..77
+          LBrace@75..76 "{"
+          RBrace@76..77 "}"
+  Newline@77..78 "\n"

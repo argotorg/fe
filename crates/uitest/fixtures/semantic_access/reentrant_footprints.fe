@@ -1,0 +1,127 @@
+// A call that can start an external execution, or address raw storage,
+// conflicts with every open storage access: through an effect row's
+// component, a closure's row, or a capability passed as a data argument.
+// A precompile cannot call back.
+use core::ptr::MemBuffer
+use std::evm::{Address, Call, Ctx, Evm, sha256}
+
+msg AMsg {
+    #[selector = 1]
+    Poke { v: Address },
+}
+
+trait Pinger {
+    uses E
+    fn go(self, _ a: Address) uses E
+}
+
+struct CallPinger {}
+
+impl Pinger for CallPinger {
+    uses E = (call: mut Call)
+
+    fn go(self, _ a: Address) uses E {
+        call.call(addr: a, gas: 200000, value: Wei::zero(), message: AMsg::Poke { v: a })
+    }
+}
+
+struct Quiet {}
+
+impl Pinger for Quiet {
+    fn go(self, _ a: Address) {}
+}
+
+fn run<P: Pinger>(_ p: P, _ a: Address) uses P::E {
+    p.go(a)
+}
+
+fn apply<F: Fn()>(_ f: F) uses F::E {
+    f()
+}
+
+fn ping_with(_ e: mut Evm, _ a: Address) {
+    e.call(addr: a, gas: 200000, value: Wei::zero(), message: AMsg::Poke { v: a })
+}
+
+fn poke<C: Call>(_ c: mut C, _ a: Address) {
+    c.call(addr: a, gas: 200000, value: Wei::zero(), message: AMsg::Poke { v: a })
+}
+
+fn caller_of(_ e: Evm) -> Address {
+    e.caller()
+}
+
+msg VMsg {
+    #[selector = 2]
+    Row { a: Address },
+    #[selector = 3]
+    Closure { a: Address },
+    #[selector = 4]
+    Data { a: Address },
+    #[selector = 5]
+    Bound { a: Address },
+    #[selector = 6]
+    Quiet { a: Address },
+    #[selector = 7]
+    Precompile,
+    #[selector = 8]
+    View,
+    #[selector = 9]
+    Local { a: Address },
+}
+
+pub contract V uses (call: mut Call, evm: mut Evm) {
+    mut value: u256,
+
+    recv VMsg {
+        // Rejected: the row's component calls out.
+        Row { a } uses (mut value, mut call) {
+            let held = mut value
+            run(CallPinger {}, a)
+            held = 1
+        }
+        // Rejected: the closure's row calls out.
+        Closure { a } uses (mut value, mut call) {
+            let held = mut value
+            apply(|| call.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a }))
+            held = 1
+        }
+        // Rejected: a `mut Evm` data argument calls out.
+        Data { a } uses (mut value, mut evm) {
+            let held = mut value
+            ping_with(mut evm, a)
+            held = 1
+        }
+        // Rejected: a capability through a bound.
+        Bound { a } uses (mut value, mut evm) {
+            let held = mut value
+            poke(mut evm, a)
+            held = 1
+        }
+        // Accepted: an empty row reaches nothing.
+        Quiet { a } uses (mut value) {
+            let held = mut value
+            run(Quiet {}, a)
+            held = 1
+        }
+        // Accepted: a precompile cannot call back.
+        Precompile uses (mut value) {
+            let held = mut value
+            let _ = sha256(MemBuffer::alloc(32).span())
+            held = 1
+        }
+        // Rejected: a view of `Evm` may read storage.
+        View uses (mut value, evm) {
+            let held = mut value
+            let _ = caller_of(evm)
+            held = 1
+        }
+        // Rejected: a local closure's body calls out.
+        Local { a } uses (mut value, mut call) {
+            let held = mut value
+            let f = || call.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a })
+            f()
+            held = 1
+        }
+    }
+}

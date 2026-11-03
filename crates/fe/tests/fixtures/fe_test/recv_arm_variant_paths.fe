@@ -1,0 +1,91 @@
+use std::abi::sol
+
+msg M {
+    #[selector = 0x01]
+    V { n: u256 } -> u256,
+    #[selector = 0x02]
+    U -> u256,
+}
+
+// An arm names its variant by a single segment, one of the msg's items, in a
+// named recv block, or by a path resolved where the arm is written.
+pub contract Named {
+    recv M {
+        M::V { n } -> u256 {
+            n + 1
+        }
+        M::U -> u256 {
+            7
+        }
+    }
+}
+
+pub contract Bare {
+    recv {
+        M::V { n } -> u256 {
+            n + 2
+        }
+        M::U -> u256 {
+            8
+        }
+    }
+}
+
+// A msg module with a variant that takes a type argument.
+mod Manual {
+    use std::abi::sol
+
+    pub struct G<T> {
+        pub value: u8,
+    }
+
+    impl<T> core::abi::AbiSize for G<T> {
+        const HEAD_SIZE: u256 = 32
+        const IS_DYNAMIC: bool = false
+
+        fn payload_size(self) -> u256 {
+            32
+        }
+    }
+
+    impl<T> core::abi::Encode<std::abi::Sol> for G<T> {
+        fn encode(own self, _ out: core::abi::AbiFrame) {
+            let Self { value } = self
+            value.encode(out)
+        }
+    }
+
+    impl<T> core::abi::Decode<std::abi::Sol> for G<T> {
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+            let value = u8::decode_payload(mut d, input)
+            Self { value }
+        }
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for G<u8> {
+        const SELECTOR: u32 = sol("g(uint8)")
+        type Return = u8
+    }
+}
+
+// A single segment with generic arguments is the msg's item too.
+pub contract Generic {
+    recv Manual {
+        G<u8> { value } -> u8 {
+            value + 1
+        }
+    }
+}
+
+#[test]
+fn test_recv_arm_variant_paths() uses (evm: mut Evm) {
+    let named = evm.create2<Named>(value: Wei::zero(), args: (), salt: 0)
+    let bare = evm.create2<Bare>(value: Wei::zero(), args: (), salt: 0)
+    let generic = evm.create2<Generic>(value: Wei::zero(), args: (), salt: 0)
+
+    assert(evm.call(addr: named, gas: 100000, value: Wei::zero(), message: M::V { n: 1 }) == 2)
+    assert(evm.call(addr: named, gas: 100000, value: Wei::zero(), message: M::U {}) == 7)
+    assert(evm.call(addr: bare, gas: 100000, value: Wei::zero(), message: M::V { n: 1 }) == 3)
+    assert(evm.call(addr: bare, gas: 100000, value: Wei::zero(), message: M::U {}) == 8)
+    assert(evm.call(addr: generic, gas: 100000, value: Wei::zero(), message: Manual::G<u8> { value: 1 }) == 2)
+}

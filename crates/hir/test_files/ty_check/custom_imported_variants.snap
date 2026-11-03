@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/custom_imported_variants.fe
 ---
@@ -295,19 +296,19 @@ note:
    ┌─ custom_imported_variants.fe:60:13
    │
 60 │         Rgb(r, g, b) => {
-   │             ^ ref u8
+   │             ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:60:16
    │
 60 │         Rgb(r, g, b) => {
-   │                ^ ref u8
+   │                ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:60:19
    │
 60 │         Rgb(r, g, b) => {
-   │                   ^ ref u8
+   │                   ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:60:25
@@ -340,13 +341,13 @@ note:
    ┌─ custom_imported_variants.fe:61:24
    │
 61 │             return r + g + b
-   │                        ^ ref u8
+   │                        ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:61:28
    │
 61 │             return r + g + b
-   │                            ^ ref u8
+   │                            ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:67:50
@@ -452,19 +453,19 @@ note:
    ┌─ custom_imported_variants.fe:78:20
    │
 78 │         Color::Rgb(r, g, b) => {
-   │                    ^ ref u8
+   │                    ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:78:23
    │
 78 │         Color::Rgb(r, g, b) => {
-   │                       ^ ref u8
+   │                       ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:78:26
    │
 78 │         Color::Rgb(r, g, b) => {
-   │                          ^ ref u8
+   │                          ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:78:32
@@ -497,10 +498,10 @@ note:
    ┌─ custom_imported_variants.fe:79:24
    │
 79 │             return r + g + b
-   │                        ^ ref u8
+   │                        ^ u8
 
 note:
    ┌─ custom_imported_variants.fe:79:28
    │
 79 │             return r + g + b
-   │                            ^ ref u8
+   │                            ^ u8

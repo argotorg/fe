@@ -1,0 +1,57 @@
+// An assignment through nested indexes needs a `mut` place along the whole
+// chain: `t[1].inner[0] = 11` takes both overloaded indexes at `mut`, and
+// nested storage entries are paths of one place.
+use core::ops::Index
+use std::evm::{Evm, StorageMap}
+
+struct Cells { cells: [u256; 2] }
+impl Index<usize> for Cells {
+    type Output = u256
+    fn index(mut? self, _ i: usize) -> mut? u256 { mut? self.cells[i] }
+}
+struct Table { inner: Cells }
+struct Tables { items: [Table; 2] }
+impl Index<usize> for Tables {
+    type Output = Table
+    fn index(mut? self, _ i: usize) -> mut? Table { mut? self.items[i] }
+}
+
+#[test]
+fn nested_overloaded_index_assignment() {
+    var t = Tables { items: [Table { inner: Cells { cells: [0, 0] } }, Table { inner: Cells { cells: [0, 0] } }] }
+    t[1].inner[0] = 11
+    t[1].inner[1] += 4
+    let next = t[1].inner[0] + 1
+    t[0].inner[1] = next
+    assert(t[1].inner[0] == 11)
+    assert(t[1].inner[1] == 4)
+    assert(t[0].inner[1] == 12)
+    assert(t.items[0].inner.cells[0] == 0)
+}
+
+struct Day { steps: u256, counts: StorageMap<u256, u256> }
+
+msg Msg {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract C {
+    mut days: StorageMap<u256, Day>,
+
+    recv Msg {
+        Run -> u256 uses (mut days) {
+            days[3].steps += 2
+            days[3].counts[7] = 9
+            days[3].counts[7] += 1
+            days[3].steps * 100 + days[3].counts[7]
+        }
+    }
+}
+
+#[test]
+fn nested_place_entries() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let v: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Run {})
+    assert(v == 210)
+}

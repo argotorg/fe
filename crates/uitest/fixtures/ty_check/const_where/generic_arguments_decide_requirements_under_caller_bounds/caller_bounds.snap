@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_where/generic_arguments_decide_requirements_under_caller_bounds/caller_bounds.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ caller_bounds.fe:38:5
+   │
+18 │ fn wipe<C: Space>(_ c: C) where C::ZEROED {}
+   │                                 --------- required by this predicate
+   ·
+38 │     wipe(w)
+   │     ^^^^^^^ condition evaluated to `false`

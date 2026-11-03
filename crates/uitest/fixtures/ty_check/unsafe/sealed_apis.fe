@@ -1,0 +1,31 @@
+use core::abi::{AbiFrame, Encode, store_word}
+use std::abi::Sol
+use core::ptr::{self, MemSlice}
+
+pub fn copy_bytes(dest: *u8, source: *u8) {
+    ptr::copy_raw(dest, source, 32)
+}
+
+pub fn forge_slice(p: *u256) -> ref MemSlice<u256> {
+    MemSlice::from_raw_parts(ptr: p, len: 4)
+}
+
+pub fn store_word_outside_unsafe(p: *u8) {
+    store_word(ptr: p, value: 1)
+}
+
+pub fn encode_value<T: Encode<Sol>>(value: own T, p: *u8) {
+    value.encode(AbiFrame::from_raw_parts(ptr: p, len: 32))
+}
+
+pub fn uninit() -> u256 {
+    let array = ptr::alloc_array<u256>(1)
+    array[0]
+}
+
+pub fn sealed_inside_unsafe(dest: *u8, source: *u8) {
+    unsafe {
+        ptr::copy_raw(dest, source, 32)
+        store_word(ptr: dest, value: 1)
+    }
+}

@@ -1,0 +1,54 @@
+use std::abi::sol
+use std::evm::{Log, revert_error}
+
+#[event]
+pub struct Wrote {
+    pub value: u256,
+}
+
+#[error]
+pub struct Overflow {
+    pub value: u256,
+}
+
+trait Slot {
+    fn slot(mut? self) -> mut? u256 uses (log: mut Log)
+}
+
+struct Cell {
+    value: u256,
+}
+
+// Only the `mut` body logs and reverts.
+impl Slot for Cell {
+    fn slot(self) -> ref u256 uses (log: mut Log) {
+        ref self.value
+    }
+
+    fn slot(mut self) -> mut u256 uses (log: mut Log) {
+        if self.value == 0 {
+            revert_error(Overflow { value: self.value })
+        }
+        log.emit(Wrote { value: self.value })
+        mut self.value
+    }
+}
+
+/// Forwards its mode to `slot`.
+fn slot_of(_ cell: mut? Cell) -> mut? u256 uses (log: mut Log) {
+    cell.slot()
+}
+
+msg Calls {
+    #[selector = sol("write()")]
+    Write,
+}
+
+pub contract Foo uses (log: mut Log) {
+    recv Calls {
+        Write uses (mut log) {
+            var cell = Cell { value: 1 }
+            slot_of(mut cell) = 2
+        }
+    }
+}

@@ -2,6 +2,6 @@
 struct Empty {
 }
 
-pub fn new_empty() -> Empty {
+pub fn main() -> Empty {
     Empty {}
 }

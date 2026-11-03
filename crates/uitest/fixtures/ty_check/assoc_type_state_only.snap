@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/assoc_type_state_only.fe
+---
+error[3-0061]: `S<K>` is state-only
+   ┌─ assoc_type_state_only.fe:24:19
+   │
+24 │ fn by_value_assoc(_ x: own S<K>) {}
+   │                   ^^^^^^^^^^^^^ a state-only type cannot be an `own` parameter
+   │
+   = `S<K>` holds `TSlot<u256>`, which is pinned to transient storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `D` is state-only
+   ┌─ assoc_type_state_only.fe:27:20
+   │
+27 │ fn by_value_direct(_ x: own D) {}
+   │                    ^^^^^^^^^^ a state-only type cannot be an `own` parameter
+   │
+   = `D` holds `TSlot<u256>`, which is pinned to transient storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter

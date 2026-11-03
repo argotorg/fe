@@ -15,19 +15,19 @@ fn finalize(_ s: own Stats) -> u256 {
 
 #[test]
 fn test_borrow_destructure_paths() {
-    let mut s = Stats {
+    var s = Stats {
         a: 2,
         b: 3,
         total: 5,
     }
 
     {
-        let a_mut: mut u256 = mut s.a
+        let a_mut = mut s.a
         a_mut += 7
     }
 
     {
-        let b_mut: mut u256 = mut s.b
+        let b_mut = mut s.b
         b_mut += 11
     }
 

@@ -4,38 +4,27 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/let_mut_capability_binding.fe
 ---
-error[8-0073]: invalid mutable local binding
-   ┌─ let_mut_capability_binding.fe:10:9
+error[8-0031]: type annotation is needed
+   ┌─ let_mut_capability_binding.fe:25:9
    │
-10 │     let mut h: mut u256 = mut x
-   │         ^^^ `let mut` local bindings must be owned values (found `mut u256`)
-   │
-   = remove `mut` from the local binding to keep a handle
-   = or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)
+25 │     let (h, _) = (mut x, 1)
+   │         ^^^^^^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: (u256, {integer})` here
 
-error[8-0073]: invalid mutable local binding
-   ┌─ let_mut_capability_binding.fe:15:9
+error[8-0070]: an access is not a value
+   ┌─ let_mut_capability_binding.fe:25:19
    │
-15 │     let mut h = mut x
-   │         ^^^ `let mut` local bindings must be owned values (found `mut u256`)
+25 │     let (h, _) = (mut x, 1)
+   │                   ^^^^^ this access is used as a value
    │
-   = remove `mut` from the local binding to keep a handle
-   = or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
 
-error[8-0073]: invalid mutable local binding
-   ┌─ let_mut_capability_binding.fe:20:9
+error[8-0122]: `var` binds a value, not an access
+   ┌─ let_mut_capability_binding.fe:12:9
    │
-20 │     let mut y = x
-   │         ^^^ `let mut` local bindings must be owned values (found `ref Foo`)
+12 │     var h = mut x
+   │         ^ this binds a value, but its initializer names an access
    │
-   = remove `mut` from the local binding to keep a handle
-   = or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)
-
-error[8-0073]: invalid mutable local binding
-   ┌─ let_mut_capability_binding.fe:24:10
-   │
-24 │     let (mut h, _): (mut u256, u256) = (mut x, 1)
-   │          ^^^ `let mut` local bindings must be owned values (found `mut u256`)
-   │
-   = remove `mut` from the local binding to keep a handle
-   = or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)
+   = remove `ref` or `mut` from the initializer to copy its value, or bind the access with `let`

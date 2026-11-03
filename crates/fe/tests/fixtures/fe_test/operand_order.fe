@@ -1,0 +1,101 @@
+// A variable is read where it appears: a call's arguments, an aggregate's
+// fields and an operator's operands are evaluated left to right, so a later
+// operand's writes come after an earlier operand is read.
+use core::ptr::MemArray
+
+struct Tally { total: u256 }
+
+fn reset(_ t: mut Tally) -> u256 {
+    t.total = 0
+    7
+}
+
+fn clear(_ a: mut MemArray<u256>) -> u256 {
+    a[0] = 0
+    7
+}
+
+#[test]
+fn operator_operands_left_to_right() {
+    var t = Tally { total: 5 }
+    assert(t.total + reset(mut t) == 12)
+    var a: MemArray<u256> = MemArray::new_zeroed(1)
+    a[0] = 5
+    assert(a[0] + clear(mut a) == 12)
+}
+
+struct Pair { a: u256, b: u256 }
+
+fn bump(_ x: mut u256) -> u256 {
+    x = 0
+    7
+}
+
+fn add(_ a: u256, _ b: u256) -> u256 { a + b }
+
+#[test]
+fn variable_read_where_it_appears() {
+    var x: u256 = 5
+    assert(add(x, bump(mut x)) == 12)
+    x = 5
+    assert(x + bump(mut x) == 12)
+    x = 5
+    assert((x, bump(mut x)).0 == 5)
+    x = 5
+    assert(Pair { a: x, b: bump(mut x) }.a == 5)
+    x = 5
+    // Fields are evaluated in the order they are written.
+    assert(Pair { b: bump(mut x), a: x }.a == 0)
+    x = 5
+    let a = [x, bump(mut x), x]
+    assert(a[0] == 5 && a[1] == 7 && a[2] == 0)
+    x = 5
+    let sum = add(x, {
+        x = 0
+        7
+    })
+    assert(sum == 12)
+}
+
+fn bump_effect() -> u256 uses (x: mut u256) {
+    x = 0
+    7
+}
+
+fn add_effect() -> u256 uses (x: mut u256) {
+    add(x, bump_effect())
+}
+
+fn plus_effect() -> u256 uses (x: mut u256) {
+    x + bump_effect()
+}
+
+// An effect is read where it appears, whether its provider is a local or
+// a place the caller passed.
+#[test]
+fn effect_read_where_it_appears() {
+    var x: u256 = 5
+    let sum = with (x) {
+        add(x, bump_effect())
+    }
+    assert(sum == 12)
+    x = 5
+    assert(with (x) { add_effect() } == 12)
+    x = 5
+    assert(with (x) { plus_effect() } == 12)
+}
+
+fn through_param(_ x: mut u256) -> u256 {
+    add(x, bump(mut x))
+}
+
+#[test]
+fn carrier_argument_read_where_it_appears() {
+    // A `Copy` value read through a `mut` parameter or binding is read before
+    // a later argument writes it, as a local's is.
+    var x: u256 = 5
+    assert(through_param(mut x) == 12)
+    var y: u256 = 5
+    let z = mut y
+    assert(add(z, bump(mut z)) == 12)
+}

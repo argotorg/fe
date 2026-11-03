@@ -1,6 +1,7 @@
-use std::evm::{Address, StorageMap}
+/// A type with no ABI encoding.
+struct Opaque { value: u256 }
 
 #[error]
 struct Bad {
-    value: StorageMap<Address, u256, 0>,
+    value: Opaque,
 }

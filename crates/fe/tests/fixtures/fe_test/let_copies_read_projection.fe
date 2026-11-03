@@ -1,0 +1,63 @@
+// A plain `let` of a read projection copies a `Copy` referent and ends the
+// session, so the source can change while the copy lives. A `mut`
+// projection, or an explicit `ref`, still binds an access.
+use core::ptr::MemArray
+
+struct Cell {
+    word: u256,
+}
+
+impl Cell {
+    fn get(self) -> ref u256 {
+        ref self.word
+    }
+
+    fn get_mut(mut self) -> mut u256 {
+        mut self.word
+    }
+}
+
+#[test]
+fn index_binding_copies_the_element() {
+    var words = MemArray<u256>::new_zeroed(2)
+    words.set(0, 7)
+    let word = words[0]
+    words.set(0, 5)
+    assert!(word == 7)
+    assert!(words[0] == 5)
+}
+
+#[test]
+fn projection_binding_copies_an_aggregate() {
+    var pairs = MemArray<(u256, u256)>::new_zeroed(1)
+    pairs.set(0, (1, 2))
+    let pair = pairs[0]
+    pairs.set(0, (3, 4))
+    assert!(pair.0 == 1 && pair.1 == 2)
+    assert!(pairs[0].0 == 3)
+}
+
+#[test]
+fn method_projection_binding_copies() {
+    var cell = Cell { word: 1 }
+    let word = cell.get()
+    cell.word = 2
+    assert!(word == 1)
+}
+
+#[test]
+fn mut_projection_binding_stays_an_access() {
+    var cell = Cell { word: 1 }
+    let word = mut cell.get_mut()
+    word = 3
+    assert!(cell.word == 3)
+}
+
+#[test]
+fn explicit_ref_binding_stays_an_access() {
+    var cell = Cell { word: 1 }
+    let word = ref cell.get()
+    assert!(word == 1)
+    cell.word = 2
+    assert!(cell.word == 2)
+}

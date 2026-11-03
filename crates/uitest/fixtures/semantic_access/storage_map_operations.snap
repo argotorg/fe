@@ -1,0 +1,30 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/storage_map_operations.fe
+---
+error[16-0001]: access conflict in `fn Direct::__init__`
+   ┌─ storage_map_operations.fe:11:9
+   │
+10 │         let x = mut m[1]
+   │                 -------- access opened here
+11 │         m.set(key: 2, value: 5)
+   │         ^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn NestedSession::__init__`
+   ┌─ storage_map_operations.fe:60:27
+   │
+59 │         let x = mut pair.right[1]
+   │                 ----------------- access opened here
+60 │         let v = read_left(pair, 1)
+   │                           ^^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn HeldSession::__init__`
+   ┌─ storage_map_operations.fe:81:13
+   │
+79 │         let x = ref b.map[1]
+   │                 ------------ access opened here
+80 │         with (Holder = b) {
+81 │             write_held(a.map)
+   │             ^^^^^^^^^^^^^^^^^ cannot mutably access this place while a `ref` access of it is open

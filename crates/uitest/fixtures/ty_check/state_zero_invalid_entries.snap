@@ -1,0 +1,53 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/state_zero_invalid_entries.fe
+---
+error[3-0069]: contract state cannot hold `Evm`
+   ┌─ state_zero_invalid_entries.fe:17:12
+   │
+17 │     mut a: Evm,
+   │            ^^^ `Evm` has `unsafe` fields
+   │
+   = state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant
+
+error[3-0069]: contract state cannot hold `Evm`
+   ┌─ state_zero_invalid_entries.fe:18:12
+   │
+18 │     mut b: StorageMap<u256, Evm>,
+   │            ^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, Evm>` holds `Evm`, which has `unsafe` fields
+   │
+   = state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant
+
+error[3-0069]: contract state cannot hold `Evm`
+   ┌─ state_zero_invalid_entries.fe:19:12
+   │
+19 │     mut c: TSlot<Evm>,
+   │            ^^^^^^^^^^ `TSlot<Evm>` holds `Evm`, which has `unsafe` fields
+   │
+   = state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant
+
+error[3-0069]: contract state cannot hold `Evm`
+   ┌─ state_zero_invalid_entries.fe:20:12
+   │
+20 │     mut d: Option<Evm>,
+   │            ^^^^^^^^^^^ `Option<Evm>` holds `Evm`, which has `unsafe` fields
+   │
+   = state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant
+
+error[3-0069]: contract state cannot hold `Guarded`
+   ┌─ state_zero_invalid_entries.fe:21:12
+   │
+21 │     mut e: StorageMap<u256, Guarded>,
+   │            ^^^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, Guarded>` holds `Guarded`, which has `unsafe` fields
+   │
+   = state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant
+
+error[3-0069]: contract state cannot hold `Evm`
+   ┌─ state_zero_invalid_entries.fe:22:8
+   │
+22 │     f: Evm,
+   │        ^^^ `Evm` has `unsafe` fields
+   │
+   = state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant

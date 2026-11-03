@@ -1,0 +1,104 @@
+use std::evm::Evm
+
+struct Pair {
+    x: u256,
+    y: u256,
+}
+
+// A `mut` binding in a pattern matched against a place opens a `mut` access
+// on the payload, so writes through it update the matched place and later
+// reads through it see them.
+fn bump(_ o: mut Option<u256>) -> u256 {
+    match o {
+        Option::Some(mut v) => {
+            v += 1
+            v
+        }
+        Option::None => 0
+    }
+}
+
+fn shift(_ o: mut Option<Pair>) {
+    if let Option::Some(mut p) = o {
+        p.x += 10
+    }
+}
+
+// Destructuring a place binds a `mut` access of each part marked `mut`.
+fn destructure(_ p: mut Pair) -> u256 {
+    let Pair { mut x, y } = p
+    x += 1
+    x + y
+}
+
+fn destructure_tuple(_ t: mut (u256, u256)) -> u256 {
+    let (mut a, b) = t
+    a += 1
+    a + b
+}
+
+msg Msg {
+    #[selector = 1]
+    Bump -> u256,
+}
+
+pub contract Counter {
+    mut slot: Option<u256>,
+
+    init() uses (mut slot) {
+        slot = Option::Some(5)
+    }
+
+    recv Msg {
+        Bump -> u256 uses (mut slot) {
+            match slot {
+                Option::Some(mut v) => {
+                    v += 1
+                    v
+                }
+                Option::None => 0
+            }
+        }
+    }
+}
+
+#[test]
+fn test_match_payload_access() {
+    var a: Option<u256> = Option::Some(1)
+    assert!(bump(mut a) == 2)
+    match a {
+        Option::Some(mut v) => {
+            v *= 3
+        }
+        Option::None => {}
+    }
+    match a {
+        Option::Some(v) => assert!(v == 6)
+        Option::None => assert!(false)
+    }
+
+    var b: Option<Pair> = Option::Some(Pair { x: 1, y: 2 })
+    shift(mut b)
+    match b {
+        Option::Some(ref p) => assert!(p.x == 11 && p.y == 2)
+        Option::None => assert!(false)
+    }
+}
+
+#[test]
+fn test_destructured_accesses() {
+    var p = Pair { x: 5, y: 1 }
+    assert!(destructure(mut p) == 7)
+    assert!(p.x == 6)
+
+    var t: (u256, u256) = (5, 1)
+    assert!(destructure_tuple(mut t) == 7)
+    assert!(t.0 == 6)
+}
+
+#[test]
+fn test_storage_payload_access() uses (evm: mut Evm) {
+    let c = evm.create2<Counter>(value: Wei::zero(), args: (), salt: 7)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Bump {}) == 6)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Bump {}) == 7)
+}

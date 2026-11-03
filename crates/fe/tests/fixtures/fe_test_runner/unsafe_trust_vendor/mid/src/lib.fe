@@ -1,0 +1,3 @@
+pub fn via_dep(_ value: u256) -> u256 {
+    dep::round_trip(value)
+}

@@ -1,7 +1,8 @@
 // A string literal longer than the inline `String` capacity whose type is only
 // inferred (not passed directly to a compile-time byte consumer like
-// `core::keccak`) used to reach constant evaluation with an invalid type and
-// fail with a compiler invariant error.
+// `core::keccak`) is a `DynString`, which has no `AsBytes` encoding. It used to
+// reach constant evaluation with an invalid type and fail with a compiler
+// invariant error.
 use core::AsBytes
 
 const fn hash<T: AsBytes>(_ x: T) -> u256 {

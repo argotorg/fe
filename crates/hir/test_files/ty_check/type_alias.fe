@@ -5,5 +5,5 @@ mod foo {
 }
 
 fn main() {
-    let mut set: foo::Foo<()>
+    var set: foo::Foo<()>
 }

@@ -1,0 +1,407 @@
+// Run-time results of the draft-13 acceptance list ("Acceptance tests"),
+// numbered as the spec lists it. Static results are in
+// `uitest/semantic_access/acceptance.fe` and `uitest/ty_check/acceptance.fe`.
+use core::iter::{Collection, Driver, Identity}
+use core::ops::Index
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::{Address, Call, Evm, StorageMap}
+
+struct Cell { v: u256 }
+
+fn inner(_ c: mut Cell) -> mut u256 {
+    yield mut c.v
+    c.v = c.v * 10 + 1
+}
+
+fn outer(_ c: mut Cell) -> mut u256 {
+    let x = mut inner(mut c)
+    yield mut x
+    x += 1
+}
+
+// 4. An outer slide uses the inner grant it retains, and the inner session
+// finishes after it: (5 + 1) * 10 + 1.
+#[test]
+fn case04_resumption_order() {
+    var c = Cell { v: 0 }
+    let x = mut outer(mut c)
+    x = 5
+    assert!(c.v == 61)
+}
+
+fn tally(_ c: mut Cell) -> mut u256 {
+    var tmp = c.v
+    yield mut tmp
+    c.v = tmp + 100
+}
+
+// 11. A slide-bearing session exited by `break` runs its slide once.
+#[test]
+fn case11_break_runs_slide_once() {
+    var c = Cell { v: 0 }
+    var i: u256 = 0
+    while i < 3 {
+        let x = mut tally(mut c)
+        if i == 1 {
+            break
+        }
+        x += 1
+        i += 1
+    }
+    assert!(c.v == 201)
+}
+
+fn written_back(_ c: mut Cell) -> mut u256 {
+    var tmp = c.v
+    yield mut tmp
+    c.v = tmp + 1000
+}
+
+fn optional(_ c: mut Cell, _ give: bool) -> Option<mut u256> {
+    let x = mut written_back(mut c)
+    if !give {
+        return Option::None
+    }
+    yield Option::Some(mut x)
+    x += 10
+}
+
+// 15. An outer projection returning `None` after opening an inner write-back
+// session finishes the inner session (its cleanup runs) and runs no outer
+// slide.
+#[test]
+fn case15_empty_exit_cleans_up() {
+    var c = Cell { v: 0 }
+    if let Option::Some(mut x) = optional(mut c, false) {
+        x += 1
+    }
+    assert!(c.v == 1000)
+    if let Option::Some(mut x) = optional(mut c, true) {
+        x += 1
+    }
+    assert!(c.v == 1000 + 1000 + 11)
+}
+
+fn replaceable(_ c: mut Cell) -> mut Cell {
+    yield mut c
+    c.v += 2
+}
+
+// 26. A mutable exported referent replaced before the slide resumes: the
+// slide sees what the caller left.
+#[test]
+fn case26_replaced_referent() {
+    var c = Cell { v: 1 }
+    let x = mut replaceable(mut c)
+    x = Cell { v: 40 }
+    assert!(c.v == 42)
+}
+
+msg Words {
+    #[selector = 1]
+    Get { i: u256 } -> u256,
+}
+
+// 23. `Identity` and `Reversed` forward a storage-yielding base: the loop
+// writes the contract's words in place.
+pub contract StoredWords {
+    mut words: [u256; 3],
+
+    init() uses (mut words) {
+        var next: u256 = 1
+        for mut word in words.reversed() {
+            word = next
+            next += 1
+        }
+        let d = Identity {}
+        for mut word in words.by(d) {
+            word *= 10
+        }
+    }
+
+    recv Words {
+        Get { i } -> u256 uses (words) {
+            words[i.downcast_unchecked()]
+        }
+    }
+}
+
+#[test]
+fn case23_storage_base() uses (evm: mut Evm) {
+    let addr = evm.create2<StoredWords>(value: Wei::zero(), args: (), salt: 0)
+    let first: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Words::Get { i: 0 })
+    let last: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Words::Get { i: 2 })
+    assert!(first == 30 && last == 10)
+}
+
+struct Item { n: u256 }
+
+fn consume(_ item: own Item) -> u256 {
+    item.n
+}
+
+// 31. Restoring through a stable access restores the element it first named,
+// however the index changes.
+#[test]
+fn case31_stable_place() {
+    var items = [Item { n: 1 }, Item { n: 2 }]
+    var i: usize = 0
+    let slot = mut items[i]
+    i = 1
+    let saved = slot
+    slot = Item { n: 3 }
+    assert(consume(saved) == 1)
+    assert(items[0].n == 3 && items[i].n == 2)
+}
+
+fn reordered(_ xs: mut MemArray<u256>, _ i: usize, _ j: usize) -> (mut u256, mut u256) {
+    let (mut a, mut b) = xs.pair_mut(i, j)
+    (mut b, mut a)
+}
+
+// 34. Reordered `pair_mut` grants write the elements they name.
+#[test]
+fn case34_reordered_grants() {
+    var xs: MemArray<u256> = MemArray::new_zeroed(2)
+    let (mut b, mut a) = reordered(mut xs, 0, 1)
+    b = 20
+    a = 10
+    assert(xs[0] == 10 && xs[1] == 20)
+}
+
+fn first_of(_ c: mut Cell) -> mut u256 {
+    mut c.v
+}
+
+fn bump(_ x: mut u256) {
+    x += 1
+}
+
+// 38. Writes through an input-rooted `mut` grant, directly and through a
+// helper, land in the input.
+#[test]
+fn case38_grant_writes() {
+    var c = Cell { v: 1 }
+    let x = mut first_of(mut c)
+    x += 1
+    bump(mut x)
+    assert(c.v == 3)
+}
+
+struct Tag { n: u256 }
+
+struct Tagged<B> {}
+
+impl<B: Collection> Driver for Tagged<B> {
+    type Base = B
+    type State = B::Cursor
+    shape Step = (own Tag, ref B::Item)
+
+    fn start(self, _ base: B) -> B::Cursor uses (B::E, E) {
+        base.start()
+    }
+
+    fn has(self, _ base: B, _ s: B::Cursor) -> bool uses (B::E, E) {
+        base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: B::Cursor) -> B::Cursor uses (B::E, E) {
+        base.next(s)
+    }
+
+    fn at(self, _ base: B, _ s: B::Cursor) -> (own Tag, ref B::Item) uses (B::E, E) {
+        (Tag { n: 1 }, base.at(s))
+    }
+}
+
+// 40. A step's owned part, a non-`Copy` tag, moves into the pattern beside a
+// copied element.
+#[test]
+fn case40_owned_extra() {
+    let xs: [u256; 3] = [1, 2, 3]
+    let d = Tagged {}
+    var total: u256 = 0
+    for (tag, x) in xs.by(d) {
+        total += tag.n + x
+    }
+    assert(total == 9)
+}
+
+fn ping() uses (call: mut Call) {
+    var output = MemBuffer::empty()
+    let outcome = call.raw_call(
+        addr: Address::new(1), gas: 100000, value: Wei::zero(),
+        args: MemSpan::empty(), ret: mut output,
+    )
+}
+
+fn ramp_and_slide_call() -> mut u256 uses (call: mut Call) {
+    var n: u256 = 0
+    ping()
+    yield mut n
+    ping()
+}
+
+fn helper_call() uses (call: mut Call) {
+    ping()
+}
+
+fn through_helper() -> mut u256 uses (call: mut Call) {
+    var n: u256 = 7
+    helper_call()
+    yield mut n
+    helper_call()
+}
+
+msg ValueMsg {
+    #[selector = 1]
+    Value -> u256,
+}
+
+// 22. An external call from a projection's own ramp or slide, directly or
+// through a helper, runs with only the session's reservation open.
+pub contract Case22OwnReservation {
+    mut value: u256,
+
+    init() uses (mut value, call: mut Call) {
+        let n = mut ramp_and_slide_call()
+        n += 1
+        let first = n
+        let m = mut through_helper()
+        m += first
+        let total = m
+        value = total
+    }
+
+    recv ValueMsg {
+        Value -> u256 uses (value) {
+            value
+        }
+    }
+}
+
+#[test]
+fn case22_calls_in_ramp_and_slide() uses (evm: mut Evm) {
+    let c = evm.create2<Case22OwnReservation>(value: Wei::zero(), args: (), salt: 22)
+    let value: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: ValueMsg::Value {})
+    assert(value == 8)
+}
+
+// 24. A storage map indexed through a write-back: 32-bit scores packed
+// eight to an entry, read as a copy and masked back after a write. The
+// result is a memory temporary and the indexing declares no effects.
+struct Scores {
+    words: StorageMap<u256, u256>,
+}
+
+impl Index<u256> for Scores {
+    type Output = u32
+    fn index(self, _ i: u256) -> ref u32 {
+        (self.words[i / 8] >> ((i % 8) * 32)).downcast_truncate()
+    }
+
+    fn index(mut self, _ i: u256) -> mut u32 {
+        let shift = (i % 8) * 32
+        var tmp: u32 = (self.words[i / 8] >> shift).downcast_truncate()
+        yield mut tmp
+        let cleared = self.words[i / 8] & !(0xffffffff << shift)
+        self.words[i / 8] = cleared | ((tmp as u256) << shift)
+    }
+}
+
+msg ScoresMsg {
+    #[selector = 1]
+    Bump { i: u256 } -> u256,
+}
+
+pub contract Case24Board {
+    mut scores: Scores,
+
+    recv ScoresMsg {
+        Bump { i } -> u256 uses (mut scores) {
+            scores[i] += 3
+            scores[i + 1] = 9
+            let s = mut scores[i]
+            s *= 2
+            (scores[i] as u256) + (scores[i + 1] as u256) * 1000
+        }
+    }
+}
+
+#[test]
+fn case24_write_back_indexing() uses (evm: mut Evm) {
+    let board = evm.create2<Case24Board>(value: Wei::zero(), args: (), salt: 24)
+    let first: u256 = evm.call(addr: board, gas: 300000, value: Wei::zero(), message: ScoresMsg::Bump { i: 6 })
+    assert(first == 9006)
+    let again: u256 = evm.call(addr: board, gas: 300000, value: Wei::zero(), message: ScoresMsg::Bump { i: 6 })
+    assert(again == 9018)
+}
+
+// 44. A map passed as `credit(mut ledger.balances, ..)` is written through
+// the `mut` parameter.
+struct Ledger {
+    balances: StorageMap<Address, u256>,
+    total: u256,
+}
+
+fn credit(_ m: mut StorageMap<Address, u256>, _ who: Address, _ amount: u256) {
+    m[who] += amount
+}
+
+msg LedgerMsg {
+    #[selector = 1]
+    Credit { who: Address, amount: u256 } -> u256,
+}
+
+pub contract Case44Bank {
+    mut ledger: Ledger,
+
+    recv LedgerMsg {
+        Credit { who, amount } -> u256 uses (mut ledger) {
+            credit(mut ledger.balances, who, amount)
+            credit(mut ledger.balances, who, amount)
+            ledger.total += amount
+            ledger.balances[who] + ledger.total
+        }
+    }
+}
+
+#[test]
+fn case44_map_as_mut_argument() uses (evm: mut Evm) {
+    let bank = evm.create2<Case44Bank>(value: Wei::zero(), args: (), salt: 44)
+    let who = Address::new(7)
+    let first: u256 = evm.call(addr: bank, gas: 300000, value: Wei::zero(), message: LedgerMsg::Credit { who, amount: 5 })
+    assert(first == 15)
+}
+
+// 50. A map nested in a map value derives its slots from its entry's:
+// `outer[1].m[3]` and `outer[2].m[3]` are distinct places.
+struct Inner {
+    m: StorageMap<u256, u256>,
+}
+
+msg NestedMsg {
+    #[selector = 1]
+    Write -> (u256, u256),
+}
+
+pub contract Case50Nested {
+    mut outer: StorageMap<u256, Inner>,
+
+    recv NestedMsg {
+        Write -> (u256, u256) uses (mut outer) {
+            outer[1].m[3] = 5
+            outer[2].m[3] = 7
+            outer[1].m[3] += 1
+            (outer[1].m[3], outer[2].m[3])
+        }
+    }
+}
+
+#[test]
+fn case50_nested_maps_are_distinct() uses (evm: mut Evm) {
+    let nested = evm.create2<Case50Nested>(value: Wei::zero(), args: (), salt: 50)
+    let values: (u256, u256) = evm.call(addr: nested, gas: 300000, value: Wei::zero(), message: NestedMsg::Write {})
+    assert(values.0 == 6)
+    assert(values.1 == 7)
+}

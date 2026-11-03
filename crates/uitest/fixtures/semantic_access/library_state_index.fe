@@ -1,0 +1,47 @@
+use core::marker::{Pinned, Storage}
+use core::ops::{Location, StateIndex}
+use std::evm::keccak_words
+
+// A library collection pinned to storage by its `StateIndex` implementation.
+// `self[k]` is a place under the receiver's access, opened with no raw
+// storage authority, and an entry's access holds the receiver.
+struct Cells {
+    len: u256,
+}
+
+impl Pinned for Cells {
+    type Space = Storage
+}
+
+unsafe impl StateIndex for Cells {
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: keccak_words([key, root]), offset: 0 }
+    }
+}
+
+impl Cells {
+    fn touch(mut self) {}
+
+    // Accepted: an entry of the receiver, with no `RawStorage` effect.
+    fn bump(mut self, _ key: u256) {
+        let cell = mut self[key]
+        cell += 1
+    }
+
+    // Accepted: another parameter's place while the entry is open.
+    fn count(mut self, _ key: u256, _ hits: mut u256) {
+        let cell = mut self[key]
+        hits += 1
+        cell += 1
+    }
+
+    // Rejected: the receiver is accessed again while its entry is open.
+    fn conflict(mut self, _ key: u256) {
+        let cell = mut self[key]
+        self.touch()
+        cell += 1
+    }
+}

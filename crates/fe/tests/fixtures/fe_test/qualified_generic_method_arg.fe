@@ -16,7 +16,7 @@ pub struct S {
 }
 
 impl S {
-    fn take<T>(self, _ value: T) -> T {
+    fn take<T>(self, _ value: own T) -> T {
         value
     }
 }

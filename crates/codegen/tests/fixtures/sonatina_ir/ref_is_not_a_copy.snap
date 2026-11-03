@@ -6,41 +6,9 @@ input_file: crates/codegen/tests/fixtures/ref_is_not_a_copy.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256};
-type @layout_1 = {i256, i256};
+type @layout_1 = {constref<i256>, constref<i256>};
 
 global private const @layout_0 $const_region_0 = {10, 20};
-
-func private %live_view(v0.constref<@layout_0>) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.constref<i256> = const.proj v0 0.i256;
-        v5.constref<i256> = const.proj v0 1.i256;
-        v6.objref<i256> = obj.alloc i256;
-        v7.i256 = const.load v3;
-        obj.store v6 v7;
-        v8.*i256 = obj.materialize.heap v6;
-        v10.*i256 = evm_malloc 64.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.i256 = ptr_to_int v8 i256;
-        mstore v11 v12 i256;
-        v14.i256 = add v11 32.i256;
-        mstore v14 1.i256 i256;
-        v15.objref<i256> = obj.alloc i256;
-        v16.i256 = const.load v5;
-        obj.store v15 v16;
-        v17.*i256 = obj.materialize.heap v15;
-        v18.*i256 = evm_malloc 64.i256;
-        v19.i256 = ptr_to_int v18 i256;
-        v20.i256 = ptr_to_int v17 i256;
-        mstore v19 v20 i256;
-        v21.i256 = add v19 32.i256;
-        mstore v21 1.i256 i256;
-        v23.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
-        v24.@layout_1 = insert_value v23 1.i256 v19;
-        return v24;
-}
 
 func private %main() {
     block0:
@@ -62,124 +30,64 @@ func private %main_root() {
 
 func private %test_ref_is_not_a_copy() {
     block0:
+        v0.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
-        v2.constref<@layout_0> = const.ref $const_region_0;
         v3.constref<@layout_0> = const.ref $const_region_0;
-        v4.@layout_1 = call %live_view v3;
-        v6.i256 = extract_value v4 0.i256;
-        v8.i256 = extract_value v4 1.i256;
-        v9.i256 = mload v6 i256;
-        v11.i256 = add v6 32.i256;
-        v12.i256 = mload v11 i256;
-        br_table v12 block9 (0.i256 block10) (1.i256 block11) (2.i256 block12) (3.i256 block13) (4.i256 block14) (5.i256 block15);
+        v4.constref<@layout_0> = const.ref $const_region_0;
+        jump block9;
 
     block2:
         jump block4;
 
     block3:
-        v27.*i8 = evm_malloc 64.i256;
-        v28.i256 = ptr_to_int v27 i256;
-        mstore v28 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        (v31.i256, v32.i1) = uaddo v28 32.i256;
-        br v32 block16 block17;
+        jump block11;
 
     block4:
-        v39.i256 = mload v8 i256;
-        v40.i256 = add v8 32.i256;
-        v41.i256 = mload v40 i256;
-        br_table v41 block19 (0.i256 block20) (1.i256 block21) (2.i256 block22) (3.i256 block23) (4.i256 block24) (5.i256 block25);
+        v6.i256 = const.load v15;
+        v7.i1 = eq v6 20.i256;
+        jump block13;
 
     block5:
         jump block7;
 
     block6:
-        v50.*i8 = evm_malloc 64.i256;
-        v51.i256 = ptr_to_int v50 i256;
-        mstore v51 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        (v53.i256, v54.i1) = uaddo v51 32.i256;
-        br v54 block16 block26;
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 1.i256 i256;
+        evm_revert 0.i256 36.i256;
 
     block7:
         return;
 
     block8:
-        v23.i256 = phi (v17 block10) (v18 block11) (v19 block12) (v20 block13) (v21 block14) (v22 block15);
-        v24.i1 = eq v23 10.i256;
-        br v24 block2 block3;
+        obj.store v0 v23;
+        v14.constref<i256> = extract_value v23 0.i256;
+        v15.constref<i256> = extract_value v23 1.i256;
+        v16.i256 = const.load v14;
+        v17.i1 = eq v16 10.i256;
+        br v17 block2 block3;
 
     block9:
-        unreachable;
+        v19.constref<i256> = const.proj v4 0.i256;
+        v20.constref<i256> = const.proj v4 1.i256;
+        v22.@layout_1 = insert_value undef.@layout_1 0.i256 v19;
+        v23.@layout_1 = insert_value v22 1.i256 v20;
+        jump block8;
 
     block10:
-        v17.i256 = mload v9 i256;
-        jump block8;
-
-    block11:
-        v18.i256 = mload v9 i256;
-        jump block8;
-
-    block12:
-        v19.i256 = evm_sload v9;
-        jump block8;
-
-    block13:
-        v20.i256 = evm_tload v9;
-        jump block8;
-
-    block14:
-        v21.i256 = evm_calldata_load v9;
-        jump block8;
-
-    block15:
-        v22.i256 = evm_code_load v9;
-        jump block8;
-
-    block16:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
+        mstore 4.i256 1.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block17:
-        mstore v31 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v28 36.i256;
+    block11:
+        jump block10;
 
-    block18:
-        v48.i256 = phi (v42 block20) (v43 block21) (v44 block22) (v45 block23) (v46 block24) (v47 block25);
-        v49.i1 = eq v48 20.i256;
-        br v49 block5 block6;
+    block12:
+        br v7 block5 block6;
 
-    block19:
-        unreachable;
-
-    block20:
-        v42.i256 = mload v39 i256;
-        jump block18;
-
-    block21:
-        v43.i256 = mload v39 i256;
-        jump block18;
-
-    block22:
-        v44.i256 = evm_sload v39;
-        jump block18;
-
-    block23:
-        v45.i256 = evm_tload v39;
-        jump block18;
-
-    block24:
-        v46.i256 = evm_calldata_load v39;
-        jump block18;
-
-    block25:
-        v47.i256 = evm_code_load v39;
-        jump block18;
-
-    block26:
-        mstore v53 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v51 36.i256;
+    block13:
+        jump block12;
 }
 
 

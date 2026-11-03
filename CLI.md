@@ -200,6 +200,7 @@ If `path` is omitted, it defaults to `.`.
 - `src/lib.fe` is treated as the ingot’s root module. If it is missing, the CLI behaves as if an empty `src/lib.fe` existed (a “phantom” root module).
 - Contracts are discovered across the ingot’s entire source set (`src/**/*.fe` top-level modules), not only `src/lib.fe`.
 - By default, **all** discovered contracts are built.
+- Contracts in different modules may share a name. A contract whose name is shared is built under its module path joined with `__`, for example `lib__a__C` for `C` in `src/a.fe`; the ingot's name is added only if the module path is not enough. Contracts whose names are not shared keep their own name. A contract has the same name whichever module or contract is being built, and that name is the artifact name used below and by `--contract`. The name `main` is reserved for the root module's executable.
 
 #### Workspace root target
 
@@ -221,10 +222,12 @@ Workspace member selection:
 ### Contract selection: `--contract <name>`
 
 - For standalone files and ingots:
-  - If `<name>` exists, only that contract is built.
-  - If not found, the build errors and prints “Available contracts:” with a list.
+  - `<name>` selects the contracts whose artifact name or source name it is. If it selects exactly one, only that contract is built.
+  - If it selects several (contracts that share the source name `<name>`), the build errors and lists their artifact names and source files; pick one by artifact name.
+  - If not found, the build errors and prints “Available contracts:” with a list of artifact names.
 - For workspace roots:
-  - If **exactly one** workspace member contains the contract, that member is built for that contract.
+  - A member contains the contract when one of its contracts has `<name>` as its artifact or source name.
+  - If **exactly one** workspace member contains the contract, that member is built for that contract, selected as above.
   - If **zero** members contain the contract, it errors.
     - It also prints “Available contracts:” for the workspace (unique contract names), capped at `50`, followed by `... and N more` if applicable.
   - If **multiple** members contain the contract, it errors and prints a “Matches:” list and a hint to build a specific member by name or path.
@@ -251,8 +254,116 @@ For each built contract, `fe build` writes (depending on `--emit`):
 - `<out>/<contract>.runtime.bin` (runtime bytecode, hex + trailing newline)
 - `<out>/<contract>.abi.json` (Solidity-compatible ABI; only when `--emit abi`)
 - `<out>/<contract>.metadata.json` (Solidity-standard contract metadata for verifiers like Sourcify; only when `--emit metadata`)
+- `<out>/<contract>.sizes.txt` (code bytes of each function in the runtime and init sections, largest first; only when `--emit sizes`)
 
 For the Sonatina backend, `.bin` is the **init section** bytes and `.runtime.bin` is the **runtime section** bytes.
+
+With the optional `sp1` Cargo feature, `fe build --backend sp1 <file.fe>` compiles
+a standalone `pub fn main() -> i32` guest to SP1 RV64IM. The default output is
+`<out>/<file>.elf`; `--emit ir` writes `<out>/<file>.sp1.sona`, and `--emit elf,ir`
+writes both. ELF linking requires the pinned Succinct toolchain configured through
+`SONATINA_SP1_TOOLCHAIN`. See the [SP1 guide](tests/sp1/README.md) for installation,
+guest input and public values, and proof verification tests.
+
+### Native output
+
+With the optional `cranelift` Cargo feature, `fe build --backend native` compiles for the host
+(x86-64 Linux or AArch64 macOS). `--emit` selects:
+
+- `executable` (the default): `<out>/<name>`, entered at the root module's
+  `pub fn main() -> i32`, whose result is the exit status.
+- `object`: `<out>/<name>.o`, the object of the `#[export]` functions in the file or ingot.
+- `staticlib`: `<out>/lib<name>.a`, a static library holding that object.
+- `ir`: `<out>/<name>.native.sona`, the Sonatina IR of the executable or, with `object` or
+  `staticlib`, of the library.
+
+`object` and `staticlib` build a library, which needs no `main` and cannot be combined with
+`executable`. A workspace build selects the members with a `main`, or for a library, the members
+with an `#[export]` function.
+
+#### Exported functions
+
+`#[export]` on a free `pub fn` defines it in native output under its own name, with the
+platform's C calling convention, even when no Fe code calls it:
+
+```fe
+#[export]
+pub fn add(_ a: i64, _ b: i64) -> i64 {
+    a + b
+}
+
+#[export]
+pub fn fill(_ data: *u8, _ len: usize, _ byte: u32) {
+    for i in 0..len {
+        unsafe { *core::ptr::offset_bytes(data, i) = byte.downcast_truncate() }
+    }
+}
+```
+
+An exported function cannot be generic or take `uses` effects, and its parameters and result
+must be `i32`, `u32`, `i64`, `u64`, `usize`, `isize` or raw pointers, which C declares as
+`int32_t`, `uint32_t`, `int64_t`, `uint64_t`, `size_t`, `ptrdiff_t` and pointers. Its symbol must
+be unique, must not start with `__fe_`, and must not be a C library function native code calls
+itself (`malloc`, `free`, `memmove`, `write`, `fflush` or `abort`). An executable defines its
+exported functions too. EVM builds and SP1 guests reject `#[export]`.
+
+#### Linking host code
+
+`--link <PATH>` links an object file or archive into a native executable, and
+`--link-lib <NAME>` links a library as the C compiler's `-l<NAME>`, found on its library path
+(such as `LIBRARY_PATH`). Both repeat, and both apply only to `--emit executable`. They let C or
+Rust code implement a Fe `extern` function, and call the executable's `#[export]` functions back:
+
+```fe
+extern {
+    fn host_apply(_ x: i64) -> i64
+}
+
+#[export]
+pub fn twice(_ x: i64) -> i64 {
+    x * 2
+}
+
+pub fn main() -> i32 {
+    if unsafe { host_apply(21) } == 42 { 0 } else { 1 }
+}
+```
+
+```
+cc -c host.c -o host.o
+fe build --backend native --link host.o main.fe
+```
+
+A Rust `staticlib` links with its `native-static-libs` (from `rustc --print native-static-libs`)
+as `--link-lib` options:
+
+```
+fe build --backend native --link target/release/libhost.a --link-lib gcc_s --link-lib m main.fe
+```
+
+#### Linking a native library
+
+A library needs only the C library: native code calls `malloc`, `free`, `memmove`, `write`,
+`fflush` and `abort`, and the `extern` functions its Fe code calls, such as `clock` for
+`std::native::cpu_clock_ticks`. C and Rust programs link the C library by default, so a C program
+needs only the Fe library:
+
+```
+fe build --backend native --emit staticlib --out-dir out mylib.fe
+cc main.c -Lout -lmylib -o main
+```
+
+A Rust program declares the functions in an `unsafe extern "C"` block and links the library,
+for example from its `build.rs`:
+
+```rust
+println!("cargo:rustc-link-search=native=path/to/out");
+println!("cargo:rustc-link-lib=static=mylib");
+```
+
+A panic in an exported function reports on stderr and aborts the whole process, as in a Fe
+executable. A library's other functions are local symbols, so two Fe libraries can be linked into
+one program as long as their exported symbols differ.
 
 The `metadata.json` artifact follows the Solidity Contract Metadata schema (`version: 1`), adapted to Fe. It is a complete, deterministic recompilation input: rebuilding with the same compiler version, `sources`, and `settings` reproduces the same bytecode. Its shape:
 
@@ -265,7 +376,7 @@ The `metadata.json` artifact follows the Solidity Contract Metadata schema (`ver
     "<source path>": { "keccak256": "0x...", "content": "..." }, ...
   },
   "settings": {
-    "compilationTarget": { "<source path>": "<ContractName>" },
+    "compilationTarget": { "<source path>": "<contract path>" },
     "optimizer": { "level": "0|1|2|s" },
     "arithmetic": "checked|unchecked",
     "dependencyArithmetic": "defer|checked|unchecked",
@@ -283,12 +394,14 @@ The `metadata.json` artifact follows the Solidity Contract Metadata schema (`ver
 ```
 
 `<source path>` is the file's path relative to its owning ingot root (e.g. `src/counter.fe`); for a
-standalone `.fe` target, it is the file's basename. `sources` contains every `.fe` file of the
-contract's owning ingot **plus all transitive dependency ingots**, the latter namespaced by the
-ingot's dependency alias (e.g. `mylib/src/lib.fe`). The bundled `core` and `std` are excluded
-because they are pinned to `compiler.version` (a verifier re-runs the same compiler, which ships
-them). `settings.ingots[]` records, per non-builtin ingot, what a verifier needs to regenerate its
-`fe.toml` and `src/` layout.
+standalone `.fe` target, it is the file's basename. `<contract path>` is the contract's path inside
+that file: its name, preceded by any inline modules (e.g. `Counter`, or `inner::Counter`). Unlike
+the artifact name, it does not depend on other contracts or on how the file is built. `sources`
+contains every `.fe` file of the contract's owning ingot **plus all transitive dependency
+ingots**, the latter namespaced by the ingot's dependency alias (e.g. `mylib/src/lib.fe`). The
+bundled `core` and `std` are excluded because they are pinned to `compiler.version` (a verifier
+re-runs the same compiler, which ships them). `settings.ingots[]` records, per non-builtin ingot,
+what a verifier needs to regenerate its `fe.toml` and `src/` layout.
 
 The on-screen output is per-artifact:
 
@@ -324,6 +437,8 @@ Behavior:
 - **Arithmetic**: the per-ingot effective `arithmetic` values from the metadata are applied via
   the regenerated `fe.toml` files (`dependency-arithmetic` is deliberately not re-applied; the
   metadata records post-forcing values).
+- **Unsafe trust**: every regenerated dependency entry sets `allow_unsafe = true`. The recorded
+  build already passed the trust check, and trust does not affect codegen.
 - **Version check**: if `compiler.version` differs from the running compiler, a warning is printed
   to stderr (no abort); exact bytecode reproduction is only guaranteed with the same version.
 - **Output**: artifacts are selected with `--emit` as usual and written to `--out-dir`, which
@@ -356,7 +471,7 @@ Type-checks and analyzes Fe code (no bytecode output).
 ### Synopsis
 
 ```
-fe check [--standalone] [--dump-mir] [--report [--report-out <out>] [--report-failed-only]] [path]
+fe check [--standalone] [--backend <backend>] [--dump-mir] [--report [--report-out <out>] [--report-failed-only]] [path]
 ```
 
 If `path` is omitted, it defaults to `.`.
@@ -382,6 +497,29 @@ When checking an ingot with dependencies, if downstream ingots have errors, `fe 
 - or `Error: Downstream ingots have errors`
 
 Then, for each dependency with errors, it prints a short header (name/version when available) and its URL, followed by emitted diagnostics.
+
+### Unsafe code in dependencies
+
+A dependency's `unsafe` code may run only if the dependency is trusted. The ingots being checked
+(and workspace members), `core` and `std` are trusted; a dependency is trusted when a trusted ingot
+declares it with `allow_unsafe = true`:
+
+```toml
+[dependencies]
+dep = { path = "../dep", allow_unsafe = true }
+```
+
+A trusted dependency's own `allow_unsafe` entries extend trust to its dependencies; an untrusted
+one's grant nothing. Only use counts: an untrusted dependency's safe functions need no trust, and
+`fe check`, `fe build` and `fe test` report an error (`16-0015`) only at a call in the checked
+ingot's code that reaches an `unsafe` block or `unsafe fn` body of an untrusted dependency. A call
+reaches what it runs: the functions it calls, the `StateIndex::locate` of a collection it indexes,
+and the bodies of a contract it creates.
+
+### Backend
+
+`--backend` selects the target to check for, as for `fe build` (default `sonatina`, the EVM).
+Integer widths, `size_of` and layouts depend on it: `usize` is 64 bits with `--backend native`.
 
 ### Optional outputs
 

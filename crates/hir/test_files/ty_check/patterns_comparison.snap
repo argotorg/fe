@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/patterns_comparison.fe
 ---
@@ -295,19 +296,19 @@ note:
    ┌─ patterns_comparison.fe:64:20
    │
 64 │         Color::Rgb(r, g, b) => {
-   │                    ^ ref u8
+   │                    ^ u8
 
 note:
    ┌─ patterns_comparison.fe:64:23
    │
 64 │         Color::Rgb(r, g, b) => {
-   │                       ^ ref u8
+   │                       ^ u8
 
 note:
    ┌─ patterns_comparison.fe:64:26
    │
 64 │         Color::Rgb(r, g, b) => {
-   │                          ^ ref u8
+   │                          ^ u8
 
 note:
    ┌─ patterns_comparison.fe:64:32
@@ -340,13 +341,13 @@ note:
    ┌─ patterns_comparison.fe:65:24
    │
 65 │             return r + g + b
-   │                        ^ ref u8
+   │                        ^ u8
 
 note:
    ┌─ patterns_comparison.fe:65:28
    │
 65 │             return r + g + b
-   │                            ^ ref u8
+   │                            ^ u8
 
 note:
    ┌─ patterns_comparison.fe:71:45
@@ -452,19 +453,19 @@ note:
    ┌─ patterns_comparison.fe:84:13
    │
 84 │         Rgb(r, g, b) => {
-   │             ^ ref u8
+   │             ^ u8
 
 note:
    ┌─ patterns_comparison.fe:84:16
    │
 84 │         Rgb(r, g, b) => {
-   │                ^ ref u8
+   │                ^ u8
 
 note:
    ┌─ patterns_comparison.fe:84:19
    │
 84 │         Rgb(r, g, b) => {
-   │                   ^ ref u8
+   │                   ^ u8
 
 note:
    ┌─ patterns_comparison.fe:84:25
@@ -497,13 +498,13 @@ note:
    ┌─ patterns_comparison.fe:85:24
    │
 85 │             return r + g + b
-   │                        ^ ref u8
+   │                        ^ u8
 
 note:
    ┌─ patterns_comparison.fe:85:28
    │
 85 │             return r + g + b
-   │                            ^ ref u8
+   │                            ^ u8
 
 note:
     ┌─ patterns_comparison.fe:91:53
@@ -704,19 +705,19 @@ note:
     ┌─ patterns_comparison.fe:116:13
     │
 116 │         Rgb(r, g, b) => {
-    │             ^ ref u8
+    │             ^ u8
 
 note:
     ┌─ patterns_comparison.fe:116:16
     │
 116 │         Rgb(r, g, b) => {
-    │                ^ ref u8
+    │                ^ u8
 
 note:
     ┌─ patterns_comparison.fe:116:19
     │
 116 │         Rgb(r, g, b) => {
-    │                   ^ ref u8
+    │                   ^ u8
 
 note:
     ┌─ patterns_comparison.fe:116:25
@@ -749,13 +750,13 @@ note:
     ┌─ patterns_comparison.fe:117:17
     │
 117 │             r + g + b
-    │                 ^ ref u8
+    │                 ^ u8
 
 note:
     ┌─ patterns_comparison.fe:117:21
     │
 117 │             r + g + b
-    │                     ^ ref u8
+    │                     ^ u8
 
 note:
     ┌─ patterns_comparison.fe:121:12
@@ -984,19 +985,19 @@ note:
     ┌─ patterns_comparison.fe:148:23
     │
 148 │         Nested::B(Rgb(r, g, b)) => {
-    │                       ^ ref u8
+    │                       ^ u8
 
 note:
     ┌─ patterns_comparison.fe:148:26
     │
 148 │         Nested::B(Rgb(r, g, b)) => {
-    │                          ^ ref u8
+    │                          ^ u8
 
 note:
     ┌─ patterns_comparison.fe:148:29
     │
 148 │         Nested::B(Rgb(r, g, b)) => {
-    │                             ^ ref u8
+    │                             ^ u8
 
 note:
     ┌─ patterns_comparison.fe:148:36
@@ -1029,13 +1030,13 @@ note:
     ┌─ patterns_comparison.fe:149:24
     │
 149 │             return r + g + b
-    │                        ^ ref u8
+    │                        ^ u8
 
 note:
     ┌─ patterns_comparison.fe:149:28
     │
 149 │             return r + g + b
-    │                            ^ ref u8
+    │                            ^ u8
 
 note:
     ┌─ patterns_comparison.fe:151:9
@@ -1047,7 +1048,7 @@ note:
     ┌─ patterns_comparison.fe:151:21
     │
 151 │         Nested::C { val } => {
-    │                     ^^^ ref u8
+    │                     ^^^ u8
 
 note:
     ┌─ patterns_comparison.fe:151:30
@@ -1062,7 +1063,7 @@ note:
     ┌─ patterns_comparison.fe:152:20
     │
 152 │             return val
-    │                    ^^^ ref u8
+    │                    ^^^ u8
 
 note:
     ┌─ patterns_comparison.fe:158:54

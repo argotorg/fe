@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/loop_input_authority.fe
+---
+error[16-0001]: access conflict in `fn theta_held`
+   ┌─ loop_input_authority.fe:68:17
+   │
+64 │             let held = mut state[x]
+   │                        ------------ access opened here
+   ·
+68 │                 state[x + 5 * y] ^= delta
+   │                 ^^^^^^^^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn theta_aliased`
+   ┌─ loop_input_authority.fe:86:44
+   │
+86 │                 swap(mut state[x + 5 * y], mut state[x])
+   │                      --------------------  ^^^^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │                      │
+   │                      access opened here

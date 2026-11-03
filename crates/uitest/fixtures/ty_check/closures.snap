@@ -1,0 +1,75 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/closures.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ closures.fe:57:8
+   │
+57 │     xs.fold(0, |acc: mut, x| acc)
+   │        ^^^^ `|mut u256, u256| -> u256` doesn't implement `FnMut(own u256, u256) -> u256`
+   │
+   ┌─ src/iter.fe:76:19
+   │
+76 │     fn fold<A, F: FnMut(own A, Self::Item) -> A>(self, _ init: own A, _ f: mut F) -> A
+   │                   ----------------------------- required by this bound on `fold`
+
+error[8-0019]: `break` is not allowed outside of a loop
+   ┌─ closures.fe:63:13
+   │
+63 │             break
+   │             ^^^^^ `break` is not allowed here
+
+error[8-0036]: missing effect `Store` required by `any`
+   ┌─ closures.fe:75:5
+   │
+75 │     xs.any(|x| x == read())
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ `any` requires effect `Store` to be in scope
+   │
+   = require it in this function's signature with `uses Store`, so that its callers provide it
+   = or provide it to a block of this function with `with (Store = value) { .. }`
+
+error[8-0108]: closures cannot be used in constant contexts
+   ┌─ closures.fe:69:13
+   │
+69 │     let f = |x: u256| x
+   │             ^^^^^^^^^^^ constant evaluation cannot evaluate a closure
+
+error[8-0109]: closure has the wrong number of parameters
+   ┌─ closures.fe:53:16
+   │
+53 │     xs.fold(0, |acc| acc)
+   │                ^^^^^^^^^ expected a closure taking 2 parameters, found 1
+
+error[8-0110]: cannot write to `total`, which a closure captures
+   ┌─ closures.fe:16:9
+   │
+16 │         total += x
+   │         ^^^^^ the closure only reads its copy
+   │
+   = closures capture by copy or move; thread state through parameters and results instead
+
+error[8-0110]: cannot write to `a`, which a closure captures
+   ┌─ closures.fe:26:17
+   │
+26 │         let r = mut a
+   │                 ^^^^^ the closure only reads its copy
+   │
+   = closures capture by copy or move; thread state through parameters and results instead
+
+error[8-0111]: a closure cannot capture the access `accounts`
+   ┌─ closures.fe:33:32
+   │
+33 │     idx.fold(0, |acc, i| acc + accounts[i].balance)
+   │                                ^^^^^^^^ an access of a non-`Copy` value is neither copied nor moved
+   │
+   = pass the value to the closure as a parameter instead
+
+error[8-0111]: a closure cannot capture the access `r`
+   ┌─ closures.fe:47:36
+   │
+47 │     let f = |x: u256| view_account(r) + x
+   │                                    ^ an access of a non-`Copy` value is neither copied nor moved
+   │
+   = pass the value to the closure as a parameter instead

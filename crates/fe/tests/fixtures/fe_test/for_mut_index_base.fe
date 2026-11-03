@@ -1,0 +1,72 @@
+// A loop base or a binding that ends in a built-in array index names that
+// element's place, as one that ends in a field does.
+use std::evm::{Evm, StorageMap}
+
+#[test]
+fn dynamic_index_base() {
+    var grid: [[u256; 3]; 2] = [[1, 2, 3], [4, 5, 6]]
+    var i: usize = 0
+    for mut x in grid[i] {
+        x += 10
+    }
+    assert(grid[0][0] == 11 && grid[0][2] == 13 && grid[1][0] == 4)
+}
+
+struct Rows {
+    r: [[u256; 2]; 2],
+}
+
+fn bump(_ g: mut Rows) {
+    for mut x in g.r[1] {
+        x += 1
+    }
+}
+
+#[test]
+fn index_base_through_a_mut_parameter() {
+    var g = Rows { r: [[1, 2], [3, 4]] }
+    bump(mut g)
+    assert(g.r[1][0] == 4 && g.r[0][0] == 1)
+}
+
+fn next_row(_ count: mut u256) -> usize {
+    count += 1
+    0
+}
+
+#[test]
+fn index_evaluated_once() {
+    var grid: [[u256; 2]; 2] = [[1, 2], [3, 4]]
+    var count: u256 = 0
+    for mut x in grid[next_row(mut count)] {
+        x += 1
+    }
+    assert(count == 1 && grid[0][0] == 2 && grid[0][1] == 3)
+}
+
+struct Store {
+    maps: [StorageMap<u256, u256>; 2],
+}
+
+msg M {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract C {
+    mut store: Store,
+
+    recv M {
+        Run -> u256 uses (mut store) {
+            store.maps[1][5] = 7
+            let m = store.maps[1]
+            m[5]
+        }
+    }
+}
+
+#[test]
+fn binding_an_indexed_collection() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    assert(evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {}) == 7)
+}

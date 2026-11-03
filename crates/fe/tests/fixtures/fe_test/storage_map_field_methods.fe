@@ -16,7 +16,7 @@ impl Ledger {
         self.credit(to, amount)
     }
 
-    fn balance(mut self, _ owner: Address) -> u256 {
+    fn balance(self, _ owner: Address) -> u256 {
         self.balances.get(key: owner)
     }
 }
@@ -39,7 +39,7 @@ pub contract Token {
         Mint { to, amount } uses (mut ledger) {
             ledger.mint(to, amount)
         }
-        Balance { owner } -> u256 uses (mut ledger) {
+        Balance { owner } -> u256 uses (ledger) {
             ledger.balance(owner)
         }
         Supply -> u256 uses (ledger) {
@@ -56,26 +56,26 @@ pub contract Token {
 
 #[test]
 fn storage_map_methods_keep_fields_separate() uses (evm: mut Evm) {
-    let token = evm.create2<Token>(value: 0, args: (), salt: 1)
-    let alice = Address { inner: 1 }
-    let bob = Address { inner: 2 }
-    evm.call(addr: token, gas: 200000, value: 0, message: LedgerMsg::Mint { to: alice, amount: 5 })
-    evm.call(addr: token, gas: 200000, value: 0, message: LedgerMsg::Mint { to: bob, amount: 7 })
-    evm.call(addr: token, gas: 200000, value: 0, message: LedgerMsg::Mint { to: alice, amount: 11 })
+    let token = evm.create2<Token>(value: Wei::zero(), args: (), salt: 1)
+    let alice = Address::new(1)
+    let bob = Address::new(2)
+    evm.call(addr: token, gas: 200000, value: Wei::zero(), message: LedgerMsg::Mint { to: alice, amount: 5 })
+    evm.call(addr: token, gas: 200000, value: Wei::zero(), message: LedgerMsg::Mint { to: bob, amount: 7 })
+    evm.call(addr: token, gas: 200000, value: Wei::zero(), message: LedgerMsg::Mint { to: alice, amount: 11 })
 
     let alice_balance: u256 = evm.call(
         addr: token,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: LedgerMsg::Balance { owner: alice },
     )
     let bob_balance: u256 = evm.call(
         addr: token,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: LedgerMsg::Balance { owner: bob },
     )
-    let supply: u256 = evm.call(addr: token, gas: 200000, value: 0, message: LedgerMsg::Supply {})
+    let supply: u256 = evm.call(addr: token, gas: 200000, value: Wei::zero(), message: LedgerMsg::Supply {})
     assert!(alice_balance == 16)
     assert!(bob_balance == 7)
     assert!(supply == 23)
@@ -83,16 +83,16 @@ fn storage_map_methods_keep_fields_separate() uses (evm: mut Evm) {
     let bumped: u256 = evm.call(
         addr: token,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: LedgerMsg::Reset { to: bob },
     )
     let bob_balance: u256 = evm.call(
         addr: token,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: LedgerMsg::Balance { owner: bob },
     )
-    let supply: u256 = evm.call(addr: token, gas: 200000, value: 0, message: LedgerMsg::Supply {})
+    let supply: u256 = evm.call(addr: token, gas: 200000, value: Wei::zero(), message: LedgerMsg::Supply {})
     assert!(bumped == 24)
     assert!(bob_balance == 100)
     assert!(supply == 24)

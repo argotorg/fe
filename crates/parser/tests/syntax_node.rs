@@ -104,7 +104,7 @@ fn choose(value: u256, pointer: *u256) -> u256 {
 #[test]
 fn star_operator_continuations_remain_binary() {
     let source = r#"
-fn update(mut value: u256, rhs: u256) -> u256 {
+fn update(var value: own u256, rhs: u256) -> u256 {
     value
         *= rhs
     value

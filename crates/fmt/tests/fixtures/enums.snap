@@ -16,7 +16,7 @@ enum Color {
 // Enum with tuple variants
 enum Option {
     None,
-    Some(i32,),
+    Some(i32),
 }
 
 // Enum with record variants
@@ -35,7 +35,7 @@ enum Mixed {
 // Enum with generics
 enum Container<T> {
     Empty,
-    Value(T,),
+    Value(T),
 }
 
 // Single line enum

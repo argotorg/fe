@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/decision_tree_moves.fe
+---
+error[16-0002]: move conflict in `fn twice`
+   ┌─ decision_tree_moves.fe:16:9
+   │
+12 │         E::A(inner) => consume(inner)
+   │              ----- value is moved here
+   ·
+16 │         E::A(inner) => consume(inner)
+   │         ^^^^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn after_move`
+   ┌─ decision_tree_moves.fe:24:9
+   │
+22 │     take(e)
+   │          - value is moved here
+23 │     match e {
+24 │         E::A(inner) => inner.v
+   │         ^^^^^^^^^^^ cannot use a value after it was moved

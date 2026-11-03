@@ -96,7 +96,7 @@ fn render_projection_path<'db>(
                     write!(&mut result, ".<discriminant>").unwrap();
                 }
                 // Index and Deref not used in pattern matching tests
-                Projection::Index(_) | Projection::Deref => {
+                Projection::Index(_) | Projection::Entry(_) | Projection::Deref => {
                     write!(&mut result, ".<unsupported>").unwrap();
                 }
             }

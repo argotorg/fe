@@ -1,0 +1,4 @@
+f(|(a, b)| a + b)
+xs.fold(0, |acc, (a, b): (u256, u256)| acc + a * b)
+f(|Point { x, y }, Wrap(inner)| x)
+f(|<T as Shaped>::Out { x }| x)

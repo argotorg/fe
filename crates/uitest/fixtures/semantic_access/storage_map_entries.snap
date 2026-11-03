@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/storage_map_entries.fe
+---
+error[16-0001]: access conflict in `fn Overlapping::__init__`
+   ┌─ storage_map_entries.fe:20:17
+   │
+19 │         let x = mut m[1]
+   │                 -------- access opened here
+20 │         let h = mut m
+   │                 ^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn RuntimeKeys::__init__`
+   ┌─ storage_map_entries.fe:41:9
+   │
+40 │         let x = mut m[a]
+   │                 -------- access opened here
+41 │         m[b] = 5
+   │         ^^^^^^^^ cannot write to this place while a `mut` access of it is open

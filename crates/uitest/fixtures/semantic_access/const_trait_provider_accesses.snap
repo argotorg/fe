@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/const_trait_provider_accesses.fe
+---
+error[16-0001]: access conflict in `fn alias`
+   ┌─ const_trait_provider_accesses.fe:29:29
+   │
+29 │     with (Lookup = table) { overwrite(mut table) }
+   │                             ^^^^^^^^^^^^^^^^^^^^
+   │                             │         │
+   │                             │         access opened here
+   │                             cannot read this place while a `mut` access of it is open

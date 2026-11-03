@@ -3,15 +3,21 @@ struct Slot {
 }
 
 struct Reader {
-    source: ref Slot,
+    slot: Slot,
     bias: u256,
 }
 
-fn sum_reader(_ r: ref Reader) -> u256 {
-    let mut total = 0
-    let mut i: u256 = 0
+impl Reader {
+    fn source(self) -> ref Slot {
+        ref self.slot
+    }
+}
+
+fn sum_reader(_ r: Reader) -> u256 {
+    var total = 0
+    var i: u256 = 0
     while i < 4 {
-        total += r.source.value + r.bias
+        total += r.source().value + r.bias
         i += 1
     }
     total
@@ -19,11 +25,6 @@ fn sum_reader(_ r: ref Reader) -> u256 {
 
 #[test]
 fn test_ref_scalar_nested() {
-    let slot = Slot { value: 7 }
-    let reader = Reader {
-        source: ref slot,
-        bias: 3,
-    }
-
-    assert!(sum_reader(ref reader) == 40)
+    let reader = Reader { slot: Slot { value: 7 }, bias: 3 }
+    assert!(sum_reader(reader) == 40)
 }

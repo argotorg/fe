@@ -1,0 +1,190 @@
+// A callable value is called as `f(x)`: a closure, a value of a type that
+// implements `Fn` or `FnMut`, or a function item. The call runs `Fn`'s
+// `call`, or `FnMut`'s `call_mut`. Function items implement both at the
+// shape of their parameters, so a named function can be passed where a
+// closure can.
+use core::iter::Collection
+
+struct Store { n: u256 }
+
+struct Counter { hits: u256 }
+
+struct Holder<F> { f: F }
+
+/// Multiplies by `k`.
+struct Scaler { k: u256 }
+
+impl Fn(u256) -> _ for Scaler {
+    uses E = ()
+    type Out = u256
+
+    fn call(self, _ a0: u256) -> u256 {
+        a0 * self.k
+    }
+}
+
+/// Callable with one argument or two: the arguments choose the shape.
+struct Overloaded {}
+
+impl Fn(u256) -> _ for Overloaded {
+    uses E = ()
+    type Out = u256
+
+    fn call(self, _ a0: u256) -> u256 {
+        a0 + 1
+    }
+}
+
+impl Fn(u256, u256) -> _ for Overloaded {
+    uses E = ()
+    type Out = u256
+
+    fn call(self, _ a0: u256, _ a1: u256) -> u256 {
+        a0 * a1
+    }
+}
+
+trait Scale {
+    fn scale(_ x: u256) -> u256
+}
+
+struct Ten {}
+
+impl Scale for Ten {
+    fn scale(_ x: u256) -> u256 {
+        x * 10
+    }
+}
+
+fn apply<F: Fn(u256) -> u256>(_ f: F, _ x: u256) -> u256 uses F::E {
+    f(x)
+}
+
+fn apply_both<F: Fn(u256) -> u256, G: Fn(u256, u256) -> u256>(_ f: F, _ g: G) -> u256
+    uses (F::E, G::E)
+{
+    g(f(1), f(2))
+}
+
+fn sum_mapped<F: FnMut(own u256) -> u256>(_ f: mut F, _ n: u256) -> u256 uses F::E {
+    var total = 0
+    var i = 0
+    while i < n {
+        total += f(i)
+        i += 1
+    }
+    total
+}
+
+fn apply_to_place<F: Fn(mut u256)>(_ f: F, _ x: mut u256) uses F::E {
+    f(mut x)
+}
+
+fn read() -> u256 uses (store: Store) {
+    store.n
+}
+
+fn triple(_ x: u256) -> u256 {
+    x * 3
+}
+
+fn add(_ acc: own u256, _ x: u256) -> u256 {
+    acc + x
+}
+
+fn bump(_ x: mut u256) {
+    x += 1
+}
+
+fn identity<T: Copy>(_ x: T) -> T {
+    x
+}
+
+fn plus_store(_ x: u256) -> u256 uses (store: Store) {
+    x + store.n
+}
+
+fn count_hit(_ x: u256) -> u256 uses (counter: mut Counter) {
+    counter.hits += 1
+    x
+}
+
+#[test]
+fn closures() {
+    let k = 3
+    let add = |a: u256, b: u256| a + b
+    assert!(add(2, 3) == 5)
+    let times = |x: u256| x * k
+    assert!(times(4) == 12)
+    assert!(apply(times, 5) == 15)
+    assert!(apply(|x| x + k, 1) == 4)
+    assert!(apply_both(times, add) == 9)
+    assert!(sum_mapped(|x: own u256| x + k, 3) == 12)
+    let twice = |x: u256| apply(|y| y + x, x)
+    assert!(twice(4) == 8)
+}
+
+#[test]
+fn shape_implementations_and_fields() {
+    let s = Scaler { k: 2 }
+    assert!(s(4) == 8)
+    assert!(apply(s, 5) == 10)
+    let o = Overloaded {}
+    let one: u256 = o(4)
+    let two: u256 = o(3, 5)
+    assert!(one == 5 && two == 15)
+    let h = Holder { f: |x: u256| x + 7 }
+    assert!((h.f)(1) == 8)
+}
+
+#[test]
+fn effects() {
+    let s = Store { n: 10 }
+    with (Store = s) {
+        let f = |x: u256| x + read()
+        assert!(f(1) == 11)
+        assert!(apply(|x| x * read(), 2) == 20)
+    }
+}
+
+#[test]
+fn function_items() {
+    assert!(apply(triple, 2) == 6)
+    let xs: [u256; 3] = [1, 2, 3]
+    assert!(xs.fold(0, add) == 6)
+    var v = 1
+    apply_to_place(bump, mut v)
+    assert!(v == 2)
+    assert!(apply(identity, 9) == 9)
+    assert!(apply(Ten::scale, 4) == 40)
+    let t = triple
+    assert!(apply(t, 1) == 3)
+    let f = |x: u256| t(x) + 1
+    assert!(f(2) == 7)
+}
+
+#[test]
+fn function_item_effects() {
+    let s = Store { n: 100 }
+    with (Store = s) {
+        assert!(apply(plus_store, 1) == 101)
+    }
+    var c = Counter { hits: 0 }
+    with (Counter = c) {
+        assert!(apply(count_hit, 7) == 7)
+        assert!(apply(count_hit, 8) == 8)
+    }
+    assert!(c.hits == 2)
+}
+
+#[test]
+fn explicit_shape_methods() {
+    let k = 2
+    let times = |x: u256| x * k
+    assert!(times.call(3) == 6)
+    var plus = |x: own u256| x + k
+    assert!(plus.call_mut(1) == 3)
+    assert!(Scaler { k: 5 }.call(2) == 10)
+    let t = triple
+    assert!(t.call(5) == 15)
+}

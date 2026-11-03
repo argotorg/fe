@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/ambiguous_glob_candidates.fe
+---
+error[2-0004]: `S` is ambiguous
+   ┌─ ambiguous_glob_candidates.fe:6:8
+   │
+ 6 │     s: S,
+   │        ^ `S` is ambiguous
+   ·
+10 │     pub struct S {}
+   │                - candidate 1
+   ·
+14 │     pub struct S {}
+   │                - candidate 2
+   ·
+18 │     pub struct S {}
+   │                - candidate 3

@@ -1,0 +1,21 @@
+trait Writer { fn write(mut self) }
+struct Counter { total: u256 }
+impl Writer for Counter {
+    fn write(mut self) { self.total += 1 }
+}
+fn write() uses (writer: mut Writer) { writer.write() }
+fn forward() uses (writer: mut Writer) {
+    with (Writer = writer) { write() }
+}
+
+fn conflict(_ counter: mut Counter) {
+    let held = mut counter.total
+    with (Writer = counter) { forward() }
+    held += 1
+}
+
+fn closed(_ counter: mut Counter) {
+    counter.total += 1
+    with (Writer = counter) { forward() }
+    counter.total += 1
+}

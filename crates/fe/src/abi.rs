@@ -11,13 +11,14 @@ use hir::{
             binder::Binder,
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             normalize::normalize_from_assumptions,
-            trait_def::{TraitInstId, resolve_trait_method_instance},
-            trait_resolution::{PredicateListId, Selection, TraitSolveCx},
-            ty_def::{TyBase, TyData, TyId},
+            trait_def::TraitInstId,
+            trait_resolution::{PredicateListId, TraitSolveCx},
+            ty_check::{BodyOwner, check_body},
+            ty_def::{BorrowKind, TyBase, TyData, TyId},
         },
     },
     hir_def::{
-        FieldDefListId, Func, GenericParamOwner, IdentId, PathId, Struct, TopLevelMod, Trait,
+        Contract, FieldDefListId, Func, GenericParamOwner, IdentId, PathId, Struct, Trait,
         scope_graph::ScopeId,
     },
 };
@@ -94,28 +95,11 @@ enum RecvArmAbiEmission {
     Skip(String),
 }
 
-/// Generate an Ethereum-compatible JSON ABI for a given contract inside `top_mod`.
-///
-/// Returns `Ok(None)` if the contract is not found in this module (useful for
-/// ingot builds where a contract may live in a different module).
+/// Generate an Ethereum-compatible JSON ABI for `contract`.
 pub fn generate_contract_abi(
     db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
-    contract_name: &str,
-) -> Result<Option<AbiResult>, String> {
-    let Some(contract) = top_mod
-        .all_contracts(db)
-        .iter()
-        .find(|c| {
-            c.name(db)
-                .to_opt()
-                .is_some_and(|n| n.data(db).as_str() == contract_name)
-        })
-        .copied()
-    else {
-        return Ok(None);
-    };
-
+    contract: Contract<'_>,
+) -> Result<AbiResult, String> {
     let mut entries = Vec::new();
     let mut warnings = Vec::new();
 
@@ -161,17 +145,27 @@ pub fn generate_contract_abi(
         for input in entry.inputs.iter_mut().flatten() {
             input.indexed = None;
         }
+        // Solidity's built-in errors are implicit. Declaring them as custom
+        // errors makes consumers such as ethers reject the entire ABI.
+        if let Some([input]) = entry.inputs.as_deref()
+            && matches!(
+                (entry.name.as_deref(), input.ty.as_str()),
+                (Some("Panic"), "uint256") | (Some("Error"), "string")
+            )
+        {
+            continue;
+        }
         entries.push(entry);
     }
 
     let entry_count = entries.len();
     let json = serde_json::to_string_pretty(&entries)
         .map_err(|e| format!("JSON serialization error: {e}"))?;
-    Ok(Some(AbiResult {
+    Ok(AbiResult {
         json,
         entry_count,
         warnings,
-    }))
+    })
 }
 
 fn recv_arm_to_abi_entry(
@@ -386,30 +380,22 @@ fn collect_typed_body_event_structs<'db>(
             && let hir::hir_def::CallableDef::Func(func) = callable.callable_def
         {
             let mut target = VisitedFuncBody::from_callable(func, callable);
-            if let Some(inst) = callable.trait_inst()
-                && let Some(name) = func.name(db).to_opt()
-                && let Selection::Unique(method) = resolve_trait_method_instance(
-                    db,
-                    TraitSolveCx::new(db, body.scope()).with_assumptions(typed_body.assumptions()),
-                    inst,
-                    name,
-                )
-                && let Some(impl_func) = method.body()
-                && let Ok(body_args) = method.complete_body_args(
-                    db,
-                    callable.generic_args(),
-                    callable.checked_input_tys(),
-                    None,
-                )
+            if let Some(method) = callable.selected_method(
+                db,
+                TraitSolveCx::new(db, body.scope()).with_assumptions(typed_body.assumptions()),
+            ) && let Some(impl_func) = method.body()
+                && let Ok(body_args) = method.complete_body_args(db, callable.generic_args())
             {
                 target.func = impl_func;
                 target.generic_args = body_args.into_values();
             }
+            // The body the call runs: a `mut?` function's at the call's mode.
+            let owner = BodyOwner::func_at(db, target.func, callable.mode());
+            target.mode = owner.mode();
             if target.func.body(db).is_none() || !visited_funcs.insert(target.clone()) {
                 continue;
             }
-            let (_, func_typed_body) =
-                hir::analysis::ty::ty_check::check_func_body(db, target.func);
+            let (_, func_typed_body) = check_body(db, owner);
             let func_typed_body =
                 instantiate_callable_typed_body(db, func_typed_body.clone(), &target);
             collect_typed_body_event_structs(
@@ -429,6 +415,8 @@ fn collect_typed_body_event_structs<'db>(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct VisitedFuncBody<'db> {
     func: Func<'db>,
+    /// The mode of the body of `func`, a `mut?` function, the call runs.
+    mode: Option<BorrowKind>,
     generic_args: Vec<TyId<'db>>,
     trait_inst: Option<TraitInstId<'db>>,
 }
@@ -440,6 +428,7 @@ impl<'db> VisitedFuncBody<'db> {
     ) -> Self {
         Self {
             func,
+            mode: callable.mode(),
             generic_args: callable.generic_args().to_vec(),
             trait_inst: callable.trait_inst(),
         }
@@ -815,23 +804,7 @@ fn derive_state_mutability(
         return "payable".to_string();
     }
 
-    // EVM memory is local to the call. Reading or writing RawMem cannot
-    // observe or mutate chain state and must not change ABI mutability.
-    let raw_mem = resolve_lib_trait_path(
-        db,
-        arm_view.contract(db).scope(),
-        "std::evm::effects::RawMem",
-    );
     let effects = arm_view.effective_effect_requirements(db);
-    let effects: Vec<_> = effects
-        .iter()
-        .filter(|effect| {
-            !effect
-                .key
-                .key_trait()
-                .is_some_and(|inst| Some(inst.def(db)) == raw_mem)
-        })
-        .collect();
     if effects.is_empty() {
         "pure".to_string()
     } else if effects.iter().any(|effect| effect.is_mut) {
@@ -855,8 +828,17 @@ mod tests {
         let mut db = DriverDataBase::default();
         let file = db.workspace().touch(&mut db, url, Some(code.to_string()));
         let top_mod = db.top_mod(file);
-        generate_contract_abi(&db, top_mod, contract_name)?
-            .ok_or_else(|| format!("contract `{contract_name}` not found"))
+        let contract = top_mod
+            .all_contracts(&db)
+            .iter()
+            .copied()
+            .find(|c| {
+                c.name(&db)
+                    .to_opt()
+                    .is_some_and(|n| n.data(&db).as_str() == contract_name)
+            })
+            .ok_or_else(|| format!("contract `{contract_name}` not found"))?;
+        generate_contract_abi(&db, contract)
     }
 
     fn generate_test_abi(code: &str, contract_name: &str) -> Result<String, String> {
@@ -1192,17 +1174,17 @@ impl<T> core::abi::AbiSize for GenericMsg<T>
 impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Encode<std::abi::Sol>
 {
-    fn encode(own self, _ ptr: *u8) {
+    fn encode(own self, _ out: core::abi::AbiFrame) {
         let Self { value } = self
-        value.encode(ptr)
+        value.encode(out)
     }
 }
 
 impl<T> core::abi::Decode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Decode<std::abi::Sol>
 {
-    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-        let value = T::decode_payload(d)
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let value = T::decode_payload(mut d, input)
         Self { value }
     }
 }
@@ -1258,16 +1240,16 @@ struct Weird {
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    fn encode(own self, _ ptr: *u8) {
-        self.flag.encode(ptr)
-        self.amount.encode(core::ptr::offset_bytes(ptr, 32))
+    fn encode(own self, _ out: core::abi::AbiFrame) {
+        self.flag.encode(out.slice(offset: 0, len: 32))
+        self.amount.encode(out.slice(offset: 32, len: 32))
     }
 }
 
 impl core::abi::Decode<std::abi::Sol> for Weird {
-    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-        let flag = bool::decode_payload(d)
-        let amount = u64::decode_payload(d)
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let flag = bool::decode_payload(mut d, input)
+        let amount = u64::decode_payload(mut d, input)
         Self { amount, flag }
     }
 }
@@ -1318,16 +1300,16 @@ mod TokenMsg {
     }
 
     impl core::abi::Encode<std::abi::Sol> for Transfer {
-        fn encode(own self, _ ptr: *u8) {
-            self.to.encode(ptr)
-            self.amount.encode(core::ptr::offset_bytes(ptr, 32))
+        fn encode(own self, _ out: core::abi::AbiFrame) {
+            self.to.encode(out.slice(offset: 0, len: 32))
+            self.amount.encode(out.slice(offset: 32, len: 32))
         }
     }
 
     impl core::abi::Decode<std::abi::Sol> for Transfer {
-        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-            let to = u64::decode_payload(d)
-            let amount = u64::decode_payload(d)
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+            let to = u64::decode_payload(mut d, input)
+            let amount = u64::decode_payload(mut d, input)
             Self { to, amount }
         }
     }
@@ -1536,7 +1518,7 @@ msg InfoMsg {
 pub contract Info {
     recv InfoMsg {
         Information {} -> (DynString, Bytes32, Address) {
-            (DynString::empty(), Bytes32 { val: 0 }, Address { inner: 0 })
+            (DynString::empty(), Bytes32 { val: 0 }, Address::new(0))
         }
         Nested {} -> (u256, (DynString, bool)) {
             (0, (DynString::empty(), false))
@@ -1611,11 +1593,11 @@ msg BarMsg {
 pub contract Foo uses (ctx: Ctx, call: mut Call) {
     recv FooMsg {
         Who -> u256 uses (ctx) {
-            ctx.caller().inner
+            ctx.caller().word()
         }
 
         Ping { b } uses (call) {
-            call.call(addr: b, gas: 100000, value: 0, message: BarMsg::Pong {})
+            call.call(addr: b, gas: 100000, value: Wei::zero(), message: BarMsg::Pong {})
         }
     }
 }
@@ -1655,7 +1637,7 @@ pub contract Probe {
     recv ProbeMsg {
         Probe { target } -> bool uses (call: Call) {
             let args = MemBuffer::alloc(0)
-            let mut ret = MemBuffer::with_capacity(64)
+            var ret = MemBuffer::with_capacity(64)
             call.raw_staticcall(addr: target, gas: 30000, args: args.span(), ret: mut ret).success()
         }
     }
@@ -2060,15 +2042,15 @@ pub contract C {
         );
     }
     #[test]
-    fn memory_effects_do_not_change_abi_state_mutability() {
+    fn raw_memory_does_not_change_abi_state_mutability() {
         let code = r#"
+use core::abi::store_word
+use core::ptr
 use std::abi::sol
-use std::evm::{RawMem, RawStorage}
+use std::evm::RawStorage
 msg M {
     #[selector = sol("memoryOnly()")]
     MemoryOnly {},
-    #[selector = sol("readMemory()")]
-    ReadMemory {},
     #[selector = sol("readStorage()")]
     ReadStorage {},
     #[selector = sol("writeStorage()")]
@@ -2076,17 +2058,17 @@ msg M {
 }
 pub contract C {
     recv M {
-        MemoryOnly {} uses (mem: mut RawMem) {}
-        ReadMemory {} uses (mem: RawMem) {}
-        ReadStorage {} uses (mem: mut RawMem, storage: RawStorage) {}
-        WriteStorage {} uses (mem: mut RawMem, storage: mut RawStorage) {}
+        MemoryOnly {} {
+            unsafe { store_word(ptr: ptr::alloc_bytes(32), value: 1) }
+        }
+        ReadStorage {} uses (storage: RawStorage) {}
+        WriteStorage {} uses (storage: mut RawStorage) {}
     }
 }
 "#;
         let entries = abi_entries(code, "C");
         for (name, expected) in [
             ("memoryOnly", "pure"),
-            ("readMemory", "pure"),
             ("readStorage", "view"),
             ("writeStorage", "nonpayable"),
         ] {
@@ -2113,7 +2095,7 @@ pub contract EncodeMsgAbiProbe {
     recv ProbeMsg {
         Probe {} {
             let encoded = encode_msg_calldata(
-                TokenMsg::Transfer { to: Address { inner: 1 }, amount: 1 },
+                TokenMsg::Transfer { to: Address::new(1), amount: 1 },
             )
         }
     }

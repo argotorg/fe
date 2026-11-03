@@ -1,0 +1,24 @@
+// An `Address` is built with `Address::new`, which checks its word, or
+// `Address::from_word_truncate`; its word is read with `word()`. The field
+// holding it is private to std, so a struct literal, a field read or a cast
+// cannot bypass them, and no address has bits above the low 160.
+use std::evm::Address
+
+const OWNER: Address = Address::new(0x1111111111111111111111111111111111111111)
+const DIRTY: Address = Address::new((1 << 160) | 1)
+
+fn literal() -> Address {
+    Address { inner: 1 }
+}
+
+fn read(_ address: Address) -> u256 {
+    address.inner
+}
+
+fn casts(_ address: Address, _ word: u256) -> (u256, Address) {
+    (address as u256, word as Address)
+}
+
+fn words() -> u256 {
+    OWNER.word() + DIRTY.word()
+}

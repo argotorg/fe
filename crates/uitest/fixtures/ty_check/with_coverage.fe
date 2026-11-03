@@ -1,0 +1,77 @@
+use std::evm::StorageMap
+use std::evm::effects::{RawStorage, StorPtr}
+
+// A `with` provider naming existing storage needs the function's own
+// authority, so its interference stays in the function's contract.
+
+fn read(_ p: StorPtr<u256>) -> u256 uses (target: u256) {
+    target
+}
+
+// Rejected: nothing in the signature covers the slot `p` names, and
+// `unsafe` does not grant authority.
+fn uncovered(_ p: StorPtr<u256>) -> u256 {
+    let ptr = p
+    unsafe {
+        with (*ptr) {
+            read(ptr)
+        }
+    }
+}
+
+// Accepted: raw storage authority covers any slot.
+fn raw(_ p: StorPtr<u256>) -> u256 uses (storage: RawStorage) {
+    let ptr = p
+    unsafe {
+        with (*ptr) {
+            read(ptr)
+        }
+    }
+}
+
+// Rejected: a provider that can write needs authority that can.
+fn raw_read_only(_ p: StorPtr<u256>) -> u256 uses (storage: RawStorage) {
+    let ptr = p
+    unsafe {
+        with (mut *ptr) {
+            read(ptr)
+        }
+    }
+}
+
+struct Store {
+    ptr: StorPtr<u256>,
+}
+
+// Rejected: a pointer read from the function's own effect still names an
+// arbitrary slot.
+fn own_effect() -> u256 uses (store: Store) {
+    unsafe {
+        with (*store.ptr) {
+            read(store.ptr)
+        }
+    }
+}
+
+fn count() -> u256 uses (counts: StorageMap<u256, u256>) {
+    counts.get(0)
+}
+
+// Accepted: a map is provided by its place, and a parameter's place is in
+// the function's contract.
+fn param_map(_ map: StorageMap<u256, u256>) -> u256 {
+    with (map) {
+        count()
+    }
+}
+
+struct Counts {
+    counts: StorageMap<u256, u256>,
+}
+
+// Accepted: a place in the function's own effect.
+fn effect_map() -> u256 uses (store: Counts) {
+    with (store.counts) {
+        count()
+    }
+}

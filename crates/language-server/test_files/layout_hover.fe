@@ -1,4 +1,4 @@
-use std::evm::{StorageMap, TStorPtr}
+use std::evm::{StorageMap, TSlot}
 
 struct CounterStore {
   global: u256,
@@ -8,12 +8,12 @@ struct CounterStore {
 pub contract <|contract|>Counter {
   mut <|store|>store: CounterStore,
   mut foo: u256,
-  mut <|explicit|>baz: StorageMap<u256, u256, 0>,
+  mut <|explicit|>baz: StorageMap<u256, u256>,
 }
 
 pub contract <|spaces|>Spaces {
   mut stored: u256,
-  mut temporary: TStorPtr<u256>,
+  mut temporary: TSlot<u256>,
   <|immutable|>immutable: u256,
 }
 
@@ -26,10 +26,18 @@ pub contract ZeroSized {
   mut <|empty|>empty: Empty,
 }
 
-struct Good<const ROOT: u256 = _> {}
-struct Bad<const ROOT: u8 = _> {}
-
 pub contract Broken {
-  mut <|blocked|>good: Good,
-  mut <|invalid|>bad: Bad,
+  mut <|blocked|>good: u256,
+  <|invalid|>bad: [u256; 576460752303423488],
+}
+
+struct Flags {
+  active: bool,
+  level: u8,
+  owner_id: u64,
+  balance: u256,
+}
+
+pub contract Packed {
+  mut <|packed|>flags: Flags,
 }

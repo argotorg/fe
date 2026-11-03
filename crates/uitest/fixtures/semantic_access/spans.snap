@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/spans.fe
+---
+error[16-0001]: access conflict in `fn write_while_viewed`
+   ┌─ spans.fe:14:5
+   │
+13 │     let span = buffer.span()
+   │                ------------- projection opened here
+14 │     buffer.reserve(8)
+   │     ^^^^^^ cannot mutably access this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn sub_span_reserves_owner`
+   ┌─ spans.fe:30:5
+   │
+29 │     let head = buffer.span().head(1)
+   │                ------------- projection opened here
+30 │     buffer.reserve(8)
+   │     ^^^^^^ cannot mutably access this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn self_copy`
+   ┌─ spans.fe:49:27
+   │
+49 │     copy_into(mut buffer, buffer.span())
+   │               ----------  ^^^^^^ cannot read this place while a `mut` access of it is open
+   │               │
+   │               access opened here

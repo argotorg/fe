@@ -1,7 +1,0 @@
----
-source: crates/uitest/tests/semantic_borrowck.rs
-assertion_line: 25
-expression: diags
-input_file: fixtures/semantic_borrowck/storage_map_field_methods.fe
----
-

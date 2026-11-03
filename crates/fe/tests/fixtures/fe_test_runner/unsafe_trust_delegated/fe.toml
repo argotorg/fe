@@ -1,0 +1,6 @@
+[ingot]
+name = "unsafe_trust_delegated"
+version = "0.1.0"
+
+[dependencies]
+mid = { path = "../unsafe_trust_vendor/mid", allow_unsafe = true }

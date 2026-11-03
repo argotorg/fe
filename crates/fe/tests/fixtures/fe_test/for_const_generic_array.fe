@@ -1,6 +1,6 @@
 
 fn sum<const N: usize>(_ arr: [u256; N]) -> u256 {
-    let mut total: u256 = 0
+    var total: u256 = 0
     for x in arr {
         total += x
     }

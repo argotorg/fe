@@ -31,7 +31,7 @@ pub fn do_both()
 }
 
 pub fn provide_both() {
-    let mut st = Storage { value: 0 }
+    var st = Storage { value: 0 }
     with (st, Console {}) {
         do_both()
     }

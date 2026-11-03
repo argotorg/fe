@@ -62,7 +62,7 @@ fn isqrt_arbitrary_values() {
 // Cover every power-of-two root boundary, including seed bit-length transitions.
 #[test]
 fn isqrt_all_power_of_two_square_boundaries() {
-    let mut bit: u256 = 1
+    var bit: u256 = 1
     while bit < 128 {
         let root: u256 = 1 << bit
         let square = root * root

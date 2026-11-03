@@ -1,0 +1,8 @@
+contract C {
+    #[slot(1)]
+    mut placed: u256,
+    #[slot(BASE)]
+    mut based: u256,
+    #[slot(keccak(keccak("example.main") - 1) & !(0xff as u256))]
+    mut main: u256,
+}

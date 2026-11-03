@@ -1,4 +1,4 @@
-use core::abi::{Abi, AbiSize, Encode, store_word}
+use core::abi::{Abi, AbiFrame, AbiSize, Encode}
 use std::abi::SolCompat
 use std::evm::TopicValue
 
@@ -10,8 +10,8 @@ impl AbiSize for Bytes {
 }
 
 impl<A: Abi> Encode<A> for Bytes {
-    fn encode(own self, _ ptr: *u8) {
-        store_word(ptr: ptr, value: self.word)
+    fn encode(own self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.word)
     }
 }
 

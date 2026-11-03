@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/storage_map_index.fe
+---
+error[16-0001]: access conflict in `fn same_field`
+   ┌─ storage_map_index.fe:26:5
+   │
+25 │     let x = mut store.counts[key]
+   │             --------------------- access opened here
+26 │     store.counts[key + 1] = 3
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ cannot write to this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn read_during_write`
+   ┌─ storage_map_index.fe:59:13
+   │
+58 │     let x = mut store.counts[key]
+   │             --------------------- access opened here
+59 │     let y = store.counts[key]
+   │             ^^^^^^^^^^^^^^^^^ cannot read this place while a `mut` access of it is open

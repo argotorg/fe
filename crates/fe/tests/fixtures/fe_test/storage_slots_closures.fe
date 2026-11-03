@@ -1,0 +1,46 @@
+// A closure lies in storage as a product of its captures, as a tuple does:
+// `storage_slots` counts the slots MIR stores it in.
+use core::intrinsic::storage_slots
+use std::evm::{Evm, RawStorage, read_storage_word, storage_at}
+
+fn slots<F>(_ f: own F) -> u256 {
+    storage_slots<F>()
+}
+
+#[test]
+fn word_captures_take_a_slot_each() {
+    let x: u256 = 5
+    let y: u256 = 6
+    assert(slots(|z: u256| z + x + y) == 2)
+}
+
+#[test]
+fn byte_captures_share_a_slot() {
+    let x: u8 = 5
+    let y: u8 = 6
+    assert(slots(|z: u8| z + x + y) == 1)
+}
+
+struct Probe<T> {
+    f: T,
+    end: u256,
+}
+
+fn place<F>(_ f: own F) -> u256 uses (storage: mut RawStorage) {
+    let probe = unsafe { mut storage_at<Probe<F>>(0x40) }
+    probe.f = f
+    probe.end = 0xee
+    storage_slots<F>()
+}
+
+#[test]
+fn layout_agrees_with_stores() uses (evm: mut Evm) {
+    let x: u256 = 5
+    let y: u256 = 6
+    with (RawStorage = evm) {
+        let n = place(|z: u256| z + x + y)
+        assert(n == 2)
+        assert(read_storage_word(0x40) == 5 && read_storage_word(0x41) == 6)
+        assert(read_storage_word(0x42) == 0xee)
+    }
+}

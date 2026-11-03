@@ -1,0 +1,7 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/storage_map_field_methods.fe
+---
+

@@ -1,0 +1,21 @@
+trait Call<shape A> {}
+
+struct S {}
+
+impl Call<(own u256, bool)> for S {}
+
+fn takes<T: Call<(own u256, ref bool)>>(_ t: T) {}
+
+// A tuple type given for a shape lists views.
+fn views<T: Call<(u256, bool)>>(_ t: T) {}
+
+fn none<T: Call<()>>(_ t: T) {}
+
+fn calls() {
+    takes(S {})
+    views(S {})
+    none(S {})
+}
+
+// A type is no shape.
+fn wrong<T: Call<u256>>(_ t: T) {}

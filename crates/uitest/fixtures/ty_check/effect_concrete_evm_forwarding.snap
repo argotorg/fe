@@ -4,7 +4,7 @@ expression: diags
 input_file: fixtures/ty_check/effect_concrete_evm_forwarding.fe
 ---
 error[8-0000]: type mismatch
-  ┌─ effect_concrete_evm_forwarding.fe:9:26
-  │
-9 │         evm.mstore(addr: ptr, value: self)
-  │                          ^^^ expected `*<u8>`, but `u256` is given
+   ┌─ effect_concrete_evm_forwarding.fe:10:34
+   │
+10 │         unsafe { store_word(ptr: ptr, value: self) }
+   │                                  ^^^ expected `*u8`, but `u256` is given

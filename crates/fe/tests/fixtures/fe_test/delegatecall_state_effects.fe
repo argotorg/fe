@@ -1,6 +1,5 @@
 use core::ptr::{self, MemBuffer, MemSpan}
-use std::evm::{Address, Call, Create, Evm}
-use std::evm::effects::TStorPtr
+use std::evm::{Address, Call, Create, Evm, TSlot}
 
 msg DelegatedState {
     #[selector = 1]
@@ -9,15 +8,15 @@ msg DelegatedState {
 
 pub contract DelegateCaller {
     mut persistent: u256,
-    mut transient: TStorPtr<u256>,
+    mut transient: TSlot<u256>,
 
     recv DelegatedState {
         Run { implementation } -> (u256, u256)
           uses (mut persistent, mut transient, call: mut Call)
         {
             persistent = 1
-            transient = 2
-            let mut output = MemBuffer::empty()
+            transient.value = 2
+            var output = MemBuffer::empty()
             let outcome = call.raw_delegatecall(
                 addr: implementation,
                 gas: 100000,
@@ -27,7 +26,7 @@ pub contract DelegateCaller {
             assert!(outcome.success())
             // Reacquire current values after unbounded external state effects.
             // The negative borrow tests separately hold native loans across this call.
-            (persistent, transient)
+            (persistent, transient.value)
         }
     }
 }
@@ -36,23 +35,28 @@ pub contract DelegateCaller {
 fn delegation_updates_persistent_and_transient_state_with_empty_buffers()
   uses (evm: mut Evm)
 {
-    // Initcode copies and returns nine bytes of runtime code. That runtime writes
-    // 41 to storage slot zero and 17 to transient slot zero, then stops.
-    let init_code = ptr::alloc<[u8; 19]>()
-    *init_code = [
-        0x60, 0x09, 0x60, 0x0a, 0x5f, 0x39, 0x60, 0x09, 0x5f, 0xf3,
-        0x60, 0x29, 0x5f, 0x55, 0x60, 0x11, 0x5f, 0x5d, 0x00,
-    ]
-    let implementation = evm.create_raw(
-        value: 0,
-        init_code: MemSpan::from_raw_parts(ptr: ptr::byte_ptr(init_code), len: 19),
-    )
-    assert!(implementation.inner != 0)
-    let caller = evm.create<DelegateCaller>(value: 0, args: ())
+    // Initcode copies and returns ten bytes of runtime code. That runtime writes
+    // 41 to storage slot zero and 17 to transient slot zero, the caller's
+    // fields' slots, then stops.
+    let init_code = ptr::alloc<[u8; 20]>()
+    unsafe {
+        *init_code = [
+            0x60, 0x0a, 0x60, 0x0a, 0x5f, 0x39, 0x60, 0x0a, 0x5f, 0xf3,
+            0x60, 0x29, 0x5f, 0x55, 0x60, 0x11, 0x60, 0x00, 0x5d, 0x00,
+        ]
+    }
+    let implementation = unsafe {
+        evm.create_raw(
+            value: Wei::zero(),
+            init_code: MemSpan::from_raw_parts(ptr: ptr::byte_ptr(init_code), len: 20),
+        )
+    }
+    assert!(implementation.word() != 0)
+    let caller = evm.create<DelegateCaller>(value: Wei::zero(), args: ())
     let (persistent, transient) = evm.call(
         addr: caller,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: DelegatedState::Run { implementation },
     )
     assert!(persistent == 41)

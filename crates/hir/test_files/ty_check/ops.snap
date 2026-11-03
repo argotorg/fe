@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/ops.fe
 ---
@@ -257,7 +258,7 @@ note:
    ┌─ ops.fe:38:13
    │
 38 │             self = Ok::Yes
-   │             ^^^^ mut Ok
+   │             ^^^^ Ok
 
 note:
    ┌─ ops.fe:38:13
@@ -274,7 +275,7 @@ note:
 note:
    ┌─ ops.fe:43:37
    │
-43 │   fn assign_yes(mut ok: own Ok) -> Ok {
+43 │   fn assign_yes(var ok: own Ok) -> Ok {
    │ ╭─────────────────────────────────────^
 44 │ │     ok += Ok::Yes
 45 │ │     ok
@@ -456,22 +457,29 @@ note:
    │                         ^ i32
 
 note:
-   ┌─ ops.fe:75:47
+   ┌─ ops.fe:75:51
    │
-75 │       fn index(self, _ i: usize) -> Option<i32> {
-   │ ╭───────────────────────────────────────────────^
-76 │ │         match i {
+75 │       fn index(self, _ i: usize) -> ref Option<i32> {
+   │ ╭───────────────────────────────────────────────────^
+76 │ │         let value = match i {
 77 │ │             0 => Some(self.x)
 78 │ │             1 => Some(self.y)
-79 │ │             _ => None
-80 │ │         }
-81 │ │     }
+   · │
+81 │ │         ref value
+82 │ │     }
    │ ╰─────^ Option<i32>
 
 note:
-   ┌─ ops.fe:76:9
+   ┌─ ops.fe:76:13
    │
-76 │ ╭         match i {
+76 │         let value = match i {
+   │             ^^^^^ Option<i32>
+
+note:
+   ┌─ ops.fe:76:21
+   │
+76 │           let value = match i {
+   │ ╭─────────────────────^
 77 │ │             0 => Some(self.x)
 78 │ │             1 => Some(self.y)
 79 │ │             _ => None
@@ -479,10 +487,10 @@ note:
    │ ╰─────────^ Option<i32>
 
 note:
-   ┌─ ops.fe:76:15
+   ┌─ ops.fe:76:27
    │
-76 │         match i {
-   │               ^ usize
+76 │         let value = match i {
+   │                           ^ usize
 
 note:
    ┌─ ops.fe:77:13
@@ -557,140 +565,158 @@ note:
    │                  ^^^^ Option<i32>
 
 note:
-   ┌─ ops.fe:84:26
+   ┌─ ops.fe:81:9
    │
-84 │   fn f(a: Point, b: Point) {
+81 │         ref value
+   │         ^^^^^^^^^ Option<i32>
+
+note:
+   ┌─ ops.fe:81:13
+   │
+81 │         ref value
+   │             ^^^^^ Option<i32>
+
+note:
+   ┌─ ops.fe:85:26
+   │
+85 │   fn f(a: Point, b: Point) {
    │ ╭──────────────────────────^
-85 │ │     let c = a + b
-86 │ │     let c2 = Add::add(a, b)
-87 │ │     // let c3 = Add::add(a, 100) TODO: fix `type annotation is needed`
-88 │ │     let d = c + as_i32(100)
-89 │ │     let x = d[0]
-90 │ │ }
+86 │ │     let c = a + b
+87 │ │     let c2 = Add::add(a, b)
+88 │ │     // let c3 = Add::add(a, 100) TODO: fix `type annotation is needed`
+89 │ │     let d = c + as_i32(100)
+90 │ │     let x = ref d[0]
+91 │ │ }
    │ ╰─^ ()
-
-note:
-   ┌─ ops.fe:85:9
-   │
-85 │     let c = a + b
-   │         ^ Point
-
-note:
-   ┌─ ops.fe:85:13
-   │
-85 │     let c = a + b
-   │             ^ Point
-
-note:
-   ┌─ ops.fe:85:13
-   │
-85 │     let c = a + b
-   │             ^^^^^ Point
-
-note:
-   ┌─ ops.fe:85:17
-   │
-85 │     let c = a + b
-   │                 ^ Point
 
 note:
    ┌─ ops.fe:86:9
    │
-86 │     let c2 = Add::add(a, b)
-   │         ^^ Point
-
-note:
-   ┌─ ops.fe:86:14
-   │
-86 │     let c2 = Add::add(a, b)
-   │              ^^^^^^^^ fn add<Point, Point>
-
-note:
-   ┌─ ops.fe:86:14
-   │
-86 │     let c2 = Add::add(a, b)
-   │              ^^^^^^^^^^^^^^ Point
-
-note:
-   ┌─ ops.fe:86:23
-   │
-86 │     let c2 = Add::add(a, b)
-   │                       ^ Point
-
-note:
-   ┌─ ops.fe:86:26
-   │
-86 │     let c2 = Add::add(a, b)
-   │                          ^ Point
-
-note:
-   ┌─ ops.fe:88:9
-   │
-88 │     let d = c + as_i32(100)
+86 │     let c = a + b
    │         ^ Point
 
 note:
-   ┌─ ops.fe:88:13
+   ┌─ ops.fe:86:13
    │
-88 │     let d = c + as_i32(100)
+86 │     let c = a + b
    │             ^ Point
 
 note:
-   ┌─ ops.fe:88:13
+   ┌─ ops.fe:86:13
    │
-88 │     let d = c + as_i32(100)
-   │             ^^^^^^^^^^^^^^^ Point
+86 │     let c = a + b
+   │             ^^^^^ Point
 
 note:
-   ┌─ ops.fe:88:17
+   ┌─ ops.fe:86:17
    │
-88 │     let d = c + as_i32(100)
-   │                 ^^^^^^ fn as_i32
+86 │     let c = a + b
+   │                 ^ Point
 
 note:
-   ┌─ ops.fe:88:17
+   ┌─ ops.fe:87:9
    │
-88 │     let d = c + as_i32(100)
-   │                 ^^^^^^^^^^^ i32
+87 │     let c2 = Add::add(a, b)
+   │         ^^ Point
 
 note:
-   ┌─ ops.fe:88:24
+   ┌─ ops.fe:87:14
    │
-88 │     let d = c + as_i32(100)
-   │                        ^^^ i32
+87 │     let c2 = Add::add(a, b)
+   │              ^^^^^^^^ fn add<Point, Point>
+
+note:
+   ┌─ ops.fe:87:14
+   │
+87 │     let c2 = Add::add(a, b)
+   │              ^^^^^^^^^^^^^^ Point
+
+note:
+   ┌─ ops.fe:87:23
+   │
+87 │     let c2 = Add::add(a, b)
+   │                       ^ Point
+
+note:
+   ┌─ ops.fe:87:26
+   │
+87 │     let c2 = Add::add(a, b)
+   │                          ^ Point
 
 note:
    ┌─ ops.fe:89:9
    │
-89 │     let x = d[0]
-   │         ^ Option<i32>
+89 │     let d = c + as_i32(100)
+   │         ^ Point
 
 note:
    ┌─ ops.fe:89:13
    │
-89 │     let x = d[0]
+89 │     let d = c + as_i32(100)
    │             ^ Point
 
 note:
    ┌─ ops.fe:89:13
    │
-89 │     let x = d[0]
-   │             ^^^^ Option<i32>
+89 │     let d = c + as_i32(100)
+   │             ^^^^^^^^^^^^^^^ Point
 
 note:
-   ┌─ ops.fe:89:15
+   ┌─ ops.fe:89:17
    │
-89 │     let x = d[0]
-   │               ^ usize
+89 │     let d = c + as_i32(100)
+   │                 ^^^^^^ fn as_i32
 
 note:
-   ┌─ ops.fe:92:28
+   ┌─ ops.fe:89:17
    │
-92 │ fn as_i32(_ x: i32) -> i32 { x }
+89 │     let d = c + as_i32(100)
+   │                 ^^^^^^^^^^^ i32
+
+note:
+   ┌─ ops.fe:89:24
+   │
+89 │     let d = c + as_i32(100)
+   │                        ^^^ i32
+
+note:
+   ┌─ ops.fe:90:9
+   │
+90 │     let x = ref d[0]
+   │         ^ Option<i32>
+
+note:
+   ┌─ ops.fe:90:13
+   │
+90 │     let x = ref d[0]
+   │             ^^^^^^^^ Option<i32>
+
+note:
+   ┌─ ops.fe:90:17
+   │
+90 │     let x = ref d[0]
+   │                 ^ Point
+
+note:
+   ┌─ ops.fe:90:17
+   │
+90 │     let x = ref d[0]
+   │                 ^^^^ Option<i32>
+
+note:
+   ┌─ ops.fe:90:19
+   │
+90 │     let x = ref d[0]
+   │                   ^ usize
+
+note:
+   ┌─ ops.fe:93:28
+   │
+93 │ fn as_i32(_ x: i32) -> i32 { x }
    │                            ^^^^^ i32
 
 note:
-   ┌─ ops.fe:92:30
+   ┌─ ops.fe:93:30
    │
-92 │ fn as_i32(_ x: i32) -> i32 { x }
+93 │ fn as_i32(_ x: i32) -> i32 { x }
    │                              ^ i32

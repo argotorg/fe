@@ -1,0 +1,46 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/effect_rows.fe
+---
+error[6-0009]: method has stricter bounds than trait
+   ┌─ effect_rows.fe:31:8
+   │
+31 │     fn bump(mut self) uses (store: mut Store) {
+   │        ^^^^ method has stricter bounds than the declared method in the trait: `store: EffectRef<Store>`
+
+error[6-0024]: method `bump` has incompatible effects
+   ┌─ effect_rows.fe:24:8
+   │
+ 3 │     fn bump(mut self) uses E
+   │        ---- trait requires these effects
+   ·
+24 │     fn bump(mut self) {}
+   │        ^^^^ expected 1 effects, found 0
+
+error[8-0036]: missing effect `Store` required by `bump`
+   ┌─ effect_rows.fe:51:5
+   │
+51 │     bump(mut sc)
+   │     ^^^^^^^^^^^^ `bump` requires effect `Store` to be in scope
+   │
+   = require it in this function's signature with `uses Store`, so that its callers provide it
+   = or provide it to a block of this function with `with (Store = value) { .. }`
+
+error[8-0051]: unresolved effect
+   ┌─ effect_rows.fe:46:45
+   │
+46 │ fn unknown_row<C: Counter>(_ c: mut C) uses C::F {}
+   │                                             ^^^^ cannot resolve `C::F` as a type or trait
+   │
+   = consider defining a type or trait named `C::F`
+   = or bind the effect value with `uses (name: Type)`
+
+error[8-0106]: missing effect row `C::E` required by `bump`
+   ┌─ effect_rows.fe:42:5
+   │
+42 │     c.bump()
+   │     ^^^^^^^^ `bump` requires the row `C::E`
+   │
+   = a row whose implementation is not known here is forwarded: require it via `uses C::E`

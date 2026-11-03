@@ -1,6 +1,9 @@
+use std::fmt::Write;
+
 use contract_harness::{ExecutionOptions, RuntimeInstance};
 use ethers_core::abi::{AbiParser, Token, encode};
 use fe::bench_support::compile_fe_sonatina_bytecode;
+use test_utils::snap_test;
 
 #[test]
 fn packed_string_encoding_matches_abi_at_every_byte_boundary() {
@@ -68,8 +71,7 @@ pub contract PackedStrings {
 }
 
 #[test]
-#[allow(clippy::print_stderr)] // Report benchmark measurements with --nocapture.
-fn constant_string_getters_stay_compact() {
+fn constant_string_getters() {
     let source = r#"
 msg Metadata {
     #[selector = sol("name()")]
@@ -90,11 +92,7 @@ pub contract ConstantStrings {
 "#;
     let bytecode = compile_fe_sonatina_bytecode(source, "ConstantStrings", "ConstantStrings")
         .expect("compile constant string contract");
-    assert!(
-        bytecode.runtime.len() <= 280,
-        "constant string code size regressed to {} bytes",
-        bytecode.runtime.len()
-    );
+    let mut report = format!("runtime bytes: {}\n", bytecode.runtime.len());
     let mut runtime = RuntimeInstance::deploy(&hex::encode(bytecode.deploy)).expect("deploy");
     for (signature, value) in [
         ("name()", "Bench Token"),
@@ -103,12 +101,10 @@ pub contract ConstantStrings {
     ] {
         let function = AbiParser::default().parse_function(signature).unwrap();
         let input = function.encode_input(&[]).unwrap();
-        let profile = runtime.call_raw_gas_profile(&input, ExecutionOptions::default());
-        assert!(
-            profile.total_step_gas <= 510,
-            "{signature} encoding gas regressed to {}",
-            profile.total_step_gas
-        );
+        let gas = runtime
+            .call_raw_gas_profile(&input, ExecutionOptions::default())
+            .total_step_gas;
+        writeln!(report, "{signature} gas: {gas}").unwrap();
         let result = runtime
             .call_raw(&input, ExecutionOptions::default())
             .unwrap();
@@ -117,4 +113,11 @@ pub contract ConstantStrings {
             encode(&[Token::String(value.to_string())])
         );
     }
+    snap_test!(
+        report,
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/packed_string_abi/constant_string_getters"
+        )
+    );
 }

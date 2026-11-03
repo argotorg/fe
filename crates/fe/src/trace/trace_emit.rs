@@ -5,7 +5,7 @@ use std::{
 };
 
 use camino::Utf8PathBuf;
-use common::{InputDb, config::Config};
+use common::{InputDb, config::Config, diagnostics::Severity};
 use driver::{
     DriverDataBase,
     cli_target::{CliTarget, resolve_cli_target},
@@ -81,7 +81,11 @@ fn ensure_target_compiles(
     } else {
         mir_diagnostics()
     };
-    if !hir_has_errors && mir_diagnostics.is_empty() {
+    if !hir_has_errors
+        && mir_diagnostics
+            .iter()
+            .all(|diag| diag.severity != Severity::Error)
+    {
         return Ok(());
     }
 

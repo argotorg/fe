@@ -1,0 +1,36 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/access_escapes.fe
+---
+error[8-0070]: an access is not a value
+   ┌─ access_escapes.fe:13:21
+   │
+13 │     Holder { value: mut x }
+   │                     ^^^^^ this access is used as a value
+   │
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
+
+error[8-0070]: an access is not a value
+   ┌─ access_escapes.fe:19:13
+   │
+19 │     consume(mut item)
+   │             ^^^^^^^^ this access is used as a value
+   │
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
+
+error[8-0070]: an access is not a value
+   ┌─ access_escapes.fe:24:5
+   │
+24 │     mut item
+   │     ^^^^^^^^ this access is used as a value
+   │
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
+
+error[8-0070]: an access is not a value
+   ┌─ access_escapes.fe:32:16
+   │
+32 │         slot = mut x
+   │                ^^^^^ this access is used as a value
+   │
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection

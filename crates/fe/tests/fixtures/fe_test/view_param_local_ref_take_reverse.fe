@@ -1,75 +1,31 @@
-use core::Seq
+// The `Seq` adapters this test once used stored references to their base.
+// Drivers hold none: the traversal is a value beside the collection, which
+// stays a view parameter.
+use core::iter::{Collection, Driver, Identity, Reversed, Take}
 
-struct Reverse<I, T: Seq<Item = I>> {
-    base: ref T,
-}
-
-struct Take<I, T: Seq<Item = I>> {
-    n: usize,
-    base: ref T,
-}
-
-fn reverse<I, T: Seq<Item = I>>(_ seq: ref T) -> Reverse<I, T> {
-    Reverse { base: seq }
-}
-
-fn take<I, T: Seq<Item = I>>(_ n: usize, _ seq: ref T) -> Take<I, T> {
-    Take { n, base: seq }
-}
-
-fn reverse_u256<T: Seq<Item = u256>>(_ seq: ref T) -> Reverse<u256, T> {
-    reverse(seq)
-}
-
-fn take_u256<T: Seq<Item = u256>>(_ n: usize, _ seq: ref T) -> Take<u256, T> {
-    take(n, seq)
-}
-
-impl<I, T: Seq<Item = I>> Seq for Reverse<I, T> {
-    type Item = I
-
-    fn len(self) -> usize {
-        self.base.len()
-    }
-
-    fn get(self, _ i: usize) -> I {
-        let n = self.base.len()
-        self.base.get(n - 1 - i)
-    }
-}
-
-impl<I, T: Seq<Item = I>> Seq for Take<I, T> {
-    type Item = I
-
-    fn len(self) -> usize {
-        let base = self.base
-        let total = base.len()
-        if self.n < total {
-            self.n
-        } else {
-            total
-        }
-    }
-
-    fn get(self, _ i: usize) -> I {
-        self.base.get(i)
-    }
-}
-
-fn sum_last4(_ arr: [u256; 8]) -> u256 {
-    let mut total = 0
-    let rev = reverse_u256(ref arr)
-    let tail = take_u256(4, ref rev)
-    for x in tail {
+fn sum_by<D: Copy + Driver<Base = [u256; 8], Step<ref> = ref u256>>(_ arr: [u256; 8], _ d: D) -> u256 uses D::E {
+    var total = 0
+    for x in arr.by(d) {
         total += x
     }
     total
 }
 
+fn last(_ n: usize) -> Take<Reversed<[u256; 8]>> {
+    Reversed<[u256; 8]> {}.take(n)
+}
+
+fn first(_ n: usize) -> Take<Identity<[u256; 8]>> {
+    Identity<[u256; 8]> {}.take(n)
+}
+
+fn sum_last4(_ arr: [u256; 8]) -> u256 {
+    sum_by(arr, last(4))
+}
+
 fn sum_first4(_ arr: [u256; 8]) -> u256 {
-    let mut total = 0
-    let head = take_u256(4, ref arr)
-    for x in head {
+    var total = 0
+    for x in arr.take(4) {
         total += x
     }
     total
@@ -80,4 +36,5 @@ fn test_view_param_local_ref_take_reverse() {
     let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
     assert!(sum_last4(arr) == 26)
     assert!(sum_first4(arr) == 10)
+    assert!(sum_by(arr, first(2)) == 3)
 }

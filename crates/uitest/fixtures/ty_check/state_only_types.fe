@@ -1,0 +1,106 @@
+// A type holding a pinned type is state-only: it lives only at its place in
+// storage or transient storage and is never a value in memory, so it is never
+// copied, moved, constructed, returned by value or taken as `own`.
+use std::evm::StorageMap
+
+struct Ledger {
+    balances: StorageMap<u256, u256>,
+    total: u256,
+}
+
+struct Pair<T> {
+    left: T,
+    right: T,
+}
+
+// Rejected: `Ledger` holds a map.
+impl Copy for Ledger {}
+
+// Rejected: an `own` parameter and an owned return.
+fn take(_ ledger: own Ledger) {}
+
+fn give(_ ledger: Ledger) -> Ledger {
+    ledger
+}
+
+// Accepted: view and `mut` parameters name the caller's place, and a
+// projection yields one.
+fn total(_ ledger: Ledger) -> u256 {
+    ledger.total
+}
+
+fn credit(_ ledger: mut Ledger, _ key: u256) {
+    ledger.balances[key] += 1
+}
+
+fn balances(_ ledger: Ledger) -> ref StorageMap<u256, u256> {
+    ref ledger.balances
+}
+
+fn identity<T>(_ value: own T) -> T {
+    value
+}
+
+enum Slot {
+    Held(StorageMap<u256, u256>),
+    Empty,
+}
+
+fn is_empty(_ slot: Slot) -> bool {
+    match slot {
+        Slot::Held(_) => false
+        Slot::Empty => true
+    }
+}
+
+fn second(_ pair: (StorageMap<u256, u256>, u256)) -> u256 {
+    pair.1
+}
+
+fn count(_ maps: [StorageMap<u256, u256>; 2]) -> u256 {
+    2
+}
+
+// Accepted: a projection yields a tuple of places, or an empty variant.
+fn both(
+    _ pair: mut Pair<StorageMap<u256, u256>>,
+) -> (mut StorageMap<u256, u256>, mut StorageMap<u256, u256>) {
+    (mut pair.left, mut pair.right)
+}
+
+fn pick(_ pair: Pair<StorageMap<u256, u256>>, _ left: bool) -> Option<ref StorageMap<u256, u256>> {
+    if left { Option::Some(ref pair.left) } else { Option::None }
+}
+
+pub contract C {
+    mut ledger: Ledger,
+    mut pair: Pair<StorageMap<u256, u256>>,
+    // Rejected: an immutable contract field lives in code.
+    frozen: StorageMap<u256, u256>,
+
+    init() uses (mut ledger, mut pair) {
+        // Accepted: a state-only type has no value reading, so a plain
+        // binding is its read access; a write through it is rejected.
+        let m = ledger.balances
+        let seen = m[1]
+        m[1] = seen
+        // Accepted: `mut` names the place for writing.
+        let named = mut ledger.balances
+        named[1] = 2
+        // Accepted: `Pair<StorageMap<..>>` holds maps through its fields, so
+        // it too binds its read access.
+        let p = pair
+        // Rejected: instantiating `identity` passes a map by value.
+        identity(ledger.balances)
+        // Rejected: a memory literal of a storage-only type.
+        total(Ledger { balances: ledger.balances, total: 0 })
+        // Rejected: an `Option` holding a map is a value outside a
+        // projection's yield site.
+        let wrapped = Option::Some(ledger.balances)
+        // Rejected: a unit variant, a tuple literal and an array literal
+        // build memory values holding a map.
+        is_empty(Slot::Empty)
+        second((ledger.balances, 0))
+        count([ledger.balances, pair.left])
+    }
+}

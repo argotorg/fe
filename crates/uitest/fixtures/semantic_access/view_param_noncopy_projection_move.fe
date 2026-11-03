@@ -1,0 +1,47 @@
+struct Wrapper {
+    p: Pair,
+}
+
+struct Pair {
+    x: u32,
+    y: u32,
+}
+
+fn unwrap(w: Wrapper) -> Pair {
+    let p = w.p
+    p
+}
+
+#[test]
+fn example() {
+    let w = Wrapper { p: Pair { x: 10, y: 20 } }
+    let p = unwrap(w)
+    assert!(w.p.x == 10)
+    assert!(p.x == 10)
+}
+
+fn whole_return(value: Pair) -> Pair {
+    value
+}
+
+fn whole_let(value: Pair) {
+    let copied: Pair = value
+}
+
+fn whole_assign(value: Pair, target: mut Pair) {
+    target = value
+}
+
+fn whole_generic<T>(value: T) -> T {
+    value
+}
+
+fn copy_and_own(value: u256, owned: own Pair) -> (u256, Pair) {
+    (value, owned)
+}
+
+// Indexing grants a `ref` access to the element: a non-`Copy` element cannot
+// be moved out of it.
+fn index_noncopy(slice: core::ptr::MemSlice<core::ptr::MemBuffer>) -> core::ptr::MemBuffer {
+    slice[0]
+}

@@ -1,0 +1,72 @@
+use std::evm::{Evm, StorageMap}
+
+// A projection yields the map its effect reserves.
+fn current_map() -> ref StorageMap<u256, u256> uses (map: StorageMap<u256, u256>) {
+    ref map
+}
+
+fn read_current(key: u256) -> u256 uses (map: StorageMap<u256, u256>) {
+    current_map().get(key: key)
+}
+
+fn read_through_effect(map: StorageMap<u256, u256>, key: u256) -> u256 {
+    with (map) {
+        read_current(key: key)
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut first: StorageMap<u256, u256>,
+    mut second: StorageMap<u256, u256>,
+
+    recv Msg {
+        Set { lane, key, value } uses (mut first, mut second) {
+            if lane == 0 {
+                first.set(key: key, value: value)
+            } else {
+                second.set(key: key, value: value)
+            }
+        }
+
+        Get { lane, key } -> u256 uses (first, second) {
+            if lane == 0 {
+                read_through_effect(map: first, key: key)
+            } else {
+                read_through_effect(map: second, key: key)
+            }
+        }
+    }
+}
+
+#[test]
+fn effect_projections_yield_the_provided_map() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Set { lane: 1, key: 7, value: 42 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Get { lane: 1, key: 7 },
+    )
+    assert!(value == 42)
+    let untouched: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Get { lane: 0, key: 7 },
+    )
+    assert!(untouched == 0)
+}

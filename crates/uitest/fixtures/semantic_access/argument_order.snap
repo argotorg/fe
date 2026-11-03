@@ -1,0 +1,45 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/argument_order.fe
+---
+error[16-0001]: access conflict in `fn viewed_then_written`
+   ┌─ argument_order.fe:53:24
+   │
+53 │     inspect(bag, reset(mut bag))
+   │             ---        ^^^^^^^ cannot mutably access this place while a `ref` access of it is open
+   │             │
+   │             access opened here
+
+error[16-0001]: access conflict in `fn viewed_then_written_param`
+   ┌─ argument_order.fe:58:24
+   │
+58 │     inspect(bag, reset(mut bag))
+   │             ---        ^^^^^^^ cannot mutably access this place while a `ref` access of it is open
+   │             │
+   │             access opened here
+
+error[16-0001]: access conflict in `fn viewed_then_written_binding`
+   ┌─ argument_order.fe:65:24
+   │
+65 │     inspect(bag, reset(mut bag))
+   │             ---        ^^^^^^^ cannot mutably access this place while a `ref` access of it is open
+   │             │
+   │             access opened here
+
+error[16-0002]: move conflict in `fn moved_then_read`
+   ┌─ argument_order.fe:41:15
+   │
+41 │     take(bag, bag.n())
+   │          ---  ^^^ cannot use a value after it was moved
+   │          │
+   │          value is moved here
+
+error[16-0002]: move conflict in `fn moved_then_written`
+   ┌─ argument_order.fe:47:21
+   │
+47 │     take(bag, reset(mut bag))
+   │          ---        ^^^^^^^ cannot use a value after it was moved
+   │          │
+   │          value is moved here

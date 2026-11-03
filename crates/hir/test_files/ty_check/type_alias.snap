@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/type_alias.fe
 ---
@@ -8,12 +9,12 @@ note:
   │
 7 │   fn main() {
   │ ╭───────────^
-8 │ │     let mut set: foo::Foo<()>
+8 │ │     var set: foo::Foo<()>
 9 │ │ }
   │ ╰─^ ()
 
 note:
   ┌─ type_alias.fe:8:9
   │
-8 │     let mut set: foo::Foo<()>
-  │         ^^^^^^^ Map<i32, ()>
+8 │     var set: foo::Foo<()>
+  │         ^^^ Map<i32, ()>

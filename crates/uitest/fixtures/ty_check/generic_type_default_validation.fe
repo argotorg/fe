@@ -19,7 +19,7 @@ enum InvalidEnum<T = Missing> { Empty }
 trait InvalidTrait<T = Wrap> {}
 type InvalidAlias<T = Missing> = T
 
-struct ConstSlot<const ROOT: u256 = _> {}
+struct ConstSlot<const ROOT: u256> {}
 trait Cap<T> {}
 impl Cap<ConstSlot<u256>> for bool {}
 

@@ -1,0 +1,48 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/pin_and_row_cycles.fe
+---
+error[3-0038]: cycle detected while resolving this type
+   ┌─ pin_and_row_cycles.fe:13:18
+   │
+13 │     type Space = Named::Space
+   │                  ^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ pin_and_row_cycles.fe:22:18
+   │
+22 │     type Space = Self::Space
+   │                  ^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ pin_and_row_cycles.fe:45:18
+   │
+45 │     type Space = Right::T
+   │                  ^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ pin_and_row_cycles.fe:51:14
+   │
+51 │     type T = Left::Space
+   │              ^^^^^^^^^^^ this type's definition depends on itself
+
+error[6-0024]: method `index` has incompatible effects
+    ┌─ pin_and_row_cycles.fe:63:8
+    │
+ 63 │     fn index(self, _ i: u256) -> ref u256 {
+    │        ^^^^^ expected 1 effects, found 0
+    │
+    ┌─ src/ops.fe:273:8
+    │
+273 │     fn index(mut? self, _ index: I) -> mut? Self::Output uses E
+    │        ----- trait requires these effects
+
+error[6-0034]: the effect row `E` names itself
+   ┌─ pin_and_row_cycles.fe:59:22
+   │
+59 │ impl Index<u256> for Words {
+   │                      ^^^^^ expanding `E` through the rows it names comes back to it
+   │
+   = an effect row must end in effects, or in other rows that do

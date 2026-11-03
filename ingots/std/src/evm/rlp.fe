@@ -16,14 +16,15 @@
 //! below `0x80` in long form, no length prefix that a shorter form could
 //! hold, no leading zero bytes in lengths or integers. `decode` checks the
 //! outer item; list items are checked when `Item::items` reads them.
-//! Decoded items are views into the input, nothing is copied.
+//! Decoded items are ranges of the input, nothing is copied; their accessors
+//! take the input they were decoded from.
 //!
 //! Specification: https://ethereum.org/developers/docs/data-structures-and-encoding/rlp
 use core::abi::Bytes
 use core::num::IntDowncast
 use core::option::Option
 use core::ptr::{self, MemArray, MemSpan}
-use super::effects::{Address, revert}
+use super::effects::Address
 
 /// Encodes a byte string.
 pub fn encode_bytes(_ data: MemSpan) -> Bytes {
@@ -34,8 +35,10 @@ pub fn encode_bytes(_ data: MemSpan) -> Bytes {
     let header = header_len(len)
     let out = ptr::alloc_bytes(header + len)
     write_header(out, offset: 0x80, len)
-    ptr::copy(dest: ptr::offset_bytes(out, header), source: data)
-    Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len))
+    unsafe {
+        ptr::copy(dest: ptr::offset_bytes(out, header), source: data)
+        Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len))
+    }
 }
 
 /// Encodes an integer as its big-endian bytes without leading zeros, so
@@ -46,17 +49,13 @@ pub fn encode_uint(_ value: u256) -> Bytes {
         return Bytes::from_word_prefix(word: value << 248, len: 1)
     }
     let out = ptr::alloc_bytes(1 + len)
-    *out = (0x80 + len).downcast_truncate()
+    unsafe { *out = (0x80 + len as u256).downcast_truncate() }
     write_be(ptr::offset_bytes(out, 1), value, len)
-    Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: 1 + len))
+    unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: 1 + len)) }
 }
 
-/// Encodes an address as a 20-byte string. Reverts for a noncanonical
-/// `Address` with high bits set.
+/// Encodes an address as a 20-byte string.
 pub fn encode_address(_ address: Address) -> Bytes {
-    if address.inner >> 160 != 0 {
-        revert(())
-    }
     Bytes::from_word_prefix(word: (0x94 << 248) | (address.inner << 88), len: 21)
 }
 
@@ -67,8 +66,8 @@ pub fn encode_bool(_ value: bool) -> Bytes {
 
 /// Encodes a list of already encoded items.
 pub fn encode_list<const N: usize>(_ items: [Bytes; N]) -> Bytes {
-    let mut len: u256 = 0
-    let mut i: usize = 0
+    var len: usize = 0
+    var i: usize = 0
     while i < N {
         len += items[i].len()
         i += 1
@@ -76,36 +75,36 @@ pub fn encode_list<const N: usize>(_ items: [Bytes; N]) -> Bytes {
     let header = header_len(len)
     let out = ptr::alloc_bytes(header + len)
     write_header(out, offset: 0xc0, len)
-    let mut offset = header
+    var offset = header
     i = 0
     while i < N {
         let item = items[i].payload_span()
-        ptr::copy(dest: ptr::offset_bytes(out, offset), source: item)
+        unsafe { ptr::copy(dest: ptr::offset_bytes(out, offset), source: item) }
         offset += item.len()
         i += 1
     }
-    Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len))
+    unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len)) }
 }
 
-fn header_len(_ len: u256) -> u256 {
-    if len < 56 { 1 } else { 1 + byte_len(len) }
+fn header_len(_ len: usize) -> usize {
+    if len < 56 { 1 } else { 1 + byte_len(len as u256) }
 }
 
 // Writes the prefix of a string (`offset` 0x80) or list (`offset` 0xc0)
 // whose payload has `len` bytes.
-fn write_header(_ dest: *u8, offset: u256, len: u256) {
+fn write_header(_ dest: *u8, offset: u256, len: usize) {
     if len < 56 {
-        *dest = (offset + len).downcast_truncate()
+        unsafe { *dest = (offset + len as u256).downcast_truncate() }
         return
     }
-    let len_len = byte_len(len)
-    *dest = (offset + 55 + len_len).downcast_truncate()
-    write_be(ptr::offset_bytes(dest, 1), value: len, len_len)
+    let len_len = byte_len(len as u256)
+    unsafe { *dest = (offset + 55 + len_len as u256).downcast_truncate() }
+    write_be(ptr::offset_bytes(dest, 1), value: len as u256, len_len)
 }
 
-fn byte_len(_ value: u256) -> u256 {
-    let mut len: u256 = 0
-    let mut rest = value
+fn byte_len(_ value: u256) -> usize {
+    var len: usize = 0
+    var rest = value
     while rest != 0 {
         len += 1
         rest >>= 8
@@ -114,21 +113,22 @@ fn byte_len(_ value: u256) -> u256 {
 }
 
 // Writes the low `len` bytes of `value` big-endian.
-fn write_be(_ dest: *u8, value: u256, _ len: u256) {
-    let mut rest = value
-    let mut i = len
+fn write_be(_ dest: *u8, value: u256, _ len: usize) {
+    var rest = value
+    var i = len
     while i > 0 {
         i -= 1
-        *ptr::offset_bytes(dest, i) = rest.downcast_truncate()
+        unsafe { *ptr::offset_bytes(dest, i) = rest.downcast_truncate() }
         rest >>= 8
     }
 }
 
-/// A decoded RLP item: a byte string or a list, viewing its payload in the
-/// input.
+/// A decoded RLP item: a byte string or a list, as the range of its payload
+/// in the input it was decoded from. Its accessors take that input.
 pub struct Item {
     is_list: bool,
-    payload: MemSpan,
+    start: usize,
+    len: usize,
 }
 
 impl Copy for Item {}
@@ -139,39 +139,39 @@ impl Item {
     }
 
     /// The string bytes, or the concatenated encodings of the list items.
-    pub fn payload(self) -> MemSpan {
-        self.payload
+    pub fn payload(self, _ input: MemSpan) -> ref MemSpan {
+        input.slice(offset: self.start, len: self.len)
     }
 
     /// The bytes of a string item, `None` for a list.
-    pub fn as_bytes(self) -> Option<MemSpan> {
+    pub fn as_bytes(self, _ input: MemSpan) -> Option<ref MemSpan> {
         if self.is_list {
             return Option::None
         }
-        Option::Some(self.payload)
+        Option::Some(self.payload(input))
     }
 
     /// A string item of at most 32 bytes without leading zero bytes, read as
     /// a big-endian integer.
-    pub fn as_uint(self) -> Option<u256> {
-        let len = self.payload.len()
-        if self.is_list || len > 32 || (len > 0 && self.payload.byte_at(0) == 0) {
+    pub fn as_uint(self, _ input: MemSpan) -> Option<u256> {
+        let payload = self.payload(input)
+        if self.is_list || self.len > 32 || (self.len > 0 && payload.byte_at(0) == 0) {
             return Option::None
         }
-        Option::Some(read_be(self.payload))
+        Option::Some(read_be(payload))
     }
 
     /// A string item of exactly 20 bytes.
-    pub fn as_address(self) -> Option<Address> {
-        if self.is_list || self.payload.len() != 20 {
+    pub fn as_address(self, _ input: MemSpan) -> Option<Address> {
+        if self.is_list || self.len != 20 {
             return Option::None
         }
-        Option::Some(Address { inner: read_be(self.payload) })
+        Option::Some(Address { inner: read_be(self.payload(input)) })
     }
 
     /// The integer 0 or 1 as `false` or `true`.
-    pub fn as_bool(self) -> Option<bool> {
-        match self.as_uint() {
+    pub fn as_bool(self, _ input: MemSpan) -> Option<bool> {
+        match self.as_uint(input) {
             Option::Some(0) => Option::Some(false)
             Option::Some(1) => Option::Some(true)
             _ => Option::None
@@ -179,29 +179,27 @@ impl Item {
     }
 
     /// The items of a list item, `None` for a string or if any item is not
-    /// canonically encoded.
-    pub fn items(self) -> Option<MemArray<Item>> {
+    /// canonically encoded. Like this item, they are ranges of `input`.
+    pub fn items(self, _ input: MemSpan) -> Option<MemArray<Item>> {
         if !self.is_list {
             return Option::None
         }
-        let mut count: u256 = 0
-        let mut rest = self.payload
-        while !rest.is_empty() {
-            match split(rest) {
-                Option::Some((_, tail)) => {
-                    rest = tail
-                    count += 1
-                }
-                Option::None => return Option::None
-            }
+        let payload = self.payload(input)
+        var count: usize = 0
+        var pos: usize = 0
+        while pos < self.len {
+            let (_, used) = split(payload.tail(pos))?
+            pos += used
+            count += 1
         }
-        let items = MemArray<Item>::new_uninit(count)
-        rest = self.payload
-        let mut i: usize = 0
-        while !rest.is_empty() {
-            let (item, tail) = split(rest).unwrap()
-            *items.ptr_at(i) = item
-            rest = tail
+        let items = unsafe { MemArray<Item>::new_uninit(count) }
+        pos = 0
+        var i: usize = 0
+        while pos < self.len {
+            let (item, used) = split(payload.tail(pos))?
+            let start = self.start + pos + item.start
+            unsafe { *items.ptr_at(i) = Item { is_list: item.is_list, start, len: item.len } }
+            pos += used
             i += 1
         }
         Option::Some(items)
@@ -211,56 +209,49 @@ impl Item {
 /// Decodes `input` as exactly one item. `None` if it is not canonically
 /// encoded or bytes follow it.
 pub fn decode(_ input: MemSpan) -> Option<Item> {
-    match split(input) {
-        Option::Some((item, rest)) => {
-            if rest.is_empty() { Option::Some(item) } else { Option::None }
-        }
-        Option::None => Option::None
-    }
+    let (item, used) = split(input)?
+    if used == input.len() { Option::Some(item) } else { Option::None }
 }
 
-// The first item of `input` and the bytes after it.
-fn split(_ input: MemSpan) -> Option<(Item, MemSpan)> {
+// The first item of `input`, and the number of bytes it takes.
+fn split(_ input: MemSpan) -> Option<(Item, usize)> {
     let len = input.len()
     if len == 0 {
         return Option::None
     }
     let prefix = input.byte_at(0) as u256
     if prefix < 0x80 {
-        let item = Item { is_list: false, payload: input.slice(offset: 0, len: 1) }
-        return Option::Some((item, input.slice(offset: 1, len: len - 1)))
+        return Option::Some((Item { is_list: false, start: 0, len: 1 }, 1))
     }
     let is_list = prefix >= 0xc0
-    let short = prefix - (if is_list { 0xc0 } else { 0x80 })
-    let mut header: u256 = 1
-    let mut payload_len = short
+    let short: usize = (prefix - (if is_list { 0xc0 } else { 0x80 })).downcast_unchecked()
+    var header: usize = 1
+    var payload_len = short
     if short >= 56 {
         let len_len = short - 55
         header = 1 + len_len
         if len < header || input.byte_at(1) == 0 {
             return Option::None
         }
-        payload_len = read_be(input.slice(offset: 1, len: len_len))
+        payload_len = read_be(input.slice(offset: 1, len: len_len)).downcast_unchecked()
         if payload_len < 56 {
             return Option::None
         }
     }
-    let payload = match input.try_slice(start: header, len: payload_len) {
-        Option::Some(payload) => payload
-        Option::None => return Option::None
-    }
-    // A single byte below 0x80 is its own encoding.
-    if !is_list && payload_len == 1 && payload.byte_at(0) < 0x80 {
+    if header > len || payload_len > len - header {
         return Option::None
     }
-    let end = header + payload_len
-    Option::Some((Item { is_list, payload }, input.slice(offset: end, len: len - end)))
+    // A single byte below 0x80 is its own encoding.
+    if !is_list && payload_len == 1 && input.byte_at(header) < 0x80 {
+        return Option::None
+    }
+    Option::Some((Item { is_list, start: header, len: payload_len }, header + payload_len))
 }
 
 // Reads at most 32 bytes as a big-endian integer.
 fn read_be(_ bytes: MemSpan) -> u256 {
-    let mut value: u256 = 0
-    let mut i: u256 = 0
+    var value: u256 = 0
+    var i: usize = 0
     while i < bytes.len() {
         value = (value << 8) | (bytes.byte_at(i) as u256)
         i += 1

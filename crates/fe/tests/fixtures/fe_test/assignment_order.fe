@@ -1,0 +1,105 @@
+// An assignment resolves its target's root, then evaluates its value, then
+// opens the target's sessions: the value may read and write what the target is
+// reached through, and a compound assignment opens one session on its target
+// after the value is read.
+use core::ops::Index
+use core::ptr::MemBuffer
+use std::evm::{Evm, StorageMap}
+
+struct Cells { cells: [u256; 2] }
+impl Index<usize> for Cells {
+    type Output = u256
+    fn index(mut? self, _ i: usize) -> mut? u256 { mut? self.cells[i] }
+}
+
+struct Counter { total: u256, n: u256, cells: Cells }
+
+impl Counter {
+    fn bump(mut self) -> u256 {
+        self.n += 1
+        self.n
+    }
+}
+
+#[test]
+fn value_writes_root() {
+    var c = Counter { total: 0, n: 0, cells: Cells { cells: [0, 0] } }
+    c.total = c.bump()
+    c.cells[0] = c.bump()
+    c.cells[1] += c.bump()
+    assert(c.total == 1 && c.cells[0] == 2 && c.cells[1] == 3)
+}
+
+#[test]
+fn value_first() {
+    var c = Cells { cells: [1, 2] }
+    c[0] = c[1] + 1
+    assert(c[0] == 3)
+    c[0] += c[1]
+    assert(c[0] == 5)
+    var a: [u256; 3] = [1, 2, 3]
+    a[0] = a[1] + a[2]
+    a[2] += a[0]
+    assert(a[0] == 5 && a[2] == 8)
+}
+
+fn index_of(_ x: mut u256) -> usize {
+    x = 0
+    1
+}
+
+// The value is read before the target's index, which writes it, runs.
+#[test]
+fn value_read_before_target_index() {
+    var a: [u256; 2] = [0, 0]
+    var x: u256 = 5
+    a[index_of(mut x)] = x
+    assert(a[1] == 5)
+    x = 5
+    a[index_of(mut x)] += x
+    assert(a[1] == 10)
+}
+
+msg Msg {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract C {
+    mut m: StorageMap<u256, u256>,
+
+    recv Msg {
+        Run -> u256 uses (mut m) {
+            m[1] = 4
+            m[2] = m[1] + 1
+            m[1] += m[2]
+            m[1] * 100 + m[2]
+        }
+    }
+}
+
+#[test]
+fn map_value_first() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let v: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Run {})
+    assert(v == 905)
+}
+
+fn make() -> MemBuffer uses (log: mut u256) {
+    log = log * 10 + 1
+    MemBuffer::alloc(1)
+}
+
+fn seven() -> u8 uses (log: mut u256) {
+    log = log * 10 + 2
+    7
+}
+
+#[test]
+fn temporary_root_first() {
+    var log: u256 = 0
+    with (log) {
+        make()[0] = seven()
+    }
+    assert(log == 12)
+}

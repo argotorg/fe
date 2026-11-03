@@ -1,0 +1,41 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/unsafe_blocks.fe
+---
+fn read(p: *u256) -> u256 {
+    unsafe {
+        *p
+    }
+}
+
+fn write(p: *u256, v: u256) {
+    unsafe {
+        *p = v
+    }
+    let x = unsafe {
+        *p
+    }
+    unsafe {
+        // keep this comment
+        *p = x + 1
+    }
+}
+
+pub unsafe fn raw(p: *u256) -> u256 {
+    *p
+}
+
+trait Read {
+    unsafe fn read(self) -> u256
+}
+
+pub unsafe trait Trusted {
+    fn id(self) -> u256
+}
+
+unsafe impl Trusted for u256 {
+    fn id(self) -> u256 {
+        self
+    }
+}

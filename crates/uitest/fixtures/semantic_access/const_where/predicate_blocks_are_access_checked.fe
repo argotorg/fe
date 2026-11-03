@@ -1,0 +1,17 @@
+// A predicate block is borrow checked like any const body. Both conditions
+// evaluate to `true`, so only the borrow conflicts are reported.
+fn ground() where {
+    var x: usize = 0
+    let a = mut x
+    let b = ref x
+    a = 1
+    b == 1
+} {}
+
+fn generic<const N: usize>() where {
+    var x: usize = N
+    let a = mut x
+    let b = ref x
+    a = 1
+    b == 1
+} {}

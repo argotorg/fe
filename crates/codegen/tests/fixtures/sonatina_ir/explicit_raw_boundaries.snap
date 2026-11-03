@@ -10,10 +10,9 @@ func private %alloc__ge513() -> i256 {
         jump block1;
 
     block1:
-        v1.*i8 = evm_malloc 32.i256;
-        v2.i256 = ptr_to_int v1 i256;
-        v3.i256 = call %cast__g5f1e v2;
-        return v3;
+        v1.i256 = call %alloc_bytes 32.i256;
+        v2.i256 = call %cast__g5f1e v1;
+        return v2;
 }
 
 func private %alloc__g4a95() -> i256 {
@@ -21,10 +20,31 @@ func private %alloc__g4a95() -> i256 {
         jump block1;
 
     block1:
-        v1.*i8 = evm_malloc 32.i256;
-        v2.i256 = ptr_to_int v1 i256;
-        v3.i256 = call %cast__gf772 v2;
-        return v3;
+        v1.i256 = call %alloc_bytes 32.i256;
+        v2.i256 = call %cast__gf772 v1;
+        return v2;
+}
+
+func inline(always) private %alloc_bytes(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i1 = gt v0 18446744073709551615.i256;
+        br v3 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 65.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        jump block4;
+
+    block4:
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
 func private %bump(v0.i256) {
@@ -55,6 +75,14 @@ func private %byte_ptr(v0.i256) -> i256 {
         return v2;
 }
 
+func private %cast__g5f1e(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
 func private %cast__gc266(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -71,15 +99,7 @@ func private %cast__gf772(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__g5f1e(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %explicit_raw_boundaries() {
+func private %main() {
     block0:
         jump block1;
 
@@ -87,7 +107,7 @@ func private %explicit_raw_boundaries() {
         v0.i256 = call %alloc__ge513;
         call %bump v0;
         v2.i256 = call %alloc__g4a95;
-        call %raw_store__g6e74 v2;
+        call %raw_store v2;
         return;
 }
 
@@ -96,36 +116,37 @@ func private %main_root() {
         jump block1;
 
     block1:
-        call %explicit_raw_boundaries;
+        call %main;
         evm_stop;
 }
 
-func private %mstore(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        mstore v0 v1 i256;
-        return;
-}
-
-func private %raw_store__g6e74(v0.i256) {
+func private %raw_store(v0.i256) {
     block0:
         jump block1;
 
     block1:
         v2.i256 = call %byte_ptr v0;
-        call %mstore v2 8.i256;
+        call %store_word v2 8.i256;
+        call %sstore 0.i256 8.i256;
         return;
 }
 
-func private %raw_store__g64c6(v0.i256) {
+func private %sstore(v0.i256, v1.i256) {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %byte_ptr v0;
-        call %mstore v2 8.i256;
+        evm_sstore v0 v1;
+        return;
+}
+
+func private %store_word(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %cast__g5f1e v0;
+        mstore v4 v1 i256;
         return;
 }
 

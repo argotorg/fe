@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::ast::AstNode;
 
-use super::{Expr, Path, ast_node, lit::Lit};
+use super::{Expr, Path, ast_node, lit::Lit, support};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -95,7 +95,8 @@ ast_node! {
 
 ast_node! {
     /// An Attribute argument.
-    /// `arg1` or `arg2 = Arg` in `#[foo(arg1, arg2 = Arg)]`
+    /// `arg1`, `arg2 = Arg` or the expression `BASE + 1` in
+    /// `#[foo(arg1, arg2 = Arg, BASE + 1)]`. An expression has no key.
     pub struct AttrArg,
     SK::AttrArg
 }

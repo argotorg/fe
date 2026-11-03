@@ -12,7 +12,7 @@ fn read() -> u256 uses (counter: Counter) {
 
 #[test]
 fn test_with_block_custom_effect() {
-    let mut counter = Counter { value: 0 }
+    var counter = Counter { value: 0 }
 
     let out: u256 = with (Counter = counter) {
         inc()

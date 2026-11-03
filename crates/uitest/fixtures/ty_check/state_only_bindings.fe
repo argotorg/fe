@@ -1,0 +1,73 @@
+// A state-only type has no value reading, so a plain name binds its read
+// access, wherever the binding stands and whatever the grant's mode; `mut`
+// binds the mutable one.
+use std::evm::StorageMap
+
+enum Choice<T> {
+    Primary(T),
+    Secondary(T),
+}
+
+impl<T: Copy> Copy for Choice<T> {}
+
+impl Choice<StorageMap<u256, u256>> {
+    // S-68. Accepted: a plain payload binding reads the map.
+    fn get(self, _ key: u256) -> u256 {
+        if let Choice::Primary(map) = self {
+            map.get(key)
+        } else {
+            0
+        }
+    }
+
+    // S-68. Rejected: a write through the plain binding's read access.
+    fn set_plain(mut self, _ key: u256) {
+        if let Choice::Primary(map) = self {
+            map[key] = 1
+        }
+    }
+
+    // S-68. Accepted: `mut map` writes.
+    fn set(mut self, _ key: u256) {
+        if let Choice::Primary(mut map) = self {
+            map[key] = 1
+        }
+    }
+}
+
+struct Ledger {
+    balances: StorageMap<u256, u256>,
+}
+
+impl Ledger {
+    fn tagged(mut self) -> (u256, mut StorageMap<u256, u256>) {
+        (0, mut self.balances)
+    }
+
+    fn maybe(mut self, _ on: bool) -> Option<mut StorageMap<u256, u256>> {
+        if on {
+            Option::Some(mut self.balances)
+        } else {
+            Option::None
+        }
+    }
+}
+
+// S-68. Rejected: a plain component of a `mut` grant is still a read access.
+fn plain_grant_component(_ ledger: mut Ledger, _ key: u256) {
+    let (_, map) = ledger.tagged()
+    map[key] = 1
+}
+
+// S-68. Accepted: `mut map` takes the grant's mutable access.
+fn marked_grant_component(_ ledger: mut Ledger, _ key: u256) {
+    let (_, mut map) = ledger.tagged()
+    map[key] = 1
+}
+
+// S-68. Rejected: the same for a sum shape's payload.
+fn plain_sum_component(_ ledger: mut Ledger, _ key: u256) {
+    if let Option::Some(map) = ledger.maybe(true) {
+        map[key] = 1
+    }
+}

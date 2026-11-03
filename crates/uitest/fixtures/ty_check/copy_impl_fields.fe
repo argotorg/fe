@@ -1,0 +1,38 @@
+use core::ptr::MemBuffer
+
+// Rejected: copying `W` would copy the buffer, two owners of one allocation.
+struct W {
+    b: MemBuffer,
+}
+
+impl Copy for W {}
+
+// Rejected: `T` may not be `Copy`.
+struct Gen<T> {
+    x: T,
+}
+
+impl<T> Copy for Gen<T> {}
+
+// Accepted: the bound makes the field `Copy`.
+struct Bounded<T> {
+    x: T,
+}
+
+impl<T: Copy> Copy for Bounded<T> {}
+
+// Rejected: an enum's variant fields are copied too.
+enum E {
+    A(u256),
+    B(MemBuffer),
+}
+
+impl Copy for E {}
+
+// Accepted: every field is `Copy`, and a parameter no field holds needs no bound.
+struct Pair<T> {
+    a: u256,
+    b: *T,
+}
+
+impl<T> Copy for Pair<T> {}

@@ -1,0 +1,68 @@
+const BASE: u256 = 8
+
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+struct Placed {
+    #[slot(0)]
+    value: u256,
+}
+
+// `b` starts inside `a`, which takes slots 4 and 5.
+contract Overlapping {
+    #[slot(4)]
+    mut a: Pair,
+    #[slot(5)]
+    mut b: u256,
+}
+
+// Overlap is per address space: transient slot 4 is free.
+contract SeparateSpaces {
+    #[slot(4)]
+    mut a: Pair,
+    #[slot(4)]
+    mut flag: std::evm::TSlot<bool>,
+}
+
+// A `TSlot` takes its number only in transient storage: the storage field
+// may share slot 6, the transient one may not.
+contract PinnedSpace {
+    #[slot(6)]
+    mut cell: std::evm::TSlot<u256>,
+    #[slot(6)]
+    mut stored: u256,
+    #[slot(6)]
+    mut flag: std::evm::TSlot<bool>,
+}
+
+contract ImmutableField {
+    #[slot(0)]
+    owner: u256,
+
+    init() uses (mut owner) {
+        owner = 1
+    }
+}
+
+contract NotConstant {
+    #[slot(missing + 1)]
+    mut a: u256,
+    #[slot(true)]
+    mut b: u256,
+    #[slot(BASE / 0)]
+    mut c: u256,
+}
+
+contract BadForms {
+    #[slot]
+    mut a: u256,
+    #[slot(1, 2)]
+    mut b: u256,
+    #[slot(at = 1)]
+    mut c: u256,
+    #[slot(1)]
+    #[slot(2)]
+    mut d: u256,
+}

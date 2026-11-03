@@ -7,8 +7,8 @@ const QUINARY_TEST_MAX_LEAVES: usize = 25
 const QUINARY_EMPTY_SIBLINGS: [[u256; QUINARY_SIBLINGS_PER_LEVEL]; MAX_DEPTH] = [[0; QUINARY_SIBLINGS_PER_LEVEL]; MAX_DEPTH]
 
 const fn binary_depth2_slots() -> [u256; 4] {
-    let mut slots: [u256; 4] = [0; 4]
-    let mut i: usize = 0
+    var slots: [u256; 4] = [0; 4]
+    var i: usize = 0
     while i < 4 {
         slots[i] = (i + 1) as u256
         i += 1
@@ -21,8 +21,8 @@ const fn binary_depth2_proof_shape(
     index: usize,
     upper_sibling: u256,
 ) -> ([u256; MAX_DEPTH], [u8; MAX_DEPTH]) {
-    let mut siblings: [u256; MAX_DEPTH] = [0; MAX_DEPTH]
-    let mut indices: [u8; MAX_DEPTH] = [0; MAX_DEPTH]
+    var siblings: [u256; MAX_DEPTH] = [0; MAX_DEPTH]
+    var indices: [u8; MAX_DEPTH] = [0; MAX_DEPTH]
 
     if index % 2 == 1 {
         siblings[0] = slots[index - 1]
@@ -40,8 +40,8 @@ const fn binary_depth2_proof_shape(
 }
 
 const fn quinary_test_slots(count: usize) -> [u256; QUINARY_TEST_MAX_LEAVES] {
-    let mut slots: [u256; QUINARY_TEST_MAX_LEAVES] = [0; QUINARY_TEST_MAX_LEAVES]
-    let mut i: usize = 0
+    var slots: [u256; QUINARY_TEST_MAX_LEAVES] = [0; QUINARY_TEST_MAX_LEAVES]
+    var i: usize = 0
     while i < count {
         slots[i] = (i + 1) as u256
         i += 1
@@ -56,10 +56,10 @@ const fn quinary_first_level_proof(
     [[u256; QUINARY_SIBLINGS_PER_LEVEL]; MAX_DEPTH],
     [u8; MAX_DEPTH],
 ) {
-    let mut siblings: [[u256; QUINARY_SIBLINGS_PER_LEVEL]; MAX_DEPTH] = QUINARY_EMPTY_SIBLINGS
-    let mut indices: [u8; MAX_DEPTH] = [0; MAX_DEPTH]
-    let mut current: [u256; QUINARY_TEST_MAX_LEAVES] = [0; QUINARY_TEST_MAX_LEAVES]
-    let mut copy_index: usize = 0
+    var siblings: [[u256; QUINARY_SIBLINGS_PER_LEVEL]; MAX_DEPTH] = QUINARY_EMPTY_SIBLINGS
+    var indices: [u8; MAX_DEPTH] = [0; MAX_DEPTH]
+    var current: [u256; QUINARY_TEST_MAX_LEAVES] = [0; QUINARY_TEST_MAX_LEAVES]
+    var copy_index: usize = 0
     while copy_index < QUINARY_TEST_MAX_LEAVES {
         current[copy_index] = slots[copy_index]
         copy_index += 1
@@ -68,8 +68,8 @@ const fn quinary_first_level_proof(
     let path = target_index % QUINARY_ARITY
     indices[0] = path.downcast_unchecked()
     let group_start = (target_index / QUINARY_ARITY) * QUINARY_ARITY
-    let mut sibling_pos: usize = 0
-    let mut j: usize = 0
+    var sibling_pos: usize = 0
+    var j: usize = 0
     while j < QUINARY_ARITY {
         if j != path {
             siblings[0][sibling_pos] = current[group_start + j]

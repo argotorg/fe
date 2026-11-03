@@ -1,0 +1,37 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/collection_loops.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+  ┌─ collection_loops.fe:6:9
+  │
+5 │     for x in xs {
+  │         - write `var x` for a mutable value
+6 │         x += 1
+  │         ^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ collection_loops.fe:23:9
+   │
+22 │     for ref account in accounts {
+   │         ----------- `account` is a read access; bind it with `mut` to write through it
+23 │         account.balance = 0
+   │         ^^^^^^^^^^^^^^^ immutable assignment
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ collection_loops.fe:29:9
+   │
+28 │ fn mutates(_ xs: [u256; 3]) {
+   │              -- `xs` does not provide mutable access
+29 │     for mut x in xs {
+   │         ^^^^^ cannot borrow as `mut`
+
+error[8-0119]: a read access needs a `ref` binding
+   ┌─ collection_loops.fe:14:9
+   │
+14 │     for account in accounts {
+   │         ^^^^^^^ this binds a read access of `Account`, which is not `Copy`
+   │
+   = mark the binding `ref` to hold the access, as `let x = ref …`, `(i, ref x)` or `for ref x in …`

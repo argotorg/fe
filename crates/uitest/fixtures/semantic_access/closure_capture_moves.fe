@@ -1,0 +1,37 @@
+use core::iter::Collection
+
+// Each call of a closure only views its captures, so nothing moves out of
+// them, whatever reads the capture.
+struct Account {
+    balance: u256,
+}
+
+fn consume(_ a: own Account) -> u256 {
+    a.balance
+}
+
+// Rejected.
+fn move_capture() -> bool {
+    let a = Account { balance: 1 }
+    let xs: [u256; 1] = [1]
+    xs.any(|_x| consume(a) == 1)
+}
+
+fn move_capture_through_block() -> bool {
+    let a = Account { balance: 1 }
+    let xs: [u256; 1] = [1]
+    xs.any(|_x| consume({ a }) == 1)
+}
+
+fn move_capture_from_nested_closure() -> bool {
+    let a = Account { balance: 1 }
+    let xs: [u256; 1] = [1]
+    xs.any(|_x| xs.any(|_y| consume(a) == 1))
+}
+
+// Accepted: a `Copy` part of a capture is read, not moved.
+fn read_capture() -> bool {
+    let a = Account { balance: 1 }
+    let xs: [u256; 1] = [1]
+    xs.any(|_x| a.balance == 1)
+}

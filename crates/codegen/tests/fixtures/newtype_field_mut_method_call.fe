@@ -25,7 +25,7 @@ struct Container {
 }
 
 pub fn newtype_field_mut_method_call(x: u256) -> u256 {
-    let mut c = Container {
+    var c = Container {
         pad: 0,
         w: WrapCounter {
             inner: Counter { value: x, pad: 0 },

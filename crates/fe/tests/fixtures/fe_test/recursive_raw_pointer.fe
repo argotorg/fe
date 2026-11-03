@@ -60,15 +60,15 @@ impl Node {
 }
 
 fn next_value(_ p: *Node) -> u256 {
-    p.next.value
+    unsafe { p.next.value }
 }
 
 fn follow(_ p: *Node) -> *Node {
-    p.next
+    unsafe { p.next }
 }
 
 fn node_sum(_ n: Node) -> u256 {
-    n.value + n.next.value
+    unsafe { n.value + n.next.value }
 }
 
 fn make_node(value: u256, _ next: *Node) -> Node {
@@ -80,54 +80,57 @@ fn pick(_ first: *Node, _ second: *Node, use_first: bool) -> *Node {
 }
 
 fn walk(_ start: *Node, steps: u256) -> u256 {
-    let mut p = start
-    let mut i: u256 = 0
+    var p = start
+    var i: u256 = 0
     while i < steps {
-        p = p.next
+        unsafe { p = p.next }
         i += 1
     }
-    p.value
+    unsafe { p.value }
 }
 
 fn generic_next<T: Copy>(_ p: *GNode<T>) -> T {
-    p.next.value
+    unsafe { p.next.value }
 }
 
 #[test]
 fn test_self_recursive_reads_writes_and_copies() {
     let tail = core::ptr::alloc<Node>()
-    tail.value = 20
-    tail.next = tail
+    unsafe { tail.value = 20 }
+    unsafe { tail.next = tail }
     let head = core::ptr::alloc<Node>()
-    head.value = 10
-    head.next = tail
+    unsafe { head.value = 10 }
+    unsafe { head.next = tail }
     assert(next_value(head) == 20)
-    assert(head.next.next.value == 20)
+    unsafe { assert(head.next.next.value == 20) }
 
-    head.next.value = 21
-    assert(tail.value == 21)
+    unsafe { head.next.value = 21 }
+    unsafe { assert(tail.value == 21) }
 
     // A whole-value copy copies the pointer, not the referent.
-    let copy = *head
+    let copy = unsafe { *head }
     let slot = core::ptr::alloc<Node>()
-    *slot = copy
-    assert(slot.value == 10)
-    slot.next.value = 22
-    assert(tail.value == 22)
-    assert(core::size_of<Node>() == 64)
+    unsafe { *slot = copy }
+    unsafe { assert(slot.value == 10) }
+    unsafe { slot.next.value = 22 }
+    unsafe { assert(tail.value == 22) }
+    // Natively a pointer takes 8 bytes, and `Node` rounds up to the u256's
+    // 16-byte alignment.
+    let pointer_size = core::size_of<*Node>()
+    assert(core::size_of<Node>() == if pointer_size == 8 { 48 } else { 32 + pointer_size })
 }
 
 #[test]
 fn test_recursive_params_returns_and_values() {
     let tail = core::ptr::alloc<Node>()
-    tail.value = 7
-    tail.next = tail
+    unsafe { tail.value = 7 }
+    unsafe { tail.next = tail }
     let head = core::ptr::alloc<Node>()
-    *head = make_node(value: 5, tail)
+    unsafe { *head = make_node(value: 5, tail) }
     assert(follow(head) == tail)
     let second = follow(follow(head))
-    assert(second.value == 7)
-    assert(node_sum(*head) == 12)
+    unsafe { assert(second.value == 7) }
+    unsafe { assert(node_sum(*head) == 12) }
     let built = make_node(value: 1, head)
     assert(node_sum(built) == 6)
 }
@@ -135,34 +138,34 @@ fn test_recursive_params_returns_and_values() {
 #[test]
 fn test_recursive_joins() {
     let b = core::ptr::alloc<Node>()
-    b.value = 2
-    b.next = b
+    unsafe { b.value = 2 }
+    unsafe { b.next = b }
     let a = core::ptr::alloc<Node>()
-    a.value = 1
-    a.next = b
+    unsafe { a.value = 1 }
+    unsafe { a.next = b }
     let first = pick(a, b, use_first: true)
-    assert(first.value == 1)
+    unsafe { assert(first.value == 1) }
     let second = pick(a, b, use_first: false)
-    assert(second.value == 2)
-    assert(pick(a, b, use_first: false).value == 2)
-    assert(pick(a, b, use_first: true).next.value == 2)
-    let chosen = if a.value == 1 { a.next } else { a }
-    assert(chosen.next.value == 2)
-    (*pick(a, b, use_first: false)).set_value(3)
-    assert(b.value == 3)
+    unsafe { assert(second.value == 2) }
+    unsafe { assert(pick(a, b, use_first: false).value == 2) }
+    unsafe { assert(pick(a, b, use_first: true).next.value == 2) }
+    let chosen = unsafe { if a.value == 1 { a.next } else { a } }
+    unsafe { assert(chosen.next.value == 2) }
+    unsafe { (*pick(a, b, use_first: false)).set_value(3) }
+    unsafe { assert(b.value == 3) }
 }
 
 #[test]
 fn test_recursive_loops() {
     let c = core::ptr::alloc<Node>()
-    c.value = 3
+    unsafe { c.value = 3 }
     let b = core::ptr::alloc<Node>()
-    b.value = 2
-    b.next = c
+    unsafe { b.value = 2 }
+    unsafe { b.next = c }
     let a = core::ptr::alloc<Node>()
-    a.value = 1
-    a.next = b
-    c.next = a
+    unsafe { a.value = 1 }
+    unsafe { a.next = b }
+    unsafe { c.next = a }
     assert(walk(a, steps: 4) == 2)
     assert(walk(a, steps: 8) == 3)
 }
@@ -171,32 +174,32 @@ fn test_recursive_loops() {
 fn test_mutual_recursion() {
     let a = core::ptr::alloc<A>()
     let b = core::ptr::alloc<B>()
-    a.value = 1
-    a.b = b
-    b.value = 2
-    b.a = a
-    assert(a.b.value == 2)
-    assert(a.b.a.b.a.value == 1)
-    b.a.value = 9
-    assert(a.value == 9)
+    unsafe { a.value = 1 }
+    unsafe { a.b = b }
+    unsafe { b.value = 2 }
+    unsafe { b.a = a }
+    unsafe { assert(a.b.value == 2) }
+    unsafe { assert(a.b.a.b.a.value == 1) }
+    unsafe { b.a.value = 9 }
+    unsafe { assert(a.value == 9) }
 }
 
 #[test]
 fn test_generic_recursion() {
     let n = core::ptr::alloc<GNode<u8>>()
-    n.value = 3
-    n.next = n
-    assert(n.next.next.value == 3)
+    unsafe { n.value = 3 }
+    unsafe { n.next = n }
+    unsafe { assert(n.next.next.value == 3) }
     assert(generic_next(n) == 3)
 
     let w = core::ptr::alloc<GNode<u256>>()
-    w.value = 300
-    w.next = w
+    unsafe { w.value = 300 }
+    unsafe { w.next = w }
     assert(generic_next(w) == 300)
 }
 
-fn relink(_ node: *ENode, _ next: Link) {
-    node.next = next
+fn relink(_ node: *ENode, _ next: own Link) {
+    unsafe { node.next = next }
 }
 
 fn is_cons(_ link: Link) -> bool {
@@ -207,91 +210,93 @@ fn is_cons(_ link: Link) -> bool {
 }
 
 fn read_next_ptr(_ start: *ONode) -> Option<*ONode> {
-    start.next
+    unsafe { start.next }
 }
 
 fn optional_next_value(_ start: *ONode) -> u256 {
-    if let Option::Some(node) = start.next {
-        node.value
-    } else {
-        0
+    unsafe {
+        if let Option::Some(node) = start.next {
+            node.value
+        } else {
+            0
+        }
     }
 }
 
 #[test]
 fn test_enum_payload_recursion() {
     let last = core::ptr::alloc<ENode>()
-    last.value = 4
-    last.next = Link::Nil
+    unsafe { last.value = 4 }
+    unsafe { last.next = Link::Nil }
     let first = core::ptr::alloc<ENode>()
-    first.value = 6
+    unsafe { first.value = 6 }
     relink(first, Link::Cons(last))
     assert(is_cons(Link::Cons(first)))
-    assert(is_cons(first.next))
-    let copy = *first
+    unsafe { assert(is_cons(first.next)) }
+    let copy = unsafe { *first }
     let slot = core::ptr::alloc<ENode>()
-    *slot = copy
-    assert(slot.value == 6)
-    last.next = Link::Cons(first)
-    assert(last.value == 4)
+    unsafe { *slot = copy }
+    unsafe { assert(slot.value == 6) }
+    unsafe { last.next = Link::Cons(first) }
+    unsafe { assert(last.value == 4) }
 
     let o2 = core::ptr::alloc<ONode>()
-    o2.value = 2
-    o2.next = Option::None
+    unsafe { o2.value = 2 }
+    unsafe { o2.next = Option::None }
     let o1 = core::ptr::alloc<ONode>()
-    o1.value = 1
-    o1.next = Option::Some(o2)
+    unsafe { o1.value = 1 }
+    unsafe { o1.next = Option::Some(o2) }
     assert(optional_next_value(o1) == 2)
     assert(optional_next_value(o2) == 0)
-    let node = *o1
+    let node = unsafe { *o1 }
     assert(node.value == 1)
     assert(node.next.is_some())
-    assert(o2.next.is_none())
+    unsafe { assert(o2.next.is_none()) }
 }
 
 #[test]
 fn test_recursive_read_only_call_frame_after_move() {
     let first = core::ptr::alloc<MovePair>()
-    first.a = 6
-    first.b = 0
-    let copy = *first
+    unsafe { first.a = 6 }
+    unsafe { first.b = 0 }
+    let copy = unsafe { *first }
     assert(copy.a == 6)
 
     let o2 = core::ptr::alloc<ONode>()
-    o2.value = 2
-    o2.next = Option::None
+    unsafe { o2.value = 2 }
+    unsafe { o2.next = Option::None }
     let o1 = core::ptr::alloc<ONode>()
-    o1.value = 1
-    o1.next = Option::Some(o2)
+    unsafe { o1.value = 1 }
+    unsafe { o1.next = Option::Some(o2) }
     assert(optional_next_value(o1) == 2)
     assert(optional_next_value(o1) == 2)
     let next = read_next_ptr(o1)
     assert(next.is_some())
     assert(optional_next_value(o2) == 0)
-    assert(o2.next.is_none())
+    unsafe { assert(o2.next.is_none()) }
 }
 
 #[test]
 fn test_pointer_arrays_tuples_and_nested_pointers() {
     let leaf = core::ptr::alloc<Tree>()
-    leaf.value = 5
-    leaf.kids = [leaf, leaf]
+    unsafe { leaf.value = 5 }
+    unsafe { leaf.kids = [leaf, leaf] }
     let root = core::ptr::alloc<Tree>()
-    root.value = 1
-    root.kids = [leaf, root]
-    assert(root.kids[0].value == 5)
-    assert(root.kids[1].kids[0].kids[1].value == 5)
+    unsafe { root.value = 1 }
+    unsafe { root.kids = [leaf, root] }
+    unsafe { assert(root.kids[0].value == 5) }
+    unsafe { assert(root.kids[1].kids[0].kids[1].value == 5) }
 
     let pair = core::ptr::alloc<Pair>()
-    pair.value = 8
-    pair.link = (1, pair)
-    assert(pair.link.1.link.1.value == 8)
+    unsafe { pair.value = 8 }
+    unsafe { pair.link = (1, pair) }
+    unsafe { assert(pair.link.1.link.1.value == 8) }
 
     let node = core::ptr::alloc<PNode>()
     let cell = core::ptr::alloc<*PNode>()
-    *cell = node
-    node.value = 11
-    node.next = cell
-    assert((*node.next).value == 11)
-    assert((*(*node.next).next).value == 11)
+    unsafe { *cell = node }
+    unsafe { node.value = 11 }
+    unsafe { node.next = cell }
+    unsafe { assert((*node.next).value == 11) }
+    unsafe { assert((*(*node.next).next).value == 11) }
 }

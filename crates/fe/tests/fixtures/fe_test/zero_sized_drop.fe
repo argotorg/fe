@@ -1,0 +1,24 @@
+use core::ops::Drop
+
+// A zero-sized value has no runtime representation, but its drop still runs:
+// this one reverts. Native tests cannot expect a revert; `native/drop_order.fe`
+// covers zero-sized drops there.
+struct Unit {}
+
+impl Drop for Unit {
+    fn drop(own self) {
+        assert(false)
+    }
+}
+
+#[test(should_revert)]
+fn zero_sized_values_are_destroyed() {
+    let _unit = Unit {}
+}
+
+#[test(should_revert)]
+fn zero_sized_parameters_are_destroyed() {
+    take(Unit {})
+}
+
+fn take(_ unit: own Unit) {}

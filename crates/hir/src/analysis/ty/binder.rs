@@ -11,23 +11,10 @@ use crate::{analysis::HirAnalysisDb, hir_def::GenericParamOwner};
 /// substitution built for another declaration is rejected rather than leaving
 /// the template's parameters untouched. A closed template (no owner) binds no
 /// parameters, e.g. contract field types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::SalsaValue)]
 pub struct Binder<'db, T> {
     owner: Option<GenericParamOwner<'db>>,
     value: T,
-}
-unsafe impl<T> salsa::Update for Binder<'_, T>
-where
-    T: salsa::Update,
-{
-    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
-        unsafe {
-            let old_value = &mut *old_pointer;
-            let owner_changed = old_value.owner != new_value.owner;
-            old_value.owner = new_value.owner;
-            T::maybe_update(&mut old_value.value, new_value.value) | owner_changed
-        }
-    }
 }
 
 impl<'db, T> Binder<'db, T> {
@@ -53,6 +40,14 @@ impl<'db, T> Binder<'db, T> {
     /// depend on the bound parameters.
     pub fn skip_binder(&self) -> &T {
         &self.value
+    }
+
+    /// Maps the template, keeping the parameters it binds.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Binder<'db, U> {
+        Binder {
+            owner: self.owner,
+            value: f(self.value),
+        }
     }
 }
 

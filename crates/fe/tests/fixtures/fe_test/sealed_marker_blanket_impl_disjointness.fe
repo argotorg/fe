@@ -8,13 +8,19 @@ struct X {
     value: u256,
 }
 
+impl Copy for X {}
+
 struct Y {
     value: u256,
 }
 
+impl Copy for Y {}
+
 struct Z {
     value: u256,
 }
+
+impl Copy for Z {}
 
 impl LeftWide for X {}
 impl LeftWide for Y {}
@@ -25,13 +31,13 @@ impl LeftNarrow for Z {}
 impl RightWide for Y {}
 impl RightWide for Z {}
 
-impl<T: LeftWide + LeftNarrow> WrappingAdd for T {
+impl<T: LeftWide + LeftNarrow + Copy> WrappingAdd for T {
     fn wrapping_add(self, _ other: T) -> Self {
         self
     }
 }
 
-impl<T: RightWide> WrappingAdd for T {
+impl<T: RightWide + Copy> WrappingAdd for T {
     fn wrapping_add(self, _ other: T) -> Self {
         other
     }
@@ -44,15 +50,17 @@ struct Full {
     value: u256,
 }
 
+impl Copy for Full {}
+
 impl FullMarker for Full {}
 
-impl<T: EmptyMarker> WrappingSub for T {
+impl<T: EmptyMarker + Copy> WrappingSub for T {
     fn wrapping_sub(self, _ other: T) -> Self {
         self
     }
 }
 
-impl<T: FullMarker> WrappingSub for T {
+impl<T: FullMarker + Copy> WrappingSub for T {
     fn wrapping_sub(self, _ other: T) -> Self {
         other
     }
@@ -66,9 +74,13 @@ struct Left {
     value: u256,
 }
 
+impl Copy for Left {}
+
 struct Right {
     value: u256,
 }
+
+impl Copy for Right {}
 
 impl LeftOnly for Left {}
 impl Common for Left {}
@@ -76,13 +88,13 @@ impl Common for Left {}
 impl RightOnly for Right {}
 impl Common for Right {}
 
-impl<T: LeftOnly + Common> WrappingMul for T {
+impl<T: LeftOnly + Common + Copy> WrappingMul for T {
     fn wrapping_mul(self, _ other: T) -> Self {
         self
     }
 }
 
-impl<T: RightOnly + Common> WrappingMul for T {
+impl<T: RightOnly + Common + Copy> WrappingMul for T {
     fn wrapping_mul(self, _ other: T) -> Self {
         other
     }

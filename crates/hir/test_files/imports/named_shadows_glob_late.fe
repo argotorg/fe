@@ -1,0 +1,23 @@
+// `foo::X` is the named import, which resolves only after the glob.
+use foo::X
+
+mod foo {
+    pub use super::bar::*
+    pub use super::q::X
+}
+
+mod bar {
+    pub struct X {}
+}
+
+mod q {
+    pub use super::r::X
+}
+
+mod r {
+    pub use super::a::X
+}
+
+mod a {
+    pub struct X {}
+}

@@ -11,19 +11,22 @@ use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use super::{
-    binder::Binder,
     canonical::Canonical,
     canonical::Canonicalized,
+    closure::callable_out_ty,
     fold::{TyFoldable, TyFolder},
-    layout_holes::LayoutRootUse,
+    shape::Shape,
     trait_def::{
-        ImplementorOrigin, TraitInstId, TraitRefId,
-        impls_for_trait_and_ty_with_possible_constraints, resolve_trait_impl_instance,
+        AssocBinding, TraitInstId, TraitRefId, impls_for_trait_inst_with_possible_constraints,
     },
     trait_lower::complete_impl_assoc_ty,
-    trait_resolution::{PredicateListId, Selection, TraitSolveCx},
-    ty_def::{AssocTy, TyData, TyId, TyParam, collect_variables},
+    trait_resolution::{PredicateListId, TraitSolveCx},
+    ty_def::{
+        AssocTy, InvalidCause, ShapeCon, ShapeMode, TyBase, TyData, TyId, TyParam,
+        collect_variables,
+    },
     unify::UnificationTable,
+    visitor::{TyVisitor, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -37,12 +40,15 @@ use crate::analysis::{
 /// - Simple associated types (e.g., `T::Output`)
 /// - Nested associated types (e.g., `T::Encoder::Output`)
 /// - Associated types with generic parameters
-pub fn normalize_ty<'db>(
+pub fn normalize_ty<'db, T>(
     db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
+    ty: T,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
+) -> T
+where
+    T: TyFoldable<'db>,
+{
     let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
     ty.fold_with(db, &mut normalizer)
 }
@@ -78,75 +84,14 @@ where
     normalize_from_assumptions(db, value, scope, PredicateListId::new(db, vec![evidence]))
 }
 
-pub(crate) fn normalize_layout_root_uses<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Vec<LayoutRootUse<'db>> {
-    fn collect<'db>(
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-        visiting: &mut rustc_hash::FxHashSet<TyId<'db>>,
-        uses: &mut Vec<LayoutRootUse<'db>>,
-    ) {
-        if !visiting.insert(ty) {
-            return;
-        }
-        if let TyData::AssocTy(assoc) = ty.data(db) {
-            let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-            if let Selection::Unique(resolved) =
-                resolve_trait_impl_instance(db, solve_cx, assoc.trait_.as_predicate(db))
-                && let ImplementorOrigin::Hir(impl_trait) = resolved.selected().origin(db)
-            {
-                for root_use in resolved.assoc_ty_layout_root_uses(db, assoc.name) {
-                    let root_use = LayoutRootUse {
-                        value: Binder::bind(impl_trait.into(), root_use.value)
-                            .instantiate(db, resolved.impl_args(db)),
-                        owner: root_use.owner.map(|owner| {
-                            normalize_ty(
-                                db,
-                                Binder::bind(impl_trait.into(), owner)
-                                    .instantiate(db, resolved.impl_args(db)),
-                                scope,
-                                assumptions,
-                            )
-                        }),
-                        selector: root_use.selector,
-                    };
-                    if !uses.contains(&root_use) {
-                        uses.push(root_use);
-                    }
-                }
-                if let Some(instantiated) = resolved.instantiated_assoc_ty(db, assoc.name) {
-                    collect(db, instantiated, scope, assumptions, visiting, uses);
-                }
-            }
-        } else {
-            let (base, args) = ty.decompose_ty_app(db);
-            if base != ty {
-                collect(db, base, scope, assumptions, visiting, uses);
-            }
-            for arg in args {
-                collect(db, *arg, scope, assumptions, visiting, uses);
-            }
-        }
-        visiting.remove(&ty);
-    }
+/// How many projections may be in the middle of being resolved at once, and
+/// how deeply the generic arguments of one instance may nest.
+pub(crate) const PROJECTION_DEPTH_LIMIT: usize = 64;
 
-    let mut uses = Vec::new();
-    collect(
-        db,
-        ty,
-        scope,
-        assumptions,
-        &mut rustc_hash::FxHashSet::default(),
-        &mut uses,
-    );
-    uses
-}
+/// How many type nodes, counted as a tree, the projections resolved by one
+/// normalization may have in total, as may the generic arguments of one
+/// instance.
+pub(crate) const PROJECTION_WORK_LIMIT: usize = 65536;
 
 pub struct TypeNormalizer<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -155,6 +100,12 @@ pub struct TypeNormalizer<'db> {
     resolve_impls: bool,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
     cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
+    /// Projections currently being resolved, counted against
+    /// [`PROJECTION_DEPTH_LIMIT`].
+    projection_depth: usize,
+    /// Size of the projections resolved so far, counted against
+    /// [`PROJECTION_WORK_LIMIT`].
+    projection_work: usize,
 }
 
 impl<'db> TypeNormalizer<'db> {
@@ -169,8 +120,116 @@ impl<'db> TypeNormalizer<'db> {
             assumptions,
             resolve_impls: true,
             cache: FxHashMap::default(),
+            projection_depth: 0,
+            projection_work: 0,
         }
     }
+
+    /// Starts resolving the projection `ty`, or returns an invalid type if
+    /// that would exceed the normalization limits.
+    ///
+    /// The cycle guard stops a projection that comes back to itself, but not
+    /// one whose impl defines it through a larger projection, such as
+    /// `type Out = <W<(T, T)> as Tr>::Out`: that chain never repeats. Its
+    /// types can also double at each step, staying small as interned values
+    /// while growing exponentially as trees, which is how resolution walks
+    /// them. So both the nesting and the total size are limited.
+    fn enter_projection(&mut self, ty: TyId<'db>) -> Result<(), TyId<'db>> {
+        let remaining = PROJECTION_WORK_LIMIT - self.projection_work;
+        match tree_size_within(self.db, ty, remaining) {
+            Some(size) if self.projection_depth < PROJECTION_DEPTH_LIMIT => {
+                self.projection_work += size;
+                self.projection_depth += 1;
+                Ok(())
+            }
+            _ => Err(TyId::invalid(self.db, InvalidCause::TypeNormalizationLimit)),
+        }
+    }
+}
+
+/// The types `ty` is made of, one level down.
+fn children<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<TyId<'db>> {
+    struct Children<'db> {
+        db: &'db dyn HirAnalysisDb,
+        children: Vec<TyId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Children<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            self.children.push(ty);
+        }
+        // An application is one type with its constructor: `(A, B)` is made
+        // of `A` and `B`, not of `(A,)` applied to `B`.
+        fn visit_app(&mut self, abs: TyId<'db>, arg: TyId<'db>) {
+            walk_ty(self, abs);
+            self.children.push(arg);
+        }
+    }
+    let mut children = Children {
+        db,
+        children: Vec::new(),
+    };
+    walk_ty(&mut children, ty);
+    children.children
+}
+
+/// The number of nodes in `ty` counted as a tree, if it is at most `limit`.
+pub(crate) fn tree_size_within<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    limit: usize,
+) -> Option<usize> {
+    fn size<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        limit: usize,
+        memo: &mut FxHashMap<TyId<'db>, usize>,
+    ) -> Option<usize> {
+        if let Some(&known) = memo.get(&ty) {
+            return Some(known);
+        }
+        let mut total = 1usize;
+        for child in children(db, ty) {
+            total = total.checked_add(size(db, child, limit, memo)?)?;
+            if total > limit {
+                return None;
+            }
+        }
+        memo.insert(ty, total);
+        Some(total)
+    }
+    if limit == 0 {
+        return None;
+    }
+    size(db, ty, limit, &mut FxHashMap::default())
+}
+
+/// Whether `ty`, as a tree, nests at most `limit` levels of types.
+pub(crate) fn tree_depth_within<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    limit: usize,
+) -> bool {
+    fn depth<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        limit: usize,
+        memo: &mut FxHashMap<TyId<'db>, usize>,
+    ) -> Option<usize> {
+        if let Some(&known) = memo.get(&ty) {
+            return (known <= limit).then_some(known);
+        }
+        let below = limit.checked_sub(1)?;
+        let mut deepest = 0;
+        for child in children(db, ty) {
+            deepest = deepest.max(depth(db, child, below, memo)?);
+        }
+        memo.insert(ty, deepest + 1);
+        Some(deepest + 1)
+    }
+    depth(db, ty, limit, &mut FxHashMap::default()).is_some()
 }
 
 impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
@@ -208,8 +267,22 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                     }
                 }
 
-                if let Some(replacement) = self.try_resolve_assoc_ty(ty, assoc_ty) {
-                    let normalized = self.fold_ty(db, replacement);
+                if let Err(limit) = self.enter_projection(ty) {
+                    self.cache.insert(*assoc_ty, Some(limit));
+                    return limit;
+                }
+                // An associated shape resolves to its impl's value at the
+                // mode it is named at; until it has one, it stays.
+                let resolved = match assoc_ty.mode {
+                    None if assoc_ty.is_shape(db) => None,
+                    mode => self.try_resolve_assoc_ty(ty, assoc_ty).map(|replacement| {
+                        let replacement =
+                            mode.map_or(replacement, |mode| replacement.at_shape_mode(db, mode));
+                        self.fold_ty(db, replacement)
+                    }),
+                };
+                self.projection_depth -= 1;
+                if let Some(normalized) = resolved {
                     self.cache.insert(*assoc_ty, Some(normalized));
                     return normalized;
                 }
@@ -218,6 +291,28 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 let folded = ty.super_fold_with(db, self);
                 self.cache.insert(*assoc_ty, Some(folded));
                 folded
+            }
+            // The value or carrier type of a shape reduces once the shape is
+            // known.
+            TyData::TyApp(..)
+                if let (base, &[shape]) = ty.decompose_ty_app(db)
+                    && let TyData::TyBase(TyBase::Shape(
+                        con @ (ShapeCon::Value | ShapeCon::Carrier),
+                    )) = base.data(db) =>
+            {
+                // A value's type names its shape without a mode, which every
+                // mode erases alike.
+                let shape = match shape.data(db) {
+                    TyData::AssocTy(assoc) if assoc.mode.is_none() && *con == ShapeCon::Value => {
+                        shape.with_shape_mode(db, ShapeMode::Ref)
+                    }
+                    _ => shape,
+                };
+                match self.fold_ty(db, shape).as_shape_part(db) {
+                    Shape::Opaque(term) => TyId::shape_part(db, *con, term),
+                    shape if *con == ShapeCon::Value => self.fold_ty(db, shape.erased_ty(db)),
+                    shape => self.fold_ty(db, shape.carrier_ty(db)),
+                }
             }
             _ => ty.super_fold_with(db, self),
         }
@@ -231,7 +326,11 @@ impl<'db> TypeNormalizer<'db> {
         let target = assoc.trait_.fold_with(self.db, self);
         let mut matching_bounds: IndexMap<TyId<'db>, ()> = IndexMap::new();
         for &pred in self.assumptions.list(self.db) {
-            let Some(bound) = pred.bound_assoc_ty(self.db, assoc.name) else {
+            let binding = AssocBinding {
+                name: assoc.name,
+                mode: assoc.mode,
+            };
+            let Some(bound) = pred.bound_assoc_ty(self.db, binding) else {
                 continue;
             };
             if self.trait_refs_match(target, pred.trait_ref(self.db)) {
@@ -247,6 +346,18 @@ impl<'db> TypeNormalizer<'db> {
 
         if !self.resolve_impls {
             return None;
+        }
+
+        if let Some(&shape) = assoc.trait_.args(self.db).get(1)
+            && let Some(out) = callable_out_ty(
+                self.db,
+                self.fold_ty(self.db, assoc.trait_.self_ty(self.db)),
+                assoc.trait_.def(self.db),
+                self.fold_ty(self.db, shape),
+                assoc.name,
+            )
+        {
+            return Some(out);
         }
 
         // 3) Fall back to the general associated type search used by path resolution,
@@ -320,8 +431,7 @@ impl<'db> TypeNormalizer<'db> {
 
     fn try_resolve_assoc_ty_from_impls(&mut self, assoc: &AssocTy<'db>) -> Option<TyId<'db>> {
         let trait_inst = assoc.trait_.fold_with(self.db, self).as_predicate(self.db);
-        let trait_def = trait_inst.def(self.db);
-        let canonical_self_ty = Canonical::new(self.db, trait_inst.self_ty(self.db));
+        let canonical_inst = Canonical::new(self.db, trait_inst);
 
         let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
 
@@ -336,11 +446,10 @@ impl<'db> TypeNormalizer<'db> {
             let target_inst = cx.query();
             let original_target = cx.try_extract::<TraitInstId<'db>>(target_inst);
             for ingot in search_ingots.into_iter().flatten() {
-                for implementor in impls_for_trait_and_ty_with_possible_constraints(
+                for implementor in impls_for_trait_inst_with_possible_constraints(
                     self.db,
                     ingot,
-                    trait_def,
-                    canonical_self_ty,
+                    canonical_inst,
                     self.assumptions,
                 ) {
                     let Some(implementor) =
@@ -378,5 +487,88 @@ impl<'db> TypeNormalizer<'db> {
             1 => Some(*dedup.first().unwrap().0),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+    use common::indexmap::IndexMap;
+
+    use super::normalize_ty;
+    use crate::analysis::ty::{
+        trait_def::TraitInstId,
+        trait_resolution::PredicateListId,
+        ty_def::{ShapeMode, TyId},
+    };
+    use crate::hir_def::{IdentId, ItemKind, ModeMarker};
+    use crate::test_db::HirAnalysisTestDb;
+
+    /// An associated shape normalizes to its impl's value at the mode it is
+    /// named at, `ref` and `mut` independently, and a nested family keeps its
+    /// structure.
+    #[test]
+    fn associated_shapes_normalize_per_mode() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("associated_shapes_normalize_per_mode.fe"),
+            r#"
+trait Driver {
+    shape Step
+}
+
+struct Identity {}
+
+impl Driver for Identity {
+    shape Step = mut? u256
+}
+
+struct Enumerate<D> {}
+
+impl<D: Driver> Driver for Enumerate<D> {
+    shape Step = (own usize, D::Step)
+}
+
+fn probe(_ d: own Enumerate<Enumerate<Identity>>) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let items: Vec<_> = top_mod.children_non_nested(&db).collect();
+        let driver = items
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_) => Some(*trait_),
+                _ => None,
+            })
+            .expect("missing Driver");
+        let probe = items
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(*func),
+                _ => None,
+            })
+            .expect("missing probe");
+        let driver_ty = probe.params(&db).next().expect("missing parameter").ty(&db);
+        let inst = TraitInstId::new(
+            &db,
+            driver,
+            vec![driver_ty],
+            IndexMap::new(),
+            ModeMarker::None,
+        );
+        let step = TyId::assoc_ty(&db, inst.trait_ref(&db), IdentId::new(&db, "Step"));
+        let at = |mode| {
+            normalize_ty(
+                &db,
+                step.with_shape_mode(&db, mode),
+                probe.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .pretty_print(&db)
+            .to_string()
+        };
+        assert_eq!(at(ShapeMode::Ref), "(own usize, (own usize, ref u256))");
+        assert_eq!(at(ShapeMode::Mut), "(own usize, (own usize, mut u256))");
     }
 }

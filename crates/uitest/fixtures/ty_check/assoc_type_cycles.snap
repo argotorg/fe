@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_type_cycles.fe
+---
+error[3-0038]: cycle detected while resolving this type
+   ┌─ assoc_type_cycles.fe:10:17
+   │
+10 │     type Part = Self::Part
+   │                 ^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ assoc_type_cycles.fe:16:17
+   │
+16 │     type Part = (usize, Self::Part)
+   │                 ^^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ assoc_type_cycles.fe:27:18
+   │
+27 │     shape Part = (own usize, Self::Other)
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ assoc_type_cycles.fe:28:19
+   │
+28 │     shape Other = (own usize, Self::Part)
+   │                   ^^^^^^^^^^^^^^^^^^^^^^^ this type's definition depends on itself

@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/desugar.rs
+source: crates/hir/tests/frontend/desugar.rs
+assertion_line: 28
 expression: output
 input_file: test_files/desugar/error_multiple_fields.fe
 ---
@@ -28,13 +29,13 @@ impl core::abi::AbiSize for InsufficientBalance {
 impl core::abi::Encode<std::abi::Sol> for InsufficientBalance {
 
     #[inline(always)]
-    fn encode(own self, _ ptr: *u8) {
-        let mut __fe_tail = <Self as core::abi::AbiSize>::HEAD_SIZE
-        let mut __fe_head_pos = 0
+    fn encode(own self, _ __fe_out: core::abi::AbiFrame) {
+        var __fe_tails = __fe_out.tail(<Self as core::abi::AbiSize>::HEAD_SIZE)
+        var __fe_head_pos = 0
         let __fe_field_0 = self.balance
-        __fe_tail = core::abi::encode_field_at<std::abi::Sol, u256>(__fe_field_0, ptr, head_pos: __fe_head_pos, tail: __fe_tail)
+        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(__fe_field_0, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
         __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
         let __fe_field_1 = self.required
-        core::abi::encode_field_at<std::abi::Sol, u256>(__fe_field_1, ptr, head_pos: __fe_head_pos, tail: __fe_tail)
+        core::abi::encode_field<std::abi::Sol, u256>(__fe_field_1, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
     }
 }

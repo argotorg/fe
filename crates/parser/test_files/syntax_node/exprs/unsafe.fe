@@ -1,0 +1,10 @@
+unsafe { *p }
+
+unsafe {
+    let x = *p
+    *p = x + 1
+}
+
+unsafe { p }.field
+
+unsafe { read(p) } + 1

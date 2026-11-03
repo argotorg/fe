@@ -1,0 +1,28 @@
+// Contract state starts zeroed, so it holds only types zero is a value of:
+// not in a field's own slots, nor in a collection's entries, nor in a field
+// that lives in code.
+use core::option::Option
+use std::evm::{Evm, StorageMap, TSlot}
+
+struct Guarded {
+    unsafe len: u256,
+}
+
+msg M {
+    #[selector = 1]
+    Go -> u256,
+}
+
+pub contract C {
+    mut a: Evm,
+    mut b: StorageMap<u256, Evm>,
+    mut c: TSlot<Evm>,
+    mut d: Option<Evm>,
+    mut e: StorageMap<u256, Guarded>,
+    f: Evm,
+    mut ok: StorageMap<u256, u256>,
+
+    recv M {
+        Go -> u256 { 0 }
+    }
+}

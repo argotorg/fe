@@ -33,19 +33,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         capture: bool,
     ) -> Option<SPlace<'db>> {
         if let Partial::Present(Expr::Un(inner, UnOp::Deref)) = expr.data(self.db, self.body) {
-            let inner_ty = self.expr_ty(*inner);
-            if let Some((_, ptr_ty)) = inner_ty.as_capability(self.db)
-                && ptr_ty.as_ptr(self.db).is_some()
-                && let Some(place) = self.typed_body.expr_place(*inner)
-            {
-                let place = self.lower_place_source(place, capture);
-                let ptr = self.emit_expr_with_origin(
-                    SemOrigin::Expr(*inner),
-                    ptr_ty,
-                    SExpr::ReadPlace { place },
-                );
-                return Some(SPlace::deref(ptr));
-            }
             let ptr = self.lower_place_operand(*inner, capture);
             return Some(SPlace::deref(ptr));
         }
@@ -76,14 +63,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             {
                 let mut place = self.try_lower_place_expr(*base, capture)?;
                 let index = self.lower_place_operand(*index, capture);
-                place.push_dynamic_index(index);
+                if self.typed_body.is_place_entry(expr) {
+                    place.push_entry(index);
+                } else {
+                    place.push_dynamic_index(index);
+                }
                 Some(place)
             }
-            // A temporary native reference still names its original referent.
-            // Preserve that carrier before projecting, instead of materializing
-            // an owned receiver snapshot for a field or indexed method call.
-            _ if self.expr_ty(expr).as_borrow(self.db).is_some() => {
-                Some(SPlace::new(self.lower_place_operand(expr, capture)))
+            // A projection's result is a place in the grant its carrier names.
+            _ if self.typed_body.expr_prop(self.db, expr).access().is_some() => {
+                Some(SPlace::new(self.lower_access(expr)))
             }
             _ => None,
         }
@@ -95,12 +84,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_place_source(&mut self, source_place: &Place<'db>, capture: bool) -> SPlace<'db> {
         let PlaceBase::Binding(binding) = source_place.base;
-        let local = *self
-            .binding_locals
-            .get(&binding)
-            .expect("binding local should be allocated");
-        let mut place = SPlace::new(local);
-        let mut ty = self.locals[local.index()].ty;
+        let (mut place, mut ty) = match self.capture_places.get(&binding) {
+            Some((place, ty)) => (place.clone(), *ty),
+            None => {
+                let local = *self
+                    .binding_locals
+                    .get(&binding)
+                    .expect("binding local should be allocated");
+                (SPlace::new(local), self.locals[local.index()].ty)
+            }
+        };
 
         for projection in &source_place.projections {
             match *projection {
@@ -114,6 +107,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 PlaceProjection::Index { index_expr, .. } => {
                     let index = self.lower_place_operand(index_expr, capture);
                     place.push_dynamic_index(index);
+                }
+                PlaceProjection::Entry { key_expr, .. } => {
+                    let key = self.lower_place_operand(key_expr, capture);
+                    place.push_entry(key);
                 }
             }
             ty = projection.result_ty();

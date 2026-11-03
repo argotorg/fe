@@ -1,5 +1,6 @@
 use core::ptr
-use std::evm::{Address, Call, Create, Evm, RawMem, copy_returndata}
+use core::abi::{load_word, store_word}
+use std::evm::{Address, Call, Create, Evm, copy_returndata}
 
 #[test(should_revert, selector = 0x08c379a0)]
 fn test_assert_macro_reverts() uses (evm: mut Evm) {
@@ -31,21 +32,23 @@ pub contract Reverter {
 
 #[test]
 fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
-    let addr = evm.create2<Reverter>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<Reverter>(value: Wei::zero(), args: (), salt: 0)
 
     // Build calldata containing only the ReverterMsg::Trigger selector.
     let selector_word = (0xaabbccdd as u256) << 224
     let ptr = ptr::alloc_bytes(4)
-    evm.mstore(addr: ptr, value: selector_word)
+    unsafe { store_word(ptr: ptr, value: selector_word) }
 
-    let mut output = ptr::MemBuffer::empty()
-    let outcome = evm.raw_call(
-        addr: addr,
-        gas: 100000,
-        value: 0,
-        args: ptr::MemSpan::from_raw_parts(ptr, len: 4),
-        ret: mut output,
-    )
+    var output = ptr::MemBuffer::empty()
+    let outcome = unsafe {
+        evm.raw_call(
+            addr: addr,
+            gas: 100000,
+            value: Wei::zero(),
+            args: ptr::MemSpan::from_raw_parts(ptr, len: 4),
+            ret: mut output,
+        )
+    }
     assert!(!outcome.success())
 
     // Solidity `Error(string)` for "boom":
@@ -55,11 +58,13 @@ fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
     // (`offset || len || bytes`).
     let ret = copy_returndata()
     assert!(ret.len() == 100)
-    assert!(evm.mload(ret.ptr()) >> 224 == 0x08c379a0)
-    assert!(evm.mload(ptr::offset_bytes(ret.ptr(), 4)) == 0x20)
-    assert!(evm.mload(ptr::offset_bytes(ret.ptr(), 36)) == 4)
-    assert!(
-        evm.mload(ptr::offset_bytes(ret.ptr(), 68))
-            == 0x626f6f6d00000000000000000000000000000000000000000000000000000000,
-    )
+    unsafe { assert!(load_word(ret.ptr()) >> 224 == 0x08c379a0) }
+    unsafe { assert!(load_word(ptr::offset_bytes(ret.ptr(), 4)) == 0x20) }
+    unsafe { assert!(load_word(ptr::offset_bytes(ret.ptr(), 36)) == 4) }
+    unsafe {
+        assert!(
+            load_word(ptr::offset_bytes(ret.ptr(), 68))
+                == 0x626f6f6d00000000000000000000000000000000000000000000000000000000,
+        )
+    }
 }

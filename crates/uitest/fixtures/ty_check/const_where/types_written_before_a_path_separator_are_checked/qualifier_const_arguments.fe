@@ -6,7 +6,9 @@ struct Plain {}
 trait Mk { type Out }
 #[arithmetic(unchecked)]
 const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
-const MAX: usize = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+#[arithmetic(unchecked)]
+const fn wrapped_max() -> usize { 0 - 1 }
+const MAX: usize = wrapped_max()
 impl Mk for Holder<MAX> { type Out = Plain }
 impl Holder<MAX> { const K: usize = 1 }
 fn g<T>() -> u8 { 1 }

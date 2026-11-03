@@ -1,0 +1,143 @@
+// A `SolArray`'s packed elements are lanes of shared slots, which no
+// reference can point at: a `mut` access to one works on a memory copy that
+// is stored back into the lane when the access ends, whether a binding, an
+// argument, a provided effect or a projection's grant.
+use core::ops::LaneCodec
+use std::abi::sol::Uint24
+use std::evm::{Address, Evm, SolArray, SolLanes}
+
+msg Msg {
+    #[selector = 1]
+    Arg -> u256,
+    #[selector = 2]
+    Effect -> u256,
+    #[selector = 3]
+    Projection -> u256,
+    #[selector = 4]
+    EffectProjection -> u256,
+    #[selector = 5]
+    Codec -> u256,
+}
+
+fn bump(_ x: mut u8) {
+    x += 1
+}
+
+fn bump_effect() uses (x: mut u8) {
+    x += 10
+}
+
+fn pick(_ arr: mut SolArray<u8>, _ i: u256) -> mut u8 {
+    mut arr[i]
+}
+
+fn granted() -> mut u8 uses (x: mut u8) {
+    mut x
+}
+
+fn widen(_ value: mut Uint24) {
+    value.val = value.val * 0x100 + 0xff
+}
+
+pub contract Lanes {
+    mut counts: SolArray<u8>,
+    mut wide: SolArray<Uint24>,
+
+    recv Msg {
+        Arg -> u256 uses (mut counts) {
+            counts.push(1)
+            counts.push(2)
+            bump(mut counts[1])
+            counts[0] as u256 * 1000 + counts[1] as u256
+        }
+        Effect -> u256 uses (mut counts) {
+            counts.push(1)
+            counts.push(2)
+            with (mut counts[1]) {
+                bump_effect()
+            }
+            counts[0] as u256 * 1000 + counts[1] as u256
+        }
+        Projection -> u256 uses (mut counts) {
+            counts.push(1)
+            counts.push(2)
+            let p = mut pick(mut counts, 1)
+            p += 100
+            counts[0] as u256 * 1000 + counts[1] as u256
+        }
+        EffectProjection -> u256 uses (mut counts) {
+            counts.push(1)
+            counts.push(2)
+            with (mut counts[0]) {
+                let g = mut granted()
+                g += 5
+            }
+            counts[0] as u256 * 1000 + counts[1] as u256
+        }
+        Codec -> u256 uses (mut wide) {
+            wide.push(Uint24 { val: 0x11 })
+            wide.push(Uint24 { val: 0x22 })
+            widen(mut wide[0])
+            wide[0].val as u256 * 0x1000000 + wide[1].val as u256
+        }
+    }
+}
+
+#[test]
+fn argument_copies_are_stored_back() uses (evm: mut Evm) {
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::Arg {})
+    assert!(value == 1003)
+}
+
+#[test]
+fn provided_effect_copies_are_stored_back() uses (evm: mut Evm) {
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::Effect {})
+    assert!(value == 1012)
+}
+
+#[test]
+fn projection_grants_are_stored_back() uses (evm: mut Evm) {
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::Projection {})
+    assert!(value == 1102)
+}
+
+#[test]
+fn effect_grants_are_stored_back_when_the_session_ends() uses (evm: mut Evm) {
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::EffectProjection {})
+    assert!(value == 6002)
+}
+
+#[test]
+fn codec_lanes_round_trip() uses (evm: mut Evm) {
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::Codec {})
+    assert!(value == 0x11ff * 0x1000000 + 0x22)
+}
+
+struct Order {
+    amount: u256,
+    open: bool,
+    filled: u64,
+}
+
+const ORDER_BITS: u256 = <SolLanes as LaneCodec<Order>>::BITS
+
+fn element_bits<T>() -> u256 {
+    <SolLanes as LaneCodec<T>>::BITS
+}
+
+// A `SolPacked` element's width is its encoding's; any other element takes
+// the slots its storage layout gives it, 256 bits each.
+#[test]
+fn codec_widths() {
+    assert(ORDER_BITS == 512)
+    assert(element_bits<Order>() == 512)
+    assert(element_bits<Uint24>() == 24)
+    assert(element_bits<Address>() == 160)
+    assert(element_bits<u256>() == 256)
+    assert(element_bits<[u8; 3]>() == 768)
+}

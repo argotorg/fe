@@ -1,0 +1,123 @@
+// The draft-6 acceptance list ("Acceptance tests"), numbered as the spec
+// lists it, for the cases the type checker decides. Access/session cases are
+// in `semantic_access/acceptance.fe`.
+use core::iter::{Collection, Identity}
+use std::evm::effects::{RawStorage, StorPtr}
+
+fn read(_ p: StorPtr<u256>) -> u256 uses (target: u256) {
+    target
+}
+
+// 16. Rejected: a shared-resource effect provided locally with `with`
+// cannot hide its interference from the function's contract, `unsafe` or not.
+fn case16_hidden(_ p: StorPtr<u256>) -> u256 {
+    let ptr = p
+    unsafe {
+        with (*ptr) {
+            read(ptr)
+        }
+    }
+}
+
+// 16. Accepted: the function's own `uses` covers it.
+fn case16_declared(_ p: StorPtr<u256>) -> u256 uses (storage: RawStorage) {
+    let ptr = p
+    unsafe {
+        with (*ptr) {
+            read(ptr)
+        }
+    }
+}
+
+struct Key { n: u256 }
+
+struct Keyed { len: u256 }
+
+impl Collection for Keyed {
+    uses E = (key: Key)
+    type Cursor = u256
+    type Item = u256
+
+    fn start(self) -> u256 uses E {
+        0
+    }
+
+    fn has(self, _ c: u256) -> bool uses E {
+        c < self.len
+    }
+
+    fn next(self, _ c: u256) -> u256 uses E {
+        c + 1
+    }
+
+    fn at(self, _ c: u256) -> ref u256 uses E {
+        let item = key.n + c
+        ref item
+    }
+}
+
+// 19. Rejected: `Identity` over an effectful base needs the base's effects.
+fn case19_identity_missing(_ xs: Keyed) -> u256 {
+    let d = Identity {}
+    var sum = 0
+    for x in xs.by(d) {
+        sum += x
+    }
+    sum
+}
+
+mod views {
+    #[view]
+    pub struct Span {
+        pub len: u256,
+    }
+
+    pub struct Owner {
+        pub len: u256,
+    }
+
+    impl Owner {
+        pub fn span(self) -> ref Span {
+            let span = Span { len: self.len }
+            ref span
+        }
+    }
+}
+
+use views::{Owner, Span}
+
+type Alias = Span
+
+trait HasSpan {
+    type S
+}
+
+impl HasSpan for Owner {
+    type S = Span
+}
+
+// 21. Rejected: a `#[view]` type behind an alias or an associated type keeps
+// its restrictions after normalization.
+fn case21_alias(_ s: own Alias) {}
+
+fn take_assoc<T: HasSpan>(_ x: own T::S) {}
+
+fn case21_assoc(owner: Owner) {
+    take_assoc<Owner>(owner.span())
+}
+
+// 28. Rejected: an aggregate containing a `#[view]` span, directly, through
+// an alias, or by generic instantiation.
+struct Direct {
+    span: Span,
+}
+
+type Spans = [Alias; 2]
+
+fn case28_alias(_ s: Spans) {}
+
+fn take<T>(_ x: own T) {}
+
+fn case28_generic(owner: Owner) {
+    take(owner.span())
+}

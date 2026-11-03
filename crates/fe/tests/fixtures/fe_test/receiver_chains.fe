@@ -18,7 +18,7 @@ impl Position {
         self.ver += 1
     }
 
-    fn settle(mut own self, _ payment: u256) -> Position {
+    fn settle(var own self, _ payment: u256) -> Position {
         if payment >= self.debt {
             self.collateral += payment - self.debt
             self.debt = 0
@@ -32,7 +32,7 @@ impl Position {
 
 #[test]
 fn test_receiver_chains() {
-    let mut p = Position {
+    var p = Position {
         collateral: 900,
         debt: 300,
         ver: 0,

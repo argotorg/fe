@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/let_else.fe
+---
+error[8-0101]: refutable pattern in `let`
+  ┌─ let_else.fe:4:9
+  │
+4 │     let Option::Some(x) = o
+  │         ^^^^^^^^^^^^^^^ this pattern may not match; handle the other cases with `let … else`
+
+error[8-0102]: `let … else` block must diverge
+  ┌─ let_else.fe:9:34
+  │
+9 │     let Option::Some(x) = o else {}
+  │                                  ^^ this block must return, break, continue or revert

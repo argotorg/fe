@@ -1,0 +1,32 @@
+use std::evm::{Evm, StorageMap}
+
+msg M {
+    #[selector = 1]
+    Set { which: usize, key: u256, value: u256 },
+    #[selector = 2]
+    Get { which: usize, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut maps: [StorageMap<u256, u256>; 2],
+
+    recv M {
+        Set { which, key, value } uses (mut maps) {
+            maps[which][key] = value
+        }
+        Get { which, key } -> u256 uses (maps) {
+            maps[which][key]
+        }
+    }
+}
+
+#[test]
+fn arrays_of_maps_keep_distinct_entries() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Set { which: 0, key: 5, value: 10 })
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Set { which: 1, key: 5, value: 20 })
+    let first: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Get { which: 0, key: 5 })
+    let second: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Get { which: 1, key: 5 })
+    assert!(first == 10)
+    assert!(second == 20)
+}

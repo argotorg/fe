@@ -1,4 +1,4 @@
-use core::abi::{AbiSize, ByteInput, Bytes, Decode, DynString, store_word}
+use core::abi::{AbiSize, ByteInput, ByteSource, Bytes, Decode, DynString, store_word}
 use core::Copy
 use core::error::ErrorVariant
 use core::num::IntDowncast
@@ -26,6 +26,7 @@ const PANIC_SELECTOR: u256 = 0x4e487b71
 pub struct ReturnData { pub base: u256 }
 
 impl Copy for ReturnData {}
+impl Snapshot for ReturnData {}
 
 impl ReturnData {
     /// A view of the whole current returndata.
@@ -55,33 +56,35 @@ impl ReturnData {
     pub fn to_bytes(self) -> Bytes {
         let len = self.len()
         let padded = (len + 31) / 32 * 32
-        let data = ptr::alloc_bytes(32 + padded)
-        store_word(ptr: data, value: len)
+        let data = ptr::alloc_bytes((32 + padded).downcast_saturate())
+        unsafe { store_word(ptr: data, value: len) }
         if len != 0 {
             if padded != len {
                 // The copy leaves the padding of the last word untouched.
-                store_word(ptr: ptr::offset_bytes(data, padded), value: 0)
+                unsafe { store_word(ptr: ptr::offset_bytes(data, padded.downcast_unchecked()), value: 0) }
             }
-            returndatacopy(
-                dest: ptr::offset_bytes(data, 32),
-                offset: self.base,
-                len: len,
-            )
+            unsafe {
+                returndatacopy(
+                    dest: ptr::offset_bytes(data, 32),
+                    offset: self.base,
+                    len: len,
+                )
+            }
         }
-        Bytes::from_abi_tail(data: data, len: len, size: 32 + padded)
+        unsafe { Bytes::from_abi_tail(data: data, len: len.downcast_unchecked(), size: 32 + padded) }
     }
 }
 
-impl ByteInput for ReturnData {
+impl ByteSource for ReturnData {
     /// Bytes visible through the view: `returndatasize() - base`, or zero if
     /// `base` is past the end.
     #[inline(always)]
-    fn len(self) -> u256 {
+    fn size(self) -> u64 {
         let total = returndatasize()
         if self.base > total {
             0
         } else {
-            total - self.base
+            (total - self.base).downcast_truncate()
         }
     }
 
@@ -96,22 +99,26 @@ impl ByteInput for ReturnData {
         }
         // `byte_offset < len` implies `base + byte_offset < returndatasize()`.
         let available = len - byte_offset
-        let scratch = ptr::FixedMemBuffer<32>::alloc()
+        let scratch = unsafe { ptr::FixedMemBuffer<32>::alloc_uninit() }
         if available < 32 {
-            store_word(ptr: scratch.ptr(), value: 0)
-            returndatacopy(
-                dest: scratch.ptr(),
-                offset: self.base + byte_offset,
-                len: available,
-            )
+            unsafe {
+                store_word(ptr: scratch.ptr(), value: 0)
+                returndatacopy(
+                    dest: scratch.ptr(),
+                    offset: self.base + byte_offset,
+                    len: available,
+                )
+            }
         } else {
-            returndatacopy(
-                dest: scratch.ptr(),
-                offset: self.base + byte_offset,
-                len: 32,
-            )
+            unsafe {
+                returndatacopy(
+                    dest: scratch.ptr(),
+                    offset: self.base + byte_offset,
+                    len: 32,
+                )
+            }
         }
-        mload(scratch.ptr())
+        unsafe { mload(scratch.ptr()) }
     }
 
     #[arithmetic(unchecked)]
@@ -125,7 +132,7 @@ impl ByteInput for ReturnData {
 
     /// Copy `len` bytes at `src_offset`; reverts without data if the range
     /// is not inside the view.
-    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
         let input_len = self.len()
         if src_offset > input_len || len > input_len - src_offset {
             revert_empty()
@@ -140,7 +147,7 @@ impl ByteInput for ReturnData {
 
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn copy_to_memory_unchecked(self, dest: *u8, src_offset: u256, len: u256) {
+    unsafe fn copy_to_memory_unchecked(self, dest: *u8, src_offset: u256, len: u256) {
         // As in `copy_to_memory`: an empty range of a view rebased past the
         // end is valid, but `RETURNDATACOPY` would halt on it.
         if len == 0 {
@@ -191,7 +198,7 @@ pub fn is_error<E>(_ data: MemSpan) -> bool where E: ErrorVariant<Sol> {
     if !has_selector<E>(data) {
         return false
     }
-    let payload_len = data.len() - 4
+    let payload_len = data.len() as u256 - 4
     if E::IS_DYNAMIC {
         payload_len >= E::HEAD_SIZE
     } else {
@@ -226,19 +233,21 @@ pub fn decode_error_string<I: ByteInput>(_ data: I) -> Option<DynString> {
         return Option::None
     }
     let padded = (length + 31) / 32 * 32
-    let tail = ptr::alloc_bytes(32 + padded)
-    store_word(ptr: tail, value: length)
+    let tail = ptr::alloc_bytes((32 + padded).downcast_saturate())
+    unsafe { store_word(ptr: tail, value: length) }
     if padded > 0 {
-        store_word(ptr: ptr::offset_bytes(tail, padded), value: 0)
+        unsafe { store_word(ptr: ptr::offset_bytes(tail, padded.downcast_unchecked()), value: 0) }
     }
-    data.copy_to_memory(
-        dest: ptr::offset_bytes(tail, 32),
-        src_offset: offset + 0x24,
-        len: length,
-    )
-    Option::Some(
-        DynString::from_abi_tail(data: tail, len: length, size: 32 + padded),
-    )
+    unsafe {
+        data.copy_to_memory(
+            dest: ptr::offset_bytes(tail, 32),
+            src_offset: offset + 0x24,
+            len: length,
+        )
+        Option::Some(
+            DynString::from_abi_tail(data: tail, len: length.downcast_unchecked(), size: 32 + padded),
+        )
+    }
 }
 
 /// The code of a Solidity `Panic(uint256)` revert, accepted like Solidity's

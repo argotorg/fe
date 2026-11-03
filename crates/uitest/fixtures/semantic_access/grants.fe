@@ -1,0 +1,76 @@
+// Creating a grant is an access of its component's mode on the yielded
+// place, checked against everything the suspended frame keeps open; the
+// exported referent must be initialized, and an owned component of a shape
+// may not overlap an access component.
+enum Choice {
+    Item(u256),
+    Empty,
+}
+
+struct Wrapper {
+    v: u256,
+}
+
+struct Holder {
+    c: Choice,
+    a: u256,
+    b: u256,
+}
+
+impl Holder {
+    // Rejected: the exported `mut` access would let the caller replace the
+    // enum under the payload view the slide still uses.
+    fn retained_payload(mut self) -> mut Choice {
+        match self.c {
+            Choice::Item(ref item) => {
+                yield mut self.c
+                self.a = item
+            }
+            Choice::Empty => {
+                yield mut self.c
+            }
+        }
+    }
+
+    // Accepted: a view of a disjoint field survives the yield.
+    fn disjoint_view(mut self) -> mut u256 {
+        let b = ref self.b
+        yield mut self.a
+        self.a += b
+    }
+
+    fn written_back(mut self) -> mut u256 {
+        var tmp = self.a
+        yield mut tmp
+        self.a = tmp
+    }
+
+    // Accepted: the export is a reborrow through the inner grant, which the
+    // slide uses after the caller's access ends.
+    fn reborrowed(mut self) -> mut u256 {
+        let x = mut self.written_back()
+        yield mut x
+        x += 1
+    }
+
+    // Rejected: an uninitialized referent cannot be exported.
+    fn uninitialized(self) -> mut u256 {
+        var tmp: u256
+        yield mut tmp
+        let _ = tmp
+    }
+
+    // Rejected: the owned component moves the value out before the access
+    // component exports it.
+    fn owned_and_access(self) -> (Wrapper, mut Wrapper) {
+        var tmp = Wrapper { v: self.a }
+        yield (tmp, mut tmp)
+        let _ = tmp.v
+    }
+
+    fn access_and_owned(self) -> (mut Wrapper, Wrapper) {
+        var tmp = Wrapper { v: self.a }
+        yield (mut tmp, tmp)
+        let _ = tmp.v
+    }
+}

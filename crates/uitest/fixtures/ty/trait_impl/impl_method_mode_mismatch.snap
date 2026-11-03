@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 84
 expression: diags
 input_file: fixtures/ty/trait_impl/impl_method_mode_mismatch.fe
 ---
@@ -19,7 +20,7 @@ error[6-0007]: method `bad` has incompatible argument type
    │                  ---------- trait requires this type
    ·
 24 │     fn bad(self, x: mut i32) {}
-   │                  ^^^^^^^^^^ expected `ref i32`, found `mut i32`
+   │                  ^^^^^^^^^^ expected `i32`, found `mut i32`
 
 error[6-0007]: method `bad` has incompatible argument type
    ┌─ impl_method_mode_mismatch.fe:28:18

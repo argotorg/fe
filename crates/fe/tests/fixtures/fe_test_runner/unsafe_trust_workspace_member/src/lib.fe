@@ -1,0 +1,6 @@
+// `dep` is a member of the `vendor` workspace, not of the user's, and
+// nothing trusts it.
+#[test]
+fn untrusted_workspace_member_use() {
+    assert!(dep::round_trip(7) == 7)
+}

@@ -6,21 +6,21 @@ use core::ptr::MemArray
 // iteration.
 
 fn fill(_ data: *u256, n: u256) {
-    let mut p = data
-    let mut i: u256 = 0
+    var p = data
+    var i: u256 = 0
     while i < n {
-        *p = i + 1
+        unsafe { *p = i + 1 }
         p = ptr::offset_bytes(p, 32)
         i += 1
     }
 }
 
 fn sum(_ data: *u256, n: u256) -> u256 {
-    let mut p = data
-    let mut i: u256 = 0
-    let mut total: u256 = 0
+    var p = data
+    var i: u256 = 0
+    var total: u256 = 0
     while i < n {
-        total += *p
+        unsafe { total += *p }
         p = ptr::offset(p, 1)
         i += 1
     }
@@ -28,8 +28,8 @@ fn sum(_ data: *u256, n: u256) -> u256 {
 }
 
 fn skip(_ data: *u8, n: u256) -> *u8 {
-    let mut p = data
-    let mut i: u256 = 0
+    var p = data
+    var i: u256 = 0
     while i < n {
         p = ptr::offset_bytes(p, 32)
         i += 1
@@ -39,22 +39,22 @@ fn skip(_ data: *u8, n: u256) -> *u8 {
 
 #[test]
 fn self_offset_pointer_in_loop() {
-    let values = MemArray<u256>::new_uninit(4)
+    let values = unsafe { MemArray<u256>::new_uninit(4) }
     fill(values.ptr_at(0), n: 4)
     assert(sum(values.ptr_at(0), n: 4) == 10)
-    assert(*values.ptr_at(3) == 4)
+    unsafe { assert(*values.ptr_at(3) == 4) }
 }
 
 #[test]
 fn nested_self_offset_pointers() {
-    let values = MemArray<u256>::new_uninit(6)
-    let mut row = values.ptr_at(0)
-    let mut i: u256 = 0
+    let values = unsafe { MemArray<u256>::new_uninit(6) }
+    var row = values.ptr_at(0)
+    var i: u256 = 0
     while i < 2 {
-        let mut cell = row
-        let mut j: u256 = 0
+        var cell = row
+        var j: u256 = 0
         while j < 3 {
-            *cell = i * 3 + j
+            unsafe { *cell = i * 3 + j }
             cell = ptr::offset(cell, 1)
             j += 1
         }
@@ -62,5 +62,5 @@ fn nested_self_offset_pointers() {
         i += 1
     }
     assert(sum(values.ptr_at(0), n: 6) == 15)
-    assert(*values.ptr_at(5) == 5)
+    unsafe { assert(*values.ptr_at(5) == 5) }
 }

@@ -1,0 +1,37 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/shared_projection_calls.fe
+---
+error[16-0001]: access conflict in `fn projection_view_conflicts_with_mut_argument`
+   ┌─ shared_projection_calls.fe:24:27
+   │
+24 │     inspect(frame.memory, mut frame)
+   │             ------------  ^^^^^^^^^ cannot mutably access this place while a `ref` access of it is open
+   │             │
+   │             access opened here
+
+error[16-0001]: access conflict in `fn projection_view_conflicts_with_mut_receiver`
+   ┌─ shared_projection_calls.fe:28:5
+   │
+28 │     frame.memory.absorb(frame.memory)
+   │     ^^^^^^^^^^^^        ------------ access opened here
+   │     │
+   │     cannot mutably access this place while a `ref` access of it is open
+
+error[16-0002]: move conflict in `fn own_receiver_moves_projection`
+   ┌─ shared_projection_calls.fe:16:30
+   │
+16 │     frame.memory.consume() + frame.memory.read()
+   │     ------------             ^^^^^^^^^^^^ cannot use a value after it was moved
+   │     │
+   │     value is moved here
+
+error[16-0002]: move conflict in `fn own_argument_moves_projection`
+   ┌─ shared_projection_calls.fe:20:29
+   │
+20 │     consume(frame.memory) + frame.memory.read()
+   │             ------------    ^^^^^^^^^^^^ cannot use a value after it was moved
+   │             │
+   │             value is moved here

@@ -7,10 +7,12 @@ struct Data {
 
 fn raw_emit(evm: mut Evm) {
     let data = ptr::alloc<Data>()
-    evm.log0(data: ptr::MemSpan::from_raw_parts(
-        ptr: ptr::byte_ptr(data),
-        len: core::size_of<Data>(),
-    ))
+    unsafe {
+        evm.log0(data: ptr::MemSpan::from_raw_parts(
+            ptr: ptr::byte_ptr(data),
+            len: core::size_of<Data>() as usize,
+        ))
+    }
 }
 
 pub fn main() uses (evm: mut Evm) {

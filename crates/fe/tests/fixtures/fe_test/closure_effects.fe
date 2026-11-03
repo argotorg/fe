@@ -1,0 +1,207 @@
+// The effects a closure's body uses are its row `E`, which the caller of
+// each call provides: a higher-order function forwards it with `uses F::E`,
+// and the provider in scope where that function is called is the one the
+// body uses.
+use core::iter::Collection
+use std::evm::Evm
+
+struct Store { n: u256 }
+
+fn bump(_ by: u256) uses (store: mut Store) {
+    store.n += by
+}
+
+fn read() -> u256 uses (store: Store) {
+    store.n
+}
+
+fn count_matching(_ xs: [u256; 4]) -> usize uses (store: Store) {
+    xs.count(|x| x == store.n)
+}
+
+fn add_all(_ xs: [u256; 4]) -> u256 uses (store: mut Store) {
+    xs.fold(0, |acc, x| {
+        bump(x)
+        acc + read()
+    })
+}
+
+fn named_write(_ xs: [u256; 4]) uses (store: mut Store) {
+    let _ = xs.any(|x| {
+        store.n += x
+        false
+    })
+}
+
+fn nested(_ xs: [u256; 2]) -> u256 uses (store: Store) {
+    xs.fold(0, |acc, x| acc + xs.fold(0, |inner, y| inner + y * read()) + x)
+}
+
+#[test]
+fn captured_and_implicit_effects() {
+    var s = Store { n: 3 }
+    with (Store = s) {
+        assert!(count_matching([1, 3, 3, 4]) == 2)
+    }
+    s.n = 0
+    with (Store = s) {
+        assert!(add_all([1, 2, 3, 4]) == 1 + 3 + 6 + 10)
+    }
+    assert!(s.n == 10)
+    with (Store = s) {
+        named_write([1, 1, 1, 1])
+    }
+    assert!(s.n == 14)
+    s.n = 2
+    with (Store = s) {
+        assert!(nested([1, 2]) == 6 + 1 + 6 + 2)
+    }
+}
+
+#[test]
+fn providers_inside_and_at_the_call() {
+    let xs: [u256; 2] = [5, 6]
+    let total = xs.fold(0, |acc, x| {
+        var local = Store { n: x }
+        with (Store = local) {
+            bump(1)
+            acc + read()
+        }
+    })
+    assert!(total == 13)
+
+    // A closure made under one provider uses the one in scope where the
+    // higher-order function calling it is called.
+    let a = Store { n: 1 }
+    let b = Store { n: 2 }
+    let ys: [u256; 1] = [0]
+    with (Store = a) {
+        let f = |y: u256| y + read()
+        with (Store = b) {
+            assert!(ys.fold(0, |acc, y| acc + f(y)) == 2)
+        }
+    }
+}
+
+trait Scale {
+    fn factor(self) -> u256
+}
+
+struct Fixed { n: u256 }
+
+impl Scale for Fixed {
+    fn factor(self) -> u256 {
+        self.n
+    }
+}
+
+fn scaled(_ x: u256) -> u256 uses (scale: Scale) {
+    x * scale.factor()
+}
+
+// Effects keyed by a trait are row components too: the provider meets the
+// trait wherever the higher-order function is called.
+fn scaled_sum(_ xs: [u256; 3]) -> u256 uses (scale: Scale) {
+    xs.fold(0, |acc, x| acc + scaled(x))
+}
+
+fn scaled_count(_ xs: [u256; 3], _ at_least: u256) -> usize uses (scale: Scale) {
+    xs.count(|x| x * scale.factor() >= at_least)
+}
+
+#[test]
+fn trait_keyed_effects() {
+    let xs: [u256; 3] = [1, 2, 3]
+    let two = Fixed { n: 2 }
+    with (Scale = two) {
+        assert!(scaled_sum(xs) == 12)
+        assert!(scaled_count(xs, 4) == 2)
+    }
+    let ten = Fixed { n: 10 }
+    with (Scale = ten) {
+        assert!(xs.fold(0, |acc, x| acc + scaled(x)) == 60)
+    }
+}
+
+fn has_start<C: Collection>(_ c: C) -> bool uses C::E {
+    c.has(c.start())
+}
+
+// An enclosing row the body needs is a component of the closure's row, which
+// the caller forwards.
+fn any_nonempty<C: Collection + Copy>(_ xs: [u256; 2], _ c: C) -> bool uses C::E {
+    xs.any(|x| has_start(c))
+}
+
+// The numbers below `store.n`: a collection whose row reads `Store`.
+struct BelowStore {}
+
+impl Copy for BelowStore {}
+
+impl Collection for BelowStore {
+    uses E = (store: Store)
+    type Cursor = u256
+    type Item = u256
+
+    fn start(self) -> u256 uses E {
+        0
+    }
+
+    fn has(self, _ c: u256) -> bool uses E {
+        c < store.n
+    }
+
+    fn next(self, _ c: u256) -> u256 uses E {
+        c + 1
+    }
+
+    fn at(self, _ c: u256) -> ref u256 uses E {
+        let value = c
+        ref value
+    }
+}
+
+#[test]
+fn enclosing_rows() {
+    var s = Store { n: 0 }
+    with (Store = s) {
+        assert!(!any_nonempty([1, 2], BelowStore {}))
+    }
+    s.n = 1
+    with (Store = s) {
+        assert!(any_nonempty([1, 2], BelowStore {}))
+    }
+    let arr: [u256; 2] = [3, 4]
+    assert!(any_nonempty([1, 2], arr))
+}
+
+msg TallyMsg {
+    #[selector = sol("add(uint256,uint256)")]
+    Add { a: u256, b: u256 } -> u256,
+}
+
+pub contract Tally {
+    mut store: Store,
+    init() uses (mut store) {
+        store.n = 0
+    }
+    recv TallyMsg {
+        Add { a, b } -> u256 uses (mut store) {
+            let xs: [u256; 2] = [a, b]
+            let _ = xs.fold(0 as u256, |acc, x| {
+                bump(x)
+                acc
+            })
+            xs.fold(store.n, |acc, x| acc + x + store.n)
+        }
+    }
+}
+
+#[test]
+fn storage_providers() uses (evm: mut Evm, call: mut Call) {
+    let addr = evm.create2<Tally>(value: Wei::zero(), args: (), salt: 0)
+    let r: u256 = addr.call(TallyMsg::Add { a: 2, b: 3 })
+    assert!(r == 5 + 2 + 3 + 5 + 5)
+    let s: u256 = addr.call(TallyMsg::Add { a: 1, b: 0 })
+    assert!(s == 6 + 1 + 6 + 0 + 6)
+}

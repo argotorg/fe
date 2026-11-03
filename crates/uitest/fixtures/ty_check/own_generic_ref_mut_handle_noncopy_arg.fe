@@ -6,12 +6,12 @@ fn consume<T>(_: own T) {}
 
 fn pass_ref() {
     let x = NoCopy { x: 1 }
-    let r: ref NoCopy = ref x
+    let r = ref x
     consume(r)
 }
 
 fn pass_mut() {
-    let mut x = NoCopy { x: 2 }
-    let m: mut NoCopy = mut x
+    var x = NoCopy { x: 2 }
+    let m = mut x
     consume(m)
 }

@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_access/inner_loop_feedback.fe
+---
+error[16-0001]: access conflict in `fn held_written_inside`
+   ┌─ inner_loop_feedback.fe:73:13
+   │
+70 │         let held = mut other[x]
+   │                    ------------ access opened here
+   ·
+73 │             other[x] = 2
+   │             ^^^^^^^^^^^^ cannot write to this place while a `mut` access of it is open
+
+error[16-0002]: move conflict in `fn moved_inside`
+   ┌─ inner_loop_feedback.fe:88:21
+   │
+88 │             consume(item)
+   │                     ^^^^
+   │                     │
+   │                     cannot use a value after it was moved
+   │                     value is moved here

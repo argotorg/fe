@@ -72,12 +72,12 @@ impl<'db> DependencyIssues<'db> {
         let Some(root) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
             return Self { issues: Vec::new() };
         };
-        seen.insert(root.base(db));
+        seen.insert(root.base(db).clone());
 
         let mut pending = root
             .dependencies(db)
-            .into_iter()
-            .map(|(_, url)| url)
+            .iter()
+            .map(|(_, url)| url.clone())
             .collect::<VecDeque<_>>();
         let mut dependencies = Vec::new();
         while let Some(dependency_url) = pending.pop_front() {
@@ -87,7 +87,7 @@ impl<'db> DependencyIssues<'db> {
             let Some(ingot) = db.workspace().containing_ingot(db, dependency_url.clone()) else {
                 continue;
             };
-            pending.extend(ingot.dependencies(db).into_iter().map(|(_, url)| url));
+            pending.extend(ingot.dependencies(db).iter().map(|(_, url)| url.clone()));
             // Analyzing the whole embedded libraries is far too slow for every run. They are
             // validated by dedicated whole-library tests, and `collect_reached_builtins`
             // reports errors in the modules a compilation actually reaches. Source and
@@ -159,7 +159,7 @@ impl<'db> DependencyIssues<'db> {
             if !hir.has_errors(db) {
                 continue;
             }
-            match by_ingot.entry(url) {
+            match by_ingot.entry(url.clone()) {
                 Entry::Vacant(entry) => {
                     entry.insert(hir);
                 }
@@ -220,7 +220,7 @@ impl<'db> CompilationDiagnostics<'db> {
         Self::finish(
             db,
             db.run_on_ingot(ingot),
-            || DependencyIssues::collect_all(db, &ingot_url),
+            || DependencyIssues::collect_all(db, ingot_url),
             || db.mir_diagnostics_for_ingot(ingot),
             || ingot_modules(db, ingot),
         )
@@ -235,10 +235,14 @@ impl<'db> CompilationDiagnostics<'db> {
         Self::finish(
             db,
             db.run_on_ingot(ingot),
-            || DependencyIssues::collect(db, &ingot_url, seen),
+            || DependencyIssues::collect(db, ingot_url, seen),
             || db.mir_diagnostics_for_ingot(ingot),
             || ingot_modules(db, ingot),
         )
+    }
+
+    pub(crate) fn mir_has_errors(&self) -> bool {
+        self.mir.iter().any(|diag| diag.severity == Severity::Error)
     }
 
     fn finish(

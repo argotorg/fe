@@ -23,17 +23,26 @@ error[3-0029]: invalid mixed receiver syntax
   = or move the mode into the type and remove the prefix: `self: own ...`
 
 error[3-0030]: invalid mixed receiver syntax
+   ┌─ self_prefix_mixed_with_explicit_type.fe:12:25
+   │
+12 │     fn bad_var_own_bare(var self: own Self) {}
+   │                         ^^^ `var self: own Self` is written with the shorthand
+   │
+   = use shorthand receiver syntax instead: `var own self`
+
+error[3-0031]: `var` makes an owned parameter mutable
+   ┌─ self_prefix_mixed_with_explicit_type.fe:14:24
+   │
+14 │     fn bad_var_view<T>(var self: Self<T>) {}
+   │                        ^^^ `var x: T` is only allowed when `T` is `own ...`
+   │
+   = use `x: mut T` for a mutable borrow, or `var x: own T` for a mutable owned parameter
+
+error[3-0068]: invalid mixed receiver syntax
    ┌─ self_prefix_mixed_with_explicit_type.fe:10:25
    │
 10 │     fn bad_mut_plain<T>(mut self: Self<T>) {}
-   │                         ^^^ `mut self: ...` is only allowed as `mut self: own X` where `X` is not bare `Self`
+   │                         ^^^ `mut self: ...` cannot be used with an explicit `self` type
    │
-   = for a mutable owned receiver, use shorthand receiver syntax: `mut own self`
-
-error[3-0030]: invalid mixed receiver syntax
-   ┌─ self_prefix_mixed_with_explicit_type.fe:12:25
-   │
-12 │     fn bad_mut_own_bare(mut self: own Self) {}
-   │                         ^^^ `mut self: ...` is only allowed as `mut self: own X` where `X` is not bare `Self`
-   │
-   = for a mutable owned receiver, use shorthand receiver syntax: `mut own self`
+   = use shorthand receiver syntax instead: `mut self`
+   = or move the mode into the type and remove the prefix: `self: mut ...`

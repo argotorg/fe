@@ -1,3 +1,5 @@
+use cranelift_entity::EntityRef;
+use hir::analysis::ty::AddressSpace;
 use rustc_hash::FxHashSet;
 
 use crate::{
@@ -72,14 +74,16 @@ pub fn verify_runtime_body_detailed<'db>(
     for (block_idx, block) in body.blocks.iter().enumerate() {
         let block_id = crate::runtime::RBlockId::from_u32(block_idx as u32);
         for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-            verify_stmt(db, program, body, block, stmt_idx, stmt).map_err(|error| {
-                RuntimeVerifyFailure {
-                    error,
-                    site: RuntimeVerifySite::Stmt {
-                        block: block_id,
-                        stmt: stmt_idx,
-                    },
-                }
+            let site = StmtSite {
+                block: block_id,
+                stmt_idx,
+            };
+            verify_stmt(db, program, body, site, stmt).map_err(|error| RuntimeVerifyFailure {
+                error,
+                site: RuntimeVerifySite::Stmt {
+                    block: block_id,
+                    stmt: stmt_idx,
+                },
             })?;
         }
 
@@ -94,18 +98,22 @@ pub fn verify_runtime_body_detailed<'db>(
     Ok(())
 }
 
+/// Where a statement is, for the proofs that depend on its block.
+#[derive(Clone, Copy)]
+struct StmtSite {
+    block: crate::runtime::RBlockId,
+    stmt_idx: usize,
+}
+
 fn verify_stmt<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
-    block: &crate::runtime::RBlock<'db>,
-    stmt_idx: usize,
+    site: StmtSite,
     stmt: &RStmt<'db>,
 ) -> Result<(), VerifyError<'db>> {
     match stmt {
-        RStmt::Assign { dst, expr } => {
-            verify_assign(db, program, body, block, stmt_idx, *dst, expr)
-        }
+        RStmt::Assign { dst, expr } => verify_assign(db, program, body, site, *dst, expr),
         RStmt::AssertIndexInBounds { index, .. } => {
             if let hir::projection::IndexSource::Dynamic(index) = index
                 && !matches!(
@@ -138,6 +146,7 @@ fn verify_stmt<'db>(
             variant,
             fields,
         } => verify_enum_write_variant(program, body, *root, *variant, fields),
+        RStmt::End { .. } => Ok(()),
     }
 }
 
@@ -194,8 +203,7 @@ fn verify_assign<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
-    block: &crate::runtime::RBlock<'db>,
-    stmt_idx: usize,
+    site: StmtSite,
     dst: crate::runtime::RLocalId,
     expr: &RExpr<'db>,
 ) -> Result<(), VerifyError<'db>> {
@@ -214,7 +222,7 @@ fn verify_assign<'db>(
     let expr_class = expr_result_class(db, program, body, dst, dst_class.clone(), expr)?;
 
     if let RExpr::EnumExtract { value, variant, .. } = expr
-        && !same_block_dominating_enum_assert(block, stmt_idx, *value, *variant)
+        && !enum_variant_proven(body, site, *value, *variant)
     {
         return Err(VerifyError::MissingEnumVariantProof(*value));
     }
@@ -243,14 +251,21 @@ fn verify_assign<'db>(
     Ok(())
 }
 
-fn same_block_dominating_enum_assert<'db>(
-    block: &crate::runtime::RBlock<'db>,
-    stmt_idx: usize,
+/// Whether `value` holds `variant` at the statement: an earlier statement of
+/// the block made or asserted it. A branch on `EnumIsVariant` is no proof:
+/// Sonatina needs the assertion to read a payload it did not see written.
+fn enum_variant_proven<'db>(
+    body: &RuntimeBody<'db>,
+    site: StmtSite,
     value: crate::runtime::RValueId,
     variant: crate::runtime::VariantId<'db>,
 ) -> bool {
     let mut proven = false;
-    for stmt in block.stmts.iter().take(stmt_idx) {
+    for stmt in body.blocks[site.block.index()]
+        .stmts
+        .iter()
+        .take(site.stmt_idx)
+    {
         match stmt {
             RStmt::Assign { dst, expr } if *dst == value => {
                 proven = matches!(
@@ -273,7 +288,8 @@ fn same_block_dominating_enum_assert<'db>(
             | RStmt::Store { .. }
             | RStmt::CopyInto { .. }
             | RStmt::EnumSetTag { .. }
-            | RStmt::EnumWriteVariant { .. } => {}
+            | RStmt::EnumWriteVariant { .. }
+            | RStmt::End { .. } => {}
         }
     }
     proven
@@ -366,14 +382,25 @@ fn verify_terminator<'db>(
             verify_call(db, program, body, *callee, args, RuntimeCallKind::Terminal)
         }
         RTerminator::ReturnData { offset, len } | RTerminator::Revert { offset, len } => {
-            verify_address_operand(body, *offset, crate::runtime::AddressSpaceKind::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             Ok(())
         }
         RTerminator::RevertEmpty => Ok(()),
-        RTerminator::SelfDestruct { beneficiary } => verify_word_value(body, *beneficiary),
+        RTerminator::Panic { code: value } | RTerminator::SelfDestruct { beneficiary: value } => {
+            verify_word_value(body, *value)
+        }
         RTerminator::Trap => Ok(()),
-        RTerminator::Return(value) => {
+        // A projection's slide returns nothing to its (inlined) caller.
+        RTerminator::Return(None)
+            if body
+                .key
+                .semantic(db)
+                .is_some_and(|semantic| semantic.is_projection(db)) =>
+        {
+            Ok(())
+        }
+        RTerminator::Return(value) | RTerminator::Yield { value, .. } => {
             let class = value
                 .map(|value| runtime_value_class(body, value).cloned())
                 .transpose()?;

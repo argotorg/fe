@@ -1,0 +1,41 @@
+use core::ptr::MemArray
+
+// `t[i]` calls `index` at `mut` wherever the context needs a `mut` place:
+// an assignment target or its base, `mut t[i]`, and a `mut self` receiver.
+struct Pair {
+    x: u256,
+    y: u256,
+}
+
+impl Pair {
+    fn bump(mut self) {
+        self.x += 1
+    }
+}
+
+#[test]
+fn index_mut_contexts() {
+    var a = MemArray<Pair>::new_zeroed(2)
+    a[0].x = 5
+    let r = mut a[1]
+    r.y = 3
+    a[0].bump()
+    a[1].x += 2
+    assert!(a[0].x == 6)
+    assert!(a[1].y == 3)
+    assert!(a[1].x == 2)
+}
+
+#[test]
+fn mut_pattern_binding_through_index() {
+    var a = MemArray<Option<u256>>::new_zeroed(1)
+    a[0] = Option::Some(1)
+    match a[0] {
+        Option::Some(mut v) => v += 10
+        Option::None => {}
+    }
+    match a[0] {
+        Option::Some(v) => assert!(v == 11)
+        Option::None => assert!(false)
+    }
+}

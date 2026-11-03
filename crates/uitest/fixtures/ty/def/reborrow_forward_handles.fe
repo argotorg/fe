@@ -11,5 +11,5 @@ fn forward_ref(_ y: ref u8) -> u8 {
 }
 
 fn forward_mut(_ y: mut u8) -> u8 {
-    take_mut(y)
+    take_mut(mut y)
 }

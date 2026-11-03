@@ -1,0 +1,68 @@
+// The draft's known restrictions, as the checker decides them.
+use core::iter::Collection
+
+struct Grid { cells: [u256; 4] }
+
+impl Collection for Grid {
+    type Cursor = (usize, usize)
+    type Item = u256
+
+    fn start(self) -> (usize, usize) {
+        (0, 0)
+    }
+
+    fn has(self, _ c: (usize, usize)) -> bool {
+        c.1 < 2
+    }
+
+    fn next(self, _ c: (usize, usize)) -> (usize, usize) {
+        (c.0, c.1 + 1)
+    }
+
+    fn at(self, _ c: (usize, usize)) -> ref u256 {
+        ref self.cells[c.0 * 2 + c.1]
+    }
+}
+
+// Rejected: an aggregate cursor is viewed in place, so the session of an
+// element a `ref` binding keeps reserves it.
+fn aggregate_cursor(_ g: Grid) -> u256 {
+    var cur = (0, 0)
+    let x = ref g.at(cur)
+    cur = (0, 1)
+    x
+}
+
+// Accepted: a `usize` cursor is a snapshot.
+fn scalar_cursor(_ xs: [u256; 3]) -> u256 {
+    var cur: usize = 0
+    let x = xs.at(cur)
+    cur = 1
+    x + cur as u256
+}
+
+struct Item { n: u256 }
+
+impl Copy for Item {}
+
+struct Token { n: u256 }
+
+fn consume(_ item: own Item) -> u256 {
+    item.n
+}
+
+fn spend(_ token: own Token) -> u256 {
+    token.n
+}
+
+// Accepted: an owned `Copy` argument taken from storage is a copy.
+// Rejected: a non-`Copy` one would move out of storage, which never holds a
+// hole.
+pub contract StorageCopy {
+    mut item: Item,
+    mut token: Token,
+    init() uses (mut item, mut token) {
+        let n = consume(item)
+        item.n = n + spend(token)
+    }
+}

@@ -1,0 +1,51 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 17
+expression: output
+input_file: tests/fixtures/projections.fe
+---
+struct Cell { v: u256, w: u256 }
+
+impl Cell {
+    fn cached(mut self) -> mut u256 {
+        var tmp = self.v
+        yield mut tmp
+        self.v = tmp
+    }
+
+    fn both(mut self) -> (mut u256, ref u256) {
+        (mut self.v, ref self.w)
+    }
+
+    fn present(mut self) -> Option<mut u256> {
+        match self.v {
+            0 => {
+                yield Option::None
+            },
+            _ => {
+                yield Option::Some(mut self.v)
+            },
+        }
+    }
+}
+
+fn use_cell(cell: mut Cell) -> u256 {
+    let x = mut cell.v
+    x += 1
+    let (a, b) = cell.both()
+    a + b
+}
+
+fn first(cell: mut Cell, o: Option<u256>) -> u256 {
+    let Option::Some(v) = o else {
+        return 0
+    }
+    let Option::Some(x) = cell.present() else {
+        return v
+    }
+    x + v
+}
+
+fn add(a: Option<u256>, b: Option<u256>) -> Option<u256> {
+    Option::Some(a? + b?)
+}

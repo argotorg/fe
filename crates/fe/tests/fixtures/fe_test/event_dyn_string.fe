@@ -1,21 +1,26 @@
 use std::abi::DynString
-use std::evm::{Log, RawMem}
+use std::evm::Log
+use core::abi::store_word
 
 #[event]
 struct StringEvent { value: DynString }
 
 #[test]
-fn test_dyn_string_event() uses (log: mut Log, raw: mut RawMem) {
+fn test_dyn_string_event() uses (log: mut Log) {
     assert!(
         StringEvent::TOPIC0 == 0x617cf8a4400dd7963ed519ebe655a16e8da1282bb8fea36a21f634af912f54ab,
     )
     let ptr = core::ptr::alloc_bytes(64)
-    raw.mstore(addr: ptr, value: 1)
-    raw.mstore(
-        addr: core::ptr::offset_bytes(ptr, 32),
-        value: 0x6100000000000000000000000000000000000000000000000000000000000000,
-    )
-    log.emit(
-        StringEvent { value: DynString::from_abi_tail(data: ptr, len: 1, size: 64) },
-    )
+    unsafe { store_word(ptr: ptr, value: 1) }
+    unsafe {
+        store_word(
+            ptr: core::ptr::offset_bytes(ptr, 32),
+            value: 0x6100000000000000000000000000000000000000000000000000000000000000,
+        )
+    }
+    unsafe {
+        log.emit(
+            StringEvent { value: DynString::from_abi_tail(data: ptr, len: 1, size: 64) },
+        )
+    }
 }

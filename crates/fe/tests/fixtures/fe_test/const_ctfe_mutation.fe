@@ -10,15 +10,15 @@ struct Pair {
 }
 
 const fn mutate_fields() -> usize {
-    let mut pair = Pair { a: 1, b: 2 }
+    var pair = Pair { a: 1, b: 2 }
     pair.a += 4
     pair.b += pair.a
     pair.b
 }
 
 const fn sum_while() -> usize {
-    let mut i: usize = 0
-    let mut sum: usize = 0
+    var i: usize = 0
+    var sum: usize = 0
     while i < 6 {
         i += 1
         if i == 2 {
@@ -33,8 +33,8 @@ const fn sum_while() -> usize {
 }
 
 const fn while_let_payload() -> usize {
-    let mut maybe = Maybe::Some(5)
-    let mut total: usize = 0
+    var maybe = Maybe::Some(5)
+    var total: usize = 0
     while let Maybe::Some(value) = maybe {
         total += value
         maybe = Maybe::None
@@ -50,7 +50,7 @@ const fn match_payload() -> usize {
 }
 
 const fn rewrite_array() -> [usize; 4] {
-    let mut values: [usize; 4] = [1, 2, 3, 4]
+    var values: [usize; 4] = [1, 2, 3, 4]
     let idx: usize = 2
     values[idx] = 9
     values[3] = values[0] + values[1] + values[2]
@@ -58,21 +58,21 @@ const fn rewrite_array() -> [usize; 4] {
 }
 
 const fn repeated_inner_array_cow_score() -> usize {
-    let mut rows: [[usize; 2]; 2] = [[1, 2]; 2]
+    var rows: [[usize; 2]; 2] = [[1, 2]; 2]
     rows[0][1] = 9
     rows[0][1] + rows[1][1]
 }
 
 const fn copied_local_array_cow_score() -> usize {
-    let mut original: [[usize; 2]; 2] = [[1, 2], [3, 4]]
-    let mut copy = original
+    var original: [[usize; 2]; 2] = [[1, 2], [3, 4]]
+    var copy = original
     copy[0][0] = 9
     original[0][0] * 10 + copy[0][0]
 }
 
 const fn diagonal_matrix_cow_score() -> usize {
-    let mut rows: [[usize; 4]; 4] = [[0; 4]; 4]
-    let mut i: usize = 0
+    var rows: [[usize; 4]; 4] = [[0; 4]; 4]
+    var i: usize = 0
     while i < 4 {
         rows[i][i] = i + 1
         i += 1
