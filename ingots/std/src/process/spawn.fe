@@ -1,0 +1,762 @@
+#![cfg(target_family = "unix")]
+/// Starting other programs and waiting for them to end.
+use core::{MemBuffer, MemSlice, MemSpan, MemVec, Option, Result, ptr}
+use core::ops::Drop
+use ingot::env::c_string_len
+use ingot::io::{Display, EINVAL, Error, read, write}
+use ingot::native::{Host, HostCapabilitySeal}
+use ingot::sys::{self, c_string, last_error}
+use ingot::time::{Clock, Duration, Instant}
+
+extern {
+    fn __fe_native_environ() -> **u8
+    fn posix_spawnp(_ pid: *i32, _ file: *u8, _ actions: *u8, _ attr: *u8, _ argv: **u8, _ envp: **u8) -> i32
+    fn posix_spawn_file_actions_init(_ actions: *u8) -> i32
+    fn posix_spawn_file_actions_destroy(_ actions: *u8) -> i32
+    fn posix_spawn_file_actions_adddup2(_ actions: *u8, _ fd: i32, _ target: i32) -> i32
+    // `mode` is a `mode_t`, 16 bits on macOS, where the caller extends it to
+    // 32 bits.
+    fn posix_spawn_file_actions_addopen(_ actions: *u8, _ fd: i32, _ path: *u8, _ flags: i32, _ mode: u32) -> i32
+    fn posix_spawn_file_actions_addchdir_np(_ actions: *u8, _ path: *u8) -> i32
+    fn posix_spawnattr_init(_ attr: *u8) -> i32
+    fn posix_spawnattr_destroy(_ attr: *u8) -> i32
+    fn pipe(_ fds: *i32) -> i32
+    fn close(_ fd: i32) -> i32
+    // `nfds` is an `nfds_t`, 32 bits on macOS, where the callee reads the low
+    // half.
+    fn poll(_ fds: *u8, _ nfds: u64, _ timeout: i32) -> i32
+    fn wait4(_ pid: i32, _ status: *i32, _ options: i32, _ usage: *u8) -> i32
+    fn kill(_ pid: i32, _ signal: i32) -> i32
+    fn signal(_ signal: i32, _ handler: *u8) -> *u8
+}
+
+// The values every supported host shares.
+const EINTR: i32 = 4
+const EPIPE: i32 = 32
+const O_RDONLY: i32 = 0
+const O_WRONLY: i32 = 1
+const POLLIN: u16 = 0x1
+const POLLOUT: u16 = 0x4
+const WNOHANG: i32 = 1
+const SIGKILL: i32 = 9
+const SIGPIPE: i32 = 13
+const SIG_IGN: usize = 1
+const NULL: usize = 0
+// The bytes of a `struct pollfd` and a `struct rusage`.
+const POLLFD_SIZE: usize = 8
+const RUSAGE_SIZE: usize = 144
+// `=`.
+const EQUALS: u8 = 61
+
+/// Starting programs and waiting for them to end.
+pub trait Spawn: HostCapabilitySeal {
+    /// Starts `command`'s program as a child process. The program is a path
+    /// if it holds a `/`, and otherwise a name to look for in the parent's
+    /// `PATH`.
+    fn spawn(mut self, _ command: Command) -> Result<Error, Child>
+    /// Waits for `child` to end, writing its input and collecting what it
+    /// writes to captured streams meanwhile.
+    fn wait(mut self, _ child: own Child) -> Result<Error, Output>
+    /// Waits until one of `children`, which must not be empty, has ended,
+    /// serving the pipes of all of them meanwhile, and returns its index.
+    /// `wait` then returns its output at once:
+    /// `proc.wait(running.swap_remove(proc.wait_any(running.as_slice())?))`.
+    fn wait_any(mut self, _ children: mut MemSlice<Child>) -> Result<Error, usize>
+    /// Runs `command` to its end: `wait(spawn(command)?)`.
+    fn output(mut self, _ command: Command) -> Result<Error, Output>
+}
+
+/// A program to run, with its arguments, environment, directory, standard
+/// streams and time limit. `Command::new(program)` gives it the parent's
+/// environment, directory and streams, and no limit; each method returns the
+/// command with one more setting:
+/// `Command::new("git").arg("status").stdout(Redirect::Capture)`. A command
+/// can be spawned any number of times.
+pub struct Command {
+    // The program, then its arguments.
+    args: MemVec<MemBuffer>,
+    env: MemVec<EnvChange>,
+    dir: Option<MemBuffer>,
+    stdin: Input,
+    stdout: Redirect,
+    stderr: Redirect,
+    timeout: Option<Duration>,
+}
+
+// A variable to set to `value`, or to remove without one.
+struct EnvChange { key: MemBuffer, value: Option<MemBuffer> }
+
+impl Command {
+    /// The command to run the program named by `program`'s text.
+    pub fn new<P: Display>(_ program: P) -> Self {
+        var args = MemVec::new()
+        args.push(format!(program))
+        Command {
+            args,
+            env: MemVec::new(),
+            dir: Option::None,
+            stdin: Input::Inherit,
+            stdout: Redirect::Inherit,
+            stderr: Redirect::Inherit,
+            timeout: Option::None,
+        }
+    }
+
+    /// Adds `arg`'s text to the program's arguments.
+    pub fn arg<A: Display>(var own self, _ arg: A) -> Self {
+        self.args.push(format!(arg))
+        self
+    }
+
+    /// Sets the child's variable `key` to `value`.
+    pub fn env<K: Display, V: Display>(var own self, _ key: K, _ value: V) -> Self {
+        self.env.push(EnvChange { key: format!(key), value: Option::Some(format!(value)) })
+        self
+    }
+
+    /// Removes the variable `key` from the child's environment.
+    pub fn env_remove<K: Display>(var own self, _ key: K) -> Self {
+        self.env.push(EnvChange { key: format!(key), value: Option::None })
+        self
+    }
+
+    /// Starts the child in the directory `dir`. A relative program path is
+    /// relative to it.
+    pub fn current_dir<P: Display>(var own self, _ dir: P) -> Self {
+        self.dir = Option::Some(format!(dir))
+        self
+    }
+
+    pub fn stdin(var own self, _ input: own Input) -> Self {
+        self.stdin = input
+        self
+    }
+
+    pub fn stdout(var own self, _ output: own Redirect) -> Self {
+        self.stdout = output
+        self
+    }
+
+    pub fn stderr(var own self, _ output: own Redirect) -> Self {
+        self.stderr = output
+        self
+    }
+
+    /// Kills the child with `SIGKILL` once `limit` has passed since its
+    /// spawn while `wait` or `wait_any` serves it, which then reports
+    /// `Status::TimedOut`. Programs the child started keep running.
+    pub fn timeout(var own self, _ limit: Duration) -> Self {
+        self.timeout = Option::Some(limit)
+        self
+    }
+}
+
+/// Where a child's standard input comes from.
+pub enum Input {
+    /// The parent's standard input.
+    Inherit,
+    /// Nothing: the input ends at once.
+    Null,
+    /// These bytes, through a pipe that `wait` and `wait_any` write while
+    /// the child runs, and close at their end.
+    Bytes(MemBuffer),
+}
+
+/// Where a child's standard output or error goes.
+pub enum Redirect {
+    /// The parent's stream.
+    Inherit,
+    /// Nowhere.
+    Null,
+    /// A pipe, whose bytes `wait` and `wait_any` collect into the `Output`.
+    Capture,
+    /// The file at the path, created if missing and emptied otherwise.
+    File(MemBuffer),
+    /// For standard error, wherever standard output goes; an `InvalidInput`
+    /// error for standard output.
+    Stdout,
+}
+
+/// A running child process. Pass it to `wait` or `wait_any`: one destroyed
+/// before it ends keeps running with its pipes closed.
+pub struct Child {
+    pid: i32,
+    // The parent's ends of the pipes to the child's streams.
+    stdin: Fd,
+    stdout: Fd,
+    stderr: Fd,
+    // The child's input, and how much of it the child has taken.
+    input: MemBuffer,
+    written: usize,
+    out: MemBuffer,
+    err: MemBuffer,
+    deadline: Option<Instant>,
+    ended: Option<Ended>,
+}
+
+struct Ended { status: Status, usage: Usage }
+
+impl Copy for Ended {}
+
+/// How a child ended, and what it wrote to its captured streams.
+pub struct Output {
+    pub status: Status,
+    /// What the child wrote to standard output, if captured.
+    pub stdout: MemBuffer,
+    /// What the child wrote to standard error, if captured.
+    pub stderr: MemBuffer,
+    pub usage: Usage,
+}
+
+/// How a child ended.
+pub enum Status {
+    /// It exited with this status.
+    Exited(i32),
+    /// This signal ended it.
+    Signaled(i32),
+    /// Its timeout passed, and `SIGKILL` ended it.
+    TimedOut,
+}
+
+impl Copy for Status {}
+
+impl Status {
+    /// Whether the child exited with status 0.
+    pub fn success(self) -> bool {
+        match self {
+            Status::Exited(code) => code == 0,
+            _ => false,
+        }
+    }
+}
+
+/// `exit status 1`, `signal 9` or `timed out`.
+impl Display for Status {
+    fn fmt(self, _ out: mut MemBuffer) {
+        match self {
+            Status::Exited(code) => write!(mut out, "exit status ", code),
+            Status::Signaled(signal) => write!(mut out, "signal ", signal),
+            Status::TimedOut => write!(mut out, "timed out"),
+        }
+    }
+}
+
+/// The resources a child used.
+pub struct Usage {
+    /// The CPU time it spent running its own code.
+    pub user: Duration,
+    /// The CPU time the host spent working for it.
+    pub system: Duration,
+    /// Its peak resident memory, in bytes.
+    pub max_rss: u64,
+}
+
+impl Copy for Usage {}
+
+impl Spawn for Host {
+    fn spawn(mut self, _ command: Command) -> Result<Error, Child> {
+        var args = MemVec::new()
+        for ref arg in command.args.as_slice() {
+            args.push(c_string(arg)?)
+        }
+        let argv = c_array(args.as_slice())
+        // The variables the command sets, which `envp` points to with the
+        // parent's that it keeps.
+        var vars = MemVec::new()
+        let envp = if command.env.is_empty() {
+            Option::None
+        } else {
+            Option::Some(environment(command.env.as_slice(), mut vars)?)
+        }
+        let setup = Setup::new()?
+        // The child's ends of its pipes, which the parent closes once the
+        // child has them.
+        var child_ends = MemVec::new()
+        var stdin = match command.stdin {
+            Input::Inherit => {
+                setup.inherit(0)?
+                Fd::none()
+            }
+            Input::Null => {
+                setup.open(0, c_string("/dev/null")?, flags: O_RDONLY)?
+                Fd::none()
+            }
+            Input::Bytes(_) => {
+                let (read_end, write_end) = make_pipe()?
+                setup.dup(read_end.fd, to: 0)?
+                child_ends.push(read_end)
+                write_end
+            }
+        }
+        let stdout = redirect(setup, 1, command.stdout, mut child_ends)?
+        let stderr = redirect(setup, 2, command.stderr, mut child_ends)?
+        match command.dir {
+            Option::Some(ref dir) => check(
+                unsafe { posix_spawn_file_actions_addchdir_np(setup.actions.ptr(), c_string(dir)?.ptr()) },
+            )?,
+            Option::None => {}
+        }
+        check(sys::close_other_fds(setup.actions.ptr(), setup.attr.ptr()))?
+        let environ = match envp {
+            Option::Some(ref pointers) => pointers.ptr(),
+            Option::None => unsafe { __fe_native_environ() },
+        }
+        let pid = MemBuffer::new(4)
+        check(
+            unsafe {
+                posix_spawnp(ptr::cast(pid.ptr()), args[0].ptr(), setup.actions.ptr(), setup.attr.ptr(), argv.ptr(), environ)
+            },
+        )?
+        let input = match command.stdin {
+            Input::Bytes(ref bytes) => MemBuffer::from_span(bytes.span()),
+            _ => MemBuffer::empty(),
+        }
+        // Empty input ends at once.
+        if input.is_empty() {
+            stdin = Fd::none()
+        }
+        let deadline = match command.timeout {
+            Option::Some(limit) => Option::Some(self.instant() + limit),
+            Option::None => Option::None,
+        }
+        Result::Ok(
+            Child {
+                pid: pid.read_le<i32>(0),
+                stdin,
+                stdout,
+                stderr,
+                input,
+                written: 0,
+                out: MemBuffer::empty(),
+                err: MemBuffer::empty(),
+                deadline,
+                ended: Option::None,
+            },
+        )
+    }
+
+    fn wait(mut self, _ child: own Child) -> Result<Error, Output> {
+        var children = MemVec::new()
+        children.push(child)
+        self.wait_any(children.as_slice())?
+        Result::Ok(children.swap_remove(0).into_output())
+    }
+
+    fn wait_any(mut self, _ children: mut MemSlice<Child>) -> Result<Error, usize> {
+        let count = children.len()
+        assert!(count > 0, "no children to wait for")
+        // The milliseconds to sleep before checking again on children
+        // without pipes, which `poll` can't watch.
+        var nap: i32 = 1
+        while true {
+            let now = self.instant()
+            var timeout: i32 = -1
+            var napping = false
+            var fds = MemBuffer::empty()
+            var streams = MemVec::new()
+            for i in 0..count {
+                if children[i].check(now)? {
+                    return Result::Ok(i)
+                }
+                match children[i].deadline {
+                    Option::Some(deadline) => timeout = earlier(timeout, poll_millis(deadline.duration_since(now))),
+                    Option::None => {}
+                }
+                if children[i].has_pipes() {
+                    children[i].watch(i, mut fds, mut streams)
+                } else {
+                    napping = true
+                }
+            }
+            if napping {
+                // A lone child without pipes or a deadline is waited for
+                // outright.
+                if count == 1 && timeout < 0 {
+                    let ended = children[0].reap_blocking()?
+                    children[0].ended = Option::Some(ended)
+                    return Result::Ok(0)
+                }
+                timeout = earlier(timeout, nap)
+                nap = if nap < 64 { nap * 2 } else { 64 }
+            }
+            if unsafe { poll(fds.ptr(), streams.len().downcast_unchecked(), timeout) } < 0 {
+                if sys::errno() != EINTR {
+                    return Result::Err(last_error())
+                }
+                continue
+            }
+            for k in 0..streams.len() {
+                if fds.read_le<u16>(k * POLLFD_SIZE + 6) != 0 {
+                    let stream = streams[k]
+                    children[stream / 3].serve(stream % 3)?
+                }
+            }
+        }
+        Result::Ok(0)
+    }
+
+    fn output(mut self, _ command: Command) -> Result<Error, Output> {
+        let child = self.spawn(command)?
+        self.wait(child)
+    }
+}
+
+// `posix_spawn`'s file actions and attributes, destroyed with it.
+struct Setup { actions: MemBuffer, attr: MemBuffer }
+
+impl Setup {
+    fn new() -> Result<Error, Self> {
+        let actions = MemBuffer::new(sys::FILE_ACTIONS_SIZE)
+        check(unsafe { posix_spawn_file_actions_init(actions.ptr()) })?
+        let attr = MemBuffer::new(sys::SPAWNATTR_SIZE)
+        let code = unsafe { posix_spawnattr_init(attr.ptr()) }
+        if code != 0 {
+            unsafe { posix_spawn_file_actions_destroy(actions.ptr()) }
+            return Result::Err(Error::from_code(code))
+        }
+        Result::Ok(Setup { actions, attr })
+    }
+
+    // Gives the child's standard stream `fd` the parent's.
+    fn inherit(self, _ fd: i32) -> Result<Error, ()> {
+        check(sys::inherit_fd(self.actions.ptr(), fd))
+    }
+
+    // Makes the child's descriptor `to` a copy of `from`.
+    fn dup(self, _ from: i32, to: i32) -> Result<Error, ()> {
+        check(unsafe { posix_spawn_file_actions_adddup2(self.actions.ptr(), from, to) })
+    }
+
+    // Opens the file at the C string `path` as the child's descriptor `fd`.
+    fn open(self, _ fd: i32, _ path: MemBuffer, flags: i32) -> Result<Error, ()> {
+        check(unsafe { posix_spawn_file_actions_addopen(self.actions.ptr(), fd, path.ptr(), flags, 0o666) })
+    }
+}
+
+impl Drop for Setup {
+    fn drop(own self) {
+        unsafe {
+            posix_spawnattr_destroy(self.attr.ptr())
+            posix_spawn_file_actions_destroy(self.actions.ptr())
+        }
+    }
+}
+
+// A `posix_spawn` function's result: zero, or an error number.
+fn check(_ code: i32) -> Result<Error, ()> {
+    if code == 0 { Result::Ok(()) } else { Result::Err(Error::from_code(code)) }
+}
+
+// Gives the child's standard stream `fd` its `redirect`, and returns the
+// parent's end of the pipe it needs, if any, putting the child's in
+// `child_ends`.
+fn redirect(_ setup: Setup, _ fd: i32, _ redirect: Redirect, _ child_ends: mut MemVec<Fd>) -> Result<Error, Fd> {
+    match redirect {
+        Redirect::Inherit => setup.inherit(fd)?,
+        Redirect::Null => setup.open(fd, c_string("/dev/null")?, flags: O_WRONLY)?,
+        Redirect::Capture => {
+            let (read_end, write_end) = make_pipe()?
+            setup.dup(write_end.fd, to: fd)?
+            child_ends.push(write_end)
+            return Result::Ok(read_end)
+        }
+        Redirect::File(ref path) => setup.open(fd, c_string(path)?, flags: O_WRONLY | sys::O_CREAT | sys::O_TRUNC)?,
+        Redirect::Stdout => {
+            if fd == 1 {
+                return Result::Err(Error::from_code(EINVAL))
+            }
+            setup.dup(1, to: fd)?
+        }
+    }
+    Result::Ok(Fd::none())
+}
+
+// A new pipe's read and write ends.
+fn make_pipe() -> Result<Error, (Fd, Fd)> {
+    let fds = MemBuffer::new(8)
+    if unsafe { pipe(ptr::cast(fds.ptr())) } != 0 {
+        return Result::Err(last_error())
+    }
+    Result::Ok((Fd { fd: fds.read_le<i32>(0) }, Fd { fd: fds.read_le<i32>(4) }))
+}
+
+// Pointers to the C strings `strings`, then a null pointer.
+fn c_array(_ strings: MemSlice<MemBuffer>) -> MemVec<*u8> {
+    var pointers = MemVec::with_capacity(strings.len() + 1)
+    for ref string in strings {
+        pointers.push(string.ptr())
+    }
+    pointers.push(NULL as *u8)
+    pointers
+}
+
+// The child's environment as a C array: the parent's variables that
+// `changes` leaves, then those it sets, whose `KEY=value` C strings go to
+// `vars`. A later change of a variable overrides an earlier one.
+fn environment(_ changes: MemSlice<EnvChange>, _ vars: mut MemVec<MemBuffer>) -> Result<Error, MemVec<*u8>> {
+    let count = changes.len()
+    for i in 0..count {
+        let change = ref changes[i]
+        let key = change.key.span()
+        var valid = !key.is_empty()
+        for byte in key {
+            valid = valid && byte != EQUALS
+        }
+        if !valid {
+            return Result::Err(Error::from_code(EINVAL))
+        }
+        if is_changed(changes.tail(i + 1), key) {
+            continue
+        }
+        match change.value {
+            Option::Some(ref value) => vars.push(c_string(format!(key, "=", value))?),
+            Option::None => {}
+        }
+    }
+    var pointers = MemVec::new()
+    let parent = unsafe { __fe_native_environ() }
+    var index: usize = 0
+    while unsafe { *ptr::offset(parent, index) } as usize != NULL {
+        let entry = unsafe { *ptr::offset(parent, index) }
+        // A variable is a live C string while the environment is unchanged.
+        let text = unsafe { MemSlice::from_raw_parts(ptr: entry, len: c_string_len(entry)) }
+        if !is_variable_of(changes, text) {
+            pointers.push(entry)
+        }
+        index += 1
+    }
+    for ref var_text in vars.as_slice() {
+        pointers.push(var_text.ptr())
+    }
+    pointers.push(NULL as *u8)
+    Result::Ok(pointers)
+}
+
+// Whether one of `changes` is of the variable `key`.
+fn is_changed(_ changes: MemSlice<EnvChange>, _ key: MemSpan) -> bool {
+    for ref change in changes {
+        if change.key.span() == key {
+            return true
+        }
+    }
+    false
+}
+
+// Whether `entry`, a `KEY=value` variable, is of a variable that one of
+// `changes` is of.
+fn is_variable_of(_ changes: MemSlice<EnvChange>, _ entry: MemSpan) -> bool {
+    for ref change in changes {
+        let key = change.key.span()
+        if entry.len() > key.len() && entry[key.len()] == EQUALS && entry.head(key.len()) == key {
+            return true
+        }
+    }
+    false
+}
+
+// `duration` in milliseconds, rounded up, as a `poll` timeout.
+fn poll_millis(_ duration: Duration) -> i32 {
+    let millis = (duration.as_nanos() + 999999) / 1000000
+    if millis > 2147483647 { 2147483647 } else { millis.downcast_unchecked() }
+}
+
+// The earlier of a `poll` timeout, where a negative one waits forever, and
+// `millis`.
+fn earlier(_ timeout: i32, _ millis: i32) -> i32 {
+    if timeout < 0 || millis < timeout { millis } else { timeout }
+}
+
+impl Child {
+    /// The child's process id.
+    pub fn id(self) -> i32 {
+        self.pid
+    }
+
+    // Whether the child has ended: true once it was reaped, which happens
+    // here once its pipes are closed and it has exited, or once its deadline
+    // has passed by `now`, when it is killed.
+    fn check(mut self, _ now: Instant) -> Result<Error, bool> {
+        if self.ended.is_some() {
+            return Result::Ok(true)
+        }
+        if !self.has_pipes() {
+            self.ended = self.reap(options: WNOHANG)?
+            if self.ended.is_some() {
+                return Result::Ok(true)
+            }
+        }
+        let expired = match self.deadline {
+            Option::Some(deadline) => now >= deadline,
+            Option::None => false,
+        }
+        if expired {
+            self.time_out()?
+        }
+        Result::Ok(expired)
+    }
+
+    fn has_pipes(self) -> bool {
+        self.stdin.is_open() || self.stdout.is_open() || self.stderr.is_open()
+    }
+
+    // Kills the child, unless it has already ended, and reaps it.
+    fn time_out(mut self) -> Result<Error, ()> {
+        self.ended = self.reap(options: WNOHANG)?
+        if self.ended.is_some() {
+            return Result::Ok(())
+        }
+        unsafe { kill(self.pid, SIGKILL) }
+        // Programs the child started may hold its pipes open.
+        self.stdin = Fd::none()
+        self.stdout = Fd::none()
+        self.stderr = Fd::none()
+        let usage = self.reap_blocking()?.usage
+        self.ended = Option::Some(Ended { status: Status::TimedOut, usage })
+        Result::Ok(())
+    }
+
+    // Waits for the child to end and reaps it.
+    fn reap_blocking(self) -> Result<Error, Ended> {
+        var ended = self.reap(options: 0)?
+        while ended.is_none() {
+            ended = self.reap(options: 0)?
+        }
+        Result::Ok(ended.unwrap())
+    }
+
+    // Reaps the child if it has ended, or waits for it unless `options` is
+    // `WNOHANG`. `None` if it hasn't ended, or a signal interrupted the wait.
+    fn reap(self, options: i32) -> Result<Error, Option<Ended>> {
+        let status = MemBuffer::new(4)
+        let usage = MemBuffer::new(RUSAGE_SIZE)
+        let pid = unsafe { wait4(self.pid, ptr::cast(status.ptr()), options, usage.ptr()) }
+        if pid == 0 || (pid < 0 && sys::errno() == EINTR) {
+            return Result::Ok(Option::None)
+        }
+        if pid < 0 {
+            return Result::Err(last_error())
+        }
+        let code = status.read_le<i32>(0)
+        let signal = code & 0x7f
+        Result::Ok(
+            Option::Some(
+                Ended {
+                    status: if signal == 0 { Status::Exited((code >> 8) & 0xff) } else { Status::Signaled(signal) },
+                    usage: Usage {
+                        user: timeval(usage.span(), 0),
+                        system: timeval(usage.span(), 16),
+                        max_rss: usage.read_le<u64>(32) * sys::MAXRSS_UNIT,
+                    },
+                },
+            ),
+        )
+    }
+
+    // Adds a `struct pollfd` to `fds` for each of the child's open pipes,
+    // and to `streams` the pipe's stream: `index * 3` plus its standard
+    // descriptor.
+    fn watch(self, _ index: usize, _ fds: mut MemBuffer, _ streams: mut MemVec<usize>) {
+        add_pollfd(mut fds, mut streams, self.stdin.fd, events: POLLOUT, stream: index * 3)
+        add_pollfd(mut fds, mut streams, self.stdout.fd, events: POLLIN, stream: index * 3 + 1)
+        add_pollfd(mut fds, mut streams, self.stderr.fd, events: POLLIN, stream: index * 3 + 2)
+    }
+
+    // Writes or reads the child's pipe for `stream`, whose descriptor `poll`
+    // found ready.
+    fn serve(mut self, _ stream: usize) -> Result<Error, ()> {
+        if stream == 0 {
+            self.write_input()
+        } else if stream == 1 {
+            read_into(mut self.stdout, mut self.out)
+        } else {
+            read_into(mut self.stderr, mut self.err)
+        }
+    }
+
+    // Writes the next of the child's input bytes that its pipe takes at
+    // once, closing the pipe after the last.
+    fn write_input(mut self) -> Result<Error, ()> {
+        let rest = self.input.len() - self.written
+        let len = if rest < sys::PIPE_BUF { rest } else { sys::PIPE_BUF }
+        // A write to a pipe the child has closed raises `SIGPIPE`, which
+        // would end the parent.
+        let handler = unsafe { signal(SIGPIPE, SIG_IGN as *u8) }
+        let count = unsafe { write(self.stdin.fd, ptr::offset_bytes(self.input.ptr(), self.written), len) }
+        let code = sys::errno()
+        unsafe { signal(SIGPIPE, handler) }
+        if count >= 0 {
+            self.written += count.downcast_unchecked()
+            if self.written == self.input.len() {
+                self.stdin = Fd::none()
+            }
+        } else if code == EPIPE {
+            // The child takes no more input.
+            self.stdin = Fd::none()
+        } else if code != EINTR {
+            return Result::Err(Error::from_code(code))
+        }
+        Result::Ok(())
+    }
+
+    fn into_output(own self) -> Output {
+        let ended = self.ended.unwrap()
+        Output { status: ended.status, stdout: self.out, stderr: self.err, usage: ended.usage }
+    }
+}
+
+// Adds a `struct pollfd` waiting for `events` on `fd` to `fds`, and
+// `stream` to `streams`, unless `fd` is closed.
+fn add_pollfd(_ fds: mut MemBuffer, _ streams: mut MemVec<usize>, _ fd: i32, events: u16, stream: usize) {
+    if fd < 0 {
+        return
+    }
+    let entry = fds.len()
+    fds.resize(entry + POLLFD_SIZE)
+    fds.write_le<i32>(offset: entry, value: fd)
+    fds.write_le<u16>(offset: entry + 4, value: events)
+    streams.push(stream)
+}
+
+// Reads what the pipe `fd` holds into `buffer`, closing the pipe at the end
+// of its stream.
+fn read_into(_ fd: mut Fd, _ buffer: mut MemBuffer) -> Result<Error, ()> {
+    buffer.reserve(65536)
+    let len = buffer.len()
+    let count = unsafe { read(fd.fd, ptr::offset_bytes(buffer.ptr(), len), buffer.capacity() - len) }
+    if count > 0 {
+        // The read initialized the bytes it counts.
+        unsafe { buffer.set_len(len + count.downcast_unchecked()) }
+    } else if count == 0 {
+        fd = Fd::none()
+    } else if sys::errno() != EINTR {
+        return Result::Err(last_error())
+    }
+    Result::Ok(())
+}
+
+// A `struct timeval` at `offset`: 64-bit seconds, then microseconds, which
+// fit the low 32 bits of the field on every host.
+fn timeval(_ raw: MemSpan, _ offset: usize) -> Duration {
+    Duration::from_secs(raw.read_le<u64>(offset)) + Duration::from_micros(raw.read_le<u32>(offset + 8) as u64)
+}
+
+// An open file descriptor, closed when destroyed, or none.
+struct Fd { fd: i32 }
+
+impl Fd {
+    fn none() -> Self {
+        Fd { fd: -1 }
+    }
+
+    fn is_open(self) -> bool {
+        self.fd >= 0
+    }
+}
+
+impl Drop for Fd {
+    fn drop(own self) {
+        if self.fd >= 0 {
+            unsafe { close(self.fd) }
+        }
+    }
+}

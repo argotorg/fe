@@ -3034,6 +3034,65 @@ read a\0: InvalidInput (Invalid argument)"#,
 }
 
 #[test]
+fn native_process_runs_programs_and_waits_for_them() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/process.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let dir = temp.path().join(format!("scratch-{level}"));
+        fs::create_dir(&dir).unwrap();
+        let result = Command::new(out.join("process"))
+            .arg(&dir)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            r#"echo: exit status 0 (success) [hello 42
+] []
+exit 3: exit status 3 [out
+] [err
+]
+merged: exit status 0 (success) [a
+b
+c
+] []
+killed: signal 9 [] []
+null input: exit status 0 (success) [] []
+null output: exit status 0 (success) [] []
+env: exit status 0 (success) [a b unset
+] []
+dir: exit status 0, the directory: true
+file: exit status 0 (success) [] []
+file holds: to file
+
+cat: exit status 0, 1048576 bytes back, same: true
+both streams: exit status 0, 300000 and 200000 bytes
+input not taken: exit status 0 (success) [] []
+missing program: NotFound (No such file or directory)
+missing dir: NotFound (No such file or directory)
+stdout to stdout: InvalidInput (Invalid argument)
+nul argument: InvalidInput (Invalid argument)
+key with =: InvalidInput (Invalid argument)
+empty key: InvalidInput (Invalid argument)
+timeout: timed out [] []
+timeout with pipes: timed out [] []
+  ended within 2 s: true
+busy: exit status 0, used CPU: true, used memory: true
+wait_any: fast exit status 0 [fast
+]
+wait_any: middle exit status 0 []
+wait_any: slow exit status 0 [slow
+]
+"#,
+            "O{level}"
+        );
+        assert_eq!(fs::read(dir.join("log")).unwrap(), b"to file\n");
+    }
+}
+
+#[test]
 fn native_clock_reads_wall_and_monotonic_time() {
     let temp = tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/time.fe");
