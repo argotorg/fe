@@ -385,6 +385,9 @@ function requireImports(wanted, imports, what) {
  * Returns the compiled module.
  */
 export async function checkModule(bytes, imports, manifest = null) {
+  // Hash and compile one copy, which the caller cannot change in between.
+  const view = ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes);
+  bytes = view.slice();
   if (manifest !== null) {
     checkManifestShape(manifest);
     const hash = await sha256Hex(bytes);

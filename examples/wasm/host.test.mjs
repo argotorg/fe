@@ -350,6 +350,16 @@ test("text in the guest's memory is copied before an allocation grows the memory
   assert.equal(guest.call("pair", memory.subarray(0, 2), memory.subarray(2, 5)), (7 << 8) | 9 | (5 << 16));
 });
 
+test("the bytes that match the manifest are the bytes that run", async () => {
+  const bytes = assemble();
+  const manifest = await manifestFor(bytes);
+  // `run` is `i32.const 7`; the caller changes it while the hash is computed.
+  const seven = bytes.findIndex((_, i) => bytes[i] === 0x41 && bytes[i + 1] === 7 && bytes[i + 2] === 0x0b);
+  const pending = instantiate(bytes, { manifest });
+  bytes[seven + 1] = 8;
+  assert.equal((await pending).call("run"), 7);
+});
+
 test("a module that differs from its manifest is refused", async () => {
   const bytes = assemble(["sys_wasm_log_i32"]);
   const good = await manifestFor(bytes, { imports: ["sys_wasm_log_i32"] });
