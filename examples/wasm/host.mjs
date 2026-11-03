@@ -282,12 +282,17 @@ export class Guest {
       return func(...args);
     }
     this.#requireAllocator();
+    // Copy the text before the first allocation, which may grow the memory and
+    // so detach a Uint8Array over the guest's memory.
+    const texts = args.map((arg) =>
+      typeof arg === "string" || arg instanceof Uint8Array ? toBytes(arg, "a text argument").slice() : null,
+    );
     const mark = this.exports.arena_mark();
     try {
       const spread = [];
-      for (const arg of args) {
-        if (typeof arg === "string" || arg instanceof Uint8Array) {
-          const bytes = toBytes(arg, "a text argument");
+      for (const [index, arg] of args.entries()) {
+        const bytes = texts[index];
+        if (bytes !== null) {
           if (bytes.length > MAX_TEXT_BYTES) {
             throw new ContractError(`text of ${bytes.length} bytes is above the limit of ${MAX_TEXT_BYTES} bytes`);
           }

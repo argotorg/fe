@@ -224,6 +224,51 @@ function assemble(importNames = []) {
   return new Uint8Array(bytes);
 }
 
+/**
+ * A module with the allocator exports, whose `alloc` grows the memory by a
+ * page and returns the new page, and an export `pair(a, a_len, b, b_len)`
+ * that returns the first byte of `a`, shifted by 8, or the first byte of `b`,
+ * or the sum of the lengths, shifted by 16.
+ */
+function assembleAllocator() {
+  const body = (code) => [...leb(code.length + 1), 0, ...code];
+  const load = (local) => [0x20, local, 0x2d, 0, 0];
+  const bytes = [
+    0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+    ...section(
+      1,
+      vec([
+        [0x60, 1, 0x7f, 1, 0x7f], // (i32) -> i32
+        [0x60, 0, 1, 0x7f], // () -> i32
+        [0x60, 1, 0x7f, 0], // (i32) -> ()
+        [0x60, 4, 0x7f, 0x7f, 0x7f, 0x7f, 1, 0x7f], // (i32, i32, i32, i32) -> i32
+      ]),
+    ),
+    ...section(3, vec([[0], [1], [2], [3]])),
+    ...section(5, vec([[0, 1]])),
+    ...section(
+      7,
+      vec([
+        [...text("memory"), 2, 0],
+        [...text("alloc"), 0, 0],
+        [...text("arena_mark"), 0, 1],
+        [...text("arena_release"), 0, 2],
+        [...text("pair"), 0, 3],
+      ]),
+    ),
+    ...section(
+      10,
+      vec([
+        body([0x41, 1, 0x40, 0, 0x41, 16, 0x74, 0x0b]),
+        body([0x41, 0, 0x0b]),
+        body([0x0b]),
+        body([...load(0), 0x41, 8, 0x74, ...load(2), 0x72, 0x20, 1, 0x20, 3, 0x6a, 0x41, 16, 0x74, 0x72, 0x0b]),
+      ]),
+    ),
+  ];
+  return new Uint8Array(bytes);
+}
+
 async function manifestFor(bytes, { imports = [], exports = null, ...patch } = {}) {
   return {
     manifest_version: MANIFEST_VERSION,
@@ -292,6 +337,13 @@ test("a module that matches its manifest runs, and the call is checked against t
   // Without a manifest the host cannot tell, and passes the arguments as they are.
   const bare = await instantiate(bytes);
   assert.equal(bare.call("twice", 4), 8);
+});
+
+test("text in the guest's memory is copied before an allocation grows the memory", async () => {
+  const guest = await instantiate(assembleAllocator());
+  const memory = new Uint8Array(guest.exports.memory.buffer);
+  memory.set([7, 8, 9, 10, 11]);
+  assert.equal(guest.call("pair", memory.subarray(0, 2), memory.subarray(2, 5)), (7 << 8) | 9 | (5 << 16));
 });
 
 test("a module that differs from its manifest is refused", async () => {
