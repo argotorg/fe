@@ -33,7 +33,7 @@ fn builder_empty_and_capacity() {
 
 #[test]
 fn growth_and_arbitrary_bytes() {
-    let input = ptr::MemBuffer::alloc(65)
+    let input = ptr::MemBuffer::new(65)
     var i = 0
     while i < 65 {
         unsafe { *ptr::offset_bytes(input.ptr(), i) = i.downcast_truncate() }

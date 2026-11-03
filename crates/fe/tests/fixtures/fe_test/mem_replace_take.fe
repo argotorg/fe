@@ -46,8 +46,8 @@ pub contract C {
 
 #[test]
 fn replace_moves_the_old_value_out() {
-    var pending = Pending { buffer: MemBuffer::alloc(3), next: Option::None, count: 1 }
-    let old = replace(mut pending.buffer, MemBuffer::alloc(7))
+    var pending = Pending { buffer: MemBuffer::new(3), next: Option::None, count: 1 }
+    let old = replace(mut pending.buffer, MemBuffer::new(7))
     assert(old.len() == 3 && pending.buffer.len() == 7)
     assert(replace(mut pending.count, 2) == 1 && pending.count == 2)
 
@@ -57,7 +57,7 @@ fn replace_moves_the_old_value_out() {
 
 #[test]
 fn take_leaves_the_default() {
-    var pending = Pending { buffer: MemBuffer::alloc(3), next: Option::Some(MemBuffer::alloc(4)), count: 6 }
+    var pending = Pending { buffer: MemBuffer::new(3), next: Option::Some(MemBuffer::new(4)), count: 6 }
     let next = take(mut pending.next)
     assert(next.unwrap().len() == 4 && pending.next.is_none())
     assert(take(mut pending.count) == 6 && pending.count == 0)
@@ -65,15 +65,15 @@ fn take_leaves_the_default() {
 
 #[test]
 fn option_take_empties_the_option() {
-    var pending = Pending { buffer: MemBuffer::empty(), next: Option::Some(MemBuffer::alloc(2)), count: 0 }
+    var pending = Pending { buffer: MemBuffer::empty(), next: Option::Some(MemBuffer::new(2)), count: 0 }
     assert(pending.next.take().unwrap().len() == 2)
     assert(pending.next.take().is_none())
 }
 
 #[test]
 fn replace_works_on_elements() {
-    var buffers = MemArray::from_fn(2, |i| MemBuffer::alloc(i + 1))
-    let first = replace(mut buffers[0], MemBuffer::alloc(9))
+    var buffers = MemArray::from_fn(2, |i| MemBuffer::new(i + 1))
+    let first = replace(mut buffers[0], MemBuffer::new(9))
     assert(first.len() == 1 && buffers[0].len() == 9 && buffers[1].len() == 2)
 
     var words: [u256; 3] = [1, 2, 3]

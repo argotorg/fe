@@ -5,14 +5,14 @@ use std::evm::{Address, Ctx, Evm, RawOps, RawStorage, StorageMap, StorPtr, rever
 // Helpers ---------------------------------------------------------------
 
 fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
-    let data = ptr::MemBuffer::alloc(32)
+    let data = ptr::MemBuffer::new(32)
     unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
 
 fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
     // ABI encoding for a single dynamic string literal
-    let data = ptr::MemBuffer::alloc(96)
+    let data = ptr::MemBuffer::new(96)
     unsafe { store_word(ptr: data.ptr(), value: 32) } // offset to data
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: len) } // string length
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 64), value: word) }
@@ -134,7 +134,7 @@ fn init() uses (evm: mut Evm) {
     }
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,

@@ -154,7 +154,7 @@ fn call_words<const N: usize>(_ addr: Address, selector: u256, words: [u256; N])
 uses (evm: mut Evm)
 {
     let len = 4 + (N as u256) * 32
-    let data = MemBuffer::alloc((len + 32).downcast_unchecked())
+    let data = MemBuffer::new((len + 32).downcast_unchecked())
     unsafe { store_word(ptr: data.ptr(), value: selector << 224) }
     var i: usize = 0
     while i < N {
@@ -163,7 +163,7 @@ uses (evm: mut Evm)
         }
         i += 1
     }
-    var ret = MemBuffer::alloc(64)
+    var ret = MemBuffer::new(64)
     let outcome = evm
         .raw_call(
             addr: addr,

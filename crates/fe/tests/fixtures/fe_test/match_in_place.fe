@@ -6,7 +6,7 @@ enum Status { A, B }
 struct Store { status: Status, buf: Option<MemBuffer>, n: u256 }
 
 fn store(_ status: own Status, _ len: u256) -> Store {
-    Store { status, buf: Option::Some(MemBuffer::alloc(len.downcast_unchecked())), n: 7 }
+    Store { status, buf: Option::Some(MemBuffer::new(len.downcast_unchecked())), n: 7 }
 }
 
 fn rank(_ s: own Store) -> u256 {

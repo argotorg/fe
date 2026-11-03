@@ -23,7 +23,7 @@ value's lifetime ends, and a type that holds a resource releases it in its
 
   ```fe
   let s = {
-      let b = MemBuffer::alloc(4)
+      let b = MemBuffer::new(4)
       b.span()
   }
   ```

@@ -15,7 +15,7 @@ struct MemOuter {
 }
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
-    let data = ptr::MemBuffer::alloc(32)
+    let data = ptr::MemBuffer::new(32)
     unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
@@ -42,7 +42,7 @@ fn mem_read(value: u256) -> u256 {
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,

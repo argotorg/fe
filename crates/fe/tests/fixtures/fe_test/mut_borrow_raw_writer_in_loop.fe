@@ -98,7 +98,7 @@ fn encode(_ book: Book) -> MemBuffer {
     var w = Writer::new()
     w.word(book.items.len)
     write_items(book, w: mut w)
-    let tail = MemBuffer::alloc(32)
+    let tail = MemBuffer::new(32)
     unsafe { *ptr::cast<u8, u256>(tail.ptr()) = 0xabcd }
     w.bytes(tail.span())
     var total: u256 = 0

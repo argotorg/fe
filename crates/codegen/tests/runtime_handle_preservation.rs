@@ -900,7 +900,7 @@ fn pointer_aggregate_temporaries_stay_values() {
 use core::ptr::MemBuffer
 
 fn buffer_len() -> usize {
-    let buffer = MemBuffer::alloc(32)
+    let buffer = MemBuffer::new(32)
     unsafe { store_word(ptr: buffer.ptr(), value: 42) }
     buffer.span().len()
 }

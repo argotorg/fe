@@ -3,7 +3,7 @@ use core::abi::store_word
 use std::evm::RawOps
 
 fn fail() uses (ops: mut RawOps) {
-    let data = ptr::MemBuffer::alloc(32)
+    let data = ptr::MemBuffer::new(32)
     unsafe { store_word(ptr: data.ptr(), value: 42) }
     ops.revert(data: data.span())
 }

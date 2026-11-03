@@ -503,7 +503,7 @@ pub fn encode_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
     where T: Encode<A> + AbiSize
 {
     let total = abi_payload_size(value)
-    let buffer = ptr::MemBuffer::alloc(ptr::allocation_len(total))
+    let buffer = ptr::MemBuffer::new(ptr::allocation_len(total))
     // The fresh buffer is zeroed, and only the encoding writes it.
     value.encode(unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) })
     buffer
@@ -514,7 +514,7 @@ pub fn encode_single_root_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
     where T: Encode<A> + AbiSize
 {
     let total = abi_single_root_size(value)
-    let buffer = ptr::MemBuffer::alloc(ptr::allocation_len(total))
+    let buffer = ptr::MemBuffer::new(ptr::allocation_len(total))
     // The fresh buffer is zeroed, and only the encoding writes it.
     let out = unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) }
     encode_field<A, T>(value, out, head_pos: 0, tails: out.tail(abi_single_root_head_size<T>()))

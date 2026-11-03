@@ -56,7 +56,7 @@ uses (call: mut Call, create: mut Create, raw: mut RawOps, ctx: Ctx)
 {
     // GAS; PUSH0; MSTORE; PUSH1 32; PUSH0; RETURN
     let target = deploy(0x5a5f5260205ff3, 7, 0)
-    var output = ptr::MemBuffer::alloc(32)
+    var output = ptr::MemBuffer::new(32)
     let result = call
         .call_with_min_gas(
             addr: target,
@@ -180,7 +180,7 @@ fn value_stipend_and_balance()
 uses (call: mut Call, create: mut Create, raw: mut RawOps, ctx: Ctx)
 {
     let target = deploy(0x5a5f5260205ff3, 7, 0)
-    var output = ptr::MemBuffer::alloc(32)
+    var output = ptr::MemBuffer::new(32)
     match call.call_with_min_gas(
         addr: target,
         minimum: 50000,
@@ -204,9 +204,9 @@ uses (call: mut Call, create: mut Create, raw: mut RawOps)
 {
     // CALLDATALOAD(0); MSTORE(0); REVERT(0,32).
     let target = deploy(0x5f355f5260205ffd, 8, 0)
-    let input = ptr::MemBuffer::alloc(4096)
+    let input = ptr::MemBuffer::new(4096)
     unsafe { core::abi::store_word(ptr: input.ptr(), value: 0xdeadbeef) }
-    var output = ptr::MemBuffer::alloc(32)
+    var output = ptr::MemBuffer::new(32)
     match call.call_with_min_gas(
         addr: target,
         minimum: 50000,

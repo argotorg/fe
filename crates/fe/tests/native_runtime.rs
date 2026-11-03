@@ -2588,12 +2588,12 @@ fn write_alternating(_ first: mut MemBuffer, _ second: mut MemBuffer, depth: usi
     }
 }
 pub fn main() -> i32 {
-    var buffer = MemBuffer::alloc(32)
+    var buffer = MemBuffer::new(32)
     write_at_depth(mut buffer, depth: 0, value: 19)
     core::assert(buffer[31] == 19)
     write_at_depth(mut buffer, depth: 32, value: 42)
     core::assert(buffer[31] == 42)
-    var other = MemBuffer::alloc(32)
+    var other = MemBuffer::new(32)
     other[31] = 7
     write_alternating(mut buffer, mut other, depth: 32, value: 19)
     core::assert(buffer[31] == 19 && other[31] == 7)

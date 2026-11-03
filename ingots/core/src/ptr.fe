@@ -850,8 +850,8 @@ impl MemSlice<u8> {
 
 impl MemBuffer {
     /// A buffer of `len` zero bytes.
-    pub fn alloc(_ len: usize) -> Self {
-        let buffer = unsafe { Self::alloc_uninit(len) }
+    pub fn new(_ len: usize) -> Self {
+        let buffer = unsafe { Self::new_uninit(len) }
         unsafe { zero_bytes(buffer.ptr, len) }
         buffer
     }
@@ -859,7 +859,7 @@ impl MemBuffer {
     /// A buffer of `len` bytes holding whatever the memory held.
     ///
     /// The caller must write every byte before anything reads it.
-    pub unsafe fn alloc_uninit(_ len: usize) -> Self {
+    pub unsafe fn new_uninit(_ len: usize) -> Self {
         Self {
             ptr: alloc_bytes(len),
             len,

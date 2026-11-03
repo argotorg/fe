@@ -22,7 +22,7 @@ fn expected_word(_ span: MemSpan, _ offset: usize) -> u256 {
 // page, so a read past the last word of a block faults.
 pub fn main() -> i32 {
     for len in 1..65 {
-        var buffer = MemBuffer::alloc(len)
+        var buffer = MemBuffer::new(len)
         for i in 0..len {
             buffer[i] = (i + 1).downcast_truncate()
         }

@@ -216,7 +216,7 @@ pub const fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
 /// Address of a contract created with `CREATE2` by `deployer`:
 /// the low 20 bytes of `keccak256(0xff ++ deployer ++ salt ++ init_code_hash)`.
 pub fn create2_address(deployer: Address, salt: u256, init_code_hash: u256) -> Address {
-    let preimage = unsafe { MemBuffer::alloc_uninit(85) }
+    let preimage = unsafe { MemBuffer::new_uninit(85) }
     unsafe {
         ops::mstore(addr: preimage.ptr(), value: (0xff << 248) | (deployer.inner << 88))
         ops::mstore(addr: offset(preimage.ptr(), 21), value: salt)
