@@ -2,6 +2,12 @@
 // build. Each of those fails with a message that names the reason.
 use std::evm::ops::byte
 
+// The host provides a `() -> i64` clock under this name, which the declared
+// signature would match once its zero-sized parameter is erased.
+extern {
+    fn sys_wasm_now_ms(_ unit: ()) -> u64
+}
+
 #[test]
 fn builds_and_passes() {
     let two: u32 = 1 + 1
@@ -16,4 +22,9 @@ fn uses_an_evm_builtin() {
 #[test(should_revert)]
 fn expects_an_evm_revert() {
     assert(false)
+}
+
+#[test]
+fn imports_a_zero_sized_parameter() {
+    let _ = unsafe { sys_wasm_now_ms(()) }
 }

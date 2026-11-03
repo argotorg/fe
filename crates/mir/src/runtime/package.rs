@@ -420,7 +420,9 @@ pub fn build_wasm_test_runtime_package<'db>(
     test: &TestFunc<'db>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     require_target(db, Target::Wasm)?;
-    build_test_package(db, test.func.top_mod(db), std::slice::from_ref(test))
+    let package = build_test_package(db, test.func.top_mod(db), std::slice::from_ref(test))?;
+    check_wasm_imports(db, &package)?;
+    Ok(package)
 }
 
 fn build_test_package<'db>(
@@ -684,7 +686,8 @@ pub fn build_wasm_export_package<'db>(
     Ok(WasmExportPackage { package, exports })
 }
 
-/// The imports of a module are the `extern` functions that its exports reach.
+/// The imports of a module are the `extern` functions that its exports or its
+/// test reach.
 /// Their signatures cross the boundary by value, so they follow the rule for
 /// exports: `bool` and integers of at most 64 bits.
 fn check_wasm_imports<'db>(

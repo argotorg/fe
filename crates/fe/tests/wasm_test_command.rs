@@ -196,7 +196,11 @@ fn tests_the_backend_cannot_build_fail_with_the_reason() {
         results(&output),
         expected(
             &["builds_and_passes"],
-            &["uses_an_evm_builtin", "expects_an_evm_revert"]
+            &[
+                "uses_an_evm_builtin",
+                "expects_an_evm_revert",
+                "imports_a_zero_sized_parameter"
+            ]
         ),
         "{}",
         stdout(&output)
@@ -213,8 +217,14 @@ fn tests_the_backend_cannot_build_fail_with_the_reason() {
             && revert.contains("`should_revert`"),
         "{revert}"
     );
+    let import = failure_of(&output, "imports_a_zero_sized_parameter");
+    assert!(
+        import.contains("cannot import `sys_wasm_now_ms` from the WebAssembly host")
+            && import.contains("parameter `unit: ()` is zero-sized"),
+        "{import}"
+    );
     assert_eq!(output.status.code(), Some(1));
-    assert!(stdout(&output).contains("1 passed; 2 failed"));
+    assert!(stdout(&output).contains("1 passed; 3 failed"));
 }
 
 #[test]
