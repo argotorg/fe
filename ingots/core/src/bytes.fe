@@ -674,7 +674,7 @@ impl<
     }
 }
 
-/// Hashes the fixed-width packed representation at CTFE or on the EVM.
+/// Hashes the fixed-width packed representation.
 #[inline(always)]
 pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
     intrinsic::__keccak256(x.as_bytes())
