@@ -1,0 +1,116 @@
+mod a {
+    pub fn dup<T>() -> u256 {
+        0
+    }
+
+    pub fn both<T>() -> u256 {
+        0
+    }
+
+    pub fn shadowed<T>() -> u256 {
+        0
+    }
+
+    pub fn only_a<T>() -> u256 {
+        0
+    }
+
+    pub const N: u256 = 1
+}
+
+mod b {
+    pub fn dup<T>() -> u256 {
+        0
+    }
+
+    pub fn both<T>() -> u256 {
+        0
+    }
+
+    pub fn shadowed<T>() -> u256 {
+        0
+    }
+
+    pub const N: u256 = 2
+}
+
+mod m {
+    pub use super::a::*
+    pub use super::b::*
+}
+
+use a::*
+use b::*
+
+struct K<const V: u256> {
+    x: u256,
+}
+
+trait Cap<const V: u256> {}
+
+trait Pa<const V: u256> {
+    fn h() -> u256
+}
+
+struct S {}
+
+impl Pa<1> for S {
+    fn h() -> u256 {
+        0
+    }
+}
+
+fn take<T>() -> u256 {
+    0
+}
+
+fn take_const<const V: u256>() -> u256 {
+    V
+}
+
+// A name glob imports bring in twice is ambiguous, however the path is written.
+fn calls() {
+    dup<u8>()
+    dup<Missing>()
+    m::dup<u8>()
+    let _ = dup
+    let _ = N
+}
+
+fn const_args() {
+    take_const<N>()
+    take<K<N>>()
+    Pa<N>::h()
+    let _: K<N> = K<1> { x: 0 }
+}
+
+fn in_param(_ x: K<N>) {}
+
+fn in_bound<T: Cap<N>>() {}
+
+fn conflict<T>() -> u256 {
+    0
+}
+
+fn conflict<T>() -> u256 {
+    0
+}
+
+fn conflicting_call() {
+    conflict<u8>()
+}
+
+// A local item shadows the imports, a type takes the name when the values
+// can't, and a single import or a qualified path isn't ambiguous.
+struct both<T> {
+    x: u256,
+}
+
+fn shadowed<T>() -> u256 {
+    0
+}
+
+fn valid() -> u256 {
+    let v = both<u8> { x: 7 }
+    v.x + shadowed<u8>() + only_a<u8>() + a::dup<u8>() + b::dup<u8>() + take_const<a::N>()
+}

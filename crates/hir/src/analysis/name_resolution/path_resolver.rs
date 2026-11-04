@@ -1198,18 +1198,21 @@ fn trait_arg_path_error<'db>(
             visited += 1;
             match resolve_path_with_minter(db, arg_path, scope, assumptions, false, lowering_cx) {
                 Ok(PathRes::Ty(_) | PathRes::TyAlias(..)) => None,
-                _ if position == TypePosition::GenericArg
-                    && lower_type_position_path(
+                result if position == TypePosition::GenericArg => {
+                    match lower_type_position_path(
                         db,
                         arg_path,
                         scope,
                         assumptions,
                         position,
                         lowering_cx,
-                    )
-                    .is_ok_and(|ty| ty.is_const_ty(db)) =>
-                {
-                    None
+                    ) {
+                        Ok(ty) if ty.is_const_ty(db) => None,
+                        Ok(_) => Some((nth, result)),
+                        // Why it names nothing as an argument, which may be a
+                        // constant, not only why it names no type.
+                        Err(err) => Some((nth, Err(err))),
+                    }
                 }
                 result => Some((nth, result)),
             }
@@ -1702,14 +1705,26 @@ fn resolve_segment<'db>(
     };
 
     let bucket = resolve_query(db, make_query(db, path, parent_scope));
-    let res = if is_tail
-        && resolve_tail_as_value
-        && let Ok(res) = bucket.pick(NameDomain::VALUE)
-    {
+    let value = (is_tail && resolve_tail_as_value).then(|| bucket.pick(NameDomain::VALUE));
+    let res = if let Some(Ok(res)) = value {
         *decided_by_value = true;
         res.clone()
     } else {
-        pick_type_domain_from_bucket(parent_res, bucket, path)?
+        match pick_type_domain_from_bucket(parent_res, bucket, path) {
+            // A value that can't be told apart is the error when no type has
+            // the name: the name isn't missing.
+            Err(PathResError {
+                kind: PathResErrorKind::NotFound { .. },
+                ..
+            }) if let Some(Err(
+                err @ (NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)),
+            )) = value =>
+            {
+                *decided_by_value = true;
+                return Err(PathResError::from_name_res_error(err.clone(), path));
+            }
+            res => res?,
+        }
     };
     resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx)
 }

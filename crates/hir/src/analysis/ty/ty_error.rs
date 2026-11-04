@@ -17,8 +17,8 @@ use crate::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, NameResKind, PathRes, diagnostics::PathResDiag, resolve_path,
-        resolve_path_with_minter, resolve_path_with_observer_and_minter,
+        ExpectedPathKind, NameResKind, PathRes, PathResErrorKind, diagnostics::PathResDiag,
+        resolve_path, resolve_path_with_minter, resolve_path_with_observer_and_minter,
         resolve_trait_path_with_observer_and_minter, resolve_type_path_definition,
         trait_arg_path_diag,
     },
@@ -485,19 +485,46 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
         // even when `String` expects a const generic arg. Avoid emitting spurious
         // type-expected diagnostics for const-like paths in generic-arg position.
-        if let GenericArg::Type(type_arg) = arg
+        let resolved = if let GenericArg::Type(type_arg) = arg
             && let Some(hir_ty) = type_arg.ty.to_opt()
             && let TypeKind::Path(path_partial) = hir_ty.data(self.db)
             && let Some(path) = path_partial.to_opt()
-            && let Ok(resolved) = resolve_path_with_minter(
-                self.db,
-                path,
-                ctxt.scope(),
-                self.assumptions,
-                true,
-                &self.path_context(),
-            )
         {
+            Some((
+                path,
+                resolve_path_with_minter(
+                    self.db,
+                    path,
+                    ctxt.scope(),
+                    self.assumptions,
+                    true,
+                    &self.path_context(),
+                ),
+            ))
+        } else {
+            None
+        };
+
+        // A name that can't be told apart isn't missing, as looking it up again
+        // as a type would say.
+        if let Some((path, Err(err))) = &resolved
+            && matches!(
+                err.kind,
+                PathResErrorKind::Ambiguous(_) | PathResErrorKind::Conflict(_)
+            )
+            && let Some(span) = ctxt.span()
+        {
+            let path_span = span.into_type_arg().ty().into_path_type().path();
+            self.diags.extend(err.clone().into_diag(
+                self.db,
+                *path,
+                path_span,
+                ExpectedPathKind::Value,
+            ));
+            return;
+        }
+
+        if let Some((path, Ok(resolved))) = resolved {
             let is_const_like = match resolved {
                 PathRes::Const(..) | PathRes::TraitConst(..) | PathRes::InherentConst(..) => true,
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
