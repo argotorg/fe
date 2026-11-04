@@ -3871,6 +3871,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "const_trait_provider_contract",
     "contract_field_explicit_slot",
     "contract_field_mut_borrow_matrix",
+    "contract_field_projection_types",
     "contract_init_fixed_array_arg",
     "copied_state_words",
     "ctx",
