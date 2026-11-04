@@ -47,6 +47,8 @@ const POLLFD_SIZE: usize = 8
 const RUSAGE_SIZE: usize = 144
 // `=`.
 const EQUALS: u8 = 61
+// The most to read of a pipe once its child has ended: more than a pipe holds.
+const DRAIN_LIMIT: usize = 1048576
 
 /// Starting programs and waiting for them to end.
 pub trait Spawn: HostCapabilitySeal {
@@ -144,7 +146,8 @@ impl Command {
 
     /// Kills the child with `SIGKILL` once `limit` has passed since its
     /// spawn while `wait` or `wait_any` serves it, which then reports
-    /// `Status::TimedOut`. Programs the child started keep running.
+    /// `Status::TimedOut` with the output so far. Programs the child started
+    /// keep running, and what they write after that is lost.
     pub fn timeout(var own self, _ limit: Duration) -> Self {
         self.timeout = Option::Some(limit)
         self
@@ -599,19 +602,21 @@ impl Child {
         self.stdin.is_open() || self.stdout.is_open() || self.stderr.is_open()
     }
 
-    // Kills the child, unless it has already ended, and reaps it.
+    // Kills the child, unless it has already ended, and reaps it, then reads
+    // what its pipes hold. Programs it started may hold them open, or go on
+    // writing, so this reads no further than that.
     fn time_out(mut self) -> Result<Error, ()> {
         self.ended = self.reap(options: WNOHANG)?
-        if self.ended.is_some() {
-            return Result::Ok(())
+        if self.ended.is_none() {
+            unsafe { kill(self.pid, SIGKILL) }
+            let usage = self.reap_blocking()?.usage
+            self.ended = Option::Some(Ended { status: Status::TimedOut, usage })
         }
-        unsafe { kill(self.pid, SIGKILL) }
-        // Programs the child started may hold its pipes open.
         self.stdin = Fd::none()
+        drain(mut self.stdout, mut self.out)?
         self.stdout = Fd::none()
+        drain(mut self.stderr, mut self.err)?
         self.stderr = Fd::none()
-        let usage = self.reap_blocking()?.usage
-        self.ended = Option::Some(Ended { status: Status::TimedOut, usage })
         Result::Ok(())
     }
 
@@ -730,6 +735,26 @@ fn read_into(_ fd: mut Fd, _ buffer: mut MemBuffer) -> Result<Error, ()> {
         fd = Fd::none()
     } else if sys::errno() != EINTR {
         return Result::Err(last_error())
+    }
+    Result::Ok(())
+}
+
+// Reads what the pipe `fd` holds now into `buffer`, closing the pipe at the
+// end of its stream, up to `DRAIN_LIMIT` bytes.
+fn drain(_ fd: mut Fd, _ buffer: mut MemBuffer) -> Result<Error, ()> {
+    var entry = MemBuffer::new(POLLFD_SIZE)
+    entry.write_le<i32>(offset: 0, value: fd.fd)
+    entry.write_le<u16>(offset: 4, value: POLLIN)
+    let start = buffer.len()
+    while fd.is_open() && buffer.len() - start < DRAIN_LIMIT {
+        let ready = unsafe { poll(entry.ptr(), 1, 0) }
+        if ready > 0 {
+            read_into(mut fd, mut buffer)?
+        } else if ready == 0 {
+            return Result::Ok(())
+        } else if sys::errno() != EINTR {
+            return Result::Err(last_error())
+        }
     }
     Result::Ok(())
 }

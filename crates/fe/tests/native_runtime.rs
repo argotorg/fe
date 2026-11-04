@@ -3079,6 +3079,12 @@ empty key: InvalidInput (Invalid argument)
 timeout: timed out [] []
 timeout with pipes: timed out [] []
   ended within 2 s: true
+exited before the wait: exit status 0 (success) [hello
+] []
+killed by the wait: timed out [partial
+] []
+endless writer: timed out
+  ended within 2 s: true
 busy: exit status 0, used CPU: true, used memory: true
 wait_any: fast exit status 0 [fast
 ]

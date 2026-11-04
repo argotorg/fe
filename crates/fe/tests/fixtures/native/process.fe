@@ -75,6 +75,17 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args, fs: Fs, proc: mut Spawn,
         proc.output(sh("sleep 5 & sleep 5").stdout(Redirect::Capture).stderr(Redirect::Null).timeout(Duration::from_millis(100))),
     )
     println!("  ended within 2 s: ", clock.instant().duration_since(start) < Duration::from_secs(2))
+    match wait_past_deadlines() {
+        Result::Ok(_) => {}
+        Result::Err(error) => failed("wait past deadlines", error),
+    }
+    // A program the child started never stops writing to its pipe.
+    let writer_start = clock.instant()
+    match proc.output(sh("yes & sleep 5").stdout(Redirect::Capture).stderr(Redirect::Null).timeout(Duration::from_millis(50))) {
+        Result::Ok(output) => println!("endless writer: ", output.status),
+        Result::Err(error) => failed("endless writer", error),
+    }
+    println!("  ended within 2 s: ", clock.instant().duration_since(writer_start) < Duration::from_secs(2))
 
     match proc.output(sh("i=0; while [ $i -lt 100000 ]; do i=$((i+1)); done")) {
         Result::Ok(output) => println!(
@@ -93,6 +104,18 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args, fs: Fs, proc: mut Spawn,
         Result::Err(error) => failed("wait_any", error),
     }
     0
+}
+
+// Waits past the deadlines of a child that has exited and of one still
+// running. What they wrote is still in their pipes.
+fn wait_past_deadlines() -> Result<Error, ()> uses (out: mut Stdout, proc: mut Spawn) {
+    let limit = Duration::from_millis(50)
+    let exited = proc.spawn(Command::new("echo").arg("hello").stdout(Redirect::Capture).timeout(limit))?
+    let running = proc.spawn(sh("echo partial; sleep 5").stdout(Redirect::Capture).stderr(Redirect::Null).timeout(limit))?
+    proc.output(Command::new("sleep").arg("1"))?
+    show("exited before the wait", proc.wait(exited))
+    show("killed by the wait", proc.wait(running))
+    Result::Ok(())
 }
 
 // Starts three children that end in the opposite order, and waits for each
