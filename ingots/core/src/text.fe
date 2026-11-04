@@ -59,7 +59,7 @@ pub fn hex(_ value: u256, _ bytes: usize) -> DynString {
     while i > 0 {
         i -= 1
         let nibble: u8 = (remaining & 15).downcast_truncate()
-        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + 48 } else { nibble + 87 } }
+        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + b'0' } else { nibble - 10 + b'a' } }
         remaining >>= 4
     }
     out
@@ -75,7 +75,7 @@ pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
     while i > 0 {
         i -= 1
         let nibble: u8 = (remaining & 15).downcast_truncate()
-        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + 48 } else { nibble + 55 } }
+        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + b'0' } else { nibble - 10 + b'A' } }
         remaining >>= 4
     }
     out

@@ -1,6 +1,12 @@
-/// Ending the process, a capability of the native root effect,
-/// `std::native::Host`: `pub fn main() -> i32 uses (proc: Exit)`.
+/// Ending the process and starting other programs, capabilities of the
+/// native root effect, `std::native::Host`: a function that ends the process
+/// declares `uses (proc: Exit)`, and one that runs programs
+/// `uses (proc: mut Spawn)`. An operation that fails returns the host's
+/// reason as a `std::io::Error`.
 use super::native::{Host, HostCapabilitySeal}
+
+#[cfg(target_family = "unix")]
+pub use spawn::*
 
 extern {
     // The C library's `exit`.

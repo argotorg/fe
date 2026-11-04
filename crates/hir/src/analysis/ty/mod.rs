@@ -297,7 +297,7 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             if let Some(cycle) = cycle {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
-            } else if let Some(cycle) = growing.get(&adt) {
+            } else if let Some(cycle) = growing.cycles.get(&adt) {
                 diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
             }
         }

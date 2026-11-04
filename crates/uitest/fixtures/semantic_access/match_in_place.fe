@@ -49,7 +49,7 @@ fn payload_twice(_ s: own Store) -> usize {
 fn from_view(_ s: Store) -> MemBuffer {
     match s.buf {
         Option::Some(b) => keep(b)
-        Option::None => MemBuffer::alloc(0)
+        Option::None => MemBuffer::new(0)
     }
 }
 
@@ -70,7 +70,7 @@ fn from_view_ref(_ s: Store) -> usize {
 fn from_mut(_ s: mut Store) -> MemBuffer {
     match s.buf {
         Option::Some(b) => keep(b)
-        Option::None => MemBuffer::alloc(0)
+        Option::None => MemBuffer::new(0)
     }
 }
 
@@ -81,6 +81,6 @@ fn swap_out(_ s: mut Store) -> MemBuffer {
             s.buf = Option::None
             keep(b)
         }
-        Option::None => MemBuffer::alloc(0)
+        Option::None => MemBuffer::new(0)
     }
 }

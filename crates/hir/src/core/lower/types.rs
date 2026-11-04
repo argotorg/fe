@@ -1,3 +1,4 @@
+use common::ingot::IngotKind;
 use parser::ast::{self};
 
 use super::FileLowerCtxt;
@@ -94,11 +95,9 @@ impl<'db> TraitRefId<'db> {
                         ty: Partial::Present(ret),
                     }));
                 }
-                ctxt.core_path().push_str(db, "functional").push_str_args(
-                    db,
-                    name.text(),
-                    GenericArgListId::new(db, args, true),
-                )
+                ctxt.builtin_ingot_path(IngotKind::Core, "core")
+                    .push_str(db, "functional")
+                    .push_str_args(db, name.text(), GenericArgListId::new(db, args, true))
             }),
             None => ast.path().map(|ast| PathId::lower_ast(ctxt, ast)),
         };

@@ -58,9 +58,9 @@ fn a_deferred_binding_lives_until_its_block_ends() {
 fn a_binding_given_a_value_on_every_branch_can_be_used_after() {
     var buffer: MemBuffer
     if true {
-        buffer = MemBuffer::alloc(8)
+        buffer = MemBuffer::new(8)
     } else {
-        buffer = MemBuffer::alloc(9)
+        buffer = MemBuffer::new(9)
     }
     assert(buffer.len() == 8)
 }

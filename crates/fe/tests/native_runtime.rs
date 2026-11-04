@@ -13,16 +13,18 @@ use std::{
     io::Write,
     os::unix::{
         ffi::OsStringExt,
+        fs::symlink,
         process::{CommandExt, ExitStatusExt},
     },
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use num_bigint::BigUint;
 use tempfile::tempdir;
+use tiny_keccak::{Hasher, Keccak};
 
 fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
     // Several tests run built programs that trap.
@@ -295,6 +297,41 @@ fn unexpected_revert() {
 }
 
 #[test]
+fn native_keccak_matches_a_reference_for_runtime_data() {
+    let keccak = |bytes: &[u8]| {
+        let mut hasher = Keccak::v256();
+        hasher.update(bytes);
+        let mut digest = [0; 32];
+        hasher.finalize(&mut digest);
+        format!("{} {}\n", bytes.len(), hex::encode(digest))
+    };
+    let bytes: Vec<u8> = (0..420).map(|index| (index * 7 + 3) as u8).collect();
+    let word = |word: u8| array::from_fn::<u8, 32, _>(|i| if i == 31 { word } else { 0 });
+    let mut expected: String = (0..420).map(|len| keccak(&bytes[..len])).collect();
+    for len in [0, 1, 31, 32, 33, 135, 136, 137, 272] {
+        expected += &keccak(&bytes[..len]);
+    }
+    expected += &keccak(&[]);
+    expected += &keccak(&word(1));
+    expected += &keccak(&word(1).repeat(10));
+
+    let temp = tempdir().unwrap();
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/keccak_digests.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("keccak_digests")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            expected,
+            "O{level}"
+        );
+    }
+}
+
+#[test]
 fn native_buffer_word_writes_preserve_unaligned_values_and_zero_gaps() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("word_writes.fe");
@@ -530,7 +567,7 @@ pub fn main() -> i32 {
                 .filter(|line| line.starts_with("func") && line.contains("bump"))
                 .collect();
             assert!(
-                matches!(bumps[..], [bump] if bump.contains("(noalias v0.objref<")),
+                matches!(bumps[..], [bump] if bump.contains("(noalias nocapture v0.objref<")),
                 "{bumps:?}"
             );
         }
@@ -788,8 +825,37 @@ math = true
 #[test]
 fn aggregate_fixtures_run_at_every_level() {
     for (name, expected_count) in [
+        ("aggregate_equality.fe", 14),
         ("aggregate_object_copies.fe", 3),
         ("const_aggregate_values.fe", 5),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(name);
+        for backend in ["sonatina", "native"] {
+            for level in ["0", "1", "2"] {
+                let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+                    .args(["test", "--backend", backend, "--jobs", "1", "-O", level])
+                    .arg(&fixture)
+                    .output()
+                    .unwrap();
+                assert!(
+                    String::from_utf8_lossy(&result.stdout)
+                        .contains(&format!("{expected_count} passed; 0 failed")),
+                    "{name} {backend} -O{level}: {result:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn text_fixtures_run_at_every_level() {
+    for (name, expected_count) in [
+        ("string_literal_eq.fe", 1),
+        ("span_string_eq.fe", 4),
+        ("byte_literals.fe", 1),
+        ("write_macros.fe", 2),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")
@@ -1521,6 +1587,7 @@ fn native_arguments_preserve_bytes_bounds_and_the_entry_name() {
         &source,
         r#"
 use core::MemBuffer
+use core::ops::Eq
 use std::env::Args
 use std::io::Stdout
 // The entry's internal name is free for a Fe function.
@@ -1535,7 +1602,15 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
     var text = MemBuffer::empty()
     var i: usize = 1
     while i < args.count() {
-        text.extend_from(args.get(i).span())
+        let arg = args.get(i)
+        text.extend_from(arg.span())
+        // An argument compares with a literal's text.
+        if arg == "Fe"
+            || arg.span() == "λ"
+            || !arg.eq("Fee") && arg == "an argument of thirty-two bytes!"
+        {
+            text.push(33)
+        }
         text.push(124)
         i += 1
     }
@@ -1550,12 +1625,15 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
         build(&source, &out, level, &[]);
         let executable = out.join("arguments");
         let result = Command::new(&executable)
-            .args(["", "Fe", "λ"])
+            .args(["", "Fe", "λ", "Fee", "an argument of thirty-two bytes!"])
             .arg(OsString::from_vec(vec![0x80, 0xff]))
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
-        assert_eq!(result.stdout, b"|Fe|\xce\xbb|\x80\xff|");
+        assert_eq!(
+            result.stdout,
+            b"|Fe!|\xce\xbb!|Fee|an argument of thirty-two bytes!!|\x80\xff|"
+        );
         for args in [&[][..], &[""][..], &["bounds"][..]] {
             let result = Command::new(&executable).args(args).output().unwrap();
             assert!(
@@ -1960,6 +2038,32 @@ fn native_executables_link_host_objects_and_libraries() {
     }
 }
 
+#[test]
+fn native_partial_words_stay_in_their_allocations() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    let allocator = temp.path().join("guarded_allocator.o");
+    let compiled = Command::new("cc")
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"])
+        .arg(fixtures.join("guarded_allocator.c"))
+        .arg("-o")
+        .arg(&allocator)
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(
+            &fixtures.join("partial_words.fe"),
+            &out,
+            level,
+            &["--link", allocator.to_str().unwrap()],
+        );
+        let result = Command::new(out.join("partial_words")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
 /// Runs a native fixture under an allocator that requires every allocation to
 /// be freed exactly once, and reports its counts on stderr. `defines`
 /// configure the allocator.
@@ -2341,7 +2445,19 @@ pub fn main() -> i32 {
             core::assert(buffer[i] == 0)
         }
         consume(buffer)
+        var filled = MemBuffer::new(64)
+        for i in 0..64 {
+            filled[i] = 0xff
+        }
+        consume(filled)
+        let zeroed = MemBuffer::try_new(64).unwrap()
+        core::assert(zeroed.len() == 64 && zeroed.capacity() == 64)
+        for i in 0..64 {
+            core::assert(zeroed[i] == 0)
+        }
+        consume(zeroed)
     }
+    core::assert(MemBuffer::try_new(usize::max()).is_none())
     0
 }
 "#,
@@ -2526,12 +2642,12 @@ fn write_alternating(_ first: mut MemBuffer, _ second: mut MemBuffer, depth: usi
     }
 }
 pub fn main() -> i32 {
-    var buffer = MemBuffer::alloc(32)
+    var buffer = MemBuffer::new(32)
     write_at_depth(mut buffer, depth: 0, value: 19)
     core::assert(buffer[31] == 19)
     write_at_depth(mut buffer, depth: 32, value: 42)
     core::assert(buffer[31] == 42)
-    var other = MemBuffer::alloc(32)
+    var other = MemBuffer::new(32)
     other[31] = 7
     write_alternating(mut buffer, mut other, depth: 32, value: 19)
     core::assert(buffer[31] == 19 && other[31] == 7)
@@ -2900,4 +3016,208 @@ fn keep_beta() {
             .any(|line| line.ends_with("/tests.o")),
         "no selected tests must not create a native object"
     );
+}
+
+#[test]
+fn native_fs_reads_writes_and_lists_files() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/fs.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let dir = temp.path().join(format!("files-{level}"));
+        fs::create_dir(&dir).unwrap();
+        symlink("a/b/c/file", dir.join("link")).unwrap();
+        let result = Command::new(out.join("fs")).arg(&dir).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        // Directory entries come in no particular order.
+        let stdout = String::from_utf8(result.stdout).unwrap();
+        let mut lines = stdout.lines().collect::<Vec<_>>();
+        for entries in lines.chunk_by_mut(|a, b| a.starts_with("  ") && b.starts_with("  ")) {
+            entries.sort();
+        }
+        let canonical = fs::canonicalize(&dir).unwrap();
+        let expected = format!(
+            r#"create_dir_all a/b/c: ok
+create_dir_all a/b/c/: ok
+write a/b/c/file: ok
+append a/b/c/file: ok
+append a/new: ok
+write a/empty: ok
+read a/b/c/file: 11 bytes "hello world"
+read a/new: 3 bytes "new"
+read a/empty: 0 bytes ""
+read link: 11 bytes "hello world"
+metadata a: dir
+metadata a/b/c/file: file of 11 bytes
+metadata link: file of 11 bytes
+read_dir .: 2 entries
+  a dir
+  link symlink
+read_dir a: 3 entries
+  b dir
+  empty file
+  new file
+canonicalize a/b/../b/./c/file: {}/a/b/c/file
+read missing: NotFound (No such file or directory)
+read a: IsADirectory (Is a directory)
+write a: IsADirectory (Is a directory)
+create_dir_all a/empty: AlreadyExists (File exists)
+create_dir_all a/empty/x: NotADirectory (Not a directory)
+metadata missing: NotFound (No such file or directory)
+read_dir a/empty: NotADirectory (Not a directory)
+read a\0: InvalidInput (Invalid argument)"#,
+            canonical.display()
+        );
+        assert_eq!(lines.join("\n"), expected, "O{level}");
+        assert_eq!(fs::read(dir.join("a/b/c/file")).unwrap(), b"hello world");
+    }
+}
+
+#[test]
+fn native_process_runs_programs_and_waits_for_them() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/process.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let dir = temp.path().join(format!("scratch-{level}"));
+        fs::create_dir(&dir).unwrap();
+        let result = Command::new(out.join("process"))
+            .arg(&dir)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            r#"echo: exit status 0 (success) [hello 42
+] []
+exit 3: exit status 3 [out
+] [err
+]
+merged: exit status 0 (success) [a
+b
+c
+] []
+killed: signal 9 [] []
+null input: exit status 0 (success) [] []
+null output: exit status 0 (success) [] []
+env: exit status 0 (success) [a b unset
+] []
+dir: exit status 0, the directory: true
+file: exit status 0 (success) [] []
+file holds: to file
+
+file in dir: exit status 0 (success) [] []
+file in dir holds: in dir
+
+cat: exit status 0, 1048576 bytes back, same: true
+both streams: exit status 0, 300000 and 200000 bytes
+input not taken: exit status 0 (success) [] []
+missing program: NotFound (No such file or directory)
+missing dir: NotFound (No such file or directory)
+stdout to stdout: InvalidInput (Invalid argument)
+nul argument: InvalidInput (Invalid argument)
+key with =: InvalidInput (Invalid argument)
+empty key: InvalidInput (Invalid argument)
+timeout: timed out [] []
+timeout with pipes: timed out [] []
+  ended within 2 s: true
+exited before the wait: exit status 0 (success) [hello
+] []
+killed by the wait: timed out [partial
+] []
+endless writer: timed out
+  ended within 2 s: true
+busy: exit status 0, used CPU: true, used memory: true
+wait_any: fast exit status 0 [fast
+]
+wait_any: middle exit status 0 []
+wait_any: slow exit status 0 [slow
+]
+"#,
+            "O{level}"
+        );
+        assert_eq!(fs::read(dir.join("log")).unwrap(), b"to file\n");
+    }
+}
+
+// A pipe made while a standard stream is closed takes its number. The child
+// must still see the stream closed: reading its stdin must not reach its own
+// stdout pipe, which would never end. Inheriting a closed stream is no error.
+#[test]
+fn native_process_pipes_avoid_closed_standard_streams() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("closed.fe");
+    fs::write(
+        &source,
+        r#"
+use std::process::{Command, Redirect, Spawn}
+use std::time::Duration
+
+pub fn main() -> i32 uses (proc: mut Spawn) {
+    let command = Command::new("sh")
+        .arg("-c")
+        .arg("read x; echo done")
+        .stdout(Redirect::Capture)
+        .timeout(Duration::from_secs(5))
+    match proc.output(command) {
+        Result::Ok(output) => {
+            var expected = format!("done")
+            expected.push(10)
+            if output.status.success() && output.stdout.span() == expected.span() { 0 } else { 1 }
+        }
+        Result::Err(_) => 2,
+    }
+}
+"#,
+    )
+    .unwrap();
+    let out = temp.path().join("out");
+    build(&source, &out, "0", &[]);
+    for closed in ["<&-", ">&-", "2>&-", "<&- >&-", "<&- >&- 2>&-"] {
+        let result = Command::new("sh")
+            .arg("-c")
+            .arg(format!("exec \"$0\" {closed}"))
+            .arg(out.join("closed"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{closed}: {result:?}");
+    }
+}
+
+#[test]
+fn native_clock_reads_wall_and_monotonic_time() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/time.fe");
+    let unix_secs = || {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let before = unix_secs();
+        let result = Command::new(out.join("time")).output().unwrap();
+        let after = unix_secs();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        let stdout = String::from_utf8(result.stdout).unwrap();
+        let (now, rest) = stdout
+            .strip_prefix("now ")
+            .unwrap()
+            .split_once('\n')
+            .unwrap();
+        let now = now.parse::<u64>().unwrap();
+        assert!(
+            (before..=after).contains(&now),
+            "O{level}: {now} outside {before}..={after}"
+        );
+        assert_eq!(
+            rest,
+            "spun 20 ms: true\nsince a later reading: 0\n2 s, 2499 ms, 2499750 us, 2499750000 ns\ntrue true\n",
+            "O{level}"
+        );
+    }
 }

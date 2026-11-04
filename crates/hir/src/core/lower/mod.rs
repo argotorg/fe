@@ -156,11 +156,31 @@ pub(crate) fn scope_graph_impl<'db>(
 
     if let Some(items) = ast.items() {
         item::validate_module_inner_attrs(&mut ctxt, items.inner_attr_list());
-        lower_module_items(&mut ctxt, items);
+        if enclosing_cfg_holds_impl(db, top_mod) {
+            lower_module_items(&mut ctxt, items);
+        }
     }
     ctxt.leave_item_scope(top_mod);
 
     ctxt.build()
+}
+
+/// Whether the `#![cfg(..)]` attributes of every file module enclosing
+/// `top_mod` hold, so that a module's `cfg` drops the modules in its
+/// directory along with its own items.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn enclosing_cfg_holds_impl<'db>(db: &'db dyn HirDb, top_mod: TopLevelMod<'db>) -> bool {
+    top_mod.parent(db).is_none_or(|parent| {
+        enclosing_cfg_holds_impl(db, parent)
+            && attr::named_attr_specs(
+                top_mod_ast(db, parent)
+                    .items()
+                    .and_then(|items| items.inner_attr_list()),
+                "cfg",
+            )
+            .iter()
+            .all(|spec| attr::cfg_spec_holds(db, spec) == Some(true))
+    })
 }
 
 /// Returns the scope graph of the body of `func`, lowered on its own, or `None`
@@ -261,13 +281,14 @@ impl<'db> FileLowerCtxt<'db> {
         self.builder.lazy_func
     }
 
-    /// The path naming the core ingot from the file: `ingot` within core.
-    pub(super) fn core_path(&self) -> PathId<'db> {
+    /// The path naming the builtin ingot `name` of `kind`, `core` or `std`,
+    /// from the file: `ingot` within that ingot.
+    pub(super) fn builtin_ingot_path(&self, kind: IngotKind, name: &str) -> PathId<'db> {
         let db = self.db();
-        let root = if self.top_mod().ingot(db).kind(db) == IngotKind::Core {
+        let root = if self.top_mod().ingot(db).kind(db) == kind {
             IdentId::make_ingot(db)
         } else {
-            IdentId::new(db, "core".to_string())
+            IdentId::new(db, name.to_string())
         };
         PathId::from_ident(db, root)
     }
@@ -431,6 +452,8 @@ impl<'db> LitKind<'db> {
                 // their source spelling as a valid semantic string.
                 Self::String(StringId::new(ctxt.db(), string.value().ok()?))
             }
+            // Parsing diagnosed invalid byte literals.
+            ast::LitKind::Byte(byte) => Self::Byte(byte.value().ok()?),
             ast::LitKind::Bool(bool) => match bool.token().text() {
                 "true" => Self::Bool(true),
                 "false" => Self::Bool(false),

@@ -68,6 +68,7 @@
 ; === Attributes ===
 
 (attribute name: (identifier) @attribute)
+(inner_attribute name: (identifier) @attribute)
 (doc_comment) @comment.doc
 
 ; === Keywords ===
@@ -121,6 +122,7 @@
 ; === Literals ===
 
 (string_literal) @string
+(byte_literal) @string
 (escape_sequence) @string.escape
 (integer_literal) @number
 (boolean_literal) @constant

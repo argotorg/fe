@@ -1,8 +1,9 @@
 /// Interfaces to the native host runtime.
 
 /// The native root effect. `main` and tests receive the host's capabilities,
-/// such as `std::io::Stdout`, `std::env::Args` and `std::process::Exit`,
-/// from it by declaring them in `uses`; nothing else can create one.
+/// such as `std::io::Stdout`, `std::env::Args`, `std::fs::Fs` and
+/// `std::process::Exit`, from it by declaring them in `uses`; nothing else
+/// can create one.
 pub struct Host { unsafe seal: Private }
 
 struct Private {}

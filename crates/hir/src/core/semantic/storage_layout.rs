@@ -908,6 +908,8 @@ fn collect_field_plan<'db>(
     if declared.has_invalid(db) || ty_has_incomplete_adt_application(db, declared) {
         return Some((name, Err(vec![ContractLayoutError::InvalidFieldType])));
     }
+    // Normalized, as MIR binds the field: `G<<K as Tr>::Out>` is `G<u8>`.
+    let declared = normalize_ty(db, declared, scope, assumptions);
     let address_space = if field.is_mut {
         AddressSpace::Storage
     } else {

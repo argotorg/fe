@@ -1,0 +1,17 @@
+use std::io::Stdout
+use std::time::{Clock, Duration}
+
+// Prints the wall clock's seconds, times a 20 ms spin on the monotonic
+// clock, and checks `Duration` and `Instant` arithmetic.
+pub fn main() -> i32 uses (out: mut Stdout, clock: Clock) {
+    println!("now ", clock.now().as_secs())
+    let start = clock.instant()
+    while clock.instant().duration_since(start) < Duration::from_millis(20) {}
+    let elapsed = clock.instant().duration_since(start)
+    println!("spun 20 ms: ", elapsed >= Duration::from_millis(20))
+    println!("since a later reading: ", start.duration_since(clock.instant()).as_nanos())
+    let d = Duration::from_secs(2) + Duration::from_millis(500) - Duration::from_micros(250)
+    println!(d.as_secs(), " s, ", d.as_millis(), " ms, ", d.as_micros(), " us, ", d.as_nanos(), " ns")
+    println!(start + Duration::from_nanos(1) > start, " ", Duration::from_nanos(7) == Duration::from_nanos(7))
+    0
+}

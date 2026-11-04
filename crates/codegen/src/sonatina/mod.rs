@@ -973,7 +973,7 @@ fn prepare_native_main(
         Signature::new(&name, Linkage::Private, sig.args(), sig.ret_tys())
     });
     module.ctx.declared_funcs.insert(main, signature);
-    let globals = HostState::ALL.map(|state| {
+    let globals = HostState::ENTRY.map(|state| {
         module
             .ctx
             .with_gv_store(|store| store.lookup_gv(state.global()))
@@ -2748,7 +2748,7 @@ pub contract C uses (evm: mut Evm) {
         for helper in [
             &["bump"][..],
             &["abi__store_word("],
-            &["MemBuffer", "__alloc("],
+            &["MemBuffer", "__new("],
         ] {
             let definitions = output
                 .lines()

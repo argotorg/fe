@@ -176,6 +176,8 @@ pub enum LitKind<'db> {
     Int(IntegerId<'db>),
     String(StringId<'db>),
     Bool(bool),
+    /// A byte literal, `b'x'`, of type `u8`.
+    Byte(u8),
 }
 
 /// `Partial<T>` is a type that explicitly indicates the possibility that an HIR

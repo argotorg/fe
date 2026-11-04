@@ -16,3 +16,13 @@ fn accepted(_ o: Option<u256>) -> u256 {
     }
     x
 }
+
+fn nested_scopes(_ o: Option<u256>) -> u256 {
+    let Option::Some(x) = o else {
+        if true { let y: u256 = 1 }
+        while false {}
+        for _ in 0..1 {}
+        return 0
+    }
+    x
+}

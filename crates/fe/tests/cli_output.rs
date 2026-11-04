@@ -189,6 +189,43 @@ fn test_cli_check_uses_the_backend_target() {
     assert!(output.contains("static assertion failed"), "{output}");
 }
 
+// A module's `#![cfg(..)]` drops the modules in its directory too.
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_check_module_cfg_drops_submodules() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    let pointer_bytes =
+        |bytes| format!("pub fn f() {{\n    static_assert(core::size_of<*u8>() == {bytes})\n}}\n");
+    for (path, content) in [
+        (
+            "fe.toml",
+            "[ingot]\nname = \"cfg_tree\"\nversion = \"0.1.0\"\n".to_string(),
+        ),
+        ("src/lib.fe", String::new()),
+        (
+            "src/native.fe",
+            "#![cfg(target = \"native\")]\n".to_string(),
+        ),
+        ("src/native/word.fe", pointer_bytes(8)),
+        ("src/native/word/inner.fe", pointer_bytes(8)),
+        ("src/evm.fe", "#![cfg(target = \"evm\")]\n".to_string()),
+        ("src/evm/word.fe", pointer_bytes(32)),
+    ] {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+        fs::write(path, content).expect("write fixture");
+    }
+    let root = root.to_str().expect("UTF-8 ingot path");
+    for args in [
+        &["check", root][..],
+        &["check", "--backend", "native", root],
+    ] {
+        let (output, exit_code) = run_fe_main(args);
+        assert_eq!(exit_code, 0, "{args:?}:\n{output}");
+    }
+}
+
 #[test]
 fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
@@ -3810,15 +3847,12 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "abi_unpadded_dynamic_payload",
     "acceptance",
     "address_call_method",
-    "address_checksum",
     "address_static_method",
     "address_validation",
     "assignment_order",
     "assoc_type_fields",
     "assoc_type_lanes",
     "associated_shape_forwarding",
-    "black_box",
-    "buffer_capacity_bound",
     "bytes_view_overflow_revert",
     "call_with_default",
     "clear_place",
@@ -3830,10 +3864,10 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "code_struct_field_offsets",
     "coin",
     "composed_abi_decoder",
-    "const_numeric_extern_intrinsics",
     "const_trait_provider_contract",
     "contract_field_explicit_slot",
     "contract_field_mut_borrow_matrix",
+    "contract_field_projection_types",
     "contract_init_fixed_array_arg",
     "copied_state_words",
     "ctx",
@@ -3862,7 +3896,6 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "event_dynamic_mixed",
     "event_many_fields",
     "event_zero_fields",
-    "evm_hashing",
     "evm_init_code_hash",
     "factory",
     "fixed_bytes_constant_return",
@@ -3871,7 +3904,6 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "generated_type_param_names",
     "immutable_aggregate_forwarding",
     "impl_method_does_not_shadow_free_fn",
-    "keccak_words",
     "lane_accesses",
     "lane_projection_spaces",
     "leading_zeros",
@@ -3882,7 +3914,6 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "mandelbrot",
     "mandelbrot_minimal",
     "maybe_mut_effect_calls",
-    "mem_buffer_word_writes",
     "mem_replace_take",
     "mem_vec",
     "merkle_proof",
@@ -3905,7 +3936,6 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "option_mut_scalar_match_regression",
     "ownable",
     "packed_encoding",
-    "packed_width_mismatch",
     "param_patterns",
     "pattern_accesses",
     "payable",
@@ -3931,7 +3961,6 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "reentrancy_tstor_ptr",
     "revert_helpers",
     "runtime_handle_preservation",
-    "runtime_packed_bytes",
     "safe_erc20",
     "shape",
     "signature",
@@ -3939,7 +3968,6 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "snapshot_effects",
     "sol_array_lanes",
     "sol_compat_int_abi_roundtrip",
-    "sol_compat_int_wrapping",
     "sol_slot",
     "sol_storage_collections",
     "specialized_adt_array_extent",
@@ -3979,7 +4007,6 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "storage_packed_projections",
     "storage_packing",
     "storage_slots_closures",
-    "text_parse",
     "time_units",
     "tslot_values",
     "tstorptr_field_projection_shapes",
@@ -4004,14 +4031,6 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
         all(target_arch = "aarch64", target_os = "macos")
     )
 ))]
-/// `fe_test` fixtures that fail natively at the listed optimization levels,
-/// and why.
-const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[(
-    "raw_record_layout",
-    &["0", "2"],
-    "EVM memory packs record fields big-endian; native memory aligns them little-endian",
-)];
-
 #[cfg(all(
     feature = "cranelift",
     any(
@@ -4051,19 +4070,10 @@ fn test_fe_test_native(fixture: Fixture<&str>) {
             "1",
             path,
         ]);
-        match NATIVE_FE_TEST_FAILURES
-            .iter()
-            .find(|(fixture, levels, _)| *fixture == name && levels.contains(&level))
-        {
-            Some((_, _, reason)) => assert_ne!(
-                exit_code, 0,
-                "{name} now passes natively at O{level} ({reason}); remove it from NATIVE_FE_TEST_FAILURES"
-            ),
-            None => assert_eq!(
-                exit_code, 0,
-                "native fe test failed for {path} at O{level}:\n{output}\n\nTo reproduce:\n  cargo run --features cranelift --bin fe -- test --backend native -O {level} --jobs 1 {path}",
-            ),
-        }
+        assert_eq!(
+            exit_code, 0,
+            "native fe test failed for {path} at O{level}:\n{output}\n\nTo reproduce:\n  cargo run --features cranelift --bin fe -- test --backend native -O {level} --jobs 1 {path}",
+        );
     }
 }
 

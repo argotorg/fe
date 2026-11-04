@@ -38,14 +38,14 @@ fn pick(_ x: own MemBuffer, _ y: own MemBuffer, _ c: bool) -> MemBuffer {
 
 #[test]
 fn join_moves_its_branch() {
-    var b = pick(MemBuffer::alloc(1), MemBuffer::alloc(1), true)
+    var b = pick(MemBuffer::new(1), MemBuffer::new(1), true)
     b[0] = 9
     assert(b[0] == 9)
 }
 
 #[test]
 fn wrapped_scrutinee_owns_its_payload() {
-    let o = Option::Some(MemBuffer::alloc(1))
+    let o = Option::Some(MemBuffer::new(1))
     match { o } {
         Option::Some(var b) => {
             b[0] = 4
@@ -57,9 +57,9 @@ fn wrapped_scrutinee_owns_its_payload() {
 
 #[test]
 fn temporary_receiver_and_argument() {
-    let c = C { buf: MemBuffer::alloc(1) }
+    let c = C { buf: MemBuffer::new(1) }
     assert({ c }.poke() == 5)
-    var fresh = MemBuffer::alloc(1)
+    var fresh = MemBuffer::new(1)
     fresh[0] = 3
     assert(first({ fresh }) == 3)
 }

@@ -1641,14 +1641,14 @@ fn runtime() uses (evm: mut Evm) {
 
     if sel == BYTES_LEN_SELECTOR {
         let view = decode_bytes_view(CallData::with_base(4))
-        let out = ptr::MemBuffer::alloc(32)
+        let out = ptr::MemBuffer::new(32)
         unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
 
     if sel == SECOND_BYTES_LEN_SELECTOR {
         let view = decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 32)
-        let out = ptr::MemBuffer::alloc(32)
+        let out = ptr::MemBuffer::new(32)
         unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
@@ -1656,14 +1656,14 @@ fn runtime() uses (evm: mut Evm) {
     if sel == STRING_FIRST_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
         let first: u256 = if view.is_empty() { 0 } else { view.byte_at(0) as u256 }
-        let out = ptr::MemBuffer::alloc(32)
+        let out = ptr::MemBuffer::new(32)
         unsafe { store_word(ptr: out.ptr(), value: first) }
         evm.return_data(data: out.span())
     }
 
     if sel == STRING_LEN_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
-        let out = ptr::MemBuffer::alloc(32)
+        let out = ptr::MemBuffer::new(32)
         unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
@@ -1841,12 +1841,12 @@ msg RawStaticCallerMsg {
 pub contract RawStaticCaller {
     recv RawStaticCallerMsg {
         CallWord { target } -> u256 uses (ctx: Ctx, call: Call) {
-            let args = ptr::MemBuffer::alloc(4)
+            let args = ptr::MemBuffer::new(4)
             unsafe { store_word(ptr: args.ptr(), value: (WORD_SELECTOR as u256) << 224) }
             staticcall_decode(addr: target, gas: ctx.gas(), args: args.span())
         }
         CallFlag { target } -> bool uses (ctx: Ctx, call: Call) {
-            let args = ptr::MemBuffer::alloc(4)
+            let args = ptr::MemBuffer::new(4)
             unsafe { store_word(ptr: args.ptr(), value: (FLAG_SELECTOR as u256) << 224) }
             staticcall_decode(addr: target, gas: ctx.gas(), args: args.span())
         }
@@ -1883,7 +1883,7 @@ fn init() uses (evm: mut Evm) {
 #[contract_runtime(BadBoolTarget)]
 fn runtime() uses (evm: mut Evm) {
     if evm.selector() == FLAG_SELECTOR {
-        let out = ptr::MemBuffer::alloc(32)
+        let out = ptr::MemBuffer::new(32)
         unsafe { store_word(ptr: out.ptr(), value: 2) }
         evm.return_data(data: out.span())
     }

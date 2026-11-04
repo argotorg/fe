@@ -46,11 +46,33 @@ fn sum_even(_ n: u256) -> u256 {
     total
 }
 
+// Scopes inside the else block leave the pattern's bindings in place, and
+// the else block's own bindings stay inside it.
+fn count_or_value(_ o: Option<u256>) -> u256 {
+    let Option::Some(x) = o else {
+        var count: u256 = 0
+        for _ in 0..3 {
+            if count < 100 {
+                let step: u256 = 2
+                count += step
+            }
+        }
+        while count > 5 {
+            count -= 1
+        }
+        let x: u256 = count + 10
+        return x
+    }
+    x
+}
+
 #[test]
 fn binds_or_diverges() {
     assert!(unwrap_or(Option::Some(3), 7) == 3)
     assert!(unwrap_or(Option::None, 7) == 7)
     assert!(sum_even(4) == 6)
+    assert!(count_or_value(Option::Some(3)) == 3)
+    assert!(count_or_value(Option::None) == 15)
 }
 
 #[test]

@@ -3308,6 +3308,11 @@ impl<'db> RmirEmitter<'db> {
             return None;
         };
 
+        if self.target() != Target::Evm
+            && let Some(ret) = self.lower_keccak_routine_call(bb, semantic, func, args)
+        {
+            return Some(ret);
+        }
         if let Some(ret) = self.lower_intrinsic_keccak256_call(bb, semantic, func, args) {
             return Some(ret);
         }
@@ -3900,6 +3905,16 @@ impl<'db> RmirEmitter<'db> {
                     None,
                 )
             }
+            RuntimeBuiltinFuncKind::ReadPaddedWord => {
+                let [ptr, len] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::ReadPaddedWord {
+                        ptr: *ptr,
+                        len: *len,
+                    },
+                    Some(word.clone()),
+                )
+            }
             RuntimeBuiltinFuncKind::Msize => {
                 let [] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::Msize, Some(word.clone()))
@@ -4386,6 +4401,54 @@ impl<'db> RmirEmitter<'db> {
             RuntimeBuiltinFuncKind::IntrinsicKeccak256
             | RuntimeBuiltinFuncKind::IntrinsicKeccakWords => return None,
         })
+    }
+
+    /// Calls the `core::hash` routine for a hash intrinsic, on a target with
+    /// no hash instruction. The routine takes the intrinsic's parameters.
+    fn lower_keccak_routine_call(
+        &mut self,
+        bb: RBlockId,
+        semantic: SemanticInstance<'db>,
+        func: Func<'db>,
+        args: &[NOperand],
+    ) -> Option<RLocalId> {
+        let path = match runtime_builtin_func_kind(self.db, func)? {
+            RuntimeBuiltinFuncKind::Keccak256 => "core::hash::keccak_raw",
+            RuntimeBuiltinFuncKind::IntrinsicKeccak256 => "core::hash::keccak_packed",
+            RuntimeBuiltinFuncKind::IntrinsicKeccakWords => "core::hash::keccak_words",
+            _ => return None,
+        };
+        let routine = resolve_lib_func_path(self.db, func.scope(), path)
+            .unwrap_or_else(|| panic!("missing {path}"));
+        let env = RuntimeTypeEnv::for_semantic(self.db, semantic);
+        let generic_args: Vec<_> = semantic
+            .key(self.db)
+            .subst(self.db)
+            .generic_args(self.db)
+            .iter()
+            .map(|arg| runtime_interface_ty_in_env(self.db, env, *arg))
+            .collect();
+        let impl_env = self.current_semantic_key().impl_env(self.db);
+        let key = generated_callee_key(
+            self.db,
+            impl_env.normalization_scope(self.db),
+            impl_env.assumptions(self.db),
+            routine,
+            None,
+            &generic_args,
+        )
+        .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, routine, error)));
+        let mut boundary_sites = BoundarySiteAllocator::default();
+        let call_input_plan = compile_call_input_plan_for_semantic(
+            self.db,
+            &self.semantic_body,
+            semantic,
+            self.env,
+            &[],
+            &mut boundary_sites,
+        );
+        let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
+        Some(self.call_generated(bb, SemanticInstance::new(self.db, key), &args))
     }
 
     /// Hashes the words of `__keccak_words`'s array as values: each element

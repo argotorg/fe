@@ -46,7 +46,7 @@ msg BytesViewBoundsMsg {
 pub contract BytesViewBounds {
     recv BytesViewBoundsMsg {
         MemoryByte {} {
-            let buffer = ptr::MemBuffer::alloc(1)
+            let buffer = ptr::MemBuffer::new(1)
             let _byte = buffer.span().byte_at(1)
         }
 

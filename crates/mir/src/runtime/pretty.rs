@@ -679,6 +679,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*dst),
             format_local_id(*len)
         ),
+        RuntimeBuiltin::ReadPaddedWord { ptr, len } => format!(
+            "read_padded_word {}, {}",
+            format_local_id(*ptr),
+            format_local_id(*len)
+        ),
         RuntimeBuiltin::StoreConstBytes { dst, bytes } => format!(
             "store_const_bytes {}, 0x{}",
             format_local_id(*dst),

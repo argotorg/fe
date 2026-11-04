@@ -122,7 +122,7 @@ fn test_digest_matches_crypto_eip712_digest() {
 // hashing is left intact, and the digest does not depend on it.
 #[test]
 fn test_digest_leaves_neighbouring_memory_intact() {
-    let before = MemBuffer::alloc(32)
+    let before = MemBuffer::new(32)
     unsafe { store_word(ptr: before.ptr(), value: 0xaa) }
     assert!(
         eip712::digest(
@@ -131,7 +131,7 @@ fn test_digest_leaves_neighbouring_memory_intact() {
             )
             == SEAPORT_DIGEST,
     )
-    let after = MemBuffer::alloc(32)
+    let after = MemBuffer::new(32)
     unsafe { store_word(ptr: after.ptr(), value: 0xbb) }
     assert!(
         eip712::digest(

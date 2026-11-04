@@ -13,8 +13,8 @@ extern {
     /// keeps whole.
     pub const fn storage_slots<T>() -> u256
 
-    /// Hashes exactly N packed bytes at CTFE or on the EVM, exporting numeric words
-    /// into fresh raw memory at runtime. Prefer `core::keccak` in source code.
+    /// Hashes exactly N packed bytes. On the EVM, numeric words are exported into
+    /// fresh raw memory at runtime. Prefer `core::keccak` in source code.
     pub(ingot) const fn __keccak256<const N: usize>(_: PackedBytes<N>) -> u256
 
     /// Computes `keccak256` over `words`, each as 32 big-endian bytes, in

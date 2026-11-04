@@ -1,0 +1,34 @@
+#![cfg(target_family = "unix")]
+/// The C interfaces of the native host that `std::fs` and its relatives
+/// share: `errno`, C strings, and the layouts and values that differ between
+/// hosts, which `linux` and `macos` give under the same names.
+use core::{MemBuffer, Result}
+use super::io::{Display, EINVAL, Error}
+
+#[cfg(target_os = "linux")]
+pub use linux::*
+#[cfg(target_os = "macos")]
+pub use macos::*
+
+/// The calling thread's `errno`.
+pub fn errno() -> i32 {
+    unsafe { *errno_location() }
+}
+
+/// The calling thread's `errno` as an `Error`.
+pub fn last_error() -> Error {
+    Error::from_code(errno())
+}
+
+/// `value`'s text and a NUL, or an `EINVAL` error if the text holds a NUL.
+pub fn c_string<T: Display>(_ value: T) -> Result<Error, MemBuffer> {
+    var text = MemBuffer::empty()
+    value.fmt(mut text)
+    for byte in text.span() {
+        if byte == 0 {
+            return Result::Err(Error::from_code(EINVAL))
+        }
+    }
+    text.push(0)
+    Result::Ok(text)
+}

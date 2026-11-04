@@ -137,6 +137,7 @@ const NATIVE_EMPTY_ALLOCATION: i64 = 16;
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
+const PANIC_OUT_OF_MEMORY: u64 = 0x41;
 
 macro_rules! define_lowering_inst_set {
     ($($inst:ty),+ $(,)?) => {
@@ -530,10 +531,18 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         } else {
             linkage_for_runtime(function.linkage(self.db))
         };
-        Ok(match ret {
+        let mut signature = match ret {
             Some(ret) => Signature::new_single(&symbol, linkage, &args, ret),
             None => Signature::new_unit(&symbol, linkage, &args),
-        })
+        };
+        // No access outlives the call it is passed to: Fe stores, returns
+        // and captures none.
+        for (idx, ty) in args.iter().enumerate() {
+            if ty.is_obj_ref(&self.builder.ctx) {
+                signature.set_nocapture_arg(idx);
+            }
+        }
+        Ok(signature)
     }
 
     fn apply_inline_hint(&self, func_ref: FuncRef, hint: RuntimeInlineHint) {
@@ -2253,7 +2262,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     /// Allocates `size` bytes from the native host. When the host is out of
-    /// memory, a `fallible` allocation is null and any other traps. A zero size
+    /// memory, a `fallible` allocation is null and any other panics with
+    /// `Panic(0x41)`. A module that traps its panics instead leaves that
+    /// allocation to `mem.alloc_dynamic`, which traps. A zero size
     /// is `NATIVE_EMPTY_ALLOCATION` instead, so empty owners never reach the
     /// host.
     fn lower_native_allocation(
@@ -2275,22 +2286,96 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         self.fb
             .insert_inst_no_result(Br::new(inst_set, is_empty, done, allocate));
         self.fb.switch_to_block(allocate);
-        let allocated = if fallible {
+        let allocated = if fallible || self.module.panics != NativePanics::Trap {
             let malloc = self.module.host_function(HostFunction::Malloc)?;
             // Callers bound the size to the address width.
             let size =
                 self.coerce_value_to_ty(size, self.module.address_int_ty(AddressSpace::Memory))?;
-            self.fb
-                .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer)
+            let allocated = self
+                .fb
+                .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer);
+            if !fallible {
+                let address = self.coerce_value_to_ty(
+                    allocated,
+                    self.module.address_int_ty(AddressSpace::Memory),
+                )?;
+                let is_null = self
+                    .fb
+                    .insert_inst(IsZero::new(inst_set, address), Type::I1);
+                self.emit_panic_revert(is_null, PANIC_OUT_OF_MEMORY)?;
+            }
+            allocated
         } else {
             self.allocate_bytes(size, Type::I8)?
         };
+        let allocated_block = self
+            .fb
+            .current_block()
+            .expect("allocation requires a block");
         self.fb.insert_inst_no_result(Jump::new(inst_set, done));
         self.fb.switch_to_block(done);
         Ok(self.fb.insert_inst(
-            Phi::new(inst_set, smallvec![(empty, entry), (allocated, allocate)]),
+            Phi::new(
+                inst_set,
+                smallvec![(empty, entry), (allocated, allocated_block)],
+            ),
             pointer,
         ))
+    }
+
+    /// `1` when `value < limit` and `0` otherwise, as an i256.
+    fn lower_below(&mut self, value: ValueId, limit: u64) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let limit = self.fb.make_imm_value(I256::from(limit));
+        let below = self
+            .fb
+            .insert_inst(Lt::new(inst_set, value, limit), Type::I1);
+        self.fb
+            .insert_inst(Zext::new(inst_set, below, Type::I256), Type::I256)
+    }
+
+    /// Byte `pos` of `value`, counting from the most significant, as the EVM's
+    /// `BYTE`: zero when `pos` is past the word.
+    fn lower_byte(&mut self, pos: ValueId, value: ValueId) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let in_word = self.lower_below(pos, 32);
+        let three = self.fb.make_imm_value(I256::from(3u64));
+        let bits = self
+            .fb
+            .insert_inst(Shl::new(inst_set, three, pos), Type::I256);
+        let raised = self
+            .fb
+            .insert_inst(Shl::new(inst_set, bits, value), Type::I256);
+        let top_byte = self.fb.make_imm_value(I256::from(248u64));
+        let byte = self
+            .fb
+            .insert_inst(Shr::new(inst_set, top_byte, raised), Type::I256);
+        self.fb
+            .insert_inst(Mul::new(inst_set, in_word, byte), Type::I256)
+    }
+
+    /// `value` sign-extended from its byte `byte`, counting from the least
+    /// significant, as the EVM's `SIGNEXTEND`: unchanged when `byte` is the
+    /// word's top byte or past it.
+    fn lower_sign_extend(&mut self, byte: ValueId, value: ValueId) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let extends = self.lower_below(byte, 31);
+        let thirty_one = self.fb.make_imm_value(I256::from(31u64));
+        let bytes = self
+            .fb
+            .insert_inst(Sub::new(inst_set, thirty_one, byte), Type::I256);
+        let three = self.fb.make_imm_value(I256::from(3u64));
+        let bits = self
+            .fb
+            .insert_inst(Shl::new(inst_set, three, bytes), Type::I256);
+        let bits = self
+            .fb
+            .insert_inst(Mul::new(inst_set, extends, bits), Type::I256);
+        let raised = self
+            .fb
+            .insert_inst(Shl::new(inst_set, bits, value), Type::I256);
+        self.fb
+            .insert_inst(Sar::new(inst_set, bits, raised), Type::I256)
     }
 
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
@@ -2455,6 +2540,97 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.fb
                     .insert_inst_no_result(Memzero::new(self.module.inst_set(), dst, len));
                 zero_for_type(&mut self.fb, Type::Unit)
+            }
+            RuntimeBuiltin::ReadPaddedWord { ptr, len } => {
+                let ptr = self.local_value(*ptr)?;
+                let len = self.local_value(*len)?;
+                let inst_set = self.module.inst_set();
+                let word_len = self.fb.make_imm_value(Immediate::from_i256(
+                    I256::from(32u64),
+                    self.fb.type_of(len),
+                ));
+                let partial = self.fb.append_block();
+                let done = self.fb.append_block();
+                let incoming = if self.module.is_native_target() {
+                    // Native reads stop at `len` bytes, copied over a zeroed
+                    // word.
+                    let full = self.fb.append_block();
+                    let copy = self.fb.append_block();
+                    let short = self
+                        .fb
+                        .insert_inst(Lt::new(inst_set, len, word_len), Type::I1);
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, short, partial, full));
+                    self.fb.switch_to_block(full);
+                    let word = self
+                        .fb
+                        .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256);
+                    let word = self.fb.insert_inst(Bswap::new(inst_set, word), Type::I256);
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    // An empty read does not access `ptr`, which may be null.
+                    self.fb.switch_to_block(partial);
+                    let empty = self.fb.insert_inst(IsZero::new(inst_set, len), Type::I1);
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, empty, done, copy));
+                    self.fb.switch_to_block(copy);
+                    let scratch_ty = self.fb.ptr_type(Type::I256);
+                    let scratch = self
+                        .fb
+                        .insert_inst(Alloca::new(inst_set, Type::I256), scratch_ty);
+                    let zero = self.fb.make_imm_value(I256::zero());
+                    self.fb
+                        .insert_inst_no_result(Mstore::new(inst_set, scratch, zero, Type::I256));
+                    let pointer = self.fb.ptr_type(Type::I8);
+                    let memmove = self.module.host_function(HostFunction::Memmove)?;
+                    let dst = self.coerce_value_to_ty(scratch, pointer)?;
+                    let src = self.coerce_value_to_ty(ptr, pointer)?;
+                    let len = self.coerce_value_to_ty(
+                        len,
+                        self.module.address_int_ty(AddressSpace::Memory),
+                    )?;
+                    self.fb.insert_inst(
+                        Call::new(inst_set, memmove, smallvec![dst, src, len]),
+                        pointer,
+                    );
+                    let copied = self
+                        .fb
+                        .insert_inst(Mload::new(inst_set, scratch, Type::I256), Type::I256);
+                    let copied = self
+                        .fb
+                        .insert_inst(Bswap::new(inst_set, copied), Type::I256);
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    smallvec![(word, full), (zero, partial), (copied, copy)]
+                } else {
+                    // EVM reads past an allocation are defined: read the whole
+                    // word and clear the bytes from `len` on.
+                    let word = self
+                        .fb
+                        .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256);
+                    let short = self
+                        .fb
+                        .insert_inst(Lt::new(inst_set, len, word_len), Type::I1);
+                    let entry = self.fb.current_block().expect("read requires a block");
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, short, partial, done));
+                    self.fb.switch_to_block(partial);
+                    let three = self.fb.make_imm_value(I256::from(3u64));
+                    let bits = self
+                        .fb
+                        .insert_inst(Shl::new(inst_set, three, len), Type::I256);
+                    let ones = self.fb.make_imm_value(Immediate::all_one(Type::I256));
+                    let tail = self
+                        .fb
+                        .insert_inst(Shr::new(inst_set, bits, ones), Type::I256);
+                    let mask = self.fb.insert_inst(Not::new(inst_set, tail), Type::I256);
+                    let masked = self
+                        .fb
+                        .insert_inst(And::new(inst_set, word, mask), Type::I256);
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    smallvec![(word, entry), (masked, partial)]
+                };
+                self.fb.switch_to_block(done);
+                self.fb
+                    .insert_inst(Phi::new(inst_set, incoming), Type::I256)
             }
             RuntimeBuiltin::Msize => self.fb.insert_inst(
                 EvmMsize::new(self.module.required_inst::<EvmMsize>()?),
@@ -2632,18 +2808,30 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             RuntimeBuiltin::Byte { pos, value } => {
                 let pos = self.local_value(*pos)?;
                 let value = self.local_value(*value)?;
-                self.fb.insert_inst(
-                    EvmByte::new(self.module.required_inst::<EvmByte>()?, pos, value),
-                    Type::I256,
-                )
+                if self.module.is_native_target() {
+                    self.lower_byte(pos, value)
+                } else {
+                    self.fb.insert_inst(
+                        EvmByte::new(self.module.required_inst::<EvmByte>()?, pos, value),
+                        Type::I256,
+                    )
+                }
             }
             RuntimeBuiltin::SignExtend { byte, value } => {
                 let byte = self.local_value(*byte)?;
                 let value = self.local_value(*value)?;
-                self.fb.insert_inst(
-                    EvmSignExtend::new(self.module.required_inst::<EvmSignExtend>()?, byte, value),
-                    Type::I256,
-                )
+                if self.module.is_native_target() {
+                    self.lower_sign_extend(byte, value)
+                } else {
+                    self.fb.insert_inst(
+                        EvmSignExtend::new(
+                            self.module.required_inst::<EvmSignExtend>()?,
+                            byte,
+                            value,
+                        ),
+                        Type::I256,
+                    )
+                }
             }
             RuntimeBuiltin::IntrinsicArith {
                 op,

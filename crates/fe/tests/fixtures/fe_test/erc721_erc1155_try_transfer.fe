@@ -53,7 +53,7 @@ pub contract Nft {
 pub contract FalseNft {
     recv Erc721Msg {
         TransferFrom { from, to, tokenId } uses (raw: mut RawOps) {
-            let data = ptr::MemBuffer::alloc(32)
+            let data = ptr::MemBuffer::new(32)
             unsafe { store_word(ptr: data.ptr(), value: 0) }
             raw.return_data(data: data.span())
         }
@@ -130,7 +130,7 @@ pub contract Receiver {
         OnErc721Received { operator, from, tokenId, data } -> Bytes4 uses (reply, raw: mut RawOps) {
             let expected = operator.word() == 7 && from.word() == 2 && tokenId == 42 && data.len() == 0
             let alloc = if reply.len < 32 || reply.len == REVERT { 32 } else { reply.len }
-            var out = ptr::MemBuffer::alloc(alloc.downcast_unchecked())
+            var out = ptr::MemBuffer::new(alloc.downcast_unchecked())
             if reply.len == REVERT {
                 unsafe { store_word(ptr: out.ptr(), value: 0xdeadbeefcafebabe << 192) }
                 unsafe { out.set_len(32) }

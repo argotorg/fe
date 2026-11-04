@@ -39,7 +39,7 @@ fn observe<F: Fn(MemBuffer) -> R, R: First>(_ f: F, _ b: mut MemBuffer) -> bool 
 // Rejected: each closure returns a view or a state-only value by value,
 // annotated or inferred.
 fn results(_ ledger: Ledger) -> bool {
-    var buf = MemBuffer::alloc(1)
+    var buf = MemBuffer::new(1)
     let inferred = |b: MemBuffer| b.span()
     let give = |l: Ledger| -> Ledger { l }
     observe(|b: MemBuffer| -> MemSpan { b.span() }, mut buf)

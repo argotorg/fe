@@ -22,9 +22,9 @@ extern {
     fn alloc_raw(_ size: usize) -> *u8
 
     /// As `alloc_raw`, but returns a null address when the native host cannot
-    /// allocate. EVM memory runs out only with the gas, so there it is
-    /// `alloc_raw`. Every call goes through `try_alloc_bytes`, which bounds the
-    /// size.
+    /// allocate, where `alloc_raw` reverts with `Panic(0x41)`. EVM memory runs out
+    /// only with the gas, so there it is `alloc_raw`. Every call goes through
+    /// `try_alloc_bytes`, which bounds the size.
     fn try_alloc_raw(_ size: usize) -> *u8
 
     /// Releases an allocation that `alloc_raw` or `try_alloc_raw` made. Native
@@ -45,6 +45,11 @@ extern {
 
     /// All `len` bytes at `ptr` must lie in a live allocation.
     unsafe fn zero_mem(_ ptr: *u8, _ len: usize)
+
+    /// The 32-byte big-endian word at `ptr`, with every byte from `len` on
+    /// read as zero, as calldata reads past its end. Reads only the first
+    /// `min(len, 32)` bytes, which must lie in a live allocation.
+    pub(ingot) unsafe fn read_padded_word(_ ptr: *u8, _ len: usize) -> u256
 }
 
 /// A dynamically sized array in linear memory.
@@ -496,6 +501,21 @@ impl<T> MemVec<T> {
         }
     }
 
+    /// Remove element `index` and return it, moving the last element into
+    /// its place.
+    pub fn swap_remove(mut self, _ index: usize) -> T {
+        if index >= self.len {
+            index_out_of_bounds()
+        }
+        let last = self.len - 1
+        self.swap(index, last)
+        // The element leaves the vector before it is moved out.
+        unsafe {
+            self.len = last
+            *elem(self.ptr, last)
+        }
+    }
+
     /// Keep the first `len` elements, destroying the rest.
     pub fn truncate(mut self, _ len: usize) {
         if len > self.len {
@@ -845,16 +865,24 @@ impl MemSlice<u8> {
 
 impl MemBuffer {
     /// A buffer of `len` zero bytes.
-    pub fn alloc(_ len: usize) -> Self {
-        let buffer = unsafe { Self::alloc_uninit(len) }
+    pub fn new(_ len: usize) -> Self {
+        let buffer = unsafe { Self::new_uninit(len) }
         unsafe { zero_bytes(buffer.ptr, len) }
         buffer
+    }
+
+    /// As `new`, or `None` when the allocation fails.
+    pub fn try_new(_ len: usize) -> Option<Self> {
+        let ptr = try_alloc_bytes(len)?
+        unsafe { zero_bytes(ptr, len) }
+        // A fresh allocation of `len` bytes, all of them zeroed.
+        Option::Some(unsafe { Self { ptr, len, capacity: len } })
     }
 
     /// A buffer of `len` bytes holding whatever the memory held.
     ///
     /// The caller must write every byte before anything reads it.
-    pub unsafe fn alloc_uninit(_ len: usize) -> Self {
+    pub unsafe fn new_uninit(_ len: usize) -> Self {
         Self {
             ptr: alloc_bytes(len),
             len,
@@ -1488,6 +1516,21 @@ impl<T> Len for MemVec<T> {
 impl<T> Len for MemSlice<T> {
     fn len(self) -> usize {
         self.len
+    }
+}
+
+/// Slices are equal when they hold equal elements.
+impl<T: Eq> Eq for MemSlice<T> {
+    fn eq(self, _ other: MemSlice<T>) -> bool {
+        if self.len != other.len {
+            return false
+        }
+        for i in 0..self.len {
+            if self[i] != other[i] {
+                return false
+            }
+        }
+        true
     }
 }
 

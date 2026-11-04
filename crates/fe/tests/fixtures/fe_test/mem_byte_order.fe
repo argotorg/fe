@@ -2,7 +2,7 @@ use core::num::{from_be, from_le, swap_bytes, to_be, to_le}
 use core::ptr::MemBuffer
 
 fn counting_bytes(_ len: usize) -> MemBuffer {
-    var buffer = MemBuffer::alloc(len)
+    var buffer = MemBuffer::new(len)
     for i in 0..len {
         buffer[i] = (i + 1).downcast_truncate()
     }
@@ -40,7 +40,7 @@ fn writes_without_bounds_checks_within_the_span() {
 
 #[test]
 fn reads_signed_integers() {
-    var buffer = MemBuffer::alloc(4)
+    var buffer = MemBuffer::new(4)
     buffer[0] = 0xff
     buffer[1] = 0xfe
     buffer[2] = 0x7f
@@ -96,13 +96,13 @@ fn swaps_bytes_of_every_width() {
 
 #[test(should_revert, panic = 0x32)]
 fn rejects_reads_past_the_extent() {
-    let buffer = MemBuffer::alloc(8)
+    let buffer = MemBuffer::new(8)
     let _ = buffer.read_le<u64>(1)
 }
 
 #[test(should_revert, panic = 0x32)]
 fn rejects_span_writes_past_its_end() {
-    var buffer = MemBuffer::alloc(16)
+    var buffer = MemBuffer::new(16)
     buffer.slice(offset: 0, len: 8).write_le<u32>(offset: 5, value: 1)
 }
 

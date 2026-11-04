@@ -13,7 +13,7 @@ const LONG: u256 = 0xffffffffffffffe1
 
 /// A 32-byte input whose length word is `len`.
 fn input(_ len: u256) -> MemBuffer {
-    var input = MemBuffer::alloc(32)
+    var input = MemBuffer::new(32)
     input.write_word(offset: 0, value: len)
     input
 }

@@ -1,0 +1,181 @@
+use core::{MemBuffer, MemVec}
+use std::env::Args
+use std::fs::Fs
+use std::io::{Display, Error, ErrorKind, Stdout}
+use std::process::{Child, Command, Input, Output, Redirect, Spawn}
+use std::time::{Clock, Duration}
+
+// Runs each `std::process` case and prints what it observed. The first
+// argument names an empty scratch directory.
+pub fn main() -> i32 uses (out: mut Stdout, args: Args, fs: Fs, proc: mut Spawn, clock: Clock) {
+    let dir = args.get(1)
+    show("echo", proc.output(Command::new("echo").arg("hello").arg(42 as u64).stdout(Redirect::Capture)))
+    show("exit 3", proc.output(sh("echo out; echo err >&2; exit 3").stdout(Redirect::Capture).stderr(Redirect::Capture)))
+    show("merged", proc.output(sh("echo a; echo b >&2; echo c").stdout(Redirect::Capture).stderr(Redirect::Stdout)))
+    show("killed", proc.output(sh("kill -9 $$")))
+    show("null input", proc.output(Command::new("cat").stdin(Input::Null).stdout(Redirect::Capture)))
+    show("null output", proc.output(sh("echo gone; echo gone >&2").stdout(Redirect::Null).stderr(Redirect::Null)))
+    show(
+        "env",
+        proc.output(
+            sh("echo \"$FE_A $FE_B ${HOME-unset}\"")
+                .env("FE_A", "a")
+                .env("FE_B", "x")
+                .env("FE_B", "b")
+                .env_remove("HOME")
+                .stdout(Redirect::Capture),
+        ),
+    )
+    match proc.output(Command::new("pwd").arg("-P").current_dir(dir).stdout(Redirect::Capture)) {
+        Result::Ok(output) => match fs.canonicalize(dir) {
+            Result::Ok(path) => {
+                var expected = path
+                expected.push(10)
+                println!("dir: ", output.status, ", the directory: ", output.stdout.span() == expected.span())
+            }
+            Result::Err(error) => failed("canonicalize", error),
+        },
+        Result::Err(error) => failed("dir", error),
+    }
+    show("file", proc.output(sh("echo to file").stdout(Redirect::File(format!(dir, "/log")))))
+    match fs.read(format!(dir, "/log")) {
+        Result::Ok(contents) => println!("file holds: ", contents),
+        Result::Err(error) => failed("read log", error),
+    }
+    show("file in dir", proc.output(sh("echo in dir").current_dir(dir).stdout(Redirect::File(format!("dir_log")))))
+    match fs.read(format!(dir, "/dir_log")) {
+        Result::Ok(contents) => println!("file in dir holds: ", contents),
+        Result::Err(error) => failed("read dir log", error),
+    }
+
+    // More bytes than pipes hold, in and out at once.
+    var bytes = MemBuffer::empty()
+    for i in 0..1048576 {
+        bytes.push((i % 251).downcast_unchecked())
+    }
+    match proc.output(Command::new("cat").stdin(Input::Bytes(MemBuffer::from_span(bytes.span()))).stdout(Redirect::Capture)) {
+        Result::Ok(output) => println!("cat: ", output.status, ", ", output.stdout.len(), " bytes back, same: ", output.stdout.span() == bytes.span()),
+        Result::Err(error) => failed("cat", error),
+    }
+    match proc.output(sh("head -c 300000 /dev/zero; head -c 200000 /dev/zero >&2").stdout(Redirect::Capture).stderr(Redirect::Capture)) {
+        Result::Ok(output) => println!("both streams: ", output.status, ", ", output.stdout.len(), " and ", output.stderr.len(), " bytes"),
+        Result::Err(error) => failed("both streams", error),
+    }
+    show("input not taken", proc.output(Command::new("true").stdin(Input::Bytes(bytes))))
+
+    show("missing program", proc.output(Command::new("fe-no-such-program")))
+    show("missing dir", proc.output(Command::new("true").current_dir(format!(dir, "/missing"))))
+    show("stdout to stdout", proc.output(Command::new("true").stdout(Redirect::Stdout)))
+    var nul = format!("a")
+    nul.push(0)
+    show("nul argument", proc.output(Command::new("echo").arg(nul)))
+    show("key with =", proc.output(Command::new("true").env("A=B", "c")))
+    show("empty key", proc.output(Command::new("true").env("", "c")))
+
+    show("timeout", proc.output(Command::new("sleep").arg("5").timeout(Duration::from_millis(100))))
+    // A program the child started holds its pipe open.
+    let start = clock.instant()
+    show(
+        "timeout with pipes",
+        proc.output(sh("sleep 5 & sleep 5").stdout(Redirect::Capture).stderr(Redirect::Null).timeout(Duration::from_millis(100))),
+    )
+    println!("  ended within 2 s: ", clock.instant().duration_since(start) < Duration::from_secs(2))
+    match wait_past_deadlines() {
+        Result::Ok(_) => {}
+        Result::Err(error) => failed("wait past deadlines", error),
+    }
+    // A program the child started never stops writing to its pipe.
+    let writer_start = clock.instant()
+    match proc.output(sh("yes & sleep 5").stdout(Redirect::Capture).stderr(Redirect::Null).timeout(Duration::from_millis(50))) {
+        Result::Ok(output) => println!("endless writer: ", output.status),
+        Result::Err(error) => failed("endless writer", error),
+    }
+    println!("  ended within 2 s: ", clock.instant().duration_since(writer_start) < Duration::from_secs(2))
+
+    match proc.output(sh("i=0; while [ $i -lt 100000 ]; do i=$((i+1)); done")) {
+        Result::Ok(output) => println!(
+            "busy: ",
+            output.status,
+            ", used CPU: ",
+            output.usage.user + output.usage.system >= Duration::from_millis(1),
+            ", used memory: ",
+            output.usage.max_rss >= 100000,
+        ),
+        Result::Err(error) => failed("busy", error),
+    }
+
+    match wait_in_turn() {
+        Result::Ok(_) => {}
+        Result::Err(error) => failed("wait_any", error),
+    }
+    0
+}
+
+// Waits past the deadlines of a child that has exited and of one still
+// running. What they wrote is still in their pipes.
+fn wait_past_deadlines() -> Result<Error, ()> uses (out: mut Stdout, proc: mut Spawn) {
+    let limit = Duration::from_millis(50)
+    let exited = proc.spawn(Command::new("echo").arg("hello").stdout(Redirect::Capture).timeout(limit))?
+    let running = proc.spawn(sh("echo partial; sleep 5").stdout(Redirect::Capture).stderr(Redirect::Null).timeout(limit))?
+    proc.output(Command::new("sleep").arg("1"))?
+    show("exited before the wait", proc.wait(exited))
+    show("killed by the wait", proc.wait(running))
+    Result::Ok(())
+}
+
+// Starts three children that end in the opposite order, and waits for each
+// as it ends. The middle one has no pipes.
+fn wait_in_turn() -> Result<Error, ()> uses (out: mut Stdout, proc: mut Spawn) {
+    var running: MemVec<Child> = MemVec::new()
+    var names: MemVec<String<6>> = MemVec::new()
+    running.push(proc.spawn(sh("sleep 1; echo slow").stdout(Redirect::Capture))?)
+    names.push("slow")
+    running.push(proc.spawn(Command::new("sleep").arg("0.5"))?)
+    names.push("middle")
+    running.push(proc.spawn(sh("echo fast").stdout(Redirect::Capture))?)
+    names.push("fast")
+    core::assert(running[0].id() > 0)
+    while !running.is_empty() {
+        let index = proc.wait_any(running.as_slice())?
+        let output = proc.wait(running.swap_remove(index))?
+        println!("wait_any: ", names.swap_remove(index), " ", output.status, " [", output.stdout, "]")
+    }
+    Result::Ok(())
+}
+
+fn sh<T: Display>(_ script: T) -> Command {
+    Command::new("sh").arg("-c").arg(script)
+}
+
+fn show<T: Display>(_ label: T, _ result: Result<Error, Output>) uses (out: mut Stdout) {
+    match result {
+        Result::Ok(ref output) => println!(
+            label,
+            ": ",
+            output.status,
+            if output.status.success() { " (success)" } else { "" },
+            " [",
+            output.stdout,
+            "] [",
+            output.stderr,
+            "]",
+        ),
+        Result::Err(error) => failed(label, error),
+    }
+}
+
+fn failed<T: Display>(_ label: T, _ error: Error) uses (out: mut Stdout) {
+    println!(label, ": ", kind_name(error.kind()), " (", error, ")")
+}
+
+fn kind_name(_ kind: ErrorKind) -> String<20> {
+    match kind {
+        ErrorKind::NotFound => "NotFound",
+        ErrorKind::PermissionDenied => "PermissionDenied",
+        ErrorKind::AlreadyExists => "AlreadyExists",
+        ErrorKind::NotADirectory => "NotADirectory",
+        ErrorKind::IsADirectory => "IsADirectory",
+        ErrorKind::InvalidInput => "InvalidInput",
+        ErrorKind::Other => "Other",
+    }
+}

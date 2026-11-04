@@ -53,7 +53,7 @@ fn array_lit(_ h: H) -> [MemBuffer; 1] {
 }
 
 fn assign(_ h: H) {
-    var y = MemBuffer::alloc(1)
+    var y = MemBuffer::new(1)
     y = { h.buf() }
 }
 

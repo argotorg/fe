@@ -6,7 +6,7 @@ use std::evm::Evm
 pub fn child_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(child_runtime)
     let offset = evm.code_region_offset(child_runtime)
-    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -18,7 +18,7 @@ pub fn child_init() uses (evm: mut Evm) {
 
 #[contract_runtime(Child)]
 pub fn child_runtime() uses (evm: mut Evm) {
-    let data = ptr::MemBuffer::alloc(32)
+    let data = ptr::MemBuffer::new(32)
     unsafe { store_word(ptr: data.ptr(), value: 0xbeef) }
     evm.return_data(data: data.span())
 }

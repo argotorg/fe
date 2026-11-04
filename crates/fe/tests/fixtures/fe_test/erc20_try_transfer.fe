@@ -48,7 +48,7 @@ const REVERT: u256 = 0xffffffff
 
 fn answer(word: u256, len: u256) -> ! uses (raw: mut RawOps) {
     let alloc = if len < 32 || len == REVERT { 32 } else { len }
-    var data = ptr::MemBuffer::alloc(alloc.downcast_unchecked())
+    var data = ptr::MemBuffer::new(alloc.downcast_unchecked())
     if len == REVERT {
         unsafe { store_word(ptr: data.ptr(), value: 0xdeadbeefcafebabe << 192) }
         unsafe { data.set_len(32) }
