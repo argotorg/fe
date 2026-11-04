@@ -3512,6 +3512,54 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_unwrap_panics_on_errors_without_an_encoding() {
+    // A native panic needs no revert data, so `unwrap` takes any error type.
+    // Arguments choose the outcome, which keeps it from folding.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("unwrap.fe");
+    fs::write(
+        &source,
+        r#"
+use std::env::Args
+use std::fs::Fs
+
+enum PlainError { Oops }
+
+fn fallible(_ ok: bool) -> Result<PlainError, i32> {
+    if ok { Result::Ok(0) } else { Result::Err(PlainError::Oops) }
+}
+
+pub fn main() -> i32 uses (args: Args, fs: mut Fs) {
+    if args.count() == 3 {
+        let _ = fs.read("/no/such/file").unwrap()
+    }
+    fallible(args.count() == 1).unwrap()
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let exe = out.join("unwrap");
+        let ok = Command::new(&exe).output().unwrap();
+        assert!(ok.status.success(), "O{level}: {ok:?}");
+        for args in [&["plain"][..], &["io", "error"]] {
+            let result = Command::new(&exe).args(args).output().unwrap();
+            assert_eq!(
+                result.status.signal(),
+                Some(libc::SIGABRT),
+                "O{level} {args:?}: {result:?}"
+            );
+            assert_eq!(
+                result.stderr, b"panicked\n",
+                "O{level} {args:?}: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_functions_named_like_the_compilers_symbols_keep_working() {
     // Functions share an object namespace with the globals behind `std::env`.
     let temp = tempdir().unwrap();

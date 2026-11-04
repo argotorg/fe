@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/unencodable_panic.fe
+---
+error[16-0018]: panic value without revert data in `fn direct`
+   ┌─ unencodable_panic.fe:28:5
+   │
+28 │     fallible(true).unwrap()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ this call can panic with `PlainError`, which must implement `Encode<Sol>` and `AbiSize` to be revert data
+
+error[16-0018]: panic value without revert data in `fn through_generic`
+   ┌─ unencodable_panic.fe:32:5
+   │
+32 │     generic(fallible(true))
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ this call can panic with `PlainError`, which must implement `Encode<Sol>` and `AbiSize` to be revert data
+
+error[16-0018]: panic value without revert data in `fn panics`
+   ┌─ unencodable_panic.fe:36:5
+   │
+36 │     core::panic_with_value(PlainError::Oops)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call can panic with `PlainError`, which must implement `Encode<Sol>` and `AbiSize` to be revert data

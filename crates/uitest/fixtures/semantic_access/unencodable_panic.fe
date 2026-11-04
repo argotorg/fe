@@ -1,0 +1,37 @@
+enum PlainError { Oops }
+
+#[error]
+pub struct Encodable { pub code: u256 }
+
+fn fallible(_ ok: bool) -> Result<PlainError, u256> {
+    if ok { Result::Ok(1) } else { Result::Err(PlainError::Oops) }
+}
+
+fn generic<E>(_ r: own Result<E, u256>) -> u256 {
+    r.unwrap()
+}
+
+// A generic function that nothing instantiates with such a type is fine.
+fn unused<E>(_ r: own Result<E, u256>) -> u256 {
+    r.unwrap()
+}
+
+fn encodable(_ r: own Result<Encodable, u256>) -> u256 {
+    r.unwrap()
+}
+
+fn encodable_through_generic(_ r: own Result<Encodable, u256>) -> u256 {
+    generic(r)
+}
+
+fn direct() -> u256 {
+    fallible(true).unwrap()
+}
+
+fn through_generic() -> u256 {
+    generic(fallible(true))
+}
+
+fn panics() {
+    core::panic_with_value(PlainError::Oops)
+}

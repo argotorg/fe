@@ -23,7 +23,7 @@ use crate::{
             closure::closure_regions,
             corelib::{
                 ContractMetadataKind, RuntimeBuiltinFuncKind, contract_metadata_kind,
-                runtime_builtin_func_kind,
+                resolve_core_trait, resolve_lib_type_path, runtime_builtin_func_kind,
             },
             effects::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
@@ -65,7 +65,7 @@ use crate::{
         storage_slot_span,
     },
 };
-use common::indexmap::IndexMap;
+use common::{compilation::Target, indexmap::IndexMap};
 use indexmap::IndexSet;
 use salsa::SalsaValue;
 use thin_vec::ThinVec;
@@ -1677,6 +1677,35 @@ impl<'db> SemanticInstance<'db> {
         if let Some(diag) = instance_limit_violation(db, self) {
             return Err(SemanticBodyAdmissionError::InstanceLimit(diag));
         }
+        // A native panic needs no revert data. This follows calls out of
+        // `self`, whose instance limits the check above has bounded.
+        if db.compilation_settings().target(db) == Target::Evm
+            && let Some((origin, ty)) =
+                instance_calls(db, self)
+                    .into_iter()
+                    .find_map(|(origin, callee)| {
+                        Some((origin, unencodable_call_panic(db, self, callee)?))
+                    })
+        {
+            return Err(SemanticBodyAdmissionError::InvalidConcreteType(
+                SemanticDiagnosticId::new(
+                    db,
+                    SemanticDiagnostic::new(
+                        self,
+                        SemanticDiagnosticKind::UnencodablePanic,
+                        format!(
+                            "this call can panic with `{}`, which must implement `Encode<Sol>` \
+                             and `AbiSize` to be revert data",
+                            ty.pretty_print(db)
+                        ),
+                        SemanticDiagnosticSpan::Origin {
+                            owner: self.key(db).owner(db),
+                            origin,
+                        },
+                    ),
+                ),
+            ));
+        }
         Ok(())
     }
 
@@ -1730,6 +1759,109 @@ impl<'db> SemanticInstance<'db> {
     }
 }
 
+/// The calls `instance` makes, with where it makes them.
+fn instance_calls<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<(SemOrigin<'db>, SemanticCalleeRef<'db>)> {
+    let calls = provisional_call_sites(db, instance)
+        .sites
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, site)| {
+            Some((SemOrigin::Expr(ExprId::new(idx)), site.as_ref()?.callee?))
+        });
+    let loops = provisional_for_loop_call_sites(db, instance)
+        .sites
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, sites)| {
+            sites.iter().flat_map(move |sites| {
+                sites
+                    .sites
+                    .iter()
+                    .filter_map(move |site| Some((SemOrigin::Stmt(StmtId::new(idx)), site.callee?)))
+            })
+        });
+    calls.chain(loops).collect()
+}
+
+/// Whether `panic_with_value` can revert with a `ty`, as Sol-encoded data.
+pub fn panic_payload_encodable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    let Some(abi) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
+        return false;
+    };
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let satisfied = |inst| {
+        matches!(
+            is_goal_satisfiable(db, solve_cx, inst),
+            GoalSatisfiability::Satisfied(_)
+        )
+    };
+    resolve_core_trait(db, scope, &["abi", "Encode"])
+        .is_some_and(|encode| satisfied(TraitInstId::new_simple(db, encode, vec![ty, abi])))
+        && resolve_core_trait(db, scope, &["abi", "AbiSize"])
+            .is_some_and(|size| satisfied(TraitInstId::new_simple(db, size, vec![ty])))
+}
+
+/// The type `callee` panics with, called from `instance`, that can't be
+/// revert data: in its own `panic_with_value`, or in any instance it calls.
+fn unencodable_call_panic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    callee: SemanticCalleeRef<'db>,
+) -> Option<TyId<'db>> {
+    let is_panic = matches!(
+        callee.key.owner(db),
+        BodyOwner::Func(func, _)
+            if runtime_builtin_func_kind(db, func) == Some(RuntimeBuiltinFuncKind::PanicWithValue)
+    );
+    if !is_panic {
+        return unencodable_panic(db, SemanticInstance::new(db, callee.key));
+    }
+    let &[ty] = callee.key.subst(db).generic_args(db) else {
+        return None;
+    };
+    let env = instance.key(db).impl_env(db);
+    (!ty.has_param(db)
+        && !ty.has_invalid(db)
+        && !panic_payload_encodable(db, env.normalization_scope(db), env.assumptions(db), ty))
+    .then_some(ty)
+}
+
+/// The type `instance`, or any instance it calls, panics with that can't be
+/// revert data.
+#[salsa::tracked(returns(copy), cycle_initial = unencodable_panic_cycle_initial)]
+fn unencodable_panic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<TyId<'db>> {
+    if !instance
+        .key(db)
+        .typed_body(db)
+        .smir_lowering_issues(db)
+        .is_empty()
+    {
+        return None;
+    }
+    instance_calls(db, instance)
+        .into_iter()
+        .find_map(|(_, callee)| unencodable_call_panic(db, instance, callee))
+}
+
+fn unencodable_panic_cycle_initial<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _: SemanticInstance<'db>,
+) -> Option<TyId<'db>> {
+    None
+}
+
 /// The first call, in `instance` or in any instance it makes, that makes an
 /// instance whose generic arguments nest more than [`PROJECTION_DEPTH_LIMIT`]
 /// levels deep or have more than [`PROJECTION_WORK_LIMIT`] type nodes.
@@ -1763,26 +1895,7 @@ fn instance_limit_violation<'db>(
             return Some(diag);
         }
     }
-    let calls = provisional_call_sites(db, instance)
-        .sites
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, site)| {
-            Some((SemOrigin::Expr(ExprId::new(idx)), site.as_ref()?.callee?))
-        });
-    let loops = provisional_for_loop_call_sites(db, instance)
-        .sites
-        .iter()
-        .enumerate()
-        .flat_map(|(idx, sites)| {
-            sites.iter().flat_map(move |sites| {
-                sites
-                    .sites
-                    .iter()
-                    .filter_map(move |site| Some((SemOrigin::Stmt(StmtId::new(idx)), site.callee?)))
-            })
-        });
-    let calls: Vec<_> = calls.chain(loops).collect();
+    let calls = instance_calls(db, instance);
     for &(origin, callee) in &calls {
         let args = callee.key.subst(db).generic_args(db);
         let within = args

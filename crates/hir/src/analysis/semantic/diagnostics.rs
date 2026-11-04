@@ -199,6 +199,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::RawPlaceViolation => 14,
             SemanticDiagnosticKind::InstanceLimit => 16,
             SemanticDiagnosticKind::ConstDestructor => 17,
+            SemanticDiagnosticKind::UnencodablePanic => 18,
         };
         let severity = match self.kind {
             SemanticDiagnosticKind::DiscardedWrites => Severity::Warning,
@@ -250,6 +251,7 @@ impl SemanticDiagnosticKind {
             Self::RawPlaceViolation => format!("invalid `#[raw_place]` projection `{item}`"),
             Self::InstanceLimit => format!("instantiation limit exceeded in `{item}`"),
             Self::ConstDestructor => format!("compile-time destructor in `{item}`"),
+            Self::UnencodablePanic => format!("panic value without revert data in `{item}`"),
         }
     }
 }
@@ -435,4 +437,7 @@ pub enum SemanticDiagnosticKind {
     /// A body evaluated at compile time destroying a value whose
     /// destruction may run a `Drop` implementation.
     ConstDestructor,
+    /// A call reaching `panic_with_value` with a type that has no Sol encoding,
+    /// on a target where that encoding is the panic's revert data.
+    UnencodablePanic,
 }

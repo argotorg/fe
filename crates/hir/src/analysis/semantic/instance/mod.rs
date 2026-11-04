@@ -10,7 +10,7 @@ pub(crate) use const_ref::{
 pub use semantic::{
     CallSiteLowering, ForLoopCallSites, InstantiatedEffectEnv, RootSemanticInstanceError,
     SemanticEffectEnvInstantiationError, SemanticInstance, SemanticInstanceKey,
-    identity_semantic_instance_key, instantiated_effect_env,
+    identity_semantic_instance_key, instantiated_effect_env, panic_payload_encodable,
     resolved_provider_binding_for_instance_effect, root_semantic_instance_key,
     validate_instantiated_effect_env_key,
 };

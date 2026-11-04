@@ -4,12 +4,20 @@ expression: output
 input_file: tests/fixtures/fe_test_runner/unwrap_non_encodable_error.fe
 ---
 === STDOUT ===
-Failed to emit test Sonatina: MIR lowering failed: unsupported while lowering `unwrap`: `unwrap()` requires the error type `PlainError` to implement `Encode<Sol>` and `AbiSize`
-ERROR [<time>] Failed to emit test Sonatina: MIR lowering failed: unsupported while lowering `unwrap`: `unwrap()` requires the error type `PlainError` to implement `Encode<Sol>` and `AbiSize`
+Compilation errors in file://<project>/crates/fe/tests/fixtures/fe_test_runner/unwrap_non_encodable_error.fe
+
+error[16-0018]: panic value without revert data in `fn test_unwrap_non_encodable`
+   ┌─ unwrap_non_encodable_error.fe:18:15
+   │
+18 │     let val = result.unwrap()
+   │               ^^^^^^^^^^^^^^^ this call can panic with `PlainError`, which must implement `Encode<Sol>` and `AbiSize` to be revert data
+
+
+ERROR [<time>] Compilation errors in file://<project>/crates/fe/tests/fixtures/fe_test_runner/unwrap_non_encodable_error.fe
 
 test result: FAILED. 0 passed; 1 failed
 
 failures:
-    unwrap_non_encodable_error::codegen
+    unwrap_non_encodable_error::compile
 
 === EXIT CODE: 1 ===
