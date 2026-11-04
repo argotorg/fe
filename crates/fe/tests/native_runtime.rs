@@ -3098,6 +3098,51 @@ wait_any: slow exit status 0 [slow
     }
 }
 
+// A pipe made while a standard stream is closed takes its number. The child
+// must still see the stream closed: reading its stdin must not reach its own
+// stdout pipe, which would never end.
+#[test]
+fn native_process_pipes_avoid_closed_standard_streams() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("closed.fe");
+    fs::write(
+        &source,
+        r#"
+use std::process::{Command, Redirect, Spawn}
+use std::time::Duration
+
+pub fn main() -> i32 uses (proc: mut Spawn) {
+    let command = Command::new("sh")
+        .arg("-c")
+        .arg("read x; echo done")
+        .stdout(Redirect::Capture)
+        .stderr(Redirect::Null)
+        .timeout(Duration::from_secs(5))
+    match proc.output(command) {
+        Result::Ok(output) => {
+            var expected = format!("done")
+            expected.push(10)
+            if output.status.success() && output.stdout.span() == expected.span() { 0 } else { 1 }
+        }
+        Result::Err(_) => 2,
+    }
+}
+"#,
+    )
+    .unwrap();
+    let out = temp.path().join("out");
+    build(&source, &out, "0", &[]);
+    for closed in ["<&-", ">&-", "2>&-", "<&- >&-", "<&- >&- 2>&-"] {
+        let result = Command::new("sh")
+            .arg("-c")
+            .arg(format!("exec \"$0\" {closed}"))
+            .arg(out.join("closed"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{closed}: {result:?}");
+    }
+}
+
 #[test]
 fn native_clock_reads_wall_and_monotonic_time() {
     let temp = tempdir().unwrap();

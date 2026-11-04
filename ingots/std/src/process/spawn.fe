@@ -21,6 +21,7 @@ extern {
     fn posix_spawnattr_init(_ attr: *u8) -> i32
     fn posix_spawnattr_destroy(_ attr: *u8) -> i32
     fn pipe(_ fds: *i32) -> i32
+    fn dup(_ fd: i32) -> i32
     fn close(_ fd: i32) -> i32
     // `nfds` is an `nfds_t`, 32 bits on macOS, where the callee reads the low
     // half.
@@ -474,13 +475,30 @@ fn redirect(_ setup: Setup, _ fd: i32, _ redirect: Redirect, _ child_ends: mut M
     Result::Ok(Fd::none())
 }
 
-// A new pipe's read and write ends.
+// A new pipe's read and write ends. If this process has closed a standard
+// stream, an end could take its number and reach the child as that stream, so
+// both move past those numbers.
 fn make_pipe() -> Result<Error, (Fd, Fd)> {
     let fds = MemBuffer::new(8)
     if unsafe { pipe(ptr::cast(fds.ptr())) } != 0 {
         return Result::Err(last_error())
     }
-    Result::Ok((Fd { fd: fds.read_le<i32>(0) }, Fd { fd: fds.read_le<i32>(4) }))
+    let read_end = Fd { fd: fds.read_le<i32>(0) }
+    let write_end = Fd { fd: fds.read_le<i32>(4) }
+    Result::Ok((past_standard_streams(read_end)?, past_standard_streams(write_end)?))
+}
+
+// `fd`, or a copy of it numbered past the standard streams. `dup` takes the
+// lowest free number, and each copy holds its own until the last is made.
+fn past_standard_streams(_ fd: own Fd) -> Result<Error, Fd> {
+    if fd.fd > 2 {
+        return Result::Ok(fd)
+    }
+    let copy = unsafe { dup(fd.fd) }
+    if copy < 0 {
+        return Result::Err(last_error())
+    }
+    past_standard_streams(Fd { fd: copy })
 }
 
 // Pointers to the C strings `strings`, then a null pointer.
