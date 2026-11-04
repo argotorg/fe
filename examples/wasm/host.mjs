@@ -38,6 +38,9 @@ export const FILE_ERRORS = Object.freeze({
 /** The longest text, in bytes, that the host reads from the module or places in it. */
 export const MAX_TEXT_BYTES = 65536;
 
+/** The longest file, in bytes: a reply carries its size in 32 bits. */
+export const MAX_FILE_BYTES = 0xffffffff;
+
 /** The module, or the code that drives it, broke the contract. */
 export class ContractError extends Error {
   constructor(message) {
@@ -66,7 +69,10 @@ export function encodeReply(tag, payload = 0) {
   if (tag !== 0 && payload !== 0) {
     throw new ContractError(`an error reply carries no payload, but error ${tag} has payload ${payload}`);
   }
-  return (BigInt(payload >>> 0) << 32n) | BigInt(tag >>> 0);
+  if (payload >>> 0 !== payload) {
+    throw new ContractError(`a reply payload is an unsigned 32-bit integer, not ${payload}`);
+  }
+  return (BigInt(payload) << 32n) | BigInt(tag >>> 0);
 }
 
 /** `{ ok: true, value }` or `{ ok: false, code, error }` for the word an export returned. */
@@ -104,8 +110,9 @@ function keyOf(bytes) {
 /**
  * The imports of `std::wasm` (module `env`), over an in-memory set of files.
  *
- * `files` maps a name to its contents. Handle numbers count up from 1 and are
- * never reused, so a closed handle is told from one that was never issued.
+ * `files` maps a name to its contents, of at most `MAX_FILE_BYTES` bytes. Handle
+ * numbers count up from 1 and are never reused, so a closed handle is told from
+ * one that was never issued.
  * Call `bind` with the instance before the module runs.
  *
  * Options:
@@ -121,7 +128,11 @@ function keyOf(bytes) {
 export function createHost(files = {}, { imports = {}, now = Date.now, onLog = null } = {}) {
   const table = new Map();
   for (const [name, contents] of Object.entries(files)) {
-    table.set(keyOf(toBytes(name, "a file name")), toBytes(contents, `the contents of ${name}`));
+    const bytes = toBytes(contents, `the contents of ${name}`);
+    if (bytes.length > MAX_FILE_BYTES) {
+      throw new ContractError(`file ${name} of ${bytes.length} bytes is above the limit of ${MAX_FILE_BYTES} bytes`);
+    }
+    table.set(keyOf(toBytes(name, "a file name")), bytes);
   }
   const open = new Map(); // handle -> contents
   const logs = [];

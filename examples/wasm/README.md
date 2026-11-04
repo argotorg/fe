@@ -308,7 +308,8 @@ cargo test -p fe --all-features \
   traps, and the memory grows with `memory.grow` and is never given back.
   `arena_release` frees what a call allocated. A module with text
   parameters starts with 18 pages (about 1.2 MB). The host limits a text to 65,536
-  bytes, a limit of `host.mjs` and not of the compiler.
+  bytes, a limit of `host.mjs` and not of the compiler. A file has at most
+  4,294,967,295 bytes, because a reply carries its size in 32 bits.
 - **Traps.** The engine reports a trap without a function name or a source location,
   because the module has no name section.
 - **Tests.** Each test runs in a separate process, so tests share nothing. The test host

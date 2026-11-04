@@ -3,7 +3,7 @@
 //! Four operations, each synchronous:
 //!
 //! - `open(name)` finds the file called `name` and returns a handle to it.
-//! - `size(handle)` is the length of the file in bytes.
+//! - `size(handle)` is the length of the file in bytes, at most `0xffffffff`.
 //! - `read_byte(handle, index)` is the byte at `index`.
 //! - `close(handle)` ends the use of the handle. It takes the handle by value,
 //!   so a closed handle cannot be used again.

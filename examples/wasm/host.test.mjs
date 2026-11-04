@@ -9,6 +9,7 @@ import {
   ContractError,
   FILE_ERRORS,
   GuestAbort,
+  MAX_FILE_BYTES,
   MAX_TEXT_BYTES,
   MANIFEST_VERSION,
   checkModule,
@@ -138,6 +139,31 @@ test("an unknown error code is refused when it is made and when it is read", () 
   assert.throws(() => decodeReply((5n << 32n) | 2n), /carries no payload/);
   assert.throws(() => decodeReply(3), /64-bit word/);
   assert.deepEqual(decodeReply(encodeReply(0, 0xffffffff)), { ok: true, value: 0xffffffff });
+});
+
+test("a reply payload must be an unsigned 32-bit integer", () => {
+  for (const payload of [2 ** 32, -1, 1.5, NaN]) {
+    assert.throws(
+      () => encodeReply(0, payload),
+      (error) => error instanceof ContractError && new RegExp(`32-bit integer, not ${payload}`).test(error.message),
+    );
+  }
+});
+
+test("a file must fit the size in a reply", () => {
+  // Only the length matters, so these allocate nothing.
+  const ofLength = (length) => Object.defineProperty(new Uint8Array(), "length", { value: length });
+  assert.throws(
+    () => createHost({ big: ofLength(MAX_FILE_BYTES + 1) }),
+    (error) => error instanceof ContractError && /big of 4294967296 bytes is above the limit/.test(error.message),
+  );
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const host = createHost({ a: ofLength(MAX_FILE_BYTES) });
+  host.bind({ exports: { memory } });
+  new Uint8Array(memory.buffer)[0] = "a".charCodeAt(0);
+  const env = host.imports.env;
+  const handle = open(env, 0, 1).value;
+  assert.deepEqual(decodeReply(env.sys_wasm_files_size(handle)), { ok: true, value: MAX_FILE_BYTES });
 });
 
 test("open handles are counted and the leak check names them", () => {
