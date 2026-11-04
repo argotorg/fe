@@ -75,7 +75,7 @@ pub fn check_on_received(
     operator: Address,
     from: Address,
     token_id: u256,
-    data: Bytes,
+    data: own Bytes,
 ) -> ReceiverCheck
 uses (ctx: Ctx, call: mut Call)
 {

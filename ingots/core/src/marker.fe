@@ -1,5 +1,3 @@
-use super::abi::Bytes
-
 // Marker traits for language-level behavior.
 //
 // `Copy` is used by the compiler's ownership model: values of `Copy` types can be
@@ -10,7 +8,7 @@ use super::abi::Bytes
 pub trait Copy {}
 
 /// A `Copy` type a view parameter takes by copy, a *snapshot*: a scalar or a
-/// handle, such as `Address` or a memory buffer's handle, whose copy is all a
+/// handle, such as `Address` or `CallData`, whose copy is all a
 /// callee can observe. Primitives and raw pointers are snapshots without it.
 /// Every other value, `Copy` or not, is viewed in place: the call reads the
 /// caller's place for its duration, and a projection's result over it is the
@@ -47,10 +45,6 @@ pub trait Clearable {}
 // Built-in primitive types are trivially copyable.
 impl Copy for () {}
 impl<const N: usize> Copy for String<N> {}
-impl Copy for Bytes {}
-
-// A memory buffer handle is a snapshot of where its contents lie.
-impl Snapshot for Bytes {}
 impl<T, const N: usize> Copy for [T; N]
     where T: Copy
 {}

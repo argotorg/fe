@@ -1,0 +1,133 @@
+// Makes `DynString`, `Bytes` and `DynArray` values every way that allocates one and
+// drops them each round. The process stays small however many rounds run, and `free`
+// aborts on a value freed twice or not from its start, so this checks that each value
+// owns its allocation and frees it once.
+use core::abi::{Bytes, Decode, DynString, encode_alloc, store_word}
+use core::ptr::{self, MemArray, MemBuffer, MemVec}
+use core::text::{concat, decimal}
+use std::abi::{DynArray, Sol, bytes_from_word, bytes_from_words, bytes_from_words_prefix, canonical_dyn_array, dyn_array_from}
+
+const GREETING: DynString = "a constant string of more than thirty-one bytes"
+const PAIR: (DynString, u32) = ("a string in a constant tuple of more than thirty-one bytes", 1)
+const NAMES: [DynString; 2] = ["the first string of a constant array of strings", "the second string of a constant array"]
+
+struct Record {
+    name: DynString,
+    payload: Bytes,
+    rows: DynArray<u256>,
+    id: u32,
+}
+
+fn pass<T>(_ value: own T) -> T {
+    value
+}
+
+fn strings(_ r: u32) -> usize {
+    let literal: DynString = "a string literal of more than thirty-one bytes"
+    let copy = literal.clone()
+    let part = copy.slice(start: 2, len: 20)
+    let joined = concat([pass(literal), part])
+    let number = decimal(r as u256)
+    let held = Option::Some(GREETING)
+    let pair = PAIR
+    let names = NAMES
+    var list: MemVec<DynString> = MemVec::new()
+    list.push(DynString::empty())
+    list.push(DynString::zeroed(100))
+    list.push(copy)
+    let held_len = match held {
+        Option::Some(text) => text.len(),
+        Option::None => 0,
+    }
+    core::assert(!number.is_empty())
+    joined.len() + list.len() + pair.0.len() + names[1].len() + held_len
+}
+
+fn bytes(_ r: u32) -> usize {
+    let source = MemBuffer::new(40)
+    let payload = Bytes::from_payload(source: source.span())
+    let copy = payload.clone()
+    let word = Bytes::from_word_prefix(word: r as u256, len: 5)
+    let whole = bytes_from_word(r as u256)
+    let words = bytes_from_words([r as u256, 1])
+    let prefix = bytes_from_words_prefix<33, 2>([r as u256, 1])
+    let empty = pass(Bytes::empty())
+    let from_string = DynString::from_word_prefix(word: r as u256, len: 5).into_bytes()
+    let raw = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: raw, value: 0) }
+    let tail = unsafe { Bytes::from_abi_tail(data: raw, len: 0, size: 32) }
+    var list: MemVec<Bytes> = MemVec::new()
+    list.push(copy)
+    list.push(tail)
+    core::assert(payload == list[0] && empty == list[1] && word.len() == from_string.len())
+    payload.len() + word.len() + whole.len() + words.len() + prefix.len() + list.len()
+}
+
+fn arrays(_ r: u32) -> usize {
+    let values: DynArray<u256> = dyn_array_from([r as u256, 1, 2])
+    let copy = values.clone()
+    let canonical = canonical_dyn_array(copy)
+    let empty: DynArray<u256> = DynArray::empty()
+    let moved = pass(values)
+    let list: DynArray<Bytes> = dyn_array_from([Bytes::from_word_prefix(word: r as u256, len: 32), Bytes::empty()])
+    let list_copy = canonical_dyn_array(list)
+    let nested: DynArray<DynArray<u256>> = dyn_array_from([dyn_array_from([r as u256]), DynArray::empty()])
+    let elements: MemArray<u256> = moved.to_mem_array()
+    var parts: MemVec<DynString> = MemVec::new()
+    parts.push(decimal(1))
+    parts.push(decimal(23))
+    let slice: DynArray<DynString> = DynArray::from_slice(parts.as_slice())
+    var total = 0
+    // Each element is a decoded temporary, read across a later allocation.
+    for ref row in list_copy {
+        let more = Bytes::from_word_prefix(word: r as u256, len: 32)
+        total += row.len() + (more.len() - 32)
+    }
+    let held = ref list_copy[0]
+    let more = Bytes::empty()
+    total += held.len() + more.len()
+    total + canonical.len() + empty.len() + elements.len() + nested.get(0).len() + slice.get(1).len()
+}
+
+fn records(_ r: u32) -> usize {
+    let record = Record {
+        name: DynString::from_word_prefix(word: r as u256, len: 5),
+        payload: Bytes::from_word_prefix(word: r as u256, len: 5),
+        rows: dyn_array_from([r as u256]),
+        id: r,
+    }
+    let moved = pass(record)
+    let held = Option::Some(moved)
+    match held {
+        Option::Some(record) => record.name.len() + record.payload.len() + record.rows.len(),
+        Option::None => 0,
+    }
+}
+
+// Encodes each type to the Solidity ABI and decodes it, which moves each array element
+// through a raw place.
+fn encoded(_ r: u32) -> usize {
+    let names: [DynString; 2] = [decimal(r as u256), "the second string of a long enough array"]
+    let encoded_names = encode_alloc<Sol, [DynString; 2]>(names)
+    let decoded_names = <[DynString; 2] as Decode<Sol>>::decode_from(encoded_names.span(), 0)
+    let parts: [Bytes; 2] = [Bytes::empty(), Bytes::from_word_prefix(word: r as u256, len: 32)]
+    let encoded_parts = encode_alloc<Sol, [Bytes; 2]>(parts)
+    let decoded_parts = <[Bytes; 2] as Decode<Sol>>::decode_from(encoded_parts.span(), 0)
+    let rows: [DynArray<u256>; 2] = [dyn_array_from([r as u256]), DynArray::empty()]
+    let encoded_rows = encode_alloc<Sol, [DynArray<u256>; 2]>(rows)
+    let decoded_rows = <[DynArray<u256>; 2] as Decode<Sol>>::decode_from(encoded_rows.span(), 0)
+    decoded_names[1].len() + decoded_parts[1].len() + decoded_rows[0].len()
+}
+
+pub fn main() -> i32 {
+    var r: u32 = 0
+    while r < 500000 {
+        core::assert(strings(r) == 46 + 20 + 3 + 58 + 37 + 47)
+        core::assert(bytes(r) == 40 + 5 + 32 + 64 + 33 + 2)
+        core::assert(arrays(r) == 32 + 32 + 3 + 0 + 3 + 1 + 2)
+        core::assert(records(r) == 5 + 5 + 1)
+        core::assert(encoded(r) == 40 + 32 + 1)
+        r += 1
+    }
+    0
+}

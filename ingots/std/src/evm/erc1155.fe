@@ -39,7 +39,7 @@ pub fn try_safe_transfer_from(
     receiver: Address,
     id: u256,
     amount: u256,
-    data: Bytes,
+    data: own Bytes,
 ) -> TokenCall
 uses (ctx: Ctx, call: mut Call)
 {
@@ -69,9 +69,9 @@ pub fn try_safe_batch_transfer_from(
     token: Address,
     owner: Address,
     receiver: Address,
-    ids: DynArray<u256>,
-    amounts: DynArray<u256>,
-    data: Bytes,
+    ids: own DynArray<u256>,
+    amounts: own DynArray<u256>,
+    data: own Bytes,
 ) -> TokenCall
 uses (ctx: Ctx, call: mut Call)
 {

@@ -1,6 +1,7 @@
 use ingot::Copy
 use ingot::Option
 use ingot::clone::Clone
+use ingot::mem::forget
 use ingot::num::{IntDowncast, WordValue, from_be, to_be, word_to_usize}
 use ingot::ptr
 use ingot::ops::{Drop, Eq}
@@ -945,8 +946,9 @@ impl DynString {
         }
     }
 
-    /// `data` must point to a validated ABI tail of `size` initialized
-    /// bytes in a live allocation, holding `len` elements.
+    /// `data` must be the start of an allocation that holds a validated ABI
+    /// tail of `size` initialized bytes and `len` elements. The value takes
+    /// over the allocation.
     unsafe fn from_validated_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         DynString { data, len, size }
     }
@@ -980,10 +982,24 @@ impl DynString {
     /// e.g. a `bytes32` label.
     pub fn from_word_prefix(word: u256, len: usize) -> Self {
         let bytes = Bytes::from_word_prefix(word, len)
-        // `bytes` holds a valid tail of the same layout.
-        unsafe {
+        // `bytes` holds a valid tail of the same layout, and the string takes
+        // over its allocation.
+        let string = unsafe {
             Self::from_validated_abi_tail(data: bytes.data, len: bytes.len, size: bytes.size)
         }
+        forget(bytes)
+        string
+    }
+
+    /// The string's bytes, in the same allocation.
+    pub fn into_bytes(own self) -> Bytes {
+        // A string's tail is a valid bytes tail, and the bytes take over its
+        // allocation.
+        let bytes = unsafe {
+            Bytes::from_validated_abi_tail(data: self.data, len: self.len, size: self.size)
+        }
+        forget(self)
+        bytes
     }
 
     /// Returns a copy of the `len` bytes starting at `start`.
@@ -1038,14 +1054,29 @@ impl DynString {
     }
 }
 
-/// Owned handle to a Solidity ABI `bytes` payload stored in linear memory.
+/// A Solidity ABI `bytes` payload stored in linear memory.
 ///
-/// `data` points at the ABI tail payload: the length word followed by packed
-/// bytes data padded to a whole word count.
+/// `data` points at the start of an allocation that holds the ABI tail payload:
+/// the length word followed by packed bytes data padded to a whole word count.
+/// The value owns the allocation and frees it when dropped, so it moves rather
+/// than copies. `clone` makes a second value, and `payload_span` views the bytes.
 pub struct Bytes {
     unsafe data: *u8,
     unsafe len: usize,
     unsafe size: u256,
+}
+
+impl Drop for Bytes {
+    fn drop(own self) {
+        // The value owns its allocation.
+        unsafe { ptr::dealloc(self.data) }
+    }
+}
+
+impl Clone for Bytes {
+    fn clone(self) -> Self {
+        Self::from_payload(source: self.payload_span())
+    }
 }
 
 impl Bytes {
@@ -1058,15 +1089,16 @@ impl Bytes {
         }
     }
 
-    /// `data` must point to a validated ABI tail of `size` initialized
-    /// bytes in a live allocation, holding `len` elements.
+    /// `data` must be the start of an allocation that holds a validated ABI
+    /// tail of `size` initialized bytes and `len` elements. The value takes
+    /// over the allocation.
     unsafe fn from_validated_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         Bytes { data, len, size }
     }
 
-    /// Wraps a complete ABI tail. `data` must point to `size` valid,
-    /// initialized bytes in an allocation that outlives the value, which
-    /// never frees it.
+    /// Takes ownership of a complete ABI tail. `data` must be the start of an
+    /// allocation from `ptr::alloc_bytes` that holds `size` initialized bytes,
+    /// and nothing else may free it: the value frees it when dropped.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         let expected_size = 32 + round_up_words(len as u256)
         if size != expected_size || mem_word_at(base: data, offset: 0) != len as u256 {

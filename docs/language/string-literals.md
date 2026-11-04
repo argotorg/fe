@@ -48,9 +48,9 @@ from the contract code where it is evaluated; a shorter one is stored a word at
 a time.
 
 A `DynString` owns its bytes. It moves rather than copies, `clone()` makes a second
-string, and dropping it frees the memory on native and WebAssembly targets. A
-parameter without a mode views the caller's string, so passing a string to one
-does not move it.
+string, and dropping it frees the memory on native targets. A parameter without a
+mode views the caller's string, so passing a string to one does not move it.
+`into_bytes()` turns a string into the `Bytes` that hold the same allocation.
 
 ## Bytes
 

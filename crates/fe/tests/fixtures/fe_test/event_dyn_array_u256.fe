@@ -101,7 +101,7 @@ fn test_dyn_array_u256_event() uses (log: mut Log) {
     unsafe { store_word(ptr: ptr, value: 1) }
     unsafe { store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: 7) }
     let values = unsafe { Values::from_abi_tail(data: ptr, len: 1, size: 64) }
-    let buffer = encode_abi_payload((values, 3 as u256))
+    let buffer = encode_abi_payload((values.clone(), 3 as u256))
     let data = buffer.ptr()
     let len = buffer.len()
 

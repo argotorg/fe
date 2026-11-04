@@ -24,7 +24,7 @@ fn test_mixed_dynamic_event() uses (log: mut Log) {
     let extra = bytes_from_words_prefix<1, 1>(
         [0xaa00000000000000000000000000000000000000000000000000000000000000],
     )
-    let buffer = encode_abi_payload((values, extra, 3 as u256))
+    let buffer = encode_abi_payload((values.clone(), extra.clone(), 3 as u256))
     let data = buffer.ptr()
     let len = buffer.len()
 
@@ -44,6 +44,6 @@ fn test_mixed_dynamic_event() uses (log: mut Log) {
     }
 
     log.emit(
-        Mixed { provider: Address::zero(), values: values, extra: extra, invariant: 3 },
+        Mixed { provider: Address::zero(), values, extra, invariant: 3 },
     )
 }

@@ -125,14 +125,14 @@ uses (evm: mut Evm, call: mut Call, ctx: Ctx)
     let addrs = dyn_array_from([Address::new(0xabc)])
 
     // Canonical element decodes fine.
-    let got: u256 = evm.call(addr: arr, gas: 1000000, value: Wei::zero(), message: ArrMsg::AddrAt { addrs, index: 0 })
+    let got: u256 = evm.call(addr: arr, gas: 1000000, value: Wei::zero(), message: ArrMsg::AddrAt { addrs: addrs.clone(), index: 0 })
     assert!(got == 0xabc)
 
     let one: u256 = 1
     let dirty = (one << 160) + 0xabc
 
     // AddrAt calldata: selector | offset(0x40) | index | len | element.
-    let args = encode_msg_calldata(ArrMsg::AddrAt { addrs, index: 0 })
+    let args = encode_msg_calldata(ArrMsg::AddrAt { addrs: addrs.clone(), index: 0 })
     unsafe { store_word(ptr: ptr::offset_bytes(args.ptr(), 100), value: dirty) }
     var ret = MemBuffer::empty()
     let outcome = call.raw_call(addr: arr, gas: ctx.gas(), value: Wei::zero(), args: args.span(), ret: mut ret)

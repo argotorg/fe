@@ -11,7 +11,11 @@ pub struct Entry {
     pub data: Bytes,
 }
 
-impl Copy for Entry {}
+impl Clone for Entry {
+    fn clone(self) -> Self {
+        Entry { id: self.id, data: self.data.clone() }
+    }
+}
 
 msg Build {
     #[selector = 0x01]
@@ -149,19 +153,19 @@ fn from_slice_is_a_snapshot() {
 #[test]
 fn loops_decode_each_element() {
     var total = 0
-    for row in nested() {
+    for ref row in nested() {
         for x in row {
             total += x
         }
     }
     assert(total == 6)
     var lengths = 0
-    for (i, part) in bytes_parts().enumerate() {
+    for (i, ref part) in bytes_parts().enumerate() {
         lengths += (i + 1) * part.len()
     }
     assert(lengths == 1 + 0 + 3 * 32)
     var reversed = 0
-    for entry in entries().reversed() {
+    for ref entry in entries().reversed() {
         reversed = reversed * 10 + entry.id
     }
     assert(reversed == 87)

@@ -20,28 +20,43 @@ use core::abi::{
 }
 use core::default::Default
 use core::iter::{Bidirectional, Collection}
-use core::marker::{Copy, Snapshot}
 use ingot::abi::Sol
 use core::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan}
-use core::ops::{Index, Len, WrappingAdd, WrappingSub}
+use core::ops::{Drop, Index, Len, WrappingAdd, WrappingSub}
 use core::option::Option
 use ingot::evm::panic::{PANIC_INDEX_OUT_OF_BOUNDS, Panic}
 use ingot::evm::revert_error
 
-/// Owned handle to a Solidity-style dynamic array (`T[]`) stored in linear memory.
+/// A Solidity-style dynamic array (`T[]`) stored in linear memory.
 ///
-/// `data` points at the ABI payload for the array: the length word followed by the
-/// tuple-encoded element heads/tails.
+/// `data` points at the start of an allocation that holds the ABI payload for the
+/// array: the length word followed by the tuple-encoded element heads/tails. The
+/// elements are encoded bytes, so `get` decodes a fresh value and dropping the
+/// array frees the allocation alone. The value owns the allocation, so it moves
+/// rather than copies; `clone` makes a second array.
 pub struct DynArray<T> {
     unsafe data: *u8,
     unsafe len: usize,
     unsafe size: u256,
 }
 
-impl<T> Copy for DynArray<T> {}
+impl<T> Drop for DynArray<T> {
+    fn drop(own self) {
+        // The array owns its allocation.
+        unsafe { ptr::dealloc(self.data) }
+    }
+}
 
-// A memory buffer handle is a snapshot of where its contents lie.
-impl<T> Snapshot for DynArray<T> {}
+impl<T> Clone for DynArray<T> {
+    fn clone(self) -> Self {
+        let data = ptr::alloc_bytes(ptr::allocation_len(self.size))
+        // The copy holds the same validated tail.
+        unsafe {
+            ptr::copy(dest: data, source: self.encoded_span())
+            Self::from_validated_abi_tail(data, len: self.len, size: self.size)
+        }
+    }
+}
 
 impl<T> Default for DynArray<T> {
     fn default() -> Self {
@@ -59,18 +74,20 @@ impl<T> DynArray<T> {
         }
     }
 
-    /// `data` must point to a validated ABI tail of `size` initialized
-    /// bytes in a live allocation, holding `len` elements.
+    /// `data` must be the start of an allocation that holds a validated ABI
+    /// tail of `size` initialized bytes and `len` elements. The value takes
+    /// over the allocation.
     unsafe fn from_validated_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         DynArray { data, len, size }
     }
 
-    /// Construct an array handle over a complete ABI tail.
+    /// Takes ownership of a complete ABI tail.
     ///
-    /// `data` must point to `size` valid bytes in an allocation that outlives
-    /// the array, which never frees it. Static-element arrays are
-    /// validated exactly; callers constructing dynamic-element arrays must
-    /// ensure their nested tails are valid and end at `size`.
+    /// `data` must be the start of an allocation from `ptr::alloc_bytes` that
+    /// holds `size` valid bytes, and nothing else may free it: the array frees
+    /// it when dropped. Static-element arrays are validated exactly; callers
+    /// constructing dynamic-element arrays must ensure their nested tails are
+    /// valid and end at `size`.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self
         where T: AbiSize
     {
@@ -158,7 +175,12 @@ impl<T> DynArray<T> {
     pub fn to_mem_array(self) -> MemArray<T>
         where T: Decode<Sol> + AbiSize
     {
-        MemArray::from_fn(self.len, |i| self.get(i))
+        let elements = unsafe { MemArray::new_uninit(self.len) }
+        for i in 0..self.len {
+            // A raw write initializes the slot, destroying nothing.
+            unsafe { *elements.ptr_at(i) = self.get(i) }
+        }
+        elements
     }
 
     /// An ABI array of clones of `values`, in canonical layout.
@@ -394,15 +416,11 @@ impl<T> Bidirectional for DynArray<T>
 
 /// A `DynArray` holding `values` in order.
 ///
-/// Works for copyable ABI element types, including dynamic ones: the
-/// `bytes[]` built by `dyn_array_from([a, b])` encodes like Solidity's
-/// `new bytes[](2)` filled with `a` and `b`.
-///
-/// Elements must implement `Copy`: array indexing cannot currently consume
-/// distinct non-copyable elements in a loop. For a non-`Copy` ABI struct,
-/// encode individual values with `encode_abi_payload` instead.
-pub fn dyn_array_from<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
-    where T: Encode<Sol> + AbiSize + Copy
+/// Works for any ABI element type, including dynamic ones: the `bytes[]` built
+/// by `dyn_array_from([a, b])` encodes like Solidity's `new bytes[](2)` filled
+/// with `a` and `b`.
+pub fn dyn_array_from<T, const N: usize>(_ values: own [T; N]) -> DynArray<T>
+    where T: Encode<Sol> + AbiSize
 {
     let size = 32 + values.payload_size()
     let data = ptr::alloc_bytes(ptr::allocation_len(size))

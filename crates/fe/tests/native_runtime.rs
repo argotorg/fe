@@ -11,6 +11,7 @@ use std::{
     ffi::OsString,
     fs,
     io::Write,
+    mem,
     os::unix::{
         ffi::OsStringExt,
         fs::symlink,
@@ -52,6 +53,38 @@ fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
         String::from_utf8_lossy(&result.stderr)
     );
     result
+}
+
+/// Runs a program to its end and returns its peak resident memory in bytes.
+fn peak_memory(executable: &Path) -> u64 {
+    // `wait4` reaps the child, and reports what `Child::wait` does not.
+    #[allow(clippy::zombie_processes)]
+    let child = Command::new(executable).spawn().unwrap();
+    let pid = child.id() as libc::pid_t;
+    let mut status = 0;
+    let mut usage: libc::rusage = unsafe { mem::zeroed() };
+    assert_eq!(unsafe { libc::wait4(pid, &mut status, 0, &mut usage) }, pid);
+    assert!(
+        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+        "wait status {status:#x}"
+    );
+    // `ru_maxrss` counts bytes on macOS and kibibytes on Linux.
+    let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
+    usage.ru_maxrss as u64 * unit
+}
+
+#[test]
+fn native_abi_buffers_free_their_allocations() {
+    let temp = tempdir().unwrap();
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/abi_buffer_churn.fe");
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        // One 32-byte allocation leaked each of the 500000 rounds comes to 16 MB.
+        let peak = peak_memory(&out.join("abi_buffer_churn"));
+        assert!(peak < 12 << 20, "O{level}: peak of {peak} bytes");
+    }
 }
 
 #[test]
