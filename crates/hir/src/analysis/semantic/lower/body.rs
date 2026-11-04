@@ -1359,7 +1359,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Expr::Assign(dst, src) => {
                 self.prepare_place_root(*dst);
                 let src = self.take_expr_operand(*src);
-                if self.typed_body.semantic_expr_lowering(*dst).is_some() {
+                if self.is_projection_target(*dst) {
                     let dst = SPlace::new(self.lower_access(*dst));
                     self.drop_before_write(origin, &dst, self.locals[src.value.index()].ty);
                     self.push_stmt(origin, SStmtKind::Store { dst, src });
@@ -1395,7 +1395,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 };
                 // A projection's result is read and written through its
                 // access, as an assignment's target is.
-                let projection = self.typed_body.semantic_expr_lowering(*dst).is_some();
+                let projection = self.is_projection_target(*dst);
                 let dst_place = if projection {
                     SPlace::new(self.lower_access(*dst))
                 } else {
@@ -1443,6 +1443,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Expr::Match(scrutinee, arms) => self.lower_match_expr(expr, *scrutinee, arms),
             Expr::With(bindings, body) => self.lower_with_expr(bindings, *body),
         }
+    }
+
+    /// Whether the assignment target `dst` is a projection's result, a call
+    /// or the `?` of one, which is read and written through its carrier.
+    fn is_projection_target(&self, dst: ExprId) -> bool {
+        self.typed_body.semantic_expr_lowering(dst).is_some()
+            || matches!(dst.data(self.db, self.body), Partial::Present(Expr::Try(_)))
     }
 
     fn lower_assert(&mut self, expr: ExprId, args: &[crate::hir_def::CallArg<'db>]) -> SValueId {
@@ -2241,7 +2248,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn prepare_place_root(&mut self, place: ExprId) -> bool {
         let lowering = self.typed_body.semantic_expr_lowering(place);
         match (place.data(self.db, self.body), lowering) {
-            (Partial::Present(Expr::Field(base, _)), _)
+            (Partial::Present(Expr::Field(base, _) | Expr::Try(base)), _)
             | (Partial::Present(Expr::Bin(base, _, BinOp::Index)), None) => {
                 self.prepare_place_root(*base)
             }
