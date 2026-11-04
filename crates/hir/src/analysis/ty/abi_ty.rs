@@ -17,6 +17,7 @@ use crate::analysis::ty::corelib::{concrete_usize, resolve_lib_trait_path};
 use crate::analysis::ty::evidence::prove;
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_def::{TraitInstId, assoc_const_body_template_for_trait_inst};
+use crate::analysis::ty::trait_resolution::PredicateListId;
 use crate::analysis::ty::trait_resolution::TraitSolveCx;
 use crate::analysis::ty::ty_check::BodyOwner;
 use crate::analysis::ty::{
@@ -24,7 +25,6 @@ use crate::analysis::ty::{
     const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
     ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
 };
-use crate::analysis::ty::{trait_resolution::PredicateListId, ty_is_copy};
 use crate::core::hir_def::scope_graph::ScopeId;
 use crate::hir_def::IdentId;
 use crate::span::{DesugaredOrigin, HirOrigin};
@@ -463,34 +463,6 @@ pub(crate) fn is_composite_event_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> boo
             Some(AdtRef::Struct(struct_))
                 if matches!(struct_.origin(db), HirOrigin::Desugared(DesugaredOrigin::AbiStruct(_)))
         )
-}
-
-/// The first fixed-array element type in `ty`, looking through fixed arrays,
-/// tuples and `DynArray`s, that is not `Copy`. The core fixed-array ABI
-/// codecs need `Copy` elements, since an array element cannot be moved out
-/// by index.
-pub(crate) fn non_copy_fixed_array_elem<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    ty: TyId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Option<TyId<'db>> {
-    let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
-    if ty.is_array(db) {
-        let (_, args) = ty.decompose_ty_app(db);
-        let elem = *args.first()?;
-        // Name the innermost culprit: `Key` rather than `[Key; 1]`.
-        return non_copy_fixed_array_elem(db, scope, elem, assumptions)
-            .or_else(|| (!ty_is_copy(db, scope, elem, assumptions)).then_some(elem));
-    }
-    if ty.is_tuple(db) {
-        let (_, args) = ty.decompose_ty_app(db);
-        return args
-            .iter()
-            .find_map(|&elem| non_copy_fixed_array_elem(db, scope, elem, assumptions));
-    }
-    std_dyn_array_elem_ty(db, ty)
-        .and_then(|elem| non_copy_fixed_array_elem(db, scope, elem, assumptions))
 }
 
 /// The value of `<ty as SolCompat>::SOL_TYPE` as a string, if `ty`
