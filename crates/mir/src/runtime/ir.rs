@@ -1218,6 +1218,13 @@ pub enum RuntimeBuiltin<'db> {
         slot: RValueId,
         value: RValueId,
     },
+    /// Zeroes the `len` words of storage or transient storage `space` from
+    /// `slot` on, in a loop rather than one store per word.
+    ZeroState {
+        space: AddressSpace,
+        slot: RValueId,
+        len: RValueId,
+    },
     CallValue,
     ReturnDataSize,
     ReturnDataCopy {
@@ -1660,6 +1667,7 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::ZeroMem { .. }
             | Self::StoreConstBytes { .. }
             | Self::Sstore { .. }
+            | Self::ZeroState { .. }
             | Self::ReturnDataCopy { .. }
             | Self::CallDataCopy { .. }
             | Self::CodeCopy { .. }
@@ -1747,6 +1755,9 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::ZeroMem { dst: a, len: b }
             | Self::ReadPaddedWord { ptr: a, len: b }
             | Self::Sstore { slot: a, value: b }
+            | Self::ZeroState {
+                slot: a, len: b, ..
+            }
             | Self::Keccak256 { offset: a, len: b }
             | Self::Byte { pos: a, value: b }
             | Self::SignExtend { byte: a, value: b }

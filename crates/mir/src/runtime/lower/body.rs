@@ -5537,6 +5537,26 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         let addr = self.coerce_value(bb, addr, &word_class());
+        // A clear of more words than this loops. The loop is smaller than one
+        // store per word from about five words on, but costs about 30 gas
+        // more per word, so narrower clears keep the stores.
+        const UNROLLED_WORDS: u64 = 16;
+        if size > UNROLLED_WORDS {
+            let len = self.alloc_word_const(bb, size);
+            let done = self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased);
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: done,
+                    expr: RExpr::Builtin(RuntimeBuiltin::ZeroState {
+                        space,
+                        slot: addr,
+                        len,
+                    }),
+                },
+            );
+            return;
+        }
         let word_ref =
             provider_class_for_target_in_env(self.db, self.env, Some(TyId::u256(self.db)), space);
         let zero = self.alloc_word_const(bb, 0);
