@@ -12,7 +12,8 @@ use super::crypto::keccak256
 pub fn checksum_address(_ address: Address) -> DynString {
     let lower = text::hex(address.inner, 20)
     let hash = keccak256(lower.payload_span())
-    let data = ptr::alloc_bytes(42)
+    let checksummed = DynString::zeroed(42)
+    let data = checksummed.payload_span().ptr()
     unsafe {
         *data = 48
         *ptr::offset_bytes(data, 1) = 120
@@ -24,7 +25,7 @@ pub fn checksum_address(_ address: Address) -> DynString {
         let cased = if uppercase { digit - 32 } else { digit }
         unsafe { *ptr::offset_bytes(digits, i) = cased }
     }
-    unsafe { DynString::from_payload(source: ptr::MemSpan::from_raw_parts(ptr: data, len: 42)) }
+    checksummed
 }
 
 /// Parses `0x` and 40 hex digits, or the 40 digits alone, as an address

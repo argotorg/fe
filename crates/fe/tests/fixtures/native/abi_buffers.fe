@@ -1,11 +1,16 @@
-// Makes `DynString`, `Bytes` and `DynArray` values every way that allocates one and
-// drops them each round. The process stays small however many rounds run, and `free`
-// aborts on a value freed twice or not from its start, so this checks that each value
-// owns its allocation and frees it once.
+// Makes `DynString`, `Bytes` and `DynArray` values every way that allocates one, and
+// calls what takes a scratch buffer in `core` and `std`. Run under an allocator that
+// requires each allocation to be freed exactly once and unmaps it when it is, so this
+// also checks that nothing reads a value after it is freed.
 use core::abi::{Bytes, Decode, DynString, encode_alloc, store_word}
 use core::ptr::{self, MemArray, MemBuffer, MemVec}
-use core::text::{concat, decimal}
+use core::text::{concat, decimal, decode_base58, decode_base64}
 use std::abi::{DynArray, Sol, bytes_from_word, bytes_from_words, bytes_from_words_prefix, canonical_dyn_array, dyn_array_from}
+use std::evm::{Address, checksum_address, merkle, rlp}
+use std::evm::clones::clone_initcode
+use std::evm::crypto::keccak256
+use std::evm::layout::mapping_slot
+use std::evm::packed::keccak_packed
 
 const GREETING: DynString = "a constant string of more than thirty-one bytes"
 const PAIR: (DynString, u32) = ("a string in a constant tuple of more than thirty-one bytes", 1)
@@ -77,6 +82,11 @@ fn arrays(_ r: u32) -> usize {
     parts.push(decimal(1))
     parts.push(decimal(23))
     let slice: DynArray<DynString> = DynArray::from_slice(parts.as_slice())
+    var moved_parts: MemVec<DynString> = MemVec::new()
+    moved_parts.push(decimal(1))
+    moved_parts.push(decimal(23))
+    let from_vec = DynArray::from_mem_vec(moved_parts)
+    core::assert(from_vec.get(1).len() == 2)
     var total = 0
     // Each element is a decoded temporary, read across a later allocation.
     for ref row in list_copy {
@@ -119,14 +129,48 @@ fn encoded(_ r: u32) -> usize {
     decoded_names[1].len() + decoded_parts[1].len() + decoded_rows[0].len()
 }
 
+fn scratch_buffers(_ r: u32) {
+    let word = r as u256
+    // A decoder frees what it has built when it rejects its input.
+    core::assert(decode_base64("aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgc3RyaW5nIQ==").unwrap().len() == 34)
+    core::assert(decode_base64("aGVs!G8g").is_none())
+    core::assert(decode_base58("3mJr7AoUXx2Wqd").unwrap().len() > 0)
+    core::assert(decode_base58("3mJr0").is_none())
+
+    let text: DynString = "seven b"
+    let encoded_text = encode_alloc<Sol, (DynString,)>((text,))
+    let decoded_text = <(String<7>,) as Decode<Sol>>::decode_from(encoded_text.span(), 0)
+    core::assert(decoded_text.0 == "seven b")
+
+    let payload = MemBuffer::new(40)
+    let list = rlp::encode_list([
+        rlp::encode_bytes(payload.span()),
+        rlp::encode_uint((1 << 255) + word),
+        rlp::encode_address(Address::new(word)),
+    ])
+    core::assert(list.len() == 2 + 41 + 33 + 21)
+    core::assert(checksum_address(Address::new(word)).len() == 42)
+
+    let nodes: DynArray<u256> = dyn_array_from([word, 7])
+    let pair = merkle::hash_pair_sorted(word, 7)
+    core::assert(merkle::process_proof(proof: nodes, leaf: 7) == merkle::hash_pair_sorted(pair, 7))
+    core::assert(merkle::process_indexed_proof(proof: nodes, leaf: 7, index: 0) != 0)
+    core::assert(mapping_slot(word, 7 as u256) != keccak_packed((word, word)))
+
+    let code = clone_initcode(Address::new(0))
+    core::assert(code.len() == 55)
+    core::assert(keccak256(code.span()) == 0x3df3da56b3ea8de108a8606dea387d6535fca78db07a7d90f7a05ad323dd43c7)
+}
+
 pub fn main() -> i32 {
     var r: u32 = 0
-    while r < 500000 {
+    while r < 3 {
         core::assert(strings(r) == 46 + 20 + 3 + 58 + 37 + 47)
         core::assert(bytes(r) == 40 + 5 + 32 + 64 + 33 + 2)
         core::assert(arrays(r) == 32 + 32 + 3 + 0 + 3 + 1 + 2)
         core::assert(records(r) == 5 + 5 + 1)
         core::assert(encoded(r) == 40 + 32 + 1)
+        scratch_buffers(r)
         r += 1
     }
     0

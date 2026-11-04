@@ -729,11 +729,11 @@ fn decode_string_payload_after_head<A: Abi, I: ByteInput, const N: usize>(_ inpu
         } else {
             // The input may end immediately after the last string byte.
             // Load from a full scratch word only after a bounded copy.
-            let scratch = ptr::alloc_bytes(32)
+            let scratch = unsafe { ptr::FixedMemBuffer<32>::alloc_uninit() }
             unsafe {
-                store_word(ptr: scratch, value: 0)
-                input.copy_to_memory(dest: scratch, src_offset: data_start, len: data_len)
-                mem_word_at(base: scratch, offset: 0) >> ((32 - data_len) * 8)
+                store_word(ptr: scratch.ptr(), value: 0)
+                input.copy_to_memory(dest: scratch.ptr(), src_offset: data_start, len: data_len)
+                mem_word_at(base: scratch.ptr(), offset: 0) >> ((32 - data_len) * 8)
             }
         }
     }
@@ -965,6 +965,7 @@ impl DynString {
     }
 
     /// Allocates a string of `len` zero bytes, to be filled through `payload_span`.
+    #[inline(always)]
     pub fn zeroed(_ len: usize) -> Self {
         let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(ptr::allocation_len(size))
@@ -1105,6 +1106,21 @@ impl Bytes {
             super::panic()
         }
         Self::from_validated_abi_tail(data, len, size)
+    }
+
+    /// Allocates `len` zero bytes, to be filled through `payload_span`.
+    #[inline(always)]
+    pub fn zeroed(_ len: usize) -> Self {
+        let size = 32 + round_up_words(len as u256)
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
+        unsafe {
+            ptr::zero_bytes(data, word_to_usize(size))
+            store_word(ptr: data, value: len as u256)
+        }
+        // The tail was allocated and written above.
+        unsafe {
+            Self::from_validated_abi_tail(data: data, len: len, size: size)
+        }
     }
 
     pub fn from_payload(source: ptr::MemSpan) -> Self {

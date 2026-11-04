@@ -193,7 +193,8 @@ pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
         padding = if input.byte_at(len - 2) == 61 { 2 } else { 1 }
     }
     let out_len = len / 4 * 3 - padding
-    let out = ptr::alloc_bytes(out_len)
+    let decoded = Bytes::zeroed(out_len)
+    let out = decoded.payload_span().ptr()
     var i: usize = 0
     var j: usize = 0
     while i < len {
@@ -217,7 +218,7 @@ pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
         i += 4
         j += 3
     }
-    Option::Some(Bytes::from_payload(source: unsafe { MemSpan::from_raw_parts(ptr: out, len: out_len) }))
+    Option::Some(decoded)
 }
 
 fn base64_digit(_ value: u8) -> u8 {
@@ -356,8 +357,9 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         }
         bytes += (used - 1) * 24
     }
-    let out = ptr::alloc_bytes(zeros + bytes)
-    unsafe { ptr::zero_bytes(out, zeros) }
+    // The leading `zeros` bytes stay zero.
+    let decoded = Bytes::zeroed(zeros + bytes)
+    let out = decoded.payload_span().ptr()
     var pos = zeros + bytes
     var k: usize = 0
     while pos > zeros {
@@ -371,8 +373,7 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         }
         k += 1
     }
-    let decoded = unsafe { MemSpan::from_raw_parts(ptr: out, len: zeros + bytes) }
-    Option::Some(Bytes::from_payload(source: decoded))
+    Option::Some(decoded)
 }
 
 // Sets the number in `limbs` (base `base`, least significant limb first,

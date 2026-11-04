@@ -131,7 +131,7 @@ fn initcode_and_prediction_vectors() {
     let code = clones::clone_initcode(Address::new(0x0))
     assert!(code.len() == 55)
     assert!(
-        std::evm::crypto::keccak256(code)
+        std::evm::crypto::keccak256(code.span())
             == 0x3df3da56b3ea8de108a8606dea387d6535fca78db07a7d90f7a05ad323dd43c7,
     )
     assert!(
@@ -148,7 +148,7 @@ fn initcode_and_prediction_vectors() {
     )
     assert!(code.len() == 55)
     assert!(
-        std::evm::crypto::keccak256(code)
+        std::evm::crypto::keccak256(code.span())
             == 0xe7971b4c6044c35b70d5a08ab3392419fc58f7b81f0d040f361f845230bfc4f6,
     )
     assert!(
@@ -165,7 +165,7 @@ fn initcode_and_prediction_vectors() {
     )
     assert!(code.len() == 55)
     assert!(
-        std::evm::crypto::keccak256(code)
+        std::evm::crypto::keccak256(code.span())
             == 0xda14c3403f303db48130d52dd0067668bffdab48a7bca92d8aad6944f62ea9f2,
     )
     assert!(
