@@ -133,7 +133,7 @@ fn native_executable_rejects_main_outside_the_root_scope() {
     assert!(
         error
             .to_string()
-            .contains("requires `pub fn main() -> i32`"),
+            .contains("requires `pub fn main()` or `pub fn main() -> i32`"),
         "unexpected error: {error}"
     );
 }
@@ -180,7 +180,7 @@ fn native_object_emission_requires_c_main_signature() {
     assert!(
         error
             .to_string()
-            .contains("native executable `main` must have signature `pub fn main() -> i32`"),
+            .contains("native executable `main` must have signature `pub fn main()` or"),
         "unexpected error: {error}"
     );
 }
@@ -364,15 +364,15 @@ fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
     for (signature, expected) in [
         (
             "(argc: i32, argv: **u8) -> i32",
-            "native executable output requires `pub fn main() -> i32`",
+            "native executable output requires `pub fn main()` or `pub fn main() -> i32`",
         ),
         (
             "(argc: i32) -> i32",
-            "native executable output requires `pub fn main() -> i32`",
+            "native executable output requires `pub fn main()` or `pub fn main() -> i32`",
         ),
         (
             "(argc: i32) -> i32 uses (greeting: Greeting)",
-            "native executable output requires `pub fn main() -> i32`",
+            "native executable output requires `pub fn main()` or `pub fn main() -> i32`",
         ),
         ("() -> u32", "native executable `main` must have signature"),
     ] {

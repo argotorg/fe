@@ -3560,6 +3560,31 @@ pub fn main() -> i32 uses (args: Args, fs: mut Fs) {
 }
 
 #[test]
+fn native_main_without_a_result_exits_with_zero() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("greet.fe");
+    fs::write(
+        &source,
+        r#"
+use std::env::Args
+use std::io::Stdout
+
+pub fn main() uses (out: mut Stdout, args: Args) {
+    println!("args: ", args.count())
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("greet")).arg("x").output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(result.stdout, b"args: 2\n", "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_functions_named_like_the_compilers_symbols_keep_working() {
     // Functions share an object namespace with the globals behind `std::env`.
     let temp = tempdir().unwrap();

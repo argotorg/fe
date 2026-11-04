@@ -83,6 +83,19 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         issue: ExportIssue,
     },
+    /// A value that an `#[unsafe(export)]` or `extern` function can't pass to
+    /// or from C.
+    InvalidCAbi {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        mutable: bool,
+        exported: bool,
+    },
+    /// A native `main` that doesn't return `i32` or nothing.
+    InvalidMainReturn {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
     /// A mode on a product parameter's type, whose parts carry the modes;
     /// with `shape`, on an associated shape's, which is named at its mode.
     ModeOnProduct {
@@ -379,6 +392,8 @@ impl TyLowerDiag<'_> {
             Self::ProductParamNotDestructured { .. } => 75,
             Self::DestructuredParamWithoutBody(_) => 76,
             Self::InvalidExport { .. } => 88,
+            Self::InvalidCAbi { .. } => 90,
+            Self::InvalidMainReturn { .. } => 91,
             Self::MaybeMutWithoutResult(_) => 77,
             Self::MaybeMutRowEffect { .. } => 78,
             Self::MisplacedSpread(_) => 80,

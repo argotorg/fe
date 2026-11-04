@@ -1772,6 +1772,49 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::InvalidCAbi {
+                span,
+                ty,
+                mutable,
+                exported,
+            } => {
+                let prefix = if *mutable { "mut " } else { "" };
+                let kind = if *exported {
+                    "an `#[unsafe(export)]`"
+                } else {
+                    "an `extern`"
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("{kind} function cannot pass this type to or from C"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{prefix}{}` has no C form", ty.pretty_print(db)),
+                        span: span.resolve(db),
+                    }],
+                    notes: vec![
+                        "C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` \
+                         and raw pointers, and may return nothing"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+            Self::InvalidMainReturn { span, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "a native `main` must return `i32` or nothing".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("`main` returns `{}`", ty.pretty_print(db)),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "the `i32` is the process's exit status, and a `main` that returns nothing \
+                     exits with 0"
+                        .to_string(),
+                ],
+                error_code,
+            },
             Self::InvalidExport { span, issue } => {
                 let (message, label, note) = match issue {
                     ExportIssue::NotPub => (

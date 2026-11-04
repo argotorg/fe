@@ -958,18 +958,24 @@ fn prepare_native_main(
         .main_entry(db)
         .ok_or_else(|| LowerError::Internal("native entry disappeared after lowering".into()))?;
     let i32_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::I32)));
-    let valid = func.return_ty(db) == i32_ty;
+    let returns_status = func.return_ty(db) == i32_ty;
+    // An SP1 guest's runtime reads an exit status.
+    let returns_nothing =
+        matches!(target, NativeTarget::Host) && func.return_ty(db) == TyId::unit(db);
     module.ctx.func_sig(main, |signature| {
-        if valid && signature.args().is_empty() && signature.ret_tys() == [Type::I32] {
+        if signature.args().is_empty()
+            && ((returns_status && signature.ret_tys() == [Type::I32])
+                || (returns_nothing && signature.ret_tys().is_empty()))
+        {
             Ok(())
         } else {
-            let executable = match target {
-                NativeTarget::Host => "native",
+            let (executable, expected) = match target {
+                NativeTarget::Host => ("native", "`pub fn main()` or `pub fn main() -> i32`"),
                 #[cfg(feature = "sp1")]
-                NativeTarget::Sp1 => "SP1",
+                NativeTarget::Sp1 => ("SP1", "`pub fn main() -> i32`"),
             };
             Err(LowerError::Unsupported(format!(
-                "{executable} executable `main` must have signature `pub fn main() -> i32`, found lowered `main({}) -> {}`",
+                "{executable} executable `main` must have signature {expected}, found lowered `main({}) -> {}`",
                 format_native_types(signature.args(), &module),
                 format_native_types(signature.ret_tys(), &module)
             )))
@@ -1031,8 +1037,14 @@ fn prepare_native_main(
         let address = fb.make_global_value(global);
         fb.insert_inst_no_result(Mstore::new(inst_set, address, value, ty));
     }
-    let result = fb.insert_inst(Call::new(inst_set, main, vec![].into()), Type::I32);
-    fb.insert_inst_no_result(Return::new_single(inst_set, result));
+    let call = Call::new(inst_set, main, vec![].into());
+    let status = if returns_nothing {
+        fb.insert_inst_no_result(call);
+        fb.make_imm_value(0i32)
+    } else {
+        fb.insert_inst(call, Type::I32)
+    };
+    fb.insert_inst_no_result(Return::new_single(inst_set, status));
     fb.seal_all();
     fb.finish();
     Ok(builder.build())

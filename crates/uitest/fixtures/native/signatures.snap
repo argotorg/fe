@@ -1,0 +1,100 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: "diagnostics(&mut db, path, content)"
+input_file: fixtures/native/signatures.fe
+---
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ signatures.fe:10:20
+   │
+10 │     fn narrow(_ a: u8) -> i32
+   │                    ^^ `u8` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ signatures.fe:11:18
+   │
+11 │     fn flag() -> bool
+   │                  ^^^^ `bool` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ signatures.fe:12:18
+   │
+12 │     fn wide(_ a: u256) -> u256
+   │                  ^^^^ `u256` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ signatures.fe:12:27
+   │
+12 │     fn wide(_ a: u256) -> u256
+   │                           ^^^^ `u256` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ signatures.fe:13:21
+   │
+13 │     fn wrapped(_ a: Wrapper) -> Wrapper
+   │                     ^^^^^^^ `Wrapper` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ signatures.fe:13:33
+   │
+13 │     fn wrapped(_ a: Wrapper) -> Wrapper
+   │                                 ^^^^^^^ `Wrapper` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ signatures.fe:14:18
+   │
+14 │     fn pair(_ a: (i32, i32))
+   │                  ^^^^^^^^^^ `(i32, i32)` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `#[unsafe(export)]` function cannot pass this type to or from C
+   ┌─ signatures.fe:21:29
+   │
+21 │ pub fn exported_narrow(_ a: u8, _ b: bool) -> u8 { a }
+   │                             ^^ `u8` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `#[unsafe(export)]` function cannot pass this type to or from C
+   ┌─ signatures.fe:21:38
+   │
+21 │ pub fn exported_narrow(_ a: u8, _ b: bool) -> u8 { a }
+   │                                      ^^^^ `bool` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `#[unsafe(export)]` function cannot pass this type to or from C
+   ┌─ signatures.fe:21:47
+   │
+21 │ pub fn exported_narrow(_ a: u8, _ b: bool) -> u8 { a }
+   │                                               ^^ `u8` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `#[unsafe(export)]` function cannot pass this type to or from C
+   ┌─ signatures.fe:24:29
+   │
+24 │ pub fn exported_borrow(_ a: mut i64) { a += 1 }
+   │                             ^^^^^^^ `mut i64` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0091]: a native `main` must return `i32` or nothing
+  ┌─ signatures.fe:4:18
+  │
+4 │ pub fn main() -> u8 { 0 }
+  │                  ^^ `main` returns `u8`
+  │
+  = the `i32` is the process's exit status, and a `main` that returns nothing exits with 0
