@@ -32,6 +32,7 @@ use common::{
 use contract_harness::{EvmTraceOptions, ExecutionOptions, RuntimeInstance, U256};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use driver::DriverDataBase;
+use driver::project_target::dependency_target_mismatch;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{build_runtime_package, build_test_runtime_package, format_runtime_package};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1917,6 +1918,17 @@ fn prepare_tests_ingot(
         };
     }
 
+    if let Some(mismatch) = dependency_target_mismatch(db, &ingot_url) {
+        let _ = writeln!(output, "Error: {mismatch}");
+        if let Some(report) = report {
+            write_report_error(report, "compilation_errors.txt", &mismatch);
+        }
+        return SuitePreparation {
+            results: suite_error_result(suite, "compile", mismatch),
+            single_jobs: Vec::new(),
+        };
+    }
+
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
         return SuitePreparation {
             results: suite_error_result(
@@ -2531,7 +2543,7 @@ fn suite_name_for_path(path: &Utf8PathBuf) -> String {
     }
 }
 
-fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Result<Vec<Utf8PathBuf>, String> {
+pub(crate) fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Result<Vec<Utf8PathBuf>, String> {
     let mut expanded = Vec::new();
     let mut seen: FxHashSet<String> = FxHashSet::default();
 

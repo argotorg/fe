@@ -179,8 +179,8 @@ A command compiles for one target, so the workspace members it selects can't set
 they do, it errors: select one with `--ingot`, or pass `--backend`. `fe test` paths can't either. An
 ingot without a target works on every target, and takes the one the others set.
 
-A dependency that sets a target must match the ingot that depends on it, or the command's target
-when the ingot sets none.
+Every dependency of a compiled ingot that sets a target must match the command's. Other commands,
+such as `fe tree`, don't check targets.
 
 The language server still checks every project for the EVM.
 

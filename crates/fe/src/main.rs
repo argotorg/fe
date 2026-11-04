@@ -27,12 +27,12 @@ use check::check;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use common::compilation::{Os, Target};
+use driver::project_target::{TargetConflict, project_target};
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
 use crate::test::TestDebugOptions;
-use crate::workspace_ingot::project_target;
 
 // mimalloc serves the compiler's many small allocations faster than the system
 // allocator.
@@ -693,6 +693,13 @@ pub struct DevTraceInputArgs {
     pub format: TraceReportFormat,
 }
 
+fn workspace_target_error(conflict: TargetConflict) -> String {
+    format!(
+        "workspace members target different machines: {conflict}; select one with `--ingot`, or \
+         pass `--backend`"
+    )
+}
+
 /// The backend `--backend` names, or the one for the target in `fe.toml`.
 fn resolve_backend(
     flag: Option<BuildBackend>,
@@ -703,6 +710,7 @@ fn resolve_backend(
     flag.map_or_else(
         || {
             project_target(path, ingot, standalone)
+                .map_err(workspace_target_error)
                 .and_then(|target| BuildBackend::for_target(target.unwrap_or_default()))
         },
         Ok,
@@ -719,10 +727,15 @@ fn resolve_test_backend(
     if let Some(flag) = flag {
         return flag.into();
     }
-    paths
+    // A path that doesn't expand is reported when the tests run.
+    test::expand_test_paths(paths)
+        .unwrap_or_else(|_| paths.to_vec())
         .iter()
         .try_fold(None, |first: Option<Target>, path| {
-            match (first, project_target(path, ingot, false)?) {
+            match (
+                first,
+                project_target(path, ingot, false).map_err(workspace_target_error)?,
+            ) {
                 (Some(first), Some(other)) if first != other => Err(format!(
                     "test paths target both `{}` and `{}`; test them separately, or pass `--backend`",
                     first.name(),

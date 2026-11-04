@@ -27,7 +27,12 @@ fn answers() { assert!(answer() == 0) }
 
 const EVM_ONLY: &str = r#"
 #[cfg(target = "evm")]
-pub fn answer() -> u256 { 0 }
+fn answer() -> u256 { 0 }
+
+pub fn called() -> u256 { answer() }
+
+#[test]
+fn answers() { assert!(answer() == 0) }
 "#;
 
 fn write_ingot(dir: &Path, name: &str, config: &str, source: &str) {
@@ -202,25 +207,31 @@ fn test_paths_must_agree_on_the_target() {
 }
 
 #[test]
-fn dependencies_must_match_the_target() {
+fn dependencies_must_match_the_commands_target() {
     let temp = tempdir().unwrap();
+    let dependency = "[dependencies]\nlib = { path = \"../lib\" }\n";
+    let tool = temp.path().join("tool");
     write_ingot(
         &temp.path().join("lib"),
         "lib",
         "target = \"evm\"\n",
         EVM_ONLY,
     );
-    let dependency = "[dependencies]\nlib = { path = \"../lib\" }\n";
     write_ingot(
-        &temp.path().join("tool"),
+        &tool,
         "tool",
         &format!("target = \"native\"\n{dependency}"),
         NATIVE_ONLY,
     );
-    assert_err(
-        &fe(&temp.path().join("tool"), &["check"]),
-        "Dependency 'lib'",
-    );
+    let mismatch = "but this command compiles for `native`";
+    for command in ["check", "build", "test"] {
+        assert_err(&fe(&tool, &[command]), mismatch);
+    }
+
+    // The command's target applies to an ingot that sets none.
+    write_ingot(&tool, "tool", dependency, "pub fn answer() -> i32 { 0 }\n");
+    assert_ok(&fe(&tool, &["check"]));
+    assert_err(&fe(&tool, &["check", "--backend", "native"]), mismatch);
 
     // An ingot without a target compiles for the command's.
     write_ingot(
@@ -229,7 +240,99 @@ fn dependencies_must_match_the_target() {
         "",
         "pub fn answer() -> i32 { 0 }\n",
     );
-    assert_ok(&fe(&temp.path().join("tool"), &["check"]));
+    assert_ok(&fe(&tool, &["check", "--backend", "native"]));
+}
+
+#[test]
+fn only_compiled_ingots_must_match_the_commands_target() {
+    let temp = tempdir().unwrap();
+    write_workspace(temp.path(), "members = [\"tool\", \"other\", \"lib\"]\n");
+    write_ingot(
+        &temp.path().join("tool"),
+        "tool",
+        "target = \"native\"\n",
+        NATIVE_ONLY,
+    );
+    write_ingot(
+        &temp.path().join("other"),
+        "other",
+        "[dependencies]\nlib = { path = \"../lib\" }\n",
+        "pub fn answer() -> u256 { 0 }\n",
+    );
+    write_ingot(
+        &temp.path().join("lib"),
+        "lib",
+        "target = \"evm\"\n",
+        EVM_ONLY,
+    );
+    assert_ok(&fe(temp.path(), &["check", "--ingot", "tool"]));
+    assert_ok(&fe(temp.path(), &["test", "--ingot", "tool"]));
+}
+
+#[test]
+fn printing_the_tree_ignores_targets() {
+    let temp = tempdir().unwrap();
+    write_ingot(
+        &temp.path().join("lib"),
+        "lib",
+        "target = \"native\"\n",
+        NATIVE_ONLY,
+    );
+    let tool = temp.path().join("tool");
+    write_ingot(
+        &tool,
+        "tool",
+        "[dependencies]\nlib = { path = \"../lib\" }\n",
+        "pub fn answer() -> i32 { 0 }\n",
+    );
+    assert_ok(&fe(&tool, &["tree"]));
+}
+
+#[test]
+fn workspaces_resolve_from_outside_their_root() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("project");
+    write_workspace(&root, "members = [\"tool\", \"contract\"]\n");
+    write_ingot(
+        &root.join("tool"),
+        "tool",
+        "target = \"native\"\n",
+        NATIVE_ONLY,
+    );
+    write_ingot(
+        &root.join("contract"),
+        "contract",
+        "target = \"evm\"\n",
+        EVM_ONLY,
+    );
+    assert_ok(&fe(temp.path(), &["check", "project", "--ingot", "tool"]));
+    assert_err(
+        &fe(temp.path(), &["check", "project"]),
+        "workspace members target different machines",
+    );
+}
+
+#[test]
+fn test_globs_use_the_targets_of_their_matches() {
+    let temp = tempdir().unwrap();
+    write_ingot(
+        &temp.path().join("projects/tool"),
+        "tool",
+        "target = \"native\"\n",
+        NATIVE_ONLY,
+    );
+    assert_ok(&fe(temp.path(), &["test", "projects/*"]));
+
+    write_ingot(
+        &temp.path().join("projects/contract"),
+        "contract",
+        "target = \"evm\"\n",
+        EVM_ONLY,
+    );
+    assert_err(
+        &fe(temp.path(), &["test", "projects/*"]),
+        "test paths target both",
+    );
 }
 
 #[test]

@@ -22,6 +22,7 @@ use common::{
 };
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
+use driver::project_target::dependency_target_mismatch;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use hir::lower::map_file_to_mod;
 use mir::build_runtime_package;
@@ -776,6 +777,10 @@ fn build_directory(
                 eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
                 return true;
             }
+            if let Some(mismatch) = dependency_target_mismatch(db, &url) {
+                eprintln!("Error: {mismatch}");
+                return true;
+            }
             let default_out_dir = canonical.join("out");
             let out_dir = out_dir.cloned().unwrap_or(default_out_dir);
             let report_dir = report_scope_dir(
@@ -1067,6 +1072,10 @@ fn analyze_ingot_build_artifacts(
     ingot_url: &Url,
     include_abi_artifact_names: bool,
 ) -> Result<IngotBuildAnalysis, ()> {
+    if let Some(mismatch) = dependency_target_mismatch(db, ingot_url) {
+        eprintln!("Error: {mismatch}");
+        return Err(());
+    }
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
         eprintln!("Error: Could not resolve ingot from directory");
         return Err(());
