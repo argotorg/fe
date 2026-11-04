@@ -63,5 +63,5 @@ uses (ctx: Ctx, call: mut Call)
         }
         results.push(ReturnData::new().to_bytes())
     }
-    DynArray::from_slice(results.as_slice())
+    DynArray::from_mem_vec(results)
 }

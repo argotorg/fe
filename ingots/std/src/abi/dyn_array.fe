@@ -21,7 +21,8 @@ use core::abi::{
 use core::default::Default
 use core::iter::{Bidirectional, Collection}
 use ingot::abi::Sol
-use core::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan}
+use core::mem::forget
+use core::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan, MemVec}
 use core::ops::{Drop, Index, Len, WrappingAdd, WrappingSub}
 use core::option::Option
 use ingot::evm::panic::{PANIC_INDEX_OUT_OF_BOUNDS, Panic}
@@ -188,26 +189,35 @@ impl<T> DynArray<T> {
         where T: Encode<Sol> + AbiSize + Clone
     {
         let len = values.len()
-        let heads = len as u256 * abi_field_head_size<T>()
-        var size = 32 + heads
-        if T::IS_DYNAMIC {
-            for ref value in values {
-                size += value.payload_size()
-            }
-        }
-        let data = ptr::alloc_bytes(ptr::allocation_len(size))
-        unsafe {
-            ptr::zero_bytes(data, size.downcast_unchecked())
-            store_word(ptr: data, value: len as u256)
-        }
-        // The zeroed payload after the length word, which only this encoding
-        // writes.
+        let (data, size) = canonical_tail(values)
         let out = unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32), len: size - 32) }
-        var tails = out.tail(heads)
+        var tails = out.tail(len as u256 * abi_field_head_size<T>())
         for (i, ref value) in values.enumerate() {
             tails = encode_field<Sol, T>(value.clone(), out, head_pos: i as u256 * abi_field_head_size<T>(), tails)
         }
         unsafe { DynArray::from_abi_tail(data, len, size) }
+    }
+
+    /// An ABI array of `values`, in canonical layout. The elements move into
+    /// the encoding, which spares the clones `from_slice` makes.
+    pub fn from_mem_vec(_ values: own MemVec<T>) -> Self
+        where T: Encode<Sol> + AbiSize
+    {
+        let len = values.len()
+        let (data, size) = canonical_tail(values.as_slice())
+        let out = unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32), len: size - 32) }
+        var tails = out.tail(len as u256 * abi_field_head_size<T>())
+        for i in 0..len {
+            // An element moves out of raw memory, which destroys nothing.
+            tails = encode_field<Sol, T>(unsafe { *values.as_slice().ptr_at(i) }, out, head_pos: i as u256 * abi_field_head_size<T>(), tails)
+        }
+        // The elements are gone, so only the allocation is left to free.
+        let elements = values.ptr()
+        forget(values)
+        unsafe {
+            ptr::dealloc(elements)
+            DynArray::from_abi_tail(data, len, size)
+        }
     }
 }
 
@@ -247,6 +257,25 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
     fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
         decode_frame_from<A, Self, I>(input, pos, input_len)
     }
+}
+
+/// A zeroed tail for `values` in canonical layout, with its length word written,
+/// and the tail's size. Only the encoding of `values` writes the rest of it.
+fn canonical_tail<T>(_ values: MemSlice<T>) -> (*u8, u256)
+    where T: AbiSize
+{
+    var size = 32 + values.len() as u256 * abi_field_head_size<T>()
+    if T::IS_DYNAMIC {
+        for ref value in values {
+            size += value.payload_size()
+        }
+    }
+    let data = ptr::alloc_bytes(ptr::allocation_len(size))
+    unsafe {
+        ptr::zero_bytes(data, size.downcast_unchecked())
+        store_word(ptr: data, value: values.len() as u256)
+    }
+    (data, size)
 }
 
 /// The array whose payload starts at `pos`, whose length word the caller
