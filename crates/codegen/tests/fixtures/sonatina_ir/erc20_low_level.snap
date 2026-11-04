@@ -204,7 +204,7 @@ func private %caller() -> @layout_0 {
         return v3;
 }
 
-func private %capacity(noalias v0.objref<@layout_1>) -> i256 {
+func private %capacity(noalias nocapture v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -230,7 +230,7 @@ func private %cast__g5f1e(v0.i256) -> i256 {
         return v0;
 }
 
-func private %codecopy(noalias v0.objref<@layout_1>, v1.i256, v2.i256, v3.i256) {
+func private %codecopy(noalias nocapture v0.objref<@layout_1>, v1.i256, v2.i256, v3.i256) {
     block0:
         jump block1;
 
@@ -573,7 +573,7 @@ func private %init() {
         jump block4;
 }
 
-func private %keccak256(noalias v0.objref<@layout_3>) -> i256 {
+func private %keccak256(noalias nocapture v0.objref<@layout_3>) -> i256 {
     block0:
         jump block1;
 
@@ -584,7 +584,7 @@ func private %keccak256(noalias v0.objref<@layout_3>) -> i256 {
         return v4;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_35af(noalias v0.objref<@layout_3>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_35af(noalias nocapture v0.objref<@layout_3>) -> i256 {
     block0:
         jump block1;
 
@@ -594,7 +594,7 @@ func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_35af(noalias v0.obj
         return v4;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias v0.objref<@layout_3>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias nocapture v0.objref<@layout_3>) -> i256 {
     block0:
         jump block1;
 
@@ -604,7 +604,7 @@ func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias v0.obj
         return v4;
 }
 
-func private %impl_MemBuffer__len(noalias v0.objref<@layout_1>) -> i256 {
+func private %impl_MemBuffer__len(noalias nocapture v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -858,7 +858,7 @@ func private %new_uninit(v0.i256) -> @layout_1 {
         return v9;
 }
 
-func private %prepare_copy_destination(noalias v0.objref<@layout_1>, v1.i256, v2.i256) -> i256 {
+func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_1>, v1.i256, v2.i256) -> i256 {
     block0:
         jump block1;
 
@@ -920,7 +920,7 @@ func private %prepare_copy_destination(noalias v0.objref<@layout_1>, v1.i256, v2
         jump block8;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321(noalias v0.objref<@layout_3>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321(noalias nocapture v0.objref<@layout_3>) -> i256 {
     block0:
         jump block1;
 
@@ -930,7 +930,7 @@ func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321(noalias v0.obj
         return v4;
 }
 
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_445a(noalias v0.objref<@layout_1>) -> i256 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_445a(noalias nocapture v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -949,7 +949,7 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_89bf(v0.@layout_1) -> i25
         return v3;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_c254(noalias v0.objref<@layout_3>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_c254(noalias nocapture v0.objref<@layout_3>) -> i256 {
     block0:
         jump block1;
 
@@ -959,7 +959,7 @@ func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_c254(noalias v0.obj
         return v4;
 }
 
-func private %return_data(noalias v0.objref<@layout_3>) {
+func private %return_data(noalias nocapture v0.objref<@layout_3>) {
     block0:
         jump block1;
 
@@ -969,7 +969,7 @@ func private %return_data(noalias v0.objref<@layout_3>) {
         evm_return v2 v3;
 }
 
-func private %revert(noalias v0.objref<@layout_3>) {
+func private %revert(noalias nocapture v0.objref<@layout_3>) {
     block0:
         jump block1;
 
@@ -1139,7 +1139,7 @@ func inline(always) private %set__g4007(v0.i256, v1.@layout_2, v2.i256) {
         return;
 }
 
-func private %set_len(noalias v0.objref<@layout_1>, v1.i256) {
+func private %set_len(noalias nocapture v0.objref<@layout_1>, v1.i256) {
     block0:
         jump block1;
 

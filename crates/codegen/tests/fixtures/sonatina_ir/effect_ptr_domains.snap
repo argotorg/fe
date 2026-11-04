@@ -68,7 +68,7 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a2
         return;
 }
 
-func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a78(noalias v0.objref<@layout_0>) {
+func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a78(noalias nocapture v0.objref<@layout_0>) {
     block0:
         jump block1;
 

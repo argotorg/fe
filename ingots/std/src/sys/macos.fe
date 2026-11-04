@@ -1,0 +1,59 @@
+#![cfg(target_os = "macos")]
+/// AArch64 macOS's layouts and values, with 64-bit inodes.
+use core::MemSpan
+
+extern {
+    fn __error() -> *i32
+}
+
+pub fn errno_location() -> *i32 {
+    unsafe { __error() }
+}
+
+// `struct stat` and `struct dirent`.
+pub fn stat_mode(_ stat: MemSpan) -> u32 {
+    stat.read_le<u16>(4) as u32
+}
+
+pub fn stat_size(_ stat: MemSpan) -> u64 {
+    stat.read_le<u64>(96)
+}
+
+pub const DIRENT_TYPE: usize = 20
+pub const DIRENT_NAME: usize = 21
+
+// `clock_gettime`'s clock that never goes back.
+pub const CLOCK_MONOTONIC: i32 = 6
+
+// `posix_spawn`'s file actions and attributes, which are pointers.
+pub const FILE_ACTIONS_SIZE: usize = 8
+pub const SPAWNATTR_SIZE: usize = 8
+
+const POSIX_SPAWN_CLOEXEC_DEFAULT: i32 = 0x4000
+
+extern {
+    fn posix_spawn_file_actions_addinherit_np(_ actions: *u8, _ fd: i32) -> i32
+    // `flags` is a `short`, which the caller extends to 32 bits.
+    fn posix_spawnattr_setflags(_ attr: *u8, _ flags: i32) -> i32
+}
+
+/// Keeps the child's standard stream `fd` as the parent's, which
+/// `close_other_fds` would close otherwise.
+pub fn inherit_fd(_ actions: *u8, _ fd: i32) -> i32 {
+    unsafe { posix_spawn_file_actions_addinherit_np(actions, fd) }
+}
+
+/// Closes the child's descriptors that no action names.
+pub fn close_other_fds(_ actions: *u8, _ attr: *u8) -> i32 {
+    unsafe { posix_spawnattr_setflags(attr, POSIX_SPAWN_CLOEXEC_DEFAULT) }
+}
+
+// `open` flags.
+pub const O_CREAT: i32 = 0x200
+pub const O_TRUNC: i32 = 0x400
+
+// The bytes a write to a pipe that `poll` finds writable takes at once.
+pub const PIPE_BUF: usize = 512
+
+// The bytes in a unit of `struct rusage`'s `ru_maxrss`.
+pub const MAXRSS_UNIT: u64 = 1

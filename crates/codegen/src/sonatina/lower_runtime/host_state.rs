@@ -1,7 +1,7 @@
-//! The process state the native entry keeps for the host capabilities. The
-//! entry stores its `argc` and `argv` in private globals, and `std::env`
-//! reads them through extern functions the compiler defines here. Outside an
-//! executable's entry, the globals stay zero.
+//! The process state the native host capabilities read, through extern
+//! functions that `std` declares and the compiler defines here. The entry
+//! stores its `argc` and `argv` in private globals, which stay zero outside
+//! an executable's entry; `environ` is the C library's.
 
 use sonatina_ir::{
     Linkage,
@@ -13,29 +13,44 @@ use sonatina_ir::{
 
 use super::{LowerError, LoweringInstSet, ModuleLowerer};
 
-/// A value of the native entry's that the host capabilities read.
+/// A value of the process's that the host capabilities read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HostState {
     Argc,
     Argv,
+    Environ,
 }
 
 impl HostState {
-    pub(crate) const ALL: [Self; 2] = [Self::Argc, Self::Argv];
+    pub(crate) const ALL: [Self; 3] = [Self::Argc, Self::Argv, Self::Environ];
 
-    /// The extern function `std::env` reads the value with.
+    /// The values the native entry stores, in the order of its C arguments.
+    #[cfg(feature = "cranelift")]
+    pub(crate) const ENTRY: [Self; 2] = [Self::Argc, Self::Argv];
+
+    /// The extern function `std` reads the value with.
     pub(crate) fn accessor(self) -> &'static str {
         match self {
             Self::Argc => "__fe_native_argc",
             Self::Argv => "__fe_native_argv",
+            Self::Environ => "__fe_native_environ",
         }
     }
 
-    /// The global the entry stores the value in.
+    /// The global that holds the value.
     pub(crate) fn global(self) -> &'static str {
         match self {
             Self::Argc => "__fe_argc",
             Self::Argv => "__fe_argv",
+            Self::Environ => "environ",
+        }
+    }
+
+    /// The module defines the entry's globals, and the C library `environ`.
+    fn linkage(self) -> Linkage {
+        match self {
+            Self::Argc | Self::Argv => Linkage::Private,
+            Self::Environ => Linkage::External,
         }
     }
 
@@ -62,7 +77,7 @@ impl<I: LoweringInstSet> ModuleLowerer<'_, '_, I> {
         let global = self.builder.declare_gv(GlobalVariableData::new(
             state.global().to_string(),
             ty,
-            Linkage::Private,
+            state.linkage(),
             false,
             None,
         ));

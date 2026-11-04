@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use num_bigint::BigUint;
@@ -531,7 +531,7 @@ pub fn main() -> i32 {
                 .filter(|line| line.starts_with("func") && line.contains("bump"))
                 .collect();
             assert!(
-                matches!(bumps[..], [bump] if bump.contains("(noalias v0.objref<")),
+                matches!(bumps[..], [bump] if bump.contains("(noalias nocapture v0.objref<")),
                 "{bumps:?}"
             );
         }
@@ -3030,5 +3030,153 @@ read a\0: InvalidInput (Invalid argument)"#,
         );
         assert_eq!(lines.join("\n"), expected, "O{level}");
         assert_eq!(fs::read(dir.join("a/b/c/file")).unwrap(), b"hello world");
+    }
+}
+
+#[test]
+fn native_process_runs_programs_and_waits_for_them() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/process.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let dir = temp.path().join(format!("scratch-{level}"));
+        fs::create_dir(&dir).unwrap();
+        let result = Command::new(out.join("process"))
+            .arg(&dir)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            r#"echo: exit status 0 (success) [hello 42
+] []
+exit 3: exit status 3 [out
+] [err
+]
+merged: exit status 0 (success) [a
+b
+c
+] []
+killed: signal 9 [] []
+null input: exit status 0 (success) [] []
+null output: exit status 0 (success) [] []
+env: exit status 0 (success) [a b unset
+] []
+dir: exit status 0, the directory: true
+file: exit status 0 (success) [] []
+file holds: to file
+
+file in dir: exit status 0 (success) [] []
+file in dir holds: in dir
+
+cat: exit status 0, 1048576 bytes back, same: true
+both streams: exit status 0, 300000 and 200000 bytes
+input not taken: exit status 0 (success) [] []
+missing program: NotFound (No such file or directory)
+missing dir: NotFound (No such file or directory)
+stdout to stdout: InvalidInput (Invalid argument)
+nul argument: InvalidInput (Invalid argument)
+key with =: InvalidInput (Invalid argument)
+empty key: InvalidInput (Invalid argument)
+timeout: timed out [] []
+timeout with pipes: timed out [] []
+  ended within 2 s: true
+exited before the wait: exit status 0 (success) [hello
+] []
+killed by the wait: timed out [partial
+] []
+endless writer: timed out
+  ended within 2 s: true
+busy: exit status 0, used CPU: true, used memory: true
+wait_any: fast exit status 0 [fast
+]
+wait_any: middle exit status 0 []
+wait_any: slow exit status 0 [slow
+]
+"#,
+            "O{level}"
+        );
+        assert_eq!(fs::read(dir.join("log")).unwrap(), b"to file\n");
+    }
+}
+
+// A pipe made while a standard stream is closed takes its number. The child
+// must still see the stream closed: reading its stdin must not reach its own
+// stdout pipe, which would never end. Inheriting a closed stream is no error.
+#[test]
+fn native_process_pipes_avoid_closed_standard_streams() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("closed.fe");
+    fs::write(
+        &source,
+        r#"
+use std::process::{Command, Redirect, Spawn}
+use std::time::Duration
+
+pub fn main() -> i32 uses (proc: mut Spawn) {
+    let command = Command::new("sh")
+        .arg("-c")
+        .arg("read x; echo done")
+        .stdout(Redirect::Capture)
+        .timeout(Duration::from_secs(5))
+    match proc.output(command) {
+        Result::Ok(output) => {
+            var expected = format!("done")
+            expected.push(10)
+            if output.status.success() && output.stdout.span() == expected.span() { 0 } else { 1 }
+        }
+        Result::Err(_) => 2,
+    }
+}
+"#,
+    )
+    .unwrap();
+    let out = temp.path().join("out");
+    build(&source, &out, "0", &[]);
+    for closed in ["<&-", ">&-", "2>&-", "<&- >&-", "<&- >&- 2>&-"] {
+        let result = Command::new("sh")
+            .arg("-c")
+            .arg(format!("exec \"$0\" {closed}"))
+            .arg(out.join("closed"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{closed}: {result:?}");
+    }
+}
+
+#[test]
+fn native_clock_reads_wall_and_monotonic_time() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/time.fe");
+    let unix_secs = || {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let before = unix_secs();
+        let result = Command::new(out.join("time")).output().unwrap();
+        let after = unix_secs();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        let stdout = String::from_utf8(result.stdout).unwrap();
+        let (now, rest) = stdout
+            .strip_prefix("now ")
+            .unwrap()
+            .split_once('\n')
+            .unwrap();
+        let now = now.parse::<u64>().unwrap();
+        assert!(
+            (before..=after).contains(&now),
+            "O{level}: {now} outside {before}..={after}"
+        );
+        assert_eq!(
+            rest,
+            "spun 20 ms: true\nsince a later reading: 0\n2 s, 2499 ms, 2499750 us, 2499750000 ns\ntrue true\n",
+            "O{level}"
+        );
     }
 }

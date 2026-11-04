@@ -501,6 +501,21 @@ impl<T> MemVec<T> {
         }
     }
 
+    /// Remove element `index` and return it, moving the last element into
+    /// its place.
+    pub fn swap_remove(mut self, _ index: usize) -> T {
+        if index >= self.len {
+            index_out_of_bounds()
+        }
+        let last = self.len - 1
+        self.swap(index, last)
+        // The element leaves the vector before it is moved out.
+        unsafe {
+            self.len = last
+            *elem(self.ptr, last)
+        }
+    }
+
     /// Keep the first `len` elements, destroying the rest.
     pub fn truncate(mut self, _ len: usize) {
         if len > self.len {

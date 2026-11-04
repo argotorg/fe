@@ -9,7 +9,7 @@ type @layout_0 = {i256, i256};
 type @layout_1 = {@layout_0};
 type @layout_2 = {i256, @layout_1};
 
-func private %bump(noalias v0.objref<@layout_1>) {
+func private %bump(noalias nocapture v0.objref<@layout_1>) {
     block0:
         jump block1;
 

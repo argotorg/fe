@@ -6,5 +6,6 @@ pub use fs
 pub use io
 pub use native
 pub use process
+pub use time
 pub use core::text
 pub use sp1

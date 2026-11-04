@@ -530,10 +530,18 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         } else {
             linkage_for_runtime(function.linkage(self.db))
         };
-        Ok(match ret {
+        let mut signature = match ret {
             Some(ret) => Signature::new_single(&symbol, linkage, &args, ret),
             None => Signature::new_unit(&symbol, linkage, &args),
-        })
+        };
+        // No access outlives the call it is passed to: Fe stores, returns
+        // and captures none.
+        for (idx, ty) in args.iter().enumerate() {
+            if ty.is_obj_ref(&self.builder.ctx) {
+                signature.set_nocapture_arg(idx);
+            }
+        }
+        Ok(signature)
     }
 
     fn apply_inline_hint(&self, func_ref: FuncRef, hint: RuntimeInlineHint) {

@@ -68,7 +68,7 @@ func private %fail() {
         jump block4;
 }
 
-func private %len(noalias v0.objref<@layout_0>) -> i256 {
+func private %len(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -119,7 +119,7 @@ func private %new_uninit(v0.i256) -> @layout_1 {
         return v9;
 }
 
-func private %ptr__g79ff(noalias v0.objref<@layout_0>) -> i256 {
+func private %ptr__g79ff(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -138,7 +138,7 @@ func private %impl_MemBuffer__ptr(v0.@layout_1) -> i256 {
         return v3;
 }
 
-func private %revert(noalias v0.objref<@layout_0>) {
+func private %revert(noalias nocapture v0.objref<@layout_0>) {
     block0:
         jump block1;
 

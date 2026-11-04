@@ -268,7 +268,7 @@ func inline(always) private %decode_from_prechecked_head(v0.@layout_1, v1.i256, 
         return;
 }
 
-func inline(always) private %decode_runtime_args(noalias v0.objref<@layout_3>) {
+func inline(always) private %decode_runtime_args(noalias nocapture v0.objref<@layout_3>) {
     block0:
         jump block1;
 
@@ -443,7 +443,7 @@ func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
         return v3;
 }
 
-func private %len__g79ff(noalias v0.objref<@layout_4>) -> i256 {
+func private %len__g79ff(noalias nocapture v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -502,7 +502,7 @@ func private %payload_size(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %ptr__g79ff(noalias v0.objref<@layout_4>) -> i256 {
+func private %ptr__g79ff(noalias nocapture v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -549,7 +549,7 @@ func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v5;
 }
 
-func private %return_bytes(noalias v0.objref<@layout_4>) {
+func private %return_bytes(noalias nocapture v0.objref<@layout_4>) {
     block0:
         jump block1;
 
@@ -558,7 +558,7 @@ func private %return_bytes(noalias v0.objref<@layout_4>) {
         unreachable;
 }
 
-func private %return_data(noalias v0.objref<@layout_4>) {
+func private %return_data(noalias nocapture v0.objref<@layout_4>) {
     block0:
         jump block1;
 

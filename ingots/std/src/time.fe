@@ -1,0 +1,169 @@
+#![cfg(target_family = "unix")]
+/// Clocks of the native host.
+///
+/// `Clock` is a capability of the native root effect, `std::native::Host`:
+/// a function that reads the time declares `uses (clock: Clock)`. Its
+/// `instant()` reads the monotonic clock, for measuring how long something
+/// takes, and `now()` the wall clock. A `Duration` counts nanoseconds in a
+/// `u64`, which spans 584 years.
+use core::MemBuffer
+use core::ops::{Add, Eq, Ord, Sub}
+use super::native::{Host, HostCapabilitySeal}
+use super::sys
+
+extern {
+    fn clock_gettime(_ clock: i32, _ time: *u8) -> i32
+}
+
+const CLOCK_REALTIME: i32 = 0
+const NANOS_PER_SEC: u64 = 1000000000
+
+/// The host's clocks.
+pub trait Clock: HostCapabilitySeal {
+    /// The monotonic clock's reading, which never goes back. Its origin is
+    /// unspecified, so only the time between two readings means anything.
+    fn instant(self) -> Instant
+    /// The time since the Unix epoch by the wall clock, which can jump when
+    /// the host's time is set.
+    fn now(self) -> Duration
+}
+
+impl Clock for Host {
+    fn instant(self) -> Instant {
+        Instant { nanos: read_clock(sys::CLOCK_MONOTONIC) }
+    }
+
+    fn now(self) -> Duration {
+        Duration { nanos: read_clock(CLOCK_REALTIME) }
+    }
+}
+
+// The reading of `clock` in nanoseconds, or zero before the epoch.
+fn read_clock(_ clock: i32) -> u64 {
+    // A `struct timespec`: 64-bit seconds and nanoseconds.
+    let time = MemBuffer::new(16)
+    assert!(unsafe { clock_gettime(clock, time.ptr()) } == 0, "failed reading the clock")
+    let secs = time.read_le<i64>(0)
+    if secs < 0 {
+        return 0
+    }
+    let whole: u64 = secs.downcast_unchecked()
+    whole * NANOS_PER_SEC + time.read_le<u64>(8)
+}
+
+/// A span of time, in nanoseconds.
+pub struct Duration { nanos: u64 }
+
+impl Copy for Duration {}
+
+impl Duration {
+    pub fn from_secs(_ secs: u64) -> Self {
+        Duration { nanos: secs * NANOS_PER_SEC }
+    }
+
+    pub fn from_millis(_ millis: u64) -> Self {
+        Duration { nanos: millis * 1000000 }
+    }
+
+    pub fn from_micros(_ micros: u64) -> Self {
+        Duration { nanos: micros * 1000 }
+    }
+
+    pub fn from_nanos(_ nanos: u64) -> Self {
+        Duration { nanos }
+    }
+
+    /// The whole seconds.
+    pub fn as_secs(self) -> u64 {
+        self.nanos / NANOS_PER_SEC
+    }
+
+    /// The whole milliseconds.
+    pub fn as_millis(self) -> u64 {
+        self.nanos / 1000000
+    }
+
+    /// The whole microseconds.
+    pub fn as_micros(self) -> u64 {
+        self.nanos / 1000
+    }
+
+    pub fn as_nanos(self) -> u64 {
+        self.nanos
+    }
+}
+
+impl Add for Duration {
+    fn add(own self, _ other: own Self) -> Self {
+        Duration { nanos: self.nanos + other.nanos }
+    }
+}
+
+/// Panics if `other` is longer.
+impl Sub for Duration {
+    fn sub(own self, _ other: own Self) -> Self {
+        Duration { nanos: self.nanos - other.nanos }
+    }
+}
+
+impl Eq for Duration {
+    fn eq(self, _ other: Self) -> bool {
+        self.nanos == other.nanos
+    }
+}
+
+impl Ord for Duration {
+    fn lt(self, _ other: Self) -> bool {
+        self.nanos < other.nanos
+    }
+    fn le(self, _ other: Self) -> bool {
+        self.nanos <= other.nanos
+    }
+    fn gt(self, _ other: Self) -> bool {
+        self.nanos > other.nanos
+    }
+    fn ge(self, _ other: Self) -> bool {
+        self.nanos >= other.nanos
+    }
+}
+
+/// A reading of the monotonic clock.
+pub struct Instant { nanos: u64 }
+
+impl Copy for Instant {}
+
+impl Instant {
+    /// The time from `earlier` to this reading, or zero if `earlier` is
+    /// later.
+    pub fn duration_since(self, _ earlier: Instant) -> Duration {
+        Duration { nanos: if self.nanos > earlier.nanos { self.nanos - earlier.nanos } else { 0 } }
+    }
+}
+
+/// The reading `other` after this one.
+impl Add<Duration> for Instant {
+    fn add(own self, _ other: own Duration) -> Self {
+        Instant { nanos: self.nanos + other.nanos }
+    }
+}
+
+impl Eq for Instant {
+    fn eq(self, _ other: Self) -> bool {
+        self.nanos == other.nanos
+    }
+}
+
+impl Ord for Instant {
+    fn lt(self, _ other: Self) -> bool {
+        self.nanos < other.nanos
+    }
+    fn le(self, _ other: Self) -> bool {
+        self.nanos <= other.nanos
+    }
+    fn gt(self, _ other: Self) -> bool {
+        self.nanos > other.nanos
+    }
+    fn ge(self, _ other: Self) -> bool {
+        self.nanos >= other.nanos
+    }
+}

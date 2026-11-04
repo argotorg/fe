@@ -1,7 +1,7 @@
 use core::MemBuffer
 use std::env::Args
-use std::fs::{Error, ErrorKind, FileType, Fs}
-use std::io::{Display, Stdout}
+use std::fs::{FileType, Fs}
+use std::io::{Display, Error, ErrorKind, Stdout}
 
 // Runs each `std::fs` operation in the directory named by the first
 // argument, which holds a symbolic link `link` to `a/b/c/file`.
