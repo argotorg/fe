@@ -1,6 +1,15 @@
 use camino::{Utf8Path, Utf8PathBuf};
-use common::{config::Config, file::IngotFileKind};
-use driver::DriverDataBase;
+use common::{
+    compilation::Target,
+    config::{Config, WorkspaceConfig},
+    file::IngotFileKind,
+};
+use driver::{
+    DriverDataBase,
+    cli_target::{CliTarget, resolve_cli_target},
+};
+use resolver::workspace::discover_context;
+use url::Url;
 
 pub const INGOT_REQUIRES_WORKSPACE_ROOT: &str =
     "`--ingot` requires an input path that resolves to a workspace root";
@@ -10,6 +19,102 @@ pub(crate) fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>)
         .files(db)
         .iter()
         .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
+}
+
+/// The target `fe.toml` sets for a command on `path`, or the default target.
+/// A path the command can't resolve reports that itself.
+pub fn project_target(
+    path: &Utf8PathBuf,
+    ingot: Option<&str>,
+    force_standalone: bool,
+) -> Result<Target, String> {
+    let mut db = DriverDataBase::default();
+    match resolve_cli_target(&mut db, path, force_standalone) {
+        Ok(CliTarget::Directory(dir)) => directory_target(&dir, ingot),
+        Ok(CliTarget::StandaloneFile(_)) | Err(_) => Ok(Target::default()),
+    }
+}
+
+fn read_config(dir: &Utf8Path) -> Option<Config> {
+    let content = std::fs::read_to_string(dir.join("fe.toml")).ok()?;
+    Config::parse(&content).ok()
+}
+
+/// The target of the ingot or the selected members of the workspace at `dir`.
+fn directory_target(dir: &Utf8Path, ingot: Option<&str>) -> Result<Target, String> {
+    let Some(config) = read_config(dir) else {
+        return Ok(Target::default());
+    };
+    let workspace = match config {
+        Config::Ingot(config) => return Ok(config.target.unwrap_or_else(|| inherited_target(dir))),
+        Config::Workspace(workspace) => workspace,
+    };
+    workspace_target(dir, &workspace, ingot)
+}
+
+/// The target of the workspace that has the ingot at `dir` as a member.
+fn inherited_target(dir: &Utf8Path) -> Target {
+    let root = dir
+        .canonicalize_utf8()
+        .ok()
+        .and_then(|dir| Url::from_directory_path(dir.as_str()).ok())
+        .and_then(|url| {
+            let context = discover_context(&url, false).ok()?;
+            context
+                .ingot_roots
+                .contains(&url)
+                .then_some(context.workspace_root?)
+        })
+        .and_then(|root| Utf8PathBuf::from_path_buf(root.to_file_path().ok()?).ok());
+    match root.as_deref().and_then(read_config) {
+        Some(Config::Workspace(workspace)) => workspace.workspace.target.unwrap_or_default(),
+        _ => Target::default(),
+    }
+}
+
+/// A database compiles for one target at a time, so the selected members of a
+/// workspace must agree on it.
+fn workspace_target(
+    dir: &Utf8Path,
+    workspace: &WorkspaceConfig,
+    ingot: Option<&str>,
+) -> Result<Target, String> {
+    let default = workspace.workspace.target.unwrap_or_default();
+    let Some(url) = dir
+        .canonicalize_utf8()
+        .ok()
+        .and_then(|dir| Url::from_directory_path(dir.as_str()).ok())
+    else {
+        return Ok(default);
+    };
+    let Ok(members) = driver::workspace_members(&workspace.workspace, &url) else {
+        return Ok(default);
+    };
+    let mut selected: Option<(Target, String)> = None;
+    for member in &members {
+        let Some(Config::Ingot(config)) = read_config(&member.path) else {
+            continue;
+        };
+        let name = config.metadata.name.as_deref();
+        if ingot.is_some_and(|ingot| name != Some(ingot) && member.name.as_deref() != Some(ingot)) {
+            continue;
+        }
+        let target = config.target.unwrap_or(default);
+        let name = name.unwrap_or(member.path.as_str()).to_string();
+        match &selected {
+            Some((first, first_name)) if *first != target => {
+                return Err(format!(
+                    "workspace members target different machines: `{first_name}` targets `{}` \
+                     and `{name}` targets `{}`; select one with `--ingot`, or pass `--backend`",
+                    first.name(),
+                    target.name(),
+                ));
+            }
+            Some(_) => {}
+            None => selected = Some((target, name)),
+        }
+    }
+    Ok(selected.map_or(default, |(target, _)| target))
 }
 
 #[derive(Debug, Clone, Copy)]

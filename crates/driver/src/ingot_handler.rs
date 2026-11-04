@@ -27,6 +27,8 @@ use resolver::{
 use smol_str::SmolStr;
 use url::Url;
 
+use common::compilation::Target;
+
 use crate::IngotInitDiagnostics;
 
 pub struct IngotHandler<'a> {
@@ -152,6 +154,22 @@ impl<'a> IngotHandler<'a> {
             Config::Workspace(config) => Some(*config),
             Config::Ingot(_) => None,
         }
+    }
+
+    /// The target the ingot at `url` or its workspace sets in `fe.toml`.
+    fn declared_target(&mut self, url: &Url) -> Option<Target> {
+        let Config::Ingot(config) = self.config_at_url(url).ok()? else {
+            return None;
+        };
+        config.target.or_else(|| {
+            let root = self
+                .db
+                .dependency_graph()
+                .workspace_root_for_member(self.db, url);
+            self.workspace_config_for_root(root.as_ref())?
+                .workspace
+                .target
+        })
     }
 
     fn record_dependency_arithmetic_request(
@@ -1333,6 +1351,23 @@ impl<'a>
                             found_name,
                             found_version,
                         });
+                    }
+                    // A workspace root has an edge to each member, whose
+                    // targets may differ.
+                    if matches!(self.config_at_url(&from_url), Ok(Config::Ingot(_)))
+                        && let Some(dependency_target) = self.declared_target(&to_url)
+                    {
+                        let target = self
+                            .declared_target(&from_url)
+                            .unwrap_or_else(|| self.db.compilation_settings().target(self.db));
+                        if dependency_target != target {
+                            self.report_error(IngotInitDiagnostics::DependencyTargetMismatch {
+                                ingot_url: from_url.clone(),
+                                dependency: alias.clone(),
+                                target,
+                                dependency_target,
+                            });
+                        }
                     }
                     if self.is_external_dependency_url(&from_url, &to_url)
                         && let Some(mode) = dependency_arithmetic_mode(

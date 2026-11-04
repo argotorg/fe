@@ -436,6 +436,12 @@ pub enum IngotInitDiagnostics {
         found_name: Option<SmolStr>,
         found_version: Option<Version>,
     },
+    DependencyTargetMismatch {
+        ingot_url: Url,
+        dependency: SmolStr,
+        target: common::compilation::Target,
+        dependency_target: common::compilation::Target,
+    },
     DependencyArithmeticConflict {
         dependency_url: Url,
         first_ingot_url: Url,
@@ -632,6 +638,19 @@ impl std::fmt::Display for IngotInitDiagnostics {
                         format_metadata(found_name, found_version)
                     )
                 }
+            }
+            IngotInitDiagnostics::DependencyTargetMismatch {
+                ingot_url,
+                dependency,
+                target,
+                dependency_target,
+            } => {
+                write!(
+                    f,
+                    "Dependency '{dependency}' of {ingot_url} targets `{}`, but the ingot targets `{}`",
+                    dependency_target.name(),
+                    target.name(),
+                )
             }
             IngotInitDiagnostics::DependencyArithmeticConflict {
                 dependency_url,

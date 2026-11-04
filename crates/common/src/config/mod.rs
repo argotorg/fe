@@ -5,6 +5,7 @@ use toml::Value;
 use url::Url;
 
 use crate::{
+    compilation::Target,
     dependencies::{Dependency, DependencyLocation, LocalFiles},
     urlext::UrlExt,
 };
@@ -209,6 +210,10 @@ pub enum ConfigDiagnostic {
         field: SmolStr,
         value: SmolStr,
     },
+    InvalidTarget {
+        field: SmolStr,
+        value: SmolStr,
+    },
     InvalidDependencyArithmeticMode {
         field: SmolStr,
         value: SmolStr,
@@ -290,6 +295,10 @@ impl Display for ConfigDiagnostic {
                 f,
                 "Invalid arithmetic mode \"{value}\" in field {field}; expected \"checked\" or \"unchecked\""
             ),
+            Self::InvalidTarget { field, value } => write!(
+                f,
+                "Invalid target \"{value}\" in field {field}; expected \"evm\" or \"native\""
+            ),
             Self::InvalidDependencyArithmeticMode { field, value } => write!(
                 f,
                 "Invalid dependency arithmetic mode \"{value}\" in field {field}; expected \"defer\", \"checked\", or \"unchecked\""
@@ -351,6 +360,31 @@ pub(crate) fn parse_string_array_field(
             vec![]
         }
     }
+}
+
+pub(crate) fn parse_target_field(
+    parent: &str,
+    table: &toml::value::Table,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) -> Option<Target> {
+    let value = table.get("target")?;
+    let field = SmolStr::new(format!("{parent}.target"));
+    let Some(value) = value.as_str() else {
+        diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
+            field,
+            found: value.type_str().to_lowercase().into(),
+            expected: Some("string".into()),
+        });
+        return None;
+    };
+    let target = Target::parse(value);
+    if target.is_none() {
+        diagnostics.push(ConfigDiagnostic::InvalidTarget {
+            field,
+            value: value.into(),
+        });
+    }
+    target
 }
 
 pub(crate) fn parse_arithmetic_field(
@@ -628,9 +662,39 @@ invalid_empty = { path = "" }
     }
 
     #[test]
+    fn parses_targets() {
+        let parse = |text: &str| Config::parse(text).unwrap();
+        let Config::Ingot(ingot) =
+            parse("[ingot]\nname = \"a\"\nversion = \"0.1.0\"\ntarget = \"native\"\n")
+        else {
+            panic!("expected an ingot config");
+        };
+        assert_eq!(ingot.target, Some(Target::Native));
+        assert!(ingot.diagnostics.is_empty());
+
+        let Config::Workspace(workspace) = parse("[workspace]\ntarget = \"evm\"\nmembers = []\n")
+        else {
+            panic!("expected a workspace config");
+        };
+        assert_eq!(workspace.workspace.target, Some(Target::Evm));
+
+        let Config::Ingot(ingot) =
+            parse("[ingot]\nname = \"a\"\nversion = \"0.1.0\"\ntarget = 1\n")
+        else {
+            panic!("expected an ingot config");
+        };
+        assert_eq!(ingot.target, None);
+        assert!(matches!(
+            ingot.diagnostics.as_slice(),
+            [ConfigDiagnostic::UnexpectedTomlData { .. }]
+        ));
+    }
+
+    #[test]
     fn reports_diagnostics_for_dependency_url_join_errors() {
         let config = IngotConfig {
             metadata: IngotMetadata::default(),
+            target: None,
             arithmetic: None,
             dependency_arithmetic: None,
             profiles: BTreeMap::new(),
@@ -778,6 +842,7 @@ util = "0.1.0"
     fn resolves_arithmetic_mode_with_ingot_profile_precedence() {
         let ingot = IngotConfig {
             metadata: IngotMetadata::default(),
+            target: None,
             arithmetic: Some(ArithmeticMode::Unchecked),
             dependency_arithmetic: None,
             profiles: BTreeMap::from([(
@@ -875,6 +940,7 @@ dependency-arithmetic = "checked"
     fn resolves_dependency_arithmetic_mode_with_profile_precedence() {
         let ingot = IngotConfig {
             metadata: IngotMetadata::default(),
+            target: None,
             arithmetic: None,
             dependency_arithmetic: Some(DependencyArithmeticMode::Checked),
             profiles: BTreeMap::from([(
