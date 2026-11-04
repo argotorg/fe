@@ -27,6 +27,7 @@ use check::check;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use common::compilation::{Os, Target};
+use driver::project_target::{TargetConflict, project_target};
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
@@ -93,6 +94,19 @@ impl From<TestBackend> for BuildBackend {
 }
 
 impl BuildBackend {
+    /// The backend that compiles for `target`, which `fe.toml` sets.
+    fn for_target(target: Target) -> Result<Self, String> {
+        match target {
+            Target::Evm => Ok(Self::Sonatina),
+            #[cfg(feature = "cranelift")]
+            Target::Native => Ok(Self::Native),
+            #[cfg(not(feature = "cranelift"))]
+            Target::Native => Err(
+                "`target = \"native\"` in `fe.toml` requires the `cranelift` feature".to_string(),
+            ),
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Sonatina => "sonatina",
@@ -231,9 +245,10 @@ pub enum Command {
         /// Build a specific contract by name (defaults to all contracts in the target).
         #[arg(long)]
         contract: Option<String>,
-        /// Backend to use for compilation.
-        #[arg(long, value_enum, default_value = "sonatina")]
-        backend: BuildBackend,
+        /// Backend to use for compilation. Defaults to the one for the `target`
+        /// in `fe.toml`, or `sonatina`.
+        #[arg(long, value_enum)]
+        backend: Option<BuildBackend>,
         #[command(flatten)]
         optimize: OptimizeArgs,
         /// Output directory for artifacts.
@@ -283,9 +298,10 @@ pub enum Command {
         #[arg(long)]
         standalone: bool,
         /// Backend whose target to check for: integer widths and layouts
-        /// depend on it.
-        #[arg(long, value_enum, default_value = "sonatina")]
-        backend: BuildBackend,
+        /// depend on it. Defaults to the one for the `target` in `fe.toml`, or
+        /// `sonatina`.
+        #[arg(long, value_enum)]
+        backend: Option<BuildBackend>,
         /// Compilation profile to use when resolving profile-aware config.
         #[arg(long, default_value = "dev", value_name = "PROFILE")]
         profile: String,
@@ -353,9 +369,10 @@ pub enum Command {
     },
     /// Run Fe tests in a file or directory.
     Test {
-        /// Execution backend for tests.
-        #[arg(long, value_enum, default_value_t = TestBackend::Sonatina)]
-        backend: TestBackend,
+        /// Execution backend for tests. Defaults to the one for the `target` in
+        /// `fe.toml`, or `sonatina`.
+        #[arg(long, value_enum)]
+        backend: Option<TestBackend>,
         /// Native test wall-time limit in seconds (default: 60, maximum: 3600).
         #[arg(long, value_name = "SECONDS")]
         native_timeout_secs: Option<u64>,
@@ -676,6 +693,66 @@ pub struct DevTraceInputArgs {
     pub format: TraceReportFormat,
 }
 
+fn workspace_target_error(conflict: TargetConflict) -> String {
+    format!(
+        "workspace members target different machines: {conflict}; select one with `--ingot`, or \
+         pass `--backend`"
+    )
+}
+
+/// The backend `--backend` names, or the one for the target in `fe.toml`.
+fn resolve_backend(
+    flag: Option<BuildBackend>,
+    path: &Utf8PathBuf,
+    ingot: Option<&str>,
+    standalone: bool,
+) -> BuildBackend {
+    flag.map_or_else(
+        || {
+            project_target(path, ingot, standalone)
+                .map_err(workspace_target_error)
+                .and_then(|target| BuildBackend::for_target(target.unwrap_or_default()))
+        },
+        Ok,
+    )
+    .unwrap_or_else(|err| exit_with_error(&err))
+}
+
+/// As `resolve_backend`, for test paths, which can't set different targets.
+fn resolve_test_backend(
+    flag: Option<TestBackend>,
+    paths: &[Utf8PathBuf],
+    ingot: Option<&str>,
+) -> BuildBackend {
+    if let Some(flag) = flag {
+        return flag.into();
+    }
+    // A path that doesn't expand is reported when the tests run.
+    test::expand_test_paths(paths)
+        .unwrap_or_else(|_| paths.to_vec())
+        .iter()
+        .try_fold(None, |first: Option<Target>, path| {
+            match (
+                first,
+                project_target(path, ingot, false).map_err(workspace_target_error)?,
+            ) {
+                (Some(first), Some(other)) if first != other => Err(format!(
+                    "test paths target both `{}` and `{}`; test them separately, or pass `--backend`",
+                    first.name(),
+                    other.name(),
+                )),
+                (first, other) => Ok(first.or(other)),
+            }
+        })
+        .and_then(|target| BuildBackend::for_target(target.unwrap_or_default()))
+        .unwrap_or_else(|err| exit_with_error(&err))
+}
+
+fn exit_with_error(message: &str) -> ! {
+    eprintln!("Error: {message}");
+    std::process::exit(1)
+}
+
 fn default_project_path() -> Utf8PathBuf {
     Utf8PathBuf::from(".")
 }
@@ -716,6 +793,11 @@ pub fn run(opts: &Options) {
             report_failed_only,
             recovery_mode,
         } => {
+            let backend = if from_metadata.is_some() {
+                backend.unwrap_or(BuildBackend::Sonatina)
+            } else {
+                resolve_backend(*backend, path, ingot.as_deref(), *standalone)
+            };
             let emit = if emit.is_empty() {
                 backend.default_emit()
             } else {
@@ -749,7 +831,7 @@ pub fn run(opts: &Options) {
                 ingot.as_deref(),
                 *standalone,
                 contract.as_deref(),
-                *backend,
+                backend,
                 opt_level,
                 &emit,
                 NativeLink {
@@ -779,7 +861,7 @@ pub fn run(opts: &Options) {
                 path,
                 ingot.as_deref(),
                 *standalone,
-                *backend,
+                resolve_backend(*backend, path, ingot.as_deref(), *standalone),
                 profile,
                 *dump_mir,
                 (*report).then_some(report_out),
@@ -881,6 +963,7 @@ pub fn run(opts: &Options) {
             } else {
                 paths.clone()
             };
+            let backend = resolve_test_backend(*backend, &paths, ingot.as_deref());
             match test::run_tests(
                 &paths,
                 ingot.as_deref(),
@@ -890,7 +973,7 @@ pub fn run(opts: &Options) {
                 *show_logs,
                 profile,
                 opt_level,
-                (*backend).into(),
+                backend,
                 *native_timeout_secs,
                 *native_output_limit_kib,
                 emit,

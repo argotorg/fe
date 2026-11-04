@@ -7,6 +7,7 @@ use common::{
 };
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
+use driver::project_target::dependency_target_mismatch;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::build_runtime_package;
 use salsa::Setter;
@@ -211,6 +212,10 @@ fn check_directory(
                 eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
                 return true;
             }
+            if let Some(mismatch) = dependency_target_mismatch(db, &ingot_url) {
+                eprintln!("Error: {mismatch}");
+                return true;
+            }
             check_ingot_url(db, &ingot_url, dump_mir, report)
         }
     }
@@ -344,6 +349,11 @@ fn check_workspace(
             continue;
         }
         let member_url = member.url;
+        if let Some(mismatch) = dependency_target_mismatch(db, &member_url) {
+            eprintln!("Error: {mismatch}");
+            has_errors = true;
+            continue;
+        }
         let member_has_errors =
             check_ingot_and_dependencies(db, &member_url, dump_mir, report, &mut seen);
         has_errors |= member_has_errors;

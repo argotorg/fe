@@ -154,6 +154,36 @@ For `build` and `check`:
   - Override: `--standalone` forces standalone mode for that `.fe` file target.
 - If you pass a `.fe` file that lives under a **workspace root** (nearest ancestor `fe.toml` parses as a workspace config), the command treats the file as **standalone** unless you explicitly target the workspace/ingot by passing a directory or member name.
 
+## Project target
+
+`target` in `fe.toml` sets the machine a project compiles for: `"evm"` or `"native"`. `fe check`,
+`fe build` and `fe test` then use that target's backend without `--backend`.
+
+```toml
+[ingot]
+name = "tool"
+version = "0.1.0"
+target = "native"
+```
+
+The first of these that applies sets the target:
+
+1. `--backend`.
+2. `target` in the ingot's `fe.toml`.
+3. `target` in the `fe.toml` of the workspace that has the ingot as a member.
+4. The default, `evm`.
+
+A standalone `.fe` file has no project, so it uses `--backend` or the default.
+
+A command compiles for one target, so the workspace members it selects can't set different ones. If
+they do, it errors: select one with `--ingot`, or pass `--backend`. `fe test` paths can't either. An
+ingot without a target works on every target, and takes the one the others set.
+
+Every dependency of a compiled ingot that sets a target must match the command's. Other commands,
+such as `fe tree`, don't check targets.
+
+The language server still checks every project for the EVM.
+
 ## `fe build`
 
 Compiles Fe contracts to EVM bytecode.
@@ -523,7 +553,8 @@ and the bodies of a contract it creates.
 
 ### Backend
 
-`--backend` selects the target to check for, as for `fe build` (default `sonatina`, the EVM).
+`--backend` selects the target to check for, as for `fe build`. Without it, the check uses the
+[project target](#project-target).
 Integer widths, `size_of` and layouts depend on it: `usize` is 64 bits with `--backend native`.
 
 ### Optional outputs

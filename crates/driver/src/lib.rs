@@ -5,6 +5,7 @@ pub mod db;
 pub mod diagnostics;
 pub mod files;
 mod ingot_handler;
+pub mod project_target;
 
 pub use common::dependencies::DependencyTree;
 

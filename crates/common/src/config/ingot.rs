@@ -3,11 +3,12 @@ use std::collections::BTreeMap;
 use smol_str::SmolStr;
 use toml::Value;
 
-use crate::ingot::Version;
+use crate::{compilation::Target, ingot::Version};
 
 use super::{
     ArithmeticMode, ConfigDiagnostic, DependencyArithmeticMode, ProfileSettings, dependency,
     is_valid_name, parse_arithmetic_field, parse_dependency_arithmetic_field, parse_profiles_table,
+    parse_target_field,
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
@@ -19,6 +20,7 @@ pub struct IngotMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngotConfig {
     pub metadata: IngotMetadata,
+    pub target: Option<Target>,
     pub arithmetic: Option<ArithmeticMode>,
     pub dependency_arithmetic: Option<DependencyArithmeticMode>,
     pub profiles: BTreeMap<SmolStr, ProfileSettings>,
@@ -29,7 +31,8 @@ pub struct IngotConfig {
 impl IngotConfig {
     pub fn parse_from_value(parsed: &Value) -> Self {
         let mut diagnostics = Vec::new();
-        let (metadata, arithmetic, dependency_arithmetic) = parse_ingot(parsed, &mut diagnostics);
+        let (metadata, target, arithmetic, dependency_arithmetic) =
+            parse_ingot(parsed, &mut diagnostics);
         let profiles = parsed
             .as_table()
             .map(|table| parse_profiles_table(table, &mut diagnostics))
@@ -37,6 +40,7 @@ impl IngotConfig {
         let dependency_entries = dependency::parse_root_dependencies(parsed, &mut diagnostics);
         Self {
             metadata,
+            target,
             arithmetic,
             dependency_arithmetic,
             profiles,
@@ -66,10 +70,12 @@ pub(crate) fn parse_ingot(
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> (
     IngotMetadata,
+    Option<Target>,
     Option<ArithmeticMode>,
     Option<DependencyArithmeticMode>,
 ) {
     let mut metadata = IngotMetadata::default();
+    let mut target = None;
     let mut arithmetic = None;
     let mut dependency_arithmetic = None;
 
@@ -102,11 +108,12 @@ pub(crate) fn parse_ingot(
             diagnostics.push(ConfigDiagnostic::MissingVersion);
         }
 
+        target = parse_target_field("ingot", table, diagnostics);
         arithmetic = parse_arithmetic_field("ingot", table, diagnostics);
         dependency_arithmetic = parse_dependency_arithmetic_field("ingot", table, diagnostics);
     } else {
         diagnostics.push(ConfigDiagnostic::MissingIngotMetadata);
     }
 
-    (metadata, arithmetic, dependency_arithmetic)
+    (metadata, target, arithmetic, dependency_arithmetic)
 }

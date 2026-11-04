@@ -14,6 +14,11 @@ pub enum Target {
 impl Target {
     pub const ALL: [Target; 2] = [Target::Evm, Target::Native];
 
+    /// The target `name` names, as in `#[cfg(target = ..)]` and `fe.toml`.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|target| target.name() == name)
+    }
+
     /// The name `#[cfg(target = ..)]` matches.
     pub fn name(self) -> &'static str {
         match self {
