@@ -6,6 +6,7 @@ use core::abi::{AbiFrame, AbiSize, Bytes, Decode, DynString, Encode, abi_payload
 use core::ptr::{self, MemArray, MemBuffer, MemVec}
 use core::text::{concat, decimal, decode_base58, decode_base64}
 use std::abi::{DynArray, Sol, bytes_from_word, bytes_from_words, bytes_from_words_prefix, canonical_dyn_array, dyn_array_from}
+use std::abi::sol::SolDecoder
 use std::evm::{Address, checksum_address, merkle, rlp}
 use std::evm::clones::clone_initcode
 use std::evm::crypto::keccak256
@@ -135,6 +136,26 @@ fn encoded(_ r: u32) -> usize {
     decoded_names[1].len() + decoded_parts[1].len() + decoded_rows[0].len()
 }
 
+// Each decoder fills a fixed array of owned values in place, at lengths that skip and
+// enter its loop. Destroying an unfilled element would free memory never allocated.
+fn decoded_arrays(_ r: u32) -> usize {
+    let one: [DynString; 1] = [decimal(r as u256)]
+    let encoded_one = encode_alloc<Sol, [DynString; 1]>(one)
+    let decoded_one = <[DynString; 1] as Decode<Sol>>::decode_from(encoded_one.span(), 0)
+    let three: [Bytes; 3] = [
+        Bytes::empty(),
+        Bytes::from_word_prefix(word: r as u256, len: 32),
+        Bytes::from_word_prefix(word: r as u256, len: 5),
+    ]
+    let encoded_three = encode_alloc<Sol, [Bytes; 3]>(three)
+    let input = encoded_three.span()
+    let from = <[Bytes; 3] as Decode<Sol>>::decode_from(input, 0)
+    let prechecked = <[Bytes; 3] as Decode<Sol>>::decode_from_prechecked_head(input, 0, encoded_three.len() as u256)
+    var decoder = SolDecoder::with_base(0)
+    let payload = <[Bytes; 3] as Decode<Sol>>::decode_payload(mut decoder, input)
+    decoded_one[0].len() + from[1].len() + prechecked[2].len() + payload[1].len()
+}
+
 fn encode_view<T>(_ value: T) -> MemBuffer
     where T: Encode<Sol> + AbiSize
 {
@@ -197,6 +218,7 @@ pub fn main() -> i32 {
         core::assert(arrays(r) == 32 + 32 + 3 + 0 + 3 + 1 + 2)
         core::assert(records(r) == 5 + 5 + 1)
         core::assert(encoded(r) == 40 + 32 + 1)
+        core::assert(decoded_arrays(r) == 1 + 32 + 5 + 32)
         core::assert(encoded_twice(r) == 2 * (160 + 192 + 288) + 32 + 5 + 5)
         scratch_buffers(r)
         r += 1

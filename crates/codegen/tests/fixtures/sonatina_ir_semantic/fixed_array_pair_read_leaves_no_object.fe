@@ -1,0 +1,14 @@
+use std::abi::sol
+
+msg PairMsg {
+    #[selector = sol("sum(uint256[2])")]
+    Sum { value: [u256; 2] } -> u256,
+}
+
+pub contract Pair {
+    recv PairMsg {
+        Sum { value } -> u256 {
+            value[0] + value[1]
+        }
+    }
+}
