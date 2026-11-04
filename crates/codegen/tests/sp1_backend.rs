@@ -100,9 +100,10 @@ fn sp1_memory_copy_reserves_the_runtime_symbol() {
         if level == OptLevel::O0 {
             assert!(ir.contains("local__memmove("), "{ir}");
         }
-        // Raw allocations are represented in IR, but the SP1 backend deliberately
-        // rejects host heap allocation when translating to machine code.
-        let error = emit_module_native_artifacts(
+        // Allocations call the C allocator, which SP1's runtime does not
+        // define, so a guest that allocates fails to link.
+        assert!(ir.contains("declare external %malloc("), "{ir}");
+        emit_module_native_artifacts(
             &db,
             db.top_mod(file),
             NativeTarget::Sp1,
@@ -113,13 +114,7 @@ fn sp1_memory_copy_reserves_the_runtime_symbol() {
                 object: true,
             },
         )
-        .expect_err("SP1 must reject unsupported host heap allocation");
-        assert!(
-            error
-                .to_string()
-                .contains("host heap allocation is unavailable on SP1"),
-            "{error}"
-        );
+        .expect("an SP1 guest that allocates should compile");
     }
 }
 

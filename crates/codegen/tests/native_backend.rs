@@ -57,6 +57,38 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_modules_keep_only_the_runtime_functions_they_call() {
+    // The first `main` cannot panic, so nothing of `core::rt` remains. The
+    // second can overflow: it keeps the panic report and its C imports, but
+    // neither the allocator's release nor the `fe test` hook.
+    for (name, source, kept, dropped) in [
+        (
+            "native_runtime_unused.fe",
+            "pub fn main() -> i32 {\n    0\n}\n",
+            &[][..],
+            &["declare external", "%report_"][..],
+        ),
+        (
+            "native_runtime_panics.fe",
+            "pub fn main(argc: i32, argv: **u8) -> i32 {\n    argc + 1\n}\n",
+            &["%report_panic(", "declare external %write("][..],
+            &["%dealloc(", "%free(", "__fe_revert"][..],
+        ),
+    ] {
+        let ir = with_top_mod_for_source(name, source, |db, top_mod| {
+            fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0)
+        })
+        .expect("native executable should lower");
+        for function in kept {
+            assert!(ir.contains(function), "{name}: missing {function}:\n{ir}");
+        }
+        for function in dropped {
+            assert!(!ir.contains(function), "{name}: kept {function}:\n{ir}");
+        }
+    }
+}
+
+#[test]
 fn native_entry_symbol_is_reserved_when_reachable_helpers_are_named_main() {
     let ir = with_top_mod_for_source(
         "native_entry_collision.fe",

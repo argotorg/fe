@@ -181,6 +181,48 @@ fn oversized_string() {
 }
 
 #[test]
+fn native_allocations_the_host_cannot_make_run_out_of_memory() {
+    // The C allocator cannot make `usize::max()` bytes.
+    let temp = tempdir().unwrap();
+    let test_source = temp.path().join("host_oom_test.fe");
+    fs::write(
+        &test_source,
+        "use core::ptr\n#[test(should_revert, panic = 0x41)]\nfn too_large() {\n    let _ = ptr::alloc_bytes(usize::max())\n}\n",
+    )
+    .unwrap();
+    let source = temp.path().join("host_oom.fe");
+    fs::write(
+        &source,
+        "use core::ptr\npub fn main() -> i32 {\n    let data = ptr::alloc_bytes(usize::max())\n    unsafe { *data = 1 }\n    0\n}\n",
+    )
+    .unwrap();
+    test_utils::skip_crash_reports();
+    for level in ["0", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&test_source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("host_oom")).output().unwrap();
+        assert_eq!(
+            result.status.signal(),
+            Some(libc::SIGABRT),
+            "O{level}: {result:?}"
+        );
+        assert_eq!(
+            result.stderr, b"panicked: out of memory\n",
+            "O{level}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn native_panics_report_on_stderr_after_flushing_stdout() {
     let temp = tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/panics.fe");
@@ -2236,8 +2278,9 @@ pub fn main() -> i32 {
 #[test]
 fn native_extern_declarations_of_a_symbol_must_agree() {
     let temp = tempdir().unwrap();
-    // `u64` and `i64` results are the same C type, so those two declarations
-    // share one import.
+    // A program's declarations must agree with each other and with core's and
+    // std's. `u64` and `i64` results are the same C type, so those two
+    // declarations share one import.
     for (name, source, errors) in [
         (
             "agree",
@@ -2251,6 +2294,15 @@ fn native_extern_declarations_of_a_symbol_must_agree() {
                 "conflicting `extern` declarations of `clock`: ",
                 "`fn clock() -> i64` in `modules::a`",
                 "`fn clock() -> i32` in `modules::b`",
+            ][..],
+        ),
+        (
+            "write",
+            "extern { fn write(_ fd: i64, _ buf: *u8, _ len: usize) -> isize }\npub fn main() -> i32 {\n    let _ = unsafe { write(2, core::ptr::alloc_bytes(1), 0) }\n    0\n}\n",
+            &[
+                "conflicting `extern` declarations of `write`: ",
+                "`fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize` in `core::rt`",
+                "`fn write(_ fd: i64, _ buf: *u8, _ len: usize) -> isize` in `write`",
             ][..],
         ),
         (
@@ -2287,40 +2339,28 @@ fn native_extern_declarations_of_a_symbol_must_agree() {
 }
 
 #[test]
-fn native_extern_declarations_must_match_runtime_imports() {
+fn native_extern_declarations_must_not_name_compiler_symbols() {
     let temp = tempdir().unwrap();
-    for (name, declaration, call, error) in [
-        (
-            "write",
-            "fn write(_ fd: i64, _ buf: *u8, _ len: usize) -> isize",
-            "write(2, core::ptr::alloc_bytes(1), 0)",
-            "native code calls the C library's `write`, so an `extern` declaration of it must be `fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize`",
-        ),
-        (
-            "__fe_revert",
-            "fn __fe_revert(_ data: *u8, _ len: usize)",
-            "__fe_revert(core::ptr::alloc_bytes(1), 0)",
-            "extern symbol `__fe_revert` is reserved: symbols starting with `__fe_` are the compiler's",
-        ),
-    ] {
-        let source = temp.path().join(format!("{name}.fe"));
-        fs::write(
-            &source,
-            format!(
-                "extern {{\n    {declaration}\n}}\npub fn main() -> i32 {{\n    let _ = unsafe {{ {call} }}\n    core::panic()\n}}\n"
-            ),
-        )
+    let source = temp.path().join("reserved.fe");
+    fs::write(
+        &source,
+        "extern {\n    fn __fe_revert(_ data: *u8, _ len: usize)\n}\npub fn main() -> i32 {\n    unsafe { __fe_revert(core::ptr::alloc_bytes(1), 0) }\n    core::panic()\n}\n",
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["build", "--backend", "native", "--out-dir"])
+        .arg(temp.path().join("out"))
+        .arg(&source)
+        .output()
         .unwrap();
-        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
-            .args(["build", "--backend", "native", "--out-dir"])
-            .arg(temp.path().join(format!("out-{name}")))
-            .arg(&source)
-            .output()
-            .unwrap();
-        let output = String::from_utf8_lossy(&result.stderr);
-        assert!(!result.status.success(), "{result:?}");
-        assert!(output.contains(error), "{output}");
-    }
+    let output = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{result:?}");
+    assert!(
+        output.contains(
+            "extern symbol `__fe_revert` is reserved: symbols starting with `__fe_` are the compiler's"
+        ),
+        "{output}"
+    );
 }
 
 #[test]

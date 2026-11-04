@@ -1,0 +1,1 @@
+Native `extern` declarations can name any C function, including those core calls (`malloc`, `free`, `write`, `fflush` and `abort`), as long as every declaration of a symbol has the same C signature. Conflicting declarations are an error that names both. Native code that runs out of memory now panics with `Panic(0x41)`, reported as `panicked: out of memory`, instead of trapping.

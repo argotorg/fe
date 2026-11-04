@@ -24,7 +24,7 @@ use hir::{
         semantic::FieldIndex,
         ty::{AddressSpace, ty_check::BodyOwner},
     },
-    hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
+    hir_def::{ArithBinOp, BinOp, CompBinOp, Func, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
 use mir::runtime::{
@@ -33,12 +33,12 @@ use mir::runtime::{
 };
 use mir::{
     ArrayLayout, ConstNode, ConstRegionId, ConstScalar, FieldPlacement, IntrinsicArithBinOp,
-    Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
-    ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
-    RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
-    RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr,
-    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place, runtime_param_accesses,
-    scalar_raw_memory_size_bytes,
+    Layout, LayoutId, NativeRuntimeFunc, RBlockId, RExpr, RLocalId, RStmt, RTerminator,
+    ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass,
+    RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot,
+    RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp,
+    ScalarClass, ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    runtime_param_accesses, scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
@@ -56,9 +56,9 @@ use sonatina_ir::{
         data::{
             Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, MemAllocDynamic,
-            Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
-            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, Memzero, Mload,
+            Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj,
+            ObjStore, SymAddr, SymSize, SymbolRef,
         },
         downcast,
         evm::{
@@ -92,56 +92,28 @@ const MAX_DIRECT_CALL_ARGS: usize = 16;
 /// same symbol shares its import, so it must declare the same signature.
 #[derive(Clone, Copy)]
 enum HostFunction {
-    Malloc,
-    Free,
     Memmove,
-    Write,
-    Fflush,
-    Abort,
 }
 
 impl HostFunction {
-    const ALL: [Self; 6] = [
-        Self::Malloc,
-        Self::Free,
-        Self::Memmove,
-        Self::Write,
-        Self::Fflush,
-        Self::Abort,
-    ];
+    const ALL: [Self; 1] = [Self::Memmove];
 
     fn symbol(self) -> &'static str {
         match self {
-            Self::Malloc => "malloc",
-            Self::Free => "free",
             Self::Memmove => "memmove",
-            Self::Write => "write",
-            Self::Fflush => "fflush",
-            Self::Abort => "abort",
         }
     }
 
     /// The Fe declaration whose import native code shares.
     fn declaration(self) -> &'static str {
         match self {
-            Self::Malloc => "fn malloc(_ size: usize) -> *u8",
-            Self::Free => "fn free(_ ptr: *u8)",
             Self::Memmove => "fn memmove(_ dest: *u8, _ src: *u8, _ len: usize) -> *u8",
-            Self::Write => "fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize",
-            Self::Fflush => "fn fflush(_ stream: *u8) -> i32",
-            Self::Abort => "fn abort()",
         }
     }
 }
 
-// The native address of every zero-size allocation, which takes nothing from
-// the host. It is aligned for any value and lies in the unmapped first page,
-// so no host allocation has it.
-const NATIVE_EMPTY_ALLOCATION: i64 = 16;
-
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
-const PANIC_OUT_OF_MEMORY: u64 = 0x41;
 
 macro_rules! define_lowering_inst_set {
     ($($inst:ty),+ $(,)?) => {
@@ -289,7 +261,6 @@ where
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
-    lowerer.define_native_panic_functions()?;
     if declare_objects {
         lowerer.declare_objects()?;
     }
@@ -368,7 +339,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     HostFunction::ALL
                         .map(HostFunction::symbol)
                         .into_iter()
-                        .chain(NativePanic::ALL.map(NativePanic::symbol))
                         .chain(HostState::ALL.map(HostState::accessor))
                         .chain(HostState::ALL.map(HostState::global))
                         .collect()
@@ -417,17 +387,9 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let pointer = self.builder.ptr_type(Type::I8);
         let size = self.address_int_ty(AddressSpace::Memory);
         let (args, ret) = match host {
-            HostFunction::Malloc => (vec![size], Some(pointer)),
-            HostFunction::Free => (vec![pointer], None),
-            HostFunction::Memmove => (vec![pointer, pointer, size], Some(pointer)),
-            HostFunction::Write => (vec![Type::I32, pointer, size], Some(size)),
-            HostFunction::Fflush => (vec![pointer], Some(Type::I32)),
-            HostFunction::Abort => (vec![], None),
+            HostFunction::Memmove => (vec![pointer, pointer, size], pointer),
         };
-        let signature = match ret {
-            Some(ret) => Signature::new_single(host.symbol(), Linkage::External, &args, ret),
-            None => Signature::new_unit(host.symbol(), Linkage::External, &args),
-        };
+        let signature = Signature::new_single(host.symbol(), Linkage::External, &args, ret);
         self.builder.declare_function(signature).map_err(|_| {
             LowerError::Unsupported(format!(
                 "native code calls the C library's `{}`, so an `extern` declaration of it must be `{}`",
@@ -513,11 +475,15 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let (mut args, ret) = self.signature_tys(instance)?;
         let symbol = self.function_symbol(instance);
         // The compiler defines the host state accessors that `std::env`
-        // declares, privately to the module.
+        // declares, privately to the module. Only core declares its other
+        // symbols.
         let host_state = HostState::from_accessor(&symbol).filter(|_| self.is_native_target());
         if function.linkage(self.db) == RuntimeLinkage::External
             && symbol.starts_with(COMPILER_SYMBOL_PREFIX)
             && host_state.is_none()
+            && semantic_func(self.db, function).is_none_or(|func| {
+                func.top_mod(self.db).ingot(self.db).kind(self.db) != IngotKind::Core
+            })
         {
             return Err(LowerError::Unsupported(format!(
                 "extern symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
@@ -1098,17 +1064,28 @@ fn assign_sonatina_function_symbols<'db>(
         .collect()
 }
 
+/// The function `function` lowers, unless it is synthetic or another body.
+fn semantic_func<'db>(
+    db: &'db DriverDataBase,
+    function: RuntimeFunction<'db>,
+) -> Option<Func<'db>> {
+    match function
+        .instance(db)
+        .key(db)
+        .semantic(db)?
+        .key(db)
+        .owner(db)
+    {
+        BodyOwner::Func(func, _) => Some(func),
+        _ => None,
+    }
+}
+
 /// An `extern` function's declaration and module, as in "`fn clock() -> i64`
 /// in `std::native`".
 fn describe_extern(db: &DriverDataBase, function: RuntimeFunction<'_>) -> String {
-    let instance = function.instance(db);
-    let func = match instance
-        .key(db)
-        .semantic(db)
-        .map(|semantic| semantic.key(db).owner(db))
-    {
-        Some(BodyOwner::Func(func, _)) => func,
-        _ => return describe_runtime_instance(db, instance),
+    let Some(func) = semantic_func(db, function) else {
+        return describe_runtime_instance(db, function.instance(db));
     };
     // A module's path starts at its ingot, except in a standalone file.
     let mut module = module_path_components_for_scope(db, func.scope());
@@ -1499,9 +1476,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     /// every later one, over an exact attribution chain. They are held back
     /// here and attributed at the end of lowering only if every request came
     /// from the same statement (see `attribute_single_user_shared_helpers`).
-    fn build_shared_helper(&mut self, build: impl FnOnce(&mut Self) -> BlockId) -> BlockId {
+    fn build_shared_helper(
+        &mut self,
+        build: impl FnOnce(&mut Self) -> Result<BlockId, LowerError>,
+    ) -> Result<BlockId, LowerError> {
         let watermark = self.inst_watermark();
-        let block = build(self);
+        let block = build(self)?;
         let insts = (watermark..self.fb.func.dfg.num_insts())
             .map(|index| InstId(index as u32))
             .inspect(|inst| {
@@ -1515,7 +1495,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             origins: Vec::new(),
         });
         self.request_shared_helper(block);
-        block
+        Ok(block)
     }
 
     /// Record that the statement currently being lowered jumps to `block`.
@@ -2290,83 +2270,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         Ok(Lowered::Value(value))
     }
 
-    fn allocate_bytes(&mut self, size: ValueId, pointee: Type) -> Result<ValueId, LowerError> {
-        let ptr_ty = self.fb.ptr_type(pointee);
-        Ok(if self.module.is_native_target() {
-            self.fb.insert_inst(
-                MemAllocDynamic::new(self.module.required_inst::<MemAllocDynamic>()?, size),
-                ptr_ty,
-            )
-        } else {
-            self.fb.insert_inst(
-                EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
-                ptr_ty,
-            )
-        })
-    }
-
-    /// Allocates `size` bytes from the native host. When the host is out of
-    /// memory, a `fallible` allocation is null and any other panics with
-    /// `Panic(0x41)`. A module that traps its panics instead leaves that
-    /// allocation to `mem.alloc_dynamic`, which traps. A zero size
-    /// is `NATIVE_EMPTY_ALLOCATION` instead, so empty owners never reach the
-    /// host.
-    fn lower_native_allocation(
-        &mut self,
-        size: ValueId,
-        fallible: bool,
-    ) -> Result<ValueId, LowerError> {
-        let inst_set = self.module.inst_set();
-        let pointer = self.fb.ptr_type(Type::I8);
-        let entry = self
-            .fb
-            .current_block()
-            .expect("allocation requires a block");
-        let allocate = self.fb.append_block();
-        let done = self.fb.append_block();
-        let empty = self.fb.make_imm_value(NATIVE_EMPTY_ALLOCATION);
-        let empty = self.coerce_value_to_ty(empty, pointer)?;
-        let is_empty = self.fb.insert_inst(IsZero::new(inst_set, size), Type::I1);
-        self.fb
-            .insert_inst_no_result(Br::new(inst_set, is_empty, done, allocate));
-        self.fb.switch_to_block(allocate);
-        let allocated = if fallible || self.module.panics != NativePanics::Trap {
-            let malloc = self.module.host_function(HostFunction::Malloc)?;
-            // Callers bound the size to the address width.
-            let size =
-                self.coerce_value_to_ty(size, self.module.address_int_ty(AddressSpace::Memory))?;
-            let allocated = self
-                .fb
-                .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer);
-            if !fallible {
-                let address = self.coerce_value_to_ty(
-                    allocated,
-                    self.module.address_int_ty(AddressSpace::Memory),
-                )?;
-                let is_null = self
-                    .fb
-                    .insert_inst(IsZero::new(inst_set, address), Type::I1);
-                self.emit_panic_revert(is_null, PANIC_OUT_OF_MEMORY)?;
-            }
-            allocated
-        } else {
-            self.allocate_bytes(size, Type::I8)?
-        };
-        let allocated_block = self
-            .fb
-            .current_block()
-            .expect("allocation requires a block");
-        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-        self.fb.switch_to_block(done);
-        Ok(self.fb.insert_inst(
-            Phi::new(
-                inst_set,
-                smallvec![(empty, entry), (allocated, allocated_block)],
-            ),
-            pointer,
-        ))
-    }
-
     /// `1` when `value < limit` and `0` otherwise, as an i256.
     fn lower_below(&mut self, value: ValueId, limit: u64) -> ValueId {
         let inst_set = self.module.inst_set();
@@ -3005,38 +2908,31 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeBuiltin::Malloc { size } | RuntimeBuiltin::TryMalloc { size } => {
                 let size = self.local_value(*size)?;
+                let pointer = self.fb.ptr_type(Type::I8);
                 if self.module.is_native_target() {
-                    let fallible = matches!(builtin, RuntimeBuiltin::TryMalloc { .. });
-                    self.lower_native_allocation(size, fallible)?
+                    let func = if matches!(builtin, RuntimeBuiltin::TryMalloc { .. }) {
+                        NativeRuntimeFunc::TryAlloc
+                    } else {
+                        NativeRuntimeFunc::Alloc
+                    };
+                    let address = self
+                        .call_native_runtime(func, &[size])?
+                        .expect("an allocation returns its address");
+                    self.coerce_value_to_ty(address, pointer)?
                 } else {
                     // EVM memory runs out only with the gas, so no allocation
                     // fails with a result.
-                    self.allocate_bytes(size, Type::I8)?
+                    self.fb.insert_inst(
+                        EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
+                        pointer,
+                    )
                 }
             }
             RuntimeBuiltin::Free { ptr } => {
                 // EVM memory is never reclaimed.
                 if self.module.is_native_target() {
-                    let inst_set = self.module.inst_set();
-                    let free = self.module.host_function(HostFunction::Free)?;
                     let ptr = self.local_value(*ptr)?;
-                    // A zero-size allocation took nothing from the host.
-                    let address = self.coerce_value_to_ty(ptr, Type::I64)?;
-                    let empty = self.fb.make_imm_value(NATIVE_EMPTY_ALLOCATION);
-                    let is_empty = self
-                        .fb
-                        .insert_inst(Eq::new(inst_set, address, empty), Type::I1);
-                    let release = self.fb.append_block();
-                    let done = self.fb.append_block();
-                    self.fb
-                        .insert_inst_no_result(Br::new(inst_set, is_empty, done, release));
-                    self.fb.switch_to_block(release);
-                    let pointer = self.fb.ptr_type(Type::I8);
-                    let ptr = self.coerce_value_to_ty(ptr, pointer)?;
-                    self.fb
-                        .insert_inst_no_result(Call::new(inst_set, free, smallvec![ptr]));
-                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-                    self.fb.switch_to_block(done);
+                    self.call_native_runtime(NativeRuntimeFunc::Dealloc, &[ptr])?;
                 }
                 zero_for_type(&mut self.fb, Type::Unit)
             }
@@ -3461,10 +3357,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 if self.module.is_native_target() {
-                    let pointer = self.fb.ptr_type(Type::I8);
-                    let data = self.coerce_value_to_ty(offset, pointer)?;
-                    let len = self.coerce_value_to_ty(len, Type::I64)?;
-                    self.insert_native_panic(NativePanic::Revert, smallvec![data, len]);
+                    self.insert_native_panic(NativePanic::Revert, &[offset, len])?;
                 } else {
                     self.fb.insert_inst_no_result(EvmRevert::new(
                         self.module.required_inst::<EvmRevert>()?,
@@ -3473,10 +3366,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     ));
                 }
             }
-            RTerminator::RevertEmpty => self.insert_empty_revert(),
+            RTerminator::RevertEmpty => self.insert_empty_revert()?,
             RTerminator::Panic { code } => {
                 let code = self.local_value(*code)?;
-                self.insert_panic_revert(code);
+                self.insert_panic_revert(code)?;
             }
             RTerminator::SelfDestruct { beneficiary } => {
                 let beneficiary = self.local_value(*beneficiary)?;
@@ -3487,7 +3380,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RTerminator::Trap => {
                 if self.module.is_native_target() {
-                    self.insert_native_panic(NativePanic::Trap, smallvec![]);
+                    self.insert_native_panic(NativePanic::Trap, &[])?;
                 } else {
                     self.fb.insert_inst_no_result(EvmInvalid::new(
                         self.module.required_inst::<EvmInvalid>()?,
@@ -6477,10 +6370,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
-    fn get_or_build_shared_helper(&mut self, kind: SharedHelperKind) -> BlockId {
+    fn get_or_build_shared_helper(
+        &mut self,
+        kind: SharedHelperKind,
+    ) -> Result<BlockId, LowerError> {
         if let Some(&block) = self.shared_helper_blocks.get(&kind) {
             self.request_shared_helper(block);
-            return block;
+            return Ok(block);
         }
         let block = self.build_shared_helper(|this| {
             let block = this.fb.append_block();
@@ -6490,43 +6386,39 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 .expect("shared helper requires current block");
             this.fb.switch_to_block(block);
             match kind {
-                SharedHelperKind::EmptyRevert => this.insert_empty_revert(),
+                SharedHelperKind::EmptyRevert => this.insert_empty_revert()?,
                 SharedHelperKind::Panic(code) => {
                     let code = this.fb.make_imm_value(I256::from(code));
-                    this.insert_panic_revert(code);
+                    this.insert_panic_revert(code)?;
                 }
             }
             this.fb.switch_to_block(current);
-            block
-        });
+            Ok(block)
+        })?;
         let replaced = self.shared_helper_blocks.insert(kind, block);
         debug_assert!(replaced.is_none(), "shared helper was registered twice");
-        block
+        Ok(block)
     }
 
     /// Ends the block at a revert without data.
-    fn insert_empty_revert(&mut self) {
+    fn insert_empty_revert(&mut self) -> Result<(), LowerError> {
         let inst_set = self.module.inst_set();
         if let Some(has_revert) = EvmRevert::belongs_to(inst_set) {
             let zero = zero_for_type(&mut self.fb, Type::I256);
             self.fb
                 .insert_inst_no_result(EvmRevert::new(has_revert, zero, zero));
+            Ok(())
         } else {
-            let pointer = self.fb.ptr_type(Type::I8);
             let zero = self.fb.make_imm_value(0i64);
-            let null = self
-                .fb
-                .insert_inst(IntToPtr::new(inst_set, zero, pointer), pointer);
-            self.insert_native_panic(NativePanic::Revert, smallvec![null, zero]);
+            self.insert_native_panic(NativePanic::Revert, &[zero, zero])
         }
     }
 
     /// Ends the block at a revert with Solidity `Panic(code)` data for the
     /// word `code`. On the EVM, the data is in scratch memory at 0.
-    fn insert_panic_revert(&mut self, code: ValueId) {
+    fn insert_panic_revert(&mut self, code: ValueId) -> Result<(), LowerError> {
         let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
-            self.insert_native_panic(NativePanic::Code, smallvec![code]);
-            return;
+            return self.insert_native_panic(NativePanic::Code, &[code]);
         };
         let zero = self.fb.make_imm_value(I256::zero());
         let selector = self.fb.make_imm_value(panic_selector_immediate());
@@ -6546,21 +6438,52 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         ));
         self.fb
             .insert_inst_no_result(EvmRevert::new(has_revert, zero, len));
+        Ok(())
     }
 
-    /// Ends the block at a native panic through `panic`'s function, or at a
-    /// trap when the module traps.
-    fn insert_native_panic(&mut self, panic: NativePanic, args: SmallVec<[ValueId; 8]>) {
-        if let Some(func) = self.module.native_panic_function(panic) {
-            self.fb
-                .insert_inst_no_result(Call::new(self.module.inst_set(), func, args));
+    /// Ends the block at a native panic through the `core::rt` function the
+    /// module panics through, or at a trap when the module traps.
+    fn insert_native_panic(
+        &mut self,
+        panic: NativePanic,
+        args: &[ValueId],
+    ) -> Result<(), LowerError> {
+        if let Some(func) = self.module.panics.function(panic) {
+            self.call_native_runtime(func, args)?;
         }
         self.fb
             .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+        Ok(())
+    }
+
+    /// Calls the `core::rt` function `func` with `args`, each converted to its
+    /// parameter's type.
+    fn call_native_runtime(
+        &mut self,
+        func: NativeRuntimeFunc,
+        args: &[ValueId],
+    ) -> Result<Option<ValueId>, LowerError> {
+        let db = self.module.db;
+        let instance = func.instance(db, self.module.package.top_mod(db))?;
+        let callee = self.module.func_ref(instance)?;
+        let (params, ret) = self.module.signature_tys(instance)?;
+        let args = args
+            .iter()
+            .zip(params)
+            .map(|(&arg, ty)| self.coerce_value_to_ty(arg, ty))
+            .collect::<Result<SmallVec<[ValueId; 8]>, _>>()?;
+        let call = Call::new(self.module.inst_set(), callee, args);
+        Ok(match ret {
+            Some(ty) => Some(self.fb.insert_inst(call, ty)),
+            None => {
+                self.fb.insert_inst_no_result(call);
+                None
+            }
+        })
     }
 
     fn emit_empty_revert(&mut self, overflow_flag: ValueId) -> Result<(), LowerError> {
-        let revert_block = self.get_or_build_shared_helper(SharedHelperKind::EmptyRevert);
+        let revert_block = self.get_or_build_shared_helper(SharedHelperKind::EmptyRevert)?;
         let continue_block = self.fb.append_block();
         self.fb.insert_inst_no_result(Br::new(
             self.module.inst_set(),
@@ -6573,7 +6496,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     fn emit_panic_revert(&mut self, overflow_flag: ValueId, code: u64) -> Result<(), LowerError> {
-        let revert_block = self.get_or_build_shared_helper(SharedHelperKind::Panic(code));
+        let revert_block = self.get_or_build_shared_helper(SharedHelperKind::Panic(code))?;
         let continue_block = self.fb.append_block();
         self.fb.insert_inst_no_result(Br::new(
             self.module.inst_set(),
