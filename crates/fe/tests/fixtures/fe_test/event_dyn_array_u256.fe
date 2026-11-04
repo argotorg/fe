@@ -10,7 +10,7 @@ impl AbiSize for DynArray<u256> {
 }
 
 impl<A: Abi> Encode<A> for DynArray<u256> {
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.value)
     }
 }

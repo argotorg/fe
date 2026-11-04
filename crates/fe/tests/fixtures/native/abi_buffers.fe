@@ -2,7 +2,7 @@
 // calls what takes a scratch buffer in `core` and `std`. Run under an allocator that
 // requires each allocation to be freed exactly once and unmaps it when it is, so this
 // also checks that nothing reads a value after it is freed.
-use core::abi::{Bytes, Decode, DynString, encode_alloc, store_word}
+use core::abi::{AbiFrame, AbiSize, Bytes, Decode, DynString, Encode, abi_payload_size, encode_alloc, store_word}
 use core::ptr::{self, MemArray, MemBuffer, MemVec}
 use core::text::{concat, decimal, decode_base58, decode_base64}
 use std::abi::{DynArray, Sol, bytes_from_word, bytes_from_words, bytes_from_words_prefix, canonical_dyn_array, dyn_array_from}
@@ -15,6 +15,12 @@ use std::evm::packed::keccak_packed
 const GREETING: DynString = "a constant string of more than thirty-one bytes"
 const PAIR: (DynString, u32) = ("a string in a constant tuple of more than thirty-one bytes", 1)
 const NAMES: [DynString; 2] = ["the first string of a constant array of strings", "the second string of a constant array"]
+
+#[abi]
+pub struct Entry {
+    pub name: DynString,
+    pub parts: [Bytes; 2],
+}
 
 struct Record {
     name: DynString,
@@ -114,8 +120,8 @@ fn records(_ r: u32) -> usize {
     }
 }
 
-// Encodes each type to the Solidity ABI and decodes it, which moves each array element
-// through a raw place.
+// Encodes each type to the Solidity ABI and decodes it, which moves each decoded array
+// element through a raw place.
 fn encoded(_ r: u32) -> usize {
     let names: [DynString; 2] = [decimal(r as u256), "the second string of a long enough array"]
     let encoded_names = encode_alloc<Sol, [DynString; 2]>(names)
@@ -127,6 +133,27 @@ fn encoded(_ r: u32) -> usize {
     let encoded_rows = encode_alloc<Sol, [DynArray<u256>; 2]>(rows)
     let decoded_rows = <[DynArray<u256>; 2] as Decode<Sol>>::decode_from(encoded_rows.span(), 0)
     decoded_names[1].len() + decoded_parts[1].len() + decoded_rows[0].len()
+}
+
+fn encode_view<T>(_ value: T) -> MemBuffer
+    where T: Encode<Sol> + AbiSize
+{
+    let total = abi_payload_size(value)
+    let buffer = MemBuffer::new(ptr::allocation_len(total))
+    value.encode(unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) })
+    buffer
+}
+
+// Encoding reads a value, so each of these is whole after being encoded twice, and is
+// freed once.
+fn encoded_twice(_ r: u32) -> usize {
+    let array: [Bytes; 2] = [Bytes::empty(), Bytes::from_word_prefix(word: r as u256, len: 32)]
+    let tuple = (decimal(r as u256), Bytes::from_word_prefix(word: r as u256, len: 5))
+    let entry = Entry { name: decimal(r as u256), parts: [Bytes::empty(), Bytes::from_word_prefix(word: r as u256, len: 5)] }
+    let encodings = encode_view(array).len() + encode_view(array).len()
+        + encode_view(tuple).len() + encode_view(tuple).len()
+        + encode_view(entry).len() + encode_view(entry).len()
+    encodings + array[1].len() + tuple.1.len() + entry.parts[1].len()
 }
 
 fn scratch_buffers(_ r: u32) {
@@ -170,6 +197,7 @@ pub fn main() -> i32 {
         core::assert(arrays(r) == 32 + 32 + 3 + 0 + 3 + 1 + 2)
         core::assert(records(r) == 5 + 5 + 1)
         core::assert(encoded(r) == 40 + 32 + 1)
+        core::assert(encoded_twice(r) == 2 * (160 + 192 + 288) + 32 + 5 + 5)
         scratch_buffers(r)
         r += 1
     }

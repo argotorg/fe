@@ -377,21 +377,21 @@ func private %abi_payload_size__gda9b(v0.i1) -> i256 {
         return v2;
 }
 
-func private %abi_payload_size__g900f(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %impl_trait_____payload_size__ge513 v0;
-        return v2;
-}
-
 func private %abi_payload_size__g79ff(v0.i8) -> i256 {
     block0:
         jump block1;
 
     block1:
         v2.i256 = call %payload_size__g79ff v0;
+        return v2;
+}
+
+func private %abi_payload_size__g900f(noalias nocapture v0.objref<@layout_0>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %impl_trait_____payload_size__ge513 v0;
         return v2;
 }
 
@@ -2459,6 +2459,18 @@ func inline(always) private %impl_trait_u256__encode__gf13e(v0.i256, v1.@layout_
         return;
 }
 
+func inline(always) private %encode__gac80(noalias nocapture v0.objref<@layout_0>, v1.@layout_3) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v7.@layout_3 = call %tail v1 32.i256;
+        v8.i256 = obj.load v4;
+        v9.@layout_3 = call %encode_field__gac80 v8 v1 0.i256 v7;
+        return;
+}
+
 func inline(always) private %impl_trait_bool__encode__gf13e(v0.i1, v1.@layout_3) {
     block0:
         jump block1;
@@ -2508,15 +2520,17 @@ func inline(always) private %encode_alloc__g09ca(v0.i1) -> @layout_11 {
 
 func inline(always) private %encode_alloc__g727c(v0.@layout_0) -> @layout_11 {
     block0:
+        v1.objref<@layout_0> = obj.alloc @layout_0;
+        obj.store v1 v0;
         jump block1;
 
     block1:
-        v2.i256 = call %abi_payload_size__g900f v0;
+        v2.i256 = call %abi_payload_size__g900f v1;
         v3.i256 = call %allocation_len v2;
         v4.@layout_11 = call %impl_MemBuffer__new v3;
         v5.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b935 v4;
         v6.@layout_3 = call %from_raw_parts v5 v2;
-        call %encode__gac80 v0 v6;
+        call %encode__gac80 v1 v6;
         return v4;
 }
 
@@ -2560,17 +2574,6 @@ func inline(always) private %encode_alloc__gac80(v0.i256) -> @layout_11 {
         v6.@layout_3 = call %from_raw_parts v5 v2;
         call %impl_trait_u256__encode__gf13e v0 v6;
         return v4;
-}
-
-func inline(always) private %encode__gac80(v0.@layout_0, v1.@layout_3) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = extract_value v0 0.i256;
-        v7.@layout_3 = call %tail v1 32.i256;
-        v8.@layout_3 = call %encode_field__gac80 v4 v1 0.i256 v7;
-        return;
 }
 
 func inline(always) private %encode__g4320(v0.i256, v1.@layout_3) {
@@ -3617,15 +3620,16 @@ func private %payload_size__g79ff(v0.i8) -> i256 {
         return 32.i256;
 }
 
-func inline(always) private %impl_trait_____payload_size__ge513(v0.@layout_0) -> i256 {
+func inline(always) private %impl_trait_____payload_size__ge513(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 0.i256;
-        v5.i256 = call %dynamic_payload_size v4;
-        v6.i256 = add 32.i256 v5;
-        return v6;
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        v6.i256 = call %dynamic_payload_size v5;
+        v7.i256 = add 32.i256 v6;
+        return v7;
 }
 
 func private %payload_size__gda9b(v0.i1) -> i256 {

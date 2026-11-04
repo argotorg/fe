@@ -14,7 +14,7 @@ impl<const N: u256> core::abi::AbiSize for Bounded<N> {
 }
 
 impl<const N: u256> core::abi::Encode<std::abi::Sol> for Bounded<N> {
-    fn encode(own self, _ out: core::abi::AbiFrame) {
+    fn encode(self, _ out: core::abi::AbiFrame) {
         let Self { value } = self
         value.encode(out)
     }

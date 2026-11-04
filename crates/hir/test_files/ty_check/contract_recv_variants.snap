@@ -17,10 +17,10 @@ note:
    │     ^^^^^^^^ () | AbiFrame | Withdraw | __fe_D | __fe_I | fn decode_field<Sol, u64, __fe_D, __fe_I> | fn decode_msg_field_from<Sol, u64, __fe_I> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64> | u256 | u64
 
 note:
-   ┌─ contract_recv_variants.fe:31:57
+   ┌─ contract_recv_variants.fe:31:53
    │
-31 │           fn encode(own self, _ out: core::abi::AbiFrame) {
-   │ ╭─────────────────────────────────────────────────────────^
+31 │           fn encode(self, _ out: core::abi::AbiFrame) {
+   │ ╭─────────────────────────────────────────────────────^
 32 │ │             let Self { to, amount } = self
 33 │ │             to.encode(out.slice(offset: 0, len: 32))
 34 │ │             amount.encode(out.slice(offset: 32, len: 32))
@@ -225,10 +225,10 @@ note:
    │                        ^^^^^^ u64
 
 note:
-   ┌─ contract_recv_variants.fe:61:57
+   ┌─ contract_recv_variants.fe:61:53
    │
-61 │           fn encode(own self, _ out: core::abi::AbiFrame) {
-   │ ╭─────────────────────────────────────────────────────────^
+61 │           fn encode(self, _ out: core::abi::AbiFrame) {
+   │ ╭─────────────────────────────────────────────────────^
 62 │ │             let Self { addr } = self
 63 │ │             addr.encode(out)
 64 │ │         }
@@ -329,10 +329,10 @@ note:
    │                    ^^^^ u64
 
 note:
-   ┌─ contract_recv_variants.fe:93:53
+   ┌─ contract_recv_variants.fe:93:49
    │
-93 │       fn encode(own self, _ out: core::abi::AbiFrame) {
-   │ ╭─────────────────────────────────────────────────────^
+93 │       fn encode(self, _ out: core::abi::AbiFrame) {
+   │ ╭─────────────────────────────────────────────────^
 94 │ │         let Self { key } = self
 95 │ │         key.encode(out)
 96 │ │     }

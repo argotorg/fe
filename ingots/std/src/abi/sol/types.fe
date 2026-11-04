@@ -390,7 +390,7 @@ impl<A: Abi, const N: usize> Decode<A> for FixedBytes<N> {
 
 impl<A: Abi, const N: usize> Encode<A> for FixedBytes<N> {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.word())
     }
 }

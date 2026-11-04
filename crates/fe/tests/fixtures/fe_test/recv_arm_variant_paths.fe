@@ -49,7 +49,7 @@ mod Manual {
     }
 
     impl<T> core::abi::Encode<std::abi::Sol> for G<T> {
-        fn encode(own self, _ out: core::abi::AbiFrame) {
+        fn encode(self, _ out: core::abi::AbiFrame) {
             let Self { value } = self
             value.encode(out)
         }

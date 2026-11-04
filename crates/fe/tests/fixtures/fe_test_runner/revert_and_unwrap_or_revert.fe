@@ -18,7 +18,7 @@ impl AbiSize for MyError {
 }
 
 impl<A: Abi> Encode<A> for MyError {
-    fn encode(own self, _ out: core::abi::AbiFrame) {
+    fn encode(self, _ out: core::abi::AbiFrame) {
         out.store_word(at: 0, value: self.to_int())
     }
 }
@@ -94,7 +94,7 @@ impl AbiSize for Inner {
 }
 
 impl<A: Abi> Encode<A> for Inner {
-    fn encode(own self, _ out: core::abi::AbiFrame) {
+    fn encode(self, _ out: core::abi::AbiFrame) {
         out.store_word(at: 0, value: self.code)
     }
 }
@@ -110,7 +110,7 @@ impl AbiSize for Outer {
 }
 
 impl<A: Abi> Encode<A> for Outer {
-    fn encode(own self, _ out: core::abi::AbiFrame) {
+    fn encode(self, _ out: core::abi::AbiFrame) {
         self.inner.encode(out.slice(offset: 0, len: 32))
         out.store_word(at: 32, value: self.extra)
     }

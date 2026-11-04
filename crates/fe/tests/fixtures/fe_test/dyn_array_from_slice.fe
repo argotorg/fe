@@ -11,12 +11,6 @@ pub struct Entry {
     pub data: Bytes,
 }
 
-impl Clone for Entry {
-    fn clone(self) -> Self {
-        Entry { id: self.id, data: self.data.clone() }
-    }
-}
-
 msg Build {
     #[selector = 0x01]
     Parts {} -> DynArray<Bytes>,

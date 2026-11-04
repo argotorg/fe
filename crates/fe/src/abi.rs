@@ -1174,7 +1174,7 @@ impl<T> core::abi::AbiSize for GenericMsg<T>
 impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Encode<std::abi::Sol>
 {
-    fn encode(own self, _ out: core::abi::AbiFrame) {
+    fn encode(self, _ out: core::abi::AbiFrame) {
         let Self { value } = self
         value.encode(out)
     }
@@ -1240,7 +1240,7 @@ struct Weird {
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    fn encode(own self, _ out: core::abi::AbiFrame) {
+    fn encode(self, _ out: core::abi::AbiFrame) {
         self.flag.encode(out.slice(offset: 0, len: 32))
         self.amount.encode(out.slice(offset: 32, len: 32))
     }
@@ -1300,7 +1300,7 @@ mod TokenMsg {
     }
 
     impl core::abi::Encode<std::abi::Sol> for Transfer {
-        fn encode(own self, _ out: core::abi::AbiFrame) {
+        fn encode(self, _ out: core::abi::AbiFrame) {
             self.to.encode(out.slice(offset: 0, len: 32))
             self.amount.encode(out.slice(offset: 32, len: 32))
         }

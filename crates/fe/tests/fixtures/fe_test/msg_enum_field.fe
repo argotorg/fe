@@ -42,7 +42,7 @@ impl Decode<Sol> for PostOpMode {
 }
 
 impl Encode<Sol> for PostOpMode {
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         let value: u256 = match self {
             PostOpMode::OpSucceeded => 0,
             PostOpMode::OpReverted => 1,

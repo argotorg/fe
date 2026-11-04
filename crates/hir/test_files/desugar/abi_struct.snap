@@ -42,14 +42,12 @@ impl core::abi::AbiSpan<std::abi::Sol> for Key {
 impl core::abi::Encode<std::abi::Sol> for Key {
 
     #[inline(always)]
-    fn encode(own self, _ __fe_out: core::abi::AbiFrame) {
+    fn encode(self, _ __fe_out: core::abi::AbiFrame) {
         var __fe_tails = __fe_out.tail(<Self as core::abi::AbiSize>::HEAD_SIZE)
         var __fe_head_pos = 0
-        let __fe_field_0 = self.currency0
-        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(__fe_field_0, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.currency0, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
         __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-        let __fe_field_1 = self.fee
-        core::abi::encode_field<std::abi::Sol, u32>(__fe_field_1, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        core::abi::encode_field<std::abi::Sol, u32>(self.fee, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
     }
 }
 
@@ -125,26 +123,20 @@ impl core::abi::AbiSpan<std::abi::Sol> for Hop {
 impl core::abi::Encode<std::abi::Sol> for Hop {
 
     #[inline(always)]
-    fn encode(own self, _ __fe_out: core::abi::AbiFrame) {
+    fn encode(self, _ __fe_out: core::abi::AbiFrame) {
         var __fe_tails = __fe_out.tail(<Self as core::abi::AbiSize>::HEAD_SIZE)
         var __fe_head_pos = 0
-        let __fe_field_0 = self.key
-        __fe_tails = core::abi::encode_field<std::abi::Sol, Key>(__fe_field_0, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        __fe_tails = core::abi::encode_field<std::abi::Sol, Key>(self.key, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
         __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<Key>()
-        let __fe_field_1 = self.data
-        __fe_tails = core::abi::encode_field<std::abi::Sol, Bytes>(__fe_field_1, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        __fe_tails = core::abi::encode_field<std::abi::Sol, Bytes>(self.data, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
         __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<Bytes>()
-        let __fe_field_2 = self.base
-        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(__fe_field_2, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.base, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
         __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-        let __fe_field_3 = self.pos
-        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(__fe_field_3, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.pos, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
         __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-        let __fe_field_4 = self.input_len
-        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(__fe_field_4, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.input_len, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
         __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-        let __fe_field_5 = self.ptr
-        core::abi::encode_field<std::abi::Sol, u256>(__fe_field_5, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        core::abi::encode_field<std::abi::Sol, u256>(self.ptr, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
     }
 }
 
