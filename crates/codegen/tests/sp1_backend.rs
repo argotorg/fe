@@ -145,9 +145,9 @@ fn sp1_rejects_host_argv_entry() {
     )
     .expect_err("SP1 runtime requires a zero-argument entry");
     assert!(
-        error
-            .to_string()
-            .contains("native executable output requires `pub fn main() -> i32`"),
+        error.to_string().contains(
+            "native executable output requires `pub fn main()` or `pub fn main() -> i32`"
+        ),
         "{error}"
     );
 }

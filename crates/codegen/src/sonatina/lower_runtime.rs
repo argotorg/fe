@@ -90,6 +90,7 @@ const MAX_DIRECT_CALL_ARGS: usize = 16;
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
+const PANIC_INDEX_OUT_OF_BOUNDS: u64 = 0x32;
 
 macro_rules! define_lowering_inst_set {
     ($($inst:ty),+ $(,)?) => {
@@ -6593,7 +6594,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 .expect("`lt` has a result"),
             len,
         });
-        self.emit_empty_revert(out_of_bounds)?;
+        // EVM keeps the cheaper empty revert. A native panic reports its reason.
+        if self.module.is_native_target() {
+            self.emit_panic_revert(out_of_bounds, PANIC_INDEX_OUT_OF_BOUNDS)?;
+        } else {
+            self.emit_empty_revert(out_of_bounds)?;
+        }
         Ok(index)
     }
 

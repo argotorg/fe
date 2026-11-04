@@ -301,7 +301,7 @@ With the optional `cranelift` Cargo feature, `fe build --backend native` compile
 (x86-64 Linux or AArch64 macOS). `--emit` selects:
 
 - `executable` (the default): `<out>/<name>`, entered at the root module's
-  `pub fn main() -> i32`, whose result is the exit status.
+  `pub fn main()`, which exits with 0, or `pub fn main() -> i32`, whose result is the exit status.
 - `object`: `<out>/<name>.o`, the object of the `#[unsafe(export)]` functions in the file or ingot.
 - `staticlib`: `<out>/lib<name>.a`, a static library holding that object.
 - `ir`: `<out>/<name>.native.sona`, the Sonatina IR of the executable or, with `object` or

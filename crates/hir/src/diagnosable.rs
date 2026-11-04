@@ -5,6 +5,7 @@
 //! logic from `core::semantic` is being migrated here to keep the main
 //! traversal surface free of diagnostic concerns.
 
+use common::{compilation::Target, ingot::IngotKind};
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use thin_vec::ThinVec;
@@ -24,7 +25,7 @@ use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::{
     TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
 };
-use crate::analysis::ty::ty_def::{BorrowKind, InvalidCause, ShapeMode, TyData, TyId};
+use crate::analysis::ty::ty_def::{BorrowKind, InvalidCause, PrimTy, ShapeMode, TyData, TyId};
 use crate::analysis::ty::ty_error::{
     collect_ty_lower_errors, emit_invalid_ty_error, path_generic_args, trait_ref_arg_diags,
 };
@@ -407,6 +408,57 @@ impl<'db> Func<'db> {
         .flatten()
         .map(|(span, issue)| TyLowerDiag::InvalidExport { span, issue }.into())
         .collect()
+    }
+
+    /// Natively, `main` returns an exit status or nothing, and a function that C
+    /// calls or that calls C passes only values with a C form. `core` and `std`
+    /// declare compiler intrinsics as `extern` too.
+    pub fn diags_native_signature(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        if db.compilation_settings().target(db) != Target::Native {
+            return Vec::new();
+        }
+        let ret = self.return_ty(db);
+        let mut diags = Vec::new();
+        if self.is_main_entry(db)
+            && ret != TyId::unit(db)
+            && ret.as_prim(db) != Some(PrimTy::I32)
+            && !ret.has_invalid(db)
+        {
+            diags.push(
+                TyLowerDiag::InvalidMainReturn {
+                    span: self.span().ret_ty().into(),
+                    ty: ret,
+                }
+                .into(),
+            );
+        }
+        let exported = self.is_exported(db);
+        let foreign = self.is_extern(db)
+            && !matches!(
+                self.top_mod(db).ingot(db).kind(db),
+                IngotKind::Core | IngotKind::Std
+            );
+        if !exported && !foreign {
+            return diags;
+        }
+        let invalid = |span: DynLazySpan<'db>, ty, mutable| {
+            TyDiagCollection::from(TyLowerDiag::InvalidCAbi {
+                span,
+                ty,
+                mutable,
+                exported,
+            })
+        };
+        diags.extend(self.params(db).enumerate().filter_map(|(idx, param)| {
+            let ty = param.ty(db);
+            let mutable = param.mode_at(db, None) == FuncParamMode::Mut;
+            (mutable || !has_c_form(db, ty))
+                .then(|| invalid(self.span().params().param(idx).ty().into(), ty, mutable))
+        }));
+        if !(has_c_form(db, ret) || ret.is_never(db)) {
+            diags.push(invalid(self.span().ret_ty().into(), ret, false));
+        }
+        diags
     }
 
     /// A row's components carry their own modes, so a `uses` entry naming a
@@ -2281,6 +2333,26 @@ impl<'db> Diagnosable<'db> for GenericParamOwner<'db> {
     }
 }
 
+/// Whether C can pass a `ty`. An invalid type reports elsewhere, and a generic
+/// one is checked when codegen lowers its instance.
+fn has_c_form<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty.has_invalid(db)
+        || ty.has_param(db)
+        || ty == TyId::unit(db)
+        || ty.as_ptr(db).is_some()
+        || matches!(
+            ty.as_prim(db),
+            Some(
+                PrimTy::I32
+                    | PrimTy::U32
+                    | PrimTy::I64
+                    | PrimTy::U64
+                    | PrimTy::Isize
+                    | PrimTy::Usize
+            )
+        )
+}
+
 impl<'db> Diagnosable<'db> for Func<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
@@ -2292,6 +2364,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         out.extend(self.diags_return(db));
         out.extend(self.diags_effects(db));
         out.extend(self.diags_export(db));
+        out.extend(self.diags_native_signature(db));
         out.extend(self.diags_view_types(db));
         out.extend(self.diags_state_only_types(db));
 

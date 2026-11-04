@@ -488,7 +488,8 @@ pub fn build_native_package<'db>(
     if kind == NativeOutputKind::Executable {
         let main = top_mod.main_entry(db).ok_or_else(|| {
             LowerError::Unsupported(
-                "native executable output requires `pub fn main() -> i32`".to_string(),
+                "native executable output requires `pub fn main()` or `pub fn main() -> i32`"
+                    .to_string(),
             )
         })?;
         symbols.insert("main".to_string(), main);

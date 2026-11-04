@@ -26,6 +26,9 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args) {
         let _ = kind / (kind - 6)
     }
     if kind == 7 {
+        std::evm::revert_empty()
+    }
+    if kind == 8 {
         let bytes: [u8; 2] = [1, 2]
         let _ = bytes[kind]
     }
