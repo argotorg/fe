@@ -2162,7 +2162,8 @@ pub fn emit_test_module_sonatina(
                                     mir::RuntimeSyntheticSpec::TestRoot { callee, .. },
                                 ) => {
                                     let semantic = callee.key(db).semantic(db)?;
-                                    let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
+                                    let BodyOwner::Func(func, _) = semantic.key(db).owner(db)
+                                    else {
                                         return None;
                                     };
                                     (func.scope(), "function", func.name(db).to_opt()?)

@@ -1,4 +1,4 @@
-use std::evm::{Call, Create, Evm, revert_error}
+use std::evm::{Call, Create, Evm, Wei, revert_error}
 
 #[error]
 pub struct Unsettled {
@@ -27,11 +27,11 @@ pub contract Manager {
 
 #[test]
 fn nested_failure() uses (evm: mut Evm) {
-    let manager = evm.create2<Manager>(value: 0, args: (7,), salt: 1)
-    evm.call(addr: manager, gas: 1000000, value: 0, message: ManagerMsg::Settle {})
+    let manager = evm.create2<Manager>(value: Wei::zero(), args: (7,), salt: 1)
+    evm.call(addr: manager, gas: 1000000, value: Wei::zero(), message: ManagerMsg::Settle {})
 }
 
 #[test]
 fn constructor_failure() uses (evm: mut Evm) {
-    let manager = evm.create2<Manager>(value: 0, args: (0,), salt: 2)
+    let manager = evm.create2<Manager>(value: Wei::zero(), args: (0,), salt: 2)
 }

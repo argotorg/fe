@@ -18,8 +18,8 @@ use hir::{
         },
     },
     hir_def::{
-        Contract, FieldDefListId, Func, GenericParamOwner, IdentId, PathId, Struct, Trait,
-        scope_graph::ScopeId,
+        Contract, FieldDefListId, Func, GenericParamOwner, IdentId, PathId, Struct, TopLevelMod,
+        Trait, scope_graph::ScopeId,
     },
 };
 use serde::Serialize;
