@@ -343,6 +343,8 @@ fn fixed_array_pair_read_leaves_no_loop(fixture: Fixture<&str>) {
         !ir.contains("obj.") && !ir.contains("phi") && !ir.contains("mload"),
         "the pair should leave no array object, loop or load from memory:\n{ir}"
     );
+    // The only allocation left holds the return value.
+    assert_eq!(ir.matches("evm_malloc").count(), 1, "{ir}");
 }
 
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "storage_map_root_effect_reports_runtime_root_error.fe")]
