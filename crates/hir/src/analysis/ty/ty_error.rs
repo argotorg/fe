@@ -592,9 +592,10 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
 
         // This will report errors with nested types that are fundamental to the nested type,
         // but will not catch cases where the nested type is fine on its own, but incompatible
-        // with the current type we're visiting. If !did_find_child_err, we use a TyVisitor to
-        // report a diag about a nested invalid type; the downside of this is that the diag's
-        // span will be too wide (it'll be the span of the current type, not the nested type).
+        // with the current type we're visiting. An invalid nested type makes the current type
+        // invalid too, so it's only reported here if no nested type reported an error; the
+        // downside of this is that the diag's span will be too wide (it'll be the span of the
+        // current type, not the nested type).
         let before = self.diags.len();
         // If the semantic type is a const type, don't traverse the underlying HIR type
         // structure as a normal type. Const expressions inside types are validated via
@@ -603,7 +604,9 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         if !ty.is_const_ty(self.db) {
             walk_type(self, ctxt, hir_ty);
         }
-        let did_fild_child_err = self.diags.len() > before;
+        if self.diags.len() > before {
+            return;
+        }
 
         let span = ctxt.span().unwrap().into();
         match ty.data(self.db) {
@@ -623,7 +626,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 //
                 // We could match other TyId structures manually to refine the spans
                 // for common error cases.
-                if !did_fild_child_err && ty.has_invalid(self.db) {
+                if ty.has_invalid(self.db) {
                     self.push_opt_diag(emit_invalid_ty_error(self.db, ty, span))
                 }
             }
