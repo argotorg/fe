@@ -527,10 +527,10 @@ mod math {
     pub fn add(_ a: i64, _ b: i64) -> i64 { a - b }
 }
 
-#[export]
+#[unsafe(export)]
 pub fn add(_ a: i64, _ b: i64) -> i64 { a + b }
 
-#[export]
+#[unsafe(export)]
 pub fn store(_ p: *i64, _ value: i64) {
     unsafe { *p = value }
 }
@@ -567,31 +567,35 @@ pub fn main() -> i32 {
 fn native_exports_reject_symbols_and_values_c_cannot_share() {
     for (source, error) in [
         (
-            "#[export]\npub fn narrow(_ a: u8, _ b: bool) -> u8 { a }",
+            "#[unsafe(export)]\npub fn narrow(_ a: u8, _ b: bool) -> u8 { a }",
             "exported function `narrow` must take and return i32/i64 or raw-pointer ABI values, found lowered `narrow(i8, i1) -> i8`",
         ),
         (
-            "#[export]\npub fn wide(_ a: u256) -> u256 { a }",
+            "#[unsafe(export)]\npub fn wide(_ a: u256) -> u256 { a }",
             "found lowered `wide(i256) -> i256`",
         ),
         (
-            "#[export]\npub fn bump(_ a: mut i64) { a += 1 }",
+            "#[unsafe(export)]\npub fn bump(_ a: mut i64) { a += 1 }",
             "found lowered `bump(objref<i64>)`",
         ),
         (
-            "#[export]\npub fn write(_ a: i64) -> i64 { a }",
-            "exported symbol `write` is reserved: native code imports `write`",
+            "mod host {\n    extern {\n        pub fn shared(_ a: i32) -> i32\n    }\n}\n#[unsafe(export)]\npub fn shared(_ a: i64) -> i64 { a }\n#[unsafe(export)]\npub fn call() -> i32 { unsafe { host::shared(1) } }",
+            "conflicting declarations of `shared`",
         ),
         (
-            "#[export]\npub fn __fe_answer() -> i64 { 42 }",
+            "#[unsafe(export)]\npub fn environ() -> i64 { 1 }",
+            "exported symbol `environ` is reserved: native code reads the C library's `environ` variable",
+        ),
+        (
+            "#[unsafe(export)]\npub fn __fe_answer() -> i64 { 42 }",
             "exported symbol `__fe_answer` is reserved: symbols starting with `__fe_` are the compiler's",
         ),
         (
-            "mod a {\n    #[export]\n    pub fn same() -> i64 { 1 }\n}\n#[export]\npub fn same() -> i64 { 2 }",
+            "mod a {\n    #[unsafe(export)]\n    pub fn same() -> i64 { 1 }\n}\n#[unsafe(export)]\npub fn same() -> i64 { 2 }",
             "`native_exports_reject::a::same` and `native_exports_reject::same` both define the native symbol `same`",
         ),
         (
-            "mod cli {\n    #[export]\n    pub fn main() -> i32 { 1 }\n}",
+            "mod cli {\n    #[unsafe(export)]\n    pub fn main() -> i32 { 1 }\n}",
             "`native_exports_reject::main` and `native_exports_reject::cli::main` both define the native symbol `main`",
         ),
     ] {

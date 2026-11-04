@@ -284,24 +284,16 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 builder.ctx.triple.architecture,
             )));
         }
-        let native = is_native_architecture(builder.ctx.triple.architecture);
-        // A function defining a symbol native code imports would replace it.
         for &(_, symbol) in fixed_symbols {
             if symbol.starts_with(COMPILER_SYMBOL_PREFIX) {
                 return Err(LowerError::Unsupported(format!(
                     "exported symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
                 )));
             }
-            if package.functions(db).iter().any(|function| {
-                function.linkage(db) == RuntimeLinkage::External
-                    && semantic_func(db, *function).is_some_and(|func| {
-                        func.name(db)
-                            .to_opt()
-                            .is_some_and(|name| name.data(db) == symbol)
-                    })
-            }) {
+            // An object's symbol is a function or data, not both.
+            if symbol == HostState::Environ.global() {
                 return Err(LowerError::Unsupported(format!(
-                    "exported symbol `{symbol}` is reserved: native code imports `{symbol}`"
+                    "exported symbol `{symbol}` is reserved: native code reads the C library's `{symbol}` variable"
                 )));
             }
         }
@@ -312,20 +304,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             package,
             func_map: FxHashMap::default(),
             argument_packs: FxHashMap::default(),
-            func_symbols: assign_sonatina_function_symbols(
-                db,
-                package,
-                fixed_symbols,
-                &if native {
-                    HostState::ALL
-                        .map(HostState::accessor)
-                        .into_iter()
-                        .chain(HostState::ALL.map(HostState::global))
-                        .collect()
-                } else {
-                    Vec::new()
-                },
-            ),
+            func_symbols: assign_sonatina_function_symbols(db, package, fixed_symbols),
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
             layout_names: FxHashMap::default(),
@@ -405,26 +384,34 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 
     fn declare_functions(&mut self) -> Result<(), LowerError> {
         let db = self.db;
-        // Every `extern` declaration of a symbol shares its first one's import.
-        let mut imports = FxHashMap::default();
-        for &function in self.package.functions(db) {
+        // A symbol has one function, so an `extern` declaration of an exported
+        // function calls it, and every other `extern` declaration of a symbol
+        // shares its first one's import. Definitions come first, to give the
+        // function its linkage.
+        let (imports, definitions): (Vec<_>, Vec<_>) = self
+            .package
+            .functions(db)
+            .iter()
+            .copied()
+            .partition(|function| function.linkage(db) == RuntimeLinkage::External);
+        let mut declared = FxHashMap::default();
+        for function in definitions.into_iter().chain(imports) {
             let signature = self.lower_signature(function)?;
             let symbol = signature.name().to_string();
             let external = function.linkage(db) == RuntimeLinkage::External;
-            let func_ref = self
-                .builder
-                .declare_function(signature)
-                .map_err(|err| match imports.get(&symbol).filter(|_| external) {
-                    Some(&first) => LowerError::Unsupported(format!(
-                        "conflicting `extern` declarations of `{symbol}`: {} and {}",
-                        describe_extern(db, first),
-                        describe_extern(db, function),
-                    )),
-                    None => LowerError::Internal(format!("failed to declare function: {err}")),
+            let func_ref =
+                self.builder.declare_function(signature).map_err(|err| {
+                    match declared.get(&symbol).filter(|_| external) {
+                        Some(&(first, first_external)) => LowerError::Unsupported(format!(
+                            "conflicting {}declarations of `{symbol}`: {} and {}",
+                            if first_external { "`extern` " } else { "" },
+                            describe_extern(db, first),
+                            describe_extern(db, function),
+                        )),
+                        None => LowerError::Internal(format!("failed to declare function: {err}")),
+                    }
                 })?;
-            if external {
-                imports.entry(symbol).or_insert(function);
-            }
+            declared.entry(symbol).or_insert((function, external));
             self.apply_inline_hint(func_ref, function.inline_hint(self.db));
             self.func_map.insert(function.instance(self.db), func_ref);
         }
@@ -989,7 +976,6 @@ fn assign_sonatina_function_symbols<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
     fixed_symbols: &[(RuntimeInstance<'db>, &str)],
-    reserved: &[&str],
 ) -> FxHashMap<mir::RuntimeInstance<'db>, String> {
     let functions = package.functions(db);
     let inputs = functions
@@ -1020,7 +1006,7 @@ fn assign_sonatina_function_symbols<'db>(
         .collect::<Vec<_>>();
     functions
         .iter()
-        .zip(assign_function_symbols(db, &inputs, reserved))
+        .zip(assign_function_symbols(db, &inputs))
         .map(|(function, symbol)| (function.instance(db), symbol))
         .collect()
 }
@@ -6762,7 +6748,7 @@ impl<T> Pipe for T {}
 
 /// Whether C passes `ty` as Fe does: an `i32`, an `i64` or a pointer. Only
 /// these cross between Fe and C, through `extern` declarations and
-/// `#[export]` functions.
+/// `#[unsafe(export)]` functions.
 pub(super) fn is_c_abi_value(ty: &Type, ctx: &ModuleCtx) -> bool {
     matches!(ty, Type::I32 | Type::I64) || ty.is_pointer(ctx)
 }

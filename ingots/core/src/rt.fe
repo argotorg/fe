@@ -1,7 +1,8 @@
 //! The native runtime. Native code calls these functions to allocate memory
 //! and to report panics; the EVM calls none of them. Their C functions are
 //! ordinary `extern` declarations, so a program's own declarations of the
-//! same functions must agree with them.
+//! same functions must agree with them, and an `#[unsafe(export)]` of one
+//! replaces it here too.
 //!
 //! The reports never panic themselves: their arithmetic wraps and their
 //! memory accesses are raw.

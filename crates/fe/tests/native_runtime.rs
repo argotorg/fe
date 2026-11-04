@@ -806,7 +806,7 @@ math = true
     .unwrap();
     fs::write(
         root.join("math/src/lib.fe"),
-        "#[export]\npub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
+        "#[unsafe(export)]\npub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
     )
     .unwrap();
     fs::write(
@@ -3369,5 +3369,118 @@ fn native_clock_reads_wall_and_monotonic_time() {
             "spun 20 ms: true\nsince a later reading: 0\n2 s, 2499 ms, 2499750 us, 2499750000 ns\ntrue true\n",
             "O{level}"
         );
+    }
+}
+
+#[test]
+fn native_exports_replace_the_symbols_native_code_imports() {
+    // Each export leaves a mark, which shows that native code called it: the
+    // allocator of `core::rt`, the backend's copy, and a Fe `extern`.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("replaced.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+use std::env::Args
+
+extern {
+    fn calloc(_ count: usize, _ size: usize) -> *u8
+}
+
+mod host {
+    extern {
+        pub fn shared(_ x: i64) -> i64
+    }
+}
+
+#[unsafe(export)]
+pub fn malloc(_ size: usize) -> *u8 {
+    let bytes = unsafe { calloc(1, size) }
+    unsafe { *bytes = 77 }
+    bytes
+}
+
+#[unsafe(export)]
+pub fn memmove(_ dest: *u8, _ src: *u8, _ len: usize) -> *u8 {
+    var i: usize = 0
+    while i < len {
+        unsafe { *ptr::offset_bytes(dest, i) = *ptr::offset_bytes(src, i) }
+        i += 1
+    }
+    unsafe { *dest = 99 }
+    dest
+}
+
+#[unsafe(export)]
+pub fn shared(_ x: i64) -> i64 {
+    x + 1
+}
+
+pub fn main() -> i32 uses (args: Args) {
+    let len = 200 * args.count()
+    let source = ptr::alloc_bytes(len)
+    if unsafe { *source } != 77 {
+        return 1
+    }
+    let dest = ptr::alloc_bytes(len)
+    unsafe {
+        ptr::zero_bytes(source, len)
+        *ptr::offset_bytes(source, len - 1) = 7
+        ptr::copy_raw(dest, source, len)
+        if *dest != 99 || *ptr::offset_bytes(dest, len - 1) != 7 {
+            return 2
+        }
+        if host::shared(41) != 42 {
+            return 3
+        }
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("replaced")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_functions_named_like_the_compilers_symbols_keep_working() {
+    // Functions share an object namespace with the globals behind `std::env`.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("names.fe");
+    fs::write(
+        &source,
+        r#"
+use std::env::Args
+
+extern {
+    fn __fe_native_environ() -> **u8
+}
+
+fn __fe_native_argc() -> i32 { 10 }
+fn __fe_native_argv() -> i32 { 20 }
+fn __fe_argc() -> i32 { 1 }
+fn __fe_argv() -> i32 { 2 }
+fn environ() -> i32 { 3 }
+
+pub fn main() -> i32 uses (args: Args) {
+    let sum = __fe_native_argc() + __fe_native_argv() + __fe_argc() + __fe_argv() + environ()
+    let count: i32 = args.count().downcast_unchecked()
+    let has_environ = unsafe { __fe_native_environ() } as usize != 0
+    if sum == 36 && count == 1 && args.get(0).len() > 0 && has_environ { 0 } else { 1 }
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("names")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
