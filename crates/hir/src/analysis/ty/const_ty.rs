@@ -625,8 +625,10 @@ fn canonicalize_const_expr_for_mode<'db>(
 }
 
 /// Unification identifies an associated or inherent const use by its trait
-/// instance (or impl and receiver) and name. The scope and assumptions it is
-/// solved under only decide how evaluation finds it.
+/// and arguments (or impl and receiver) and name, not by the bound it was found
+/// through: `T::LEN` is the same constant under `T: Len` and `T: Len<Item = u8>`.
+/// The scope and assumptions it is solved under only decide how evaluation
+/// finds it.
 pub(crate) enum RebaseConstUseEnv<'db> {
     /// The comparison form, once evaluation has used the environment: the
     /// root of the ingot defining the constant (the trait's, or the inherent
@@ -833,7 +835,9 @@ impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
         };
         let rebased = match expr.data(db) {
             ConstExpr::TraitConst(use_) => {
-                let inst = use_.inst().fold_with(db, self);
+                let inst = use_.inst();
+                let inst = TraitInstId::new_simple(db, inst.def(db), inst.args(db).clone())
+                    .fold_with(db, self);
                 let (scope, assumptions) = self.env(
                     db,
                     use_.origin_scope(),

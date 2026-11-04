@@ -402,6 +402,25 @@ trait TraitLevel<const N: usize = { indexed_value<Self, { Self::LEN }>() }, cons
 
 impl TraitLevel for S {}
 
+// The bound `T::LEN` is found through has a binding on a later parameter.
+trait LenWithItem {
+    type Item
+    const LEN_WITH_ITEM: usize
+}
+
+impl LenWithItem for S {
+    type Item = u8
+    const LEN_WITH_ITEM: usize = 3
+}
+
+struct BindingOnUsedBound<T, const N: usize = { indexed_value<T, { T::LEN_WITH_ITEM }>() }, U = u8>
+where
+    T: LenWithItem<Item = U> + Indexed<{ T::LEN_WITH_ITEM }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
 struct BlockArg<T, const K: usize, const N: usize = {
     indexed_value<T, {
         let a = K
@@ -497,4 +516,8 @@ fn test_later_bound_is_context_of_a_computed_arg() {
     assert(S {}.trait_level_len() == 7)
     let block = BlockArg<S, 2> { x: [0; 7], t: S {} }
     assert(block.x[6] == 0)
+    let binding_explicit = BindingOnUsedBound<S, 7, u8> { x: [0; 7], t: S {} }
+    assert(binding_explicit.x[6] == 0)
+    let binding_defaulted = BindingOnUsedBound<S> { x: [0; 7], t: S {} }
+    assert(binding_defaulted.x[6] == 0)
 }
