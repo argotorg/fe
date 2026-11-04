@@ -24,6 +24,7 @@ use std::{
 
 use num_bigint::BigUint;
 use tempfile::tempdir;
+use tiny_keccak::{Hasher, Keccak};
 
 fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
     // Several tests run built programs that trap.
@@ -292,6 +293,41 @@ fn unexpected_revert() {
         ] {
             assert!(output.contains(failure), "O{level}: {output}");
         }
+    }
+}
+
+#[test]
+fn native_keccak_matches_a_reference_for_runtime_data() {
+    let keccak = |bytes: &[u8]| {
+        let mut hasher = Keccak::v256();
+        hasher.update(bytes);
+        let mut digest = [0; 32];
+        hasher.finalize(&mut digest);
+        format!("{} {}\n", bytes.len(), hex::encode(digest))
+    };
+    let bytes: Vec<u8> = (0..420).map(|index| (index * 7 + 3) as u8).collect();
+    let word = |word: u8| array::from_fn::<u8, 32, _>(|i| if i == 31 { word } else { 0 });
+    let mut expected: String = (0..420).map(|len| keccak(&bytes[..len])).collect();
+    for len in [0, 1, 31, 32, 33, 135, 136, 137, 272] {
+        expected += &keccak(&bytes[..len]);
+    }
+    expected += &keccak(&[]);
+    expected += &keccak(&word(1));
+    expected += &keccak(&word(1).repeat(10));
+
+    let temp = tempdir().unwrap();
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/keccak_digests.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("keccak_digests")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            expected,
+            "O{level}"
+        );
     }
 }
 

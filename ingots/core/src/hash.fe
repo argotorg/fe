@@ -1,0 +1,276 @@
+//! Ethereum's Keccak-256, in Fe.
+//!
+//! `Keccak256` hashes borrowed bytes without allocating, on any target. On
+//! targets without a hash instruction, the compiler also calls `keccak_raw`,
+//! `keccak_packed` and `keccak_words` for `std::evm::ops::keccak256`,
+//! `core::intrinsic::__keccak256` and `core::intrinsic::__keccak_words`.
+
+use super::assert
+use super::bytes::PackedBytes
+use super::num::{IntDowncast, swap_bytes}
+use super::ops::WrappingAdd
+use super::ptr::{MemBuffer, MemSpan}
+
+/// Read-only bytes. Implementations must accept every index below `input_len()`.
+/// Hashing borrows its source and never allocates or retains a reference to it.
+pub trait HashInput {
+    fn input_len(self) -> usize
+    fn input_byte(self, _ index: usize) -> u8
+
+    /// The 8 bytes from `index` on as a little-endian integer, for every
+    /// `index` with `index + 8 <= input_len()`.
+    fn input_lane(self, _ index: usize) -> u64 {
+        var lane: u64 = 0
+        for byte in 0..8 { lane |= (self.input_byte(index + byte) as u64) << (byte * 8).downcast_unchecked() }
+        lane
+    }
+}
+
+impl<const N: usize> HashInput for [u8; N] {
+    fn input_len(self) -> usize { N }
+    fn input_byte(self, _ index: usize) -> u8 { self[index] }
+}
+
+impl HashInput for MemBuffer {
+    fn input_len(self) -> usize { MemBuffer::len(self) }
+    fn input_byte(self, _ index: usize) -> u8 { self[index] }
+    fn input_lane(self, _ index: usize) -> u64 { self.read_le<u64>(index) }
+}
+
+impl HashInput for MemSpan {
+    fn input_len(self) -> usize { MemSpan::len(self) }
+    fn input_byte(self, _ index: usize) -> u8 { self[index] }
+    fn input_lane(self, _ index: usize) -> u64 { self.read_le<u64>(index) }
+}
+
+/// Ethereum's Keccak-256: 136-byte rate, 512-bit capacity, suffix 0x01.
+/// This is distinct from the SHA3-256 variant, whose suffix is 0x06.
+pub struct Keccak256 { lanes: [u64; 25], position: usize }
+
+impl Keccak256 {
+    pub fn new() -> Self { Self { lanes: [0; 25], position: 0 } }
+
+    /// Absorb a source range. Empty updates do not change the hash state.
+    pub fn update<T: HashInput>(mut self, _ input: T, offset: usize, len: usize) {
+        assert(offset <= input.input_len() && len <= input.input_len() - offset)
+        // Bytes up to a lane boundary, then whole lanes, then the rest.
+        var index: usize = 0
+        while index < len && self.position % 8 != 0 {
+            self.absorb_byte(input.input_byte(offset + index))
+            index += 1
+        }
+        // Whole lanes. `index + remaining` stays `len`, and `offset + len`
+        // fits the input, so the additions cannot wrap.
+        var remaining = len - index
+        while remaining >= 8 {
+            self.lanes[self.position / 8] ^= input.input_lane(offset.wrapping_add(index))
+            self.advance(8)
+            index = index.wrapping_add(8)
+            remaining -= 8
+        }
+        while index < len {
+            self.absorb_byte(input.input_byte(offset + index))
+            index += 1
+        }
+    }
+
+    /// Absorb the last `len` (at most 32) bytes of `value`'s big-endian
+    /// encoding: 32 for a word, 20 for an address, 1 for a byte.
+    pub fn update_word(mut self, _ value: u256, len: usize) {
+        assert(len <= 32)
+        // Bytes up to a lane boundary, then whole lanes, then the rest. The
+        // bytes still to absorb are the low `remaining` of `value`.
+        var remaining = len
+        while remaining > 0 && self.position % 8 != 0 {
+            remaining -= 1
+            self.absorb_byte((value >> (remaining * 8) as u256).downcast_truncate())
+        }
+        while remaining >= 8 {
+            remaining -= 8
+            let lane: u64 = (value >> (remaining * 8) as u256).downcast_truncate()
+            self.lanes[self.position / 8] ^= swap_bytes(lane)
+            self.advance(8)
+        }
+        while remaining > 0 {
+            remaining -= 1
+            self.absorb_byte((value >> (remaining * 8) as u256).downcast_truncate())
+        }
+    }
+
+    fn absorb_byte(mut self, _ byte: u8) {
+        self.lanes[self.position / 8] ^= (byte as u64) << ((self.position % 8) * 8).downcast_unchecked()
+        self.advance(1)
+    }
+
+    /// Count `bytes` more absorbed bytes, permuting at the end of a block.
+    fn advance(mut self, _ bytes: usize) {
+        self.position += bytes
+        if self.position == 136 {
+            permute(mut self.lanes)
+            self.position = 0
+        }
+    }
+
+    fn pad(mut self) {
+        self.lanes[self.position / 8] ^= 1 << ((self.position % 8) * 8).downcast_unchecked()
+        self.lanes[16] ^= 0x8000000000000000
+        permute(mut self.lanes)
+    }
+
+    /// Apply Keccak padding and return the digest as a big-endian word, as
+    /// the EVM's `KECCAK256` does, consuming the state.
+    pub fn finish_word(var own self) -> u256 {
+        self.pad()
+        ((swap_bytes(self.lanes[0]) as u256) << 192)
+            | ((swap_bytes(self.lanes[1]) as u256) << 128)
+            | ((swap_bytes(self.lanes[2]) as u256) << 64)
+            | (swap_bytes(self.lanes[3]) as u256)
+    }
+
+    /// Apply Keccak padding, return the digest, and consume the state.
+    pub fn finish(var own self) -> [u8; 32] {
+        self.pad()
+        var digest: [u8; 32] = [0; 32]
+        for index in 0..32 {
+            digest[index] = (self.lanes[index / 8] >> ((index % 8) * 8).downcast_unchecked()).downcast_truncate()
+        }
+        digest
+    }
+}
+
+pub fn keccak256<T: HashInput>(_ input: T) -> [u8; 32] {
+    var state = Keccak256::new()
+    state.update(input, offset: 0, len: input.input_len())
+    state.finish()
+}
+
+/// The digest of `input` as a big-endian word; see `Keccak256::finish_word`.
+pub fn keccak256_word<T: HashInput>(_ input: T) -> u256 {
+    var state = Keccak256::new()
+    state.update(input, offset: 0, len: input.input_len())
+    state.finish_word()
+}
+
+/// The digest of the `len` bytes at `ptr`.
+///
+/// The caller must ensure that those bytes are live and that `len` fits a
+/// `usize`, as the length of a span does.
+pub unsafe fn keccak_raw(_ ptr: *u8, _ len: u256) -> u256 {
+    keccak256_word(unsafe { MemSpan::from_raw_parts(ptr, len: len.downcast_unchecked()) })
+}
+
+/// The digest of `bytes`.
+pub fn keccak_packed<const N: usize>(_ bytes: PackedBytes<N>) -> u256 {
+    var state = Keccak256::new()
+    var index: usize = 0
+    while index < N {
+        let len = if N - index < 32 { N - index } else { 32 }
+        // The last word is padded on the right.
+        state.update_word(bytes.word(index / 32) >> ((32 - len) * 8) as u256, len)
+        index += len
+    }
+    state.finish_word()
+}
+
+/// The digest of `words`, each as 32 big-endian bytes, in order.
+pub fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
+    var state = Keccak256::new()
+    for word in words {
+        state.update_word(word, len: 32)
+    }
+    state.finish_word()
+}
+
+// Keccak-f[1600], indexed x + 5*y. Small counters use u64 because Fe usize
+// has 256-bit arithmetic, including on native targets. Constants and round definition:
+// https://keccak.team/keccak_specs_summary.html
+const ROUND_CONSTANTS: [u64; 24] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
+    0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+    0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003,
+    0x8000000000008002, 0x8000000000000080, 0x000000000000800a, 0x800000008000000a,
+    0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+]
+
+#[inline(always)]
+fn rotate(_ value: u64, by: u64) -> u64 {
+    (value << by) | (value >> (64 - by))
+}
+
+// The fixed 5x5 round exposes constant lane indices and rotation amounts.
+// Keep only the 24-round loop; no run-time modulo or temporary lane arrays.
+fn permute(_ state: mut [u64; 25]) {
+    var round: u64 = 0
+    while round < 24 {
+        // Theta: column parities and their neighboring deltas.
+        let c0 = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20]
+        let c1 = state[1] ^ state[6] ^ state[11] ^ state[16] ^ state[21]
+        let c2 = state[2] ^ state[7] ^ state[12] ^ state[17] ^ state[22]
+        let c3 = state[3] ^ state[8] ^ state[13] ^ state[18] ^ state[23]
+        let c4 = state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24]
+        let d0 = c4 ^ rotate(c1, by: 1)
+        let d1 = c0 ^ rotate(c2, by: 1)
+        let d2 = c1 ^ rotate(c3, by: 1)
+        let d3 = c2 ^ rotate(c4, by: 1)
+        let d4 = c3 ^ rotate(c0, by: 1)
+
+        // Rho/Pi: rotate each theta-adjusted lane into its new position.
+        let b0 = state[0] ^ d0
+        let b10 = rotate(state[1] ^ d1, by: 1)
+        let b20 = rotate(state[2] ^ d2, by: 62)
+        let b5 = rotate(state[3] ^ d3, by: 28)
+        let b15 = rotate(state[4] ^ d4, by: 27)
+        let b16 = rotate(state[5] ^ d0, by: 36)
+        let b1 = rotate(state[6] ^ d1, by: 44)
+        let b11 = rotate(state[7] ^ d2, by: 6)
+        let b21 = rotate(state[8] ^ d3, by: 55)
+        let b6 = rotate(state[9] ^ d4, by: 20)
+        let b7 = rotate(state[10] ^ d0, by: 3)
+        let b17 = rotate(state[11] ^ d1, by: 10)
+        let b2 = rotate(state[12] ^ d2, by: 43)
+        let b12 = rotate(state[13] ^ d3, by: 25)
+        let b22 = rotate(state[14] ^ d4, by: 39)
+        let b23 = rotate(state[15] ^ d0, by: 41)
+        let b8 = rotate(state[16] ^ d1, by: 45)
+        let b18 = rotate(state[17] ^ d2, by: 15)
+        let b3 = rotate(state[18] ^ d3, by: 21)
+        let b13 = rotate(state[19] ^ d4, by: 8)
+        let b14 = rotate(state[20] ^ d0, by: 18)
+        let b24 = rotate(state[21] ^ d1, by: 2)
+        let b9 = rotate(state[22] ^ d2, by: 61)
+        let b19 = rotate(state[23] ^ d3, by: 56)
+        let b4 = rotate(state[24] ^ d4, by: 14)
+
+        // Chi: every output row reads the complete pre-Chi row.
+        state[0] = b0 ^ (!b1 & b2)
+        state[1] = b1 ^ (!b2 & b3)
+        state[2] = b2 ^ (!b3 & b4)
+        state[3] = b3 ^ (!b4 & b0)
+        state[4] = b4 ^ (!b0 & b1)
+        state[5] = b5 ^ (!b6 & b7)
+        state[6] = b6 ^ (!b7 & b8)
+        state[7] = b7 ^ (!b8 & b9)
+        state[8] = b8 ^ (!b9 & b5)
+        state[9] = b9 ^ (!b5 & b6)
+        state[10] = b10 ^ (!b11 & b12)
+        state[11] = b11 ^ (!b12 & b13)
+        state[12] = b12 ^ (!b13 & b14)
+        state[13] = b13 ^ (!b14 & b10)
+        state[14] = b14 ^ (!b10 & b11)
+        state[15] = b15 ^ (!b16 & b17)
+        state[16] = b16 ^ (!b17 & b18)
+        state[17] = b17 ^ (!b18 & b19)
+        state[18] = b18 ^ (!b19 & b15)
+        state[19] = b19 ^ (!b15 & b16)
+        state[20] = b20 ^ (!b21 & b22)
+        state[21] = b21 ^ (!b22 & b23)
+        state[22] = b22 ^ (!b23 & b24)
+        state[23] = b23 ^ (!b24 & b20)
+        state[24] = b24 ^ (!b20 & b21)
+
+        // Iota.
+        state[0] ^= ROUND_CONSTANTS[round as usize]
+        round += 1
+    }
+}
