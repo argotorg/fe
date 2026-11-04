@@ -123,8 +123,8 @@ impl Command {
         self
     }
 
-    /// Starts the child in the directory `dir`. A relative program path is
-    /// relative to it.
+    /// Starts the child in the directory `dir`. A relative program path or
+    /// `Redirect::File` path is relative to it.
     pub fn current_dir<P: Display>(var own self, _ dir: P) -> Self {
         self.dir = Option::Some(format!(dir))
         self
@@ -273,6 +273,13 @@ impl Spawn for Host {
             Option::Some(environment(command.env.as_slice(), mut vars)?)
         }
         let setup = Setup::new()?
+        // First, so that relative paths in the actions after it start there.
+        match command.dir {
+            Option::Some(ref dir) => check(
+                unsafe { posix_spawn_file_actions_addchdir_np(setup.actions.ptr(), c_string(dir)?.ptr()) },
+            )?,
+            Option::None => {}
+        }
         // The child's ends of its pipes, which the parent closes once the
         // child has them.
         var child_ends = MemVec::new()
@@ -294,12 +301,6 @@ impl Spawn for Host {
         }
         let stdout = redirect(setup, 1, command.stdout, mut child_ends)?
         let stderr = redirect(setup, 2, command.stderr, mut child_ends)?
-        match command.dir {
-            Option::Some(ref dir) => check(
-                unsafe { posix_spawn_file_actions_addchdir_np(setup.actions.ptr(), c_string(dir)?.ptr()) },
-            )?,
-            Option::None => {}
-        }
         check(sys::close_other_fds(setup.actions.ptr(), setup.attr.ptr()))?
         let environ = match envp {
             Option::Some(ref pointers) => pointers.ptr(),

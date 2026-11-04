@@ -42,6 +42,11 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args, fs: Fs, proc: mut Spawn,
         Result::Ok(contents) => println!("file holds: ", contents),
         Result::Err(error) => failed("read log", error),
     }
+    show("file in dir", proc.output(sh("echo in dir").current_dir(dir).stdout(Redirect::File(format!("dir_log")))))
+    match fs.read(format!(dir, "/dir_log")) {
+        Result::Ok(contents) => println!("file in dir holds: ", contents),
+        Result::Err(error) => failed("read dir log", error),
+    }
 
     // More bytes than pipes hold, in and out at once.
     var bytes = MemBuffer::empty()

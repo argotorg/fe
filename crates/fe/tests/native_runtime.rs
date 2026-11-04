@@ -3067,6 +3067,9 @@ dir: exit status 0, the directory: true
 file: exit status 0 (success) [] []
 file holds: to file
 
+file in dir: exit status 0 (success) [] []
+file in dir holds: in dir
+
 cat: exit status 0, 1048576 bytes back, same: true
 both streams: exit status 0, 300000 and 200000 bytes
 input not taken: exit status 0 (success) [] []
