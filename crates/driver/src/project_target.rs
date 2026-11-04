@@ -5,10 +5,11 @@ use std::fmt;
 use camino::{Utf8Path, Utf8PathBuf};
 use common::{
     InputDb,
-    compilation::Target,
+    compilation::{Os, Target},
     config::{Config, WorkspaceConfig, WorkspaceMemberSelection},
 };
 use resolver::workspace::{discover_context, expand_workspace_members};
+use salsa::Setter;
 use url::Url;
 
 use crate::{
@@ -74,6 +75,40 @@ pub fn project_target(
         Ok(CliTarget::Directory(dir)) => directory_target(&dir, ingot),
         Ok(CliTarget::StandaloneFile(_)) | Err(_) => Ok(None),
     }
+}
+
+/// The target the ingots and workspaces at `urls` set, if any.
+pub fn ingots_target(urls: &[Url]) -> Result<Option<Target>, TargetConflict> {
+    let mut common = CommonTarget::default();
+    for url in urls {
+        let Some(dir) = url
+            .to_file_path()
+            .ok()
+            .and_then(|dir| Utf8PathBuf::from_path_buf(dir).ok())
+        else {
+            continue;
+        };
+        if let Some(target) = directory_target(&dir, None)? {
+            common.add(dir.as_str(), target)?;
+        }
+    }
+    Ok(common.target())
+}
+
+/// Sets the target of `db` and the operating system that goes with it, and
+/// returns whether that changed the target.
+pub fn set_target(db: &mut DriverDataBase, target: Target) -> bool {
+    if db.compilation_settings().target(db) == target {
+        return false;
+    }
+    db.compilation_settings().set_target(db).to(target);
+    let os = if target == Target::Native {
+        Os::host()
+    } else {
+        None
+    };
+    db.compilation_settings().set_os(db).to(os);
+    true
 }
 
 /// A dependency of the ingot at `url` that sets a target other than the one

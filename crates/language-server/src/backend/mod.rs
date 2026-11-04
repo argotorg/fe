@@ -51,6 +51,10 @@ pub struct Backend {
     pub(super) doc_reload_generation: Arc<AtomicU64>,
     pub(super) docs_url: Option<String>,
     pub(super) lsp_workspace_root: Option<PathBuf>,
+    /// The ingots and workspaces whose `fe.toml` sets the database's target.
+    pub(super) project_ingots: Vec<Url>,
+    /// The target conflict the client was last warned about.
+    pub(super) target_conflict: Option<String>,
 }
 
 impl Backend {
@@ -86,6 +90,8 @@ impl Backend {
             doc_reload_generation: Arc::new(AtomicU64::new(0)),
             docs_url,
             lsp_workspace_root: None,
+            project_ingots: Vec::new(),
+            target_conflict: None,
         }
     }
 

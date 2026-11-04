@@ -4,7 +4,7 @@
 //! request handling, verifying the server survives malformed edits.
 
 use async_lsp::concurrency::ConcurrencyLayer;
-use async_lsp::lsp_types::notification::{LogMessage, PublishDiagnostics};
+use async_lsp::lsp_types::notification::{LogMessage, PublishDiagnostics, ShowMessage};
 use async_lsp::lsp_types::*;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::{LanguageServer, MainLoop};
@@ -86,6 +86,8 @@ pub struct MockLspClient {
     diagnostics: Arc<Mutex<Vec<PublishedDiagnostics>>>,
     diagnostics_changed: Arc<Notify>,
     log_messages: Arc<Mutex<Vec<LogMessageParams>>>,
+    shown_messages: Arc<Mutex<Vec<ShowMessageParams>>>,
+    shown_message_changed: Arc<Notify>,
     _srv_handle: tokio::task::JoinHandle<()>,
     _cli_handle: tokio::task::JoinHandle<()>,
     // Holds the tracing subscriber default-guard installed for this test. Dropped
@@ -155,6 +157,10 @@ impl MockLspClient {
 
         let log_messages: Arc<Mutex<Vec<LogMessageParams>>> = Arc::new(Mutex::new(Vec::new()));
         let log_collector = log_messages.clone();
+        let shown_messages: Arc<Mutex<Vec<ShowMessageParams>>> = Arc::new(Mutex::new(Vec::new()));
+        let shown_collector = shown_messages.clone();
+        let shown_message_changed = Arc::new(Notify::new());
+        let shown_notify = shown_message_changed.clone();
 
         let (client_main, server_socket) = MainLoop::new_client(move |_| {
             let diags = diag_collector.clone();
@@ -175,6 +181,11 @@ impl MockLspClient {
                     logs.lock().unwrap().push(params);
                     ControlFlow::Continue(())
                 })
+                .notification::<ShowMessage>(move |_, params| {
+                    shown_collector.lock().unwrap().push(params);
+                    shown_notify.notify_one();
+                    ControlFlow::Continue(())
+                })
                 // Silently absorb any other server notifications
                 .unhandled_notification(|_, _| ControlFlow::Continue(()));
             ServiceBuilder::new().service(router)
@@ -189,6 +200,8 @@ impl MockLspClient {
             diagnostics,
             diagnostics_changed,
             log_messages,
+            shown_messages,
+            shown_message_changed,
             _srv_handle: srv_handle,
             _cli_handle: cli_handle,
             _logging_guard: logging_guard,
@@ -197,10 +210,15 @@ impl MockLspClient {
 
     /// Run the initialize + initialized handshake with the test fixture workspace.
     pub async fn initialize(&mut self) {
+        self.initialize_at(fixture_url()).await;
+    }
+
+    /// Run the initialize + initialized handshake with the workspace at `uri`.
+    pub async fn initialize_at(&mut self, uri: Url) {
         self.server
             .initialize(InitializeParams {
                 workspace_folders: Some(vec![WorkspaceFolder {
-                    uri: fixture_url(),
+                    uri,
                     name: "test".into(),
                 }]),
                 ..Default::default()
@@ -210,6 +228,49 @@ impl MockLspClient {
         self.server
             .initialized(InitializedParams {})
             .expect("initialized failed");
+    }
+
+    /// Notify the server that the file at `uri` changed on disk.
+    pub fn file_changed(&mut self, uri: &Url) {
+        self.server
+            .did_change_watched_files(DidChangeWatchedFilesParams {
+                changes: vec![FileEvent {
+                    uri: uri.clone(),
+                    typ: FileChangeType::CHANGED,
+                }],
+            })
+            .expect("didChangeWatchedFiles failed");
+    }
+
+    /// Notify the server that the editor saved the file at `uri`.
+    pub fn did_save(&mut self, uri: &Url) {
+        self.server
+            .did_save(DidSaveTextDocumentParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                text: None,
+            })
+            .expect("didSave failed");
+    }
+
+    /// Wait until the server shows a message containing `text`, or give up.
+    pub async fn wait_for_shown_message(&self, text: &str) -> bool {
+        tokio::time::timeout(WAIT_TIMEOUT, async {
+            loop {
+                let notified = self.shown_message_changed.notified();
+                if self
+                    .shown_messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|shown| shown.message.contains(text))
+                {
+                    break;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .is_ok()
     }
 
     /// Open a text document.
@@ -961,6 +1022,85 @@ async fn hover_at(client: &mut MockLspClient, uri: &Url, line: u32, character: u
         .await
         .expect("hover failed")
         .unwrap_or_else(|| panic!("expected hover result at {line}:{character}"))
+}
+
+/// Compiles only for the native target, so diagnostics tell the targets apart.
+const NATIVE_ONLY: &str = r#"
+#[cfg(target = "native")]
+fn answer() -> i32 { 0 }
+
+pub fn main() -> i32 { answer() }
+"#;
+
+fn write_ingot(dir: &std::path::Path, name: &str, target: &str, source: &str) -> (Url, Url) {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let config = dir.join("fe.toml");
+    std::fs::write(
+        &config,
+        format!("[ingot]\nname = \"{name}\"\nversion = \"0.1.0\"\ntarget = \"{target}\"\n"),
+    )
+    .unwrap();
+    let lib = dir.join("src/lib.fe");
+    std::fs::write(&lib, source).unwrap();
+    (
+        Url::from_file_path(config).unwrap(),
+        Url::from_file_path(lib).unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn mock_lsp_checks_for_the_project_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (config, lib) = write_ingot(&root, "tool", "native", NATIVE_ONLY);
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+
+    client.did_open(&lib, NATIVE_ONLY);
+    let clean =
+        |published: &PublishedDiagnostics| published.uri == lib && published.diagnostics.is_empty();
+    let errors = |published: &PublishedDiagnostics| {
+        published.uri == lib && !published.diagnostics.is_empty()
+    };
+    assert!(client.wait_for_diagnostics(clean).await);
+    assert!(client.diagnostics_for_uri(&lib).is_empty());
+
+    client.clear_diagnostics();
+    write_ingot(&root, "tool", "evm", NATIVE_ONLY);
+    client.file_changed(&config);
+    assert!(client.wait_for_diagnostics(errors).await);
+
+    client.clear_diagnostics();
+    write_ingot(&root, "tool", "native", NATIVE_ONLY);
+    client.did_save(&config);
+    assert!(client.wait_for_diagnostics(clean).await);
+
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn mock_lsp_warns_about_projects_with_different_targets() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    write_ingot(&root.join("tool"), "tool", "native", NATIVE_ONLY);
+    write_ingot(
+        &root.join("contract"),
+        "contract",
+        "evm",
+        "pub fn answer() -> u256 { 0 }\n",
+    );
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+    assert!(
+        client
+            .wait_for_shown_message("target different machines")
+            .await
+    );
+    client.shutdown().await;
 }
 
 #[tokio::test]
