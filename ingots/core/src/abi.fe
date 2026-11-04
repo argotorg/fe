@@ -1,7 +1,7 @@
 use ingot::Copy
 use ingot::Option
 use ingot::clone::Clone
-use ingot::mem::{forget, replace}
+use ingot::mem::forget
 use ingot::num::{IntDowncast, WordValue, from_be, to_be, word_to_usize}
 use ingot::ptr
 use ingot::ops::{Drop, Eq}
@@ -5224,70 +5224,65 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T1
     }
 }
 
-/// An array to fill in place, whose elements are uninitialized memory.
-///
-/// No element is a `T` yet. The caller must overwrite each one without destroying
-/// or reading it before the array is used, and must not let the array be destroyed
-/// before then.
-unsafe fn uninit_array<T, const N: usize>() -> [T; N] {
-    let memory = ptr::alloc<[T; N]>()
-    let array = *memory
-    ptr::dealloc(memory)
+/// Moves an array out of raw memory, every element of which is initialized, and
+/// frees the memory.
+unsafe fn take_array<T, const N: usize>(_ elements: *[T; N]) -> [T; N] {
+    let array = *elements
+    ptr::dealloc(elements)
     array
 }
 
 impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
     where T: Decode<A> + AbiSize
 {
-    // `forget(replace(..))` fills an element without destroying what it held, as
-    // `out[i] = value` would. A decode that fails reverts, which runs no destructors,
-    // so nothing destroys an element that was not filled.
+    // The elements are written through raw places, which destroy nothing, so an
+    // element type need not be `Copy`. The memory is read as an array only once full.
     //
-    // Decoding element 0 ahead of the loop leaves `N == 2` a loop of one iteration.
-    // The optimizer removes that loop, then `out`, so reading a pair takes no memory.
+    // Decoding element 0 ahead of the loop leaves `N == 2` a loop of one iteration,
+    // which the optimizer removes, and the elements are then used where they decode.
     fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
-        var out: [T; N] = unsafe { uninit_array() }
+        let elements = ptr::alloc<[T; N]>()
         if N > 0 {
-            forget(replace(mut out[0], decode_field<A, T, D, I>(mut d, input)))
+            unsafe { (*elements)[0] = decode_field<A, T, D, I>(mut d, input) }
         }
         var i: usize = 1
         while i < N {
-            forget(replace(mut out[i], decode_field<A, T, D, I>(mut d, input)))
+            unsafe { (*elements)[i] = decode_field<A, T, D, I>(mut d, input) }
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-        var out: [T; N] = unsafe { uninit_array() }
+        let elements = ptr::alloc<[T; N]>()
         if N > 0 {
-            forget(replace(mut out[0], decode_field_from<A, T, I>(input, base: pos, head_pos: pos)))
+            unsafe { (*elements)[0] = decode_field_from<A, T, I>(input, base: pos, head_pos: pos) }
         }
         var i: usize = 1
         var head_pos = pos + abi_field_head_size<T>()
         while i < N {
-            forget(replace(mut out[i], decode_field_from<A, T, I>(input, base: pos, head_pos: head_pos)))
+            unsafe { (*elements)[i] = decode_field_from<A, T, I>(input, base: pos, head_pos: head_pos) }
             head_pos += abi_field_head_size<T>()
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-        var out: [T; N] = unsafe { uninit_array() }
+        let elements = ptr::alloc<[T; N]>()
         if N > 0 {
-            forget(replace(mut out[0], decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: pos, input_len: input_len)))
+            unsafe { (*elements)[0] = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: pos, input_len: input_len) }
         }
         var i: usize = 1
         var head_pos = pos + abi_field_head_size<T>()
         while i < N {
-            forget(replace(mut out[i], decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: head_pos, input_len: input_len)))
+            unsafe { (*elements)[i] = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: head_pos, input_len: input_len) }
             head_pos += abi_field_head_size<T>()
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]

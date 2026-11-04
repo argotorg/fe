@@ -329,8 +329,8 @@ fn fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend(fixture: Fixt
     );
 }
 
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "fixed_array_pair_read_leaves_no_object.fe")]
-fn fixed_array_pair_read_leaves_no_object(fixture: Fixture<&str>) {
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "fixed_array_pair_read_leaves_no_loop.fe")]
+fn fixed_array_pair_read_leaves_no_loop(fixture: Fixture<&str>) {
     let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
         emit_module_sonatina_ir_optimized(db, top_mod, OptLevel::O1, None)
             .expect("optimized Sonatina IR should emit")
@@ -340,8 +340,8 @@ fn fixed_array_pair_read_leaves_no_object(fixture: Fixture<&str>) {
         "the elements should load straight from calldata:\n{ir}"
     );
     assert!(
-        !ir.contains("obj.") && !ir.contains("phi"),
-        "decoding the pair should leave no array object or loop:\n{ir}"
+        !ir.contains("obj.") && !ir.contains("phi") && !ir.contains("mload"),
+        "the pair should leave no array object, loop or load from memory:\n{ir}"
     );
 }
 
