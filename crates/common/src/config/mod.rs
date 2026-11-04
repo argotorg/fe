@@ -297,7 +297,7 @@ impl Display for ConfigDiagnostic {
             ),
             Self::InvalidTarget { field, value } => write!(
                 f,
-                "Invalid target \"{value}\" in field {field}; expected \"evm\" or \"native\""
+                "Invalid target \"{value}\" in field {field}; expected \"evm\", \"native\" or \"wasm\""
             ),
             Self::InvalidDependencyArithmeticMode { field, value } => write!(
                 f,

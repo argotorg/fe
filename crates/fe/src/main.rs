@@ -115,6 +115,12 @@ impl BuildBackend {
             Target::Native => Err(
                 "`target = \"native\"` in `fe.toml` requires the `cranelift` feature".to_string(),
             ),
+            #[cfg(feature = "wasm")]
+            Target::Wasm => Ok(Self::Wasm),
+            #[cfg(not(feature = "wasm"))]
+            Target::Wasm => {
+                Err("`target = \"wasm\"` in `fe.toml` requires the `wasm` feature".to_string())
+            }
         }
     }
 

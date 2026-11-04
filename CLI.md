@@ -156,8 +156,9 @@ For `build` and `check`:
 
 ## Project target
 
-`target` in `fe.toml` sets the machine a project compiles for: `"evm"` or `"native"`. `fe check`,
-`fe build` and `fe test` then use that target's backend without `--backend`.
+`target` in `fe.toml` sets the machine a project compiles for: `"evm"`, `"native"` or `"wasm"`.
+`fe check`, `fe build` and `fe test` then use that target's backend without `--backend`. `fe build`
+takes only standalone `.fe` files for `wasm`, so it reports an error for an ingot with this target.
 
 ```toml
 [ingot]
