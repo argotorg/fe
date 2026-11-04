@@ -25,6 +25,7 @@ use super::{
     unify::UnificationTable,
 };
 use crate::analysis::HirAnalysisDb;
+use crate::semantic::adt_grows;
 
 /// Represents a ADT type definition.
 #[salsa::tracked]
@@ -118,9 +119,11 @@ pub(crate) fn ty_pinned_part<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> 
             if ty.may_be_pinned(db) {
                 return Some(ty);
             }
-            // A type not applied to all its arguments has no values.
+            // A type not applied to all its arguments has no values. A
+            // growing type, rejected where it is defined, reaches a new type
+            // through each pointer, so its fields are never searched.
             let args = ty.generic_args(db);
-            if args.len() != adt.params(db).len() {
+            if args.len() != adt.params(db).len() || adt_grows(db, *adt) {
                 return None;
             }
             // A field of an associated type holds the type it names.
