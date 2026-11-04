@@ -234,6 +234,7 @@ fn native_panics_report_on_stderr_after_flushing_stdout() {
         "panicked: reverted with 0x4e487b710000000000000000000000000000000000000000000000000000000000000077\n",
         "panicked: division by zero\n",
         "panicked: reverted without data\n",
+        "panicked: index out of bounds\n",
     ];
     for level in ["0", "1", "2"] {
         let out = temp.path().join(format!("out-{level}"));
