@@ -33,6 +33,7 @@ extern {
 
 // The values every supported host shares.
 const EINTR: i32 = 4
+const EBADF: i32 = 9
 const EPIPE: i32 = 32
 const O_RDONLY: i32 = 0
 const O_WRONLY: i32 = 1
@@ -422,8 +423,13 @@ impl Setup {
         Result::Ok(Setup { actions, attr })
     }
 
-    // Gives the child's standard stream `fd` the parent's.
+    // Gives the child's standard stream `fd` the parent's. A stream the parent
+    // has closed stays closed: macOS refuses to inherit it.
     fn inherit(self, _ fd: i32) -> Result<Error, ()> {
+        let copy = Fd { fd: unsafe { dup(fd) } }
+        if !copy.is_open() {
+            return if sys::errno() == EBADF { Result::Ok(()) } else { Result::Err(last_error()) }
+        }
         check(sys::inherit_fd(self.actions.ptr(), fd))
     }
 

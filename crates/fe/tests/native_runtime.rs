@@ -3103,7 +3103,7 @@ wait_any: slow exit status 0 [slow
 
 // A pipe made while a standard stream is closed takes its number. The child
 // must still see the stream closed: reading its stdin must not reach its own
-// stdout pipe, which would never end.
+// stdout pipe, which would never end. Inheriting a closed stream is no error.
 #[test]
 fn native_process_pipes_avoid_closed_standard_streams() {
     let temp = tempdir().unwrap();
@@ -3119,7 +3119,6 @@ pub fn main() -> i32 uses (proc: mut Spawn) {
         .arg("-c")
         .arg("read x; echo done")
         .stdout(Redirect::Capture)
-        .stderr(Redirect::Null)
         .timeout(Duration::from_secs(5))
     match proc.output(command) {
         Result::Ok(output) => {
