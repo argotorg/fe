@@ -1343,6 +1343,12 @@ program_test!(heap_churn, "heap_churn", {
         ),
         Export::new("vec_churn", &[("rounds", U32)], U32)
             .product(&[vec![0, 1, 2, 100, 1000]], |a| u32c(a[0] * 20)),
+        // Each round: 46 + 20 bytes joined, a 5-byte name, 3 strings in a list, and
+        // 58 and 10 bytes from constants.
+        Export::new("string_churn", &[("rounds", U32)], U32)
+            .product(&[vec![0, 1, 2, 100, 1000]], |a| u32c(a[0] * 142)),
+        Export::new("string_abi_churn", &[("rounds", U32)], U32)
+            .product(&[vec![0, 1, 2, 100, 1000]], |a| u32c(a[0] * 40)),
     ]
 });
 
@@ -1386,6 +1392,62 @@ fn memory_does_not_grow_with_the_rounds_of_a_loop_that_allocates_and_drops() {
             memory_pages(&mut running) <= after_one + 1,
             "O{level}: a vector that grows and is dropped leaks"
         );
+        let string_churn = Export::new("string_churn", &[("rounds", U32)], U32);
+        let mut running = Running::new(&bytes);
+        running.call(&string_churn, &[1]).unwrap();
+        let after_one = memory_pages(&mut running);
+        assert_eq!(running.call(&string_churn, &[50_000]).unwrap(), 7_100_000);
+        assert!(
+            memory_pages(&mut running) <= after_one + 1,
+            "O{level}: strings that are dropped leak"
+        );
+        let string_abi_churn = Export::new("string_abi_churn", &[("rounds", U32)], U32);
+        let mut running = Running::new(&bytes);
+        running.call(&string_abi_churn, &[1]).unwrap();
+        let after_one = memory_pages(&mut running);
+        assert_eq!(
+            running.call(&string_abi_churn, &[50_000]).unwrap(),
+            2_000_000
+        );
+        assert!(
+            memory_pages(&mut running) <= after_one + 1,
+            "O{level}: encoded and decoded strings leak"
+        );
+    }
+}
+
+#[test]
+fn a_copy_of_a_host_text_is_freed_when_it_is_dropped() {
+    let source = fixture_path("host_text_copy");
+    let temp = tempfile::tempdir().unwrap();
+    for level in ["0", "1", "2", "s"] {
+        let bytes = build_wasm(&source, level, &temp.path().join(format!("o{level}")));
+        let alloc = Export::new("alloc", &[("size", U32)], U32);
+        let mark = Export::new("arena_mark", &[], U32);
+        let copied = Export::new("copied_len", &[("addr", U32), ("len", U32)], U32);
+        let mut running = Running::new(&bytes);
+        let text = b"notes.txt";
+        let call = |running: &mut Running| {
+            let addr = running.call(&alloc, &[text.len() as i128]).unwrap();
+            let memory = running
+                .instance
+                .get_memory(&mut running.store, "memory")
+                .expect("the module exports its memory");
+            memory
+                .write(&mut running.store, addr as usize, text)
+                .unwrap();
+            let len = running.call(&copied, &[addr, text.len() as i128]).unwrap();
+            assert_eq!(len, text.len() as i128, "O{level}");
+        };
+        call(&mut running);
+        let before = running.call(&mark, &[]).unwrap();
+        for _ in 0..1000 {
+            call(&mut running);
+        }
+        // No release: each call cuts a block of 32 bytes for its text, and the
+        // copy takes the block that the previous copy freed.
+        let grew = running.call(&mark, &[]).unwrap() - before;
+        assert_eq!(grew, 1000 * 32, "O{level}");
     }
 }
 

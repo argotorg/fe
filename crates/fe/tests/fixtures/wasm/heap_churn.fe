@@ -1,6 +1,22 @@
 // Blocks that are allocated and then dropped are reused: the memory of the module
 // does not grow with the number of rounds.
+use core::abi::{Decode, DynString, encode_alloc}
 use core::ptr::{MemArray, MemVec}
+use std::abi::Sol
+use core::text::{concat, decimal}
+
+const GREETING: DynString = "a constant string of more than thirty-one bytes"
+const PAIR: (DynString, u32) = ("a string in a constant tuple of more than thirty-one bytes", 1)
+const NAMES: [DynString; 2] = ["the first string of a constant array of strings", "the second"]
+
+struct Named {
+    name: DynString,
+    id: u32,
+}
+
+fn pass(_ text: own DynString) -> DynString {
+    text
+}
 
 // Allocates a zeroed block of `n` words each round, writes the round number to its
 // first word and drops it. Returns how many rounds wrote an odd number.
@@ -28,6 +44,53 @@ pub fn vec_churn(rounds: u32) -> u32 {
             i += 1
         }
         total += i
+        r += 1
+    }
+    total
+}
+
+// Makes strings every way that allocates one and drops them each round. `free`
+// traps on anything but the start of a live block, so this also checks that each
+// string owns its allocation and frees it once.
+pub fn string_churn(rounds: u32) -> u32 {
+    var total: u32 = 0
+    var r: u32 = 0
+    while r < rounds {
+        let literal: DynString = "a string literal of more than thirty-one bytes"
+        let copy = literal.clone()
+        let part = copy.slice(start: 2, len: 20)
+        let joined = concat([pass(literal), part])
+        let number = decimal(r as u256)
+        let named = Named { name: DynString::from_word_prefix(word: r as u256, len: 5), id: r }
+        let held = Option::Some(GREETING)
+        let pair = PAIR
+        let names = NAMES
+        var list: MemVec<DynString> = MemVec::new()
+        list.push(DynString::empty())
+        list.push(DynString::zeroed(100))
+        list.push(copy)
+        let count = joined.len() + named.name.len() + list.len() + pair.0.len() + names[1].len()
+        total += count.downcast().unwrap()
+        total += match held {
+            Option::Some(text) => (text.is_empty() as u32) + (number.is_empty() as u32) + (named.id - r)
+            Option::None => 1000
+        }
+        r += 1
+    }
+    total
+}
+
+// Encodes an array of strings to the Solidity ABI and decodes it each round, which
+// moves each string through a raw place.
+pub fn string_abi_churn(rounds: u32) -> u32 {
+    var total: u32 = 0
+    var r: u32 = 0
+    while r < rounds {
+        let names: [DynString; 2] = [decimal(r as u256), "the second string of a long enough array"]
+        let encoded = encode_alloc<Sol, [DynString; 2]>(names)
+        let decoded = <[DynString; 2] as Decode<Sol>>::decode_from(encoded.span(), 0)
+        let count = decoded[1].len()
+        total += count.downcast().unwrap()
         r += 1
     }
     total
