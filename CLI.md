@@ -175,11 +175,12 @@ The first of these that applies sets the target:
 
 A standalone `.fe` file has no project, so it uses `--backend` or the default.
 
-A command compiles for one target, so the workspace members it selects must agree. If they don't,
-it errors: select one with `--ingot`, or pass `--backend`. `fe test` paths must agree too.
+A command compiles for one target, so the workspace members it selects can't set different ones. If
+they do, it errors: select one with `--ingot`, or pass `--backend`. `fe test` paths can't either. An
+ingot without a target works on every target, and takes the one the others set.
 
-A dependency that sets a target must match the ingot that depends on it, or the ingot's target when
-it sets none. An ingot that works on every target leaves `target` unset.
+A dependency that sets a target must match the ingot that depends on it, or the command's target
+when the ingot sets none.
 
 The language server still checks every project for the EVM.
 

@@ -141,7 +141,12 @@ fn workspace_members_must_agree_on_the_target() {
         "target = \"native\"\n",
         NATIVE_ONLY,
     );
-    write_ingot(&temp.path().join("contract"), "contract", "", EVM_ONLY);
+    write_ingot(
+        &temp.path().join("contract"),
+        "contract",
+        "target = \"evm\"\n",
+        EVM_ONLY,
+    );
 
     for command in ["check", "build", "test"] {
         let output = fe(temp.path(), &[command]);
@@ -156,6 +161,26 @@ fn workspace_members_must_agree_on_the_target() {
 }
 
 #[test]
+fn a_member_without_a_target_takes_the_selected_target() {
+    let temp = tempdir().unwrap();
+    write_workspace(temp.path(), "members = [\"tool\", \"lib\"]\n");
+    write_ingot(
+        &temp.path().join("tool"),
+        "tool",
+        "target = \"native\"\n",
+        NATIVE_ONLY,
+    );
+    write_ingot(
+        &temp.path().join("lib"),
+        "lib",
+        "",
+        "pub fn answer() -> i32 { 0 }\n",
+    );
+    assert_ok(&fe(temp.path(), &["check"]));
+    assert_ok(&fe(temp.path(), &["test"]));
+}
+
+#[test]
 fn test_paths_must_agree_on_the_target() {
     let temp = tempdir().unwrap();
     write_ingot(
@@ -164,7 +189,12 @@ fn test_paths_must_agree_on_the_target() {
         "target = \"native\"\n",
         NATIVE_ONLY,
     );
-    write_ingot(&temp.path().join("contract"), "contract", "", EVM_ONLY);
+    write_ingot(
+        &temp.path().join("contract"),
+        "contract",
+        "target = \"evm\"\n",
+        EVM_ONLY,
+    );
     assert_err(
         &fe(temp.path(), &["test", "tool", "contract"]),
         "test paths target both `native` and `evm`",

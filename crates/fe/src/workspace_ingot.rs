@@ -21,17 +21,17 @@ pub(crate) fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>)
         .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
 }
 
-/// The target `fe.toml` sets for a command on `path`, or the default target.
-/// A path the command can't resolve reports that itself.
+/// The target `fe.toml` sets for a command on `path`, if any. A path the
+/// command can't resolve reports that itself.
 pub fn project_target(
     path: &Utf8PathBuf,
     ingot: Option<&str>,
     force_standalone: bool,
-) -> Result<Target, String> {
+) -> Result<Option<Target>, String> {
     let mut db = DriverDataBase::default();
     match resolve_cli_target(&mut db, path, force_standalone) {
         Ok(CliTarget::Directory(dir)) => directory_target(&dir, ingot),
-        Ok(CliTarget::StandaloneFile(_)) | Err(_) => Ok(Target::default()),
+        Ok(CliTarget::StandaloneFile(_)) | Err(_) => Ok(None),
     }
 }
 
@@ -40,54 +40,46 @@ fn read_config(dir: &Utf8Path) -> Option<Config> {
     Config::parse(&content).ok()
 }
 
-/// The target of the ingot or the selected members of the workspace at `dir`.
-fn directory_target(dir: &Utf8Path, ingot: Option<&str>) -> Result<Target, String> {
-    let Some(config) = read_config(dir) else {
-        return Ok(Target::default());
-    };
-    let workspace = match config {
-        Config::Ingot(config) => return Ok(config.target.unwrap_or_else(|| inherited_target(dir))),
-        Config::Workspace(workspace) => workspace,
-    };
-    workspace_target(dir, &workspace, ingot)
+fn directory_url(dir: &Utf8Path) -> Option<Url> {
+    let dir = dir.canonicalize_utf8().ok()?;
+    Url::from_directory_path(dir.as_str()).ok()
 }
 
-/// The target of the workspace that has the ingot at `dir` as a member.
-fn inherited_target(dir: &Utf8Path) -> Target {
-    let root = dir
-        .canonicalize_utf8()
-        .ok()
-        .and_then(|dir| Url::from_directory_path(dir.as_str()).ok())
-        .and_then(|url| {
-            let context = discover_context(&url, false).ok()?;
-            context
-                .ingot_roots
-                .contains(&url)
-                .then_some(context.workspace_root?)
-        })
-        .and_then(|root| Utf8PathBuf::from_path_buf(root.to_file_path().ok()?).ok());
-    match root.as_deref().and_then(read_config) {
-        Some(Config::Workspace(workspace)) => workspace.workspace.target.unwrap_or_default(),
-        _ => Target::default(),
+/// The target the ingot, or the selected members of the workspace, at `dir`
+/// set. An ingot without one works on every target.
+fn directory_target(dir: &Utf8Path, ingot: Option<&str>) -> Result<Option<Target>, String> {
+    match read_config(dir) {
+        Some(Config::Ingot(config)) => Ok(config.target.or_else(|| inherited_target(dir))),
+        Some(Config::Workspace(workspace)) => workspace_target(dir, &workspace, ingot),
+        None => Ok(None),
     }
 }
 
+/// The target of the workspace that has the ingot at `dir` as a member.
+fn inherited_target(dir: &Utf8Path) -> Option<Target> {
+    let url = directory_url(dir)?;
+    let context = discover_context(&url, false).ok()?;
+    if !context.ingot_roots.contains(&url) {
+        return None;
+    }
+    let root = context.workspace_root?.to_file_path().ok()?;
+    let Config::Workspace(workspace) = read_config(&Utf8PathBuf::from_path_buf(root).ok()?)? else {
+        return None;
+    };
+    workspace.workspace.target
+}
+
 /// A database compiles for one target at a time, so the selected members of a
-/// workspace must agree on it.
+/// workspace must not set different ones.
 fn workspace_target(
     dir: &Utf8Path,
     workspace: &WorkspaceConfig,
     ingot: Option<&str>,
-) -> Result<Target, String> {
-    let default = workspace.workspace.target.unwrap_or_default();
-    let Some(url) = dir
-        .canonicalize_utf8()
-        .ok()
-        .and_then(|dir| Url::from_directory_path(dir.as_str()).ok())
+) -> Result<Option<Target>, String> {
+    let default = workspace.workspace.target;
+    let Some(members) = directory_url(dir)
+        .and_then(|url| driver::workspace_members(&workspace.workspace, &url).ok())
     else {
-        return Ok(default);
-    };
-    let Ok(members) = driver::workspace_members(&workspace.workspace, &url) else {
         return Ok(default);
     };
     let mut selected: Option<(Target, String)> = None;
@@ -99,7 +91,9 @@ fn workspace_target(
         if ingot.is_some_and(|ingot| name != Some(ingot) && member.name.as_deref() != Some(ingot)) {
             continue;
         }
-        let target = config.target.unwrap_or(default);
+        let Some(target) = config.target.or(default) else {
+            continue;
+        };
         let name = name.unwrap_or(member.path.as_str()).to_string();
         match &selected {
             Some((first, first_name)) if *first != target => {
@@ -114,7 +108,7 @@ fn workspace_target(
             None => selected = Some((target, name)),
         }
     }
-    Ok(selected.map_or(default, |(target, _)| target))
+    Ok(selected.map(|(target, _)| target).or(default))
 }
 
 #[derive(Debug, Clone, Copy)]

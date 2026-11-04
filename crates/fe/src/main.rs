@@ -701,13 +701,16 @@ fn resolve_backend(
     standalone: bool,
 ) -> BuildBackend {
     flag.map_or_else(
-        || project_target(path, ingot, standalone).and_then(BuildBackend::for_target),
+        || {
+            project_target(path, ingot, standalone)
+                .and_then(|target| BuildBackend::for_target(target.unwrap_or_default()))
+        },
         Ok,
     )
     .unwrap_or_else(|err| exit_with_error(&err))
 }
 
-/// As `resolve_backend`, for test paths, which must agree on the target.
+/// As `resolve_backend`, for test paths, which can't set different targets.
 fn resolve_test_backend(
     flag: Option<TestBackend>,
     paths: &[Utf8PathBuf],
@@ -716,23 +719,19 @@ fn resolve_test_backend(
     if let Some(flag) = flag {
         return flag.into();
     }
-    let targets = paths
+    paths
         .iter()
-        .map(|path| project_target(path, ingot, false))
-        .collect::<Result<Vec<_>, _>>()
-        .and_then(|targets| match targets.as_slice() {
-            [first, rest @ ..] => match rest.iter().find(|target| *target != first) {
-                Some(other) => Err(format!(
+        .try_fold(None, |first: Option<Target>, path| {
+            match (first, project_target(path, ingot, false)?) {
+                (Some(first), Some(other)) if first != other => Err(format!(
                     "test paths target both `{}` and `{}`; test them separately, or pass `--backend`",
                     first.name(),
                     other.name(),
                 )),
-                None => Ok(*first),
-            },
-            [] => Ok(Target::default()),
-        });
-    targets
-        .and_then(BuildBackend::for_target)
+                (first, other) => Ok(first.or(other)),
+            }
+        })
+        .and_then(|target| BuildBackend::for_target(target.unwrap_or_default()))
         .unwrap_or_else(|err| exit_with_error(&err))
 }
 
