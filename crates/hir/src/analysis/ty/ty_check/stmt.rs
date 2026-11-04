@@ -11,7 +11,7 @@ use crate::core::hir_def::{
 use crate::span::DynLazySpan;
 
 use super::{
-    AccessBinding, Callable, LocalBinding, TyChecker,
+    AccessBinding, Callable, LocalBinding, TyChecker, Typeable,
     env::{ExprProp, ParamSite, TraitObligation, TraitObligationOrigin, hir_param},
 };
 use crate::analysis::ty::{
@@ -22,7 +22,7 @@ use crate::analysis::ty::{
     shape::Shape,
     trait_def::{AssocBinding, TraitInstId},
     trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
-    ty_def::{BorrowKind, InvalidCause, TyId},
+    ty_def::{BorrowKind, InvalidCause, Kind, TyId, TyVarSort},
     visitor::TyVisitable,
 };
 
@@ -148,10 +148,12 @@ impl<'db> TyChecker<'db> {
                     .check_expr_unknown(*else_)
                     .ty
                     .fold_with(self.db, &mut self.table);
-                if !else_ty.is_never(self.db) && !else_ty.has_invalid(self.db) {
-                    self.push_diag(BodyDiag::LetElseMustDiverge {
-                        primary: else_.span(self.body()).into(),
-                    });
+                let primary = else_.span(self.body()).into();
+                if else_ty.is_diverging(self.db) {
+                    // Fix it as `!`, so no later use can give the block a value.
+                    self.equate_ty(else_ty, TyId::never(self.db), primary);
+                } else if !else_ty.has_invalid(self.db) {
+                    self.push_diag(BodyDiag::LetElseMustDiverge { primary });
                 }
             }
             // The `let` a destructured parameter's body begins with.
@@ -163,6 +165,21 @@ impl<'db> TyChecker<'db> {
             ) {
                 self.take_initializer_marker(*expr, &[*pat], MarkerPosition::Initializer);
             }
+            // A value of type `!` coerces to whatever the pattern binds, as it
+            // does to a written type.
+            let prop = if ascription.is_none()
+                && !self.env.is_place_expr(*expr)
+                && prop
+                    .ty
+                    .fold_with(self.db, &mut self.table)
+                    .is_never(self.db)
+            {
+                let ty = self.table.new_var(TyVarSort::Diverging, &Kind::Star);
+                self.retype_expr_or_pat(Typeable::Expr(*expr, prop.clone()), ty);
+                ExprProp { ty, ..prop }
+            } else {
+                prop
+            };
             self.check_pat(*pat, prop.ty);
             if let Some((site, idx)) = param {
                 self.check_param_bindings(*pat, site, idx);

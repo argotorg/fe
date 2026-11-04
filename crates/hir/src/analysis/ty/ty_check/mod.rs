@@ -4006,7 +4006,11 @@ impl<'db> TyChecker<'db> {
     ) -> TyId<'db> {
         // FIXME: This is a temporary workaround, this should be removed when we
         // implement subtyping.
-        if expected.is_never(self.db) && !actual.is_never(self.db) {
+        if expected.is_never(self.db)
+            && !actual
+                .fold_with(self.db, &mut self.table)
+                .is_diverging(self.db)
+        {
             if !actual.has_invalid(self.db) && !expected.has_invalid(self.db) {
                 let diag = BodyDiag::TypeMismatch {
                     span,
@@ -4023,7 +4027,19 @@ impl<'db> TyChecker<'db> {
         let expected = expected.fold_with(self.db, &mut self.table);
         let actual = self.normalize_ty(actual);
         let expected = self.normalize_ty(expected);
-        match self.table.unify(actual, expected) {
+        // A diverging expression coerces to a variable still open, which only
+        // this direction allows: a type doesn't coerce to `!`.
+        let unified = match expected.data(self.db) {
+            TyData::TyVar(var)
+                if actual.is_never(self.db)
+                    && var.kind == Kind::Star
+                    && matches!(var.sort, TyVarSort::General | TyVarSort::Diverging) =>
+            {
+                self.table.mark_diverging(var)
+            }
+            _ => self.table.unify(actual, expected),
+        };
+        match unified {
             Ok(()) => {
                 // FIXME: This is a temporary workaround, this should be removed when we
                 // implement subtyping.

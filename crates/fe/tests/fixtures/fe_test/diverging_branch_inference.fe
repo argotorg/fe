@@ -1,0 +1,202 @@
+// A diverging branch does not decide a conditional's type: the other branch's
+// inferred type comes from its use.
+fn zero<T: Default>() -> T {
+    T::default()
+}
+
+fn take(_ x: u64) -> u64 {
+    x + 7
+}
+
+fn pick(_ c: bool) -> u64 {
+    let w = if c { return 1 } else { zero() }
+    take(w)
+}
+
+fn swapped(_ c: bool) -> u64 {
+    let w = if c { zero() } else { return 1 }
+    take(w)
+}
+
+fn all_diverge(_ c: bool) -> u64 {
+    let w = if c { return 1 } else { return 2 }
+    take(w)
+}
+
+fn matched(_ c: bool) -> u64 {
+    let w = match c {
+        true => return 3
+        false => zero()
+    }
+    take(w)
+}
+
+fn looped(_ c: bool) -> u64 {
+    var result = 0
+    while result == 0 {
+        let w = if c { break } else { zero() }
+        result = take(w)
+    }
+    result
+}
+
+fn nested(_ c: bool, _ d: bool) -> u64 {
+    let w = if c {
+        if d { return 4 } else { return 5 }
+    } else {
+        zero()
+    }
+    take(w)
+}
+
+fn id<T>(_ x: own T) -> T {
+    x
+}
+
+fn through_generic(_ c: bool) -> u64 {
+    let w = if c { return 6 } else { return 7 }
+    take(id(w))
+}
+
+fn as_argument(_ c: bool) -> u64 {
+    take(if c { return 8 } else { zero() })
+}
+
+fn unused_binding(_ c: bool) -> u64 {
+    let _w = if c { return 9 } else { return 10 }
+    take(11)
+}
+
+fn destructured(_ c: bool) -> u64 {
+    let (a, b) = if c { return 12 } else { return 13 }
+    take(a) + take(b)
+}
+
+fn in_closure(_ c: bool) -> u64 {
+    let f = || -> u64 {
+        let w = if c { return 14 } else { zero() }
+        take(w)
+    }
+    f()
+}
+
+fn any<T>() -> T {
+    panic()
+}
+
+// Nothing else fixes the type, so it is `!`.
+fn falls_back(_ c: bool) -> u64 {
+    let _w = if c { return 15 } else { any() }
+    16
+}
+
+// A variable only `!` has coerced to is `!` where that's required.
+fn never_through_generic() -> ! {
+    id(panic())
+}
+
+fn never_through_nested_generic(_ c: bool) -> ! {
+    if c { id(id(panic())) } else { panic() }
+}
+
+fn sink(_ x: !) {}
+
+fn never_argument_through_generic() {
+    sink(id(panic()))
+}
+
+fn never_in_closure(_ c: bool) -> u64 {
+    let f = || -> ! { id(panic()) }
+    if c {
+        f()
+    }
+    18
+}
+
+fn else_through_generic(_ o: Option<u64>) -> u64 {
+    let Option::Some(x) = o else { id(panic()) }
+    x
+}
+
+// `y` is `!` from the else block on, and that coerces to `u64`.
+fn else_then_value(_ c: bool, _ o: Option<u64>) -> u64 {
+    let y = if c { panic() } else { any() }
+    let Option::Some(x) = o else { y }
+    let z: u64 = y
+    x + z
+}
+
+fn never_binding_through_generic(_ c: bool) -> ! {
+    let x = if c { id(panic()) } else { panic() }
+    x
+}
+
+fn calls_never(_ c: bool) -> u64 {
+    if c {
+        never_through_generic()
+    }
+    if c {
+        never_through_nested_generic(c)
+    }
+    if c {
+        never_argument_through_generic()
+    }
+    if c {
+        never_binding_through_generic(c)
+    }
+    if c {
+        let _ = else_then_value(c, Option::None)
+    }
+    19
+}
+
+// The initializer takes the binding's type, as with a written one.
+fn bound_from_panic(_ c: bool) -> u64 {
+    if c {
+        return 17
+    }
+    let x = panic()
+    x
+}
+
+fn matched_never_through_generic(_ c: bool) -> u64 {
+    if c {
+        return 20
+    }
+    match id(panic()) {
+        _ => 21
+    }
+}
+
+#[test]
+fn t() {
+    assert(pick(true) == 1)
+    assert(pick(false) == 7)
+    assert(swapped(false) == 1)
+    assert(swapped(true) == 7)
+    assert(all_diverge(true) == 1)
+    assert(all_diverge(false) == 2)
+    assert(matched(true) == 3)
+    assert(matched(false) == 7)
+    assert(looped(true) == 0)
+    assert(looped(false) == 7)
+    assert(nested(true, true) == 4)
+    assert(nested(true, false) == 5)
+    assert(nested(false, true) == 7)
+    assert(through_generic(true) == 6)
+    assert(through_generic(false) == 7)
+    assert(as_argument(true) == 8)
+    assert(as_argument(false) == 7)
+    assert(unused_binding(true) == 9)
+    assert(unused_binding(false) == 10)
+    assert(destructured(true) == 12)
+    assert(destructured(false) == 13)
+    assert(in_closure(true) == 14)
+    assert(in_closure(false) == 7)
+    assert(falls_back(true) == 15)
+    assert(never_in_closure(false) == 18)
+    assert(else_through_generic(Option::Some(22)) == 22)
+    assert(calls_never(false) == 19)
+    assert(bound_from_panic(true) == 17)
+    assert(matched_never_through_generic(true) == 20)
+}

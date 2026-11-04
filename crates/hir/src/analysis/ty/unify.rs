@@ -516,6 +516,15 @@ where
         ty
     }
 
+    /// Records that a value of type `!` coerced to `var`. That doesn't fix it,
+    /// since `!` coerces to any type: it becomes `!` only if nothing else does.
+    pub fn mark_diverging(&mut self, var: &TyVar<'db>) -> UnificationResult {
+        self.table.unify_var_value(
+            var.key,
+            InferenceValue::Unbound(var.kind.clone(), TyVarSort::Diverging),
+        )
+    }
+
     pub fn new_key(&mut self, kind: &Kind, sort: TyVarSort) -> InferenceKey<'db> {
         self.table
             .new_key(InferenceValue::Unbound(kind.clone(), sort))
@@ -556,7 +565,8 @@ where
         match (var1.sort, var2.sort) {
             (sort1, sort2) if sort1 == sort2 => self.table.unify_var_var(var1.key, var2.key),
 
-            (TyVarSort::General, _) | (_, TyVarSort::General) => {
+            (TyVarSort::General | TyVarSort::Diverging, _)
+            | (_, TyVarSort::General | TyVarSort::Diverging) => {
                 self.table.unify_var_var(var1.key, var2.key)
             }
 
@@ -603,7 +613,7 @@ where
         };
 
         match root_var.sort {
-            TyVarSort::General => self
+            TyVarSort::General | TyVarSort::Diverging => self
                 .table
                 .unify_var_value(root_var.key, InferenceValue::Bound(value)),
 
@@ -700,7 +710,7 @@ where
             return false;
         };
         let min_len = match sort {
-            TyVarSort::General => min_len,
+            TyVarSort::General | TyVarSort::Diverging => min_len,
             TyVarSort::StringLen { min_len: current } => current.max(min_len),
             TyVarSort::Integral | TyVarSort::String { .. } => return false,
         };
