@@ -446,7 +446,7 @@ fn build_contract_package<'db>(
     Ok(package)
 }
 
-/// The `#[export]` functions of `top_mod`'s ingot, which a native object
+/// The `#[unsafe(export)]` functions of `top_mod`'s ingot, which a native object
 /// defines under their own names.
 pub fn native_exports<'db>(db: &'db dyn MirDb, top_mod: TopLevelMod<'db>) -> Vec<Func<'db>> {
     top_mod
@@ -511,7 +511,7 @@ pub fn build_native_package<'db>(
     }
     if sections.is_empty() {
         return Err(LowerError::Unsupported(
-            "native library output requires an `#[export]` function".to_string(),
+            "native library output requires an `#[unsafe(export)]` function".to_string(),
         ));
     }
     let package = build_sectioned_package(
@@ -980,12 +980,68 @@ fn build_non_contract_package<'db>(
     )
 }
 
+/// A `core::rt` function that native code calls to allocate memory or report
+/// a panic. Every native package holds them all; the backend drops those its
+/// module never calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativeRuntimeFunc {
+    Alloc,
+    TryAlloc,
+    Dealloc,
+    ReportTrap,
+    ReportPanic,
+    ReportRevert,
+    HostPanic,
+    HostRevert,
+}
+
+impl NativeRuntimeFunc {
+    pub const ALL: [Self; 8] = [
+        Self::Alloc,
+        Self::TryAlloc,
+        Self::Dealloc,
+        Self::ReportTrap,
+        Self::ReportPanic,
+        Self::ReportRevert,
+        Self::HostPanic,
+        Self::HostRevert,
+    ];
+
+    /// The function's instance in the packages of `top_mod`.
+    pub fn instance<'db>(
+        self,
+        db: &'db dyn MirDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Result<RuntimeInstance<'db>, LowerError> {
+        let name = match self {
+            Self::Alloc => "alloc",
+            Self::TryAlloc => "try_alloc",
+            Self::Dealloc => "dealloc",
+            Self::ReportTrap => "report_trap",
+            Self::ReportPanic => "report_panic",
+            Self::ReportRevert => "report_revert",
+            Self::HostPanic => "host_panic",
+            Self::HostRevert => "host_revert",
+        };
+        let path = format!("core::rt::{name}");
+        let func = resolve_lib_func_path(db, top_mod.scope(), &path)
+            .ok_or_else(|| LowerError::Unsupported(format!("`{path}` is missing")))?;
+        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
+        Ok(runtime_instance_for_semantic(db, semantic))
+    }
+}
+
 fn build_sectioned_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
-    roots: Vec<RuntimeInstance<'db>>,
+    mut roots: Vec<RuntimeInstance<'db>>,
     object_specs: Vec<ObjectSpec<'db>>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
+    if db.compilation_settings().target(db) == Target::Native {
+        for func in NativeRuntimeFunc::ALL {
+            roots.push(func.instance(db, top_mod)?);
+        }
+    }
     let root_object_count = object_specs.len();
     let mut graph = RuntimeGraphBuilder::new(db, roots, object_specs).build()?;
     let functions = collect_runtime_functions(db, &graph);
@@ -2451,10 +2507,14 @@ pub fn main() -> i32 {
         );
         let package =
             build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
+        // Every native package also holds the C imports of `core::rt`.
         let imports = package
             .functions(&db)
             .iter()
-            .filter(|function| function.linkage(&db) == RuntimeLinkage::External)
+            .filter(|function| {
+                function.linkage(&db) == RuntimeLinkage::External
+                    && function.symbol(&db).contains("putchar")
+            })
             .collect::<Vec<_>>();
         assert_eq!(imports.len(), 1);
         let imported = imports[0].instance(&db);

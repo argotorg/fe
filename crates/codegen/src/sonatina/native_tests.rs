@@ -7,7 +7,7 @@ use sonatina_ir::{Linkage, ir_writer::ModuleWriter};
 
 use super::{
     LowerError, NativePanics, create_native_isa, debug_ensure_module_sonatina_ir_valid,
-    format_cranelift_errors, lower_runtime, to_sonatina_opt_level,
+    format_cranelift_errors, lower_runtime, remove_unreachable_functions, to_sonatina_opt_level,
 };
 use crate::{
     ExpectedRevert, OptLevel,
@@ -90,6 +90,7 @@ pub fn emit_test_suite_native(
             expected_revert,
         });
     }
+    remove_unreachable_functions(&module);
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
     compile.optimize();

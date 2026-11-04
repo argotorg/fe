@@ -5,7 +5,7 @@ extern {
     fn host_offset() -> i64
 }
 
-#[export]
+#[unsafe(export)]
 pub fn twice(_ x: i64) -> i64 {
     x * 2
 }

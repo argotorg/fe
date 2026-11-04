@@ -1786,17 +1786,17 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             Self::InvalidExport { span, issue } => {
                 let (message, label, note) = match issue {
                     ExportIssue::NotPub => (
-                        "an `#[export]` function must be `pub`",
+                        "an `#[unsafe(export)]` function must be `pub`",
                         "this function is not `pub`",
                         None,
                     ),
                     ExportIssue::Generic => (
-                        "an `#[export]` function cannot be generic",
+                        "an `#[unsafe(export)]` function cannot be generic",
                         "generic parameters",
                         Some("a C caller supplies no generic arguments: export a function for each one"),
                     ),
                     ExportIssue::Effects => (
-                        "an `#[export]` function cannot take effects",
+                        "an `#[unsafe(export)]` function cannot take effects",
                         "effects",
                         Some("a C caller provides no effects: provide them in the body with `with`"),
                     ),

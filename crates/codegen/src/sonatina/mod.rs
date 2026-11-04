@@ -22,7 +22,7 @@ use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
-use sonatina_codegen::Compile;
+use sonatina_codegen::{Compile, module_analysis::CallGraph};
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     machinst::vcode::{SectionCodeUnitId, VCodeInst},
@@ -764,7 +764,7 @@ fn compile_native_module(
         NativeTarget::Sp1 => {
             if let Some(func) = mir::native_exports(db, top_mod).first() {
                 return Err(LowerError::Unsupported(format!(
-                    "SP1 guests export no functions, but `{}` is `#[export]`",
+                    "SP1 guests export no functions, but `{}` is `#[unsafe(export)]`",
                     func.scope().pretty_path(db).unwrap_or_default()
                 )));
             }
@@ -902,6 +902,7 @@ pub fn emit_module_native_artifacts(
         Some(main) => prepare_native_main(db, top_mod, target, module, main)?,
         None => module,
     };
+    remove_unreachable_functions(&module);
 
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
@@ -921,6 +922,28 @@ pub fn emit_module_native_artifacts(
         None
     };
     Ok(NativeArtifacts { ir, object })
+}
+
+/// Removes the functions no public function calls. A native package holds
+/// every `core::rt` function, of which a module calls only some, and an
+/// unused C import would still need a definition when the module links.
+#[cfg(feature = "cranelift")]
+fn remove_unreachable_functions(module: &Module) {
+    let calls = CallGraph::build_graph(module);
+    let mut reached = module
+        .funcs()
+        .into_iter()
+        .filter(|&func| module.ctx.func_linkage(func) == Linkage::Public)
+        .collect::<FxHashSet<_>>();
+    let mut pending = reached.iter().copied().collect::<Vec<_>>();
+    while let Some(func) = pending.pop() {
+        for &callee in calls.callee_of(func) {
+            if reached.insert(callee) {
+                pending.push(callee);
+            }
+        }
+    }
+    module.retain_defined_funcs(|func| reached.contains(&func));
 }
 
 #[cfg(feature = "cranelift")]
@@ -2168,6 +2191,7 @@ mod tests {
         let (module, _) =
             compile_native_module(&db, top_mod, NativeTarget::Host, NativeOutputKind::Library)
                 .expect("native pointer fixture should lower");
+        remove_unreachable_functions(&module);
         let mut compile = Compile::new(module, CraneliftObjectBackend::new())
             .with_opt_level(SonatinaOptLevel::O0);
         compile.optimize();
@@ -2194,7 +2218,7 @@ fn zero_buffer(ptr: *u8, len: usize) {
     unsafe { core::ptr::zero_bytes(ptr, len) }
 }
 
-#[export]
+#[unsafe(export)]
 pub fn zero(_ ptr: *u8, _ len: usize) {
     zero_buffer(ptr, len)
 }
@@ -2225,7 +2249,7 @@ fn replace_byte(ptr: *u8, value: u8) -> u8 {
     previous
 }
 
-#[export]
+#[unsafe(export)]
 pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
     replace_byte(ptr, value.downcast_truncate()) as u32
 }

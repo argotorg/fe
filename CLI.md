@@ -272,27 +272,31 @@ With the optional `cranelift` Cargo feature, `fe build --backend native` compile
 
 - `executable` (the default): `<out>/<name>`, entered at the root module's
   `pub fn main() -> i32`, whose result is the exit status.
-- `object`: `<out>/<name>.o`, the object of the `#[export]` functions in the file or ingot.
+- `object`: `<out>/<name>.o`, the object of the `#[unsafe(export)]` functions in the file or ingot.
 - `staticlib`: `<out>/lib<name>.a`, a static library holding that object.
 - `ir`: `<out>/<name>.native.sona`, the Sonatina IR of the executable or, with `object` or
   `staticlib`, of the library.
 
 `object` and `staticlib` build a library, which needs no `main` and cannot be combined with
 `executable`. A workspace build selects the members with a `main`, or for a library, the members
-with an `#[export]` function.
+with an `#[unsafe(export)]` function.
 
 #### Exported functions
 
-`#[export]` on a free `pub fn` defines it in native output under its own name, with the
-platform's C calling convention, even when no Fe code calls it:
+`#[unsafe(export)]` on a free `pub fn` defines it in native output under its own name, with the
+platform's C calling convention, even when no Fe code calls it. It is `unsafe` because symbols are
+global: an export replaces any other definition of its name for this object and possibly for code
+linked with it, so you must ensure it does what every caller of that name expects. That includes
+`memcpy`, `memset` and `memmove`, which the compiler calls on its own with their C meanings, and
+`malloc`, `free`, `write`, `fflush` and `abort`, which `core::rt` calls:
 
 ```fe
-#[export]
+#[unsafe(export)]
 pub fn add(_ a: i64, _ b: i64) -> i64 {
     a + b
 }
 
-#[export]
+#[unsafe(export)]
 pub fn fill(_ data: *u8, _ len: usize, _ byte: u32) {
     for i in 0..len {
         unsafe { *core::ptr::offset_bytes(data, i) = byte.downcast_truncate() }
@@ -303,23 +307,24 @@ pub fn fill(_ data: *u8, _ len: usize, _ byte: u32) {
 An exported function cannot be generic or take `uses` effects, and its parameters and result
 must be `i32`, `u32`, `i64`, `u64`, `usize`, `isize` or raw pointers, which C declares as
 `int32_t`, `uint32_t`, `int64_t`, `uint64_t`, `size_t`, `ptrdiff_t` and pointers. Its symbol must
-be unique, must not start with `__fe_`, and must not be a C library function native code calls
-itself (`malloc`, `free`, `memmove`, `write`, `fflush` or `abort`). An executable defines its
-exported functions too. EVM builds and SP1 guests reject `#[export]`.
+be unique, must not start with `__fe_`, and must not be `environ`, a C variable native code reads.
+A Fe `extern` declaration of the same symbol calls the exported function, and must have the same
+signature. An executable defines its
+exported functions too. EVM builds and SP1 guests reject `#[unsafe(export)]`.
 
 #### Linking host code
 
 `--link <PATH>` links an object file or archive into a native executable, and
 `--link-lib <NAME>` links a library as the C compiler's `-l<NAME>`, found on its library path
 (such as `LIBRARY_PATH`). Both repeat, and both apply only to `--emit executable`. They let C or
-Rust code implement a Fe `extern` function, and call the executable's `#[export]` functions back:
+Rust code implement a Fe `extern` function, and call the executable's `#[unsafe(export)]` functions back:
 
 ```fe
 extern {
     fn host_apply(_ x: i64) -> i64
 }
 
-#[export]
+#[unsafe(export)]
 pub fn twice(_ x: i64) -> i64 {
     x * 2
 }

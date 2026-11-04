@@ -1503,7 +1503,12 @@ module.exports = grammar({
 
     attribute_list: $ => repeat1(choice($.attribute, $.doc_comment)),
 
-    attribute: $ => seq('#', '[', $._attribute_body, ']'),
+    attribute: $ => seq(
+      '#',
+      '[',
+      choice($._attribute_body, seq('unsafe', '(', $._attribute_body, ')')),
+      ']',
+    ),
 
     // Attributes of the enclosing module, at the start of a file or `mod`
     // body: #![cfg(target_os = "linux")]

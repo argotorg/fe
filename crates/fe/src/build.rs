@@ -112,7 +112,7 @@ impl EmitSelection {
         self.bytecode || self.runtime_bytecode || self.sizes
     }
 
-    /// Native library output, of the `#[export]` functions only.
+    /// Native library output, of the `#[unsafe(export)]` functions only.
     fn library(self) -> bool {
         self.object || self.staticlib
     }
@@ -887,7 +887,7 @@ fn build_workspace(
         }
         if built.is_empty() {
             if emit.library() {
-                eprintln!("Error: No native `#[export]` functions found to build");
+                eprintln!("Error: No native `#[unsafe(export)]` functions found to build");
             } else {
                 eprintln!("Error: No native executable entry points found to build");
             }
@@ -1617,13 +1617,13 @@ fn build_top_mod(
     BuildSummary { had_errors }
 }
 
-/// Reports `top_mod`'s ingot's `#[export]` functions, which only native
+/// Reports `top_mod`'s ingot's `#[unsafe(export)]` functions, which only native
 /// objects define, rather than dropping them from an EVM build.
 fn report_evm_exports(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
     let exports = mir::native_exports(db, top_mod);
     for func in &exports {
         eprintln!(
-            "Error: `#[export]` requires `--backend native`, but `{}` is exported",
+            "Error: `#[unsafe(export)]` requires `--backend native`, but `{}` is exported",
             func.scope().pretty_path(db).unwrap_or_default()
         );
     }
@@ -2495,7 +2495,7 @@ fn link_native_executable_artifact(
     Ok(())
 }
 
-/// Writes `object`, the native object of a library's `#[export]` functions,
+/// Writes `object`, the native object of a library's `#[unsafe(export)]` functions,
 /// as `<name>.o` and as the static library `lib<name>.a`, as `emit` asks.
 #[cfg(feature = "cranelift")]
 fn write_native_library_artifacts(

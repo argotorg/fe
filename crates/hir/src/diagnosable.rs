@@ -390,7 +390,7 @@ impl<'db> Func<'db> {
         diags
     }
 
-    /// An `#[export]` function is public, and a C caller supplies it no
+    /// An `#[unsafe(export)]` function is public, and a C caller supplies it no
     /// generic arguments or effects.
     pub fn diags_export(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         if !self.is_exported(db) {

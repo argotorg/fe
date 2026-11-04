@@ -181,6 +181,48 @@ fn oversized_string() {
 }
 
 #[test]
+fn native_allocations_the_host_cannot_make_run_out_of_memory() {
+    // The C allocator cannot make `usize::max()` bytes.
+    let temp = tempdir().unwrap();
+    let test_source = temp.path().join("host_oom_test.fe");
+    fs::write(
+        &test_source,
+        "use core::ptr\n#[test(should_revert, panic = 0x41)]\nfn too_large() {\n    let _ = ptr::alloc_bytes(usize::max())\n}\n",
+    )
+    .unwrap();
+    let source = temp.path().join("host_oom.fe");
+    fs::write(
+        &source,
+        "use core::ptr\npub fn main() -> i32 {\n    let data = ptr::alloc_bytes(usize::max())\n    unsafe { *data = 1 }\n    0\n}\n",
+    )
+    .unwrap();
+    test_utils::skip_crash_reports();
+    for level in ["0", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&test_source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("host_oom")).output().unwrap();
+        assert_eq!(
+            result.status.signal(),
+            Some(libc::SIGABRT),
+            "O{level}: {result:?}"
+        );
+        assert_eq!(
+            result.stderr, b"panicked: out of memory\n",
+            "O{level}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn native_panics_report_on_stderr_after_flushing_stdout() {
     let temp = tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/panics.fe");
@@ -486,8 +528,10 @@ pub fn main() -> i32 {
             let frame = ir
                 .lines()
                 .find_map(|line| {
-                    line.strip_prefix("type ")?
-                        .strip_suffix(" = {i1, [i256; 64], i64, [i8; 3], @layout_1};")
+                    let (frame, _) = line
+                        .strip_prefix("type ")?
+                        .split_once(" = {i1, [i256; 64], i64, [i8; 3], @layout_")?;
+                    Some(frame)
                 })
                 .unwrap_or_else(|| panic!("no frame type\n{ir}"));
             // Value names are per function, and the object operand is the
@@ -762,7 +806,7 @@ math = true
     .unwrap();
     fs::write(
         root.join("math/src/lib.fe"),
-        "#[export]\npub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
+        "#[unsafe(export)]\npub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
     )
     .unwrap();
     fs::write(
@@ -1871,7 +1915,7 @@ pub fn main() -> i32 uses (out: mut Stdout, input: mut Stdin) {
 }
 
 #[test]
-fn native_memory_copy_preserves_overlaps_and_reserves_the_host_symbol() {
+fn native_memory_copy_preserves_overlaps() {
     let temp = tempdir().unwrap();
     let source =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fe_test/raw_memory_copy.fe");
@@ -1880,10 +1924,13 @@ fn native_memory_copy_preserves_overlaps_and_reserves_the_host_symbol() {
         build(&source, &out, level, &[]);
         let result = Command::new(out.join("raw_memory_copy")).output().unwrap();
         assert!(result.status.success(), "O{level}: {result:?}");
+        // The backend lowers the copy, so Fe declares no `memmove` and
+        // `local::memmove` keeps its name.
         let ir = fs::read_to_string(out.join("raw_memory_copy.native.sona")).unwrap();
-        assert!(ir.contains("declare external %memmove"), "{ir}");
+        assert!(ir.contains("memcopy "), "{ir}");
+        assert!(!ir.contains("declare external %memmove"), "{ir}");
         if level == "0" {
-            assert!(ir.contains("local__memmove"), "{ir}");
+            assert!(ir.contains("func private %memmove("), "{ir}");
         }
         assert!(!ir.contains("evm_mcopy"), "{ir}");
     }
@@ -2235,40 +2282,148 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_extern_declarations_must_match_runtime_imports() {
+fn native_extern_declarations_of_a_symbol_must_agree() {
     let temp = tempdir().unwrap();
-    for (name, declaration, call, error) in [
+    // A program's declarations must agree with each other and with core's and
+    // std's. `u64` and `i64` results are the same C type, so those two
+    // declarations share one import.
+    for (name, source, errors) in [
+        (
+            "agree",
+            "mod a {\n    extern { pub fn clock() -> i64 }\n}\nmod b {\n    extern { pub fn clock() -> u64 }\n}\npub fn main() -> i32 {\n    let ticks = unsafe { b::clock() }\n    if unsafe { a::clock() } < 0 || ticks == 0 { 1 } else { 0 }\n}\n",
+            &[][..],
+        ),
+        (
+            "modules",
+            "mod a {\n    extern { pub fn clock() -> i64 }\n}\nmod b {\n    extern { pub fn clock() -> i32 }\n}\npub fn main() -> i32 {\n    let ticks = unsafe { b::clock() }\n    if unsafe { a::clock() } < 0 || ticks < 0 { 1 } else { 0 }\n}\n",
+            &[
+                "conflicting `extern` declarations of `clock`: ",
+                "`fn clock() -> i64` in `modules::a`",
+                "`fn clock() -> i32` in `modules::b`",
+            ][..],
+        ),
         (
             "write",
-            "fn write(_ fd: i64, _ buf: *u8, _ len: usize) -> isize",
-            "write(2, core::ptr::alloc_bytes(1), 0)",
-            "native code calls the C library's `write`, so an `extern` declaration of it must be `fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize`",
+            "extern { fn write(_ fd: i64, _ buf: *u8, _ len: usize) -> isize }\npub fn main() -> i32 {\n    let _ = unsafe { write(2, core::ptr::alloc_bytes(1), 0) }\n    0\n}\n",
+            &[
+                "conflicting `extern` declarations of `write`: ",
+                "`fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize` in `core::rt`",
+                "`fn write(_ fd: i64, _ buf: *u8, _ len: usize) -> isize` in `write`",
+            ][..],
         ),
         (
-            "__fe_revert",
-            "fn __fe_revert(_ data: *u8, _ len: usize)",
-            "__fe_revert(core::ptr::alloc_bytes(1), 0)",
-            "extern symbol `__fe_revert` is reserved: symbols starting with `__fe_` are the compiler's",
+            "std",
+            "extern { fn clock() -> i32 }\npub fn main() -> i32 {\n    let ticks = std::native::cpu_clock_ticks()\n    if ticks < 0 || unsafe { clock() } < 0 { 1 } else { 0 }\n}\n",
+            &[
+                "conflicting `extern` declarations of `clock`: ",
+                "`fn clock() -> i64` in `std::native`",
+                "`fn clock() -> i32` in `std`",
+            ][..],
         ),
     ] {
-        let source = temp.path().join(format!("{name}.fe"));
-        fs::write(
-            &source,
-            format!(
-                "extern {{\n    {declaration}\n}}\npub fn main() -> i32 {{\n    let _ = unsafe {{ {call} }}\n    core::panic()\n}}\n"
-            ),
-        )
-        .unwrap();
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let out = temp.path().join(format!("out-{name}"));
         let result = Command::new(env!("CARGO_BIN_EXE_fe"))
             .args(["build", "--backend", "native", "--out-dir"])
-            .arg(temp.path().join(format!("out-{name}")))
-            .arg(&source)
+            .arg(&out)
+            .arg(&path)
             .output()
             .unwrap();
         let output = String::from_utf8_lossy(&result.stderr);
-        assert!(!result.status.success(), "{result:?}");
-        assert!(output.contains(error), "{output}");
+        if errors.is_empty() {
+            assert!(result.status.success(), "{name}: {output}");
+            let run = Command::new(out.join(name)).output().unwrap();
+            assert!(run.status.success(), "{name}: {run:?}");
+        } else {
+            assert!(!result.status.success(), "{name}: {result:?}");
+            for error in errors {
+                assert!(output.contains(error), "{name}: {output}");
+            }
+        }
     }
+}
+
+#[test]
+fn native_functions_named_like_c_functions_leave_the_backends_calls_alone() {
+    // The array copy and the zero fill exceed the inline limit, so they call
+    // `memcpy` and `memset`, and the copy of dynamic length calls `memmove`:
+    // the C library's, not these functions.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("c_names.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+use std::env::Args
+
+#[inline(never)]
+fn memcpy(_ x: u64) -> u64 { x + 1 }
+#[inline(never)]
+fn memset(_ x: u64) -> u64 { x + 2 }
+#[inline(never)]
+fn memmove(_ x: u64) -> u64 { x + 3 }
+
+fn sum(_ a: [u64; 32]) -> u64 {
+    var total: u64 = 0
+    for x in a {
+        total = total + x
+    }
+    total
+}
+
+pub fn main() -> i32 uses (args: Args) {
+    var a: [u64; 32] = [3; 32]
+    a[5] = memcpy(41) + memset(0) + memmove(0)
+    let b = a
+    a[0] = 100
+    let len = 200 * args.count()
+    let source = ptr::alloc_bytes(len)
+    let dest = ptr::alloc_bytes(len)
+    unsafe {
+        ptr::zero_bytes(source, len)
+        *ptr::offset_bytes(source, len - 1) = 7
+        ptr::copy_raw(dest, source, len)
+        if sum(b) != 31 * 3 + 47 || b[0] != 3 || *dest != 0 || *ptr::offset_bytes(dest, len - 1) != 7 {
+            return 1
+        }
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("c_names")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_extern_declarations_must_not_name_compiler_symbols() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("reserved.fe");
+    fs::write(
+        &source,
+        "extern {\n    fn __fe_revert(_ data: *u8, _ len: usize)\n}\npub fn main() -> i32 {\n    unsafe { __fe_revert(core::ptr::alloc_bytes(1), 0) }\n    core::panic()\n}\n",
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["build", "--backend", "native", "--out-dir"])
+        .arg(temp.path().join("out"))
+        .arg(&source)
+        .output()
+        .unwrap();
+    let output = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{result:?}");
+    assert!(
+        output.contains(
+            "extern symbol `__fe_revert` is reserved: symbols starting with `__fe_` are the compiler's"
+        ),
+        "{output}"
+    );
 }
 
 #[test]
@@ -3215,5 +3370,118 @@ fn native_clock_reads_wall_and_monotonic_time() {
             "spun 20 ms: true\nsince a later reading: 0\n2 s, 2499 ms, 2499750 us, 2499750000 ns\ntrue true\n",
             "O{level}"
         );
+    }
+}
+
+#[test]
+fn native_exports_replace_the_symbols_native_code_imports() {
+    // Each export leaves a mark, which shows that native code called it: the
+    // allocator of `core::rt`, the backend's copy, and a Fe `extern`.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("replaced.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+use std::env::Args
+
+extern {
+    fn calloc(_ count: usize, _ size: usize) -> *u8
+}
+
+mod host {
+    extern {
+        pub fn shared(_ x: i64) -> i64
+    }
+}
+
+#[unsafe(export)]
+pub fn malloc(_ size: usize) -> *u8 {
+    let bytes = unsafe { calloc(1, size) }
+    unsafe { *bytes = 77 }
+    bytes
+}
+
+#[unsafe(export)]
+pub fn memmove(_ dest: *u8, _ src: *u8, _ len: usize) -> *u8 {
+    var i: usize = 0
+    while i < len {
+        unsafe { *ptr::offset_bytes(dest, i) = *ptr::offset_bytes(src, i) }
+        i += 1
+    }
+    unsafe { *dest = 99 }
+    dest
+}
+
+#[unsafe(export)]
+pub fn shared(_ x: i64) -> i64 {
+    x + 1
+}
+
+pub fn main() -> i32 uses (args: Args) {
+    let len = 200 * args.count()
+    let source = ptr::alloc_bytes(len)
+    if unsafe { *source } != 77 {
+        return 1
+    }
+    let dest = ptr::alloc_bytes(len)
+    unsafe {
+        ptr::zero_bytes(source, len)
+        *ptr::offset_bytes(source, len - 1) = 7
+        ptr::copy_raw(dest, source, len)
+        if *dest != 99 || *ptr::offset_bytes(dest, len - 1) != 7 {
+            return 2
+        }
+        if host::shared(41) != 42 {
+            return 3
+        }
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("replaced")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_functions_named_like_the_compilers_symbols_keep_working() {
+    // Functions share an object namespace with the globals behind `std::env`.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("names.fe");
+    fs::write(
+        &source,
+        r#"
+use std::env::Args
+
+extern {
+    fn __fe_native_environ() -> **u8
+}
+
+fn __fe_native_argc() -> i32 { 10 }
+fn __fe_native_argv() -> i32 { 20 }
+fn __fe_argc() -> i32 { 1 }
+fn __fe_argv() -> i32 { 2 }
+fn environ() -> i32 { 3 }
+
+pub fn main() -> i32 uses (args: Args) {
+    let sum = __fe_native_argc() + __fe_native_argv() + __fe_argc() + __fe_argv() + environ()
+    let count: i32 = args.count().downcast_unchecked()
+    let has_environ = unsafe { __fe_native_environ() } as usize != 0
+    if sum == 36 && count == 1 && args.get(0).len() > 0 && has_environ { 0 } else { 1 }
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("names")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
     }
 }

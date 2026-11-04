@@ -767,7 +767,7 @@ impl<'db> Func<'db> {
         self.attributes(db).has_marker_attr(db, "raw_place")
     }
 
-    /// A free `#[export]` function, which a native object defines under its
+    /// A free `#[unsafe(export)]` function, which a native object defines under its
     /// own name for C callers. Elsewhere the attribute is an error.
     pub fn is_exported(self, db: &'db dyn HirDb) -> bool {
         !self.is_extern(db)

@@ -54,11 +54,13 @@ impl ToDoc for ast::NormalAttr {
             alloc.nil()
         };
 
-        alloc
-            .text("#[")
-            .append(path)
-            .append(suffix_doc)
-            .append(alloc.text("]"))
+        let body = path.append(suffix_doc);
+        let body = if self.is_unsafe() {
+            alloc.text("unsafe(").append(body).append(alloc.text(")"))
+        } else {
+            body
+        };
+        alloc.text("#[").append(body).append(alloc.text("]"))
     }
 }
 
