@@ -20,7 +20,10 @@ use sonatina_ir::{ir_writer::ModuleWriter, isa::wasm32::Wasm32};
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 use sonatina_wasm::{WasmBackend, WasmError};
 
-use super::{LowerError, ensure_module_sonatina_ir_valid, lower_runtime, to_sonatina_opt_level};
+use super::{
+    LowerError, ensure_module_sonatina_ir_valid, lower_runtime, remove_unreachable_functions,
+    to_sonatina_opt_level,
+};
 use crate::OptLevel;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -123,6 +126,7 @@ pub fn emit_module_wasm_artifacts(
         &scalar_exports,
         &adapters,
     )?;
+    remove_unreachable_functions(&module);
     let backend = if exports.iter().any(WasmExport::takes_text) {
         WasmBackend::new().with_host_allocator()
     } else {

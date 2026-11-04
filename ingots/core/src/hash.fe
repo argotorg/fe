@@ -201,7 +201,7 @@ fn rotate(_ value: u64, by: u64) -> u64 {
 // The fixed 5x5 round exposes constant lane indices and rotation amounts.
 // Keep only the 24-round loop; no run-time modulo or temporary lane arrays.
 fn permute(_ state: mut [u64; 25]) {
-    var round: u64 = 0
+    var round: usize = 0
     while round < 24 {
         // Theta: column parities and their neighboring deltas.
         let c0 = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20]
@@ -270,7 +270,7 @@ fn permute(_ state: mut [u64; 25]) {
         state[24] = b24 ^ (!b20 & b21)
 
         // Iota.
-        state[0] ^= ROUND_CONSTANTS[round as usize]
+        state[0] ^= ROUND_CONSTANTS[round]
         round += 1
     }
 }

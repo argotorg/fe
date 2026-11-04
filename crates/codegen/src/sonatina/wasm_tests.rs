@@ -14,7 +14,8 @@ use sonatina_ir::{Linkage, ir_writer::ModuleWriter};
 use sonatina_wasm::WasmBackend;
 
 use super::{
-    LowerError, ensure_module_sonatina_ir_valid, lower_runtime, to_sonatina_opt_level,
+    LowerError, ensure_module_sonatina_ir_valid, lower_runtime, remove_unreachable_functions,
+    to_sonatina_opt_level,
     wasm::{create_wasm32_isa, lower_wasm_errors},
 };
 use crate::{
@@ -84,6 +85,7 @@ pub fn emit_test_wasm(
         Ok(signature.name().to_string())
     })?;
     module.ctx.update_func_linkage(entry, Linkage::Public);
+    remove_unreachable_functions(&module);
 
     let mut compile =
         Compile::new(module, WasmBackend::new()).with_opt_level(to_sonatina_opt_level(opt_level));

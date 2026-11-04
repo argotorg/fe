@@ -33,7 +33,9 @@ use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
-use sonatina_codegen::{Compile, module_analysis::CallGraph};
+use sonatina_codegen::Compile;
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+use sonatina_codegen::module_analysis::CallGraph;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     machinst::vcode::{SectionCodeUnitId, VCodeInst},
@@ -45,6 +47,8 @@ use sonatina_codegen::{
 };
 #[cfg(feature = "cranelift")]
 use sonatina_cranelift::CraneliftObjectBackend;
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+use sonatina_ir::Linkage;
 use sonatina_ir::{
     BlockId, Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -54,7 +58,7 @@ use sonatina_ir::{
 };
 #[cfg(feature = "cranelift")]
 use sonatina_ir::{
-    Linkage, Signature, Type,
+    Signature, Type,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
@@ -938,7 +942,7 @@ pub fn emit_module_native_artifacts(
 /// Removes the functions no public function calls. A native package holds
 /// every `core::rt` function, of which a module calls only some, and an
 /// unused C import would still need a definition when the module links.
-#[cfg(feature = "cranelift")]
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
 fn remove_unreachable_functions(module: &Module) {
     let calls = CallGraph::build_graph(module);
     let mut reached = module

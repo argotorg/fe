@@ -33,7 +33,13 @@ use mir::runtime::{
 };
 use mir::{
     ArrayLayout, ConstNode, ConstRegionId, ConstScalar, FieldPlacement, IntrinsicArithBinOp,
-    Layout, LayoutId, NativeRuntimeFunc, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr, VariantId, WasmParamShape, WasmResultShape, instance::RuntimeInstanceSource, resolve_runtime_place, runtime_param_accesses, scalar_raw_memory_size_bytes,
+    Layout, LayoutId, NativeRuntimeFunc, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator,
+    ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass,
+    RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot,
+    RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp,
+    ScalarClass, ScalarRepr, VariantId, WasmParamShape, WasmResultShape,
+    instance::RuntimeInstanceSource, resolve_runtime_place, runtime_param_accesses,
+    scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
@@ -584,11 +590,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         is_native_architecture(self.builder.ctx.triple.architecture)
     }
 
-    /// Whether the module is linked against the host C library, as native
-    /// code is. A WebAssembly module carries its own memory and imports nothing
-    /// for it.
-    fn has_host_libc(&self) -> bool {
-        self.is_native_target() && !self.is_wasm_target()
+    /// Whether a panic or a revert ends the module in a bare trap, which
+    /// ignores their operands.
+    fn traps_on_panic(&self) -> bool {
+        self.is_native_target() && self.panics == NativePanics::Trap
     }
 
     fn is_wasm_target(&self) -> bool {
@@ -701,7 +706,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             )));
         }
         if function.linkage(self.db) == RuntimeLinkage::External {
-            if self.is_wasm_target() {
+            if self.is_wasm_target() && !WASM_RUNTIME_ROUTINES.contains(&symbol.as_str()) {
                 // The host sees `bool` and narrow integers as an `i32` holding
                 // the zero-extended value. The package builder has already
                 // named any other type.
@@ -3573,9 +3578,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 ));
             }
             RTerminator::Revert { offset, len } => {
-                let offset = self.local_value(*offset)?;
-                let len = self.local_value(*len)?;
-                if self.module.is_native_target() {
+                if self.module.traps_on_panic() {
+                    // The statements that compute the data are not lowered.
+                    self.insert_native_panic(NativePanic::Revert, &[])?;
+                } else if self.module.is_native_target() {
+                    let offset = self.local_value(*offset)?;
+                    let len = self.local_value(*len)?;
                     self.insert_native_panic(NativePanic::Revert, &[offset, len])?;
                 } else {
                     let offset = self.local_value(*offset)?;

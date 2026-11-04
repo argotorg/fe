@@ -1211,20 +1211,6 @@ fn non_scalar_exports_are_named_errors() {
 }
 
 #[test]
-fn an_evm_builtin_is_a_named_error() {
-    let stderr = rejected(
-        "evm_builtin",
-        "use std::evm::ops\n\
-         pub fn lowest_byte(x: u32) -> u32 {\n\
-         \x20   let b: u256 = ops::byte(pos: 31, value: x as u256)\n\
-         \x20   1\n\
-         }\n",
-        &["lowest_byte", "EVM-only instruction", "EvmByte"],
-    );
-    assert!(stderr.contains("wasm32-unknown-native"), "{stderr}");
-}
-
-#[test]
 fn a_function_named_memory_is_refused() {
     rejected(
         "reserved_name",

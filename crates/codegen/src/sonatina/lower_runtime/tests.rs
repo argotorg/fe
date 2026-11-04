@@ -301,7 +301,7 @@ fn assert_raw_memory_layouts_match_objects<I>(
         package,
         &[],
         &[],
-        NativePanics::Abort,
+        NativePanics::Trap,
     )
     .unwrap();
     lowerer.declare_functions().unwrap();

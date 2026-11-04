@@ -1,5 +1,5 @@
-// One test that passes next to tests that the WebAssembly backend cannot
-// build. Each of those fails with a message that names the reason.
+// Tests that pass next to tests that the WebAssembly backend cannot build. Each
+// of those fails with a message that names the reason.
 use std::evm::ops::byte
 
 // The host provides a `() -> i64` clock under this name, which the declared
@@ -15,7 +15,7 @@ fn builds_and_passes() {
 }
 
 #[test]
-fn uses_an_evm_builtin() {
+fn lowers_an_evm_builtin() {
     assert(byte(pos: 31, value: 0x1234) == 0x34)
 }
 

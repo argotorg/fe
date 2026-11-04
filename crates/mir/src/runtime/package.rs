@@ -706,6 +706,10 @@ fn check_wasm_imports<'db>(
         let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
             continue;
         };
+        // `core::rt`'s `malloc` and `free` are the module's own allocator.
+        if func.top_mod(db).ingot(db).is_core(db) {
+            continue;
+        }
         let name = func_display_name(db, func);
         let signature = instance.interface_signature(db);
         let scalar = vec![WasmParamShape::Scalar; signature.params.len()];
@@ -1471,8 +1475,9 @@ fn build_non_contract_package<'db>(
 }
 
 /// A `core::rt` function that native code calls to allocate memory or report
-/// a panic. Every native package holds them all; the backend drops those its
-/// module never calls.
+/// a panic. Every native package holds them all, and every WebAssembly package
+/// those that allocate, since its module traps at a panic. The backend drops
+/// those its module never calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeRuntimeFunc {
     Alloc,
@@ -1496,6 +1501,9 @@ impl NativeRuntimeFunc {
         Self::HostPanic,
         Self::HostRevert,
     ];
+
+    /// The functions that allocate, which import only `malloc` and `free`.
+    pub const ALLOCATION: [Self; 3] = [Self::Alloc, Self::TryAlloc, Self::Dealloc];
 
     /// The function's instance in the packages of `top_mod`.
     pub fn instance<'db>(
@@ -1527,10 +1535,13 @@ fn build_sectioned_package<'db>(
     mut roots: Vec<RuntimeInstance<'db>>,
     object_specs: Vec<ObjectSpec<'db>>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    if db.compilation_settings().target(db) == Target::Native {
-        for func in NativeRuntimeFunc::ALL {
-            roots.push(func.instance(db, top_mod)?);
-        }
+    let runtime_funcs: &[NativeRuntimeFunc] = match db.compilation_settings().target(db) {
+        Target::Evm => &[],
+        Target::Native => &NativeRuntimeFunc::ALL,
+        Target::Wasm => &NativeRuntimeFunc::ALLOCATION,
+    };
+    for func in runtime_funcs {
+        roots.push(func.instance(db, top_mod)?);
     }
     let root_object_count = object_specs.len();
     let mut graph = RuntimeGraphBuilder::new(db, roots, object_specs).build()?;

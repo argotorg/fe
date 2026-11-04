@@ -195,21 +195,11 @@ fn tests_the_backend_cannot_build_fail_with_the_reason() {
     assert_eq!(
         results(&output),
         expected(
-            &["builds_and_passes"],
-            &[
-                "uses_an_evm_builtin",
-                "expects_an_evm_revert",
-                "imports_a_zero_sized_parameter"
-            ]
+            &["builds_and_passes", "lowers_an_evm_builtin"],
+            &["expects_an_evm_revert", "imports_a_zero_sized_parameter"]
         ),
         "{}",
         stdout(&output)
-    );
-    let builtin = failure_of(&output, "uses_an_evm_builtin");
-    assert!(
-        builtin.starts_with("cannot build `uses_an_evm_builtin` for WebAssembly: unsupported:")
-            && builtin.contains("EvmByte"),
-        "{builtin}"
     );
     let revert = failure_of(&output, "expects_an_evm_revert");
     assert!(
@@ -224,7 +214,7 @@ fn tests_the_backend_cannot_build_fail_with_the_reason() {
         "{import}"
     );
     assert_eq!(output.status.code(), Some(1));
-    assert!(stdout(&output).contains("1 passed; 3 failed"));
+    assert!(stdout(&output).contains("2 passed; 2 failed"));
 }
 
 #[test]
