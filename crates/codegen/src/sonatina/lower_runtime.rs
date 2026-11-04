@@ -2323,6 +2323,61 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         ))
     }
 
+    /// `1` when `value < limit` and `0` otherwise, as an i256.
+    fn lower_below(&mut self, value: ValueId, limit: u64) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let limit = self.fb.make_imm_value(I256::from(limit));
+        let below = self
+            .fb
+            .insert_inst(Lt::new(inst_set, value, limit), Type::I1);
+        self.fb
+            .insert_inst(Zext::new(inst_set, below, Type::I256), Type::I256)
+    }
+
+    /// Byte `pos` of `value`, counting from the most significant, as the EVM's
+    /// `BYTE`: zero when `pos` is past the word.
+    fn lower_byte(&mut self, pos: ValueId, value: ValueId) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let in_word = self.lower_below(pos, 32);
+        let three = self.fb.make_imm_value(I256::from(3u64));
+        let bits = self
+            .fb
+            .insert_inst(Shl::new(inst_set, three, pos), Type::I256);
+        let raised = self
+            .fb
+            .insert_inst(Shl::new(inst_set, bits, value), Type::I256);
+        let top_byte = self.fb.make_imm_value(I256::from(248u64));
+        let byte = self
+            .fb
+            .insert_inst(Shr::new(inst_set, top_byte, raised), Type::I256);
+        self.fb
+            .insert_inst(Mul::new(inst_set, in_word, byte), Type::I256)
+    }
+
+    /// `value` sign-extended from its byte `byte`, counting from the least
+    /// significant, as the EVM's `SIGNEXTEND`: unchanged when `byte` is the
+    /// word's top byte or past it.
+    fn lower_sign_extend(&mut self, byte: ValueId, value: ValueId) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let extends = self.lower_below(byte, 31);
+        let thirty_one = self.fb.make_imm_value(I256::from(31u64));
+        let bytes = self
+            .fb
+            .insert_inst(Sub::new(inst_set, thirty_one, byte), Type::I256);
+        let three = self.fb.make_imm_value(I256::from(3u64));
+        let bits = self
+            .fb
+            .insert_inst(Shl::new(inst_set, three, bytes), Type::I256);
+        let bits = self
+            .fb
+            .insert_inst(Mul::new(inst_set, extends, bits), Type::I256);
+        let raised = self
+            .fb
+            .insert_inst(Shl::new(inst_set, bits, value), Type::I256);
+        self.fb
+            .insert_inst(Sar::new(inst_set, bits, raised), Type::I256)
+    }
+
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
         Ok(match builtin {
             // The EVM's word loads and stores are big-endian; native ones
@@ -2753,18 +2808,30 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             RuntimeBuiltin::Byte { pos, value } => {
                 let pos = self.local_value(*pos)?;
                 let value = self.local_value(*value)?;
-                self.fb.insert_inst(
-                    EvmByte::new(self.module.required_inst::<EvmByte>()?, pos, value),
-                    Type::I256,
-                )
+                if self.module.is_native_target() {
+                    self.lower_byte(pos, value)
+                } else {
+                    self.fb.insert_inst(
+                        EvmByte::new(self.module.required_inst::<EvmByte>()?, pos, value),
+                        Type::I256,
+                    )
+                }
             }
             RuntimeBuiltin::SignExtend { byte, value } => {
                 let byte = self.local_value(*byte)?;
                 let value = self.local_value(*value)?;
-                self.fb.insert_inst(
-                    EvmSignExtend::new(self.module.required_inst::<EvmSignExtend>()?, byte, value),
-                    Type::I256,
-                )
+                if self.module.is_native_target() {
+                    self.lower_sign_extend(byte, value)
+                } else {
+                    self.fb.insert_inst(
+                        EvmSignExtend::new(
+                            self.module.required_inst::<EvmSignExtend>()?,
+                            byte,
+                            value,
+                        ),
+                        Type::I256,
+                    )
+                }
             }
             RuntimeBuiltin::IntrinsicArith {
                 op,

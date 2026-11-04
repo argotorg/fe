@@ -1,4 +1,5 @@
 use core::hint::black_box
+#[cfg(target = "evm")]
 use std::evm::Ctx
 
 fn square_plus_three(_ x: u256) -> u256 {
@@ -27,6 +28,7 @@ fn black_box_returns_its_argument() {
     assert!(square_plus_three(black_box(5)) == 28)
 }
 
+#[cfg(target = "evm")]
 #[test]
 fn black_box_keeps_discarded_work_between_gas_reads() uses (ctx: Ctx) {
     let before = ctx.gas()

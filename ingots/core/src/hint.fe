@@ -17,6 +17,5 @@ extern {
     ///
     /// `T` must be an integer-valued scalar type, such as an integer or `bool`.
     /// Pointers and aggregates are not supported.
-    /// Only EVM targets support `black_box`.
     pub fn black_box<T>(_ value: own T) -> T
 }
