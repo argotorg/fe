@@ -1283,7 +1283,7 @@ impl<const N: usize> AbiSize for String<N> {
 }
 
 impl<T, const N: usize> AbiSize for [T; N]
-    where T: AbiSize + Copy
+    where T: AbiSize
 {
     const HEAD_SIZE: u256 = (N as u256) * abi_field_head_size<T>()
     const IS_DYNAMIC: bool = T::IS_DYNAMIC
@@ -5171,58 +5171,60 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T1
     }
 }
 
+/// Moves an array out of raw memory, every element of which is initialized, and
+/// frees the memory.
+unsafe fn take_array<T, const N: usize>(_ elements: *[T; N]) -> [T; N] {
+    let array = *elements
+    ptr::dealloc(elements)
+    array
+}
+
 impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
-    where T: Decode<A> + AbiSize + Copy
+    where T: Decode<A> + AbiSize
 {
+    // The elements are written through raw places, which destroy nothing, so
+    // an element type need not be `Copy` to fill the array.
     fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
-        // Empty arrays contain no values to initialize or decode.
-        if N == 0 {
-            return unsafe { *ptr::alloc<[T; N]>() }
-        }
-        let first = decode_field<A, T, D, I>(mut d, input)
-        var out: [T; N] = [first; N]
-        var i: usize = 1
+        let elements = ptr::alloc<[T; N]>()
+        var i: usize = 0
         while i < N {
-            out[i] = decode_field<A, T, D, I>(mut d, input)
+            unsafe { (*elements)[i] = decode_field<A, T, D, I>(mut d, input) }
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-        // Empty arrays contain no values to initialize or decode.
-        if N == 0 {
-            return unsafe { *ptr::alloc<[T; N]>() }
-        }
-        let first = decode_field_from<A, T, I>(input, base: pos, head_pos: pos)
-        var out: [T; N] = [first; N]
-        var i: usize = 1
-        var head_pos = pos + abi_field_head_size<T>()
+        let elements = ptr::alloc<[T; N]>()
+        var i: usize = 0
+        var head_pos = pos
         while i < N {
-            out[i] = decode_field_from<A, T, I>(input, base: pos, head_pos: head_pos)
+            unsafe { (*elements)[i] = decode_field_from<A, T, I>(input, base: pos, head_pos: head_pos) }
             head_pos += abi_field_head_size<T>()
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-        // Empty arrays contain no values to initialize or decode.
-        if N == 0 {
-            return unsafe { *ptr::alloc<[T; N]>() }
-        }
-        let first = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: pos, input_len: input_len)
-        var out: [T; N] = [first; N]
-        var i: usize = 1
-        var head_pos = pos + abi_field_head_size<T>()
+        let elements = ptr::alloc<[T; N]>()
+        var i: usize = 0
+        var head_pos = pos
         while i < N {
-            out[i] = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+            unsafe {
+                (*elements)[i] = decode_field_from_prechecked_head<A, T, I>(
+                    input,
+                    base: pos,
+                    head_pos: head_pos,
+                    input_len: input_len,
+                )
+            }
             head_pos += abi_field_head_size<T>()
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]
@@ -5233,7 +5235,7 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
 }
 
 impl<A: Abi, T, const N: usize> AbiSpan<A> for [T; N]
-    where T: AbiSpan<A> + AbiSize + Copy
+    where T: AbiSpan<A> + AbiSize
 {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
         let _ = base
@@ -5264,16 +5266,21 @@ impl<A: Abi, T, const N: usize> AbiSpan<A> for [T; N]
 }
 
 impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
-    where T: Encode<A> + AbiSize + Copy
+    where T: Encode<A> + AbiSize
 {
     fn encode(own self, _ out: AbiFrame) {
+        // `encode` consumes each element. The elements move out of raw memory,
+        // which destroys nothing, so an element type need not be `Copy`.
+        let elements = ptr::alloc<[T; N]>()
+        unsafe { *elements = self }
         var head_pos: u256 = 0
         var tails = out.tail(Self::HEAD_SIZE)
         var i: usize = 0
         while i < N {
-            tails = encode_field<A, T>(self[i], out, head_pos, tails)
+            tails = encode_field<A, T>(unsafe { (*elements)[i] }, out, head_pos, tails)
             head_pos += abi_field_head_size<T>()
             i += 1
         }
+        unsafe { ptr::dealloc(elements) }
     }
 }
