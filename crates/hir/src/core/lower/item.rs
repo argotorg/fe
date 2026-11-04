@@ -195,7 +195,7 @@ fn validate_func_attrs<'db>(
         AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED)
     };
     let export = if kind == FuncKind::Free {
-        AttrRule::supported("export", BARE_FORM, "`#[export]`")
+        AttrRule::supported_unsafe("export", BARE_FORM, "`#[unsafe(export)]`")
     } else {
         AttrRule::unsupported("export", EXPORT_TARGETS)
     };

@@ -764,7 +764,7 @@ fn compile_native_module(
         NativeTarget::Sp1 => {
             if let Some(func) = mir::native_exports(db, top_mod).first() {
                 return Err(LowerError::Unsupported(format!(
-                    "SP1 guests export no functions, but `{}` is `#[export]`",
+                    "SP1 guests export no functions, but `{}` is `#[unsafe(export)]`",
                     func.scope().pretty_path(db).unwrap_or_default()
                 )));
             }
@@ -2218,7 +2218,7 @@ fn zero_buffer(ptr: *u8, len: usize) {
     unsafe { core::ptr::zero_bytes(ptr, len) }
 }
 
-#[export]
+#[unsafe(export)]
 pub fn zero(_ ptr: *u8, _ len: usize) {
     zero_buffer(ptr, len)
 }
@@ -2249,7 +2249,7 @@ fn replace_byte(ptr: *u8, value: u8) -> u8 {
     previous
 }
 
-#[export]
+#[unsafe(export)]
 pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
     replace_byte(ptr, value.downcast_truncate()) as u32
 }

@@ -56,9 +56,9 @@ pub enum BuildEmit {
     /// Code bytes of each function in a contract (`<Contract>.sizes.txt`).
     Sizes,
     Executable,
-    /// A native object of the `#[export]` functions (`<name>.o`).
+    /// A native object of the `#[unsafe(export)]` functions (`<name>.o`).
     Object,
-    /// A native static library of the `#[export]` functions (`lib<name>.a`).
+    /// A native static library of the `#[unsafe(export)]` functions (`lib<name>.a`).
     Staticlib,
     Elf,
 }

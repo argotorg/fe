@@ -1239,7 +1239,7 @@ fn test_cli_build_native_library_needs_exports_and_no_executable() {
         ),
         (
             "staticlib",
-            "native library output requires an `#[export]` function",
+            "native library output requires an `#[unsafe(export)]` function",
         ),
     ] {
         let (output, exit_code) = run_fe_main(&[
@@ -1287,7 +1287,11 @@ fn test_cli_build_sonatina_rejects_executable_emit() {
 fn test_cli_build_sonatina_rejects_library_emits() {
     let temp = tempdir().expect("tempdir");
     let source = temp.path().join("library.fe");
-    fs::write(&source, "#[export]\npub fn answer() -> i64 { 42 }\n").expect("write source");
+    fs::write(
+        &source,
+        "#[unsafe(export)]\npub fn answer() -> i64 { 42 }\n",
+    )
+    .expect("write source");
     for emit in ["object", "staticlib"] {
         let (output, exit_code) = run_fe_main(&[
             "build",
@@ -1343,7 +1347,7 @@ fn test_cli_build_sonatina_rejects_exported_functions() {
     let source = temp.path().join("exports.fe");
     fs::write(
         &source,
-        "#[export]\npub fn answer() -> i64 { 42 }\ncontract Counter {}\n",
+        "#[unsafe(export)]\npub fn answer() -> i64 { 42 }\ncontract Counter {}\n",
     )
     .expect("write source");
     let out_dir = temp.path().join("out");
@@ -1356,8 +1360,9 @@ fn test_cli_build_sonatina_rejects_exported_functions() {
     ]);
     assert_eq!(exit_code, 1, "expected export rejection:\n{output}");
     assert!(
-        output
-            .contains("`#[export]` requires `--backend native`, but `exports::answer` is exported"),
+        output.contains(
+            "`#[unsafe(export)]` requires `--backend native`, but `exports::answer` is exported"
+        ),
         "unexpected output:\n{output}"
     );
     assert!(!out_dir.exists(), "a rejected build must write nothing");

@@ -1,45 +1,52 @@
-// A C caller calls an `#[export]` function by its name alone.
-#[export]
+// A C caller calls an `#[unsafe(export)]` function by its name alone.
+#[unsafe(export)]
 pub fn exported(_ x: i64) -> i64 { x }
 
-#[export]
+#[unsafe(export)]
 fn private() {}
 
-#[export]
+#[unsafe(export)]
 pub fn generic<T>(_ x: own T) {}
 
-#[export]
+#[unsafe(export)]
 pub fn sized<const N: usize>() -> usize { N }
 
 struct Counter { n: i64 }
 
-#[export]
+#[unsafe(export)]
 pub fn effects() -> i64 uses (counter: Counter) { counter.n }
 
-#[export(name)]
+#[unsafe(export(name))]
 pub fn bad_form() {}
 
-#[export]
-#[export]
+#[unsafe(export)]
+#[unsafe(export)]
 pub fn duplicate() {}
 
 impl Counter {
-    #[export]
+    #[unsafe(export)]
     pub fn method(self) -> i64 { self.n }
 }
 
 trait Get {
-    #[export]
+    #[unsafe(export)]
     fn get(self) -> i64
 }
 
 extern {
-    #[export]
+    #[unsafe(export)]
     fn puts(_ s: *u8) -> i32
 }
 
-#[export]
+#[unsafe(export)]
 struct Exported {}
 
-#[export]
+#[unsafe(export)]
 mod exported_mod {}
+
+// Only exporting is unsafe, and exporting is always unsafe.
+#[export]
+pub fn not_marked_unsafe() {}
+
+#[unsafe(inline)]
+pub fn unsafe_inline() {}

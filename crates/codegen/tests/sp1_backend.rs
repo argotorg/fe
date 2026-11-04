@@ -161,7 +161,10 @@ fn sp1_rejects_exported_functions() {
     let file = db.workspace().touch(
         &mut db,
         Url::parse("file:///sp1_export.fe").unwrap(),
-        Some("#[export]\npub fn answer() -> i64 { 42 }\npub fn main() -> i32 { 0 }\n".to_string()),
+        Some(
+            "#[unsafe(export)]\npub fn answer() -> i64 { 42 }\npub fn main() -> i32 { 0 }\n"
+                .to_string(),
+        ),
     );
     let error = emit_module_native_artifacts(
         &db,
@@ -176,9 +179,9 @@ fn sp1_rejects_exported_functions() {
     )
     .expect_err("an SP1 guest exports nothing");
     assert!(
-        error
-            .to_string()
-            .contains("SP1 guests export no functions, but `sp1_export::answer` is `#[export]`"),
+        error.to_string().contains(
+            "SP1 guests export no functions, but `sp1_export::answer` is `#[unsafe(export)]`"
+        ),
         "{error}"
     );
 }

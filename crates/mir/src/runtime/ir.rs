@@ -1057,7 +1057,7 @@ pub enum RuntimeSectionName {
     Runtime,
     Main,
     Test(String),
-    /// A native object's `#[export]` function, defined under this symbol.
+    /// A native object's `#[unsafe(export)]` function, defined under this symbol.
     Export(String),
 }
 

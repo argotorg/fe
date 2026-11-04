@@ -446,7 +446,7 @@ fn build_contract_package<'db>(
     Ok(package)
 }
 
-/// The `#[export]` functions of `top_mod`'s ingot, which a native object
+/// The `#[unsafe(export)]` functions of `top_mod`'s ingot, which a native object
 /// defines under their own names.
 pub fn native_exports<'db>(db: &'db dyn MirDb, top_mod: TopLevelMod<'db>) -> Vec<Func<'db>> {
     top_mod
@@ -511,7 +511,7 @@ pub fn build_native_package<'db>(
     }
     if sections.is_empty() {
         return Err(LowerError::Unsupported(
-            "native library output requires an `#[export]` function".to_string(),
+            "native library output requires an `#[unsafe(export)]` function".to_string(),
         ));
     }
     let package = build_sectioned_package(

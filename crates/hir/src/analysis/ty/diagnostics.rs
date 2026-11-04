@@ -75,7 +75,7 @@ pub enum TyLowerDiag<'db> {
     ShapeWithoutMode(DynLazySpan<'db>),
     /// A parameter pattern of a function without a body to bind it.
     DestructuredParamWithoutBody(DynLazySpan<'db>),
-    /// An `#[export]` function a C caller cannot call as declared.
+    /// An `#[unsafe(export)]` function a C caller cannot call as declared.
     InvalidExport {
         span: DynLazySpan<'db>,
         issue: ExportIssue,
@@ -348,7 +348,7 @@ pub enum RevealedBy {
     Evaluation,
 }
 
-/// Why a C caller cannot call an `#[export]` function.
+/// Why a C caller cannot call an `#[unsafe(export)]` function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ExportIssue {
     NotPub,

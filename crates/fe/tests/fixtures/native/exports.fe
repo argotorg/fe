@@ -1,9 +1,9 @@
-#[export]
+#[unsafe(export)]
 pub fn twice(_ x: i64) -> i64 {
     x * 2
 }
 
-#[export]
+#[unsafe(export)]
 pub fn store(_ p: *i64, _ value: i64) {
     unsafe { *p = value }
 }

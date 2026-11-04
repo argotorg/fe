@@ -112,6 +112,13 @@ impl super::Parse for AttrScope {
         // Expect the opening bracket for a Rust-style outer attribute: #[ ... ]
         parser.bump_or_recover(SyntaxKind::LBracket, "expected `[` after `#`")?;
 
+        // `unsafe(..)` wraps an attribute whose correctness the compiler can't
+        // check: `#[unsafe(export)]`.
+        let is_unsafe = parser.bump_if(SyntaxKind::UnsafeKw);
+        if is_unsafe {
+            parser.bump_or_recover(SyntaxKind::LParen, "expected `(` after `unsafe`")?;
+        }
+
         // Parse the attribute path (e.g., foo, foo::bar). Recover on failure.
         parser.parse_or_recover(PathScope::default())?;
 
@@ -126,6 +133,10 @@ impl super::Parse for AttrScope {
                 parser.parse(AttrValueExprScope::default())?;
             }
             _ => {}
+        }
+
+        if is_unsafe {
+            parser.bump_or_recover(SyntaxKind::RParen, "expected `)` to close `unsafe(`")?;
         }
 
         // Expect the closing bracket of the attribute.
