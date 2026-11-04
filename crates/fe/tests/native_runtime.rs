@@ -2480,15 +2480,15 @@ pub fn main() -> i32 {
     core::assert(empty.len() == 0 && empty.capacity() == 0)
     var buffer = MemBuffer::empty()
     core::assert(buffer.try_resize(513))
-    core::assert(buffer.capacity() == 1024)
+    core::assert(buffer.capacity() == 513)
     for i in 0..513 {
         core::assert(buffer[i] == 0)
         buffer[i] = (i % 251).downcast_truncate()
     }
     core::assert(buffer.try_resize(1500))
-    core::assert(buffer.capacity() == 2048)
+    core::assert(buffer.capacity() == 1500)
     core::assert(!buffer.try_resize(3000))
-    core::assert(buffer.len() == 1500 && buffer.capacity() == 2048)
+    core::assert(buffer.len() == 1500 && buffer.capacity() == 1500)
     for i in 0..1500 {
         let expected: u8 = if i < 513 { (i % 251).downcast_truncate() } else { 0 }
         core::assert(buffer[i] == expected)

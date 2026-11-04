@@ -397,10 +397,7 @@ impl<T> MemVec<T> {
     /// `reserve`'s check stays small where it is inlined.
     #[inline(never)]
     fn grow(mut self, needed: usize) {
-        var capacity = if self.capacity == 0 { 4 } else { self.capacity }
-        while capacity < needed {
-            capacity *= 2
-        }
+        let capacity = grown_capacity(self.capacity, needed, initial: 4, max: MAX_ALLOCATION)
         let replacement = cast<u8, T>(alloc_bytes(capacity * size_of<T>()))
         unsafe { self.move_to(replacement, capacity) }
     }
@@ -983,18 +980,16 @@ impl MemBuffer {
     /// larger region and copies the initialized bytes.
     pub fn reserve(mut self, _ additional: usize) {
         let needed = self.len + additional
-        if needed <= self.capacity {
-            return
+        if needed > self.capacity {
+            self.grow(needed)
         }
+    }
 
-        var capacity = self.capacity
-        if capacity == 0 {
-            capacity = 32
-        }
-        while capacity < needed {
-            capacity *= 2
-        }
-
+    /// Grows the allocation to hold `needed` bytes. Out of line, so that
+    /// `reserve`'s check stays small where it is inlined.
+    #[inline(never)]
+    fn grow(mut self, needed: usize) {
+        let capacity = grown_capacity(self.capacity, needed, initial: 32, max: MAX_ALLOCATION)
         let replacement = alloc_bytes(capacity)
         unsafe { self.move_to(replacement, capacity) }
     }
@@ -1062,20 +1057,24 @@ impl MemBuffer {
     /// Append bytes, growing the allocation when necessary.
     pub fn extend_from(mut self, _ source: MemSpan) {
         self.reserve(source.len())
-        // `reserve` made room, and the copy initializes the added bytes.
+        // `reserve` made room, and the copy initializes the added bytes. They
+        // lie within the allocation, so the new length cannot overflow.
         unsafe {
             copy(dest: offset_bytes(self.ptr, self.len), source)
-            self.len += source.len()
+            self.len = self.len.wrapping_add(source.len())
         }
     }
 
     /// Append one byte, growing the allocation when necessary.
     pub fn push(mut self, _ byte: u8) {
-        self.reserve(1)
-        // `reserve` made room for the byte.
+        if self.len == self.capacity {
+            self.grow(needed: self.len + 1)
+        }
+        // There is room for the byte, which lies within the allocation, so
+        // `len + 1` cannot overflow.
         unsafe {
             *offset_bytes(self.ptr, self.len) = byte
-            self.len += 1
+            self.len = self.len.wrapping_add(1)
         }
     }
 
@@ -1346,14 +1345,12 @@ fn try_alloc_elems<T>(_ len: usize) -> Option<*T> {
     Option::Some(cast<u8, T>(try_alloc_bytes(len * size)?))
 }
 
-/// The capacity growing from `capacity` to fit `needed` takes, at most
-/// `max`: doubling, from `initial` when empty.
+/// The capacity growing from `capacity` to fit `needed` takes: double, within
+/// `max`, or `needed` if that is more, and `initial` at least.
 fn grown_capacity(_ capacity: usize, needed: usize, initial: usize, max: usize) -> usize {
-    var capacity = if capacity == 0 { initial } else { capacity }
-    while capacity < needed {
-        capacity = if capacity > max / 2 { needed } else { capacity * 2 }
-    }
-    capacity
+    let doubled = if capacity > max / 2 { needed } else { capacity * 2 }
+    let grown = if doubled > needed { doubled } else { needed }
+    if grown > initial { grown } else { initial }
 }
 
 /// Allocates an array without initializing its contents. The caller must
