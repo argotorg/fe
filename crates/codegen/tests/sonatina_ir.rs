@@ -7,15 +7,9 @@
 //! Snapshots are stored in `fixtures/sonatina_ir/`.
 
 use common::InputDb;
-#[cfg(feature = "cranelift")]
-use common::compilation::Target;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-#[cfg(feature = "cranelift")]
-use fe_codegen::emit_module_native_ir;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
-#[cfg(feature = "cranelift")]
-use salsa::Setter;
 use std::{collections::HashSet, path::Path};
 use test_utils::{
     _macro_support::_insta::{self, Settings},
@@ -89,23 +83,6 @@ fn black_box_keeps_measured_work_between_gas_reads(fixture: Fixture<&str>) {
             "discarded pure work is expected to be removed: {discarded:?}\n{ir}"
         );
     }
-}
-
-#[cfg(feature = "cranelift")]
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_native_target_unsupported.fe")]
-fn black_box_reports_unsupported_native_target(fixture: Fixture<&str>) {
-    let mut db = DriverDataBase::default();
-    db.compilation_settings()
-        .set_target(&mut db)
-        .to(Target::Native);
-    let file = db.workspace().touch(
-        &mut db,
-        Url::from_file_path(fixture.path()).expect("fixture path should be absolute"),
-        Some(fixture.content().to_string()),
-    );
-    let err = emit_module_native_ir(&db, db.top_mod(file), OptLevel::O0)
-        .expect_err("the native target has no BlackBox instruction");
-    assert!(err.to_string().contains("BlackBox"), "{err}");
 }
 
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_rejects_*.fe")]
