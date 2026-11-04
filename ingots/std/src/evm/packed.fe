@@ -119,7 +119,7 @@ pub(ingot) unsafe fn write_word_prefix(_ dest: *u8, _ value: u256, _ width: u256
 #[inline(always)]
 pub fn encode_packed<T: EncodePacked>(_ value: own T) -> Packed {
     let width = value.packed_width()
-    var buffer = ptr::MemBuffer::with_capacity((width + 32).downcast_unchecked())
+    var buffer = ptr::MemBuffer::with_capacity(ptr::allocation_len(width + 32))
     let written = unsafe { value.write_packed(buffer.ptr(), room: width) }
     unsafe { buffer.set_len(written.downcast_unchecked()) }
     Packed { buffer }
@@ -129,7 +129,7 @@ pub fn encode_packed<T: EncodePacked>(_ value: own T) -> Packed {
 #[inline(always)]
 pub fn keccak_packed<T: EncodePacked>(_ value: own T) -> u256 {
     let width = value.packed_width()
-    let buffer = ptr::alloc_bytes((width + 32).downcast_unchecked())
+    let buffer = ptr::alloc_bytes(ptr::allocation_len(width + 32))
     let written = unsafe { value.write_packed(buffer, room: width) }
     unsafe { crypto::keccak256(MemSpan::from_raw_parts(ptr: buffer, len: written.downcast_unchecked())) }
 }
@@ -329,7 +329,7 @@ impl Packed {
     /// Ensure `additional` bytes fit below `limit`, growing
     /// (copy-on-grow, doubling until it fits) if they don't.
     fn reserve(mut self, _ additional: u256) {
-        self.buffer.reserve(additional.downcast_unchecked())
+        self.buffer.reserve(ptr::allocation_len(additional))
     }
 
     fn append_raw(mut self, source: *u8, len: u256) {

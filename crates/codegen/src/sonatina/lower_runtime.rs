@@ -137,6 +137,7 @@ const NATIVE_EMPTY_ALLOCATION: i64 = 16;
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
+const PANIC_OUT_OF_MEMORY: u64 = 0x41;
 
 macro_rules! define_lowering_inst_set {
     ($($inst:ty),+ $(,)?) => {
@@ -2253,7 +2254,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     /// Allocates `size` bytes from the native host. When the host is out of
-    /// memory, a `fallible` allocation is null and any other traps. A zero size
+    /// memory, a `fallible` allocation is null and any other panics with
+    /// `Panic(0x41)`. A module that traps its panics instead leaves that
+    /// allocation to `mem.alloc_dynamic`, which traps. A zero size
     /// is `NATIVE_EMPTY_ALLOCATION` instead, so empty owners never reach the
     /// host.
     fn lower_native_allocation(
@@ -2275,20 +2278,39 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         self.fb
             .insert_inst_no_result(Br::new(inst_set, is_empty, done, allocate));
         self.fb.switch_to_block(allocate);
-        let allocated = if fallible {
+        let allocated = if fallible || self.module.panics != NativePanics::Trap {
             let malloc = self.module.host_function(HostFunction::Malloc)?;
             // Callers bound the size to the address width.
             let size =
                 self.coerce_value_to_ty(size, self.module.address_int_ty(AddressSpace::Memory))?;
-            self.fb
-                .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer)
+            let allocated = self
+                .fb
+                .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer);
+            if !fallible {
+                let address = self.coerce_value_to_ty(
+                    allocated,
+                    self.module.address_int_ty(AddressSpace::Memory),
+                )?;
+                let is_null = self
+                    .fb
+                    .insert_inst(IsZero::new(inst_set, address), Type::I1);
+                self.emit_panic_revert(is_null, PANIC_OUT_OF_MEMORY)?;
+            }
+            allocated
         } else {
             self.allocate_bytes(size, Type::I8)?
         };
+        let allocated_block = self
+            .fb
+            .current_block()
+            .expect("allocation requires a block");
         self.fb.insert_inst_no_result(Jump::new(inst_set, done));
         self.fb.switch_to_block(done);
         Ok(self.fb.insert_inst(
-            Phi::new(inst_set, smallvec![(empty, entry), (allocated, allocate)]),
+            Phi::new(
+                inst_set,
+                smallvec![(empty, entry), (allocated, allocated_block)],
+            ),
             pointer,
         ))
     }

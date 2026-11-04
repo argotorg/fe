@@ -4035,18 +4035,11 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
 ))]
 /// `fe_test` fixtures that fail natively at the listed optimization levels,
 /// and why.
-const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[
-    (
-        "buffer_capacity_bound",
-        &["0", "2"],
-        "sizes above 64 bits truncate natively, and a native allocation failure traps",
-    ),
-    (
-        "raw_record_layout",
-        &["0", "2"],
-        "EVM memory packs record fields big-endian; native memory aligns them little-endian",
-    ),
-];
+const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[(
+    "raw_record_layout",
+    &["0", "2"],
+    "EVM memory packs record fields big-endian; native memory aligns them little-endian",
+)];
 
 #[cfg(all(
     feature = "cranelift",
