@@ -1,0 +1,32 @@
+// `T::LEN` is the same constant whatever bound it was found through.
+trait Len {
+    type Item
+    const LEN: usize
+}
+
+struct S {}
+
+impl Len for S {
+    type Item = u8
+    const LEN: usize = 2
+}
+
+fn zeros<X: Len>() -> [u8; { X::LEN }] {
+    [0; { X::LEN }]
+}
+
+fn under_concrete_binding<T: Len<Item = u8>>() -> [u8; { T::LEN }] {
+    zeros<T>()
+}
+
+fn under_generic_binding<V, T: Len<Item = V>>() -> [u8; { T::LEN }] {
+    zeros<T>()
+}
+
+#[test]
+fn test_use_under_binding_matches_use_without() {
+    let concrete = under_concrete_binding<S>()
+    assert(concrete[1] == 0)
+    let generic = under_generic_binding<u8, S>()
+    assert(generic[1] == 0)
+}

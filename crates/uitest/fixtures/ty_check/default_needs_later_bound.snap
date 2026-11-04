@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/default_needs_later_bound.fe
+---
+error[2-0002]: `C` is not found
+  ┌─ default_needs_later_bound.fe:6:48
+  │
+6 │ struct InConstDefault<T, const N: usize = { T::C }, const L: usize = 5>
+  │                                                ^ `C` is not found
+
+error[2-0002]: `C` is not found
+   ┌─ default_needs_later_bound.fe:14:39
+   │
+14 │ struct InTypeDefault<T, X = [u8; { T::C + 1 }], const L: usize = 5>
+   │                                       ^ `C` is not found
+
+error[2-0002]: `C` is not found
+   ┌─ default_needs_later_bound.fe:23:23
+   │
+23 │     let _a: [u8; { T::C + 1 }] = [0; 1]
+   │                       ^ `C` is not found
+
+error[2-0002]: `C` is not found
+   ┌─ default_needs_later_bound.fe:36:62
+   │
+36 │ struct InComputedBound<T, const N: usize = { indexed<T, { T::C }>() }, const L: usize = 5>
+   │                                                              ^ `C` is not found
