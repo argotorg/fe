@@ -3450,6 +3450,59 @@ pub fn main() -> i32 uses (args: Args) {
 }
 
 #[test]
+fn native_selector_store_stays_in_its_allocation() {
+    // Canary bytes past every allocation catch a selector word stored past
+    // the encoding of a message with no fields.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("selector.fe");
+    fs::write(
+        &source,
+        r#"
+use std::abi::Sol
+use core::error::ErrorVariant
+use core::ptr
+use std::evm::encode_error
+
+extern {
+    fn calloc(_ count: usize, _ size: usize) -> *u8
+}
+
+#[error]
+pub struct Empty {}
+
+#[unsafe(export)]
+pub fn malloc(_ size: usize) -> *u8 {
+    let bytes = unsafe { calloc(1, size + 32) }
+    for i in 0..32 {
+        unsafe { *ptr::offset_bytes(bytes, size + i) = 0xa5 }
+    }
+    bytes
+}
+
+pub fn main() -> i32 {
+    let encoded = encode_error(Empty {})
+    if encoded.len() != 4 || encoded.read_be<u32>(0) != <Empty as ErrorVariant<Sol>>::SELECTOR {
+        return 1
+    }
+    for i in 0..32 {
+        if unsafe { *ptr::offset_bytes(encoded.ptr(), encoded.capacity() + i) } != 0xa5 {
+            return 2
+        }
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("selector")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_functions_named_like_the_compilers_symbols_keep_working() {
     // Functions share an object namespace with the globals behind `std::env`.
     let temp = tempdir().unwrap();
