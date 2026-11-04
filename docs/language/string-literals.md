@@ -47,6 +47,11 @@ On the EVM, a `DynString` literal of 96 bytes or more is copied into memory
 from the contract code where it is evaluated; a shorter one is stored a word at
 a time.
 
+A `DynString` owns its bytes. It moves rather than copies, `clone()` makes a second
+string, and dropping it frees the memory on native and WebAssembly targets. A
+parameter without a mode views the caller's string, so passing a string to one
+does not move it.
+
 ## Bytes
 
 `String<N>::as_bytes()` returns an owned `PackedBytes<N>` with all `N` bytes,

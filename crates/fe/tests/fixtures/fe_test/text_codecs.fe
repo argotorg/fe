@@ -36,7 +36,7 @@ fn all_bytes() -> Bytes {
 }
 
 fn decodes_base64(_ encoded: DynString, _ expected: DynString) -> bool {
-    text::decode_base64(encoded).unwrap() == expected.as_bytes()
+    text::decode_base64(encoded).unwrap().payload_span() == expected.payload_span()
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use super::abi::{Bytes, DynString}
+use super::abi::Bytes
 
 // Marker traits for language-level behavior.
 //
@@ -48,11 +48,9 @@ pub trait Clearable {}
 impl Copy for () {}
 impl<const N: usize> Copy for String<N> {}
 impl Copy for Bytes {}
-impl Copy for DynString {}
 
 // A memory buffer handle is a snapshot of where its contents lie.
 impl Snapshot for Bytes {}
-impl Snapshot for DynString {}
 impl<T, const N: usize> Copy for [T; N]
     where T: Copy
 {}

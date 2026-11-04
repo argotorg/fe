@@ -2047,7 +2047,7 @@ pub contract NestedTupleInit {
 
     init(text: Text, count: u64) uses (mut store) {
         store.text_len = text.len() as u256
-        store.first_byte = if text.is_empty() { 0 } else { text.as_bytes().byte_at(0) }
+        store.first_byte = if text.is_empty() { 0 } else { text.byte_at(0) }
         store.count = count
     }
 
@@ -2248,7 +2248,7 @@ pub contract DynamicChild {
 
     init(text: Text, count: u64) uses (mut store) {
         store.text_len = text.len() as u256
-        store.first_byte = if text.is_empty() { 0 } else { text.as_bytes().byte_at(0) }
+        store.first_byte = if text.is_empty() { 0 } else { text.byte_at(0) }
         store.count = count
     }
 

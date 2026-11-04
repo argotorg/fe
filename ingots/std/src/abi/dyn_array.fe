@@ -161,15 +161,15 @@ impl<T> DynArray<T> {
         MemArray::from_fn(self.len, |i| self.get(i))
     }
 
-    /// An ABI array of copies of `values`, in canonical layout.
+    /// An ABI array of clones of `values`, in canonical layout.
     pub fn from_slice(_ values: MemSlice<T>) -> Self
-        where T: Encode<Sol> + AbiSize + Copy
+        where T: Encode<Sol> + AbiSize + Clone
     {
         let len = values.len()
         let heads = len as u256 * abi_field_head_size<T>()
         var size = 32 + heads
         if T::IS_DYNAMIC {
-            for value in values {
+            for ref value in values {
                 size += value.payload_size()
             }
         }
@@ -182,8 +182,8 @@ impl<T> DynArray<T> {
         // writes.
         let out = unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32), len: size - 32) }
         var tails = out.tail(heads)
-        for (i, value) in values.enumerate() {
-            tails = encode_field<Sol, T>(value, out, head_pos: i as u256 * abi_field_head_size<T>(), tails)
+        for (i, ref value) in values.enumerate() {
+            tails = encode_field<Sol, T>(value.clone(), out, head_pos: i as u256 * abi_field_head_size<T>(), tails)
         }
         unsafe { DynArray::from_abi_tail(data, len, size) }
     }

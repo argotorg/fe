@@ -20,7 +20,7 @@ fn literals_and_equality() {
     assert!(unicode.byte_at(6) == 0xe2)
     let empty: DynString = ""
     assert!(empty == DynString::empty())
-    assert!(unicode.as_bytes() == unicode.as_bytes())
+    assert!(unicode.payload_span() == unicode.clone().payload_span())
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn concat_parts() {
     let middle = text::decimal(42)
     assert!(text::concat(["<g>", middle, "</g>"]) == "<g>42</g>")
     let empty: DynString = ""
-    assert!(text::concat([empty, empty]) == "")
+    assert!(text::concat([empty.clone(), empty]) == "")
 }
 
 #[test]

@@ -1,8 +1,9 @@
 use ingot::Copy
 use ingot::Option
+use ingot::clone::Clone
 use ingot::num::{IntDowncast, WordValue, from_be, to_be, word_to_usize}
 use ingot::ptr
-use ingot::ops::Eq
+use ingot::ops::{Drop, Eq}
 
 /// Errors returned by ABI decoding/encoding helpers.
 pub enum AbiError {
@@ -909,14 +910,29 @@ impl<I> StringView<I>
     }
 }
 
-/// Owned handle to a Solidity ABI `string` payload stored in linear memory.
+/// A Solidity ABI `string` payload stored in linear memory.
 ///
-/// `data` points at the ABI tail payload: the length word followed by packed
-/// UTF-8 bytes padded to a whole word count.
+/// `data` points at the start of an allocation that holds the ABI tail payload:
+/// the length word followed by packed UTF-8 bytes padded to a whole word count.
+/// The value owns the allocation and frees it when dropped, so it moves rather
+/// than copies. `clone` makes a second string, and `payload_span` views the bytes.
 pub struct DynString {
     unsafe data: *u8,
     unsafe len: usize,
     unsafe size: u256,
+}
+
+impl Drop for DynString {
+    fn drop(own self) {
+        // The string owns its allocation.
+        unsafe { ptr::dealloc(self.data) }
+    }
+}
+
+impl Clone for DynString {
+    fn clone(self) -> Self {
+        Self::from_payload(source: self.payload_span())
+    }
 }
 
 impl DynString {
@@ -935,9 +951,9 @@ impl DynString {
         DynString { data, len, size }
     }
 
-    /// Wraps a complete ABI tail. `data` must point to `size` valid,
-    /// initialized bytes in an allocation that outlives the value, which
-    /// never frees it.
+    /// Takes ownership of a complete ABI tail. `data` must be the start of an
+    /// allocation from `ptr::alloc_bytes` that holds `size` initialized bytes,
+    /// and nothing else may free it: the value frees it when dropped.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         let expected_size = 32 + round_up_words(len as u256)
         if size != expected_size || mem_word_at(base: data, offset: 0) != len as u256 {
@@ -1015,17 +1031,6 @@ impl DynString {
 
     pub fn encoded_span(self) -> ref ptr::MemSpan {
         unsafe { ptr::MemSpan::from_raw_parts(ptr: self.data, len: word_to_usize(self.size)) }
-    }
-
-    pub fn as_bytes(self) -> Bytes {
-        // A string's tail is a valid bytes tail.
-        unsafe {
-            Bytes::from_validated_abi_tail(
-                data: self.data,
-                len: self.len,
-                size: self.size,
-            )
-        }
     }
 
     pub fn byte_at(self, _ index: usize) -> u8 {
