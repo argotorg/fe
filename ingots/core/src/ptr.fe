@@ -1078,6 +1078,16 @@ impl MemBuffer {
         }
     }
 
+    /// Append the low `len` bytes of `word`, at most 32, big-endian.
+    pub fn extend_from_word(mut self, _ word: u256, len: usize) {
+        // One store writes all 32 bytes, those from `len` on past the extent.
+        self.reserve(32)
+        unsafe {
+            *cast<u8, u256>(offset_bytes(self.ptr, self.len)) = to_be(word << (((32 - len) * 8) as u256))
+            self.len = self.len.wrapping_add(len)
+        }
+    }
+
     /// Copy bytes into an allocation subrange and extend the logical extent.
     pub fn copy_from(mut self, dest_offset: usize, _ source: MemSpan) {
         if dest_offset > self.capacity || source.len() > self.capacity - dest_offset {

@@ -854,6 +854,7 @@ fn text_fixtures_run_at_every_level() {
     for (name, expected_count) in [
         ("string_literal_eq.fe", 1),
         ("span_string_eq.fe", 4),
+        ("string_text_ops.fe", 3),
         ("byte_literals.fe", 1),
         ("write_macros.fe", 2),
     ] {

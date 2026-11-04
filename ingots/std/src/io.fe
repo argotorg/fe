@@ -360,13 +360,7 @@ impl Display for bool {
 impl<const N: usize> Display for String<N> {
     fn fmt(self, _ out: mut MemBuffer) {
         // The text is the low `len` bytes of the string's word, big endian.
-        let len = self.len()
-        let word = self as u256
-        var i: usize = len
-        while i > 0 {
-            i -= 1
-            out.push(((word >> ((i * 8) as u256)) & 0xff).downcast_unchecked())
-        }
+        out.extend_from_word(self as u256, len: self.len())
     }
 }
 
