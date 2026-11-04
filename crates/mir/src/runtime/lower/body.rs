@@ -15,7 +15,7 @@ use hir::analysis::{
             NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
             NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
         },
-        reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
+        panic_payload_encodable, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
     },
     ty::{
         const_expr::ConstExpr,
@@ -249,26 +249,6 @@ pub(super) fn check_runtime_body_supported<'db>(
                 expr: NExpr::Call { callee, args, .. },
                 ..
             } = &stmt.kind
-                && let Some(value_ty) = builtin_arg_ty(
-                    db,
-                    body,
-                    *callee,
-                    args,
-                    RuntimeBuiltinFuncKind::PanicWithValue,
-                )
-            {
-                let impl_env = key.impl_env(db);
-                ensure_panic_payload_encodable(
-                    db,
-                    impl_env.normalization_scope(db),
-                    impl_env.assumptions(db),
-                    value_ty,
-                )?;
-            }
-            if let NStatementKind::Define {
-                expr: NExpr::Call { callee, args, .. },
-                ..
-            } = &stmt.kind
                 && let Some(value_ty) =
                     builtin_arg_ty(db, body, *callee, args, RuntimeBuiltinFuncKind::BlackBox)
             {
@@ -362,31 +342,6 @@ fn builtin_arg_ty<'db>(
     Some(body.normalized.value(value.value)?.ty)
 }
 
-fn ensure_panic_payload_encodable<'db>(
-    db: &'db dyn MirDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    value_ty: TyId<'db>,
-) -> Result<(), LowerError> {
-    let abi_ty = resolve_lib_type_path(db, scope, "std::abi::Sol")
-        .ok_or_else(|| LowerError::Unsupported("missing std::abi::Sol".to_string()))?;
-    let encode_trait = resolve_core_trait(db, scope, &["abi", "Encode"])
-        .ok_or_else(|| LowerError::Unsupported("missing core::abi::Encode".to_string()))?;
-    let abi_size_trait = resolve_core_trait(db, scope, &["abi", "AbiSize"])
-        .ok_or_else(|| LowerError::Unsupported("missing core::abi::AbiSize".to_string()))?;
-    let encode = TraitInstId::new_simple(db, encode_trait, vec![value_ty, abi_ty]);
-    let abi_size = TraitInstId::new_simple(db, abi_size_trait, vec![value_ty]);
-    if trait_goal_satisfied(db, scope, assumptions, encode)
-        && trait_goal_satisfied(db, scope, assumptions, abi_size)
-    {
-        return Ok(());
-    }
-    Err(LowerError::Unsupported(format!(
-        "`unwrap()` requires the error type `{}` to implement `Encode<Sol>` and `AbiSize`",
-        value_ty.pretty_print(db)
-    )))
-}
-
 fn panic_payload_is_error_variant<'db>(
     db: &'db dyn MirDb,
     scope: ScopeId<'db>,
@@ -401,18 +356,9 @@ fn panic_payload_is_error_variant<'db>(
         return false;
     };
     let error_variant = TraitInstId::new_simple(db, error_variant_trait, vec![value_ty, abi_ty]);
-    trait_goal_satisfied(db, scope, assumptions, error_variant)
-}
-
-fn trait_goal_satisfied<'db>(
-    db: &'db dyn MirDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    inst: TraitInstId<'db>,
-) -> bool {
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     matches!(
-        is_goal_satisfiable(db, solve_cx, inst),
+        is_goal_satisfiable(db, solve_cx, error_variant),
         GoalSatisfiability::Satisfied(_)
     )
 }
@@ -3470,6 +3416,20 @@ impl<'db> RmirEmitter<'db> {
 
     fn lower_panic_with_value(&mut self, bb: RBlockId, value: RLocalId) -> RLocalId {
         let value_ty = self.locals[value.index()].semantic_ty;
+        let impl_env = self.current_semantic_key().impl_env(self.db);
+        // Natively a panic needs no revert data. On EVM, admission rejects
+        // a value without an encoding.
+        if self.target() == Target::Native
+            && !panic_payload_encodable(
+                self.db,
+                impl_env.normalization_scope(self.db),
+                impl_env.assumptions(self.db),
+                value_ty,
+            )
+        {
+            self.set_terminator(bb, RTerminator::Trap);
+            return self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased);
+        }
         let revert = self.resolve_panic_payload_revert(value_ty);
         let [param_class] = revert.key(self.db).params(self.db).as_slice() else {
             panic!("panic payload revert should have one runtime parameter");
@@ -3490,7 +3450,6 @@ impl<'db> RmirEmitter<'db> {
         let impl_env = key.impl_env(self.db);
         let scope = impl_env.normalization_scope(self.db);
         let assumptions = impl_env.assumptions(self.db);
-        self.assert_panic_payload_encodable(scope, assumptions, value_ty);
         let func_path = if panic_payload_is_error_variant(self.db, scope, assumptions, value_ty) {
             "std::evm::revert_error"
         } else {
@@ -3502,16 +3461,6 @@ impl<'db> RmirEmitter<'db> {
             generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
                 .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
         runtime_instance_for_semantic(self.db, SemanticInstance::new(self.db, semantic_key))
-    }
-
-    fn assert_panic_payload_encodable(
-        &self,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-        value_ty: TyId<'db>,
-    ) {
-        ensure_panic_payload_encodable(self.db, scope, assumptions, value_ty)
-            .expect("panic payload support should be checked before rMIR emission");
     }
 
     fn lower_numeric_intrinsic_call(
