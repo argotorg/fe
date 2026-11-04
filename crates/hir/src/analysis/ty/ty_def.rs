@@ -1408,6 +1408,10 @@ pub enum InvalidCause<'db> {
     /// shape.
     ModeArgNotShape,
 
+    /// An associated type binding as a generic argument of anything but a
+    /// trait.
+    AssocBindingNotOnTrait,
+
     /// A `#[view]` type held as part of another type.
     ViewPart {
         view: TyId<'db>,
@@ -1742,6 +1746,7 @@ impl InvalidCause<'_> {
             InvalidCause::NotFullyApplied
             | InvalidCause::ModeNotType
             | InvalidCause::ModeArgNotShape
+            | InvalidCause::AssocBindingNotOnTrait
             | InvalidCause::TooManyGenericArgs { .. }
             | InvalidCause::InvalidConstParamTy
             | InvalidCause::RecursiveConstParamTy

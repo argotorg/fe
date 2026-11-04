@@ -456,6 +456,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyGenericArgSpan<'db>>,
         arg: &GenericArg<'db>,
     ) {
+        // A trait checks its own bindings. Anywhere else, lowering rejects a
+        // binding whatever it binds.
+        if matches!(arg, GenericArg::AssocType(_)) {
+            return;
+        }
+
         // A tuple whose parts carry modes or name a shape is a shape, checked
         // as a product parameter's type is.
         if let GenericArg::Type(type_arg) = arg
@@ -941,6 +947,8 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         InvalidCause::ModeNotType => TyLowerDiag::ModeNotType(span).into(),
 
         InvalidCause::ModeArgNotShape => TyLowerDiag::ModeArgNotShape(span).into(),
+
+        InvalidCause::AssocBindingNotOnTrait => TyLowerDiag::AssocBindingNotOnTrait(span).into(),
 
         InvalidCause::ViewPart { view } => TyLowerDiag::ViewTypeMode {
             span,
