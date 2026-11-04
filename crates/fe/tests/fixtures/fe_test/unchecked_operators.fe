@@ -1,7 +1,8 @@
 // An arithmetic operator wraps in unchecked code, where it is written: on
 // primitive operands it is a wrapping operation, and on other operands it
-// calls the wrapping operator trait if their type implements it. A called
-// function's own operators keep its own mode.
+// calls the wrapping operator trait if their type implements it, which a type
+// parameter must be bounded by. A called function's own operators keep its
+// own mode.
 use core::fixed::Wad
 use core::ops::{Add, WrappingAdd}
 use std::evm::{Duration, Timestamp, seconds, wei}
@@ -111,23 +112,20 @@ fn generic_operator_stays_checked() {
 }
 
 #[arithmetic(unchecked)]
-fn unchecked_sum<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+fn unchecked_wrapping_sum<T: WrappingAdd<Output = T>>(_ a: own T, _ b: own T) -> T {
     a + b
 }
 
+// `.add` is the checked operation in any mode.
 #[arithmetic(unchecked)]
-fn unchecked_wrapping_sum<T: Add<Output = T> + WrappingAdd<Output = T>>(
-    _ a: own T,
-    _ b: own T,
-) -> T {
-    a + b
+fn unchecked_explicit_sum<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+    a.add(b)
 }
 
-// Without a `WrappingAdd` bound, `+` on a type parameter calls `Add`.
 #[test(should_revert, panic = 0x11)]
-fn unchecked_generic_operator_without_wrapping_bound_is_checked() {
+fn unchecked_generic_explicit_method_is_checked() {
     let x: u8 = 255
-    let y = unchecked_sum(x, 1)
+    let y = unchecked_explicit_sum(x, 1)
 }
 
 #[test]

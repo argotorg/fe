@@ -79,3 +79,45 @@ pub fn plain(x: Plain, y: Plain) {
 pub fn unsigned(x: u8) -> u8 {
     -x
 }
+
+// `#[arithmetic(unchecked)]` asks a type parameter's operators to wrap, so it
+// needs the wrapping bound, on a value or through a borrow.
+#[arithmetic(unchecked)]
+pub fn generic_add<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+    a + b
+}
+
+#[arithmetic(unchecked)]
+pub fn generic_add_assign<T: Copy + AddAssign>(_ a: mut T, _ b: T) {
+    a += b
+}
+
+#[arithmetic(unchecked)]
+pub fn generic_neg<T: Neg<Output = T>>(_ a: own T) -> T {
+    -a
+}
+
+pub trait Valued {
+    type Output: Add<Output = Self::Output> + Copy
+    fn value(self) -> Self::Output
+}
+
+#[arithmetic(unchecked)]
+pub fn associated<T: Valued>(_ x: T) -> T::Output {
+    x.value() + x.value()
+}
+
+#[arithmetic(unchecked)]
+mod unchecked_module {
+    use core::ops::Add
+
+    pub fn generic_add<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+        a + b
+    }
+}
+
+// In checked code, the bound `Add` is what `+` calls.
+#[arithmetic(checked)]
+pub fn generic_add_checked<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+    a + b
+}

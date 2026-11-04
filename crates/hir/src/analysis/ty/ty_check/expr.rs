@@ -1094,9 +1094,11 @@ impl<'db> TyChecker<'db> {
 
     /// The operator `op` on an operand of type `ty` as written in this body.
     /// In unchecked code, an operator that can overflow calls its wrapping
-    /// trait if `ty` implements it for some right operand, and otherwise the
-    /// trait it calls in checked code, so code that compiles checked compiles
-    /// unchecked too. A type parameter implements what its bounds say.
+    /// trait. On a concrete type that doesn't implement it for any right
+    /// operand, it calls the trait it calls in checked code. So does a type
+    /// parameter or associated type whose bounds don't say it implements it,
+    /// if the mode comes from configuration, which code doesn't choose. An
+    /// `#[arithmetic(unchecked)]` over the code requires the bound.
     fn mode_op<T: Copy>(&mut self, ty: TyId<'db>, op: T) -> ModeOp<T>
     where
         ModeOp<T>: TraitOps,
@@ -1113,8 +1115,19 @@ impl<'db> TyChecker<'db> {
         else {
             return mode_op;
         };
+        let ty = ty.fold_with(self.db, &mut self.table);
+        if matches!(ty.data(self.db), TyData::TyParam(_) | TyData::AssocTy(_))
+            && self
+                .env
+                .owner()
+                .scope()
+                .source_arithmetic_mode(self.db)
+                .is_some()
+        {
+            return mode_op;
+        }
         let snapshot = self.snapshot_state();
-        let mut args = vec![ty.fold_with(self.db, &mut self.table)];
+        let mut args = vec![ty];
         args.extend(self.fresh_tys_n(trait_def.params(self.db).len() - 1));
         let goal = TraitInstId::new_simple(self.db, trait_def, args);
         let solve_cx =

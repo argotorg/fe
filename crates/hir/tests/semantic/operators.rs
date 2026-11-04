@@ -185,12 +185,7 @@ fn checked_only(a: Points, b: Points) -> Points {
     c
 }
 
-// A type parameter implements what its bounds say.
-#[arithmetic(unchecked)]
-fn generic<T: Add<Output = T>>(_ a: own T, _ b: own T) -> T {
-    a + b
-}
-
+// A type parameter calls the wrapping trait its bounds name.
 #[arithmetic(unchecked)]
 fn generic_wrapping<T: Add<Output = T> + WrappingAdd<Output = T>>(_ a: own T, _ b: own T) -> T {
     a + b
@@ -207,7 +202,6 @@ fn generic_wrapping<T: Add<Output = T> + WrappingAdd<Output = T>>(_ a: own T, _ 
             &["wrapping_add", "wrapping_neg", "wrapping_add", "div"],
         ),
         ("checked_only", &["add", "sub_assign"]),
-        ("generic", &["add"]),
         ("generic_wrapping", &["wrapping_add"]),
     ] {
         let (binary, unary, calls) = operations(&db, top_mod, name);

@@ -4399,7 +4399,9 @@ fn test_cli_test_profile_selects_ingot_arithmetic() {
         test_output.contains("PASS  [<time>] arithmetic_profile_ingot_wraps_in_test_profile")
             && test_output
                 .contains("PASS  [<time>] arithmetic_profile_ingot_wraps_wei_in_test_profile")
-            && test_output.contains("2 passed"),
+            && test_output
+                .contains("PASS  [<time>] arithmetic_profile_ingot_generic_operator_is_checked")
+            && test_output.contains("3 passed"),
         "expected test profile to run unchecked arithmetic:\n{test_output}"
     );
 

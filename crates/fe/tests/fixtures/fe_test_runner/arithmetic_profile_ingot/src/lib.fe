@@ -11,3 +11,15 @@ fn arithmetic_profile_ingot_wraps_wei_in_test_profile() {
     let max = std::evm::wei(u256::max())
     assert!((max + std::evm::wei(1)) == Wei::zero())
 }
+
+fn sum<T: core::ops::Add<Output = T>>(_ a: own T, _ b: own T) -> T {
+    a + b
+}
+
+// A mode from configuration doesn't require a type parameter's wrapping bound,
+// so the same source compiles in either profile, and `+` calls `Add`.
+#[test(should_revert, panic = 0x11)]
+fn arithmetic_profile_ingot_generic_operator_is_checked() {
+    let x: u8 = 255
+    let y = sum(x, 1)
+}

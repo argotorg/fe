@@ -3942,7 +3942,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 op,
                 trait_path,
                 wraps,
+                needs_bound,
             } => {
+                let trait_path_str = trait_path.pretty_print(db);
                 let sub_diagnostics = vec![
                     SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -3952,20 +3954,19 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     // TODO move to hint
                     SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!(
-                            "Try implementing `{}` for `{}`",
-                            trait_path.pretty_print(db),
-                            ty
-                        ),
+                        message: if *needs_bound {
+                            format!("Add a `{ty}: {trait_path_str}` bound")
+                        } else {
+                            format!("Try implementing `{trait_path_str}` for `{ty}`")
+                        },
                         span: span.resolve(db),
                     },
                 ];
 
                 let notes = if *wraps {
                     vec![format!(
-                        "arithmetic is unchecked here, so `{}` wraps on overflow, which calls `{}`",
+                        "arithmetic is unchecked here, so `{}` wraps on overflow, which calls `{trait_path_str}`",
                         op.data(db),
-                        trait_path.pretty_print(db)
                     )]
                 } else {
                     vec![]

@@ -5,7 +5,7 @@ use super::{
     shape::Shape,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{BorrowKind, Kind, TyId},
+    ty_def::{BorrowKind, Kind, TyData, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -808,6 +808,9 @@ pub enum BodyDiag<'db> {
         /// The operator is written in unchecked code, so it calls a
         /// wrapping trait.
         wraps: bool,
+        /// `ty` is a type parameter or associated type, which implements what
+        /// its bounds say.
+        needs_bound: bool,
     },
     UnsupportedUnaryPlus(DynLazySpan<'db>),
     UnsupportedMacroCall(DynLazySpan<'db>),
@@ -1427,6 +1430,7 @@ impl<'db> BodyDiag<'db> {
         ty: TyId<'db>,
         ops: &dyn TraitOps,
     ) -> Self {
+        let needs_bound = matches!(ty.data(db), TyData::TyParam(_) | TyData::AssocTy(_));
         let ty = ty.pretty_print(db).to_string();
         let op = ops.op_symbol(db);
         let trait_path = ops.core_trait_path(db);
@@ -1436,6 +1440,7 @@ impl<'db> BodyDiag<'db> {
             op,
             trait_path,
             wraps: ops.wraps(),
+            needs_bound,
         }
     }
 

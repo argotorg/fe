@@ -675,6 +675,18 @@ impl<'db> ScopeId<'db> {
     /// expressions there, but not the constants in its signature, such as
     /// its `where` conditions.
     pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> ArithmeticMode {
+        self.source_arithmetic_mode(db).unwrap_or_else(|| {
+            match self.top_mod(db).ingot(db).arithmetic_mode(db) {
+                Some(common::config::ArithmeticMode::Unchecked) => ArithmeticMode::Unchecked,
+                Some(common::config::ArithmeticMode::Checked) | None => ArithmeticMode::Checked,
+            }
+        })
+    }
+
+    /// The arithmetic mode this scope's source selects with an `#[arithmetic]`
+    /// or `#![arithmetic]` attribute. Without one, the mode comes from
+    /// configuration, which a profile or a dependent ingot can change.
+    pub fn source_arithmetic_mode(self, db: &'db dyn HirDb) -> Option<ArithmeticMode> {
         let mut inner = None;
         let mut scope = Some(self);
         while let Some(current) = scope
@@ -692,19 +704,12 @@ impl<'db> ScopeId<'db> {
                 _ => None,
             };
             if let Some(mode) = attrs.and_then(|attrs| attrs.arithmetic_mode(db)) {
-                return mode;
+                return Some(mode);
             }
             inner = Some(current);
             scope = current.parent(db);
         }
-        let top_mod = self.top_mod(db);
-        top_mod
-            .attributes(db)
-            .arithmetic_mode(db)
-            .unwrap_or_else(|| match top_mod.ingot(db).arithmetic_mode(db) {
-                Some(common::config::ArithmeticMode::Unchecked) => ArithmeticMode::Unchecked,
-                Some(common::config::ArithmeticMode::Checked) | None => ArithmeticMode::Checked,
-            })
+        self.top_mod(db).attributes(db).arithmetic_mode(db)
     }
 }
 
