@@ -56,9 +56,9 @@ use sonatina_ir::{
         data::{
             Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, Memzero, Mload,
-            Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj,
-            ObjStore, SymAddr, SymSize, SymbolRef,
+            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, Memcopy,
+            Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
+            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         downcast,
         evm::{
@@ -87,30 +87,6 @@ use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 
 // Sonatina's EVM calling convention can carry at most 16 arguments.
 const MAX_DIRECT_CALL_ARGS: usize = 16;
-
-/// A C library function native code calls. A Fe `extern` declaration of the
-/// same symbol shares its import, so it must declare the same signature.
-#[derive(Clone, Copy)]
-enum HostFunction {
-    Memmove,
-}
-
-impl HostFunction {
-    const ALL: [Self; 1] = [Self::Memmove];
-
-    fn symbol(self) -> &'static str {
-        match self {
-            Self::Memmove => "memmove",
-        }
-    }
-
-    /// The Fe declaration whose import native code shares.
-    fn declaration(self) -> &'static str {
-        match self {
-            Self::Memmove => "fn memmove(_ dest: *u8, _ src: *u8, _ len: usize) -> *u8",
-        }
-    }
-}
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
@@ -171,6 +147,7 @@ define_lowering_inst_set!(
     ExtractValue,
     Gep,
     InsertValue,
+    Memcopy,
     Memzero,
     Mload,
     Mstore,
@@ -315,12 +292,16 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     "exported symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
                 )));
             }
-            if HostFunction::ALL
-                .map(HostFunction::symbol)
-                .contains(&symbol)
-            {
+            if package.functions(db).iter().any(|function| {
+                function.linkage(db) == RuntimeLinkage::External
+                    && semantic_func(db, *function).is_some_and(|func| {
+                        func.name(db)
+                            .to_opt()
+                            .is_some_and(|name| name.data(db) == symbol)
+                    })
+            }) {
                 return Err(LowerError::Unsupported(format!(
-                    "exported symbol `{symbol}` is reserved: native code calls the C library's `{symbol}`"
+                    "exported symbol `{symbol}` is reserved: native code imports `{symbol}`"
                 )));
             }
         }
@@ -336,10 +317,9 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 package,
                 fixed_symbols,
                 &if native {
-                    HostFunction::ALL
-                        .map(HostFunction::symbol)
+                    HostState::ALL
+                        .map(HostState::accessor)
                         .into_iter()
-                        .chain(HostState::ALL.map(HostState::accessor))
                         .chain(HostState::ALL.map(HostState::global))
                         .collect()
                 } else {
@@ -378,25 +358,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 
     fn is_native_target(&self) -> bool {
         is_native_architecture(self.builder.ctx.triple.architecture)
-    }
-
-    /// Declares the C library's `host`, sharing the import with a Fe `extern`
-    /// declaration of the same symbol. As in a Fe `extern`, a pointer is an
-    /// `*i8` and a `usize` or `isize` an address-wide integer.
-    fn host_function(&self, host: HostFunction) -> Result<FuncRef, LowerError> {
-        let pointer = self.builder.ptr_type(Type::I8);
-        let size = self.address_int_ty(AddressSpace::Memory);
-        let (args, ret) = match host {
-            HostFunction::Memmove => (vec![pointer, pointer, size], pointer),
-        };
-        let signature = Signature::new_single(host.symbol(), Linkage::External, &args, ret);
-        self.builder.declare_function(signature).map_err(|_| {
-            LowerError::Unsupported(format!(
-                "native code calls the C library's `{}`, so an `extern` declaration of it must be `{}`",
-                host.symbol(),
-                host.declaration(),
-            ))
-        })
     }
 
     /// An address in `space`: a byte pointer for native memory, and otherwise
@@ -2430,19 +2391,14 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let src = self.local_value(*src)?;
                 let len = self.local_value(*len)?;
                 if self.module.is_native_target() {
-                    // An empty raw copy does not access either address. Avoid
-                    // passing potentially null pointers to the host C routine.
+                    let inst_set = self.module.inst_set();
+                    // An empty raw copy accesses neither address, so its
+                    // addresses may be null or dangling.
                     let copy = self.fb.append_block();
                     let done = self.fb.append_block();
-                    let empty = self
-                        .fb
-                        .insert_inst(IsZero::new(self.module.inst_set(), len), Type::I1);
-                    self.fb.insert_inst_no_result(Br::new(
-                        self.module.inst_set(),
-                        empty,
-                        done,
-                        copy,
-                    ));
+                    let empty = self.fb.insert_inst(IsZero::new(inst_set, len), Type::I1);
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, empty, done, copy));
                     self.fb.switch_to_block(copy);
                     // Reject a byte range that wraps the address space.
                     let max = self.fb.make_imm_value(u64::MAX);
@@ -2450,26 +2406,19 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         let address = self.coerce_value_to_ty(address, Type::I64)?;
                         let available = self
                             .fb
-                            .insert_inst(Sub::new(self.module.inst_set(), max, address), Type::I64);
+                            .insert_inst(Sub::new(inst_set, max, address), Type::I64);
                         let invalid = self
                             .fb
-                            .insert_inst(Gt::new(self.module.inst_set(), len, available), Type::I1);
+                            .insert_inst(Gt::new(inst_set, len, available), Type::I1);
                         self.emit_empty_revert(invalid)?;
                     }
-                    let pointer = self.fb.ptr_type(Type::I8);
-                    let memmove = self.module.host_function(HostFunction::Memmove)?;
-                    let dst = self.coerce_value_to_ty(dst, pointer)?;
-                    let src = self.coerce_value_to_ty(src, pointer)?;
-                    let len = self.coerce_value_to_ty(
+                    self.fb.insert_inst_no_result(Memcopy::new(
+                        self.module.required_inst::<Memcopy>()?,
+                        dst,
+                        src,
                         len,
-                        self.module.address_int_ty(AddressSpace::Memory),
-                    )?;
-                    self.fb.insert_inst(
-                        Call::new(self.module.inst_set(), memmove, smallvec![dst, src, len]),
-                        pointer,
-                    );
-                    self.fb
-                        .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+                    ));
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
                     self.fb.switch_to_block(done);
                 } else {
                     self.fb.insert_inst_no_result(EvmMcopy::new(
@@ -2527,18 +2476,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     let zero = self.fb.make_imm_value(I256::zero());
                     self.fb
                         .insert_inst_no_result(Mstore::new(inst_set, scratch, zero, Type::I256));
-                    let pointer = self.fb.ptr_type(Type::I8);
-                    let memmove = self.module.host_function(HostFunction::Memmove)?;
-                    let dst = self.coerce_value_to_ty(scratch, pointer)?;
-                    let src = self.coerce_value_to_ty(ptr, pointer)?;
-                    let len = self.coerce_value_to_ty(
+                    self.fb.insert_inst_no_result(Memcopy::new(
+                        self.module.required_inst::<Memcopy>()?,
+                        scratch,
+                        ptr,
                         len,
-                        self.module.address_int_ty(AddressSpace::Memory),
-                    )?;
-                    self.fb.insert_inst(
-                        Call::new(inst_set, memmove, smallvec![dst, src, len]),
-                        pointer,
-                    );
+                    ));
                     let copied = self
                         .fb
                         .insert_inst(Mload::new(inst_set, scratch, Type::I256), Type::I256);

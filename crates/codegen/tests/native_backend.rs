@@ -70,7 +70,7 @@ fn native_modules_keep_only_the_runtime_functions_they_call() {
         ),
         (
             "native_runtime_panics.fe",
-            "pub fn main(argc: i32, argv: **u8) -> i32 {\n    argc + 1\n}\n",
+            "use std::env::Args\npub fn main() -> i32 uses (args: Args) {\n    let argc: i32 = args.count().downcast_truncate()\n    argc + 1\n}\n",
             &["%report_panic(", "declare external %write("][..],
             &["%dealloc(", "%free(", "__fe_revert"][..],
         ),
@@ -580,7 +580,7 @@ fn native_exports_reject_symbols_and_values_c_cannot_share() {
         ),
         (
             "#[export]\npub fn write(_ a: i64) -> i64 { a }",
-            "exported symbol `write` is reserved: native code calls the C library's `write`",
+            "exported symbol `write` is reserved: native code imports `write`",
         ),
         (
             "#[export]\npub fn __fe_answer() -> i64 { 42 }",

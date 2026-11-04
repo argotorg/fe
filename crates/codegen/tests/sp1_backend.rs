@@ -71,7 +71,7 @@ fn sp1_guest_io_emits_rv64_object_with_external_adapters() {
 }
 
 #[test]
-fn sp1_memory_copy_reserves_the_runtime_symbol() {
+fn sp1_memory_copies_lower_to_memcopy() {
     let mut db = DriverDataBase::default();
     db.compilation_settings()
         .set_target(&mut db)
@@ -93,12 +93,15 @@ fn sp1_memory_copy_reserves_the_runtime_symbol() {
                 object: false,
             },
         )
-        .expect("SP1 memory copy must use the runtime import");
+        .expect("SP1 memory copy should lower");
         let ir = artifacts.ir.unwrap();
-        assert!(ir.contains("declare external %memmove("), "{ir}");
+        assert!(ir.contains("memcopy "), "{ir}");
         assert!(!ir.contains("evm_mcopy"), "{ir}");
+        // The backend's own `memmove` call never reaches a module function of
+        // that name, so `local::memmove` keeps it.
+        assert!(!ir.contains("declare external %memmove("), "{ir}");
         if level == OptLevel::O0 {
-            assert!(ir.contains("local__memmove("), "{ir}");
+            assert!(ir.contains("func private %memmove("), "{ir}");
         }
         // Allocations call the C allocator, which SP1's runtime does not
         // define, so a guest that allocates fails to link.

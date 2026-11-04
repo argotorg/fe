@@ -48,61 +48,6 @@ use crate::{
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 #[test]
-fn native_extern_must_match_the_memory_copy_import() {
-    let mut db = DriverDataBase::default();
-    db.compilation_settings()
-        .set_target(&mut db)
-        .to(Target::Native);
-    let file = db.workspace().touch(
-        &mut db,
-        Url::parse("file:///native_memmove_extern_collision.fe").unwrap(),
-        Some(
-            r#"
-use core::ptr
-// Another signature than the one native copies call.
-extern {
-    fn memmove(_ dest: *u8, _ src: *u8, _ len: i32) -> *u8
-}
-pub fn main() -> i32 {
-    let data = ptr::alloc_bytes(1)
-    ptr::copy_raw(dest: data, source: data, len: 1)
-    let _ = unsafe { memmove(data, data, 1) }
-    0
-}
-"#
-            .into(),
-        ),
-    );
-    let package =
-        build_native_package(&db, db.top_mod(file), NativeOutputKind::Executable).unwrap();
-    let isa = crate::sonatina::create_native_isa().unwrap();
-    let mut lowerer = ModuleLowerer::new(
-        &db,
-        ModuleBuilder::new(ModuleCtx::new(&isa)),
-        isa.inst_set(),
-        &package,
-        &[],
-        NativePanics::Abort,
-    )
-    .unwrap();
-    lowerer.declare_functions().unwrap();
-    lowerer.lower_const_regions().unwrap();
-    let error = lowerer
-        .lower_bodies()
-        .expect_err("a mismatched extern memmove must not share the copy import");
-    assert!(
-        error.to_string().contains(
-            "native code calls the C library's `memmove`, so an `extern` declaration of it must be"
-        ),
-        "unexpected error: {error}"
-    );
-}
-
-#[cfg(all(
-    feature = "cranelift",
-    any(target_arch = "x86_64", target_arch = "aarch64")
-))]
-#[test]
 fn backend_addresses_must_be_as_wide_as_the_target_usize() {
     // An EVM compilation, whose layouts take 256-bit addresses.
     let mut db = DriverDataBase::default();
