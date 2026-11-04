@@ -1,0 +1,26 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/dyn_string_moves.fe
+---
+error[16-0002]: move conflict in `fn moved_twice`
+   ┌─ dyn_string_moves.fe:19:12
+   │
+19 │     (text, text)
+   │      ----  ^^^^ cannot use a value after it was moved
+   │      │
+   │      value is moved here
+
+error[16-0002]: move conflict in `fn used_after_moved`
+   ┌─ dyn_string_moves.fe:25:5
+   │
+24 │     consume(text)
+   │             ---- value is moved here
+25 │     text.len()
+   │     ^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn moved_out_of_a_view`
+   ┌─ dyn_string_moves.fe:29:5
+   │
+29 │     named.name
+   │     ^^^^^^^^^^ cannot move out of a place reached through a `ref` access

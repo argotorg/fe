@@ -13,6 +13,7 @@ use crate::analysis::{
     },
     ty::{
         const_ty::evaluate_type_level_const_ty,
+        drop_glue::ty_has_drop_glue,
         ty_def::{BorrowKind, TyId},
     },
 };
@@ -201,7 +202,17 @@ fn canonicalize_stmt<'db>(
                 locals,
                 cx.layout_index_locals[dst.index()],
             );
-            locals[dst.index()] = value;
+            // Runtime folding erases the operands' ownership, so a value with
+            // a destructor stays a value: a read folded to a constant would
+            // evaluate it again, and leave the first owner undestroyed because
+            // the drop analysis saw it move.
+            let owner = matches!(cx.mode, ConstCanonicalizationMode::Runtime)
+                && ty_has_drop_glue(
+                    cx.db,
+                    cx.instance
+                        .normalized_ty(cx.db, cx.body.locals[dst.index()].ty),
+                );
+            locals[dst.index()] = value.filter(|_| !owner);
             if let SExpr::Call {
                 args, effect_args, ..
             } = expr

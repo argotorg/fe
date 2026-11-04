@@ -6,7 +6,6 @@ use crate::analysis::{
         abi_ty::{is_composite_event_ty, is_dynamic_event_ty},
         adt_def::AdtRef,
         corelib::{resolve_core_trait, resolve_lib_trait_path, resolve_lib_type_path},
-        non_copy_array_abi_fields,
         trait_def::TraitInstId,
         trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
         ty_lower::lower_hir_ty,
@@ -19,10 +18,6 @@ use crate::{
     lower::{func_body_graph_impl, parse_file_impl, top_mod_ast},
     semantic::constraints_for,
     span::{DesugaredOrigin, HirOrigin},
-};
-use common::{
-    diagnostics::{DiagnosticPass, GlobalErrorCode},
-    file::File,
 };
 use parser::ast::{self, prelude::*};
 
@@ -146,15 +141,6 @@ impl ModuleAnalysisPass for EventLowerPass {
                 .map(|d| Box::new(d) as _),
         );
         diags.extend(semantic_indexed_dynamic_field_errors(db, top_mod).map(|d| Box::new(d) as _));
-        diags.extend(
-            non_copy_array_field_errors(
-                db,
-                top_mod,
-                |origin| matches!(origin, DesugaredOrigin::Event(_)),
-                GlobalErrorCode::new(DiagnosticPass::EventLower, 10),
-            )
-            .map(|d| Box::new(d) as _),
-        );
         diags
     }
 }
@@ -396,15 +382,6 @@ impl ModuleAnalysisPass for ErrorLowerPass {
             semantic_field_type_errors(db, top_mod, AbiFieldContext::Error)
                 .map(|d| Box::new(d) as _),
         );
-        diags.extend(
-            non_copy_array_field_errors(
-                db,
-                top_mod,
-                |origin| matches!(origin, DesugaredOrigin::Error(_)),
-                GlobalErrorCode::new(DiagnosticPass::ErrorLower, 6),
-            )
-            .map(|d| Box::new(d) as _),
-        );
         diags
     }
 }
@@ -424,15 +401,6 @@ impl ModuleAnalysisPass for AbiStructLowerPass {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        diags.extend(
-            non_copy_array_field_errors(
-                db,
-                top_mod,
-                |origin| matches!(origin, DesugaredOrigin::AbiStruct(_)),
-                GlobalErrorCode::new(DiagnosticPass::AbiStructLower, 3),
-            )
-            .map(|d| Box::new(d) as _),
-        );
         let root = top_mod_ast(db, top_mod).syntax().clone();
         diags.extend(
             abi_struct_field_checks(db, top_mod)
@@ -471,37 +439,6 @@ fn field_ty_range(
             || parser::TextRange::empty(0.into()),
             |ty| ty.syntax().text_range(),
         )
-}
-
-/// A field of an `#[abi]`, `#[event]` or `#[error]` struct that holds a fixed
-/// array of non-`Copy` elements, which the fixed-array ABI codecs cannot
-/// encode. Each struct kind's lowering pass reports it under its own code.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AbiArrayElemNotCopy {
-    pub error_code: GlobalErrorCode,
-    pub ty: String,
-    pub elem_ty: String,
-    pub file: File,
-    pub primary_range: parser::TextRange,
-}
-
-fn non_copy_array_field_errors<'db>(
-    db: &'db dyn HirAnalysisDb,
-    top_mod: TopLevelMod<'db>,
-    owns: fn(&DesugaredOrigin) -> bool,
-    error_code: GlobalErrorCode,
-) -> impl Iterator<Item = AbiArrayElemNotCopy> {
-    let root = top_mod_ast(db, top_mod).syntax().clone();
-    non_copy_array_abi_fields(db, top_mod)
-        .iter()
-        .filter(move |field| owns(&field.origin))
-        .map(move |field| AbiArrayElemNotCopy {
-            error_code: error_code.clone(),
-            ty: field.field_ty.pretty_print(db).to_string(),
-            elem_ty: field.elem_ty.pretty_print(db).to_string(),
-            file: top_mod.file(db),
-            primary_range: field_ty_range(&root, &field.ast_struct, field.field_idx),
-        })
 }
 
 /// Analysis pass that collects generic attribute misuse diagnostics.

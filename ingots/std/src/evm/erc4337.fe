@@ -114,8 +114,6 @@ pub struct PackedUserOperation {
     pub signature: Bytes,
 }
 
-impl Copy for PackedUserOperation {}
-
 impl PackedUserOperation {
     pub fn verification_gas_limit(self) -> u256 {
         self.account_gas_limits.val >> 128

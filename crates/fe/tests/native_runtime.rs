@@ -2130,6 +2130,15 @@ fn run_balanced(fixture: &str, out: &Path, level: &str, defines: &[&str]) -> Out
 }
 
 #[test]
+fn native_abi_buffers_and_scratch_free_what_they_allocate() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        run_balanced("abi_buffers.fe", &out, level, &[]);
+    }
+}
+
+#[test]
 fn native_owners_destroy_what_they_hold_and_free_it_once() {
     let temp = tempdir().unwrap();
     for level in ["0", "1", "2"] {

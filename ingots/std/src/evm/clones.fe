@@ -1,7 +1,7 @@
 //! ERC-1167 minimal proxy creation and deterministic address prediction.
 //! The implementation is immutable in the proxy bytecode. These helpers do
 //! not initialize the proxy, validate implementation code, or impose ownership.
-use core::ptr::{self, MemSpan}
+use core::ptr::{self, FixedMemBuffer}
 use core::abi::store_word
 use super::effects::{Address, Create, revert_error}
 use super::units::Wei
@@ -12,20 +12,21 @@ use super::packed::keccak_packed
 pub struct ERC1167FailedCreateClone {}
 
 /// The standard 55-byte creation code for an ERC-1167 proxy.
-pub fn clone_initcode(_ implementation: Address) -> ref MemSpan {
-    let p = ptr::alloc_bytes(64)
+pub fn clone_initcode(_ implementation: Address) -> FixedMemBuffer<55> {
+    let code = unsafe { FixedMemBuffer<55>::alloc_uninit() }
+    // The first word's last 9 bytes are zero, and the second word overwrites them.
     unsafe {
         store_word(
-            ptr: p,
-            value: (implementation.inner << 96 >> 232)
-                | 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000,
+            ptr: code.ptr(),
+            value: ((implementation.inner << 96 >> 232)
+                | 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000) << 72,
         )
         store_word(
-            ptr: ptr::offset_bytes(p, 32),
+            ptr: ptr::offset_bytes(code.ptr(), 23),
             value: (implementation.inner << 120) | 0x5af43d82803e903d91602b57fd5bf3,
         )
-        MemSpan::from_raw_parts(ptr: ptr::offset_bytes(p, 9), len: 55)
     }
+    code
 }
 
 /// Predict a CREATE2 proxy address without deploying it. `deployer` is the
@@ -35,7 +36,7 @@ pub fn predict_deterministic_address(
     salt: u256,
     deployer: Address,
 ) -> Address {
-    let code_hash = keccak256(clone_initcode(implementation))
+    let code_hash = keccak256(clone_initcode(implementation).span())
     let hash = keccak_packed((255 as u8, deployer, salt, code_hash))
     Address { inner: hash & ((1 << 160) - 1) }
 }
@@ -45,7 +46,7 @@ pub fn predict_deterministic_address(
 pub fn clone(_ implementation: Address, value: Wei) -> Address
 uses (create: mut Create)
 {
-    let proxy = create.create_raw(value, init_code: clone_initcode(implementation))
+    let proxy = create.create_raw(value, init_code: clone_initcode(implementation).span())
     if proxy == Address::zero() {
         revert_error(ERC1167FailedCreateClone {})
     }
@@ -57,7 +58,7 @@ uses (create: mut Create)
 pub fn clone_deterministic(_ implementation: Address, salt: u256, value: Wei) -> Address
 uses (create: mut Create)
 {
-    let proxy = create.create2_raw(value, init_code: clone_initcode(implementation), salt)
+    let proxy = create.create2_raw(value, init_code: clone_initcode(implementation).span(), salt)
     if proxy == Address::zero() {
         revert_error(ERC1167FailedCreateClone {})
     }

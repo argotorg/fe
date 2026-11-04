@@ -1,0 +1,253 @@
+// Makes `DynString`, `Bytes` and `DynArray` values every way that allocates one, and
+// calls what takes a scratch buffer in `core` and `std`. Run under an allocator that
+// requires each allocation to be freed exactly once and unmaps it when it is, so this
+// also checks that nothing reads a value after it is freed.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Bytes, Decode, DynString, Encode, abi_payload_size, encode_alloc, store_word}
+use core::ptr::{self, MemArray, MemBuffer, MemVec}
+use core::text::{concat, decimal, decode_base58, decode_base64}
+use std::abi::{DynArray, Sol, bytes_from_word, bytes_from_words, bytes_from_words_prefix, canonical_dyn_array, dyn_array_from}
+use std::abi::sol::SolDecoder
+use std::evm::{Address, checksum_address, merkle, rlp}
+use std::evm::clones::clone_initcode
+use std::evm::crypto::keccak256
+use std::evm::layout::mapping_slot
+use std::evm::packed::keccak_packed
+
+const GREETING: DynString = "a constant string of more than thirty-one bytes"
+const PAIR: (DynString, u32) = ("a string in a constant tuple of more than thirty-one bytes", 1)
+const NAMES: [DynString; 2] = ["the first string of a constant array of strings", "the second string of a constant array"]
+
+#[abi]
+pub struct Entry {
+    pub name: DynString,
+    pub parts: [Bytes; 2],
+}
+
+struct Record {
+    name: DynString,
+    payload: Bytes,
+    rows: DynArray<u256>,
+    id: u32,
+}
+
+fn pass<T>(_ value: own T) -> T {
+    value
+}
+
+fn strings(_ r: u32) -> usize {
+    let literal: DynString = "a string literal of more than thirty-one bytes"
+    let copy = literal.clone()
+    let part = copy.slice(start: 2, len: 20)
+    let joined = concat([pass(literal), part])
+    let number = decimal(r as u256)
+    let held = Option::Some(GREETING)
+    let pair = PAIR
+    let names = NAMES
+    var list: MemVec<DynString> = MemVec::new()
+    list.push(DynString::empty())
+    list.push(DynString::zeroed(100))
+    list.push(copy)
+    let held_len = match held {
+        Option::Some(text) => text.len(),
+        Option::None => 0,
+    }
+    core::assert(!number.is_empty())
+    joined.len() + list.len() + pair.0.len() + names[1].len() + held_len
+}
+
+fn bytes(_ r: u32) -> usize {
+    let source = MemBuffer::new(40)
+    let payload = Bytes::from_payload(source: source.span())
+    let copy = payload.clone()
+    let word = Bytes::from_word_prefix(word: r as u256, len: 5)
+    let whole = bytes_from_word(r as u256)
+    let words = bytes_from_words([r as u256, 1])
+    let prefix = bytes_from_words_prefix<33, 2>([r as u256, 1])
+    let empty = pass(Bytes::empty())
+    let from_string = DynString::from_word_prefix(word: r as u256, len: 5).into_bytes()
+    let raw = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: raw, value: 0) }
+    let tail = unsafe { Bytes::from_abi_tail(data: raw, len: 0, size: 32) }
+    var list: MemVec<Bytes> = MemVec::new()
+    list.push(copy)
+    list.push(tail)
+    core::assert(payload == list[0] && empty == list[1] && word.len() == from_string.len())
+    payload.len() + word.len() + whole.len() + words.len() + prefix.len() + list.len()
+}
+
+fn arrays(_ r: u32) -> usize {
+    let values: DynArray<u256> = dyn_array_from([r as u256, 1, 2])
+    let copy = values.clone()
+    let canonical = canonical_dyn_array(copy)
+    let empty: DynArray<u256> = DynArray::empty()
+    let moved = pass(values)
+    let list: DynArray<Bytes> = dyn_array_from([Bytes::from_word_prefix(word: r as u256, len: 32), Bytes::empty()])
+    let list_copy = canonical_dyn_array(list)
+    let nested: DynArray<DynArray<u256>> = dyn_array_from([dyn_array_from([r as u256]), DynArray::empty()])
+    let elements: MemArray<u256> = moved.to_mem_array()
+    var parts: MemVec<DynString> = MemVec::new()
+    parts.push(decimal(1))
+    parts.push(decimal(23))
+    let slice: DynArray<DynString> = DynArray::from_slice(parts.as_slice())
+    var moved_parts: MemVec<DynString> = MemVec::new()
+    moved_parts.push(decimal(1))
+    moved_parts.push(decimal(23))
+    let from_vec = DynArray::from_mem_vec(moved_parts)
+    core::assert(from_vec.get(1).len() == 2)
+    var total = 0
+    // Each element is a decoded temporary, read across a later allocation.
+    for ref row in list_copy {
+        let more = Bytes::from_word_prefix(word: r as u256, len: 32)
+        total += row.len() + (more.len() - 32)
+    }
+    let held = ref list_copy[0]
+    let more = Bytes::empty()
+    total += held.len() + more.len()
+    total + canonical.len() + empty.len() + elements.len() + nested.get(0).len() + slice.get(1).len()
+}
+
+fn records(_ r: u32) -> usize {
+    let record = Record {
+        name: DynString::from_word_prefix(word: r as u256, len: 5),
+        payload: Bytes::from_word_prefix(word: r as u256, len: 5),
+        rows: dyn_array_from([r as u256]),
+        id: r,
+    }
+    let moved = pass(record)
+    let held = Option::Some(moved)
+    match held {
+        Option::Some(record) => record.name.len() + record.payload.len() + record.rows.len(),
+        Option::None => 0,
+    }
+}
+
+// Encodes each type to the Solidity ABI and decodes it, which moves each decoded array
+// element through a raw place.
+fn encoded(_ r: u32) -> usize {
+    let names: [DynString; 2] = [decimal(r as u256), "the second string of a long enough array"]
+    let encoded_names = encode_alloc<Sol, [DynString; 2]>(names)
+    let decoded_names = <[DynString; 2] as Decode<Sol>>::decode_from(encoded_names.span(), 0)
+    let parts: [Bytes; 2] = [Bytes::empty(), Bytes::from_word_prefix(word: r as u256, len: 32)]
+    let encoded_parts = encode_alloc<Sol, [Bytes; 2]>(parts)
+    let decoded_parts = <[Bytes; 2] as Decode<Sol>>::decode_from(encoded_parts.span(), 0)
+    let rows: [DynArray<u256>; 2] = [dyn_array_from([r as u256]), DynArray::empty()]
+    let encoded_rows = encode_alloc<Sol, [DynArray<u256>; 2]>(rows)
+    let decoded_rows = <[DynArray<u256>; 2] as Decode<Sol>>::decode_from(encoded_rows.span(), 0)
+    decoded_names[1].len() + decoded_parts[1].len() + decoded_rows[0].len()
+}
+
+enum Mode {
+    On,
+    Off,
+}
+
+impl AbiSize for Mode {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl Decode<Sol> for Mode {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        match d.read_word(input) {
+            0 => Mode::On,
+            _ => Mode::Off,
+        }
+    }
+}
+
+// Each decoder fills a fixed array in raw memory, at lengths that skip and enter its
+// loop. Destroying an unfilled element would free memory never allocated, and a tag read
+// before its element is written would see this allocator's poison.
+fn decoded_arrays(_ r: u32) -> usize {
+    let one: [DynString; 1] = [decimal(r as u256)]
+    let encoded_one = encode_alloc<Sol, [DynString; 1]>(one)
+    let decoded_one = <[DynString; 1] as Decode<Sol>>::decode_from(encoded_one.span(), 0)
+    let three: [Bytes; 3] = [
+        Bytes::empty(),
+        Bytes::from_word_prefix(word: r as u256, len: 32),
+        Bytes::from_word_prefix(word: r as u256, len: 5),
+    ]
+    let encoded_three = encode_alloc<Sol, [Bytes; 3]>(three)
+    let input = encoded_three.span()
+    let from = <[Bytes; 3] as Decode<Sol>>::decode_from(input, 0)
+    let prechecked = <[Bytes; 3] as Decode<Sol>>::decode_from_prechecked_head(input, 0, encoded_three.len() as u256)
+    var decoder = SolDecoder::with_base(0)
+    let payload = <[Bytes; 3] as Decode<Sol>>::decode_payload(mut decoder, input)
+    let encoded_modes = encode_alloc<Sol, [u256; 3]>([1, 0, 1])
+    let modes = <[Mode; 3] as Decode<Sol>>::decode_from(encoded_modes.span(), 0)
+    let on: usize = match modes[1] {
+        Mode::On => 1,
+        Mode::Off => 0,
+    }
+    decoded_one[0].len() + from[1].len() + prechecked[2].len() + payload[1].len() + on
+}
+
+fn encode_view<T>(_ value: T) -> MemBuffer
+    where T: Encode<Sol> + AbiSize
+{
+    let total = abi_payload_size(value)
+    let buffer = MemBuffer::new(ptr::allocation_len(total))
+    value.encode(unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) })
+    buffer
+}
+
+// Encoding reads a value, so each of these is whole after being encoded twice, and is
+// freed once.
+fn encoded_twice(_ r: u32) -> usize {
+    let array: [Bytes; 2] = [Bytes::empty(), Bytes::from_word_prefix(word: r as u256, len: 32)]
+    let tuple = (decimal(r as u256), Bytes::from_word_prefix(word: r as u256, len: 5))
+    let entry = Entry { name: decimal(r as u256), parts: [Bytes::empty(), Bytes::from_word_prefix(word: r as u256, len: 5)] }
+    let encodings = encode_view(array).len() + encode_view(array).len()
+        + encode_view(tuple).len() + encode_view(tuple).len()
+        + encode_view(entry).len() + encode_view(entry).len()
+    encodings + array[1].len() + tuple.1.len() + entry.parts[1].len()
+}
+
+fn scratch_buffers(_ r: u32) {
+    let word = r as u256
+    // A decoder frees what it has built when it rejects its input.
+    core::assert(decode_base64("aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgc3RyaW5nIQ==").unwrap().len() == 34)
+    core::assert(decode_base64("aGVs!G8g").is_none())
+    core::assert(decode_base58("3mJr7AoUXx2Wqd").unwrap().len() > 0)
+    core::assert(decode_base58("3mJr0").is_none())
+
+    let text: DynString = "seven b"
+    let encoded_text = encode_alloc<Sol, (DynString,)>((text,))
+    let decoded_text = <(String<7>,) as Decode<Sol>>::decode_from(encoded_text.span(), 0)
+    core::assert(decoded_text.0 == "seven b")
+
+    let payload = MemBuffer::new(40)
+    let list = rlp::encode_list([
+        rlp::encode_bytes(payload.span()),
+        rlp::encode_uint((1 << 255) + word),
+        rlp::encode_address(Address::new(word)),
+    ])
+    core::assert(list.len() == 2 + 41 + 33 + 21)
+    core::assert(checksum_address(Address::new(word)).len() == 42)
+
+    let nodes: DynArray<u256> = dyn_array_from([word, 7])
+    let pair = merkle::hash_pair_sorted(word, 7)
+    core::assert(merkle::process_proof(proof: nodes, leaf: 7) == merkle::hash_pair_sorted(pair, 7))
+    core::assert(merkle::process_indexed_proof(proof: nodes, leaf: 7, index: 0) != 0)
+    core::assert(mapping_slot(word, 7 as u256) != keccak_packed((word, word)))
+
+    let code = clone_initcode(Address::new(0))
+    core::assert(code.len() == 55)
+    core::assert(keccak256(code.span()) == 0x3df3da56b3ea8de108a8606dea387d6535fca78db07a7d90f7a05ad323dd43c7)
+}
+
+pub fn main() -> i32 {
+    var r: u32 = 0
+    while r < 3 {
+        core::assert(strings(r) == 46 + 20 + 3 + 58 + 37 + 47)
+        core::assert(bytes(r) == 40 + 5 + 32 + 64 + 33 + 2)
+        core::assert(arrays(r) == 32 + 32 + 3 + 0 + 3 + 1 + 2)
+        core::assert(records(r) == 5 + 5 + 1)
+        core::assert(encoded(r) == 40 + 32 + 1)
+        core::assert(decoded_arrays(r) == 1 + 32 + 5 + 32 + 1)
+        core::assert(encoded_twice(r) == 2 * (160 + 192 + 288) + 32 + 5 + 5)
+        scratch_buffers(r)
+        r += 1
+    }
+    0
+}

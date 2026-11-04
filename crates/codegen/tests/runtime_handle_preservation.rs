@@ -862,11 +862,26 @@ pub fn main() -> u256 {
 fn immutable_own_pointer_aggregate_param_field_reads_stay_unrooted() {
     with_runtime_package!(
         "immutable_own_pointer_aggregate_param_field_reads_stay_unrooted.fe",
-        r#"use core::abi::Bytes
+        r#"use core::marker::Snapshot
+use core::ptr
+
+struct Handle {
+    data: *u8,
+    len: usize,
+}
+
+impl Copy for Handle {}
+impl Snapshot for Handle {}
+
+impl Handle {
+    fn len(self) -> usize {
+        self.len
+    }
+}
 
 struct Note {
     id: u256,
-    body: Bytes,
+    body: Handle,
 }
 
 fn note_size(_ note: own Note) -> u256 {
@@ -874,7 +889,7 @@ fn note_size(_ note: own Note) -> u256 {
 }
 
 pub fn main() -> u256 {
-    note_size(Note { id: 1, body: Bytes::empty() })
+    note_size(Note { id: 1, body: Handle { data: ptr::alloc_bytes(32), len: 0 } })
 }
 "#,
         |db, package| {

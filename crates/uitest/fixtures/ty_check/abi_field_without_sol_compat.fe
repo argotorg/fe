@@ -24,7 +24,7 @@ impl Decode<Sol> for Word {
 }
 
 impl Encode<Sol> for Word {
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.value)
     }
 }

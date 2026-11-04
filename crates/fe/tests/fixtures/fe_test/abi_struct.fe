@@ -1,9 +1,10 @@
 // `#[abi]` structs encode and decode like the Solidity tuple of their fields.
 use core::abi::{AbiDecoder, AbiFrame, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
+use core::mem::forget
 use core::ptr::{self, MemArray, MemBuffer, MemVec}
 use std::abi::{Bytes, DynArray, Sol, canonical_dyn_array, dyn_array_from, sol}
 use std::abi::sol::{Int24, Uint24}
-use std::evm::{Address, Evm, encode_abi_payload}
+use std::evm::{Address, Evm, Log, encode_abi_payload, encode_error}
 
 #[abi]
 pub struct Key {
@@ -18,7 +19,6 @@ pub struct Hop {
     pub key: Key,
     pub data: Bytes,
 }
-impl Copy for Hop {}
 
 #[abi]
 struct Empty {}
@@ -27,6 +27,28 @@ struct Empty {}
 #[abi]
 pub struct Item {
     pub value: u256,
+}
+
+// Fixed arrays of non-`Copy` elements, as fields of each kind of ABI struct.
+#[abi]
+pub struct ItemArrays {
+    pub pair: [Item; 2],
+    pub nested: (u256, [[Item; 1]; 2]),
+    pub list: DynArray<[Item; 2]>,
+    pub names: [Bytes; 2],
+    pub rows: [DynArray<u256>; 2],
+}
+
+type ItemPair = [Item; 2]
+
+#[event]
+struct ItemsEvent {
+    items: ItemPair,
+}
+
+#[error]
+struct ItemsError {
+    items: ItemPair,
 }
 
 #[abi]
@@ -81,7 +103,7 @@ impl Decode<Sol> for Word {
 }
 
 impl Encode<Sol> for Word {
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.value)
     }
 }
@@ -195,8 +217,7 @@ fn dyn_array_from_encodes_dynamic_elements() {
 #[test]
 fn canonical_dyn_array_reorders_tails() {
     // bytes[2] whose second element's tail precedes the first one's.
-    let data = MemBuffer::new(32 + 64 + 64 + 64)
-    let p = data.ptr()
+    let p = ptr::alloc_bytes(32 + 64 + 64 + 64)
     unsafe { store_word(ptr: p, value: 2) }
     unsafe { store_word(ptr: ptr::offset_bytes(p, 32), value: 128) }
     unsafe { store_word(ptr: ptr::offset_bytes(p, 64), value: 64) }
@@ -235,8 +256,7 @@ fn canonical_dyn_array_copies_composite_elements() {
 #[test(should_revert)]
 fn canonical_dyn_array_rejects_dirty_static_elements() {
     // address[1] whose element has dirty upper bits.
-    let data = MemBuffer::new(64)
-    let p = data.ptr()
+    let p = ptr::alloc_bytes(64)
     unsafe { store_word(ptr: p, value: 1) }
     unsafe { store_word(ptr: ptr::offset_bytes(p, 32), value: 1 << 160) }
     let dirty = unsafe { DynArray<Address>::from_abi_tail(data: p, len: 1, size: 64) }
@@ -250,8 +270,11 @@ fn canonical_dyn_array_takes_non_copy_elements() {
         (7, Bytes::from_word_prefix(word: 0xaa << 248, len: 1)),
         (8, Bytes::from_word_prefix(word: 0, len: 32)),
     ])
-    let span = hops.encoded_span()
-    let named = unsafe { canonical_dyn_array(DynArray<Named>::from_abi_tail(data: span.ptr(), len: 2, size: span.len() as u256)) }
+    let data = hops.encoded_span().ptr()
+    let size = hops.encoded_size()
+    // The named array takes over the allocation.
+    forget(hops)
+    let named = unsafe { canonical_dyn_array(DynArray<Named>::from_abi_tail(data, len: 2, size)) }
     assert(named.get(0).item.value == 7)
     assert(named.get(0).name.byte_at(0) == 0xaa)
     assert(named.get(1).item.value == 8)
@@ -334,14 +357,41 @@ fn abi_struct_copy_array_field_round_trips() {
 fn canonical_dyn_array_of_zero_size_elements_is_constant_time() {
     // A huge `()[]` or `Empty[]` is just its length word.
     let count: u256 = 1 << 200
-    let data = MemBuffer::new(32)
-    unsafe { store_word(ptr: data.ptr(), value: count) }
-    let units = unsafe { canonical_dyn_array(DynArray<()>::from_abi_tail(data: data.ptr(), len: count.downcast_unchecked(), size: 32)) }
+    let data = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: data, value: count) }
+    let units = unsafe { canonical_dyn_array(DynArray<()>::from_abi_tail(data, len: count.downcast_unchecked(), size: 32)) }
     assert(units.len() == count.downcast_unchecked())
     assert(units.encoded_size() == 32)
-    let empties = unsafe { canonical_dyn_array(DynArray<Empty>::from_abi_tail(data: data.ptr(), len: count.downcast_unchecked(), size: 32)) }
+    let empty_data = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: empty_data, value: count) }
+    let empties = unsafe { canonical_dyn_array(DynArray<Empty>::from_abi_tail(data: empty_data, len: count.downcast_unchecked(), size: 32)) }
     assert(empties.len() == count.downcast_unchecked())
     assert(empties.encoded_size() == 32)
+}
+
+#[test]
+fn fixed_arrays_of_non_copy_elements_round_trip() {
+    let value = ItemArrays {
+        pair: [Item { value: 1 }, Item { value: 2 }],
+        nested: (3, [[Item { value: 4 }], [Item { value: 5 }]]),
+        list: dyn_array_from([[Item { value: 6 }, Item { value: 7 }]]),
+        names: [Bytes::from_word_prefix(word: 0xaa << 248, len: 1), Bytes::from_word_prefix(word: 0xbb << 248, len: 1)],
+        rows: [dyn_array_from([8 as u256]), dyn_array_from([9 as u256, 10])],
+    }
+    let encoded = encode_abi_payload(value)
+    let decoded = <ItemArrays as Decode<Sol>>::decode_from(encoded.span(), 0)
+    assert(decoded.pair[1].value == 2)
+    assert(decoded.nested.0 == 3 && decoded.nested.1[1][0].value == 5)
+    assert(decoded.list.get(0)[1].value == 7)
+    assert(decoded.names[0].byte_at(0) == 0xaa && decoded.names[1].byte_at(0) == 0xbb)
+    assert(decoded.rows[0].get(0) == 8 && decoded.rows[1].get(1) == 10)
+}
+
+#[test]
+fn fixed_arrays_of_non_copy_elements_in_events_and_errors() uses (log: mut Log) {
+    log.emit(ItemsEvent { items: [Item { value: 1 }, Item { value: 2 }] })
+    let encoded = encode_error(ItemsError { items: [Item { value: 3 }, Item { value: 4 }] })
+    assert(encoded.span().word_at(36) == 4)
 }
 
 #[test]

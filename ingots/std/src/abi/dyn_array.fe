@@ -20,28 +20,44 @@ use core::abi::{
 }
 use core::default::Default
 use core::iter::{Bidirectional, Collection}
-use core::marker::{Copy, Snapshot}
 use ingot::abi::Sol
-use core::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan}
-use core::ops::{Index, Len, WrappingAdd, WrappingSub}
+use core::mem::forget
+use core::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan, MemVec}
+use core::ops::{Drop, Index, Len, WrappingAdd, WrappingSub}
 use core::option::Option
 use ingot::evm::panic::{PANIC_INDEX_OUT_OF_BOUNDS, Panic}
 use ingot::evm::revert_error
 
-/// Owned handle to a Solidity-style dynamic array (`T[]`) stored in linear memory.
+/// A Solidity-style dynamic array (`T[]`) stored in linear memory.
 ///
-/// `data` points at the ABI payload for the array: the length word followed by the
-/// tuple-encoded element heads/tails.
+/// `data` points at the start of an allocation that holds the ABI payload for the
+/// array: the length word followed by the tuple-encoded element heads/tails. The
+/// elements are encoded bytes, so `get` decodes a fresh value and dropping the
+/// array frees the allocation alone. The value owns the allocation, so it moves
+/// rather than copies; `clone` makes a second array.
 pub struct DynArray<T> {
     unsafe data: *u8,
     unsafe len: usize,
     unsafe size: u256,
 }
 
-impl<T> Copy for DynArray<T> {}
+impl<T> Drop for DynArray<T> {
+    fn drop(own self) {
+        // The array owns its allocation.
+        unsafe { ptr::dealloc(self.data) }
+    }
+}
 
-// A memory buffer handle is a snapshot of where its contents lie.
-impl<T> Snapshot for DynArray<T> {}
+impl<T> Clone for DynArray<T> {
+    fn clone(self) -> Self {
+        let data = ptr::alloc_bytes(ptr::allocation_len(self.size))
+        // The copy holds the same validated tail.
+        unsafe {
+            ptr::copy(dest: data, source: self.encoded_span())
+            Self::from_validated_abi_tail(data, len: self.len, size: self.size)
+        }
+    }
+}
 
 impl<T> Default for DynArray<T> {
     fn default() -> Self {
@@ -59,18 +75,20 @@ impl<T> DynArray<T> {
         }
     }
 
-    /// `data` must point to a validated ABI tail of `size` initialized
-    /// bytes in a live allocation, holding `len` elements.
+    /// `data` must be the start of an allocation that holds a validated ABI
+    /// tail of `size` initialized bytes and `len` elements. The value takes
+    /// over the allocation.
     unsafe fn from_validated_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         DynArray { data, len, size }
     }
 
-    /// Construct an array handle over a complete ABI tail.
+    /// Takes ownership of a complete ABI tail.
     ///
-    /// `data` must point to `size` valid bytes in an allocation that outlives
-    /// the array, which never frees it. Static-element arrays are
-    /// validated exactly; callers constructing dynamic-element arrays must
-    /// ensure their nested tails are valid and end at `size`.
+    /// `data` must be the start of an allocation from `ptr::alloc_bytes` that
+    /// holds `size` valid bytes, and nothing else may free it: the array frees
+    /// it when dropped. Static-element arrays are validated exactly; callers
+    /// constructing dynamic-element arrays must ensure their nested tails are
+    /// valid and end at `size`.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self
         where T: AbiSize
     {
@@ -158,34 +176,50 @@ impl<T> DynArray<T> {
     pub fn to_mem_array(self) -> MemArray<T>
         where T: Decode<Sol> + AbiSize
     {
-        MemArray::from_fn(self.len, |i| self.get(i))
+        let elements = unsafe { MemArray::new_uninit(self.len) }
+        for i in 0..self.len {
+            // A raw write initializes the slot, destroying nothing.
+            unsafe { *elements.ptr_at(i) = self.get(i) }
+        }
+        elements
     }
 
-    /// An ABI array of copies of `values`, in canonical layout.
+    /// An ABI array of `values`, in canonical layout.
     pub fn from_slice(_ values: MemSlice<T>) -> Self
-        where T: Encode<Sol> + AbiSize + Copy
+        where T: Encode<Sol> + AbiSize
     {
         let len = values.len()
-        let heads = len as u256 * abi_field_head_size<T>()
-        var size = 32 + heads
-        if T::IS_DYNAMIC {
-            for value in values {
-                size += value.payload_size()
-            }
-        }
-        let data = ptr::alloc_bytes(ptr::allocation_len(size))
-        unsafe {
-            ptr::zero_bytes(data, size.downcast_unchecked())
-            store_word(ptr: data, value: len as u256)
-        }
-        // The zeroed payload after the length word, which only this encoding
-        // writes.
+        let (data, size) = canonical_tail(values)
         let out = unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32), len: size - 32) }
-        var tails = out.tail(heads)
-        for (i, value) in values.enumerate() {
+        var tails = out.tail(len as u256 * abi_field_head_size<T>())
+        for (i, ref value) in values.enumerate() {
             tails = encode_field<Sol, T>(value, out, head_pos: i as u256 * abi_field_head_size<T>(), tails)
         }
         unsafe { DynArray::from_abi_tail(data, len, size) }
+    }
+
+    /// An ABI array of `values`, in canonical layout. Each element is destroyed
+    /// as soon as it is encoded, which spares the second pass over the elements
+    /// that dropping a `MemVec` makes after `from_slice`.
+    pub fn from_mem_vec(_ values: own MemVec<T>) -> Self
+        where T: Encode<Sol> + AbiSize
+    {
+        let len = values.len()
+        let (data, size) = canonical_tail(values.as_slice())
+        let out = unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32), len: size - 32) }
+        var tails = out.tail(len as u256 * abi_field_head_size<T>())
+        for i in 0..len {
+            // The element moves out of raw memory into a temporary, which the
+            // end of this statement destroys.
+            tails = encode_field<Sol, T>(unsafe { *values.as_slice().ptr_at(i) }, out, head_pos: i as u256 * abi_field_head_size<T>(), tails)
+        }
+        // The elements are gone, so only the allocation is left to free.
+        let elements = values.ptr()
+        forget(values)
+        unsafe {
+            ptr::dealloc(elements)
+            DynArray::from_abi_tail(data, len, size)
+        }
     }
 }
 
@@ -227,6 +261,25 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
     }
 }
 
+/// A zeroed tail for `values` in canonical layout, with its length word written,
+/// and the tail's size. Only the encoding of `values` writes the rest of it.
+fn canonical_tail<T>(_ values: MemSlice<T>) -> (*u8, u256)
+    where T: AbiSize
+{
+    var size = 32 + values.len() as u256 * abi_field_head_size<T>()
+    if T::IS_DYNAMIC {
+        for ref value in values {
+            size += value.payload_size()
+        }
+    }
+    let data = ptr::alloc_bytes(ptr::allocation_len(size))
+    unsafe {
+        ptr::zero_bytes(data, size.downcast_unchecked())
+        store_word(ptr: data, value: values.len() as u256)
+    }
+    (data, size)
+}
+
 /// The array whose payload starts at `pos`, whose length word the caller
 /// has bounds-checked, copied into its own allocation.
 #[inline(always)]
@@ -247,7 +300,7 @@ impl<A: Abi, T> Encode<A> for DynArray<T>
     where T: AbiSize
 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.copy_from(at: 0, self.encoded_span())
     }
 }
@@ -394,15 +447,11 @@ impl<T> Bidirectional for DynArray<T>
 
 /// A `DynArray` holding `values` in order.
 ///
-/// Works for copyable ABI element types, including dynamic ones: the
-/// `bytes[]` built by `dyn_array_from([a, b])` encodes like Solidity's
-/// `new bytes[](2)` filled with `a` and `b`.
-///
-/// Elements must implement `Copy`: array indexing cannot currently consume
-/// distinct non-copyable elements in a loop. For a non-`Copy` ABI struct,
-/// encode individual values with `encode_abi_payload` instead.
+/// Works for any ABI element type, including dynamic ones: the `bytes[]` built
+/// by `dyn_array_from([a, b])` encodes like Solidity's `new bytes[](2)` filled
+/// with `a` and `b`.
 pub fn dyn_array_from<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
-    where T: Encode<Sol> + AbiSize + Copy
+    where T: Encode<Sol> + AbiSize
 {
     let size = 32 + values.payload_size()
     let data = ptr::alloc_bytes(ptr::allocation_len(size))

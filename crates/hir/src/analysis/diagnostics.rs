@@ -936,25 +936,6 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
     }
 }
 
-impl DiagnosticVoucher for crate::analysis::analysis_pass::AbiArrayElemNotCopy {
-    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        let Self { ty, elem_ty, .. } = self;
-        CompleteDiagnostic::new(
-            Severity::Error,
-            "fixed-array ABI fields need `Copy` elements".to_string(),
-            vec![SubDiagnostic::new(
-                LabelStyle::Primary,
-                format!("`{ty}` holds a fixed array of `{elem_ty}`, which is not `Copy`"),
-                Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
-            )],
-            vec![format!(
-                "implement `Copy` for `{elem_ty}`, or use `DynArray<{elem_ty}>`"
-            )],
-            self.error_code.clone(),
-        )
-    }
-}
-
 pub trait LazyDiagnostic<'db> {
     fn to_complete(&self, db: &'db dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;
 }

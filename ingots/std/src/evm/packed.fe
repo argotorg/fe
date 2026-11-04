@@ -129,9 +129,9 @@ pub fn encode_packed<T: EncodePacked>(_ value: own T) -> Packed {
 #[inline(always)]
 pub fn keccak_packed<T: EncodePacked>(_ value: own T) -> u256 {
     let width = value.packed_width()
-    let buffer = ptr::alloc_bytes(ptr::allocation_len(width + 32))
-    let written = unsafe { value.write_packed(buffer, room: width) }
-    unsafe { crypto::keccak256(MemSpan::from_raw_parts(ptr: buffer, len: written.downcast_unchecked())) }
+    let buffer = ptr::MemBuffer::with_capacity(ptr::allocation_len(width + 32))
+    let written = unsafe { value.write_packed(buffer.ptr(), room: width) }
+    unsafe { crypto::keccak256(MemSpan::from_raw_parts(ptr: buffer.ptr(), len: written.downcast_unchecked())) }
 }
 
 /// Imperative builder for packed byte payloads.

@@ -13,7 +13,7 @@ impl AbiSize for Bad {
 }
 
 impl<A: Abi> Encode<A> for Bad {
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.word)
     }
 }

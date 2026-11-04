@@ -28,7 +28,7 @@
 /// }
 /// ```
 use ingot::abi::DynArray
-use core::ptr::{self, MemSlice}
+use core::ptr::{self, FixedMemBuffer, MemSlice}
 use ingot::abi::Bytes32
 use super::ops
 
@@ -71,7 +71,8 @@ unsafe fn dyn_array_words(_ data: *u8, len: usize) -> ref MemSlice<u256> {
 ///
 /// The result does not depend on argument order.
 pub fn hash_pair_sorted(_ a: u256, _ b: u256) -> u256 {
-    sorted_into(ptr::alloc_bytes(64), a, b)
+    let scratch = unsafe { FixedMemBuffer<64>::alloc_uninit() }
+    sorted_into(scratch.ptr(), a, b)
 }
 
 /// The root implied by `leaf` and a sorted-pair `proof`:
@@ -84,7 +85,8 @@ pub fn process_proof<P: ProofNodes>(proof: P, leaf: u256) -> u256 {
     let nodes = proof.nodes()
     let len = nodes.len() as u256
     let base = ptr::cast<u256, u8>(nodes.ptr())
-    let scratch = ptr::alloc_bytes(64)
+    let buffer = unsafe { FixedMemBuffer<64>::alloc_uninit() }
+    let scratch = buffer.ptr()
     var node = leaf
     var i: u256 = 0
     while i < len {
@@ -120,7 +122,8 @@ pub fn process_indexed_proof<P: ProofNodes>(proof: P, leaf: u256, index: u256) -
     let nodes = proof.nodes()
     let len = nodes.len() as u256
     let base = ptr::cast<u256, u8>(nodes.ptr())
-    let scratch = ptr::alloc_bytes(64)
+    let buffer = unsafe { FixedMemBuffer<64>::alloc_uninit() }
+    let scratch = buffer.ptr()
     let right_at = ptr::offset_bytes(scratch, 32)
     var node = leaf
     var i: u256 = 0

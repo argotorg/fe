@@ -3511,7 +3511,7 @@ impl core::abi::AbiSize for Weird {
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    fn encode(own self, _ out: core::abi::AbiFrame) {
+    fn encode(self, _ out: core::abi::AbiFrame) {
         out.store_word(at: 0, value: if self.flag { 1 } else { 0 })
         out.store_word(at: 32, value: self.amount as u256)
     }
@@ -3885,6 +3885,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "effect_handle_field_deref",
     "eip712_domain",
     "encode_msg_calldata",
+    "encode_storage_place",
     "entry_space_numbering",
     "enum",
     "enum_state_machine",

@@ -415,58 +415,6 @@ fn events_with_indexed_dynamic_fields<'db>(
     events
 }
 
-/// A field of an `#[abi]`, `#[event]` or `#[error]` struct whose type holds
-/// a fixed array of non-`Copy` elements, which the fixed-array ABI codecs
-/// cannot handle.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub(crate) struct NonCopyArrayAbiField<'db> {
-    pub(crate) origin: DesugaredOrigin,
-    pub(crate) ast_struct: parser::ast::AstPtr<parser::ast::Struct>,
-    pub(crate) field_idx: usize,
-    pub(crate) field_ty: TyId<'db>,
-    pub(crate) elem_ty: TyId<'db>,
-}
-
-/// Shared by the `#[abi]`, `#[event]` and `#[error]` lowering passes, which
-/// report the fields, and the body pass, which skips the generated bodies.
-#[salsa::tracked]
-pub(crate) fn non_copy_array_abi_fields<'db>(
-    db: &'db dyn HirAnalysisDb,
-    top_mod: TopLevelMod<'db>,
-) -> Vec<NonCopyArrayAbiField<'db>> {
-    let mut fields = Vec::new();
-    for struct_ in top_mod.all_structs(db).iter().copied() {
-        let HirOrigin::Desugared(origin) = struct_.origin(db) else {
-            continue;
-        };
-        let ast_struct = match origin {
-            DesugaredOrigin::AbiStruct(origin) => origin.abi_struct.clone(),
-            DesugaredOrigin::Event(origin) => origin.event_struct.clone(),
-            DesugaredOrigin::Error(origin) => origin.error_struct.clone(),
-            _ => continue,
-        };
-        let assumptions = crate::semantic::constraints_for(db, struct_.into());
-        for (field_idx, field) in struct_.hir_fields(db).data(db).iter().enumerate() {
-            let Some(hir_ty) = field.type_ref().to_opt() else {
-                continue;
-            };
-            let field_ty = lower_hir_ty(db, hir_ty, struct_.scope(), assumptions);
-            if let Some(elem_ty) =
-                abi_ty::non_copy_fixed_array_elem(db, struct_.scope(), field_ty, assumptions)
-            {
-                fields.push(NonCopyArrayAbiField {
-                    origin: origin.clone(),
-                    ast_struct: ast_struct.clone(),
-                    field_idx,
-                    field_ty,
-                    elem_ty,
-                });
-            }
-        }
-    }
-    fields
-}
-
 /// A field of an `#[abi]` struct whose type lacks ABI traits that the
 /// generated codec needs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -498,7 +446,6 @@ pub(crate) fn abi_struct_field_checks<'db>(
     top_mod: TopLevelMod<'db>,
 ) -> AbiStructFieldChecks<'db> {
     let mut checks = AbiStructFieldChecks::default();
-    let non_copy_fields = non_copy_array_abi_fields(db, top_mod);
     for struct_ in top_mod.all_structs(db).iter().copied() {
         let HirOrigin::Desugared(origin @ DesugaredOrigin::AbiStruct(abi_origin)) =
             struct_.origin(db)
@@ -563,12 +510,8 @@ pub(crate) fn abi_struct_field_checks<'db>(
                 continue;
             };
             let field_ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-            // Invalid types and non-`Copy` fixed arrays are reported on their own.
-            if field_ty.has_invalid(db)
-                || non_copy_fields
-                    .iter()
-                    .any(|field| field.origin == *origin && field.field_idx == field_idx)
-            {
+            // Invalid types are reported on their own.
+            if field_ty.has_invalid(db) {
                 reported_at_source = true;
                 continue;
             }
@@ -609,10 +552,9 @@ fn generated_abi_reported_at_source<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> FxHashSet<&'db DesugaredOrigin> {
-    non_copy_array_abi_fields(db, top_mod)
+    abi_struct_field_checks(db, top_mod)
+        .reported_at_source
         .iter()
-        .map(|field| &field.origin)
-        .chain(&abi_struct_field_checks(db, top_mod).reported_at_source)
         .collect()
 }
 

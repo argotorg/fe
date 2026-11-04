@@ -119,8 +119,8 @@ fn encode_lists() {
     let nil = rlp::encode_list(empty)
     assert!(to_hex(nil) == "c0")
     // The set theoretical representation of three, [ [], [[]], [ [], [[]] ] ].
-    let one = rlp::encode_list([nil])
-    let two = rlp::encode_list([nil, one])
+    let one = rlp::encode_list([nil.clone()])
+    let two = rlp::encode_list([nil.clone(), one.clone()])
     assert!(to_hex(rlp::encode_list([nil, one, two])) == "c7c0c1c0c3c0c1c0")
     let lorem = rlp::encode_bytes(from_hex(LOREM_HEX).payload_span())
     assert!(

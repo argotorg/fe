@@ -452,7 +452,7 @@ func inline(always) private %encode_alloc(v0.i256) -> @layout_5 {
         v2.i256 = call %abi_payload_size v0;
         v3.i256 = call %allocation_len v2;
         v4.@layout_5 = call %impl_MemBuffer__new v3;
-        v5.i256 = call %impl_MemBuffer__ptr v4;
+        v5.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b54c v4;
         v6.@layout_4 = call %from_raw_parts v5 v2;
         call %encode v0 v6;
         return v4;
@@ -512,7 +512,7 @@ func inline(always) private %encode_single_root_alloc(v0.i256) -> @layout_5 {
         v2.i256 = call %abi_single_root_size v0;
         v3.i256 = call %allocation_len v2;
         v4.@layout_5 = call %impl_MemBuffer__new v3;
-        v5.i256 = call %impl_MemBuffer__ptr v4;
+        v5.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b54c v4;
         v6.@layout_4 = call %from_raw_parts v5 v2;
         v9.@layout_4 = call %tail v6 32.i256;
         v10.@layout_4 = call %encode_field v0 v6 0.i256 v9;
@@ -673,17 +673,17 @@ func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
         br v7 block6 block7;
 
     block2:
-        v27.i256 = call %keccak256 v2;
+        v28.i256 = call %keccak256 v2;
         jump block5;
 
     block3:
-        v30.@layout_4 = insert_value undef.@layout_4 0.i256 v14;
-        v33.@layout_4 = insert_value v30 1.i256 v24;
-        obj.store v2 v33;
+        v31.@layout_4 = insert_value undef.@layout_4 0.i256 v15;
+        v34.@layout_4 = insert_value v31 1.i256 v25;
+        obj.store v2 v34;
         jump block2;
 
     block4:
-        return v27;
+        return v28;
 
     block5:
         jump block4;
@@ -695,16 +695,17 @@ func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
 
     block7:
         v13.i256 = call %downcast_saturate v6;
-        v14.i256 = call %core__lib__ptr__alloc_bytes_8b3e v13;
-        call %write_key v14 v1;
-        v18.i256 = call %downcast_unchecked v4;
-        v19.i256 = add v14 v18;
-        mstore v19 v0 i256;
-        (v22.i256, v23.i1) = uaddo v4 32.i256;
-        br v23 block6 block8;
+        v14.@layout_5 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d v13;
+        v15.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8 v14;
+        call %write_key v15 v1;
+        v19.i256 = call %downcast_unchecked v4;
+        v20.i256 = add v15 v19;
+        mstore v20 v0 i256;
+        (v23.i256, v24.i1) = uaddo v4 32.i256;
+        br v24 block6 block8;
 
     block8:
-        v24.i256 = call %downcast_unchecked v22;
+        v25.i256 = call %downcast_unchecked v23;
         jump block3;
 }
 
@@ -713,7 +714,7 @@ func private %impl_MemBuffer__new(v0.i256) -> @layout_5 {
         jump block1;
 
     block1:
-        v2.@layout_5 = call %new_uninit v0;
+        v2.@layout_5 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_28c8 v0;
         v4.i256 = extract_value v2 0.i256;
         call %zero_bytes v4 v0;
         return v2;
@@ -728,12 +729,24 @@ func inline(always) private %impl_CallData__new() -> @layout_1 {
         return v2;
 }
 
-func private %new_uninit(v0.i256) -> @layout_5 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_28c8(v0.i256) -> @layout_5 {
     block0:
         jump block1;
 
     block1:
         v2.i256 = call %core__lib__ptr__alloc_bytes_073d v0;
+        v5.@layout_5 = insert_value undef.@layout_5 0.i256 v2;
+        v7.@layout_5 = insert_value v5 1.i256 v0;
+        v9.@layout_5 = insert_value v7 2.i256 v0;
+        return v9;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d(v0.i256) -> @layout_5 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %core__lib__ptr__alloc_bytes_8b3e v0;
         v5.@layout_5 = insert_value undef.@layout_5 0.i256 v2;
         v7.@layout_5 = insert_value v5 1.i256 v0;
         v9.@layout_5 = insert_value v7 2.i256 v0;
@@ -786,7 +799,16 @@ func inline(always) private %ptr__g1d2b(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %impl_MemBuffer__ptr(v0.@layout_5) -> i256 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b54c(v0.@layout_5) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8(v0.@layout_5) -> i256 {
     block0:
         jump block1;
 
@@ -863,7 +885,7 @@ func private %return_value(v0.i256) {
 
     block7:
         v23.@layout_5 = call %impl_MemBuffer__new 32.i256;
-        v24.i256 = call %impl_MemBuffer__ptr v23;
+        v24.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b54c v23;
         v25.@layout_4 = call %from_raw_parts v24 32.i256;
         call %encode v0 v25;
         jump block17;
