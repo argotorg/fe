@@ -865,10 +865,8 @@ pub(crate) fn lower_generic_arg_list<'db>(
                 lower_opt_const_body(db, const_arg.value, scope, assumptions, lowering_cx),
             ),
 
-            GenericArg::AssocType(_assoc_type_arg) => {
-                // TODO: ?
-                TyId::invalid(db, InvalidCause::Other)
-            }
+            // A trait path lowers its bindings itself.
+            GenericArg::AssocType(_) => TyId::invalid(db, InvalidCause::AssocBindingNotOnTrait),
         })
         .collect()
 }

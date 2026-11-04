@@ -1,0 +1,53 @@
+struct G<T> {
+    x: u256,
+}
+
+struct W<T> {
+    x: u256,
+}
+
+struct K<const N: usize> {
+    x: u256,
+}
+
+mod m {
+    struct Hidden {}
+}
+
+// A nested type's error is reported once, where it's written.
+fn kind(_ a: W<G<W>>, _ b: W<W<G<W>>>) {}
+
+fn mode(_ a: W<G<ref>>) {}
+
+fn binding(_ a: W<G<Item = u8>>) {}
+
+fn string(_ a: W<String<999999>>) {}
+
+fn const_mismatch(_ a: W<K<true>>) {}
+
+fn hidden(_ a: W<m::Hidden>) {}
+
+fn missing(_ a: W<G<Missing>>) {}
+
+fn in_body() {
+    let _: W<G<W>> = W<G<u8>> { x: 0 }
+}
+
+struct Field {
+    a: W<G<W>>,
+}
+
+type Alias = W<G<W>>
+
+// Separate types each report their own.
+fn tuple(_ a: (G<W>, G<Item = u8>)) {}
+
+fn array(_ a: [G<W>; 2]) {}
+
+fn pointer(_ a: *G<W>) {}
+
+// The current type's own error is reported when nothing nested has one.
+fn own_error(_ a: G<W>, _ b: u8<u8>, _ c: W) {}
+
+// So is a wrong number of arguments, whatever they are.
+fn arg_count(_ a: W<u8, Missing>, _ b: W<G<W>, u8>) {}

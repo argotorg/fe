@@ -1713,6 +1713,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::AssocBindingNotOnTrait(span) => primary_diag(
+                Severity::Error,
+                "an associated type binding names a trait's associated type",
+                "only a trait takes a binding, as in `T: Tr<Item = u8>`",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ModeOnProduct { span, shape } => {
                 let (message, label) = if *shape {
                     (

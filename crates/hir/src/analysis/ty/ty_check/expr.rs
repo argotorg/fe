@@ -81,7 +81,7 @@ use crate::analysis::ty::{
         BorrowKind, ClosureDef, ClosureTy, PrimTy, TyBase, TyData, TyVarSort,
         int_literal_fits_prim, prim_int_bits,
     },
-    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause},
+    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause, generic_arg_list_diags},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -3875,7 +3875,16 @@ impl<'db> TyChecker<'db> {
         };
 
         let receiver_prop = self.check_expr_unknown(*receiver);
-        if receiver_prop.ty.has_invalid(self.db) {
+        let arg_diags = generic_arg_list_diags(
+            self.db,
+            *generic_args,
+            call_span.clone().generic_args(),
+            self.env.scope(),
+            self.env.assumptions(),
+        );
+        let args_invalid = !arg_diags.is_empty();
+        self.diags.extend(arg_diags.into_iter().map(Into::into));
+        if args_invalid || receiver_prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 

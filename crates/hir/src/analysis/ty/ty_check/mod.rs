@@ -128,7 +128,8 @@ use crate::analysis::ty::{
     registered_root_providers,
     ty_error::{
         collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause,
-        normalization_limit_diag, path_arg_diags, qualified_path_wf_diags,
+        emit_invalid_ty_error, normalization_limit_diag, path_arg_diags, path_generic_arg_diags,
+        qualified_path_wf_diags,
     },
 };
 use crate::analysis::{
@@ -4087,7 +4088,7 @@ impl<'db> TyChecker<'db> {
             }
         };
 
-        let res = match resolve_path_with_observer_and_minter(
+        let res = resolve_path_with_observer_and_minter(
             self.db,
             path,
             scope,
@@ -4095,13 +4096,7 @@ impl<'db> TyChecker<'db> {
             resolve_tail_as_value,
             &mut observe_segment,
             lowering_cx,
-        ) {
-            Ok(r) => {
-                self.env.register_path_applications(site, applications);
-                Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty)))
-            }
-            Err(err) => Err(err),
-        };
+        );
 
         if let Some((path, deriv_span)) = invisible {
             let span = span.clone().segment(path.segment_index(self.db)).ident();
@@ -4110,7 +4105,33 @@ impl<'db> TyChecker<'db> {
             self.diags.push(diag.into());
         }
 
-        res
+        // A path that fails whatever its arguments are reports that alone.
+        if let Err(err) = &res
+            && err.is_independent_of_args(self.db)
+        {
+            return res;
+        }
+
+        // The path's generic arguments report their errors as a written type's
+        // do, and an invalid type that none of them reports is reported for
+        // its segment. What resolves through them reports nothing more.
+        let mut arg_diags =
+            path_generic_arg_diags(self.db, path, span.clone(), scope, self.env.assumptions());
+        if arg_diags.is_empty()
+            && path.generic_args(self.db).is_given(self.db)
+            && let Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) = res
+        {
+            let args_span = span.segment(path.segment_index(self.db)).generic_args();
+            arg_diags.extend(emit_invalid_ty_error(self.db, ty, args_span.into()));
+        }
+        if !arg_diags.is_empty() {
+            self.diags.extend(arg_diags.into_iter().map(Into::into));
+            return Err(PathResError::new(PathResErrorKind::InvalidGenericArg, path));
+        }
+
+        let res = res?;
+        self.env.register_path_applications(site, applications);
+        Ok(res.map_over_ty(|ty| self.instantiate_to_term(ty)))
     }
 
     fn instantiate_to_term(&mut self, ty: TyId<'db>) -> TyId<'db> {

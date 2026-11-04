@@ -1,0 +1,507 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/body_path_generic_args.fe
+---
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:149:10
+    │
+149 │     take<Missing>()
+    │          ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:150:17
+    │
+150 │     take<(u256, Missing)>()
+    │                 ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:151:11
+    │
+151 │     take<[Missing; 2]>()
+    │           ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:152:12
+    │
+152 │     take<W<Missing>>()
+    │            ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:153:13
+    │
+153 │     take<m::Missing>()
+    │             ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:154:9
+    │
+154 │     two<Missing, Nope>()
+    │         ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Nope` is not found
+    ┌─ body_path_generic_args.fe:154:18
+    │
+154 │     two<Missing, Nope>()
+    │                  ^^^^ `Nope` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:155:16
+    │
+155 │     take_const<Missing>()
+    │                ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:156:16
+    │
+156 │     take_value<Missing>(1)
+    │                ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:157:10
+    │
+157 │     m::t<Missing>()
+    │          ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:158:13
+    │
+158 │     S::take<Missing>()
+    │             ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:159:15
+    │
+159 │     G<u8>::tk<Missing>()
+    │               ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:160:11
+    │
+160 │     Tr::f<Missing>()
+    │           ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:161:18
+    │
+161 │     <S as Tr>::f<Missing>()
+    │                  ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:166:10
+    │
+166 │     s.me<Missing>()
+    │          ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:167:11
+    │
+167 │     s.me2<Missing, Nope>()
+    │           ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Nope` is not found
+    ┌─ body_path_generic_args.fe:167:20
+    │
+167 │     s.me2<Missing, Nope>()
+    │                    ^^^^ `Nope` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:171:7
+    │
+171 │     G<Missing>::mk()
+    │       ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:172:14
+    │
+172 │     G<(u256, Missing)>::mk()
+    │              ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:173:9
+    │
+173 │     G<W<Missing>>::mk()
+    │         ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:174:7
+    │
+174 │     G<Missing>::C
+    │       ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:175:7
+    │
+175 │     G<Missing>::nope()
+    │       ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:176:7
+    │
+176 │     G<Missing>::tk<Nope>()
+    │       ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Nope` is not found
+    ┌─ body_path_generic_args.fe:176:20
+    │
+176 │     G<Missing>::tk<Nope>()
+    │                    ^^^^ `Nope` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:177:10
+    │
+177 │     m::D<Missing>::mk()
+    │          ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:178:8
+    │
+178 │     Al<Missing>::mk()
+    │        ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:179:8
+    │
+179 │     Al<Missing>::C
+    │        ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:180:8
+    │
+180 │     Pa<Missing>::h()
+    │        ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:181:8
+    │
+181 │     <G<Missing> as Tr>::g()
+    │        ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:182:15
+    │
+182 │     let _ = E<Missing>::A
+    │               ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:183:15
+    │
+183 │     let _ = E<Missing>::B(1)
+    │               ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:184:15
+    │
+184 │     let _ = E<Missing>::C { v: 1 }
+    │               ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:188:15
+    │
+188 │     let _ = W<Missing> { x: 0 }
+    │               ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:189:17
+    │
+189 │     let _ = W<W<Missing>> { x: 0 }
+    │                 ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:190:16
+    │
+190 │     let _ = Al<Missing> { x: 0 }
+    │                ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:191:15
+    │
+191 │     let _ = W<Missing>
+    │               ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:196:11
+    │
+196 │         E<Missing>::A => {}
+    │           ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:197:11
+    │
+197 │         E<Missing>::B(_) => {}
+    │           ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:198:11
+    │
+198 │         E<Missing>::C { .. } => {}
+    │           ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:200:11
+    │
+200 │     let W<Missing> { .. } = w
+    │           ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:228:21
+    │
+228 │     take_shape<(mut Missing,)>()
+    │                     ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:230:13
+    │
+230 │     Sh<(own Missing,)>::mk()
+    │             ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:231:21
+    │
+231 │     s.me_shape<(ref Missing,)>()
+    │                     ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:241:24
+    │
+241 │     Dd<Step<ref> = ref Missing>::run(d)
+    │                        ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:244:14
+    │
+244 │     Dd<Out = Missing>::run(d)
+    │              ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `mk` is not found
+    ┌─ body_path_generic_args.fe:250:25
+    │
+250 │     G<[u8; missing()]>::mk()
+    │                         ^^ `mk` is not found
+
+error[2-0002]: `nope` is not found
+    ┌─ body_path_generic_args.fe:255:5
+    │
+255 │     nope<Missing>()
+    │     ^^^^ `nope` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:256:5
+    │
+256 │     Missing<Nope>::mk()
+    │     ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `nope` is not found
+    ┌─ body_path_generic_args.fe:257:8
+    │
+257 │     m::nope<Missing>()
+    │        ^^^^ `nope` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:263:26
+    │
+263 │ fn type_positions(_ a: G<Missing>::T, _ b: G<W>::T, _ c: G<Tr>::Nope) {
+    │                          ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:264:14
+    │
+264 │     let _: G<Missing>::T = 1
+    │              ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+    ┌─ body_path_generic_args.fe:267:12
+    │
+267 │     let _: Missing<Nope>::T = 1
+    │            ^^^^^^^ `Missing` is not found
+
+error[2-0003]: `Hidden` is not visible
+    ┌─ body_path_generic_args.fe:205:13
+    │
+145 │     struct Hidden {}
+    │            ------ `Hidden` is defined here
+    ·
+205 │     take<m::Hidden>()
+    │             ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+    ┌─ body_path_generic_args.fe:206:10
+    │
+145 │     struct Hidden {}
+    │            ------ `Hidden` is defined here
+    ·
+206 │     G<m::Hidden>::mk()
+    │          ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+    ┌─ body_path_generic_args.fe:207:13
+    │
+145 │     struct Hidden {}
+    │            ------ `Hidden` is defined here
+    ·
+207 │     s.me<m::Hidden>()
+    │             ^^^^^^ `Hidden` is not visible
+
+error[2-0006]: expected type item here
+    ┌─ body_path_generic_args.fe:263:60
+    │
+263 │ fn type_positions(_ a: G<Missing>::T, _ b: G<W>::T, _ c: G<Tr>::Nope) {
+    │                                                            ^^ expected type here, but found trait `Tr`
+
+error[2-0006]: expected type item here
+    ┌─ body_path_generic_args.fe:266:14
+    │
+266 │     let _: G<Tr>::Nope = 1
+    │              ^^ expected type here, but found trait `Tr`
+
+error[2-0010]: no method named `nope` found for struct `S`
+    ┌─ body_path_generic_args.fe:258:8
+    │
+258 │     S::nope<Missing>()
+    │        ^^^^ method not found in `S`
+
+error[2-0011]: incorrect number of generic arguments for `G`; expected 1, given 2
+    ┌─ body_path_generic_args.fe:259:5
+    │
+259 │     G<u8, Missing>::mk()
+    │     ^ expected 1 arguments, but 2 were given
+
+error[2-0011]: incorrect number of generic arguments for `G`; expected 1, given 2
+    ┌─ body_path_generic_args.fe:260:5
+    │
+260 │     G<W, Missing>::C
+    │     ^ expected 1 arguments, but 2 were given
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:212:6
+    │
+212 │     G<W>::mk()
+    │      ^^^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:213:6
+    │
+213 │     G<W>::C
+    │      ^^^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:216:6
+    │
+216 │     <G<W> as Tr>::g()
+    │      ^^^^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:217:14
+    │
+217 │     let _ = E<W>::A
+    │              ^^^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:218:14
+    │
+218 │     let _ = W<W> { x: 0 }
+    │              ^^^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:219:10
+    │
+219 │     take<W>()
+    │          ^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:222:10
+    │
+222 │     s.me<W>()
+    │          ^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:232:10
+    │
+232 │     take<(mut u256,)>()
+    │          ^^^^^^^^^^^ expected `*` kind, but `(mut u256)` has `shape` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:233:6
+    │
+233 │     G<(mut u256,)>::mk()
+    │      ^^^^^^^^^^^^^ expected `*` kind, but `(mut u256)` has `shape` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:263:45
+    │
+263 │ fn type_positions(_ a: G<Missing>::T, _ b: G<W>::T, _ c: G<Tr>::Nope) {
+    │                                             ^^^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+    ┌─ body_path_generic_args.fe:265:13
+    │
+265 │     let _: G<W>::T = 1
+    │             ^^^ expected `*` kind, but `W` has `(* -> *)` kind
+
+error[3-0011]: given type doesn't match the expected const type
+    ┌─ body_path_generic_args.fe:215:7
+    │
+215 │     G<[u8; true]>::mk()
+    │       ^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[3-0012]: expected const type
+    ┌─ body_path_generic_args.fe:220:16
+    │
+220 │     take_const<u8>()
+    │                ^^ expected const type of `u256` here
+
+error[3-0013]: expected a normal type
+    ┌─ body_path_generic_args.fe:214:6
+    │
+214 │     G<{ 1 }>::mk()
+    │      ^^^^^^^ expected a normal type here, but `1` is given
+
+error[3-0083]: a mode argument names an associated shape's mode
+    ┌─ body_path_generic_args.fe:242:11
+    │
+242 │     Dd<Out<ref> = u8>::run(d)
+    │           ^^^^^ only an associated shape takes `ref` or `mut`, as in `D::Step<ref>`
+
+error[3-0083]: a mode argument names an associated shape's mode
+    ┌─ body_path_generic_args.fe:245:8
+    │
+245 │     Pa<ref>::h()
+    │        ^^^ only an associated shape takes `ref` or `mut`, as in `D::Step<ref>`
+
+error[3-0084]: an associated shape needs a mode here
+    ┌─ body_path_generic_args.fe:238:8
+    │
+238 │     Dd<Step = ref u256>::run(d)
+    │        ^^^^ write `<ref>` or `<mut>` after it, as in `D::Step<ref>`; only a `mut?` item's own signature names one without
+
+error[3-0085]: `mut?` in a shape argument
+    ┌─ body_path_generic_args.fe:229:17
+    │
+229 │     take_shape<(mut? u256,)>()
+    │                 ^^^^^^^^^ a shape's modes are concrete: write `ref` or `mut`
+
+error[3-0085]: `mut?` in a shape argument
+    ┌─ body_path_generic_args.fe:240:20
+    │
+240 │     Dd<Step<ref> = mut? u256>::run(d)
+    │                    ^^^^^^^^^ a shape's modes are concrete: write `ref` or `mut`
+
+error[3-0086]: `Out` is bound more than once
+    ┌─ body_path_generic_args.fe:243:18
+    │
+243 │     Dd<Out = u8, Out = u16>::run(d)
+    │        ---       ^^^ `Out` is bound again here
+    │        │
+    │        `Out` is first bound here
+
+error[6-0039]: `Step` grants `mut` where it is named at `ref`
+    ┌─ body_path_generic_args.fe:239:20
+    │
+239 │     Dd<Step<ref> = mut u256>::run(d)
+    │                    ^^^^^^^^ a shape's accesses are at most its mode: bind `Step<mut>` for a `mut` access
+
+error[8-0012]: undefined variable
+    ┌─ body_path_generic_args.fe:250:12
+    │
+250 │     G<[u8; missing()]>::mk()
+    │            ^^^^^^^ undefined variable `missing`

@@ -1,0 +1,157 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/ambiguous_value_path.fe
+---
+error[2-0004]: `dup` is ambiguous
+   ┌─ ambiguous_value_path.fe:73:5
+   │
+ 2 │     pub fn dup<T>() -> u256 {
+   │            --- candidate 1
+   ·
+22 │     pub fn dup<T>() -> u256 {
+   │            --- candidate 2
+   ·
+73 │     dup<u8>()
+   │     ^^^ `dup` is ambiguous
+
+error[2-0004]: `dup` is ambiguous
+   ┌─ ambiguous_value_path.fe:74:5
+   │
+ 2 │     pub fn dup<T>() -> u256 {
+   │            --- candidate 1
+   ·
+22 │     pub fn dup<T>() -> u256 {
+   │            --- candidate 2
+   ·
+74 │     dup<Missing>()
+   │     ^^^ `dup` is ambiguous
+
+error[2-0004]: `dup` is ambiguous
+   ┌─ ambiguous_value_path.fe:75:8
+   │
+ 2 │     pub fn dup<T>() -> u256 {
+   │            --- candidate 1
+   ·
+22 │     pub fn dup<T>() -> u256 {
+   │            --- candidate 2
+   ·
+75 │     m::dup<u8>()
+   │        ^^^ `dup` is ambiguous
+
+error[2-0004]: `dup` is ambiguous
+   ┌─ ambiguous_value_path.fe:76:13
+   │
+ 2 │     pub fn dup<T>() -> u256 {
+   │            --- candidate 1
+   ·
+22 │     pub fn dup<T>() -> u256 {
+   │            --- candidate 2
+   ·
+76 │     let _ = dup
+   │             ^^^ `dup` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_path.fe:77:13
+   │
+18 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+34 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+77 │     let _ = N
+   │             ^ `N` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_path.fe:81:16
+   │
+18 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+34 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+81 │     take_const<N>()
+   │                ^ `N` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_path.fe:82:12
+   │
+18 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+34 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+82 │     take<K<N>>()
+   │            ^ `N` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_path.fe:83:8
+   │
+18 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+34 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+83 │     Pa<N>::h()
+   │        ^ `N` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_path.fe:84:14
+   │
+18 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+34 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+84 │     let _: K<N> = K<1> { x: 0 }
+   │              ^ `N` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_path.fe:87:20
+   │
+18 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+34 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+87 │ fn in_param(_ x: K<N>) {}
+   │                    ^ `N` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+   ┌─ ambiguous_value_path.fe:89:20
+   │
+18 │     pub const N: u256 = 1
+   │               - candidate 1
+   ·
+34 │     pub const N: u256 = 2
+   │               - candidate 2
+   ·
+89 │ fn in_bound<T: Cap<N>>() {}
+   │                    ^ `N` is ambiguous
+
+error[2-0004]: `conflict` is ambiguous
+    ┌─ ambiguous_value_path.fe:100:5
+    │
+ 91 │ fn conflict<T>() -> u256 {
+    │    -------- candidate 1
+    ·
+ 95 │ fn conflict<T>() -> u256 {
+    │    -------- candidate 2
+    ·
+100 │     conflict<u8>()
+    │     ^^^^^^^^ `conflict` is ambiguous
+
+error[3-0100]: conflicting definitions of `conflict`
+   ┌─ ambiguous_value_path.fe:91:4
+   │
+91 │ fn conflict<T>() -> u256 {
+   │    ^^^^^^^^ `conflict` is defined here
+   ·
+95 │ fn conflict<T>() -> u256 {
+   │    -------- `conflict` is redefined here
