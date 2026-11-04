@@ -1,0 +1,26 @@
+pub struct Grow<T> {
+    value: T,
+    next: *Grow<[T; 1]>,
+}
+
+pub struct Ping<T> {
+    pong: *Pong<(T, u8)>,
+}
+
+pub struct Pong<U> {
+    ping: *Ping<U>,
+}
+
+// Using a pointer to a growing type as a value reports only the type.
+fn copies(_ p: *Grow<u256>) -> *Grow<u256> {
+    let q = p
+    q
+}
+
+fn allocates() {
+    let _ = core::ptr::alloc<Grow<u256>>()
+}
+
+fn pings(_ p: *Ping<u8>) -> *Ping<u8> {
+    p
+}

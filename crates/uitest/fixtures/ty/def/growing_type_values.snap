@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/growing_type_values.fe
+---
+error[3-0057]: recursive type grows without bound
+  ┌─ growing_type_values.fe:1:12
+  │
+1 │ pub struct Grow<T> {
+  │            ^^^^ recursive type definition here
+2 │     value: T,
+3 │     next: *Grow<[T; 1]>,
+  │           ------------- recursion occurs here
+  │
+  = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types
+
+error[3-0057]: recursive type grows without bound
+   ┌─ growing_type_values.fe:6:12
+   │
+ 6 │ pub struct Ping<T> {
+   │            ^^^^ recursive type definition here
+ 7 │     pong: *Pong<(T, u8)>,
+   │           -------------- recursion occurs here
+   ·
+11 │     ping: *Ping<U>,
+   │           -------- recursion occurs here
+   │
+   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types

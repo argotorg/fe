@@ -1,0 +1,46 @@
+// A default can't read what only a bound on a later parameter provides.
+trait Bar<const X: usize> {
+    const C: usize
+}
+
+struct InConstDefault<T, const N: usize = { T::C }, const L: usize = 5>
+where
+    T: Bar<L>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+struct InTypeDefault<T, X = [u8; { T::C + 1 }], const L: usize = 5>
+where
+    T: Bar<L>,
+{
+    x: X,
+    t: T,
+}
+
+struct InNestedBody<T, const N: usize = {
+    let _a: [u8; { T::C + 1 }] = [0; 1]
+    1
+}, const L: usize = 5>
+where
+    T: Bar<L>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+trait Indexed<const I: usize> {}
+
+// The computed argument's value depends on `L`, through `T::C`.
+struct InComputedBound<T, const N: usize = { indexed<T, { T::C }>() }, const L: usize = 5>
+where
+    T: Bar<L> + Indexed<{ T::C }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+const fn indexed<T: Indexed<M>, const M: usize>() -> usize {
+    1
+}

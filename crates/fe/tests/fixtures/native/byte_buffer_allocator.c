@@ -17,7 +17,7 @@ typedef union {
 } Header;
 
 void *malloc(size_t size) {
-    if (size == 4096) {
+    if (size == 3000) {
         failures++;
         return NULL;
     }
@@ -27,7 +27,7 @@ void *malloc(size_t size) {
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (header == MAP_FAILED) return NULL;
     header->info.extent = extent;
-    header->info.watched = size == 1024 || size == 2048;
+    header->info.watched = size == 513 || size == 1500;
     allocations += header->info.watched;
     // Fresh mmap bytes are zero; poison them so the test checks Fe's zeroing.
     memset(header + 1, 0xa5, size);

@@ -281,7 +281,7 @@ pub(crate) fn lower_opt_const_body<'db>(
             Partial::Present(body),
             None,
             None,
-            ConstCaptureEnv::identity_for_body(db, body, Some(lowering_cx)),
+            ConstCaptureEnv::identity_for_body(db, body),
             UnevaluatedConstPolicy::DeferValidation,
         );
     }

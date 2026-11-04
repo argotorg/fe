@@ -1,0 +1,523 @@
+const fn double(_ x: usize) -> usize {
+    x * 2
+}
+
+trait Sized<const N: usize, const L: usize = { double(N) }> {
+    fn len(self) -> usize {
+        L
+    }
+}
+
+trait Next<const N: usize, const L: usize = { N + 1 }> {
+    fn next(self) -> usize {
+        L
+    }
+}
+
+trait Same<const N: usize, const L: usize = { N }> {
+    fn same(self) -> usize {
+        L + N
+    }
+}
+
+struct S {}
+
+trait Tag<const X: usize> {}
+
+impl Tag<6> for S {}
+
+struct Picker<T, const N: usize, const L: usize = { double(N) }>
+where
+    T: Tag<L>,
+{
+    t: T,
+}
+
+impl<T: Tag<6>> Picker<T, 3> {
+    fn get(self) -> usize {
+        6
+    }
+}
+impl Sized<3> for S {}
+impl Next<4> for S {}
+impl Same<5> for S {}
+
+fn len_of<T: Sized<3>>(_ t: T) -> usize {
+    t.len()
+}
+
+fn next_of<T: Next<4>>(_ t: T) -> usize {
+    t.next()
+}
+
+fn same_of<T: Same<5>>(_ t: T) -> usize {
+    t.same()
+}
+
+// A default can use what a bound naming the defaulted parameter implies of
+// the parameters before it, such as a supertrait.
+trait Width {
+    type Item
+    const W: usize
+}
+
+impl Width for S {
+    type Item = u8
+    const W: usize = 4
+}
+
+const fn width<T: Width>() -> usize {
+    T::W
+}
+
+trait Buf<const N: usize = { width<Self>() }>: Width {
+    fn buf_len(self) -> usize {
+        N
+    }
+}
+
+impl Buf for S {}
+
+fn buf_len_of<T: Buf<4>>(_ t: T) -> usize {
+    t.buf_len()
+}
+
+trait Has<const N: usize, const L: usize = { width<Self>() + N }>: Width {
+    fn has_len(self) -> usize {
+        L
+    }
+}
+
+impl Has<1> for S {}
+
+fn has_len_of<T: Has<1>>(_ t: T) -> usize {
+    t.has_len()
+}
+
+trait Sup<const M: usize> {
+    const V: usize
+}
+
+impl Sup<2> for S {
+    const V: usize = 10
+}
+
+const fn sup_value<T: Sup<M>, const M: usize>() -> usize {
+    T::V + M
+}
+
+trait Mid<const N: usize, const L: usize = { sup_value<Self, N>() }>: Sup<N> {
+    fn mid_len(self) -> usize {
+        L
+    }
+}
+
+impl Mid<2> for S {}
+
+fn mid_len_of<T: Mid<2, 12>>(_ t: T) -> usize {
+    t.mid_len()
+}
+
+trait WideTag<const X: usize>: Width {}
+
+impl WideTag<4> for S {}
+
+struct WidePicker<T, const L: usize = { width<T>() }>
+where
+    T: WideTag<L>,
+{
+    t: T,
+}
+
+impl<T: WideTag<4>> WidePicker<T, 4> {
+    fn get(self) -> usize {
+        4
+    }
+}
+
+// A bound keeps its trait where only an associated type binding names the
+// defaulted parameter or a later one.
+struct LaterBinding<T, const N: usize = { width<T>() }, U = u8>
+where
+    T: Width<Item = U>,
+{
+    t: T,
+}
+
+impl<T: Width<Item = u8>> LaterBinding<T, 4, u8> {
+    fn get(self) -> usize {
+        4
+    }
+}
+
+struct OwnBinding<T, const N: usize = { width<T>() }>
+where
+    T: Width<Item = [u8; N]>,
+{
+    t: T,
+}
+
+impl<T: Width<Item = [u8; 4]>> OwnBinding<T, 4> {
+    fn get(self) -> usize {
+        4
+    }
+}
+
+struct W4 {}
+
+impl Width for W4 {
+    type Item = [u8; 4]
+    const W: usize = 4
+}
+
+trait ArrayBuf<const N: usize = { width<Self>() }>: Width<Item = [u8; N]> {
+    fn array_len(self) -> usize {
+        N
+    }
+}
+
+impl ArrayBuf<4> for W4 {}
+
+fn array_len_of<T: ArrayBuf<4>>(_ t: T) -> usize {
+    t.array_len()
+}
+
+trait SubWidth<X>: Width<Item = X> {}
+
+impl SubWidth<u8> for S {}
+
+struct ImpliedBinding<T, const N: usize = { width<T>() }, U = u8>
+where
+    T: SubWidth<U>,
+{
+    t: T,
+}
+
+impl<T: SubWidth<u8>> ImpliedBinding<T, 4, u8> {
+    fn get(self) -> usize {
+        4
+    }
+}
+
+trait Two {
+    type A
+    type B
+    const W: usize
+}
+
+impl Two for S {
+    type A = u8
+    type B = u16
+    const W: usize = 4
+}
+
+const fn two_width<T: Two<A = X>, X>() -> usize {
+    T::W
+}
+
+struct PartialBinding<X, T, const N: usize = { two_width<T, X>() }, U = u16>
+where
+    T: Two<A = X, B = U>,
+{
+    x: X,
+    t: T,
+}
+
+impl<T: Two<A = u8, B = u16>> PartialBinding<u8, T, 4, u16> {
+    fn get(self) -> usize {
+        4
+    }
+}
+
+// A computed argument depends only on the parameters it names, although it
+// keeps its owner's whole capture as context.
+trait Indexed<const I: usize> {
+    const V: usize
+}
+
+impl Indexed<3> for S {
+    const V: usize = 7
+}
+
+const fn indexed_value<T: Indexed<M>, const M: usize>() -> usize {
+    T::V
+}
+
+struct ComputedBound<T, const K: usize, const N: usize = { indexed_value<T, { K + 1 }>() }>
+where
+    T: Indexed<{ K + 1 }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+const fn add_one<const M: usize>() -> usize {
+    M + 1
+}
+
+struct InvocationBound<T, const K: usize, const N: usize = { indexed_value<T, { add_one<K>() }>() }>
+where
+    T: Indexed<{ add_one<K>() }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+// A trait's own computed supertrait argument.
+trait ComputedSuper<const K: usize, const N: usize = { indexed_value<Self, { K + 1 }>() }>: Indexed<{ K + 1 }> {
+    fn computed_super_len(self) -> usize {
+        N
+    }
+}
+
+impl ComputedSuper<2> for S {}
+
+// A computed bound naming the defaulted parameter stays out of its reach.
+trait Plain {
+    const P: usize
+}
+
+impl Plain for S {
+    const P: usize = 2
+}
+
+impl Indexed<4> for u8 {
+    const V: usize = 1
+}
+
+struct ForwardBound<T: Indexed<{ N + 2 }> + Plain, const N: usize = { T::P }> {
+    x: [u8; N],
+    t: T,
+}
+
+impl Plain for u8 {
+    const P: usize = 2
+}
+
+// A method's default under a where clause naming a later parameter.
+struct W<T> {
+    t: T,
+}
+
+impl<T> W<T> {
+    fn method_len<const N: usize = { width<T>() }, const L: usize = 4>(self) -> usize
+    where
+        T: WideTag<L>,
+    {
+        N
+    }
+}
+
+// An equality on a later parameter doesn't rewrite a bound on a projection.
+trait Source {
+    type Item
+}
+
+impl Source for S {
+    type Item = W4
+}
+
+struct ProjectionBound<T, const N: usize = { width<T::Item>() }, U = W4>
+where
+    T: Source<Item = U>,
+    T::Item: Width,
+{
+    x: [u8; N],
+    t: T,
+}
+
+trait Takes<X> {
+    const V: usize
+}
+
+impl Takes<W4> for S {
+    const V: usize = 3
+}
+
+const fn takes_value<T: Takes<X>, X>() -> usize {
+    T::V
+}
+
+struct ProjectionArg<T, const N: usize = { takes_value<T, T::Item>() }, U = W4>
+where
+    T: Source<Item = U>,
+    T: Takes<T::Item>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+// A bound on a later parameter doesn't make a computed argument depend on that
+// parameter, although the const use is solved under it.
+trait Len {
+    const LEN: usize
+}
+
+impl Len for S {
+    const LEN: usize = 3
+}
+
+trait Tag2<const X: usize> {}
+
+impl Tag2<5> for S {}
+
+const fn read_len<T: Len>() -> usize {
+    T::LEN
+}
+
+struct TraitConstArg<T, const N: usize = { indexed_value<T, { T::LEN }>() }, const L: usize = 5>
+where
+    T: Len + Tag2<L> + Indexed<{ T::LEN }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+struct InvocationArg<T, const N: usize = { indexed_value<T, { read_len<T>() }>() }, const L: usize = 5>
+where
+    T: Len + Tag2<L> + Indexed<{ read_len<T>() }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+// The proof of `T: Len` runs through the later bound.
+trait SubLen<const X: usize>: Len {}
+
+impl SubLen<5> for S {}
+
+struct ProofThroughLater<T, const N: usize = { indexed_value<T, { read_len<T>() }>() }, const L: usize = 5>
+where
+    T: SubLen<L> + Indexed<{ read_len<T>() }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+trait TraitLevel<const N: usize = { indexed_value<Self, { Self::LEN }>() }, const L: usize = 5>: Len + Tag2<L> + Indexed<{ Self::LEN }> {
+    fn trait_level_len(self) -> usize {
+        N
+    }
+}
+
+impl TraitLevel for S {}
+
+// The bound `T::LEN` is found through has a binding on a later parameter.
+trait LenWithItem {
+    type Item
+    const LEN_WITH_ITEM: usize
+}
+
+impl LenWithItem for S {
+    type Item = u8
+    const LEN_WITH_ITEM: usize = 3
+}
+
+struct BindingOnUsedBound<T, const N: usize = { indexed_value<T, { T::LEN_WITH_ITEM }>() }, U = u8>
+where
+    T: LenWithItem<Item = U> + Indexed<{ T::LEN_WITH_ITEM }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+struct BlockArg<T, const K: usize, const N: usize = {
+    indexed_value<T, {
+        let a = K
+        a + 1
+    }>()
+}>
+where
+    T: Indexed<{
+        let a = K
+        a + 1
+    }>,
+{
+    x: [u8; N],
+    t: T,
+}
+
+#[test]
+fn test_trait_bounds_with_defaulted_const_params() {
+    assert(len_of(S {}) == 6)
+    assert(next_of(S {}) == 5)
+    assert(same_of(S {}) == 10)
+}
+
+#[test]
+fn test_struct_bound_on_defaulted_const_param() {
+    let p = Picker<S, 3> { t: S {} }
+    assert(p.get() == 6)
+}
+
+#[test]
+fn test_defaults_using_implied_bounds() {
+    assert(buf_len_of(S {}) == 4)
+    assert(has_len_of(S {}) == 5)
+    assert(mid_len_of(S {}) == 12)
+    let p = WidePicker<S> { t: S {} }
+    assert(p.get() == 4)
+}
+
+#[test]
+fn test_defaults_under_associated_type_bindings() {
+    let later = LaterBinding<S> { t: S {} }
+    assert(later.get() == 4)
+    let explicit = LaterBinding<S, 4, u8> { t: S {} }
+    assert(explicit.get() == 4)
+    let owned = OwnBinding<W4> { t: W4 {} }
+    assert(owned.get() == 4)
+    assert(array_len_of(W4 {}) == 4)
+    let implied = ImpliedBinding<S> { t: S {} }
+    assert(implied.get() == 4)
+    let partial = PartialBinding<u8, S> { x: 1, t: S {} }
+    assert(partial.get() == 4)
+}
+
+#[test]
+fn test_computed_bound_on_earlier_params() {
+    let explicit = ComputedBound<S, 2, 7> { x: [0; 7], t: S {} }
+    assert(explicit.x[6] == 0)
+    let defaulted = ComputedBound<S, 2> { x: [0; 7], t: S {} }
+    assert(defaulted.x[6] == 0)
+    let invocation = InvocationBound<S, 2> { x: [0; 7], t: S {} }
+    assert(invocation.x[6] == 0)
+    assert(S {}.computed_super_len() == 7)
+    let forward = ForwardBound<u8> { x: [0; 2], t: 0 }
+    assert(forward.x[1] == 0)
+}
+
+#[test]
+fn test_method_default_under_later_where_clause() {
+    let w = W<S> { t: S {} }
+    assert(w.method_len() == 4)
+}
+
+#[test]
+fn test_later_equality_leaves_projections() {
+    let explicit = ProjectionBound<S, 4, W4> { x: [0; 4], t: S {} }
+    assert(explicit.x[3] == 0)
+    let defaulted = ProjectionBound<S> { x: [0; 4], t: S {} }
+    assert(defaulted.x[3] == 0)
+    let arg = ProjectionArg<S> { x: [0; 3], t: S {} }
+    assert(arg.x[2] == 0)
+}
+
+#[test]
+fn test_later_bound_is_context_of_a_computed_arg() {
+    let explicit = TraitConstArg<S, 7, 5> { x: [0; 7], t: S {} }
+    assert(explicit.x[6] == 0)
+    let defaulted = TraitConstArg<S> { x: [0; 7], t: S {} }
+    assert(defaulted.x[6] == 0)
+    let invocation = InvocationArg<S> { x: [0; 7], t: S {} }
+    assert(invocation.x[6] == 0)
+    let proof = ProofThroughLater<S> { x: [0; 7], t: S {} }
+    assert(proof.x[6] == 0)
+    assert(S {}.trait_level_len() == 7)
+    let block = BlockArg<S, 2> { x: [0; 7], t: S {} }
+    assert(block.x[6] == 0)
+    let binding_explicit = BindingOnUsedBound<S, 7, u8> { x: [0; 7], t: S {} }
+    assert(binding_explicit.x[6] == 0)
+    let binding_defaulted = BindingOnUsedBound<S> { x: [0; 7], t: S {} }
+    assert(binding_defaulted.x[6] == 0)
+}
