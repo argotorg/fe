@@ -372,3 +372,95 @@ contract DuplicateFields {
         "unexpected diagnostics:\n{rendered}"
     );
 }
+
+#[test]
+fn report_packs_solidity_value_types_and_newtypes() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use std::abi::sol::Uint24
+use std::evm::Address
+
+struct Stamp { t: u64 }
+struct Big { v: u256 }
+struct Rec { owner: Address, flag: bool, stamp: Stamp, wide: Uint24, big: Big }
+
+contract C {
+    mut rec: Rec,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let report = contract.layout_report(&db).unwrap();
+    // A newtype's field lies in the newtype's lane: `Address` takes 20
+    // bytes and `Uint24` its `SolPacked` width, 3. A newtype of a word
+    // takes a slot of its own.
+    for (path, slot, lane) in [
+        ("rec.owner.inner", "0", Some((0, 20))),
+        ("rec.flag", "0", Some((20, 1))),
+        ("rec.stamp.t", "0", Some((21, 8))),
+        ("rec.wide.val", "0", Some((29, 3))),
+        ("rec.big.v", "1", None),
+    ] {
+        let entry = entry(&db, &report.entries, path);
+        assert_eq!(scalar_value(&db, entry), slot, "{path}");
+        assert_eq!(
+            entry.lane.map(|lane| (lane.byte_offset, lane.byte_width)),
+            lane,
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn report_packs_consecutive_narrow_contract_fields() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use std::evm::{Address, TSlot}
+
+struct Pair { left: u256, right: u8 }
+
+contract C {
+    mut owner: Address,
+    mut paused: bool,
+    mut big: u128,
+    mut stamp: u64,
+    mut pair: Pair,
+    mut lone: u8,
+    #[slot(9)]
+    mut placed: u8,
+    mut cell: TSlot<u256>,
+    limit: u8,
+    mut total: u256,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let report = contract.layout_report(&db).unwrap();
+    // `big` does not fit beside `owner` and `paused`, a struct ends a run,
+    // and an explicit slot, a transient cell and an immutable leave the
+    // counted storage fields alone.
+    for (path, slot, lane) in [
+        ("owner.inner", "0", Some((0, 20, true))),
+        ("paused", "0", Some((20, 1, true))),
+        ("big", "1", Some((0, 16, true))),
+        ("stamp", "1", Some((16, 8, true))),
+        ("pair.left", "2", None),
+        ("lone", "4", Some((0, 1, false))),
+        ("placed", "9", None),
+        ("total", "5", None),
+    ] {
+        let entry = entry(&db, &report.entries, path);
+        assert_eq!(scalar_value(&db, entry), slot, "{path}");
+        assert_eq!(
+            entry
+                .lane
+                .map(|lane| (lane.byte_offset, lane.byte_width, lane.shared)),
+            lane,
+            "{path}"
+        );
+    }
+}

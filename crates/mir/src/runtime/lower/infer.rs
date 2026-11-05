@@ -1401,7 +1401,9 @@ fn merge_layouts<'db>(
             ))
         }
         (Layout::Struct(current), Layout::Struct(desired))
-            if current.fields.len() == desired.fields.len() && current.pinned == desired.pinned =>
+            if current.fields.len() == desired.fields.len()
+                && current.pinned == desired.pinned
+                && current.lane_bytes == desired.lane_bytes =>
         {
             Some(LayoutId::new(
                 db,
@@ -1414,6 +1416,7 @@ fn merge_layouts<'db>(
                         .collect::<Option<Vec<_>>>()?
                         .into(),
                     pinned: current.pinned,
+                    lane_bytes: current.lane_bytes,
                 }),
             ))
         }
@@ -1567,6 +1570,7 @@ mod tests {
             LayoutKey::Struct(StructLayout {
                 fields: vec![word.clone(), word].into(),
                 pinned: false,
+                lane_bytes: None,
             }),
         )
     }

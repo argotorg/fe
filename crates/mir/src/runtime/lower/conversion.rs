@@ -683,6 +683,7 @@ mod tests {
             LayoutKey::Struct(StructLayout {
                 fields: vec![word_class()].into(),
                 pinned: false,
+                lane_bytes: None,
             }),
         )
     }

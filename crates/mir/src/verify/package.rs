@@ -514,7 +514,7 @@ pub contract C {
                     else {
                         return None;
                     };
-                    let plan = plan.clone();
+                    let plan = (**plan).clone();
                     Some((owner.clone(), plan, function.instance(db).body(db).clone()))
                 })
                 .collect();
@@ -650,10 +650,10 @@ pub contract C {
                     &db,
                     original.owner,
                     RuntimeSyntheticSpec::ContractRecvAbi {
-                        plan: ContractRecvAbiPlan {
+                        plan: Box::new(ContractRecvAbiPlan {
                             payable: !plan.payable,
                             ..plan.clone()
-                        },
+                        }),
                     },
                 )
                 .unwrap(),

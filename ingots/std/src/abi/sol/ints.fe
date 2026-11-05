@@ -1,7 +1,7 @@
 use core::abi::{Abi, AbiDecoder, AbiFrame, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
 use core::num::IntDowncast
 use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
-use ingot::evm::{EncodePacked, Packed, packed::write_word_prefix, SolPacked, StorageKey, TopicValue, ops::{revert_empty, signextend}}
+use ingot::evm::{EncodePacked, Packed, packed::write_word_prefix, SolPacked, sol_slot::SolValueType, StorageKey, TopicValue, ops::{revert_empty, signextend}}
 
 use super::types::{SolCompat, StaticAbiElement, StaticAbiElementSeal}
 
@@ -1670,3 +1670,5 @@ impl<T: SolWordRepr + SolWrappingInt + SolInt> SolPacked for T {
         T::from_wrapping_word(bits)
     }
 }
+
+impl<T: SolInt> SolValueType for T {}

@@ -24,7 +24,9 @@ use hir::analysis::{
     },
 };
 use hir::hir_def::{ArithBinOp, FuncParamMode, ItemKind};
-use hir::semantic::{ProviderBinding, ProviderSource, constraints_for};
+use hir::semantic::{
+    ContractFieldId, ProviderBinding, ProviderSource, constraints_for, contract_field_lane,
+};
 use rustc_hash::FxHashMap;
 use salsa::SalsaValue;
 
@@ -32,12 +34,12 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::place::{
-        place_reference_class, project_field_class, project_index_class, storage_field_lane,
+        field_path_lane, place_reference_class, project_field_class, project_index_class, ref_lane,
     },
     runtime::{
-        BorrowAccess, Layout, LayoutId, RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass,
-        RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan, SaturatingBinOp, ScalarClass,
-        ScalarRepr, ScalarRole,
+        BorrowAccess, Layout, LayoutId, RefKind, RefView, RuntimeBoundarySpec, RuntimeCarrier,
+        RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan, SaturatingBinOp,
+        ScalarClass, ScalarRepr, ScalarRole, StorageLaneView,
     },
 };
 
@@ -1035,7 +1037,8 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
             Some(ty) => Some(stored_class_for_ty_in_env(self.db, self.type_env(), ty)),
             None => normalized_place_root_class_in_context(self, place.base, carriers),
         };
-        lane |= self.place_is_lane(root, &path, root_space)?;
+        let root_lane = ref_lane(&root_class);
+        lane |= self.place_is_lane(root, &path, root_space, root_lane)?;
         Some(PlaceReference {
             root_class,
             root_space,
@@ -1045,24 +1048,40 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     }
 
     /// Whether the place reached from a root of class `root` by `path` is a
-    /// lane: a field packed into a storage word of `root_space`.
+    /// lane: a field packed into a storage word of `root_space`, or a place
+    /// in `root_lane`, the lane a packed contract field's root views.
     fn place_is_lane(
         self,
         root: impl FnOnce() -> Option<RuntimeClass<'db>>,
         path: &NDataPath,
         root_space: AddressSpace,
+        root_lane: Option<StorageLaneView>,
     ) -> Option<bool> {
         let projections: Vec<_> = path.iter().cloned().collect();
-        let Some((NDataProjection::Field(field), parent_path)) = projections.split_last() else {
-            return Some(false);
-        };
-        let mut parent = self.walk_data_path_class(root()?, &NDataPath::new(parent_path));
-        if !parent_path.is_empty()
-            && let Some(target) = parent.deref_target(self.db)
-        {
-            parent = target;
+        let start = projections
+            .iter()
+            .rposition(|projection| !matches!(projection, NDataProjection::Field(_)))
+            .map_or(0, |index| index + 1);
+        let root_lane = root_lane.filter(|_| start == 0);
+        if start == projections.len() {
+            return Some(root_lane.is_some());
         }
-        Some(storage_field_lane(self.db, &parent, *field, root_space).is_some())
+        // The fields the path ends with, each with the class it projects from.
+        let mut parent = self.walk_data_path_class(root()?, &NDataPath::new(&projections[..start]));
+        let mut fields = Vec::new();
+        for (index, projection) in projections.iter().enumerate().skip(start) {
+            let NDataProjection::Field(field) = projection else {
+                unreachable!("the path ends with fields")
+            };
+            if index > 0
+                && let Some(target) = parent.deref_target(self.db)
+            {
+                parent = target;
+            }
+            let class = project_field_class(self.db, parent.clone(), *field);
+            fields.push((std::mem::replace(&mut parent, class), *field));
+        }
+        Some(field_path_lane(self.db, root_lane, &fields, root_space).is_some())
     }
 
     pub(crate) fn actual_aggregate_class_for_source(
@@ -1649,13 +1668,56 @@ pub(crate) fn runtime_class_for_provider_binding<'db>(
             provider.provider_ty,
             AddressSpace::Memory,
         ),
-        ProviderKind::Place => Some(provider_class_for_target_in_env(
+        ProviderKind::Place => Some(with_provider_lane(
             db,
-            RuntimeTypeEnv::new(scope, assumptions),
-            provider.semantics.target_ty,
-            provider.semantics.address_space?,
+            provider,
+            provider_class_for_target_in_env(
+                db,
+                RuntimeTypeEnv::new(scope, assumptions),
+                provider.semantics.target_ty,
+                provider.semantics.address_space?,
+            ),
         )),
     }
+}
+
+/// `class`, a reference `provider` passes, viewing the lane of its slot when
+/// `provider` is a contract field packed into the slot with other fields.
+fn with_provider_lane<'db>(
+    db: &'db dyn MirDb,
+    provider: &ProviderBinding<'db>,
+    class: RuntimeClass<'db>,
+) -> RuntimeClass<'db> {
+    match (&provider.source, class) {
+        (
+            ProviderSource::ContractField { field },
+            RuntimeClass::Ref {
+                pointee,
+                kind,
+                view: RefView::Whole,
+            },
+        ) => RuntimeClass::Ref {
+            pointee,
+            kind,
+            view: contract_field_view(db, *field),
+        },
+        (_, class) => class,
+    }
+}
+
+/// How a reference to `field` views its slot: as the lane it packs into
+/// with other fields, or whole.
+pub(crate) fn contract_field_view<'db>(
+    db: &'db dyn MirDb,
+    field: ContractFieldId<'db>,
+) -> RefView<'db> {
+    contract_field_lane(db, field).map_or(RefView::Whole, |lane| {
+        RefView::Lane(StorageLaneView {
+            byte_offset: lane.byte_offset,
+            byte_width: lane.byte_width,
+            shared: lane.shared,
+        })
+    })
 }
 
 pub(crate) fn runtime_class_for_effect_binding_provider_in_env<'db>(
@@ -1700,11 +1762,10 @@ fn runtime_class_for_provider_value_ty_in_env<'db>(
             .unwrap_or(AddressSpace::Memory),
         ProviderKind::Place => provider.semantics.address_space?,
     };
-    Some(provider_class_for_target_in_env(
+    Some(with_provider_lane(
         db,
-        env,
-        Some(value_ty),
-        space,
+        provider,
+        provider_class_for_target_in_env(db, env, Some(value_ty), space),
     ))
 }
 

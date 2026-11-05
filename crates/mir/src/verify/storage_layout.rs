@@ -19,7 +19,7 @@ use crate::{
     runtime::{
         ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan, RefKind, RefView,
         RuntimeClass, RuntimeFunctionOwner, RuntimeMemoryLayout, RuntimeSyntheticSpec,
-        lower::classify::runtime_effect_binding_plan,
+        lower::classify::{contract_field_view, runtime_effect_binding_plan},
     },
     verify::VerifyError,
 };
@@ -179,6 +179,11 @@ fn verify_contract_field_binding<'db>(
     if binding.kind != expected_kind {
         return Err(VerifyError::ContractFieldKindMismatch(binding.field));
     }
+    if let RuntimeClass::Ref { view, .. } = &binding.class
+        && *view != contract_field_view(db, binding.field)
+    {
+        return Err(VerifyError::ContractFieldViewMismatch(binding.field));
+    }
     let pointee =
         binding
             .class
@@ -187,10 +192,22 @@ fn verify_contract_field_binding<'db>(
                 field: binding.field,
                 class: binding.class.clone(),
             })?;
-    let mir_span = RuntimeMemoryLayout::for_space(db, AddressSpace::Storage)
-        .class_size(&pointee)
-        .map_err(|_| VerifyError::InvalidContractFieldLayout(binding.field))?;
-    if u64::try_from(field.slot_count).ok() != Some(mir_span) {
+    let hir_span = u64::try_from(field.slot_count).ok();
+    // A code field holds its value at its memory layout, in bytes, which its
+    // words must cover; a state field's slots are its storage layout's.
+    let (mir_span, covered) = if field.address_space == AddressSpace::Code {
+        let words = RuntimeMemoryLayout::for_space(db, AddressSpace::Code)
+            .class_size(&pointee)
+            .map_err(|_| VerifyError::InvalidContractFieldLayout(binding.field))?
+            .div_ceil(32);
+        (words, hir_span.is_some_and(|span| words <= span))
+    } else {
+        let slots = RuntimeMemoryLayout::for_space(db, AddressSpace::Storage)
+            .class_size(&pointee)
+            .map_err(|_| VerifyError::InvalidContractFieldLayout(binding.field))?;
+        (slots, hir_span == Some(slots))
+    };
+    if !covered {
         return Err(VerifyError::ContractFieldSpanMismatch {
             field: binding.field,
             hir_span: field.slot_count,
@@ -225,7 +242,7 @@ fn contract_field_ref_kind<'db>(
     match &binding.class {
         RuntimeClass::Ref {
             kind,
-            view: RefView::Whole,
+            view: RefView::Whole | RefView::Lane(_),
             ..
         } => Some(kind.clone()),
         RuntimeClass::RawAddr { space, .. } => Some(RefKind::Provider {

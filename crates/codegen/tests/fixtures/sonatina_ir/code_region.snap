@@ -8,6 +8,7 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {i256};
 type @layout_1 = {i256, i256, i256};
 type @layout_2 = {i256, i256};
+type @layout_3 = {i256};
 
 func inline(always) private %alloc_bytes(v0.i256) -> i256 {
     block0:
@@ -247,7 +248,7 @@ func private %codecopy(noalias nocapture v0.objref<@layout_1>, v1.i256, v2.i256,
         br v24 block5 block6;
 }
 
-func private %create2_raw(v0.@layout_0, noalias nocapture v1.objref<@layout_2>, v2.i256) -> @layout_0 {
+func private %create2_raw(v0.@layout_0, noalias nocapture v1.objref<@layout_2>, v2.i256) -> @layout_3 {
     block0:
         jump block1;
 
@@ -256,7 +257,7 @@ func private %create2_raw(v0.@layout_0, noalias nocapture v1.objref<@layout_2>, 
         v6.i256 = call %ptr__g79ff v1;
         v7.i256 = call %len__g79ff v1;
         v9.i256 = evm_create2 v4 v6 v7 v2;
-        v12.@layout_0 = insert_value undef.@layout_0 0.i256 v9;
+        v12.@layout_3 = insert_value undef.@layout_3 0.i256 v9;
         return v12;
 }
 
@@ -307,7 +308,7 @@ func private %init() {
         jump block3;
 
     block2:
-        v15.@layout_0 = call %create2_raw v11 v2 4660.i256;
+        v15.@layout_3 = call %create2_raw v11 v2 4660.i256;
         jump block7;
 
     block3:

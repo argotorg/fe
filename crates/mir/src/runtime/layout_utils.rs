@@ -45,6 +45,10 @@ pub struct FieldPlacement {
     /// Whether the word at `offset` also holds other fields, so a write must
     /// preserve the rest of it.
     pub shared: bool,
+    /// Whether `lane` is read and written apart from the rest of its word
+    /// (`StorageFieldPlacement::partial_lane`), so no reference can point at
+    /// it.
+    pub partial: bool,
 }
 
 impl From<RuntimeMemoryLayoutError> for LowerError {
@@ -153,6 +157,7 @@ impl<'db> RuntimeMemoryLayout<'db> {
                     .offsets[field],
                 lane: None,
                 shared: false,
+                partial: false,
             }),
             RuntimeMemoryUnit::Word => {
                 let placement = self
@@ -162,22 +167,34 @@ impl<'db> RuntimeMemoryLayout<'db> {
                     offset: placement.slot,
                     lane: placement.lane,
                     shared: placement.shared,
+                    partial: placement.partial_lane().is_some(),
                 })
             }
         }
     }
 
-    /// The packed storage layout of a struct's fields, like Solidity's.
+    /// The packed storage layout of a struct's fields, like Solidity's. A
+    /// newtype whose lane is narrower than its field holds the field's value
+    /// in that lane wherever the newtype lies, even in a slot of its own: a
+    /// read masks the value and a write checks that it fits.
     fn storage_struct_layout(
         self,
         layout: &StructLayout<'db>,
         visiting: &mut FxHashSet<LayoutId<'db>>,
     ) -> Result<StorageFieldsLayout, RuntimeMemoryLayoutError> {
-        let shapes = layout
+        let mut shapes = layout
             .fields
             .iter()
             .map(|field| self.storage_field_shape(field, visiting))
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some(bytes) = layout.lane_bytes.map(u32::from)
+            && !matches!(shapes[..], [StorageFieldShape::Scalar { bytes: field, .. }] if field == bytes)
+        {
+            shapes = vec![StorageFieldShape::Scalar {
+                bytes,
+                narrowed: true,
+            }];
+        }
         Ok(storage_fields_layout(shapes)?)
     }
 
@@ -189,12 +206,25 @@ impl<'db> RuntimeMemoryLayout<'db> {
         Ok(match class {
             RuntimeClass::Scalar(scalar) => StorageFieldShape::Scalar {
                 bytes: storage_scalar_bytes(scalar),
+                narrowed: false,
             },
-            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
-                StorageFieldShape::Scalar { bytes: 32 }
-            }
-            RuntimeClass::AggregateValue { layout } => StorageFieldShape::Aggregate {
-                slots: self.layout_size_inner(*layout, visiting)?,
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => StorageFieldShape::Scalar {
+                bytes: 32,
+                narrowed: false,
+            },
+            RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
+                // A newtype packs at its lane's width; its own layout keeps
+                // its field's value to the lane (`storage_struct_layout`).
+                Layout::Struct(StructLayout {
+                    lane_bytes: Some(bytes),
+                    ..
+                }) => StorageFieldShape::Scalar {
+                    bytes: u32::from(bytes),
+                    narrowed: false,
+                },
+                _ => StorageFieldShape::Aggregate {
+                    slots: self.layout_size_inner(*layout, visiting)?,
+                },
             },
         })
     }
@@ -856,6 +886,7 @@ mod tests {
         let struct_layout = StructLayout {
             fields: vec![scalar(8), scalar(256)].into_boxed_slice(),
             pinned: false,
+            lane_bytes: None,
         };
         let array_layout = ArrayLayout {
             elem: scalar(16),
@@ -880,6 +911,7 @@ mod tests {
         let struct_layout = StructLayout {
             fields: vec![scalar(8), scalar(256), scalar(24)].into_boxed_slice(),
             pinned: false,
+            lane_bytes: None,
         };
         let pair = LayoutId::new(&db, LayoutKey::Struct(struct_layout.clone()));
         let bytes = RuntimeMemoryLayout::raw(&db);
