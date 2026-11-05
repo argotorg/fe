@@ -1,0 +1,14 @@
+use core::ptr::MemSpan
+use std::evm::{Address, Call, staticcall_decode}
+
+fn missing_call() {
+    let _ = staticcall_decode<()>(addr: Address::zero(), gas: 100000, args: MemSpan::empty())
+}
+
+fn shared_call() uses (call: Call) {
+    let _ = staticcall_decode<()>(addr: Address::zero(), gas: 100000, args: MemSpan::empty())
+}
+
+fn forwarded_call() uses (call: Call) {
+    shared_call()
+}

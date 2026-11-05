@@ -2,7 +2,7 @@ use core::intrinsic::storage_slots
 
 // Rejected: the type takes more storage slots than a layout can count.
 fn too_many() -> u256 {
-    storage_slots<[u256; 0x10000000000000000]>()
+    storage_slots<[[u256; 0x100000000]; 0x100000000]>()
 }
 
 // Accepted.

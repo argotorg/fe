@@ -1,0 +1,63 @@
+use core::ptr::MemSpan
+use std::evm::{Call, Evm, RawOps, encode_msg_calldata, revert, staticcall_decode}
+
+msg Query {
+    #[selector = 1]
+    Word { value: u256 } -> u256,
+    #[selector = 2]
+    Fail {} -> u256,
+    #[selector = 3]
+    Short {} -> u256,
+}
+
+pub contract Target {
+    recv Query {
+        Word { value } -> u256 {
+            value
+        }
+        Fail {} -> u256 {
+            revert((0xdeadbeef as u256) << 224)
+        }
+        Short {} -> u256 uses (ops: RawOps) {
+            ops.return_data(data: MemSpan::empty())
+        }
+    }
+}
+
+#[test]
+fn shared_staticcall_decodes_output() uses (evm: mut Evm) {
+    let target = evm.create2<Target>(value: Wei::zero(), args: (), salt: 0)
+    let args = encode_msg_calldata(Query::Word { value: 42 })
+    with (Call = evm) {
+        assert(
+            staticcall_decode<u256>(addr: target, gas: 100000, args: args.span()) == 42,
+        )
+    }
+}
+
+#[test(should_revert, selector = 0xdeadbeef)]
+fn staticcall_bubbles_revert_data() uses (evm: mut Evm) {
+    let target = evm.create2<Target>(value: Wei::zero(), args: (), salt: 0)
+    let args = encode_msg_calldata(Query::Fail {})
+    with (Call = evm) {
+        let _ = staticcall_decode<u256>(addr: target, gas: 100000, args: args.span())
+    }
+}
+
+#[test(should_revert)]
+fn staticcall_rejects_short_output() uses (evm: mut Evm) {
+    let target = evm.create2<Target>(value: Wei::zero(), args: (), salt: 0)
+    let args = encode_msg_calldata(Query::Short {})
+    with (Call = evm) {
+        let _ = staticcall_decode<u256>(addr: target, gas: 100000, args: args.span())
+    }
+}
+
+#[test(should_revert)]
+fn staticcall_rejects_noncanonical_output() uses (evm: mut Evm) {
+    let target = evm.create2<Target>(value: Wei::zero(), args: (), salt: 0)
+    let args = encode_msg_calldata(Query::Word { value: 2 })
+    with (Call = evm) {
+        let _ = staticcall_decode<bool>(addr: target, gas: 100000, args: args.span())
+    }
+}

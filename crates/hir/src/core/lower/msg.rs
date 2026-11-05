@@ -1,6 +1,5 @@
 use num_bigint::BigUint;
 use parser::ast::{self, AttrListOwner as _, prelude::AstNode as _};
-use salsa::Accumulator as _;
 
 use super::{
     attr::named_attr_specs,
@@ -463,7 +462,7 @@ fn lower_msg_variant_struct<'db>(
     variant: &ast::MsgVariant,
 ) -> Struct<'db> {
     let name = IdentId::lower_token_partial(builder.ctxt(), variant.name());
-    super::item::report_payable_on_unsupported_target(
+    super::item::report_unsupported_member_attrs(
         builder.ctxt(),
         variant.attr_list(),
         "msg variant",
@@ -485,7 +484,7 @@ fn lower_msg_variant_fields<'db>(
             let fields = params
                 .into_iter()
                 .map(|field| {
-                    super::item::report_payable_on_unsupported_target(
+                    super::item::report_unsupported_member_attrs(
                         ctxt,
                         field.attr_list(),
                         "field",
@@ -582,16 +581,16 @@ fn create_selector_const<'db>(
 
     let body = if let Some(parsed) = parsed {
         if let Some(error_kind) = parsed.error {
-            MsgDiagnostic {
+            ctxt.report(MsgDiagnostic {
                 kind: error_kind,
                 file,
                 primary_range: parsed.range,
                 secondary_range: None,
                 variant_name: variant_name.to_string(),
-            }
-            .accumulate(db);
+            });
             Body::lower_ast_with_variant(
                 ctxt,
+                None,
                 None,
                 TrackedItemVariant::NamelessBody,
                 BodyKind::Anonymous,
@@ -602,6 +601,7 @@ fn create_selector_const<'db>(
             Body::lower_ast_with_variant(
                 ctxt,
                 None,
+                None,
                 TrackedItemVariant::NamelessBody,
                 BodyKind::Anonymous,
             )
@@ -610,16 +610,16 @@ fn create_selector_const<'db>(
         let variant_range = variant
             .name()
             .map_or_else(|| variant.syntax().text_range(), |n| n.text_range());
-        MsgDiagnostic {
+        ctxt.report(MsgDiagnostic {
             kind: MsgDiagnosticKind::Missing,
             file,
             primary_range: variant_range,
             secondary_range: None,
             variant_name: variant_name.to_string(),
-        }
-        .accumulate(db);
+        });
         Body::lower_ast_with_variant(
             ctxt,
+            None,
             None,
             TrackedItemVariant::NamelessBody,
             BodyKind::Anonymous,
@@ -664,7 +664,7 @@ fn parse_selector_attr<'db>(
                                     let v = int_id.data(ctxt.db());
                                     (v > &u32_max).then_some(MsgDiagnosticKind::Overflow)
                                 }
-                                Some(LitKind::String(_) | LitKind::Bool(_)) => {
+                                Some(LitKind::String(_) | LitKind::Bool(_) | LitKind::Byte(_)) => {
                                     Some(MsgDiagnosticKind::InvalidType)
                                 }
                                 None => None,

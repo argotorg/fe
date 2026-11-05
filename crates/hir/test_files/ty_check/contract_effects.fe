@@ -61,8 +61,8 @@ impl Ctx for MockCtx {
 }
 
 fn test_withdraw() {
-    let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-    let owner = Address { inner: 0xfe }
+    let ctx = MockCtx { caller: Address::new(0xbeef) }
+    let owner = Address::new(0xfe)
     var balance = 100
     with (ctx, owner, balance) {
         let ok = withdraw(amount: 100)

@@ -19,7 +19,7 @@ pub fn lower_contract_fields<'db>(
 }
 
 /// Lower HIR ADT definition (`struct/enum`) to [`AdtDef`].
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn lower_adt<'db>(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> AdtDef<'db> {
     let scope = adt.scope();
 

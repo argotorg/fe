@@ -41,17 +41,17 @@ pub contract C {
 
 #[test]
 fn signed_ints_cross_abi_boundary() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
 
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI8 { k: -1 }) == 1)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI16 { k: -1 }) == 1)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI32 { k: -1 }) == 1)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI64 { k: -1 }) == 1)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI128 { k: -1 }) == 1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::InputI8 { k: -1 }) == 1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::InputI16 { k: -1 }) == 1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::InputI32 { k: -1 }) == 1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::InputI64 { k: -1 }) == 1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::InputI128 { k: -1 }) == 1)
 
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI8 { dummy: 0 }) == -1)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI16 { dummy: 0 }) == -1)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI32 { dummy: 0 }) == -1)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI64 { dummy: 0 }) == -1)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI128 { dummy: 0 }) == -1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::OutputI8 { dummy: 0 }) == -1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::OutputI16 { dummy: 0 }) == -1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::OutputI32 { dummy: 0 }) == -1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::OutputI64 { dummy: 0 }) == -1)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::OutputI128 { dummy: 0 }) == -1)
 }

@@ -1,9 +1,8 @@
 use crate::HirDb;
 
 #[salsa::interned]
-#[derive(Debug)]
+#[derive(Debug, PartialOrd, Ord)]
 pub struct IdentId<'db> {
-    #[return_ref]
     pub data: String,
 }
 

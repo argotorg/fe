@@ -1,0 +1,23 @@
+// `t1` and `t2` glob-import each other, so each finds `N` from `u1` and `u2`
+// in an order that alternates. The type `N` and the function `N` don't
+// conflict.
+mod t1 {
+    pub use super::t2::*
+    pub use super::u1::*
+}
+mod t2 {
+    pub use super::t1::*
+    pub use super::u2::*
+}
+mod u1 {
+    pub struct N {}
+}
+mod u2 {
+    pub fn N() -> u8 {
+        1
+    }
+}
+use t1::N
+fn f(x: N) -> u8 {
+    N()
+}

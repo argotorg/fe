@@ -1,0 +1,40 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/swapped_aliases.fe
+---
+note:
+  ┌─ swapped_aliases.fe:7:5
+  │
+7 │     pub use super::Y as X
+  │     ^^^^^^^^^^^^^^^^^^^^^ swapped_aliases::Y
+
+note:
+  ┌─ swapped_aliases.fe:8:5
+  │
+8 │     pub use super::X as Y
+  │     ^^^^^^^^^^^^^^^^^^^^^ swapped_aliases::X
+
+note:
+   ┌─ swapped_aliases.fe:11:5
+   │
+11 │     use X as P
+   │     ^^^^^^^^^^ swapped_aliases::Y
+
+note:
+   ┌─ swapped_aliases.fe:12:5
+   │
+12 │     use Y as Q
+   │     ^^^^^^^^^^ swapped_aliases::X
+
+note:
+   ┌─ swapped_aliases.fe:13:5
+   │
+13 │     use a::X
+   │     ^^^^^^^^ swapped_aliases::Y
+
+note:
+   ┌─ swapped_aliases.fe:14:5
+   │
+14 │     use a::Y
+   │     ^^^^^^^^ swapped_aliases::X

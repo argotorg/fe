@@ -32,7 +32,7 @@ fn inherent_value<const N: usize, const M: usize = Size<N>::LEN>() -> usize { M 
 
 fn identity<T = u256>(_ value: own T) -> T { value }
 
-fn sized_default<const N: usize, T = [u8; { N + 1 }]>() -> u256 { core::size_of<T>() }
+fn sized_default<const N: usize, T = [u8; { N + 1 }]>() -> u256 { core::size_of<T>() as u256 }
 fn sized_forwarded<const N: usize>() -> u256 { sized_default<N>() }
 
 trait Output { type Item }

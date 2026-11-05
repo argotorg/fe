@@ -9,7 +9,7 @@
 fn test_oob_read_reverts() {
     let arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 4
-    let val = arr[i as usize]
+    let val = arr[i.downcast_unchecked()]
     assert!(val == 0)
 }
 
@@ -17,14 +17,14 @@ fn test_oob_read_reverts() {
 fn test_oob_write_reverts() {
     var arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 4
-    arr[i as usize] = 99
+    arr[i.downcast_unchecked()] = 99
 }
 
 #[test(should_revert)]
 fn test_oob_large_index_reverts() {
     let arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 100
-    let val = arr[i as usize]
+    let val = arr[i.downcast_unchecked()]
     assert!(val == 0)
 }
 
@@ -35,7 +35,7 @@ fn test_oob_into_adjacent_array_reverts() {
 
     // i=4 is OOB for `a` — reverts instead of silently reading b[0]
     let i: u256 = 4
-    let leaked = a[i as usize]
+    let leaked = a[i.downcast_unchecked()]
     assert!(leaked == 100)
 }
 
@@ -45,12 +45,12 @@ fn test_oob_into_adjacent_array_reverts() {
 fn test_oob_dead_read_reverts() {
     let arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 4
-    let _val = arr[i as usize]
+    let _val = arr[i.downcast_unchecked()]
 }
 
 #[test(should_revert)]
 fn test_oob_dead_write_reverts() {
     var arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 4
-    arr[i as usize] = 99
+    arr[i.downcast_unchecked()] = 99
 }

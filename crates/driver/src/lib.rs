@@ -277,7 +277,7 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
             if let Some(ingot) = db.workspace().containing_ingot(db, url.clone())
                 && let Some(config) = ingot.config(db)
             {
-                configs.insert(url.clone(), config);
+                configs.insert(url.clone(), config.clone());
             }
         }
 

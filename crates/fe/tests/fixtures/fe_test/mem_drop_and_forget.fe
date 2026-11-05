@@ -1,0 +1,39 @@
+use core::mem
+use core::ops::Drop
+use core::ptr
+
+// Each drop counts itself through a raw pointer, which no scope owns.
+struct Token {
+    counter: *u256,
+}
+
+impl Drop for Token {
+    fn drop(own self) {
+        unsafe { *self.counter += 1 }
+    }
+}
+
+fn counter() -> *u256 {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    counter
+}
+
+fn count(_ counter: *u256) -> u256 {
+    unsafe { *counter }
+}
+
+#[test]
+fn drop_destroys_at_once_and_forget_never() {
+    let counter = counter()
+    {
+        let dropped = Token { counter }
+        let forgotten = Token { counter }
+        let _kept = Token { counter }
+        mem::drop(dropped)
+        assert(count(counter) == 1)
+        mem::forget(forgotten)
+        assert(count(counter) == 1)
+    }
+    assert(count(counter) == 2)
+}

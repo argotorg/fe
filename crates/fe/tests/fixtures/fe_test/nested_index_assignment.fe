@@ -1,27 +1,19 @@
 // An assignment through nested indexes needs a `mut` place along the whole
-// chain: `t[1].inner[0] = 11` takes `index_mut` for both overloaded indexes,
-// and nested storage entries are paths of one place.
-use core::ops::{Index, IndexMut}
+// chain: `t[1].inner[0] = 11` takes both overloaded indexes at `mut`, and
+// nested storage entries are paths of one place.
+use core::ops::Index
 use std::evm::{Evm, StorageMap}
 
 struct Cells { cells: [u256; 2] }
 impl Index<usize> for Cells {
-    space S = memory
     type Output = u256
-    fn index(self, _ i: usize) -> ref u256 { ref self.cells[i] }
-}
-impl IndexMut<usize> for Cells {
-    fn index_mut(mut self, _ i: usize) -> mut u256 { mut self.cells[i] }
+    fn index(mut? self, _ i: usize) -> mut? u256 { mut? self.cells[i] }
 }
 struct Table { inner: Cells }
 struct Tables { items: [Table; 2] }
 impl Index<usize> for Tables {
-    space S = memory
     type Output = Table
-    fn index(self, _ i: usize) -> ref Table { ref self.items[i] }
-}
-impl IndexMut<usize> for Tables {
-    fn index_mut(mut self, _ i: usize) -> mut Table { mut self.items[i] }
+    fn index(mut? self, _ i: usize) -> mut? Table { mut? self.items[i] }
 }
 
 #[test]
@@ -59,7 +51,7 @@ pub contract C {
 
 #[test]
 fn nested_place_entries() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
-    let v: u256 = evm.call(addr: c, gas: 300000, value: 0, message: Msg::Run {})
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let v: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Run {})
     assert(v == 210)
 }

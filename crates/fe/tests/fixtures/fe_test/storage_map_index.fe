@@ -70,26 +70,26 @@ pub contract Pair {
 
 #[test]
 fn same_typed_maps() uses (evm: mut Evm) {
-    let addr = evm.create2<Pair>(value: 0, args: (), salt: 0)
-    let a: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Bump { key: 3, by: 4 })
+    let addr = evm.create2<Pair>(value: Wei::zero(), args: (), salt: 0)
+    let a: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Bump { key: 3, by: 4 })
     assert!(a == 4)
-    let b: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Double { key: 3 })
+    let b: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Double { key: 3 })
     assert!(b == 8)
-    let c: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Get { key: 3 })
+    let c: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Get { key: 3 })
     assert!(c == 805)
 }
 
 #[test]
 fn indexing_writes_back() uses (evm: mut Evm) {
-    let addr = evm.create2<Counts>(value: 0, args: (), salt: 0)
-    let a: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Bump { key: 1, by: 5 })
+    let addr = evm.create2<Counts>(value: Wei::zero(), args: (), salt: 0)
+    let a: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Bump { key: 1, by: 5 })
     assert!(a == 5)
-    let b: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Bump { key: 1, by: 2 })
+    let b: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Bump { key: 1, by: 2 })
     assert!(b == 7)
-    let c: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Get { key: 1 })
+    let c: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Get { key: 1 })
     assert!(c == 21)
-    let d: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Double { key: 1 })
+    let d: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Double { key: 1 })
     assert!(d == 16)
-    let e: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Get { key: 1 })
+    let e: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Counter::Get { key: 1 })
     assert!(e == 23)
 }

@@ -67,8 +67,8 @@ impl DependencyGraph {
         if self.node_map(db).contains_key(url) {
             return;
         }
-        let mut graph = self.graph(db);
-        let mut node_map = self.node_map(db);
+        let mut graph = self.graph(db).clone();
+        let mut node_map = self.node_map(db).clone();
         Self::allocate_node(&mut graph, &mut node_map, url);
         self.set_graph(db).to(graph);
         self.set_node_map(db).to(node_map);
@@ -81,7 +81,7 @@ impl DependencyGraph {
         name: SmolStr,
         version: Version,
     ) {
-        let mut map = self.ingots_by_metadata(db);
+        let mut map = self.ingots_by_metadata(db).clone();
         map.entry((name, version)).or_insert_with(|| url.clone());
         self.set_ingots_by_metadata(db).to(map);
     }
@@ -103,7 +103,7 @@ impl DependencyGraph {
         workspace_root: &Url,
         member: WorkspaceMemberRecord,
     ) {
-        let mut members = self.workspace_members(db);
+        let mut members = self.workspace_members(db).clone();
         let entry = members.entry(workspace_root.clone()).or_default();
         if let Some(existing) = entry.iter_mut().find(|record| record.url == member.url) {
             *existing = member.clone();
@@ -121,7 +121,7 @@ impl DependencyGraph {
         workspace_root: &Url,
         member_url: &Url,
     ) {
-        let mut roots = self.workspace_root_by_member(db);
+        let mut roots = self.workspace_root_by_member(db).clone();
         roots.insert(member_url.clone(), workspace_root.clone());
         self.set_workspace_root_by_member(db).to(roots);
     }
@@ -146,7 +146,7 @@ impl DependencyGraph {
     /// that match nothing yet).  Without this the root would be invisible to
     /// `workspace_roots()`.
     pub fn ensure_workspace_root(&self, db: &mut dyn InputDb, workspace_root: &Url) {
-        let mut members = self.workspace_members(db);
+        let mut members = self.workspace_members(db).clone();
         if members.contains_key(workspace_root) {
             return;
         }
@@ -183,7 +183,7 @@ impl DependencyGraph {
         name: SmolStr,
         version: Version,
     ) {
-        let mut map = self.expected_member_metadata(db);
+        let mut map = self.expected_member_metadata(db).clone();
         map.insert(url.clone(), (name, version));
         self.set_expected_member_metadata(db).to(map);
     }
@@ -202,7 +202,7 @@ impl DependencyGraph {
 
     /// Records `url` as an ingot or workspace a build was asked for.
     pub fn register_root_ingot(&self, db: &mut dyn InputDb, url: &Url) {
-        let mut roots = self.root_ingots(db);
+        let mut roots = self.root_ingots(db).clone();
         if roots.insert(url.clone()) {
             self.set_root_ingots(db).to(roots);
         }
@@ -275,7 +275,7 @@ impl DependencyGraph {
         url: &Url,
         arithmetic: ArithmeticMode,
     ) {
-        let mut forced = self.forced_dependency_arithmetic(db);
+        let mut forced = self.forced_dependency_arithmetic(db).clone();
         forced.insert(url.clone(), arithmetic);
         self.set_forced_dependency_arithmetic(db).to(forced);
     }
@@ -296,8 +296,8 @@ impl DependencyGraph {
         alias: DependencyAlias,
         arguments: DependencyArguments,
     ) {
-        let mut graph = self.graph(db);
-        let mut node_map = self.node_map(db);
+        let mut graph = self.graph(db).clone();
+        let mut node_map = self.node_map(db).clone();
         let source_idx = Self::allocate_node(&mut graph, &mut node_map, source);
         let target_idx = Self::allocate_node(&mut graph, &mut node_map, target);
 
@@ -321,7 +321,7 @@ impl DependencyGraph {
     }
 
     pub fn petgraph(&self, db: &dyn InputDb) -> DiGraph<Url, EdgeWeight> {
-        self.graph(db)
+        self.graph(db).clone()
     }
 
     pub fn cyclic_subgraph(&self, db: &dyn InputDb) -> DiGraph<Url, EdgeWeight> {
@@ -421,11 +421,11 @@ impl DependencyGraph {
         local_url: Url,
         remote: RemoteFiles,
     ) {
-        let mut git_map = self.git_locations(db);
+        let mut git_map = self.git_locations(db).clone();
         git_map.insert(local_url.clone(), remote.clone());
         self.set_git_locations(db).to(git_map);
 
-        let mut reverse = self.reverse_git_map(db);
+        let mut reverse = self.reverse_git_map(db).clone();
         reverse.insert(remote, local_url);
         self.set_reverse_git_map(db).to(reverse);
     }

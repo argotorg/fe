@@ -5,7 +5,7 @@ struct Slot { pointer: *Option<Token> }
 struct Buffer { data: *u8, offset: u256, len: u256 }
 
 fn clear(_ state: mut Buffer) {
-    unsafe { ptr::zero_bytes(ptr: ptr::offset(state.data, state.offset), len: state.len) }
+    unsafe { ptr::zero_bytes(ptr: ptr::offset(state.data, state.offset.downcast_unchecked()), len: state.len.downcast_unchecked()) }
     state.len = 0
 }
 

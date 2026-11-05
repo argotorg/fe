@@ -1,0 +1,114 @@
+// A parameter may be a pattern, which the body binds as `let` would.
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+struct Wrapper<T> {
+    x: T,
+}
+
+struct Pair(u256, u256)
+
+impl Point {
+    fn norm(_ Self { x, y }: Self) -> u256 {
+        x * x + y * y
+    }
+}
+
+fn unwrap(_ Wrapper<u256> { x }: Wrapper<u256>) -> u256 {
+    x
+}
+
+fn module_paths(_ self::Point { x, y }: Point, _ ingot::Wrapper { x: z }: Wrapper<u256>) -> u256 {
+    x + y + z
+}
+
+fn sum(_ (a, b): (u256, u256)) -> u256 {
+    a + b
+}
+
+fn product(_ (a, b): own (u256, u256)) -> u256 {
+    a * b
+}
+
+fn add_first(_ (ref a, mut b): mut (u256, u256)) {
+    b += a
+}
+
+fn norm(_ Point { x, y }: Point) -> u256 {
+    x * x + y * y
+}
+
+fn pair_sum(_ Pair(a, b): Pair) -> u256 {
+    a + b
+}
+
+fn bump_pair(_ Pair(ref a, mut b): mut Pair) {
+    b += a
+}
+
+fn nested(_ ((a, b), c): ((u256, u256), u256)) -> u256 {
+    a + b + c
+}
+
+fn apply<F: Fn((u256, u256)) -> u256>(_ f: F) -> u256 uses F::E {
+    f((3, 4))
+}
+
+#[test]
+fn function_parameter_patterns() {
+    assert(sum((1, 2)) == 3)
+    assert(product((3, 4)) == 12)
+    var pair = (1, 2)
+    add_first(mut pair)
+    assert(pair.1 == 3)
+    assert(norm(Point { x: 3, y: 4 }) == 25)
+    assert(Point::norm(Point { x: 3, y: 4 }) == 25)
+    assert(unwrap(Wrapper { x: 7 }) == 7)
+    assert(module_paths(Point { x: 1, y: 2 }, Wrapper { x: 3 }) == 6)
+    assert(pair_sum(Pair(1, 2)) == 3)
+    var p = Pair(1, 2)
+    bump_pair(mut p)
+    assert(p.1 == 3)
+    assert(nested(((1, 2), 3)) == 6)
+}
+
+#[test]
+fn closure_parameter_patterns() {
+    assert(apply(|(a, b)| a * b) == 12)
+    let x_of = |ingot::Point { x, .. }: Point| x
+    assert(x_of(Point { x: 8, y: 9 }) == 8)
+    let add = |(a, b): (u256, u256)| a + b
+    assert(add((5, 6)) == 11)
+    let mul = |Pair(a, b): Pair| a * b
+    assert(mul(Pair(3, 4)) == 12)
+    let pairs: [(u256, u256); 2] = [(1, 2), (3, 4)]
+    assert(pairs.fold(0, |acc, (a, b)| acc + a * b) == 14)
+}
+
+msg PairMsg {
+    #[selector = 0x5c4a3b21]
+    Get -> u256,
+}
+
+pub contract PairStore {
+    total: u256
+
+    init(_ (a, b): (u256, u256)) uses (mut total) {
+        total = a * b
+    }
+
+    recv PairMsg {
+        Get -> u256 uses (total) {
+            total
+        }
+    }
+}
+
+#[test]
+fn init_parameter_pattern() uses (evm: mut Evm) {
+    let addr = evm.create2<PairStore>(value: Wei::zero(), args: ((6, 7),), salt: 0)
+    let total: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: PairMsg::Get {})
+    assert(total == 42)
+}

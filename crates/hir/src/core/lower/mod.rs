@@ -13,8 +13,8 @@ use self::{item::lower_module_items, scope_builder::ScopeGraphBuilder};
 use crate::{
     HirDb, LowerHirDb,
     hir_def::{
-        AttrListId, ExprId, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial, PathId,
-        StringId, TopLevelMod, TrackedItemId, TrackedItemVariant, Use, Visibility,
+        AttrListId, Body, ExprId, Func, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial,
+        PathId, StringId, TopLevelMod, TrackedItemId, TrackedItemVariant, Use, Visibility,
         module_tree_impl,
         scope_graph::ScopeGraph,
         use_tree::{UsePathId, UsePathSegment},
@@ -27,7 +27,7 @@ pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
 pub use item::{FieldModifierError, FieldModifierErrorKind, MsgDiagnostic, MsgDiagnosticKind};
-pub use parse::parse_file_impl;
+pub use parse::{ParsedFile, parse_file_impl};
 
 pub(crate) mod parse;
 
@@ -127,7 +127,7 @@ pub fn module_tree<'db>(db: &'db dyn LowerHirDb, ingot: Ingot<'db>) -> &'db Modu
     module_tree_impl(db, ingot)
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn map_file_to_mod_impl<'db>(db: &'db dyn HirDb, file: File) -> TopLevelMod<'db> {
     let path = file.path(db);
     let path = path.as_ref().unwrap_or_else(|| {
@@ -144,7 +144,7 @@ pub(crate) fn map_file_to_mod_impl<'db>(db: &'db dyn HirDb, file: File) -> TopLe
     TopLevelMod::new(db, mod_name, file)
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn scope_graph_impl<'db>(
     db: &'db dyn HirDb,
     top_mod: TopLevelMod<'db>,
@@ -156,14 +156,52 @@ pub(crate) fn scope_graph_impl<'db>(
 
     if let Some(items) = ast.items() {
         item::validate_module_inner_attrs(&mut ctxt, items.inner_attr_list());
-        lower_module_items(&mut ctxt, items);
+        if enclosing_cfg_holds_impl(db, top_mod) {
+            lower_module_items(&mut ctxt, items);
+        }
     }
     ctxt.leave_item_scope(top_mod);
 
     ctxt.build()
 }
 
+/// Whether the `#![cfg(..)]` attributes of every file module enclosing
+/// `top_mod` hold, so that a module's `cfg` drops the modules in its
+/// directory along with its own items.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn enclosing_cfg_holds_impl<'db>(db: &'db dyn HirDb, top_mod: TopLevelMod<'db>) -> bool {
+    top_mod.parent(db).is_none_or(|parent| {
+        enclosing_cfg_holds_impl(db, parent)
+            && attr::named_attr_specs(
+                top_mod_ast(db, parent)
+                    .items()
+                    .and_then(|items| items.inner_attr_list()),
+                "cfg",
+            )
+            .iter()
+            .all(|spec| attr::cfg_spec_holds(db, spec) == Some(true))
+    })
+}
+
+/// Returns the scope graph of the body of `func`, lowered on its own, or `None`
+/// if the function has no body in source or its body was lowered with the
+/// module because it declares items.
 #[salsa::tracked]
+pub(crate) fn func_body_graph_impl<'db>(
+    db: &'db dyn HirDb,
+    func: Func<'db>,
+) -> Option<ScopeGraph<'db>> {
+    let (None, HirOrigin::Raw(ptr)) = (func.eager_body(db), func.origin(db)) else {
+        return None;
+    };
+    let ast = ptr.to_node(top_mod_ast(db, func.top_mod(db)).syntax());
+    let body = ast.body()?;
+    let mut ctxt = FileLowerCtxt::enter_func_body(db, func);
+    Body::lower_func_body(&mut ctxt, &ast, body);
+    Some(ctxt.build())
+}
+
+#[salsa::tracked(returns(copy))]
 pub(crate) fn top_mod_attributes_impl<'db>(
     db: &'db dyn HirDb,
     top_mod: TopLevelMod<'db>,
@@ -177,9 +215,21 @@ pub(crate) fn top_mod_attributes_impl<'db>(
 }
 
 pub(crate) fn top_mod_ast(db: &dyn HirDb, top_mod: TopLevelMod) -> ast::Root {
-    let node = SyntaxNode::new_root(parse_file_impl(db, top_mod));
+    let node = SyntaxNode::new_root(parse_file_impl(db, top_mod).root.clone());
     // This cast never fails even if the file content is empty.
     ast::Root::cast(node).unwrap()
+}
+
+/// A diagnostic reported while lowering a module or a function body.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
+pub enum LowerDiagnostic {
+    Msg(MsgDiagnostic),
+    FieldModifier(FieldModifierError),
+    Event(EventError),
+    Error(ErrorDiagnostic),
+    AbiStruct(AbiStructDiagnostic),
+    AbiField(AbiFieldDiagnostic),
+    AttrMisuse(AttrMisuseError),
 }
 
 pub(super) struct FileLowerCtxt<'db> {
@@ -187,6 +237,7 @@ pub(super) struct FileLowerCtxt<'db> {
     next_impl_idx: u32,
     next_impl_trait_idx: u32,
     next_static_assert_idx: u32,
+    diagnostics: Vec<LowerDiagnostic>,
 }
 
 impl<'db> FileLowerCtxt<'db> {
@@ -196,11 +247,26 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_idx: 0,
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn enter_func_body(db: &'db dyn HirDb, func: Func<'db>) -> Self {
+        Self {
+            builder: ScopeGraphBuilder::enter_func_body(db, func),
+            next_impl_idx: 0,
+            next_impl_trait_idx: 0,
+            next_static_assert_idx: 0,
+            diagnostics: Vec::new(),
         }
     }
 
     pub(super) fn build(self) -> ScopeGraph<'db> {
-        self.builder.build()
+        self.builder.build(self.diagnostics)
+    }
+
+    pub(super) fn report(&mut self, diagnostic: impl Into<LowerDiagnostic>) {
+        self.diagnostics.push(diagnostic.into());
     }
 
     pub(super) fn db(&self) -> &'db dyn HirDb {
@@ -211,13 +277,18 @@ impl<'db> FileLowerCtxt<'db> {
         self.builder.top_mod
     }
 
-    /// The path naming the core ingot from the file: `ingot` within core.
-    pub(super) fn core_path(&self) -> PathId<'db> {
+    pub(super) fn lazy_func(&self) -> Option<Func<'db>> {
+        self.builder.lazy_func
+    }
+
+    /// The path naming the builtin ingot `name` of `kind`, `core` or `std`,
+    /// from the file: `ingot` within that ingot.
+    pub(super) fn builtin_ingot_path(&self, kind: IngotKind, name: &str) -> PathId<'db> {
         let db = self.db();
-        let root = if self.top_mod().ingot(db).kind(db) == IngotKind::Core {
+        let root = if self.top_mod().ingot(db).kind(db) == kind {
             IdentId::make_ingot(db)
         } else {
-            IdentId::new(db, "core".to_string())
+            IdentId::new(db, name.to_string())
         };
         PathId::from_ident(db, root)
     }
@@ -381,6 +452,8 @@ impl<'db> LitKind<'db> {
                 // their source spelling as a valid semantic string.
                 Self::String(StringId::new(ctxt.db(), string.value().ok()?))
             }
+            // Parsing diagnosed invalid byte literals.
+            ast::LitKind::Byte(byte) => Self::Byte(byte.value().ok()?),
             ast::LitKind::Bool(bool) => match bool.token().text() {
                 "true" => Self::Bool(true),
                 "false" => Self::Bool(false),

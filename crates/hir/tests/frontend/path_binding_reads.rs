@@ -1,10 +1,7 @@
 use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
-        semantic::{
-            SExpr, SLocalId, SStmtKind, get_or_build_semantic_instance,
-            identity_semantic_instance_key,
-        },
+        semantic::{SExpr, SLocalId, SStmtKind, SemanticInstance, identity_semantic_instance_key},
         ty::ty_check::{BodyOwner, LocalBinding, PathReadSemantics, check_func_body},
     },
     hir_def::{ExprId, ItemKind, Partial, PatId, Stmt},
@@ -114,9 +111,9 @@ fn f() {
     let dst_binding = typed_body
         .pat_binding(dst_pat)
         .expect("missing destination binding");
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
     );
     let sem_body = instance.body(&db);
     let dst = local_for_binding(sem_body, dst_binding);

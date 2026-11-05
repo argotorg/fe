@@ -1,6 +1,6 @@
 use core::ptr::{self, MemBuffer, MemSpan}
-use core::abi::store_word
-use std::abi::decode_bytes_view_at
+use core::abi::{ByteSource, store_word}
+use std::abi::{decode_bytes_view, decode_bytes_view_at}
 use std::evm::{Address, CallData, Evm}
 
 msg ViewMsg {
@@ -12,7 +12,7 @@ msg ViewMsg {
 pub contract Viewer {
     recv ViewMsg {
         Len {} -> u256 {
-            decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 0).len()
+            decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 0).len() as u256
         }
     }
 }
@@ -21,20 +21,20 @@ struct Outcome { success: bool, ret_len: u256, word0: u256 }
 
 fn call_words<const N: usize>(_ addr: Address, words: [u256; N]) -> Outcome uses (evm: mut Evm) {
     let len = 4 + (N as u256) * 32
-    let data = MemBuffer::alloc(len + 32)
+    let data = MemBuffer::new((len + 32).downcast_unchecked())
     unsafe { store_word(ptr: data.ptr(), value: 1 << 224) }
     var i: usize = 0
     while i < N {
-        unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4 + (i as u256) * 32), value: words[i]) }
+        unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), (4 + (i as u256) * 32).downcast_unchecked()), value: words[i]) }
         i += 1
     }
-    var ret = MemBuffer::alloc(64)
+    var ret = MemBuffer::new(64)
     let outcome = unsafe {
         evm.raw_call(
             addr: addr,
             gas: 1000000,
-            value: 0,
-            args: MemSpan::from_raw_parts(ptr: data.ptr(), len: len),
+            value: Wei::zero(),
+            args: MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked()),
             ret: mut ret,
         )
     }
@@ -60,7 +60,7 @@ const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 #[test]
 fn test_overflowing_bytes_offsets_and_lengths_revert_empty() uses (evm: mut Evm) {
-    let v = evm.create2<Viewer>(value: 0, args: (), salt: 0)
+    let v = evm.create2<Viewer>(value: Wei::zero(), args: (), salt: 0)
     let ok = call_words(v, words: [0x20, 2, 0xabcd << 240])
     assert!(ok.success && ok.word0 == 2)
     // Offsets whose sum with the base wraps around.
@@ -69,4 +69,43 @@ fn test_overflowing_bytes_offsets_and_lengths_revert_empty() uses (evm: mut Evm)
     // Lengths whose sum with the data position wraps around.
     reverts_empty(v, words: [0x20, MAX])
     reverts_empty(v, words: [0x20, MAX - 31])
+}
+
+const TWO_64: u256 = 0x10000000000000000
+
+// Model the longest input, `2**64 - 1` bytes, without allocating it: two
+// words at offsets 0 and 32, zero everywhere else. An offset or length of
+// `2**64` or more cannot fit it.
+struct SparseInput { w0: u256, w1: u256 }
+impl Copy for SparseInput {}
+impl ByteSource for SparseInput {
+    fn size(self) -> u64 { 0xffffffffffffffff }
+    fn word_at(self, _ byte_offset: u256) -> u256 {
+        if byte_offset == 0 {
+            self.w0
+        } else if byte_offset == 32 {
+            self.w1
+        } else {
+            0
+        }
+    }
+    fn byte_at(self, _: u256) -> u8 { panic() }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) { panic() }
+}
+
+#[test]
+fn test_offsets_and_lengths_that_fit_accepted_on_long_input() {
+    let len = TWO_64 - 1
+    assert!(decode_bytes_view(SparseInput { w0: len - 32, w1: 0 }).len() == 0)
+    assert!(decode_bytes_view(SparseInput { w0: 0x20, w1: len - 0x40 }).len() as u256 == len - 0x40)
+}
+
+#[test(should_revert)]
+fn test_offset_of_two_64_rejected_on_long_input() {
+    let _ = decode_bytes_view(SparseInput { w0: TWO_64, w1: 0 })
+}
+
+#[test(should_revert)]
+fn test_length_of_two_64_rejected_on_long_input() {
+    let _ = decode_bytes_view(SparseInput { w0: 0x20, w1: TWO_64 })
 }

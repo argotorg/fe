@@ -1,5 +1,3 @@
-use core::intrinsic
-
 struct Pair {
     a: u8,
     b: [u8; 2],
@@ -11,8 +9,7 @@ enum Entry {
 }
 
 const fn word() -> [u8; 2] {
-    let value: u16 = 26
-    intrinsic::__as_bytes(value)
+    [0, 26]
 }
 
 const PAIRS: [Pair; 2] = [Pair { a: 1, b: [2, 3] }, Pair { a: 4, b: [5, 6] }]

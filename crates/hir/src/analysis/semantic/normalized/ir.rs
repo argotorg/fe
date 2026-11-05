@@ -1,5 +1,5 @@
 use cranelift_entity::{EntityRef, entity_impl};
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     analysis::{
@@ -27,16 +27,16 @@ entity_impl!(NValueId);
 pub struct NRootId(u32);
 entity_impl!(NRootId);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct NBlockId(u32);
 entity_impl!(NBlockId);
 
 /// Stable identity for every normalized operation, including synthetic operations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct NStatementId(u32);
 entity_impl!(NStatementId);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NormalizedBody<'db> {
     pub owner: SemanticInstance<'db>,
     pub template_owner: BodyOwner<'db>,
@@ -69,7 +69,9 @@ impl<'db> NormalizedBody<'db> {
         };
         match &self.block(block)?.statements.get(statement as usize)?.kind {
             NStatementKind::Define { expr, .. } => Some((block, expr)),
-            NStatementKind::Store { .. } | NStatementKind::End { .. } => None,
+            NStatementKind::Store { .. }
+            | NStatementKind::End { .. }
+            | NStatementKind::Drop { .. } => None,
         }
     }
 
@@ -95,6 +97,19 @@ impl<'db> NormalizedBody<'db> {
         let base_ty = self.place_base_ty(db, place.base)?;
         let prefix = NDataPath::new(place.path.iter().take(len).copied().collect::<Vec<_>>());
         super::verify::project_path_ty(db, self.owner, &self.values, base_ty, &prefix).ok()
+    }
+
+    /// The type of `value` after the first `len` steps of `path`.
+    pub fn value_prefix_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        value: NValueId,
+        path: &NDataPath,
+        len: usize,
+    ) -> Option<TyId<'db>> {
+        let prefix = NDataPath::new(path.iter().take(len).copied().collect::<Vec<_>>());
+        super::verify::project_path_ty(db, self.owner, &self.values, self.value(value)?.ty, &prefix)
+            .ok()
     }
 
     /// Values required to access a place, including the value that initializes
@@ -173,6 +188,12 @@ impl<'db> NormalizedBody<'db> {
                         value.value == target || place_uses_target(destination)
                     }
                     NStatementKind::End { access } => end_uses && *access == target,
+                    NStatementKind::Drop {
+                        target: NDropTarget::Value(value),
+                    } => *value == target,
+                    NStatementKind::Drop {
+                        target: NDropTarget::Place(place),
+                    } => place_uses_target(place),
                 };
                 if used {
                     return true;
@@ -204,7 +225,7 @@ impl<'db> NormalizedBody<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NValue<'db> {
     pub ty: TyId<'db>,
     pub mutability: Mutability,
@@ -221,7 +242,7 @@ pub enum NValueDefinition {
     Statement { block: NBlockId, statement: u32 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NRoot<'db> {
     pub kind: NRootKind<'db>,
     pub ty: TyId<'db>,
@@ -230,7 +251,7 @@ pub struct NRoot<'db> {
     pub origin: SemOrigin<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum NRootKind<'db> {
     LocalSlot {
         binding: Option<LocalBinding<'db>>,
@@ -250,7 +271,7 @@ pub enum NRootKind<'db> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NPlace<'db> {
     pub base: NPlaceBase,
     pub path: NDataPath,
@@ -356,7 +377,7 @@ pub struct NOperand {
     pub mode: ReadMode,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: NEffectArgValue<'db>,
@@ -366,7 +387,7 @@ pub struct NEffectArg<'db> {
     pub provider: Option<AddressSpace>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum NEffectArgValue<'db> {
     Place(NPlace<'db>),
     Value(NOperand),
@@ -377,7 +398,7 @@ pub enum ViewAccess {
     Read,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum NExpr<'db> {
     Forward {
         src: NOperand,
@@ -563,14 +584,14 @@ pub struct StructuralRepack {
     pub fields: Box<[(NDataPath, NDataPath)]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NBlock<'db> {
     pub params: Box<[NValueId]>,
     pub statements: Vec<NStatement<'db>>,
     pub terminator: NTerminator<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NStatement<'db> {
     pub id: NStatementId,
     /// Stable raw-SMIR identity when this operation directly corresponds to a
@@ -581,7 +602,7 @@ pub struct NStatement<'db> {
     pub kind: NStatementKind<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum NStatementKind<'db> {
     Define {
         result: NValueId,
@@ -596,6 +617,17 @@ pub enum NStatementKind<'db> {
     End {
         access: NValueId,
     },
+    /// Destroys what `target` still owns (`SStmtKind::Drop`).
+    Drop {
+        target: NDropTarget<'db>,
+    },
+}
+
+/// What a `Drop` destroys: an owned value no place holds, or a place.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum NDropTarget<'db> {
+    Value(NValueId),
+    Place(NPlace<'db>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -604,13 +636,13 @@ pub struct NSuccessor {
     pub args: Box<[NOperand]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NTerminator<'db> {
     pub origin: SemOrigin<'db>,
     pub kind: NTerminatorKind<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum NTerminatorKind<'db> {
     Goto(NSuccessor),
     Branch {

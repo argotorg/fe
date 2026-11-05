@@ -1,0 +1,28 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/byte.fe
+---
+Root@0..30
+  ArrayExpr@0..29
+    LBracket@0..1 "["
+    LitExpr@1..5
+      Lit@1..5
+        Byte@1..5 "b'a'"
+    Comma@5..6 ","
+    WhiteSpace@6..7 " "
+    LitExpr@7..12
+      Lit@7..12
+        Byte@7..12 "b'\\n'"
+    Comma@12..13 ","
+    WhiteSpace@13..14 " "
+    LitExpr@14..21
+      Lit@14..21
+        Byte@14..21 "b'\\xff'"
+    Comma@21..22 ","
+    WhiteSpace@22..23 " "
+    LitExpr@23..28
+      Lit@23..28
+        Byte@23..28 "b'\\''"
+    RBracket@28..29 "]"
+  Newline@29..30 "\n"

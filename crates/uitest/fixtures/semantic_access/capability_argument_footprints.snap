@@ -1,6 +1,6 @@
 ---
 source: crates/uitest/tests/semantic_access.rs
-assertion_line: 25
+assertion_line: 32
 expression: diags
 input_file: fixtures/semantic_access/capability_argument_footprints.fe
 ---
@@ -25,8 +25,8 @@ error[16-0001]: access conflict in `fn V::recv[0][5]`
     │
 102 │             let held = mut value
     │                        --------- access opened here
-103 │             apply_with(|e: mut Evm| e.call(addr: a, gas: 1000, value: 0, message: AMsg::Poke { v: a }), mut evm)
-    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+103 │             apply_with(|e: mut Evm| e.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a }), mut evm)
+    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn V::recv[0][6]`
     ┌─ capability_argument_footprints.fe:109:13

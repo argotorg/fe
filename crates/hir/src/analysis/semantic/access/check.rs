@@ -8,6 +8,10 @@
 //! accesses open around it: overlapping accesses conflict unless both read,
 //! except that an access through a carrier is authorized by the accesses the
 //! carrier was derived from.
+
+// Diagnostics and CTFE stops are returned on the slow path; salsa's 8-byte ids
+// put them just past clippy's 128-byte `Err` threshold.
+#![allow(clippy::result_large_err)]
 use std::collections::BTreeSet;
 
 use common::ingot::IngotKind;
@@ -16,44 +20,46 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::{
-    PathSpace,
+    DropElaboration, DropFlagPoint, DropFlagUpdate, DropPart, DropStep,
     domain::Domains,
     place::{AbsPlace, Base, Path, Step, path_of, paths_overlap},
+    space::{PathSpace, PlaceStep},
 };
 use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            SemOrigin, SemanticInstance, SemanticInstanceKey,
+            SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex,
             access::{control::semantic_may_return, projection_result_spaces},
             definite_assignment::literal_index,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan, operand_origin,
             },
-            effect_param_site, get_or_build_semantic_instance,
+            effect_param_site,
             instance::row_expansion_for_key,
             normalized::{
-                NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NOperand,
-                NPlace, NPlaceBase, NRootKind, NStatement, NStatementKind, NStructuralPath,
-                NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, ReadMode,
-                access::AccessTarget,
+                NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue,
+                NExpr, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
+                NStatementKind, NStructuralPath, NTerminatorKind, NValueDefinition, NValueId,
+                NormalizedBody, ReadMode, access::AccessTarget,
             },
         },
         ty::{
+            adt_def::AdtRef,
             corelib::{
                 MemoryAccessKind, bounded_by_sealed_capabilities, effect_key_state_access,
                 external_call_state_access, is_sealed_evm_capability,
             },
+            drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
             provider::{AddressSpace, provider_semantics},
-            result_space::PlaceStep,
             shape::Shape,
             trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, LocalBinding, infer_body},
-            ty_def::{BorrowKind, CapabilityKind, TyId},
-            ty_is_snapshot,
+            ty_check::{BindingAccess, BodyOwner, LocalBinding, infer_body},
+            ty_def::{BorrowKind, CapabilityKind, ShapeMode, TyData, TyId},
+            ty_is_copy, ty_is_snapshot,
         },
     },
-    hir_def::{CallableDef, FuncParamMode, Partial, Stmt, scope_graph::ScopeId},
+    hir_def::{Partial, Stmt, scope_graph::ScopeId},
     semantic::{EffectRequirementKey, ProviderSource, effect_requirements_for_site},
 };
 
@@ -111,14 +117,38 @@ struct State {
     open: BTreeSet<TokenId>,
     /// Possibly moved (or uninitialized) values, roots and parameter paths.
     moved: BTreeSet<(MoveKey, Path)>,
+    /// The entries of `moved` moved on every path, which a drop skips.
+    definitely_moved: BTreeSet<(MoveKey, Path)>,
 }
 
 impl State {
     fn join(&mut self, other: &Self) -> bool {
-        let before = (self.open.len(), self.moved.len());
+        let before = (
+            self.open.len(),
+            self.moved.len(),
+            self.definitely_moved.len(),
+        );
         self.open.extend(other.open.iter().copied());
         self.moved.extend(other.moved.iter().cloned());
-        before != (self.open.len(), self.moved.len())
+        self.definitely_moved
+            .retain(|entry| other.definitely_moved.contains(entry));
+        before
+            != (
+                self.open.len(),
+                self.moved.len(),
+                self.definitely_moved.len(),
+            )
+    }
+
+    fn record_move(&mut self, entry: (MoveKey, Path)) {
+        self.definitely_moved.insert(entry.clone());
+        self.moved.insert(entry);
+    }
+
+    /// Initializes the entries `initialized` selects.
+    fn initialize(&mut self, initialized: impl Fn(&(MoveKey, Path)) -> bool) {
+        self.moved.retain(|entry| !initialized(entry));
+        self.definitely_moved.retain(|entry| !initialized(entry));
     }
 }
 
@@ -182,6 +212,10 @@ pub(super) struct Analysis<'a, 'db> {
     divergence: Vec<Option<usize>>,
     /// Whether transfer functions report violations.
     checking: bool,
+    /// The parts each drop destroys, as the check finds them.
+    drop_parts: Vec<(NStatementId, Vec<DropPart>)>,
+    /// The paths whose initialization a flag tracks, by flag.
+    drop_flags: Vec<(MoveKey, Path)>,
 }
 
 impl<'a, 'db> Analysis<'a, 'db> {
@@ -195,9 +229,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         divergence: bool,
     ) -> Self {
         let typed_body = instance.key(db).typed_body(db);
-        let param_count = (0..)
-            .take_while(|index| typed_body.param_binding(*index).is_some())
-            .count() as u32;
+        let param_count = typed_body.input_bindings().len() as u32;
         let mut analysis = Self {
             db,
             instance,
@@ -238,6 +270,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
             moved_at: FxHashMap::default(),
             divergence: vec![None; body.blocks.len()],
             checking: false,
+            drop_parts: Vec::new(),
+            drop_flags: Vec::new(),
         };
         if divergence {
             for (block, data) in body.blocks.iter().enumerate() {
@@ -248,10 +282,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                             NStatementKind::Define {
                                 expr: NExpr::Call { callee, .. },
                                 ..
-                            } => !semantic_may_return(
-                                db,
-                                get_or_build_semantic_instance(db, callee.key),
-                            ),
+                            } => !semantic_may_return(db, SemanticInstance::new(db, callee.key)),
                             _ => false,
                         });
             }
@@ -330,7 +361,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     Some(LocalBinding::EffectParam { site, idx, .. }) => {
                         Some(self.domains.provider_source(
                             ProviderSource::UsesParam {
-                                site,
+                                site: site.slot_site(self.db, idx as u32),
                                 requirement_idx: idx as u32,
                             },
                             provider_semantics(self.db, value.ty).address_space,
@@ -361,9 +392,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             if let NRootKind::LocalSlot { binding } = &root.kind
                 && !binding.is_some_and(|binding| entry_bindings.contains(&binding))
             {
-                state
-                    .moved
-                    .insert((MoveKey::Root(index as u32), Path::new()));
+                state.record_move((MoveKey::Root(index as u32), Path::new()));
             }
         }
         self.entry[body.entry.index()] = Some(state);
@@ -407,12 +436,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
             .collect()
     }
 
-    /// The accesses a carrier argument for a parameter of `mode` passes. A
-    /// handle opens none, and a snapshot view argument is passed by copy.
-    fn passed_to(&self, value: NValueId, mode: FuncParamMode) -> TokenSet {
+    /// The accesses a carrier argument for an input taken by `access` passes.
+    /// A handle opens none, and a snapshot view argument is passed by copy.
+    fn passed_to(&self, value: NValueId, access: Option<BindingAccess>) -> TokenSet {
         let ty = self.body.values[value.index()].ty;
         let ty = ty.as_capability(self.db).map_or(ty, |(_, target)| target);
-        if mode == FuncParamMode::View && ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
+        if access == Some(BindingAccess::View)
+            && ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
         {
             return TokenSet::new();
         }
@@ -476,6 +506,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 let base = self.root_domain[root.index()].map_or(Base::Root(root), Base::Domain);
                 (vec![rooted(self, base, path)], TokenSet::new())
             }
+            // A carrier with no access names no known place: none until the
+            // flow gives it one (`check_places_known`).
             NPlaceBase::CapabilityTarget { carrier } => {
                 let direct = self.direct(carrier);
                 let mut regions: Vec<AbsPlace> = direct
@@ -487,9 +519,6 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         region.extended(&path, moved, lane)
                     })
                     .collect();
-                if regions.is_empty() {
-                    regions = vec![rooted(self, Base::Raw, path)];
-                }
                 regions.sort();
                 regions.dedup();
                 (regions, direct)
@@ -497,11 +526,20 @@ impl<'a, 'db> Analysis<'a, 'db> {
             // A pointer holds no access. A memory pointee is raw memory; a
             // state pointee may be any place of its space.
             NPlaceBase::Deref { pointer } => {
-                let base = match self.body.values[pointer.index()].ty.as_ptr(self.db) {
-                    Some((_, AddressSpace::Memory)) | None => Base::Raw,
-                    Some((_, space)) => Base::Domain(self.domains.dynamic(Some(space))),
-                };
-                (vec![rooted(self, base, path)], TokenSet::new())
+                let base =
+                    self.body.values[pointer.index()]
+                        .ty
+                        .as_ptr(self.db)
+                        .map(|(_, space)| match space {
+                            AddressSpace::Memory => Base::Raw,
+                            space => Base::Domain(self.domains.dynamic(Some(space))),
+                        });
+                (
+                    base.map(|base| rooted(self, base, path))
+                        .into_iter()
+                        .collect(),
+                    TokenSet::new(),
+                )
             }
         };
         Resolved {
@@ -656,7 +694,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     fn flow(&mut self, statement: &NStatement<'db>, changed: &mut bool) {
         match &statement.kind {
-            NStatementKind::End { .. } => {}
+            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
             NStatementKind::Store { destination, value } => {
                 let held = self.values[value.value.index()].clone();
                 if held.is_empty() {
@@ -784,11 +822,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 effect_args,
                 ..
             } => {
-                if let BodyOwner::Func(func) = callee.key.owner(self.db)
-                    && let Some(shape) = func.return_shape(self.db)
+                if let BodyOwner::Func(func, mode) = callee.key.owner(self.db)
+                    && let Some(shape) = func.return_shape(self.db, mode)
                 {
                     self.sessions
-                        .insert(result, get_or_build_semantic_instance(self.db, callee.key));
+                        .insert(result, SemanticInstance::new(self.db, callee.key));
                     return self.open_session(result, origin, callee.key, shape, args, effect_args);
                 }
                 Held::new()
@@ -835,19 +873,19 @@ impl<'a, 'db> Analysis<'a, 'db> {
         args: &[NOperand],
         effect_args: &[NEffectArg<'db>],
     ) -> Held {
-        let BodyOwner::Func(func) = callee.owner(self.db) else {
+        let BodyOwner::Func(..) = callee.owner(self.db) else {
             return Held::new();
         };
         let mut reservations = TokenSet::new();
         for (position, arg) in args.iter().enumerate() {
-            let param_mode = CallableDef::Func(func).param_mode(self.db, position);
-            let direct = self.passed_to(arg.value, param_mode);
+            let access = callee_input_access(self.db, callee, position);
+            let direct = self.passed_to(arg.value, access);
             if direct.is_empty() {
                 continue;
             }
-            let mode = match param_mode {
-                FuncParamMode::Mut => BorrowKind::Mut,
-                FuncParamMode::View | FuncParamMode::Own => BorrowKind::Ref,
+            let mode = match access {
+                Some(BindingAccess::Mut) => BorrowKind::Mut,
+                Some(BindingAccess::View | BindingAccess::Ref) | None => BorrowKind::Ref,
             };
             let regions: Vec<AbsPlace> = direct
                 .iter()
@@ -870,9 +908,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         let mut footprints: Vec<_> = args
             .iter()
             .enumerate()
-            .filter_map(|(position, arg)| {
-                self.capability_arg_footprint(BodyOwner::Func(func), position, arg)
-            })
+            .filter_map(|(position, arg)| self.capability_arg_footprint(callee, position, arg))
             .collect();
         for effect in effect_args {
             footprints.extend(self.effect_footprint(callee, effect));
@@ -889,7 +925,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
             reservations.push(id);
         }
         let mut held = Held::new();
-        for (component, (path, mode, _)) in access_components(shape).into_iter().enumerate() {
+        for (component, (path, mode, _)) in
+            access_components(self.db, shape).into_iter().enumerate()
+        {
             let mut grant = self.new_token(TokenKind::Grant, mode, origin);
             grant.regions.push(AbsPlace::new(Base::Grant {
                 session: result,
@@ -935,7 +973,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     /// Every persistent and transient slot, when the data argument at
-    /// `position` of a call of `func` is a reentrant or raw storage
+    /// `position` of a call of `callee` is a reentrant or raw storage
     /// capability: the callee may start an external execution or address
     /// slots through it, as through an effect. Read through a view. The
     /// methods `core` and `std` define on the capabilities say what they
@@ -943,11 +981,12 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// reaches nothing.
     fn capability_arg_footprint(
         &self,
-        owner: BodyOwner<'db>,
+        callee: SemanticInstanceKey<'db>,
         position: usize,
         arg: &NOperand,
     ) -> Option<Footprint> {
-        if let BodyOwner::Func(func) = owner
+        let owner = callee.owner(self.db);
+        if let BodyOwner::Func(func, _) = owner
             && matches!(
                 func.top_mod(self.db).ingot(self.db).kind(self.db),
                 IngotKind::Core | IngotKind::Std
@@ -955,15 +994,27 @@ impl<'a, 'db> Analysis<'a, 'db> {
         {
             return None;
         }
-        let mode = callee_param_mode(self.db, owner, position)?;
-        let declared = match owner {
-            BodyOwner::Func(func) => func.params(self.db).nth(position).map(|p| p.ty(self.db)),
-            _ => None,
+        // The declared type, before the callee's generic arguments. A
+        // parameter a spread lists declares none.
+        let typed_body = &infer_body(self.db, owner).1;
+        let (input, declared) = match typed_body.input_bindings().get(position) {
+            Some(&input) => (
+                input,
+                matches!(owner, BodyOwner::Func(..)).then(|| typed_body.binding_ty(self.db, input)),
+            ),
+            None => (
+                *callee.typed_body(self.db).input_bindings().get(position)?,
+                None,
+            ),
         };
         let ty = self.body.values[arg.value.index()].ty;
         let ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
-        let access =
-            self.capability_state_access(owner, declared, ty, mode != FuncParamMode::View)?;
+        // A view or a `ref` part only reads; an owned or `mut` input may write.
+        let reads = matches!(
+            typed_body.binding_access(input),
+            Some(BindingAccess::View | BindingAccess::Ref)
+        );
+        let access = self.capability_state_access(owner, declared, ty, !reads)?;
         Some(Footprint {
             regions: state_regions(),
             mode: access.borrow_kind(),
@@ -986,7 +1037,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         is_mut: bool,
     ) -> Option<MemoryAccessKind> {
         if let Some(declared) = declared
-            && let BodyOwner::Func(_) = owner
+            && let BodyOwner::Func(_, _) = owner
         {
             let assumptions = infer_body(self.db, owner).1.assumptions();
             if bounded_by_sealed_capabilities(self.db, owner.scope(), assumptions, declared) {
@@ -1135,9 +1186,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     fn block_entry(&self, block: NBlockId) -> Option<State> {
         let mut state = self.entry[block.index()].clone()?;
         for param in &self.body.blocks[block.index()].params {
-            state
-                .moved
-                .retain(|(key, _)| *key != MoveKey::Value(*param));
+            state.initialize(|(key, _)| *key == MoveKey::Value(*param));
         }
         Some(state)
     }
@@ -1214,15 +1263,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
             && let AccessTarget::Value { operand, .. } = access.target
             && access.kind == MemoryAccessKind::Move
         {
-            moved
-                .moved
-                .insert((MoveKey::Value(operand.value), Path::new()));
+            moved.record_move((MoveKey::Value(operand.value), Path::new()));
         }
         for successor in kind.successors() {
             let mut edge = moved.clone();
             for arg in &successor.args {
                 if arg.mode == ReadMode::Move {
-                    edge.moved.insert((MoveKey::Value(arg.value), Path::new()));
+                    edge.record_move((MoveKey::Value(arg.value), Path::new()));
                 }
             }
             match &mut self.entry[successor.block.index()] {
@@ -1238,7 +1285,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     // --- checks -----------------------------------------------------------
 
-    /// Checks the body; returns its result-space contract.
+    /// Checks the body; returns its result spaces.
     pub fn check(&mut self) -> Result<Vec<Option<AddressSpace>>, Diag<'db>> {
         self.checking = true;
         for block in self.reverse_postorder() {
@@ -1247,6 +1294,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             };
             let statements: Vec<_> = self.statements(block).collect();
             for (_, statement) in statements {
+                self.check_places_known(statement)?;
                 self.transfer(statement, &mut state)?;
             }
             if !self.diverges(block) {
@@ -1259,13 +1307,53 @@ impl<'a, 'db> Analysis<'a, 'db> {
         self.check_yields()
     }
 
+    /// Every place a reachable operation names is known once the flow is
+    /// solved: its carrier holds the access it reaches the place through, and
+    /// a dereference is of a pointer. A place nothing traces is an error,
+    /// never memory.
+    fn check_places_known(&self, statement: &NStatement<'db>) -> Result<(), Diag<'db>> {
+        let known = |place: &NPlace<'db>| match place.base {
+            NPlaceBase::Root(_) => true,
+            NPlaceBase::CapabilityTarget { carrier } => !self.direct(carrier).is_empty(),
+            NPlaceBase::Deref { pointer } => self.body.values[pointer.index()]
+                .ty
+                .as_ptr(self.db)
+                .is_some(),
+        };
+        let mut unknown = None;
+        match &statement.kind {
+            NStatementKind::Store { destination, .. }
+            | NStatementKind::Drop {
+                target: NDropTarget::Place(destination),
+            } if !known(destination) => {
+                unknown = Some(destination.origin);
+            }
+            NStatementKind::Define { expr, .. } => expr.for_each_place_operand(|place| {
+                if unknown.is_none() && !known(place) {
+                    unknown = Some(place.origin);
+                }
+            }),
+            NStatementKind::Store { .. }
+            | NStatementKind::End { .. }
+            | NStatementKind::Drop { .. } => {}
+        }
+        match unknown {
+            Some(origin) => Err(self.diag(
+                SemanticDiagnosticKind::Internal,
+                specific_origin(origin, statement.origin),
+                "cannot tell which place this access names".into(),
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// A `#[raw_place]` projection yields a place computed from its inputs,
     /// with nothing to resume: after each yield it only closes the accesses
     /// its grant derives from, a session among them is a `#[raw_place]`
     /// call's, and the place is not one of its own frame.
     fn check_raw_place(&self) -> Result<(), Diag<'db>> {
         let owner = self.instance.key(self.db).owner(self.db);
-        let BodyOwner::Func(func) = owner else {
+        let BodyOwner::Func(func, mode) = owner else {
             return Ok(());
         };
         if !func.is_raw_place(self.db) {
@@ -1278,7 +1366,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 message.into(),
             )
         };
-        if func.return_shape(self.db).is_none() {
+        if func.return_shape(self.db, mode).is_none() {
             return Err(violation(
                 SemOrigin::Body(owner),
                 "a `#[raw_place]` function must be a projection",
@@ -1322,7 +1410,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     let raw_session = match self.body.defining_expr(access) {
                         Some((_, NExpr::Call { callee, .. })) => matches!(
                             callee.key.owner(self.db),
-                            BodyOwner::Func(callee) if callee.is_raw_place(self.db)
+                            BodyOwner::Func(callee, _) if callee.is_raw_place(self.db)
                         ),
                         _ => true,
                     };
@@ -1358,9 +1446,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     /// Projections are inlined into their callers, so a projection may not
-    /// reach itself through projection calls.
+    /// reach itself through projection calls. Another instance of its
+    /// function is another projection, as `Enumerate<Enumerate<D>>::at` calls
+    /// `Enumerate<D>::at`; instantiation limits keep their chains finite.
     fn check_projection_recursion(&self) -> Result<(), Diag<'db>> {
-        let owner = self.instance.key(self.db).owner(self.db);
         if !self.instance.is_projection(self.db) {
             return Ok(());
         }
@@ -1370,11 +1459,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 expr: NExpr::Call { callee, .. },
                 ..
             } = &statement.kind
-                && reaches_owner(
+                && reaches_instance(
                     self.db,
-                    get_or_build_semantic_instance(self.db, callee.key),
-                    owner,
-                    &mut Vec::new(),
+                    SemanticInstance::new(self.db, callee.key),
+                    self.instance,
                     &mut explored,
                 )
             {
@@ -1394,10 +1482,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
     fn check_yield_paths(&self) -> Result<(), Diag<'db>> {
         const NOT_YET: u8 = 1;
         const YIELDED: u8 = 2;
-        let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
             return Ok(());
         };
-        if func.body(self.db).is_none() || func.return_shape(self.db).is_none() {
+        if func.body(self.db).is_none() || func.return_shape(self.db, mode).is_none() {
             return Ok(());
         }
         let mut entry = vec![0; self.body.blocks.len()];
@@ -1448,13 +1536,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// through them are discarded when the session finishes. A view
     /// descriptor is exempt, since its writes reach its owner.
     fn discarded_writes(&self) -> Vec<Diag<'db>> {
-        let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
             return Vec::new();
         };
-        let Some(shape) = func.return_shape(self.db) else {
+        let Some(shape) = func.return_shape(self.db, mode) else {
             return Vec::new();
         };
-        let components = access_components(shape);
+        let components = access_components(self.db, shape);
         self.body
             .blocks
             .iter()
@@ -1567,9 +1655,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
             let hole = ended.iter().find_map(|token| {
                 Some((*token, self.hole(state, MoveKey::Access(*token))?.clone()))
             });
-            state
-                .moved
-                .retain(|(key, _)| !matches!(key, MoveKey::Access(token) if ended.contains(token)));
+            state.initialize(
+                |(key, _)| matches!(key, MoveKey::Access(token) if ended.contains(token)),
+            );
             return match hole {
                 Some((token, hole)) => {
                     let mut diag = self.moved_diag(
@@ -1625,15 +1713,24 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 if let Some(key) = key
                     && !path.contains(&Step::Index(None))
                 {
-                    state.moved.retain(|(moved, moved_path)| {
-                        *moved != key || !moved_path.starts_with(&path)
+                    state.initialize(|(moved, moved_path)| {
+                        *moved == key && moved_path.starts_with(&path)
                     });
                 }
             }
             NStatementKind::Define { result, expr } => {
-                state
-                    .moved
-                    .retain(|(key, _)| *key != MoveKey::Value(*result));
+                state.initialize(|(key, _)| *key == MoveKey::Value(*result));
+                // A value forwarded by copy is handed on when it owns
+                // something to destroy: two owners would destroy it twice. An
+                // inspection reads it in place.
+                if let NExpr::Forward { src } = expr
+                    && src.mode == ReadMode::Copy
+                    && self.owns_drop_glue(self.body.values[src.value.index()].ty)
+                {
+                    let moved = (MoveKey::Value(src.value), Path::new());
+                    self.moved_at.entry(moved.clone()).or_insert(origin);
+                    state.record_move(moved);
+                }
                 if let NExpr::Call {
                     callee,
                     args,
@@ -1671,8 +1768,489 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 }
                 state.open.extend(opened);
             }
+            NStatementKind::Drop { target } => {
+                let result = self.drop_target(statement.id, target, state, origin);
+                self.report(result)?;
+            }
             NStatementKind::End { .. } => {}
         }
+        Ok(())
+    }
+
+    /// Whether a value of `ty` may own something to destroy. A `Copy` value
+    /// owns nothing.
+    fn owns_drop_glue(&self, ty: TyId<'db>) -> bool {
+        ty_has_drop_glue(self.db, ty) && !ty_is_copy(self.db, self.scope, ty, self.assumptions)
+    }
+
+    /// A value whose type implements `Drop` is destroyed whole, so no part
+    /// of it moves out; its own `drop` destroys `self` field by field, and
+    /// never moves it whole. `prefix_ty` is the type after a path prefix of
+    /// a length.
+    fn check_drop_move(
+        &self,
+        key: MoveKey,
+        prefix_ty: impl Fn(usize) -> Option<TyId<'db>>,
+        len: usize,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), Diag<'db>> {
+        let in_own_drop = self.is_drop_self(key);
+        if in_own_drop && len == 0 {
+            return Err(self.diag(
+                SemanticDiagnosticKind::MoveConflict,
+                origin,
+                "`drop` cannot move `self` whole: it is destroyed field by field".into(),
+            ));
+        }
+        let skip = usize::from(in_own_drop);
+        for ty in (skip..len).filter_map(prefix_ty) {
+            if ty
+                .adt_def(self.db)
+                .is_some_and(|adt| adt_drop_impl(self.db, adt.adt_ref(self.db)).is_some())
+            {
+                return Err(self.diag(
+                    SemanticDiagnosticKind::MoveConflict,
+                    origin,
+                    format!(
+                        "cannot move out of `{}`, which implements `Drop`",
+                        ty.pretty_print(self.db)
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `key` is the `self` of the `Drop::drop` being checked.
+    fn is_drop_self(&self, key: MoveKey) -> bool {
+        let BodyOwner::Func(func, _) = self.instance.key(self.db).owner(self.db) else {
+            return false;
+        };
+        let self_param = match key {
+            MoveKey::Value(value) => matches!(
+                self.body.values[value.index()].definition,
+                NValueDefinition::EntryParam { param: 0 }
+            ),
+            MoveKey::Root(root) => matches!(
+                self.body.roots[root as usize].kind,
+                NRootKind::ParamPlace { param: 0 }
+            ),
+            MoveKey::Param(_) | MoveKey::Access(_) => false,
+        };
+        self_param && implements_drop(self.db, func)
+    }
+
+    /// Whether `value` owns what it holds, rather than reading a place or
+    /// a value in place.
+    fn value_owns(&self, value: NValueId) -> bool {
+        !matches!(
+            self.body.defining_expr(value),
+            Some((
+                _,
+                NExpr::Load {
+                    mode: ReadMode::Read,
+                    ..
+                } | NExpr::Forward {
+                    src: NOperand {
+                        mode: ReadMode::Read,
+                        ..
+                    },
+                } | NExpr::ProjectValue {
+                    value: NOperand {
+                        mode: ReadMode::Read,
+                        ..
+                    },
+                    ..
+                }
+            ))
+        )
+    }
+
+    /// The parts of what `key` holds at `path` that a drop destroys: those
+    /// initialized on some path, each with the flags of the paths on its way
+    /// that only some paths move. A place no key tracks is initialized.
+    fn drop_parts(
+        &mut self,
+        key: Option<MoveKey>,
+        path: &Path,
+        ty: TyId<'db>,
+        state: &State,
+    ) -> Vec<DropPart> {
+        let Some(key) = key else {
+            return vec![DropPart {
+                path: Vec::new(),
+                flags: Vec::new(),
+            }];
+        };
+        let mut flags = Vec::new();
+        for len in 0..path.len() {
+            let enclosing = (key, path[..len].iter().copied().collect());
+            if state.definitely_moved.contains(&enclosing) {
+                return Vec::new();
+            }
+            if state.moved.contains(&enclosing) {
+                flags.push(self.drop_flag(enclosing));
+            }
+        }
+        let mut parts = Vec::new();
+        self.collect_drop_parts(key, path, path.len(), ty, flags, state, &mut parts);
+        parts
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_drop_parts(
+        &mut self,
+        key: MoveKey,
+        path: &Path,
+        base: usize,
+        ty: TyId<'db>,
+        mut flags: Vec<u32>,
+        state: &State,
+        parts: &mut Vec<DropPart>,
+    ) {
+        let entry = (key, path.clone());
+        if !self.owns_drop_glue(ty) || state.definitely_moved.contains(&entry) {
+            return;
+        }
+        if state.moved.contains(&entry) {
+            flags.push(self.drop_flag(entry));
+        }
+        let partly_moved = state.moved.iter().any(|(moved, moved_path)| {
+            *moved == key && moved_path.len() > path.len() && moved_path.starts_with(path)
+        });
+        if !partly_moved {
+            parts.push(DropPart {
+                path: path[base..].iter().map(|step| drop_step(*step)).collect(),
+                flags,
+            });
+            return;
+        }
+        for (step, component_ty) in self.drop_components(ty) {
+            let mut component = path.clone();
+            component.push(step);
+            self.collect_drop_parts(
+                key,
+                &component,
+                base,
+                component_ty,
+                flags.clone(),
+                state,
+                parts,
+            );
+        }
+    }
+
+    /// The components of a value of `ty` its drop destroys one by one when
+    /// some are moved out: fields, every variant's fields, or elements.
+    fn drop_components(&self, ty: TyId<'db>) -> Vec<(Step, TyId<'db>)> {
+        let (db, instance) = (self.db, self.instance);
+        if let Some(adt) = ty.adt_def(db)
+            && matches!(adt.adt_ref(db), AdtRef::Enum(_))
+        {
+            return (0..adt.fields(db).len() as u16)
+                .flat_map(|variant| {
+                    instance
+                        .normalized_enum_variant_field_tys(db, ty, VariantIndex(variant))
+                        .into_iter()
+                        .enumerate()
+                        .map(move |(field, &ty)| {
+                            (
+                                Step::Variant {
+                                    variant,
+                                    field: field as u16,
+                                },
+                                ty,
+                            )
+                        })
+                })
+                .collect();
+        }
+        if ty.is_array(db)
+            && let Some(len) = ty.array_len(db)
+        {
+            let element = instance.normalized_ty(db, ty.generic_args(db)[0]);
+            return (0..len)
+                .map(|index| (Step::Index(Some(index)), element))
+                .collect();
+        }
+        instance
+            .normalized_field_types(db, ty)
+            .iter()
+            .enumerate()
+            .map(|(field, &ty)| (Step::Field(field as u16), ty))
+            .collect()
+    }
+
+    /// The flag tracking whether `entry` is initialized.
+    fn drop_flag(&mut self, entry: (MoveKey, Path)) -> u32 {
+        let index = self
+            .drop_flags
+            .iter()
+            .position(|flag| *flag == entry)
+            .unwrap_or_else(|| {
+                self.drop_flags.push(entry);
+                self.drop_flags.len() - 1
+            });
+        index as u32
+    }
+
+    /// What the body's drops destroy, with the flags they consult set where
+    /// the flow moves or initializes each flagged path.
+    fn drop_elaboration(&mut self) -> Result<DropElaboration, Diag<'db>> {
+        let mut drops = std::mem::take(&mut self.drop_parts);
+        drops.sort_by_key(|(statement, _)| *statement);
+        let entry = self.entry[self.body.entry.index()]
+            .clone()
+            .unwrap_or_default();
+        let flags = self
+            .drop_flags
+            .iter()
+            .map(|flag| !self.flag_moved(&entry.moved, flag))
+            .collect();
+        let flag_updates = if self.drop_flags.is_empty() {
+            Vec::new()
+        } else {
+            self.drop_flag_updates()?
+        };
+        Ok(DropElaboration {
+            drops,
+            flags,
+            flag_updates,
+        })
+    }
+
+    /// Whether an entry of `moved` covers the flagged path.
+    fn flag_moved(&self, moved: &BTreeSet<(MoveKey, Path)>, flag: &(MoveKey, Path)) -> bool {
+        moved
+            .iter()
+            .any(|(key, path)| *key == flag.0 && flag.1.starts_with(path))
+    }
+
+    /// Replays the solved flow, recording where each flagged path is moved
+    /// or initialized.
+    fn drop_flag_updates(&mut self) -> Result<Vec<DropFlagUpdate>, Diag<'db>> {
+        self.checking = false;
+        let mut updates = Vec::new();
+        for block in self.reverse_postorder() {
+            let Some(before) = self.entry[block.index()].clone() else {
+                continue;
+            };
+            let mut state = self
+                .block_entry(block)
+                .expect("a reached block has an entry state");
+            self.record_flag_updates(
+                &before,
+                &state,
+                DropFlagPoint::BlockStart(block),
+                &mut updates,
+            );
+            let statements: Vec<_> = self.statements(block).collect();
+            for (_, statement) in statements {
+                let before = state.clone();
+                let _ = self.transfer(statement, &mut state);
+                self.record_flag_updates(
+                    &before,
+                    &state,
+                    DropFlagPoint::After(statement.id),
+                    &mut updates,
+                );
+            }
+            if self.diverges(block) {
+                continue;
+            }
+            // A terminator's moves happen on its way out.
+            let kind = &self.body.blocks[block.index()].terminator.kind;
+            let successors = kind.successors();
+            let mut after = state.clone();
+            if let Some(access) = kind.access(self.db, self.body)
+                && let AccessTarget::Value { operand, .. } = access.target
+                && access.kind == MemoryAccessKind::Move
+            {
+                after.record_move((MoveKey::Value(operand.value), Path::new()));
+            }
+            for successor in &successors {
+                let mut edge = after.clone();
+                for arg in &successor.args {
+                    if arg.mode == ReadMode::Move {
+                        edge.record_move((MoveKey::Value(arg.value), Path::new()));
+                    }
+                }
+                let mut moves = Vec::new();
+                self.record_flag_updates(
+                    &state,
+                    &edge,
+                    DropFlagPoint::BeforeTerminator(block),
+                    &mut moves,
+                );
+                let mut everywhere = Vec::new();
+                self.record_flag_updates(
+                    &state,
+                    &after,
+                    DropFlagPoint::BeforeTerminator(block),
+                    &mut everywhere,
+                );
+                // Only a successor argument moves on one edge alone, and
+                // normalization passes them in `Copy` mode, so this does not
+                // happen today; a flag update per edge would be needed if it did.
+                if moves.len() != everywhere.len() && successors.len() > 1 {
+                    return Err(self.diag(
+                        SemanticDiagnosticKind::Internal,
+                        self.body.blocks[block.index()].terminator.origin,
+                        "a value is moved into one branch only and destroyed after it".into(),
+                    ));
+                }
+                if successor.block == successors[0].block {
+                    updates.extend(moves);
+                }
+            }
+        }
+        self.checking = true;
+        Ok(updates)
+    }
+
+    fn record_flag_updates(
+        &self,
+        before: &State,
+        after: &State,
+        at: DropFlagPoint,
+        updates: &mut Vec<DropFlagUpdate>,
+    ) {
+        for (flag, tracked) in self.drop_flags.iter().enumerate() {
+            let covers =
+                |entry: &(MoveKey, Path)| entry.0 == tracked.0 && tracked.1.starts_with(&entry.1);
+            let moved = after
+                .definitely_moved
+                .iter()
+                .any(|entry| covers(entry) && !before.definitely_moved.contains(entry));
+            let initialized = before
+                .moved
+                .iter()
+                .any(|entry| covers(entry) && !after.moved.contains(entry));
+            if moved || initialized {
+                updates.push(DropFlagUpdate {
+                    at,
+                    flag: flag as u32,
+                    initialized: !moved,
+                });
+            }
+        }
+    }
+
+    /// A drop destroys whatever of its target is initialized, so a part
+    /// moved out is no error. Destroying a place writes it: no other access
+    /// may be open on it.
+    fn drop_target(
+        &mut self,
+        statement: NStatementId,
+        target: &NDropTarget<'db>,
+        state: &mut State,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), Diag<'db>> {
+        let place = match target {
+            NDropTarget::Value(value) => {
+                let entry = (MoveKey::Value(*value), Path::new());
+                if self.checking {
+                    let ty = self.body.values[value.index()].ty;
+                    let parts = if self.value_owns(*value) {
+                        self.drop_parts(Some(entry.0), &entry.1, ty, state)
+                    } else {
+                        Vec::new()
+                    };
+                    self.record_drop(statement, parts, ty, origin)?;
+                }
+                state.record_move(entry);
+                return Ok(());
+            }
+            NDropTarget::Place(place) => place,
+        };
+        let resolved = self.resolve(place);
+        let path = self.path(&place.path);
+        let key = match place.base {
+            NPlaceBase::Root(root) if self.root_domain[root.index()].is_none() => {
+                Some(MoveKey::Root(root.index() as u32))
+            }
+            NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
+            NPlaceBase::CapabilityTarget { carrier } => self.carrier_key(carrier),
+        };
+        // `[*]` names no definite element, so the drop may reach one moved
+        // out and destroy again what was moved, unless that owns nothing.
+        if let Some(key) = key
+            && path.contains(&Step::Index(None))
+            && let Some(found) = state.moved.iter().find(|(moved, moved_path)| {
+                *moved == key
+                    && paths_overlap(moved_path, &path)
+                    && moved_path
+                        .get(path.len()..)
+                        .unwrap_or_default()
+                        .iter()
+                        .try_fold(place.ty, |ty, step| {
+                            self.drop_components(ty)
+                                .into_iter()
+                                .find_map(|(component, ty)| (component == *step).then_some(ty))
+                        })
+                        .is_none_or(|ty| self.owns_drop_glue(ty))
+            })
+        {
+            return Err(self.moved_diag(
+                "cannot assign at a dynamic index while an element may be moved out",
+                origin,
+                found,
+            ));
+        }
+        if self.checking {
+            let parts = self.drop_parts(key, &path, place.ty, state);
+            self.record_drop(statement, parts, place.ty, origin)?;
+        }
+        // `[*]` names no definite element; the store a drop precedes
+        // initializes it again.
+        if let Some(key) = key
+            && !path.contains(&Step::Index(None))
+        {
+            state.record_move((key, path));
+        }
+        if self.holds_nothing(place.ty) {
+            return Ok(());
+        }
+        self.check_conflicts(
+            state,
+            &resolved.regions,
+            BorrowKind::Mut,
+            &resolved.authority,
+            &[],
+            MemoryAccessKind::Write,
+            origin,
+        )
+    }
+
+    /// Records the parts the drop `statement` destroys. Compile-time code
+    /// runs no `Drop` implementation, so there a drop may destroy nothing
+    /// whose destruction might run one.
+    fn record_drop(
+        &mut self,
+        statement: NStatementId,
+        parts: Vec<DropPart>,
+        ty: TyId<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), Diag<'db>> {
+        if !parts.is_empty()
+            && match self.instance.key(self.db).owner(self.db) {
+                BodyOwner::Func(func, _) => func.is_const(self.db),
+                BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
+                BodyOwner::ContractInit { .. }
+                | BodyOwner::ContractRecvArm { .. }
+                | BodyOwner::Closure { .. } => false,
+            }
+        {
+            return Err(self.diag(
+                SemanticDiagnosticKind::ConstDestructor,
+                origin,
+                format!(
+                    "destroying `{}` may run a `Drop` implementation, which compile-time code cannot",
+                    ty.pretty_print(self.db)
+                ),
+            ));
+        }
+        self.drop_parts.push((statement, parts));
         Ok(())
     }
 
@@ -1709,12 +2287,14 @@ impl<'a, 'db> Analysis<'a, 'db> {
     fn use_value(
         &mut self,
         operand: NOperand,
-        path: Option<&NStructuralPath>,
+        structural: Option<&NStructuralPath>,
         state: &mut State,
         consume: bool,
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
-        let path = path.map(|path| self.path(&path.0)).unwrap_or_default();
+        let path = structural
+            .map(|path| self.path(&path.0))
+            .unwrap_or_default();
         let key = MoveKey::Value(operand.value);
         if let Some(found) = state
             .moved
@@ -1733,10 +2313,22 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 .as_capability(self.db)
                 .is_none()
         {
+            let body = self.body;
+            self.check_drop_move(
+                key,
+                |len| match structural {
+                    Some(structural) => {
+                        body.value_prefix_ty(self.db, operand.value, &structural.0, len)
+                    }
+                    None => body.value(operand.value).map(|value| value.ty),
+                },
+                path.len(),
+                operand_origin(operand, origin),
+            )?;
             self.moved_at
                 .entry((key, path.clone()))
                 .or_insert(operand_origin(operand, origin));
-            state.moved.insert((key, path));
+            state.record_move((key, path));
         }
         Ok(())
     }
@@ -1821,6 +2413,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 return Err(self.moved_diag(message, origin, found));
             }
             if kind == MemoryAccessKind::Move {
+                let body = self.body;
+                self.check_drop_move(
+                    key,
+                    |len| body.place_prefix_ty(self.db, place, len),
+                    path.len(),
+                    origin,
+                )?;
                 // `[*]` names no definite element to restore.
                 if path.contains(&Step::Index(None)) {
                     return Err(self.diag(
@@ -1842,7 +2441,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     ));
                 }
                 self.moved_at.entry((key, path.clone())).or_insert(origin);
-                state.moved.insert((key, path));
+                state.record_move((key, path));
             }
         }
         let writes = kind != MemoryAccessKind::Read;
@@ -2048,23 +2647,29 @@ impl<'a, 'db> Analysis<'a, 'db> {
         // environment.
         let owner = callee.owner(self.db);
         let func = match owner {
-            BodyOwner::Func(func) => Some(func),
+            BodyOwner::Func(func, mode) => Some((func, mode)),
             BodyOwner::Closure { .. } => None,
             _ => return Ok(()),
         };
         // The places each argument passes, as the callee takes them.
         let mut passed = Vec::new();
         for (position, arg) in args.iter().enumerate() {
-            let Some(param_mode) = callee_param_mode(self.db, owner, position) else {
+            if callee
+                .typed_body(self.db)
+                .input_bindings()
+                .get(position)
+                .is_none()
+            {
                 continue;
-            };
+            }
+            let access = callee_input_access(self.db, callee, position);
             let arg_origin = operand_origin(*arg, origin);
-            let direct = self.passed_to(arg.value, param_mode);
+            let direct = self.passed_to(arg.value, access);
             if direct.is_empty() {
                 // An aggregate passed by value is still viewed in place: the
                 // call reads the place it came from.
                 let ty = self.body.values[arg.value.index()].ty;
-                if param_mode == FuncParamMode::View
+                if access == Some(BindingAccess::View)
                     && !ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
                 {
                     let (regions, parents) = self.source_place(arg.value);
@@ -2082,9 +2687,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 }
                 continue;
             }
-            let (mode, kind) = match param_mode {
-                FuncParamMode::Mut => (BorrowKind::Mut, MemoryAccessKind::MutAccess),
-                FuncParamMode::View | FuncParamMode::Own => {
+            let (mode, kind) = match access {
+                Some(BindingAccess::Mut) => (BorrowKind::Mut, MemoryAccessKind::MutAccess),
+                Some(BindingAccess::View | BindingAccess::Ref) | None => {
                     (BorrowKind::Ref, MemoryAccessKind::Read)
                 }
             };
@@ -2112,13 +2717,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
         let mut footprints: Vec<_> = args
             .iter()
             .enumerate()
-            .filter_map(|(position, arg)| self.capability_arg_footprint(owner, position, arg))
+            .filter_map(|(position, arg)| self.capability_arg_footprint(callee, position, arg))
             .collect();
         for effect in effect_args {
             footprints.extend(self.effect_footprint(callee, effect));
         }
-        if let Some(func) = func
-            && let Some(access) = external_call_state_access(self.db, func)
+        if let Some((func, mode)) = func
+            && let Some(access) = external_call_state_access(self.db, func, mode)
         {
             footprints.push(Footprint {
                 regions: state_regions(),
@@ -2236,14 +2841,14 @@ impl<'a, 'db> Analysis<'a, 'db> {
         state: &State,
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
-        let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
             return Ok(());
         };
-        let Some(shape) = func.return_shape(self.db) else {
+        let Some(shape) = func.return_shape(self.db, mode) else {
             return Ok(());
         };
         let held = &self.values[value.value.index()];
-        for (path, mode, _) in access_components(shape) {
+        for (path, mode, _) in access_components(self.db, shape) {
             let own: TokenSet = held
                 .iter()
                 .filter(|(_, rest)| *rest == path)
@@ -2288,16 +2893,18 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     /// A projection's yields: each component of every yield site names a
-    /// place in one address space, its result-space contract, and the access
-    /// components of a split are disjoint.
+    /// place in one address space, its result space, and the access
+    /// components of a split are disjoint. A component no yield grants has
+    /// none: every place but a grant has a space, and a grant of a callee's
+    /// component that no yield of the callee grants is never live.
     fn check_yields(&self) -> Result<Vec<Option<AddressSpace>>, Diag<'db>> {
-        let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
             return Ok(Vec::new());
         };
-        let Some(shape) = func.return_shape(self.db) else {
+        let Some(shape) = func.return_shape(self.db, mode) else {
             return Ok(Vec::new());
         };
-        let components = access_components(shape);
+        let components = access_components(self.db, shape);
         let mut spaces: Vec<Option<(AddressSpace, SemOrigin<'db>)>> = vec![None; components.len()];
         for block in &self.body.blocks {
             let NTerminatorKind::Yield { value, .. } = &block.terminator.kind else {
@@ -2355,70 +2962,41 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 }
             }
         }
-        // A declared contract holds every yield, and is the contract of a
-        // component no yield shows.
-        let declared = self.instance.declared_result_spaces(self.db);
-        spaces
+        Ok(spaces
             .into_iter()
-            .enumerate()
-            .map(|(index, inferred)| {
-                let declared = declared
-                    .get(index)
-                    .copied()
-                    .flatten()
-                    .and_then(|contract| self.instance.contract_space(self.db, contract));
-                match (inferred, declared) {
-                    (Some((space, origin)), Some(declared)) if space != declared => Err(self.diag(
-                        SemanticDiagnosticKind::TransportViolation,
-                        origin,
-                        format!(
-                            "this yield names {}, but the signature declares {}",
-                            space.pretty(),
-                            declared.pretty()
-                        ),
-                    )),
-                    (inferred, declared) => Ok(inferred.map(|(space, _)| space).or(declared)),
-                }
-            })
-            .collect()
+            .map(|space| space.map(|(space, _)| space))
+            .collect())
     }
 }
 
-/// Whether `instance`, a callee, is a projection that reaches `owner` through
-/// projection calls. A function that recurs on the path is not explored
-/// further: its own check reports it, which also bounds polymorphic recursion.
-fn reaches_owner<'db>(
+/// Whether `instance`, a callee, is a projection that reaches `target`
+/// through projection calls. An instance is explored once, and an
+/// instantiation past the limit has no callee, which bounds polymorphic
+/// recursion.
+fn reaches_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    owner: BodyOwner<'db>,
-    path: &mut Vec<BodyOwner<'db>>,
+    target: SemanticInstance<'db>,
     explored: &mut FxHashSet<SemanticInstance<'db>>,
 ) -> bool {
-    let instance_owner = instance.key(db).owner(db);
-    if !instance.is_projection(db) || path.contains(&instance_owner) || !explored.insert(instance) {
+    if !instance.is_projection(db) || !explored.insert(instance) {
         return false;
     }
-    if instance_owner == owner {
-        return true;
-    }
-    path.push(instance_owner);
-    let reaches = instance.callees(db).iter().any(|callee| {
-        reaches_owner(
-            db,
-            get_or_build_semantic_instance(db, callee.key),
-            owner,
-            path,
-            explored,
-        )
-    });
-    path.pop();
-    reaches
+    instance == target
+        || instance.callees(db).iter().any(|callee| {
+            reaches_instance(db, SemanticInstance::new(db, callee.key), target, explored)
+        })
 }
 
 /// The access components of a shape, by their path in its carrier, with
-/// their mode and type.
-fn access_components<'db>(shape: &Shape<'db>) -> Vec<(Path, BorrowKind, TyId<'db>)> {
+/// their mode and type. An opaque part is one abstract component, at its
+/// mode, or `mut` when that is not known.
+pub(super) fn access_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    shape: &Shape<'db>,
+) -> Vec<(Path, BorrowKind, TyId<'db>)> {
     fn walk<'db>(
+        db: &'db dyn HirAnalysisDb,
         shape: &Shape<'db>,
         path: &mut Path,
         out: &mut Vec<(Path, BorrowKind, TyId<'db>)>,
@@ -2426,10 +3004,21 @@ fn access_components<'db>(shape: &Shape<'db>) -> Vec<(Path, BorrowKind, TyId<'db
         match shape {
             Shape::Owned(_) => {}
             Shape::Access(kind, ty) => out.push((path.clone(), *kind, *ty)),
+            Shape::Opaque(term) => {
+                let kind = match term.data(db) {
+                    TyData::AssocTy(assoc) => assoc.mode.and_then(ShapeMode::kind),
+                    _ => None,
+                };
+                out.push((
+                    path.clone(),
+                    kind.unwrap_or(BorrowKind::Mut),
+                    shape.erased_ty(db),
+                ));
+            }
             Shape::Tuple(elems) => {
                 for (field, elem) in elems.iter().enumerate() {
                     path.push(Step::Field(field as u16));
-                    walk(elem, path, out);
+                    walk(db, elem, path, out);
                     path.pop();
                 }
             }
@@ -2440,13 +3029,13 @@ fn access_components<'db>(shape: &Shape<'db>) -> Vec<(Path, BorrowKind, TyId<'db
                     variant: *variant,
                     field: 0,
                 });
-                walk(payload, path, out);
+                walk(db, payload, path, out);
                 path.pop();
             }
         }
     }
     let mut out = Vec::new();
-    walk(shape, &mut Path::new(), &mut out);
+    walk(db, shape, &mut Path::new(), &mut out);
     out
 }
 
@@ -2480,21 +3069,16 @@ fn call_args(body: &NormalizedBody<'_>) -> FxHashSet<NValueId> {
     args
 }
 
-/// The mode of a callee's parameter at `position`: a closure's first is its
-/// environment, in the mode the closure is called with.
-fn callee_param_mode<'db>(
+/// How the callee `callee` takes its input at `position`: a parameter, or a
+/// product parameter's part; a closure's first input is its environment, in
+/// the mode the closure is called with. `None` for an owned input.
+pub(super) fn callee_input_access<'db>(
     db: &'db dyn HirAnalysisDb,
-    owner: BodyOwner<'db>,
+    callee: SemanticInstanceKey<'db>,
     position: usize,
-) -> Option<FuncParamMode> {
-    match owner {
-        BodyOwner::Func(func) => Some(CallableDef::Func(func).param_mode(db, position)),
-        BodyOwner::Closure { ty, receiver, .. } => match position.checked_sub(1) {
-            None => Some(receiver),
-            Some(idx) => ty.modes(db).get(idx).copied(),
-        },
-        _ => None,
-    }
+) -> Option<BindingAccess> {
+    let typed_body = callee.typed_body(db);
+    typed_body.binding_access(*typed_body.input_bindings().get(position)?)
 }
 
 fn state_regions() -> Vec<AbsPlace> {
@@ -2522,16 +3106,30 @@ fn specific_origin<'db>(first: SemOrigin<'db>, second: SemOrigin<'db>) -> SemOri
     }
 }
 
-/// Checks a body, returning its warnings and its result-space contract.
+/// Checks a body, returning its warnings and its result spaces.
+/// What checking a body establishes for its callers and for runtime
+/// lowering.
+pub(super) struct CheckedBody<'db> {
+    pub warnings: Vec<Diag<'db>>,
+    /// A projection's result space per access component.
+    pub spaces: Vec<Option<AddressSpace>>,
+    pub drops: DropElaboration,
+}
+
 pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &NormalizedBody<'db>,
-) -> Result<(Vec<Diag<'db>>, Vec<Option<AddressSpace>>), Diag<'db>> {
+) -> Result<CheckedBody<'db>, Diag<'db>> {
     let mut analysis = Analysis::new(db, instance, body, true);
     analysis.solve();
     let spaces = analysis.check()?;
-    Ok((analysis.discarded_writes(), spaces))
+    let drops = analysis.drop_elaboration()?;
+    Ok(CheckedBody {
+        warnings: analysis.discarded_writes(),
+        spaces,
+        drops,
+    })
 }
 
 /// Adds `extra` to `parents`, once each.
@@ -2539,6 +3137,16 @@ fn add_parents(parents: &mut TokenSet, extra: &[TokenId]) {
     for &token in extra {
         if !parents.contains(&token) {
             parents.push(token);
+        }
+    }
+}
+
+fn drop_step(step: Step) -> DropStep {
+    match step {
+        Step::Field(field) => DropStep::Field(field),
+        Step::Variant { variant, field } => DropStep::Variant { variant, field },
+        Step::Index(index) => {
+            DropStep::Index(index.expect("a part of a drop lies at constant indices"))
         }
     }
 }

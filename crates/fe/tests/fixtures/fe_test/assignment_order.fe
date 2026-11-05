@@ -2,18 +2,14 @@
 // opens the target's sessions: the value may read and write what the target is
 // reached through, and a compound assignment opens one session on its target
 // after the value is read.
-use core::ops::{Index, IndexMut}
+use core::ops::Index
 use core::ptr::MemBuffer
 use std::evm::{Evm, StorageMap}
 
 struct Cells { cells: [u256; 2] }
 impl Index<usize> for Cells {
-    space S = memory
     type Output = u256
-    fn index(self, _ i: usize) -> ref u256 { ref self.cells[i] }
-}
-impl IndexMut<usize> for Cells {
-    fn index_mut(mut self, _ i: usize) -> mut u256 { mut self.cells[i] }
+    fn index(mut? self, _ i: usize) -> mut? u256 { mut? self.cells[i] }
 }
 
 struct Counter { total: u256, n: u256, cells: Cells }
@@ -84,14 +80,14 @@ pub contract C {
 
 #[test]
 fn map_value_first() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
-    let v: u256 = evm.call(addr: c, gas: 300000, value: 0, message: Msg::Run {})
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    let v: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Run {})
     assert(v == 905)
 }
 
 fn make() -> MemBuffer uses (log: mut u256) {
     log = log * 10 + 1
-    MemBuffer::alloc(1)
+    MemBuffer::new(1)
 }
 
 fn seven() -> u8 uses (log: mut u256) {

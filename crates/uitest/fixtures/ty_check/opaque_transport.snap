@@ -1,0 +1,102 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/opaque_transport.fe
+---
+error[3-0082]: an associated shape carries its own modes
+   ┌─ opaque_transport.fe:59:26
+   │
+59 │ fn moded<D: Driver>(_ s: own D::Step<ref>) {}
+   │                          ^^^^^^^^^^^^^^^^ remove the mode before it: the shape is named at its mode, as `D::Step<ref>`
+
+error[3-0084]: an associated shape needs a mode here
+   ┌─ opaque_transport.fe:56:25
+   │
+56 │ fn bare<D: Driver>(_ s: D::Step) {}
+   │                         ^^^^^^^ write `<ref>` or `<mut>` after it, as in `D::Step<ref>`; only a `mut?` item's own signature names one without
+
+error[8-0000]: type mismatch
+   ┌─ opaque_transport.fe:39:9
+   │
+39 │     let (a, b) = s
+   │         ^^^^^^ expected `D::Step<ref>`, but `(_, _)` is given
+
+error[8-0000]: type mismatch
+   ┌─ opaque_transport.fe:48:13
+   │
+48 │     take<D>(x)
+   │             ^ expected `D::Step<ref>`, but `u256` is given
+
+error[8-0000]: type mismatch
+   ┌─ opaque_transport.fe:52:13
+   │
+52 │     take<D>(s)
+   │             ^ expected `D::Step<ref>`, but `D::Step<mut>` is given
+
+error[8-0000]: type mismatch
+   ┌─ opaque_transport.fe:65:17
+   │
+65 │     take_mut<D>(s)
+   │                 ^ expected `D::Step<mut>`, but `D::Step<ref>` is given
+
+error[8-0015]: invalid field index
+   ┌─ opaque_transport.fe:43:5
+   │
+43 │     s.0
+   │     ^^^ field `0` is not found in `D::Step<ref>`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ opaque_transport.fe:69:17
+   │
+68 │ fn explicit_mut<D: mut Driver>(_ s: D::Step<ref>) {
+   │                                  - `s` does not provide mutable access
+69 │     take_mut<D>(mut s)
+   │                 ^^^^^ cannot borrow as `mut`
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ opaque_transport.fe:26:9
+   │
+26 │     let t = s
+   │         ^ its parts are not known here: return it, or pass it to a parameter of the same shape
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ opaque_transport.fe:31:9
+   │
+31 │         ref r => {}
+   │         ^^^^^ its parts are not known here: return it, or pass it to a parameter of the same shape
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ opaque_transport.fe:34:9
+   │
+34 │         mut m => {}
+   │         ^^^^^ its parts are not known here: return it, or pass it to a parameter of the same shape
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ opaque_transport.fe:81:16
+   │
+81 │     let a = id(s)
+   │                ^ its parts are not known here: return it, or pass it to a parameter of the same shape
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ opaque_transport.fe:85:10
+   │
+85 │     view(s)
+   │          ^ its parts are not known here: return it, or pass it to a parameter of the same shape
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ opaque_transport.fe:89:26
+   │
+89 │     let o = Option::Some(s)
+   │                          ^ its parts are not known here: return it, or pass it to a parameter of the same shape
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ opaque_transport.fe:93:15
+   │
+93 │     let xs = [s]
+   │               ^ its parts are not known here: return it, or pass it to a parameter of the same shape
+
+error[8-0147]: a value of `D::Step<ref>` can only be passed on
+   ┌─ opaque_transport.fe:97:24
+   │
+97 │     let f = || take<D>(s)
+   │                        ^ its parts are not known here: return it, or pass it to a parameter of the same shape

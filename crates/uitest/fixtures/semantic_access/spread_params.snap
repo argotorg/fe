@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/spread_params.fe
+---
+error[16-0001]: access conflict in `fn mut_and_view`
+   ┌─ spread_params.fe:14:20
+   │
+14 │     f.apply(mut y, y)
+   │             -----  ^ cannot read this place while a `mut` access of it is open
+   │             │
+   │             access opened here
+
+error[16-0001]: access conflict in `fn mut_twice`
+   ┌─ spread_params.fe:19:20
+   │
+19 │     f.apply(mut y, mut y)
+   │             -----  ^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │             │
+   │             access opened here
+
+error[16-0001]: access conflict in `fn product_part`
+   ┌─ spread_params.fe:24:21
+   │
+24 │     f.apply((mut y, ref y))
+   │              -----  ^^^^^ cannot read this place while a `mut` access of it is open
+   │              │
+   │              access opened here

@@ -19,7 +19,7 @@ fn at(_ a: [u256; 0], _ i: usize) -> ref u256 {
 }
 
 fn runtime_zero() -> usize uses (storage: RawStorage) {
-    unsafe { storage.sload(0) as usize }
+    unsafe { storage.sload(0).downcast_unchecked() }
 }
 
 #[test]

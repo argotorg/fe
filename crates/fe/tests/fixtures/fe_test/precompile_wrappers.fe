@@ -36,7 +36,7 @@ type MemBuffer = ptr::MemBuffer
 type MemSpan = ptr::MemSpan
 
 fn buffer(_ ptr: *u8, _ len: u256) -> ref MemSpan {
-    unsafe { MemSpan::from_raw_parts(ptr, len) }
+    unsafe { MemSpan::from_raw_parts(ptr, len: len.downcast_unchecked()) }
 }
 
 fn expect_word(_ result: Result<PrecompileError, u256>) -> u256 {
@@ -84,7 +84,7 @@ uses (evm: mut Evm)
 {
     var offset: u256 = 0
     while offset < len {
-        unsafe { store_word(ptr: ptr::offset_bytes(base, offset), value: 0) }
+        unsafe { store_word(ptr: ptr::offset_bytes(base, offset.downcast_unchecked()), value: 0) }
         offset += 32
     }
 }
@@ -232,7 +232,7 @@ uses (evm: Evm)
     unsafe { ptr::zero_bytes(ptr, 64) }
     var ret = MemBuffer::with_capacity(32)
     let outcome = evm.raw_staticcall(
-        addr: Address { inner: 4 },
+        addr: Address::new(4),
         gas: 1000000,
         args: buffer(ptr, 64),
         ret: mut ret,

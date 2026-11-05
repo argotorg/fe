@@ -11,7 +11,8 @@ use hir::{
         NameDomain, NameResKind, available_traits_in_scope, is_scope_visible_from,
     },
     hir_def::{
-        Body, Func, HirIngot, ItemKind, Partial, Pat, Stmt, TopLevelMod, scope_graph::ScopeId,
+        Body, Func, FuncParam, HirIngot, ItemKind, Partial, Pat, Stmt, TopLevelMod,
+        scope_graph::ScopeId,
     },
     lower::map_file_to_mod,
     visitor::prelude::*,
@@ -214,7 +215,7 @@ fn find_scope_at_cursor<'db>(
     use hir::span::LazySpan;
 
     // Find the smallest enclosing item
-    let items = top_mod.scope_graph(db).items_dfs(db);
+    let items = top_mod.all_items(db).iter().copied();
     let mut best_scope = None;
     let mut best_size = None;
 
@@ -295,7 +296,11 @@ fn collect_auto_import_completions<'db>(
     let import_position = find_module_import_position(db, current_scope, file_text);
 
     // Iterate all items in the ingot (includes nested inline modules)
-    for item in ingot.all_items(db).iter().copied() {
+    for item in ingot
+        .all_modules(db)
+        .iter()
+        .flat_map(|top_mod| top_mod.scope_graph(db).items_dfs())
+    {
         // Only include items visible from the current scope
         let item_scope = ScopeId::from_item(item);
         if !is_scope_visible_from(db, item_scope, current_scope) {
@@ -754,10 +759,9 @@ fn collect_member_completions<'db>(
     use hir::span::LazySpan;
 
     // Find the enclosing function
-    let scope_graph = top_mod.scope_graph(db);
     let mut enclosing_func = None;
 
-    for item in scope_graph.items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         if let ItemKind::Func(func) = item
             && let Some(span) = func.span().resolve(db)
             && span.range.contains(cursor)
@@ -956,7 +960,7 @@ fn collect_methods_for_type<'db>(
     let mut seen_methods = std::collections::HashSet::new();
 
     // Look for inherent impl blocks in the module
-    for item in top_mod.scope_graph(db).items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         if let ItemKind::Impl(impl_) = item {
             // Check if this impl is for our type by comparing target type name
             let impl_ty_name = impl_.ty(db).pretty_print(db);
@@ -1300,7 +1304,13 @@ fn name_res_to_completion<'db>(
             // Handle other scope types
             let kind = match scope {
                 ScopeId::FuncParam(_, _) => {
-                    if matches!(context, CompletionContext::Type) {
+                    // A destructured parameter's hidden name is no source
+                    // name: its pattern's names are the body's bindings.
+                    if matches!(context, CompletionContext::Type)
+                        || scope
+                            .resolve_to::<&FuncParam>(db)
+                            .is_some_and(FuncParam::is_destructured)
+                    {
                         return None;
                     }
                     CompletionItemKind::VARIABLE
@@ -1508,6 +1518,24 @@ mod tests {
             finder.count > 0,
             "Expected Field expressions in the fixture"
         );
+    }
+
+    /// An import named `_` brings in no name, so it doesn't settle the
+    /// ambiguity between two glob-imported names.
+    #[test]
+    fn test_underscore_import_is_not_visible() {
+        use hir::analysis::name_resolution::NameDomain;
+
+        let mut db = DriverDataBase::default();
+        let source = "use a::*\nuse b::*\nuse c::T as _\n\
+                      mod a { pub trait T {} }\nmod b { pub trait T {} }\nmod c { pub trait T {} }\n";
+        let url = url::Url::parse("file:///underscore_import.fe").unwrap();
+        let file = db.workspace().touch(&mut db, url, Some(source.to_string()));
+        let top_mod = map_file_to_mod(&db, file);
+
+        let visible = top_mod.scope().items_in_scope(&db, NameDomain::TYPE);
+        assert!(visible.contains_key("c"));
+        assert!(!visible.contains_key("T"));
     }
 
     /// Test auto-import completions

@@ -264,7 +264,7 @@ impl<'db> SymbolView<'db> {
             return Vec::new();
         };
         let scope = ScopeId::from_item(item);
-        let scope_graph = scope.top_mod(db).scope_graph(db);
+        let scope_graph = scope.scope_graph(db);
         scope_graph
             .children(scope)
             .filter(|child| matches!(child, ScopeId::GenericParam(..)))
@@ -519,7 +519,7 @@ fn item_children<'db>(db: &'db dyn HirDb, item: ItemKind<'db>) -> Vec<SymbolView
         }
         ItemKind::Mod(m) => {
             let scope = m.scope();
-            let scope_graph = scope.top_mod(db).scope_graph(db);
+            let scope_graph = scope.scope_graph(db);
             for child_item in scope_graph.child_items(scope) {
                 children.push(SymbolView::from_item(child_item));
             }
@@ -640,7 +640,8 @@ pub fn item_kind_to_url_suffix(db: &dyn SpannedHirDb, item: ItemKind) -> Option<
 pub fn qualify_path_with_ingot_name(db: &dyn SpannedHirDb, path: &str, ingot: Ingot) -> String {
     let ingot_name = ingot
         .config(db)
-        .and_then(|c| c.metadata.name)
+        .as_ref()
+        .and_then(|c| c.metadata.name.as_ref())
         .map(|s| s.to_string());
 
     if let Some(name) = ingot_name {
@@ -661,7 +662,7 @@ pub fn qualify_path_with_ingot_name(db: &dyn SpannedHirDb, path: &str, ingot: In
 // ---------------------------------------------------------------------------
 
 /// A single reference to a symbol, with its span and metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct IndexedReference<'db> {
     /// The span of the reference occurrence.
     pub span: DynLazySpan<'db>,
@@ -676,21 +677,10 @@ pub struct IndexedReference<'db> {
 ///
 /// Built once per ingot, eliminates the O(items × modules) scan that SCIP
 /// and LSIF currently perform.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct ReferenceIndex<'db> {
     /// Target scope → list of references pointing at it.
     index: FxHashMap<ScopeId<'db>, Vec<IndexedReference<'db>>>,
-}
-
-unsafe impl<'db> salsa::Update for ReferenceIndex<'db> {
-    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
-        let old = unsafe { &mut *old_pointer };
-        if old == &new_value {
-            return false;
-        }
-        *old = new_value;
-        true
-    }
 }
 
 impl<'db> ReferenceIndex<'db> {

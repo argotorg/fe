@@ -1,24 +1,12 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/revert.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {i256, i256, i256};
-type @layout_1 = {i256, i256};
-
-func private %alloc(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %alloc_uninit v0;
-        v4.i256 = extract_value v2 0.i256;
-        call %zero_bytes v4 v0;
-        return v2;
-}
+type @layout_0 = {i256, i256};
+type @layout_1 = {i256, i256, i256};
 
 func inline(always) private %alloc_bytes(v0.i256) -> i256 {
     block0:
@@ -37,21 +25,9 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.*i8 = evm_malloc v0;
-        v13.i256 = ptr_to_int v12 i256;
-        return v13;
-}
-
-func private %alloc_uninit(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %alloc_bytes v0;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
-        v7.@layout_0 = insert_value v5 1.i256 v0;
-        v9.@layout_0 = insert_value v7 2.i256 v0;
-        return v9;
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
 func private %cast(v0.i256) -> i256 {
@@ -62,13 +38,13 @@ func private %cast(v0.i256) -> i256 {
         return v0;
 }
 
-func private %standalone_revert__revert__fail__gcd5c_b28f() {
+func private %fail() {
     block0:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
+        v0.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v2.@layout_0 = call %alloc 32.i256;
+        v2.@layout_1 = call %new 32.i256;
         v3.i256 = call %impl_MemBuffer__ptr v2;
         call %store_word v3 42.i256;
         jump block3;
@@ -86,53 +62,13 @@ func private %standalone_revert__revert__fail__gcd5c_b28f() {
         jump block2;
 
     block5:
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v9;
-        v17.@layout_1 = insert_value v15 1.i256 v11;
-        v18.objref<i256> = obj.proj v0 0.i256;
-        v19.i256 = extract_value v17 0.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v0 1.i256;
-        v21.i256 = extract_value v17 1.i256;
-        obj.store v20 v21;
+        v15.@layout_0 = insert_value undef.@layout_0 0.i256 v9;
+        v17.@layout_0 = insert_value v15 1.i256 v11;
+        obj.store v0 v17;
         jump block4;
 }
 
-func private %standalone_revert__revert__fail__gcd5c_b920() {
-    block0:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %alloc 32.i256;
-        v3.i256 = call %impl_MemBuffer__ptr v2;
-        call %store_word v3 42.i256;
-        jump block3;
-
-    block2:
-        call %revert v0;
-        unreachable;
-
-    block3:
-        v9.i256 = extract_value v2 0.i256;
-        v11.i256 = extract_value v2 1.i256;
-        jump block5;
-
-    block4:
-        jump block2;
-
-    block5:
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v9;
-        v17.@layout_1 = insert_value v15 1.i256 v11;
-        v18.objref<i256> = obj.proj v0 0.i256;
-        v19.i256 = extract_value v17 0.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v0 1.i256;
-        v21.i256 = extract_value v17 1.i256;
-        obj.store v20 v21;
-        jump block4;
-}
-
-func private %len(v0.objref<@layout_1>) -> i256 {
+func private %len(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -147,7 +83,7 @@ func private %main() {
         jump block1;
 
     block1:
-        call %standalone_revert__revert__fail__gcd5c_b920;
+        call %fail;
         unreachable;
 }
 
@@ -160,16 +96,30 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %impl_MemBuffer__ptr(v0.@layout_0) -> i256 {
+func private %new(v0.i256) -> @layout_1 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = extract_value v0 0.i256;
-        return v3;
+        v2.@layout_1 = call %new_uninit v0;
+        v4.i256 = extract_value v2 0.i256;
+        call %zero_bytes v4 v0;
+        return v2;
 }
 
-func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
+func private %new_uninit(v0.i256) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %alloc_bytes v0;
+        v5.@layout_1 = insert_value undef.@layout_1 0.i256 v2;
+        v7.@layout_1 = insert_value v5 1.i256 v0;
+        v9.@layout_1 = insert_value v7 2.i256 v0;
+        return v9;
+}
+
+func private %ptr__g79ff(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -179,7 +129,16 @@ func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %revert(v0.objref<@layout_1>) {
+func private %impl_MemBuffer__ptr(v0.@layout_1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func private %revert(noalias nocapture v0.objref<@layout_0>) {
     block0:
         jump block1;
 

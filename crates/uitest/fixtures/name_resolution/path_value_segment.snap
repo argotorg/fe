@@ -1,0 +1,25 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/path_value_segment.fe
+---
+error[2-0005]: `f` can't be used as a middle segment of a path
+   ┌─ path_value_segment.fe:12:11
+   │
+ 6 │     pub fn f() {}
+   │            - `f` is defined here
+   ·
+12 │     c: m::f::X,
+   │           ^ `f` can't be used as a middle segment of a path
+
+error[2-0006]: expected type item here
+   ┌─ path_value_segment.fe:10:11
+   │
+10 │     a: m::f,
+   │           ^ expected type here, but found fn `f`
+
+error[2-0006]: expected type item here
+   ┌─ path_value_segment.fe:11:12
+   │
+11 │     b: <m::f as M>::P,
+   │            ^ expected type here, but found fn `f`

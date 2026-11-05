@@ -8,7 +8,10 @@ use test_utils::snap_test;
     glob: "*.fe"
 )]
 fn format_snap(fixture: Fixture<&str>) {
-    let config = Config::default();
+    let config = Config {
+        uses_new_line: fixture.content().lines().next() == Some("// fmt: uses_new_line = true"),
+        ..Config::default()
+    };
     let output = match format_str(fixture.content(), &config) {
         Ok(formatted) => formatted,
         Err(err) => format!("FORMAT ERROR: {err:?}"),

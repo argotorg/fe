@@ -3,5 +3,5 @@ source: crates/fe/tests/erc20_deployment.rs
 assertion_line: 115
 expression: report
 ---
-initcode bytes: 996
-runtime bytes: 865
+initcode bytes: 993
+runtime bytes: 869

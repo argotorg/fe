@@ -1,45 +1,50 @@
-use core::iter::{Collection, Driver, enumerate, reversed}
-use core::option::Option
+use core::iter::{Collection, Driver, Reversed}
 
 struct Account { balance: u256 }
 
-// A driver is a value that implements `Driver` over the base.
+// A chain whose value drives none of its receivers is the loop's
+// collection: `by` takes a driver over the base.
 fn not_a_driver(_ xs: [u256; 3]) {
-    for x in xs by true {
+    for x in xs.by(true) {
     }
 }
 
 // Only the elements a driver projects can be mutated.
-struct Firsts {}
+struct Firsts<B> {}
 
-impl<B: Collection<Cursor = usize>> Driver<B> for Firsts {
+impl<B: Collection<Cursor = usize>> Driver for Firsts<B> {
+    type Base = B
     type State = usize
-    type Item = B::Item
+    shape Step = ref B::Item
 
-    fn start(self, _ base: B) -> Option<usize> uses B::E {
+    fn start(self, _ base: B) -> usize uses B::E {
         base.start()
     }
 
-    fn next(self, _ base: B, _ s: usize) -> Option<usize> uses B::E {
-        Option::None
+    fn has(self, _ base: B, _ s: usize) -> bool uses B::E {
+        s == base.start() && base.has(s)
     }
 
-    fn at(self, _ base: B, _ s: usize) -> ((), ref B::Item) uses B::E {
-        ((), Collection::at(base, s))
+    fn next(self, _ base: B, _ s: usize) -> usize uses B::E {
+        s + 1
+    }
+
+    fn at(self, _ base: B, _ s: usize) -> ref B::Item uses B::E {
+        Collection::at(base, s)
     }
 }
 
 fn mutates_through_reads() {
     var xs: [u256; 3] = [1, 2, 3]
     let d = Firsts {}
-    for mut x in xs by d {
+    for mut x in xs.by(d) {
         x += 1
     }
 }
 
 // A copied element is not a place.
 fn copies(_ xs: [u256; 3]) {
-    for x in xs by reversed() {
+    for x in xs.reversed() {
         x += 1
     }
 }
@@ -51,14 +56,28 @@ fn reads(_ accounts: [Account; 2]) {
     }
 }
 
-// Without anything beside it, a driver binds its element alone.
+// A step of the element alone binds it alone.
 fn binds_the_element(_ xs: [u256; 3]) {
-    for (i, x) in xs by reversed() {
+    for (i, x) in xs.reversed() {
     }
 }
 
 // A method chain drives a collection it passes through.
 fn chain_over_a_driver() {
-    for x in reversed().take(2) {
+    let d = Reversed<[u256; 3]> {}
+    for x in d.take(2) {
+    }
+}
+
+// A driver runs over its own base's type.
+fn other_base(_ xs: [u256; 3]) {
+    let d = Reversed<[u256; 4]> {}
+    for x in xs.by(d) {
+    }
+}
+
+// A generic driver's base is its own unless a bound names the loop's.
+fn generic_base<C: Collection, D: Driver>(_ xs: C, _ d: own D) {
+    for x in xs.by(d) {
     }
 }

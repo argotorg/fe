@@ -5,7 +5,6 @@ struct WordView { base: u256 }
 impl Copy for WordView {}
 
 impl Index<u256> for WordView {
-    space S = memory
     type Output = u256
 
     // The grant is a temporary of the projection's own frame.

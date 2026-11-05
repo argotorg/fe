@@ -1,6 +1,6 @@
 use cranelift_entity::{EntityRef, entity_impl};
 use rustc_hash::FxHashMap;
-use salsa::Update;
+use salsa::SalsaValue;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
@@ -10,13 +10,13 @@ use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor};
 use crate::core::hir_def::{EnumVariant, FieldParent, IdentId, LitKind, PatId, VariantKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct BindingRef<'db> {
     pub name: IdentId<'db>,
     pub representative_pat: PatId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct PatternMatchTy<'db>(TyId<'db>);
 
 impl<'db> PatternMatchTy<'db> {
@@ -29,7 +29,7 @@ impl<'db> PatternMatchTy<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ValidatedPat<'db> {
     // Match-analysis type only. This intentionally stays separate from the final
     // binding type and from the carrier/source type used during semantic lowering.
@@ -54,7 +54,7 @@ impl<'db> ValidatedPat<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub enum ValidatedPatKind<'db> {
     Wildcard {
         binding: Option<BindingRef<'db>>,
@@ -66,11 +66,11 @@ pub enum ValidatedPatKind<'db> {
     Or(Vec<ValidatedPatId>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ValidatedPatId(u32);
 entity_impl!(ValidatedPatId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PatternAnalysisStatus {
     Ready(ValidatedPatId),
     Invalid,
@@ -90,7 +90,7 @@ impl PatternAnalysisStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, SalsaValue)]
 pub struct PatternStore<'db> {
     nodes: Vec<ValidatedPat<'db>>,
     roots_by_pat: FxHashMap<PatId, ValidatedPatId>,
@@ -147,6 +147,17 @@ impl<'db> PatternStore<'db> {
         }
     }
 
+    /// Whether `id` binds a name anywhere in it.
+    pub fn binds(&self, id: ValidatedPatId) -> bool {
+        match self.node(id).kind() {
+            ValidatedPatKind::Wildcard { binding } => binding.is_some(),
+            ValidatedPatKind::Constructor { fields, .. } => {
+                fields.iter().any(|field| self.binds(*field))
+            }
+            ValidatedPatKind::Or(pats) => pats.iter().any(|pat| self.binds(*pat)),
+        }
+    }
+
     pub fn mir_unsupported_reason(&self, id: ValidatedPatId) -> Option<&'static str> {
         match self.node(id).kind() {
             ValidatedPatKind::Wildcard { .. } => None,
@@ -154,7 +165,10 @@ impl<'db> PatternStore<'db> {
                 ConstructorKind::Variant(..) | ConstructorKind::Type(_) => fields
                     .iter()
                     .find_map(|field| self.mir_unsupported_reason(*field)),
-                ConstructorKind::Literal(LitKind::Int(_) | LitKind::Bool(_), _) => fields
+                ConstructorKind::Literal(
+                    LitKind::Int(_) | LitKind::Bool(_) | LitKind::Byte(_),
+                    _,
+                ) => fields
                     .iter()
                     .find_map(|field| self.mir_unsupported_reason(*field)),
                 ConstructorKind::Literal(LitKind::String(_), _) => {
@@ -168,7 +182,7 @@ impl<'db> PatternStore<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ConstructorKind<'db> {
     Variant(EnumVariant<'db>, TyId<'db>),
     Type(TyId<'db>),

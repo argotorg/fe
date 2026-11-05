@@ -1,0 +1,88 @@
+// An associated type binding of a bound names a type as a trait argument
+// does: one that needs another bound waits for it, at any depth, and a path
+// in it that names no type is reported where it is written.
+use core::option::Option
+
+trait Ty {
+    type T
+}
+
+trait Get {
+    type Out
+}
+
+trait Conv<X> {}
+
+trait Out<X> {
+    type O
+}
+
+struct W<const L: u256> {}
+
+struct S {}
+
+const N: u256 = 3
+
+fn helper() {}
+
+// Accepted: the binding names another parameter's associated type, in
+// either order or in a where clause.
+fn later<G: Get<Out = Q::T>, Q: Ty>() {}
+
+fn earlier<Q: Ty, G: Get<Out = Q::T>>() {}
+
+fn in_where<G, Q>() where G: Get<Out = Q::T>, Q: Ty {}
+
+// Accepted: the projection is nested in the binding or the argument.
+fn in_option<G: Get<Out = Option<Q::T>>, Q: Ty>() {}
+
+fn in_tuple<G: Get<Out = (Q::T, u256)>, Q: Ty>() {}
+
+fn in_array<G: Get<Out = [Q::T; 2]>, Q: Ty>() {}
+
+fn in_pointer<G: Get<Out = *Q::T>, Q: Ty>() {}
+
+fn in_arg<P: Conv<Option<Q::T>>, Q: Ty>() {}
+
+// Accepted: a type's generic argument may name a constant.
+fn const_arg<P: Conv<W<N>>>() {}
+
+// Rejected: `Nope` is not found.
+fn undefined<G: Get<Out = Nope>>() {}
+
+// Rejected: `Q` has no bound with a `T`.
+fn unbound<G: Get<Out = Q::T>, Q>() {}
+
+// Rejected: `helper` is a function.
+fn not_a_type<G: Get<Out = helper>>() {}
+
+// Rejected: a trait argument's error is reported at the argument too.
+fn undefined_arg<P: Conv<Nope>>() {}
+
+// Rejected, each where the nested path is written.
+fn nested_option<G: Get<Out = Option<Nope>>>() {}
+
+fn nested_tuple<G: Get<Out = (u256, Nope)>>() {}
+
+fn nested_array<G: Get<Out = [Nope; 2]>>() {}
+
+fn nested_pointer<G: Get<Out = *Nope>>() {}
+
+fn nested_unbound<G: Get<Out = (Q::T,)>, Q>() {}
+
+fn nested_function<G: Get<Out = (u256, helper)>>() {}
+
+fn nested_arg<P: Conv<Option<Nope>>>() {}
+
+fn nested_in_where<P>() where P: Conv<(Nope,)> {}
+
+// Rejected: the second `N`, a constant where a type is expected.
+fn constant_as_type<P: Conv<(W<N>, N)>>() {}
+
+trait Holder {
+    type Item: Conv<(Nope,)>
+}
+
+impl Conv<(Nope,)> for S {}
+
+fn qualified<G: Out<u8>>(_ x: <G as Out<(Nope,)>>::O) {}

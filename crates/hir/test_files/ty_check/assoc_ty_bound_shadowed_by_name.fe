@@ -1,0 +1,66 @@
+// Inside `Abi`, the associated types `Decoder` and `Encoder` shadow the
+// same-named traits, but trait references still name the traits.
+trait Decoder<A> {
+    fn read(mut self) -> u256
+}
+
+trait Encoder {
+    type Output
+}
+
+trait Abi {
+    type Decoder: Decoder<Self>
+    type Encoder: Encoder
+
+    fn decoder() -> Self::Decoder
+    fn output() -> <Self::Encoder as Encoder>::Output
+
+    fn read_with<D: Decoder<Self>>(var d: own D) -> u256 {
+        d.read()
+    }
+}
+
+fn first<A: Abi>() -> u256 {
+    var d = A::decoder()
+    d.read()
+}
+
+fn second<A: Abi, D: Decoder<A>>(var d: own D) -> u256 {
+    d.read()
+}
+
+fn third<A: Abi>() -> u256 {
+    second<A, A::Decoder>(d: A::decoder())
+}
+
+struct Sol {}
+struct SolDecoder {}
+struct SolEncoder {}
+
+impl Decoder<Sol> for SolDecoder {
+    fn read(mut self) -> u256 {
+        1
+    }
+}
+
+impl Encoder for SolEncoder {
+    type Output = u8
+}
+
+impl Abi for Sol {
+    type Decoder = SolDecoder
+    type Encoder = SolEncoder
+
+    fn decoder() -> SolDecoder {
+        SolDecoder {}
+    }
+
+    fn output() -> u8 {
+        0
+    }
+}
+
+fn concrete() -> u256 {
+    var d = Sol::decoder()
+    d.read() + Sol::read_with(d: SolDecoder {})
+}

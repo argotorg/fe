@@ -56,7 +56,7 @@ fn clear_zeroes_memory_places() {
 #[test]
 fn clear_zeroes_storage_places() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let pairs = unsafe { SolArray<Pair>::at(0) }
+        let pairs = unsafe { mut SolArray<Pair>::at(0) }
         pairs.push(Pair { small: 1, other: 2, big: 3 })
         pairs.push(Pair { small: 4, other: 5, big: 6 })
         // A packed field clears only its bytes of the word it shares.
@@ -100,9 +100,9 @@ pub contract Cells {
 
 #[test]
 fn clear_zeroes_transient_places() uses (evm: mut Evm) {
-    let cells = evm.create2<Cells>(value: 0, args: (), salt: 0)
+    let cells = evm.create2<Cells>(value: Wei::zero(), args: (), salt: 0)
     let values: (u256, u256, u256) =
-        evm.call(addr: cells, gas: 300000, value: 0, message: ClearMsg::Run {})
+        evm.call(addr: cells, gas: 300000, value: Wei::zero(), message: ClearMsg::Run {})
     assert(values.0 == 0)
     assert(values.1 == 8)
     assert(values.2 == 0)
@@ -111,13 +111,13 @@ fn clear_zeroes_transient_places() uses (evm: mut Evm) {
 #[test]
 fn collections_clear_their_elements() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let balances = unsafe { StorageMap<u256, u256>::at(7) }
+        let balances = unsafe { mut StorageMap<u256, u256>::at(7) }
         balances[1] = 10
         balances[2] = 20
         balances.remove(1)
         assert(balances[1] == 0 && balances[2] == 20)
 
-        let pairs = unsafe { SolArray<Pair>::at(8) }
+        let pairs = unsafe { mut SolArray<Pair>::at(8) }
         pairs.push(Pair { small: 1, other: 2, big: 3 })
         pairs.push(Pair { small: 4, other: 5, big: 6 })
         // `clear_at` zeroes one element and leaves the length.
@@ -131,13 +131,13 @@ fn collections_clear_their_elements() uses (evm: mut Evm) {
         assert(load(data) == 0 && load(data + 1) == 0)
         assert(load(data + 2) == 0 && load(data + 3) == 0)
 
-        let owners = unsafe { SolEnumerableSet<Address>::at(9) }
-        assert(owners.add(Address { inner: 10 }))
-        assert(owners.add(Address { inner: 11 }))
+        let owners = unsafe { mut SolEnumerableSet<Address>::at(9) }
+        assert(owners.add(Address::new(10)))
+        assert(owners.add(Address::new(11)))
         owners.clear()
         assert(owners.len() == 0)
-        assert(!owners.contains(Address { inner: 10 }))
-        assert(owners.add(Address { inner: 11 }))
+        assert(!owners.contains(Address::new(10)))
+        assert(owners.add(Address::new(11)))
         assert(owners.len() == 1)
     }
 }

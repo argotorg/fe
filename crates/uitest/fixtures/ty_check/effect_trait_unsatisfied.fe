@@ -23,3 +23,29 @@ pub fn missing_logger_impl() -> u8 {
         needs_logger()
     }
 }
+
+// A key whose trait defaults a parameter to `Self` asks its provider for
+// that parameter too.
+pub trait Reads<T = Self> {
+    fn read(self) -> u8
+}
+
+pub struct Other {}
+
+impl Reads<u8> for Other {
+    fn read(self) -> u8 {
+        2
+    }
+}
+
+pub fn needs_reader() -> u8
+  uses (reader: Reads)
+{
+    reader.read()
+}
+
+pub fn reader_for_another_type() -> u8 {
+    with (Reads = Other {}) {
+        needs_reader()
+    }
+}

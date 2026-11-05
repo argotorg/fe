@@ -1,0 +1,11 @@
+use std::sp1::{ProverInput, PublicValues, commit_u32, commit_u64, read_u32, read_u64, sp1}
+
+pub fn main() -> i32 {
+    with (ProverInput = sp1(), PublicValues = sp1()) {
+        let value = read_u32()
+        let wide = read_u64()
+        commit_u32(value + 1)
+        commit_u64(wide)
+    }
+    0
+}

@@ -1,0 +1,1 @@
+A method call that a trait's impls tell apart by their trait arguments, such as `c.get(true)` with `Get<u256>` and `Get<bool>` impls, can now be an operator's operand; it failed with "type must be known" unless its result was annotated.

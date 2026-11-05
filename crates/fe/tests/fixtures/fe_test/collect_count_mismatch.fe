@@ -3,25 +3,26 @@
 // second time; collecting reverts rather than hand out the uninitialized
 // rest.
 use core::iter::{Collection, FromProducer, Producer}
-use core::option::Option
 use core::ptr::MemArray
 
-struct Shrink {
+struct Shrink<B> {
     stop: usize,
 }
 
-impl<B: Collection<Item = u256, Cursor = usize>> Producer<B> for Shrink {
+impl<B: Collection<Item = u256, Cursor = usize>> Producer for Shrink<B> {
+    type Base = B
     type State = usize
     type Out = MemArray<u256>
 
-    fn start(self, _ base: B) -> Option<usize> uses B::E {
+    fn start(self, _ base: B) -> usize uses B::E {
         base.start()
     }
 
-    fn next(self, _ base: B, _ s: usize) -> Option<usize> uses B::E {
-        if s + 1 >= self.stop {
-            return Option::None
-        }
+    fn has(self, _ base: B, _ s: usize) -> bool uses B::E {
+        s < self.stop && base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: usize) -> usize uses B::E {
         base.next(s)
     }
 
@@ -33,12 +34,12 @@ impl<B: Collection<Item = u256, Cursor = usize>> Producer<B> for Shrink {
 
 #[test(should_revert, selector = 0x4e487b71)]
 fn shrinking_producer_reverts() {
-    let out: MemArray<MemArray<u256>> = MemArray::collect([1, 2, 3, 4], Shrink { stop: 100 })
+    let out: MemArray<MemArray<u256>> = MemArray::collect([1, 2, 3, 4], Shrink<[u256; 4]> { stop: 100 })
     assert(out.len() == 4)
 }
 
 #[test]
 fn steady_producer_collects() {
-    let out: MemArray<MemArray<u256>> = MemArray::collect([1, 2, 3, 4], Shrink { stop: 0 })
+    let out: MemArray<MemArray<u256>> = MemArray::collect([1, 2, 3, 4], Shrink<[u256; 4]> { stop: 1 })
     assert(out.len() == 1)
 }

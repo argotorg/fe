@@ -1,0 +1,55 @@
+// A signature names an associated shape at a mode: a `mut?` item's own one,
+// or `<ref>` or `<mut>`.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+
+    // Outside a `mut?` item, a shape needs its mode.
+    fn peek(self) -> Self::Step
+
+    fn view(self) -> Self::Step<ref>
+}
+
+struct One {
+    x: u256,
+}
+
+impl Driver for One {
+    shape Step = mut? u256
+
+    // The return differs from the shape.
+    fn at(mut? self) -> (mut? u256, own u256) {
+        (mut? self.x, 0)
+    }
+
+    fn peek(self) -> ref u256 {
+        ref self.x
+    }
+
+    fn view(self) -> ref u256 {
+        ref self.x
+    }
+}
+
+fn bound<D: Driver, F: Fn(D::Step) -> bool>(_ f: F) {}
+
+fn where_bound<D: Driver, F>(_ f: F)
+    where F: Fn(D::Step<ref>, D::Step) -> bool
+{}
+
+fn explicit<D: Driver, F: Fn(D::Step<ref>, D::Step<mut>) -> bool>(_ f: F) {}
+
+// A concrete type's shape is named at a mode too.
+fn concrete(_ s: One::Step<ref>) {}
+
+fn concrete_bare(_ s: One::Step) {}
+
+// A result reported where it is written is not checked against the body.
+fn bare_result(_ o: One) -> One::Step {
+    o.at()
+}
+
+fn moded_result<D: Driver>(_ d: D) -> ref D::Step<ref> {
+    d.at()
+}

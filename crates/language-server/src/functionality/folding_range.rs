@@ -16,11 +16,10 @@ pub async fn handle_folding_range(
     };
 
     let top_mod = map_file_to_mod(&backend.db, file);
-    let scope_graph = top_mod.scope_graph(&backend.db);
 
     let mut ranges = Vec::new();
 
-    for item in scope_graph.items_dfs(&backend.db) {
+    for &item in top_mod.all_items(&backend.db) {
         let item_span: hir::span::DynLazySpan = item.span().into();
         let Some(span) = item_span.resolve(&backend.db) else {
             continue;
@@ -82,10 +81,9 @@ mod tests {
         db: &DriverDataBase,
         top_mod: hir::hir_def::TopLevelMod,
     ) -> Vec<(u32, u32)> {
-        let scope_graph = top_mod.scope_graph(db);
         let mut ranges = Vec::new();
 
-        for item in scope_graph.items_dfs(db) {
+        for &item in top_mod.all_items(db) {
             let item_span: hir::span::DynLazySpan = item.span().into();
             let Some(span) = item_span.resolve(db) else {
                 continue;

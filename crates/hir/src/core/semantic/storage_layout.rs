@@ -6,9 +6,10 @@ use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 use ruint::aliases::U256;
 use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
+    HirDb,
     analysis::{
         HirAnalysisDb,
         semantic::{RuntimeSizeError, runtime_size_bytes_with_source},
@@ -32,13 +33,31 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct ContractFieldId<'db> {
     pub contract: Contract<'db>,
     pub index: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+impl<'db> ContractFieldId<'db> {
+    /// The field's scope. The id's index counts only the named fields.
+    pub fn scope(self, db: &'db dyn HirDb) -> Option<ScopeId<'db>> {
+        let (idx, _) = self
+            .contract
+            .hir_fields(db)
+            .data(db)
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| field.name.is_present())
+            .nth(self.index as usize)?;
+        Some(ScopeId::Field(
+            FieldParent::Contract(self.contract),
+            idx as u16,
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractLayoutReport<'db> {
     pub entries: Vec<ContractLayoutEntry<'db>>,
 }
@@ -54,7 +73,7 @@ impl<'db> ContractLayoutReport<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractLayoutEntry<'db> {
     pub field: ContractFieldId<'db>,
     pub path: ContractLayoutPath<'db>,
@@ -68,7 +87,7 @@ pub struct ContractLayoutEntry<'db> {
 
 /// The bytes of a storage slot that hold a packed scalar, counted from the
 /// low-order end like Solidity's `offset`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractLayoutLane {
     pub byte_offset: u8,
     pub byte_width: u8,
@@ -83,7 +102,7 @@ impl From<StorageLane> for ContractLayoutLane {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutEntryKind {
     InlineField,
     /// A storage collection, whose place is its identity.
@@ -91,7 +110,7 @@ pub enum ContractLayoutEntryKind {
     EnumTag,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutValue<'db> {
     Scalar(IntegerId<'db>),
     Indexed {
@@ -111,7 +130,7 @@ impl<'db> ContractLayoutValue<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ContractLayoutPath<'db> {
     pub field: IdentId<'db>,
     pub segments: Vec<ContractLayoutPathSegment<'db>>,
@@ -151,7 +170,7 @@ impl<'db> ContractLayoutPath<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutPathSegment<'db> {
     Member { name: IdentId<'db>, index: u32 },
     TupleElement(u32),
@@ -160,7 +179,7 @@ pub enum ContractLayoutPathSegment<'db> {
     EnumTag,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutError<'db> {
     InvalidFieldType,
     InvalidConcreteArrayLength {
@@ -229,7 +248,7 @@ impl ContractLayoutError<'_> {
 
 /// A contract field's layout before the contract places it: its address
 /// space, the slots it spans and the parts that take them.
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ValidatedFieldLayoutPlan<'db> {
     field: ContractFieldId<'db>,
     name: IdentId<'db>,
@@ -247,7 +266,7 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct FieldStorageLayout<'db> {
     pub field: ContractFieldId<'db>,
     pub name: IdentId<'db>,
@@ -261,21 +280,21 @@ pub struct FieldStorageLayout<'db> {
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct AllocatedContractStorageLayout<'db> {
     pub fields: IndexMap<IdentId<'db>, FieldStorageLayout<'db>>,
     /// The words the code fields take.
     pub code_slot_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ContractFieldLayoutResult<'db> {
     pub field: ContractFieldId<'db>,
     pub name: IdentId<'db>,
     pub result: Result<ValidatedFieldLayoutPlan<'db>, Vec<ContractLayoutError<'db>>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ContractStorageLayoutResult<'db> {
     pub field_results: Vec<ContractFieldLayoutResult<'db>>,
     pub allocated: Option<AllocatedContractStorageLayout<'db>>,
@@ -352,7 +371,7 @@ fn storage_packable_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<u32> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 enum InlineLayoutLeafKind {
     Field,
     Collection,
@@ -362,7 +381,7 @@ enum InlineLayoutLeafKind {
 /// A part of a field that takes slots: a scalar, a storage collection or an
 /// enum tag, at `offset` slots from the field's first, repeated along each
 /// enclosing array's dimension at its stride.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 struct InlineLayoutLeaf<'db> {
     path: Vec<ContractLayoutPathSegment<'db>>,
     ty: TyId<'db>,
@@ -722,7 +741,7 @@ impl<'db> FieldWalker<'db> {
             canonical: ty,
             source,
         } = views;
-        if adt.recursive_cycle(self.db).is_some() {
+        if adt.recursive_cycle_through_arguments(self.db).is_some() {
             self.push_error(ContractLayoutError::InvalidFieldType);
             return WalkOutput::empty();
         }
@@ -889,6 +908,8 @@ fn collect_field_plan<'db>(
     if declared.has_invalid(db) || ty_has_incomplete_adt_application(db, declared) {
         return Some((name, Err(vec![ContractLayoutError::InvalidFieldType])));
     }
+    // Normalized, as MIR binds the field: `G<<K as Tr>::Out>` is `G<u8>`.
+    let declared = normalize_ty(db, declared, scope, assumptions);
     let address_space = if field.is_mut {
         AddressSpace::Storage
     } else {
@@ -976,7 +997,7 @@ fn collect_field_plan<'db>(
 
 /// The slots a value of `ty` takes in storage, as the layout places a
 /// contract field of its type, or why `ty` has no storage layout.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub(crate) fn storage_slot_span<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -996,7 +1017,7 @@ pub(crate) fn storage_slot_span<'db>(
 /// in storage or transient storage: packed scalars that share their word or
 /// lie above its low byte, as MIR's `storage_field_lane` decides. A retained
 /// grant to a lane is a memory copy.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
     if !ty.is_tuple(db) && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db)) {
         return Vec::new();
@@ -1421,7 +1442,7 @@ fn allocated_contract_layout_report<'db>(
     ContractLayoutReport { entries }
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn build_contract_layout_report<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
@@ -1430,7 +1451,7 @@ pub(crate) fn build_contract_layout_report<'db>(
     Some(allocated_contract_layout_report(db, fields))
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn build_contract_storage_layout<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,

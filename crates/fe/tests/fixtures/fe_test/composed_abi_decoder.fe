@@ -39,18 +39,18 @@ pub contract PairProbe {
 use core::ptr::{self, MemBuffer}
 use std::evm::{Evm, Call}
 fn check_pair(_ a: u256, _ b: u256, _ valid: bool) uses (evm: mut Evm) {
-    let receiver = evm.create2<PairProbe>(value: 0, args: (), salt: 0)
-    assert!(receiver.inner != 0)
-    let data = MemBuffer::alloc(68)
+    let receiver = evm.create2<PairProbe>(value: Wei::zero(), args: (), salt: 0)
+    assert!(receiver.word() != 0)
+    let data = MemBuffer::new(68)
     unsafe { store_word(ptr: data.ptr(), value: (0x11223344 as u256) << 224) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: a) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: b) }
-    var ret = MemBuffer::alloc(64)
+    var ret = MemBuffer::new(64)
     let outcome = evm
         .raw_call(
             addr: receiver,
             gas: 1000000,
-            value: 0,
+            value: Wei::zero(),
             args: data.span(),
             ret: mut ret,
         )

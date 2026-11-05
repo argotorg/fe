@@ -1,0 +1,47 @@
+// Hashes bytes known only at runtime through each route to a hash;
+// `native_runtime.rs` compares the digests with a reference. The program runs
+// with no arguments, so the argument count is 1.
+use core::ptr::MemBuffer
+use core::text::hex
+use std::env::Args
+use std::evm::{keccak256, keccak_words}
+use std::io::Stdout
+
+fn byte_at(_ index: usize, one: usize) -> u8 {
+    (index * 7 + 2 + one).downcast_truncate()
+}
+
+fn print_packed<const N: usize>(one: usize) uses (out: mut Stdout) {
+    var bytes: [u8; N] = [0; N]
+    for index in 0..N {
+        bytes[index] = byte_at(index, one)
+    }
+    println!(N, " ", hex(core::keccak(bytes), 32))
+}
+
+pub fn main() -> i32 uses (args: Args, out: mut Stdout) {
+    let one = args.count()
+    for len in 0..420 {
+        var bytes = MemBuffer::new(len)
+        for index in 0..len {
+            bytes[index] = byte_at(index, one)
+        }
+        println!(len, " ", hex(keccak256(bytes.span()), 32))
+    }
+
+    print_packed<0>(one)
+    print_packed<1>(one)
+    print_packed<31>(one)
+    print_packed<32>(one)
+    print_packed<33>(one)
+    print_packed<135>(one)
+    print_packed<136>(one)
+    print_packed<137>(one)
+    print_packed<272>(one)
+
+    let word = one as u256
+    println!("0 ", hex(keccak_words([]), 32))
+    println!("32 ", hex(keccak_words([word]), 32))
+    println!("320 ", hex(keccak_words([word; 10]), 32))
+    0
+}

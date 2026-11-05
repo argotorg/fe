@@ -1,0 +1,58 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_recv_arms.fe
+---
+note: 
+  ┌─ goto_recv_arms.fe:7:5
+  │
+7 │     Transfer { amount: u256 } -> bool,
+  │     ^^^^^^^^ -> goto_recv_arms::Token::Transfer
+
+note: 
+   ┌─ goto_recv_arms.fe:11:10
+   │
+11 │     recv Token {
+   │          ^^^^^ -> goto_recv_arms::Token
+
+note: 
+   ┌─ goto_recv_arms.fe:12:9
+   │
+12 │         Transfer { amount } -> bool {
+   │         ^^^^^^^^ -> goto_recv_arms::Token::Transfer
+
+note: 
+   ┌─ goto_recv_arms.fe:12:20
+   │
+12 │         Transfer { amount } -> bool {
+   │                    ^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_recv_arms.fe:13:13
+   │
+13 │             amount > 0
+   │             ^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_recv_arms.fe:20:9
+   │
+20 │         Token::Transfer { amount } -> bool {
+   │         ^^^^^ -> goto_recv_arms::Token
+
+note: 
+   ┌─ goto_recv_arms.fe:20:16
+   │
+20 │         Token::Transfer { amount } -> bool {
+   │                ^^^^^^^^ -> goto_recv_arms::Token::Transfer
+
+note: 
+   ┌─ goto_recv_arms.fe:20:27
+   │
+20 │         Token::Transfer { amount } -> bool {
+   │                           ^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_recv_arms.fe:21:13
+   │
+21 │             amount > 1
+   │             ^^^^^^ -> local: u256

@@ -21,6 +21,15 @@ error[6-0003]: trait bound is not satisfied
   │     `[NoEq; 2]` doesn't implement `Eq<[NoEq; 2]>`
   │     trait bound `NoEq: Eq<NoEq>` is not satisfied
 
+error[6-0003]: trait bound is not satisfied
+   ┌─ aggregate_equality.fe:20:5
+   │
+20 │     a == b
+   │     ^^^^^^
+   │     │
+   │     `Option<NoEq>` doesn't implement `Eq<Option<NoEq>>`
+   │     trait bound `NoEq: Eq<NoEq>` is not satisfied
+
 error[8-0000]: type mismatch
    ┌─ aggregate_equality.fe:12:10
    │

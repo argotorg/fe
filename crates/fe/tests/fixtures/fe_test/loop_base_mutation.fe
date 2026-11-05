@@ -1,7 +1,10 @@
 // By-value traversal holds no access on its base between steps, so the body
-// may change the collection, and `at` reads each element afresh. A session a
-// loop condition opens closes before the back edge.
+// may change the collection, and `at` reads each element afresh. A body that
+// removes the element it is at leaves `next` a cursor that names none, and
+// `has` ends the loop. A session a loop condition opens closes before the
+// back edge.
 use core::iter::Collection
+use std::evm::{Evm, RawStorage, SolArray}
 
 #[test]
 fn by_value_traversal_mutates_its_base() {
@@ -21,10 +24,46 @@ fn by_value_traversal_mutates_its_base() {
 }
 
 #[test]
+fn by_value_traversal_shrinks_its_base() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let xs = unsafe { mut SolArray<u256>::at(0) }
+        xs.push(1)
+        xs.push(2)
+        xs.push(3)
+        // The second pop removes the element at the cursor.
+        var total: u256 = 0
+        for x in xs {
+            total += x
+            xs.pop()
+        }
+        assert(total == 1 + 2 && xs.len() == 1)
+
+        xs.push(2)
+        xs.push(3)
+        // Each pop removes the element at the cursor.
+        var digits: u256 = 0
+        for x in xs.reversed() {
+            digits = digits * 10 + x
+            xs.pop()
+        }
+        assert(digits == 321 && xs.len() == 0)
+
+        xs.push(1)
+        xs.push(2)
+        total = 0
+        for x in xs {
+            total += x
+            xs.clear()
+        }
+        assert(total == 1)
+    }
+}
+
+#[test]
 fn while_let_sessions_close_each_step() {
     var xs: MemArray<u256> = MemArray::new_zeroed(3)
     var i: usize = 0
-    while let Option::Some(mut x) = xs.get_mut(i) {
+    while let Option::Some(mut x) = xs.get(i) {
         x += i as u256 + 1
         i += 1
     }

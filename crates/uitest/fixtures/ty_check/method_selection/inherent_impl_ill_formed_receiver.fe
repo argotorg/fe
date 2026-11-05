@@ -24,6 +24,6 @@ fn bad_let<T>() {
 }
 
 fn bad_let_init<T>() {
-    let cache: Cache<T> = todo()
+    let cache: Cache<T> = unsafe { todo() }
     cache.touch()
 }

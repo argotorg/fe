@@ -1,5 +1,4 @@
 use parser::ast::{self, prelude::*};
-use salsa::Accumulator as _;
 
 use super::{
     AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, FileLowerCtxt,
@@ -20,7 +19,6 @@ use crate::{
 };
 
 /// Event-related errors accumulated during `#[event]` lowering / validation.
-#[salsa::accumulator]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EventError {
     pub kind: EventErrorKind,
@@ -66,14 +64,13 @@ pub(super) fn lower_event_struct<'db>(
         let range = ast
             .generic_params()
             .map_or_else(|| ast.syntax().text_range(), |g| g.syntax().text_range());
-        EventError {
+        builder.ctxt().report(EventError {
             kind: EventErrorKind::GenericEventStruct,
             file,
             primary_range: range,
             struct_name: struct_name.clone(),
             field_name: None,
-        }
-        .accumulate(db);
+        });
     }
 
     let where_clause =
@@ -241,7 +238,7 @@ fn parse_event_fields<'db>(
         // in the TOPIC0 computation. Non-path types (tuples, etc.) are not
         // supported as event fields.
         let TypeKind::Path(Partial::Present(_)) = ty.data(db) else {
-            AbiFieldDiagnostic {
+            ctxt.report(AbiFieldDiagnostic {
                 kind: AbiFieldDiagnosticKind::Unsupported,
                 context: AbiFieldContext::Event,
                 ty: ty.pretty_print(db),
@@ -251,8 +248,7 @@ fn parse_event_fields<'db>(
                     .map_or_else(|| field.syntax().text_range(), |t| t.syntax().text_range()),
                 struct_name: struct_name.map(|s| s.to_string()),
                 field_name: name_tok.map(|n| n.text().to_string()),
-            }
-            .accumulate(db);
+            });
             is_valid = false;
             continue;
         };
@@ -271,14 +267,13 @@ fn parse_event_fields<'db>(
             .get(3)
             .copied()
             .unwrap_or_else(|| ast.syntax().text_range());
-        EventError {
+        ctxt.report(EventError {
             kind: EventErrorKind::TooManyIndexedFields { indexed_count },
             file,
             primary_range,
             struct_name: struct_name.map(|s| s.to_string()),
             field_name: None,
-        }
-        .accumulate(db);
+        });
         is_valid = false;
     }
 
@@ -407,6 +402,7 @@ fn create_topic0_const<'db>(
         body_ctxt.conds,
         body_ctxt.pats,
         body_ctxt.f_ctxt.top_mod(),
+        body_ctxt.f_ctxt.lazy_func(),
         body_ctxt.source_map,
         origin,
     );

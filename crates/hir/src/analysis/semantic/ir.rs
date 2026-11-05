@@ -1,5 +1,5 @@
 use cranelift_entity::{EntityRef, entity_impl};
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     analysis::{
@@ -17,23 +17,23 @@ use crate::{
 
 use super::{consts::SemConstId, ctfe::VerifiedConstValueId};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum Mutability {
     Mutable,
     Immutable,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct FieldIndex(pub u16);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct VariantIndex(pub u16);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct SLocalId(u32);
 entity_impl!(SLocalId);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct SBlockId(u32);
 entity_impl!(SBlockId);
 
@@ -42,26 +42,14 @@ entity_impl!(SBlockId);
 /// Constant canonicalization may replace the statement's expression, but it
 /// must preserve this identity so side tables can follow the semantic
 /// operation without relying on block/statement coordinates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct SStmtId(u32);
 entity_impl!(SStmtId);
 
 pub type SValueId = SLocalId;
 pub type SemanticProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId>;
 
-unsafe impl<'db> Update for SemanticProjectionPath<'db> {
-    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
-        let old_value = unsafe { &mut *old_pointer };
-        if *old_value == new_value {
-            false
-        } else {
-            *old_value = new_value;
-            true
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SemanticBody<'db> {
     pub owner: SemanticInstance<'db>,
     pub template_owner: BodyOwner<'db>,
@@ -99,7 +87,7 @@ impl<'db> SemanticBody<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SLocal<'db> {
     pub ty: TyId<'db>,
     pub mutability: Mutability,
@@ -109,19 +97,19 @@ pub struct SLocal<'db> {
     pub layout_backing_sources: Vec<LayoutBackingSource<'db>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ValueProvenance<'db> {
     Ordinary,
     RootProvider(ProviderBinding<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum PlaceProvenance<'db> {
     RootProvider(ProviderBinding<'db>),
     Derived(SPlace<'db>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum LayoutBackingProjection {
     Field(FieldIndex),
     VariantField {
@@ -167,7 +155,7 @@ pub(crate) fn layout_backing_query<'db>(
 ///
 /// This keeps backing storage alive and lets borrow normalization recover a
 /// projectable carrier place.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum LayoutBackingPlace<'db> {
     Local(SPlace<'db>),
     RootProvider {
@@ -184,7 +172,7 @@ pub enum LayoutBackingPlace<'db> {
 
 /// Maps a projection in the current value to the place that physically backs
 /// it: carrier provenance.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct LayoutBackingSource<'db> {
     pub target: Vec<LayoutBackingProjection>,
     pub source: LayoutBackingPlace<'db>,
@@ -212,7 +200,7 @@ impl<'db> PlaceProvenance<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticLocalKind {
     Erased,
     DirectValue,
@@ -220,7 +208,7 @@ pub enum SemanticLocalKind {
     PlaceBoundValue,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticLocalRole<'db> {
     Erased,
     DirectValue {
@@ -274,18 +262,18 @@ impl<'db> SemanticLocalRole<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SBlock<'db> {
     pub stmts: Vec<SStmt<'db>>,
     pub terminator: STerminator<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SemanticCalleeRef<'db> {
     pub key: SemanticInstanceKey<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemOrigin<'db> {
     Expr(ExprId),
     Stmt(StmtId),
@@ -295,7 +283,7 @@ pub enum SemOrigin<'db> {
     Synthetic,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum CallSiteId {
     Expr(ExprId),
     ForLoop(StmtId, ForLoopStep),
@@ -304,29 +292,32 @@ pub enum CallSiteId {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct SemanticConstRef<'db> {
+    #[returns(copy)]
     pub instance: SemanticInstanceKey<'db>,
+    #[returns(copy)]
     pub ty: TyId<'db>,
+    #[returns(copy)]
     pub origin: SemOrigin<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ManualContractSection {
     Init,
     Runtime,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticCodeRegionRef<'db> {
     ManualContractRoot { func: Func<'db> },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticCodeRegionTarget<'db> {
     Resolved(SemanticCodeRegionRef<'db>),
     Deferred { arg: ExprId, ty: TyId<'db> },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SPlace<'db> {
     pub local: SLocalId,
     pub path: SemanticProjectionPath<'db>,
@@ -414,7 +405,7 @@ impl SPlace<'_> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: SEffectArgValue<'db>,
@@ -424,20 +415,20 @@ pub struct SEffectArg<'db> {
     pub provider: Option<AddressSpace>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SEffectArgValue<'db> {
     Place(SPlace<'db>),
     Value(SOperand),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SOperandOrigin {
     Inherited,
     Expr(ExprId),
     Synthetic,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SOperand {
     pub value: SValueId,
     pub origin: SOperandOrigin,
@@ -474,7 +465,7 @@ impl SOperand {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SExpr<'db> {
     /// Passes a value on as it is, copying it: never the read of a
     /// non-`Copy` binding by value, which `UseValue` is, so it forwards values
@@ -608,7 +599,7 @@ impl SExpr<'_> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SConst<'db> {
     Value(VerifiedConstValueId<'db>),
     Description(SemConstId<'db>),
@@ -617,14 +608,14 @@ pub enum SConst<'db> {
     Ref(SemanticConstRef<'db>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SStmt<'db> {
     pub id: SStmtId,
     pub origin: SemOrigin<'db>,
     pub kind: SStmtKind<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SStmtKind<'db> {
     Assign {
         dst: SLocalId,
@@ -640,15 +631,21 @@ pub enum SStmtKind<'db> {
     End {
         access: SStmtId,
     },
+    /// Destroys what `place` still owns: its owner's scope ends, or a store
+    /// is about to overwrite it. Drop elaboration decides which of its parts
+    /// are initialized.
+    Drop {
+        place: SPlace<'db>,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct STerminator<'db> {
     pub origin: SemOrigin<'db>,
     pub kind: STerminatorKind<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum STerminatorKind<'db> {
     Goto(SBlockId),
     Branch {

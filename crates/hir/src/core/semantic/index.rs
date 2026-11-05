@@ -11,10 +11,11 @@ use crate::core::semantic::symbol::{IndexedReference, ReferenceIndex};
 use crate::hir_def::{HirIngot, TopLevelMod, scope_graph::ScopeId};
 use crate::span::DynLazySpan;
 
+use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 /// A single resolved reference: target scope + source span + metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ResolvedRef<'db> {
     pub target: ScopeId<'db>,
     pub span: DynLazySpan<'db>,
@@ -23,15 +24,14 @@ pub struct ResolvedRef<'db> {
 
 /// Per-module: all references originating from this module's items.
 /// Cached by salsa — only recomputes when this module's resolved targets change.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn module_references<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> Vec<ResolvedRef<'db>> {
-    let scope_graph = top_mod.scope_graph(db);
     let mut refs = Vec::new();
 
-    for item in scope_graph.items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         for resolved in resolved_item_scope_targets(db, item) {
             refs.push(ResolvedRef {
                 target: resolved.scope,
@@ -46,27 +46,22 @@ pub fn module_references<'db>(
 
 /// Pre-warm the per-module reference cache in parallel.
 ///
-/// Must be called OUTSIDE any salsa tracked query -- `salsa::par_map` forks the
-/// database internally and worker threads attach their own forks. Calling from
-/// inside a tracked query would conflict with the existing attachment.
+/// Must be called outside any salsa tracked query: each worker thread queries
+/// its own clone of `db`.
 ///
 /// After this returns, every module's `module_references` result is cached in
 /// salsa's memo table, so subsequent reads (e.g., from `build_reference_index_from_cached`)
 /// are cheap hash lookups.
-pub fn pre_warm_module_references<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) {
-    let modules = ingot.all_modules(db);
-    if modules.is_empty() {
-        return;
-    }
-
-    // Ensure the HirAnalysisDb view is registered before par_map forks the db.
-    // Views are normally registered lazily by the first tracked function call,
-    // but par_map needs them registered up front for as_view on forked dbs.
-    HirAnalysisDb::zalsa_register_downcaster(db);
-
-    let _: Vec<()> = salsa::par_map(db, modules.to_vec(), |db, top_mod| {
-        let _ = module_references(db, top_mod);
-    });
+pub fn pre_warm_module_references<DB>(db: &DB, ingot: Ingot<'_>)
+where
+    DB: HirAnalysisDb + Clone,
+{
+    ingot
+        .all_modules(db)
+        .par_iter()
+        .for_each_with(db.clone(), |db, &top_mod| {
+            module_references(db, top_mod);
+        });
 }
 
 /// Build a ReferenceIndex for an ingot from cached per-module data.

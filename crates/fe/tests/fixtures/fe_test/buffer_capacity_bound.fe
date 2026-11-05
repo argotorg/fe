@@ -3,31 +3,31 @@
 // allocations, including requests that reserve memory without writing it.
 use core::abi::DynString
 use core::ptr::{self, MemArray, MemBuffer}
-use std::evm::packed::{EncodePacked, Packed, keccak_packed}
+use std::evm::packed::{EncodePacked, Packed, encode_packed, keccak_packed}
 
-fn huge(_ x: u256) -> u256 {
+fn huge(_ x: usize) -> usize {
     x
 }
 
-#[test(should_revert, selector = 0x4e487b71)]
+#[test(should_revert, panic = 0x41)]
 fn huge_capacity_reverts() {
-    let _ = MemBuffer::with_capacity(huge(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
+    let _ = MemBuffer::with_capacity(huge(usize::max()))
 }
 
-#[test(should_revert, selector = 0x4e487b71)]
+#[test(should_revert, panic = 0x41)]
 fn huge_reserve_reverts() {
     var buf = MemBuffer::with_capacity(32)
-    buf.reserve(huge(0x10000000000000000))
+    buf.reserve(huge(usize::max() / 2 + 1))
 }
 
-#[test(should_revert, selector = 0x4e487b71)]
+#[test(should_revert, panic = 0x41)]
 fn huge_alloc_bytes_reverts() {
-    let _ = ptr::alloc_bytes(huge(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0))
+    let _ = ptr::alloc_bytes(huge(usize::max()))
 }
 
-#[test(should_revert, selector = 0x4e487b71)]
+#[test(should_revert, panic = 0x41)]
 fn huge_buffer_reverts() {
-    let _ = MemBuffer::alloc(huge(0x10000000000000000))
+    let _ = MemBuffer::new(huge(usize::max()))
 }
 
 #[test(should_revert, selector = 0x4e487b71)]
@@ -37,7 +37,32 @@ fn huge_array_reverts() {
 
 #[test(should_revert, selector = 0x4e487b71)]
 fn huge_string_reverts() {
-    let _ = DynString::zeroed(huge(0x10000000000000000))
+    let _ = DynString::zeroed(huge(usize::max()))
+}
+
+// The EVM's `usize` also holds sizes just past the bound.
+#[cfg(target = "evm")]
+fn past_bound() -> usize {
+    (0x10000000000000000 as u256).downcast_unchecked()
+}
+
+#[cfg(target = "evm")]
+#[test(should_revert, panic = 0x41)]
+fn reserve_above_bound_reverts() {
+    var buf = MemBuffer::with_capacity(32)
+    buf.reserve(past_bound())
+}
+
+#[cfg(target = "evm")]
+#[test(should_revert, panic = 0x41)]
+fn buffer_above_bound_reverts() {
+    let _ = MemBuffer::new(past_bound())
+}
+
+#[cfg(target = "evm")]
+#[test(should_revert, panic = 0x41)]
+fn string_above_bound_reverts() {
+    let _ = DynString::zeroed(past_bound())
 }
 
 // A safe `packed_width` that over-reports cannot size a wrapping allocation.
@@ -55,15 +80,42 @@ impl EncodePacked for Big {
     }
 }
 
-#[test(should_revert, selector = 0x4e487b71)]
+#[test(should_revert, panic = 0x41)]
 fn huge_packed_width_reverts() {
     let _ = keccak_packed(Big {})
+}
+
+// A width just past 64 bits, with room to write that its allocation lacks if
+// the size is truncated.
+struct JustPast64Bits {}
+
+impl EncodePacked for JustPast64Bits {
+    fn packed_width(self) -> u256 {
+        0x10000000000000000
+    }
+
+    fn pack_into(own self, _ p: own Packed) -> Packed {
+        var p = p
+        p.u256(0x4242)
+        p.u256(0x4242)
+        p
+    }
+}
+
+#[test(should_revert, panic = 0x41)]
+fn keccak_packed_width_past_64_bits_reverts() {
+    let _ = keccak_packed(JustPast64Bits {})
+}
+
+#[test(should_revert, panic = 0x41)]
+fn encode_packed_width_past_64_bits_reverts() {
+    let _ = encode_packed(JustPast64Bits {})
 }
 
 #[test]
 fn bounded_capacity_allocates() {
     var buf = MemBuffer::with_capacity(huge(64))
     buf.reserve(100)
-    let other = MemBuffer::alloc(32)
+    let other = MemBuffer::new(32)
     assert(buf.capacity() >= 100 && other[0] == 0)
 }

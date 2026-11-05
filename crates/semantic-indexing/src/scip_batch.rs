@@ -381,7 +381,6 @@ fn process_module<'db>(
 ) -> Option<ModuleResult> {
     use hir::core::semantic::{SymbolKind, scope_to_doc_path};
 
-    let scope_graph = top_mod.scope_graph(db);
     let doc_url = top_mod_url(db, &top_mod)?.to_string();
 
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
@@ -395,7 +394,7 @@ fn process_module<'db>(
             .or_insert_with(|| ScipDocumentBuilder::new(relative.clone()));
     }
 
-    for item in scope_graph.items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         // Skip items that are children of container items (traits, structs, enums, impls).
         // These are handled correctly by the child-indexing path below, which
         // produces proper SCIP symbols (e.g. Trait#method. not Trait/method.).
@@ -415,7 +414,6 @@ fn process_module<'db>(
             index_unnamed_item_generic_params(
                 db,
                 item,
-                scope_graph,
                 ctx,
                 &doc_url,
                 file_relative_paths,
@@ -625,7 +623,6 @@ fn process_module<'db>(
 fn index_unnamed_item_generic_params<'db>(
     db: &'db driver::DriverDataBase,
     item: ItemKind<'db>,
-    _scope_graph: &hir::core::hir_def::scope_graph::ScopeGraph<'db>,
     ctx: &index_util::IngotContext<'db>,
     doc_url: &str,
     file_relative_paths: &HashMap<String, String>,
@@ -906,6 +903,7 @@ fn emit_cross_ingot_references<'db>(
             let name = index_util::ingot_display_name(db, target_ingot);
             let version = target_ingot
                 .version(db)
+                .as_ref()
                 .map_or_else(|| "0.0.0".to_string(), |v| v.to_string());
             (name, version)
         });
@@ -2300,7 +2298,7 @@ fn make_point() -> Point {
             let scope_graph = top_mod.scope_graph(&db);
             let item_scope = ScopeId::from_item(
                 scope_graph
-                    .items_dfs(&db)
+                    .items_dfs()
                     .find(|i| i.name(&db).is_some_and(|n| *n.data(&db) == "Foo"))
                     .expect("Foo item"),
             );
@@ -2451,7 +2449,7 @@ pub trait Greet {
     fn test_impl_block_method_type_params_indexed() {
         let code = r#"pub trait Applicative {
     fn pure<T>(_ value: own T) -> Self<T>
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U>
+    fn ap<T, U, F: Fn(own T) -> U>(self: own Self<F>, _ value: own Self<T>) -> Self<U>
 }
 
 pub enum Result<E> {
@@ -2463,7 +2461,7 @@ impl<E> Applicative for Result<E> {
     fn pure<T>(_ value: own T) -> Self<T> {
         Result::Ok
     }
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
+    fn ap<T, U, F: Fn(own T) -> U>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
         Result::Ok
     }
 }

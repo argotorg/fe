@@ -1,5 +1,7 @@
 #[doc(hidden)]
 pub mod _macro_support;
+pub mod deadline;
+pub mod fixtures;
 pub mod normalize;
 pub mod url_utils;
 pub use tracing::Level;
@@ -10,6 +12,27 @@ use tracing::{
 };
 use tracing_subscriber::{EnvFilter, fmt::TestWriter, layer::SubscriberExt};
 use tracing_tree::HierarchicalLayer;
+
+/// Lowers this process's core size limit to 1, which the programs it runs
+/// inherit. A limit of 1 writes no core file and, unlike 0, keeps the kernel
+/// from piping each crash to a crash reporter such as apport, which takes
+/// about a second per crash. Tests that run programs which trap call it first.
+#[cfg(unix)]
+pub fn skip_crash_reports() {
+    static LOWERED: std::sync::Once = std::sync::Once::new();
+    LOWERED.call_once(|| {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        unsafe {
+            assert_eq!(libc::getrlimit(libc::RLIMIT_CORE, &mut limit), 0);
+            limit.rlim_max = limit.rlim_max.min(1);
+            limit.rlim_cur = limit.rlim_max;
+            assert_eq!(libc::setrlimit(libc::RLIMIT_CORE, &limit), 0);
+        }
+    });
+}
 
 pub fn setup_tracing_with_filter(filter: &str) -> DefaultGuard {
     let subscriber = default_subscriber().with(EnvFilter::new(filter));

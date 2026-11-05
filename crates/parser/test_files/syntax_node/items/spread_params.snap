@@ -1,0 +1,52 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/spread_params.fe
+---
+Root@0..55
+  ItemList@0..54
+    Item@0..54
+      Trait@0..54
+        TraitKw@0..5 "trait"
+        WhiteSpace@5..6 " "
+        Ident@6..10 "Call"
+        GenericParamList@10..19
+          Lt@10..11 "<"
+          ShapeGenericParam@11..18
+            Ident@11..16 "shape"
+            WhiteSpace@16..17 " "
+            Ident@17..18 "A"
+          Gt@18..19 ">"
+        WhiteSpace@19..20 " "
+        TraitItemList@20..54
+          LBrace@20..21 "{"
+          Newline@21..22 "\n"
+          WhiteSpace@22..26 "    "
+          Func@26..52
+            FnKw@26..28 "fn"
+            WhiteSpace@28..29 " "
+            FuncSignature@29..52
+              Ident@29..33 "call"
+              FuncParamList@33..44
+                LParen@33..34 "("
+                FnParam@34..38
+                  SelfKw@34..38 "self"
+                Comma@38..39 ","
+                WhiteSpace@39..40 " "
+                FnParam@40..43
+                  Dot2@40..42 ".."
+                  PathType@42..43
+                    Path@42..43
+                      PathSegment@42..43
+                        Ident@42..43 "A"
+                RParen@43..44 ")"
+              WhiteSpace@44..45 " "
+              Arrow@45..47 "->"
+              WhiteSpace@47..48 " "
+              PathType@48..52
+                Path@48..52
+                  PathSegment@48..52
+                    Ident@48..52 "u256"
+          Newline@52..53 "\n"
+          RBrace@53..54 "}"
+  Newline@54..55 "\n"

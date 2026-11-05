@@ -1,4 +1,4 @@
-use core::marker::Pinned
+use core::marker::{Pinned, Storage}
 use core::ptr::{self, MemArray, StorPtr, TStorPtr}
 use std::evm::{StorageMap, TSlot}
 
@@ -9,7 +9,7 @@ struct SCell {
 }
 
 impl Pinned for SCell {
-    space S = storage
+    type Space = Storage
 }
 
 // Rejected: each array would hold its pinned elements in memory.

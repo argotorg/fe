@@ -68,6 +68,7 @@
 ; === Attributes ===
 
 (attribute name: (identifier) @attribute)
+(inner_attribute name: (identifier) @attribute)
 (doc_comment) @comment.doc
 
 ; === Keywords ===
@@ -76,7 +77,6 @@
 
 [
   "as"
-  "by"
   "const"
   "contract"
   "else"
@@ -93,6 +93,7 @@
   "mod"
   "msg"
   "mut"
+  "mut?"
   "own"
   "recv"
   "self"
@@ -121,6 +122,7 @@
 ; === Literals ===
 
 (string_literal) @string
+(byte_literal) @string
 (escape_sequence) @string.escape
 (integer_literal) @number
 (boolean_literal) @constant

@@ -7,15 +7,12 @@ input_file: fixtures/semantic_access/loop_sessions.fe
 error[16-0001]: access conflict in `fn projected`
    ┌─ loop_sessions.fe:10:9
    │
- 8 │   fn projected(_ items: mut [Item; 2]) {
-   │ ╭──────────────────────────────────────'
- 9 │ │     for ref item in items {
+ 9 │ ╭     for ref item in items {
 10 │ │         items[0] = Item { n: 0 }
    │ │         ^^^^^^^^^^^^^^^^^^^^^^^^ cannot write to this place while a `ref` projection of it is open
 11 │ │         assert(item.n > 0)
 12 │ │     }
-13 │ │ }
-   │ ╰─' projection opened here
+   │ ╰─────' projection opened here
 
 error[16-0001]: access conflict in `fn mutable`
    ┌─ loop_sessions.fe:18:9
@@ -28,7 +25,17 @@ error[16-0001]: access conflict in `fn mutable`
 error[16-0001]: access conflict in `fn while_let`
    ┌─ loop_sessions.fe:26:9
    │
-25 │     while let Option::Some(mut x) = xs.get_mut(i) {
-   │                                     ------------- projection opened here
+25 │     while let Option::Some(mut x) = xs.get(i) {
+   │                                     --------- projection opened here
 26 │         xs[0] = 7
    │         ^^ cannot mutably access this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn enumerated`
+   ┌─ loop_sessions.fe:43:9
+   │
+42 │ ╭     for (i, ref item) in items.enumerate() {
+43 │ │         items[i] = Item { n: 0 }
+   │ │         ^^^^^^^^^^^^^^^^^^^^^^^^ cannot write to this place while a `ref` projection of it is open
+44 │ │         assert(item.n > 0)
+45 │ │     }
+   │ ╰─────' projection opened here

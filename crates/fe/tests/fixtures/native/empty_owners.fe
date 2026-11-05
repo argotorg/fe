@@ -1,0 +1,16 @@
+use core::{Box, MemArray, MemBuffer, MemSlice, MemVec, Option}
+
+// Empty owners take nothing from the host, so only `grown` allocates.
+pub fn main() -> i32 {
+    let _vector: MemVec<u256> = MemVec::new()
+    let _buffer = MemBuffer::empty()
+    let _array = MemArray::from_fn(0, |i| i)
+    let _unit = Box::new(())
+    let _slice = MemSlice<u8>::empty()
+    var grown = match MemVec<u8>::try_with_capacity(0) {
+        Option::Some(grown) => grown
+        Option::None => core::panic()
+    }
+    grown.push(1)
+    0
+}

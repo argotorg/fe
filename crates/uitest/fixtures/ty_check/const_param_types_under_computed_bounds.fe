@@ -1,0 +1,25 @@
+// A const parameter's type can name a projection that only a computed bound
+// argument selects. Discovering the parameter evaluates that argument while
+// the owner's parameters are still settling, which must not panic.
+const fn two() -> usize { 2 }
+
+struct Marker {}
+
+impl Marker { const N: usize = 2 }
+
+trait Width<const K: usize> { type Item }
+
+fn call<T: Width<{ two() }, Item = usize>, const N: <T as Width<2>>::Item>() {}
+
+fn assoc<T: Width<{ Marker::N }, Item = usize>, const N: <T as Width<2>>::Item>() {}
+
+fn dependent<T: Width<{ N + 1 }, Item = usize>, const N: usize, const M: <T as Width<{ N + 1 }>>::Item>() {}
+
+struct Foo<T> {}
+
+impl<T> Foo<T> {
+    fn dependent<const N: usize, const M: <T as Width<{ N + 1 }>>::Item>()
+    where
+        T: Width<{ N + 1 }, Item = usize>
+    {}
+}

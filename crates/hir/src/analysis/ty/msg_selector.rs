@@ -304,7 +304,7 @@ fn msg_variant_field<'db>(
     field_idx: usize,
 ) -> Option<ast::RecordFieldDef> {
     let (msg_ptr, variant_idx) = msg_origin_for_variant_struct(db, struct_)?;
-    let root = SyntaxNode::new_root(parse_file_impl(db, top_mod));
+    let root = SyntaxNode::new_root(parse_file_impl(db, top_mod).root.clone());
     let msg_node = msg_ptr.to_node(&root);
     let variant = msg_node.variants()?.into_iter().nth(variant_idx)?;
     variant.params()?.into_iter().nth(field_idx)
@@ -332,7 +332,7 @@ fn msg_variant_focus_range<'db>(
         return parser::TextRange::new(0.into(), 0.into());
     };
 
-    let root = SyntaxNode::new_root(parse_file_impl(db, top_mod));
+    let root = SyntaxNode::new_root(parse_file_impl(db, top_mod).root.clone());
     let msg_node = msg_ptr.to_node(&root);
 
     if !matches!(focus, MsgDesugaredFocus::Selector) {

@@ -25,7 +25,7 @@ use super::normalize::normalized_source_local_value_ty;
 /// Semantic borrow and capability analyses consume only `NormalizedBody`.
 /// rMIR lowering uses this companion plan to locate the representation that
 /// carries a semantic value or root.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NLayoutPlan<'db> {
     pub value_representations: Vec<NValueRepresentation>,
     pub root_representations: Vec<NRootRepresentation>,
@@ -56,6 +56,8 @@ impl NLayoutPlan<'_> {
 
 /// Shared runtime homes for semantic values.
 /// Source provenance never gives a synthetic value permission to overwrite its source.
+/// Homes share the normalized body's type basis, which evaluates specialized
+/// extents that a source local's type still describes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NLayoutLocals<'db> {
     pub locals: Vec<SLocal<'db>>,
@@ -64,11 +66,19 @@ pub struct NLayoutLocals<'db> {
 
 impl<'db> NLayoutLocals<'db> {
     pub fn new(
+        db: &'db dyn HirAnalysisDb,
         body: &NormalizedBody<'db>,
         plan: &NLayoutPlan<'db>,
         source: &SemanticBody<'db>,
     ) -> Self {
-        let mut locals = source.locals.clone();
+        let mut locals = source
+            .locals
+            .iter()
+            .map(|local| SLocal {
+                ty: body.owner.normalized_ty(db, local.ty),
+                ..local.clone()
+            })
+            .collect::<Vec<_>>();
         let value_locals = body
             .values
             .iter()
@@ -120,7 +130,7 @@ pub struct NRootRepresentation {
     pub source_local: Option<SLocalId>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NLayoutUseBacking<'db> {
     pub value: NValueId,
     pub target: Box<[LayoutBackingProjection]>,

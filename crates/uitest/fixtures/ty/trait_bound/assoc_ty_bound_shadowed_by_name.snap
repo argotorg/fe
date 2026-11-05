@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_ty_bound_shadowed_by_name.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_ty_bound_shadowed_by_name.fe:16:20
+   │
+16 │     type Decoder = OtherDecoder
+   │                    ^^^^^^^^^^^^ `OtherDecoder` doesn't implement `Decoder<Sol>`

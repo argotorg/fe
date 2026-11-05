@@ -6,7 +6,7 @@ use std::evm::{Create, Evm}
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -20,15 +20,15 @@ fn init() uses (evm: mut Evm) {
 fn runtime() uses (evm: mut Evm) {
     let len = evm.code_region_len(child::child_init)
     let offset = evm.code_region_offset(child::child_init)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
         src_offset: offset,
         len,
     )
-    let addr = evm.create2_raw(value: 0, init_code: dest.span(), salt: 0x1234)
-    let data = ptr::MemBuffer::alloc(32)
-    unsafe { store_word(ptr: data.ptr(), value: addr.inner) }
+    let addr = evm.create2_raw(value: Wei::zero(), init_code: dest.span(), salt: 0x1234)
+    let data = ptr::MemBuffer::new(32)
+    unsafe { store_word(ptr: data.ptr(), value: addr.word()) }
     evm.return_data(data: data.span())
 }

@@ -4,7 +4,7 @@ use crate::hir_def::{
 };
 use crate::span::DynLazySpan;
 use common::ingot::Ingot;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{
     binder::Binder,
@@ -12,8 +12,7 @@ use super::{
     corelib::resolve_core_trait,
     fold::TyFoldable,
     normalize::normalize_ty,
-    provider::{AddressSpace, pinned_space},
-    result_space::{SpaceValue, impl_space_value},
+    provider::{AddressSpace, is_state_pin, pinned_space},
     trait_def::{ImplementorOrigin, impls_for_trait_def},
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
@@ -26,27 +25,27 @@ use super::{
     unify::UnificationTable,
 };
 use crate::analysis::HirAnalysisDb;
+use crate::semantic::adt_grows;
 
 /// Represents a ADT type definition.
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct AdtDef<'db> {
+    #[returns(copy)]
     pub adt_ref: AdtRef<'db>,
 
     /// Type parameters of the ADT.
-    #[return_ref]
     pub param_set: GenericParamTypeSet<'db>,
 
     /// Fields of the ADT, if the ADT is an enum, this represents variants.
     /// Otherwise, `fields[0]` represents all fields of the struct.
-    #[return_ref]
     pub fields: Vec<AdtField<'db>>,
 }
 
 /// Where a type is pinned: to the state space its `core::marker::Pinned`
-/// implementation names as `S`. Implementing the trait is the pinning
+/// implementation names as `Space`. Implementing the trait is the pinning
 /// declaration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum Pin {
     /// No implementation pins the type, or any instance of it.
     Unpinned,
@@ -61,7 +60,7 @@ pub enum Pin {
 /// no implementation is selected for is undecided while one could still
 /// apply to an instance of it (its parameters, or bounds they leave open),
 /// and unpinned otherwise.
-#[salsa::tracked(cycle_fn = ty_pin_cycle_recover, cycle_initial = ty_pin_cycle_initial)]
+#[salsa::tracked(returns(copy), cycle_initial = ty_pin_cycle_initial)]
 pub(crate) fn ty_pin<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Pin {
     let Some(adt) = ty.adt_def(db) else {
         return Pin::Unpinned;
@@ -85,14 +84,7 @@ pub(crate) fn ty_pin<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Pin {
         .any(|implementor| {
             // A pin to another space is an error at the implementation.
             if let ImplementorOrigin::Hir(impl_trait) = implementor.origin(db)
-                && let Some(SpaceValue::Space(space)) = impl_trait
-                    .spaces(db)
-                    .first()
-                    .and_then(|space| space.value)
-                    .and_then(|(value, steps)| {
-                        impl_space_value(db, impl_trait, value.to_opt()?, steps)
-                    })
-                && !matches!(space, AddressSpace::Storage | AddressSpace::Transient)
+                && !is_state_pin(db, impl_trait)
             {
                 return false;
             }
@@ -114,31 +106,24 @@ pub(crate) fn ty_pin<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Pin {
     }
 }
 
-fn ty_pin_cycle_initial<'db>(_: &'db dyn HirAnalysisDb, _: TyId<'db>) -> Pin {
+fn ty_pin_cycle_initial<'db>(_: &'db dyn HirAnalysisDb, _: salsa::Id, _: TyId<'db>) -> Pin {
     Pin::Unpinned
-}
-
-fn ty_pin_cycle_recover<'db>(
-    _: &'db dyn HirAnalysisDb,
-    _: &Pin,
-    _: u32,
-    _: TyId<'db>,
-) -> salsa::CycleRecoveryAction<Pin> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 /// The type that is or may be pinned that `ty` is or holds in a field, or
 /// in a tuple or array element; see `TyId::pinned_part`.
-#[salsa::tracked(cycle_fn = ty_pinned_part_cycle_recover, cycle_initial = ty_pinned_part_cycle_initial)]
+#[salsa::tracked(returns(copy), cycle_initial = ty_pinned_part_cycle_initial)]
 pub(crate) fn ty_pinned_part<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
     match ty.base_ty(db).data(db) {
         TyData::TyBase(TyBase::Adt(adt)) => {
             if ty.may_be_pinned(db) {
                 return Some(ty);
             }
-            // A type not applied to all its arguments has no values.
+            // A type not applied to all its arguments has no values. A
+            // growing type, rejected where it is defined, reaches a new type
+            // through each pointer, so its fields are never searched.
             let args = ty.generic_args(db);
-            if args.len() != adt.params(db).len() {
+            if args.len() != adt.params(db).len() || adt_grows(db, *adt) {
                 return None;
             }
             // A field of an associated type holds the type it names.
@@ -168,17 +153,83 @@ pub(crate) fn ty_pinned_part<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> 
     }
 }
 
-fn ty_pinned_part_cycle_initial<'db>(_: &'db dyn HirAnalysisDb, _: TyId<'db>) -> Option<TyId<'db>> {
+fn ty_pinned_part_cycle_initial<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _: TyId<'db>,
+) -> Option<TyId<'db>> {
     None
 }
 
-fn ty_pinned_part_cycle_recover<'db>(
-    _: &'db dyn HirAnalysisDb,
-    _: &Option<TyId<'db>>,
-    _: u32,
-    _: TyId<'db>,
-) -> salsa::CycleRecoveryAction<Option<TyId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
+/// The `#[view]` type `ty` holds as a part: an argument of a tuple, an array
+/// or a pointer, or of an ADT parameter its fields mention, at any depth; see
+/// `TyId::view_part`.
+pub(crate) fn ty_view_part<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
+    let held = match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Adt(adt)) => adt_field_params(db, *adt).as_slice(),
+        TyData::TyBase(TyBase::Prim(PrimTy::Tuple(_) | PrimTy::Array | PrimTy::Ptr(_))) => &[],
+        _ => return None,
+    };
+    ty.generic_args(db)
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| held.get(*idx).copied().unwrap_or(true))
+        .find_map(|(_, &arg)| arg.is_view(db).then_some(arg).or_else(|| arg.view_part(db)))
+}
+
+/// Whether some field of `adt` holds a value of each of its parameters: an
+/// argument for one that none does only distinguishes the type. Type lowering
+/// asks this of every ADT it names, impl headers included, so the fields'
+/// const bodies stay unevaluated: evaluating one proves bounds through those
+/// impls, and a const holds no value anyway.
+#[salsa::tracked(cycle_initial = adt_field_params_cycle_initial)]
+pub(crate) fn adt_field_params<'db>(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> Vec<bool> {
+    let params = adt.params(db);
+    if params.is_empty() {
+        return Vec::new();
+    }
+    let fields: Vec<_> = adt
+        .fields(db)
+        .iter()
+        .flat_map(|variant| {
+            (0..variant.num_types()).map(|i| variant.ty_in_mode(db, i, ConstBodyLowering::Deferred))
+        })
+        .map(|field| field.instantiate_identity())
+        .collect();
+    params
+        .iter()
+        .map(|&param| fields.iter().any(|&field| holds(db, field, param)))
+        .collect()
+}
+
+/// Whether a value of `ty` holds a value of `param`: it is one, or holds one
+/// through an argument of a tuple, an array or a pointer, or of an ADT
+/// parameter that its fields hold. A projection may be any type, an
+/// equality's among them, so it holds every parameter.
+fn holds<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, param: TyId<'db>) -> bool {
+    if ty == param {
+        return true;
+    }
+    match ty.base_ty(db).data(db) {
+        TyData::AssocTy(_) | TyData::QualifiedTy(_) => true,
+        TyData::TyBase(TyBase::Adt(adt)) => {
+            let held = adt_field_params(db, *adt);
+            ty.generic_args(db)
+                .iter()
+                .enumerate()
+                .any(|(idx, &arg)| held.get(idx).copied().unwrap_or(true) && holds(db, arg, param))
+        }
+        _ => ty.generic_args(db).iter().any(|&arg| holds(db, arg, param)),
+    }
+}
+
+// Until the fields are known, every parameter may be held.
+fn adt_field_params_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    adt: AdtDef<'db>,
+) -> Vec<bool> {
+    vec![true; adt.params(db).len()]
 }
 
 impl<'db> AdtDef<'db> {
@@ -262,7 +313,7 @@ impl<'db> AdtDef<'db> {
 
 /// This struct represents a field of an ADT. If the ADT is an enum, this
 /// represents a variant.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AdtField<'db> {
     /// Field types as HIR type refs. To allow recursive types, these are kept
     /// at the HIR level and lowered on demand.
@@ -325,7 +376,9 @@ impl<'db> AdtField<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, salsa::Supertype, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, salsa::Supertype, SalsaValue,
+)]
 pub enum AdtRef<'db> {
     Enum(Enum<'db>),
     Struct(Struct<'db>),
@@ -401,7 +454,7 @@ impl<'db> AdtRef<'db> {
 }
 
 /// Struct for downstream diagnostics that refer to cycle members.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AdtCycleMember<'db> {
     pub adt: AdtDef<'db>,
     pub field_idx: usize,

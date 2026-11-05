@@ -1,0 +1,79 @@
+struct Local {}
+struct Other {}
+struct Bound {}
+struct Source {}
+struct Wrap<T> {
+    t: T,
+}
+struct NeedsCopy<T: Copy> {
+    t: T,
+}
+
+trait Get {
+    type Out
+}
+impl Get for Local {
+    type Out = Local
+}
+impl Get for Option<u256> {
+    type Out = Other
+}
+impl Get for Bound {
+    type Out = Bound
+}
+impl Get for Source {
+    type Out = Option<u256>
+}
+impl<T: Get> Get for Wrap<T> {
+    type Out = T::Out
+}
+
+// An impl is for its normalized self type: `Local`, `Other` although
+// `Option` is core's, and `Bound` by the impl's own bound.
+impl Copy for <Local as Get>::Out {}
+impl Copy for <Option<u256> as Get>::Out {}
+impl<T: Get<Out = Bound>> Copy for <T as Get>::Out {}
+
+fn copies(
+    _ local: NeedsCopy<Local>,
+    _ other: NeedsCopy<Other>,
+    _ bound: NeedsCopy<Bound>,
+) {}
+
+// `Self` is the normalized type too.
+trait Name {
+    fn name(self) -> u256
+}
+impl Name for <Local as Get>::Out {
+    fn name(self) -> u256 {
+        1
+    }
+}
+
+// `Option<u256>` and `Copy` are core's.
+impl Copy for <Source as Get>::Out {}
+
+// `<Wrap<T> as Get>::Out` is `T::Out`, which is no ingot's type.
+impl<T: Get> Copy for <Wrap<T> as Get>::Out {}
+
+// A bound on an associated type finds the implementation for the type it
+// normalizes to: `<Option<Point> as Unwrap>::Out` is `Point`, whose `Copy`
+// is here, although `Option` is core's.
+struct Point {}
+impl Copy for Point {}
+
+trait Unwrap {
+    type Out
+}
+impl<T> Unwrap for Option<T> {
+    type Out = T
+}
+
+trait Check {}
+impl<O: Unwrap> Check for Wrap<O> where O::Out: Copy {}
+
+fn checks<C: Check>(_ c: C) {}
+
+fn check(_ w: Wrap<Option<Point>>) {
+    checks(w)
+}

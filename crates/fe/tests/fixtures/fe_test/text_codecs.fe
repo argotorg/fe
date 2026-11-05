@@ -8,32 +8,28 @@ use std::text::{self, TextBuilder}
 
 fn from_hex(_ hex: DynString) -> Bytes {
     let len = hex.len() / 2
-    let buffer = MemBuffer::alloc(len)
-    var i: u256 = 0
-    while i < len {
+    let buffer = MemBuffer::new(len)
+    for i in 0..len {
         let byte = text::parse_hex_uint(hex.slice(start: 2 * i, len: 2)).unwrap()
         unsafe { *ptr::offset_bytes(buffer.ptr(), i) = byte.downcast_truncate() }
-        i += 1
     }
     Bytes::from_payload(source: buffer.span())
 }
 
 fn to_hex(_ bytes: Bytes) -> DynString {
     var builder = TextBuilder::new()
-    var i: u256 = 0
-    while i < bytes.len() {
+    for i in 0..bytes.len() {
         builder = builder.push(text::hex(bytes.byte_at(i) as u256, 1))
-        i += 1
     }
     builder.finish()
 }
 
 // The 256 bytes 0x00, 0x01, ..., 0xff.
 fn all_bytes() -> Bytes {
-    let buffer = MemBuffer::alloc(256)
+    let buffer = MemBuffer::new(256)
     var i: u256 = 0
     while i < 256 {
-        unsafe { *ptr::offset_bytes(buffer.ptr(), i) = i.downcast_truncate() }
+        unsafe { *ptr::offset_bytes(buffer.ptr(), i.downcast_unchecked()) = i.downcast_truncate() }
         i += 1
     }
     Bytes::from_payload(source: buffer.span())

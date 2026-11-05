@@ -3,7 +3,7 @@ use cranelift_entity::entity_impl;
 use super::{Body, CondId, ExprId, Partial, PatId, TypeId};
 use crate::{HirDb, span::stmt::LazyStmtSpan};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Stmt<'db> {
     /// The `let` statement. The first `PatId` is the pattern for binding, the
     /// second `Option<TypeId>` is the type annotation, the third
@@ -16,14 +16,15 @@ pub enum Stmt<'db> {
     /// The first `PatId` is the pattern for binding which can be used in the
     /// for-loop body.
     ///
-    /// The second `ExprId` is the iterable expression, the third the driver of
-    /// `for x in y by d`, if any, and the fourth the for-loop body.
+    /// The second `ExprId` is the iterable expression.
     ///
-    /// The fifth field is the unroll hint:
+    /// The third `ExprId` is the for-loop body.
+    ///
+    /// The fourth field is the unroll hint:
     /// - `None`: no attribute, use auto-unroll heuristics (unroll if < 10 iterations)
     /// - `Some(true)`: #[unroll] attribute forces unrolling
     /// - `Some(false)`: #[unroll(never)] attribute prevents unrolling
-    For(PatId, ExprId, Option<ExprId>, ExprId, Option<bool>),
+    For(PatId, ExprId, ExprId, Option<bool>),
 
     /// The first `CondId` is the condition of the while-loop.
     /// The second `ExprId` is the body of the while-loop.
@@ -37,7 +38,7 @@ pub enum Stmt<'db> {
     Expr(ExprId),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct StmtId(u32);
 entity_impl!(StmtId);
 

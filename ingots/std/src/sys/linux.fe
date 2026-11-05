@@ -1,0 +1,56 @@
+#![cfg(target_os = "linux")]
+/// glibc's x86-64 layouts and values.
+use core::MemSpan
+
+extern {
+    fn __errno_location() -> *i32
+}
+
+pub fn errno_location() -> *i32 {
+    unsafe { __errno_location() }
+}
+
+// `struct stat` and `struct dirent`.
+pub fn stat_mode(_ stat: MemSpan) -> u32 {
+    stat.read_le<u32>(24)
+}
+
+pub fn stat_size(_ stat: MemSpan) -> u64 {
+    stat.read_le<u64>(48)
+}
+
+pub const DIRENT_TYPE: usize = 18
+pub const DIRENT_NAME: usize = 19
+
+// `clock_gettime`'s clock that never goes back.
+pub const CLOCK_MONOTONIC: i32 = 1
+
+// `posix_spawn`'s file actions and attributes.
+pub const FILE_ACTIONS_SIZE: usize = 80
+pub const SPAWNATTR_SIZE: usize = 336
+
+extern {
+    fn posix_spawn_file_actions_addclosefrom_np(_ actions: *u8, _ from: i32) -> i32
+}
+
+/// Keeps the child's standard stream `fd` as the parent's. A child inherits
+/// it unless an action changes it.
+pub fn inherit_fd(_ actions: *u8, _ fd: i32) -> i32 {
+    0
+}
+
+/// Closes the child's descriptors past its standard streams, after the
+/// actions before it. `attr` needs nothing.
+pub fn close_other_fds(_ actions: *u8, _ attr: *u8) -> i32 {
+    unsafe { posix_spawn_file_actions_addclosefrom_np(actions, 3) }
+}
+
+// `open` flags.
+pub const O_CREAT: i32 = 0x40
+pub const O_TRUNC: i32 = 0x200
+
+// The bytes a write to a pipe that `poll` finds writable takes at once.
+pub const PIPE_BUF: usize = 4096
+
+// The bytes in a unit of `struct rusage`'s `ru_maxrss`.
+pub const MAXRSS_UNIT: u64 = 1024

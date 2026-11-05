@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/pattern_matching.rs
+source: crates/hir/tests/frontend/pattern_matching.rs
 expression: diagnostic_output
 input_file: test_files/pattern_matching/non_exhaustive/enum_data_in_tuples.fe
 ---
@@ -58,7 +58,7 @@ error[8-0034]: non-exhaustive patterns: type `(Item, Item, Item)` is not covered
 50 │ │         (Item::Value(x), Item::Value(y), Item::Value(z)) => x + y + z
 51 │ │         (Item::Empty, _, _) => 100
 52 │ │         (_, Item::Empty, _) => 200
-53 │ │         (_, _, Item::Empty) => 300
+53 │ │         (_, _, Item::Empty) => 250
 54 │ │     }
    │ ╰─────^ match expression does not cover all possible values
    │

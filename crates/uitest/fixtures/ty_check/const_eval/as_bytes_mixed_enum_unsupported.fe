@@ -1,15 +1,28 @@
-use core::intrinsic
-
+// Serialization requires an explicit AsBytes implementation, including at CTFE.
 enum Mixed {
-    A(u256),
+    A(u256,),
     B,
 }
-
-const fn len() -> usize {
-    let bytes: [u8; 32] = intrinsic::__as_bytes(Mixed::B)
-    bytes[31] as usize
+enum AddrSpace {
+    Mem,
+    Stor,
+    Tran,
 }
+struct NotBytes { value: u256 }
 
-type Arr = [u8; len()]
-
-fn takes(_x: Arr) {}
+const fn mixed() -> u256 {
+    core::keccak(Mixed::B)
+}
+const fn unit_enum() -> u256 {
+    core::keccak(AddrSpace::Stor)
+}
+const fn integer() -> u256 {
+    core::keccak(26 as u16)
+}
+const fn array() -> u256 {
+    let xs: [u16; 2] = [258, 772]
+    core::keccak(xs)
+}
+const fn record() -> u256 {
+    core::keccak(NotBytes { value: 1 })
+}

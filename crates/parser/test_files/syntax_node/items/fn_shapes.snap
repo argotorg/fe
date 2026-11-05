@@ -4,8 +4,8 @@ assertion_line: 18
 expression: node
 input_file: test_files/syntax_node/items/fn_shapes.fe
 ---
-Root@0..120
-  ItemList@0..119
+Root@0..165
+  ItemList@0..164
     Item@0..53
       Func@0..53
         FnKw@0..2 "fn"
@@ -143,4 +143,54 @@ Root@0..120
         BlockExpr@117..119
           LBrace@117..118 "{"
           RBrace@118..119 "}"
-  Newline@119..120 "\n"
+    Newline@119..121 "\n\n"
+    Item@121..164
+      Func@121..164
+        FnKw@121..123 "fn"
+        WhiteSpace@123..124 " "
+        FuncSignature@124..161
+          Ident@124..128 "open"
+          GenericParamList@128..149
+            Lt@128..129 "<"
+            TypeGenericParam@129..148
+              Ident@129..130 "F"
+              TypeBoundList@130..148
+                Colon@130..131 ":"
+                WhiteSpace@131..132 " "
+                TypeBound@132..148
+                  TraitRef@132..148
+                    FnShape@132..148
+                      Ident@132..137 "FnMut"
+                      TupleType@137..143
+                        LParen@137..138 "("
+                        PathType@138..142
+                          Path@138..142
+                            PathSegment@138..142
+                              Ident@138..142 "u256"
+                        RParen@142..143 ")"
+                      WhiteSpace@143..144 " "
+                      Arrow@144..146 "->"
+                      WhiteSpace@146..147 " "
+                      Underscore@147..148 "_"
+            Gt@148..149 ">"
+          FuncParamList@149..161
+            LParen@149..150 "("
+            FnParam@150..160
+              Underscore@150..151 "_"
+              WhiteSpace@151..152 " "
+              Ident@152..153 "f"
+              Colon@153..154 ":"
+              WhiteSpace@154..155 " "
+              ModeType@155..160
+                OwnKw@155..158 "own"
+                WhiteSpace@158..159 " "
+                PathType@159..160
+                  Path@159..160
+                    PathSegment@159..160
+                      Ident@159..160 "F"
+            RParen@160..161 ")"
+        WhiteSpace@161..162 " "
+        BlockExpr@162..164
+          LBrace@162..163 "{"
+          RBrace@163..164 "}"
+  Newline@164..165 "\n"

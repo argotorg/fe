@@ -123,11 +123,11 @@ fn parse_hex_uint_rejects() {
 
 #[test]
 fn parse_address_values() {
-    let expected = Address { inner: 0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed }
+    let expected = Address::new(0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed)
     assert!(parse_address("0x5aAeb6053F3E94C9b9A09f33669435e7Ef1BeAed").unwrap() == expected)
     assert!(parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed").unwrap() == expected)
     assert!(parse_address("5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED").unwrap() == expected)
-    let zero = Address { inner: 0 }
+    let zero = Address::new(0)
     assert!(parse_address("0x0000000000000000000000000000000000000000").unwrap() == zero)
     let text = checksum_address(expected)
     assert!(checksum_address(parse_address(text).unwrap()) == text)

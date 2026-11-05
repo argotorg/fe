@@ -113,7 +113,7 @@ fn shuffles_keep_every_element() {
         i += 1
     }
     with (Rng = rng) {
-        shuffle_slice(mut memory.as_mut_slice())
+        shuffle_slice(mut memory.as_slice())
     }
     var seen_memory: u256 = 0
     var k: usize = 0
@@ -127,15 +127,15 @@ fn shuffles_keep_every_element() {
 #[test]
 fn a_test_rng_picks_the_winner() {
     let tickets: [Address; 3] = [
-        Address { inner: 0xa },
-        Address { inner: 0xb },
-        Address { inner: 0xc },
+        Address::new(0xa),
+        Address::new(0xb),
+        Address::new(0xc),
     ]
     var rng = ReplayRng::new([2])
     let winner = with (Rng = rng) {
         draw_winner(tickets)
     }
-    assert!(winner.inner == 0xc)
+    assert!(winner.word() == 0xc)
 }
 
 msg LotteryMsg {
@@ -148,9 +148,9 @@ pub contract Lottery uses (ctx: Ctx) {
     recv LotteryMsg {
         Draw -> Address uses (ctx) {
             let tickets: [Address; 3] = [
-                Address { inner: 0xa },
-                Address { inner: 0xb },
-                Address { inner: 0xc },
+                Address::new(0xa),
+                Address::new(0xb),
+                Address::new(0xc),
             ]
             var rng = KeccakRng::seeded(ctx.prevrandao())
             with (Rng = rng) {
@@ -162,15 +162,15 @@ pub contract Lottery uses (ctx: Ctx) {
 
 #[test]
 fn a_contract_draws_with_a_seeded_rng() uses (evm: mut Evm) {
-    let lottery = evm.create2<Lottery>(value: 0, args: (), salt: 0)
+    let lottery = evm.create2<Lottery>(value: Wei::zero(), args: (), salt: 0)
     let winner: Address = evm
         .call(
             addr: lottery,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: LotteryMsg::Draw {},
         )
     assert!(
-        winner.inner == 0xa || winner.inner == 0xb || winner.inner == 0xc,
+        winner.word() == 0xa || winner.word() == 0xb || winner.word() == 0xc,
     )
 }

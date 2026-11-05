@@ -1,0 +1,22 @@
+// A repeat length is forced now or waits only on facts that specialization
+// supplies. A closed opaque extern call, a non-const call and a runtime value
+// are rejected where they are written. An opaque call behind a parameter
+// waits, and fails where a concrete use forces it.
+extern {
+    const fn opaque() -> usize
+    const fn opaque_of(_ n: usize) -> usize
+}
+
+const fn word_len(_ n: usize) -> usize { n / 32 + if n % 32 == 0 { 0 } else { 1 } }
+
+fn runtime_len(_ n: usize) -> usize { n }
+
+fn dependent<const N: usize>() -> [u8; word_len(N)] { [0; word_len(N)] }
+
+fn deferred_opaque<const N: usize>() -> [u8; opaque_of(N)] { [0; opaque_of(N)] }
+
+fn closed_opaque() -> u8 { [0 as u8; opaque()][0] }
+
+fn generic_non_const<const N: usize>() -> u8 { [0 as u8; runtime_len(N)][0] }
+
+fn runtime(_ n: usize) -> u8 { [0 as u8; { n + 1 }][0] }

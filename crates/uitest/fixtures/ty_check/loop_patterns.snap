@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/loop_patterns.fe
+---
+error[8-0148]: refutable pattern in `for`
+  ┌─ loop_patterns.fe:5:9
+  │
+5 │     for (0, x) in xs.enumerate() {
+  │         ^^^^^^ this pattern may not match every step
+
+error[8-0148]: refutable pattern in `for`
+   ┌─ loop_patterns.fe:13:9
+   │
+13 │     for (7, x) in pairs {
+   │         ^^^^^^ this pattern may not match every step
+
+error[8-0148]: refutable pattern in `for`
+   ┌─ loop_patterns.fe:21:9
+   │
+21 │     for Option::Some(x) in xs {
+   │         ^^^^^^^^^^^^^^^ this pattern may not match every step

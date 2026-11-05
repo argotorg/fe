@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_item_trait_scope_headers.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_item_trait_scope_headers.fe:32:14
+   │
+32 │ impl Top for S {}
+   │              ^ `S` doesn't implement `Parent<2>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_item_trait_scope_headers.fe:43:5
+   │
+40 │ fn need<T: Target<1>>() {}
+   │            --------- required by this bound on `need`
+   ·
+43 │     need<W>()
+   │     ^^^^^^^ `W` doesn't implement `Target<1>`

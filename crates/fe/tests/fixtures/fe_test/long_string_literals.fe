@@ -1,0 +1,124 @@
+// String literals longer than the 31 bytes a `String<N>` holds are
+// `DynString`s when nothing else fixes their type. Their bytes are checked
+// against `core::keccak` of the same literal, which constant evaluation
+// computes from the literal's bytes.
+use core::abi::{AbiSize, Encode, encode_alloc}
+use core::keccak
+use std::abi::{DynString, Sol}
+use std::evm::{Call, Evm, Log, decode_error_string}
+use std::evm::crypto::keccak256
+
+#[error]
+pub struct Error { pub reason: DynString }
+
+#[event]
+struct Noted { text: DynString }
+
+const BANNER: DynString = "Greetings from a string literal longer than one word"
+
+msg TextMsg {
+    #[selector = 1]
+    Greeting -> DynString,
+    #[selector = 2]
+    Fail,
+    #[selector = 3]
+    FailAssert,
+}
+
+pub contract Texts {
+    recv TextMsg {
+        Greeting -> DynString {
+            "Greetings from a string literal longer than one word"
+        }
+        Fail {} {
+            revert_error(Error { reason: "DefaultPool: Caller is not the ActivePool" })
+        }
+        FailAssert {} {
+            assert!(false, "an assert message longer than a single word of text")
+        }
+    }
+}
+
+/// Whether `text` holds `len` bytes hashing to `hash`.
+fn holds(_ text: DynString, len: usize, hash: u256) -> bool {
+    text.len() == len && keccak256(text.payload_span()) == hash
+}
+
+/// The hash of `value`'s ABI encoding.
+fn encoding_hash<T: Encode<Sol> + AbiSize>(_ value: own T) -> u256 {
+    keccak256(encode_alloc<Sol, T>(value).span())
+}
+
+fn length(_ short: bool) -> usize {
+    // Both literals unify with the longer one: the `if` is a `DynString`.
+    let text = if short { "short" } else { "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-!" }
+    text.len()
+}
+
+#[test]
+fn test_literals_up_to_a_word_stay_inline() {
+    let inferred = "abcdefghijklmnopqrstuvwxyz01234"
+    let fixed: String<31> = inferred
+    assert!(fixed.len() == 31)
+    let text: DynString = "abcdefghijklmnopqrstuvwxyz012345"
+    assert!(holds(text, len: 32, hash: keccak("abcdefghijklmnopqrstuvwxyz012345")))
+}
+
+#[test]
+fn test_long_literal_bytes() {
+    let s32 = "abcdefghijklmnopqrstuvwxyz012345"
+    let s33 = "abcdefghijklmnopqrstuvwxyz0123456"
+    let s64 = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-"
+    let s65 = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-!"
+    let utf8 = "éééééééééééééééééééé"
+    assert!(holds(s32, len: 32, hash: keccak("abcdefghijklmnopqrstuvwxyz012345")))
+    assert!(holds(s33, len: 33, hash: keccak("abcdefghijklmnopqrstuvwxyz0123456")))
+    assert!(holds(s64, len: 64, hash: keccak("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-")))
+    assert!(holds(s65, len: 65, hash: keccak("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-!")))
+    assert!(holds(utf8, len: 40, hash: keccak("éééééééééééééééééééé")))
+    assert!(s65.byte_at(64) == 0x21)
+    assert!(utf8.byte_at(0) == 0xc3 && utf8.byte_at(39) == 0xa9)
+}
+
+#[test]
+fn test_kilobyte_literal() {
+    let text = "Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dyna"
+    assert!(holds(text, len: 1024, hash: keccak("Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dynamic strings. Fe string literals longer than one word are dyna")))
+}
+
+#[test]
+fn test_long_literals_unify() {
+    assert!(length(short: true) == 5)
+    assert!(length(short: false) == 65)
+    assert!(holds(BANNER, len: 52, hash: keccak("Greetings from a string literal longer than one word")))
+}
+
+#[test]
+fn test_generic_consumer_encodes_a_long_literal() {
+    // keccak of `cast abi-encode "f(string)" "<the literal>"` without its offset word.
+    let expected = 0x72ba47e088ba3900cf8555829b754c1725bfda8b5fea6250d963f9af5cbf4346
+    assert!(encoding_hash("Greetings from a string literal longer than one word") == expected)
+    assert!(encoding_hash(BANNER) == expected)
+}
+
+#[test]
+fn test_long_literal_event() uses (log: mut Log) {
+    log.emit(Noted { text: "DefaultPool: Caller is not the ActivePool" })
+}
+
+#[test]
+fn test_long_literals_cross_calls() uses (evm: mut Evm, call: mut Call) {
+    let texts = evm.create2<Texts>(value: Wei::zero(), args: (), salt: 0)
+    let greeting: DynString = evm.call(addr: texts, gas: 1000000, value: Wei::zero(), message: TextMsg::Greeting {})
+    assert!(holds(greeting, len: 52, hash: keccak("Greetings from a string literal longer than one word")))
+
+    let failed = texts.try_call(TextMsg::Fail {})
+    assert!(!failed.success())
+    let reason = decode_error_string(failed.returndata()).unwrap()
+    assert!(holds(reason, len: 41, hash: keccak("DefaultPool: Caller is not the ActivePool")))
+
+    let asserted = texts.try_call(TextMsg::FailAssert {})
+    assert!(!asserted.success())
+    let message = decode_error_string(asserted.returndata()).unwrap()
+    assert!(holds(message, len: 51, hash: keccak("an assert message longer than a single word of text")))
+}

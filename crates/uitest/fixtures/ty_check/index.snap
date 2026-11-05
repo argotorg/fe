@@ -5,15 +5,15 @@ expression: diags
 input_file: fixtures/ty_check/index.fe
 ---
 error[8-0000]: type mismatch
-   ┌─ index.fe:15:7
+   ┌─ index.fe:14:7
    │
-15 │     x[false]
+14 │     x[false]
    │       ^^^^^ expected `usize`, but `bool` is given
 
 error[8-0016]: `core::ops::Index` trait is not implemented
-   ┌─ index.fe:17:5
+   ┌─ index.fe:16:5
    │
-17 │     f[1]
+16 │     f[1]
    │     ^^^^
    │     │
    │     `[]` can't be applied to `Foo`

@@ -19,19 +19,21 @@ use crate::{
     analysis::HirAnalysisDb,
     analysis::name_resolution::{
         EarlyNameQueryId, PathRes, PathResError, PathResErrorKind, QueryDirective, resolve_path,
-        resolve_query,
+        resolve_query, resolve_trait_path_with_observer_and_minter,
     },
     analysis::ty::{
+        const_ty::LoweringContext,
         trait_resolution::{PredicateListId, constraint::collect_constraints},
         ty_check::{
-            LocalBinding, RecordLike, TypedBody, check_contract_init_body,
-            check_contract_recv_arm_body, check_func_body,
+            EffectParamSite, LocalBinding, ParamSite, RecordLike, TypedBody,
+            check_contract_init_body, check_contract_recv_arm_body, check_func_body,
         },
         ty_def::TyId,
     },
+    core::semantic::{EffectEnvView, RecvArmView},
     hir_def::scope_graph::ScopeId,
     hir_def::{
-        Body, Contract, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment,
+        Body, Expr, ExprId, FieldIndex, IdentId, ItemKind, Partial, PathId, Use, UsePathSegment,
     },
     hir_def::{GenericParamOwner, HirIngot},
     span::{
@@ -76,29 +78,26 @@ pub(crate) fn typed_body_for_body<'db>(
     }
 
     // Try contract bodies (init and recv arms)
-    let scope_graph = body.scope().scope_graph(db);
-    for item in scope_graph.items_dfs(db) {
-        if let ItemKind::Contract(contract) = item {
-            // Check init body
-            if let Some(init) = contract.init(db)
-                && init.body(db) == body
-            {
-                return Some(&check_contract_init_body(db, contract).1);
-            }
-            // Check recv arm bodies
-            for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
-                for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
-                    if arm.body == body {
-                        return Some(
-                            &check_contract_recv_arm_body(
-                                db,
-                                contract,
-                                recv_idx as u32,
-                                arm_idx as u32,
-                            )
-                            .1,
-                        );
-                    }
+    for &contract in body.top_mod(db).all_contracts(db) {
+        // Check init body
+        if let Some(init) = contract.init(db)
+            && init.body(db) == body
+        {
+            return Some(&check_contract_init_body(db, contract).1);
+        }
+        // Check recv arm bodies
+        for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
+            for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
+                if arm.body == body {
+                    return Some(
+                        &check_contract_recv_arm_body(
+                            db,
+                            contract,
+                            recv_idx as u32,
+                            arm_idx as u32,
+                        )
+                        .1,
+                    );
                 }
             }
         }
@@ -129,7 +128,7 @@ fn scopes_from_resolution<'db>(
 ///
 /// For ambiguous paths that can resolve to multiple items (e.g., a module
 /// and a function with the same name), this returns all candidates.
-pub fn resolve_path_to_scopes<'db>(
+fn resolve_path_to_scopes<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
@@ -146,72 +145,6 @@ pub fn resolve_path_to_scopes<'db>(
     let assumptions = enclosing_assumptions(db, scope);
     let result = resolve_path(db, path, scope, assumptions, true);
     scopes_from_resolution(db, &result)
-}
-
-/// Resolve a path from a scope, with a fallback through the msg module
-/// if the scope belongs to a recv arm body.
-///
-/// In `recv TokenMsg { Mint { to, amount } -> bool { ... } }`, the pattern
-/// path `Mint` is stored as a bare identifier resolved from the body scope.
-/// Standard resolution fails because `Mint` lives inside the desugared
-/// `TokenMsg` module. This helper retries resolution from the msg module
-/// scope when the body belongs to a recv arm.
-pub(super) fn resolve_path_with_recv_fallback<'db>(
-    db: &'db dyn HirAnalysisDb,
-    path: PathId<'db>,
-    scope: ScopeId<'db>,
-) -> Vec<ScopeId<'db>> {
-    let scopes = resolve_path_to_scopes(db, path, scope);
-    if !scopes.is_empty() {
-        return scopes;
-    }
-
-    // Fallback: if the scope is a recv arm body, resolve from the msg module
-    if let Some(body) = scope.body()
-        && let Some(msg_scope) = recv_arm_msg_scope(db, body)
-    {
-        return resolve_path_to_scopes(db, path, msg_scope);
-    }
-
-    vec![]
-}
-
-/// For a body that belongs to a recv arm with a named msg type, return the
-/// msg module's scope for path resolution fallback.
-fn recv_arm_msg_scope<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<ScopeId<'db>> {
-    let contract = recv_arm_contract(db, body)?;
-    for recv in contract.recvs(db).data(db) {
-        for arm in recv.arms.data(db) {
-            if arm.body == body {
-                let msg_path = recv.msg_path?;
-                let assumptions = PredicateListId::empty_list(db);
-                if let Ok(PathRes::Mod(scope)) =
-                    resolve_path(db, msg_path, contract.scope(), assumptions, false)
-                {
-                    return Some(scope);
-                }
-                return None;
-            }
-        }
-    }
-    None
-}
-
-/// Find the contract that owns a recv arm body.
-fn recv_arm_contract<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<Contract<'db>> {
-    let scope_graph = body.scope().scope_graph(db);
-    for item in scope_graph.items_dfs(db) {
-        if let ItemKind::Contract(contract) = item {
-            for recv in contract.recvs(db).data(db) {
-                for arm in recv.arms.data(db) {
-                    if arm.body == body {
-                        return Some(contract);
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 /// The resolved target of a reference.
@@ -280,7 +213,7 @@ impl<'db> TargetResolution<'db> {
 }
 
 /// Context for where a path appears in a function body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum BodyPathContext {
     /// Path in an expression (e.g., `x` in `x + 1` or `foo()`)
     Expr(ExprId),
@@ -290,8 +223,17 @@ pub enum BodyPathContext {
     PatReference(crate::hir_def::PatId),
 }
 
+/// An unlabeled entry of a contract `init`'s or recv arm's `uses`. Its key
+/// names what the compiler resolves the entry to: a field of the contract, or
+/// an effect of the contract's own `uses`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct UsesEntry<'db> {
+    pub site: EffectParamSite<'db>,
+    pub idx: usize,
+}
+
 /// A view of a path reference in the HIR.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct PathView<'db> {
     pub path: PathId<'db>,
     pub scope: ScopeId<'db>,
@@ -299,15 +241,31 @@ pub struct PathView<'db> {
     /// Context when this path is inside a function body.
     /// None for paths in signatures, type annotations, etc.
     pub body_ctx: Option<BodyPathContext>,
+    /// Whether the path is written where a trait is expected: a bound, a
+    /// super-trait, an implemented trait, or a qualified path's trait.
+    pub trait_ref: bool,
+    /// The entry whose key the path is, for an unlabeled `uses` entry of a
+    /// contract `init` or recv arm.
+    pub uses_entry: Option<UsesEntry<'db>>,
+    /// The recv arm whose variant path the path is.
+    pub recv_arm: Option<RecvArmView<'db>>,
 }
 
 impl<'db> PathView<'db> {
-    pub fn new(path: PathId<'db>, scope: ScopeId<'db>, span: LazyPathSpan<'db>) -> Self {
+    pub fn new(
+        path: PathId<'db>,
+        scope: ScopeId<'db>,
+        span: LazyPathSpan<'db>,
+        trait_ref: bool,
+    ) -> Self {
         Self {
             path,
             scope,
             span,
             body_ctx: None,
+            trait_ref,
+            uses_entry: None,
+            recv_arm: None,
         }
     }
 
@@ -321,10 +279,94 @@ impl<'db> PathView<'db> {
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
-        if let Some(local) = self.local_target(db) {
+        self.segment_target(db, self.path.segment_index(db))
+    }
+
+    /// Resolve the path up to segment `idx` to its target definition(s): the
+    /// local binding a path names, or the scopes of `segment_targets`.
+    pub fn segment_target<DB>(&self, db: &'db DB, idx: usize) -> TargetResolution<'db>
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
+        if idx == self.path.segment_index(db)
+            && let Some(local) = self.local_target(db)
+        {
             return TargetResolution::Single(local);
         }
-        TargetResolution::from_scopes(resolve_path_with_recv_fallback(db, self.path, self.scope))
+        TargetResolution::from_scopes(self.segment_targets(db, idx))
+    }
+
+    /// Resolve the path up to segment `idx` to all its possible scopes.
+    ///
+    /// A path the type checker bound to a local binding names that binding,
+    /// so it resolves to the binding's scope if it has one: a function's
+    /// parameter, or the contract field a contract's `uses` entry provides.
+    /// Resolving it as an item path could find an item of the same name, or
+    /// the module for `self`. Likewise, an unlabeled `uses` entry of a
+    /// contract `init` or recv arm resolves to the field that provides it, or
+    /// to nothing for an effect of the contract's own `uses`, if the compiler
+    /// resolves it.
+    ///
+    /// The last segment of a trait reference is resolved as a trait, under the
+    /// enclosing bounds, which its arguments can need (`Sink<T::Item>`).
+    pub fn segment_targets(&self, db: &'db dyn HirAnalysisDb, idx: usize) -> Vec<ScopeId<'db>> {
+        let Some(seg_path) = self.path.segment(db, idx) else {
+            return Vec::new();
+        };
+        if seg_path == self.path
+            && let Some(UsesEntry { site, idx: entry }) = self.uses_entry
+            && let Some(binding) = EffectEnvView::new(site).resolved_binding(db, entry)
+        {
+            return binding
+                .provider
+                .source
+                .contract_field()
+                .and_then(|field| field.scope(db))
+                .into_iter()
+                .collect();
+        }
+        if seg_path == self.path
+            && let Some(binding) = self.binding(db)
+        {
+            let scope = match binding {
+                LocalBinding::Param {
+                    site: ParamSite::Func(func),
+                    idx: param,
+                    ..
+                } => Some(ScopeId::FuncParam(func.into(), param as u16)),
+                LocalBinding::EffectParam {
+                    site, idx: entry, ..
+                } => EffectEnvView::new(site)
+                    .resolved_binding(db, entry)
+                    .and_then(|binding| binding.provider.source.contract_field())
+                    .and_then(|field| field.scope(db)),
+                LocalBinding::Local { .. }
+                | LocalBinding::Param { .. }
+                | LocalBinding::ParamPart { .. } => None,
+            };
+            return scope.into_iter().collect();
+        }
+        if self.trait_ref && seg_path == self.path {
+            let res = resolve_trait_path_with_observer_and_minter(
+                db,
+                seg_path,
+                self.scope,
+                enclosing_assumptions(db, self.scope),
+                &mut |_, _| {},
+                &LoweringContext::new(),
+            );
+            return scopes_from_resolution(db, &res);
+        }
+        // A recv arm's variant path is resolved as its arm resolves it: in a
+        // named block, a single segment is one of the msg's items.
+        if let Some(arm) = self.recv_arm
+            && let Some(lookup) = arm.resolution(db).lookup
+        {
+            return lookup.segment(db, idx).map_or_else(Vec::new, |segment| {
+                resolve_path_to_scopes(db, segment, arm.contract(db).scope())
+            });
+        }
+        resolve_path_to_scopes(db, seg_path, self.scope)
     }
 
     /// Resolve at a specific cursor position (segment-aware: `foo` in `foo::Bar` → foo).
@@ -340,22 +382,22 @@ impl<'db> PathView<'db> {
             };
 
             if seg_span.range.contains(cursor) {
-                if idx == last_idx
-                    && let Some(local) = self.local_target(db)
-                {
-                    return TargetResolution::Single(local);
-                }
-
-                if let Some(seg_path) = self.path.segment(db, idx) {
-                    return TargetResolution::from_scopes(resolve_path_with_recv_fallback(
-                        db, seg_path, self.scope,
-                    ));
-                }
-                return TargetResolution::None;
+                return self.segment_target(db, idx);
             }
         }
 
         self.target(db)
+    }
+
+    /// The local binding the type checker bound this path to: a `let` or
+    /// pattern binding, a parameter, or an effect.
+    fn binding(&self, db: &'db dyn HirAnalysisDb) -> Option<LocalBinding<'db>> {
+        let typed_body = typed_body_for_body(db, self.scope.body()?)?;
+        match self.body_ctx? {
+            BodyPathContext::Expr(expr) => typed_body.expr_binding(expr),
+            BodyPathContext::PatBinding(pat) => typed_body.pat_binding(pat),
+            BodyPathContext::PatReference(_) => None,
+        }
     }
 
     fn local_target<DB>(&self, db: &'db DB) -> Option<Target<'db>>
@@ -418,7 +460,7 @@ impl<'db> PathView<'db> {
 }
 
 /// A view of a field access expression (`expr.field`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct FieldAccessView<'db> {
     pub body: Body<'db>,
     pub expr: ExprId,
@@ -436,8 +478,8 @@ impl<'db> FieldAccessView<'db> {
         else {
             return TargetResolution::None;
         };
-        let Partial::Present(FieldIndex::Ident(field_name)) = field_index else {
-            return TargetResolution::None; // Tuple field access (e.g., tuple.0) doesn't have a scope
+        let Partial::Present(field_index) = field_index else {
+            return TargetResolution::None;
         };
 
         // Get the typed body (works for functions, contract init, recv arms)
@@ -454,9 +496,19 @@ impl<'db> FieldAccessView<'db> {
             .as_capability(db)
             .map_or(receiver_ty, |(_, inner)| inner);
 
+        // Tuple struct fields are named by their position. Plain tuple field
+        // access (e.g., tuple.0) doesn't have a scope.
+        let field_name = match field_index {
+            FieldIndex::Ident(field_name) => *field_name,
+            FieldIndex::Index(index) if receiver_ty.as_tuple_struct(db).is_some() => {
+                IdentId::new(db, index.data(db).to_string())
+            }
+            FieldIndex::Index(_) => return TargetResolution::None,
+        };
+
         // Resolve the field scope using RecordLike
         let record_like = RecordLike::from_ty(receiver_ty);
-        match record_like.record_field_scope(db, *field_name) {
+        match record_like.record_field_scope(db, field_name) {
             Some(scope) => TargetResolution::Single(Target::Scope(scope)),
             None => TargetResolution::None,
         }
@@ -472,7 +524,7 @@ impl<'db> FieldAccessView<'db> {
 }
 
 /// A view of a method call expression (`expr.method(...)`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct MethodCallView<'db> {
     pub body: Body<'db>,
     pub expr: ExprId,
@@ -500,6 +552,7 @@ impl<'db> MethodCallView<'db> {
                 ScopeId::from_item(ItemKind::Func(method_func))
             }
             crate::hir_def::CallableDef::VariantCtor(variant) => ScopeId::Variant(variant),
+            crate::hir_def::CallableDef::StructCtor(struct_) => struct_.scope(),
         };
         TargetResolution::Single(Target::Scope(scope))
     }
@@ -514,7 +567,7 @@ impl<'db> MethodCallView<'db> {
 }
 
 /// A view of a use path segment.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct UsePathView<'db> {
     pub use_item: Use<'db>,
     pub segment: usize,
@@ -620,7 +673,7 @@ impl<'db> UsePathView<'db> {
 /// This enum provides a common interface for working with different kinds
 /// of references, enabling heterogeneous collections and uniform handling
 /// in the language server.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum ReferenceView<'db> {
     /// A path reference (expression, pattern, type, or trait ref)
     Path(PathView<'db>),

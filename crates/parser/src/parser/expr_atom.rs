@@ -390,7 +390,7 @@ impl super::Parse for PathExprScope {
         })?;
 
         if parser.current_kind() == Some(SyntaxKind::LBrace) && self.allow_record_init {
-            self.set_kind(SyntaxKind::RecordInitExpr);
+            parser.set_scope_kind(SyntaxKind::RecordInitExpr);
             parser.parse(RecordFieldListScope::default())?;
         }
         Ok(())
@@ -439,7 +439,7 @@ impl super::Parse for ParenScope {
         parser.bump_expected(SyntaxKind::LParen);
 
         if parser.bump_if(SyntaxKind::RParen) {
-            self.set_kind(SyntaxKind::TupleExpr);
+            parser.set_scope_kind(SyntaxKind::TupleExpr);
             return Ok(());
         }
 
@@ -451,7 +451,7 @@ impl super::Parse for ParenScope {
             parser.expect(&[SyntaxKind::RParen, SyntaxKind::Comma], None)?;
 
             if parser.bump_if(SyntaxKind::Comma) {
-                self.set_kind(SyntaxKind::TupleExpr);
+                parser.set_scope_kind(SyntaxKind::TupleExpr);
                 continue;
             }
             break;
@@ -483,7 +483,7 @@ impl super::Parse for ArrayScope {
         )?;
 
         if parser.bump_if(SyntaxKind::SemiColon) {
-            self.set_kind(SyntaxKind::ArrayRepExpr);
+            parser.set_scope_kind(SyntaxKind::ArrayRepExpr);
             parse_expr(parser)?;
         } else {
             while parser.bump_if(SyntaxKind::Comma) {

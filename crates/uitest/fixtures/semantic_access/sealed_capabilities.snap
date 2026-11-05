@@ -1,6 +1,6 @@
 ---
 source: crates/uitest/tests/semantic_access.rs
-assertion_line: 25
+assertion_line: 32
 expression: diags
 input_file: fixtures/semantic_access/sealed_capabilities.fe
 ---
@@ -12,7 +12,7 @@ error[16-0001]: access conflict in `fn call_with_entry`
 51 │       var output = MemBuffer::empty()
 52 │       let outcome = call.raw_call(
    │ ╭───────────────────^
-53 │ │         addr: Address { inner: 1 }, gas: 100000, value: 0,
+53 │ │         addr: Address::new(1), gas: 100000, value: Wei::zero(),
 54 │ │         args: MemSpan::empty(), ret: mut output,
 55 │ │     )
    │ ╰─────^ this call may write storage while a `mut` access of it is open

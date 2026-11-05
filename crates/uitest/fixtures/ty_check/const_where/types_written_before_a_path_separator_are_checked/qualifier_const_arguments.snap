@@ -4,37 +4,37 @@ expression: diags
 input_file: fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/qualifier_const_arguments.fe
 ---
 error[8-0093]: const requirement is not satisfied
-   ┌─ qualifier_const_arguments.fe:14:24
+   ┌─ qualifier_const_arguments.fe:16:24
    │
  8 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
    │                                               ----- required by this predicate
    ·
-14 │ fn param(_ x: Holder<{ dec<0>() }>::Out) {}
+16 │ fn param(_ x: Holder<{ dec<0>() }>::Out) {}
    │                        ^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ qualifier_const_arguments.fe:15:31
+   ┌─ qualifier_const_arguments.fe:17:31
    │
  8 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
    │                                               ----- required by this predicate
    ·
-15 │ fn local() { let _x: Holder<{ dec<0>() }>::Out = Plain {} }
+17 │ fn local() { let _x: Holder<{ dec<0>() }>::Out = Plain {} }
    │                               ^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ qualifier_const_arguments.fe:16:35
+   ┌─ qualifier_const_arguments.fe:18:35
    │
  8 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
    │                                               ----- required by this predicate
    ·
-16 │ fn turbofish() -> u8 { g<Holder<{ dec<0>() }>::Out>() }
+18 │ fn turbofish() -> u8 { g<Holder<{ dec<0>() }>::Out>() }
    │                                   ^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ qualifier_const_arguments.fe:17:34
+   ┌─ qualifier_const_arguments.fe:19:34
    │
  8 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
    │                                               ----- required by this predicate
    ·
-17 │ fn argument(_ h: Holder<Holder<{ dec<0>() }>::K>) {}
+19 │ fn argument(_ h: Holder<Holder<{ dec<0>() }>::K>) {}
    │                                  ^^^^^^^^ condition evaluated to `false`

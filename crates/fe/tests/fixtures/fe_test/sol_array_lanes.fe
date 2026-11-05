@@ -85,36 +85,36 @@ pub contract Lanes {
 
 #[test]
 fn argument_copies_are_stored_back() uses (evm: mut Evm) {
-    let lanes = evm.create2<Lanes>(value: 0, args: (), salt: 1)
-    let value: u256 = evm.call(addr: lanes, gas: 300000, value: 0, message: Msg::Arg {})
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::Arg {})
     assert!(value == 1003)
 }
 
 #[test]
 fn provided_effect_copies_are_stored_back() uses (evm: mut Evm) {
-    let lanes = evm.create2<Lanes>(value: 0, args: (), salt: 1)
-    let value: u256 = evm.call(addr: lanes, gas: 300000, value: 0, message: Msg::Effect {})
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::Effect {})
     assert!(value == 1012)
 }
 
 #[test]
 fn projection_grants_are_stored_back() uses (evm: mut Evm) {
-    let lanes = evm.create2<Lanes>(value: 0, args: (), salt: 1)
-    let value: u256 = evm.call(addr: lanes, gas: 300000, value: 0, message: Msg::Projection {})
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::Projection {})
     assert!(value == 1102)
 }
 
 #[test]
 fn effect_grants_are_stored_back_when_the_session_ends() uses (evm: mut Evm) {
-    let lanes = evm.create2<Lanes>(value: 0, args: (), salt: 1)
-    let value: u256 = evm.call(addr: lanes, gas: 300000, value: 0, message: Msg::EffectProjection {})
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::EffectProjection {})
     assert!(value == 6002)
 }
 
 #[test]
 fn codec_lanes_round_trip() uses (evm: mut Evm) {
-    let lanes = evm.create2<Lanes>(value: 0, args: (), salt: 1)
-    let value: u256 = evm.call(addr: lanes, gas: 300000, value: 0, message: Msg::Codec {})
+    let lanes = evm.create2<Lanes>(value: Wei::zero(), args: (), salt: 1)
+    let value: u256 = evm.call(addr: lanes, gas: 300000, value: Wei::zero(), message: Msg::Codec {})
     assert!(value == 0x11ff * 0x1000000 + 0x22)
 }
 

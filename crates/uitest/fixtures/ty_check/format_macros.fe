@@ -1,0 +1,59 @@
+use core::MemBuffer
+use std::io::{Stderr, Stdout}
+
+struct Point {
+    x: u64,
+}
+
+// Each argument is formatted on its own, so a view may be one.
+fn report(_ name: MemBuffer, count: u64) uses (out: mut Stdout, err: mut Stderr) {
+    let line = format!("name: ", name.span(), ", count: ", count)
+    println!(line)
+    print!("partial")
+    println!()
+    eprintln!("to stderr: ", name, " ", true)
+}
+
+fn no_stdout() {
+    println!("hi")
+}
+
+fn not_displayable() -> MemBuffer {
+    format!("point: ", Point { x: 1 })
+}
+
+fn untyped_integer() -> MemBuffer {
+    format!(7)
+}
+
+// `write!` appends to a buffer written as a `mut` argument, here an effect.
+fn append(_ count: u64) uses (text: mut MemBuffer) {
+    write!(mut text, "count: ", count)
+    writeln!(mut text)
+}
+
+fn unmarked_buffer() uses (text: mut MemBuffer) {
+    write!(text, "a")
+}
+
+// A block that ends in a `mut` grant is a buffer too.
+fn block_buffer() uses (text: mut MemBuffer) {
+    write!({ mut text }, "a")
+}
+
+fn unmarked_block_buffer() uses (text: mut MemBuffer) {
+    write!({ text }, "a")
+}
+
+fn immutable_buffer(_ text: MemBuffer) {
+    writeln!(mut text, "a")
+}
+
+fn not_a_buffer() {
+    var count: u64 = 0
+    write!(mut count, "a", "b")
+}
+
+fn no_buffer() {
+    write!()
+}

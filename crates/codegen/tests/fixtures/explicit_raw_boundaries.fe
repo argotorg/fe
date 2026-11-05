@@ -17,7 +17,7 @@ fn raw_store() uses (data: *Data, storage: mut RawStorage) {
     }
 }
 
-pub fn explicit_raw_boundaries() uses (storage: mut RawStorage) {
+pub fn main() uses (storage: mut RawStorage) {
     let value_ptr = ptr::alloc<u256>()
     unsafe {
         with (mut *value_ptr) {

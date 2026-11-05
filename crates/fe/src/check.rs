@@ -12,6 +12,7 @@ use mir::build_runtime_package;
 use salsa::Setter;
 use url::Url;
 
+use crate::BuildBackend;
 use crate::dependency_diagnostics::CompilationDiagnostics;
 use crate::report::{
     copy_input_into_report, create_dir_all_utf8, create_report_staging_dir, enable_panic_report,
@@ -40,6 +41,7 @@ pub fn check(
     path: &Utf8PathBuf,
     ingot: Option<&str>,
     force_standalone: bool,
+    backend: BuildBackend,
     profile: &str,
     dump_mir: bool,
     report_out: Option<&Utf8PathBuf>,
@@ -53,6 +55,10 @@ pub fn check(
     db.compilation_settings()
         .set_profile(&mut db)
         .to(profile.into());
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(backend.target());
+    db.compilation_settings().set_os(&mut db).to(backend.os());
 
     let report_root = report_out
         .map(|out| -> Result<_, String> {

@@ -1,0 +1,49 @@
+use core::MemBuffer
+use core::abi::DynString
+use core::ops::Eq
+
+struct Width {}
+
+trait Measure<T> {
+    fn measure(self, _ x: own T) -> u256
+}
+
+impl<const N: usize> Measure<String<N>> for Width {
+    fn measure(self, _ x: own String<N>) -> u256 {
+        N as u256
+    }
+}
+
+impl Measure<DynString> for Width {
+    fn measure(self, _ x: own DynString) -> u256 {
+        0
+    }
+}
+
+fn takes_text(_ t: DynString) {}
+
+#[test]
+fn literal_default_selects_impl() {
+    let w = Width {}
+    let short: u256 = w.measure("ab")
+    assert!(short == 2)
+    let long: u256 = w.measure("a literal of thirty-two bytes!!!")
+    assert!(long == 0)
+    // A later use makes the literal a `DynString` before any default.
+    let text = "ab"
+    let fixed: u256 = w.measure(text)
+    takes_text(text)
+    assert!(fixed == 0)
+}
+
+#[test]
+fn spans_compare_by_method() {
+    var buf = MemBuffer::empty()
+    buf.push(115)
+    assert!(buf.span().eq("s"))
+    assert!(buf.eq("s"))
+    assert!(!buf.span().eq(MemBuffer::empty().span()))
+    assert!(!buf.span().eq("t"))
+    assert!(!buf.eq("a literal of thirty-two bytes!!!"))
+    assert!(!!buf.eq("s"))
+}

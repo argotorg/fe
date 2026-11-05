@@ -1,0 +1,1 @@
+Using a pointer to a type that grows without bound, such as `*Grow<u256>` for `struct Grow<T> { next: *Grow<[T; 1]> }`, as a value now reports only the type's definition error instead of overflowing the compiler's stack.

@@ -13,7 +13,7 @@ pub contract Child {
 
     recv ChildMsg {
         Get { x, y } -> u256 uses (owner) {
-            mix(x, y) + owner.inner
+            mix(x, y) + owner.word()
         }
     }
 }

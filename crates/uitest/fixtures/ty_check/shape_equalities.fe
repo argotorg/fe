@@ -1,0 +1,68 @@
+// A bound names an associated shape at a mode, `Step<ref> = ref u256`, and
+// a type that implements the trait satisfies it at that mode.
+trait Driver {
+    shape Step
+    type Out
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct One {
+    x: u256,
+}
+
+impl Driver for One {
+    shape Step = mut? u256
+    type Out = u256
+
+    fn at(mut? self) -> mut? u256 {
+        mut? self.x
+    }
+}
+
+struct Small {
+    x: u8,
+}
+
+impl Driver for Small {
+    shape Step = mut? u8
+    type Out = u8
+
+    fn at(mut? self) -> mut? u8 {
+        mut? self.x
+    }
+}
+
+fn read<D: Driver<Step<ref> = ref u256>>(_ d: D) -> u256 {
+    let x = d.at()
+    x
+}
+
+// Rejected: `Small`'s step at `ref` is `ref u8`.
+fn small(_ s: Small) -> u256 {
+    read(s)
+}
+
+// Rejected: the equality names `ref`, so the step at `mut` is unknown.
+fn other_mode<D: mut Driver<Step<ref> = ref u256>>(_ d: mut D) {
+    d.at() += 1
+}
+
+// Rejected: an associated shape is bound at a mode.
+fn no_mode<D: Driver<Step = ref u256>>(_ d: D) {}
+
+// Rejected: an associated type is bound without one.
+fn type_mode<D: Driver<Out<ref> = u256>>(_ d: D) {}
+
+// Rejected: a bound fixes each item, at each mode, once.
+fn twice<D: Driver<Step<ref> = ref u256, Step<ref> = ref u8>>(_ d: D) {}
+
+fn type_twice<D: Driver<Out = u256, Out = u8>>(_ d: D) {}
+
+// Accepted: one item at its two modes.
+fn both_modes<D: mut Driver<Step<ref> = ref u256, Step<mut> = mut u256>>(_ d: D) {}
+
+// Rejected: a bound names its modes, and at `ref` no access is `mut`.
+fn maybe_mut_value<D: Driver<Step<ref> = mut? u256>>(_ d: D) {}
+
+fn mut_at_ref<D: Driver<Step<ref> = (own usize, mut u256)>>(_ d: D) {}

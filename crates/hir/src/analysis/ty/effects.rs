@@ -1,3 +1,4 @@
+use crate::hir_def::ModeMarker;
 use common::indexmap::IndexMap;
 
 use crate::analysis::HirAnalysisDb;
@@ -181,7 +182,7 @@ pub(crate) fn canonical_effect_identity_for_binding<'db>(
 }
 
 /// Returns a per-effect mapping from effect index → hidden provider generic-arg index.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn place_effect_provider_param_index_map<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
@@ -270,7 +271,13 @@ pub(crate) fn lower_effect_key_schema<'db>(
         // instance's associated types.
         .map_or(ResolvedEffectKey::Other, |(inst, row)| {
             ResolvedEffectKey::Row(rows::RowKey {
-                inst: TraitInstId::new(db, inst.def(db), inst.args(db).to_vec(), IndexMap::new()),
+                inst: TraitInstId::new(
+                    db,
+                    inst.def(db),
+                    inst.args(db).to_vec(),
+                    IndexMap::new(),
+                    ModeMarker::None,
+                ),
                 row: row as u16,
             })
         }),

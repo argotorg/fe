@@ -9,12 +9,12 @@ use rustc_hash::FxHashSet;
 use crate::{
     HirDb,
     hir_def::{
-        AccessItems, ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp,
-        BindingMarker, BlockKind, Body, BodyKind, EffectParamListId, Expr, ExprId, FieldDefListId,
-        FieldIndex, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode, FuncParamName,
-        FuncReturn, GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId,
-        ImplTrait, IntegerId, ItemKind, LitKind, Mod, NormalAttr, Partial, Pat, PatId, PathId,
-        PathKind, Stmt, StmtId, Struct, TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId,
+        ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, BindingMarker,
+        BlockKind, Body, BodyKind, EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex,
+        Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg,
+        GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId,
+        ItemKind, LitKind, Mod, ModeMarker, NormalAttr, Partial, Pat, PatId, PathId, PathKind,
+        Stmt, StmtId, Struct, TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId,
         TypeBound, TypeGenericArg, TypeGenericParam, TypeId, TypeKind, TypeMode, UnOp, Visibility,
         WhereClauseId, expr::CallArg,
     },
@@ -244,7 +244,7 @@ where
                 .map(|&(ident, bound)| {
                     GenericParam::Type(TypeGenericParam {
                         name: Partial::Present(ident),
-                        bounds: vec![TypeBound::Trait(bound)],
+                        bounds: vec![TypeBound::Trait(bound, ModeMarker::None)],
                         default_ty: None,
                     })
                 })
@@ -319,6 +319,7 @@ where
             attributes: self.empty_attrs(),
             name: Partial::Present(self.ident(name)),
             type_ref,
+            is_shape: false,
         }
     }
 
@@ -393,6 +394,7 @@ where
                 generic_params,
                 where_clause,
                 fields,
+                false,
                 this.top_mod(),
                 this.origin(),
             )
@@ -448,7 +450,7 @@ where
             where_clause,
             types,
             consts,
-            AccessItems::default(),
+            vec![],
             false,
             self.top_mod(),
             origin,
@@ -550,10 +552,7 @@ where
                     where_clause,
                     Partial::Present(spec.params),
                     effects,
-                    FuncReturn {
-                        ty: spec.ret_ty,
-                        spaces: Vec::new(),
-                    },
+                    spec.ret_ty,
                     spec.modifiers,
                     Some(body),
                     this.top_mod(),

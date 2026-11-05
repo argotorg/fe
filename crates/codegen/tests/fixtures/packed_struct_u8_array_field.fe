@@ -3,7 +3,7 @@ struct Pair {
     value: u256,
 }
 
-pub fn packed_field_offset() -> u256 {
+pub fn main() -> u256 {
     let pair = Pair {
         bytes: [1, 2],
         value: 42,

@@ -86,7 +86,7 @@ pub(crate) fn runtime_test_root_metadata<'db>(
             "test section `{hir_name}` does not target a semantic instance"
         )));
     };
-    let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+    let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
         return Err(TestRootMetadataError::InvalidPackage(format!(
             "test section `{hir_name}` does not target a function body"
         )));

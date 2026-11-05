@@ -1,0 +1,195 @@
+---
+source: crates/hir/tests/frontend/ty_check.rs
+expression: res
+input_file: test_files/ty_check/trait_ref_self_in_trait.fe
+---
+note:
+   ┌─ trait_ref_self_in_trait.fe:11:56
+   │
+11 │       fn by_default<T: Combine>(a: own T, b: own T) -> T {
+   │ ╭────────────────────────────────────────────────────────^
+12 │ │         a.combine(rhs: b)
+13 │ │     }
+   │ ╰─────^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:12:9
+   │
+12 │         a.combine(rhs: b)
+   │         ^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:12:9
+   │
+12 │         a.combine(rhs: b)
+   │         ^^^^^^^^^^^^^^^^^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:12:24
+   │
+12 │         a.combine(rhs: b)
+   │                        ^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:18:5
+   │
+18 │ ╭     {
+19 │ │         a.combine(rhs: b)
+20 │ │     }
+   │ ╰─────^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:19:9
+   │
+19 │         a.combine(rhs: b)
+   │         ^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:19:9
+   │
+19 │         a.combine(rhs: b)
+   │         ^^^^^^^^^^^^^^^^^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:19:24
+   │
+19 │         a.combine(rhs: b)
+   │                        ^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:22:60
+   │
+22 │       fn by_assoc(a: own Self::A, b: own Self::A) -> Self::A {
+   │ ╭────────────────────────────────────────────────────────────^
+23 │ │         a.combine(rhs: b)
+24 │ │     }
+   │ ╰─────^ Self::A
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:23:9
+   │
+23 │         a.combine(rhs: b)
+   │         ^ Self::A
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:23:9
+   │
+23 │         a.combine(rhs: b)
+   │         ^^^^^^^^^^^^^^^^^ Self::A
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:23:24
+   │
+23 │         a.combine(rhs: b)
+   │                        ^ Self::A
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:26:62
+   │
+26 │       fn written<T: Combine<Self>>(a: own T, b: own Self) -> T {
+   │ ╭──────────────────────────────────────────────────────────────^
+27 │ │         a.combine(rhs: b)
+28 │ │     }
+   │ ╰─────^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:27:9
+   │
+27 │         a.combine(rhs: b)
+   │         ^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:27:9
+   │
+27 │         a.combine(rhs: b)
+   │         ^^^^^^^^^^^^^^^^^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:27:24
+   │
+27 │         a.combine(rhs: b)
+   │                        ^ Self
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:30:90
+   │
+30 │       fn qualified(x: own <Self::A as Combine<Self::A>>::Out) -> <Self::A as Combine>::Out {
+   │ ╭──────────────────────────────────────────────────────────────────────────────────────────^
+31 │ │         x
+32 │ │     }
+   │ ╰─────^ Self::A::Out
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:31:9
+   │
+31 │         x
+   │         ^ Self::A::Out
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:39:51
+   │
+39 │       fn by_default<T: Tr>(a: own T, b: own T) -> T {
+   │ ╭───────────────────────────────────────────────────^
+40 │ │         a.join(r: b)
+41 │ │     }
+   │ ╰─────^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:40:9
+   │
+40 │         a.join(r: b)
+   │         ^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:40:9
+   │
+40 │         a.join(r: b)
+   │         ^^^^^^^^^^^^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:40:19
+   │
+40 │         a.join(r: b)
+   │                   ^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:43:57
+   │
+43 │       fn written<T: Tr<Self>>(a: own T, b: own Self) -> T {
+   │ ╭─────────────────────────────────────────────────────────^
+44 │ │         a.join(r: b)
+45 │ │     }
+   │ ╰─────^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:44:9
+   │
+44 │         a.join(r: b)
+   │         ^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:44:9
+   │
+44 │         a.join(r: b)
+   │         ^^^^^^^^^^^^ T
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:44:19
+   │
+44 │         a.join(r: b)
+   │                   ^ Self
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:53:39
+   │
+53 │       fn combine(self, rhs: own X) -> X {
+   │ ╭───────────────────────────────────────^
+54 │ │         rhs
+55 │ │     }
+   │ ╰─────^ X
+
+note:
+   ┌─ trait_ref_self_in_trait.fe:54:9
+   │
+54 │         rhs
+   │         ^^^ X

@@ -1,0 +1,52 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/cycles_with_one_resolution.fe
+---
+note:
+  ┌─ cycles_with_one_resolution.fe:9:5
+  │
+9 │     pub use super::b::X
+  │     ^^^^^^^^^^^^^^^^^^^ cycles_with_one_resolution::defs::X
+
+note:
+   ┌─ cycles_with_one_resolution.fe:12:5
+   │
+12 │     pub use super::defs::*
+   │     ^^^^^^^^^^^^^^^^^^^^^^ cycles_with_one_resolution::defs::X as X
+
+note:
+   ┌─ cycles_with_one_resolution.fe:13:5
+   │
+13 │     pub use super::a::X
+   │     ^^^^^^^^^^^^^^^^^^^ cycles_with_one_resolution::defs::X
+
+note:
+   ┌─ cycles_with_one_resolution.fe:18:1
+   │
+18 │ pub use c::a::*
+   │ ^^^^^^^^^^^^^^^ cycles_with_one_resolution::c as a
+
+note:
+   ┌─ cycles_with_one_resolution.fe:19:1
+   │
+19 │ pub use self::a::*
+   │ ^^^^^^^^^^^^^^^^^^ cycles_with_one_resolution::defs::X as X
+
+note:
+   ┌─ cycles_with_one_resolution.fe:21:5
+   │
+21 │     pub use super::c as a
+   │     ^^^^^^^^^^^^^^^^^^^^^ cycles_with_one_resolution::c
+
+note:
+   ┌─ cycles_with_one_resolution.fe:37:5
+   │
+37 │     use d::e::f
+   │     ^^^^^^^^^^^ cycles_with_one_resolution::d::e::f
+
+note:
+   ┌─ cycles_with_one_resolution.fe:38:5
+   │
+38 │     use f::*
+   │     ^^^^^^^^ cycles_with_one_resolution::d::e::f::S as S

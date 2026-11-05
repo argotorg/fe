@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/param_patterns.fe
+---
+error[16-0002]: move conflict in `fn moved`
+  ┌─ param_patterns.fe:7:13
+  │
+7 │ fn moved(_ (a, b): (Buf, Buf)) -> u256 {
+  │             ^ cannot move out of a place reached through a `ref` access; bind it with `ref` to read it in place

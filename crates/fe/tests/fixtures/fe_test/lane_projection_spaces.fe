@@ -10,7 +10,7 @@ struct Packed {
 }
 
 impl Packed {
-    fn a_mut(mut self) -> mut u8 @memory {
+    fn a_mut(mut self) -> mut u8 {
         mut self.a
     }
 
@@ -52,8 +52,8 @@ pub contract C uses (storage: mut RawStorage) {
 
 #[test]
 fn lane_grants_are_memory_copies() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    let r: (u8, u8, u256) = evm.call(addr: c, gas: 300000, value: 0, message: M::Go {})
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: (u8, u8, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Go {})
     assert!(r.0 == 4)
     assert!(r.1 == 9)
     assert!(r.2 == 0x0904)

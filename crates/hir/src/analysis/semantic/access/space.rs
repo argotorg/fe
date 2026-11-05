@@ -7,10 +7,23 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::SemanticInstance,
-        ty::{provider::AddressSpace, result_space::PlaceStep, ty_def::TyId},
+        ty::{provider::AddressSpace, ty_def::TyId},
     },
     core::semantic::storage_field_lanes,
 };
+
+/// What one step of a place's path is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlaceStep {
+    /// A field or tuple component, by index.
+    Field(usize),
+    /// An array element.
+    Index,
+    /// An entry of a `StateIndex` collection.
+    Entry,
+    /// A field of an enum variant's payload.
+    Variant,
+}
 
 /// Where a path takes a place, step by step.
 #[derive(Clone, Copy, Debug)]
@@ -63,16 +76,6 @@ impl PathSpace {
         }
         if let Some(space) = result.pin(db) {
             self.moved = Some(space);
-        }
-    }
-
-    /// The space a retained grant to the place lies in, for a root in
-    /// `start`: memory for a lane, whose grants are memory copies.
-    pub fn grant_space(self, start: Option<AddressSpace>) -> Option<AddressSpace> {
-        if self.lane {
-            Some(AddressSpace::Memory)
-        } else {
-            self.moved.or(start)
         }
     }
 }

@@ -11,17 +11,20 @@ use hir::analysis::{
     ty::ty_def::TyId,
 };
 
-use crate::runtime::{RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass};
+use crate::runtime::{
+    RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimeParamPlan,
+};
 
 use super::{
     boundary::{
-        BoundaryMatcher, BoundaryRef, RuntimeValueMaterialization, StagedBoundary,
-        specialize_boundary_for_aggregate_layout,
+        BoundaryMatcher, BoundaryRef, BoundarySiteAllocator, RuntimeValueMaterialization,
+        StagedBoundary, specialize_boundary_for_aggregate_layout,
         specialize_boundary_for_runtime_source_in_context,
     },
     call_input::{
         CompiledCallInputPlan, CompiledEffectArgPlan, CompiledEffectPlacePlan,
         CompiledEffectValuePlan, CompiledMaterializationPlan, CompiledValuePassPlan,
+        compile_value_pass_plan,
     },
     classify::{
         BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
@@ -80,6 +83,27 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         operand: RuntimeOperand,
     ) -> Option<SelectedRuntimeArg<'db>> {
         self.select_actual_operand_value(operand.local, operand)
+    }
+
+    /// The value a constructor field is built from, for a field of a type
+    /// with `boundary`. Inference classifies the field by it and lowering
+    /// lowers it, so the two agree on the field's class.
+    pub(super) fn selected_ctor_field(
+        &mut self,
+        field: RuntimeOperand,
+        boundary: Option<&RuntimeBoundarySpec<'db>>,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        let Some(boundary) = boundary else {
+            return self.selected_materialized_operand(field);
+        };
+        let mut boundary_sites = BoundarySiteAllocator::default();
+        self.selected_value_pass_plan(
+            field,
+            &compile_value_pass_plan(
+                RuntimeParamPlan::Boundary(boundary.clone()),
+                &mut boundary_sites,
+            ),
+        )
     }
 
     pub(super) fn selected_materialized_operand(
@@ -165,39 +189,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     .and_then(|arg| self.selected_value_pass_plan(arg, plan))
             })
             .collect()
-    }
-
-    pub(super) fn selected_semantic_operand_for_boundary(
-        &mut self,
-        arg: RuntimeOperand,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> SelectedRuntimeArg<'db> {
-        let local = arg.local;
-        let boundary = self
-            .env
-            .specialize_boundary_for_source(self.carriers, local, boundary);
-        match &boundary {
-            RuntimeBoundarySpec::ExactTransport(target) => {
-                self.selected_semantic_operand_for_class(arg, target)
-            }
-            RuntimeBoundarySpec::ExactShape(target) => self
-                .select_runtime_boundary_compatible_value(local, &boundary)
-                .unwrap_or_else(|| self.selected_semantic_operand_for_class(arg, target)),
-            RuntimeBoundarySpec::BorrowLike { .. } => self
-                .select_runtime_boundary_compatible_value(local, &boundary)
-                .or_else(|| {
-                    self.sources()
-                        .semantic_operand_value_is_available(local)
-                        .then(|| self.select_materialized_semantic_value(arg, &boundary))
-                        .flatten()
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "semantic operand boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
-                        self.env.body().owner().key(self.env.db()).owner(self.env.db()),
-                    )
-                }),
-        }
     }
 
     pub(super) fn selected_semantic_operand_for_class(

@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/shape_inference.fe
+---
+error[8-0031]: type annotation is needed
+   ┌─ shape_inference.fe:50:9
+   │
+50 │     let g = Leaf {}.wrap().keep(|(i, _)| i > 0)
+   │         ^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: Keep<Wrap<Leaf<[_; _]>>, |(own usize, ref _)| -> bool>` here

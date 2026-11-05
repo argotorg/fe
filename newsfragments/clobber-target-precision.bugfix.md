@@ -1,1 +1,0 @@
-Preserve the overwritten cell when bounding raw-pointer clobber conditions, and retain the write extent when its source is unchanged. This lets field-level separation contracts rule out impossible pointer corruption.

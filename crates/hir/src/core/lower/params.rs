@@ -1,4 +1,4 @@
-use parser::ast::{self};
+use parser::{SyntaxKind, ast};
 
 use super::FileLowerCtxt;
 use crate::core::hir_def::{
@@ -45,7 +45,8 @@ impl<'db> FuncParamListId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParamList) -> Self {
         let params = ast
             .into_iter()
-            .map(|param| FuncParam::lower_ast(ctxt, param))
+            .enumerate()
+            .map(|(idx, param)| FuncParam::lower_ast(ctxt, param, idx))
             .collect::<Vec<_>>();
         Self::new(ctxt.db(), params)
     }
@@ -64,6 +65,7 @@ impl<'db> WhereClauseId<'db> {
                     let body = Body::lower_ast_with_variant(
                         ctxt,
                         pred.expr(),
+                        None,
                         TrackedItemVariant::WhereConstPredicate(const_idx),
                         BodyKind::Anonymous,
                     );
@@ -129,6 +131,11 @@ impl<'db> GenericArg<'db> {
             ast::GenericArgKind::AssocType(assoc_type_param) => {
                 AssocTypeGenericArg::lower_ast(ctxt, assoc_type_param).into()
             }
+            ast::GenericArgKind::Mode(mode) => Self::Mode(if mode.is_mut() {
+                TypeMode::Mut
+            } else {
+                TypeMode::Ref
+            }),
         }
     }
 }
@@ -154,8 +161,15 @@ impl<'db> ConstGenericArg<'db> {
 impl<'db> AssocTypeGenericArg<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::AssocTypeGenericArg) -> Self {
         let name = IdentId::lower_token_partial(ctxt, ast.name());
+        let mode = ast.mode().map(|mode| {
+            if mode.is_mut() {
+                TypeMode::Mut
+            } else {
+                TypeMode::Ref
+            }
+        });
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-        Self { name, ty }
+        Self { name, mode, ty }
     }
 }
 
@@ -168,18 +182,35 @@ impl<'db> GenericParam<'db> {
             ast::GenericParamKind::Const(const_param) => {
                 ConstGenericParam::lower_ast(ctxt, const_param).into()
             }
+            // A type parameter of the `shape` kind.
+            ast::GenericParamKind::Shape(shape_param) => TypeGenericParam {
+                name: IdentId::lower_token_partial(ctxt, shape_param.name()),
+                bounds: vec![TypeBound::Kind(Partial::Present(KindBound::Shape))],
+                default_ty: None,
+            }
+            .into(),
         }
     }
 }
 
 impl<'db> FuncParam<'db> {
-    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParam) -> Self {
+    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParam, idx: usize) -> Self {
         let has_mut_token = ast.mut_token().is_some();
         let mut is_mut = has_mut_token || ast.var_token().is_some();
         let is_ref = ast.ref_token().is_some();
         let is_own = ast.own_token().is_some();
+        let is_maybe_mut = ast.maybe_mut_token().is_some();
         let is_label_suppressed = ast.is_label_suppressed();
-        let name = ast.name().map(|ast| FuncParamName::lower_ast(ctxt, ast));
+        let name = if ast.spread_token().is_some() {
+            Some(FuncParamName::Spread)
+        } else if ast.pat().is_some() {
+            Some(FuncParamName::Destructured(FuncParamName::destructured(
+                ctxt.db(),
+                idx,
+            )))
+        } else {
+            ast.name().map(|ast| FuncParamName::lower_ast(ctxt, ast))
+        };
 
         let name_is_self = name.is_some_and(|name| name.is_self(ctxt.db()));
         let self_ty_fallback = name_is_self && ast.ty().is_none();
@@ -187,6 +218,8 @@ impl<'db> FuncParam<'db> {
             Some(TypeMode::Ref)
         } else if is_own {
             Some(TypeMode::Own)
+        } else if is_maybe_mut {
+            Some(TypeMode::MaybeMut)
         } else {
             None
         };
@@ -203,6 +236,11 @@ impl<'db> FuncParam<'db> {
                 Partial::Present(TypeId::new(
                     ctxt.db(),
                     TypeKind::Mode(TypeMode::Own, Partial::Present(fallback_self)),
+                ))
+            } else if is_maybe_mut {
+                Partial::Present(TypeId::new(
+                    ctxt.db(),
+                    TypeKind::Mode(TypeMode::MaybeMut, Partial::Present(fallback_self)),
                 ))
             } else if has_mut_token {
                 is_mut = false;
@@ -272,7 +310,12 @@ impl<'db> WherePredicate<'db> {
 impl<'db> TypeBound<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TypeBound) -> Self {
         if let Some(trait_bound) = ast.trait_bound() {
-            Self::Trait(TraitRefId::lower_ast(ctxt, trait_bound))
+            let mode = match ast.mode_token().map(|token| token.kind()) {
+                Some(SyntaxKind::MutKw) => ModeMarker::Mut,
+                Some(SyntaxKind::MaybeMutKw) => ModeMarker::MaybeMut,
+                _ => ModeMarker::None,
+            };
+            Self::Trait(TraitRefId::lower_ast(ctxt, trait_bound), mode)
         } else {
             Self::Kind(KindBound::lower_ast_opt(ctxt, ast.kind_bound()))
         }

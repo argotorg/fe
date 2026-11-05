@@ -1,7 +1,7 @@
 // Higher-order collection operations take callables by their mode shape:
 // `fold` owns the accumulator and views each element, `filter` drives over
 // the elements a predicate holds for, and `map` produces owned values.
-use core::iter::{Collection, FromProducer, filter, map}
+use core::iter::{Collection, FromProducer}
 use core::option::Option
 use core::ptr::MemArray
 
@@ -64,7 +64,7 @@ fn folds_and_queries() {
 fn filters_and_maps() {
     let xs: [u256; 4] = [1, 2, 3, 4]
     var evens = 0
-    for x in xs by filter(IsEven {}) {
+    for x in xs.filter(IsEven {}) {
         evens += x
     }
     assert!(evens == 6)
@@ -76,11 +76,11 @@ fn filters_and_maps() {
     assert!(weighted == 2 + 8)
 
     var doubled = 0
-    for y in xs by map(Double {}) {
+    for y in xs.map(Double {}) {
         doubled += y
     }
     assert!(doubled == 20)
 
-    let collected = MemArray::collect(xs, filter(IsEven {}).map(Double {}))
+    let collected = MemArray::collect(xs, xs.filter(IsEven {}).map(Double {}))
     assert!(collected.len() == 2 && collected[0] == 4 && collected[1] == 8)
 }

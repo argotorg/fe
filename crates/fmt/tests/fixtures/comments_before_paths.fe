@@ -1,0 +1,36 @@
+struct Record { value: // field type
+ u256 }
+
+struct RestrictedRecord { pub(super) unsafe value: // restricted field type
+ u256 }
+
+fn helper(value: // parameter type
+ u256) {}
+
+fn labels(
+ _ value: // suppressed label
+ own u256,
+ var counter: // mutable owned parameter
+ own u256,
+ _: // unnamed parameter
+ u256,
+) {}
+
+impl Record {
+ fn borrow(ref // borrowed receiver
+ self) {}
+
+ fn take(var own // mutable owned receiver
+ self) {}
+}
+
+type Word = // alias type
+ u256
+
+fn initializer() { let value = ( // initializer
+ other::value) }
+
+fn closure() {
+ let identity = |value: // closure parameter type
+ u256| value
+}

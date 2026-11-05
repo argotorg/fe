@@ -1,0 +1,8 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/spread_params.fe
+---
+trait Call<shape A> {
+    fn call(self, ..A) -> u256
+}

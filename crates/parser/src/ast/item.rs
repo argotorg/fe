@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::ast::AstNode;
 
-use super::{TraitRef, TupleType, TypeBoundList, ast_node, use_tree::UsePath};
+use super::{TraitRef, TupleType, TypeBoundList, ast_node, support, use_tree::UsePath};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -50,6 +50,11 @@ impl Item {
             .or_else(|| support::child(self.syntax()).map(ItemKind::Use))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Extern))
     }
+
+    /// The attributes of the item, whatever its kind.
+    pub fn attr_list(&self) -> Option<super::AttrList> {
+        support::child(&self.syntax().first_child()?)
+    }
 }
 
 ast_node! {
@@ -95,12 +100,6 @@ impl FuncSignature {
 
     /// Returns the function's return type.
     pub fn ret_ty(&self) -> Option<super::Type> {
-        support::child(self.syntax())
-    }
-
-    /// The result-space contract of the return's access components that
-    /// declare none: `-> (usize, ref T) @S`.
-    pub fn ret_space(&self) -> Option<super::SpaceAnnotation> {
         support::child(self.syntax())
     }
 
@@ -431,14 +430,14 @@ impl TraitUsesItem {
 }
 
 ast_node! {
-    /// `space S` in a trait definition, or `space S = memory` in a trait
-    /// implementation: an associated result space.
-    pub struct TraitSpaceItem,
-    SK::TraitSpaceItem,
+    /// `shape Step` in a trait definition, or `shape Step = (own usize,
+    /// D::Step)` in a trait implementation: an associated shape.
+    pub struct TraitShapeItem,
+    SK::TraitShapeItem,
 }
-impl super::AttrListOwner for TraitSpaceItem {}
-impl TraitSpaceItem {
-    /// Returns the name of the space.
+impl super::AttrListOwner for TraitShapeItem {}
+impl TraitShapeItem {
+    /// The shape's name, after the `shape` keyword.
     pub fn name(&self) -> Option<SyntaxToken> {
         self.syntax()
             .children_with_tokens()
@@ -447,20 +446,15 @@ impl TraitSpaceItem {
             .nth(1)
     }
 
-    /// The space an implementation gives, after `=`.
-    pub fn value(&self) -> Option<super::Path> {
-        support::child(self.syntax())
-    }
-
-    /// `[_]` in `space S = self[_]`.
-    pub fn space_path(&self) -> Option<super::SpacePath> {
+    /// The shape an implementation gives it, after `=`.
+    pub fn ty(&self) -> Option<super::Type> {
         support::child(self.syntax())
     }
 }
 
 ast_node! {
     pub struct TraitItem,
-    SK::Func | SK::TraitTypeItem | SK::TraitConstItem | SK::TraitUsesItem | SK::TraitSpaceItem
+    SK::Func | SK::TraitTypeItem | SK::TraitConstItem | SK::TraitUsesItem | SK::TraitShapeItem
 }
 impl TraitItem {
     pub fn kind(&self) -> TraitItemKind {
@@ -475,8 +469,8 @@ impl TraitItem {
             SK::TraitUsesItem => {
                 TraitItemKind::Uses(TraitUsesItem::cast(self.syntax().clone()).unwrap())
             }
-            SK::TraitSpaceItem => {
-                TraitItemKind::Space(TraitSpaceItem::cast(self.syntax().clone()).unwrap())
+            SK::TraitShapeItem => {
+                TraitItemKind::Shape(TraitShapeItem::cast(self.syntax().clone()).unwrap())
             }
             _ => unreachable!(),
         }
@@ -488,7 +482,7 @@ pub enum TraitItemKind {
     Type(TraitTypeItem),
     Const(TraitConstItem),
     Uses(TraitUsesItem),
-    Space(TraitSpaceItem),
+    Shape(TraitShapeItem),
 }
 
 ast_node! {
@@ -639,13 +633,23 @@ impl Extern {
 }
 
 ast_node! {
+    /// The field list of a struct: either `{x: i32, y: u32}` for a record
+    /// struct, or `(pub u8, u16)` for a tuple struct. Tuple fields have no
+    /// name.
     pub struct RecordFieldDefList,
-    SK::RecordFieldDefList,
+    SK::RecordFieldDefList | SK::TupleFieldDefList,
     IntoIterator<Item=RecordFieldDef>
 }
+impl RecordFieldDefList {
+    /// Returns `true` if this is the field list of a tuple struct.
+    pub fn is_tuple(&self) -> bool {
+        self.syntax().kind() == SK::TupleFieldDefList
+    }
+}
+
 ast_node! {
     pub struct RecordFieldDef,
-    SK::RecordFieldDef,
+    SK::RecordFieldDef | SK::TupleFieldDef,
 }
 
 impl super::AttrListOwner for RecordFieldDef {}
@@ -1014,6 +1018,27 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn tuple_struct() {
+        let source = r#"
+                pub struct Pair<T>(pub T, (u8, i32)) where T: Trait
+            "#;
+        let s: Struct = parse_item(source);
+        assert_eq!(s.name().unwrap().text(), "Pair");
+        assert_eq!(s.generic_params().unwrap().iter().count(), 1);
+        assert!(s.where_clause().is_some());
+        let fields = s.fields().unwrap();
+        assert!(fields.is_tuple());
+        let fields: Vec<_> = fields.into_iter().collect();
+        assert_eq!(fields.len(), 2);
+        assert!(fields[0].pub_kw().is_some());
+        assert!(fields[0].name().is_none());
+        assert!(matches!(fields[0].ty().unwrap().kind(), TypeKind::Path(_)));
+        assert!(fields[1].pub_kw().is_none());
+        assert!(matches!(fields[1].ty().unwrap().kind(), TypeKind::Tuple(_)));
     }
 
     #[test]

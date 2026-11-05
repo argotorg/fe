@@ -10,13 +10,14 @@ use crate::analysis::name_resolution::{
     resolve_path_with_minter,
 };
 use crate::analysis::ty::canonical::Canonicalized;
+use crate::analysis::ty::trait_resolution::mentions_ty;
 use crate::analysis::ty::{
     const_ty::ConstBodyLowering,
     subst::substitute_complete,
     ty_lower::{CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_type_alias},
 };
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
-use crate::semantic::constraints_for;
+use crate::semantic::{constraints_for, param_env};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PredicateKey<'db> {
@@ -126,7 +127,9 @@ impl<'db> PredicateKeyBuilder<'_, 'db> {
                     match typed.expr_const_ref(expr) {
                         None => return Ok(None),
                         Some(ConstRef::Const(constant)) => PredicateTerm::Const(constant),
-                        Some(ConstRef::TraitConst(reference)) => PredicateTerm::TraitConst(
+                        Some(ConstRef::TraitConst {
+                            use_: reference, ..
+                        }) => PredicateTerm::TraitConst(
                             self.instantiate(reference.inst())?,
                             reference.name(),
                         ),
@@ -185,7 +188,7 @@ impl<'db> PredicateKeyBuilder<'_, 'db> {
 /// The generic parameters that a predicate's expression mentions, each
 /// once, as types. The ambient trait assumptions it is checked under are not
 /// dependencies of the expression, so their parameters are left out.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn predicate_params<'db>(db: &'db dyn HirAnalysisDb, predicate: Body<'db>) -> Vec<TyId<'db>> {
     use crate::analysis::ty::visitor::walk_ty;
     struct Params<'db> {
@@ -223,7 +226,7 @@ fn predicate_params<'db>(db: &'db dyn HirAnalysisDb, predicate: Body<'db>) -> Ve
 
 /// Why a const requirement does not hold at a use. Discharge decides it, and
 /// the use's diagnostic renders it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum RequirementFailure {
     /// The condition evaluated to `false`.
     False,
@@ -246,7 +249,7 @@ pub enum RequirementFailure {
 }
 
 /// Why compile-time evaluation of a condition stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum EvaluationStop {
     DivisionByZero,
     Overflow,
@@ -269,14 +272,14 @@ impl RequirementFailure {
 }
 
 /// Whether a use's const requirement holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub(super) enum Discharge {
     Holds,
     Fails(RequirementFailure),
 }
 
 /// Whether a predicate can be discharged.
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(super) enum FormationStatus<'db> {
     /// It type checks as a `bool` const body and does not depend on itself.
     /// Discharge reads its typed body.
@@ -285,7 +288,7 @@ pub(super) enum FormationStatus<'db> {
     Recursive,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(super) struct PredicateFormation<'db> {
     /// The predicate's own diagnostics, reported at its declaration.
     pub(super) diags: Vec<FuncBodyDiag<'db>>,
@@ -367,7 +370,7 @@ fn unmet_requirement_diag<'db>(
     .into()
 }
 
-#[salsa::tracked(return_ref, cycle_initial=formation_cycle_initial, cycle_fn=formation_cycle_recover)]
+#[salsa::tracked(cycle_initial=formation_cycle_initial)]
 pub(super) fn check_predicate_formation<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -421,7 +424,10 @@ fn requirement_premise_owner<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> Option<GenericParamOwner<'db>> {
-    if !matches!(owner, BodyOwner::Func(_) | BodyOwner::AnonConstBody { .. }) {
+    if !matches!(
+        owner,
+        BodyOwner::Func(_, _) | BodyOwner::AnonConstBody { .. }
+    ) {
         return None;
     }
     premise_owner_in_scope(db, owner.scope())
@@ -608,7 +614,7 @@ pub(super) fn check_body_requirements<'db>(
         }
     }
     let mut check = checker.check_inferred_types(&entered);
-    for (nested, expected) in expression_const_bodies(db, body, typed) {
+    for (nested, expected) in expression_const_bodies(db, owner, body, typed) {
         check.extend(anon_const_position_check(db, nested, expected));
     }
     check
@@ -754,7 +760,7 @@ impl<'a, 'db> BodyRequirements<'a, 'db> {
         // that names the function. A call through anything else, such as a
         // binding, block, branch or field, calls such a value, whose
         // requirements were checked there. A call of a callable value runs
-        // its shape trait's method, whose requirements are checked here.
+        // its callable trait's method, whose requirements are checked here.
         if let Some(Expr::Call(callee, _)) = data.borrowed().to_opt()
             && !self.names_function_value(*callee)
             && self.typed.call_receiver(self.db, expr).is_none()
@@ -779,7 +785,7 @@ impl<'a, 'db> BodyRequirements<'a, 'db> {
                 self.check_callee_headers(expr, func, args);
                 self.discharge_callee_conditions(expr, func, args);
             }
-            CallableDef::VariantCtor(_) => {
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => {
                 self.check_constructor_value(expr, data, definition, args);
             }
         }
@@ -1153,6 +1159,7 @@ fn check_path_application<'db>(
 /// the body are covered by `check_declared_type_requirements`.
 fn expression_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
     body: Body<'db>,
     typed: &TypedBody<'db>,
 ) -> Vec<(Body<'db>, TyId<'db>)> {
@@ -1260,20 +1267,13 @@ fn expression_const_bodies<'db>(
     };
     // Arguments of the path's segments, which path resolution applies, each
     // checked against its segment's own resolution (`segment_const_args`).
-    let segment_args = |path: PathId<'db>, value: bool| {
+    let segment_args = |path: PathId<'db>, scope: ScopeId<'db>, value: bool| {
         if path_const_bodies(db, path).is_empty() {
             return Vec::new();
         }
         let lowering_cx = LoweringContext::deferred().recording_resolutions();
         let resolve = |value| {
-            resolve_path_with_minter(
-                db,
-                path,
-                body.scope(),
-                typed.assumptions(),
-                value,
-                &lowering_cx,
-            )
+            resolve_path_with_minter(db, path, scope, typed.assumptions(), value, &lowering_cx)
         };
         // A tail that is not a value can still be a type, as a record's is.
         if resolve(value).is_err() {
@@ -1289,24 +1289,49 @@ fn expression_const_bodies<'db>(
                 len.to_opt().zip(array_length_ty(db)).into_iter().collect()
             }
             Some(Expr::Path(Partial::Present(path))) => {
-                let mut entries = segment_args(*path, true);
+                let mut entries = segment_args(*path, body.scope(), true);
                 entries.extend(explicit_args(expr, path.generic_args(db)));
                 entries
             }
-            Some(Expr::RecordInit(Partial::Present(path), _)) => segment_args(*path, false),
+            Some(Expr::RecordInit(Partial::Present(path), _)) => {
+                segment_args(*path, body.scope(), false)
+            }
             Some(Expr::MethodCall(_, _, args, _)) => explicit_args(expr, *args),
             _ => Vec::new(),
         };
         found.extend(entries);
     }
-    for pat in body.pats(db).values() {
+    // A recv arm's variant path is resolved as the arm resolves it, which
+    // finds no path when the arm's block doesn't resolve its msg.
+    let recv_arm = match owner {
+        BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+        } => contract
+            .recv_arm(db, recv_idx as usize, arm_idx as usize)
+            .map(|arm| {
+                let lookup = recv_arm_resolution(db, contract, recv_idx, arm_idx).lookup;
+                (arm.pat, contract.scope(), lookup)
+            }),
+        _ => None,
+    };
+    for (pat_id, pat) in body.pats(db).iter() {
+        if let Some((arm_pat, scope, lookup)) = recv_arm
+            && pat_id == arm_pat
+        {
+            if let Some(lookup) = lookup {
+                found.extend(segment_args(lookup.path, scope, false));
+            }
+            continue;
+        }
         if let Some(
             Pat::Path(Partial::Present(path), _)
             | Pat::PathTuple(Partial::Present(path), _)
             | Pat::Record(Partial::Present(path), _),
         ) = pat.borrowed().to_opt()
         {
-            found.extend(segment_args(*path, true));
+            found.extend(segment_args(*path, body.scope(), true));
         }
     }
     // A body appears in one position, but two lookups can both find it.
@@ -1371,7 +1396,7 @@ fn const_ref_headers<'db>(
 ) -> Option<Vec<TyId<'db>>> {
     match typed.expr_const_ref(expr)? {
         ConstRef::Const(_) => None,
-        ConstRef::TraitConst(reference) => Some(reference.inst().args(db).to_vec()),
+        ConstRef::TraitConst { use_, .. } => Some(use_.inst().args(db).to_vec()),
         ConstRef::InherentConst(reference) => Some(vec![reference.receiver_ty()]),
     }
 }
@@ -1500,7 +1525,7 @@ fn check_type_requirements<'db>(
         })
 }
 
-#[salsa::tracked(cycle_initial=requirement_cycle_initial, cycle_fn=requirement_cycle_recover)]
+#[salsa::tracked(returns(copy), cycle_initial=requirement_cycle_initial)]
 fn discharge_requirement<'db>(
     db: &'db dyn HirAnalysisDb,
     declaration: WhereClauseOwner<'db>,
@@ -1604,6 +1629,7 @@ fn discharge_requirement<'db>(
 // A requirement reached again while it is being discharged depends on itself.
 fn requirement_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _declaration: WhereClauseOwner<'db>,
     _predicate: Body<'db>,
     _args: Vec<TyId<'db>>,
@@ -1612,22 +1638,11 @@ fn requirement_cycle_initial<'db>(
     Discharge::Fails(RequirementFailure::Recursive)
 }
 
-fn requirement_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Discharge,
-    _count: u32,
-    _declaration: WhereClauseOwner<'db>,
-    _predicate: Body<'db>,
-    _args: Vec<TyId<'db>>,
-    _caller: Option<GenericParamOwner<'db>>,
-) -> salsa::CycleRecoveryAction<Discharge> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 // A predicate reached again while its formation is checked depends on
 // itself.
 fn formation_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     body: Body<'db>,
 ) -> PredicateFormation<'db> {
     PredicateFormation {
@@ -1635,17 +1650,13 @@ fn formation_cycle_initial<'db>(
         status: FormationStatus::Recursive,
     }
 }
-fn formation_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &PredicateFormation<'db>,
-    _count: u32,
-    _body: Body<'db>,
-) -> salsa::CycleRecoveryAction<PredicateFormation<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 /// The assumptions a type written at `scope` is lowered with.
 fn assumptions_at<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> PredicateListId<'db> {
+    constraints_for(db, enclosing_item(db, scope))
+}
+
+/// The item `scope` is in, outside any body.
+fn enclosing_item<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> ItemKind<'db> {
     let mut enclosing = scope;
     while matches!(enclosing.item(), ItemKind::Body(_)) {
         let Some(parent) = enclosing.parent(db) else {
@@ -1653,7 +1664,7 @@ fn assumptions_at<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Predi
         };
         enclosing = parent;
     }
-    constraints_for(db, enclosing.item())
+    enclosing.item()
 }
 
 /// The applications that the types written in `owner`'s signature and body
@@ -1673,7 +1684,7 @@ fn written_applications<'db>(
         }
     }
     let signature = match owner {
-        BodyOwner::Func(func) => Some(ItemKind::Func(func)),
+        BodyOwner::Func(func, _) => Some(ItemKind::Func(func)),
         BodyOwner::Const(const_) => Some(ItemKind::Const(const_)),
         _ => None,
     };
@@ -1711,7 +1722,7 @@ pub(crate) fn check_declared_type_requirements<'db>(
 
 /// A position in an item or body that `written_type_check` checks, in the
 /// order it checks them.
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 enum WrittenEntry<'db> {
     /// Anonymous constants written in a type or trait reference, each with
     /// the type its position checks it against.
@@ -1720,7 +1731,7 @@ enum WrittenEntry<'db> {
     Type(WrittenType<'db>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 struct WrittenType<'db> {
     span: DynLazySpan<'db>,
     scope: ScopeId<'db>,
@@ -1728,12 +1739,16 @@ struct WrittenType<'db> {
     lowered: Option<TyId<'db>>,
     /// The constrained applications its paths passed through.
     applications: Vec<TyId<'db>>,
+    /// Whether it is in an argument its alias drops, which no expansion
+    /// holds for its position to check.
+    dropped: bool,
     /// The index of the first entry nested in this type.
     nested_from: usize,
 }
 
 #[salsa::interned]
 struct WrittenTypeRegion<'db> {
+    #[returns(copy)]
     item: ItemKind<'db>,
 }
 
@@ -1747,7 +1762,7 @@ fn written_types<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> &'db [
     written_types_query(db, WrittenTypeRegion::new(db, item))
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn written_types_query<'db>(
     db: &'db dyn HirAnalysisDb,
     region: WrittenTypeRegion<'db>,
@@ -1756,8 +1771,11 @@ fn written_types_query<'db>(
     use crate::span::types::LazyTySpan;
     use crate::visitor::{
         Visitor, VisitorCtxt,
-        prelude::{LazyBodySpan, LazyExprSpan, LazyItemSpan, LazyTraitRefSpan},
-        walk_body, walk_expr, walk_item, walk_path, walk_trait_ref, walk_type,
+        prelude::{
+            LazyBodySpan, LazyExprSpan, LazyGenericArgListSpan, LazyItemSpan, LazyTraitRefSpan,
+        },
+        walk_body, walk_expr, walk_generic_arg_list, walk_item, walk_path, walk_trait_ref,
+        walk_type,
     };
     struct Collector<'db> {
         db: &'db dyn HirAnalysisDb,
@@ -1768,6 +1786,10 @@ fn written_types_query<'db>(
         /// and finds them with the same rule (`written_type_const_args`).
         defaults: FxHashSet<crate::hir_def::TypeId<'db>>,
         default_depth: usize,
+        /// The arguments of the alias path being walked, each with whether
+        /// the alias drops it, and how deep the walk is inside one dropped.
+        alias_args: Option<(GenericArgListId<'db>, Vec<bool>)>,
+        dropped_depth: usize,
     }
     impl<'db> Visitor<'db> for Collector<'db> {
         // Nested items and bodies are their own regions.
@@ -1826,6 +1848,26 @@ fn written_types_query<'db>(
             let scope = ctxt.scope();
             let span = ctxt.span().map(Into::into);
             self.written_type(hir_ty, scope, span, |this| walk_type(this, ctxt, hir_ty));
+        }
+
+        fn visit_generic_arg_list(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyGenericArgListSpan<'db>>,
+            args: GenericArgListId<'db>,
+        ) {
+            let alias_args = self
+                .alias_args
+                .take_if(|(alias_args, _)| *alias_args == args);
+            let (Some((_, dropped)), Some(span)) = (alias_args, ctxt.span()) else {
+                return walk_generic_arg_list(self, ctxt, args);
+            };
+            for (idx, arg) in args.data(self.db).iter().enumerate() {
+                let in_dropped = dropped.get(idx).copied().unwrap_or_default();
+                self.dropped_depth += usize::from(in_dropped);
+                let mut arg_ctxt = VisitorCtxt::new(self.db, ctxt.scope(), span.clone().arg(idx));
+                self.visit_generic_arg(&mut arg_ctxt, arg);
+                self.dropped_depth -= usize::from(in_dropped);
+            }
         }
 
         // A `with` key is a type written in the body, whose paths are
@@ -1901,14 +1943,34 @@ fn written_types_query<'db>(
                     self.entries.push(WrittenEntry::ConstBodies(bodies));
                 }
             }
+            let alias_args = match hir_ty.data(db) {
+                TypeKind::Path(Partial::Present(path)) => {
+                    match resolve_path(db, *path, scope, assumptions, false) {
+                        Ok(PathRes::TyAlias(alias, _)) => {
+                            let expansion = *alias.alias_to.skip_binder();
+                            let dropped = alias
+                                .params(db)
+                                .iter()
+                                .map(|&param| !mentions_ty(db, expansion, param))
+                                .collect();
+                            Some((path.generic_args(db), dropped))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            let enclosing_alias_args = std::mem::replace(&mut self.alias_args, alias_args);
             let nested_from = self.entries.len();
             walk_nested(self);
+            self.alias_args = enclosing_alias_args;
             if let Some(span) = span {
                 self.entries.push(WrittenEntry::Type(WrittenType {
                     span,
                     scope,
                     lowered: (!ty.has_invalid(db)).then_some(ty),
                     applications,
+                    dropped: self.dropped_depth > 0,
                     nested_from,
                 }));
             }
@@ -1922,6 +1984,8 @@ fn written_types_query<'db>(
         entries: Vec::new(),
         defaults: FxHashSet::default(),
         default_depth: 0,
+        alias_args: None,
+        dropped_depth: 0,
     };
     collector.visit_item(&mut VisitorCtxt::with_item(db, root), root);
     collector.entries
@@ -1940,7 +2004,7 @@ fn written_type_check<'db>(
     written_type_check_query(db, WrittenTypeRegion::new(db, item))
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn written_type_check_query<'db>(
     db: &'db dyn HirAnalysisDb,
     region: WrittenTypeRegion<'db>,
@@ -1949,7 +2013,36 @@ fn written_type_check_query<'db>(
     let mut diags = Vec::new();
     // The failing application each entry reported, if any.
     let mut reported: Vec<Option<TyId<'db>>> = Vec::with_capacity(entries.len());
+    // Whether each entry reported itself ill-formed.
+    let mut ill_formed: Vec<bool> = Vec::with_capacity(entries.len());
     for entry in entries {
+        // A type in an argument its alias drops is checked for its bounds
+        // here, where it is written, once for the innermost one that fails.
+        ill_formed.push(match entry {
+            WrittenEntry::Type(written)
+                if written.dropped && !ill_formed[written.nested_from..].contains(&true) =>
+            {
+                written.lowered.is_some_and(|ty| {
+                    let solve_cx = TraitSolveCx::new(db, written.scope)
+                        .with_assumptions(param_env(db, enclosing_item(db, written.scope)));
+                    let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty)
+                    else {
+                        return false;
+                    };
+                    diags.push(FuncBodyDiag::Ty(
+                        TraitConstraintDiag::TraitBoundNotSat {
+                            span: written.span.clone(),
+                            primary_goal: goal,
+                            unsat_subgoal: subgoal,
+                            required_by: None,
+                        }
+                        .into(),
+                    ));
+                    true
+                })
+            }
+            _ => false,
+        });
         let report = match entry {
             WrittenEntry::ConstBodies(bodies) => {
                 for &(body, expected) in bodies {

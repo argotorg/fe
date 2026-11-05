@@ -4,51 +4,71 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/loop_drivers.fe
 ---
-error[8-0000]: type mismatch
-   ┌─ loop_drivers.fe:56:9
+error[6-0003]: trait bound is not satisfied
+   ┌─ loop_drivers.fe:40:18
    │
-56 │     for (i, x) in xs by reversed() {
+40 │     for mut x in xs.by(d) {
+   │                  ^^^^^^^^ `Firsts<[u256; 3]>` doesn't implement `mut Driver`
+
+error[8-0000]: type mismatch
+   ┌─ loop_drivers.fe:61:9
+   │
+61 │     for (i, x) in xs.reversed() {
    │         ^^^^^^ expected `u256`, but `(_, _)` is given
 
 error[8-0018]: left-hand side of assignment is immutable
-   ┌─ loop_drivers.fe:43:9
+   ┌─ loop_drivers.fe:48:9
    │
-42 │     for x in xs by reversed() {
+47 │     for x in xs.reversed() {
    │         - write `var x` for a mutable value
-43 │         x += 1
+48 │         x += 1
    │         ^ immutable assignment
 
 error[8-0018]: left-hand side of assignment is immutable
-   ┌─ loop_drivers.fe:50:9
+   ┌─ loop_drivers.fe:55:9
    │
-49 │     for (_, ref account) in accounts.enumerate() {
+54 │     for (_, ref account) in accounts.enumerate() {
    │             ----------- `account` is a read access; bind it with `mut` to write through it
-50 │         account.balance = 0
+55 │         account.balance = 0
    │         ^^^^^^^^^^^^^^^ immutable assignment
 
-error[8-0020]: `Driver` needs to be implemented for bool
-  ┌─ loop_drivers.fe:8:20
+error[8-0020]: `Collection` needs to be implemented for bool
+  ┌─ loop_drivers.fe:8:14
   │
-8 │     for x in xs by true {
-  │                    ^^^^
-  │                    │
-  │                    `Driver` needs to be implemented for `bool`
-  │                    consider implementing `Driver` for `bool`
+8 │     for x in xs.by(true) {
+  │              ^^^^^^^^^^^
+  │              │
+  │              `Collection` needs to be implemented for `bool`
+  │              consider implementing `Collection` for `bool`
 
-error[8-0020]: `DriverMut` needs to be implemented for Firsts
-   ┌─ loop_drivers.fe:35:24
+error[8-0123]: a `mut` binding needs a mutable place or access
+   ┌─ loop_drivers.fe:40:9
    │
-35 │     for mut x in xs by d {
-   │                        ^
-   │                        │
-   │                        `DriverMut` needs to be implemented for `Firsts`
-   │                        consider implementing `DriverMut` for `Firsts`
+40 │     for mut x in xs.by(d) {
+   │         ^^^^^ this binds part of a read access
+   │
+   = write `var` for a mutable copy, or use the `mut` projection to write through
 
-error[8-0020]: `Collection` needs to be implemented for Take<Reversed>
-   ┌─ loop_drivers.fe:62:14
+error[8-0149]: `Take<Reversed<[u256; 3]>>` is a driver over `[u256; 3]`, but the loop has no collection
+   ┌─ loop_drivers.fe:68:14
    │
-62 │     for x in reversed().take(2) {
-   │              ^^^^^^^^^^^^^^^^^^
-   │              │
-   │              `Collection` needs to be implemented for `Take<Reversed>`
-   │              consider implementing `Collection` for `Take<Reversed>`
+68 │     for x in d.take(2) {
+   │              ^^^^^^^^^ this drives no collection
+   │
+   = drive a collection with it, as `xs.by(d)`
+
+error[8-0149]: `Reversed<[u256; 4]>` drives `[u256; 4]`, not `[u256; 3]`
+   ┌─ loop_drivers.fe:75:14
+   │
+75 │     for x in xs.by(d) {
+   │              ^^^^^^^^ this loop's collection is `[u256; 3]`
+   │
+   = a driver runs over its own base: use one over `[u256; 3]`, or bound a parameter as `Driver<Base = [u256; 3]>`
+
+error[8-0149]: `D` drives `D::Base`, not `C`
+   ┌─ loop_drivers.fe:81:14
+   │
+81 │     for x in xs.by(d) {
+   │              ^^^^^^^^ this loop's collection is `C`
+   │
+   = a driver runs over its own base: use one over `C`, or bound a parameter as `Driver<Base = C>`

@@ -11,7 +11,10 @@ use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
 use std::{collections::HashSet, path::Path};
-use test_utils::_macro_support::_insta::{self, Settings};
+use test_utils::{
+    _macro_support::_insta::{self, Settings},
+    fixture_shards,
+};
 use tracing::info;
 use url::Url;
 
@@ -32,6 +35,68 @@ fn with_top_mod_for_source<T>(
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
     f(&db, top_mod)
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_keeps_measured_work_between_gas_reads.fe")]
+fn black_box_keeps_measured_work_between_gas_reads(fixture: Fixture<&str>) {
+    for level in [OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+            emit_module_sonatina_ir_optimized(db, top_mod, level, None)
+                .expect("optimized Sonatina IR should emit")
+        });
+
+        // Each recv arm reads the gas twice in one block; collect the instruction
+        // names between the two reads.
+        let measured: Vec<Vec<&str>> = ir
+            .split("\n\n")
+            .filter_map(|block| {
+                let insts: Vec<&str> = block
+                    .lines()
+                    .filter_map(|line| line.split(" = ").nth(1)?.split_whitespace().next())
+                    .map(|inst| inst.trim_end_matches(';'))
+                    .collect();
+                let first = insts.iter().position(|&inst| inst == "evm_gas")?;
+                let len = insts[first + 1..]
+                    .iter()
+                    .position(|&inst| inst == "evm_gas")?;
+                Some(insts[first + 1..first + 1 + len].to_vec())
+            })
+            .collect();
+        let [kept, discarded] = [true, false].map(|boxed| {
+            measured
+                .iter()
+                .find(|insts| insts.contains(&"black_box") == boxed)
+                .unwrap_or_else(|| panic!("missing measured arm (black_box: {boxed}):\n{ir}"))
+        });
+
+        assert!(
+            kept.iter()
+                .position(|&inst| inst == "xor")
+                .is_some_and(|work| {
+                    kept[..work].contains(&"black_box") && kept[work..].contains(&"black_box")
+                }),
+            "the boxed input, the work and the boxed result must stay between the gas reads: \
+         {kept:?}\n{ir}"
+        );
+        assert!(
+            !discarded.contains(&"xor"),
+            "discarded pure work is expected to be removed: {discarded:?}\n{ir}"
+        );
+    }
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_rejects_*.fe")]
+fn black_box_rejects_non_scalar_arguments(fixture: Fixture<&str>) {
+    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+        let diagnostics = db.run_on_top_mod(top_mod);
+        assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(db));
+        emit_module_sonatina_ir(db, top_mod).expect_err("black_box only accepts scalars")
+    });
+    let message = err.to_string();
+    assert!(
+        message.contains("`core::hint::black_box` requires a scalar argument"),
+        "unexpected error message:\n{message}"
+    );
 }
 
 fn sonatina_function_names(ir: &str) -> Vec<String> {
@@ -89,6 +154,67 @@ fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a s
     let body = &ir[start..];
     let end = body.find("\n}\n").map_or(body.len(), |end| end + 2);
     Some(&body[..end])
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "packed_hash_words.fe")]
+fn packed_hash_exports_only_numeric_words(fixture: Fixture<&str>) {
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        for level in [OptLevel::O1, OptLevel::O2] {
+            let ir = emit_module_sonatina_ir_optimized(db, top_mod, level, None)
+                .expect("packed hash IR should emit");
+            let body = sonatina_function_body(&ir, "%contract_runtime_root_Hashes(")
+                .expect("hash runtime should emit");
+            assert!(
+                !body.contains("mstore8"),
+                "byte stores in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("[i8;"),
+                "expanded byte object in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("obj."),
+                "unscalarized hash input in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("phi "),
+                "conversion loop in {level:?}:\n{body}"
+            );
+            // Four ABI return stores, in addition to each preimage's numeric words.
+            assert_eq!(
+                body.matches("mstore ").count(),
+                1 + 1 + 2 + 3 + 4,
+                "stores in {level:?}:\n{body}"
+            );
+            let mut widths = Vec::new();
+            for block in body.split("\n    block") {
+                if let Some((preimage, hash)) = block.split_once("evm_keccak256 ") {
+                    let width: usize = hash
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .last()
+                        .unwrap()
+                        .trim_end_matches(".i256;")
+                        .parse()
+                        .unwrap();
+                    assert_eq!(
+                        preimage.matches("mstore ").count(),
+                        width.div_ceil(32),
+                        "preimage in {level:?}:\n{block}"
+                    );
+                    assert!(
+                        !block.contains("br "),
+                        "conversion branch in {level:?}:\n{block}"
+                    );
+                    widths.push(width);
+                }
+            }
+            widths.sort_unstable();
+            assert_eq!(widths, [5, 32, 64, 69]);
+        }
+    });
 }
 
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "zero_sized_const_aggregates_do_not_emit_const_regions.fe")]
@@ -342,31 +468,25 @@ fn runtime_abi_head_guard_matches_modern_solidity_signed_size_check(fixture: Fix
     );
 }
 
-// NOTE: `dir_test` discovers fixtures at compile time; new fixture files will be picked up on a
-// clean build (e.g. CI) or whenever this test target is recompiled.
-//
 // Sonatina IR tests only run on fixtures that the backend currently supports. Unsupported
 // fixtures will produce LowerError::Unsupported, which we skip gracefully.
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/tests/fixtures",
-    glob: "*.fe"
-)]
-fn sonatina_ir_snap(fixture: Fixture<&str>) {
+fixture_shards!(
+    sonatina_ir_snap,
+    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"),
+    "*.fe",
+    DriverDataBase::default,
+    check_sonatina_ir,
+);
+
+fn check_sonatina_ir(db: &mut DriverDataBase, fixture: &test_utils::fixtures::Fixture) {
     let _logging = test_utils::setup_test_tracing();
-    let mut db = DriverDataBase::default();
     let file_url = Url::from_file_path(fixture.path()).expect("fixture path should be absolute");
-    db.workspace().touch(
-        &mut db,
-        file_url.clone(),
-        Some(fixture.content().to_string()),
-    );
     let file = db
         .workspace()
-        .get(&db, &file_url)
-        .expect("file should be loaded");
+        .touch(db, file_url, Some(fixture.content().to_string()));
     let top_mod = db.top_mod(file);
 
-    let output = match emit_module_sonatina_ir(&db, top_mod) {
+    let output = match emit_module_sonatina_ir(db, top_mod) {
         Ok(ir) => ir,
         Err(fe_codegen::LowerError::Unsupported(msg)) => {
             info!("SKIP {}: unsupported ({msg})", fixture.path());
@@ -387,4 +507,20 @@ fn sonatina_ir_snap(fixture: Fixture<&str>) {
     settings.bind(|| {
         _insta::assert_snapshot!(fixture_name, output);
     });
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "maybe_mut_bodies_share_callees.fe")]
+fn maybe_mut_bodies_share_callees(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
+
+    let notes = ir
+        .lines()
+        .filter(|line| line.starts_with("func ") && line.contains("note"))
+        .count();
+    assert_eq!(
+        notes, 1,
+        "both bodies of `slot` should call one instance of `note`:\n{ir}"
+    );
 }

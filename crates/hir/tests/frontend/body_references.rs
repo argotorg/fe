@@ -21,8 +21,7 @@ fn body_references(fixture: Fixture<&str>) {
     db.assert_no_diags(top_mod);
 
     // Find all functions and collect their body references
-    let scope_graph = top_mod.scope_graph(&db);
-    for item in scope_graph.items_dfs(&db) {
+    for &item in top_mod.all_items(&db) {
         if let ItemKind::Func(func) = item
             && let Some(body) = func.body(&db)
         {

@@ -3,7 +3,7 @@ use core::abi::store_word
 use std::evm::{Evm, RawOps, RawStorage, StorageMap, StorPtr}
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
-    let data = ptr::MemBuffer::alloc(32)
+    let data = ptr::MemBuffer::new(32)
     unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
@@ -50,7 +50,7 @@ fn transfer(from: u256, to: u256, amount: u256) -> u256
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -80,7 +80,7 @@ fn runtime() uses (evm: mut Evm) {
                 // setBalance(uint256,uint256)
                 let addr = evm.calldataload(4)
                 let value = evm.calldataload(36)
-                let balances = unsafe { StorageMap<u256, u256>::at(0) }
+                let balances = unsafe { mut StorageMap<u256, u256>::at(0) }
                 with (mut balances) {
                     set_balance(addr: addr, value: value)
                 }
@@ -91,7 +91,7 @@ fn runtime() uses (evm: mut Evm) {
                 let from = evm.calldataload(4)
                 let to = evm.calldataload(36)
                 let amount = evm.calldataload(68)
-                let balances = unsafe { StorageMap<u256, u256>::at(0) }
+                let balances = unsafe { mut StorageMap<u256, u256>::at(0) }
                 let result = with (mut balances) {
                     transfer(from: from, to: to, amount: amount)
                 }
@@ -108,7 +108,7 @@ fn runtime() uses (evm: mut Evm) {
                 // setAllowance(uint256,uint256)
                 let addr = evm.calldataload(4)
                 let value = evm.calldataload(36)
-                let allowances = unsafe { StorageMap<u256, u256>::at(1) }
+                let allowances = unsafe { mut StorageMap<u256, u256>::at(1) }
                 with (mut allowances) {
                     set_allowance(addr: addr, value: value)
                 }

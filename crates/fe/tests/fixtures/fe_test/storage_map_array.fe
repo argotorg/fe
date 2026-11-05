@@ -22,11 +22,11 @@ pub contract C {
 
 #[test]
 fn arrays_of_maps_keep_distinct_entries() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    evm.call(addr: c, gas: 200000, value: 0, message: M::Set { which: 0, key: 5, value: 10 })
-    evm.call(addr: c, gas: 200000, value: 0, message: M::Set { which: 1, key: 5, value: 20 })
-    let first: u256 = evm.call(addr: c, gas: 200000, value: 0, message: M::Get { which: 0, key: 5 })
-    let second: u256 = evm.call(addr: c, gas: 200000, value: 0, message: M::Get { which: 1, key: 5 })
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Set { which: 0, key: 5, value: 10 })
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Set { which: 1, key: 5, value: 20 })
+    let first: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Get { which: 0, key: 5 })
+    let second: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Get { which: 1, key: 5 })
     assert!(first == 10)
     assert!(second == 20)
 }

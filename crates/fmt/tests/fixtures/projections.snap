@@ -37,10 +37,10 @@ fn use_cell(cell: mut Cell) -> u256 {
 }
 
 fn first(cell: mut Cell, o: Option<u256>) -> u256 {
-    let Option::Some(v,) = o else {
+    let Option::Some(v) = o else {
         return 0
     }
-    let Option::Some(x,) = cell.present() else {
+    let Option::Some(x) = cell.present() else {
         return v
     }
     x + v

@@ -1,0 +1,53 @@
+// `byte` and `signextend` of values the optimizer cannot see, at the edges of
+// the word.
+use core::hint::black_box
+use std::evm::{byte, signextend}
+
+const WORD: u256 = 0x8182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0
+const ALL_ONES: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+fn byte_of(_ pos: u256) -> u256 {
+    byte(pos: black_box(pos), value: black_box(WORD))
+}
+
+fn extended(_ byte: u256, _ value: u256) -> u256 {
+    signextend(byte: black_box(byte), value: black_box(value))
+}
+
+#[test]
+fn byte_counts_from_the_most_significant() {
+    assert!(byte_of(0) == 0x81)
+    assert!(byte_of(1) == 0x82)
+    assert!(byte_of(30) == 0x9f)
+    assert!(byte_of(31) == 0xa0)
+}
+
+#[test]
+fn byte_past_the_word_is_zero() {
+    assert!(byte_of(32) == 0)
+    assert!(byte_of(256) == 0)
+    // Times eight, these wrap to bit positions inside the word.
+    assert!(byte_of(1 << 253) == 0)
+    assert!(byte_of((1 << 253) + 1) == 0)
+    assert!(byte_of(ALL_ONES) == 0)
+}
+
+#[test]
+fn signextend_copies_the_sign_bit_of_the_byte() {
+    assert!(extended(0, 0x7f) == 0x7f)
+    assert!(extended(0, 0x80) == ALL_ONES - 0x7f)
+    assert!(extended(0, 0x1ff) == ALL_ONES)
+    assert!(extended(1, 0xff) == 0xff)
+    assert!(extended(1, 0x8000) == ALL_ONES - 0x7fff)
+    assert!(extended(30, 1 << 247) == ALL_ONES << 247)
+    assert!(extended(30, (1 << 247) - 1) == (1 << 247) - 1)
+}
+
+#[test]
+fn signextend_from_the_top_or_past_it_keeps_the_value() {
+    assert!(extended(31, WORD) == WORD)
+    assert!(extended(32, WORD) == WORD)
+    // Times eight, these wrap to bit positions inside the word.
+    assert!(extended(1 << 253, WORD) == WORD)
+    assert!(extended(ALL_ONES, WORD) == WORD)
+}

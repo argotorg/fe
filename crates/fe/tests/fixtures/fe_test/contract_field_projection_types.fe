@@ -1,0 +1,67 @@
+trait Tr {
+    type Out
+}
+
+struct Nar {}
+
+impl Tr for Nar {
+    type Out = u8
+}
+
+struct G<X> {
+    a: X,
+    b: u8,
+}
+
+struct A<T: Tr> {
+    a: T::Out,
+    b: u8,
+}
+
+struct L {
+    a: <Nar as Tr>::Out,
+    b: u256,
+}
+
+msg M {
+    #[selector = 0x00000001]
+    Set {} -> u256,
+    #[selector = 0x00000002]
+    Get {} -> u256,
+}
+
+pub contract C {
+    mut direct: <Nar as Tr>::Out,
+    mut g: G<<Nar as Tr>::Out>,
+    mut pair: (<Nar as Tr>::Out, u8),
+    mut l: L,
+    mut generic: A<Nar>,
+    mut after: u256,
+
+    recv M {
+        Set {} -> u256 uses (mut direct, mut g, mut pair, mut l, mut generic, mut after) {
+            direct = 3
+            g = G { a: 1, b: 2 }
+            pair = (3, 4)
+            l = L { a: 5, b: 6 }
+            generic = A { a: 8, b: 9 }
+            after = 7
+            return 0
+        }
+
+        Get {} -> u256 uses (direct, g, pair, l, generic, after) {
+            return (g.a as u256) + (g.b as u256) * 10 + (pair.0 as u256) * 100
+                + (pair.1 as u256) * 1000 + (l.a as u256) * 10000 + l.b * 100000
+                + after * 1000000 + (generic.a as u256) * 10000000
+                + (generic.b as u256) * 100000000 + (direct as u256) * 1000000000
+        }
+    }
+}
+
+#[test]
+fn test_contract_fields_typed_through_projections() uses (evm: mut Evm) {
+    let addr = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Set {})
+    let v: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Get {})
+    assert(v == 3987654321)
+}

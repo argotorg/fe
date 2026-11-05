@@ -1,0 +1,50 @@
+trait Reader {
+    fn value(self) -> u256
+}
+trait Writer {
+    fn increment(mut self)
+}
+
+struct Counter { n: u256 }
+impl Reader for Counter {
+    fn value(self) -> u256 {
+        self.n
+    }
+}
+impl Writer for Counter {
+    fn increment(mut self) {
+        self.n += 1
+    }
+}
+
+trait Source {
+    uses E
+    fn read(self) -> u256 uses E
+    fn forward(self) -> u256 uses E
+}
+struct Adapter {}
+impl Source for Adapter {
+    uses E = (reader: Reader, writer: mut Writer)
+    fn read(self) -> u256 uses E {
+        writer.increment()
+        reader.value()
+    }
+    fn forward(self) -> u256 uses E {
+        self.read()
+    }
+}
+
+fn read<S: Source>(_ source: S) -> u256 uses S::E {
+    source.forward()
+}
+
+#[test]
+fn forwarding_a_spliced_row_keeps_each_provider() {
+    let reader = Counter { n: 7 }
+    var writer = Counter { n: 19 }
+    with (Reader = reader, Writer = mut writer) {
+        assert(read(Adapter {}) == 7)
+    }
+    assert(reader.n == 7)
+    assert(writer.n == 20)
+}

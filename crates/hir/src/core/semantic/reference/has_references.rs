@@ -16,9 +16,9 @@ use super::typed_body_for_body;
 use super::{ReferenceView, Target};
 
 use super::collector::{
-    body_references, contract_references, enum_references, func_signature_references,
-    impl_references, impl_trait_references, struct_references, trait_references,
-    type_alias_references, use_references,
+    body_references, const_references, contract_references, enum_references,
+    func_signature_references, impl_references, impl_trait_references, static_assert_references,
+    struct_references, trait_references, type_alias_references, use_references,
 };
 
 /// Empty reference slice for types that don't contain references.
@@ -55,33 +55,6 @@ impl<'db> HasReferences<'db> for ScopeId<'db> {
     }
 }
 
-impl<'db> ScopeId<'db> {
-    /// Find the most specific reference at a cursor position within this scope.
-    ///
-    /// When references are nested (e.g. `C::InitArgs` inside
-    /// `C::InitArgs::ENCODED_SIZE`), selects the narrowest span containing
-    /// the cursor so that goto-definition resolves the inner type argument
-    /// rather than the outer function call.
-    pub fn reference_at(
-        self,
-        db: &'db dyn SpannedHirDb,
-        cursor: TextSize,
-    ) -> Option<&'db ReferenceView<'db>> {
-        self.references(db)
-            .iter()
-            .filter_map(|r| {
-                let span = r.span().resolve(db)?;
-                if span.range.contains(cursor) {
-                    Some((r, span.range.len()))
-                } else {
-                    None
-                }
-            })
-            .min_by_key(|(_, len)| *len)
-            .map(|(r, _)| r)
-    }
-}
-
 impl<'db> HasReferences<'db> for ItemKind<'db> {
     fn references(&self, db: &'db dyn HirDb) -> &'db [ReferenceView<'db>] {
         match self {
@@ -94,8 +67,8 @@ impl<'db> HasReferences<'db> for ItemKind<'db> {
             ItemKind::Trait(trait_) => trait_references(db, *trait_),
             ItemKind::ImplTrait(impl_trait) => impl_trait_references(db, *impl_trait),
             ItemKind::Use(use_item) => use_references(db, *use_item),
-            ItemKind::Const(c) => c.body(db).to_opt().map_or(EMPTY_REFS, |b| b.references(db)),
-            ItemKind::StaticAssert(assert_) => assert_.condition(db).references(db),
+            ItemKind::Const(c) => const_references(db, *c),
+            ItemKind::StaticAssert(assert_) => static_assert_references(db, *assert_),
             // Modules don't contain references themselves
             ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_REFS,
             ItemKind::Contract(contract) => contract_references(db, *contract),
@@ -280,18 +253,39 @@ impl<'db> TopLevelMod<'db> {
         None
     }
 
-    /// Find the reference at a cursor position anywhere in this module.
+    /// Find the reference at a cursor position anywhere in this module: the
+    /// innermost item's reference with the narrowest span containing the
+    /// cursor.
+    ///
+    /// When references are nested (e.g. `C::InitArgs` inside
+    /// `C::InitArgs::ENCODED_SIZE`), the narrowest is the inner type argument
+    /// rather than the outer function call. A function's or `init`'s
+    /// parameter patterns are written in its signature, but the body that
+    /// binds them records their references, so that body's references count
+    /// as the item's.
     pub fn reference_at(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
     ) -> Option<&'db ReferenceView<'db>> {
-        for item in self.find_enclosing_items(db, cursor) {
-            if let Some(reference) = ScopeId::from_item(item).reference_at(db, cursor) {
-                return Some(reference);
-            }
-        }
-        None
+        self.find_enclosing_items(db, cursor)
+            .into_iter()
+            .find_map(|item| {
+                let param_body = match item {
+                    ItemKind::Func(func) => func.body(db),
+                    ItemKind::Contract(contract) => contract.init(db).map(|init| init.body(db)),
+                    _ => None,
+                };
+                item.references(db)
+                    .iter()
+                    .chain(param_body.into_iter().flat_map(|body| body.references(db)))
+                    .filter_map(|r| {
+                        let range = r.span().resolve(db)?.range;
+                        range.contains(cursor).then_some((r, range.len()))
+                    })
+                    .min_by_key(|(_, len)| *len)
+                    .map(|(r, _)| r)
+            })
     }
 
     /// Find the item definition at cursor position (cursor on name token).
@@ -319,8 +313,7 @@ impl<'db> TopLevelMod<'db> {
             // token); generic/func params and trait types are excluded because
             // their spans are broader and can overlap references we'd rather
             // resolve through `reference_at`.
-            let scope_graph = self.scope_graph(db);
-            for child in scope_graph.children(ScopeId::from_item(item)) {
+            for child in ScopeId::from_item(item).children(db) {
                 match child {
                     ScopeId::Variant(_)
                     | ScopeId::Field(_, _)
@@ -339,18 +332,24 @@ impl<'db> TopLevelMod<'db> {
         None
     }
 
-    /// Find items with the smallest span enclosing the cursor.
+    /// Find items with the smallest span enclosing the cursor. A static
+    /// assertion's comparison side isn't one: its source is the condition's.
     pub fn find_enclosing_items(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
     ) -> Vec<ItemKind<'db>> {
-        let items = self.scope_graph(db).items_dfs(db);
+        let items = self.all_items(db).iter().copied();
 
         let mut smallest_items = Vec::new();
         let mut smallest_range_size = None;
 
         for item in items {
+            if let ItemKind::Body(body) = item
+                && body.is_static_assert_comparison_side(db)
+            {
+                continue;
+            }
             let lazy_item_span = DynLazySpan::from(item.span());
             let Some(item_span) = lazy_item_span.resolve(db) else {
                 continue;
@@ -399,7 +398,7 @@ impl<'db> TopLevelMod<'db> {
         match target {
             Target::Scope(scope) => {
                 let mut results = Vec::new();
-                for item in self.scope_graph(db).items_dfs(db) {
+                for &item in self.all_items(db) {
                     for resolved in resolved_item_scope_targets(db, item) {
                         if resolved.scope == *scope {
                             results.push(MatchedReference {

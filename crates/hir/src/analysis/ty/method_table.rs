@@ -1,7 +1,7 @@
 use crate::core::hir_def::{HirIngot, IdentId, Impl, scope_graph::ScopeId};
 use common::ingot::Ingot;
 use rustc_hash::FxHashMap;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{
     binder::Binder,
@@ -24,7 +24,7 @@ use crate::hir_def::CallableDef;
 /// inference context instead of re-deriving the binder args from the
 /// receiver. This keeps the matching rule (which params, which probe key,
 /// which normalizations) in exactly one place — the probe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ProbedMethod<'db> {
     pub def: CallableDef<'db>,
     bound: Solution<BoundInherentMethod<'db>>,
@@ -39,7 +39,7 @@ impl<'db> ProbedMethod<'db> {
 
 /// Canonicalize the receiver and its environment together: predicates may
 /// contain inference variables not present in the receiver itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) struct MethodProbe<'db> {
     pub receiver: TyId<'db>,
     pub assumptions: PredicateListId<'db>,
@@ -62,7 +62,7 @@ impl<'db> TyFoldable<'db> for MethodProbe<'db> {
 }
 
 /// The bound form of an inherent-method candidate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct BoundInherentMethod<'db> {
     /// The candidate's function type with all binder args applied (solved
     /// where the receiver determined them, fresh variables otherwise).
@@ -98,7 +98,7 @@ impl<'db> TyFoldable<'db> for BoundInherentMethod<'db> {
     }
 }
 
-#[salsa::tracked(return_ref, cycle_fn=collect_methods_cycle_recover, cycle_initial=collect_methods_cycle_initial)]
+#[salsa::tracked(cycle_initial=collect_methods_cycle_initial)]
 pub(crate) fn collect_methods<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -114,18 +114,10 @@ pub(crate) fn collect_methods<'db>(
 
 fn collect_methods_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _ingot: Ingot<'db>,
 ) -> MethodTable<'db> {
     MethodTable::new()
-}
-
-fn collect_methods_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &MethodTable<'db>,
-    _count: u32,
-    _ingot: Ingot<'db>,
-) -> salsa::CycleRecoveryAction<MethodTable<'db>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) fn probe_method<'db>(
@@ -141,7 +133,7 @@ pub(crate) fn probe_method<'db>(
         .collect()
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn probe_canonical_method<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -153,7 +145,7 @@ fn probe_canonical_method<'db>(
     table.probe(db, query, scope, name)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct MethodTable<'db> {
     buckets: FxHashMap<TyBase<'db>, MethodBucket<'db>>,
 }
@@ -217,7 +209,7 @@ impl<'db> MethodTable<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 struct MethodBucket<'db> {
     methods: FxHashMap<Binder<'db, TyId<'db>>, FxHashMap<IdentId<'db>, CallableDef<'db>>>,
 }

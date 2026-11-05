@@ -10,8 +10,9 @@ use crate::core::hir_def::{
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef};
-use common::indexmap::IndexMap;
+use common::compilation::Target;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
+use fold::{TyFoldable, TyFolder};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 use trait_def::impls_for_trait_def;
@@ -40,10 +41,12 @@ pub mod const_expr;
 pub mod const_ty;
 pub mod corelib;
 pub mod effects;
+pub mod evidence;
 pub mod msg_selector;
 
 pub mod decision_tree;
 pub mod diagnostics;
+pub mod drop_glue;
 pub mod fold;
 pub(crate) mod generic_defaults;
 
@@ -54,7 +57,6 @@ pub mod pattern_analysis;
 pub mod pattern_ir;
 pub mod pattern_types;
 pub mod provider;
-pub mod result_space;
 pub(crate) mod scratch;
 pub mod shape;
 pub(crate) mod sol_codec;
@@ -76,7 +78,8 @@ pub use provider::{
     RootProviderScope, RootProviderSiteKind, provider_semantics, registered_root_providers,
 };
 
-const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
+const EVM_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
+const NATIVE_ROOT_EFFECT_TY_PATH: &[&str] = &["std", "native", "Host"];
 
 pub fn ty_is_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -169,7 +172,7 @@ pub fn state_index_tys<'db>(
     Some((assoc("Key")?, assoc("Entry")?))
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn ty_is_copy_query<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -278,10 +281,23 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             if cycle_participants.contains(&adt) {
                 continue;
             }
-            if let Some(cycle) = adt.recursive_cycle(db) {
+            // An `#[abi]` struct's ABI type holds its fields' wherever their
+            // values keep them.
+            let cycle = match adt_ref {
+                AdtRef::Struct(struct_)
+                    if matches!(
+                        struct_.origin(db),
+                        HirOrigin::Desugared(DesugaredOrigin::AbiStruct(_))
+                    ) =>
+                {
+                    adt.recursive_cycle_through_arguments(db)
+                }
+                _ => adt.recursive_cycle(db),
+            };
+            if let Some(cycle) = cycle {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
-            } else if let Some(cycle) = growing.get(&adt) {
+            } else if let Some(cycle) = growing.cycles.get(&adt) {
                 diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
             }
         }
@@ -402,7 +418,7 @@ fn events_with_indexed_dynamic_fields<'db>(
 /// A field of an `#[abi]`, `#[event]` or `#[error]` struct whose type holds
 /// a fixed array of non-`Copy` elements, which the fixed-array ABI codecs
 /// cannot handle.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub(crate) struct NonCopyArrayAbiField<'db> {
     pub(crate) origin: DesugaredOrigin,
     pub(crate) ast_struct: parser::ast::AstPtr<parser::ast::Struct>,
@@ -413,7 +429,7 @@ pub(crate) struct NonCopyArrayAbiField<'db> {
 
 /// Shared by the `#[abi]`, `#[event]` and `#[error]` lowering passes, which
 /// report the fields, and the body pass, which skips the generated bodies.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn non_copy_array_abi_fields<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -453,7 +469,7 @@ pub(crate) fn non_copy_array_abi_fields<'db>(
 
 /// A field of an `#[abi]` struct whose type lacks ABI traits that the
 /// generated codec needs.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub(crate) struct UnsupportedAbiStructField<'db> {
     pub(crate) ast_struct: parser::ast::AstPtr<parser::ast::Struct>,
     pub(crate) field_idx: usize,
@@ -463,7 +479,7 @@ pub(crate) struct UnsupportedAbiStructField<'db> {
 
 /// How the fields of the module's `#[abi]` structs meet the requirements of
 /// their generated impls.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub(crate) struct AbiStructFieldChecks<'db> {
     /// Fields lacking a codec trait, each reported once at the field.
     pub(crate) unsupported: Vec<UnsupportedAbiStructField<'db>>,
@@ -476,7 +492,7 @@ pub(crate) struct AbiStructFieldChecks<'db> {
     pub(crate) without_sol_compat: Vec<DesugaredOrigin>,
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn abi_struct_field_checks<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -503,7 +519,7 @@ pub(crate) fn abi_struct_field_checks<'db>(
         }
         if AdtRef::from(struct_)
             .as_adt(db)
-            .recursive_cycle(db)
+            .recursive_cycle_through_arguments(db)
             .is_some()
         {
             checks.reported_at_source.push(origin.clone());
@@ -783,11 +799,28 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             .first()
             .map(|registration| registration.provider_ty);
             for (idx, effect) in contract.effects(db).data(db).iter().enumerate() {
+                // A contract has no mode.
+                if effect.mode == crate::hir_def::ModeMarker::MaybeMut {
+                    diags.push(Box::new(BodyDiag::MaybeMutWithoutMode {
+                        primary: contract.span().effects().param_idx(idx).into(),
+                    }) as _);
+                }
                 let Some(key_ty) = effect.key_ty.to_opt() else {
                     continue;
                 };
 
-                match resolve_effect_key(db, key_ty, contract.scope(), assumptions) {
+                let key = resolve_effect_key(db, key_ty, contract.scope(), assumptions);
+                if let Some(diag) = ty_check::effect_key_wf_diag(
+                    db,
+                    EffectParamOwner::Contract(contract),
+                    idx,
+                    &key,
+                    TraitSolveCx::new(db, contract.scope()).with_assumptions(assumptions),
+                ) {
+                    diags.push(diag.to_voucher());
+                    continue;
+                }
+                match key {
                     ResolvedEffectKey::Trait(schema) => {
                         let Some(root_effect_ty) = root_effect_ty else {
                             continue;
@@ -829,14 +862,26 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                             }) as _);
                         }
                     }
-                    ResolvedEffectKey::Row(_)
-                    | ResolvedEffectKey::Invalid
-                    | ResolvedEffectKey::Other => {
+                    ResolvedEffectKey::Row(_) => {
                         diags.push(Box::new(BodyDiag::InvalidEffectKey {
                             owner: EffectParamOwner::Contract(contract),
                             key: key_ty,
                             idx,
                         }) as _);
+                    }
+                    ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
+                        diags.extend(
+                            ty_check::invalid_effect_key_diags(
+                                db,
+                                EffectParamOwner::Contract(contract),
+                                idx,
+                                key_ty,
+                                contract.scope(),
+                                assumptions,
+                            )
+                            .iter()
+                            .map(|diag| diag.to_voucher()),
+                        );
                     }
                 }
             }
@@ -895,21 +940,17 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
     }
 }
 
-#[salsa::tracked]
-pub fn resolve_default_root_effect_ty<'db>(
+/// The type contracts take their EVM capabilities from: the `RootEffect` of
+/// `std::evm::EvmTarget`, whatever the compilation target.
+#[salsa::tracked(returns(copy))]
+pub fn resolve_contract_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<TyId<'db>> {
-    let target_path = PathId::from_segments(db, DEFAULT_TARGET_TY_PATH);
-    let target_ty = match resolve_path(db, target_path, scope, assumptions, false).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
-        _ => return None,
-    };
-
+    let target_ty = resolve_ty_path(db, EVM_TARGET_TY_PATH, scope, assumptions)?;
     let target_trait = corelib::resolve_core_trait(db, scope, &["contracts", "Target"])?;
-    let inst_target =
-        trait_def::TraitInstId::new(db, target_trait, vec![target_ty], IndexMap::new());
+    let inst_target = trait_def::TraitInstId::new_simple(db, target_trait, vec![target_ty]);
     let root_ident = IdentId::new(db, "RootEffect".to_owned());
     Some(normalize::normalize_ty(
         db,
@@ -919,19 +960,69 @@ pub fn resolve_default_root_effect_ty<'db>(
     ))
 }
 
+/// The type `main` and tests take their target capabilities from:
+/// `std::native::Host` for native code, else the contracts' root effect.
+pub fn resolve_func_root_effect_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    match db.compilation_settings().target(db) {
+        Target::Native => resolve_ty_path(db, NATIVE_ROOT_EFFECT_TY_PATH, scope, assumptions),
+        Target::Evm => resolve_contract_root_effect_ty(db, scope, assumptions),
+    }
+}
+
+fn resolve_ty_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    segments: &[&str],
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    match resolve_path(
+        db,
+        PathId::from_segments(db, segments),
+        scope,
+        assumptions,
+        false,
+    )
+    .ok()?
+    {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        _ => None,
+    }
+}
+
+/// `inst`, an effect key, as the predicate `self_ty` provides. A key leaves
+/// its `Self`, the provider, open, and a default naming `Self` names it as the
+/// trait's own `Self`, which `self_ty` replaces too.
 pub(crate) fn instantiate_trait_self<'db>(
     db: &'db dyn HirAnalysisDb,
     inst: trait_def::TraitInstId<'db>,
     self_ty: TyId<'db>,
 ) -> trait_def::TraitInstId<'db> {
-    let def = inst.def(db);
-    let mut args = inst.args(db).to_vec();
-    if args.is_empty() {
-        args.push(self_ty);
-    } else {
-        args[0] = self_ty;
+    struct TraitSelf<'db> {
+        trait_self: TyId<'db>,
+        self_ty: TyId<'db>,
     }
-    trait_def::TraitInstId::new(db, def, args, inst.assoc_type_bindings(db).clone())
+    impl<'db> TyFolder<'db> for TraitSelf<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if ty == self.trait_self {
+                self.self_ty
+            } else {
+                ty.super_fold_with(db, self)
+            }
+        }
+    }
+    let trait_self = inst.def(db).self_param(db);
+    inst.fold_with(
+        db,
+        &mut TraitSelf {
+            trait_self,
+            self_ty,
+        },
+    )
+    .with_self_ty(db, self_ty)
 }
 
 /// An analysis pass for trait definitions.
@@ -1113,7 +1204,13 @@ struct Plain {
         let copy_trait = resolve_core_trait(&db, top_mod.scope(), &["marker", "Copy"])
             .expect("missing Copy trait");
         let plain = named_struct_ty(&db, top_mod, "Plain");
-        let copy_plain = TraitInstId::new(&db, copy_trait, vec![plain], IndexMap::new());
+        let copy_plain = TraitInstId::new(
+            &db,
+            copy_trait,
+            vec![plain],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
         let assumptions = PredicateListId::empty_list(&db);
         let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
 
@@ -1138,7 +1235,13 @@ impl Copy for Explicit {}
         let copy_trait = resolve_core_trait(&db, top_mod.scope(), &["marker", "Copy"])
             .expect("missing Copy trait");
         let explicit = named_struct_ty(&db, top_mod, "Explicit");
-        let copy_explicit = TraitInstId::new(&db, copy_trait, vec![explicit], IndexMap::new());
+        let copy_explicit = TraitInstId::new(
+            &db,
+            copy_trait,
+            vec![explicit],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
         let assumptions = PredicateListId::empty_list(&db);
         let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
 

@@ -1,6 +1,6 @@
 [package]
 name = "fe-test-utils"
-version = "26.4.0"
+version = "26.5.0"
 edition.workspace = true
 
 [lib]
@@ -8,9 +8,13 @@ doctest = false
 
 [dependencies]
 common.workspace = true
+glob = "0.3"
 insta = { default-features = false, version = "1.42", features = ["filters"] }
 regex = "1"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-tree.workspace = true
 url.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

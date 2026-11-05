@@ -1,0 +1,25 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/supertrait_lowering_errors.fe
+---
+error[3-0024]: non-const function call in const context
+   ┌─ supertrait_lowering_errors.fe:10:23
+   │
+10 │ trait NonConst: Has<{ runtime() }> {}
+   │                       ^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0025]: division by zero in const context
+  ┌─ supertrait_lowering_errors.fe:8:23
+  │
+8 │ trait Faulting: Has<{ 1 / 0 }> {}
+  │                       ^^^^^ cannot divide by zero
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ supertrait_lowering_errors.fe:22:18
+   │
+22 │ trait IllFormed: Holds<u8> {}
+   │                  ^^^^^^^^^
+   │                  │
+   │                  `u8` doesn't implement `Gate`
+   │                  trait bound `u8: Missing` is not satisfied

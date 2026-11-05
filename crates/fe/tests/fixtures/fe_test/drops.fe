@@ -1,0 +1,462 @@
+use core::{Box, MemArray, MemBuffer, MemVec, Option, Result}
+use core::ops::Drop
+use core::ptr
+
+// Each drop counts itself through a raw pointer, which no scope owns.
+struct Counted {
+    counter: *u256,
+}
+
+impl Drop for Counted {
+    fn drop(own self) {
+        unsafe { *self.counter += 1 }
+    }
+}
+
+fn consume(_ value: own Counted) {}
+
+fn counted(_ counter: *u256) -> Counted {
+    Counted { counter }
+}
+
+fn counter() -> *u256 {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    counter
+}
+
+fn count(_ counter: *u256) -> u256 {
+    unsafe { *counter }
+}
+
+#[test]
+fn values_are_destroyed_once() {
+    let counter = counter()
+    {
+        let _a = Counted { counter }
+        let b = Counted { counter }
+        consume(b)
+        assert(count(counter) == 1)
+    }
+    assert(count(counter) == 2)
+}
+
+#[test]
+fn a_deferred_binding_lives_until_its_block_ends() {
+    let counter = counter()
+    {
+        var value: Counted
+        {
+            value = Counted { counter }
+        }
+        assert(count(counter) == 0)
+    }
+    assert(count(counter) == 1)
+}
+
+#[test]
+fn a_binding_given_a_value_on_every_branch_can_be_used_after() {
+    var buffer: MemBuffer
+    if true {
+        buffer = MemBuffer::new(8)
+    } else {
+        buffer = MemBuffer::new(9)
+    }
+    assert(buffer.len() == 8)
+}
+
+#[test]
+fn conditional_moves_destroy_once() {
+    let counter = counter()
+    for c in [true, false] {
+        let value = Counted { counter }
+        if c {
+            consume(value)
+        }
+    }
+    assert(count(counter) == 2)
+}
+
+#[test]
+fn reassignment_destroys_the_old_value() {
+    let counter = counter()
+    var value = Counted { counter }
+    value = Counted { counter }
+    assert(count(counter) == 1)
+    consume(value)
+    assert(count(counter) == 2)
+}
+
+// A part a product parameter's pattern leaves unbound is destroyed when the
+// function returns.
+fn ignore_owned(_ (_, n): (own Counted, own u256), _ counter: *u256) -> u256 {
+    assert(count(counter) == 0)
+    n
+}
+
+fn ignore_nested(_ ((_, n), _): ((own Counted, own u256), own Counted), _ counter: *u256) -> u256 {
+    assert(count(counter) == 1)
+    n
+}
+
+#[test]
+fn product_parameters_destroy_unbound_parts_on_return() {
+    let counter = counter()
+    assert(ignore_owned((Counted { counter }, 1), counter) == 1)
+    assert(count(counter) == 1)
+    assert(ignore_nested(((Counted { counter }, 1), Counted { counter }), counter) == 1)
+    assert(count(counter) == 3)
+}
+
+fn apply_product<F: Fn((own Counted, own u256)) -> u256>(_ f: F, _ counter: *u256) -> u256 uses F::E {
+    f((Counted { counter }, 1))
+}
+
+#[test]
+fn closure_product_parameters_destroy_unbound_parts_on_return() {
+    let counter = counter()
+    assert(apply_product(|(_, n): (own Counted, own u256)| {
+        assert(count(counter) == 0)
+        n
+    }, counter) == 1)
+    assert(count(counter) == 1)
+}
+
+struct Tagged {
+    inner: Counted,
+    n: u256,
+}
+
+impl Drop for Tagged {
+    fn drop(own self) {}
+}
+
+#[test]
+fn a_drop_that_does_nothing_still_destroys_its_fields() {
+    let counter = counter()
+    {
+        let _tagged = Tagged { inner: Counted { counter }, n: 1 }
+    }
+    assert(count(counter) == 1)
+}
+
+// Its effect is where its own type needs no destroying, which no answer of
+// `needs_drop` makes consistent; it needs destroying, as natively.
+struct Contrary {
+    counter: *u256,
+}
+
+impl Drop for Contrary {
+    fn drop(own self) {
+        if core::mem::needs_drop<Contrary>() {
+        } else {
+            unsafe { *self.counter += 1 }
+        }
+    }
+}
+
+#[test]
+fn a_drop_may_ask_whether_its_own_type_needs_destroying() {
+    let counter = counter()
+    assert(core::mem::needs_drop<Contrary>())
+    {
+        let _contrary = Contrary { counter }
+    }
+    assert(count(counter) == 0)
+}
+
+// Reading a `Copy` field of a `Drop` part moves nothing out of the part,
+// which is destroyed whole on return.
+fn tagged_sum(_ (Tagged { n, .. }, k): (own Tagged, own u256), _ counter: *u256) -> u256 {
+    assert(count(counter) == 0)
+    n + k
+}
+
+#[test]
+fn product_patterns_read_copy_fields_of_drop_parts() {
+    let counter = counter()
+    assert(tagged_sum((Tagged { inner: Counted { counter }, n: 2 }, 3), counter) == 5)
+    assert(count(counter) == 1)
+}
+
+trait Holds {
+    shape Part
+}
+
+struct Cells {}
+
+impl Holds for Cells {
+    shape Part = (own Option<Counted>, own u256)
+}
+
+// A named parameter of a known product shape owns its parts as an `own`
+// tuple does: a pattern binds them where they lie, and what it leaves is
+// destroyed on return.
+fn known_match(_ s: Cells::Part<ref>, _ counter: *u256) -> u256 {
+    match s {
+        (Option::Some(_), k) => {
+            assert(count(counter) == 0)
+            k
+        }
+        (Option::None, k) => k + 1
+    }
+}
+
+fn known_let_else(_ s: Cells::Part<ref>) -> u256 {
+    let (Option::Some(c), k) = s else {
+        return 100
+    }
+    consume(c)
+    k
+}
+
+#[test]
+fn known_product_parameters_destroy_their_parts_once() {
+    let counter = counter()
+    assert(known_match((Option::Some(Counted { counter }), 1), counter) == 1)
+    assert(count(counter) == 1)
+    assert(known_match((Option::None, 1), counter) == 2)
+    assert(known_let_else((Option::Some(Counted { counter }), 3)) == 3)
+    assert(count(counter) == 2)
+    assert(known_let_else((Option::None, 3)) == 100)
+    assert(count(counter) == 2)
+}
+
+#[test]
+fn matched_payloads_are_destroyed() {
+    let counter = counter()
+    let some = Option::Some(Counted { counter })
+    match some {
+        Option::Some(value) => consume(value)
+        Option::None => {}
+    }
+    let _none: Option<Counted> = Option::None
+    assert(count(counter) == 1)
+    {
+        let kept = Option::Some(Counted { counter })
+        match kept {
+            Option::Some(_) => {}
+            Option::None => {}
+        }
+        assert(count(counter) == 1)
+    }
+    assert(count(counter) == 2)
+}
+
+// Querying an `Option` or `Result` reads it, destroying nothing.
+#[test]
+fn queries_read_without_destroying() {
+    let counter = counter()
+    {
+        let option = Option::Some(Counted { counter })
+        assert(option.is_some() && !option.is_none())
+        let result: Result<u256, Counted> = Result::Ok(Counted { counter })
+        assert(result.is_ok() && !result.is_err())
+        assert(count(counter) == 0)
+    }
+    assert(count(counter) == 2)
+}
+
+// An irrefutable `if let` or `while let` never fails: what it binds is
+// destroyed where its body ends or a later condition fails.
+#[test]
+fn irrefutable_conditions_destroy_what_they_bind() {
+    let counter = counter()
+    if let _c = counted(counter) {
+        assert(count(counter) == 0)
+    }
+    assert(count(counter) == 1)
+    var rounds: u256 = 0
+    while let (_c, n) = (counted(counter), rounds) && n < 2 {
+        rounds += 1
+    }
+    assert(count(counter) == 4)
+}
+
+// A condition that diverges never fails either.
+fn a_diverging_condition_after_a_binding(_ counter: *u256) {
+    if let _c = counted(counter) && core::panic() {}
+}
+
+struct Slot {
+    x: u256,
+}
+
+impl Slot {
+    fn find(mut? self, _ hit: bool, _ counter: *u256) -> Option<(own Counted, mut? u256)> {
+        if hit {
+            Option::Some((Counted { counter }, mut? self.x))
+        } else {
+            Option::None
+        }
+    }
+
+    fn both(mut? self, _ counter: *u256) -> (own Counted, mut? u256) {
+        (Counted { counter }, mut? self.x)
+    }
+}
+
+// A projection's result that owns a value is matched in place, and an
+// access part of it is read as a value.
+#[test]
+fn projection_results_that_own_values_destroy_them_once() {
+    let counter = counter()
+    let slot = Slot { x: 5 }
+    let found = match slot.find(true, counter) {
+        Option::Some((_, x)) => x
+        Option::None => 0
+    }
+    assert(found == 5)
+    assert(count(counter) == 1)
+    var got: u256 = 0
+    if let Option::Some((c, x)) = slot.find(true, counter) {
+        consume(c)
+        got = x
+    }
+    assert(got == 5)
+    assert(count(counter) == 2)
+    let (_, x) = slot.both(counter)
+    assert(count(counter) == 3)
+    let y = if got == 5 { x } else { 0 }
+    assert(y == 5)
+}
+
+#[test]
+fn owners_destroy_what_they_hold() {
+    let counter = counter()
+    {
+        var values = MemVec::new()
+        for _ in 0..3 {
+            values.push(Counted { counter })
+        }
+        values.truncate(2)
+        assert(count(counter) == 1)
+        let _boxed = Box::new(Counted { counter })
+        let unboxed = Box::new(Counted { counter }).into_inner()
+        assert(count(counter) == 1)
+        consume(unboxed)
+        assert(count(counter) == 2)
+    }
+    assert(count(counter) == 5)
+}
+
+// `set` destroys the element it overwrites; `replace` hands it back, and
+// `swap` destroys nothing.
+#[test]
+fn element_writes_destroy_only_what_they_overwrite() {
+    let counter = counter()
+    {
+        var values = MemVec::new()
+        values.push(Counted { counter })
+        values.push(Counted { counter })
+        values.set(0, Counted { counter })
+        assert(count(counter) == 1)
+        let old = values.replace(1, Counted { counter })
+        assert(count(counter) == 1)
+        consume(old)
+        assert(count(counter) == 2)
+        values.swap(0, 1)
+        var array = MemArray::from_fn(2, |_| Counted { counter })
+        array.set(1, Counted { counter })
+        assert(count(counter) == 3)
+        let old = array.replace(0, Counted { counter })
+        array.swap(0, 1)
+        assert(count(counter) == 3)
+        consume(old)
+        assert(count(counter) == 4)
+    }
+    assert(count(counter) == 8)
+}
+
+struct Holder {
+    counted: Counted,
+}
+
+// Raw memory is outside ownership: a write through a pointer, to the
+// pointee or to a field of it, destroys nothing.
+#[test]
+fn raw_writes_destroy_nothing() {
+    let counter = counter()
+    let p = ptr::alloc<Holder>()
+    unsafe {
+        *p = Holder { counted: Counted { counter } }
+        p.counted = Counted { counter }
+        (*p).counted = Counted { counter }
+        *p = Holder { counted: Counted { counter } }
+    }
+    assert(count(counter) == 0)
+}
+
+struct Node {
+    counted: Counted,
+    next: Option<Box<Node>>,
+}
+
+#[test]
+fn a_boxed_list_destroys_every_node() {
+    let counter = counter()
+    {
+        var head = Option::None
+        for _ in 0..5 {
+            head = Option::Some(Box::new(Node { counted: Counted { counter }, next: head }))
+        }
+        assert(count(counter) == 0)
+    }
+    assert(count(counter) == 5)
+}
+
+// The zero `Tally`, whose counter is null, counts nothing when destroyed.
+struct Tally {
+    counter: *u256,
+}
+
+impl Drop for Tally {
+    fn drop(own self) {
+        if self.counter as usize != 0 {
+            unsafe { *self.counter += 1 }
+        }
+    }
+}
+
+#[test]
+fn zeroing_destroys_what_it_overwrites() {
+    let counter = counter()
+    {
+        var values = MemVec::new()
+        values.push(Tally { counter })
+        values.push(Tally { counter })
+        values.as_slice().zero()
+        assert(count(counter) == 2)
+        var array = MemArray::from_fn(3, |_| Tally { counter })
+        array.zero()
+        assert(count(counter) == 5)
+        // A zeroed array starts as zero values; nothing was there to destroy.
+        let _fresh: MemArray<Tally> = MemArray::new_zeroed(4)
+    }
+    assert(count(counter) == 5)
+}
+
+trait Names {
+    type Named
+}
+
+struct NamesCounted {}
+
+impl Names for NamesCounted {
+    type Named = Counted
+}
+
+struct Namer<T: Names> {
+    named: T::Named,
+}
+
+// A field typed by an associated type holds the type it names.
+#[test]
+fn associated_type_fields_are_destroyed() {
+    let counter = counter()
+    assert(core::mem::needs_drop<Namer<NamesCounted>>())
+    {
+        let _namer = Namer<NamesCounted> { named: Counted { counter } }
+    }
+    assert(count(counter) == 1)
+}

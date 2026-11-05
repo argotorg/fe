@@ -1,4 +1,4 @@
-use std::abi::{DynArray, MemVec}
+use std::abi::DynArray
 
 // Not `Copy`, so fixed arrays of it have no ABI codec.
 #[abi]
@@ -16,10 +16,6 @@ struct Nested {
     first: u256,
     nested: (u256, [[Key; 1]; 2]),
     list: DynArray<[Key; 2]>,
-}
-
-fn mem_vec() {
-    let _values: MemVec<[Key; 2]> = MemVec::zeroed(1)
 }
 
 type KeyPair = [Key; 2]

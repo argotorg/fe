@@ -164,7 +164,7 @@ impl Ownable {
         let pending_owner = ctx.caller()
         self.handover_expiries.set(
                 key: pending_owner,
-                value: ctx.timestamp() + HANDOVER_VALID_FOR,
+                value: ctx.timestamp().as_seconds() + HANDOVER_VALID_FOR,
             )
         log.emit(OwnershipHandoverRequested { pending_owner })
     }
@@ -183,7 +183,7 @@ impl Ownable {
     uses (auth: OnlyOwner, ctx: Ctx, log: mut Log)
     {
         let expiry = self.handover_expiries.get(pending_owner)
-        if ctx.timestamp() > expiry {
+        if ctx.timestamp().as_seconds() > expiry {
             revert_error(NoHandoverRequest {})
         }
         self.handover_expiries.set(key: pending_owner, value: 0)

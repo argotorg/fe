@@ -23,7 +23,7 @@ error[16-0001]: access conflict in `fn store_field`
 error[16-0001]: access conflict in `fn mutex_value`
    ┌─ state_only_places.fe:37:5
    │
-36 │     let value = mut vault.value_mut()
+36 │     let value = mut vault.value()
    │                     ----- access opened here
 37 │     ping()
    │     ^^^^^^ this call may write storage while a `mut` access of it is open

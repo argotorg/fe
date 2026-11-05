@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/frontend/ty_check.rs
-assertion_line: 46
 expression: res
 input_file: test_files/ty_check/pointer_first_class.fe
 ---
@@ -93,7 +92,7 @@ note:
    ┌─ pointer_first_class.fe:13:60
    │
 13 │     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
-   │                                                            ^^ u256
+   │                                                            ^^ usize
 
 note:
    ┌─ pointer_first_class.fe:14:9
@@ -619,7 +618,7 @@ note:
    ┌─ pointer_first_class.fe:38:55
    │
 38 │     var array = unsafe { core::ptr::alloc_array<u256>(2) }
-   │                                                       ^ u256
+   │                                                       ^ usize
 
 note:
    ┌─ pointer_first_class.fe:39:5
@@ -703,7 +702,7 @@ note:
    ┌─ pointer_first_class.fe:42:56
    │
 42 │     let zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
-   │                                                        ^ u256
+   │                                                        ^ usize
 
 note:
    ┌─ pointer_first_class.fe:43:5

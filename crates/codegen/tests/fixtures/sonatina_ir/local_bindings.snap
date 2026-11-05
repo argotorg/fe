@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/local_bindings.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %local_bindings() -> i64 {
+func private %main() -> i64 {
     block0:
         jump block1;
 
@@ -18,7 +18,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i64 = call %local_bindings;
+        v0.i64 = call %main;
         evm_stop;
 }
 

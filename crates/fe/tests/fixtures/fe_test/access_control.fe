@@ -3,7 +3,7 @@
 // vault and is its owner; `Actor` calls it from a second address.
 
 use std::abi::{Sol, sol}
-use std::evm::{Address, Call, Ctx, Evm, Log}
+use std::evm::{Address, Call, Ctx, Evm, Log, Wei}
 use core::error::ErrorVariant
 use std::evm::auth::{
     NewOwnerIsZeroAddress,
@@ -178,7 +178,7 @@ pub contract Actor uses (call: mut Call) {
             call.try_call(
                 addr: vault,
                 gas: 200000,
-                value: 0,
+                value: Wei::zero(),
                 message: VaultMsg::Mint { amount },
             )
                 .success()
@@ -187,7 +187,7 @@ pub contract Actor uses (call: mut Call) {
             call.try_call(
                 addr: vault,
                 gas: 200000,
-                value: 0,
+                value: Wei::zero(),
                 message: VaultMsg::Burn { amount },
             )
                 .success()
@@ -196,7 +196,7 @@ pub contract Actor uses (call: mut Call) {
             call.try_call(
                 addr: vault,
                 gas: 200000,
-                value: 0,
+                value: Wei::zero(),
                 message: VaultMsg::RequestHandover {},
             )
                 .success()
@@ -207,7 +207,7 @@ pub contract Actor uses (call: mut Call) {
             call.try_call(
                 addr: vault,
                 gas: 200000,
-                value: 0,
+                value: Wei::zero(),
                 message: VaultMsg::TransferOwnership { new_owner },
             )
                 .success()
@@ -218,7 +218,7 @@ pub contract Actor uses (call: mut Call) {
             call.try_call(
                 addr: vault,
                 gas: 200000,
-                value: 0,
+                value: Wei::zero(),
                 message: VaultMsg::GrantRoles { user, roles },
             )
                 .success()
@@ -227,7 +227,7 @@ pub contract Actor uses (call: mut Call) {
             call.try_call(
                 addr: vault,
                 gas: 200000,
-                value: 0,
+                value: Wei::zero(),
                 message: VaultMsg::RenounceRoles { roles },
             )
                 .success()
@@ -236,8 +236,8 @@ pub contract Actor uses (call: mut Call) {
 }
 
 fn deploy() -> (Address, Address) uses (evm: mut Evm) {
-    let vault = evm.create2<Vault>(value: 0, args: (), salt: 0)
-    let actor = evm.create2<Actor>(value: 0, args: (), salt: 1)
+    let vault = evm.create2<Vault>(value: Wei::zero(), args: (), salt: 0)
+    let actor = evm.create2<Actor>(value: Wei::zero(), args: (), salt: 1)
     (vault, actor)
 }
 
@@ -245,7 +245,7 @@ fn owner_of(_ vault: Address) -> Address uses (evm: mut Evm) {
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::Owner {},
     )
 }
@@ -254,7 +254,7 @@ fn roles_of(_ vault: Address, _ user: Address) -> u256 uses (evm: mut Evm) {
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::RolesOf { user },
     )
 }
@@ -263,7 +263,7 @@ fn supply_of(_ vault: Address) -> u256 uses (evm: mut Evm) {
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::Supply {},
     )
 }
@@ -292,7 +292,7 @@ fn deployer_is_owner_and_only_owner_transfers() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::TransferOwnership { vault, new_owner: actor },
         )
     assert!(!ok)
@@ -302,7 +302,7 @@ fn deployer_is_owner_and_only_owner_transfers() uses (evm: mut Evm) {
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::TransferOwnership { new_owner: actor },
     )
     assert!(owner_of(vault) == actor)
@@ -310,7 +310,7 @@ fn deployer_is_owner_and_only_owner_transfers() uses (evm: mut Evm) {
         .try_call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::TransferOwnership { new_owner: me },
         )
     assert!(!outcome.success())
@@ -321,7 +321,7 @@ fn deployer_is_owner_and_only_owner_transfers() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::TransferOwnership { vault, new_owner: me },
         )
     assert!(ok)
@@ -335,7 +335,7 @@ fn transfer_to_zero_is_rejected() uses (evm: mut Evm) {
         .try_call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::TransferOwnership { new_owner: Address::zero() },
         )
     assert!(!outcome.success())
@@ -349,7 +349,7 @@ fn renounced_ownership_locks_owner_functions() uses (evm: mut Evm) {
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::RenounceOwnership {},
     )
     assert!(owner_of(vault) == Address::zero())
@@ -357,7 +357,7 @@ fn renounced_ownership_locks_owner_functions() uses (evm: mut Evm) {
         .try_call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::GrantRoles { user: me, roles: MINTER },
         )
     assert!(!outcome.success())
@@ -374,7 +374,7 @@ fn handover_requires_a_request() uses (evm: mut Evm) {
         .try_call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::CompleteHandover { pending_owner: actor },
         )
     assert!(!outcome.success())
@@ -384,7 +384,7 @@ fn handover_requires_a_request() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::RequestHandover { vault },
         )
     assert!(ok)
@@ -392,15 +392,15 @@ fn handover_requires_a_request() uses (evm: mut Evm) {
         .call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::HandoverExpiry { pending_owner: actor },
         )
-    assert!(expiry == evm.timestamp() + 172800)
+    assert!(expiry == evm.timestamp().as_seconds() + 172800)
 
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::CompleteHandover { pending_owner: actor },
     )
     assert!(owner_of(vault) == actor)
@@ -410,7 +410,7 @@ fn handover_requires_a_request() uses (evm: mut Evm) {
         .call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::HandoverExpiry { pending_owner: actor },
         )
     assert!(expiry == 0)
@@ -423,20 +423,20 @@ fn canceled_handover_cannot_complete() uses (evm: mut Evm) {
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::RequestHandover {},
     )
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::CancelHandover {},
     )
     let outcome = evm
         .try_call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::CompleteHandover { pending_owner: me },
         )
     assert!(!outcome.success())
@@ -452,7 +452,7 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::Mint { vault, amount: 10 },
         )
     assert!(!ok)
@@ -462,14 +462,14 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::GrantRoles { vault, user: actor, roles: MINTER },
         )
     assert!(!ok)
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::GrantRoles { user: actor, roles: MINTER },
     )
     assert!(roles_of(vault, actor) == MINTER)
@@ -478,7 +478,7 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::Mint { vault, amount: 10 },
         )
     assert!(ok)
@@ -489,7 +489,7 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::Burn { vault, amount: 4 },
         )
     assert!(ok)
@@ -500,7 +500,7 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
         .try_call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::Mint { amount: 1 },
         )
     assert!(!outcome.success())
@@ -510,21 +510,21 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::GrantRoles { user: actor, roles: BURNER },
     )
     let all: bool = evm
         .call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::HasAllRoles { user: actor, roles: MINTER_OR_BURNER },
         )
     assert!(all)
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::RevokeRoles { user: actor, roles: MINTER },
     )
     assert!(roles_of(vault, actor) == BURNER)
@@ -532,7 +532,7 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::Mint { vault, amount: 1 },
         )
     assert!(!ok)
@@ -540,7 +540,7 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::Burn { vault, amount: 1 },
         )
     assert!(ok)
@@ -551,7 +551,7 @@ fn roles_gate_capabilities() uses (evm: mut Evm) {
         .call(
             addr: actor,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: ActorMsg::RenounceRoles { vault, roles: BURNER },
         )
     assert!(ok)
@@ -565,14 +565,14 @@ fn mint_reports_the_authorized_account() uses (evm: mut Evm) {
     evm.call(
         addr: vault,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: VaultMsg::GrantRoles { user: me, roles: MINTER },
     )
     let minter: Address = evm
         .call(
             addr: vault,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: VaultMsg::Mint { amount: 1 },
         )
     assert!(minter == me)

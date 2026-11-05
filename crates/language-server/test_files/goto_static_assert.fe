@@ -1,0 +1,7 @@
+const A: u256 = 1
+const B: u256 = 1
+
+// Each side of the comparison is lowered a second time, but a cursor on it
+// is in the condition, which resolves it.
+static_assert(A == B)
+static_assert((A + 1) > B)

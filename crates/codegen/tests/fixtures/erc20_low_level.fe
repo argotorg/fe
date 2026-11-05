@@ -5,14 +5,14 @@ use std::evm::{Address, Ctx, Evm, RawOps, RawStorage, StorageMap, StorPtr, rever
 // Helpers ---------------------------------------------------------------
 
 fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
-    let data = ptr::MemBuffer::alloc(32)
+    let data = ptr::MemBuffer::new(32)
     unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
 
 fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
     // ABI encoding for a single dynamic string literal
-    let data = ptr::MemBuffer::alloc(96)
+    let data = ptr::MemBuffer::new(96)
     unsafe { store_word(ptr: data.ptr(), value: 32) } // offset to data
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: len) } // string length
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 64), value: word) }
@@ -134,7 +134,7 @@ fn init() uses (evm: mut Evm) {
     }
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -152,12 +152,12 @@ fn runtime() uses (evm: mut Evm) {
         with (mut *erc20, Ctx = evm, RawOps = evm) {
             match selector {
                 0x70a08231 => { // balanceOf(address)
-                    let owner = Address { inner: evm.calldataload(4) }
+                    let owner = Address::new(evm.calldataload(4))
                     abi_encode_u256(value: balance_of(addr: owner))
                 }
                 0xdd62ed3e => { // allowance(address,address)
-                    let owner = Address { inner: evm.calldataload(4) }
-                    let spender = Address { inner: evm.calldataload(36) }
+                    let owner = Address::new(evm.calldataload(4))
+                    let spender = Address::new(evm.calldataload(36))
                     abi_encode_u256(value: allowance(owner: owner, spender: spender))
                 }
                 0x06fdde03 => { // name()
@@ -176,23 +176,23 @@ fn runtime() uses (evm: mut Evm) {
                     abi_encode_u256(value: 18)
                 }
                 0xa9059cbb => { // transfer(address,uint256)
-                    let to = Address { inner: evm.calldataload(4) }
+                    let to = Address::new(evm.calldataload(4))
                     let amount = evm.calldataload(36)
                     abi_encode_u256(value: transfer(to: to, amount: amount))
                 }
                 0x095ea7b3 => { // approve(address,uint256)
-                    let spender = Address { inner: evm.calldataload(4) }
+                    let spender = Address::new(evm.calldataload(4))
                     let amount = evm.calldataload(36)
                     abi_encode_u256(value: approve(spender: spender, amount: amount))
                 }
                 0x23b872dd => { // transferFrom(address,address,uint256)
-                    let from = Address { inner: evm.calldataload(4) }
-                    let to = Address { inner: evm.calldataload(36) }
+                    let from = Address::new(evm.calldataload(4))
+                    let to = Address::new(evm.calldataload(36))
                     let amount = evm.calldataload(68)
                     abi_encode_u256(value: transfer_from(from: from, to: to, amount: amount))
                 }
                 0x40c10f19 => { // mint(address,uint256)
-                    let to = Address { inner: evm.calldataload(4) }
+                    let to = Address::new(evm.calldataload(4))
                     let amount = evm.calldataload(36)
                     abi_encode_u256(value: mint(to: to, amount: amount))
                 }

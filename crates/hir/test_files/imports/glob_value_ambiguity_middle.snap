@@ -1,0 +1,22 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/glob_value_ambiguity_middle.fe
+---
+note:
+   ┌─ glob_value_ambiguity_middle.fe:12:1
+   │
+12 │ use a::*
+   │ ^^^^^^^^ glob_value_ambiguity_middle::a::m as m
+
+note:
+   ┌─ glob_value_ambiguity_middle.fe:13:1
+   │
+13 │ use b::*
+   │ ^^^^^^^^ glob_value_ambiguity_middle::b::m as m
+
+note:
+   ┌─ glob_value_ambiguity_middle.fe:14:1
+   │
+14 │ use m::S
+   │ ^^^^^^^^ glob_value_ambiguity_middle::m::S

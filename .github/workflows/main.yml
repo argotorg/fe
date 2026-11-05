@@ -7,13 +7,18 @@ on:
       - v*
 
   pull_request:
+    # Merging or closing a PR starts a run that only cancels the PR's run.
+    types: [opened, synchronize, reopened, closed]
+
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
+  # Keyed on the PR number: a merged PR's `closed` event has github.ref = refs/heads/master.
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,6 +30,7 @@ env:
 
 jobs:
   lint:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -64,21 +70,29 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D clippy::all
 
   test:
-    # Build & Test runs on all platforms
+    # PRs skip macOS: the org shares 5 concurrent macOS runners. To test a PR
+    # branch on macOS, run `gh workflow run CI --ref <branch>`.
+    if: github.event.action != 'closed'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-          - os: macOS-latest
-          - os: windows-latest
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest", "macOS-latest", "windows-latest"]') }}
     env:
       # MSVC's link.exe is much slower than lld at linking the large test
       # binaries. Only affects Windows builds.
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
     steps:
+      # Defender scans every file the build writes and every test binary it
+      # runs. The runner is discarded after the job.
+      - name: Disable Windows Defender real-time scanning
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          Get-MpPreference | Select-Object DisableRealtimeMonitoring
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
@@ -165,7 +179,9 @@ jobs:
           -E 'not (package(=fe-language-server) and test(/^mock_client_tests::/))'
       - name: Upload build timings
         if: always()
-        uses: actions/upload-artifact@v4
+        # Timings are diagnostics; an artifact service outage shouldn't fail the job.
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cargo-timings-${{ runner.os }}
           path: target/cargo-timings/*.html
@@ -173,6 +189,7 @@ jobs:
           retention-days: 14
 
   wasm-wasi-check:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -195,6 +212,27 @@ jobs:
         run: cargo check --locked -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
       - name: Check filesystem crates for wasm32-wasip1
         run: cargo check --locked -p fe-driver -p fe-resolver --target wasm32-wasip1
+
+  prune-caches:
+    # Master saves new Rust caches when the lockfile or toolchain changes; delete
+    # the ones they replace before GitHub evicts other caches to make room.
+    needs: [lint, test, wasm-wasi-check]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Delete superseded Rust caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: .github/scripts/prune-rust-caches.sh
 
   release-build:
     # Only run this when we push a tag
@@ -266,23 +304,23 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         # `fe/cranelift` enables the native backend (`fe build --backend native`).
-        run: cargo build --locked --release --target ${{ matrix.target }} --features fe/cranelift ${{ matrix.EXTRA_FEATURES }}
+        run: cargo build --locked --profile dist --target ${{ matrix.target }} --features fe/cranelift ${{ matrix.EXTRA_FEATURES }}
       - name: Check native backend is available
         # Cross-compiled binaries can't run on the build host.
         if: matrix.target != 'aarch64-unknown-linux-gnu' && matrix.target != 'x86_64-apple-darwin'
         shell: bash
-        run: target/${{ matrix.target }}/release/fe${{ matrix.EXT }} build --help | grep -q native
+        run: target/${{ matrix.target }}/dist/fe${{ matrix.EXT }} build --help | grep -q native
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
-        run: ${{ matrix.STRIP }} target/${{ matrix.target }}/release/fe
+        run: ${{ matrix.STRIP }} target/${{ matrix.target }}/dist/fe
       - name: Rename binary
         shell: bash
-        run: mv target/${{ matrix.target }}/release/fe${{ matrix.EXT }} target/${{ matrix.target }}/release/${{ matrix.BIN_FILE }}
+        run: mv target/${{ matrix.target }}/dist/fe${{ matrix.EXT }} target/${{ matrix.target }}/dist/${{ matrix.BIN_FILE }}
       - name: Upload release binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fe-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/${{ matrix.BIN_FILE }}
+          path: target/${{ matrix.target }}/dist/${{ matrix.BIN_FILE }}
           if-no-files-found: error
           retention-days: 1
 

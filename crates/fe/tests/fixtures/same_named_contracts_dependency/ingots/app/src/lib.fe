@@ -1,0 +1,51 @@
+use std::evm::Create
+
+pub msg Get {
+    #[selector = sol("get()")]
+    Get -> u256,
+}
+
+pub msg Make {
+    #[selector = 0x22222222]
+    MakeBoth { salt: u256 } -> Address,
+}
+
+pub contract C {
+    recv Get {
+        Get -> u256 {
+            3
+        }
+    }
+}
+
+// Creates `C` from this ingot and `C` from the dependency.
+pub contract Factory {
+    recv Make {
+        MakeBoth { salt } -> Address uses (create: mut Create) {
+            create.create2<C>(value: Wei::zero(), args: (), salt: salt)
+            create.create2<lib::C>(value: Wei::zero(), args: (), salt: salt + 1)
+        }
+    }
+}
+
+#[test]
+fn each_ingot_keeps_its_own_code() uses (evm: mut Evm) {
+    let local = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let dependency = evm.create2<lib::C>(value: Wei::zero(), args: (), salt: 1)
+    let local_reply: u256 = evm
+        .call(
+            addr: local,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Get::Get {},
+        )
+    let dependency_reply: u256 = evm
+        .call(
+            addr: dependency,
+            gas: 100000,
+            value: Wei::zero(),
+            message: lib::Get::Get {},
+        )
+    assert!(local_reply == 3)
+    assert!(dependency_reply == 7)
+}

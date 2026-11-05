@@ -1,0 +1,53 @@
+// A closure's or function's product parameter is a parameter of parts in its
+// callable shape: a call passes a tuple of the parts, or a projection's
+// result that grants them.
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Pair {
+    fn both(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+fn total(_ (a, b): (own u256, ref u256)) -> u256 {
+    a + b
+}
+
+fn apply<F: Fn((own u256, ref u256)) -> u256>(_ f: F, _ x: u256) -> u256 uses F::E {
+    f((1, ref x))
+}
+
+fn update<F: FnMut((mut u256, mut u256)) -> _>(_ f: mut F, _ p: mut Pair) uses F::E {
+    f(p.both())
+}
+
+#[test]
+fn product_callables() {
+    let x: u256 = 2
+    assert(apply(total, x) == 3)
+    assert(apply(|(a, b): (own u256, ref u256)| a * b, x) == 2)
+    // An unannotated pattern takes the parts the shape lists, and a
+    // mode-free annotation constrains their types alone.
+    assert(apply(|(a, b)| a + b + 1, x) == 4)
+    assert(apply(|(a, b): (u256, u256)| a * 3 + b, x) == 5)
+}
+
+#[test]
+fn product_writes() {
+    var p = Pair { a: 1, b: 2 }
+    var swap = |(mut a, mut b): (mut u256, mut u256)| {
+        let t = a
+        a = b
+        b = t
+    }
+    update(mut swap, mut p)
+    assert(p.a == 2 && p.b == 1)
+    // Called directly, with a tuple of accesses.
+    var y: u256 = 5
+    var z: u256 = 7
+    swap((mut y, mut z))
+    assert(y == 7 && z == 5)
+}

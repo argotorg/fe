@@ -4,18 +4,18 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/state_entry_layout_range.fe
 ---
-error[3-0070]: the entries of `StorageMap<u256, [u256; 18446744073709551616]>` cannot be laid out in storage
+error[3-0070]: the entries of `StorageMap<u256, [[u256; 4294967296]; 4294967296]>` cannot be laid out in storage
    ┌─ state_entry_layout_range.fe:13:19
    │
-13 │     mut too_long: StorageMap<u256, [u256; 0x10000000000000000]>,
-   │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ an entry `[u256; 18446744073709551616]`: layout extent overflowed
+13 │     mut too_long: StorageMap<u256, [[u256; 0x100000000]; 0x100000000]>,
+   │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ an entry `[[u256; 4294967296]; 4294967296]`: layout extent overflowed
    │
    = a collection lays each entry out like a field, at the slots it locates
 
-error[3-0070]: the entries of `StorageMap<u256, StorageMap<u256, [u256; 18446744073709551616]>>` cannot be laid out in storage
+error[3-0070]: the entries of `StorageMap<u256, StorageMap<u256, [[u256; 4294967296]; 4294967296]>>` cannot be laid out in storage
    ┌─ state_entry_layout_range.fe:14:17
    │
-14 │     mut nested: StorageMap<u256, StorageMap<u256, [u256; 0x10000000000000000]>>,
-   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ an entry `[u256; 18446744073709551616]`: layout extent overflowed
+14 │     mut nested: StorageMap<u256, StorageMap<u256, [[u256; 0x100000000]; 0x100000000]>>,
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ an entry `[[u256; 4294967296]; 4294967296]`: layout extent overflowed
    │
    = a collection lays each entry out like a field, at the slots it locates

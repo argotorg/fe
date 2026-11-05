@@ -15,10 +15,16 @@ use super::{
     canonical::Canonicalized,
     closure::callable_out_ty,
     fold::{TyFoldable, TyFolder},
-    trait_def::{TraitInstId, TraitRefId, impls_for_trait_inst_with_possible_constraints},
+    shape::Shape,
+    trait_def::{
+        AssocBinding, TraitInstId, TraitRefId, impls_for_trait_inst_with_possible_constraints,
+    },
     trait_lower::complete_impl_assoc_ty,
     trait_resolution::{PredicateListId, TraitSolveCx},
-    ty_def::{AssocTy, InvalidCause, TyData, TyId, TyParam, collect_variables},
+    ty_def::{
+        AssocTy, InvalidCause, ShapeCon, ShapeMode, TyBase, TyData, TyId, TyParam,
+        collect_variables,
+    },
     unify::UnificationTable,
     visitor::{TyVisitor, walk_ty},
 };
@@ -265,9 +271,16 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                     self.cache.insert(*assoc_ty, Some(limit));
                     return limit;
                 }
-                let resolved = self
-                    .try_resolve_assoc_ty(ty, assoc_ty)
-                    .map(|replacement| self.fold_ty(db, replacement));
+                // An associated shape resolves to its impl's value at the
+                // mode it is named at; until it has one, it stays.
+                let resolved = match assoc_ty.mode {
+                    None if assoc_ty.is_shape(db) => None,
+                    mode => self.try_resolve_assoc_ty(ty, assoc_ty).map(|replacement| {
+                        let replacement =
+                            mode.map_or(replacement, |mode| replacement.at_shape_mode(db, mode));
+                        self.fold_ty(db, replacement)
+                    }),
+                };
                 self.projection_depth -= 1;
                 if let Some(normalized) = resolved {
                     self.cache.insert(*assoc_ty, Some(normalized));
@@ -278,6 +291,28 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 let folded = ty.super_fold_with(db, self);
                 self.cache.insert(*assoc_ty, Some(folded));
                 folded
+            }
+            // The value or carrier type of a shape reduces once the shape is
+            // known.
+            TyData::TyApp(..)
+                if let (base, &[shape]) = ty.decompose_ty_app(db)
+                    && let TyData::TyBase(TyBase::Shape(
+                        con @ (ShapeCon::Value | ShapeCon::Carrier),
+                    )) = base.data(db) =>
+            {
+                // A value's type names its shape without a mode, which every
+                // mode erases alike.
+                let shape = match shape.data(db) {
+                    TyData::AssocTy(assoc) if assoc.mode.is_none() && *con == ShapeCon::Value => {
+                        shape.with_shape_mode(db, ShapeMode::Ref)
+                    }
+                    _ => shape,
+                };
+                match self.fold_ty(db, shape).as_shape_part(db) {
+                    Shape::Opaque(term) => TyId::shape_part(db, *con, term),
+                    shape if *con == ShapeCon::Value => self.fold_ty(db, shape.erased_ty(db)),
+                    shape => self.fold_ty(db, shape.carrier_ty(db)),
+                }
             }
             _ => ty.super_fold_with(db, self),
         }
@@ -291,7 +326,11 @@ impl<'db> TypeNormalizer<'db> {
         let target = assoc.trait_.fold_with(self.db, self);
         let mut matching_bounds: IndexMap<TyId<'db>, ()> = IndexMap::new();
         for &pred in self.assumptions.list(self.db) {
-            let Some(bound) = pred.bound_assoc_ty(self.db, assoc.name) else {
+            let binding = AssocBinding {
+                name: assoc.name,
+                mode: assoc.mode,
+            };
+            let Some(bound) = pred.bound_assoc_ty(self.db, binding) else {
                 continue;
             };
             if self.trait_refs_match(target, pred.trait_ref(self.db)) {
@@ -309,12 +348,15 @@ impl<'db> TypeNormalizer<'db> {
             return None;
         }
 
-        if let Some(out) = callable_out_ty(
-            self.db,
-            self.fold_ty(self.db, assoc.trait_.self_ty(self.db)),
-            assoc.trait_.def(self.db),
-            assoc.name,
-        ) {
+        if let Some(&shape) = assoc.trait_.args(self.db).get(1)
+            && let Some(out) = callable_out_ty(
+                self.db,
+                self.fold_ty(self.db, assoc.trait_.self_ty(self.db)),
+                assoc.trait_.def(self.db),
+                self.fold_ty(self.db, shape),
+                assoc.name,
+            )
+        {
             return Some(out);
         }
 
@@ -445,5 +487,88 @@ impl<'db> TypeNormalizer<'db> {
             1 => Some(*dedup.first().unwrap().0),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+    use common::indexmap::IndexMap;
+
+    use super::normalize_ty;
+    use crate::analysis::ty::{
+        trait_def::TraitInstId,
+        trait_resolution::PredicateListId,
+        ty_def::{ShapeMode, TyId},
+    };
+    use crate::hir_def::{IdentId, ItemKind, ModeMarker};
+    use crate::test_db::HirAnalysisTestDb;
+
+    /// An associated shape normalizes to its impl's value at the mode it is
+    /// named at, `ref` and `mut` independently, and a nested family keeps its
+    /// structure.
+    #[test]
+    fn associated_shapes_normalize_per_mode() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("associated_shapes_normalize_per_mode.fe"),
+            r#"
+trait Driver {
+    shape Step
+}
+
+struct Identity {}
+
+impl Driver for Identity {
+    shape Step = mut? u256
+}
+
+struct Enumerate<D> {}
+
+impl<D: Driver> Driver for Enumerate<D> {
+    shape Step = (own usize, D::Step)
+}
+
+fn probe(_ d: own Enumerate<Enumerate<Identity>>) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let items: Vec<_> = top_mod.children_non_nested(&db).collect();
+        let driver = items
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_) => Some(*trait_),
+                _ => None,
+            })
+            .expect("missing Driver");
+        let probe = items
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(*func),
+                _ => None,
+            })
+            .expect("missing probe");
+        let driver_ty = probe.params(&db).next().expect("missing parameter").ty(&db);
+        let inst = TraitInstId::new(
+            &db,
+            driver,
+            vec![driver_ty],
+            IndexMap::new(),
+            ModeMarker::None,
+        );
+        let step = TyId::assoc_ty(&db, inst.trait_ref(&db), IdentId::new(&db, "Step"));
+        let at = |mode| {
+            normalize_ty(
+                &db,
+                step.with_shape_mode(&db, mode),
+                probe.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .pretty_print(&db)
+            .to_string()
+        };
+        assert_eq!(at(ShapeMode::Ref), "(own usize, (own usize, ref u256))");
+        assert_eq!(at(ShapeMode::Mut), "(own usize, (own usize, mut u256))");
     }
 }

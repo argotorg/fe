@@ -1,0 +1,21 @@
+// A bound whose const argument reads an associated const through a sibling
+// bound records no solving environment, so collecting the constraints
+// settles instead of nesting one iteration in the next, and the bound is
+// still enforced.
+trait Has<const N: usize> {}
+trait Size { const LEN: usize }
+trait Sub: Size + Has<{Self::LEN}> {}
+struct A {}
+impl Size for A { const LEN: usize = 3 }
+impl Has<3> for A {}
+impl Sub for A {}
+struct B {}
+impl Size for B { const LEN: usize = 4 }
+impl Has<3> for B {}
+impl Sub for B {}
+fn f<T: Size + Has<{T::LEN}>>() {}
+fn ok() { f<A>() }
+fn bad() { f<B>() }
+fn through_sub<T: Sub>() { f<T>() }
+fn where_form<T>() where T: Size + Has<{T::LEN}> {}
+struct Bounded<T: Size + Has<{T::LEN}>> {}

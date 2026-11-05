@@ -1,0 +1,16 @@
+// `m`'s private glob brings in `x`, which `use m::x::y` can't see, so it
+// waits for `m`'s `pub` glob of `k`, which brings in the same `x`.
+mod p {
+    pub mod x {
+        pub struct y {}
+    }
+}
+mod k {
+    pub use super::p::x
+}
+mod m {
+    use super::p::*
+    pub use super::k::*
+}
+use m::x::y
+fn f(v: y) {}

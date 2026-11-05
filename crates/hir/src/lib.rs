@@ -3,7 +3,7 @@ pub use core::lower::{
     AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, AbiStructDiagnostic,
     AbiStructDiagnosticKind, AttrMisuseError, AttrMisuseErrorKind, ErrorDiagnostic,
     ErrorDiagnosticKind, EventError, EventErrorKind, FieldModifierError, FieldModifierErrorKind,
-    MsgDiagnostic, MsgDiagnosticKind, parse::ParserError,
+    LowerDiagnostic, MsgDiagnostic, MsgDiagnosticKind, ParsedFile, parse::ParserError,
 };
 
 pub mod analysis;

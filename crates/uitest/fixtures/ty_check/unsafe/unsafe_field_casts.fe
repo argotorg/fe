@@ -15,8 +15,8 @@ fn forge(_ p: *u8) -> Cell {
     p as Cell
 }
 
-// Rejected: so does a cast through the field's word.
-fn forge_word(_ w: u256) -> Cell {
+// Rejected: so does a cast through the field's address.
+fn forge_word(_ w: usize) -> Cell {
     w as Cell
 }
 

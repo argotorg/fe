@@ -15,8 +15,31 @@ fn consume(_ item: own Item) { .. }         // own: the callee takes the value
 
 A view or `mut` argument is a place of the caller's (`bump(mut counter)`);
 an owned argument is moved, or copied if its type is `Copy`. A projection's
-`mut` result is marked like a place (`bump(mut xs.at_mut(0))`), unless its
-type has no value, as a view's does (`fill(buf.span_mut())`).
+`mut` result is marked like a place (`bump(mut xs.at(0))`), unless its
+type has no value, as a view's does (`fill(buf.span())`).
+
+A parameter may be a pattern, written after `_` since it has no label:
+`fn sum(_ (a, b): (u256, u256))`. The body binds its names as a `let` of the
+parameter would, so from a view of a tuple a `Copy` part is copied and any
+other part must be bound `ref` (`_ (i, ref x): (usize, Buf)`). A function without
+a body, such as a trait method's declaration, names its parameters.
+
+A parameter may also take several accesses at once as a *product*: a tuple
+whose parts carry their own modes, as in `_ (i, ref x): (own usize, ref T)`.
+A part without a mode is `ref`, and a `mut?` part takes its function's
+mode. The argument is either a tuple of the parts, each written as an
+argument of its part's mode (`bump((mut y, ref x))`), or a projection's
+result that grants them (`swap(p.both())`). The parts are accesses of the
+call, as separate arguments are. So `add_to((mut x, ref x))` is rejected, as
+is a part that overlaps another argument or an effect, while
+`add_to((mut p.a, ref p.b))` is accepted. No single name holds a product:
+
+- a function with a body destructures it;
+- the parts carry its modes, so `own (own u256, ref u256)` is an error;
+- a receiver cannot be one.
+
+A closure's parameter may be a product too, and a function taking one is a
+callable value of that shape (see [closures](closures.md)).
 
 A view argument that is a scalar or a handle (an integer, `bool`,
 `Address`, a raw pointer, or any `core::marker::Snapshot` type) is a
@@ -77,6 +100,9 @@ fn take(_ x: mut Option<MemBuffer>) -> Option<MemBuffer> {
 }
 ```
 
+`core::mem::replace(mut x, v)` and `core::mem::take(mut x)` do this in one
+call, as does `x.take()` on an `Option`.
+
 A value reached through a view or a `ref` access, through an effect, or in
 storage, cannot move; bind it `ref` to read it in place. An effect lends its
 place: a non-`Copy` value under it is read in place or passed on to a callee's
@@ -109,16 +135,15 @@ A projection's result binds like a place. A plain name takes a value: a
 which keeps the access; `(i, ref x)` and `for ref x in xs` do the same for a
 component and an element. Whether a type is `Copy` is decided by the
 body's declared bounds, never by an instance. A whole `mut` result is bound
-`mut` as well: `let x = mut xs.at_mut(0)` holds the access, and a plain
-`let x = xs.at_mut(0)` is an error, since its value would discard the writes
-the call asks for; `var x = xs.at_mut(0)` copies the element and warns,
+`mut` as well: `let x = mut v.first()` holds the access, and a plain
+`let x = v.first()` is an error, since its value would discard the writes
+the call asks for; `var x = v.first()` copies the element and warns,
 since writes to `x` reach nothing. The components of a `mut` result
 take values as a place's do, so `Some(mut v)` writes through and a plain
 `Some(v)` is an immutable copy. A type with no value reading binds its
 access under a plain name, `mut` for a whole `mut` result and a read access
-otherwise: a `#[view]` result (`let s = buf.span()` or
-`let s = buf.span_mut()`) and a state-only one (`let m = store.balances`);
-`let t = s` reborrows the access the same way.
+otherwise: a `#[view]` result (`let s = buf.span()`) and a state-only one
+(`let m = store.balances`); `let t = s` reborrows the access the same way.
 
 Copying a result ends the projection's session at the binding, so its slide
 runs there rather than at the binding's last use.
@@ -138,31 +163,27 @@ warning.
 A shape groups owned values and accesses, `-> (usize, ref T)`, and the
 caller destructures it with `let (i, x) = ..`. Two `mut` components must be
 structurally disjoint, as in `(mut self.a, mut self.b)`. An optional shape,
-`-> Option<mut T>` or `-> Result<mut T, E>`, is consumed with `if let`,
-`match`, `let .. else` or `?`; its empty variant may only be returned before
-the `yield`.
+`-> Option<mut T>` or `-> Result<E, mut T>`, is consumed with `if let`,
+`match`, `let .. else` or `?`. Its empty variant grants nothing and runs no
+slide: it may only be returned before the `yield`, and a `yield` of it,
+written out or forwarded from another projection as in
+`yield self.entry(k)`, ends the projection there, as `?` does.
 
 Each access a projection grants lies in one address space, its *result
-space*. The compiler infers it from the body, and a signature may declare it
-after a component or after the whole return: a space (`@memory`, `@storage`,
-`@transient`, `@calldata`, `@code`), a parameter's or effect's place
-(`@self`, `@total`), a sub-place of one (`@self.value`, `@self.pair.0`,
-`@self.cells[_]`), the resource a handle names (`@target(p)`), or an
-associated space (`@S`). A sub-place lies where its path leads: a step into a
-pinned type moves it into the pin's space, an entry into its collection's,
-and a packed field or entry is reached through a memory copy, so
-its grants lie in memory. Every yield must lie in the declared space, so
-`@self` on a struct holding a `TSlot` does not cover a yield of the `TSlot`'s
-value, while `@self.locked` does. An implementation gives its trait's
-`space S` the same way; `space S = self[_]` says its elements are its own
-parts, which is memory for packed elements.
+space*, which the compiler infers from the body for each instance. A place
+lies where its path leads: a step into a pinned type moves it into the pin's
+space, an entry into its collection's, and a packed field or entry is
+reached through a memory copy, so its grants lie in memory. Every yield of a
+component must lie in one space:
 
 ```fe
-fn value_mut(mut self) -> mut T @self.value { mut self.value }
+struct Guarded { value: u256, hits: TSlot<u256> }
 
-impl<T> Collection for Cells<T> {
-    space S = self[_]       // where its elements lie: memory for packed ones
-    ..
+impl Guarded {
+    // rejected: the yields lie in storage and transient storage
+    fn pick(mut self, _ c: bool) -> mut u256 {
+        if c { mut self.value } else { mut self.hits.value }
+    }
 }
 ```
 
@@ -183,6 +204,140 @@ a.push(1)                           // all storage stays reserved until both end
 b.push(2)
 ```
 
+## `mut?` items
+
+A function whose signature writes `mut?` has a *mode*: it is used at `ref`
+or at `mut`, and `mut?` is `ref` or `mut` accordingly, wherever `ref` and
+`mut` may be written.
+
+```fe
+pub fn at(mut? self, _ index: usize) -> mut? T {
+    unsafe { mut? *self.ptr_at(index) }
+}
+
+pub fn split_at(mut? self, _ mid: usize) -> (mut? Self, mut? Self) { .. }
+```
+
+Its body is checked once per mode: the `ref` body cannot write through a
+`mut?` place, and the `mut` body keeps `mut`'s rules, such as the
+disjointness of two `mut?` components. A call is at `ref` unless a use of
+its result asks for `mut`: a `mut` receiver (`xs.at(i).bump()`), a `mut`
+access or binding (`let x = mut xs.at(i)`, `Some(mut x)`), a `mut`
+argument, an assignment (`xs.at(i) = 1`) or a `mut` yield. A `mut` binding
+of any part of an unsafe split asks every access in it for `mut`, since the
+split is one session. At `mut`, the
+call's receiver is accessed mutably, and any other argument its `mut?`
+parameters take must be written as a `mut` access, `f(mut p)`. Since only a
+use of its result asks for `mut`, a `mut?` function's result must have a
+`mut?` part; without one, its `mut` body would never run.
+
+A trait method may be `mut?`. A bound says which modes a generic body may
+call it at: `T: Collection` grants `at` at `ref`, and `T: mut Collection`
+at both. An implementation grants `mut` when each of the trait's `mut?`
+methods has a `mut` mode there: a `mut?` method, or a second method of the
+same name that takes `mut` where the trait method takes `mut?`, for an
+element its two modes compute differently:
+
+```fe
+/// Stores each element doubled.
+struct Doubled {
+    words: [u256; 4],
+}
+
+impl Index<usize> for Doubled {
+    type Output = u256
+
+    fn index(self, _ index: usize) -> ref u256 {
+        self.words[index] / 2
+    }
+
+    fn index(mut self, _ index: usize) -> mut u256 {
+        var value = self.words[index] / 2
+        yield mut value
+        self.words[index] = value * 2
+    }
+}
+```
+
+An implementation with only a `ref` method, such as a range's `at`, is no
+`mut Collection`. A `mut?` bound (`D: mut? Driver`) is `mut` where its
+item is used at `mut`: `impl<D: mut? Driver> Driver for Enumerate<D>` makes
+`Enumerate<D>` a `mut Driver` exactly when `D` is one, and a
+separate `mut` body of the implementation takes `D` as one. Only a function
+or an implementation is used at a mode, so only their bounds may be `mut?`;
+a struct's or a trait's bounds, including those of its associated types
+(`type Item: mut Slot`) and of `Self`, are `mut` or plain.
+
+Each body of a `mut?` function defines its own closures, and a `mut?` in
+one, such as a parameter `c: mut? T`, is that body's mode.
+
+An effect may be `mut?` as well: the `ref` body only reads it, and the `mut`
+body may write it.
+
+```fe
+fn slot() -> mut? u256 uses (store: mut? Store) {
+    mut? store.n
+}
+```
+
+A call at `ref` needs only read authority, `uses (store: Store)`, and one at
+`mut` needs the effect `mut`. The two bodies of an implementation's `mut?`
+method take the trait method's `mut?` effect at their own modes. An effect
+row (`uses E = (..)`) and a contract's `uses` have no mode, so each of their
+effects is `mut` or read-only.
+
+## Associated shapes
+
+A trait may declare an associated shape, `shape Part`, which each
+implementation gives as an owned value, an access, a product of them or
+another shape, and which its methods may return:
+
+```fe
+trait Holds {
+    shape Part
+
+    fn part(mut? self) -> Self::Part
+}
+
+impl Holds for Pair {
+    shape Part = (mut? u256, mut? u256)
+
+    fn part(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+```
+
+A shape is named at a mode, `H::Part<ref>` or `H::Part<mut>`, and only a
+`mut?` item's own signature names it without one, at the item's mode; a
+concrete type's is named the same way, `Pair::Part<ref>`. Only an
+associated shape takes a mode argument. An implementation's shape keeps a
+contract at each mode: its accesses are at most the mode, so an access that
+is `mut` at `mut` is written `mut?`, and `shape Part = mut u256` is
+rejected, as is a shape parameter, whose accesses no one knows; and a shape
+a trait method returns, the trait's own or a super-trait's, has an access in
+every implementation of that trait, so the method is a projection in each (a
+traversal of owned values is a producer). A trait's default shape keeps the
+same contract.
+
+Before `H` is known, `H::Part<ref>` lists no parts. Generic code passes a
+value of it on whole: it returns it, alone or as part of a returned
+product, or passes it to a parameter of the same shape, `_ p: H::Part<ref>`,
+at most once. A `let`, a pattern, a field read or a copy of it is an error.
+A product's part, `(own usize, H::Part<ref>)`, a closure's parameter and a
+callable bound, `F: Fn(H::Part<ref>) -> bool`, take one the same way. A
+bound that fixes the shape at a mode makes its parts known there, to bind,
+copy and destructure; each mode is fixed on its own:
+
+```fe
+fn bump<H: mut Holds<Part<ref> = (ref u256, ref u256), Part<mut> = (mut u256, mut u256)>>(
+    _ h: mut H,
+) {
+    let (mut a, _) = h.part()
+    a += 1
+}
+```
+
 ## Views
 
 A type marked `#[view]`, such as `MemSlice`, describes memory its owner
@@ -191,14 +346,14 @@ field of that type, and nothing for `var` to hold; a plain binding of one is
 its read access. A span such as `buffer.span()` is a `ref` projection, so it
 keeps the buffer reserved until its last use.
 
-A view may also be accessed mutably. `buffer.span_mut()` holds the buffer
-mutably until the span's last use, and writes through the span reach the
-buffer:
+A view may also be accessed mutably. `span` is `mut?`, and taken at `mut`
+it holds the buffer mutably until the span's last use; writes through the
+span reach the buffer:
 
 ```fe
-let s = buffer.span_mut()
+let s = mut buffer.span()
 s[0] = 10
-let (mut head, mut tail) = s.split_at_mut(4)
+let (mut head, mut tail) = s.split_at(4)
 for mut b in tail { b = 0 }
 ```
 
@@ -267,10 +422,10 @@ unsafe impl<K: StorageKey + Copy, V> StateIndex for StorageMap<K, V> {
 transient storage implements `core::ops::StateIndex` (below): it only says
 where an entry lies, and the compiler opens the entry's place, so its users
 need no raw storage authority. Any other collection implements
-`core::ops::Index` and `IndexMut`, whose `index` and `index_mut` are
-projections: their bodies may check bounds, compute an element or write one
-back, and an element's access reserves the whole collection until its last
-use. A memory owner such as `MemArray` yields an element through its pointer
+`core::ops::Index`, whose `index` is a `mut?` projection: its bodies may
+check bounds, compute an element or write one back, and an element's access
+reserves the whole collection until its last use. `c[k]` calls it at `mut`
+where the context needs a mutable place, which needs `C: mut Index<K>`. A memory owner such as `MemArray` yields an element through its pointer
 in an `unsafe` block; growing it takes `mut self`, so it cannot reallocate
 under an open element access.
 
@@ -296,7 +451,10 @@ index and the element type, and `locate(root, key)` returns the entry's
 access to `c[k]` opens and does the loads, stores and masking itself. It
 must keep every entry inside the collection's own region, hashing per entry
 or bounding the key, and distinct keys apart, which the `unsafe impl`
-asserts.
+asserts. `std::evm::layout` has Solidity's derivations for it:
+`mapping_slot(root, key)`, `array_data_slot(root)` and `element_location`,
+so a mapping-like `locate` is
+`Location { slot: mapping_slot(root, key), offset: 0 }`.
 
 A collection may pack small elements into lanes of shared slots, as a
 `SolArray` does for Solidity's packed array elements. Its `Lanes` codec
@@ -316,12 +474,13 @@ balances.set(key: to, value: 0)     // rejected: `x` holds an entry of `balances
 x -= amount
 ```
 
-A type implementing `core::marker::Pinned` is *pinned* to its space `S`,
-`storage` or `transient`, or another pinned type's (`space S = P::S`):
+A type implementing `core::marker::Pinned` is *pinned* to its `Space`,
+`core::marker::Storage` or `core::marker::Transient`, or another pinned
+type's (`type Space = P::Space`):
 
 ```fe
 impl<K, V> Pinned for StorageMap<K, V> {
-    space S = storage
+    type Space = Storage
 }
 ```
 
@@ -334,9 +493,10 @@ binding of one (`let m = store.balances`) is its read access. A place's space
 follows its path: a field or element of a pinned type lies in the type's
 space, so a `TSlot` and its value, `slot.value`, lie in transient storage
 whatever holds the `TSlot`. A raw-slot constructor,
-`unsafe fn at(slot) -> mut Self uses (storage: mut RawStorage)`, places a
-collection at a runtime slot, and its caller vouches that nothing else uses
-that slot. A `with` block may install a provider naming storage only when its
+`unsafe fn at(slot) -> mut? Self uses (storage: mut? RawStorage)`, places a
+collection at a runtime slot, read-only unless its use asks for `mut`
+(`let a = unsafe { mut SolArray<u256>::at(0) }`), and its caller vouches that
+nothing else uses that slot. A `with` block may install a provider naming storage only when its
 place lies in one of the function's effects, under raw storage authority, or
 in an `unsafe` block.
 

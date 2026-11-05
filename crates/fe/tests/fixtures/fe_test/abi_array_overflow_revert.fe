@@ -11,18 +11,18 @@ msg ArrayMsg {
 pub contract ArrayReceiver {
     recv ArrayMsg {
         Read { values } -> u256 {
-            values.len()
+            values.len() as u256
         }
         ReadDynamic { values } -> u256 {
-            values.len()
+            values.len() as u256
         }
     }
 }
 fn rejects_empty(_ offset: u256, _ length: u256, _ salt: u256)
 uses (evm: mut Evm)
 {
-    let receiver = evm.create2<ArrayReceiver>(value: 0, args: (), salt: salt)
-    let data = MemBuffer::alloc(68)
+    let receiver = evm.create2<ArrayReceiver>(value: Wei::zero(), args: (), salt: salt)
+    let data = MemBuffer::new(68)
     unsafe { store_word(ptr: data.ptr(), value: (0x11223344 as u256) << 224) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: offset) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: length) }
@@ -31,7 +31,7 @@ uses (evm: mut Evm)
         .raw_call(
             addr: receiver,
             gas: 1000000,
-            value: 0,
+            value: Wei::zero(),
             args: data.span(),
             ret: mut ret,
         )
@@ -57,8 +57,8 @@ fn overflowing_array_end_reverts_empty() uses (evm: mut Evm) {
 
 #[test]
 fn overflowing_dynamic_element_tail_reverts_empty() uses (evm: mut Evm) {
-    let receiver = evm.create2<ArrayReceiver>(value: 0, args: (), salt: 5)
-    let data = MemBuffer::alloc(100)
+    let receiver = evm.create2<ArrayReceiver>(value: Wei::zero(), args: (), salt: 5)
+    let data = MemBuffer::new(100)
     unsafe { store_word(ptr: data.ptr(), value: (0x11223345 as u256) << 224) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: 32) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: 1) }
@@ -73,7 +73,7 @@ fn overflowing_dynamic_element_tail_reverts_empty() uses (evm: mut Evm) {
         .raw_call(
             addr: receiver,
             gas: 1000000,
-            value: 0,
+            value: Wei::zero(),
             args: data.span(),
             ret: mut ret,
         )

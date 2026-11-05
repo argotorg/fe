@@ -1,7 +1,7 @@
-// A call `f(x)` calls a value only through a callable shape trait: a method
-// of another trait or an inherent method named `call` does not make a type
+// A call `f(x)` calls a value only through `Fn` or `FnMut`: a method of
+// another trait or an inherent method named `call` does not make a type
 // callable. A field holding a callable is called as `(h.f)(x)`. A function
-// item is a callable value unless it is an `unsafe fn` or a projection.
+// item is a callable value unless it is an `unsafe fn`, a projection or `mut?`.
 
 struct Caller { n: u256 }
 
@@ -68,4 +68,31 @@ fn projection_item() -> u256 {
 
 fn item_arity() -> u256 {
     apply(two, 1)
+}
+
+struct Store {
+    n: u256,
+}
+
+fn read_store() -> u256 uses (store: Store) {
+    store.n
+}
+
+fn slot() -> mut? u256 uses (store: mut? Store) {
+    mut? store.n
+}
+
+fn takes_bool<F: Fn() -> bool>(_ f: F) -> bool uses (F::E) {
+    f()
+}
+
+fn takes_u256<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) {
+    f()
+}
+
+// A function with effects implements its own shape only, and a `mut?`
+// function is no callable value.
+fn effectful_items() uses (store: Store) {
+    let b = takes_bool(read_store)
+    let n = takes_u256(slot)
 }

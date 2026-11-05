@@ -12,7 +12,7 @@ struct Plain { total: u256 }
 fn ping() uses (call: mut Call) {
     var output = MemBuffer::empty()
     let _ = call.raw_call(
-        addr: Address { inner: 1 }, gas: 0, value: 0, args: MemSpan::empty(), ret: mut output,
+        addr: Address::new(1), gas: 0, value: Wei::zero(), args: MemSpan::empty(), ret: mut output,
     )
 }
 
@@ -33,7 +33,7 @@ fn store_field() uses (s: mut Store, call: mut Call) {
 // Rejected: a call crosses a mutex's open value grant.
 fn mutex_value() uses (vault: mut Mutex<u256>, call: mut Call) {
     assert!(vault.try_lock())
-    let value = mut vault.value_mut()
+    let value = mut vault.value()
     ping()
     value += 1
     vault.unlock()

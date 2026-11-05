@@ -57,7 +57,7 @@ fn test_struct_decision_tree(point: Point, color: Color) -> u8 {
     match (point, color) {
         (Point { x: 0, y: 0 }, Color::Red) => 100
         (Point { x: 0, y: _ }, Color::Green) => 200
-        (Point { x: _, y: 0 }, Color::Blue) => 300
+        (Point { x: _, y: 0 }, Color::Blue) => 250
         (Point { x, y }, _) => x + y
     }
 }
@@ -78,7 +78,7 @@ fn test_enum_data_decision_tree(shape: ShapeVariant) -> u8 {
         ShapeVariant::Circle(Point { x, y }, _) => x + y
         ShapeVariant::Rect(Rectangle { top_left: Point { x: 0, y: 0 }, bottom_right: _ }) => 200
         ShapeVariant::Rect(_) => 150
-        ShapeVariant::Line(Point { x: 0, y: 0 }, Point { x: 1, y: 1 }) => 300
+        ShapeVariant::Line(Point { x: 0, y: 0 }, Point { x: 1, y: 1 }) => 240
         ShapeVariant::Line(_, _) => 250
     }
 }

@@ -15,7 +15,7 @@ use parser::RootScope;
 pub fn parse_source_file(text: &str, recovery_mode: RecoveryMode) -> (GreenNode, Vec<ParseError>) {
     let lexer = lexer::Lexer::new(text);
     let mut parser = parser::Parser::new(lexer, recovery_mode);
-    let checkpoint = parser.enter(RootScope::default(), None);
+    let checkpoint = parser.enter::<RootScope>(None);
 
     let _ = parser.parse(parser::ItemListScope::default());
 

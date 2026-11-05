@@ -1,0 +1,31 @@
+// The parameters a spread lists are accesses of the call, as declared
+// parameters are: two of them conflict as two arguments would.
+trait Apply<shape A> {
+    fn apply(self, ..A)
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn mut_and_view<F: Apply<(mut u256, ref u256)>>(_ f: own F) {
+    var y: u256 = 1
+    f.apply(mut y, y)
+}
+
+fn mut_twice<F: Apply<(mut u256, mut u256)>>(_ f: own F) {
+    var y: u256 = 1
+    f.apply(mut y, mut y)
+}
+
+fn product_part<F: Apply<((mut u256, ref u256),)>>(_ f: own F) {
+    var y: u256 = 1
+    f.apply((mut y, ref y))
+}
+
+// Accepted: disjoint fields.
+fn disjoint<F: Apply<(mut u256, ref u256)>>(_ f: own F) {
+    var p = Pair { a: 1, b: 2 }
+    f.apply(mut p.a, p.b)
+}

@@ -158,7 +158,7 @@ fn access_families<'db>(
                 (*dst, expr.used_locals())
             }
             SStmtKind::Store { dst, src } => (dst.local, vec![src.value]),
-            SStmtKind::End { .. } => continue,
+            SStmtKind::End { .. } | SStmtKind::Drop { .. } => continue,
         };
         if holds_carrier(db, body.locals[dst.index()].ty) {
             for local in used {
@@ -199,7 +199,7 @@ fn opens_session<'db>(db: &'db dyn HirAnalysisDb, expr: &SExpr<'db>) -> bool {
     matches!(
         expr,
         SExpr::Call { callee, .. }
-            if matches!(callee.key.owner(db), BodyOwner::Func(func) if func.is_projection(db))
+            if matches!(callee.key.owner(db), BodyOwner::Func(func, _) if func.is_projection(db))
     )
 }
 
@@ -217,6 +217,15 @@ fn transfer(stmt: &SStmt<'_>, live: &mut FxHashSet<SLocalId>) {
             live.extend(dst.used_locals());
             live.insert(src.value);
         }
+        // Destruction reads none of the accesses a value carries: an access
+        // has no drop glue, and a `#[view]` type implements no `Drop`. A
+        // store follows each drop through an access, and keeps it live.
+        SStmtKind::Drop { place } => live.extend(
+            place
+                .used_locals()
+                .into_iter()
+                .filter(|local| *local != place.local),
+        ),
         SStmtKind::End { .. } => {}
     }
 }

@@ -1,0 +1,13 @@
+trait M {
+    type P
+}
+
+mod m {
+    pub fn f() {}
+}
+
+struct S {
+    a: m::f,
+    b: <m::f as M>::P,
+    c: m::f::X,
+}

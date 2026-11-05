@@ -1,0 +1,69 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/format_macros.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ format_macros.fe:22:24
+   │
+22 │     format!("point: ", Point { x: 1 })
+   │                        ^^^^^^^^^^^^^^ `Point` doesn't implement `Display`
+
+error[8-0000]: type mismatch
+   ┌─ format_macros.fe:54:12
+   │
+54 │     write!(mut count, "a", "b")
+   │            ^^^^^^^^^ expected `MemBuffer`, but `u64` is given
+
+error[8-0023]: argument number mismatch
+     ┌─ format_macros.fe:58:5
+     │
+  58 │     write!()
+     │     ^^^^^^^^ expected 2 arguments, but 1 given
+     │
+     ┌─ src/ptr.fe:1063:12
+     │
+1063 │     pub fn extend_from(mut self, _ source: MemSpan) {
+     │            ----------- function defined here
+
+error[8-0031]: type annotation is needed
+   ┌─ format_macros.fe:26:13
+   │
+26 │     format!(7)
+   │             ^
+   │             │
+   │             type annotation is needed
+   │             consider giving `: fn fmt<{integer}>` here
+
+error[8-0036]: missing effect `Stdout` required by `print_buffer`
+   ┌─ format_macros.fe:18:5
+   │
+18 │     println!("hi")
+   │     ^^^^^^^^^^^^^^ `print_buffer` requires effect `Stdout` to be in scope
+   │
+   = require it in this function's signature with `uses (out: mut Stdout)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Stdout = value) { .. }`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ format_macros.fe:49:14
+   │
+48 │ fn immutable_buffer(_ text: MemBuffer) {
+   │                       ---- `text` does not provide mutable access
+49 │     writeln!(mut text, "a")
+   │              ^^^^^^^^ cannot borrow as `mut`
+
+error[8-0068]: `mut` argument must be a place
+   ┌─ format_macros.fe:45:12
+   │
+45 │     write!({ text }, "a")
+   │            ^^^^^^^^ temporaries and literal values cannot be used where `mut` is expected
+   │
+   = help: bind the value to a named local first, then pass `mut <place>`
+
+error[8-0069]: explicit borrow required
+   ┌─ format_macros.fe:36:12
+   │
+36 │     write!(text, "a")
+   │            ^^^^ this argument must be explicitly borrowed as `mut`
+   │
+   = help: try `mut text`

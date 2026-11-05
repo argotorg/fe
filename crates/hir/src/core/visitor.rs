@@ -10,7 +10,7 @@ use crate::{
         transition::ChainRoot,
     },
     hir_def::{
-        Body, CallArg, Cond, CondId, Const, Contract, ContractRecv, ContractRecvArm,
+        Body, CallArg, Cond, CondId, Const, Contract, ContractInit, ContractRecv, ContractRecvArm,
         ContractRecvArmListId, EffectParam, EffectParamListId, Enum, EnumVariant, Expr, ExprId,
         Field, FieldDef, FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId,
         FuncParamName, GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId,
@@ -27,8 +27,8 @@ use crate::{
 pub mod prelude {
     pub use super::{
         Visitor, VisitorCtxt, walk_arm, walk_attribute, walk_attribute_list, walk_body,
-        walk_call_arg, walk_call_arg_list, walk_const, walk_contract, walk_contract_recv,
-        walk_contract_recv_arm, walk_contract_recv_arm_list, walk_effect_param,
+        walk_call_arg, walk_call_arg_list, walk_const, walk_contract, walk_contract_init,
+        walk_contract_recv, walk_contract_recv_arm, walk_contract_recv_arm_list, walk_effect_param,
         walk_effect_param_list, walk_enum, walk_expr, walk_field, walk_field_def,
         walk_field_def_list, walk_field_list, walk_func, walk_func_param, walk_func_param_list,
         walk_generic_arg, walk_generic_arg_list, walk_generic_param, walk_generic_param_list,
@@ -93,6 +93,14 @@ pub trait Visitor<'db> {
         effect: &EffectParam<'db>,
     ) {
         walk_effect_param(self, ctxt, effect)
+    }
+
+    fn visit_contract_init(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyContractInitSpan<'db>>,
+        init: ContractInit<'db>,
+    ) {
+        walk_contract_init(self, ctxt, init)
     }
 
     fn visit_contract_recv(
@@ -633,34 +641,10 @@ pub fn walk_contract<'db, V>(
         },
     );
 
-    // Init block: walk parameter types and effects.
-    // Note: we walk param types individually (not via visit_func_param_list)
-    // because the scope builder doesn't create FuncParam scopes for contract
-    // init params, so with_new_scoped_ctxt would panic.
-    // The body itself is visited via child items below.
     if let Some(init) = contract.init(ctxt.db) {
         ctxt.with_new_ctxt(
             |span| span.init_block(),
-            |ctxt| {
-                let params = init.params(ctxt.db);
-                ctxt.with_new_ctxt(
-                    |span| span.params(),
-                    |ctxt| {
-                        for (idx, param) in params.data(ctxt.db).iter().enumerate() {
-                            if let Some(ty) = param.ty.to_opt() {
-                                ctxt.with_new_ctxt(
-                                    |span| span.param(idx).ty(),
-                                    |ctxt| visitor.visit_ty(ctxt, ty),
-                                );
-                            }
-                        }
-                    },
-                );
-                ctxt.with_new_ctxt(
-                    |span| span.effects(),
-                    |ctxt| visitor.visit_effect_param_list(ctxt, init.effects(ctxt.db)),
-                );
-            },
+            |ctxt| visitor.visit_contract_init(ctxt, init),
         );
     }
 
@@ -680,6 +664,37 @@ pub fn walk_contract<'db, V>(
             |ctxt| visitor.visit_contract_recv(ctxt, recv),
         );
     }
+}
+
+/// Walks an `init` block's parameter types and effects. The body is visited
+/// as a child item of the contract.
+pub fn walk_contract_init<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyContractInitSpan<'db>>,
+    init: ContractInit<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    // Param types are walked one by one, not with `visit_func_param_list`,
+    // because the scope graph has no `FuncParam` scopes for `init` params.
+    let params = init.params(ctxt.db);
+    ctxt.with_new_ctxt(
+        |span| span.params(),
+        |ctxt| {
+            for (idx, param) in params.data(ctxt.db).iter().enumerate() {
+                if let Some(ty) = param.ty.to_opt() {
+                    ctxt.with_new_ctxt(
+                        |span| span.param(idx).ty(),
+                        |ctxt| visitor.visit_ty(ctxt, ty),
+                    );
+                }
+            }
+        },
+    );
+    ctxt.with_new_ctxt(
+        |span| span.effects(),
+        |ctxt| visitor.visit_effect_param_list(ctxt, init.effects(ctxt.db)),
+    );
 }
 
 pub fn walk_effect_param_list<'db, V>(
@@ -1147,12 +1162,9 @@ pub fn walk_stmt<'db, V>(
             }
         }
 
-        Stmt::For(pat_id, cond_id, driver_id, for_body_id, _unroll) => {
+        Stmt::For(pat_id, cond_id, for_body_id, _unroll) => {
             visit_node_in_body!(visitor, ctxt, pat_id, pat);
             visit_node_in_body!(visitor, ctxt, cond_id, expr);
-            if let Some(driver_id) = driver_id {
-                visit_node_in_body!(visitor, ctxt, driver_id, expr);
-            }
             visit_node_in_body!(visitor, ctxt, for_body_id, expr);
         }
 
@@ -1732,6 +1744,8 @@ pub fn walk_generic_arg<'db, V>(
                 );
             }
         }
+
+        GenericArg::Mode(_) => {}
     }
 }
 
@@ -2085,7 +2099,7 @@ pub fn walk_type_bound<'db, V>(
     V: Visitor<'db> + ?Sized,
 {
     match bound {
-        TypeBound::Trait(trait_ref) => ctxt.with_new_ctxt(
+        TypeBound::Trait(trait_ref, _) => ctxt.with_new_ctxt(
             |span| span.trait_bound(),
             |ctxt| visitor.visit_trait_ref(ctxt, *trait_ref),
         ),

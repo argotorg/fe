@@ -52,21 +52,25 @@ macro_rules! snap_test {
         settings.set_input_file($fixture_path);
         settings.set_prepend_module_to_snapshot(false);
         $crate::_macro_support::configure_snapshot_filters(&mut settings, project_root);
+        // A suite's fixtures share one test when they share a database, and
+        // fixtures in different directories can share a name.
         settings.bind(|| {
-            $crate::_macro_support::_insta::_macro_support::assert_snapshot(
-                (
-                    $crate::_macro_support::_insta::_macro_support::AutoName,
-                    normalized_value.as_str(),
+            $crate::_macro_support::_insta::allow_duplicates! {
+                $crate::_macro_support::_insta::_macro_support::assert_snapshot(
+                    (
+                        $crate::_macro_support::_insta::_macro_support::AutoName,
+                        normalized_value.as_str(),
+                    )
+                        .into(),
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+                    fixture_name,
+                    module_path!(),
+                    file!(),
+                    line!(),
+                    stringify!($value),
                 )
-                    .into(),
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
-                fixture_name,
-                module_path!(),
-                file!(),
-                line!(),
-                stringify!($value),
-            )
-            .unwrap()
+                .unwrap()
+            }
         })
     };
 }

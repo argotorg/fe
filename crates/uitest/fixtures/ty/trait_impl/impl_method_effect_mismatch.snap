@@ -20,3 +20,12 @@ error[6-0024]: method `f` has incompatible effects
    ·
 15 │     fn f(self) uses (a: mut A) {}
    │        ^ effect keys or mutability differ from the trait method
+
+error[6-0024]: method `f` has incompatible effects
+   ┌─ impl_method_effect_mismatch.fe:28:8
+   │
+23 │     fn f(self) uses B::E
+   │        - trait requires these effects
+   ·
+28 │     fn f(self) uses C::E {}
+   │        ^ effect keys or mutability differ from the trait method

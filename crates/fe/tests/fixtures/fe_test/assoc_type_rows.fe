@@ -1,0 +1,86 @@
+// A trait's signatures name the effect rows of its associated types'
+// bounds, `Self::Inner::E`, and its implementations the same rows through
+// their own types.
+trait Writer {
+    fn increment(mut self)
+}
+
+struct Counter { n: u256 }
+
+impl Writer for Counter {
+    fn increment(mut self) {
+        self.n += 1
+    }
+}
+
+trait Bump {
+    uses E
+    fn bump(self) uses E
+}
+
+struct Step {}
+
+impl Copy for Step {}
+
+impl Bump for Step {
+    uses E = (writer: mut Writer)
+
+    fn bump(self) uses E {
+        writer.increment()
+    }
+}
+
+trait Holds {
+    type Inner: Bump
+
+    fn inner(self) -> Self::Inner
+    fn bump_twice(self) uses Self::Inner::E
+}
+
+struct Direct<S> {
+    s: S,
+}
+
+impl<S: Bump + Copy> Holds for Direct<S> {
+    type Inner = S
+
+    fn inner(self) -> S {
+        self.s
+    }
+
+    fn bump_twice(self) uses S::E {
+        self.inner().bump()
+        self.inner().bump()
+    }
+}
+
+struct Wrap<H> {
+    held: H,
+}
+
+impl<H: Holds> Holds for Wrap<H> {
+    type Inner = H::Inner
+
+    fn inner(self) -> H::Inner {
+        self.held.inner()
+    }
+
+    fn bump_twice(self) uses Self::Inner::E {
+        self.held.bump_twice()
+        self.held.inner().bump()
+    }
+}
+
+fn bump_held<H: Holds>(_ h: H) uses H::Inner::E {
+    h.bump_twice()
+}
+
+#[test]
+fn rows_of_associated_types_reach_their_providers() {
+    var writer = Counter { n: 0 }
+    with (Writer = mut writer) {
+        bump_held(Direct { s: Step {} })
+        bump_held(Wrap { held: Direct { s: Step {} } })
+    }
+    assert(writer.n == 5)
+}

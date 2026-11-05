@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/keccak_intrinsic.fe
 ---
@@ -25,9 +24,27 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.*i8 = evm_malloc v0;
-        v13.i256 = ptr_to_int v12 i256;
-        return v13;
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
+}
+
+func private %downcast_unchecked(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %to_word v0;
+        v3.i256 = call %from_word v2;
+        return v3;
+}
+
+func private %from_word(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
 }
 
 func private %hash(v0.i256, v1.i256) -> i256 {
@@ -36,31 +53,27 @@ func private %hash(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
+        v4.i256 = call %downcast_unchecked v1;
         jump block3;
 
     block2:
-        v6.i256 = call %keccak256 v2;
+        v7.i256 = call %keccak256 v2;
         jump block5;
 
     block3:
-        v10.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        v13.@layout_0 = insert_value v10 1.i256 v1;
-        v14.objref<i256> = obj.proj v2 0.i256;
-        v15.i256 = extract_value v13 0.i256;
-        obj.store v14 v15;
-        v16.objref<i256> = obj.proj v2 1.i256;
-        v17.i256 = extract_value v13 1.i256;
-        obj.store v16 v17;
+        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v14.@layout_0 = insert_value v11 1.i256 v4;
+        obj.store v2 v14;
         jump block2;
 
     block4:
-        return v6;
+        return v7;
 
     block5:
         jump block4;
 }
 
-func private %keccak256(v0.objref<@layout_0>) -> i256 {
+func private %keccak256(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -71,7 +84,7 @@ func private %keccak256(v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func private %len(v0.objref<@layout_0>) -> i256 {
+func private %len(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -100,7 +113,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %ptr(v0.objref<@layout_0>) -> i256 {
+func private %ptr(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -108,6 +121,14 @@ func private %ptr(v0.objref<@layout_0>) -> i256 {
         v3.objref<i256> = obj.proj v0 0.i256;
         v4.i256 = obj.load v3;
         return v4;
+}
+
+func private %to_word(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
 }
 
 

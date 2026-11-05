@@ -1,0 +1,40 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/glob_shadows_outer_late.fe
+---
+note:
+  ┌─ glob_shadows_outer_late.fe:4:5
+  │
+4 │     use super::util
+  │     ^^^^^^^^^^^^^^^ glob_shadows_outer_late::util
+
+note:
+  ┌─ glob_shadows_outer_late.fe:7:9
+  │
+7 │         use super::o1::*
+  │         ^^^^^^^^^^^^^^^^ glob_shadows_outer_late::q::util as util
+
+note:
+  ┌─ glob_shadows_outer_late.fe:8:9
+  │
+8 │         use util::f
+  │         ^^^^^^^^^^^ glob_shadows_outer_late::q::util::f
+
+note:
+   ┌─ glob_shadows_outer_late.fe:20:5
+   │
+20 │     pub use super::o2::util
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ glob_shadows_outer_late::q::util
+
+note:
+   ┌─ glob_shadows_outer_late.fe:24:5
+   │
+24 │     pub use super::o3::util
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ glob_shadows_outer_late::q::util
+
+note:
+   ┌─ glob_shadows_outer_late.fe:28:5
+   │
+28 │     pub use super::q::util
+   │     ^^^^^^^^^^^^^^^^^^^^^^ glob_shadows_outer_late::q::util

@@ -591,10 +591,10 @@ note:
 note:
    ┌─ core_hkt_effects.fe:75:89
    │
-75 │   pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: own L, _ func: F) -> R uses F::E {
+75 │   pub fn with_logger<R, L: Logger, F: Fn() -> R>(logger: own L, _ func: F) -> R uses F::E {
    │ ╭─────────────────────────────────────────────────────────────────────────────────────────^
 76 │ │     with (Logger = logger) {
-77 │ │         func(())
+77 │ │         func()
 78 │ │     }
 79 │ │ }
    │ ╰─^ R
@@ -603,7 +603,7 @@ note:
    ┌─ core_hkt_effects.fe:76:5
    │
 76 │ ╭     with (Logger = logger) {
-77 │ │         func(())
+77 │ │         func()
 78 │ │     }
    │ ╰─────^ R
 
@@ -618,27 +618,21 @@ note:
    │
 76 │       with (Logger = logger) {
    │ ╭────────────────────────────^
-77 │ │         func(())
+77 │ │         func()
 78 │ │     }
    │ ╰─────^ R
 
 note:
    ┌─ core_hkt_effects.fe:77:9
    │
-77 │         func(())
+77 │         func()
    │         ^^^^ F
 
 note:
    ┌─ core_hkt_effects.fe:77:9
    │
-77 │         func(())
-   │         ^^^^^^^^ R
-
-note:
-   ┌─ core_hkt_effects.fe:77:14
-   │
-77 │         func(())
-   │              ^^ ()
+77 │         func()
+   │         ^^^^^^ R
 
 note:
    ┌─ core_hkt_effects.fe:83:1
@@ -661,10 +655,10 @@ note:
    │     ^^^^^^^^^^^^ ()
 
 note:
-   ┌─ core_hkt_effects.fe:89:62
+   ┌─ core_hkt_effects.fe:89:46
    │
-89 │       fn call(self, _ unit: own ()) -> Result<(), Option<i32>> {
-   │ ╭──────────────────────────────────────────────────────────────^
+89 │       fn call(self) -> Result<(), Option<i32>> {
+   │ ╭──────────────────────────────────────────────^
 90 │ │         with (Logger = ConsoleLogger {}) {
 91 │ │             log_once()
 92 │ │             log_and_chain(x: 10)

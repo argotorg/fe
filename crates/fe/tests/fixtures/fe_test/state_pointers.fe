@@ -69,20 +69,20 @@ pub contract C uses (storage: mut RawStorage) {
 
 #[test]
 fn state_pointers_address_their_space() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
     let written: u256 =
-        evm.call(addr: c, gas: 100000, value: 0, message: M::Write { slot: 40, value: 7 })
+        evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Write { slot: 40, value: 7 })
     assert!(written == 7)
-    let word: u256 = evm.call(addr: c, gas: 100000, value: 0, message: M::ReadWord { slot: 40 })
+    let word: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::ReadWord { slot: 40 })
     assert!(word == 7)
-    let saved: u256 = evm.call(addr: c, gas: 100000, value: 0, message: M::Saved {})
+    let saved: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Saved {})
     assert!(saved == 40)
-    let first: u256 = evm.call(addr: c, gas: 100000, value: 0, message: M::Bump {})
+    let first: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Bump {})
     assert!(first == 1)
-    let second: u256 = evm.call(addr: c, gas: 100000, value: 0, message: M::Bump {})
+    let second: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Bump {})
     assert!(second == 2)
-    let count: u256 = evm.call(addr: c, gas: 100000, value: 0, message: M::ReadWord { slot: 41 })
+    let count: u256 = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::ReadWord { slot: 41 })
     assert!(count == 2)
-    let flag: bool = evm.call(addr: c, gas: 100000, value: 0, message: M::Flag { slot: 3 })
+    let flag: bool = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: M::Flag { slot: 3 })
     assert!(flag)
 }

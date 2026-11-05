@@ -113,7 +113,7 @@ uses (rng: mut Rng) where T: Copy
 {
     var i = N
     while i > 1 {
-        let j = rng.uniform(i as u256) as usize
+        let j = rng.uniform(i as u256).downcast_unchecked()
         i -= 1
         let held = items[i]
         items[i] = items[j]
@@ -126,10 +126,10 @@ uses (rng: mut Rng) where T: Copy
 pub fn shuffle_slice<T>(_ items: mut MemSlice<T>) uses (rng: mut Rng) where T: Copy {
     var i = items.len()
     while i > 1 {
-        let j = rng.uniform(i) as usize
+        let j = rng.uniform(i as u256).downcast_unchecked()
         i -= 1
-        let held = items[i as usize]
-        items[i as usize] = items[j]
+        let held = items[i]
+        items[i] = items[j]
         items[j] = held
     }
 }
@@ -138,5 +138,5 @@ pub fn shuffle_slice<T>(_ items: mut MemSlice<T>) uses (rng: mut Rng) where T: C
 pub fn choose<T, const N: usize>(_ items: [T; N]) -> T
 uses (rng: mut Rng) where T: Copy
 {
-    items[rng.uniform(N as u256) as usize]
+    items[rng.uniform(N as u256).downcast_unchecked()]
 }

@@ -1,3 +1,5 @@
+use std::{collections::BTreeMap, fmt::Write};
+
 use sonatina_codegen::object::{
     OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PcMapEntry, SectionObservability, UnmappedReason,
     UnmappedReasonCoverage,
@@ -6,6 +8,47 @@ use sonatina_codegen::object::{
 use super::{LowerError, SonatinaContractBytecode};
 
 impl SonatinaContractBytecode {
+    /// The code bytes of the runtime and creation sections by function,
+    /// largest first, or `None` unless the bytecode was emitted with
+    /// observability:
+    ///
+    /// ```text
+    /// runtime: 1203 bytes (1171 code, 32 data, 0 embedded)
+    ///      840 contract_runtime_root_Counter
+    ///      331 increment
+    /// ```
+    pub fn size_report(&self) -> Option<String> {
+        let mut out = String::new();
+        for (section, observability) in [
+            ("runtime", &self.runtime_observability),
+            ("creation", &self.deploy_observability),
+        ] {
+            let obs = observability.as_ref()?;
+            let mut functions: BTreeMap<&str, u32> = BTreeMap::new();
+            // Entries past the code region belong to embedded sections.
+            for entry in obs.pc_map.iter().filter(|e| e.pc_start < obs.code_bytes) {
+                *functions.entry(&entry.func_name).or_default() += entry.pc_end - entry.pc_start;
+            }
+            let unattributed = obs.code_bytes - functions.values().sum::<u32>();
+            let mut functions: Vec<_> = functions.into_iter().collect();
+            functions.sort_by(|(a, a_bytes), (b, b_bytes)| b_bytes.cmp(a_bytes).then(a.cmp(b)));
+            writeln!(
+                out,
+                "{section}: {} bytes ({} code, {} data, {} embedded)",
+                obs.section_bytes, obs.code_bytes, obs.data_bytes, obs.embed_bytes
+            )
+            .expect("in-memory write should not fail");
+            for (name, bytes) in functions {
+                writeln!(out, "{bytes:>8} {name}").expect("in-memory write should not fail");
+            }
+            if unattributed != 0 {
+                writeln!(out, "{unattributed:>8} (unattributed)")
+                    .expect("in-memory write should not fail");
+            }
+        }
+        Some(out)
+    }
+
     /// Admit the final result, after embed composition and wrapper construction.
     /// Both trace and ordinary observability APIs return through this boundary.
     pub(super) fn checked(self, object: &str, required: bool) -> Result<Self, LowerError> {

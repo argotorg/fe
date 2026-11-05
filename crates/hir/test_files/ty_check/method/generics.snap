@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/method/generics.fe
 ---
@@ -35,27 +35,33 @@ note:
    │
 20 │       fn clamp_into(self) -> i32 {
    │ ╭────────────────────────────────^
-21 │ │         clamp_i64_i32(self)
+21 │ │         unsafe { clamp_i64_i32(self) }
 22 │ │     }
    │ ╰─────^ i32
 
 note:
    ┌─ generics.fe:21:9
    │
-21 │         clamp_i64_i32(self)
-   │         ^^^^^^^^^^^^^ fn clamp_i64_i32
+21 │         unsafe { clamp_i64_i32(self) }
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ i32
 
 note:
-   ┌─ generics.fe:21:9
+   ┌─ generics.fe:21:18
    │
-21 │         clamp_i64_i32(self)
-   │         ^^^^^^^^^^^^^^^^^^^ i32
+21 │         unsafe { clamp_i64_i32(self) }
+   │                  ^^^^^^^^^^^^^ fn clamp_i64_i32
 
 note:
-   ┌─ generics.fe:21:23
+   ┌─ generics.fe:21:18
    │
-21 │         clamp_i64_i32(self)
-   │                       ^^^^ i64
+21 │         unsafe { clamp_i64_i32(self) }
+   │                  ^^^^^^^^^^^^^^^^^^^ i32
+
+note:
+   ┌─ generics.fe:21:32
+   │
+21 │         unsafe { clamp_i64_i32(self) }
+   │                                ^^^^ i64
 
 note:
    ┌─ generics.fe:33:46

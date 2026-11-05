@@ -1,4 +1,4 @@
-pub fn local_bindings() -> u64 {
+pub fn main() -> u64 {
     let x: u64 = 1 + 2
     let y = 3
     y

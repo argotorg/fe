@@ -56,7 +56,7 @@ fn saturating_u256() {
 
 #[test]
 fn saturating_usize() {
-    let max: usize = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+    let max = usize::max()
     let zero: usize = 0
     assert!(max.saturating_add(1) == max)
     assert!(zero.saturating_sub(1) == zero)
@@ -119,8 +119,8 @@ fn saturating_i256() {
 
 #[test]
 fn saturating_isize() {
-    let max: isize = 57896044618658097711785492504343953926634992332820282019728792003956564819967
-    let min: isize = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    let max = isize::max()
+    let min = isize::min()
     assert!(max.saturating_add(1) == max)
     assert!(min.saturating_sub(1) == min)
     assert!(max.saturating_mul(2) == max)

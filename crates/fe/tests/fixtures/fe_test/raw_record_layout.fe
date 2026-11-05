@@ -4,6 +4,8 @@ struct Packet { tag: u8, inner: Inner, samples: [u16; 3], tail: u8 }
 impl Copy for Inner {}
 impl Copy for Packet {}
 
+// EVM memory packs record fields big-endian.
+#[cfg(target = "evm")]
 #[test]
 fn packed_record_bytes_and_stride() {
     assert!(core::size_of<Inner>() == 3)
@@ -45,4 +47,52 @@ fn packed_record_bytes_and_stride() {
     assert!(bytes[17] == 0xab)
     assert!(bytes[18] == 0xcd)
     assert!(bytes[21] == 0x6d)
+}
+
+// Native memory aligns record fields little-endian: `Inner` is `code` at 0 and
+// `ready` at 2 in 4 bytes, and `Packet` is `tag` at 0, `inner` at 2, `samples`
+// at 6 and `tail` at 12 in 14 bytes.
+#[cfg(target = "native")]
+#[test]
+fn aligned_record_bytes_and_stride() {
+    assert!(core::size_of<Inner>() == 4)
+    assert!(core::size_of<Packet>() == 14)
+    var packets = core::ptr::MemArray<Packet>::new_zeroed(2)
+    packets[0] = Packet {
+        tag: 0xa1,
+        inner: Inner { code: 0x1234, ready: true },
+        samples: [0x5678, 0x9abc, 0xdef0],
+        tail: 0x7e,
+    }
+    packets[1] = Packet {
+        tag: 0xb2,
+        inner: Inner { code: 0x4321, ready: false },
+        samples: [0x1112, 0x1314, 0x1516],
+        tail: 0x6d,
+    }
+    assert!(packets.byte_len() == 28)
+    let bytes = packets.span()
+    // Padding at 1, 5 and 13 of each record holds no value.
+    let expected: [(usize, u8); 22] = [
+        (0, 0xa1), (2, 0x34), (3, 0x12), (4, 1), (6, 0x78), (7, 0x56), (8, 0xbc), (9, 0x9a),
+        (10, 0xf0), (11, 0xde), (12, 0x7e),
+        (14, 0xb2), (16, 0x21), (17, 0x43), (18, 0), (20, 0x12), (21, 0x11), (22, 0x14),
+        (23, 0x13), (24, 0x16), (25, 0x15), (26, 0x6d),
+    ]
+    for (index, byte) in expected {
+        assert!(bytes[index] == byte)
+    }
+    let second = packets.ptr_at(1)
+    unsafe { second.inner.code = 0x2468 }
+    unsafe { second.samples[1] = 0xabcd }
+    assert!(packets[1].inner.code == 0x2468)
+    assert!(packets[1].samples[1] == 0xabcd)
+    assert!(packets[0].inner.code == 0x1234)
+    assert!(packets[0].tail == 0x7e)
+    let bytes = packets.span()
+    assert!(bytes[16] == 0x68)
+    assert!(bytes[17] == 0x24)
+    assert!(bytes[22] == 0xcd)
+    assert!(bytes[23] == 0xab)
+    assert!(bytes[26] == 0x6d)
 }

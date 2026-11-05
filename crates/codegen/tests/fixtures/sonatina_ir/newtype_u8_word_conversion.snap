@@ -35,18 +35,11 @@ func private %newtype_u8_roundtrip(v0.i8) -> i8 {
         v5.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
         v7.@layout_1 = insert_value undef.@layout_1 0.i256 v5;
         v9.@layout_1 = insert_value v7 1.i256 0.i256;
+        obj.store v1 v9;
         v10.objref<@layout_0> = obj.proj v1 0.i256;
-        v11.@layout_0 = extract_value v9 0.i256;
-        v12.objref<i8> = obj.proj v10 0.i256;
-        v13.i8 = extract_value v11 0.i256;
-        obj.store v12 v13;
-        v14.objref<i256> = obj.proj v1 1.i256;
-        v15.i256 = extract_value v9 1.i256;
-        obj.store v14 v15;
-        v16.objref<@layout_0> = obj.proj v1 0.i256;
-        v17.objref<i8> = obj.proj v16 0.i256;
-        v18.i8 = obj.load v17;
-        return v18;
+        v11.objref<i8> = obj.proj v10 0.i256;
+        v12.i8 = obj.load v11;
+        return v12;
 }
 
 

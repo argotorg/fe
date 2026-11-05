@@ -1,0 +1,140 @@
+// A bound's associated type binding, or a trait argument, may name another
+// parameter's associated type, whichever bound comes first, at any depth.
+use core::option::Option
+
+trait Ty {
+    type T
+}
+
+trait Get {
+    type Out
+
+    fn get(self) -> Self::Out
+}
+
+struct Words {}
+
+impl Ty for Words {
+    type T = u256
+}
+
+struct Seven {}
+
+impl Get for Seven {
+    type Out = u256
+
+    fn get(self) -> u256 {
+        7
+    }
+}
+
+fn fetch_later<G: Get<Out = Q::T>, Q: Ty>(_ g: G) -> Q::T {
+    g.get()
+}
+
+fn fetch_earlier<Q: Ty, G: Get<Out = Q::T>>(_ g: G) -> Q::T {
+    g.get()
+}
+
+fn fetch_where<G, Q>(_ g: G) -> Q::T where G: Get<Out = Q::T>, Q: Ty {
+    g.get()
+}
+
+#[test]
+fn binding_names_a_later_parameter() {
+    assert(fetch_later<Seven, Words>(Seven {}) == 7)
+}
+
+#[test]
+fn binding_names_an_earlier_parameter() {
+    assert(fetch_earlier<Words, Seven>(Seven {}) == 7)
+}
+
+#[test]
+fn binding_in_a_where_clause() {
+    assert(fetch_where<Seven, Words>(Seven {}) == 7)
+}
+
+struct Maybe {}
+
+impl Get for Maybe {
+    type Out = Option<u256>
+
+    fn get(self) -> Option<u256> {
+        Option::Some(7)
+    }
+}
+
+struct Pair {}
+
+impl Get for Pair {
+    type Out = (u256, u256)
+
+    fn get(self) -> (u256, u256) {
+        (7, 8)
+    }
+}
+
+struct Row {}
+
+impl Get for Row {
+    type Out = [u256; 2]
+
+    fn get(self) -> [u256; 2] {
+        [7, 8]
+    }
+}
+
+trait Conv<X> {
+    fn conv(self) -> X
+}
+
+impl Conv<Option<u256>> for Maybe {
+    fn conv(self) -> Option<u256> {
+        Option::Some(7)
+    }
+}
+
+fn fetch_option<G: Get<Out = Option<Q::T>>, Q: Ty>(_ g: G) -> Option<Q::T> {
+    g.get()
+}
+
+fn fetch_pair<G: Get<Out = (Q::T, Q::T)>, Q: Ty>(_ g: G) -> (Q::T, Q::T) {
+    g.get()
+}
+
+fn fetch_row<G: Get<Out = [Q::T; 2]>, Q: Ty>(_ g: G) -> [Q::T; 2] {
+    g.get()
+}
+
+fn convert<C: Conv<Option<Q::T>>, Q: Ty>(_ c: C) -> Option<Q::T> {
+    c.conv()
+}
+
+#[test]
+fn binding_nests_a_projection_in_a_type_argument() {
+    match fetch_option<Maybe, Words>(Maybe {}) {
+        Option::Some(x) => assert(x == 7),
+        Option::None => assert(false),
+    }
+}
+
+#[test]
+fn binding_nests_a_projection_in_a_tuple() {
+    let (a, b) = fetch_pair<Pair, Words>(Pair {})
+    assert(a == 7 && b == 8)
+}
+
+#[test]
+fn binding_nests_a_projection_in_an_array() {
+    let row = fetch_row<Row, Words>(Row {})
+    assert(row[0] == 7 && row[1] == 8)
+}
+
+#[test]
+fn argument_nests_a_projection() {
+    match convert<Maybe, Words>(Maybe {}) {
+        Option::Some(x) => assert(x == 7),
+        Option::None => assert(false),
+    }
+}

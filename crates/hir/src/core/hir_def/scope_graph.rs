@@ -1,11 +1,12 @@
 use std::io;
 
+use crate::core::lower::LowerDiagnostic;
 use common::{
     indexmap::{IndexMap, IndexSet},
     ingot::Ingot,
 };
 use rustc_hash::FxHashSet;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{
     AssocConstDecl, AssocTyDecl, AttrListId, Body, Const, Contract, Enum, EnumVariant, ExprId,
@@ -19,25 +20,29 @@ use crate::{
     span::DynLazySpan,
 };
 
-/// Represents a scope relation graph in a top-level module.
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+/// Represents a scope relation graph in a top-level module, or in a function
+/// body that is lowered on its own (see [`Body::scope_graph`]).
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ScopeGraph<'db> {
     /// The top-level module containing the scope graph.
     pub top_mod: TopLevelMod<'db>,
+    /// The outermost scope of the graph: the top-level module, or the body.
+    pub root: ScopeId<'db>,
     /// The scopes in the graph.
     pub scopes: IndexMap<ScopeId<'db>, Scope<'db>>,
     /// The all unresolved uses in the graph, this is used in name resolution.
     pub unresolved_uses: FxHashSet<Use<'db>>,
+    /// The diagnostics reported while lowering the graph's items.
+    pub lower_diagnostics: Vec<LowerDiagnostic>,
 }
 
 impl<'db> ScopeGraph<'db> {
-    /// Represents all item scopes in a top-level module in depth-first order.
-    pub fn items_dfs<'a>(&'a self, db: &'a dyn HirDb) -> impl Iterator<Item = ItemKind<'a>> + 'a {
+    /// Represents all item scopes in the graph in depth-first order.
+    pub fn items_dfs<'a>(&'a self) -> impl Iterator<Item = ItemKind<'a>> + 'a {
         ScopeGraphItemIterDfs {
-            db,
             graph: self,
             visited: Default::default(),
-            stack: vec![self.top_mod.scope()],
+            stack: vec![self.root],
         }
     }
 
@@ -79,7 +84,7 @@ impl<'db> ScopeGraph<'db> {
 }
 
 /// An reference to a `[ScopeData]` in a `ScopeGraph`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub enum ScopeId<'db> {
     /// An item scope.
     Item(ItemKind<'db>),
@@ -194,7 +199,10 @@ impl<'db> ScopeId<'db> {
 
     /// Returns the scope graph containing this scope.
     pub fn scope_graph(self, db: &'db dyn HirDb) -> &'db ScopeGraph<'db> {
-        self.top_mod(db).scope_graph(db)
+        match self {
+            ScopeId::Item(ItemKind::Body(body)) | ScopeId::Block(body, _) => body.scope_graph(db),
+            _ => self.top_mod(db).scope_graph(db),
+        }
     }
 
     pub fn edges(self, db: &'db dyn HirDb) -> &'db IndexSet<ScopeEdge<'db>> {
@@ -344,7 +352,7 @@ impl<'db> ScopeId<'db> {
 
             ScopeId::FuncParam(..) => {
                 let param: &FuncParam = self.resolve_to(db)?;
-                param.name()
+                param.binding_name()
             }
 
             ScopeId::GenericParam(..) => {
@@ -437,7 +445,6 @@ impl<'db> ScopeId<'db> {
 }
 
 struct ScopeGraphItemIterDfs<'db, 'a> {
-    db: &'db dyn HirDb,
     graph: &'a ScopeGraph<'db>,
     visited: FxHashSet<ScopeId<'db>>,
     stack: Vec<ScopeId<'db>>,
@@ -451,8 +458,7 @@ impl<'db> std::iter::Iterator for ScopeGraphItemIterDfs<'db, '_> {
             self.visited.insert(scope);
             for edge in self.graph.edges(scope).iter().rev() {
                 let dest = edge.dest;
-                let top_mod = dest.top_mod(self.db);
-                if top_mod != self.graph.top_mod || self.visited.contains(&dest) {
+                if !self.graph.scopes.contains_key(&dest) || self.visited.contains(&dest) {
                     continue;
                 }
 
@@ -474,7 +480,7 @@ impl<'db> std::iter::Iterator for ScopeGraphItemIterDfs<'db, '_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct Scope<'db> {
     pub id: ScopeId<'db>,
     pub edges: IndexSet<ScopeEdge<'db>>,
@@ -495,7 +501,7 @@ impl<'db> Scope<'db> {
 /// The edge contains the destination of the edge and the kind of the edge.
 /// [`EdgeKind`] is contains supplementary information about the destination
 /// scope, which is used for name resolution.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct ScopeEdge<'db> {
     pub dest: ScopeId<'db>,
     pub kind: EdgeKind<'db>,
@@ -506,7 +512,9 @@ pub struct ScopeEdge<'db> {
 /// NOTE: The internal types of each variants contains very small amount of
 /// information, the reason why we need to prepare each internal types is to
 /// allow us to implement traits to each edges directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub enum EdgeKind<'db> {
     /// An edge to a lexical parent scope.
     Lex(LexEdge),
@@ -600,28 +608,44 @@ impl<'db> EdgeKind<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LexEdge();
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub struct ModEdge<'db>(pub IdentId<'db>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub struct TypeEdge<'db>(pub IdentId<'db>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub struct TraitEdge<'db>(pub IdentId<'db>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub struct TraitTypeEdge<'db>(pub IdentId<'db>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub struct ValueEdge<'db>(pub IdentId<'db>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub struct GenericParamEdge<'db>(pub IdentId<'db>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub struct FieldEdge<'db>(pub IdentId<'db>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, Update)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
 pub struct VariantEdge<'db>(pub IdentId<'db>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -761,6 +785,44 @@ mod tests {
     };
 
     #[test]
+    fn item_free_func_bodies_are_lowered_on_demand() {
+        let mut db = TestDb::default();
+        let text = r#"
+            fn lazy() { let x = { 1 } }
+            fn eager() { struct S {} }
+        "#;
+
+        let file = db.standalone_file(text);
+        let graph = db.parse_source(file);
+        let &[lazy, eager] = graph.top_mod.all_funcs(&db).as_slice() else {
+            panic!("expected two functions");
+        };
+        let lazy_body = lazy.body(&db).unwrap();
+        let eager_body = eager.body(&db).unwrap();
+
+        assert!(!graph.scopes.contains_key(&lazy_body.scope()));
+        assert!(graph.scopes.contains_key(&eager_body.scope()));
+        assert_eq!(lazy_body.scope().scope_graph(&db).root, lazy_body.scope());
+        assert_eq!(lazy_body.containing_func(&db), Some(lazy));
+        let items: Vec<_> = graph
+            .top_mod
+            .all_items(&db)
+            .iter()
+            .copied()
+            .filter(|item| !matches!(item, ItemKind::TopMod(_) | ItemKind::Use(_)))
+            .collect();
+        assert_eq!(
+            items[..4],
+            [
+                ItemKind::Func(lazy),
+                ItemKind::Body(lazy_body),
+                ItemKind::Func(eager),
+                ItemKind::Body(eager_body),
+            ]
+        );
+    }
+
+    #[test]
     fn item_tree() {
         let mut db = TestDb::default();
 
@@ -780,9 +842,11 @@ mod tests {
         "#;
 
         let file = db.standalone_file(text);
-        let scope_graph = db.parse_source(file);
-        let items: Vec<_> = scope_graph
-            .items_dfs(&db)
+        let top_mod = db.parse_source(file).top_mod;
+        let items: Vec<_> = top_mod
+            .all_items(&db)
+            .iter()
+            .copied()
             .filter(|item| !matches!(item, ItemKind::Use(use_) if use_.is_synthetic_use(&db)))
             .collect();
         assert_eq!(items.len(), 8);

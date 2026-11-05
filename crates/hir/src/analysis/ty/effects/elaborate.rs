@@ -1,3 +1,4 @@
+use crate::hir_def::ModeMarker;
 use smallvec1::SmallVec;
 
 use crate::{
@@ -17,10 +18,10 @@ use crate::{
                 stored_trait_key_is_rigid, stored_type_key_is_rigid,
             },
             fold::{TyFoldable, TyFolder},
-            trait_def::TraitInstId,
+            trait_def::{AssocBinding, TraitInstId},
             trait_resolution::PredicateListId,
             ty_check::{Callable, TyChecker},
-            ty_def::{InvalidCause, TyBase, TyData, TyId, TyParam, inference_keys},
+            ty_def::{BorrowKind, InvalidCause, TyBase, TyData, TyId, TyParam, inference_keys},
             ty_lower::collect_generic_params,
             visitor::{TyVisitable, TyVisitor, walk_ty},
         },
@@ -36,10 +37,11 @@ use common::indexmap::IndexMap;
 pub fn effect_requirement_decls_for_callable<'db>(
     db: &'db dyn HirAnalysisDb,
     callable_def: CallableDef<'db>,
+    mode: Option<BorrowKind>,
 ) -> SmallVec<[EffectRequirementDecl<'db>; 2]> {
     let bindings: &[EffectRequirement<'db>] = match callable_def {
-        CallableDef::Func(func) => func.effective_effect_requirements(db),
-        CallableDef::VariantCtor(_) => &[],
+        CallableDef::Func(func) => func.effect_requirements(db, mode),
+        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => &[],
     };
     bindings
         .iter()
@@ -217,7 +219,7 @@ fn generic_param_owner_for_effect_family_base<'db>(
         TyData::TyBase(TyBase::Adt(adt)) => Some(adt.as_generic_param_owner(db)),
         TyData::TyBase(TyBase::Func(func)) => match func {
             CallableDef::Func(def) => Some((*def).into()),
-            CallableDef::VariantCtor(_) => None,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => None,
         },
         _ => None,
     }
@@ -247,6 +249,7 @@ fn build_conservative_invalid_trait_key_barrier_pattern_in_scope<'db>(
                 .chain(args_no_self.iter().copied())
                 .collect::<Vec<_>>(),
             IndexMap::new(),
+            ModeMarker::None,
         ),
         slots,
     )))
@@ -595,7 +598,7 @@ fn normalize_stored_trait_key<'db>(
         .into_iter()
         .map(|ty| normalize_effect_identity_ty(db, ty, scope, assumptions, None))
         .collect();
-    let mut assoc_bindings: SmallVec<[(crate::hir_def::IdentId<'db>, TyId<'db>); 2]> = key
+    let mut assoc_bindings: SmallVec<[(AssocBinding<'db>, TyId<'db>); 2]> = key
         .assoc_bindings
         .into_iter()
         .map(|(name, ty)| {

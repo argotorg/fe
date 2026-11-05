@@ -3,7 +3,7 @@ use hir::analysis::{
     HirAnalysisDb,
     semantic::{
         ExecutableBlock, PlaceProvenance, SLocal, SLocalId, SemOrigin, SemanticBody,
-        SemanticInstance, SemanticLocalRole, get_or_build_semantic_instance,
+        SemanticInstance, SemanticLocalRole,
         normalized::{
             NBlock, NBlockId, NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutLocals,
             NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind,
@@ -99,7 +99,8 @@ impl<'db> RuntimeSemanticBody<'db> {
             ))
         })?;
         let source = instance.body(db).clone();
-        let representations = NLayoutLocals::new(&artifacts.body, &artifacts.layout_plan, &source);
+        let representations =
+            NLayoutLocals::new(db, &artifacts.body, &artifacts.layout_plan, &source);
 
         // Runtime code is the control flow the borrow check proved executable,
         // so representation choices and the summary's return contract agree on
@@ -240,7 +241,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                     NStatementKind::Define { expr, .. } => {
                         self.mark_expr_root_demand(db, local, expr, &mut demand)
                     }
-                    NStatementKind::End { .. } => {}
+                    NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
                     NStatementKind::Store { destination, .. } => {
                         if self.place_source(destination) == Some(local) {
                             // Whole-local assignments update its value binding.
@@ -302,7 +303,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                 effect_args,
                 ..
             } => {
-                let callee = get_or_build_semantic_instance(db, callee.key);
+                let callee = SemanticInstance::new(db, callee.key);
                 // A view of the local, or the local itself when it is a view,
                 // for a parameter that needs its address passes the local's
                 // own storage, so the callee does not copy it on every call.
@@ -386,11 +387,7 @@ impl<'db> RuntimeSemanticBody<'db> {
 /// instead of each copying the argument into the callee's own storage. A
 /// scalar view is always passed by value, so rooting its argument saves
 /// nothing.
-#[salsa::tracked(
-    return_ref,
-    cycle_fn = params_needing_place_cycle_recover,
-    cycle_initial = params_needing_place_cycle_initial
-)]
+#[salsa::tracked(cycle_initial = params_needing_place_cycle_initial)]
 pub(crate) fn params_needing_place<'db>(
     db: &'db dyn MirDb,
     instance: SemanticInstance<'db>,
@@ -400,9 +397,10 @@ pub(crate) fn params_needing_place<'db>(
     };
     let typed_body = instance.key(db).typed_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, instance);
-    (0..)
-        .map_while(|index| typed_body.param_binding(index))
-        .map(|binding| {
+    typed_body
+        .input_bindings()
+        .iter()
+        .map(|&binding| {
             matches!(
                 binding,
                 LocalBinding::Param {
@@ -432,16 +430,8 @@ pub(crate) fn params_needing_place<'db>(
 
 fn params_needing_place_cycle_initial<'db>(
     _: &'db dyn MirDb,
+    _: salsa::Id,
     _: SemanticInstance<'db>,
 ) -> Vec<bool> {
     Vec::new()
-}
-
-fn params_needing_place_cycle_recover<'db>(
-    _: &'db dyn MirDb,
-    _: &Vec<bool>,
-    _: u32,
-    _: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<Vec<bool>> {
-    salsa::CycleRecoveryAction::Iterate
 }
