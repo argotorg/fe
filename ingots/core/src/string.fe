@@ -31,6 +31,12 @@ impl<const N: usize> String<N> {
         word_to_usize(32 - leading_zeros(word) / 8)
     }
 
+    /// The text as a word's first `len` bytes, the rest zero, given the
+    /// string's `len()`.
+    pub(ingot) const fn text_word(self, _ len: usize) -> u256 {
+        padded_word(self) << (((32 - len) * 8) as u256)
+    }
+
     /// Returns the byte at `index` of the string's `len()` bytes, the text
     /// after the zero padding, which `index` must be below.
     pub fn byte_at(self, _ index: usize) -> u8 {
@@ -89,8 +95,7 @@ impl<const N: usize> Eq<String<N>> for MemSlice<u8> {
             return false
         }
         // Both hold their text in the word's first `len` bytes, the rest zero.
-        let shift = ((32 - len) * 8) as u256
-        unsafe { read_padded_word(self.ptr(), len) } == padded_word(other) << shift
+        unsafe { read_padded_word(self.ptr(), len) } == other.text_word(len)
     }
 }
 

@@ -98,6 +98,51 @@ fn index_of_a_span_past_a_word() {
 }
 
 #[test]
+fn a_literal_search_compares_past_the_first_byte() {
+    let s: DynString = "abababac"
+    assert!(s.span().index_of("abac").unwrap() == 4)
+    assert!(s.span().index_of("abad").is_none())
+
+    // A match that would run past the end isn't one.
+    let near_end: DynString = "xxab"
+    assert!(near_end.span().index_of("ab").unwrap() == 2)
+    assert!(near_end.span().index_of("abc").is_none())
+    assert!(near_end.span().head(3).index_of("ab").is_none())
+}
+
+#[test]
+fn a_literal_search_reads_every_byte_value() {
+    let s: DynString = "café au lait"
+    assert!(s.span().index_of("é").unwrap() == 3)
+    assert!(s.span().index_of("é a").unwrap() == 3)
+    assert!(s.span().starts_with("café"))
+
+    var buffer = MemBuffer::new(0)
+    buffer.push(0)
+    buffer.push(b'a')
+    buffer.push(0)
+    buffer.push(b'b')
+    let span = buffer.span()
+    assert!(span.index_of("a").unwrap() == 1)
+    assert!(span.index_of("b").unwrap() == 3)
+    assert!(span.ends_with("b"))
+    assert!(!span.starts_with("a"))
+}
+
+#[test]
+fn a_literal_of_31_bytes_fills_a_word() {
+    let s: DynString = "xabcdefghijklmnopqrstuvwxyz01234y"
+    let span = s.span()
+    assert!(span.index_of("abcdefghijklmnopqrstuvwxyz01234").unwrap() == 1)
+    assert!(span.index_of("abcdefghijklmnopqrstuvwxyz01235").is_none())
+    assert!(span.tail(1).starts_with("abcdefghijklmnopqrstuvwxyz01234"))
+    assert!(span.head(32).ends_with("abcdefghijklmnopqrstuvwxyz01234"))
+    assert!(
+        bracketed(span, span.split("abcdefghijklmnopqrstuvwxyz01234")) == "[x][y]",
+    )
+}
+
+#[test]
 fn trim_removes_ascii_whitespace() {
     assert!(trimmed("  a b\t\r\n") == "a b")
     assert!(trimmed("a") == "a")
@@ -139,6 +184,10 @@ fn split_takes_a_longer_separator() {
     let span = s.span()
     let buffer = bracketed(span, span.split(", "))
     assert!(buffer == "[a][b][][c,d]")
+
+    // The first byte of a separator alone isn't a match.
+    let partial: DynString = "a,b, c,"
+    assert!(bracketed(partial.span(), partial.span().split(", ")) == "[a,b][c,]")
 }
 
 #[test]

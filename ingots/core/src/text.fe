@@ -21,11 +21,48 @@ pub trait Text {
     fn text_len(self) -> usize
     /// The byte at `index`, which is below `text_len()`.
     fn text_byte(self, _ index: usize) -> u8
+
+    /// Whether the text is the bytes of `span` from `offset` on, of which
+    /// there must be `text_len()`.
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        let len = self.text_len()
+        var i: usize = 0
+        while i < len {
+            if span.byte_at(offset + i) != self.text_byte(i) {
+                return false
+            }
+            i += 1
+        }
+        true
+    }
+
+    /// The first match in `span` at or after `from`.
+    fn text_find(self, _ span: MemSpan, from: usize) -> Option<usize> {
+        let len = self.text_len()
+        var offset = from
+        while offset + len <= span.len() {
+            if self.text_matches_at(span, offset) {
+                return Option::Some(offset)
+            }
+            offset += 1
+        }
+        Option::None
+    }
 }
 
 impl<const N: usize> Text for String<N> {
     fn text_len(self) -> usize { self.len() }
     fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+
+    // `byte_at` finds the string's `len()` for each byte, so these compare words.
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span.slice(offset, len: self.len()) == self
+    }
+
+    fn text_find(self, _ span: MemSpan, from: usize) -> Option<usize> {
+        let len = self.len()
+        find_word(span, word: self.text_word(len), len, from)
+    }
 }
 
 impl Text for DynString {
@@ -528,26 +565,18 @@ impl TextBuilder {
 impl MemSlice<u8> {
     /// Whether the span begins with `prefix`.
     pub fn starts_with<T: Text>(self, _ prefix: T) -> bool {
-        prefix.text_len() <= self.len() && text_matches_at(self, prefix, offset: 0)
+        prefix.text_len() <= self.len() && prefix.text_matches_at(self, offset: 0)
     }
 
     /// Whether the span ends with `suffix`.
     pub fn ends_with<T: Text>(self, _ suffix: T) -> bool {
         let len = suffix.text_len()
-        len <= self.len() && text_matches_at(self, suffix, offset: self.len() - len)
+        len <= self.len() && suffix.text_matches_at(self, offset: self.len() - len)
     }
 
     /// The offset of the first match of `pattern`.
     pub fn index_of<T: Text>(self, _ pattern: T) -> Option<usize> {
-        let len = pattern.text_len()
-        var offset: usize = 0
-        while offset + len <= self.len() {
-            if text_matches_at(self, pattern, offset) {
-                return Option::Some(offset)
-            }
-            offset += 1
-        }
-        Option::None
+        pattern.text_find(self, from: 0)
     }
 
     /// The span without its leading and trailing ASCII whitespace.
@@ -581,14 +610,14 @@ impl MemSlice<u8> {
     }
 }
 
-/// What `MemSpan::split` splits on: a byte (`b','`) or a literal (`", "`).
+/// What `MemSpan::split` splits on: a byte (`b','`) or a `String<N>`, so a
+/// literal of up to 31 bytes (`", "`).
 pub trait Separator {
     /// The number of bytes a match covers.
     fn byte_len(self) -> usize
 
-    /// Whether the separator is the bytes of `text` from `offset` on, of which
-    /// there must be `byte_len()`.
-    fn matches_at(self, _ text: MemSpan, offset: usize) -> bool
+    /// The first match in `text` at or after `from`.
+    fn find(self, _ text: MemSpan, from: usize) -> Option<usize>
 }
 
 impl Separator for u8 {
@@ -596,8 +625,8 @@ impl Separator for u8 {
         1
     }
 
-    fn matches_at(self, _ text: MemSpan, offset: usize) -> bool {
-        text.byte_at(offset) == self
+    fn find(self, _ text: MemSpan, from: usize) -> Option<usize> {
+        find_byte(text, self, from)
     }
 }
 
@@ -606,8 +635,8 @@ impl<const N: usize> Separator for String<N> {
         self.len()
     }
 
-    fn matches_at(self, _ text: MemSpan, offset: usize) -> bool {
-        text_matches_at(text, self, offset)
+    fn find(self, _ text: MemSpan, from: usize) -> Option<usize> {
+        self.text_find(text, from)
     }
 }
 
@@ -671,30 +700,47 @@ impl Driver for Lines {
     }
 }
 
-// Whether `pattern`, which must fit, is the bytes of `text` from `offset` on.
-fn text_matches_at<T: Text>(_ text: MemSpan, _ pattern: T, offset: usize) -> bool {
-    var i: usize = 0
-    while i < pattern.text_len() {
-        if text.byte_at(offset + i) != pattern.text_byte(i) {
-            return false
-        }
-        i += 1
-    }
-    true
-}
-
 // The part beginning at `start`, which ends at the next separator or at the
 // span's end. A `start` past the end names no part.
 fn part_from<S: Separator>(_ text: MemSpan, _ separator: S, start: usize) -> (usize, usize) {
-    let len = separator.byte_len()
-    var end = start
-    while end + len <= text.len() {
-        if separator.matches_at(text, offset: end) {
-            return (start, end)
-        }
-        end += 1
+    match separator.find(text, from: start) {
+        Option::Some(end) => (start, end)
+        Option::None => (start, text.len())
     }
-    (start, text.len())
+}
+
+// The first offset at or after `from` where `len` bytes of `text` are `word`'s
+// first `len` bytes, the rest of `word` being zero. Testing the first byte
+// avoids most of the word reads.
+fn find_word(_ text: MemSpan, word: u256, len: usize, from: usize) -> Option<usize> {
+    let end = text.len()
+    if len == 0 && from <= end {
+        return Option::Some(from)
+    }
+    let base = text.ptr()
+    let first: u8 = (word >> 248).downcast_truncate()
+    var offset = from
+    while offset + len <= end {
+        let at = ptr::offset_bytes(base, offset)
+        if unsafe { *at } == first && unsafe { ptr::read_padded_word(at, len) } == word {
+            return Option::Some(offset)
+        }
+        offset += 1
+    }
+    Option::None
+}
+
+fn find_byte(_ text: MemSpan, _ byte: u8, from: usize) -> Option<usize> {
+    let end = text.len()
+    let base = text.ptr()
+    var offset = from
+    while offset < end {
+        if unsafe { *ptr::offset_bytes(base, offset) } == byte {
+            return Option::Some(offset)
+        }
+        offset += 1
+    }
+    Option::None
 }
 
 fn is_ascii_whitespace(_ byte: u8) -> bool {
