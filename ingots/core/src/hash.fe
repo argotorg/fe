@@ -1,6 +1,7 @@
-//! Ethereum's Keccak-256, in Fe.
+//! Ethereum's Keccak-256 and FIPS 180-4's SHA-256, in Fe.
 //!
-//! `Keccak256` hashes borrowed bytes without allocating, on any target. On
+//! `Keccak256` and `Sha256` hash borrowed bytes without allocating, on any
+//! target. On the EVM, `std::evm::crypto::sha256` costs far less gas. On
 //! targets without a hash instruction, the compiler also calls `keccak_raw`,
 //! `keccak_packed` and `keccak_words` for `std::evm::ops::keccak256`,
 //! `core::intrinsic::__keccak256` and `core::intrinsic::__keccak_words`.
@@ -179,6 +180,171 @@ pub fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
         state.update_word(word, len: 32)
     }
     state.finish_word()
+}
+
+/// SHA-256 (FIPS 180-4).
+pub struct Sha256 { state: [u32; 8], words: [u32; 16], position: u64, len: u64 }
+
+impl Sha256 {
+    pub fn new() -> Self { Self { state: SHA256_INITIAL, words: [0; 16], position: 0, len: 0 } }
+
+    /// Absorb a source range. Empty updates do not change the hash state.
+    pub fn update<T: HashInput>(mut self, _ input: T, offset: usize, len: usize) {
+        assert(offset <= input.input_len() && len <= input.input_len() - offset)
+        // Memory holds fewer than 2^61 bytes, so the bit count fits 64 bits.
+        self.len = self.len.wrapping_add(len.downcast_truncate())
+        // Bytes up to a lane boundary, then whole lanes, then the rest.
+        var index: usize = 0
+        while index < len && self.position % 8 != 0 {
+            self.absorb_byte(input.input_byte(offset + index))
+            index += 1
+        }
+        // `index + remaining` stays `len`, and `offset + len` fits the input,
+        // so the additions cannot wrap.
+        var remaining = len - index
+        while remaining >= 8 {
+            let lane = swap_bytes(input.input_lane(offset.wrapping_add(index)))
+            let word = (self.position / 4) as usize
+            self.words[word] = (lane >> 32).downcast_truncate()
+            self.words[word + 1] = lane.downcast_truncate()
+            self.advance(8)
+            index = index.wrapping_add(8)
+            remaining -= 8
+        }
+        while index < len {
+            self.absorb_byte(input.input_byte(offset + index))
+            index += 1
+        }
+    }
+
+    // Four bytes in a row replace the word, shifting out the previous block's.
+    fn absorb_byte(mut self, _ byte: u8) {
+        let word = (self.position / 4) as usize
+        self.words[word] = (self.words[word] << 8) | byte as u32
+        self.advance(1)
+    }
+
+    /// Count `bytes` more absorbed bytes, compressing at the end of a block.
+    fn advance(mut self, _ bytes: u64) {
+        self.position += bytes
+        if self.position == 64 {
+            sha256_compress(mut self.state, self.words)
+            self.position = 0
+        }
+    }
+
+    fn pad(mut self) {
+        let bits = self.len << 3
+        self.absorb_byte(0x80)
+        while self.position != 56 {
+            self.absorb_byte(0)
+        }
+        self.words[14] = (bits >> 32).downcast_truncate()
+        self.words[15] = bits.downcast_truncate()
+        sha256_compress(mut self.state, self.words)
+    }
+
+    /// Apply SHA-256 padding and return the digest as a big-endian word,
+    /// consuming the state.
+    pub fn finish_word(var own self) -> u256 {
+        self.pad()
+        var digest: u256 = 0
+        for word in self.state { digest = (digest << 32) | word as u256 }
+        digest
+    }
+
+    /// Apply SHA-256 padding, return the digest, and consume the state.
+    pub fn finish(var own self) -> [u8; 32] {
+        let word = self.finish_word()
+        var digest: [u8; 32] = [0; 32]
+        for index in 0..32 {
+            digest[index] = (word >> ((31 - index) * 8) as u256).downcast_truncate()
+        }
+        digest
+    }
+}
+
+pub fn sha256<T: HashInput>(_ input: T) -> [u8; 32] {
+    var state = Sha256::new()
+    state.update(input, offset: 0, len: input.input_len())
+    state.finish()
+}
+
+/// The digest of `input` as a big-endian word; see `Sha256::finish_word`.
+pub fn sha256_word<T: HashInput>(_ input: T) -> u256 {
+    var state = Sha256::new()
+    state.update(input, offset: 0, len: input.input_len())
+    state.finish_word()
+}
+
+// FIPS 180-4 section 4.2.2 and 5.3.3.
+const SHA256_K: [u32; 64] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]
+const SHA256_INITIAL: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+]
+
+#[inline(always)]
+fn rotate_right(_ value: u32, by: u32) -> u32 {
+    (value >> by) | (value << (32 - by))
+}
+
+fn sha256_compress(_ state: mut [u32; 8], _ words: [u32; 16]) {
+    var w: [u32; 64] = [0; 64]
+    var t: u64 = 0
+    while t < 16 {
+        w[t as usize] = words[t as usize]
+        t += 1
+    }
+    while t < 64 {
+        let x = w[(t - 15) as usize]
+        let y = w[(t - 2) as usize]
+        let s0 = rotate_right(x, by: 7) ^ rotate_right(x, by: 18) ^ (x >> 3)
+        let s1 = rotate_right(y, by: 17) ^ rotate_right(y, by: 19) ^ (y >> 10)
+        w[t as usize] = w[(t - 16) as usize].wrapping_add(s0).wrapping_add(w[(t - 7) as usize]).wrapping_add(s1)
+        t += 1
+    }
+    var a = state[0]
+    var b = state[1]
+    var c = state[2]
+    var d = state[3]
+    var e = state[4]
+    var f = state[5]
+    var g = state[6]
+    var h = state[7]
+    t = 0
+    while t < 64 {
+        let s1 = rotate_right(e, by: 6) ^ rotate_right(e, by: 11) ^ rotate_right(e, by: 25)
+        let choice = (e & f) ^ (!e & g)
+        let first = h.wrapping_add(s1).wrapping_add(choice).wrapping_add(SHA256_K[t as usize]).wrapping_add(w[t as usize])
+        let s0 = rotate_right(a, by: 2) ^ rotate_right(a, by: 13) ^ rotate_right(a, by: 22)
+        let majority = (a & b) ^ (a & c) ^ (b & c)
+        h = g
+        g = f
+        f = e
+        e = d.wrapping_add(first)
+        d = c
+        c = b
+        b = a
+        a = first.wrapping_add(s0).wrapping_add(majority)
+        t += 1
+    }
+    state[0] = state[0].wrapping_add(a)
+    state[1] = state[1].wrapping_add(b)
+    state[2] = state[2].wrapping_add(c)
+    state[3] = state[3].wrapping_add(d)
+    state[4] = state[4].wrapping_add(e)
+    state[5] = state[5].wrapping_add(f)
+    state[6] = state[6].wrapping_add(g)
+    state[7] = state[7].wrapping_add(h)
 }
 
 // Keccak-f[1600], indexed x + 5*y. Small counters use u64 because Fe usize
