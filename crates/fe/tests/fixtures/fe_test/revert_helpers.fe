@@ -56,7 +56,7 @@ msg MockMsg {
 pub contract Mock {
     recv MockMsg {
         RevertWith { data } {
-            revert_bytes(data.payload_span())
+            revert_bytes(data.span())
         }
         FailInsufficient { available, required } {
             revert_error(Insufficient { available, required })
@@ -95,7 +95,7 @@ pub contract Forwarder uses (call: mut Call) {
                     addr: target,
                     gas: 1000000,
                     value: Wei::zero(),
-                    args: data.payload_span(),
+                    args: data.span(),
                     ret: mut ret,
                 )
             if !outcome.success() {
@@ -585,7 +585,7 @@ fn test_returndata_to_bytes() uses (evm: mut Evm) {
     assert!(
         bytes.encoded_span().word_at(64) == 0x2122232425262728 << 192,
     )
-    assert!(span_eq(bytes.payload_span(), span(buf, 40)))
+    assert!(span_eq(bytes.span(), span(buf, 40)))
     assert!(
         bytes == Bytes::from_payload(source: copy_returndata().span()),
     )
@@ -610,7 +610,7 @@ fn test_returndata_to_bytes() uses (evm: mut Evm) {
     assert!(aligned.encoded_span().word_at(64) == 4)
     let whole = ReturnData::new().to_bytes()
     assert!(
-        whole.len() == 68 && is_error<Insufficient>(whole.payload_span()),
+        whole.len() == 68 && is_error<Insufficient>(whole.span()),
     )
 
     // No returndata.

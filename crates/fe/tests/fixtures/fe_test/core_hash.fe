@@ -123,7 +123,7 @@ fn keccak_matches_compile_time_hashes() {
 }
 
 fn sha256_text(_ text: DynString) -> u256 {
-    sha256_word(text.payload_span())
+    sha256_word(text.span())
 }
 
 // FIPS 180-4's example messages.

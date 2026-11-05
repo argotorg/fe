@@ -11,9 +11,9 @@ use super::crypto::keccak256
 /// Specification: https://eips.ethereum.org/EIPS/eip-55
 pub fn checksum_address(_ address: Address) -> DynString {
     let lower = text::hex(address.inner, 20)
-    let hash = keccak256(lower.payload_span())
+    let hash = keccak256(lower.span())
     let checksummed = DynString::zeroed(42)
-    let data = checksummed.payload_span().ptr()
+    let data = checksummed.span().ptr()
     unsafe {
         *data = 48
         *ptr::offset_bytes(data, 1) = 120

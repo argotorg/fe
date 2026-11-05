@@ -44,11 +44,11 @@ pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
         i += 1
     }
     let out = DynString::zeroed(len)
-    let data = out.payload_span().ptr()
+    let data = out.span().ptr()
     var offset: usize = 0
     i = 0
     while i < N {
-        let part = parts[i].payload_span()
+        let part = parts[i].span()
         unsafe { ptr::copy(dest: ptr::offset_bytes(data, offset), source: part) }
         offset += part.len()
         i += 1
@@ -65,7 +65,7 @@ pub fn decimal(_ value: u256) -> DynString {
         rest /= 10
     }
     let out = DynString::zeroed(digits)
-    let data = out.payload_span().ptr()
+    let data = out.span().ptr()
     var remaining = value
     var i = digits
     while i > 0 {
@@ -81,7 +81,7 @@ pub fn decimal(_ value: u256) -> DynString {
 pub fn hex(_ value: u256, _ bytes: usize) -> DynString {
     let digits = bytes * 2
     let out = DynString::zeroed(digits)
-    let data = out.payload_span().ptr()
+    let data = out.span().ptr()
     var remaining = value
     var i = digits
     while i > 0 {
@@ -97,7 +97,7 @@ pub fn hex(_ value: u256, _ bytes: usize) -> DynString {
 pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
     let digits = bytes * 2
     let out = DynString::zeroed(digits)
-    let data = out.payload_span().ptr()
+    let data = out.span().ptr()
     var remaining = value
     var i = digits
     while i > 0 {
@@ -186,7 +186,7 @@ fn digit_value(_ byte: u8) -> u256 {
 pub fn base64(_ data: MemSpan) -> DynString {
     let len = data.len()
     let out = DynString::zeroed(4 * ((len + 2) / 3))
-    let dest = out.payload_span().ptr()
+    let dest = out.span().ptr()
     var i: usize = 0
     var j: usize = 0
     while i < len {
@@ -211,7 +211,7 @@ pub fn base64(_ data: MemSpan) -> DynString {
 /// the bits it leaves unused are zero, so each byte string has exactly one
 /// accepted encoding (RFC 4648).
 pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
-    let input = text.payload_span()
+    let input = text.span()
     let len = input.len()
     if len % 4 != 0 {
         return Option::None
@@ -222,7 +222,7 @@ pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
     }
     let out_len = len / 4 * 3 - padding
     let decoded = Bytes::zeroed(out_len)
-    let out = decoded.payload_span().ptr()
+    let out = decoded.span().ptr()
     var i: usize = 0
     var j: usize = 0
     while i < len {
@@ -321,7 +321,7 @@ pub fn base58(_ data: MemSpan) -> DynString {
         digits += (used - 1) * 10
     }
     let out = DynString::zeroed(zeros + digits)
-    let dest = out.payload_span().ptr()
+    let dest = out.span().ptr()
     i = 0
     while i < zeros {
         unsafe { *ptr::offset_bytes(dest, i) = 49 }
@@ -347,7 +347,7 @@ pub fn base58(_ data: MemSpan) -> DynString {
 /// `Base58.decode`): each leading `1` becomes a zero byte. `None` if any
 /// byte is outside the alphabet.
 pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
-    let input = text.payload_span()
+    let input = text.span()
     let len = input.len()
     var zeros: usize = 0
     while zeros < len && input.byte_at(zeros) == 49 {
@@ -387,7 +387,7 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
     }
     // The leading `zeros` bytes stay zero.
     let decoded = Bytes::zeroed(zeros + bytes)
-    let out = decoded.payload_span().ptr()
+    let out = decoded.span().ptr()
     var pos = zeros + bytes
     var k: usize = 0
     while pos > zeros {
@@ -468,10 +468,10 @@ pub fn concat_slice(_ parts: ptr::MemSlice<DynString>) -> DynString {
     var offset: usize = 0
     i = 0
     while i < parts.len() {
-        let part = unsafe { (*parts.ptr_at(i)).payload_span() }
+        let part = unsafe { (*parts.ptr_at(i)).span() }
         unsafe {
             ptr::copy(
-                dest: ptr::offset_bytes(out.payload_span().ptr(), offset),
+                dest: ptr::offset_bytes(out.span().ptr(), offset),
                 source: part,
             )
         }
@@ -505,7 +505,7 @@ impl TextBuilder {
     /// Append a string without copying the already accumulated prefix unless
     /// the buffer must grow.
     pub fn push(own self, _ value: DynString) -> Self {
-        self.push_bytes(value.payload_span())
+        self.push_bytes(value.span())
     }
 
     /// Append arbitrary bytes, including zero bytes and non-UTF-8 sequences.

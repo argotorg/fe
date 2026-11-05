@@ -8,7 +8,7 @@
 //! let encoded = rlp::encode_list([
 //!     rlp::encode_uint(nonce),
 //!     rlp::encode_address(to),
-//!     rlp::encode_bytes(data.payload_span()),
+//!     rlp::encode_bytes(data.span()),
 //! ])
 //! ```
 //!
@@ -34,7 +34,7 @@ pub fn encode_bytes(_ data: MemSpan) -> Bytes {
     }
     let header = header_len(len)
     let encoded = Bytes::zeroed(header + len)
-    let out = encoded.payload_span().ptr()
+    let out = encoded.span().ptr()
     write_header(out, offset: 0x80, len)
     unsafe { ptr::copy(dest: ptr::offset_bytes(out, header), source: data) }
     encoded
@@ -48,7 +48,7 @@ pub fn encode_uint(_ value: u256) -> Bytes {
         return Bytes::from_word_prefix(word: value << 248, len: 1)
     }
     let encoded = Bytes::zeroed(1 + len)
-    let out = encoded.payload_span().ptr()
+    let out = encoded.span().ptr()
     unsafe { *out = (0x80 + len as u256).downcast_truncate() }
     write_be(ptr::offset_bytes(out, 1), value, len)
     encoded
@@ -74,12 +74,12 @@ pub fn encode_list<const N: usize>(_ items: [Bytes; N]) -> Bytes {
     }
     let header = header_len(len)
     let encoded = Bytes::zeroed(header + len)
-    let out = encoded.payload_span().ptr()
+    let out = encoded.span().ptr()
     write_header(out, offset: 0xc0, len)
     var offset = header
     i = 0
     while i < N {
-        let item = items[i].payload_span()
+        let item = items[i].span()
         unsafe { ptr::copy(dest: ptr::offset_bytes(out, offset), source: item) }
         offset += item.len()
         i += 1

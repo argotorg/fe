@@ -55,7 +55,7 @@ uses (ctx: Ctx, call: mut Call)
         let outcome = call.raw_delegatecall(
             addr: this,
             gas: ops::gas(),
-            args: entry.payload_span(),
+            args: entry.span(),
             ret: mut ret,
         )
         if !outcome.success() {

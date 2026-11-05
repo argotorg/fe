@@ -40,7 +40,7 @@ fn keccak_packed_writes_each_type_at_its_width() {
     let owner = Address::new(0xabc)
     let packed = encode_packed((owner, Int24 { val: -60 }, Uint24 { val: 3000 }, true, 7 as u256))
     assert(packed.len() == 20 + 3 + 3 + 1 + 32)
-    let span = packed.as_bytes().payload_span()
+    let span = packed.as_bytes().span()
     assert(span.word_at(0) == (0xabc << 96) | (0xffffc4 << 72) | (0x000bb8 << 48) | (1 << 40))
     assert(span.word_at(27) == 7)
     // The direct `write_packed` path hashes the same bytes as the builder.

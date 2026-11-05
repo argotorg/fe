@@ -32,10 +32,10 @@
 ///
 /// ```ignore
 /// let root: u256 = (
-///     ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey.payload_span(), start: 0, len: 48),
+///     ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey.span(), start: 0, len: 48),
 ///     wc_word,                            // already a 32-byte chunk
 ///     ssz::u64_chunk(amount_gwei),        // pack the uint64
-///     ssz::hash_tree_root<ssz::ByteVector<96>>(signature.payload_span(), start: 0, len: 96),
+///     ssz::hash_tree_root<ssz::ByteVector<96>>(signature.span(), start: 0, len: 96),
 /// ).merkleize()                           // 4 chunks → balanced tree
 /// ```
 ///
@@ -129,7 +129,7 @@ pub struct ByteVector<const N: usize> {}
 ///
 /// Implementors decide how many chunks the value occupies and how to
 /// merkleize them. The value is the `len` bytes of `input` from `start`, so
-/// callers pass a view of existing bytes (typically `Bytes::payload_span`)
+/// callers pass a view of existing bytes (typically `Bytes::span`)
 /// without copying them.
 pub trait HashTreeRoot {
     /// Compute the SSZ root of `input`'s bytes `start..start + len`.

@@ -236,7 +236,7 @@ impl ByteSource for LengthInput {
 }
 
 #[test]
-fn largest_padded_dynamic_payload_span_is_accepted() {
+fn largest_padded_dynamic_span_is_accepted() {
     let data = LengthInput { data_len: 0xffffffffffffffc0 }
     assert!(<Bytes as AbiSpan<Sol>>::payload_end(data, base: 0, pos: 0) == 0xffffffffffffffe0)
 }

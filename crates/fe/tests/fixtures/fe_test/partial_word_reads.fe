@@ -46,7 +46,7 @@ fn bytes_words_zero_the_bytes_past_the_payload() {
     for len in 1..66 {
         let bytes = Bytes::from_payload(source: buffer.slice(offset: 0, len))
         for offset in 0..len {
-            core::assert(bytes.word_at(offset) == expected_word(bytes.payload_span(), offset))
+            core::assert(bytes.word_at(offset) == expected_word(bytes.span(), offset))
         }
     }
 }

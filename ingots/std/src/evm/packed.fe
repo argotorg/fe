@@ -604,13 +604,13 @@ impl EncodePacked for Bytes {
     #[inline(always)]
     fn packed_width(self) -> u256 { self.len() as u256 }
     fn pack_into(own self, var _ p: own Packed) -> Packed {
-        let source = self.payload_span()
+        let source = self.span()
         p.append_raw(source: source.ptr(), len: source.len() as u256)
         p
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8, room: u256) -> u256 {
-        let source = self.payload_span()
+        let source = self.span()
         check_room(width: source.len() as u256, room)
         ptr::copy(dest, source)
         source.len() as u256

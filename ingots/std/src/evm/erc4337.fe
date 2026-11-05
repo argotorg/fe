@@ -165,7 +165,7 @@ impl PackedUserOperation {
         if len < PAYMASTER_DATA_OFFSET {
             return MemSpan::empty()
         }
-        self.paymaster_and_data.payload_span().slice(
+        self.paymaster_and_data.span().slice(
             offset: PAYMASTER_DATA_OFFSET,
             len: len - PAYMASTER_DATA_OFFSET,
         )
@@ -180,12 +180,12 @@ impl PackedUserOperation {
             [
                 self.sender.inner,
                 self.nonce,
-                keccak256(self.init_code.payload_span()),
-                keccak256(self.call_data.payload_span()),
+                keccak256(self.init_code.span()),
+                keccak256(self.call_data.span()),
                 self.account_gas_limits.val,
                 self.pre_verification_gas,
                 self.gas_fees.val,
-                keccak256(self.paymaster_and_data.payload_span()),
+                keccak256(self.paymaster_and_data.span()),
             ],
         )
         keccak_words([packed, entry_point.inner, chain_id])
@@ -205,12 +205,12 @@ impl PackedUserOperation {
                 PACKED_USEROP_TYPEHASH,
                 self.sender.inner,
                 self.nonce,
-                keccak256(self.init_code.payload_span()),
-                keccak256(self.call_data.payload_span()),
+                keccak256(self.init_code.span()),
+                keccak256(self.call_data.span()),
                 self.account_gas_limits.val,
                 self.pre_verification_gas,
                 self.gas_fees.val,
-                keccak256(self.paymaster_and_data.payload_span()),
+                keccak256(self.paymaster_and_data.span()),
             ],
         )
         let separator = eip712::domain_separator(
@@ -328,7 +328,7 @@ pub fn validate_user_op<S: UserOpSigner>(
 uses (ctx: Ctx, call: mut Call)
 {
     require_entry_point(entry_point)
-    let valid = signer.is_valid_signature(hash: user_op_hash.val, signature: user_op.signature.payload_span())
+    let valid = signer.is_valid_signature(hash: user_op_hash.val, signature: user_op.signature.span())
     pay_prefund(missing_account_funds)
     if valid { SIG_VALIDATION_SUCCESS } else { SIG_VALIDATION_FAILED }
 }

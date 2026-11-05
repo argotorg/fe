@@ -3,7 +3,7 @@
 //! `SignatureChecker` semantics.
 //!
 //! Signatures are passed as a `MemSpan` over their raw bytes, so both ABI
-//! `bytes` values (`sig.payload_span()`) and hand-sliced memory regions work.
+//! `bytes` values (`sig.span()`) and hand-sliced memory regions work.
 //!
 //! Accepting both the 65-byte and the 64-byte EIP-2098 encoding means one
 //! signature has two valid byte strings. Never use signature bytes as a

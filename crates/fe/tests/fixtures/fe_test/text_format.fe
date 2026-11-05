@@ -20,7 +20,7 @@ fn literals_and_equality() {
     assert!(unicode.byte_at(6) == 0xe2)
     let empty: DynString = ""
     assert!(empty == DynString::empty())
-    assert!(unicode.payload_span() == unicode.clone().payload_span())
+    assert!(unicode.span() == unicode.clone().span())
 }
 
 #[test]
@@ -54,11 +54,11 @@ fn hex_digits() {
 
 #[test]
 fn base64_padding() {
-    assert!(text::base64(("").payload_span()) == "")
-    assert!(text::base64(("M").payload_span()) == "TQ==")
-    assert!(text::base64(("Ma").payload_span()) == "TWE=")
-    assert!(text::base64(("Man").payload_span()) == "TWFu")
-    assert!(text::base64(("<svg>?").payload_span()) == "PHN2Zz4/")
+    assert!(text::base64(("").span()) == "")
+    assert!(text::base64(("M").span()) == "TQ==")
+    assert!(text::base64(("Ma").span()) == "TWE=")
+    assert!(text::base64(("Man").span()) == "TWFu")
+    assert!(text::base64(("<svg>?").span()) == "PHN2Zz4/")
 }
 
 #[test]

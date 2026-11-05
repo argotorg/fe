@@ -132,7 +132,7 @@ fn parse_text_inputs() {
     let dynamic: DynString = "-17"
     assert!(text::parse_int(dynamic).unwrap() == -17)
 
-    let owned = MemBuffer::from_span(text::decimal(90210).payload_span())
+    let owned = MemBuffer::from_span(text::decimal(90210).span())
     assert!(text::parse_uint(owned).unwrap() == 90210)
     assert!(text::parse_int(owned).unwrap() == 90210)
     assert!(text::parse_hex_uint(owned).unwrap() == 0x90210)

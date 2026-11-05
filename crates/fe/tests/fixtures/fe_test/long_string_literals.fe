@@ -41,7 +41,7 @@ pub contract Texts {
 
 /// Whether `text` holds `len` bytes hashing to `hash`.
 fn holds(_ text: DynString, len: usize, hash: u256) -> bool {
-    text.len() == len && keccak256(text.payload_span()) == hash
+    text.len() == len && keccak256(text.span()) == hash
 }
 
 /// The hash of `value`'s ABI encoding.

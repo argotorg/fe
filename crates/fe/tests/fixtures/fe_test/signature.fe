@@ -42,7 +42,7 @@ msg Erc1271Msg {
 pub contract Wallet {
     recv Erc1271Msg {
         IsValidSignature { hash, signature } -> u256 {
-            match signature::recover(digest: hash.val, signature.payload_span()) {
+            match signature::recover(digest: hash.val, signature.span()) {
                 Option::Some(signer) => {
                     if signer.word() == OWNER {
                         return MAGIC_WORD

@@ -108,7 +108,7 @@ fn checked(_ reply: Reply) -> Result<FileError, u32> {
 
 impl Files for Host {
     fn open(mut self, _ name: DynString) -> Result<FileError, Handle> {
-        let bytes = name.payload_span()
+        let bytes = name.span()
         let addr: u32 = (bytes.ptr() as usize).downcast().unwrap()
         let len: u32 = bytes.len().downcast().unwrap()
         match checked(Reply::from_word(sys_wasm_files_open(addr, len))) {
