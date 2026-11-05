@@ -183,7 +183,7 @@ pub fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
 }
 
 /// SHA-256 (FIPS 180-4).
-pub struct Sha256 { state: [u32; 8], words: [u32; 16], position: u64, len: u64 }
+pub struct Sha256 { state: [u32; 8], words: [u32; 16], position: usize, len: u64 }
 
 impl Sha256 {
     pub fn new() -> Self { Self { state: SHA256_INITIAL, words: [0; 16], position: 0, len: 0 } }
@@ -204,7 +204,7 @@ impl Sha256 {
         var remaining = len - index
         while remaining >= 8 {
             let lane = swap_bytes(input.input_lane(offset.wrapping_add(index)))
-            let word = (self.position / 4) as usize
+            let word = self.position / 4
             self.words[word] = (lane >> 32).downcast_truncate()
             self.words[word + 1] = lane.downcast_truncate()
             self.advance(8)
@@ -219,13 +219,13 @@ impl Sha256 {
 
     // Four bytes in a row replace the word, shifting out the previous block's.
     fn absorb_byte(mut self, _ byte: u8) {
-        let word = (self.position / 4) as usize
+        let word = self.position / 4
         self.words[word] = (self.words[word] << 8) | byte as u32
         self.advance(1)
     }
 
     /// Count `bytes` more absorbed bytes, compressing at the end of a block.
-    fn advance(mut self, _ bytes: u64) {
+    fn advance(mut self, _ bytes: usize) {
         self.position += bytes
         if self.position == 64 {
             sha256_compress(mut self.state, self.words)
@@ -299,17 +299,17 @@ fn rotate_right(_ value: u32, by: u32) -> u32 {
 
 fn sha256_compress(_ state: mut [u32; 8], _ words: [u32; 16]) {
     var w: [u32; 64] = [0; 64]
-    var t: u64 = 0
+    var t: usize = 0
     while t < 16 {
-        w[t as usize] = words[t as usize]
+        w[t] = words[t]
         t += 1
     }
     while t < 64 {
-        let x = w[(t - 15) as usize]
-        let y = w[(t - 2) as usize]
+        let x = w[t - 15]
+        let y = w[t - 2]
         let s0 = rotate_right(x, by: 7) ^ rotate_right(x, by: 18) ^ (x >> 3)
         let s1 = rotate_right(y, by: 17) ^ rotate_right(y, by: 19) ^ (y >> 10)
-        w[t as usize] = w[(t - 16) as usize].wrapping_add(s0).wrapping_add(w[(t - 7) as usize]).wrapping_add(s1)
+        w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1)
         t += 1
     }
     var a = state[0]
@@ -324,7 +324,7 @@ fn sha256_compress(_ state: mut [u32; 8], _ words: [u32; 16]) {
     while t < 64 {
         let s1 = rotate_right(e, by: 6) ^ rotate_right(e, by: 11) ^ rotate_right(e, by: 25)
         let choice = (e & f) ^ (!e & g)
-        let first = h.wrapping_add(s1).wrapping_add(choice).wrapping_add(SHA256_K[t as usize]).wrapping_add(w[t as usize])
+        let first = h.wrapping_add(s1).wrapping_add(choice).wrapping_add(SHA256_K[t]).wrapping_add(w[t])
         let s0 = rotate_right(a, by: 2) ^ rotate_right(a, by: 13) ^ rotate_right(a, by: 22)
         let majority = (a & b) ^ (a & c) ^ (b & c)
         h = g
@@ -347,8 +347,7 @@ fn sha256_compress(_ state: mut [u32; 8], _ words: [u32; 16]) {
     state[7] = state[7].wrapping_add(h)
 }
 
-// Keccak-f[1600], indexed x + 5*y. Small counters use u64 because Fe usize
-// has 256-bit arithmetic, including on native targets. Constants and round definition:
+// Keccak-f[1600], indexed x + 5*y. Constants and round definition:
 // https://keccak.team/keccak_specs_summary.html
 const ROUND_CONSTANTS: [u64; 24] = [
     0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
