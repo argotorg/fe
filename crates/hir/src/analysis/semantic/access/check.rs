@@ -23,6 +23,7 @@ use super::{
     DropElaboration, DropFlagPoint, DropFlagUpdate, DropPart, DropStep,
     domain::Domains,
     place::{AbsPlace, Base, Path, Step, path_of, paths_overlap},
+    refine::provisional_result_spaces,
     space::{PathSpace, PlaceStep},
 };
 use crate::{
@@ -30,7 +31,10 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex,
-            access::{control::semantic_may_return, projection_result_spaces},
+            access::{
+                control::{provisional_may_return, semantic_may_return},
+                projection_result_spaces,
+            },
             definite_assignment::literal_index,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan, operand_origin,
@@ -214,6 +218,8 @@ pub(super) struct Analysis<'a, 'db> {
     divergence: Vec<Option<usize>>,
     /// Whether transfer functions report violations.
     checking: bool,
+    /// Whether this analyzes a provisional body.
+    provisional: bool,
     /// The parts each drop destroys, as the check finds them.
     drop_parts: Vec<(NStatementId, Vec<DropPart>)>,
     /// The paths whose initialization a flag tracks, by flag.
@@ -221,14 +227,14 @@ pub(super) struct Analysis<'a, 'db> {
 }
 
 impl<'a, 'db> Analysis<'a, 'db> {
-    /// `divergence` cuts each block at a call that never returns. Provisional
-    /// analyses run while callee instances are still being built, so they
-    /// keep every path.
+    /// Each block is cut at a call that never returns. A provisional analysis
+    /// runs while callee instances are still being built, so it reads each
+    /// callee's provisional body and refinement rather than its checked body.
     pub fn new(
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
         body: &'a NormalizedBody<'db>,
-        divergence: bool,
+        provisional: bool,
     ) -> Self {
         let typed_body = instance.key(db).typed_body(db);
         let param_count = typed_body.input_bindings().len() as u32;
@@ -272,22 +278,26 @@ impl<'a, 'db> Analysis<'a, 'db> {
             moved_at: FxHashMap::default(),
             divergence: vec![None; body.blocks.len()],
             checking: false,
+            provisional,
             drop_parts: Vec::new(),
             drop_flags: Vec::new(),
         };
-        if divergence {
-            for (block, data) in body.blocks.iter().enumerate() {
-                analysis.divergence[block] =
-                    data.statements
-                        .iter()
-                        .position(|statement| match &statement.kind {
-                            NStatementKind::Define {
-                                expr: NExpr::Call { callee, .. },
-                                ..
-                            } => !semantic_may_return(db, SemanticInstance::new(db, callee.key)),
-                            _ => false,
-                        });
-            }
+        let may_return = if provisional {
+            provisional_may_return
+        } else {
+            semantic_may_return
+        };
+        for (block, data) in body.blocks.iter().enumerate() {
+            analysis.divergence[block] =
+                data.statements
+                    .iter()
+                    .position(|statement| match &statement.kind {
+                        NStatementKind::Define {
+                            expr: NExpr::Call { callee, .. },
+                            ..
+                        } => !may_return(db, SemanticInstance::new(db, callee.key)),
+                        _ => false,
+                    });
         }
         for (index, root) in body.roots.iter().enumerate() {
             if let NRootKind::Provider { binding } = &root.kind {
@@ -568,6 +578,24 @@ impl<'a, 'db> Analysis<'a, 'db> {
         region.space.or_else(|| self.space(region.base))
     }
 
+    /// Whether `value` is the result of a projection call, which opens a
+    /// session.
+    pub fn is_session(&self, value: NValueId) -> bool {
+        self.sessions.contains_key(&value)
+    }
+
+    /// Makes `callee` the projection `session` calls, as its call site's
+    /// refinement instantiates it. Returns whether that changed it.
+    pub fn set_session(&mut self, session: NValueId, callee: SemanticInstance<'db>) -> bool {
+        match self.sessions.get_mut(&session) {
+            Some(current) if *current != callee => {
+                *current = callee;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The space a retained grant to `region` lies in: memory for a lane,
     /// whose grant is a memory copy, else the region's own.
     pub fn grant_space(&self, region: &AbsPlace) -> Option<AddressSpace> {
@@ -586,10 +614,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
             Base::State(space) => Some(space),
             // A grant lies in the space its projection's contract exports.
             Base::Grant { session, component } => {
-                projection_result_spaces(self.db, *self.sessions.get(&session)?)
-                    .get(component as usize)
-                    .copied()
-                    .flatten()
+                let callee = *self.sessions.get(&session)?;
+                let spaces = if self.provisional {
+                    provisional_result_spaces(self.db, callee)
+                } else {
+                    projection_result_spaces(self.db, callee)
+                };
+                spaces.get(component as usize).copied().flatten()
             }
             Base::Raw => Some(AddressSpace::Memory),
         }
@@ -835,11 +866,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 effect_args,
                 ..
             } => {
-                if let BodyOwner::Func(func, mode) = callee.key.owner(self.db)
-                    && let Some(shape) = func.return_shape(self.db, mode)
-                {
-                    self.sessions
-                        .insert(result, SemanticInstance::new(self.db, callee.key));
+                let instance = SemanticInstance::new(self.db, callee.key);
+                if let Some(shape) = instance.return_shape(self.db) {
+                    self.sessions.entry(result).or_insert(instance);
                     return self.open_session(result, origin, callee.key, shape, args, effect_args);
                 }
                 Held::new()
@@ -1232,25 +1261,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     fn reverse_postorder(&self) -> Vec<NBlockId> {
-        let mut visited = vec![false; self.body.blocks.len()];
-        let mut postorder = Vec::new();
-        let mut stack = vec![(self.body.entry, 0)];
-        visited[self.body.entry.index()] = true;
-        while let Some((block, next)) = stack.last_mut() {
-            let successors = self.successors(*block);
-            if let Some(&successor) = successors.get(*next) {
-                *next += 1;
-                if !visited[successor.index()] {
-                    visited[successor.index()] = true;
-                    stack.push((successor, 0));
-                }
-            } else {
-                postorder.push(*block);
-                stack.pop();
-            }
-        }
-        postorder.reverse();
-        postorder
+        self.body
+            .reverse_postorder_by(|block| self.successors(block))
     }
 
     /// Runs a block's statements; returns the state at its terminator.
@@ -1549,10 +1561,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// through them are discarded when the session finishes. A view
     /// descriptor is exempt, since its writes reach its owner.
     fn discarded_writes(&self) -> Vec<Diag<'db>> {
-        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
-            return Vec::new();
-        };
-        let Some(shape) = func.return_shape(self.db, mode) else {
+        let Some(shape) = self.instance.return_shape(self.db) else {
             return Vec::new();
         };
         let components = access_components(self.db, shape);
@@ -2854,10 +2863,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         state: &State,
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
-        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
-            return Ok(());
-        };
-        let Some(shape) = func.return_shape(self.db, mode) else {
+        let Some(shape) = self.instance.return_shape(self.db) else {
             return Ok(());
         };
         let held = &self.values[value.value.index()];
@@ -2910,11 +2916,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// components of a split are disjoint. A component no yield grants has
     /// none: every place but a grant has a space, and a grant of a callee's
     /// component that no yield of the callee grants is never live.
-    fn check_yields(&self) -> Result<Vec<Option<AddressSpace>>, Diag<'db>> {
-        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
-            return Ok(Vec::new());
-        };
-        let Some(shape) = func.return_shape(self.db, mode) else {
+    pub fn check_yields(&self) -> Result<Vec<Option<AddressSpace>>, Diag<'db>> {
+        let Some(shape) = self.instance.return_shape(self.db) else {
             return Ok(Vec::new());
         };
         let components = access_components(self.db, shape);
@@ -3134,7 +3137,7 @@ pub(super) fn check_body<'db>(
     instance: SemanticInstance<'db>,
     body: &NormalizedBody<'db>,
 ) -> Result<CheckedBody<'db>, Diag<'db>> {
-    let mut analysis = Analysis::new(db, instance, body, true);
+    let mut analysis = Analysis::new(db, instance, body, false);
     analysis.solve();
     let spaces = analysis.check()?;
     let drops = analysis.drop_elaboration()?;

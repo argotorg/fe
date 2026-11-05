@@ -78,8 +78,10 @@ In a pattern, a binding's marker sits on its name: `x` takes a value,
 A pattern matched against a place opens each marked binding's access on that
 binding's own part of the place, and nothing else: in
 `match p { Pair { ref a, mut b, .. } => … }`, `p.a` is held for reading and
-`p.b` for writing, and `p.c` stays free. `mut x` needs a mutable place or
-access behind it, and `ref` or `mut` on an owned value is an error. Markers
+`p.b` for writing, and `p.c` stays free. A pattern on a projection's result,
+as in `let Pair { mut a, .. } = p.me()`, does the same with what the result
+reaches. `mut x` needs a mutable place or access behind it, and `ref` or `mut`
+on an owned value is an error. Markers
 go on the names only: `match ref x`, `if let Some(v) = mut o` and
 `let (a, b) = mut t` are errors, fixed by marking each name
 (`match x { V(ref v) => … }`). A marker on the scrutinee would hold all of

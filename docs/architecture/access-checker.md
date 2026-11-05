@@ -175,7 +175,9 @@ stack; they end at their `end`, in any order. In the projection's body:
   (`projection_result_spaces`), inferred from the body and exported with the
   instance: callers combine grants by their result spaces, never by bodies.
   A component no yield grants, such as the payload of a variant the
-  projection never returns, has none, and neither does a grant of one.
+  projection never returns, has none, and neither does a grant of one. The
+  components are those of the instance's shape, whose arguments make the parts
+  of an associated shape known (`SemanticInstance::return_shape`).
   Lowering holds the class it returns each component in to its space
   (`check_projection_result_spaces`); a disagreement is an internal error.
   A place's space is its root's, unless a pinned type or an entry along its

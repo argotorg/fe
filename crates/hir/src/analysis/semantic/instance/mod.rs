@@ -19,7 +19,7 @@ pub(crate) use semantic::{
 };
 pub(crate) use semantic::{
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
-    row_expansion_for_key, semantic_instance_base_assumptions_for_key,
+    refined_callee, row_expansion_for_key, semantic_instance_base_assumptions_for_key,
 };
 pub use template::{
     EffectProviderSubst, GenericSubst, ImplEnv, TypedBodyTemplate, instantiate_typed_body,

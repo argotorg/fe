@@ -1,0 +1,129 @@
+// A pattern on a projection's result opens each `ref` or `mut` binding's access
+// on its own part of what the result reaches, inside the projection's session.
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Pair {
+    fn me(mut? self) -> mut? Pair {
+        mut? self
+    }
+}
+
+struct Nest {
+    l: Pair,
+    r: Pair,
+}
+
+impl Nest {
+    fn both(mut? self) -> (mut? Pair, mut? Pair) {
+        (mut? self.l, mut? self.r)
+    }
+
+    fn maybe(mut? self) -> Option<mut? Pair> {
+        Option::Some(mut? self.l)
+    }
+}
+
+fn write_base_while_bound() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { mut a, .. } = p.me()
+    p.a = 5
+    a = 1
+}
+
+fn read_base_while_bound() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { mut a, .. } = p.me()
+    let n = p.b
+    a = n
+}
+
+fn second_session_while_bound() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { mut a, .. } = p.me()
+    let Pair { mut b, .. } = p.me()
+    a = 1
+    b = 2
+}
+
+fn write_base_in_tested_arm() {
+    var p = Pair { a: 1, b: 2 }
+    match p.me() {
+        Pair { mut a, b: 2 } => {
+            p.b = 1
+            a = 1
+        }
+        _ => {}
+    }
+}
+
+fn write_base_under_payload() {
+    var n = Nest { l: Pair { a: 1, b: 2 }, r: Pair { a: 3, b: 4 } }
+    if let Option::Some(Pair { mut a, .. }) = n.maybe() {
+        n.l.a = 5
+        a = 1
+    }
+}
+
+fn write_base_under_part() {
+    var n = Nest { l: Pair { a: 1, b: 2 }, r: Pair { a: 3, b: 4 } }
+    let (Pair { mut a, .. }, _) = n.both()
+    n.r.a = 5
+    a = 1
+}
+
+// Accepted: the bindings' parts are apart.
+fn bindings_apart() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { mut a, mut b } = p.me()
+    a = 1
+    b = 2
+}
+
+// Accepted: the same field of two parts.
+fn same_field_of_parts() {
+    var n = Nest { l: Pair { a: 1, b: 2 }, r: Pair { a: 3, b: 4 } }
+    let (Pair { mut a, .. }, Pair { a: mut c, .. }) = n.both()
+    a = 1
+    c = 2
+}
+
+// Accepted: a read of another part.
+fn binding_beside_read() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { mut a, b } = p.me()
+    a = b
+}
+
+// Accepted: a read access of another part.
+fn binding_beside_ref() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { mut a, ref b } = p.me()
+    a = b
+}
+
+// Accepted: the binding is dead before the write.
+fn dead_before_write() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { mut a, .. } = p.me()
+    a = 1
+    p.a = 5
+}
+
+// Accepted: a value outlives the session.
+fn value_outlives_session() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { a, .. } = p.me()
+    p.a = a + 1
+}
+
+// Accepted: the test has closed before the binding opens.
+fn tested_then_bound() {
+    var p = Pair { a: 1, b: 2 }
+    let Pair { mut a, b: 2 } = p.me() else {
+        return
+    }
+    a = 1
+}

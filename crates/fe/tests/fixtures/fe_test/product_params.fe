@@ -388,6 +388,8 @@ msg SpacesMsg {
     Nested -> u256,
     #[selector = 0x11223349]
     Indexed -> u256,
+    #[selector = 0x1122334a]
+    ResultParts -> u256,
 }
 
 pub contract Spaces {
@@ -429,6 +431,17 @@ pub contract Spaces {
             s = 7
             xs[1] * 100 + xs[0] * 10 + mem[2]
         }
+        // A projection's storage parts, returned on by the callee.
+        ResultParts -> u256 uses (mut pair) {
+            pair.a = 1
+            pair.b = 2
+            let r = mut first(pair.both())
+            r = 5
+            let s = mut pick(pair.both(), false)
+            s = 6
+            let t = pick(pair.both(), true)
+            pair.a * 100 + pair.b * 10 + t
+        }
     }
 }
 
@@ -443,4 +456,6 @@ fn spaces_through_forwarding() uses (evm: mut Evm) {
     assert(nested == 70008)
     let indexed: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: SpacesMsg::Indexed {})
     assert(indexed == 917)
+    let result_parts: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: SpacesMsg::ResultParts {})
+    assert(result_parts == 565)
 }

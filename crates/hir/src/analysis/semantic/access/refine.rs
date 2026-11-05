@@ -13,7 +13,11 @@ use crate::analysis::{
             SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
             SemanticDiagnosticSpan, SemanticNormalizationFailure,
         },
-        normalized::{NEffectArgValue, NExpr, NStatementKind, normalize_semantic_body_provisional},
+        instance::refined_callee,
+        normalized::{
+            NEffectArgValue, NExpr, NStatementKind, NormalizedBody,
+            normalize_semantic_body_provisional,
+        },
         provisional_provider_idx_for_requirement,
     },
     ty::{
@@ -25,13 +29,20 @@ use crate::analysis::{
 /// The address spaces a provisional body passes to its callees' inputs.
 #[derive(Clone, Debug, PartialEq, Eq, SalsaValue)]
 pub(crate) enum CallSiteRefinements<'db> {
-    Refined(Vec<CallSiteProviderRefinement>),
+    /// With the body's result space per access component, if it's a
+    /// projection.
+    Refined {
+        refinements: Vec<CallSiteProviderRefinement>,
+        spaces: Vec<Option<AddressSpace>>,
+    },
     /// Upstream causes block the provisional body.
     Blocked,
     Rejected(SemanticDiagnosticId<'db>),
 }
 
-#[salsa::tracked]
+// A grant's space comes from its projection's refinement, so recursion through
+// projections, which the check rejects, is a cycle.
+#[salsa::tracked(cycle_initial = refinements_cycle_initial)]
 pub(crate) fn provisional_call_site_provider_refinements<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -44,8 +55,86 @@ pub(crate) fn provisional_call_site_provider_refinements<'db>(
             | SemanticNormalizationFailure::InternalFailure(diag),
         ) => return CallSiteRefinements::Rejected(SemanticDiagnosticId::new(db, diag)),
     };
-    let mut analysis = Analysis::new(db, instance, &body, false);
+    let mut analysis = Analysis::new(db, instance, &body, true);
     analysis.solve();
+    let sessions: Vec<_> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| match &statement.kind {
+            NStatementKind::Define {
+                result,
+                expr: NExpr::Call { call_site, .. },
+            } if analysis.is_session(*result) => Some((*result, *call_site)),
+            _ => None,
+        })
+        .collect();
+    // A grant lies where its session's callee puts it, the callee as its own
+    // call site's refinement instantiates it: refine until every session's
+    // callee settles. Each round settles the sessions whose grants come from
+    // settled ones, so the sessions bound the rounds.
+    let mut round = 0;
+    loop {
+        let refinements = match input_refinements(db, instance, &body, &mut analysis) {
+            Ok(refinements) => refinements,
+            Err(diag) => return CallSiteRefinements::Rejected(diag),
+        };
+        let mut settled = true;
+        for &(session, call_site) in &sessions {
+            let site: Vec<_> = refinements
+                .iter()
+                .filter(|refinement| refinement.call_site == call_site)
+                .cloned()
+                .collect();
+            let site = (!site.is_empty()).then_some(site.as_slice());
+            if let Some(callee) = refined_callee(db, instance, call_site, site) {
+                settled &= !analysis.set_session(session, callee);
+            }
+        }
+        if settled || round == sessions.len() {
+            return CallSiteRefinements::Refined {
+                refinements,
+                // The check reports what's wrong with a yield.
+                spaces: analysis.check_yields().unwrap_or_default(),
+            };
+        }
+        // Where a path from a grant leads depends on the grant's space.
+        analysis.solve();
+        round += 1;
+    }
+}
+
+fn refinements_cycle_initial<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _: SemanticInstance<'db>,
+) -> CallSiteRefinements<'db> {
+    CallSiteRefinements::Refined {
+        refinements: Vec::new(),
+        spaces: Vec::new(),
+    }
+}
+
+/// A projection's result space, per access component, as its refinement finds
+/// it. A provisional analysis reads this rather than the checked body, which
+/// may depend on the refinements being computed.
+pub(super) fn provisional_result_spaces<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> &'db [Option<AddressSpace>] {
+    match provisional_call_site_provider_refinements(db, instance) {
+        CallSiteRefinements::Refined { spaces, .. } => spaces,
+        CallSiteRefinements::Blocked | CallSiteRefinements::Rejected(_) => &[],
+    }
+}
+
+/// The space of each call's inputs, as `analysis` places them.
+fn input_refinements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    body: &NormalizedBody<'db>,
+    analysis: &mut Analysis<'_, 'db>,
+) -> Result<Vec<CallSiteProviderRefinement>, SemanticDiagnosticId<'db>> {
     let mut refinements = Vec::new();
     for block in &body.blocks {
         for statement in &block.statements {
@@ -136,7 +225,7 @@ pub(crate) fn provisional_call_site_provider_refinements<'db>(
                                 origin,
                             },
                         );
-                        return CallSiteRefinements::Rejected(SemanticDiagnosticId::new(db, diag));
+                        return Err(SemanticDiagnosticId::new(db, diag));
                     }
                 };
                 // Data parameters name memory unless refined.
@@ -153,5 +242,5 @@ pub(crate) fn provisional_call_site_provider_refinements<'db>(
             }
         }
     }
-    CallSiteRefinements::Refined(refinements)
+    Ok(refinements)
 }

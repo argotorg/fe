@@ -38,7 +38,7 @@ use hir::hir_def::{
     scope_graph::ScopeId,
 };
 use hir::projection::IndexSource;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     db::MirDb,
@@ -737,9 +737,19 @@ impl<'db> RmirEmitter<'db> {
         self.terminated_blocks = vec![false; self.semantic_body.normalized.blocks.len()];
         let blocks = self.semantic_body.normalized.blocks.clone();
         self.prepare_drop_flags();
-        for (idx, block) in blocks.iter().enumerate() {
-            let block_id = NBlockId::new(idx);
-            let mut bb = RBlockId::from_u32(idx as u32);
+        // Each block is lowered after the blocks dominating it, which block
+        // allocation can put later: an `End` needs what the definition of its
+        // access or session recorded.
+        let mut order = self.semantic_body.normalized.reverse_postorder();
+        let reachable: FxHashSet<_> = order.iter().copied().collect();
+        order.extend(
+            (0..blocks.len())
+                .map(NBlockId::new)
+                .filter(|block| !reachable.contains(block)),
+        );
+        for block_id in order {
+            let block = &blocks[block_id.index()];
+            let mut bb = RBlockId::from_u32(block_id.index() as u32);
             self.update_drop_flags(bb, DropFlagPoint::BlockStart(block_id));
             for (stmt_idx, stmt) in block.statements.iter().enumerate() {
                 bb = self.with_current_origin(stmt.origin, |this| {
@@ -799,31 +809,7 @@ impl<'db> RmirEmitter<'db> {
             }
             NStatementKind::Drop { target } => return self.lower_drop(bb, stmt.id, target),
             NStatementKind::End { access } => {
-                if !self.end_lane_extent(bb, LaneExtent::Access(*access))
-                    && let NValueDefinition::Statement { block, statement } =
-                        self.semantic_body.normalized.values[access.index()].definition
-                    && let NStatementKind::Define {
-                        expr:
-                            NExpr::Borrow {
-                                place,
-                                kind: BorrowKind::Mut,
-                                ..
-                            },
-                        ..
-                    } = &self.semantic_body.normalized.blocks[block.index()].statements
-                        [statement as usize]
-                        .kind
-                {
-                    assert!(
-                        !self.with_current_body_cx(|cx| cx
-                            .env
-                            .place_entry_root(place)
-                            .flatten()
-                            .is_some_and(|entry| entry.lane))
-                            || !self.semantic_body.normalized.access_is_used(*access),
-                        "a lane borrow ends before it is lowered"
-                    );
-                }
+                self.end_lane_extent(bb, LaneExtent::Access(*access));
                 if let NValueDefinition::Statement { block, statement } =
                     self.semantic_body.normalized.values[access.index()].definition
                     && let Some(&session) = self.sessions.get(
@@ -5478,15 +5464,11 @@ impl<'db> RmirEmitter<'db> {
     }
 
     /// Stores back the lane copies held for `extent`, which ends here; an
-    /// extent can end on several paths. Whether it held any.
-    fn end_lane_extent(&mut self, bb: RBlockId, extent: LaneExtent) -> bool {
-        let Some(copies) = self.lane_extents.get(&extent).cloned() else {
-            return false;
-        };
-        for copy in copies {
+    /// extent can end on several paths.
+    fn end_lane_extent(&mut self, bb: RBlockId, extent: LaneExtent) {
+        for copy in self.lane_extents.get(&extent).cloned().unwrap_or_default() {
             self.store_lane_copy(bb, copy);
         }
-        true
     }
 
     /// Whether `expr`, defining `value`, accesses a lane that nothing reads

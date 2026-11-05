@@ -36,6 +36,44 @@ fn entry_lane_field_updates() uses (evm: mut Evm) {
     }
 }
 
+// The body a refutable pattern guards may be allocated before the blocks
+// binding it.
+#[test]
+fn refutable_pattern_field_lane_updates() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let arr = unsafe { mut SolArray<Flags>::at(1) }
+        arr.push(Flags { a: 1, b: 2, big: 3 })
+        if let Flags { mut a, b: 2, .. } = arr[0] {
+            a = 5
+        }
+        let a = arr[0].a
+        assert(a == 5)
+        let Flags { mut b, a: 5, .. } = arr[0] else {
+            assert(false)
+            return
+        }
+        b = 6
+        let b = arr[0].b
+        assert(b == 6)
+        let f = mut arr[0]
+        if let Flags { mut a, b: 6, .. } = f {
+            a = 7
+        }
+        let a = arr[0].a
+        assert(a == 7)
+        while let Flags { mut a, b: 6, .. } = arr[0] {
+            a = 8
+            arr[0].b = 9
+        }
+        let a = arr[0].a
+        let b = arr[0].b
+        let big = arr[0].big
+        assert(a == 8)
+        assert(b == 9)
+        assert(big == 3)
+    }
+}
+
 #[test]
 fn field_lane_updates() uses (evm: mut Evm) {
     with (RawStorage = evm) {

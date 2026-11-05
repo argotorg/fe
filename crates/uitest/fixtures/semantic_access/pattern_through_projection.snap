@@ -1,0 +1,53 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/pattern_through_projection.fe
+---
+error[16-0001]: access conflict in `fn write_base_while_bound`
+   ┌─ pattern_through_projection.fe:32:5
+   │
+31 │     let Pair { mut a, .. } = p.me()
+   │                              - access opened here
+32 │     p.a = 5
+   │     ^^^^^^^ cannot write to this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn read_base_while_bound`
+   ┌─ pattern_through_projection.fe:39:13
+   │
+38 │     let Pair { mut a, .. } = p.me()
+   │                              - access opened here
+39 │     let n = p.b
+   │             ^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn second_session_while_bound`
+   ┌─ pattern_through_projection.fe:46:30
+   │
+45 │     let Pair { mut a, .. } = p.me()
+   │                              - access opened here
+46 │     let Pair { mut b, .. } = p.me()
+   │                              ^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn write_base_in_tested_arm`
+   ┌─ pattern_through_projection.fe:55:13
+   │
+53 │     match p.me() {
+   │           - access opened here
+54 │         Pair { mut a, b: 2 } => {
+55 │             p.b = 1
+   │             ^^^^^^^ cannot write to this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn write_base_under_payload`
+   ┌─ pattern_through_projection.fe:65:9
+   │
+64 │     if let Option::Some(Pair { mut a, .. }) = n.maybe() {
+   │                                               - access opened here
+65 │         n.l.a = 5
+   │         ^^^^^^^^^ cannot write to this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn write_base_under_part`
+   ┌─ pattern_through_projection.fe:73:5
+   │
+72 │     let (Pair { mut a, .. }, _) = n.both()
+   │                                   - access opened here
+73 │     n.r.a = 5
+   │     ^^^^^^^^^ cannot write to this place while a `mut` access of it is open
