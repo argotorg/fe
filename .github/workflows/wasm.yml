@@ -12,8 +12,11 @@ on:
   pull_request:
     paths:
       - .github/workflows/wasm.yml
+      - Cargo.toml
+      - Cargo.lock
       - examples/wasm/**
       - examples/wasm_host.fe
+      - ingots/core/**
       - ingots/std/src/wasm.fe
       - ingots/std/src/wasm/**
       - crates/codegen/**
