@@ -182,7 +182,9 @@ ingot without a target works on every target, and takes the one the others set.
 Every dependency of a compiled ingot that sets a target must match the command's. Other commands,
 such as `fe tree`, don't check targets.
 
-The language server still checks every project for the EVM.
+The language server reads `target` too, when it starts and when a `fe.toml` changes. It has one
+target at a time, so if the projects it has open set different ones, it warns and checks them all
+for the default.
 
 ## `fe build`
 
