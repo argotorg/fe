@@ -337,11 +337,7 @@ impl<'db> RmirEmitter<'db> {
                 dst
             }
             DropSource::Place(place) => {
-                let mut part = place.clone();
-                for projection in path {
-                    part.path.push(*projection);
-                }
-                part.ty = ty;
+                let part = place_part(place, path, ty);
                 let Some(class) = self
                     .with_current_body_cx(|cx| cx.env.normalized_place_class(cx.carriers, &part))
                 else {
@@ -368,7 +364,8 @@ impl<'db> RmirEmitter<'db> {
         self.alloc_runtime_temp(ty, RuntimeCarrier::Erased)
     }
 
-    /// Whether the enum at `path` of `source` holds `variant`.
+    /// Whether the enum at `path` of `source` holds `variant`. An enum in
+    /// memory answers from its tag: reading the value would copy its payload.
     fn is_variant(
         &mut self,
         bb: RBlockId,
@@ -377,12 +374,30 @@ impl<'db> RmirEmitter<'db> {
         variant: VariantIndex,
     ) -> RLocalId {
         let ty = self.prefix_ty(source, path);
-        let value = self.read_part(bb, source, path, ty);
+        let dst = self.alloc_bool_temp();
+        let value = match source {
+            DropSource::Value(_) => self.read_part(bb, source, path, ty),
+            DropSource::Place(place) => {
+                let part = place_part(place, path, ty);
+                let class = self
+                    .with_current_body_cx(|cx| cx.env.normalized_place_class(cx.carriers, &part))
+                    .expect("an enum has a runtime class");
+                let value = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(class.clone()));
+                if let Some(place) = self.lower_place_read_outside_memory(bb, value, &part, &class)
+                {
+                    let enum_layout = class
+                        .aggregate_layout()
+                        .expect("an enum value has an aggregate layout");
+                    self.lower_place_is_enum_variant(bb, dst, place, ty, enum_layout, variant);
+                    return dst;
+                }
+                value
+            }
+        };
         let enum_layout = self
             .value_class(value)
             .and_then(RuntimeClass::aggregate_layout)
             .expect("an enum value has an aggregate layout");
-        let dst = self.alloc_bool_temp();
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -516,6 +531,16 @@ impl<'db> RmirEmitter<'db> {
     pub(super) fn needs_drop(&self, ty: TyId<'db>) -> bool {
         runtime_needs_drop(self.db, ty)
     }
+}
+
+/// The part of type `ty` at `path` of `place`.
+fn place_part<'db>(place: &NPlace<'db>, path: &[NDataProjection], ty: TyId<'db>) -> NPlace<'db> {
+    let mut part = place.clone();
+    for projection in path {
+        part.path.push(*projection);
+    }
+    part.ty = ty;
+    part
 }
 
 fn has_drop_impl<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {

@@ -1,0 +1,23 @@
+use core::{MemBuffer, MemVec}
+
+enum Held {
+    Empty,
+    Flag(bool),
+    Text(MemBuffer),
+    List(MemVec<u64>),
+}
+
+fn overwrite(_ list: mut MemVec<Held>, _ at: usize) {
+    list[at] = Held::Empty
+}
+
+pub fn main() -> i32 {
+    var list = MemVec::new()
+    list.push(Held::Text(MemBuffer::with_capacity(8)))
+    list.push(Held::List(MemVec::new()))
+    list.push(Held::Flag(true))
+    for at in 0..list.len() {
+        overwrite(mut list, at)
+    }
+    0
+}

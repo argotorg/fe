@@ -244,6 +244,124 @@ fn matched_payloads_are_destroyed() {
 }
 
 // Querying an `Option` or `Result` reads it, destroying nothing.
+enum Held {
+    Empty,
+    Flag(bool),
+    One(Counted),
+    Two(Counted, Counted),
+}
+
+enum Nested {
+    Plain(u256),
+    Inner(Held),
+}
+
+struct Cell {
+    before: u256,
+    held: Held,
+}
+
+fn held_one(_ counter: *u256) -> Held {
+    Held::One(Counted { counter })
+}
+
+fn held_two(_ counter: *u256) -> Held {
+    Held::Two(Counted { counter }, Counted { counter })
+}
+
+fn overwrite(_ place: mut Nested, _ value: own Nested) {
+    place = value
+}
+
+fn touch(_ place: mut Held) {}
+
+#[test]
+fn assignment_destroys_the_variant_an_enum_holds() {
+    let counter = counter()
+    {
+        // A local.
+        var local = held_one(counter)
+        local = held_two(counter)
+        assert(count(counter) == 1)
+        local = Held::Flag(true)
+        assert(count(counter) == 3)
+        local = Held::Empty
+        assert(count(counter) == 3)
+    }
+    assert(count(counter) == 3)
+    {
+        // Elements.
+        var list = MemVec::new()
+        list.push(held_one(counter))
+        list.push(held_two(counter))
+        list.push(Held::Flag(true))
+        list[0] = Held::Empty
+        assert(count(counter) == 4)
+        list[1] = Held::Empty
+        assert(count(counter) == 6)
+        list[2] = held_one(counter)
+        assert(count(counter) == 6)
+    }
+    assert(count(counter) == 7)
+    {
+        var pair = [held_one(counter), Held::Flag(false)]
+        pair[0] = Held::Empty
+        assert(count(counter) == 8)
+        pair[1] = held_two(counter)
+        assert(count(counter) == 8)
+    }
+    assert(count(counter) == 10)
+    {
+        // A field.
+        var cell = Cell { before: 7, held: held_two(counter) }
+        cell.held = Held::Empty
+        assert(count(counter) == 12)
+        assert(cell.before == 7)
+    }
+    {
+        // An enum in a variant, through a `mut` access.
+        var nested = Nested::Inner(held_one(counter))
+        overwrite(mut nested, Nested::Plain(1))
+        assert(count(counter) == 13)
+        overwrite(mut nested, Nested::Inner(held_two(counter)))
+        assert(count(counter) == 13)
+        overwrite(mut nested, Nested::Plain(2))
+        assert(count(counter) == 15)
+    }
+    {
+        // An enum small enough for registers.
+        var option = Option::Some(Counted { counter })
+        option = Option::None
+        assert(count(counter) == 16)
+    }
+    assert(count(counter) == 16)
+}
+
+#[test]
+fn a_partial_move_out_of_an_enum_in_memory_destroys_the_rest() {
+    let counter = counter()
+    {
+        var two = held_two(counter)
+        touch(mut two)
+        match two {
+            Held::Two(first, _) => consume(first),
+            _ => {},
+        }
+        assert(count(counter) == 1)
+    }
+    assert(count(counter) == 2)
+    {
+        var one = held_one(counter)
+        touch(mut one)
+        match one {
+            Held::Two(first, _) => consume(first),
+            _ => {},
+        }
+        assert(count(counter) == 2)
+    }
+    assert(count(counter) == 3)
+}
+
 #[test]
 fn queries_read_without_destroying() {
     let counter = counter()

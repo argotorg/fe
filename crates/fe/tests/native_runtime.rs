@@ -2206,6 +2206,27 @@ fn native_values_are_destroyed_once_in_scope_order() {
 }
 
 #[test]
+fn native_in_place_enum_drops_read_only_the_tag() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let result = run_balanced("in_place_enum_drop.fe", &out, level, &[]);
+        assert!(result.status.success(), "O{level}: {result:?}");
+        // Inlining merges `overwrite` into its caller at higher levels.
+        if level == "0" {
+            let ir = fs::read_to_string(out.join("in_place_enum_drop.native.sona")).unwrap();
+            let overwrite = ir
+                .split_once("%overwrite(")
+                .and_then(|(_, body)| body.split_once("\n}\n"))
+                .expect("`overwrite` is lowered")
+                .0;
+            assert!(overwrite.contains("enum.get_tag"), "{overwrite}");
+            assert!(!overwrite.contains("enum.is_variant"), "{overwrite}");
+        }
+    }
+}
+
+#[test]
 fn native_out_of_bounds_index_store_destroys_nothing() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("index_store.fe");
