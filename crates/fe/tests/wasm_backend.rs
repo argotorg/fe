@@ -1215,6 +1215,20 @@ fn non_scalar_exports_are_named_errors() {
 }
 
 #[test]
+fn an_evm_only_instruction_is_a_named_error() {
+    let stderr = rejected(
+        "evm_caller",
+        "use std::evm::{Ctx, Evm}\n\
+         pub fn who() -> u32 uses (evm: Evm) {\n\
+         \x20   let _ = evm.caller()\n\
+         \x20   1\n\
+         }\n",
+        &["EvmCaller", "an EVM-only instruction"],
+    );
+    assert!(stderr.contains("wasm32-unknown-native"), "{stderr}");
+}
+
+#[test]
 fn a_function_named_memory_is_refused() {
     rejected(
         "reserved_name",
