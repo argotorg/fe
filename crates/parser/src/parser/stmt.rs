@@ -162,7 +162,7 @@ impl super::Parse for LoopStmtScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_expected(SyntaxKind::LoopKw);
 
-        if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::LoopStmt))? {
+        if parser.find(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::LoopStmt))? {
             parser.parse(BlockExprScope::default())?;
         }
         Ok(())
