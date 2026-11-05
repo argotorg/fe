@@ -779,6 +779,10 @@ program_test!(trap_assert, "trap_assert", {
     ]
 });
 
+program_test!(trap_unwrap, "trap_unwrap", {
+    vec![Export::new("unwrapped", &[("ok", Bool)], I32).edges(|a| (a[0] == 1).then_some(7))]
+});
+
 // ---------------------------------------------------------------------------
 // The module itself.
 // ---------------------------------------------------------------------------

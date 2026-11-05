@@ -3418,9 +3418,9 @@ impl<'db> RmirEmitter<'db> {
     fn lower_panic_with_value(&mut self, bb: RBlockId, value: RLocalId) -> RLocalId {
         let value_ty = self.locals[value.index()].semantic_ty;
         let impl_env = self.current_semantic_key().impl_env(self.db);
-        // Natively a panic needs no revert data. On EVM, admission rejects
-        // a value without an encoding.
-        if self.target() == Target::Native
+        // Outside the EVM a panic needs no revert data. On EVM, admission
+        // rejects a value without an encoding.
+        if self.target() != Target::Evm
             && !panic_payload_encodable(
                 self.db,
                 impl_env.normalization_scope(self.db),

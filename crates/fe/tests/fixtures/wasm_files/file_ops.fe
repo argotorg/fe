@@ -40,6 +40,14 @@ fn size_of_impl(_ name: HostText) -> Reply uses (files: mut Files) {
     }
 }
 
+// A `FileError` has no Sol encoding, and `unwrap` traps on it.
+fn size_unwrapped_impl(_ name: HostText) -> Reply uses (files: mut Files) {
+    let handle = open(name.copy()).unwrap()
+    let n = size(handle).unwrap()
+    close(handle)
+    Reply::ok(n)
+}
+
 fn checksum_impl(_ name: HostText) -> Reply uses (files: mut Files) {
     match open(name.copy()) {
         Result::Ok(handle) => {
@@ -123,6 +131,13 @@ fn leak_impl(_ name: HostText) -> Reply uses (files: mut Files) {
 //mock: pub fn size_of(name: HostText) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) { size_of_impl(name) }
+}
+
+//host: pub fn size_unwrapped(name: HostText) -> Reply uses (files: mut Files) {
+//host:     size_unwrapped_impl(name)
+//mock: pub fn size_unwrapped(name: HostText) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) { size_unwrapped_impl(name) }
 }
 
 //host: pub fn checksum(name: HostText) -> Reply uses (files: mut Files) {
