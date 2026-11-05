@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_variant_path_pat.fe
+---
+error[8-0004]: expected unit variant
+   ┌─ msg_variant_path_pat.fe:11:9
+   │
+11 │         M::V -> u256 {
+   │         ^^^^
+   │         │
+   │         expected unit variant here, but found struct
+   │         Consider using `V { n }` instead
+
+error[8-0004]: expected unit variant
+   ┌─ msg_variant_path_pat.fe:18:9
+   │
+18 │     let Empty = e
+   │         ^^^^^
+   │         │
+   │         expected unit variant here, but found struct
+   │         Consider using `Empty {  }` instead

@@ -1,0 +1,19 @@
+msg M {
+    #[selector = 0x01]
+    V { n: u256 } -> u256,
+}
+
+struct Empty {}
+
+// Only a msg variant without fields is matched by its path alone.
+pub contract C {
+    recv M {
+        M::V -> u256 {
+            1
+        }
+    }
+}
+
+fn empty(e: Empty) {
+    let Empty = e
+}
