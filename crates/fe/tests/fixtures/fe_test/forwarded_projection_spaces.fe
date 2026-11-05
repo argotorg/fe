@@ -1,0 +1,399 @@
+// A projection's result passed through a function that returns it lies
+// where the projection's own call puts it: a storage receiver's or
+// effect's grant stays in storage through `id`, and a memory one in memory.
+use core::marker::{Pinned, Storage}
+use std::evm::Evm
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Pair {
+    fn a_mut(mut self) -> mut u256 {
+        mut self.a
+    }
+
+    fn me(mut? self) -> mut? Pair {
+        mut? self
+    }
+
+    fn both(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+
+    fn maybe(mut? self, _ present: bool) -> Option<mut? u256> {
+        if present {
+            Option::Some(mut? self.b)
+        } else {
+            Option::None
+        }
+    }
+}
+
+// A packed field's grant is a memory copy, wherever its struct lies.
+struct Small {
+    a: u8,
+    b: u8,
+}
+
+impl Small {
+    fn me(mut? self) -> mut? Small {
+        mut? self
+    }
+}
+
+struct Outer {
+    small: Small,
+    word: u256,
+}
+
+impl Outer {
+    fn small(mut? self) -> mut? Small {
+        mut? self.small
+    }
+}
+
+struct Words {
+    xs: [u256; 3],
+}
+
+trait Driver {
+    shape Step
+
+    fn step(mut? self) -> Self::Step
+}
+
+impl Driver for Pair {
+    shape Step = (mut? u256, mut? u256)
+
+    fn step(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+fn first<D: mut? Driver>(_ d: mut? D) -> D::Step {
+    d.step()
+}
+
+impl Words {
+    fn all(mut? self) -> mut? [u256; 3] {
+        mut? self.xs
+    }
+
+    fn me(mut? self) -> mut? Words {
+        mut? self
+    }
+}
+
+// A yield after a call that never returns grants nothing: `pick`'s result is
+// in storage.
+struct Cell {
+    count: u256,
+}
+
+impl Pinned for Cell {
+    type Space = Storage
+}
+
+fn halt() {
+    panic()
+}
+
+impl Cell {
+    fn pick(mut self, _ other: mut u256, _ live: bool) -> mut u256 {
+        if live {
+            mut self.count
+        } else {
+            halt()
+            mut other
+        }
+    }
+}
+
+fn id(_ x: mut u256) -> mut u256 {
+    mut x
+}
+
+fn id8(_ x: mut u8) -> mut u8 {
+    mut x
+}
+
+fn generic_id<T>(_ x: mut T) -> mut T {
+    mut x
+}
+
+fn second(_ (_, mut b): (mut u256, mut u256)) -> mut u256 {
+    mut b
+}
+
+fn part(_ (_, mut b): (own u256, mut u256)) -> mut u256 {
+    mut b
+}
+
+fn select(_ first: bool, _ x: mut u256, _ y: mut u256) -> mut u256 {
+    if first {
+        mut x
+    } else {
+        mut y
+    }
+}
+
+fn b_of() -> mut u256 uses (p: mut Pair) {
+    mut p.b
+}
+
+msg M {
+    #[selector = 1]
+    Forwarded -> u256,
+    #[selector = 2]
+    Twice -> u256,
+    #[selector = 3]
+    FromEffect -> u256,
+    #[selector = 4]
+    Chained -> u256,
+    #[selector = 5]
+    Generic -> u256,
+    #[selector = 6]
+    BesideMemory -> u256,
+    #[selector = 7]
+    Selected -> u256,
+    #[selector = 8]
+    Parts -> u256,
+    #[selector = 9]
+    Payload -> u256,
+    #[selector = 10]
+    InALoop -> u256,
+    #[selector = 11]
+    OverLoop -> u256,
+    #[selector = 12]
+    Element -> u256,
+    #[selector = 13]
+    PackedField -> u256,
+    #[selector = 14]
+    NestedPackedField -> u256,
+    #[selector = 15]
+    PatternPassed -> u256,
+    #[selector = 16]
+    PatternForwardedPassed -> u256,
+    #[selector = 17]
+    PackedPatternPassed -> u256,
+    #[selector = 18]
+    PackedPatternChained -> u256,
+    #[selector = 19]
+    PastDivergence -> u256,
+}
+
+pub contract C {
+    mut p: Pair
+    mut other: Pair
+    mut words: Words
+    mut small: Small
+    mut outer: Outer
+    mut cell: Cell
+
+    recv M {
+        Forwarded -> u256 uses (mut p) {
+            p.a = 1
+            let q = mut id(mut p.a_mut())
+            q = 40
+            p.a
+        }
+        Twice -> u256 uses (mut p) {
+            let q = mut id(mut id(mut p.a_mut()))
+            q = 41
+            p.a
+        }
+        FromEffect -> u256 uses (mut p) {
+            let q = mut id(mut b_of())
+            q = 7
+            p.b
+        }
+        Chained -> u256 uses (mut p) {
+            let q = mut id(mut p.me().me().a_mut())
+            q = 42
+            p.a
+        }
+        Generic -> u256 uses (mut p) {
+            let q = mut generic_id(mut p.a_mut())
+            q = 43
+            p.a
+        }
+        // One body, each call's callee in its own space.
+        BesideMemory -> u256 uses (mut p) {
+            var local = Pair { a: 1, b: 2 }
+            let q = mut id(mut p.a_mut())
+            q = 44
+            let r = mut id(mut local.a_mut())
+            r = 3
+            p.a * 10 + local.a
+        }
+        Selected -> u256 uses (mut p, mut other) {
+            p.a = 0
+            other.a = 0
+            let q = mut select(p.a == 0, mut p.a_mut(), mut other.a_mut())
+            q = 4
+            p.a * 10 + other.a
+        }
+        // A product's parts from a projection's result, as a pattern's
+        // bindings or whole.
+        Parts -> u256 uses (mut p) {
+            p.a = 1
+            p.b = 2
+            let q = mut second(p.both())
+            q = 5
+            let r = mut part(p.at())
+            r += 1
+            let (a, mut b) = p.at()
+            let s = mut part((a, mut b))
+            s += 1
+            p.b
+        }
+        Payload -> u256 uses (mut p) {
+            p.b = 1
+            match p.maybe(true) {
+                Option::Some(mut x) => {
+                    let q = mut id(mut x)
+                    q = 6
+                }
+                Option::None => {}
+            }
+            p.b
+        }
+        InALoop -> u256 uses (mut p) {
+            p.a = 0
+            var i: u256 = 0
+            while i < 2 {
+                let q = mut id(mut p.a_mut())
+                q += 1
+                i += 1
+            }
+            p.a
+        }
+        OverLoop -> u256 uses (mut words) {
+            words.xs = [1, 2, 3]
+            for mut x in words.all() {
+                let q = mut id(mut x)
+                q += 1
+            }
+            for mut x in words.me().xs {
+                let q = mut id(mut x)
+                q += 1
+            }
+            words.xs[0] * 100 + words.xs[1] * 10 + words.xs[2]
+        }
+        Element -> u256 uses (mut words) {
+            words.xs = [1, 2, 3]
+            let q = mut id(mut words.all()[1])
+            q = 9
+            words.xs[1]
+        }
+        PackedField -> u256 uses (mut small) {
+            small.a = 1
+            small.b = 2
+            let q = mut id8(mut small.me().a)
+            q = 5
+            small.a as u256 * 10 + small.b as u256
+        }
+        NestedPackedField -> u256 uses (mut outer) {
+            outer.small.a = 3
+            outer.small.b = 4
+            let q = mut id8(mut outer.small().a)
+            q = 7
+            outer.small.a as u256 * 10 + outer.small.b as u256
+        }
+        // A pattern's binding of a projection's result, passed on.
+        PatternPassed -> u256 uses (mut p) {
+            p.a = 1
+            p.b = 2
+            let (mut x, _) = p.both()
+            let q = mut id(mut x)
+            q = 5
+            p.a * 10 + p.b
+        }
+        PatternForwardedPassed -> u256 uses (mut p) {
+            p.a = 1
+            p.b = 2
+            let (mut x, _) = first(mut p)
+            let q = mut id(mut x)
+            q = 5
+            p.a * 10 + p.b
+        }
+        PackedPatternPassed -> u256 uses (mut small) {
+            small.a = 1
+            small.b = 2
+            let Small { mut a, .. } = small.me()
+            let q = mut id8(mut a)
+            q = 5
+            small.a as u256 * 10 + small.b as u256
+        }
+        PackedPatternChained -> u256 uses (mut small) {
+            small.a = 1
+            small.b = 2
+            let Small { mut a, .. } = small.me().me()
+            a = 5
+            small.a as u256 * 10 + small.b as u256
+        }
+        PastDivergence -> u256 uses (mut cell) {
+            var local: u256 = 1
+            let q = mut id(mut cell.pick(mut local, true))
+            q = 7
+            cell.count * 10 + local
+        }
+    }
+}
+
+#[test]
+fn storage_results_forwarded() uses (evm: mut Evm) {
+    let addr = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let forwarded: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Forwarded {})
+    assert(forwarded == 40)
+    let twice: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Twice {})
+    assert(twice == 41)
+    let from_effect: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::FromEffect {})
+    assert(from_effect == 7)
+    let chained: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Chained {})
+    assert(chained == 42)
+    let generic: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Generic {})
+    assert(generic == 43)
+    let beside_memory: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::BesideMemory {})
+    assert(beside_memory == 443)
+    let selected: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Selected {})
+    assert(selected == 40)
+    let parts: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Parts {})
+    assert(parts == 7)
+    let payload: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Payload {})
+    assert(payload == 6)
+    let in_a_loop: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::InALoop {})
+    assert(in_a_loop == 2)
+    let over_loop: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::OverLoop {})
+    assert(over_loop == 345)
+    let element: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::Element {})
+    assert(element == 9)
+    let packed: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::PackedField {})
+    assert(packed == 52)
+    let nested_packed: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::NestedPackedField {})
+    assert(nested_packed == 74)
+    let pattern_passed: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::PatternPassed {})
+    assert(pattern_passed == 52)
+    let pattern_forwarded: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::PatternForwardedPassed {})
+    assert(pattern_forwarded == 52)
+    let packed_pattern: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::PackedPatternPassed {})
+    assert(packed_pattern == 52)
+    let packed_chained: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::PackedPatternChained {})
+    assert(packed_chained == 52)
+    let past_divergence: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: M::PastDivergence {})
+    assert(past_divergence == 71)
+}
+
+#[test]
+fn memory_result_forwarded() {
+    var local = Pair { a: 1, b: 2 }
+    let q = mut id(mut local.a_mut())
+    q = 3
+    assert(local.a == 3)
+}

@@ -1,0 +1,60 @@
+// A call's refinement instantiates the callee a grant comes from, which is
+// reported, and doesn't cycle, when the callee reaches the projection again.
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Pair {
+    fn rec(mut? self, _ n: u256) -> mut? u256 {
+        if n == 0 {
+            mut? self.b
+        } else {
+            mut? self.rec(n - 1)
+        }
+    }
+
+    fn even(mut? self, _ n: u256) -> mut? u256 {
+        if n == 0 {
+            mut? self.a
+        } else {
+            mut? self.odd(n - 1)
+        }
+    }
+
+    fn odd(mut? self, _ n: u256) -> mut? u256 {
+        if n == 0 {
+            mut? self.b
+        } else {
+            mut? self.even(n - 1)
+        }
+    }
+}
+
+fn id(_ x: mut u256) -> mut u256 {
+    mut x
+}
+
+msg M {
+    #[selector = 1]
+    Direct -> u256,
+    #[selector = 2]
+    Mutual -> u256,
+}
+
+pub contract C {
+    mut p: Pair
+
+    recv M {
+        Direct -> u256 uses (mut p) {
+            let q = mut id(mut p.rec(2))
+            q = 1
+            p.b
+        }
+        Mutual -> u256 uses (mut p) {
+            let q = mut id(mut p.even(2))
+            q = 1
+            p.b
+        }
+    }
+}

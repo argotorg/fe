@@ -702,7 +702,7 @@ fn final_call_site_data<'db>(
         || pinned_param
     {
         match provisional_call_site_provider_refinements(db, instance).clone() {
-            CallSiteRefinements::Refined(refinements) => refinements,
+            CallSiteRefinements::Refined { refinements, .. } => refinements,
             CallSiteRefinements::Blocked => {
                 return CallSiteFinalizationData {
                     call_sites,
@@ -803,6 +803,63 @@ fn finalize_call_sites<'db>(
         }
     }
     Ok(())
+}
+
+/// The instance the call at `site` of `instance` runs once `refinements`
+/// give its inputs' spaces, as `final_call_site_data` finalizes it.
+pub(crate) fn refined_callee<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    site: CallSiteId,
+    refinements: Option<&[CallSiteProviderRefinement]>,
+) -> Option<SemanticInstance<'db>> {
+    let typed_body = instance.key(db).typed_body(db);
+    let same_assumptions = instance.assumptions(db)
+        == semantic_instance_base_assumptions_for_key(db, instance.key(db));
+    let (mut lowering, callable, effect_args, origin) = match site {
+        CallSiteId::Expr(expr) => {
+            let Some(SemanticExprLowering::Call { callable }) =
+                typed_body.semantic_expr_lowering(expr)
+            else {
+                return None;
+            };
+            (
+                provisional_call_sites(db, instance)
+                    .sites
+                    .get(expr.index())?
+                    .clone()?,
+                callable,
+                typed_body.call_effect_args(expr).unwrap_or(&[]),
+                SemOrigin::Expr(expr),
+            )
+        }
+        CallSiteId::ForLoop(stmt, step) => {
+            let call = typed_body.for_loop_plan(stmt)?.call(step);
+            (
+                provisional_for_loop_call_sites(db, instance)
+                    .sites
+                    .get(stmt.index())?
+                    .as_ref()?
+                    .site(step)
+                    .clone(),
+                &call.callable,
+                call.effect_args.as_slice(),
+                SemOrigin::Stmt(stmt),
+            )
+        }
+    };
+    finalize_call_site(
+        db,
+        instance,
+        callable,
+        &mut lowering,
+        effect_args,
+        refinements,
+        origin,
+        same_assumptions,
+    )
+    .ok()?;
+    Some(SemanticInstance::new(db, lowering.callee?.key))
 }
 
 fn final_call_site_data_cycle_initial<'db>(

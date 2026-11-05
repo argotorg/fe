@@ -3936,6 +3936,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "factory",
     "fixed_bytes_constant_return",
     "for_mut_index_base",
+    "forwarded_projection_spaces",
     "gcd",
     "generated_type_param_names",
     "immutable_aggregate_forwarding",

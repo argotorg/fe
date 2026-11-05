@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/forwarded_projection_recursion.fe
+---
+error[16-0013]: recursion through a projection in `fn rec`
+   ┌─ forwarded_projection_recursion.fe:13:18
+   │
+13 │             mut? self.rec(n - 1)
+   │                  ^^^^^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined
+
+error[16-0013]: recursion through a projection in `fn even`
+   ┌─ forwarded_projection_recursion.fe:21:18
+   │
+21 │             mut? self.odd(n - 1)
+   │                  ^^^^^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined
+
+error[16-0013]: recursion through a projection in `fn odd`
+   ┌─ forwarded_projection_recursion.fe:29:18
+   │
+29 │             mut? self.even(n - 1)
+   │                  ^^^^^^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined
