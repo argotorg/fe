@@ -1,0 +1,45 @@
+// Each row of the parameter-shape table, as a closure and as a function
+// item: two parameters, a product, a product of views, a view of a tuple
+// (written with and without `ref`), an owned tuple, no parameter and an
+// owned unit.
+fn two<F: Fn(own usize, u256) -> u256>(_ f: F) -> u256 uses F::E { f(2, 3) }
+fn product<F: Fn((own usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn views<F: Fn((ref usize, ref u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn tuple<F: Fn((usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn tuple_ref<F: Fn(ref (usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn tuple_own<F: Fn(own (usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+fn none<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+fn unit<F: Fn(own ()) -> u256>(_ f: F) -> u256 uses F::E { f(()) }
+
+fn f_two(_ i: own usize, _ x: u256) -> u256 { i as u256 + x }
+fn f_product(_ (i, x): (own usize, u256)) -> u256 { i as u256 + x }
+fn f_views(_ (i, x): (ref usize, ref u256)) -> u256 { i as u256 + x }
+fn f_tuple(_ t: (usize, u256)) -> u256 { t.0 as u256 + t.1 }
+fn f_tuple_own(_ t: own (usize, u256)) -> u256 { t.0 as u256 + t.1 }
+fn f_none() -> u256 { 5 }
+fn f_unit(_ u: own ()) -> u256 { 5 }
+
+#[test]
+fn closures() {
+    assert(two(|i, x| i as u256 + x) == 5)
+    assert(product(|(i, x)| i as u256 + x) == 5)
+    assert(views(|(i, x)| i as u256 + x) == 5)
+    assert(tuple(|(i, x)| i as u256 + x) == 5)
+    assert(tuple_ref(|(i, x)| i as u256 + x) == 5)
+    assert(tuple_own(|(i, x)| i as u256 + x) == 5)
+    assert(none(|| 5) == 5)
+    assert(unit(|u| 5) == 5)
+}
+
+#[test]
+fn items() {
+    assert(two(f_two) == 5)
+    assert(product(f_product) == 5)
+    assert(views(f_views) == 5)
+    assert(tuple(f_tuple) == 5)
+    // `Fn((usize, u256))` is `Fn(ref (usize, u256))`.
+    assert(tuple_ref(f_tuple) == 5)
+    assert(tuple_own(f_tuple_own) == 5)
+    assert(none(f_none) == 5)
+    assert(unit(f_unit) == 5)
+}

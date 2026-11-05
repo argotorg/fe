@@ -1,0 +1,493 @@
+use core::{MemBuffer, Option, Result}
+use core::ops::Drop
+
+extern {
+    fn putchar(_ c: i32) -> i32
+}
+
+fn put(_ c: i32) {
+    let _ = unsafe { putchar(c) }
+}
+
+// Prints its tag when destroyed.
+struct Noisy {
+    tag: i32,
+}
+
+impl Drop for Noisy {
+    fn drop(own self) {
+        put(self.tag)
+    }
+}
+
+struct Pair {
+    a: Noisy,
+    b: Noisy,
+}
+
+// Prints `n`, then its fields are destroyed.
+struct Outer {
+    inner: Noisy,
+    n: i32,
+}
+
+impl Drop for Outer {
+    fn drop(own self) {
+        put(self.n)
+    }
+}
+
+fn noisy(_ tag: i32) -> Noisy {
+    Noisy { tag }
+}
+
+fn consume(_ value: own Noisy) {}
+
+// "a." and ".a"
+fn conditional(_ moved: bool) {
+    let a = noisy(97)
+    if moved {
+        consume(a)
+    }
+    put(46)
+}
+
+// "0123": moved, left by `continue`, moved, left by `break`.
+fn looping() {
+    var i: i32 = 0
+    while i < 4 {
+        let n = noisy(48 + i)
+        if i == 1 {
+            i += 1
+            continue
+        }
+        if i == 3 {
+            break
+        }
+        consume(n)
+        i += 1
+    }
+}
+
+// "Ss" and "N"
+fn matching(_ value: own Option<Noisy>) {
+    match value {
+        Option::Some(n) => {
+            put(83)
+            consume(n)
+        }
+        Option::None => put(78)
+    }
+}
+
+// "A,B": the field left behind is destroyed at the end.
+fn partial(_ pair: own Pair) {
+    consume(pair.a)
+    put(44)
+}
+
+// "1;2"
+fn reassign() {
+    var x = noisy(49)
+    x = noisy(50)
+    put(59)
+}
+
+// Returns `x`, destroying `y`, or the reverse.
+fn early(_ first: bool) -> Noisy {
+    let x = noisy(120)
+    let y = noisy(121)
+    if first {
+        return x
+    }
+    y
+}
+
+impl Outer {
+    fn inner(self) -> ref Noisy {
+        ref self.inner
+    }
+}
+
+// "-e-ox": a temporary lives as long as the binding borrowing it.
+fn extended() {
+    let inner = ref Outer { inner: noisy(120), n: 111 }.inner()
+    put(45)
+    put(inner.tag - 19)
+    put(45)
+}
+
+struct Cell {
+    n: i32,
+}
+
+impl Cell {
+    fn peek(mut? self) -> (Noisy, mut? i32) {
+        (noisy(112), mut? self.n)
+    }
+
+    fn pick(mut? self, _ hit: bool) -> Result<Noisy, (own Noisy, mut? i32)> {
+        if hit {
+            Result::Ok((noisy(43), mut? self.n))
+        } else {
+            Result::Err(noisy(45))
+        }
+    }
+}
+
+// ".-p": a temporary's access ends at its last use, before it is destroyed.
+fn carried() {
+    var cell = Cell { n: 1 }
+    let (_, ref n) = cell.peek()
+    put(45 + n)
+    cell.n = 5
+    put(45)
+}
+
+// Every variant owns a value, which the match destroys where its arms join.
+fn picked(_ cell: Cell, _ hit: bool) -> i32 {
+    match cell.pick(hit) {
+        Result::Ok(_) => 111
+        Result::Err(_) => 101
+    }
+}
+
+// "+o" and "-e"
+fn picking() {
+    var cell = Cell { n: 1 }
+    put(picked(cell, true))
+    put(10)
+    put(picked(cell, false))
+}
+
+// "-BOIA": the binding, then what the pattern leaves of the product, in
+// declaration order, as for an `own` tuple parameter.
+fn product_leftovers(_ (Outer { n, .. }, Pair { b, .. }): (own Outer, own Pair)) {
+    put(n - 34)
+}
+
+// "oi"
+fn outer() {
+    let _value = Outer { inner: noisy(105), n: 111 }
+}
+
+// "ABC"
+fn array() {
+    let _values = [noisy(65), noisy(66), noisy(67)]
+}
+
+// "Z-[-": temporaries are destroyed at the end of their statement.
+fn temporaries() {
+    let _ = noisy(90)
+    put(45)
+    noisy(91)
+    put(45)
+}
+
+// "H-KLJI": the overwritten field, then locals in reverse, fields in order.
+fn tuple_and_field() {
+    var pair = Pair { a: noisy(72), b: noisy(73) }
+    pair.a = noisy(74)
+    let _tuple = (noisy(75), noisy(76))
+    put(45)
+}
+
+enum Either {
+    Left(Noisy),
+    Right(Noisy),
+}
+
+// "-l" and "!r": the `else` destroys the scrutinee, but no binding.
+fn let_else(_ value: own Either) {
+    let Either::Left(_x) = value else {
+        put(33)
+        return
+    }
+    put(45)
+}
+
+struct Counter {
+    held: Noisy,
+    n: i32,
+}
+
+impl Counter {
+    fn bump(mut self) {
+        self.held = noisy(self.n)
+        self.n += 1
+    }
+
+    fn swap(var own self, _ tag: i32) -> Counter {
+        self.held = noisy(tag)
+        self
+    }
+
+    fn into_held(own self) -> Noisy {
+        self.held
+    }
+}
+
+// "A-B-C--Z": receivers' fields are destroyed as they are overwritten.
+fn methods() {
+    var counter = Counter { held: noisy(65), n: 66 }
+    counter.bump()
+    put(45)
+    counter.bump()
+    put(45)
+    let swapped = counter.swap(90)
+    put(45)
+    let held = swapped.into_held()
+    put(45)
+    consume(held)
+}
+
+// "c-c": a closure's capture is destroyed once.
+fn closures() {
+    let n = noisy(99)
+    let tag = || n.tag
+    put(tag())
+    put(45)
+}
+
+// "-u" and "U": a `match` arm that returns destroys only what its path
+// holds.
+fn unwrapped(_ value: own Option<Noisy>) {
+    let n = match value {
+        Option::Some(n) => n
+        Option::None => {
+            put(85)
+            return
+        }
+    }
+    put(45)
+}
+
+fn held() -> ref Noisy {
+    let value = noisy(86)
+    ref value
+}
+
+// "-Vv-": a projection's local lives until the access it grants ends,
+// after its last read and before `put` prints what was read.
+fn projected() {
+    let value = ref held()
+    put(45)
+    put(value.tag + 32)
+    put(45)
+}
+
+fn checked(_ value: own Option<Noisy>) -> Option<Noisy> {
+    let kept = noisy(107)
+    let inner = value?
+    consume(inner)
+    put(45)
+    Option::Some(kept)
+}
+
+// "q-k" and "kQ": a failing `?` destroys what its scopes hold.
+fn try_exit(_ fail: bool) {
+    let value = if fail { Option::None } else { Option::Some(noisy(113)) }
+    match checked(value) {
+        Option::Some(_) => {}
+        Option::None => put(81)
+    }
+}
+
+struct Settings {
+    a: u256,
+    b: u256,
+}
+
+impl Copy for Settings {}
+
+fn paired(_ settings: Settings) -> Pair {
+    Pair { a: noisy(70), b: noisy(71) }
+}
+
+// "-GF": constant folding renumbers the body runtime code is lowered from,
+// whose drops still destroy what the checked body's do.
+fn folded() {
+    var settings = Settings { a: 1, b: 2 }
+    let pair = paired(settings)
+    let _right = pair.b
+    settings.a = 0
+    put(45)
+}
+
+struct Unit {}
+
+impl Drop for Unit {
+    fn drop(own self) {
+        put(117)
+    }
+}
+
+struct Wrap<T> {
+    value: T,
+}
+
+struct Guard<F> {
+    f: F,
+}
+
+impl<F> Drop for Guard<F> {
+    fn drop(own self) {
+        put(103)
+    }
+}
+
+fn unit() -> Unit {
+    Unit {}
+}
+
+fn take(_ unit: own Unit) {}
+
+// "u1u2u3u4guuuu": zero-sized values are destroyed like any other. A
+// temporary, an `own` parameter, a discarded result and a reassigned value
+// go where they end; then a guard holding a closure, a wrapper, an array's
+// elements and the binding go with the scope.
+fn zero_sized() {
+    Unit {}
+    put(49)
+    take(Unit {})
+    put(50)
+    unit()
+    put(51)
+    var reassigned = unit()
+    reassigned = unit()
+    put(52)
+    let _pair = [Unit {}, Unit {}]
+    let _wrapped = Wrap { value: Unit {} }
+    let _guard = Guard { f: || {} }
+}
+
+// "1a", "-b" and "-", and "-0-1-.2": a binding declared without a value
+// belongs to the block declaring it, wherever an assignment gives it one.
+fn deferred_nested() {
+    var value: Noisy
+    {
+        value = noisy(97)
+    }
+    put(49)
+}
+
+fn deferred_branch(_ assign: bool) {
+    var value: Noisy
+    if assign {
+        value = noisy(98)
+    }
+    put(45)
+}
+
+fn deferred_loop() {
+    var value: Noisy
+    for tag in [48, 49, 50] {
+        value = noisy(tag)
+        put(45)
+    }
+    put(46)
+}
+
+// "-B": a block whose value is an access keeps its bindings until the end of
+// the enclosing block, so the access stays valid.
+fn access_block() {
+    let span = {
+        let buffer = MemBuffer::alloc(4)
+        let _tag = noisy(66)
+        buffer.span()
+    }
+    core::assert(span.len() == 4)
+    put(45)
+}
+
+// "ba": bindings are destroyed in reverse declaration order, whatever order
+// they are given values in.
+fn deferred_order() {
+    var first: Noisy
+    let _second = noisy(98)
+    first = noisy(97)
+}
+
+fn generic<T>(_ value: own T, _ keep: bool) -> Option<T> {
+    if keep { Option::Some(value) } else { Option::None }
+}
+
+pub fn main() -> i32 {
+    conditional(true)
+    put(10)
+    conditional(false)
+    put(10)
+    looping()
+    put(10)
+    matching(Option::Some(noisy(115)))
+    put(10)
+    matching(Option::None)
+    put(10)
+    partial(Pair { a: noisy(65), b: noisy(66) })
+    put(10)
+    reassign()
+    put(10)
+    let e = early(true)
+    put(10)
+    consume(e)
+    put(10)
+    let f = early(false)
+    put(10)
+    consume(f)
+    put(10)
+    outer()
+    put(10)
+    array()
+    put(10)
+    temporaries()
+    put(10)
+    tuple_and_field()
+    put(10)
+    let_else(Either::Left(noisy(108)))
+    put(10)
+    let_else(Either::Right(noisy(114)))
+    put(10)
+    methods()
+    put(10)
+    closures()
+    put(10)
+    extended()
+    put(10)
+    carried()
+    put(10)
+    picking()
+    put(10)
+    product_leftovers((Outer { inner: noisy(73), n: 79 }, Pair { a: noisy(65), b: noisy(66) }))
+    put(10)
+    try_exit(false)
+    put(10)
+    try_exit(true)
+    put(10)
+    projected()
+    put(10)
+    unwrapped(Option::Some(noisy(117)))
+    put(10)
+    unwrapped(Option::None)
+    put(10)
+    folded()
+    put(10)
+    zero_sized()
+    put(10)
+    deferred_nested()
+    put(10)
+    deferred_branch(true)
+    put(10)
+    deferred_branch(false)
+    put(10)
+    deferred_loop()
+    put(10)
+    deferred_order()
+    put(10)
+    access_block()
+    put(10)
+    // "d" now, and "k" when `main` returns.
+    let _kept = generic(noisy(107), true)
+    let _dropped = generic(noisy(100), false)
+    put(10)
+    0
+}

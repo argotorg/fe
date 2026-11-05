@@ -1,7 +1,6 @@
-// `Collection::at(self)` and `CollectionMut::at_mut(mut self)` are distinct
-// methods: `xs.at(c)` yields a view and `xs.at_mut(c)` a `mut` access. A
-// projection result carries its own mode, so it takes no `mut` marker.
-use core::iter::{Collection, CollectionMut}
+// `Collection::at` is `mut?`: `xs.at(c)` yields a view, and a `mut` access
+// where its use needs one, which the call itself takes no marker for.
+use core::iter::Collection
 
 struct Counter { n: u256 }
 
@@ -21,30 +20,25 @@ fn reads_and_writes_by_method() {
     let a = xs.at(1)
     assert(a == 2)
 
-    xs.at_mut(1) = 5
-    xs.at_mut(2) += 10
-    let first = mut xs.at_mut(0)
+    xs.at(1) = 5
+    xs.at(2) += 10
+    let first = mut xs.at(0)
     first *= 7
     assert(xs[0] == 7 && xs[1] == 5 && xs[2] == 13)
 
     var counters = [Counter { n: 0 }, Counter { n: 4 }]
-    counters.at_mut(1).bump()
+    counters.at(1).bump()
     assert(counters[1].n == 5)
-    increment(mut xs.at_mut(1))
+    increment(mut xs.at(1))
     assert(xs[1] == 6)
 }
 
-// Generic code names the method its bound declares.
-fn bump_all<C: Collection<Item = u256> + CollectionMut>(_ xs: mut C) uses C::E {
+// Generic code takes the `mut` mode by its bound.
+fn bump_all<C: mut Collection<Item = u256>>(_ xs: mut C) uses C::E {
     var c = xs.start()
-    while true {
-        match c {
-            Option::Some(cursor) => {
-                xs.at_mut(cursor) += 1
-                c = xs.next(cursor)
-            }
-            Option::None => break
-        }
+    while xs.has(c) {
+        xs.at(c) += 1
+        c = xs.next(c)
     }
 }
 

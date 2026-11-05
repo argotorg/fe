@@ -1,0 +1,9 @@
+struct Pair(pub i32, pub i32)
+
+fn test_tuple_struct_field() {
+    let p = Pair(3, 4)
+    let a = p.0
+    let b = p.1
+    let t = (a, b)
+    let c = t.0
+}

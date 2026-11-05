@@ -1,0 +1,86 @@
+// Aggregate values copied into object-backed locals and fields keep every
+// field, including fieldless enum tags and enum payloads.
+enum Mode {
+    Off,
+    On,
+}
+
+enum Slot {
+    Empty,
+    Full(u256, bool),
+}
+
+struct Entry {
+    keys: [u256; 4],
+    mode: Mode,
+    slot: Slot,
+}
+
+struct Table {
+    entries: [Entry; 2],
+    len: u256,
+}
+
+impl Copy for Mode {}
+impl Copy for Slot {}
+impl Copy for Entry {}
+impl Copy for Table {}
+
+fn entry(base: u256, on: bool) -> Entry {
+    Entry {
+        keys: [base, base + 1, base + 2, base + 3],
+        mode: if on { Mode::On } else { Mode::Off },
+        slot: if on { Slot::Full(base, true) } else { Slot::Empty },
+    }
+}
+
+fn table(base: u256) -> Table {
+    Table { entries: [entry(base, on: true), entry(base: base + 10, on: false)], len: 2 }
+}
+
+fn is_on(_ mode: Mode) -> bool {
+    match mode {
+        Mode::On => true,
+        Mode::Off => false,
+    }
+}
+
+fn full_value(_ slot: Slot) -> u256 {
+    match slot {
+        Slot::Full(value, _) => value,
+        Slot::Empty => 0,
+    }
+}
+
+#[test]
+fn call_results_copy_into_mutable_locals() {
+    var t = table(base: 100)
+    t.len = 3
+    assert!(t.entries[0].keys[3] == 103 && t.entries[1].keys[0] == 110)
+    assert!(is_on(t.entries[0].mode) && !is_on(t.entries[1].mode))
+    assert!(full_value(t.entries[0].slot) == 100 && full_value(t.entries[1].slot) == 0)
+    t = table(base: 200)
+    assert!(t.len == 2 && t.entries[1].keys[2] == 212)
+    assert!(full_value(t.entries[0].slot) == 200)
+}
+
+#[test]
+fn object_copies_are_independent() {
+    var a = table(base: 1)
+    var b = a
+    a.entries[0].mode = Mode::Off
+    a.entries[1].slot = Slot::Full(9, false)
+    a.entries[0].keys[0] = 50
+    assert!(is_on(b.entries[0].mode) && full_value(b.entries[1].slot) == 0)
+    assert!(b.entries[0].keys[0] == 1)
+    b.entries[1].mode = Mode::On
+    assert!(!is_on(a.entries[1].mode) && full_value(a.entries[1].slot) == 9)
+}
+
+#[test]
+fn values_copy_into_object_fields() {
+    var t = table(base: 0)
+    t.entries[1] = entry(base: 40, on: true)
+    assert!(t.entries[1].keys[1] == 41 && is_on(t.entries[1].mode))
+    assert!(full_value(t.entries[1].slot) == 40 && t.entries[0].keys[3] == 3)
+}

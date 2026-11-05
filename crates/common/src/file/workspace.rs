@@ -35,9 +35,9 @@ impl Workspace {
             return Err(InputIndexError::CannotReuseInput);
         }
 
-        let files = self.files(db);
-        self.set_files(db).to(files.insert(url.clone(), file));
-        let mut paths = self.paths(db);
+        let files = self.files(db).insert(url.clone(), file);
+        self.set_files(db).to(files);
+        let mut paths = self.paths(db).clone();
         paths.insert(file, url);
         self.set_paths(db).to(paths);
         Ok(file)
@@ -52,7 +52,7 @@ impl Workspace {
             let files = self.files(db);
             if let (files, Some(file)) = files.remove(url) {
                 self.set_files(db).to(files);
-                let mut paths = self.paths(db);
+                let mut paths = self.paths(db).clone();
                 paths.remove(&file);
                 self.set_paths(db).to(paths);
                 Some(file)
@@ -98,7 +98,7 @@ impl Workspace {
     }
 
     pub fn all_files(&self, db: &dyn InputDb) -> StringTrie<Url, File> {
-        self.files(db)
+        self.files(db).clone()
     }
 }
 

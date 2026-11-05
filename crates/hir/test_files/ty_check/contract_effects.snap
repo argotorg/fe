@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/frontend/ty_check.rs
-assertion_line: 46
 expression: res
 input_file: test_files/ty_check/contract_effects.fe
 ---
@@ -267,8 +266,8 @@ note:
    │
 63 │   fn test_withdraw() {
    │ ╭────────────────────^
-64 │ │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-65 │ │     let owner = Address { inner: 0xfe }
+64 │ │     let ctx = MockCtx { caller: Address::new(0xbeef) }
+65 │ │     let owner = Address::new(0xfe)
 66 │ │     var balance = 100
    · │
 69 │ │     }
@@ -278,44 +277,56 @@ note:
 note:
    ┌─ contract_effects.fe:64:9
    │
-64 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
+64 │     let ctx = MockCtx { caller: Address::new(0xbeef) }
    │         ^^^ MockCtx
 
 note:
    ┌─ contract_effects.fe:64:15
    │
-64 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-   │               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ MockCtx
+64 │     let ctx = MockCtx { caller: Address::new(0xbeef) }
+   │               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ MockCtx
 
 note:
    ┌─ contract_effects.fe:64:33
    │
-64 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-   │                                 ^^^^^^^^^^^^^^^^^^^^^^^^^ Address
+64 │     let ctx = MockCtx { caller: Address::new(0xbeef) }
+   │                                 ^^^^^^^^^^^^ fn new
 
 note:
-   ┌─ contract_effects.fe:64:50
+   ┌─ contract_effects.fe:64:33
    │
-64 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-   │                                                  ^^^^^^ u256
+64 │     let ctx = MockCtx { caller: Address::new(0xbeef) }
+   │                                 ^^^^^^^^^^^^^^^^^^^^ Address
+
+note:
+   ┌─ contract_effects.fe:64:46
+   │
+64 │     let ctx = MockCtx { caller: Address::new(0xbeef) }
+   │                                              ^^^^^^ u256
 
 note:
    ┌─ contract_effects.fe:65:9
    │
-65 │     let owner = Address { inner: 0xfe }
+65 │     let owner = Address::new(0xfe)
    │         ^^^^^ Address
 
 note:
    ┌─ contract_effects.fe:65:17
    │
-65 │     let owner = Address { inner: 0xfe }
-   │                 ^^^^^^^^^^^^^^^^^^^^^^^ Address
+65 │     let owner = Address::new(0xfe)
+   │                 ^^^^^^^^^^^^ fn new
 
 note:
-   ┌─ contract_effects.fe:65:34
+   ┌─ contract_effects.fe:65:17
    │
-65 │     let owner = Address { inner: 0xfe }
-   │                                  ^^^^ u256
+65 │     let owner = Address::new(0xfe)
+   │                 ^^^^^^^^^^^^^^^^^^ Address
+
+note:
+   ┌─ contract_effects.fe:65:30
+   │
+65 │     let owner = Address::new(0xfe)
+   │                              ^^^^ u256
 
 note:
    ┌─ contract_effects.fe:66:9

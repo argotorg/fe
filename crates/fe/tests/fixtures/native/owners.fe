@@ -1,0 +1,118 @@
+use core::{Box, MemArray, MemBuffer, MemVec, Option, Result}
+use core::ops::Drop
+
+extern {
+    fn putchar(_ c: i32) -> i32
+}
+
+fn put(_ c: i32) {
+    let _ = unsafe { putchar(c) }
+}
+
+// Prints its tag when destroyed.
+struct Noisy {
+    tag: i32,
+}
+
+impl Drop for Noisy {
+    fn drop(own self) {
+        put(self.tag)
+    }
+}
+
+fn noisy(_ tag: i32) -> Noisy {
+    Noisy { tag }
+}
+
+// "de-ab-c-fg": growth moves elements without destroying them; truncation,
+// `clear` and the vector's end destroy them in order.
+fn vector() {
+    var values = MemVec::new()
+    for tag in [97, 98, 99, 100, 101] {
+        values.push(noisy(tag))
+    }
+    values.truncate(3)
+    let last = values.pop()
+    put(45)
+    values.clear()
+    put(45)
+    core::mem::drop(last)
+    put(45)
+    values.push(noisy(102))
+    match values.try_push(noisy(103)) {
+        Result::Ok(()) => {}
+        Result::Err(_) => core::panic()
+    }
+}
+
+// "xy-ABC": arrays destroy their elements, and a vector turned into an
+// array hands its elements over.
+fn array() {
+    let _letters = MemArray::from_fn(3, |i| noisy((65 + i).downcast_truncate()))
+    {
+        var values = MemVec::with_capacity(4)
+        values.push(noisy(120))
+        values.push(noisy(121))
+        let _array = values.into_array()
+    }
+    put(45)
+}
+
+// "-b" and "u-U": a box destroys its value; `into_inner` moves it out.
+fn boxes() {
+    var boxed = Box::new(noisy(98))
+    boxed.get().tag = 98
+    put(45)
+}
+
+fn unboxed() {
+    let value = Box::new(noisy(85)).into_inner()
+    put(117)
+    put(45)
+}
+
+struct Node {
+    tag: i32,
+    next: Option<Box<Node>>,
+}
+
+impl Drop for Node {
+    fn drop(own self) {
+        put(self.tag)
+    }
+}
+
+// "123": a list destroys each node, then the rest of the list.
+fn list() {
+    var head = Option::None
+    for tag in [51, 50, 49] {
+        head = Option::Some(Box::new(Node { tag, next: head }))
+    }
+}
+
+// "": buffers free the allocations they leave behind.
+fn buffers() {
+    var buffer = MemBuffer::with_capacity(4)
+    for i in 0..1000 {
+        buffer.extend_from(MemBuffer::alloc(i % 7).span())
+    }
+    var words: MemVec<u64> = MemVec::new()
+    words.resize(100)
+    core::assert(words[99] == 0)
+    words.resize(10)
+}
+
+pub fn main() -> i32 {
+    vector()
+    put(10)
+    array()
+    put(10)
+    boxes()
+    put(10)
+    unboxed()
+    put(10)
+    list()
+    put(10)
+    buffers()
+    0
+}

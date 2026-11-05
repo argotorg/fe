@@ -1,0 +1,113 @@
+use core::num::{from_be, from_le, swap_bytes, to_be, to_le}
+use core::ptr::MemBuffer
+
+fn counting_bytes(_ len: usize) -> MemBuffer {
+    var buffer = MemBuffer::alloc(len)
+    for i in 0..len {
+        buffer[i] = (i + 1).downcast_truncate()
+    }
+    buffer
+}
+
+#[test]
+fn reads_integers_in_either_byte_order() {
+    let buffer = counting_bytes(40)
+    assert!(buffer.read_be<u16>(0) == 0x0102)
+    assert!(buffer.read_le<u16>(0) == 0x0201)
+    assert!(buffer.read_be<u64>(1) == 0x0203040506070809)
+    assert!(buffer.read_le<u64>(1) == 0x0908070605040302)
+    assert!(buffer.read_be<u32>(36) == 0x25262728)
+    assert!(buffer.read_be<u8>(39) == 40 && buffer.read_le<u8>(39) == 40)
+    assert!(buffer.read_le<u256>(8) == from_le(to_be(buffer.read_be<u256>(8))))
+    assert!(buffer.read_be<u256>(8) == buffer.read_word(8))
+    assert!(buffer.span().read_le<u64>(32) == 0x2827262524232221)
+}
+
+#[test]
+fn reads_without_bounds_checks_within_the_span() {
+    let buffer = counting_bytes(40)
+    let span = buffer.span()
+    assert!(unsafe { span.read_be_unchecked<u64>(1) } == 0x0203040506070809)
+    assert!(unsafe { span.read_be_unchecked<u256>(8) } == buffer.read_word(8))
+}
+
+#[test]
+fn writes_without_bounds_checks_within_the_span() {
+    var buffer = counting_bytes(40)
+    unsafe { buffer.span().write_be_unchecked(offset: 4, value: 0x0a0b0c0d as u32) }
+    assert!(buffer.read_be<u32>(4) == 0x0a0b0c0d && buffer[3] == 4 && buffer[8] == 9)
+}
+
+#[test]
+fn reads_signed_integers() {
+    var buffer = MemBuffer::alloc(4)
+    buffer[0] = 0xff
+    buffer[1] = 0xfe
+    buffer[2] = 0x7f
+    assert!(buffer.read_be<i16>(0) == -2)
+    assert!(buffer.read_le<i16>(0) == -257)
+    assert!(buffer.read_le<i16>(1) == 0x7ffe)
+}
+
+#[test]
+fn writes_integers_in_either_byte_order() {
+    var buffer = MemBuffer::with_capacity(24)
+    buffer.write_be<u32>(offset: 0, value: 0x01020304)
+    buffer.write_le<u32>(offset: 4, value: 0x01020304)
+    assert!(buffer.len() == 8)
+    assert!(buffer[0] == 1 && buffer[3] == 4 && buffer[4] == 4 && buffer[7] == 1)
+    buffer.write_le<u64>(offset: 10, value: 0x1122334455667788)
+    assert!(buffer.len() == 18 && buffer[8] == 0 && buffer[9] == 0)
+    assert!(buffer[10] == 0x88 && buffer[17] == 0x11)
+    buffer.span().write_be<u16>(offset: 8, value: 0xabcd)
+    assert!(buffer[8] == 0xab && buffer[9] == 0xcd && buffer.len() == 18)
+    buffer.write_be<i16>(offset: 18, value: -2)
+    assert!(buffer[18] == 0xff && buffer[19] == 0xfe && buffer.len() == 20)
+}
+
+#[test]
+fn byte_order_conversions_invert() {
+    let x: u64 = 0x0102030405060708
+    let swapped: u64 = 0x0807060504030201
+    // Each target's memory is big-endian or little-endian, so exactly one
+    // conversion reverses the bytes.
+    assert!(to_be(x) == x && to_le(x) == swapped || to_be(x) == swapped && to_le(x) == x)
+    assert!(from_be(to_be(x)) == x && from_le(to_le(x)) == x)
+    let byte: u8 = 7
+    assert!(to_be(byte) == 7 && to_le(byte) == 7)
+    let word: u256 = 1
+    assert!(to_be(word) == 1 && to_le(word) == 1 << 248 || to_be(word) == 1 << 248 && to_le(word) == 1)
+}
+
+#[test]
+fn swaps_bytes_of_every_width() {
+    let byte: u8 = 0xab
+    assert!(swap_bytes(byte) == 0xab)
+    let short: u16 = 0x0102
+    assert!(swap_bytes(short) == 0x0201)
+    let lane: u64 = 0x0102030405060708
+    assert!(swap_bytes(lane) == 0x0807060504030201)
+    let signed: i32 = -2
+    assert!(swap_bytes(signed) == -16777217)
+    let word: u256 = 0x0102
+    assert!(swap_bytes(word) == 0x0201 << 240)
+    assert!(swap_bytes(lane) == from_le(to_be(lane)))
+}
+
+#[test(should_revert, panic = 0x32)]
+fn rejects_reads_past_the_extent() {
+    let buffer = MemBuffer::alloc(8)
+    let _ = buffer.read_le<u64>(1)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn rejects_span_writes_past_its_end() {
+    var buffer = MemBuffer::alloc(16)
+    buffer.slice(offset: 0, len: 8).write_le<u32>(offset: 5, value: 1)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn rejects_writes_past_the_capacity() {
+    var buffer = MemBuffer::with_capacity(8)
+    buffer.write_le<u32>(offset: 5, value: 1)
+}

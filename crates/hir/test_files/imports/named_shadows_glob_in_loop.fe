@@ -1,0 +1,54 @@
+// `p::X` and `k::t` are named imports that resolve late and shadow a glob
+// import of the same name. What `a` and `b` re-export to each other is the
+// named import's, not the glob's.
+mod a {
+    pub use super::b::*
+    pub use super::k::*
+}
+mod b {
+    pub use super::a::*
+}
+mod k {
+    pub use super::p::X
+    use super::g::*
+    pub use super::y1::t3 as t
+    pub use t::A
+}
+mod p {
+    pub use super::g1::*
+    pub use super::c1::X
+}
+mod g1 {
+    pub struct X {}
+}
+mod c1 {
+    pub use super::c2::X
+}
+mod c2 {
+    pub struct X {
+        pub v: u8,
+    }
+}
+mod g {
+    pub mod t {
+        pub mod A {}
+    }
+}
+mod h {
+    pub mod t {
+        pub mod A {
+            pub struct S {
+                pub v: u8,
+            }
+        }
+    }
+}
+mod y1 {
+    pub use super::y2::t2 as t3
+}
+mod y2 {
+    pub use super::h::t as t2
+}
+fn f(x: a::X, y: b::A::S) -> u8 {
+    x.v + y.v
+}

@@ -1,5 +1,11 @@
 use camino::Utf8PathBuf;
-use std::{cell::RefCell, sync::OnceLock};
+use std::{
+    cell::RefCell,
+    sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 pub fn sanitize_filename(component: &str) -> String {
     component
@@ -35,13 +41,17 @@ pub fn create_dir_all_utf8(path: &Utf8PathBuf) -> Result<(), String> {
 }
 
 pub fn create_report_staging_dir(base: &str) -> Result<Utf8PathBuf, String> {
+    // Suites stage their reports in parallel, and the clock can read the same
+    // time for two of them, so the sequence number keeps their directories apart.
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
     let base = Utf8PathBuf::from(base);
     let _ = std::fs::create_dir_all(&base);
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let dir = base.join(format!("report-{pid}-{nanos}"));
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = base.join(format!("report-{pid}-{nanos}-{seq}"));
     create_dir_all_utf8(&dir)?;
     Ok(dir)
 }
@@ -328,7 +338,34 @@ pub fn is_verifier_error_text(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_verifier_error_text;
+    use std::{collections::HashSet, sync::Barrier, thread};
+
+    use super::{create_report_staging_dir, is_verifier_error_text};
+
+    #[test]
+    fn staging_dirs_made_at_once_are_distinct() {
+        let base = tempfile::tempdir().unwrap();
+        let base = base.path().to_str().unwrap();
+        let start = Barrier::new(8);
+        let dirs: Vec<_> = thread::scope(|scope| {
+            let workers: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        (0..16)
+                            .map(|_| create_report_staging_dir(base).unwrap())
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().unwrap())
+                .collect()
+        });
+        let distinct: HashSet<_> = dirs.iter().collect();
+        assert_eq!(distinct.len(), dirs.len());
+    }
 
     #[test]
     fn detects_verifier_error_markers() {

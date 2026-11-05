@@ -41,8 +41,8 @@ const SALT_DIGEST: u256 = 0xa284ddd69adb56d959922d24c73d2cd9e6b24d5e789a4106eca9
 
 #[test]
 fn test_create2_salt_pair() {
-    let token0 = Address { inner: 0x1111111111111111111111111111111111111111 }
-    let token1 = Address { inner: 0x2222222222222222222222222222222222222222 }
+    let token0 = Address::new(0x1111111111111111111111111111111111111111)
+    let token1 = Address::new(0x2222222222222222222222222222222222222222)
     assert!(keccak_packed((token0, token1)) == SALT_DIGEST)
 }
 
@@ -80,7 +80,7 @@ fn test_mixed_widths_tuple() {
         0x000102030405060708090a0b0c0d0e0f as u128,
         MIXED_U256,
         true,
-        Address { inner: WETH },
+        Address::new(WETH),
     ))
     assert!(p.len() == 84)
     assert!(p.keccak256() == MIXED_DIGEST)
@@ -98,7 +98,7 @@ fn test_builder_matches_tuple_api() {
     p.u128(0x000102030405060708090a0b0c0d0e0f)
     p.u256(MIXED_U256)
     p.bool_(true)
-    p.address(Address { inner: WETH })
+    p.address(Address::new(WETH))
     assert!(p.len() == 84)
     assert!(p.keccak256() == MIXED_DIGEST)
     assert!(p.sha256() == MIXED_SHA256)
@@ -163,14 +163,6 @@ fn test_fixed_bytes_over_width_reverts() {
     keccak_packed((fb,))
 }
 
-// Same for a hand-built Address with bits above the low 160 set: packing
-// must revert, not truncate it into a collision with the canonical value.
-#[test(should_revert)]
-fn test_address_non_canonical_reverts() {
-    let addr = Address { inner: (1 << 160) | 0x1111111111111111111111111111111111111111 }
-    keccak_packed((addr,))
-}
-
 // keccak256("Uniswap V2") — the effective 10 string bytes, not a padded
 // capacity.
 const UNISWAP_V2_DIGEST: u256 = 0xbfcc8ef98ffbf7b6c3fec7bf5185b566b9863e35a9d83acd49ad6824b5969738
@@ -216,7 +208,7 @@ const FLAT_DIGEST: u256 = 0x1d14a90c464e40ebf036a55b03363aa6f517a9f7ef1d8bafe272
 
 #[test]
 fn test_nested_tuple_flattens() {
-    let weth = Address { inner: WETH }
+    let weth = Address::new(WETH)
     assert!(keccak_packed((0x11 as u8, weth, MIXED_U256)) == FLAT_DIGEST)
     assert!(keccak_packed((0x11 as u8, (weth, MIXED_U256))) == FLAT_DIGEST)
 }
@@ -276,8 +268,8 @@ fn test_sha256_terminal() {
 #[test]
 fn test_as_bytes_roundtrip() {
     var p = Packed::new()
-    p.address(Address { inner: 0x1111111111111111111111111111111111111111 })
-    p.address(Address { inner: 0x2222222222222222222222222222222222222222 })
+    p.address(Address::new(0x1111111111111111111111111111111111111111))
+    p.address(Address::new(0x2222222222222222222222222222222222222222))
     let b = p.as_bytes()
     assert!(b.len() == 40)
     assert!(b.encoded_size() == 96)

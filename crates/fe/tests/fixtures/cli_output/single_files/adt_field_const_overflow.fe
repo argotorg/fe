@@ -4,6 +4,9 @@ struct S<const N: usize> {
     x: [u8; { N + 1 }],
 }
 
+// `usize`'s largest value, which no literal can spell on every target.
+const MAX: usize = usize::max()
+
 fn size() -> u256 {
-    core::size_of<S<0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff>>()
+    core::size_of<S<MAX>>() as u256
 }

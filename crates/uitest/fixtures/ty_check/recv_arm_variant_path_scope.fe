@@ -1,0 +1,24 @@
+msg M {
+    #[selector = 0x01]
+    V { n: u256 } -> u256,
+    #[selector = 0x02]
+    U -> u256,
+}
+
+// A single segment in a named recv block is an item of its msg; a longer path
+// is resolved where the arm is written, so `self::V` is no variant of `M`.
+// Each arm's path is resolved once, so a bad one is reported once, and its
+// fields still bind.
+pub contract C {
+    recv M {
+        self::V { n } -> u256 {
+            n
+        }
+        Nope { x } -> u256 {
+            x
+        }
+        M::U { k } -> u256 {
+            k
+        }
+    }
+}

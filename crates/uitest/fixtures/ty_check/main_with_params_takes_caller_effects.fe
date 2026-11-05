@@ -1,0 +1,23 @@
+trait Greeting {
+    fn greet(self) -> u256
+}
+
+struct Hello {}
+
+impl Greeting for Hello {
+    fn greet(self) -> u256 {
+        1
+    }
+}
+
+// A `main` with parameters is an ordinary function: its callers, not the
+// target's root effect, provide its effects.
+pub fn main(_ x: u256) -> u256 uses (greeting: Greeting) {
+    greeting.greet() + x
+}
+
+fn call_main() -> u256 {
+    with (Greeting = Hello {}) {
+        main(2)
+    }
+}

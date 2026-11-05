@@ -1,0 +1,58 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_trait_bound_projection_arg.fe
+---
+note: 
+   ┌─ goto_trait_bound_projection_arg.fe:11:9
+   │
+11 │ fn f<T: HasItem, U: Sink<T::Item>>() {}
+   │         ^^^^^^^ -> goto_trait_bound_projection_arg::HasItem
+
+note: 
+   ┌─ goto_trait_bound_projection_arg.fe:11:21
+   │
+11 │ fn f<T: HasItem, U: Sink<T::Item>>() {}
+   │                     ^^^^---------
+   │                     │
+   │                     full segment (includes generics)
+   │                     -> goto_trait_bound_projection_arg::Sink
+
+note: 
+   ┌─ goto_trait_bound_projection_arg.fe:13:9
+   │
+13 │ impl<T: HasItem> Sink<T::Item> for S<T> {}
+   │         ^^^^^^^ -> goto_trait_bound_projection_arg::HasItem
+
+note: 
+   ┌─ goto_trait_bound_projection_arg.fe:13:18
+   │
+13 │ impl<T: HasItem> Sink<T::Item> for S<T> {}
+   │                  ^^^^---------
+   │                  │
+   │                  full segment (includes generics)
+   │                  -> goto_trait_bound_projection_arg::Sink
+
+note: 
+   ┌─ goto_trait_bound_projection_arg.fe:13:36
+   │
+13 │ impl<T: HasItem> Sink<T::Item> for S<T> {}
+   │                                    ^---
+   │                                    │
+   │                                    full segment (includes generics)
+   │                                    -> goto_trait_bound_projection_arg::S
+
+note: 
+   ┌─ goto_trait_bound_projection_arg.fe:15:13
+   │
+15 │ trait Pipe: HasItem {
+   │             ^^^^^^^ -> goto_trait_bound_projection_arg::HasItem
+
+note: 
+   ┌─ goto_trait_bound_projection_arg.fe:16:15
+   │
+16 │     type Out: Sink<Self::Item>
+   │               ^^^^------------
+   │               │
+   │               full segment (includes generics)
+   │               -> goto_trait_bound_projection_arg::Sink

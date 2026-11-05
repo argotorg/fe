@@ -53,7 +53,7 @@ pub(crate) fn inline_projections<'db>(
             unreachable!("found a projection call")
         };
         let callee = runtime_instance_lowered_body(db, callee)?.body(db);
-        inline_session(db, body, block, stmt, dst, &args, &callee);
+        inline_session(db, body, block, stmt, dst, &args, callee);
     }
     prune_unreachable_blocks(body);
     Ok(())
@@ -424,8 +424,10 @@ impl<'db> SumShape<'db> {
     /// Rewrites the caller's uses of the call's result to read the variant
     /// and the fields the yields set, and sends each yield, at `exits` with
     /// the variant it built, to that variant's case of the caller's match
-    /// when nothing runs between the call and the match. A yield that still
-    /// joins the others defines the other variants' fields too.
+    /// when nothing runs between the call and the match. Each yield defines
+    /// the other variants' fields too: a read under a test of the variant,
+    /// such as a drop's where the caller's match joins, need not follow the
+    /// yield that set them.
     fn replace_uses(
         self,
         body: &mut RuntimeBody<'db>,
@@ -533,7 +535,6 @@ impl<'db> SumShape<'db> {
             if let Some(case) = self.dispatched_case(body, after_call, variant, &tests, &constants)
             {
                 body.blocks[exit.index()].terminator = RTerminator::Goto(case);
-                continue;
             }
             for (idx, fields) in self.fields.iter().enumerate() {
                 if idx == usize::from(variant) {

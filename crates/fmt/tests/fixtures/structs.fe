@@ -9,6 +9,9 @@ pub struct  PubPoint { x:i32,y : i32}
 // Struct with pub fields
 pub struct Mixed{pub x:i32,y:i32}
 
+// Struct with restricted field visibility
+struct Restricted{pub(ingot) x:i32,pub(super) y:i32}
+
 // Empty struct
 struct Empty {}
 

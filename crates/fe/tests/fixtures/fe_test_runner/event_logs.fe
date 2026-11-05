@@ -30,8 +30,8 @@ struct DynamicEvent {
 
 #[test]
 fn test_transfer_event() uses (evm: mut Evm) {
-    let from = Address { inner: 0x1111111111111111111111111111111111111111 }
-    let to = Address { inner: 0x2222222222222222222222222222222222222222 }
+    let from = Address::new(0x1111111111111111111111111111111111111111)
+    let to = Address::new(0x2222222222222222222222222222222222222222)
     evm.emit(Transfer { from, to, value: 1000 })
 }
 

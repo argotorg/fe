@@ -46,12 +46,12 @@ struct SizesEvent {
 }
 
 fn item(_ amount: u256) -> Item {
-    Item { itemType: 2, token: Address { inner: 0xbeef }, identifier: 7, amount }
+    Item { itemType: 2, token: Address::new(0xbeef), identifier: 7, amount }
 }
 
 #[test]
 fn test_abi_struct_array_event() uses (evm: mut Evm) {
-    evm.emit(Offered { offer: dyn_array_from([item(1), item(2)]), offerer: Address { inner: 0xcafe } })
+    evm.emit(Offered { offer: dyn_array_from([item(1), item(2)]), offerer: Address::new(0xcafe) })
 }
 
 #[test]

@@ -39,8 +39,11 @@ flowchart TD
   exist only in the IR).
 - A projection's every yield site is a `Yield` terminator whose resume block
   runs the slide and returns. A tail or `return` yield has an empty slide; a
-  `yield` statement's slide is the code after it. Each yield site yields on
-  its own path.
+  `yield` statement's slide is the code after it, except on a sum shape's
+  empty variant, which grants nothing and so returns at once, as `?`'s exit
+  does: a variant constructor is decided statically, and any other yield,
+  such as a forwarded `yield self.entry(k)`, tests its value. Each yield site
+  yields on its own path.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its
@@ -119,10 +122,14 @@ not conflict with an operation on the map's entries.
   zero-sized `Evm` implements, even as a generic helper's effect.
 - `Grant { session, component }`: what a session granted. Places derived from
   one grant overlap; sibling components of a split are disjoint. A grant lies
-  in the address space its projection's result-space contract exports.
+  in the address space its projection's result space exports.
 - `State(space)`: every slot of an address space, the footprint of external
   execution and raw storage authority.
 - `Raw`: memory reached through a raw pointer; never checked.
+
+A place reached through a carrier that holds no access, or by dereferencing
+a value that is not a pointer, has no base: once the flow is solved, an
+operation on it is an internal error, never an access of memory.
 
 Places in different spaces are disjoint. A place's space is its root's
 unless a pinned type or an entry along its path moves it (below), so an
@@ -164,16 +171,18 @@ stack; they end at their `end`, in any order. In the projection's body:
   the grant's own ancestors are exempt. The exported referent must be
   initialized, and an owned component may not overlap an access component.
 - Each component of every yield site names places in one address space per
-  instantiation. That space is the projection's *result-space contract*
+  instantiation. That space is the projection's *result space*
   (`projection_result_spaces`), inferred from the body and exported with the
-  instance: callers combine grants by their contracts, never by bodies. A
-  declared contract naming a sub-place (`@self.value`, `space S = self[_]`)
-  resolves per instance by the same path walk (`access::space::PathSpace`)
-  that classifies yields, so the two agree on pins, entries and lanes. A
-  place's space is its root's, unless a pinned type or an entry along its
-  path moves it into the type's pin or the collection's: a `TSlot` held in
-  a storage struct, and its `mut self.lock.value`, are transient. The
-  innermost such step decides.
+  instance: callers combine grants by their result spaces, never by bodies.
+  A component no yield grants, such as the payload of a variant the
+  projection never returns, has none, and neither does a grant of one.
+  Lowering holds the class it returns each component in to its space
+  (`check_projection_result_spaces`); a disagreement is an internal error.
+  A place's space is its root's, unless a pinned type or an entry along its
+  path moves it into the type's pin or the collection's
+  (`access::space::PathSpace`): a `TSlot` held in a storage struct, and its
+  `mut self.lock.value`, are transient. The innermost such step decides,
+  and a lane's grants lie in memory.
 - The `mut` components of a split are structurally disjoint.
 - A `#[raw_place]` projection has nothing to resume: after each yield it
   only ends the accesses its grant derives from, a session among them is a

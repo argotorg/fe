@@ -1,4 +1,4 @@
-pub fn sum_const() -> usize {
+pub fn main() -> usize {
     var sum: usize = 0
     for i in 0..4 {
         sum = sum + i

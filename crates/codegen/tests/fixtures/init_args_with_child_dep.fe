@@ -6,6 +6,6 @@ pub contract Child {
 
 pub contract Parent uses (create: mut Create) {
     init(seed: u256) uses (mut create) {
-        create.create<Child>(value: 0, args: (seed, seed))
+        create.create<Child>(value: Wei::zero(), args: (seed, seed))
     }
 }

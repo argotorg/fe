@@ -5,13 +5,13 @@ expression: diags
 input_file: fixtures/ty_check/trait_access_defaults.fe
 ---
 error[5-0005]: a trait's effect row has no default
-  ┌─ trait_access_defaults.fe:3:7
+  ┌─ trait_access_defaults.fe:2:7
   │
-3 │ trait Collection {
+2 │ trait Collection {
   │       ^^^^^^^^^^ effect row `E` is given by each implementation, not the trait
 
-error[5-0005]: a trait's space has no default
-  ┌─ trait_access_defaults.fe:3:7
-  │
-3 │ trait Collection {
-  │       ^^^^^^^^^^ space `S` is given by each implementation, not the trait
+error[6-0026]: associated effect row not defined in trait
+   ┌─ trait_access_defaults.fe:14:15
+   │
+14 │ impl Slot for Unknown {
+   │               ^^^^^^^ associated effect row `E` is not defined in trait `Slot`

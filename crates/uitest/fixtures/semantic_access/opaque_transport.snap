@@ -1,0 +1,52 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/opaque_transport.fe
+---
+error[16-0001]: access conflict in `fn aliased_parts`
+   ┌─ opaque_transport.fe:44:25
+   │
+44 │     set<Pair>((mut p.a, mut p.a))
+   │                -------  ^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │                │
+   │                access opened here
+
+error[16-0001]: access conflict in `fn open_while_passed`
+   ┌─ opaque_transport.fe:74:21
+   │
+74 │     sink<D>(d.at(), mut d)
+   │             ------  ^^^^^ cannot mutably access this place while a `ref` projection of it is open
+   │             │
+   │             projection opened here
+
+error[16-0001]: access conflict in `fn open_while_forwarded`
+   ┌─ opaque_transport.fe:83:33
+   │
+83 │     sink<D>(pass_on<D>(d.at()), mut d)
+   │                        ------   ^^^^^ cannot mutably access this place while a `ref` projection of it is open
+   │                        │
+   │                        projection opened here
+
+error[16-0002]: move conflict in `fn twice`
+   ┌─ opaque_transport.fe:26:13
+   │
+25 │     take<D>(s)
+   │             - value is moved here
+26 │     take<D>(s)
+   │             ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn part_twice`
+   ┌─ opaque_transport.fe:58:13
+   │
+57 │     take<D>(s)
+   │             - value is moved here
+58 │     take<D>(s)
+   │             ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn <closure>`
+   ┌─ opaque_transport.fe:64:17
+   │
+63 │         take<D>(s)
+   │                 - value is moved here
+64 │         take<D>(s)
+   │                 ^ cannot use a value after it was moved

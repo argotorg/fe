@@ -5,17 +5,17 @@ expression: diags
 input_file: fixtures/semantic_access/mixed_space_projections.fe
 ---
 error[16-0001]: access conflict in `fn held_across`
-   ┌─ mixed_space_projections.fe:81:5
+   ┌─ mixed_space_projections.fe:82:5
    │
-80 │     let w = mut vault.value_mut()
+81 │     let w = mut vault.value()
    │                 ----- access opened here
-81 │     call_out(to)
+82 │     call_out(to)
    │     ^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
 
 error[16-0007]: transport violation in `fn pick`
-   ┌─ mixed_space_projections.fe:32:40
+   ┌─ mixed_space_projections.fe:33:40
    │
-32 │         if c { mut self.value } else { mut self.hits.value }
+33 │         if c { mut self.value } else { mut self.hits.value }
    │                --------------          ^^^^^^^^^^^^^^^^^^^ this yield names transient storage, but another yield names storage
    │                │
    │                yields storage

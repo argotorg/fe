@@ -1,0 +1,103 @@
+use core::option::Option
+
+struct Counter {
+    count: u256,
+}
+
+struct Pair {
+    first: Counter,
+    second: Counter,
+}
+
+impl Pair {
+    fn first(mut? self) -> mut? Counter {
+        mut? self.first
+    }
+
+    fn both(mut? self) -> (mut? Counter, mut? Counter) {
+        (mut? self.first, mut? self.second)
+    }
+
+    fn maybe_first(mut? self) -> Option<mut? Counter> {
+        Option::Some(mut? self.first)
+    }
+
+    // The `ref` body cannot write through `self`.
+    fn reset(mut? self) -> mut? Counter {
+        self.first.count = 0
+        mut? self.first
+    }
+
+    // `mut?` takes the mode of a function whose signature writes it.
+    fn plain(self) -> u256 {
+        let first = mut? self.first
+        first.count
+    }
+
+    // The `ref` body cannot write through a `mut?` binding.
+    fn zeroed(mut? self) -> mut? Counter {
+        let (mut? first, _) = self.both()
+        first.count = 0
+        mut? self.second
+    }
+
+    // The `ref` body's closure cannot write through its `mut?` parameter.
+    fn cleared(mut? self) -> mut? Counter {
+        let clear = |c: mut? Counter| { c.count = 0 }
+        clear(mut? self.first)
+        mut? self.first
+    }
+}
+
+fn first_of(_ pair: mut? Pair) -> mut? Counter {
+    mut? pair.first
+}
+
+fn immutable_base() {
+    let pair = Pair { first: Counter { count: 1 }, second: Counter { count: 2 } }
+    let first = mut pair.first()
+    first.count = 2
+}
+
+// `?` and a block's tail pass the demand on to the call.
+fn immutable_through_try(_ pair: Pair) -> Option<()> {
+    let first = mut pair.maybe_first()?
+    first.count = 2
+    Option::Some(())
+}
+
+fn immutable_through_block() {
+    let pair = Pair { first: Counter { count: 1 }, second: Counter { count: 2 } }
+    let (mut a, b) = { pair.both() }
+    a.count = b.count
+}
+
+fn implicit_argument() {
+    var pair = Pair { first: Counter { count: 1 }, second: Counter { count: 2 } }
+    let first = mut first_of(pair)
+    first.count = 2
+}
+
+// Only a use of its result calls a `mut?` function at `mut`, so its result
+// needs a `mut?` part.
+fn count_of(_ pair: mut? Pair) -> u256 {
+    pair.first.count
+}
+
+fn reset_both(_ pair: mut? Pair) {}
+
+// A result that does not parse is reported as such alone.
+fn unparsed(_ pair: mut? Pair) -> _ {
+    pair.first.count
+}
+
+fn needs_mut_counter() uses (counter: mut Counter) {}
+
+// A `with` value bound `mut?` is read-only in the `ref` body; the note names
+// the value's binding, not the effect.
+fn with_maybe_mut(_ c: mut? Counter) -> mut? u256 {
+    with (Counter = c) {
+        needs_mut_counter()
+    }
+    mut? c.count
+}

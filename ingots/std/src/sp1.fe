@@ -1,0 +1,63 @@
+//! Scalar input and public values for SP1 RV64IM guests.
+//!
+//! Each read consumes one hint containing exactly four or eight little-endian
+//! bytes. Commits append raw little-endian bytes to the public output.
+
+extern {
+    // Adapters in the Sonatina SP1 runtime. They change guest I/O state, and
+    // their scalar-only signatures give them no access to Fe-managed memory.
+    fn sys_sp1_read_u32() -> u32
+    fn sys_sp1_read_u64() -> u64
+    fn sys_sp1_commit_u32(value: u32)
+    fn sys_sp1_commit_u64(value: u64)
+}
+
+pub trait ProverInput {
+    fn read_u32(mut self) -> u32
+    fn read_u64(mut self) -> u64
+}
+
+pub trait PublicValues {
+    fn commit_u32(mut self, value: u32)
+    fn commit_u64(mut self, value: u64)
+}
+
+pub struct Guest {}
+
+pub fn sp1() -> Guest {
+    Guest {}
+}
+
+impl ProverInput for Guest {
+    fn read_u32(mut self) -> u32 {
+        sys_sp1_read_u32()
+    }
+    fn read_u64(mut self) -> u64 {
+        sys_sp1_read_u64()
+    }
+}
+
+impl PublicValues for Guest {
+    fn commit_u32(mut self, value: u32) {
+        sys_sp1_commit_u32(value)
+    }
+    fn commit_u64(mut self, value: u64) {
+        sys_sp1_commit_u64(value)
+    }
+}
+
+pub fn read_u32() -> u32 uses (input: mut ProverInput) {
+    input.read_u32()
+}
+
+pub fn read_u64() -> u64 uses (input: mut ProverInput) {
+    input.read_u64()
+}
+
+pub fn commit_u32(_ value: u32) uses (values: mut PublicValues) {
+    values.commit_u32(value)
+}
+
+pub fn commit_u64(_ value: u64) uses (values: mut PublicValues) {
+    values.commit_u64(value)
+}

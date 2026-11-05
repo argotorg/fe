@@ -54,8 +54,8 @@ pub contract C uses (storage: mut RawStorage) {
 
 #[test]
 fn layouts_agree() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    let r: (u256, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: 0, message: M::Run {})
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: (u256, u256, u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
     assert!(r.0 == 5)
     assert!(r.1 == 7)
     assert!(r.2 == 9)
@@ -65,7 +65,7 @@ fn layouts_agree() uses (evm: mut Evm) {
 #[test]
 fn sol_array_assoc_stride() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let arr = unsafe { SolArray<S<K>>::at(0x100) }
+        let arr = unsafe { mut SolArray<S<K>>::at(0x100) }
         arr.push(S<K> { a: (1, 2, 3) })
         arr.push(S<K> { a: (4, 5, 6) })
         arr.push(S<K> { a: (7, 8, 9) })
@@ -97,7 +97,7 @@ impl SolPacked for Big {
 #[test]
 fn sol_array_wide_packed_stride() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let arr = unsafe { SolArray<Big>::at(0x200) }
+        let arr = unsafe { mut SolArray<Big>::at(0x200) }
         arr.push(Big { a: 1, b: 2 })
         arr.push(Big { a: 3, b: 4 })
         assert(arr.get(0).b == 2 && arr.get(1).a == 3 && arr.get(1).b == 4)

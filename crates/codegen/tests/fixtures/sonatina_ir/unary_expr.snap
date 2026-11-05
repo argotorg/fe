@@ -5,21 +5,21 @@ input_file: crates/codegen/tests/fixtures/unary_expr.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %main_root() {
-    block0:
-        jump block1;
-
-    block1:
-        v0.i64 = call %unary_expr;
-        evm_stop;
-}
-
-func private %unary_expr() -> i64 {
+func private %main() -> i64 {
     block0:
         jump block1;
 
     block1:
         return -3.i64;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i64 = call %main;
+        evm_stop;
 }
 
 

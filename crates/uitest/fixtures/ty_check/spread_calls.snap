@@ -1,0 +1,86 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/spread_calls.fe
+---
+error[6-0005]: method argument count mismatch
+   ┌─ spread_calls.fe:27:13
+   │
+27 │     fn apply(self, _ a: own u256) {}
+   │             ^^^^^^^^^^^^^^^^^^^^^ expected 3 arguments, but 2 given
+
+error[6-0006]: method argument label mismatch
+   ┌─ spread_calls.fe:44:20
+   │
+ 6 │     fn apply(self, ..A) -> Self::Out
+   │                    --- argument label defined here
+   ·
+44 │     fn apply(self, a: own u256) {}
+   │                    ^^^^^^^^^^^ expected `_` label, but the given label is `a`
+
+error[6-0007]: method `apply` has incompatible argument type
+   ┌─ spread_calls.fe:35:20
+   │
+ 6 │     fn apply(self, ..A) -> Self::Out
+   │                    --- trait requires this type
+   ·
+35 │     fn apply(self, _ a: u256) {}
+   │                    ^^^^^^^^^ expected `own u256`, found `u256`
+
+error[6-0007]: method `apply` has incompatible argument type
+   ┌─ spread_calls.fe:52:35
+   │
+ 6 │     fn apply(self, ..A) -> Self::Out
+   │                    --- trait requires this type
+   ·
+52 │     fn apply(self, _ a: own u256, _ (mut b, c): (mut u256, ref u256)) {}
+   │                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `(mut u256, ref bool)`, found `(mut u256, ref u256)`
+
+error[6-0037]: cannot implement `apply`: its parameters are not known
+   ┌─ spread_calls.fe:61:13
+   │
+ 6 │     fn apply(self, ..A) -> Self::Out
+   │                    --- spread declared here
+   ·
+61 │     fn apply(self) {}
+   │             ^^^^^^ the trait's spread is `..S` here, which lists no known parameters
+
+error[8-0000]: type mismatch
+   ┌─ spread_calls.fe:13:13
+   │
+13 │     f.apply(true, mut x)
+   │             ^^^^ expected `u256`, but `bool` is given
+
+error[8-0023]: argument number mismatch
+   ┌─ spread_calls.fe:11:12
+   │
+ 6 │     fn apply(self, ..A) -> Self::Out
+   │        ----- function defined here
+   ·
+11 │     f.apply(1)
+   │            ^^^ expected 3 arguments, but 2 given
+
+error[8-0068]: `mut` argument must be a place
+   ┌─ spread_calls.fe:12:16
+   │
+12 │     f.apply(1, x + 1)
+   │                ^^^^^ temporaries and literal values cannot be used where `mut` is expected
+   │
+   = help: bind the value to a named local first, then pass `mut <place>`
+
+error[8-0069]: explicit borrow required
+   ┌─ spread_calls.fe:14:16
+   │
+14 │     f.apply(1, x)
+   │                ^ this argument must be explicitly borrowed as `mut`
+   │
+   = help: try `mut x`
+
+error[8-0146]: the callee's parameters are not known
+   ┌─ spread_calls.fe:19:12
+   │
+ 6 │     fn apply(self, ..A) -> Self::Out
+   │        ----- function defined here
+   ·
+19 │     f.apply()
+   │            ^^ its spread is `..S`, which lists no known parameters

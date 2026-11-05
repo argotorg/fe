@@ -1,0 +1,67 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_key_argument_errors.fe
+---
+error[2-0002]: `Missing` is not found
+   ┌─ effect_key_argument_errors.fe:14:34
+   │
+14 │ fn binding() uses (p: Has<Item = Missing>) {}
+   │                                  ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ effect_key_argument_errors.fe:16:30
+   │
+16 │ fn trait_arg() uses (p: HasT<Missing>) {}
+   │                              ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ effect_key_argument_errors.fe:20:28
+   │
+20 │ fn type_arg() uses (p: Foo<Missing>) {}
+   │                            ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ effect_key_argument_errors.fe:54:32
+   │
+54 │ contract C uses (p: Has<Item = Missing>) {}
+   │                                ^^^^^^^ `Missing` is not found
+
+error[3-0025]: division by zero in const context
+   ┌─ effect_key_argument_errors.fe:18:34
+   │
+18 │ fn trait_const() uses (p: HasC<{ 1 / 0 }>) {}
+   │                                  ^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ effect_key_argument_errors.fe:22:33
+   │
+22 │ fn type_const() uses (p: FooC<{ 2 / 0 }>) {}
+   │                                 ^^^^^ cannot divide by zero
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ effect_key_argument_errors.fe:46:26
+   │
+46 │ fn type_bound() uses (p: Guarded<bool>) {}
+   │                          ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ effect_key_argument_errors.fe:48:27
+   │
+48 │ fn trait_bound() uses (p: Requires<bool>) {}
+   │                           ^^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ effect_key_argument_errors.fe:52:21
+   │
+52 │ contract D uses (p: Guarded<bool>) {}
+   │                     ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+
+error[8-0051]: unresolved effect
+   ┌─ effect_key_argument_errors.fe:24:26
+   │
+24 │ fn unresolved() uses (p: Missing) {}
+   │                          ^^^^^^^ cannot resolve `Missing` as a type or trait
+   │
+   = consider defining a type or trait named `Missing`
+   = or bind the effect value with `uses (name: Type)`

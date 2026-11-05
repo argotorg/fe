@@ -1,4 +1,4 @@
-use core::marker::Pinned
+use core::marker::{Pinned, Transient}
 
 // A blanket implementation pins only the types its sealed bound admits.
 trait Mark {}
@@ -10,5 +10,5 @@ pub struct Cell {
 impl Mark for Cell {}
 
 impl<T: Mark> Pinned for T {
-    space S = transient
+    type Space = Transient
 }

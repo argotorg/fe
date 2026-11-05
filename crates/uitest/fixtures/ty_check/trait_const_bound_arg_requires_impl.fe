@@ -1,0 +1,16 @@
+// A bound argument naming a trait constant is well-formed only where the
+// constant's impl applies under the declaring item's bounds, as the same
+// constant in a type argument is.
+trait Size { const LEN: usize }
+
+trait Gate {}
+
+trait Has<const N: usize> {}
+
+struct Marker<T, const N: usize> {}
+
+impl<T: Gate, const N: usize> Size for Marker<T, N> { const LEN: usize = N + 1 }
+
+fn gated<T: Gate, const N: usize, U: Has<{ <Marker<T, N> as Size>::LEN }>>() {}
+
+fn ungated<T, const N: usize, U: Has<{ <Marker<T, N> as Size>::LEN }>>() {}

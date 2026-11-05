@@ -12,7 +12,7 @@ impl Copy for Env {}
 #[inline(never)]
 fn pick(_ env: Env, _ which: u256) -> u256 {
     assert!(env.flag)
-    assert!(env.address.inner == 44)
+    assert!(env.address.word() == 44)
     if which == env.second { env.third } else { env.first }
 }
 
@@ -57,8 +57,8 @@ pub contract Snapshot {
     mut stored: Env,
 
     init() uses (mut env, mut stored) {
-        env = Env { first: 11, second: 22, third: 33, flag: true, address: Address { inner: 44 } }
-        stored = Env { first: 11, second: 22, third: 33, flag: true, address: Address { inner: 44 } }
+        env = Env { first: 11, second: 22, third: 33, flag: true, address: Address::new(44) }
+        stored = Env { first: 11, second: 22, third: 33, flag: true, address: Address::new(44) }
     }
 
     recv Query {
@@ -86,28 +86,28 @@ pub contract Snapshot {
 
 #[test]
 fn immutable_fields_survive_intervening_effects() uses (evm: mut Evm) {
-    let c = evm.create2<Snapshot>(value: 0, args: (), salt: 0)
-    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadCode { which: 22 }) == 33)
-    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadCode { which: 1 }) == 11)
+    let c = evm.create2<Snapshot>(value: Wei::zero(), args: (), salt: 0)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Query::ReadCode { which: 22 }) == 33)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Query::ReadCode { which: 1 }) == 11)
 }
 
 #[test]
 fn mutable_storage_argument_is_snapshotted_before_later_argument() uses (evm: mut Evm) {
-    let c = evm.create2<Snapshot>(value: 0, args: (), salt: 1)
-    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadStorage { which: 22 }) == 33)
-    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadStorage { which: 77 }) == 33)
+    let c = evm.create2<Snapshot>(value: Wei::zero(), args: (), salt: 1)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Query::ReadStorage { which: 22 }) == 33)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Query::ReadStorage { which: 77 }) == 33)
 }
 
 #[test]
 fn mutable_copy_does_not_change_immutable_source() uses (evm: mut Evm) {
-    let c = evm.create2<Snapshot>(value: 0, args: (), salt: 2)
-    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::CopyCode {}) == 99)
-    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::CopyCode {}) == 99)
+    let c = evm.create2<Snapshot>(value: Wei::zero(), args: (), salt: 2)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Query::CopyCode {}) == 99)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Query::CopyCode {}) == 99)
 }
 
 #[test]
 fn memory_snapshot_is_independent() {
-    var original = Env { first: 11, second: 22, third: 33, flag: true, address: Address { inner: 44 } }
+    var original = Env { first: 11, second: 22, third: 33, flag: true, address: Address::new(44) }
     let snapshot = original
     original.third = 99
     assert!(pick(snapshot, 22) == 33)
@@ -116,6 +116,6 @@ fn memory_snapshot_is_independent() {
 
 #[test]
 fn calldata_snapshots_preserve_word_layout() uses (evm: mut Evm) {
-    let c = evm.create2<Snapshot>(value: 0, args: (), salt: 3)
-    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadCalldata { first: 15, second: 27, third: 39 }) == 27)
+    let c = evm.create2<Snapshot>(value: Wei::zero(), args: (), salt: 3)
+    assert!(evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Query::ReadCalldata { first: 15, second: 27, third: 39 }) == 27)
 }

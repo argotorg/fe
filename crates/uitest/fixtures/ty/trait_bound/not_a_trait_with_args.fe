@@ -1,0 +1,13 @@
+struct S {}
+contract C {}
+mod m {
+    pub struct S {}
+}
+
+// Each bound names something other than a trait. That is reported, not the
+// generic arguments the named item doesn't take.
+trait Tr {
+    type Missing: Missing<Self>
+}
+
+fn f<A: S<u8>, B: C<u8>, D: m<u8>, E: m::S<u8>>() {}

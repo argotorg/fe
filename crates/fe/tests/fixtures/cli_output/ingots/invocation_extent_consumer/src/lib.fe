@@ -1,0 +1,11 @@
+// A call extent written with another ingot's const fn is the same type on
+// both sides of the ingot boundary, symbolically and once concrete.
+use invocation_extent_provider::{take, word_len}
+
+pub fn forward<const N: usize>(_ x: [u8; word_len(N)]) -> [u8; word_len(N)] {
+    take<N>(x)
+}
+
+pub fn concrete(_ x: [u8; 2]) -> [u8; word_len(33)] {
+    forward<33>(x)
+}

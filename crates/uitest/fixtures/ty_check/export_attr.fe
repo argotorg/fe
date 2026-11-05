@@ -1,0 +1,45 @@
+// A C caller calls an `#[export]` function by its name alone.
+#[export]
+pub fn exported(_ x: i64) -> i64 { x }
+
+#[export]
+fn private() {}
+
+#[export]
+pub fn generic<T>(_ x: own T) {}
+
+#[export]
+pub fn sized<const N: usize>() -> usize { N }
+
+struct Counter { n: i64 }
+
+#[export]
+pub fn effects() -> i64 uses (counter: Counter) { counter.n }
+
+#[export(name)]
+pub fn bad_form() {}
+
+#[export]
+#[export]
+pub fn duplicate() {}
+
+impl Counter {
+    #[export]
+    pub fn method(self) -> i64 { self.n }
+}
+
+trait Get {
+    #[export]
+    fn get(self) -> i64
+}
+
+extern {
+    #[export]
+    fn puts(_ s: *u8) -> i32
+}
+
+#[export]
+struct Exported {}
+
+#[export]
+mod exported_mod {}

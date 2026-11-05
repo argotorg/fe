@@ -1,0 +1,52 @@
+use std::abi::sol
+
+struct Bounded<const N: u256> where N > 0 {
+    pub value: u256,
+}
+
+impl<const N: u256> core::abi::AbiSize for Bounded<N> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+
+    fn payload_size(self) -> u256 {
+        32
+    }
+}
+
+impl<const N: u256> core::abi::Encode<std::abi::Sol> for Bounded<N> {
+    fn encode(own self, _ out: core::abi::AbiFrame) {
+        let Self { value } = self
+        value.encode(out)
+    }
+}
+
+impl<const N: u256> core::abi::Decode<std::abi::Sol> for Bounded<N> {
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let value = u256::decode_payload(mut d, input)
+        Self { value }
+    }
+}
+
+impl core::message::MsgVariant<std::abi::Sol> for Bounded<0> {
+    const SELECTOR: u32 = sol("bounded0(uint256)")
+    type Return = u256
+}
+
+impl core::message::MsgVariant<std::abi::Sol> for Bounded<1> {
+    const SELECTOR: u32 = sol("bounded1(uint256)")
+    type Return = u256
+}
+
+// The requirements of the applications that an arm's path passes through
+// are checked with the arm, as those of any other path are where it's
+// written.
+pub contract C {
+    recv {
+        Bounded<0> { value } -> u256 {
+            value
+        }
+        Bounded<1> { value } -> u256 {
+            value
+        }
+    }
+}

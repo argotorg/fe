@@ -1,6 +1,9 @@
-use core::marker::Pinned
+use core::marker::{Pinned, Transient}
+use std::evm::TSlot
 
-// A result space follows the pin that applies to the instance.
+// A result space follows the pin that applies to the instance. Each method
+// yields its cell or a transient slot, so the yields agree only where the
+// cell is pinned to transient storage.
 trait X {}
 
 struct A {}
@@ -14,19 +17,19 @@ struct Cell<P> {
 }
 
 impl<P: X> Pinned for Cell<P> {
-    space S = transient
+    type Space = Transient
 }
 
 impl Cell<A> {
     // Accepted: `Cell<A>` is pinned to transient storage.
-    fn get_mut(mut self) -> mut u256 @transient {
-        mut self.v
+    fn pick(mut self, _ slot: mut TSlot<u256>, _ flag: bool) -> mut u256 {
+        if flag { mut self.v } else { mut slot.value }
     }
 }
 
 impl Cell<B> {
     // Rejected: the implementation does not apply to `Cell<B>`.
-    fn get_mut(mut self) -> mut u256 @transient {
-        mut self.v
+    fn pick(mut self, _ slot: mut TSlot<u256>, _ flag: bool) -> mut u256 {
+        if flag { mut self.v } else { mut slot.value }
     }
 }

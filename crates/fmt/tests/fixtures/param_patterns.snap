@@ -1,0 +1,10 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/param_patterns.fe
+---
+// Parameter patterns keep their shape.
+fn sum(_ (a, b): (u256, u256), _ Point { x, y }: Point) -> u256 {
+    let f = |(c, d), Wrap(e)| c + d + e
+    a + b + x + y
+}

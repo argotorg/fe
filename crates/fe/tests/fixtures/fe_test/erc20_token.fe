@@ -3,7 +3,7 @@
 // test key over the digest of the token deployed with CREATE as the test
 // runner's first deployment (chain id 1, timestamp 1).
 
-use std::evm::{Address, Call, Ctx, Evm, Log}
+use std::evm::{Address, Call, Ctx, Evm, Log, Wei}
 use std::evm::erc20::{
     Approval,
     Erc20,
@@ -119,7 +119,7 @@ pub contract Spender uses (call: mut Call) {
             call.try_call(
                 addr: token,
                 gas: 200000,
-                value: 0,
+                value: Wei::zero(),
                 message: IErc20::TransferFrom { from, to, amount },
             )
                 .success()
@@ -131,7 +131,7 @@ fn balance(_ token: Address, _ owner: Address) -> u256 uses (evm: mut Evm) {
     evm.call(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: IErc20::BalanceOf { owner },
     )
 }
@@ -142,7 +142,7 @@ uses (evm: mut Evm)
     evm.call(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: IErc20::Allowance { owner, spender },
     )
 }
@@ -151,15 +151,15 @@ fn total_supply(_ token: Address) -> u256 uses (evm: mut Evm) {
     evm.call(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: IErc20::TotalSupply {},
     )
 }
 
 // The first CREATE deployment, so the permit domain matches the signature.
 fn deploy(_ supply: u256) -> Address uses (evm: mut Evm) {
-    let token = evm.create<Token>(value: 0, args: (supply,))
-    assert!(token.inner == TOKEN)
+    let token = evm.create<Token>(value: Wei::zero(), args: (supply,))
+    assert!(token.word() == TOKEN)
     token
 }
 
@@ -192,7 +192,7 @@ fn selectors_and_topics_match_solidity() {
 fn transfer_moves_balances() uses (evm: mut Evm) {
     let token = deploy(1000)
     let me = evm.address()
-    let alice = Address { inner: 0xa11ce }
+    let alice = Address::new(0xa11ce)
     assert!(total_supply(token) == 1000)
     assert!(balance(token, me) == 1000)
 
@@ -200,7 +200,7 @@ fn transfer_moves_balances() uses (evm: mut Evm) {
         .call(
             addr: token,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: IErc20::Transfer { to: alice, amount: 300 },
         )
     assert!(ok)
@@ -212,7 +212,7 @@ fn transfer_moves_balances() uses (evm: mut Evm) {
         .try_call(
             addr: token,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: IErc20::Transfer { to: alice, amount: 701 },
         )
     assert!(!outcome.success())
@@ -224,15 +224,15 @@ fn transfer_moves_balances() uses (evm: mut Evm) {
 fn transfer_from_spends_allowance() uses (evm: mut Evm) {
     let token = deploy(1000)
     let me = evm.address()
-    let bob = Address { inner: 0xb0b }
-    let spender = evm.create<Spender>(value: 0, args: ())
+    let bob = Address::new(0xb0b)
+    let spender = evm.create<Spender>(value: Wei::zero(), args: ())
 
     // Without an allowance the spender is rejected.
     let ok: bool = evm
         .call(
             addr: spender,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: SpenderMsg::TransferFrom { token, from: me, to: bob, amount: 1 },
         )
     assert!(!ok)
@@ -240,7 +240,7 @@ fn transfer_from_spends_allowance() uses (evm: mut Evm) {
     evm.call(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: IErc20::Approve { spender, amount: 500 },
     )
     assert!(allowance(token, me, spender) == 500)
@@ -249,7 +249,7 @@ fn transfer_from_spends_allowance() uses (evm: mut Evm) {
         .call(
             addr: spender,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: SpenderMsg::TransferFrom { token, from: me, to: bob, amount: 200 },
         )
     assert!(ok)
@@ -262,7 +262,7 @@ fn transfer_from_spends_allowance() uses (evm: mut Evm) {
         .call(
             addr: spender,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: SpenderMsg::TransferFrom { token, from: me, to: bob, amount: 301 },
         )
     assert!(!ok)
@@ -272,12 +272,12 @@ fn transfer_from_spends_allowance() uses (evm: mut Evm) {
 #[test]
 fn transfer_from_reverts_with_insufficient_allowance() uses (evm: mut Evm) {
     let token = deploy(1000)
-    let owner = Address { inner: 0xa11ce }
+    let owner = Address::new(0xa11ce)
     let outcome = evm
         .try_call(
             addr: token,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: IErc20::TransferFrom { from: owner, to: owner, amount: 1 },
         )
     assert!(!outcome.success())
@@ -288,18 +288,18 @@ fn transfer_from_reverts_with_insufficient_allowance() uses (evm: mut Evm) {
 fn infinite_allowance_is_not_spent() uses (evm: mut Evm) {
     let token = deploy(1000)
     let me = evm.address()
-    let spender = evm.create<Spender>(value: 0, args: ())
+    let spender = evm.create<Spender>(value: Wei::zero(), args: ())
     evm.call(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: IErc20::Approve { spender, amount: MAX },
     )
     let ok: bool = evm
         .call(
             addr: spender,
             gas: 500000,
-            value: 0,
+            value: Wei::zero(),
             message: SpenderMsg::TransferFrom { token, from: me, to: spender, amount: 400 },
         )
     assert!(ok)
@@ -311,11 +311,11 @@ fn infinite_allowance_is_not_spent() uses (evm: mut Evm) {
 fn mint_and_burn_track_supply() uses (evm: mut Evm) {
     let token = deploy(1000)
     let me = evm.address()
-    let alice = Address { inner: 0xa11ce }
+    let alice = Address::new(0xa11ce)
     evm.call(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenAdmin::Mint { to: alice, amount: 50 },
     )
     assert!(total_supply(token) == 1050)
@@ -324,7 +324,7 @@ fn mint_and_burn_track_supply() uses (evm: mut Evm) {
     evm.call(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenAdmin::Burn { amount: 400 },
     )
     assert!(total_supply(token) == 650)
@@ -334,7 +334,7 @@ fn mint_and_burn_track_supply() uses (evm: mut Evm) {
         .try_call(
             addr: token,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: TokenAdmin::Burn { amount: 601 },
         )
     assert!(!outcome.success())
@@ -344,7 +344,7 @@ fn mint_and_burn_track_supply() uses (evm: mut Evm) {
         .try_call(
             addr: token,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: TokenAdmin::Mint { to: alice, amount: MAX - 649 },
         )
     assert!(!outcome.success())
@@ -352,7 +352,7 @@ fn mint_and_burn_track_supply() uses (evm: mut Evm) {
     evm.call(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenAdmin::Mint { to: alice, amount: MAX - 650 },
     )
     assert!(total_supply(token) == MAX)
@@ -361,13 +361,13 @@ fn mint_and_burn_track_supply() uses (evm: mut Evm) {
 #[test]
 fn permit_sets_allowance_once() uses (evm: mut Evm) {
     let token = deploy(0)
-    let owner = Address { inner: SIGNER }
-    let spender = Address { inner: SPENDER }
+    let owner = Address::new(SIGNER)
+    let spender = Address::new(SPENDER)
     let separator: Bytes32 = evm
         .call(
             addr: token,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: IErc20Permit::DomainSeparator {},
         )
     assert!(separator.val == DOMAIN_SEPARATOR)
@@ -381,13 +381,13 @@ fn permit_sets_allowance_once() uses (evm: mut Evm) {
         r: Bytes32 { val: PERMIT_R },
         s: Bytes32 { val: PERMIT_S },
     }
-    evm.call(addr: token, gas: 200000, value: 0, message: permit)
+    evm.call(addr: token, gas: 200000, value: Wei::zero(), message: permit)
     assert!(allowance(token, owner, spender) == PERMIT_VALUE)
     let nonce: u256 = evm
         .call(
             addr: token,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: IErc20Permit::Nonces { owner },
         )
     assert!(nonce == 1)
@@ -402,7 +402,7 @@ fn permit_sets_allowance_once() uses (evm: mut Evm) {
         r: Bytes32 { val: PERMIT_R },
         s: Bytes32 { val: PERMIT_S },
     }
-    let outcome = evm.try_call(addr: token, gas: 200000, value: 0, message: replay)
+    let outcome = evm.try_call(addr: token, gas: 200000, value: Wei::zero(), message: replay)
     assert!(!outcome.success())
     assert!(is_error<InvalidPermit>(outcome.returndata()))
 }
@@ -410,24 +410,24 @@ fn permit_sets_allowance_once() uses (evm: mut Evm) {
 #[test]
 fn permit_rejects_tampered_values() uses (evm: mut Evm) {
     let token = deploy(0)
-    let owner = Address { inner: SIGNER }
+    let owner = Address::new(SIGNER)
     let tampered = IErc20Permit::Permit {
         owner,
-        spender: Address { inner: SPENDER },
+        spender: Address::new(SPENDER),
         value: PERMIT_VALUE + 1,
         deadline: PERMIT_DEADLINE,
         v: PERMIT_V,
         r: Bytes32 { val: PERMIT_R },
         s: Bytes32 { val: PERMIT_S },
     }
-    let outcome = evm.try_call(addr: token, gas: 200000, value: 0, message: tampered)
+    let outcome = evm.try_call(addr: token, gas: 200000, value: Wei::zero(), message: tampered)
     assert!(!outcome.success())
     assert!(is_error<InvalidPermit>(outcome.returndata()))
     let nonce: u256 = evm
         .call(
             addr: token,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: IErc20Permit::Nonces { owner },
         )
     assert!(nonce == 0)
@@ -437,15 +437,15 @@ fn permit_rejects_tampered_values() uses (evm: mut Evm) {
 fn permit_rejects_expired_deadline() uses (evm: mut Evm) {
     let token = deploy(0)
     let expired = IErc20Permit::Permit {
-        owner: Address { inner: SIGNER },
-        spender: Address { inner: SPENDER },
+        owner: Address::new(SIGNER),
+        spender: Address::new(SPENDER),
         value: PERMIT_VALUE,
         deadline: 0,
         v: PERMIT_V,
         r: Bytes32 { val: PERMIT_R },
         s: Bytes32 { val: PERMIT_S },
     }
-    let outcome = evm.try_call(addr: token, gas: 200000, value: 0, message: expired)
+    let outcome = evm.try_call(addr: token, gas: 200000, value: Wei::zero(), message: expired)
     assert!(!outcome.success())
     assert!(is_error<PermitExpired>(outcome.returndata()))
 }

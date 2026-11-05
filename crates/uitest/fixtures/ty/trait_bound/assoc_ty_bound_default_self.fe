@@ -1,0 +1,15 @@
+trait Combine<Rhs = Self> {}
+
+// The omitted `Rhs = Self` is the associated type, so the bound is `A: Combine<A>`.
+trait Foo {
+    type A: Combine
+}
+
+struct S {}
+struct X {}
+
+impl Combine<S> for X {}
+
+impl Foo for S {
+    type A = X
+}

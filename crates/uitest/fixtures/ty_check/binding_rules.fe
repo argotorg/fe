@@ -55,14 +55,15 @@ fn unbounded<T>(_ a: MemArray<T>) {
 fn plain_view(_ buf: MemBuffer) -> u256 {
     let s = buf.span()
     let t = s
-    t.len()
+    t.len() as u256
 }
 
-// Accepted: a `mut` view result, bound or passed whole, is its `mut` access.
+// Accepted: a view result taken at `mut`, bound or passed whole, is its
+// `mut` access.
 fn plain_mut_view(_ buf: mut MemBuffer) {
-    let s = buf.span_mut()
+    let s = mut buf.span()
     s[0] = 1
-    clear_first(buf.span_mut())
+    clear_first(buf.span())
 }
 
 fn clear_first(_ s: mut MemSlice<u8>) {
@@ -197,4 +198,11 @@ fn unmarked_mut_argument(_ cell: mut Cell) {
 
 fn bump(_ x: mut u256) {
     x += 1
+}
+
+// Rejected once: a write through a `mut` binding of a read is reported at
+// the binding.
+fn write_through_mut_of_read(_ items: MemArray<Item>) {
+    let (i, mut item) = first(items)
+    item.n = 0
 }

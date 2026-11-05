@@ -1,4 +1,5 @@
 use common::ingot::IngotKind;
+use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
 
 use crate::{
@@ -6,17 +7,18 @@ use crate::{
         HirAnalysisDb,
         name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
         ty::{
+            const_ty::demand_concrete_specialized_const_ty,
             trait_def::TraitInstId,
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, goal_holds, is_goal_satisfiable,
             },
-            ty_def::{BorrowKind, TyBase, TyData, TyId},
+            ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
             visitor::{TyVisitable, TyVisitor, walk_ty},
         },
     },
     hir_def::{
-        ArithBinOp, BinOp, CallableDef, CompBinOp, Func, IdentId, ItemKind, PathId, Trait, UnOp,
-        scope_graph::ScopeId,
+        ArithBinOp, BinOp, CallableDef, CompBinOp, Func, FuncParamMode, IdentId, ItemKind, PathId,
+        Trait, UnOp, scope_graph::ScopeId,
     },
     semantic::EffectRequirementKey,
 };
@@ -48,7 +50,6 @@ pub fn resolve_core_trait<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct LibPath<'db> {
-    #[return_ref]
     pub string: String,
 }
 
@@ -63,6 +64,15 @@ pub fn resolve_lib_type_path<'db>(
 ) -> Option<TyId<'db>> {
     let path_id = LibPath::new(db, path.to_string());
     resolve_lib_path(db, scope, path_id)
+}
+
+/// The concrete value of `n`, a specialized `usize` const such as the `N` of
+/// `__keccak256<N>`, whose signature fixes the type of its input.
+pub fn concrete_usize<'db>(db: &'db dyn HirAnalysisDb, n: TyId<'db>) -> Option<usize> {
+    let usize_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    demand_concrete_specialized_const_ty(db, n, usize_ty)?
+        .integer_value(db)?
+        .to_usize()
 }
 
 /// Resolve a function by a fully-qualified `core::...` or `std::...` path string.
@@ -140,12 +150,12 @@ impl MemoryAccessKind {
 
 macro_rules! define_runtime_intrinsics {
     ($($variant:ident => ($ingot:ident, [$($segment:literal),+])),+ $(,)?) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
         pub enum RuntimeBuiltinFuncKind {
             $($variant),+
         }
 
-        #[salsa::tracked]
+        #[salsa::tracked(returns(copy))]
         pub fn runtime_builtin_func_kind<'db>(
             db: &'db dyn HirAnalysisDb,
             func: Func<'db>,
@@ -175,9 +185,12 @@ macro_rules! define_runtime_intrinsics {
 
 define_runtime_intrinsics! {
     Malloc => (Core, ["ptr", "alloc_raw"]),
+    TryMalloc => (Core, ["ptr", "try_alloc_raw"]),
+    Free => (Core, ["ptr", "dealloc_raw"]),
+    Forget => (Core, ["mem", "forget"]),
+    NeedsDrop => (Core, ["mem", "needs_drop"]),
     PtrOffsetBytes => (Core, ["ptr", "offset_bytes"]),
     PtrEq => (Core, ["ptr", "addr_eq"]),
-    NativePtrIsNull => (Std, ["native", "bytes", "is_null"]),
     Mload => (Std, ["evm", "ops", "mload"]),
     Mstore => (Std, ["evm", "ops", "mstore"]),
     Mstore8 => (Std, ["evm", "ops", "mstore8"]),
@@ -202,6 +215,12 @@ define_runtime_intrinsics! {
     AddMod => (Core, ["num", "addmod"]),
     MulMod => (Core, ["num", "mulmod"]),
     LeadingZeros => (Core, ["num", "leading_zeros"]),
+    ToBigEndian => (Core, ["num", "to_be"]),
+    FromBigEndian => (Core, ["num", "from_be"]),
+    ToLittleEndian => (Core, ["num", "to_le"]),
+    FromLittleEndian => (Core, ["num", "from_le"]),
+    SwapBytes => (Core, ["num", "swap_bytes"]),
+    BlackBox => (Core, ["hint", "black_box"]),
     Byte => (Std, ["evm", "ops", "byte"]),
     SignExtend => (Std, ["evm", "ops", "signextend"]),
     Address => (Std, ["evm", "ops", "address"]),
@@ -264,13 +283,14 @@ pub(crate) enum NumericExternIntrinsic {
 pub(crate) enum CtfeExternIntrinsic {
     SizeOf,
     StorageSlots,
-    AsBytes,
     Keccak256,
+    KeccakWords,
     Bitcast,
     Numeric(NumericExternIntrinsic),
     AddMod,
     MulMod,
     LeadingZeros,
+    PanicCode,
 }
 
 pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
@@ -286,19 +306,17 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(RuntimeBuiltinFuncKind::LeadingZeros) => {
             return Some(CtfeExternIntrinsic::LeadingZeros);
         }
+        Some(RuntimeBuiltinFuncKind::PanicCode) => return Some(CtfeExternIntrinsic::PanicCode),
         _ => {}
     }
     if lib_func_matches(db, func, "core::intrinsic::size_of") {
         Some(CtfeExternIntrinsic::SizeOf)
     } else if lib_func_matches(db, func, "core::intrinsic::storage_slots") {
         Some(CtfeExternIntrinsic::StorageSlots)
-    } else if lib_func_matches(db, func, "core::intrinsic::__as_bytes") {
-        Some(CtfeExternIntrinsic::AsBytes)
-    } else if lib_func_matches(db, func, "core::intrinsic::__keccak256")
-        || lib_func_matches(db, func, "core::intrinsic::__keccak_words")
-    {
-        // A word array's bytes are its words, big-endian, in order.
+    } else if lib_func_matches(db, func, "core::intrinsic::__keccak256") {
         Some(CtfeExternIntrinsic::Keccak256)
+    } else if lib_func_matches(db, func, "core::intrinsic::__keccak_words") {
+        Some(CtfeExternIntrinsic::KeccakWords)
     } else if lib_func_matches(db, func, "core::num::__bitcast") {
         Some(CtfeExternIntrinsic::Bitcast)
     } else {
@@ -437,10 +455,12 @@ fn trait_reaches<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>, target: Tr
 /// The persistent and transient state an external execution started by `func`
 /// can access. A call or creation can reenter the contract and write any slot;
 /// a static call only reads; precompiles cannot call back. Methods of reentrant
-/// std capabilities start such executions.
+/// std capabilities start such executions; shared receiver authority only
+/// permits reads, while mutable or owned authority can write.
 pub fn external_call_state_access<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
+    mode: Option<BorrowKind>,
 ) -> Option<MemoryAccessKind> {
     match runtime_builtin_func_kind(db, func) {
         Some(
@@ -462,7 +482,7 @@ pub fn external_call_state_access<'db>(
         return None;
     }
     Some(
-        if lib_func_matches(db, func, "std::evm::effects::Call::raw_staticcall") {
+        if CallableDef::Func(func).param_mode(db, 0, mode) == FuncParamMode::View {
             MemoryAccessKind::Read
         } else {
             MemoryAccessKind::Write
@@ -722,7 +742,7 @@ pub fn resolve_core_range_types<'db>(
     })
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn resolve_lib_path<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -742,7 +762,7 @@ fn resolve_lib_path<'db>(
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn resolve_lib_func<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -768,7 +788,7 @@ fn resolve_lib_func<'db>(
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn resolve_lib_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,

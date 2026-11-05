@@ -1,16 +1,12 @@
-/// Effect reference traits.
+/// Effect reference trait.
 ///
 /// Fe models effects as implicit "provider" generic parameters, and a
-/// provider is a place. The `EffectRef<T>` marker traits express that a
-/// provider type can satisfy a read-only (or mutable) effect whose domain is
-/// `T`. A raw pointer's target, `*p`, is a place like any other.
+/// provider is a place. The `EffectRef<T>` marker trait expresses that a
+/// provider type can satisfy an effect whose domain is `T`; whether the
+/// effect may be written is checked at the term level. A raw pointer's
+/// target, `*p`, is a place like any other.
 
-/// Marker: `Self` can satisfy a read-only effect whose domain is `Target`.
+/// Marker: `Self` can satisfy an effect whose domain is `Target`.
 pub trait EffectRef<Target> {}
 
-/// Marker: `Self` can satisfy a *mutable* effect whose domain is `Target`.
-pub trait EffectRefMut<Target>: EffectRef<Target> {}
-
 impl<T> EffectRef<T> for T {}
-// Mutability is checked at the term level.
-impl<T> EffectRefMut<T> for T {}

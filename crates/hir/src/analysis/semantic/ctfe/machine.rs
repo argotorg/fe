@@ -1,9 +1,13 @@
+// Diagnostics and CTFE stops are returned on the slow path; salsa's 8-byte ids
+// put them just past clippy's 128-byte `Err` threshold.
+#![allow(clippy::result_large_err)]
+
 use cranelift_entity::EntityRef;
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use ruint::aliases::U256;
 use rustc_hash::FxHashMap;
-use salsa::Update;
+use salsa::SalsaValue;
 use std::rc::Rc;
 use tiny_keccak::{Hasher, Keccak};
 
@@ -12,7 +16,7 @@ use crate::{
         HirAnalysisDb,
         semantic::instance::{
             GenericSubst, ImplEnv, SemanticBodyAdmissionError, SemanticInstance,
-            SemanticInstanceKey, get_or_build_semantic_instance,
+            SemanticInstanceKey,
         },
         semantic::{
             BlockedInfo, ConstDemandKind, ConstDependency, EvalFailure, EvalOutcome, FieldIndex,
@@ -29,15 +33,17 @@ use crate::{
             const_ty::{ConstTyData, ConstTyId},
             corelib::{
                 CtfeExternIntrinsic, NumericExternIntrinsic, PrimitiveWrapperCallKind,
-                SaturatingArithmetic, core_primitive_wrapper_call_kind, ctfe_extern_intrinsic_kind,
+                SaturatingArithmetic, concrete_usize, core_primitive_wrapper_call_kind,
+                ctfe_extern_intrinsic_kind,
             },
+            evidence::EvidenceList,
             normalize::normalize_ty,
             provider::AddressSpace,
             ty_check::{
                 BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, infer_body,
                 inference_met_lowering_cycle,
             },
-            ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
+            ty_def::{InvalidCause, TyData, TyId},
         },
     },
     core::hir_def::expr::LogicalBinOp,
@@ -52,7 +58,7 @@ use super::{
     service::force_const_term_value_with_steps,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct CtfeConfig {
     pub step_limit: usize,
     pub recursion_limit: usize,
@@ -67,7 +73,7 @@ impl Default for CtfeConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum CtfeError<'db> {
     NotConstEvaluable {
         origin: SemOrigin<'db>,
@@ -75,6 +81,11 @@ pub enum CtfeError<'db> {
     AssertionFailed {
         origin: SemOrigin<'db>,
         message: Option<String>,
+    },
+    /// `core::panic_code(code)` was reached.
+    Panicked {
+        origin: SemOrigin<'db>,
+        code: U256,
     },
     InvalidOperation {
         origin: SemOrigin<'db>,
@@ -155,7 +166,7 @@ enum EvmModularArithmetic {
 // initial value; the machine's ref site keeps that error shape stable across
 // iterations (see `SExpr::Const(SConst::Ref(..))` in `eval_expr`), so the
 // cycle converges to a recursion error instead of panicking.
-#[salsa::tracked(cycle_initial=eval_const_instance_cycle_initial, cycle_fn=eval_const_instance_cycle_recover)]
+#[salsa::tracked(returns(clone), cycle_initial=eval_const_instance_cycle_initial)]
 pub fn eval_const_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -172,6 +183,7 @@ pub fn eval_const_instance<'db>(
 
 fn eval_const_instance_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     instance: SemanticInstance<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
     EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::RecursiveConst {
@@ -179,16 +191,7 @@ fn eval_const_instance_cycle_initial<'db>(
     }))
 }
 
-fn eval_const_instance_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &EvalOutcome<'db, SemConstId<'db>>,
-    _count: u32,
-    _instance: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<EvalOutcome<'db, SemConstId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-#[salsa::tracked(cycle_initial=eval_const_ref_cycle_initial, cycle_fn=eval_const_ref_cycle_recover)]
+#[salsa::tracked(returns(clone), cycle_initial=eval_const_ref_cycle_initial)]
 pub fn eval_const_ref<'db>(
     db: &'db dyn HirAnalysisDb,
     cref: SemanticConstRef<'db>,
@@ -205,6 +208,7 @@ pub fn eval_const_ref<'db>(
 
 fn eval_const_ref_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     cref: SemanticConstRef<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
     EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::RecursiveConst {
@@ -212,33 +216,26 @@ fn eval_const_ref_cycle_initial<'db>(
     }))
 }
 
-fn eval_const_ref_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &EvalOutcome<'db, SemConstId<'db>>,
-    _count: u32,
-    _cref: SemanticConstRef<'db>,
-) -> salsa::CycleRecoveryAction<EvalOutcome<'db, SemConstId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-#[salsa::tracked(cycle_initial=eval_body_owner_const_cycle_initial, cycle_fn=eval_body_owner_const_cycle_recover)]
+#[salsa::tracked(returns(clone), cycle_initial=eval_body_owner_const_cycle_initial)]
 pub fn eval_body_owner_const<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
     subst: GenericSubst<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
-    let key = SemanticInstanceKey::new(
+    let key = SemanticInstanceKey::of(
         db,
         owner,
         subst,
         crate::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
+        EvidenceList::none(db),
     );
-    eval_const_instance(db, get_or_build_semantic_instance(db, key))
+    eval_const_instance(db, SemanticInstance::new(db, key))
 }
 
 fn eval_body_owner_const_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     owner: BodyOwner<'db>,
     _subst: GenericSubst<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
@@ -247,29 +244,20 @@ fn eval_body_owner_const_cycle_initial<'db>(
     }))
 }
 
-fn eval_body_owner_const_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &EvalOutcome<'db, SemConstId<'db>>,
-    _count: u32,
-    _owner: BodyOwner<'db>,
-    _subst: GenericSubst<'db>,
-) -> salsa::CycleRecoveryAction<EvalOutcome<'db, SemConstId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-#[salsa::tracked(cycle_initial=eval_body_owner_const_with_args_cycle_initial, cycle_fn=eval_body_owner_const_with_args_cycle_recover)]
+#[salsa::tracked(returns(clone), cycle_initial=eval_body_owner_const_with_args_cycle_initial)]
 pub fn eval_body_owner_const_with_args<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
     subst: GenericSubst<'db>,
     args: Vec<SemConstId<'db>>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
-    let key = SemanticInstanceKey::new(
+    let key = SemanticInstanceKey::of(
         db,
         owner,
         subst,
         crate::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
+        EvidenceList::none(db),
     );
     execute_resolved_const_computation(db, key, args, CtfeConfig::default(), SemOrigin::Body(owner))
 }
@@ -300,7 +288,7 @@ pub(super) fn execute_resolved_const_computation_with_steps<'db>(
         .collect::<EvalResult<'db, Vec<_>>>();
     let outcome = match args {
         Ok(args) => machine
-            .eval_root(get_or_build_semantic_instance(db, key), args, origin)
+            .eval_root(SemanticInstance::new(db, key), args, origin)
             .into(),
         Err(stop) => EvalOutcome::from(Err(stop)),
     };
@@ -310,6 +298,7 @@ pub(super) fn execute_resolved_const_computation_with_steps<'db>(
 
 fn eval_body_owner_const_with_args_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     owner: BodyOwner<'db>,
     _subst: GenericSubst<'db>,
     _args: Vec<SemConstId<'db>>,
@@ -317,17 +306,6 @@ fn eval_body_owner_const_with_args_cycle_initial<'db>(
     EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::RecursiveConst {
         origin: SemOrigin::Body(owner),
     }))
-}
-
-fn eval_body_owner_const_with_args_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &EvalOutcome<'db, SemConstId<'db>>,
-    _count: u32,
-    _owner: BodyOwner<'db>,
-    _subst: GenericSubst<'db>,
-    _args: Vec<SemConstId<'db>>,
-) -> salsa::CycleRecoveryAction<EvalOutcome<'db, SemConstId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(super) fn attempt_optional_const_fold<'db>(
@@ -492,15 +470,6 @@ impl<'db> CtfeConstValue<'db> {
         };
         Self {
             kind: CtfeConstKind::Int { ty, value },
-        }
-    }
-
-    fn bytes(ty: TyId<'db>, bytes: Vec<u8>) -> Self {
-        Self {
-            kind: CtfeConstKind::Bytes {
-                ty,
-                bytes: bytes.into(),
-            },
         }
     }
 
@@ -1068,7 +1037,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 }
             }
         }
-        let value = if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
+        let value = if let BodyOwner::Func(func, _) = instance.key(self.db).owner(self.db)
             && func.is_extern(self.db)
         {
             if !func.is_const(self.db) {
@@ -1078,7 +1047,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .admitted_body(self.db)
                 .map_err(|_| CtfeError::InvalidBody { origin })?;
             self.frames.push(CtfeFrame::new(body, Vec::new()));
-            let result = (|| {
+            let result = (|| -> EvalResult<'db, _> {
                 let args = self.value_args(args, origin)?;
                 self.eval_extern_const_fn(
                     instance,
@@ -1137,7 +1106,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .config
                 .recursion_limit
                 .saturating_sub(self.frames.len().saturating_sub(self.const_stack.len())),
-            ..self.config.clone()
+            ..self.config
         };
         force_const_term_value_with_steps(self.db, term, config, origin, &mut self.steps)
             .into_result()
@@ -1241,18 +1210,28 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
 
         let mut locals = vec![CtfeSlot::Uninit; body.locals.len()];
         let mut arg_locals = match instance.key(self.db).owner(self.db) {
-            BodyOwner::Func(func) => body
+            BodyOwner::Func(func, _) => body
                 .entry_locals
                 .iter()
                 .filter_map(|local| match body.local(*local)?.source? {
-                    LocalBinding::Param {
+                    binding @ (LocalBinding::Param {
                         site: ParamSite::Func(candidate),
-                        idx,
                         ..
-                    } if candidate == func => Some((idx, *local)),
+                    }
+                    | LocalBinding::ParamPart {
+                        site: ParamSite::Func(candidate),
+                        ..
+                    }) if candidate == func => Some((
+                        instance
+                            .key(self.db)
+                            .typed_body(self.db)
+                            .input_index(binding)?,
+                        *local,
+                    )),
                     LocalBinding::Local { .. }
                     | LocalBinding::EffectParam { .. }
-                    | LocalBinding::Param { .. } => None,
+                    | LocalBinding::Param { .. }
+                    | LocalBinding::ParamPart { .. } => None,
                 })
                 .collect::<Vec<_>>(),
             BodyOwner::Const(_)
@@ -1293,10 +1272,14 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             .iter()
             .filter_map(|local| match body.local(*local)?.source? {
                 LocalBinding::EffectParam {
-                    site: EffectParamSite::Func(func),
+                    site: EffectParamSite::Func(func, mode),
                     idx,
                     ..
-                } if instance.key(self.db).owner(self.db) == BodyOwner::Func(func) => {
+                } if matches!(
+                    instance.key(self.db).owner(self.db),
+                    BodyOwner::Func(owner, owner_mode) if owner == func && owner_mode == mode
+                ) =>
+                {
                     Some((idx as u32, *local))
                 }
                 _ => None,
@@ -1390,17 +1373,18 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         origin: SemOrigin<'db>,
     ) -> Result<&'body SemanticBody<'db>, CtfeError<'db>> {
         match instance.key(self.db).owner(self.db) {
-            BodyOwner::Func(func) if !func.is_const(self.db) => {
+            BodyOwner::Func(func, _) if !func.is_const(self.db) => {
                 Err(CtfeError::NonConstCall { origin })
             }
-            BodyOwner::Func(func) if !const_effects_supported(self.db, func) => {
+            BodyOwner::Func(func, mode) if !const_effects_supported(self.db, func, mode) => {
                 Err(CtfeError::NotConstEvaluable { origin })
             }
             BodyOwner::ContractInit { .. }
             | BodyOwner::ContractRecvArm { .. }
             | BodyOwner::Closure { .. } => Err(CtfeError::NotConstEvaluable { origin }),
-            owner
-            @ (BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }) => {
+            owner @ (BodyOwner::Func(_, _)
+            | BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }) => {
                 if inference_met_lowering_cycle(self.db, infer_body(self.db, owner)) {
                     return Err(CtfeError::InvalidBody { origin });
                 }
@@ -1502,6 +1486,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     self.finish_session(session)?;
                 }
             }
+            // Access checking rejects compile-time code whose drops may run a
+            // `Drop` implementation, so what a drop here destroys needs none.
+            SStmtKind::Drop { .. } => {}
         }
         Ok(())
     }
@@ -1572,10 +1559,10 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .collect::<Vec<_>>();
                 let instance = self.instance_for_key(callee.key);
                 if !effect_args.is_empty() {
-                    let BodyOwner::Func(func) = instance.key(self.db).owner(self.db) else {
+                    let BodyOwner::Func(func, mode) = instance.key(self.db).owner(self.db) else {
                         return Err(CtfeError::NotConstEvaluable { origin }.into());
                     };
-                    if !const_effects_supported(self.db, func) {
+                    if !const_effects_supported(self.db, func, mode) {
                         return Err(CtfeError::NotConstEvaluable { origin }.into());
                     }
                 }
@@ -1584,7 +1571,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 )? {
                     return Ok(CtfeValue::Value(value));
                 }
-                if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
+                if let BodyOwner::Func(func, _) = instance.key(self.db).owner(self.db)
                     && func.is_extern(self.db)
                 {
                     if !func.is_const(self.db) {
@@ -1593,10 +1580,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     let value_args = self.value_args(args, origin)?;
                     return self
                         .eval_extern_const_fn(instance, func, result_ty, &value_args, origin)
-                        .map(CtfeValue::Value)
-                        .map_err(Into::into);
+                        .map(CtfeValue::Value);
                 }
-                if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
+                if let BodyOwner::Func(func, _) = instance.key(self.db).owner(self.db)
                     && !func.is_const(self.db)
                 {
                     return Err(CtfeError::NonConstCall { origin }.into());
@@ -1844,7 +1830,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         args: &[CtfeValue<'db>],
         origin: SemOrigin<'db>,
     ) -> Result<Option<CtfeConstValue<'db>>, CtfeError<'db>> {
-        let BodyOwner::Func(func) = instance.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, _) = instance.key(self.db).owner(self.db) else {
             return Ok(None);
         };
         let Some(call) = core_primitive_wrapper_call_kind(self.db, func, result_ty) else {
@@ -1944,8 +1930,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        match ctfe_extern_intrinsic_kind(self.db, func) {
+    ) -> EvalResult<'db, CtfeConstValue<'db>> {
+        let value = match ctfe_extern_intrinsic_kind(self.db, func) {
             Some(CtfeExternIntrinsic::AddMod) => {
                 self.eval_evm_modular_arithmetic(result_ty, args, EvmModularArithmetic::Add, origin)
             }
@@ -1955,17 +1941,24 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             Some(CtfeExternIntrinsic::LeadingZeros) => {
                 self.eval_leading_zeros(result_ty, args, origin)
             }
+            Some(CtfeExternIntrinsic::PanicCode) => {
+                let [code] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let code = self.expect_u256_const(code, origin)?;
+                Err(CtfeError::Panicked { origin, code })
+            }
             Some(CtfeExternIntrinsic::SizeOf) => {
-                self.eval_intrinsic_size_of(instance, result_ty, args, origin)
+                return self.eval_intrinsic_size_of(instance, result_ty, args, origin);
             }
             Some(CtfeExternIntrinsic::StorageSlots) => {
                 self.eval_intrinsic_storage_slots(instance, result_ty, args, origin)
             }
-            Some(CtfeExternIntrinsic::AsBytes) => {
-                self.eval_intrinsic_as_bytes(result_ty, args, origin)
-            }
             Some(CtfeExternIntrinsic::Keccak256) => {
-                self.eval_intrinsic_keccak(result_ty, args, origin)
+                self.eval_intrinsic_keccak(instance, result_ty, args, origin)
+            }
+            Some(CtfeExternIntrinsic::KeccakWords) => {
+                self.eval_intrinsic_keccak_words(instance, result_ty, args, origin)
             }
             Some(CtfeExternIntrinsic::Bitcast) => {
                 self.eval_intrinsic_bitcast(result_ty, args, origin)
@@ -1974,7 +1967,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 self.eval_numeric_extern_intrinsic(kind, result_ty, args, origin)
             }
             None => Err(CtfeError::NotConstEvaluable { origin }),
-        }
+        };
+        Ok(value?)
     }
 
     fn eval_numeric_extern_intrinsic(
@@ -2335,9 +2329,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+    ) -> EvalResult<'db, CtfeConstValue<'db>> {
         if !args.is_empty() {
-            return Err(CtfeError::NotConstEvaluable { origin });
+            return Err(CtfeError::NotConstEvaluable { origin }.into());
         }
         let ty = *instance
             .key(self.db)
@@ -2375,7 +2369,14 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     message: cause.pretty_print(self.db),
                 },
             })?
-            .ok_or(CtfeError::NotConstEvaluable { origin })?;
+            // Only a type that still names a parameter has no size yet.
+            .ok_or_else(|| {
+                EvalStop::Blocked(BlockedInfo::new(
+                    ConstDemandKind::Layout,
+                    ConstDependency::Type(ty),
+                    origin,
+                ))
+            })?;
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(size)))
     }
 
@@ -2408,67 +2409,99 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(slots)))
     }
 
-    fn eval_intrinsic_as_bytes(
-        &self,
-        result_ty: TyId<'db>,
-        args: &[CtfeConstValue<'db>],
-        origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        if !is_u8_array_ty(self.db, result_ty) {
-            return Err(CtfeError::NotConstEvaluable { origin });
-        }
-        let [value] = args else {
-            return Err(CtfeError::NotConstEvaluable { origin });
-        };
-        let mut bytes = self.const_as_bytes(value, origin)?;
-        if let Some(len) = array_len(self.db, result_ty)
-            && bytes.len() != len
-        {
-            if let Some(string_bytes) = self.fixed_string_bytes_for_len(value, len) {
-                bytes = string_bytes;
-            } else {
-                return Err(CtfeError::NotConstEvaluable { origin });
-            }
-        }
-        Ok(CtfeConstValue::bytes(result_ty, bytes))
-    }
-
-    fn fixed_string_bytes_for_len(
-        &self,
-        value: &CtfeConstValue<'db>,
-        len: usize,
-    ) -> Option<Vec<u8>> {
-        let value = self.expand_interned(value.clone());
-        let CtfeConstKind::Bytes { ty, bytes } = &value.kind else {
-            return None;
-        };
-        if !ty.is_string(self.db) {
-            return None;
-        }
-
-        let mut out = vec![0u8; len];
-        let suffix = if bytes.len() > len {
-            &bytes[bytes.len() - len..]
-        } else {
-            bytes.as_ref()
-        };
-        let offset = len - suffix.len();
-        out[offset..].copy_from_slice(suffix);
-        Some(out)
+    /// The concrete `N` of a packed-hash intrinsic instance.
+    fn intrinsic_len(&self, instance: SemanticInstance<'db>) -> Option<usize> {
+        let key = instance.key(self.db);
+        let n = *key.subst(self.db).generic_args(self.db).first()?;
+        concrete_usize(
+            self.db,
+            normalize_ty(
+                self.db,
+                n,
+                key.owner(self.db).scope(),
+                key.instantiate_typed_body(self.db).assumptions(),
+            ),
+        )
     }
 
     fn eval_intrinsic_keccak(
         &self,
+        instance: SemanticInstance<'db>,
         result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        let [value] = args else {
-            return Err(CtfeError::NotConstEvaluable { origin });
+        let invalid = || CtfeError::InvalidOperation {
+            origin,
+            message: "keccak input must be canonical PackedBytes<N> with a zero tail".into(),
         };
-        let bytes = self.const_as_bytes(value, origin)?;
+        let (Some(n), [value]) = (self.intrinsic_len(instance), args) else {
+            return Err(invalid());
+        };
+        let value = self.expand_interned(value.clone());
+        let CtfeConstKind::Struct { fields, .. } = &value.kind else {
+            return Err(invalid());
+        };
+        let [words] = fields.as_ref() else {
+            return Err(invalid());
+        };
+        self.eval_keccak_word_array(result_ty, words, n, origin)
+    }
+
+    fn eval_intrinsic_keccak_words(
+        &self,
+        instance: SemanticInstance<'db>,
+        result_ty: TyId<'db>,
+        args: &[CtfeConstValue<'db>],
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+        let (Some(count), [words]) = (self.intrinsic_len(instance), args) else {
+            return Err(CtfeError::InvalidOperation {
+                origin,
+                message: "keccak_words input must be a canonical u256 array matching N".into(),
+            });
+        };
+        let n = count
+            .checked_mul(32)
+            .ok_or(CtfeError::ArithmeticOverflow { origin })?;
+        self.eval_keccak_word_array(result_ty, words, n, origin)
+    }
+
+    /// Hash numeric u256 elements only, with no recursive aggregate serialization.
+    fn eval_keccak_word_array(
+        &self,
+        result_ty: TyId<'db>,
+        words: &CtfeConstValue<'db>,
+        n: usize,
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+        let invalid = || CtfeError::InvalidOperation {
+            origin,
+            message: "keccak input must contain canonical u256 words with a zero tail".into(),
+        };
+        let words = self.expand_interned(words.clone());
+        let CtfeConstKind::Array { elems, .. } = &words.kind else {
+            return Err(invalid());
+        };
+        if elems.len() != n.div_ceil(32) {
+            return Err(invalid());
+        }
         let mut hasher = Keccak::v256();
-        hasher.update(&bytes);
+        for (i, word) in elems.iter().enumerate() {
+            let word = self.expand_interned(word.clone());
+            let CtfeConstKind::Int { ty, value } = &word.kind else {
+                return Err(invalid());
+            };
+            if *ty != TyId::u256(self.db) || !self.int_in_range(*ty, &value.to_bigint()) {
+                return Err(invalid());
+            }
+            let bytes = value.to_u256().to_be_bytes::<32>();
+            let width = (n - i * 32).min(32);
+            if bytes[width..].iter().any(|byte| *byte != 0) {
+                return Err(invalid());
+            }
+            hasher.update(&bytes[..width]);
+        }
         let mut out = [0u8; 32];
         hasher.finalize(&mut out);
         Ok(CtfeConstValue::int_word(
@@ -2878,10 +2911,12 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     -int - BigInt::one(),
                 )))
             }
-            UnOp::Mut | UnOp::Ref | UnOp::Deref => Err(CtfeError::InvalidOperation {
-                origin,
-                message: "unexpected place operator in CTFE unary evaluation".into(),
-            }),
+            UnOp::Mut | UnOp::MaybeMut | UnOp::Ref | UnOp::Deref => {
+                Err(CtfeError::InvalidOperation {
+                    origin,
+                    message: "unexpected place operator in CTFE unary evaluation".into(),
+                })
+            }
         }
     }
 
@@ -3274,65 +3309,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         }
         Ok(())
     }
-
-    fn const_as_bytes(
-        &self,
-        value: &CtfeConstValue<'db>,
-        origin: SemOrigin<'db>,
-    ) -> Result<Vec<u8>, CtfeError<'db>> {
-        let value = self.expand_interned(value.clone());
-        match &value.kind {
-            CtfeConstKind::Bool(flag) => Ok(vec![u8::from(*flag)]),
-            CtfeConstKind::Int { ty, value } => {
-                let Some((bits, _)) = int_ty_shape(self.db, *ty) else {
-                    return Err(CtfeError::NotConstEvaluable { origin });
-                };
-                let width = usize::from(bits / 8);
-                match value {
-                    CtfeInt::Word { word, .. } => {
-                        Ok(word.to_be_bytes::<32>()[32 - width..].to_vec())
-                    }
-                    CtfeInt::Big(value) => {
-                        let (_, bytes) =
-                            normalize_int_to_shape(value.clone(), bits, false).to_bytes_be();
-                        if bytes.len() > width {
-                            return Err(CtfeError::NotConstEvaluable { origin });
-                        }
-                        let mut out = vec![0u8; width];
-                        let offset = width - bytes.len();
-                        out[offset..].copy_from_slice(&bytes);
-                        Ok(out)
-                    }
-                }
-            }
-            CtfeConstKind::Bytes { bytes, .. } => Ok(bytes.to_vec()),
-            CtfeConstKind::Tuple { elems, .. } | CtfeConstKind::Array { elems, .. } => {
-                let mut out = Vec::new();
-                for elem in elems.iter() {
-                    out.extend(self.const_as_bytes(elem, origin)?);
-                }
-                Ok(out)
-            }
-            CtfeConstKind::Struct { fields, .. } => {
-                let mut out = Vec::new();
-                for field in fields.iter() {
-                    out.extend(self.const_as_bytes(field, origin)?);
-                }
-                Ok(out)
-            }
-            CtfeConstKind::Enum { ty, variant, .. } if ty.is_unit_variant_only_enum(self.db) => {
-                let width = 32;
-                let (_, bytes) = BigInt::from(variant.0).to_bytes_be();
-                let mut out = vec![0u8; width];
-                let offset = width - bytes.len();
-                out[offset..].copy_from_slice(&bytes);
-                Ok(out)
-            }
-            CtfeConstKind::Unit | CtfeConstKind::Interned(_) | CtfeConstKind::Enum { .. } => {
-                Err(CtfeError::NotConstEvaluable { origin })
-            }
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -3342,29 +3318,16 @@ struct ResolvedPlace {
     path: Vec<CtfePathElem>,
 }
 
-fn is_u8_array_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    if !ty.is_array(db) {
-        return false;
-    }
-    let (_, args) = ty.decompose_ty_app(db);
-    matches!(
-        args.first().copied().map(|ty| ty.base_ty(db).data(db)),
-        Some(TyData::TyBase(TyBase::Prim(PrimTy::U8)))
-    )
-}
-
-fn array_len<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
-    let (_, args) = ty.decompose_ty_app(db);
-    let TyData::ConstTy(const_ty) = args.get(1)?.data(db) else {
-        return None;
-    };
-    const_ty.integer_value(db)?.to_usize()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{analysis::semantic::identity_semantic_instance_key, test_db::HirAnalysisTestDb};
+    use crate::{
+        analysis::{
+            semantic::identity_semantic_instance_key,
+            ty::ty_def::{PrimTy, TyBase},
+        },
+        test_db::HirAnalysisTestDb,
+    };
 
     #[test]
     fn unverified_semantic_value_cannot_enter_machine_storage() {
@@ -3394,9 +3357,9 @@ mod tests {
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
-        let instance = get_or_build_semantic_instance(
+        let instance = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(module.all_funcs(&db)[0])),
+            identity_semantic_instance_key(&db, BodyOwner::Func(module.all_funcs(&db)[0], None)),
         );
         let mut machine = CtfeMachine::new(&db, CtfeConfig::default());
         let live_reference = CtfeValue::Ref(CtfeRef {
@@ -3421,13 +3384,13 @@ mod tests {
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
         let funcs = module.all_funcs(&db);
-        let read = get_or_build_semantic_instance(
+        let read = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[0])),
+            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[0], None)),
         );
-        let anchor = get_or_build_semantic_instance(
+        let anchor = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[1])),
+            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[1], None)),
         );
         let read_body = read.body(&db);
         let anchor_body = anchor.body(&db);
@@ -3503,17 +3466,17 @@ mod tests {
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
         let funcs = module.all_funcs(&db);
-        let read = get_or_build_semantic_instance(
+        let read = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[0])),
+            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[0], None)),
         );
-        let anchor = get_or_build_semantic_instance(
+        let anchor = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[1])),
+            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[1], None)),
         );
-        let dependent = get_or_build_semantic_instance(
+        let dependent = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[2])),
+            identity_semantic_instance_key(&db, BodyOwner::Func(funcs[2], None)),
         );
         let read_body = read.body(&db);
         let anchor_body = anchor.body(&db);
@@ -3627,9 +3590,9 @@ mod tests {
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
-        let instance = get_or_build_semantic_instance(
+        let instance = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(module.all_funcs(&db)[0])),
+            identity_semantic_instance_key(&db, BodyOwner::Func(module.all_funcs(&db)[0], None)),
         );
         let body = instance.body(&db);
         let (dst, expr, origin) = body
@@ -3676,7 +3639,7 @@ mod tests {
             "const fn anchor() -> u8 { 0 }",
         );
         let (module, _) = db.top_mod(file);
-        let origin = SemOrigin::Body(BodyOwner::Func(module.all_funcs(&db)[0]));
+        let origin = SemOrigin::Body(BodyOwner::Func(module.all_funcs(&db)[0], None));
         let u8_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::U8)));
         let machine = CtfeMachine::new(&db, CtfeConfig::default());
 

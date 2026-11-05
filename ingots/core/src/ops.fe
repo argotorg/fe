@@ -219,7 +219,7 @@ pub struct Location {
 /// and separated lanes for distinct keys, without checking it, so each
 /// implementation is an `unsafe impl` that asserts both. A memory
 /// collection, whose elements live in an allocation it owns, implements
-/// `Index` and `IndexMut` instead.
+/// `Index` instead.
 pub unsafe trait StateIndex: Pinned {
     /// The index operand, evaluated once and retained by the access.
     type Key: Copy
@@ -262,21 +262,15 @@ pub trait LaneCodec<T> {
     fn set(_ word: u256, offset: u256, value: own T) -> u256
 }
 
-/// `t[i]` where the context reads the element.
+/// `t[i]`: at `mut` where the context needs a `mut` place (an assignment
+/// target, `mut t[i]`, or a `mut self` method's receiver), which takes
+/// `T: mut Index<I>`.
 pub trait Index<I> {
     /// The effects of reaching an element.
     uses E
-    /// The address space of the projected element.
-    space S
     type Output
 
-    fn index(self, _ index: I) -> ref Self::Output @S uses E
-}
-
-/// `t[i]` where the context needs a `mut` place: an assignment target,
-/// `mut t[i]`, or a `mut self` method's receiver.
-pub trait IndexMut<I>: Index<I> {
-    fn index_mut(mut self, _ index: I) -> mut Self::Output @S uses E
+    fn index(mut? self, _ index: I) -> mut? Self::Output uses E
 }
 
 /// The number of elements of a collection indexed by position: its
@@ -285,22 +279,14 @@ pub trait Len {
     fn len(self) -> usize
 }
 
-// An array index is built-in place syntax; these impls let generic code
-// index an array through `Index` and `IndexMut`.
+// An array index is built-in place syntax; this impl lets generic code
+// index an array through `Index`.
 impl<T, const N: usize> Index<usize> for [T; N] {
-    space S = self[_]
     type Output = T
 
     #[inline(always)]
-    fn index(self, _ index: usize) -> ref T {
-        ref self[index]
-    }
-}
-
-impl<T, const N: usize> IndexMut<usize> for [T; N] {
-    #[inline(always)]
-    fn index_mut(mut self, _ index: usize) -> mut T {
-        mut self[index]
+    fn index(mut? self, _ index: usize) -> mut? T {
+        mut? self[index]
     }
 }
 
@@ -353,4 +339,17 @@ pub trait BitOrAssign<T = Self> {
 
 pub trait BitXorAssign<T = Self> {
     fn bitxor_assign(mut self, _ other: own T)
+}
+
+/// Destroys a value when its owner gives it up: at the end of the owner's
+/// scope, when the value is overwritten, or for the fields a partial move
+/// leaves behind. `drop` runs once, then the fields it did not move out are
+/// destroyed in declaration order.
+///
+/// A drop runs where no call is written, so `drop` declares no effects, and
+/// nothing calls it directly: `core::mem::drop` ends a value early. An
+/// implementation covers the whole type, as `impl<T> Drop for Buf<T>` does,
+/// and a type with one is never `Copy`.
+pub trait Drop {
+    fn drop(own self)
 }

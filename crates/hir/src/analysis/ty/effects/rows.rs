@@ -8,14 +8,14 @@
 //! A row that does not expand is matched by identity: a call forwards the
 //! caller's own. In an implementation's own methods, `uses E` is spliced
 //! into the method's effects (`Func::effects`).
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     analysis::{
         HirAnalysisDb,
         ty::{
             binder::Binder,
-            closure::{CallableShape, CallableValue},
+            closure::{CallableTrait, CallableValue},
             effects::resolve_effect_key,
             fold::{TyFoldable, TyFolder},
             trait_def::{ImplementorOrigin, TraitInstId, resolve_trait_impl_instance},
@@ -28,7 +28,7 @@ use crate::{
 };
 
 /// Row `row` of a trait instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RowKey<'db> {
     pub inst: TraitInstId<'db>,
     pub row: u16,
@@ -62,7 +62,7 @@ impl<'db> TyFoldable<'db> for RowKey<'db> {
 }
 
 /// A component of a row: an ordinary effect requirement, or another row.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RowComponent<'db> {
     pub name: IdentId<'db>,
     pub key: EffectRequirementKey<'db>,
@@ -95,7 +95,7 @@ impl<'db> TyFoldable<'db> for RowComponent<'db> {
 /// from, and its index in each row on the way down. A path names the same
 /// component in every view of a requirement, however far each view expands
 /// it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RowPath {
     pub entry: u32,
     pub steps: Vec<u32>,
@@ -134,7 +134,7 @@ impl RowPath {
 
 /// A component of the rows a function's requirements name, as one view
 /// expands them: an effect, or a row the view cannot expand.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RowComponentRequirement<'db> {
     pub path: RowPath,
     pub requirement: EffectRequirement<'db>,
@@ -142,7 +142,7 @@ pub struct RowComponentRequirement<'db> {
 
 /// The rows among a function's effect requirements, as one view expands
 /// them: each as far as the view selects the implementations involved.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue, Default)]
 pub struct RowExpansion<'db> {
     /// The components, depth first in entry order, as effect requirements
     /// numbered after the function's own. Numbers are particular to the
@@ -309,7 +309,7 @@ fn direct_row_components<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Option<Vec<RowComponent<'db>>> {
     // A callable value's row is the effects a call of it runs.
-    if CallableShape::of(db, key.inst.def(db)).is_some()
+    if CallableTrait::of(db, key.inst.def(db)).is_some()
         && let Some(value) = CallableValue::of(db, key.inst.self_ty(db))
     {
         return Some(value.effects(db));
@@ -360,7 +360,7 @@ fn direct_row_components<'db>(
                     .name
                     .or_else(|| key_syntax.as_path(db)?.ident(db).to_opt())?,
                 key,
-                is_mut: effect.is_mut,
+                is_mut: effect.is_mut(),
                 key_syntax,
             })
         })

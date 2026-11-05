@@ -1,6 +1,6 @@
 use core::ptr
 
-pub fn bump_self_assign(size: u256) -> *u8 {
+pub fn bump_self_assign(size: usize) -> *u8 {
     var x = ptr::alloc_bytes(size)
     x = ptr::alloc_bytes(64)
     x

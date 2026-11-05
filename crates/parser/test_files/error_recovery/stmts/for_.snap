@@ -51,7 +51,7 @@ Root@0..71
           Path@37..37
             PathSegment@37..37
           Error@37..38
-            At@37..38 "@"
+            InvalidToken@37..38 "@"
         WhiteSpace@38..39 " "
         InKw@39..41 "in"
         WhiteSpace@41..42 " "
@@ -71,7 +71,7 @@ Root@0..71
           Path@54..54
             PathSegment@54..54
           Error@54..55
-            At@54..55 "@"
+            InvalidToken@54..55 "@"
         WhiteSpace@55..56 " "
         InKw@56..58 "in"
         WhiteSpace@58..59 " "

@@ -1,0 +1,66 @@
+// An explicit length that cannot hold the string literal is still rejected
+// when the parameter's length is a generic const.
+fn width<const N: usize>(_ s: String<N>) -> usize { N }
+
+fn byte_len<const N: usize>(_ bytes: [u8; N]) -> usize { N }
+
+fn explicit_string() -> usize {
+    width<2>("abc")
+}
+
+fn explicit_bytes() -> usize {
+    byte_len<2>("abc")
+}
+
+
+// A caller's generic length may be instantiated shorter than the literal,
+// whichever argument fixes the length first.
+fn width_and_bytes<const N: usize>(_ s: String<N>, _ bytes: [u8; N]) -> usize { N }
+
+fn bytes_and_width<const N: usize>(_ bytes: [u8; N], _ s: String<N>) -> usize { N }
+
+fn literal_first<const M: usize>(_ bytes: [u8; M]) -> usize {
+    width_and_bytes("abc", bytes)
+}
+
+fn literal_last<const M: usize>(_ bytes: [u8; M]) -> usize {
+    bytes_and_width(bytes, "abc")
+}
+
+fn literal_as_generic<const M: usize>() -> String<M> {
+    "abc"
+}
+
+// An empty literal fits any length.
+fn empty_as_generic<const M: usize>() -> String<M> {
+    ""
+}
+
+fn empty_with_generic_bytes<const M: usize>(_ bytes: [u8; M]) -> usize {
+    width_and_bytes("", bytes)
+}
+
+// A computed length may be instantiated shorter than the literal too.
+fn literal_as_computed<const M: usize>() -> String<{ M + 1 }> {
+    "abc"
+}
+
+fn computed_bytes<const M: usize>(_ bytes: [u8; { M + 1 }]) -> usize {
+    width_and_bytes("abc", bytes)
+}
+
+// No `String<N>` holds more than 31 bytes.
+fn too_long() -> usize {
+    width("abcdefghijklmnopqrstuvwxyz123456")
+}
+
+// The length a trait bound selects must hold the literal as well.
+trait Fits<const K: usize> {}
+
+impl Fits<2> for u8 {}
+
+fn fits<T: Fits<N>, const N: usize>(_ t: T, _ s: String<N>) -> usize { N }
+
+fn bound_too_short() -> usize {
+    fits(1 as u8, "abc")
+}

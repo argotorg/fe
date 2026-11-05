@@ -6,8 +6,8 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             FieldIndex, Mutability, SConst, SemanticInstance, VariantIndex,
-            capability::semantics::contains_capability, get_or_build_semantic_instance,
-            lower::enum_tag_ty, normalized::*, sem_const_ty,
+            capability::semantics::contains_capability, lower::enum_tag_ty, normalized::*,
+            sem_const_ty,
         },
         ty::{
             adt_def::AdtRef,
@@ -180,11 +180,18 @@ pub fn verify_normalized_body<'db>(
                     }
                     verify_mutation(db, body, destination, true)?;
                 }
-                NStatementKind::End { access } => {
+                NStatementKind::End { access }
+                | NStatementKind::Drop {
+                    target: NDropTarget::Value(access),
+                } => {
                     if body.value(*access).is_none() {
                         return Err(NormalizedBodyVerifyError::MissingValue(*access));
                     }
                 }
+                // Destroying an immutable binding's value is no mutation.
+                NStatementKind::Drop {
+                    target: NDropTarget::Place(place),
+                } => verify_place(db, body, place)?,
             }
         }
         verify_terminator(db, body, &block.terminator.kind)?;
@@ -295,7 +302,7 @@ fn verify_expr<'db>(
                     value_ty == result_ty && value_ty.is_integral(db)
                 }
                 UnOp::Not => value_ty.is_bool(db) && result_ty.is_bool(db),
-                UnOp::Mut | UnOp::Ref | UnOp::Deref => false,
+                UnOp::Mut | UnOp::MaybeMut | UnOp::Ref | UnOp::Deref => false,
             };
             valid
                 .then_some(())
@@ -399,12 +406,13 @@ fn verify_expr<'db>(
             effect_args,
             ..
         } => {
-            let callee = get_or_build_semantic_instance(db, callee.key);
+            let callee = SemanticInstance::new(db, callee.key);
             let typed_body = callee.key(db).typed_body(db);
-            let mut param_tys = Vec::new();
-            while let Some(binding) = typed_body.param_binding(param_tys.len()) {
-                param_tys.push(callee.normalized_binding_ty(db, binding));
-            }
+            let param_tys: Vec<_> = typed_body
+                .input_bindings()
+                .iter()
+                .map(|&binding| callee.normalized_binding_ty(db, binding))
+                .collect();
             if args.len() != param_tys.len() {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
             }
@@ -1067,7 +1075,13 @@ fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBod
                     uses.push(value.value);
                     uses.extend(body.place_values(destination));
                 }
-                NStatementKind::End { access } => uses.push(*access),
+                NStatementKind::End { access }
+                | NStatementKind::Drop {
+                    target: NDropTarget::Value(access),
+                } => uses.push(*access),
+                NStatementKind::Drop {
+                    target: NDropTarget::Place(place),
+                } => uses.extend(body.place_values(place)),
             }
             for value in uses {
                 verify_value_dominates_use(body, &dominators, value, block_id, statement_index)?;

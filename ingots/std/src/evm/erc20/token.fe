@@ -212,7 +212,7 @@ impl Erc20 {
     ) -> VerifiedPermit
     uses (ctx: Ctx)
     {
-        if ctx.timestamp() > deadline {
+        if ctx.timestamp().as_seconds() > deadline {
             revert_error(PermitExpired {})
         }
         let nonce = self.nonces.get(owner)

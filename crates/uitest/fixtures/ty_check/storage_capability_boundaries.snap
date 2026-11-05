@@ -31,28 +31,22 @@ error[8-0011]: missing fields in record pattern
    │                  missing `value`
    │                  Consider using `TSlot { value }` instead
 
-error[8-0018]: left-hand side of assignment is immutable
-   ┌─ storage_capability_boundaries.fe:38:14
-   │
-38 │     unsafe { storage_at<u256>(0) = 1 }
-   │              ^^^^^^^^^^^^^^^^^^^ immutable assignment
-
 error[8-0036]: missing effect `RawStorage` required by `at`
    ┌─ storage_capability_boundaries.fe:18:14
    │
 18 │     unsafe { StorageMap<u256, u256>::at(0).get(1) }
    │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `at` requires effect `RawStorage` to be in scope
    │
-   = require it in this function's signature with `uses (storage: mut RawStorage)`, so that its callers provide it
+   = require it in this function's signature with `uses (storage: RawStorage)`, so that its callers provide it
    = or provide it to a block of this function with `with (RawStorage = value) { .. }`
 
-error[8-0037]: effect `RawStorage` must be mutable when calling `storage_at_mut`
+error[8-0037]: effect `RawStorage` must be mutable when calling `storage_at`
    ┌─ storage_capability_boundaries.fe:42:14
    │
-41 │ pub fn raw_mut_form_with_read_authority() -> u256 uses (storage: RawStorage) {
-   │                                                         ------------------- effect `RawStorage` is provided here
-42 │     unsafe { storage_at_mut<u256>(0) }
-   │              ^^^^^^^^^^^^^^^^^^^^^^^ `storage_at_mut` requires `mut RawStorage`
+41 │ pub fn raw_write_with_read_authority() uses (storage: RawStorage) {
+   │                                              ------------------- effect `RawStorage` is provided here
+42 │     unsafe { storage_at<u256>(0) = 1 }
+   │              ^^^^^^^^^^^^^^^^^^^ `storage_at` requires `mut RawStorage`
    │
    = use a mutable binding or pass a mutable reference in the `with` block
 
@@ -79,7 +73,7 @@ error[8-0097]: call to unsafe function `at` requires an `unsafe` block or functi
  14 │     StorageMap<u256, u256>::at(0).get(1)
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
     │
-    ┌─ src/evm/storage_map.fe:238:19
+    ┌─ src/evm/storage_map.fe:229:19
     │
-238 │     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+229 │     pub unsafe fn at(_ slot: u256) -> mut? Self uses (storage: mut? RawStorage) {
     │                   -- callee defined here

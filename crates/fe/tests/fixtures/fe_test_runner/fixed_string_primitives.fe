@@ -1,9 +1,10 @@
+use core::PackedBytes
 use core::abi::{ByteInput, encode_alloc}
 use core::concat
 use std::abi::Sol
 
 fn fifth_byte(_ s: String<8>) -> u8 {
-    let bytes: [u8; 8] = s.as_bytes()
+    let bytes = s.as_bytes()
     bytes[4]
 }
 
@@ -16,7 +17,7 @@ fn test_string_len_runtime() {
 #[test]
 fn test_string_as_bytes_runtime() {
     let s: String<8> = "COOL"
-    let bytes: [u8; 8] = s.as_bytes()
+    let bytes = s.as_bytes()
     assert!(bytes[0] == 0)
     assert!(bytes[3] == 0)
     assert!(bytes[4] == 67)
@@ -34,20 +35,20 @@ fn test_string_as_bytes_param_runtime() {
     padded[6] = input.byte_at(34)
     padded[7] = input.byte_at(35)
 
-    let s: String<8> = String::from_bytes(padded)
+    let s: String<8> = String::from_bytes(PackedBytes::from_array(padded))
     assert!(fifth_byte(s) == 67)
 }
 
 #[test]
 fn test_string_roundtrip_bytes_runtime() {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(PackedBytes::from_array(bytes))
     assert!(s == "COOL")
 }
 
 #[test]
 fn test_string_from_bytes_expression_runtime() {
-    let s: String<8> = String::from_bytes([0, 0, 0, 0, 67, 79, 79, 76])
+    let s: String<8> = String::from_bytes(PackedBytes::from_array([0, 0, 0, 0, 67, 79, 79, 76]))
     assert!(s == "COOL")
 }
 

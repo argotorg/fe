@@ -1,0 +1,44 @@
+const fn word_len(_ n: usize) -> usize {
+    n / 32 + if n % 32 == 0 { 0 } else { 1 }
+}
+struct Packed<const N: usize> { words: [u256; word_len(N)] }
+impl<const N: usize> Packed<N> {
+    const fn zero() -> Self { Self { words: [0; word_len(N)] } }
+}
+trait Bytes {
+    const N: usize
+    const fn bytes(self) -> Packed<Self::N> { Packed<Self::N>::zero() }
+}
+struct Blob<const N: usize> {}
+impl<const LEN: usize> Bytes for Blob<LEN> { const N: usize = LEN }
+impl<const N: usize> Blob<N> {
+    const fn bytes(self) -> Packed<N> { <Self as Bytes>::bytes(self) }
+    const fn forward(self) -> Packed<N> { self.bytes() }
+}
+
+impl<const N: usize> Blob<N> {
+    const WIDTH: usize = N
+    const fn inherent(self) -> Packed<Self::WIDTH> { self.bytes() }
+}
+fn equivalent<const N: usize>(
+    _ value: [u256; word_len(Blob<N>::N)],
+) -> [u256; word_len(N)] { value }
+fn inherent_equivalent<const N: usize>(
+    _ value: [u256; word_len(Blob<N>::WIDTH)],
+) -> [u256; word_len(N)] { value }
+trait Marker {}
+struct Key {}
+impl Marker for Key {}
+struct Guarded<T, const N: usize> {}
+impl<T: Marker, const N: usize> Bytes for Guarded<T, N> { const N: usize = N }
+fn guarded<T: Marker, const N: usize>(
+    _ value: [u256; word_len(Guarded<T, N>::N)],
+) -> [u256; word_len(N)] { value }
+const EMPTY: Packed<0> = Blob<0> {}.forward()
+const WIDE: Packed<33> = Blob<33> {}.inherent()
+const EMPTY_WORDS: [u256; 0] = EMPTY.words
+const CHECK: bool = WIDE.words[0] == 0 && WIDE.words[1] == 0
+
+trait Has<const N: usize> {}
+fn constrained<const N: usize, U: Has<word_len(Blob<N>::N)>>() {}
+fn specialized<U: Has<2>>() { constrained<33, U>() }

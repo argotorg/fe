@@ -124,7 +124,7 @@ fn make<T>() -> T
 where
     T: Other
 {
-    todo()
+    unsafe { todo() }
 }
 
 fn caller(flag: bool) {
@@ -156,7 +156,7 @@ fn make<T>() -> T
 where
     T: Other
 {
-    todo()
+    unsafe { todo() }
 }
 
 fn caller(flag: bool) {
@@ -185,7 +185,7 @@ fn make<T>() -> T
 where
     T: Other
 {
-    todo()
+    unsafe { todo() }
 }
 
 fn caller() {
@@ -217,7 +217,7 @@ fn make<T>() -> T
 where
     T: Other
 {
-    todo()
+    unsafe { todo() }
 }
 
 fn caller() {
@@ -251,7 +251,7 @@ impl Link<u256> for Mid {}
 // `U: Link<T>` is declared before `V: Link<U>` but is ambiguous until the
 // latter binds `U`, so a single pass over the bounds leaves `T` unresolved.
 fn chain<T, U: Link<T>, V: Link<U>>(_ value: V) -> T {
-    todo()
+    unsafe { todo() }
 }
 
 fn caller() -> u256 {
@@ -288,7 +288,7 @@ impl Make for Factory {
     where
         T: Other
     {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -330,7 +330,7 @@ impl Make for Factory {
     where
         T: Other
     {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -360,7 +360,7 @@ fn make<T>() -> T
 where
     T: Other
 {
-    todo()
+    unsafe { todo() }
 }
 
 fn caller<U>() -> U {
@@ -473,13 +473,13 @@ trait FooB {
 
 impl FooA for S {
     fn foo<P: HasOutput, Q: PickA<P>>(self, _ value: Q) -> P::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 
 impl FooB for S {
     fn foo<P: HasOutput, Q: PickB<P>>(self, _ value: Q) -> P::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 

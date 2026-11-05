@@ -1,0 +1,34 @@
+// A step made of two of the inner driver's steps reaches the base twice:
+// at `mut`, the second is an access conflict.
+use core::iter::{Collection, Driver}
+
+pub struct Dup<D> {
+    inner: D,
+}
+
+impl<D: Copy> Copy for Dup<D> {}
+
+impl<D: mut? Driver> Driver for Dup<D> {
+    uses E = D::E
+    type Base = D::Base
+    type State = D::State
+    shape Step = (D::Step, D::Step)
+
+    fn start(self, _ base: D::Base) -> D::State uses (D::Base::E, E) {
+        self.inner.start(base)
+    }
+
+    fn has(self, _ base: D::Base, _ s: D::State) -> bool uses (D::Base::E, E) {
+        self.inner.has(base, s)
+    }
+
+    fn next(self, _ base: D::Base, _ s: D::State) -> D::State uses (D::Base::E, E) {
+        self.inner.next(base, s)
+    }
+
+    fn at(self, _ base: mut? D::Base, _ s: D::State) -> (D::Step, D::Step) uses (D::Base::E, E) {
+        (self.inner.at(mut? base, s), self.inner.at(mut? base, s))
+    }
+}
+
+

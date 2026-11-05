@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_duplicate_generic_handler.fe
+---
+error[8-0050]: duplicate message handler
+   ┌─ recv_duplicate_generic_handler.fe:49:9
+   │
+ 6 │     pub struct G<T> {
+   │                - `G<u8>` first handled here
+   ·
+49 │         Manual::G<u8> { value } -> u8 {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^ `G<u8>` is already handled
+   │
+   = each message type can only be handled once in a contract

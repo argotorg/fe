@@ -5,8 +5,8 @@ release notes. This should be a description of aspects of the change
 commit message and PR description, which are a description of the change as
 relevant to people working on the code itself.)
 
-Each file should be named like `<ISSUE>.<TYPE>.md`, where
-`<ISSUE>` is an issue numbers, and `<TYPE>` is one of:
+Each file should be named like `<PR>.<TYPE>.md`, where
+`<PR>` is the number of the pull request that creates the fragment, and `<TYPE>` is one of:
 
 * `feature`
 * `bugfix`
@@ -18,8 +18,12 @@ Each file should be named like `<ISSUE>.<TYPE>.md`, where
 
 So for example: `123.feature.md`, `456.bugfix.md`
 
-If the PR fixes an issue, use that number here. If there is no issue,
-then open up the PR first and use the PR number for the newsfragment.
+Open the PR first, then use its number for the newsfragment. If a PR needs
+multiple fragments of the same type, add a numeric suffix, for example
+`123.feature.1.md` and `123.feature.2.md`.
+
+Describe changes from the previous release. Do not include fixes for bugs
+introduced since that release or changes superseded by later work.
 
 The release notes are assembled with
 [eisenbote](https://github.com/fe-lang/eisenbote), configured in

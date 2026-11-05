@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/impl_foreign_trait_projection.fe
+---
+error[5-0000]: external trait cannot be implemented for external type
+   ┌─ impl_foreign_trait_projection.fe:54:1
+   │
+54 │ impl Copy for <Source as Get>::Out {}
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ external trait cannot be implemented for external type
+
+error[5-0000]: external trait cannot be implemented for external type
+   ┌─ impl_foreign_trait_projection.fe:57:1
+   │
+57 │ impl<T: Get> Copy for <Wrap<T> as Get>::Out {}
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ external trait cannot be implemented for external type

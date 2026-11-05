@@ -1,0 +1,10 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/prelude_glob_ingot_names.fe
+---
+note:
+  ┌─ prelude_glob_ingot_names.fe:2:1
+  │
+2 │ use foo::*
+  │ ^^^^^^^^^^ prelude_glob_ingot_names::foo::core as core | prelude_glob_ingot_names::foo::std as std

@@ -1,0 +1,62 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/staticcall_reads.fe
+---
+error[16-0001]: access conflict in `fn DecodeAcrossMut::__init__`
+   ┌─ staticcall_reads.fe:47:17
+   │
+46 │         let held = mut value
+   │                    --------- access opened here
+47 │         let _ = staticcall_decode<()>(addr: Address::zero(), gas: 100000, args: MemSpan::empty())
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call may read storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn ForwardedDecodeAcrossMut::__init__`
+   ┌─ staticcall_reads.fe:58:9
+   │
+57 │         let held = mut temporary.value
+   │                    ------------------- access opened here
+58 │         read_remote()
+   │         ^^^^^^^^^^^^^ this call may read storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn TypedStaticAcrossMut::__init__`
+   ┌─ staticcall_reads.fe:69:17
+   │
+68 │           let held = mut value
+   │                      --------- access opened here
+69 │           let _ = call.static(
+   │ ╭─────────────────^
+70 │ │                 addr: Address::zero(),
+71 │ │                 gas: 100000,
+72 │ │                 message: Query::Value {},
+73 │ │             )
+   │ ╰─────────────^ this call may read storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn TryStaticAcrossMut::__init__`
+   ┌─ staticcall_reads.fe:84:17
+   │
+83 │           let held = mut temporary.value
+   │                      ------------------- access opened here
+84 │           let _ = call.try_static(
+   │ ╭─────────────────^
+85 │ │                 addr: Address::zero(),
+86 │ │                 gas: 100000,
+87 │ │                 message: Query::Value {},
+88 │ │             )
+   │ ╰─────────────^ this call may read storage while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn StaticIntoAcrossMut::__init__`
+    ┌─ staticcall_reads.fe:100:17
+    │
+ 98 │           let held = mut value
+    │                      --------- access opened here
+ 99 │           var output = MemBuffer::empty()
+100 │           let _ = call
+    │ ╭─────────────────^
+101 │ │             .try_static_into(
+102 │ │                 addr: Address::zero(),
+103 │ │                 gas: 100000,
+104 │ │                 message: Query::Value {},
+105 │ │                 ret: mut output,
+106 │ │             )
+    │ ╰─────────────^ this call may read storage while a `mut` access of it is open

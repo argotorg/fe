@@ -1,0 +1,9 @@
+use ingot::Get
+
+pub contract C {
+    recv Get {
+        Get -> u256 {
+            2
+        }
+    }
+}

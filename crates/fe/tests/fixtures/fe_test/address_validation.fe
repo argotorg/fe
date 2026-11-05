@@ -1,0 +1,72 @@
+// An `Address` has no bits above the low 160: `Address::new` rejects such a
+// word with `Panic(0x11)`, and `from_word_truncate` drops them, so every
+// address with the same 160 bits is the same key, topic and encoding.
+use std::evm::{Address, Call, Evm, SolPacked, StorageMap, decode_panic}
+
+const OWNER: Address = Address::new(0x1111111111111111111111111111111111111111)
+
+msg AddressMsg {
+    #[selector = 1]
+    Make { word: u256 } -> Address,
+    #[selector = 2]
+    Credit { who: Address, amount: u256 },
+    #[selector = 3]
+    Balance { who: Address } -> u256,
+}
+
+pub contract Book {
+    mut balances: StorageMap<Address, u256>,
+
+    recv AddressMsg {
+        Make { word } -> Address {
+            Address::new(word)
+        }
+        Credit { who, amount } uses (mut balances) {
+            balances[who] += amount
+        }
+        Balance { who } -> u256 uses (balances) {
+            balances[who]
+        }
+    }
+}
+
+#[test]
+fn test_new_keeps_a_clean_word() {
+    assert!(OWNER.word() == 0x1111111111111111111111111111111111111111)
+    let max = Address::new(0xffffffffffffffffffffffffffffffffffffffff)
+    assert!(max.word() == 0xffffffffffffffffffffffffffffffffffffffff)
+    assert!(Address::new(0) == Address::zero())
+}
+
+#[test]
+fn test_truncation_drops_high_bits() {
+    let dirty: u256 = (0xabc << 160) | 7
+    assert!(Address::from_word_truncate(dirty) == Address::new(7))
+    assert!(Address::from_word_truncate(dirty).word() == 7)
+    assert!(<Address as SolPacked>::from_packed(dirty) == Address::new(7))
+}
+
+#[test(should_revert)]
+fn test_new_rejects_high_bits() {
+    let _ = Address::new(1 << 160)
+}
+
+#[test]
+fn test_new_panics_with_overflow() uses (evm: mut Evm, call: mut Call) {
+    let book = evm.create2<Book>(value: Wei::zero(), args: (), salt: 0)
+    let made: Address = evm.call(addr: book, gas: 1000000, value: Wei::zero(), message: AddressMsg::Make { word: 5 })
+    assert!(made == Address::new(5))
+    let failed = book.try_call(AddressMsg::Make { word: (1 << 160) | 5 })
+    assert!(!failed.success())
+    assert!(decode_panic(failed.returndata()).unwrap() == 0x11)
+}
+
+#[test]
+fn test_addresses_key_one_entry() uses (evm: mut Evm) {
+    let book = evm.create2<Book>(value: Wei::zero(), args: (), salt: 1)
+    let who = Address::from_word_truncate((1 << 200) | 9)
+    evm.call(addr: book, gas: 1000000, value: Wei::zero(), message: AddressMsg::Credit { who, amount: 3 })
+    evm.call(addr: book, gas: 1000000, value: Wei::zero(), message: AddressMsg::Credit { who: Address::new(9), amount: 4 })
+    let balance: u256 = evm.call(addr: book, gas: 1000000, value: Wei::zero(), message: AddressMsg::Balance { who: Address::new(9) })
+    assert!(balance == 7)
+}

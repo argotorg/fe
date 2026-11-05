@@ -1,0 +1,2 @@
+fn no_label((a, b): (u256, u256)) {}
+fn marker(_ var (a, b): (u256, u256)) {}

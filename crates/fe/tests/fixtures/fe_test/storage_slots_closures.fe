@@ -1,7 +1,7 @@
 // A closure lies in storage as a product of its captures, as a tuple does:
 // `storage_slots` counts the slots MIR stores it in.
 use core::intrinsic::storage_slots
-use std::evm::{Evm, RawStorage, read_storage_word, storage_at_mut}
+use std::evm::{Evm, RawStorage, read_storage_word, storage_at}
 
 fn slots<F>(_ f: own F) -> u256 {
     storage_slots<F>()
@@ -27,7 +27,7 @@ struct Probe<T> {
 }
 
 fn place<F>(_ f: own F) -> u256 uses (storage: mut RawStorage) {
-    let probe = unsafe { mut storage_at_mut<Probe<F>>(0x40) }
+    let probe = unsafe { mut storage_at<Probe<F>>(0x40) }
     probe.f = f
     probe.end = 0xee
     storage_slots<F>()

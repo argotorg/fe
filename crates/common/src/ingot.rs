@@ -83,7 +83,9 @@ impl IngotFiles {
 #[derive(Debug)]
 pub struct Ingot<'db> {
     pub base: Url,
+    #[returns(copy)]
     pub standalone_file: Option<File>,
+    #[returns(copy)]
     pub kind: IngotKind,
 }
 
@@ -111,7 +113,7 @@ impl<'db> Ingot<'db> {
     /// The files of this ingot: those under its base URL, except files that
     /// belong to another ingot nested in its directory tree (such as a tool
     /// ingot in `tools/` that depends on this one), or that no ingot claims.
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn files(self, db: &'db dyn InputDb) -> IngotFiles {
         if let Some(standalone_file) = self.standalone_file(db) {
             // For standalone ingots, use the standalone file URL as the base
@@ -136,9 +138,10 @@ impl<'db> Ingot<'db> {
         )
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn config_file(self, db: &'db dyn InputDb) -> Option<File> {
-        db.workspace().containing_ingot_config(db, self.base(db))
+        db.workspace()
+            .containing_ingot_config(db, self.base(db).clone())
     }
 
     #[salsa::tracked]
@@ -157,23 +160,23 @@ impl<'db> Ingot<'db> {
 
     #[salsa::tracked]
     pub fn config(self, db: &'db dyn InputDb) -> Option<IngotConfig> {
-        self.parse_config(db).and_then(|result| result.ok())
+        self.parse_config(db).as_ref()?.as_ref().ok().cloned()
     }
 
     #[salsa::tracked]
     pub fn config_parse_error(self, db: &'db dyn InputDb) -> Option<String> {
-        self.parse_config(db).and_then(|result| result.err())
+        self.parse_config(db).as_ref()?.as_ref().err().cloned()
     }
 
     #[salsa::tracked]
     pub fn workspace_root(self, db: &'db dyn InputDb) -> Option<Url> {
         db.dependency_graph()
-            .workspace_root_for_member(db, &self.base(db))
+            .workspace_root_for_member(db, self.base(db))
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn workspace_config_file(self, db: &'db dyn InputDb) -> Option<File> {
-        let workspace_root = self.workspace_root(db)?;
+        let workspace_root = self.workspace_root(db).as_ref()?;
         let config_url = workspace_root.join("fe.toml").ok()?;
         db.workspace().get(db, &config_url)
     }
@@ -198,14 +201,17 @@ impl<'db> Ingot<'db> {
     #[salsa::tracked]
     pub fn workspace_config(self, db: &'db dyn InputDb) -> Option<WorkspaceConfig> {
         self.parse_workspace_config(db)
-            .and_then(|result| result.ok())
+            .as_ref()?
+            .as_ref()
+            .ok()
+            .cloned()
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn arithmetic_mode(self, db: &'db dyn InputDb) -> Option<ArithmeticMode> {
         if let Some(mode) = db
             .dependency_graph()
-            .forced_dependency_arithmetic_for(db, &self.base(db))
+            .forced_dependency_arithmetic_for(db, self.base(db))
         {
             return Some(mode);
         }
@@ -219,7 +225,7 @@ impl<'db> Ingot<'db> {
 
     #[salsa::tracked]
     pub fn version(self, db: &'db dyn InputDb) -> Option<Version> {
-        self.config(db).and_then(|config| config.metadata.version)
+        self.config(db).as_ref()?.metadata.version.clone()
     }
 
     #[salsa::tracked]
@@ -233,7 +239,7 @@ impl<'db> Ingot<'db> {
         } else {
             let graph_deps = db
                 .dependency_graph()
-                .direct_dependencies(db, &base_url)
+                .direct_dependencies(db, base_url)
                 .into_iter()
                 .collect::<Vec<_>>();
 
@@ -242,7 +248,7 @@ impl<'db> Ingot<'db> {
             } else {
                 match self.config(db) {
                     Some(config) => {
-                        let (dependencies, _) = config.dependencies(&base_url);
+                        let (dependencies, _) = config.dependencies(base_url);
                         dependencies
                             .into_iter()
                             .filter_map(|dependency| {
@@ -256,7 +262,7 @@ impl<'db> Ingot<'db> {
                                         let name = dependency.arguments.name.clone()?;
                                         let workspace_root = db
                                             .dependency_graph()
-                                            .workspace_root_for_member(db, &base_url)?;
+                                            .workspace_root_for_member(db, base_url)?;
                                         let candidates = db
                                             .dependency_graph()
                                             .workspace_members_by_name(db, &workspace_root, &name);
@@ -286,7 +292,7 @@ impl<'db> Ingot<'db> {
         let workspace_member_url = |name: &str| -> Option<Url> {
             let workspace_root = db
                 .dependency_graph()
-                .workspace_root_for_member(db, &base_url)?;
+                .workspace_root_for_member(db, base_url)?;
             let name = SmolStr::new(name);
             db.dependency_graph()
                 .workspace_members_by_name(db, &workspace_root, &name)
@@ -319,7 +325,7 @@ pub type Version = serde_semver::semver::Version;
 #[salsa::tracked]
 impl Workspace {
     /// Recursively search for a local ingot configuration file
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn containing_ingot_config(self, db: &dyn InputDb, file: Url) -> Option<File> {
         tracing::debug!(target: "ingot_config", "containing_ingot_config called with file: {}", file);
         let Some(dir) = file.directory() else {
@@ -349,7 +355,7 @@ impl Workspace {
         }
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn containing_ingot(self, db: &dyn InputDb, location: Url) -> Option<Ingot<'_>> {
         // Try to find a config file to determine if this is part of a structured ingot
         if let Some(config_file) = db.workspace().containing_ingot_config(db, location.clone()) {
@@ -543,7 +549,7 @@ mod tests {
         assert_eq!(ingot_lib.base(&db), ingot_nested.base(&db));
 
         let expected_base = Url::parse("file:///project/").unwrap();
-        assert_eq!(ingot_lib.base(&db), expected_base);
+        assert_eq!(ingot_lib.base(&db), &expected_base);
     }
 
     #[test]

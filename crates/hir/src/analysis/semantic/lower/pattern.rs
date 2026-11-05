@@ -66,9 +66,9 @@ pub(super) enum PatternSource<'db> {
 struct DecisionTreeProjectionCache<'db> {
     entries: Vec<(ProjectionPath<'db>, PatternValue<'db>)>,
     carrier_tys: Vec<(ProjectionPath<'db>, TyId<'db>)>,
-    /// A matched place: read through a read access only when a test first
-    /// needs its value, and bound by component.
-    place: Option<(SPlace<'db>, Option<AddressSpace>)>,
+    /// A matched place, and what it holds: read through a read access only
+    /// when a test first needs its value, and bound by component.
+    place: Option<(SPlace<'db>, Option<AddressSpace>, TyId<'db>)>,
     /// Whether the matched place's tests read its value (`inspected`).
     inspected: bool,
 }
@@ -96,6 +96,10 @@ fn with_source_carriers<'db>(
     source: TyId<'db>,
     matched: TyId<'db>,
 ) -> TyId<'db> {
+    // A value of an opaque shape is held by the shape's carrier.
+    if matched.as_shape_value(db).is_some() {
+        return source;
+    }
     let (source_base, source_args) = source.decompose_ty_app(db);
     if let Some((_, inner)) = source.as_capability(db)
         && matched.as_capability(db).is_none()
@@ -140,7 +144,7 @@ impl<'db> DecisionTreeProjectionCache<'db> {
                 } else {
                     TyId::borrow_ref_of(db, ty)
                 },
-                Some((place, provider)),
+                Some((place, provider, ty)),
                 inspected,
             ),
         };
@@ -329,8 +333,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match source {
             PatternSource::Value(value) => self.bind_validated_pattern(root, value),
             PatternSource::Place {
-                place, provider, ..
-            } => self.bind_validated_pattern_place(root, place, provider),
+                place,
+                ty,
+                provider,
+                ..
+            } => self.bind_validated_pattern_place(root, place, provider, ty),
         }
     }
 
@@ -482,54 +489,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         )
     }
 
+    /// Binds `pat`'s bindings to the parts of `value` they name. A part no
+    /// binding names is not projected, so it stays in `value`: projecting
+    /// would move it out, as a value's projection does.
     fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: PatternValue<'db>) {
-        let kind = self.typed_body.pattern_store().node(pat).kind().clone();
+        let store = self.typed_body.pattern_store();
+        let kind = store.node(pat).kind().clone();
         match kind {
             ValidatedPatKind::Wildcard {
                 binding: Some(binding),
-            } => {
-                if let Some(local_binding) = self.typed_body.pat_binding(binding.representative_pat)
-                {
-                    let dst = self.alloc_binding_local(local_binding);
-                    let dst_ty = self.locals[dst.index()].ty;
-                    let by_borrow = matches!(
-                        self.typed_body.pat_binding_mode(binding.representative_pat),
-                        Some(PatBindingMode::Access { .. })
-                    );
-                    let source_matches_dst = {
-                        let scope = self.body.scope();
-                        normalize_ty(self.db, value.carrier_ty.0, scope, self.assumptions)
-                            == normalize_ty(self.db, dst_ty, scope, self.assumptions)
-                    };
-                    let needs_borrow_read = by_borrow && !source_matches_dst;
-                    let binding_value = if needs_borrow_read {
-                        PatternValue {
-                            value: value.value,
-                            carrier_ty: PatternCarrierTy(dst_ty),
-                        }
-                    } else {
-                        value
-                    };
-                    self.debug_assert_pattern_binding_ty_matches(dst, binding_value);
-                    self.push_stmt(
-                        SemOrigin::Pat(binding.representative_pat),
-                        SStmtKind::Assign {
-                            dst,
-                            expr: if needs_borrow_read {
-                                SExpr::ReadPlace {
-                                    place: SPlace::new(value.value),
-                                }
-                            } else {
-                                SExpr::UseValue(SOperand::inherited(value.value))
-                            },
-                        },
-                    );
-                }
-            }
+            } => self.bind_value(binding.representative_pat, value),
             ValidatedPatKind::Wildcard { binding: None } => {}
             ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Variant(variant, _) => {
-                    for (idx, field_pat) in fields.into_iter().enumerate() {
+                    for (idx, field_pat) in fields
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, field)| store.binds(*field))
+                    {
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -549,7 +526,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     }
                 }
                 ConstructorKind::Type(_) => {
-                    for (idx, field_pat) in fields.into_iter().enumerate() {
+                    for (idx, field_pat) in fields
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, field)| store.binds(*field))
+                    {
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -574,14 +555,68 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    /// Binds `pat`'s bindings to the components of `place` where they lie.
+    /// Binds `pat`, a binding's pattern, to `value`: the value, or for a
+    /// `ref` or `mut` binding the access it is or reads through.
+    fn bind_value(&mut self, pat: PatId, value: PatternValue<'db>) {
+        let Some(binding) = self.typed_body.pat_binding(pat) else {
+            return;
+        };
+        let dst = self.alloc_binding_local(binding);
+        let dst_ty = self.locals[dst.index()].ty;
+        let by_borrow = matches!(
+            self.typed_body.pat_binding_mode(pat),
+            Some(PatBindingMode::Access { .. })
+        );
+        let source_matches_dst = {
+            let scope = self.body.scope();
+            normalize_ty(self.db, value.carrier_ty.0, scope, self.assumptions)
+                == normalize_ty(self.db, dst_ty, scope, self.assumptions)
+        };
+        let needs_borrow_read = by_borrow && !source_matches_dst;
+        let binding_value = if needs_borrow_read {
+            PatternValue {
+                value: value.value,
+                carrier_ty: PatternCarrierTy(dst_ty),
+            }
+        } else {
+            value
+        };
+        self.debug_assert_pattern_binding_ty_matches(dst, binding_value);
+        self.push_stmt(
+            SemOrigin::Pat(pat),
+            SStmtKind::Assign {
+                dst,
+                expr: if needs_borrow_read {
+                    SExpr::ReadPlace {
+                        place: SPlace::new(value.value),
+                    }
+                } else {
+                    SExpr::UseValue(SOperand::inherited(value.value))
+                },
+            },
+        );
+    }
+
+    /// Binds `pat`'s bindings to the components of `place`, which holds a
+    /// `ty`, where they lie. A component that holds an access, such as an
+    /// access part of a product or of a projection's result, is read and
+    /// matched as a value: its bindings take what the access reaches.
     fn bind_validated_pattern_place(
         &mut self,
         pat: ValidatedPatId,
         place: SPlace<'db>,
         provider: Option<AddressSpace>,
+        ty: TyId<'db>,
     ) {
-        let kind = self.typed_body.pattern_store().node(pat).kind().clone();
+        let store = self.typed_body.pattern_store();
+        if ty.as_capability(self.db).is_some() {
+            if store.binds(pat) {
+                let carrier = self.emit_expr(ty, SExpr::ReadPlace { place });
+                self.bind_validated_pattern(pat, self.owned_pattern_value(carrier, ty));
+            }
+            return;
+        }
+        let kind = store.node(pat).kind().clone();
         match kind {
             ValidatedPatKind::Wildcard {
                 binding: Some(binding),
@@ -593,23 +628,32 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             } => {}
             ValidatedPatKind::Constructor { ctor, fields } => {
                 for (idx, field_pat) in fields.into_iter().enumerate() {
-                    let mut component = place.clone();
-                    component.path.push(match ctor {
-                        ConstructorKind::Variant(variant, enum_ty) => {
+                    let (projection, step) = match ctor {
+                        ConstructorKind::Variant(variant, enum_ty) => (
                             crate::projection::Projection::VariantField {
                                 variant: VariantIndex(variant.idx),
                                 enum_ty,
                                 field_idx: idx,
-                            }
-                        }
-                        _ => crate::projection::Projection::Field(idx),
-                    });
-                    self.bind_validated_pattern_place(field_pat, component, provider);
+                            },
+                            PatternProjectionStep::VariantField {
+                                variant,
+                                field_idx: idx,
+                            },
+                        ),
+                        _ => (
+                            crate::projection::Projection::Field(idx),
+                            PatternProjectionStep::Field(idx),
+                        ),
+                    };
+                    let mut component = place.clone();
+                    component.path.push(projection);
+                    let field_ty = project_pattern_child_source_ty(self.db, ty, step);
+                    self.bind_validated_pattern_place(field_pat, component, provider, field_ty);
                 }
             }
             ValidatedPatKind::Or(pats) => {
                 if let Some(first) = pats.first() {
-                    self.bind_validated_pattern_place(*first, place, provider);
+                    self.bind_validated_pattern_place(*first, place, provider, ty);
                 }
             }
         }
@@ -662,10 +706,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             join_bb,
             arms,
         };
-        if !self.lower_decision_tree(&tree, &mut projections, target) {
+        let join_reachable = self.lower_decision_tree(&tree, &mut projections, target);
+        self.switch_to(join_bb);
+        if join_reachable {
+            self.hold_defined(result);
+        } else {
             self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
         }
-        self.switch_to(join_bb);
         result
     }
 
@@ -693,30 +740,31 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             },
             DecisionTree::Leaf(leaf) => match target {
+                // An arm's scope holds what it binds.
                 DecisionTreeTarget::MatchArms {
                     result,
                     join_bb,
                     arms,
                 } => {
+                    self.push_drop_scope(true);
                     self.bind_decision_tree_leaf(leaf, projections);
                     let arm = &arms[leaf.arm_index];
                     let arm_value = self.lower_expr(arm.body);
-                    if self.is_terminated(self.current) {
-                        false
-                    } else {
+                    let falls = !self.is_terminated(self.current);
+                    if falls {
                         // The arm's value passes to the join, which takes it.
                         let arm_value = self.take_operand(arm.body, arm_value);
-                        self.push_synthetic_stmt(SStmtKind::Assign {
-                            dst: result,
-                            expr: SExpr::Forward(SOperand::expr(arm_value, arm.body)),
-                        });
+                        self.assign_branch_result(result, SOperand::expr(arm_value, arm.body));
+                    }
+                    self.pop_drop_scope(None);
+                    if falls {
                         self.set_terminator(
                             self.current,
                             SemOrigin::Pat(arm.pat),
                             STerminatorKind::Goto(join_bb),
                         );
-                        true
                     }
+                    falls
                 }
                 DecisionTreeTarget::Branch {
                     then_bb, else_bb, ..
@@ -858,13 +906,40 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         leaf: &LeafNode<'db>,
         projections: &mut DecisionTreeProjectionCache<'db>,
     ) {
-        if let Some((place, provider)) = projections.place.clone() {
+        if let Some((place, provider, place_ty)) = projections.place.clone() {
             for (binding_ref, path) in &leaf.bindings {
-                let mut component = place.clone();
-                for projection in path.iter() {
-                    component.path.push(semantic_projection(projection));
+                let pat = binding_ref.representative_pat;
+                // A binding at or below a component that holds an access
+                // takes what the access reaches from the tests' reading of
+                // the place, as a value pattern does; the place owns no part
+                // of it.
+                let mut ty = place_ty;
+                let carried = projections.inspected
+                    && path.iter().any(|projection| {
+                        let step = match projection {
+                            Projection::Field(field) => PatternProjectionStep::Field(*field),
+                            Projection::VariantField {
+                                variant, field_idx, ..
+                            } => PatternProjectionStep::VariantField {
+                                variant: *variant,
+                                field_idx: *field_idx,
+                            },
+                            _ => unreachable!("a pattern binds through fields and variant fields"),
+                        };
+                        ty = project_pattern_child_source_ty(self.db, ty, step);
+                        ty.as_capability(self.db).is_some()
+                    });
+                if carried {
+                    let value =
+                        self.project_decision_tree_path(SemOrigin::Pat(pat), projections, path);
+                    self.bind_value(pat, value);
+                } else {
+                    let mut component = place.clone();
+                    for projection in path.iter() {
+                        component.path.push(semantic_projection(projection));
+                    }
+                    self.bind_place_component(pat, component, provider);
                 }
-                self.bind_place_component(binding_ref.representative_pat, component, provider);
             }
             return;
         }
@@ -898,7 +973,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // A test reads a matched place through a read access of it, which
         // its last test closes, or reads an inspected place's value.
         if projections.entries.is_empty()
-            && let Some((place, provider)) = projections.place.clone()
+            && let Some((place, provider, _)) = projections.place.clone()
         {
             let root_path = ProjectionPath::default();
             let carrier_ty = projections

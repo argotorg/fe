@@ -17,7 +17,7 @@ impl Table {
     }
 
     fn set(mut self, _ key: u256, _ value: u256) {
-        var slot = (key % CAP_U256) as usize
+        var slot = (key % CAP_U256).downcast_unchecked()
         var i: usize = 0
 
         while i < CAP {
@@ -42,7 +42,7 @@ impl Table {
     }
 
     fn get(self, _ key: u256) -> u256 {
-        var slot = (key % CAP_U256) as usize
+        var slot = (key % CAP_U256).downcast_unchecked()
         var i: usize = 0
 
         while i < CAP {

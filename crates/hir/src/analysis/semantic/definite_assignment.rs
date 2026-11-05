@@ -12,10 +12,14 @@
 //! `while true { .. break }`), which is decided per-block without tracking
 //! facts across joins.
 
+// Diagnostics and CTFE stops are returned on the slow path; salsa's 8-byte ids
+// put them just past clippy's 128-byte `Err` threshold.
+#![allow(clippy::result_large_err)]
+
 use cranelift_entity::{EntityRef, SecondaryMap};
 use dataflow::{JoinSemiLattice, try_solve_forward_cfg};
 use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::Update;
+use salsa::SalsaValue;
 
 use num_traits::ToPrimitive;
 
@@ -24,11 +28,10 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             BlockedSemanticBody, SConst, SemConstScalar, SemConstValue, SemanticDiagnosticId,
-            SemanticInstance, SemanticNormalizationFailure, get_or_build_semantic_instance,
-            identity_semantic_instance_key,
+            SemanticInstance, SemanticNormalizationFailure, identity_semantic_instance_key,
             normalized::{
-                NBlockId, NEffectArg, NEffectArgValue, NExpr, NOperand, NPlace, NPlaceBase,
-                NRootKind, NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
+                NBlockId, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NOperand, NPlace,
+                NPlaceBase, NRootKind, NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
                 SemanticBodyAdmission, semantic_body_admission,
             },
         },
@@ -43,7 +46,7 @@ use crate::{
 
 /// A caller-visible write target a body definitely assigns (whole-value)
 /// on every normal exit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 enum AssignedTarget<'db> {
     /// A contract field bound as an effect provider (e.g. `uses (mut x)` in
     /// `init`).
@@ -53,9 +56,11 @@ enum AssignedTarget<'db> {
         func: Func<'db>,
         requirement_idx: u32,
     },
-    /// A `mut T` capability parameter of a function. Writes through `own`
-    /// or non-capability params stay local to the callee and are excluded.
-    FuncParam { func: Func<'db>, param_idx: u32 },
+    /// A `mut T` capability input of a function, by its position among the
+    /// inputs a call passes: a parameter, or a part of a product parameter.
+    /// Writes through `own` or non-capability inputs stay local to the
+    /// callee and are excluded.
+    FuncParam { func: Func<'db>, input_idx: u32 },
 }
 
 /// Field indices of `contract` definitely assigned on every normal exit of
@@ -66,7 +71,7 @@ pub fn contract_init_assigned_fields<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
 ) -> Result<Option<FxHashSet<u32>>, SemanticNormalizationFailure<'db>> {
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         db,
         identity_semantic_instance_key(db, BodyOwner::ContractInit { contract }),
     );
@@ -97,7 +102,7 @@ pub fn contract_init_assigned_fields<'db>(
 /// Targets `instance`'s body definitely assigns on every normal exit.
 /// `Ready(None)` means no normal exit is reachable. Admission failures remain
 /// explicit so callers cannot mistake an unanalyzable body for divergence.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 enum AssignedTargetsResult<'db> {
     Ready(Option<Vec<AssignedTarget<'db>>>),
     Blocked(BlockedSemanticBody<'db>),
@@ -112,11 +117,7 @@ enum AssignedTargetsFailure<'db> {
     InternalFailure(SemanticDiagnosticId<'db>),
 }
 
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=assigned_targets_cycle_recover,
-    cycle_initial=assigned_targets_cycle_initial
-)]
+#[salsa::tracked(cycle_initial=assigned_targets_cycle_initial)]
 fn instance_assigned_targets<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -182,19 +183,11 @@ fn instance_assigned_targets<'db>(
 
 fn assigned_targets_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _instance: SemanticInstance<'db>,
 ) -> AssignedTargetsResult<'db> {
     // Recursive calls initially contribute no writes; iteration refines.
     AssignedTargetsResult::Ready(Some(Vec::new()))
-}
-
-fn assigned_targets_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &AssignedTargetsResult<'db>,
-    _count: u32,
-    _instance: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<AssignedTargetsResult<'db>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -282,7 +275,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         let mut state = in_state.clone();
         for statement in &self.body.blocks[block.index()].statements {
             match &statement.kind {
-                NStatementKind::End { .. } => {}
+                NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
                 NStatementKind::Store { destination, .. } => {
                     if let Some(target) = self.write_target_of_place(destination) {
                         state.assigned.insert(target);
@@ -317,7 +310,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                         Some(AssignedTarget::ContractField(field))
                     }
                     ProviderSource::UsesParam {
-                        site: EffectParamSite::Func(func),
+                        site: EffectParamSite::Func(func, _),
                         requirement_idx,
                     } => Some(AssignedTarget::FuncEffect {
                         func,
@@ -337,20 +330,57 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         }
     }
 
-    /// A capability-`mut` function parameter carried by `value`, if any.
-    fn target_of_param_carrier(&self, value: NValueId) -> Option<AssignedTarget<'db>> {
-        let Some(LocalBinding::Param {
+    /// A capability-`mut` function input carried by `value`, if any: a `mut`
+    /// parameter, or a `mut` part of a product parameter, which the body
+    /// projects out of the product it gathers from its parts.
+    fn target_of_param_carrier(&self, mut value: NValueId) -> Option<AssignedTarget<'db>> {
+        // The fields still to select, the next one last: a projection of a
+        // projection selects through both, and an aggregate selects its field.
+        let mut fields = Vec::new();
+        loop {
+            match (self.definitions.get(&value), fields.last()) {
+                (Some(NExpr::ProjectValue { value: base, path }), _) => {
+                    for step in path.0.as_slice().iter().rev() {
+                        let NDataProjection::Field(field) = step else {
+                            return None;
+                        };
+                        fields.push(*field);
+                    }
+                    value = base.value;
+                }
+                (Some(NExpr::AggregateMake { fields: parts, .. }), Some(field)) => {
+                    value = parts.get(usize::from(field.0))?.value;
+                    fields.pop();
+                }
+                _ => break,
+            }
+        }
+        if !fields.is_empty() {
+            return None;
+        }
+        let source = self.body.value(value)?.source?;
+        let (LocalBinding::Param {
             site: ParamSite::Func(func),
-            idx,
             mode: FuncParamMode::Mut,
             ..
-        }) = self.body.value(value)?.source
+        }
+        | LocalBinding::ParamPart {
+            site: ParamSite::Func(func),
+            access: Some(BorrowKind::Mut),
+            ..
+        }) = source
         else {
             return None;
         };
+        let input_idx = self
+            .body
+            .owner
+            .key(self.db)
+            .typed_body(self.db)
+            .input_index(source)?;
         Some(AssignedTarget::FuncParam {
             func,
-            param_idx: idx as u32,
+            input_idx: input_idx as u32,
         })
     }
 
@@ -363,10 +393,10 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         effect_args: &[NEffectArg<'db>],
         state: &mut MustAssignState<'db>,
     ) -> Result<(), AssignedTargetsFailure<'db>> {
-        let BodyOwner::Func(callee_func) = callee_key.owner(self.db) else {
+        let BodyOwner::Func(callee_func, _) = callee_key.owner(self.db) else {
             return Ok(());
         };
-        let callee = get_or_build_semantic_instance(self.db, callee_key);
+        let callee = SemanticInstance::new(self.db, callee_key);
         let summary = match instance_assigned_targets(self.db, callee) {
             AssignedTargetsResult::Ready(Some(summary)) => summary,
             AssignedTargetsResult::Ready(None) => return Ok(()),
@@ -399,8 +429,8 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                         NEffectArgValue::Place(place) => self.write_target_of_place(place),
                         NEffectArgValue::Value(_) => None,
                     }),
-                AssignedTarget::FuncParam { func, param_idx } if *func == callee_func => args
-                    .get(*param_idx as usize)
+                AssignedTarget::FuncParam { func, input_idx } if *func == callee_func => args
+                    .get(*input_idx as usize)
                     .and_then(|arg| match self.borrowed_place_of(arg.value) {
                         Some(place) => self.write_target_of_place(place),
                         None => self.target_of_param_carrier(arg.value),

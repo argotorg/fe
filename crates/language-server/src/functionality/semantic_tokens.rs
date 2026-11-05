@@ -6,9 +6,7 @@ use async_lsp::lsp_types::{
 };
 use common::InputDb;
 use hir::{
-    core::semantic::reference::{
-        HasReferences, ReferenceView, Target, TargetResolution, resolve_path_to_scopes,
-    },
+    core::semantic::reference::{HasReferences, ReferenceView, Target},
     hir_def::ItemKind,
     lower::map_file_to_mod,
     span::LazySpan,
@@ -77,8 +75,7 @@ pub async fn handle_semantic_tokens_full(
     let mut tokens: Vec<(u32, u32, u32, u32, u32)> = vec![]; // (line, col, length, type, modifiers)
 
     // Collect tokens from all items in the module
-    let scope_graph = top_mod.scope_graph(&backend.db);
-    for item in scope_graph.items_dfs(&backend.db) {
+    for &item in top_mod.all_items(&backend.db) {
         for reference in item.references(&backend.db) {
             // For path references, emit a separate token per segment so that
             // each part of `C::init_code_offset` gets its own token type
@@ -101,19 +98,10 @@ pub async fn handle_semantic_tokens_full(
                     }
 
                     // Resolve this segment to its target
-                    let token_type = if let Some(seg_path) = view.path.segment(&backend.db, idx) {
-                        let scopes = resolve_path_to_scopes(&backend.db, seg_path, view.scope);
-                        match TargetResolution::from_scopes(scopes).first() {
-                            Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
-                            _ => None,
-                        }
-                    } else {
-                        // Fallback: use whole-path target for last segment
-                        match reference.target(&backend.db).first() {
-                            Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
-                            Some(Target::Local { .. }) => Some(3),
-                            None => None,
-                        }
+                    let token_type = match view.segment_target(&backend.db, idx).first() {
+                        Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
+                        Some(Target::Local { .. }) => Some(3),
+                        None => None,
                     };
 
                     if let Some(token_type) = token_type {

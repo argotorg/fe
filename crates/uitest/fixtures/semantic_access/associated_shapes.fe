@@ -1,0 +1,44 @@
+// An associated shape forwarded whole is an access of the call, as the
+// shape its impl gives is: a write to the base while a part is live, and two
+// `mut` grants of one base, conflict.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (mut? u256, mut? u256)
+
+    fn at(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+fn first<D: mut? Driver>(_ d: mut? D) -> D::Step {
+    d.at()
+}
+
+fn twice<D: mut? Driver>(_ d: mut? D) -> (D::Step, D::Step) {
+    (d.at(), d.at())
+}
+
+fn write_while_live() {
+    var p = Pair { a: 1, b: 2 }
+    let (mut x, y) = first(mut p)
+    p.a = 5
+    x = 1
+}
+
+// Accepted: the parts are dead before the write.
+fn write_after() {
+    var p = Pair { a: 1, b: 2 }
+    let (mut x, y) = first(mut p)
+    x = 1
+    p.a = 5
+}

@@ -31,7 +31,7 @@ fn f() -> u256 uses (foo: Foo) {
         })
         .expect("expected function `f`");
 
-    let bindings = owner_effect_bindings(&db, BodyOwner::Func(func));
+    let bindings = owner_effect_bindings(&db, BodyOwner::Func(func, None));
     let [binding] = bindings.as_slice() else {
         panic!("expected exactly one effect binding");
     };

@@ -3,3 +3,5 @@ fn fold<A, F: FnMut(own A, u256) -> A>(_ f: mut F) {}
 impl Fn(u256) -> bool for IsEven {}
 
 fn unit<F: Fn()>(_ f: F) {}
+
+fn open<F: FnMut(u256) -> _>(_ f: own F) {}

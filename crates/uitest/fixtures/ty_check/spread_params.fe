@@ -1,0 +1,40 @@
+// A spread parameter lists a shape's parameters, as the last parameter of
+// a trait method's declaration.
+trait Call<shape A> {
+    fn call(self, ..A) -> u256
+
+    fn before(self, ..A, _ x: u256)
+}
+
+fn free<shape A>(..A) {}
+
+// A misplaced spread lists nothing, so its impls and calls report nothing
+// more.
+struct S {}
+
+impl Call<(own u256,)> for S {
+    fn call(self, _ a: own u256) -> u256 {
+        a
+    }
+
+    fn before(self, _ a: own u256, _ x: u256) {}
+}
+
+fn misplaced_calls() {
+    free<(own u256,)>(1)
+    free()
+    S {}.before(1, 2)
+}
+
+trait Defaulted<shape A> {
+    fn call(self, ..A) {}
+}
+
+trait NotShape<T> {
+    fn call(self, ..T)
+}
+
+// A closure lists its parameters itself.
+fn closure_spread() {
+    let f = |..u256| {}
+}

@@ -3,7 +3,7 @@ use core::ptr::MemArray
 // Rejected: a tuple holds no accesses, so outside an unsafe split its
 // projection-call elements would be copies.
 fn safe_tuple(_ xs: mut MemArray<u256>, _ ys: mut MemArray<u256>) {
-    let (mut x, mut y) = (xs.at_mut(0), ys.at_mut(0))
+    let (mut x, mut y) = (xs.at(0), ys.at(0))
     x = 1
     y = 2
 }

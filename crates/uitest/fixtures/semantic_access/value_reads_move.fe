@@ -1,5 +1,3 @@
-use core::functional::FnMut_v
-use core::iter::map
 use core::option::Option
 use core::ptr::MemBuffer
 
@@ -39,12 +37,22 @@ struct Bump {
     buf: MemBuffer,
 }
 
-impl FnMut_v<u256> for Bump {
+impl FnMut(u256) -> _ for Bump {
     uses E = ()
     type Out = u256
     fn call_mut(mut self, _ a: u256) -> u256 {
         self.buf[0] = 5
         0
+    }
+}
+
+struct Above {
+    buf: MemBuffer,
+}
+
+impl Fn(u256) -> bool for Above {
+    fn call(self, _ x: u256) -> bool {
+        x > 1
     }
 }
 
@@ -114,13 +122,28 @@ fn block_view_arg(_ b: mut Buf) -> u256 {
 // Rejected: a producer moves into its first loop.
 fn producer_reused() -> u256 {
     let xs: [u256; 3] = [1, 2, 3]
-    let m = map(Bump { buf: MemBuffer::alloc(1) })
+    let m = xs.map(Bump { buf: MemBuffer::alloc(1) })
     var s: u256 = 0
-    for y in xs by m {
+    for y in xs.by(m) {
         s += y
     }
-    for y in xs by m {
+    for y in xs.by(m) {
         s += y
+    }
+    s
+}
+
+// Rejected: a driver that is not `Copy` moves into its first loop, as a
+// producer does.
+fn driver_reused() -> u256 {
+    let xs: [u256; 3] = [1, 2, 3]
+    let d = xs.filter(Above { buf: MemBuffer::alloc(1) })
+    var s: u256 = 0
+    for x in xs.by(d) {
+        s += x
+    }
+    for x in xs.by(d) {
+        s += x
     }
     s
 }

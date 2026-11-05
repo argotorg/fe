@@ -1,0 +1,31 @@
+// A trait's argument, like a type's, may be a path to a constant; a
+// binding names a type.
+trait Gate<const W: u256> {}
+
+trait Conv<X> {}
+
+trait Get {
+    type Out
+}
+
+struct W<const L: u256> {}
+
+const N: u256 = 3
+
+// Accepted.
+fn bare<T: Gate<N>>() {}
+
+fn braced<T: Gate<{ N }>>() {}
+
+fn nested<T: Conv<W<N>>>() {}
+
+// Rejected: `Conv` takes a type, whether the constant is bare or braced.
+fn bare_for_type<T: Conv<N>>() {}
+
+fn braced_for_type<T: Conv<{ N }>>() {}
+
+// Rejected: a binding names a type.
+fn binding<T: Get<Out = N>>() {}
+
+// Rejected: `Gate` takes a constant.
+fn type_for_const<T: Gate<u8>>() {}

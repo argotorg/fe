@@ -12,7 +12,7 @@ fn fail(_ code: u256) -> u256 {
 
 fn write_at(_ index: u256) -> u8 {
     var buffer: MemArray<u8> = MemArray::new_zeroed(3)
-    buffer[index as usize] = 65
+    buffer[index.downcast_unchecked()] = 65
     buffer[0]
 }
 

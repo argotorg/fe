@@ -115,7 +115,7 @@ pub(crate) fn execute_source_int_unary(
     let value = match op {
         UnOp::Plus => value,
         UnOp::Minus => -value,
-        UnOp::Not | UnOp::BitNot | UnOp::Mut | UnOp::Ref | UnOp::Deref => {
+        UnOp::Not | UnOp::BitNot | UnOp::Mut | UnOp::MaybeMut | UnOp::Ref | UnOp::Deref => {
             return Err(PrimitiveFault::OutsideSupportedSubset);
         }
     };

@@ -1,0 +1,49 @@
+// A type written as an argument its alias drops is in no expansion its
+// position checks, so it must satisfy its bounds where it is written, in
+// every position a type can be written.
+trait Gate {}
+
+trait Has<T> {}
+
+struct Open {}
+
+impl Gate for Open {}
+
+struct Guarded<T: Gate> {}
+
+struct Wrap<T> {}
+
+type Drop<T> = u8
+
+type Keep<T> = Wrap<T>
+
+type Pick<A, B> = A
+
+fn effect_key() uses (p: Drop<Guarded<bool>>) {}
+
+fn param(x: Drop<Guarded<bool>>) {}
+
+struct Field { x: Drop<Guarded<bool>> }
+
+fn bound<T: Has<Drop<Guarded<bool>>>>() {}
+
+fn annotation() {
+    let x: Drop<Guarded<bool>> = 0
+}
+
+type Declared = Drop<Guarded<bool>>
+
+// The innermost failing type is reported, and an alias's own parameter has
+// no bounds to meet one with.
+fn nested(x: Drop<Wrap<Guarded<bool>>>) {}
+
+fn twice(x: Drop<Drop<Guarded<bool>>>) {}
+
+type Generic<T> = Drop<Guarded<T>>
+
+// An argument the alias keeps is checked through its expansion, once.
+fn kept(x: Keep<Guarded<bool>>) {}
+
+fn picked(x: Pick<Guarded<bool>, Guarded<bool>>) {}
+
+fn holds(x: Drop<Guarded<Open>>) {}

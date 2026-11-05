@@ -4,37 +4,37 @@ expression: diags
 input_file: fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/with_keys.fe
 ---
 error[8-0093]: const requirement is not satisfied
-   ┌─ with_keys.fe:16:24
+   ┌─ with_keys.fe:18:24
    │
  3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-16 │ fn qualifier() { with (Bounded<0>::Out = Holder<MAX> {}) { wants_max() } }
+18 │ fn qualifier() { with (Bounded<0>::Out = Holder<MAX> {}) { wants_max() } }
    │                        ^^^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ with_keys.fe:17:30
+   ┌─ with_keys.fe:19:30
    │
  3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-17 │ fn argument() { with (Holder<Bounded<0>::D> = Holder<MAX> {}) { wants_max() } }
+19 │ fn argument() { with (Holder<Bounded<0>::D> = Holder<MAX> {}) { wants_max() } }
    │                              ^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ with_keys.fe:18:30
+   ┌─ with_keys.fe:20:30
    │
  3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-18 │ fn braced() { with (Holder<{ Bounded<0>::D }> = Holder<MAX> {}) { wants_max() } }
+20 │ fn braced() { with (Holder<{ Bounded<0>::D }> = Holder<MAX> {}) { wants_max() } }
    │                              ^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ with_keys.fe:19:28
+   ┌─ with_keys.fe:21:28
    │
  8 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
    │                                                    ----- required by this predicate
    ·
-19 │ fn call() { with (Holder<{ positive<0>() }> = Holder<1> {}) { wants_one() } }
+21 │ fn call() { with (Holder<{ positive<0>() }> = Holder<1> {}) { wants_one() } }
    │                            ^^^^^^^^^^^^^ condition evaluated to `false`

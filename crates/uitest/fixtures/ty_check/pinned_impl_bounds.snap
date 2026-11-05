@@ -40,19 +40,37 @@ error[3-0061]: `Gated<P>` is state-only
    = `Gated<P>` is pinned to a state space for some of its parameters
    = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
 
-error[3-0061]: `Marked` is state-only
-   ┌─ pinned_impl_bounds.fe:73:9
+error[3-0061]: `Nested<Gated<Yes>, Transient>` is state-only
+   ┌─ pinned_impl_bounds.fe:67:9
    │
-73 │     let _marked = Marked { v: 1 }
+67 │     let _nested: Nested<Gated<Yes>, Transient> = Nested { base: 0 }
+   │         ^^^^^^^ a state-only type cannot be bound by value
+   │
+   = `Nested<Gated<Yes>, Transient>` is pinned to transient storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Nested<Gated<Yes>, Transient>` is state-only
+   ┌─ pinned_impl_bounds.fe:67:50
+   │
+67 │     let _nested: Nested<Gated<Yes>, Transient> = Nested { base: 0 }
+   │                                                  ^^^^^^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
+   │
+   = `Nested<Gated<Yes>, Transient>` is pinned to transient storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Marked` is state-only
+   ┌─ pinned_impl_bounds.fe:94:9
+   │
+94 │     let _marked = Marked { v: 1 }
    │         ^^^^^^^ a state-only type cannot be bound by value
    │
    = `Marked` is pinned to transient storage by its `Pinned` implementation
    = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
 
 error[3-0061]: `Marked` is state-only
-   ┌─ pinned_impl_bounds.fe:73:19
+   ┌─ pinned_impl_bounds.fe:94:19
    │
-73 │     let _marked = Marked { v: 1 }
+94 │     let _marked = Marked { v: 1 }
    │                   ^^^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
    │
    = `Marked` is pinned to transient storage by its `Pinned` implementation

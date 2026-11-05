@@ -1,0 +1,70 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/glob_visibility_order.fe
+---
+note:
+  ┌─ glob_visibility_order.fe:9:5
+  │
+9 │     pub use super::x::*
+  │     ^^^^^^^^^^^^^^^^^^^ glob_visibility_order::x::R as R | glob_visibility_order::x::S as S
+
+note:
+   ┌─ glob_visibility_order.fe:12:5
+   │
+12 │     pub use super::a::*
+   │     ^^^^^^^^^^^^^^^^^^^ glob_visibility_order::x::R as R | glob_visibility_order::x::S as S
+
+note:
+   ┌─ glob_visibility_order.fe:13:5
+   │
+13 │     use super::x::*
+   │     ^^^^^^^^^^^^^^^ glob_visibility_order::x::R as R | glob_visibility_order::x::S as S
+
+note:
+   ┌─ glob_visibility_order.fe:16:5
+   │
+16 │     use super::x::*
+   │     ^^^^^^^^^^^^^^^ glob_visibility_order::x::R as R | glob_visibility_order::x::S as S
+
+note:
+   ┌─ glob_visibility_order.fe:17:5
+   │
+17 │     pub use super::a::*
+   │     ^^^^^^^^^^^^^^^^^^^ glob_visibility_order::x::R as R | glob_visibility_order::x::S as S
+
+note:
+   ┌─ glob_visibility_order.fe:21:5
+   │
+21 │     pub use super::x::R
+   │     ^^^^^^^^^^^^^^^^^^^ glob_visibility_order::x::R
+
+note:
+   ┌─ glob_visibility_order.fe:24:5
+   │
+24 │     pub use super::x::R
+   │     ^^^^^^^^^^^^^^^^^^^ glob_visibility_order::x::R
+
+note:
+   ┌─ glob_visibility_order.fe:27:1
+   │
+27 │ use b1::S as S1
+   │ ^^^^^^^^^^^^^^^ glob_visibility_order::x::S
+
+note:
+   ┌─ glob_visibility_order.fe:28:1
+   │
+28 │ use b2::S as S2
+   │ ^^^^^^^^^^^^^^^ glob_visibility_order::x::S
+
+note:
+   ┌─ glob_visibility_order.fe:29:1
+   │
+29 │ use c1::R as R1
+   │ ^^^^^^^^^^^^^^^ glob_visibility_order::x::R
+
+note:
+   ┌─ glob_visibility_order.fe:30:1
+   │
+30 │ use c2::R as R2
+   │ ^^^^^^^^^^^^^^^ glob_visibility_order::x::R

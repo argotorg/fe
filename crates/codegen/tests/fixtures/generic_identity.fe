@@ -11,3 +11,8 @@ fn call_identity_bool() -> bool {
     let val = identity(true)
     val
 }
+
+pub fn main() {
+    let _ = call_identity_u32()
+    let _ = call_identity_bool()
+}

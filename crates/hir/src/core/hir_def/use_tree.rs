@@ -4,7 +4,6 @@ use crate::{HirDb, hir_def::Partial};
 #[salsa::interned]
 #[derive(Debug)]
 pub struct UsePathId<'db> {
-    #[return_ref]
     pub data: Vec<Partial<UsePathSegment<'db>>>,
 }
 
@@ -46,7 +45,7 @@ impl<'db> UsePathId<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum UsePathSegment<'db> {
     Ident(IdentId<'db>),
     /// `*`.
@@ -71,7 +70,7 @@ impl<'db> UsePathSegment<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum UseAlias<'db> {
     Ident(IdentId<'db>),
     Underscore,

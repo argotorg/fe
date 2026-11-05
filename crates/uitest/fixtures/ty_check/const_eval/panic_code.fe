@@ -1,0 +1,12 @@
+// `core::panic_code` stops constant evaluation with its code.
+use core::panics::PANIC_OVERFLOW
+
+const fn checked(_ word: u256) -> u256 {
+    if word > 255 {
+        core::panic_code(PANIC_OVERFLOW)
+    }
+    word
+}
+
+const SMALL: u256 = checked(7)
+const BIG: u256 = checked(256)

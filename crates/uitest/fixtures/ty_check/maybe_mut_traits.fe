@@ -1,0 +1,133 @@
+trait Slot {
+    fn slot(mut? self) -> mut? u256
+    fn other(mut? self) -> mut? u256
+}
+
+struct Cell {
+    value: u256,
+}
+
+impl Slot for Cell {
+    fn slot(mut? self) -> mut? u256 {
+        mut? self.value
+    }
+    fn other(mut? self) -> mut? u256 {
+        mut? self.value
+    }
+}
+
+/// Grants only `ref`.
+struct Fixed {
+    value: u256,
+}
+
+impl Slot for Fixed {
+    fn slot(self) -> ref u256 {
+        ref self.value
+    }
+    fn other(self) -> ref u256 {
+        ref self.value
+    }
+}
+
+/// Gives `slot` its `mut` mode, but not `other`.
+struct Half {
+    value: u256,
+}
+
+impl Slot for Half {
+    fn slot(mut? self) -> mut? u256 {
+        mut? self.value
+    }
+    fn other(self) -> ref u256 {
+        ref self.value
+    }
+}
+
+struct Wrap<S> {
+    inner: S,
+}
+
+impl<S: mut? Slot> Slot for Wrap<S> {
+    fn slot(mut? self) -> mut? u256 {
+        self.inner.slot()
+    }
+    fn other(mut? self) -> mut? u256 {
+        self.inner.other()
+    }
+}
+
+trait Plain {
+    fn get(self) -> ref u256
+}
+
+impl Plain for Cell {
+    // Not `mut?` in the trait.
+    fn get(mut? self) -> mut? u256 {
+        mut? self.value
+    }
+}
+
+fn bump<S: mut Slot>(_ slot: mut S) {
+    let value = mut slot.slot()
+    value += 1
+}
+
+// A plain bound grants `ref` only.
+fn bump_plain<S: Slot>(_ slot: mut S) {
+    let value = mut slot.slot()
+    value += 1
+}
+
+fn misuse() {
+    var fixed = Fixed { value: 1 }
+    bump(mut fixed)
+    let value = mut fixed.slot()
+    value = 2
+    var wrapped = Wrap { inner: Fixed { value: 1 } }
+    bump(mut wrapped)
+}
+
+/// Holds slots of a type that grants `mut`.
+trait Holder {
+    type Item: mut Slot
+}
+
+struct FixedHolder {}
+
+impl Holder for FixedHolder {
+    type Item = Fixed
+}
+
+/// A slot that grants `mut`.
+trait Writable where Self: mut Slot {}
+
+impl Writable for Fixed {}
+
+// A trait or a struct has no mode for a `mut?` bound to be at.
+trait MaybeHolder {
+    type Item: mut? Slot
+}
+
+trait MaybeWritable where Self: mut? Slot {}
+
+trait MaybeSlotted<S: mut? Slot> {}
+
+struct MaybeWrap<S: mut? Slot> {
+    inner: S,
+}
+
+struct Narrow {
+    narrow: u8,
+    wide: u256,
+}
+
+// A `mut?` method differing from the trait's at both modes is reported once.
+impl Slot for Narrow {
+    fn slot(mut? self) -> mut? u8 {
+        mut? self.narrow
+    }
+    fn other(mut? self) -> mut? u256 {
+        mut? self.wide
+    }
+}

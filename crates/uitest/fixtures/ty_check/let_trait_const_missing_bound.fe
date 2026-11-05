@@ -9,5 +9,5 @@ trait HasN {
 struct Slot<const N: u32> {}
 
 fn bad_len<T>() {
-    let _: Slot<{ <T as HasN>::N }> = todo()
+    let _: Slot<{ <T as HasN>::N }> = unsafe { todo() }
 }

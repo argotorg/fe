@@ -9,7 +9,9 @@ trait Sel<const N: usize> { type Out }
 #[arithmetic(unchecked)]
 const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
 const fn positive<const N: usize>() -> usize where N > 0 { 1 }
-const MAX: usize = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+#[arithmetic(unchecked)]
+const fn wrapped_max() -> usize { 0 - 1 }
+const MAX: usize = wrapped_max()
 impl Mk for Holder<MAX> { type Out = Plain }
 impl<const N: usize> Sel<N> for Plain { type Out = Plain }
 impl<const N: usize> Bounded<N> { const D: usize = dec<N>() }

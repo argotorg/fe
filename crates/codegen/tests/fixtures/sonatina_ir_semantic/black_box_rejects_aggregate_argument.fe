@@ -1,0 +1,8 @@
+use core::hint::black_box
+
+struct Pair { left: u256, right: u256 }
+
+pub fn main() -> u256 {
+    let pair = black_box(Pair { left: 1, right: 2 })
+    pair.left + pair.right
+}

@@ -3,6 +3,12 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/recv_expected_msg_type.fe
 ---
+error[8-0012]: undefined variable
+   ┌─ recv_expected_msg_type.fe:18:13
+   │
+18 │             value
+   │             ^^^^^ undefined variable `value`
+
 error[8-0041]: recv block expects a msg module
    ┌─ recv_expected_msg_type.fe:16:10
    │

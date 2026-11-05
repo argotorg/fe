@@ -118,7 +118,7 @@ Root@0..90
               Ident@78..79 "E"
         WhiteSpace@79..80 " "
         Error@80..81
-          At@80..81 "@"
+          InvalidToken@80..81 "@"
         WhiteSpace@81..82 " "
         ForKw@82..85 "for"
         WhiteSpace@85..86 " "

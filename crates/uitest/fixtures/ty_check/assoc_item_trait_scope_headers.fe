@@ -1,0 +1,44 @@
+// `u8::N` in a super-trait or impl header selects `Local`, the trait in
+// scope, over the unimported `other::Hidden`, while that header is lowered.
+// Both bounds below then require `Parent<2>` and `Target<2>`, which `S`
+// lacks.
+
+mod other {
+    pub trait Hidden {
+        const N: usize
+    }
+
+    impl Hidden for u8 {
+        const N: usize = 1
+    }
+}
+
+pub trait Local {
+    const N: usize
+}
+
+impl Local for u8 {
+    const N: usize = 2
+}
+
+pub struct S {}
+
+pub trait Parent<const K: usize> {}
+
+pub trait Top: Parent<{ u8::N }> {}
+
+impl Parent<1> for S {}
+
+impl Top for S {}
+
+pub trait Target<const K: usize> {}
+
+pub struct W {}
+
+impl Target<{ u8::N }> for W {}
+
+fn need<T: Target<1>>() {}
+
+fn use_it() {
+    need<W>()
+}

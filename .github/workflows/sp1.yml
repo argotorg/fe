@@ -1,0 +1,114 @@
+name: SP1
+
+# Main CI's all-feature jobs already build, lint, and test the SP1 compiler path
+# on pull requests. This executes the guests after each push to master. Dispatch
+# it manually with `prove` to also generate and verify a CPU core proof, e.g.
+# when changing the SP1 SDK, toolchain, or Sonatina pin.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      prove:
+        description: Also generate and verify a CPU core proof
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sp1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      FE_SP1_BINARY: ${{ github.workspace }}/target/release/fe
+    steps:
+      # The runner context is only available to steps, not job-level env.
+      - name: Locate the Succinct toolchain directory
+        run: echo "SONATINA_SP1_TOOLCHAIN=$RUNNER_TEMP/sonatina-sp1-toolchain" >> "$GITHUB_ENV"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: Generate tree-sitter parser
+        working-directory: crates/tree-sitter-fe
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild tree-sitter-cli
+          npx tree-sitter generate --abi=14
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+          workspaces: |
+            . -> target
+            tests/sp1 -> target
+      - name: Build Fe with SP1 support
+        run: cargo build --locked --release -p fe --features sp1
+      - name: Check out the pinned Sonatina toolchain installer
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: fe-lang/sonatina
+          persist-credentials: false
+          ref: 6bd0ce661ea327c149429b00fee3c8608616040f
+          path: target/sonatina-sp1-tools
+          sparse-checkout: crates/sp1
+      - name: Install checksum-pinned Succinct toolchain
+        run: bash target/sonatina-sp1-tools/crates/sp1/install-toolchain.sh "$SONATINA_SP1_TOOLCHAIN"
+      # The SDK's prover types are generated from protobuf definitions.
+      # arduino/setup-protoc lists every protobuf release through the GitHub API
+      # on each run, and fails when that listing comes back short.
+      - name: Install checksum-pinned protoc
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/protoc.zip" https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-x86_64.zip
+          echo "0502f286ac9ed860b629a7965a14527b1f2dd131e4283fa23c2d7f184672aa9a  $RUNNER_TEMP/protoc.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/protoc.zip" -d "$RUNNER_TEMP/protoc"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@badb8c3638e0b773c6c17a6025c2306a8f1c4303 # nextest
+        with:
+          tool: nextest
+      - name: Check SDK harness formatting
+        run: cargo fmt --manifest-path tests/sp1/Cargo.toml --all -- --check
+      - name: Lint SDK harness
+        run: cargo clippy --locked --release --manifest-path tests/sp1/Cargo.toml --all-targets -- -D warnings
+      - name: Execute Fe guests
+        run: cargo nextest r --locked --release --no-fail-fast --manifest-path tests/sp1/Cargo.toml
+      - name: Prove and verify a Fe guest
+        if: inputs.prove
+        run: cargo nextest r --locked --release --no-fail-fast --manifest-path tests/sp1/Cargo.toml --run-ignored only
+
+  prune-caches:
+    # See the job of the same name in main.yml.
+    needs: execute
+    if: ${{ !cancelled() && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Delete superseded Rust caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: .github/scripts/prune-rust-caches.sh

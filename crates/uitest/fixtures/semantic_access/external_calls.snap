@@ -1,6 +1,6 @@
 ---
 source: crates/uitest/tests/semantic_access.rs
-assertion_line: 25
+assertion_line: 32
 expression: diags
 input_file: fixtures/semantic_access/external_calls.fe
 ---
@@ -12,7 +12,7 @@ error[16-0001]: access conflict in `fn CallAcrossMut::__init__`
 36 │           var output = MemBuffer::empty()
 37 │           let outcome = call.raw_call(
    │ ╭───────────────────────^
-38 │ │             addr: Address { inner: 1 }, gas: 100000, value: 0,
+38 │ │             addr: Address::new(1), gas: 100000, value: Wei::zero(),
 39 │ │             args: MemSpan::empty(), ret: mut output,
 40 │ │         )
    │ ╰─────────^ this call may write storage while a `mut` access of it is open
@@ -49,7 +49,7 @@ error[16-0001]: access conflict in `fn StaticAcrossMut::__init__`
 93 │           var output = MemBuffer::empty()
 94 │           let outcome = call.raw_staticcall(
    │ ╭───────────────────────^
-95 │ │             addr: Address { inner: 1 }, gas: 100000,
+95 │ │             addr: Address::new(1), gas: 100000,
 96 │ │             args: MemSpan::empty(), ret: mut output,
 97 │ │         )
    │ ╰─────────^ this call may read storage while a `mut` access of it is open

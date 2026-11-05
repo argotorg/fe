@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::ast::AstNode;
 
-use super::{AstChildren, GenericArgsOwner, ast_node};
+use super::{AstChildren, GenericArgsOwner, ast_node, support};
 use crate::{SyntaxKind as SK, syntax_node::SyntaxToken};
 
 ast_node! {
@@ -29,7 +29,11 @@ ast_node! {
 impl GenericArgsOwner for PathSegment {}
 impl PathSegment {
     pub fn kind(&self) -> Option<PathSegmentKind> {
-        match self.syntax().first_child_or_token() {
+        match self
+            .syntax()
+            .children_with_tokens()
+            .find(|child| !child.kind().is_trivia() && child.kind() != SK::Newline)
+        {
             Some(node) => match node.kind() {
                 SK::IngotKw => Some(PathSegmentKind::Ingot(node.into_token().unwrap())),
                 SK::SuperKw => Some(PathSegmentKind::Super(node.into_token().unwrap())),

@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/cast.fe
 ---
@@ -169,38 +169,44 @@ note:
 note:
    ┌─ cast.fe:18:9
    │
-18 │     let a_word: u256 = (a) as u256
+18 │     let a_word: u256 = a.word()
    │         ^^^^^^ u256
 
 note:
    ┌─ cast.fe:18:24
    │
-18 │     let a_word: u256 = (a) as u256
-   │                        ^^^^^^^^^^^ u256
+18 │     let a_word: u256 = a.word()
+   │                        ^ Address
 
 note:
-   ┌─ cast.fe:18:25
+   ┌─ cast.fe:18:24
    │
-18 │     let a_word: u256 = (a) as u256
-   │                         ^ Address
+18 │     let a_word: u256 = a.word()
+   │                        ^^^^^^^^ u256
 
 note:
    ┌─ cast.fe:19:9
    │
-19 │     let a2: Address = a_word as Address
+19 │     let a2: Address = Address::new(a_word)
    │         ^^ Address
 
 note:
    ┌─ cast.fe:19:23
    │
-19 │     let a2: Address = a_word as Address
-   │                       ^^^^^^ u256
+19 │     let a2: Address = Address::new(a_word)
+   │                       ^^^^^^^^^^^^ fn new
 
 note:
    ┌─ cast.fe:19:23
    │
-19 │     let a2: Address = a_word as Address
-   │                       ^^^^^^^^^^^^^^^^^ Address
+19 │     let a2: Address = Address::new(a_word)
+   │                       ^^^^^^^^^^^^^^^^^^^^ Address
+
+note:
+   ┌─ cast.fe:19:36
+   │
+19 │     let a2: Address = Address::new(a_word)
+   │                                    ^^^^^^ u256
 
 note:
    ┌─ cast.fe:21:5

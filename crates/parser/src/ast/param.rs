@@ -1,6 +1,6 @@
-use rowan::ast::{AstNode, support};
+use rowan::ast::AstNode;
 
-use super::ast_node;
+use super::{ast_node, support};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken, ast::Type};
 
 ast_node! {
@@ -16,6 +16,7 @@ ast_node! {
     /// `self`
     /// `a: u256`
     /// `_ a: u256`
+    /// `_ (a, b): (u256, u256)`
     pub struct FuncParam,
     SK::FnParam,
 }
@@ -35,6 +36,12 @@ impl FuncParam {
         support::token(self.syntax(), SK::MutKw)
     }
 
+    /// Returns the `mut?` keyword for the shorthand receiver at the item's
+    /// mode (`mut? self`).
+    pub fn maybe_mut_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::MaybeMutKw)
+    }
+
     /// Returns the `var` keyword of a mutable owned parameter.
     pub fn var_token(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::VarKw)
@@ -51,15 +58,30 @@ impl FuncParam {
             }
         });
 
-        matches!(
-            (param_names.next(), param_names.next()),
-            (Some(FuncParamName::Underscore(_)), Some(_))
-        )
+        match (param_names.next(), param_names.next()) {
+            (Some(FuncParamName::Underscore(_)), Some(_)) => true,
+            (Some(FuncParamName::Underscore(_)), None) => self.pat().is_some(),
+            _ => false,
+        }
+    }
+
+    /// Returns the `..` of a spread parameter, `..A`.
+    pub fn spread_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Dot2)
+    }
+
+    /// Returns the pattern a parameter destructures with instead of a name.
+    /// `(a, b)` in `_ (a, b): (u256, u256)`.
+    pub fn pat(&self) -> Option<super::Pat> {
+        support::child(self.syntax())
     }
 
     /// Returns the name of the parameter.
     /// `a` in `_ a: u256`.
     pub fn name(&self) -> Option<FuncParamName> {
+        if self.pat().is_some() {
+            return None;
+        }
         let mut param_names = self.syntax().children_with_tokens().filter_map(|child| {
             if let rowan::NodeOrToken::Token(token) = child {
                 FuncParamName::from_token(token)
@@ -101,7 +123,7 @@ ast_node! {
     /// `T: Trait`
     /// `const N: usize`
     pub struct GenericParam,
-    SK::TypeGenericParam | SK::ConstGenericParam,
+    SK::TypeGenericParam | SK::ConstGenericParam | SK::ShapeGenericParam,
 }
 impl GenericParam {
     /// Returns the specific kind of the generic parameter.
@@ -113,6 +135,9 @@ impl GenericParam {
             SK::ConstGenericParam => {
                 GenericParamKind::Const(AstNode::cast(self.syntax().clone()).unwrap())
             }
+            SK::ShapeGenericParam => {
+                GenericParamKind::Shape(AstNode::cast(self.syntax().clone()).unwrap())
+            }
             _ => unreachable!(),
         }
     }
@@ -121,10 +146,12 @@ impl GenericParam {
 /// A generic parameter kind.
 /// `Type` is either `T` or `T: Trait`.
 /// `Const` is `const N: usize`.
+/// `Shape` is `shape A`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum GenericParamKind {
     Type(TypeGenericParam),
     Const(ConstGenericParam),
+    Shape(ShapeGenericParam),
 }
 
 impl GenericParamKind {
@@ -132,6 +159,7 @@ impl GenericParamKind {
         match self {
             GenericParamKind::Type(param) => param.syntax(),
             GenericParamKind::Const(param) => param.syntax(),
+            GenericParamKind::Shape(param) => param.syntax(),
         }
     }
 }
@@ -184,6 +212,22 @@ impl TypeGenericParam {
 }
 
 ast_node! {
+    /// A shape generic parameter, `shape A`: a callable's parameter list.
+    pub struct ShapeGenericParam,
+    SK::ShapeGenericParam,
+}
+impl ShapeGenericParam {
+    /// The parameter's name, after the `shape` keyword.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| token.kind() == SK::Ident)
+            .nth(1)
+    }
+}
+
+ast_node! {
     /// A const generic parameter.
     /// `const N: usize`.
     pub struct ConstGenericParam,
@@ -226,7 +270,7 @@ ast_node! {
     /// `lit`
     /// `Output = u64`
     pub struct GenericArg,
-    SK::TypeGenericArg | SK::ConstGenericArg | SK::AssocTypeGenericArg,
+    SK::TypeGenericArg | SK::ConstGenericArg | SK::AssocTypeGenericArg | SK::ModeGenericArg,
 }
 impl GenericArg {
     pub fn kind(&self) -> GenericArgKind {
@@ -239,6 +283,9 @@ impl GenericArg {
             }
             SK::AssocTypeGenericArg => {
                 GenericArgKind::AssocType(AstNode::cast(self.syntax().clone()).unwrap())
+            }
+            SK::ModeGenericArg => {
+                GenericArgKind::Mode(AstNode::cast(self.syntax().clone()).unwrap())
             }
             _ => unreachable!(),
         }
@@ -272,6 +319,21 @@ ast_node! {
 impl AssocTypeGenericArg {
     pub fn name(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::Ident)
+    }
+
+    /// The `<ref>` or `<mut>` an associated shape is bound at:
+    /// `Step<ref> = ref u256`.
+    pub fn generic_args(&self) -> Option<GenericArgList> {
+        support::child(self.syntax())
+    }
+
+    /// The mode the generic arguments name, if they are one mode.
+    pub fn mode(&self) -> Option<ModeGenericArg> {
+        let mut args = self.generic_args()?.into_iter();
+        match (args.next()?.kind(), args.next()) {
+            (GenericArgKind::Mode(mode), None) => Some(mode),
+            _ => None,
+        }
     }
 
     pub fn ty(&self) -> Option<super::Type> {
@@ -378,7 +440,8 @@ ast_node! {
 
 ast_node! {
     /// A single `uses` parameter.
-    /// Supports: `Type`, `mut Type`, `name: Type`, `name: mut Type`.
+    /// Supports: `Type`, `mut Type`, `mut? Type`, `name: Type`,
+    /// `name: mut Type`, `name: mut? Type`.
     pub struct UsesParam,
     SK::UsesParam,
 }
@@ -386,6 +449,12 @@ impl UsesParam {
     /// Returns the `mut` keyword if present.
     pub fn mut_token(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::MutKw)
+    }
+
+    /// Returns the `mut?` keyword if present: the effect is required at the
+    /// item's mode.
+    pub fn maybe_mut_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::MaybeMutKw)
     }
 
     /// Returns the name if present (identifier or underscore).
@@ -444,6 +513,20 @@ pub enum GenericArgKind {
     Type(TypeGenericArg),
     Const(ConstGenericArg),
     AssocType(AssocTypeGenericArg),
+    Mode(ModeGenericArg),
+}
+
+ast_node! {
+    /// `ref` or `mut`: the mode an associated shape is named at,
+    /// `D::Step<ref>`.
+    pub struct ModeGenericArg,
+    SK::ModeGenericArg,
+}
+impl ModeGenericArg {
+    /// Whether the mode is `mut`, rather than `ref`.
+    pub fn is_mut(&self) -> bool {
+        support::token(self.syntax(), SK::MutKw).is_some()
+    }
 }
 
 ast_node! {
@@ -466,6 +549,13 @@ impl TypeBound {
     /// A path of the type bound.
     pub fn trait_bound(&self) -> Option<TraitRef> {
         support::child(self.syntax())
+    }
+
+    /// The `mut` or `mut?` before a trait bound: the modes it grants the
+    /// trait's `mut?` methods at.
+    pub fn mode_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::MutKw)
+            .or_else(|| support::token(self.syntax(), SK::MaybeMutKw))
     }
 
     pub fn kind_bound(&self) -> Option<KindBound> {
@@ -495,9 +585,9 @@ impl TraitRef {
 }
 
 ast_node! {
-    /// `Fn(own A, B) -> R`: the callable trait of the shape whose receiver
-    /// mode the name gives (`Fn` views, `FnMut` mutates) and whose parameter
-    /// modes the list gives.
+    /// `Fn(own A, B) -> R`: the callable trait, `Fn` or `FnMut`, of the
+    /// parameter list `(own A, B)`, with the result `R` (or `-> _`, left
+    /// open).
     pub struct FnShape,
     SK::FnShape
 }
@@ -518,6 +608,11 @@ impl FnShape {
             .children()
             .filter_map(super::Type::cast)
             .nth(1)
+    }
+
+    /// Whether the result is `-> _`, left open.
+    pub fn infers_ret(&self) -> bool {
+        support::token(self.syntax(), SK::Underscore).is_some()
     }
 }
 
@@ -949,11 +1044,11 @@ mod tests {
         assert!(!errors.is_empty(), "expected parser errors");
         assert!(errors.iter().any(|err| {
             err.msg()
-                .contains("typed `uses` parameters only support `mut`; remove `ref`")
+                .contains("typed `uses` parameters only support `mut` and `mut?`; remove `ref`")
         }));
         assert!(errors.iter().any(|err| {
             err.msg()
-                .contains("typed `uses` parameters only support `mut`; remove `own`")
+                .contains("typed `uses` parameters only support `mut` and `mut?`; remove `own`")
         }));
     }
 }

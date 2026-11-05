@@ -85,9 +85,9 @@ pub contract C uses (storage: mut RawStorage) {
 
 #[test]
 fn explicit_slots_place_fields() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
     let values: (u256, u256, u256, u256, u256, bool) =
-        evm.call(addr: c, gas: 300000, value: 0, message: M::Set {})
+        evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Set {})
     assert!(values.0 == 10)
     assert!(values.1 == 11)
     // `pair` skips slot 1, which `placed` takes, so its right half is slot 3.
@@ -95,9 +95,9 @@ fn explicit_slots_place_fields() uses (evm: mut Evm) {
     assert!(values.3 == 14)
     assert!(values.4 == 15)
     assert!(values.5)
-    let main: u256 = evm.call(addr: c, gas: 300000, value: 0, message: M::Namespaced {})
+    let main: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Namespaced {})
     assert!(main == 17)
-    let cell: (u256, u256, u256) = evm.call(addr: c, gas: 300000, value: 0, message: M::Cell {})
+    let cell: (u256, u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Cell {})
     assert!(cell.0 == 21)
     assert!(cell.1 == 22)
     assert!(cell.2 == 22)

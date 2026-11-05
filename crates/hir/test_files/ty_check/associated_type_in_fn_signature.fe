@@ -30,12 +30,12 @@ impl Abi for SomeAbi {
 
 impl MyTrait for MyStruct {
     fn get_output<T: Abi>(self) -> T::Encoder::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 
 fn use_encoder<T: Encoder>(enc: T) -> T::Output {
-    todo()
+    unsafe { todo() }
 }
 
 fn example(ms: MyStruct) {

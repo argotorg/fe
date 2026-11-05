@@ -21,3 +21,4 @@ pub(crate) mod type_info;
 
 pub use body::lower_to_rmir;
 pub use call::collect_runtime_calls;
+pub use interface::runtime_param_accesses;

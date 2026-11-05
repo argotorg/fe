@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/import_self_dependent.fe
+---
+error[2-0002]: `m` is not found
+   ┌─ import_self_dependent.fe:10:8
+   │
+10 │ use t::m
+   │        ^ `m` is not found
+
+error[2-0004]: `n` is ambiguous
+   ┌─ import_self_dependent.fe:24:9
+   │
+18 │     pub mod n {
+   │             - candidate 1
+19 │         pub mod n {}
+   │                 - candidate 2
+   ·
+24 │     use n::*
+   │         ^ `n` is ambiguous

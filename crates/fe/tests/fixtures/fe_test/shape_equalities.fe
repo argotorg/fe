@@ -1,0 +1,68 @@
+// A bound names an associated shape at a mode, `Step<ref> = ref u256`, so
+// generic code destructures and copies what a call returns at that mode.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct One {
+    x: u256,
+}
+
+impl Driver for One {
+    shape Step = mut? u256
+
+    fn at(mut? self) -> mut? u256 {
+        mut? self.x
+    }
+}
+
+struct Pair {
+    i: usize,
+    x: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own usize, mut? u256)
+
+    fn at(mut? self) -> (own usize, mut? u256) {
+        (self.i, mut? self.x)
+    }
+}
+
+fn read<D: Driver<Step<ref> = ref u256>>(_ d: D) -> u256 {
+    let x = d.at()
+    x
+}
+
+// The call is typed at `ref` before the assignment asks for `mut`, so both
+// modes are named.
+fn bump<D: mut Driver<Step<ref> = ref u256, Step<mut> = mut u256>>(_ d: mut D) {
+    d.at() += 1
+}
+
+fn weighted<D: Driver<Step<ref> = (own usize, ref u256)>>(_ d: D) -> u256 {
+    let (i, x) = d.at()
+    i as u256 * x
+}
+
+// Bound at `mut` too, a step is destructured there.
+fn bump_part<D: mut Driver<Step<ref> = (own usize, ref u256), Step<mut> = (own usize, mut u256)>>(
+    _ d: mut D,
+) {
+    let (_, mut x) = d.at()
+    x += 1
+}
+
+#[test]
+fn equalities_at_a_mode() {
+    var one = One { x: 4 }
+    assert(read(one) == 4)
+    bump(mut one)
+    assert(one.x == 5)
+    var pair = Pair { i: 3, x: 7 }
+    assert(weighted(pair) == 21)
+    bump_part(mut pair)
+    assert(pair.x == 8)
+}

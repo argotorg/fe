@@ -1,0 +1,64 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/import_shadowed_glob_loop.fe
+---
+error[2-0002]: `X` is not found
+   ┌─ import_shadowed_glob_loop.fe:13:16
+   │
+13 │     pub use w::X
+   │                ^ `X` is not found
+
+error[2-0002]: `X` is not found
+   ┌─ import_shadowed_glob_loop.fe:27:12
+   │
+27 │ fn f(x: a::X, y: b::X) {}
+   │            ^ `X` is not found
+
+error[2-0002]: `X` is not found
+   ┌─ import_shadowed_glob_loop.fe:27:21
+   │
+27 │ fn f(x: a::X, y: b::X) {}
+   │                     ^ `X` is not found
+
+error[2-0002]: `B` is not found
+   ┌─ import_shadowed_glob_loop.fe:51:9
+   │
+51 │     use B as A
+   │         ^ `B` is not found
+
+error[2-0002]: `A` is not found
+   ┌─ import_shadowed_glob_loop.fe:52:9
+   │
+52 │     use A as B
+   │         ^ `A` is not found
+
+error[2-0002]: `A` is not found
+   ┌─ import_shadowed_glob_loop.fe:53:12
+   │
+53 │     let x: A::S = 1
+   │            ^ `A` is not found
+
+error[2-0002]: `Y` is not found
+   ┌─ import_shadowed_glob_loop.fe:84:12
+   │
+84 │ fn h(x: c::Y, y: d::Y) {}
+   │            ^ `Y` is not found
+
+error[2-0002]: `Y` is not found
+   ┌─ import_shadowed_glob_loop.fe:84:21
+   │
+84 │ fn h(x: c::Y, y: d::Y) {}
+   │                     ^ `Y` is not found
+
+error[2-0004]: `Y` is ambiguous
+   ┌─ import_shadowed_glob_loop.fe:66:23
+   │
+66 │     pub use super::p::Y
+   │                       ^ `Y` is ambiguous
+   ·
+73 │     pub struct Y {}
+   │                - candidate 1
+   ·
+82 │     pub struct Y {}
+   │                - candidate 2

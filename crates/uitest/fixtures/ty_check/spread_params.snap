@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/spread_params.fe
+---
+error[3-0080]: a spread parameter is a trait method declaration's last
+  ┌─ spread_params.fe:6:21
+  │
+6 │     fn before(self, ..A, _ x: u256)
+  │                     ^^^ `..A` spreads a shape's parameters in a bodiless trait method
+
+error[3-0080]: a spread parameter is a trait method declaration's last
+  ┌─ spread_params.fe:9:18
+  │
+9 │ fn free<shape A>(..A) {}
+  │                  ^^^ `..A` spreads a shape's parameters in a bodiless trait method
+
+error[3-0080]: a spread parameter is a trait method declaration's last
+   ┌─ spread_params.fe:30:19
+   │
+30 │     fn call(self, ..A) {}
+   │                   ^^^ `..A` spreads a shape's parameters in a bodiless trait method
+
+error[3-0080]: a spread parameter is a trait method declaration's last
+   ┌─ spread_params.fe:39:14
+   │
+39 │     let f = |..u256| {}
+   │              ^^^^^^ `..A` spreads a shape's parameters in a bodiless trait method
+
+error[3-0081]: `T` is not a shape
+   ┌─ spread_params.fe:34:21
+   │
+34 │     fn call(self, ..T)
+   │                     ^ a spread takes the parameters of a shape parameter, `..A` with `shape A`

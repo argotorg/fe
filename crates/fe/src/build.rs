@@ -1,5 +1,5 @@
 #[cfg(feature = "cranelift")]
-use crate::native::link_executable;
+use crate::native::{archive_objects, link_executable};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
@@ -7,6 +7,8 @@ use std::{
 
 use camino::{Utf8Path, Utf8PathBuf};
 use codegen::{OptLevel, SonatinaContractBytecode};
+#[cfg(feature = "sp1")]
+use common::cache::cache_dir;
 use common::{
     InputDb,
     config::{
@@ -18,11 +20,13 @@ use common::{
 };
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
-use hir::hir_def::{HirIngot, ManualContractRootAttr, TopLevelMod};
+use hir::hir_def::{HirIngot, TopLevelMod};
 use hir::lower::map_file_to_mod;
 use mir::build_runtime_package;
 use salsa::Setter;
 use smol_str::SmolStr;
+#[cfg(feature = "sp1")]
+use sonatina_sp1::{Sp1Runtime, Sp1Toolchain};
 use tiny_keccak::{Hasher, Keccak};
 use url::Url;
 
@@ -52,6 +56,8 @@ struct BuildReportContext {
 #[derive(Debug, Default)]
 struct IngotBuildAnalysis {
     contract_names: Vec<String>,
+    /// The names written in the source, which `--contract` also accepts.
+    source_names: Vec<String>,
     abi_artifact_names: Vec<String>,
 }
 
@@ -62,7 +68,11 @@ struct EmitSelection {
     ir: bool,
     abi: bool,
     metadata: bool,
+    sizes: bool,
     executable: bool,
+    object: bool,
+    staticlib: bool,
+    elf: bool,
 }
 
 impl EmitSelection {
@@ -73,7 +83,11 @@ impl EmitSelection {
             ir: false,
             abi: false,
             metadata: false,
+            sizes: false,
             executable: false,
+            object: false,
+            staticlib: false,
+            elf: false,
         };
         for emit in requested {
             match emit {
@@ -82,14 +96,37 @@ impl EmitSelection {
                 BuildEmit::Ir => selection.ir = true,
                 BuildEmit::Abi => selection.abi = true,
                 BuildEmit::Metadata => selection.metadata = true,
+                BuildEmit::Sizes => selection.sizes = true,
                 BuildEmit::Executable => selection.executable = true,
+                BuildEmit::Object => selection.object = true,
+                BuildEmit::Staticlib => selection.staticlib = true,
+                BuildEmit::Elf => selection.elf = true,
             }
         }
         selection
     }
 
     fn writes_any_bytecode(self) -> bool {
-        self.bytecode || self.runtime_bytecode
+        self.bytecode || self.runtime_bytecode || self.sizes
+    }
+
+    /// Native library output, of the `#[export]` functions only.
+    fn library(self) -> bool {
+        self.object || self.staticlib
+    }
+}
+
+/// Host code linked into native executables: object files and archives by
+/// path, and libraries by name, as the C compiler's `-l<name>`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NativeLink<'a> {
+    pub paths: &'a [Utf8PathBuf],
+    pub libraries: &'a [String],
+}
+
+impl NativeLink<'_> {
+    fn is_empty(self) -> bool {
+        self.paths.is_empty() && self.libraries.is_empty()
     }
 }
 
@@ -99,37 +136,80 @@ fn create_build_report_staging() -> Result<ReportStaging, String> {
 
 fn validate_build_request(
     backend: BuildBackend,
+    ingot: Option<&str>,
     contract: Option<&str>,
     emit: EmitSelection,
+    link: NativeLink<'_>,
 ) -> Result<(), String> {
+    #[cfg(not(feature = "sp1"))]
+    let _ = ingot;
     #[cfg(not(feature = "cranelift"))]
     let _ = contract;
+
+    if emit.elf && backend.name() != "sp1" {
+        return Err("`--emit elf` requires `--backend sp1`".to_string());
+    }
+    if !link.is_empty() && !(backend.is_native() && emit.executable) {
+        return Err(
+            "`--link` and `--link-lib` require `--backend native` and `--emit executable`"
+                .to_string(),
+        );
+    }
 
     match backend {
         BuildBackend::Sonatina if emit.executable => {
             Err("`--emit executable` requires `--backend native`".to_string())
         }
+        BuildBackend::Sonatina if emit.library() => {
+            Err("`--emit object` and `--emit staticlib` require `--backend native`".to_string())
+        }
         BuildBackend::Sonatina => Ok(()),
         #[cfg(feature = "cranelift")]
         BuildBackend::Native if contract.is_some() => {
-            Err("native executable output does not support `--contract`".to_string())
+            Err("native output does not support `--contract`".to_string())
         }
         #[cfg(feature = "cranelift")]
-        BuildBackend::Native if emit.writes_any_bytecode() || emit.abi || emit.metadata => {
-            Err("native backend only supports `--emit executable` and `--emit ir`".to_string())
-        }
-        #[cfg(feature = "cranelift")]
-        BuildBackend::Native if emit.executable && !native_executable_host_supported() => Err(
-            "native executable output currently requires an x86-64 Linux or AArch64 macOS host"
+        BuildBackend::Native if emit.writes_any_bytecode() || emit.abi || emit.metadata => Err(
+            "native backend only supports `--emit executable`, `--emit object`, `--emit staticlib` and `--emit ir`"
                 .to_string(),
         ),
         #[cfg(feature = "cranelift")]
+        BuildBackend::Native if emit.executable && emit.library() => Err(
+            "`--emit executable` cannot be combined with `--emit object` or `--emit staticlib`, which build a library without `main`"
+                .to_string(),
+        ),
+        #[cfg(feature = "cranelift")]
+        BuildBackend::Native
+            if (emit.executable || emit.library()) && !native_object_host_supported() =>
+        {
+            Err(
+                "native executable and library output currently require an x86-64 Linux or AArch64 macOS host"
+                    .to_string(),
+            )
+        }
+        #[cfg(feature = "cranelift")]
         BuildBackend::Native => Ok(()),
+        #[cfg(feature = "sp1")]
+        BuildBackend::Sp1 if ingot.is_some() || contract.is_some() => {
+            Err("SP1 output does not support `--ingot` or `--contract`".to_string())
+        }
+        #[cfg(feature = "sp1")]
+        BuildBackend::Sp1
+            if emit.writes_any_bytecode()
+                || emit.abi
+                || emit.metadata
+                || emit.executable
+                || emit.library() =>
+        {
+            Err("SP1 backend only supports `--emit elf` and `--emit ir`".to_string())
+        }
+        #[cfg(feature = "sp1")]
+        BuildBackend::Sp1 => Ok(()),
     }
 }
 
 #[cfg(feature = "cranelift")]
-fn native_executable_host_supported() -> bool {
+fn native_object_host_supported() -> bool {
     cfg!(any(
         all(target_arch = "x86_64", target_os = "linux"),
         all(target_arch = "aarch64", target_os = "macos")
@@ -197,6 +277,7 @@ pub fn build(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: &[BuildEmit],
+    link: NativeLink<'_>,
     out_dir: Option<&Utf8PathBuf>,
     profile: &str,
     report_out: Option<&Utf8PathBuf>,
@@ -204,7 +285,7 @@ pub fn build(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(backend, contract, emit) {
+    if let Err(err) = validate_build_request(backend, ingot, contract, emit, link) {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -215,6 +296,9 @@ pub fn build(
     db.compilation_settings()
         .set_profile(&mut db)
         .to(profile.into());
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(backend.target());
 
     let report_root = match report_out
         .map(|out| -> Result<_, String> {
@@ -313,9 +397,15 @@ pub fn build(
             backend,
             opt_level,
             emit,
+            link,
             out_dir,
             report_ctx.as_ref(),
         ),
+        #[cfg(feature = "sp1")]
+        CliTarget::Directory(_) if matches!(backend, BuildBackend::Sp1) => {
+            eprintln!("Error: sp1 executable output only supports standalone `.fe` files");
+            true
+        }
         CliTarget::Directory(dir_path) => build_directory(
             &mut db,
             &dir_path,
@@ -325,6 +415,7 @@ pub fn build(
             backend,
             opt_level,
             emit,
+            link,
             out_dir,
             report_ctx.as_ref(),
         ),
@@ -377,7 +468,13 @@ pub fn build_from_metadata(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(BuildBackend::Sonatina, contract, emit) {
+    if let Err(err) = validate_build_request(
+        BuildBackend::Sonatina,
+        None,
+        contract,
+        emit,
+        NativeLink::default(),
+    ) {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -463,11 +560,11 @@ pub fn build_from_metadata(
     let contract = contract
         .map(str::to_string)
         .or_else(|| recorded_target.as_ref().map(|(_, name)| name.clone()));
-    // The recorded source path pins which module defines the target, in case
-    // another module defines a same-named contract; it only applies while
-    // building the recorded contract. Standalone-target metadata keys its
-    // source by bare file basename, which `reconstruct_project` materializes
-    // under `src/`; mirror that so the path resolves in the rebuilt ingot.
+    // The recorded source path and the contract's path in that file identify
+    // the target; they only apply while building the recorded contract.
+    // Standalone-target metadata keys its source by bare file basename, which
+    // `reconstruct_project` materializes under `src/`; mirror that so the path
+    // resolves in the rebuilt ingot.
     let target_source = recorded_target
         .filter(|(_, name)| contract.as_deref() == Some(name))
         .map(|(path, _)| {
@@ -519,6 +616,7 @@ pub fn build_from_metadata(
         BuildBackend::Sonatina,
         opt_level,
         emit,
+        NativeLink::default(),
         Some(&out_dir),
         None,
     );
@@ -538,6 +636,7 @@ fn build_file(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -612,6 +711,7 @@ fn build_file(
         backend,
         opt_level,
         emit,
+        link,
         &out_dir,
         &out_dir,
         ir_file_stem.as_str(),
@@ -631,6 +731,7 @@ fn build_directory(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -673,7 +774,7 @@ fn build_directory(
 
     match config {
         Config::Workspace(_) => build_workspace(
-            db, &canonical, url, ingot, contract, backend, opt_level, emit, out_dir, report,
+            db, &canonical, url, ingot, contract, backend, opt_level, emit, link, out_dir, report,
         ),
         Config::Ingot(_) => {
             if ingot.is_some() {
@@ -699,6 +800,7 @@ fn build_directory(
                 backend,
                 opt_level,
                 emit,
+                link,
                 &out_dir,
                 None,
                 None,
@@ -720,6 +822,7 @@ fn build_workspace(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -757,7 +860,7 @@ fn build_workspace(
 
     #[cfg(feature = "cranelift")]
     if backend.is_native() {
-        let mut executables = Vec::new();
+        let mut built = Vec::new();
         let mut artifact_names = BTreeSet::new();
         for member in members {
             if !selected_member_paths.contains(&workspace_root.join(member.path.as_str())) {
@@ -766,28 +869,37 @@ fn build_workspace(
             if analyze_ingot_build_artifacts(db, &member.url, false).is_err() {
                 return true;
             }
-            let member_ingot = db
+            let root_mod = db
                 .workspace()
                 .containing_ingot(db, member.url.clone())
-                .expect("analyzed member must resolve");
-            if ingot.is_none()
-                && mir::native_executable_entry(db, member_ingot.root_mod(db)).is_none()
-            {
+                .expect("analyzed member must resolve")
+                .root_mod(db);
+            // A library is made of exports, and an executable starts at `main`.
+            let has_roots = if emit.library() {
+                !mir::native_exports(db, root_mod).is_empty()
+            } else {
+                root_mod.main_entry(db).is_some()
+            };
+            if ingot.is_none() && !has_roots {
                 continue;
             }
             let artifact = sanitize_name_with_default(member.name.as_str(), "main");
             if !artifact_names.insert(artifact.to_ascii_lowercase()) {
-                eprintln!("Error: Native executable names collide: {artifact}");
+                eprintln!("Error: Native artifact names collide: {artifact}");
                 return true;
             }
-            executables.push(member);
+            built.push(member);
         }
-        if executables.is_empty() {
-            eprintln!("Error: No native executable entry points found to build");
+        if built.is_empty() {
+            if emit.library() {
+                eprintln!("Error: No native `#[export]` functions found to build");
+            } else {
+                eprintln!("Error: No native executable entry points found to build");
+            }
             return true;
         }
         let mut had_errors = false;
-        for member in executables {
+        for member in built {
             let report_dir = report_scope_dir(report, &format!("member-{}", member.name));
             had_errors |= build_ingot_url(
                 db,
@@ -797,6 +909,7 @@ fn build_workspace(
                 backend,
                 opt_level,
                 emit,
+                link,
                 &out_dir,
                 None,
                 Some(member.name.as_str()),
@@ -811,6 +924,7 @@ fn build_workspace(
     let abi_collision_check_needs_filtering =
         emit.abi && !emit.writes_any_bytecode() && contract.is_none();
     let mut contract_names_by_member = Vec::with_capacity(selected_member_paths.len());
+    let mut source_names_by_member = Vec::with_capacity(selected_member_paths.len());
     let mut abi_artifact_names_by_member = Vec::with_capacity(selected_member_paths.len());
     for member in members {
         let member_path = workspace_root.join(member.path.as_str());
@@ -826,16 +940,26 @@ fn build_workspace(
             Err(()) => return true,
         };
         contract_names_by_member.push((member.clone(), analysis.contract_names));
+        source_names_by_member.push((member.clone(), analysis.source_names));
         if abi_collision_check_needs_filtering {
             abi_artifact_names_by_member.push((member, analysis.abi_artifact_names));
         }
     }
 
     if let Some(contract) = contract {
+        // A member matches when one of its contracts has `contract` as its
+        // artifact or source name. A single matching member then resolves the
+        // name among its own contracts.
         let matches: Vec<_> = contract_names_by_member
             .iter()
-            .filter(|(_, names)| names.iter().any(|name| name == contract))
-            .map(|(member, _)| member)
+            .zip(&source_names_by_member)
+            .filter(|((_, names), (_, source_names))| {
+                names
+                    .iter()
+                    .chain(source_names)
+                    .any(|name| name == contract)
+            })
+            .map(|((member, _), _)| member)
             .collect();
 
         match matches.len() {
@@ -870,6 +994,7 @@ fn build_workspace(
                     backend,
                     opt_level,
                     emit,
+                    link,
                     &out_dir,
                     workspace_member_ir_out_dir(emit, &out_dir, matches[0].name.as_str()),
                     Some(matches[0].name.as_str()),
@@ -924,6 +1049,7 @@ fn build_workspace(
             backend,
             opt_level,
             emit,
+            link,
             &out_dir,
             workspace_member_ir_out_dir(emit, &out_dir, member.name.as_str()),
             Some(member.name.as_str()),
@@ -973,6 +1099,12 @@ fn analyze_ingot_build_artifacts(
     }
 
     let contract_names = collect_workspace_contract_names(db, ingot);
+    let source_names = mir::ingot_contracts(db, ingot)
+        .iter()
+        .map(|contract| contract.source_name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
 
     let abi_artifact_names = if include_abi_artifact_names {
         collect_ingot_abi_artifact_names(db, ingot).map_err(|err| {
@@ -984,6 +1116,7 @@ fn analyze_ingot_build_artifacts(
 
     Ok(IngotBuildAnalysis {
         contract_names,
+        source_names,
         abi_artifact_names,
     })
 }
@@ -1129,6 +1262,7 @@ fn build_ingot_url(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: &Utf8Path,
     ir_out_dir: Option<Utf8PathBuf>,
     ir_file_stem: Option<&str>,
@@ -1173,14 +1307,18 @@ fn build_ingot_url(
             ingot.root_mod(db),
             opt_level,
             emit,
+            link,
             out_dir,
             &ir_file_stem,
             report_dir,
         );
     }
     #[cfg(not(feature = "cranelift"))]
-    let _ = backend;
+    let _ = (backend, link);
 
+    if report_evm_exports(db, ingot.root_mod(db)) {
+        return BuildSummary { had_errors: true };
+    }
     build_ingot(
         db,
         ingot,
@@ -1218,13 +1356,15 @@ fn build_ingot(
         }
     };
 
-    // `--from-metadata` records the contract's defining source file in
-    // `settings.compilationTarget`; scope emission to that module so a
-    // same-named contract in another module cannot make the target ambiguous.
-    // A recorded target that doesn't resolve is an error, never a fallback to
-    // ingot-wide resolution: that could silently rebuild the wrong source.
-    let target_mod = match (target_source, contract) {
-        (Some(key), Some(name)) => {
+    // `--from-metadata` records the contract as its source file and its path in
+    // that file (`settings.compilationTarget`). Neither depends on the other
+    // contracts or on how the file was built, so they find the contract in the
+    // rebuilt ingot. Scope emission to that module and build the contract's
+    // artifact. A recorded target that doesn't resolve is an error, never a
+    // fallback to ingot-wide resolution: that could silently rebuild the wrong
+    // source.
+    let (target_mod, contract) = match (target_source, contract) {
+        (Some(key), Some(path)) => {
             let mut sources = BTreeMap::new();
             collect_ingot_sources_prefixed(db, ingot, None, &mut sources);
             let Some((top_mod, _)) = sources.get(key) else {
@@ -1234,16 +1374,19 @@ fn build_ingot(
                 );
                 return BuildSummary { had_errors: true };
             };
-            if !module_defines_contract(db, *top_mod, name) {
+            let Some(declared) = mir::ingot_contracts(db, ingot)
+                .iter()
+                .find(|declared| declared.top_mod == *top_mod && declared.path_in_file == path)
+            else {
                 eprintln!(
-                    "Error: `{key}` does not define the contract `{name}` recorded in \
+                    "Error: `{key}` does not define the contract `{path}` recorded in \
                      `settings.compilationTarget`"
                 );
                 return BuildSummary { had_errors: true };
-            }
-            Some(*top_mod)
+            };
+            (Some(*top_mod), Some(declared.name.as_str()))
         }
-        _ => None,
+        _ => (None, contract),
     };
 
     if contract_names.is_empty() {
@@ -1251,11 +1394,18 @@ fn build_ingot(
         return BuildSummary { had_errors: true };
     }
 
-    let names_to_build =
-        match resolve_names_to_build(contract_names, contract, missing_contract_is_error) {
-            Ok(names) => names,
-            Err(summary) => return summary,
-        };
+    let names_to_build = match resolve_names_to_build(
+        db,
+        ingot,
+        contract_names,
+        contract,
+        missing_contract_is_error,
+    ) {
+        Ok(names) => names,
+        Err(summary) => return summary,
+    };
+    // `--contract` may give a source name; codegen selects by artifact name.
+    let contract = contract.and_then(|_| names_to_build.first().map(String::as_str));
     if let Err(err) = ensure_output_dirs(emit, out_dir, ir_out_dir) {
         eprintln!("Error: {err}");
         return BuildSummary { had_errors: true };
@@ -1286,11 +1436,19 @@ fn build_ingot(
             }
         }
         if emit.writes_any_bytecode() {
-            let bytecode = match target_mod {
-                Some(top_mod) => {
+            let bytecode = match (target_mod, emit.sizes) {
+                (Some(top_mod), false) => {
                     codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
                 }
-                None => codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract),
+                (Some(top_mod), true) => codegen::emit_module_sonatina_bytecode_with_observability(
+                    db, top_mod, opt_level, contract,
+                ),
+                (None, false) => {
+                    codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract)
+                }
+                (None, true) => codegen::emit_ingot_sonatina_bytecode_with_observability(
+                    db, ingot, opt_level, contract,
+                ),
             };
             let bytecode = match bytecode {
                 Ok(bytecode) => bytecode,
@@ -1310,14 +1468,7 @@ fn build_ingot(
     }
 
     if emit.abi {
-        // For ingot builds, generate ABI from each top-level module
-        use hir::hir_def::HirIngot;
-        for top_mod in ingot.all_modules(db) {
-            if target_mod.is_some_and(|target| *top_mod != target) {
-                continue;
-            }
-            had_errors |= write_abi_artifacts(db, *top_mod, &names_to_build, out_dir, report_dir);
-        }
+        had_errors |= write_abi_artifacts(db, ingot, &names_to_build, out_dir, report_dir);
     }
 
     if emit.metadata {
@@ -1336,6 +1487,7 @@ fn build_top_mod(
     backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
     ir_file_stem: &str,
@@ -1343,7 +1495,7 @@ fn build_top_mod(
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
     #[cfg(not(feature = "cranelift"))]
-    let _ = backend;
+    let _ = (backend, link);
 
     #[cfg(feature = "cranelift")]
     if matches!(backend, BuildBackend::Native) {
@@ -1352,12 +1504,35 @@ fn build_top_mod(
             top_mod,
             opt_level,
             emit,
+            link,
             out_dir,
             ir_file_stem,
             report_dir,
         );
     }
 
+    #[cfg(feature = "sp1")]
+    if matches!(backend, BuildBackend::Sp1) {
+        let result = build_sp1_top_mod(
+            db,
+            top_mod,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir.map(Utf8PathBuf::as_path),
+        );
+        if let Err(err) = &result {
+            eprintln!("Error: Failed to compile SP1 output: {err}");
+        }
+        return BuildSummary {
+            had_errors: result.is_err(),
+        };
+    }
+
+    if report_evm_exports(db, top_mod) {
+        return BuildSummary { had_errors: true };
+    }
     let contract_names = match collect_contract_names(db, top_mod) {
         Ok(names) => names,
         Err(err) => {
@@ -1371,11 +1546,18 @@ fn build_top_mod(
         return BuildSummary { had_errors: true };
     }
 
-    let names_to_build =
-        match resolve_names_to_build(contract_names, contract, missing_contract_is_error) {
-            Ok(names) => names,
-            Err(summary) => return summary,
-        };
+    let names_to_build = match resolve_names_to_build(
+        db,
+        top_mod.ingot(db),
+        contract_names,
+        contract,
+        missing_contract_is_error,
+    ) {
+        Ok(names) => names,
+        Err(summary) => return summary,
+    };
+    // `--contract` may give a source name; codegen selects by artifact name.
+    let contract = contract.and_then(|_| names_to_build.first().map(String::as_str));
     if let Err(err) = ensure_output_dirs(emit, out_dir, ir_out_dir) {
         eprintln!("Error: {err}");
         return BuildSummary { had_errors: true };
@@ -1402,14 +1584,20 @@ fn build_top_mod(
             }
         }
         if emit.writes_any_bytecode() {
-            let bytecode =
-                match codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract) {
-                    Ok(bytecode) => bytecode,
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
-                        return BuildSummary { had_errors: true };
-                    }
-                };
+            let bytecode = if emit.sizes {
+                codegen::emit_module_sonatina_bytecode_with_observability(
+                    db, top_mod, opt_level, contract,
+                )
+            } else {
+                codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
+            };
+            let bytecode = match bytecode {
+                Ok(bytecode) => bytecode,
+                Err(err) => {
+                    eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
+                    return BuildSummary { had_errors: true };
+                }
+            };
             had_errors |= write_sonatina_bytecode_artifacts(
                 &names_to_build,
                 &bytecode,
@@ -1421,7 +1609,8 @@ fn build_top_mod(
     }
 
     if emit.abi {
-        had_errors |= write_abi_artifacts(db, top_mod, &names_to_build, out_dir, report_dir);
+        had_errors |=
+            write_abi_artifacts(db, top_mod.ingot(db), &names_to_build, out_dir, report_dir);
     }
 
     if emit.metadata {
@@ -1433,12 +1622,27 @@ fn build_top_mod(
     BuildSummary { had_errors }
 }
 
+/// Reports `top_mod`'s ingot's `#[export]` functions, which only native
+/// objects define, rather than dropping them from an EVM build.
+fn report_evm_exports(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
+    let exports = mir::native_exports(db, top_mod);
+    for func in &exports {
+        eprintln!(
+            "Error: `#[export]` requires `--backend native`, but `{}` is exported",
+            func.scope().pretty_path(db).unwrap_or_default()
+        );
+    }
+    !exports.is_empty()
+}
+
 #[cfg(feature = "cranelift")]
+#[allow(clippy::too_many_arguments)]
 fn build_native_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
     emit: EmitSelection,
+    link: NativeLink<'_>,
     out_dir: &Utf8Path,
     ir_file_stem: &str,
     report_dir: Option<&Utf8PathBuf>,
@@ -1448,13 +1652,20 @@ fn build_native_top_mod(
         return BuildSummary { had_errors: true };
     }
     let report_dir = report_dir.map(Utf8PathBuf::as_path);
+    let kind = if emit.library() {
+        codegen::NativeOutputKind::Library
+    } else {
+        codegen::NativeOutputKind::Executable
+    };
     let artifacts = match codegen::emit_module_native_artifacts(
         db,
         top_mod,
+        codegen::NativeTarget::Host,
+        kind,
         opt_level,
         codegen::NativeOutputSelection {
             ir: emit.ir,
-            object: emit.executable,
+            object: emit.executable || emit.library(),
         },
     ) {
         Ok(artifacts) => artifacts,
@@ -1471,13 +1682,70 @@ fn build_native_top_mod(
         return BuildSummary { had_errors: true };
     }
     if let Some(object) = artifacts.object
-        && let Err(err) =
-            link_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object)
+        && let Err(err) = if emit.executable {
+            link_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object, link)
+        } else {
+            write_native_library_artifacts(out_dir, report_dir, ir_file_stem, &object, emit)
+        }
     {
         eprintln!("Error: {err}");
         return BuildSummary { had_errors: true };
     }
     BuildSummary { had_errors: false }
+}
+
+#[cfg(feature = "sp1")]
+fn build_sp1_top_mod(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8Path>,
+) -> Result<(), String> {
+    // Locate the toolchain before compiling, and write nothing unless linking succeeds.
+    let toolchain = emit
+        .elf
+        .then(Sp1Toolchain::from_env)
+        .transpose()
+        .map_err(|err| err.to_string())?;
+    let artifacts = codegen::emit_module_native_artifacts(
+        db,
+        top_mod,
+        codegen::NativeTarget::Sp1,
+        codegen::NativeOutputKind::Executable,
+        opt_level,
+        codegen::NativeOutputSelection {
+            ir: emit.ir,
+            object: emit.elf,
+        },
+    )
+    .map_err(|err| err.to_string())?;
+    let elf = toolchain
+        .map(|toolchain| {
+            let cache = cache_dir("sp1-runtime")
+                .ok_or("no cache directory for the SP1 runtime; set FE_CACHE_DIR")?;
+            let object = artifacts.object.as_deref().expect("SP1 object requested");
+            Sp1Runtime::build(toolchain, cache)
+                .and_then(|runtime| runtime.link_objects(&[object]))
+                .map_err(|err| err.to_string())
+        })
+        .transpose()?;
+    ensure_output_dirs(emit, out_dir, out_dir)?;
+    if let Some(ir) = artifacts.ir {
+        write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "sp1.sona", &ir)?;
+    }
+    if let Some(elf) = elf {
+        let name = format!("{}.elf", sanitize_name_with_default(ir_file_stem, "main"));
+        let file = out_dir.join(&name);
+        fs::write(&file, &elf).map_err(|err| format!("Failed to write SP1 ELF {file}: {err}"))?;
+        if let Some(report_dir) = report_dir {
+            let _ = fs::write(report_dir.join(&name), &elf);
+        }
+        println!("Wrote {file}");
+    }
+    Ok(())
 }
 
 fn collect_contract_names(
@@ -1488,7 +1756,7 @@ fn collect_contract_names(
     let mut names: Vec<_> = package
         .root_objects(db)
         .iter()
-        .map(|object| object.name(db))
+        .map(|object| object.name(db).clone())
         .collect();
     names.sort();
     names.dedup();
@@ -1517,71 +1785,25 @@ fn collect_ingot_contract_names(
     Ok(names)
 }
 
-/// Whether `top_mod` defines `name` as a contract or manual contract root — the
-/// same definitions `write_metadata_artifacts` records in `compilationTarget`.
-fn module_defines_contract(db: &DriverDataBase, top_mod: TopLevelMod<'_>, name: &str) -> bool {
-    if top_mod.all_contracts(db).iter().any(|contract| {
-        contract
-            .name(db)
-            .to_opt()
-            .is_some_and(|n| n.data(db) == name)
-    }) {
-        return true;
-    }
-    top_mod.all_funcs(db).iter().any(|&func| {
-        func.top_mod(db) == top_mod
-            && match func.manual_contract_root_attr(db) {
-                Some(ManualContractRootAttr::Init { contract_name })
-                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
-                    contract_name.data(db) == name
-                }
-                Some(ManualContractRootAttr::Error(_)) | None => false,
-            }
-    })
-}
-
+/// The artifact names of the contracts `ingot` declares.
 fn collect_workspace_contract_names(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> Vec<String> {
-    let mut names = BTreeSet::new();
-    for &top_mod in ingot.all_modules(db) {
-        for contract in top_mod.all_contracts(db) {
-            if let Some(name) = contract.name(db).to_opt() {
-                names.insert(name.data(db).to_string());
-            }
-        }
-        for &func in top_mod.all_funcs(db) {
-            if func.top_mod(db) != top_mod {
-                continue;
-            }
-            match func.manual_contract_root_attr(db) {
-                Some(ManualContractRootAttr::Init { contract_name })
-                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
-                    names.insert(contract_name.data(db).to_string());
-                }
-                Some(ManualContractRootAttr::Error(_)) | None => {}
-            }
-        }
-    }
-    names.into_iter().collect()
+    mir::ingot_contracts(db, ingot)
+        .iter()
+        .map(|contract| contract.name.clone())
+        .collect()
 }
 
 fn collect_ingot_abi_artifact_names(
     db: &DriverDataBase,
     ingot: hir::Ingot<'_>,
 ) -> Result<Vec<String>, String> {
-    use hir::hir_def::HirIngot;
-
     let mut names = BTreeSet::new();
-    for top_mod in ingot.all_modules(db) {
-        for contract in top_mod.all_contracts(db) {
-            let Some(name) = contract.name(db).to_opt().map(|name| name.data(db).clone()) else {
-                continue;
-            };
-            let Some(result) = crate::abi::generate_contract_abi(db, *top_mod, &name)? else {
-                continue;
-            };
-            if result.entry_count > 0 {
-                names.insert(name);
-            }
+    for declared in mir::ingot_contracts(db, ingot) {
+        let Some(contract) = declared.contract() else {
+            continue;
+        };
+        if crate::abi::generate_contract_abi(db, contract)?.entry_count > 0 {
+            names.insert(declared.name.clone());
         }
     }
 
@@ -1597,7 +1819,15 @@ fn workspace_member_ir_out_dir(
         .then(|| out_dir.join(sanitize_filename(member_name)))
 }
 
+/// The artifact names to build for `--contract`, or all of `contract_names`
+/// without it.
+///
+/// `--contract` selects the contracts whose artifact name or source name it
+/// is, and must select exactly one. A source name several contracts share is
+/// ambiguous: the contracts are listed so one can be picked by artifact name.
 fn resolve_names_to_build(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
     contract_names: Vec<String>,
     contract: Option<&str>,
     missing_contract_is_error: bool,
@@ -1606,8 +1836,36 @@ fn resolve_names_to_build(
         return Ok(contract_names);
     };
 
-    if contract_names.iter().any(|candidate| candidate == name) {
-        return Ok(vec![name.to_string()]);
+    let contracts = mir::ingot_contracts(db, ingot);
+    let declaration =
+        |candidate: &str| contracts.iter().find(|declared| declared.name == candidate);
+    let matches: Vec<_> = contract_names
+        .iter()
+        .filter(|candidate| {
+            *candidate == name
+                || declaration(candidate).is_some_and(|declared| declared.source_name == name)
+        })
+        .collect();
+    match matches.as_slice() {
+        [] => {}
+        [only] => return Ok(vec![only.to_string()]),
+        several => {
+            eprintln!("Error: Contract \"{name}\" is defined more than once");
+            eprintln!("Select one by its artifact name:");
+            let mut sources = BTreeMap::new();
+            collect_ingot_sources_prefixed(db, ingot, None, &mut sources);
+            for candidate in several {
+                match declaration(candidate).and_then(|declared| {
+                    sources
+                        .iter()
+                        .find(|(_, (top_mod, _))| *top_mod == declared.top_mod)
+                }) {
+                    Some((path, _)) => eprintln!("  - {candidate} ({path})"),
+                    None => eprintln!("  - {candidate}"),
+                }
+            }
+            return Err(BuildSummary { had_errors: true });
+        }
     }
     if missing_contract_is_error {
         eprintln!("Error: Contract \"{name}\" not found");
@@ -1626,7 +1884,13 @@ fn ensure_output_dirs(
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
 ) -> Result<(), String> {
-    if emit.writes_any_bytecode() || emit.abi || emit.metadata || emit.executable {
+    if emit.writes_any_bytecode()
+        || emit.abi
+        || emit.metadata
+        || emit.executable
+        || emit.library()
+        || emit.elf
+    {
         fs::create_dir_all(out_dir.as_std_path())
             .map_err(|err| format!("Failed to create output directory {out_dir}: {err}"))?;
     }
@@ -1639,15 +1903,24 @@ fn ensure_output_dirs(
 
 fn write_abi_artifacts(
     db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
+    ingot: hir::Ingot<'_>,
     names_to_build: &[String],
     out_dir: &Utf8Path,
     report_dir: Option<&Utf8Path>,
 ) -> bool {
     let mut had_errors = false;
+    let contracts = mir::ingot_contracts(db, ingot);
     for name in names_to_build {
-        match crate::abi::generate_contract_abi(db, top_mod, name) {
-            Ok(Some(result)) => {
+        // Manual contract roots and `main` have no ABI.
+        let Some(contract) = contracts
+            .iter()
+            .find(|candidate| candidate.name == *name)
+            .and_then(|candidate| candidate.contract())
+        else {
+            continue;
+        };
+        match crate::abi::generate_contract_abi(db, contract) {
+            Ok(result) => {
                 for warning in &result.warnings {
                     eprintln!("Warning: {warning}");
                 }
@@ -1677,7 +1950,6 @@ fn write_abi_artifacts(
                     println!("Wrote {out_dir}/{base}.abi.json");
                 }
             }
-            Ok(None) => {} // Contract not in this module, skip
             Err(err) => {
                 eprintln!("Error: Failed to generate ABI for {name}: {err}");
                 had_errors = true;
@@ -1722,7 +1994,11 @@ fn dependency_arithmetic_str(mode: DependencyArithmeticMode) -> &'static str {
 /// human-facing `name` and the *candidate* namespace; see [`assign_namespaces`] for the unique
 /// namespace actually used as a path prefix and dependency-map target.
 fn ingot_namespace(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> String {
-    if let Some(name) = ingot.config(db).and_then(|config| config.metadata.name) {
+    if let Some(name) = ingot
+        .config(db)
+        .as_ref()
+        .and_then(|config| config.metadata.name.as_ref())
+    {
         return name.to_string();
     }
     ingot
@@ -1778,7 +2054,7 @@ fn non_builtin_closure<'db>(
     root: hir::Ingot<'db>,
 ) -> Vec<hir::Ingot<'db>> {
     let mut closure = vec![root];
-    for dep_url in db.dependency_graph().dependency_urls(db, &root.base(db)) {
+    for dep_url in db.dependency_graph().dependency_urls(db, root.base(db)) {
         let Some(dep) = dep_url.ingot(db) else {
             continue;
         };
@@ -1851,7 +2127,7 @@ fn assign_namespaces(
             n += 1;
         }
         used.insert(candidate.clone());
-        map.insert(ing.base(db), candidate);
+        map.insert(ing.base(db).clone(), candidate);
     }
     map
 }
@@ -1870,7 +2146,7 @@ fn ingot_dependencies_json(
             Some(dep) if matches!(dep.kind(db), IngotKind::Std) => "std".to_string(),
             Some(dep) if matches!(dep.kind(db), IngotKind::Core) => "core".to_string(),
             Some(dep) => namespaces
-                .get(&dep.base(db))
+                .get(dep.base(db))
                 .cloned()
                 .unwrap_or_else(|| ingot_namespace(db, dep)),
             None => alias.to_string(),
@@ -1908,34 +2184,20 @@ fn write_metadata_artifacts(
         if dep.base(db) == ingot.base(db) {
             continue;
         }
-        let ns = namespaces.get(&dep.base(db)).cloned().unwrap_or_default();
+        let ns = namespaces.get(dep.base(db)).cloned().unwrap_or_default();
         collect_ingot_sources_prefixed(db, dep, Some(&ns), &mut all_sources);
     }
 
-    // Map each root contract name to its source path and defining module.
-    let mut name_to_loc: BTreeMap<String, (String, TopLevelMod<'_>)> = BTreeMap::new();
-    for (path_key, (top_mod, _)) in &root_sources {
-        for contract in top_mod.all_contracts(db) {
-            if let Some(name) = contract.name(db).to_opt() {
-                name_to_loc
-                    .entry(name.data(db).to_string())
-                    .or_insert_with(|| (path_key.clone(), *top_mod));
-            }
-        }
-        for &func in top_mod.all_funcs(db) {
-            if func.top_mod(db) != *top_mod {
-                continue;
-            }
-            match func.manual_contract_root_attr(db) {
-                Some(ManualContractRootAttr::Init { contract_name })
-                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
-                    name_to_loc
-                        .entry(contract_name.data(db).to_string())
-                        .or_insert_with(|| (path_key.clone(), *top_mod));
-                }
-                Some(ManualContractRootAttr::Error(_)) | None => {}
-            }
-        }
+    // Map each root contract's artifact name to its source path and declaration.
+    let mut name_to_loc: BTreeMap<&str, (&str, &mir::IngotContract<'_>)> = BTreeMap::new();
+    for declared in mir::ingot_contracts(db, ingot) {
+        let Some((path_key, _)) = root_sources
+            .iter()
+            .find(|(_, (top_mod, _))| *top_mod == declared.top_mod)
+        else {
+            continue;
+        };
+        name_to_loc.insert(&declared.name, (path_key, declared));
     }
 
     // `sources` object (shared across this ingot's contracts), with keccak256 + content.
@@ -1964,7 +2226,7 @@ fn write_metadata_artifacts(
     let ingots_arr: Vec<serde_json::Value> = closure
         .iter()
         .map(|&ing| {
-            let namespace = namespaces.get(&ing.base(db)).cloned().unwrap_or_default();
+            let namespace = namespaces.get(ing.base(db)).cloned().unwrap_or_default();
             let dep_arith = resolve_dependency_arithmetic_mode(
                 ing.config(db).as_ref(),
                 ing.workspace_config(db).as_ref(),
@@ -1972,7 +2234,7 @@ fn write_metadata_artifacts(
             );
             serde_json::json!({
                 "name": ingot_namespace(db, ing),
-                "version": ing.version(db).map(|v| v.to_string()),
+                "version": ing.version(db).as_ref().map(|v| v.to_string()),
                 "namespace": namespace,
                 "arithmetic": arithmetic_str(ing.arithmetic_mode(db)),
                 "dependencyArithmetic": dependency_arithmetic_str(dep_arith),
@@ -2005,28 +2267,36 @@ fn write_metadata_artifacts(
     let compiler = serde_json::Value::Object(compiler);
 
     for name in names_to_build {
-        let Some((source_path, top_mod)) = name_to_loc.get(name) else {
+        let Some(&(source_path, declared)) = name_to_loc.get(name.as_str()) else {
             continue;
         };
 
-        let abi_value = match crate::abi::generate_contract_abi(db, *top_mod, name) {
-            Ok(Some(result)) => {
+        let abi_value = match declared
+            .contract()
+            .map(|contract| crate::abi::generate_contract_abi(db, contract))
+        {
+            Some(Ok(result)) => {
                 for warning in &result.warnings {
                     eprintln!("Warning: {warning}");
                 }
                 serde_json::from_str::<serde_json::Value>(&result.json)
                     .unwrap_or_else(|_| serde_json::json!([]))
             }
-            Ok(None) => serde_json::json!([]),
-            Err(err) => {
+            None => serde_json::json!([]),
+            Some(Err(err)) => {
                 eprintln!("Error: Failed to generate ABI for {name}: {err}");
                 had_errors = true;
                 serde_json::json!([])
             }
         };
 
+        // The source file and the contract's path in it, which identify the
+        // contract wherever the file is built.
         let mut compilation_target = serde_json::Map::new();
-        compilation_target.insert(source_path.clone(), serde_json::Value::String(name.clone()));
+        compilation_target.insert(
+            source_path.to_string(),
+            serde_json::Value::String(declared.path_in_file.clone()),
+        );
 
         let value = serde_json::json!({
             "version": 1,
@@ -2108,19 +2378,28 @@ fn write_sonatina_bytecode_artifacts(
 ) -> bool {
     let mut had_errors = false;
     for name in names_to_build {
-        let Some(SonatinaContractBytecode {
-            deploy, runtime, ..
-        }) = bytecode.get(name)
-        else {
+        let Some(contract_bytecode) = bytecode.get(name) else {
             eprintln!("Error: Sonatina did not emit bytecode for contract \"{name}\"");
             had_errors = true;
             continue;
         };
-        let deploy_hex = hex::encode(deploy);
-        let runtime_hex = hex::encode(runtime);
-        if let Err(err) =
-            write_contract_artifacts(out_dir, report_dir, name, &deploy_hex, &runtime_hex, emit)
-        {
+        let deploy_hex = hex::encode(&contract_bytecode.deploy);
+        let runtime_hex = hex::encode(&contract_bytecode.runtime);
+        let sizes = contract_bytecode.size_report();
+        if emit.sizes && sizes.is_none() {
+            eprintln!("Error: Sonatina did not emit code sizes for contract \"{name}\"");
+            had_errors = true;
+            continue;
+        }
+        if let Err(err) = write_contract_artifacts(
+            out_dir,
+            report_dir,
+            name,
+            &deploy_hex,
+            &runtime_hex,
+            sizes.as_deref(),
+            emit,
+        ) {
             eprintln!("Error: {err}");
             had_errors = true;
         } else {
@@ -2133,7 +2412,8 @@ fn write_sonatina_bytecode_artifacts(
 fn derive_ingot_ir_file_stem(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> String {
     if let Some(name) = ingot
         .config(db)
-        .and_then(|config| config.metadata.name)
+        .as_ref()
+        .and_then(|config| config.metadata.name.as_ref())
         .map(|name| name.to_string())
     {
         return sanitize_name_with_default(&name, "module");
@@ -2164,8 +2444,20 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     if emit.metadata {
         parts.push("metadata");
     }
+    if emit.sizes {
+        parts.push("sizes");
+    }
     if emit.executable {
         parts.push("executable");
+    }
+    if emit.object {
+        parts.push("object");
+    }
+    if emit.staticlib {
+        parts.push("staticlib");
+    }
+    if emit.elf {
+        parts.push("elf");
     }
     parts.join(",")
 }
@@ -2176,6 +2468,7 @@ fn link_native_executable_artifact(
     report_dir: Option<&Utf8Path>,
     file_stem: &str,
     object: &[u8],
+    link: NativeLink<'_>,
 ) -> Result<(), String> {
     let base = sanitize_name_with_default(file_stem, "main");
     let executable_name = base.clone();
@@ -2185,7 +2478,13 @@ fn link_native_executable_artifact(
     let linked_path = temp.path().join(&executable_name);
     fs::write(&object_path, object)
         .map_err(|err| format!("Failed to write temporary native object: {err}"))?;
-    link_executable(&[&object_path], &linked_path)?;
+    // The host code follows the Fe object, whose calls into it an archive
+    // resolves.
+    let inputs = [object_path.as_path()]
+        .into_iter()
+        .chain(link.paths.iter().map(|path| path.as_std_path()))
+        .collect::<Vec<_>>();
+    link_executable(&inputs, link.libraries, &linked_path)?;
 
     let executable_path = out_dir.join(&executable_name);
     fs::copy(&linked_path, executable_path.as_std_path())
@@ -2201,12 +2500,56 @@ fn link_native_executable_artifact(
     Ok(())
 }
 
+/// Writes `object`, the native object of a library's `#[export]` functions,
+/// as `<name>.o` and as the static library `lib<name>.a`, as `emit` asks.
+#[cfg(feature = "cranelift")]
+fn write_native_library_artifacts(
+    out_dir: &Utf8Path,
+    report_dir: Option<&Utf8Path>,
+    file_stem: &str,
+    object: &[u8],
+    emit: EmitSelection,
+) -> Result<(), String> {
+    let base = sanitize_name_with_default(file_stem, "main");
+    let object_name = format!("{base}.o");
+    if let Some(report_dir) = report_dir {
+        let _ = fs::write(report_dir.join(&object_name).as_std_path(), object);
+    }
+    if emit.object {
+        let object_path = out_dir.join(&object_name);
+        fs::write(object_path.as_std_path(), object)
+            .map_err(|err| format!("Failed to write native object {object_path}: {err}"))?;
+        println!("Wrote {object_path}");
+    }
+    if emit.staticlib {
+        // `ar` adds to an archive that exists, so build a fresh one apart.
+        let temp = tempfile::tempdir()
+            .map_err(|err| format!("Failed to create temporary native archive directory: {err}"))?;
+        let temp_object = temp.path().join(&object_name);
+        fs::write(&temp_object, object)
+            .map_err(|err| format!("Failed to write temporary native object: {err}"))?;
+        let archive_name = format!("lib{base}.a");
+        let temp_archive = temp.path().join(&archive_name);
+        archive_objects(&[&temp_object], &temp_archive)?;
+        let archive_path = out_dir.join(&archive_name);
+        fs::copy(&temp_archive, archive_path.as_std_path()).map_err(|err| {
+            format!("Failed to write native static library {archive_path}: {err}")
+        })?;
+        if let Some(report_dir) = report_dir {
+            let _ = fs::copy(&temp_archive, report_dir.join(&archive_name).as_std_path());
+        }
+        println!("Wrote {archive_path}");
+    }
+    Ok(())
+}
+
 fn write_contract_artifacts(
     out_dir: &Utf8Path,
     report_dir: Option<&Utf8Path>,
     contract_name: &str,
     bytecode: &str,
     runtime_bytecode: &str,
+    sizes: Option<&str>,
     emit: EmitSelection,
 ) -> Result<(), String> {
     let base = sanitize_filename(contract_name);
@@ -2228,6 +2571,15 @@ fn write_contract_artifacts(
             let _ = fs::write(runtime_path.as_std_path(), runtime_bytecode);
         }
     }
+    if let Some(sizes) = sizes {
+        let sizes_path = out_dir.join(format!("{base}.sizes.txt"));
+        fs::write(sizes_path.as_std_path(), sizes)
+            .map_err(|err| format!("Failed to write {sizes_path}: {err}"))?;
+        if let Some(dir) = report_dir {
+            let sizes_path = dir.join(format!("{base}.sizes.txt"));
+            let _ = fs::write(sizes_path.as_std_path(), sizes);
+        }
+    }
     Ok(())
 }
 
@@ -2238,6 +2590,9 @@ fn print_contract_artifact_paths(out_dir: &Utf8Path, contract_name: &str, emit: 
     }
     if emit.runtime_bytecode {
         println!("Wrote {out_dir}/{base}.runtime.bin");
+    }
+    if emit.sizes {
+        println!("Wrote {out_dir}/{base}.sizes.txt");
     }
 }
 
@@ -2278,7 +2633,11 @@ mod tests {
             ir: false,
             abi: true,
             metadata: false,
+            sizes: false,
             executable: false,
+            object: false,
+            staticlib: false,
+            elf: false,
         };
         assert_eq!(describe_emit_selection(emit), "abi");
     }
@@ -2302,7 +2661,8 @@ mod tests {
         fs::create_dir_all(report_dir.as_std_path()).expect("create report dir");
 
         let names = vec!["Foo".to_string()];
-        let had_errors = write_abi_artifacts(&db, top_mod, &names, &out_dir, Some(&report_dir));
+        let had_errors =
+            write_abi_artifacts(&db, top_mod.ingot(&db), &names, &out_dir, Some(&report_dir));
         assert!(!had_errors, "unexpected ABI write error");
 
         let out_abi = out_dir.join("Foo.abi.json");
@@ -2347,7 +2707,7 @@ mod tests {
         let names = vec!["Foo".to_string()];
         let had_errors = write_abi_artifacts(
             &first_db,
-            first_top_mod,
+            first_top_mod.ingot(&first_db),
             &names,
             &out_dir,
             Some(&report_dir),
@@ -2381,7 +2741,7 @@ pub contract Foo {
         let second_top_mod = second_db.top_mod(second_file);
         let had_errors = write_abi_artifacts(
             &second_db,
-            second_top_mod,
+            second_top_mod.ingot(&second_db),
             &names,
             &out_dir,
             Some(&report_dir),

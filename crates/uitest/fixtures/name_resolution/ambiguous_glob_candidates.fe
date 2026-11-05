@@ -1,0 +1,19 @@
+use a::*
+use b::*
+use c::*
+
+struct Holder {
+    s: S,
+}
+
+mod a {
+    pub struct S {}
+}
+
+mod b {
+    pub struct S {}
+}
+
+mod c {
+    pub struct S {}
+}

@@ -1,0 +1,22 @@
+/// Hints to the compiler that affect how code is optimized.
+extern {
+    /// Returns `value` unchanged while hiding it from the optimizer.
+    ///
+    /// The compiler must assume the call can observe `value`, change it and
+    /// have other effects. The computation that produces `value` is kept even
+    /// when the result is unused, and the call stays ordered with respect to
+    /// other effects, such as reading the remaining gas. Pass a benchmark's
+    /// inputs through `black_box` after the first gas read and its result
+    /// before the second one:
+    ///
+    /// ```fe
+    /// let gas_before = evm.gas()
+    /// black_box(most_significant_bit(black_box(x)))
+    /// let used = gas_before - evm.gas()
+    /// ```
+    ///
+    /// `T` must be an integer-valued scalar type, such as an integer or `bool`.
+    /// Pointers and aggregates are not supported.
+    /// Only EVM targets support `black_box`.
+    pub fn black_box<T>(_ value: own T) -> T
+}

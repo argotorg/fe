@@ -10,14 +10,15 @@ use crate::analysis::ty::provider::AddressSpace;
 use crate::analysis::ty::shape::Shape;
 use crate::analysis::ty::ty_check::{BodyOwner, TypedBody};
 use crate::analysis::ty::ty_check::{RecordInitLowering, transparent_newtype_field_ty};
-use crate::analysis::ty::ty_def::BorrowKind;
 use crate::analysis::ty::ty_def::TyId;
+use crate::analysis::ty::ty_def::{BorrowKind, ClosureDef};
 use crate::core::semantic::EffectEnvView;
 use crate::hir_def::{
-    BinOp, BindingMarker, BlockKind, Body, CallableDef, ClosureDef, Cond, CondId, EnumVariant,
-    Expr, ExprId, Field, FieldIndex, FieldParent, FuncParamMode, IdentId, Partial, Pat, PatId,
-    Stmt, StmtId, UnOp,
+    BinOp, BindingMarker, BlockKind, Body, CallableDef, Cond, CondId, EnumVariant, Expr, ExprId,
+    Field, FieldIndex, FieldParent, FuncParamMode, IdentId, Partial, Pat, PatId, Stmt, StmtId,
+    UnOp,
 };
+use common::ingot::IngotKind;
 use rustc_hash::FxHashSet;
 use std::iter;
 
@@ -46,7 +47,7 @@ pub(crate) fn check_unsafe_ops<'db>(
         owner,
         body,
         typed_body,
-        in_unsafe: matches!(owner, BodyOwner::Func(func) if func.is_unsafe(db)),
+        in_unsafe: matches!(owner, BodyOwner::Func(func, _) if func.is_unsafe(db)),
         written_fields: FxHashSet::default(),
         state_accesses: FxHashSet::default(),
         diags: Vec::new(),
@@ -131,6 +132,7 @@ impl<'db> UnsafeChecker<'db, '_> {
                 ClosureDef {
                     body: self.body,
                     expr,
+                    mode: self.owner.mode(),
                 },
             ),
             None => effect_param_site(self.owner)
@@ -324,6 +326,11 @@ impl<'db> UnsafeChecker<'db, '_> {
     fn mut_binding(&self, pat: PatId) -> Option<PatId> {
         match pat.data(self.db, self.body) {
             Partial::Present(Pat::Path(_, BindingMarker::Mut)) => Some(pat),
+            Partial::Present(Pat::Path(_, BindingMarker::MaybeMut))
+                if self.owner.mode() == Some(BorrowKind::Mut) =>
+            {
+                Some(pat)
+            }
             Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
                 pats.iter().find_map(|pat| self.mut_binding(*pat))
             }
@@ -342,7 +349,11 @@ impl<'db> UnsafeChecker<'db, '_> {
     fn mut_receiver(&self, expr: ExprId) -> Option<ExprId> {
         let receiver = self.typed_body.call_receiver(self.db, expr)?;
         let callable = self.typed_body.callable_expr(expr)?;
-        (callable.callable_def().param_mode(self.db, 0) == FuncParamMode::Mut).then_some(receiver)
+        (callable
+            .callable_def()
+            .param_mode(self.db, 0, callable.mode())
+            == FuncParamMode::Mut)
+            .then_some(receiver)
     }
     fn report_deref(&mut self, expr: ExprId) {
         self.push_unsafe(BodyDiag::UnsafeDerefRequiresUnsafe {
@@ -351,13 +362,21 @@ impl<'db> UnsafeChecker<'db, '_> {
     }
 
     /// Reports a call, method call or operator whose callee is an
-    /// `unsafe fn`, and a `with` provider through an `unsafe` field that one
-    /// of its `mut` effects writes. A trait method call resolves to the
-    /// trait's declaration, whose unsafety every implementation shares.
+    /// `unsafe fn` or a foreign function, and a `with` provider through an
+    /// `unsafe` field that one of its `mut` effects writes. A trait method
+    /// call resolves to the trait's declaration, whose unsafety every
+    /// implementation shares. A runtime function of an `extern` block
+    /// outside core and std is foreign: nothing checks what it does.
     fn check_call(&mut self, expr: ExprId) {
         if let Some(callable) = self.typed_body.callable_expr(expr)
             && let callee @ CallableDef::Func(func) = callable.callable_def()
-            && func.is_unsafe(self.db)
+            && (func.is_unsafe(self.db)
+                || func.is_extern(self.db)
+                    && !func.is_const(self.db)
+                    && !matches!(
+                        func.top_mod(self.db).ingot(self.db).kind(self.db),
+                        IngotKind::Core | IngotKind::Std
+                    ))
         {
             self.push_unsafe(BodyDiag::UnsafeCallRequiresUnsafe {
                 primary: expr.span(self.body).into(),
@@ -386,11 +405,10 @@ impl<'db> UnsafeChecker<'db, '_> {
                     self.check_expr(*expr);
                 }
             }
-            Stmt::For(pat, iter, driver, body, _) => {
+            Stmt::For(pat, iter, body, _) => {
                 self.check_pat(*pat);
-                for expr in [*iter].into_iter().chain(*driver).chain([*body]) {
-                    self.check_expr(expr);
-                }
+                self.check_expr(*iter);
+                self.check_expr(*body);
             }
             Stmt::While(cond, body) => {
                 self.check_cond(*cond);
@@ -430,7 +448,9 @@ impl<'db> UnsafeChecker<'db, '_> {
             Expr::Closure { body, .. } => self.check_expr(*body),
 
             Expr::Un(inner, op) => {
-                if *op == UnOp::Mut {
+                if *op == UnOp::Mut
+                    || *op == UnOp::MaybeMut && self.owner.mode() == Some(BorrowKind::Mut)
+                {
                     self.check_place_write(*inner);
                 }
                 self.check_expr(*inner);

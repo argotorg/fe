@@ -1,0 +1,175 @@
+// A loop binds each step of a driver as a `let` binds a projection's
+// result: it copies the parts it names by value, and holds the accesses it
+// binds `ref` or `mut` through the body, whose session ends before `next`.
+use core::iter::{Bidirectional, Collection, FromProducer}
+use core::ptr::MemArray
+
+struct Account { balance: u256 }
+
+// `next` reverts unless the write-back of the element it advances past has
+// landed.
+struct Tracked {
+    items: [u256; 4],
+    written: usize,
+}
+
+impl Collection for Tracked {
+    type Cursor = usize
+    type Item = u256
+
+    fn start(self) -> usize {
+        0
+    }
+
+    fn has(self, _ c: usize) -> bool {
+        c < 4
+    }
+
+    fn next(self, _ c: usize) -> usize {
+        assert!(self.written == c + 1)
+        c + 1
+    }
+
+    fn at(self, _ c: usize) -> ref u256 {
+        let item = self.items[c]
+        yield ref item
+    }
+
+    fn at(mut self, _ c: usize) -> mut u256 {
+        var item = self.items[c]
+        yield mut item
+        self.items[c] = item
+        self.written = c + 1
+    }
+}
+
+#[test]
+fn chains_infer_through_steps() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    var weighted = 0
+    for (i, (j, x)) in xs.enumerate().enumerate() {
+        weighted += (i + j) as u256 * x
+    }
+    assert!(weighted == 40)
+
+    var sum = 0
+    for y in xs.enumerate().map(|(i, x)| i as u256 * x) {
+        sum += y
+    }
+    assert!(sum == 20)
+
+    let evens: MemArray<u256> = MemArray::collect(
+        xs,
+        xs.enumerate().filter(|(i, _)| i % 2 == 0).map(|(i, x)| i as u256 + x),
+    )
+    assert!(evens.len() == 2 && evens[0] == 1 && evens[1] == 5)
+}
+
+#[test]
+fn copies_end_the_session_before_the_body() {
+    var xs: [u256; 3] = [1, 2, 3]
+    var sum = 0
+    for (i, (j, x)) in xs.enumerate().enumerate() {
+        xs[2 - i] = x * 10
+        sum += x + (i + j) as u256
+    }
+    assert!(sum == 19 && xs[0] == 100 && xs[1] == 20 && xs[2] == 10)
+
+    // A discarded element opens no session either.
+    var accounts = [Account { balance: 1 }, Account { balance: 2 }]
+    var n: usize = 0
+    for (i, _) in accounts.enumerate() {
+        accounts[i].balance += 10
+        n += 1
+    }
+    assert!(n == 2 && accounts[0].balance == 11 && accounts[1].balance == 12)
+}
+
+#[test]
+fn slides_run_before_next() {
+    var xs = Tracked { items: [1, 2, 3, 4], written: 0 }
+    for (i, mut x) in xs.enumerate() {
+        x += i as u256 * 10
+    }
+    assert!(xs.items[1] == 12 && xs.items[3] == 34 && xs.written == 4)
+}
+
+#[test]
+fn continue_and_break_run_the_slide() {
+    var xs = Tracked { items: [1, 2, 3, 4], written: 0 }
+    for (i, mut x) in xs.enumerate().take(3) {
+        x += 10
+        if i == 0 {
+            continue
+        }
+        if i == 1 {
+            break
+        }
+    }
+    assert!(xs.items[0] == 11 && xs.items[1] == 12 && xs.items[2] == 3 && xs.written == 2)
+}
+
+fn bump_until(_ xs: mut Tracked, _ stop: usize) -> usize {
+    for (i, mut x) in xs.enumerate() {
+        x += 100
+        if i == stop {
+            return i
+        }
+    }
+    4
+}
+
+#[test]
+fn return_runs_the_slide() {
+    var xs = Tracked { items: [1, 2, 3, 4], written: 0 }
+    assert!(bump_until(mut xs, 1) == 1)
+    assert!(xs.items[0] == 101 && xs.items[1] == 102 && xs.items[2] == 3 && xs.written == 2)
+}
+
+// A chain over a type-parameter collection calls its adapters' methods,
+// whose effect rows name the collection's through the driver's base.
+fn weigh<C: Collection<Item = u256> + Bidirectional>(_ xs: C) -> u256 uses C::E {
+    var sum = 0
+    for (i, (j, x)) in xs.enumerate().skip(1).enumerate() {
+        sum += (i + j) as u256 * x
+    }
+    for y in xs.reversed().map(|x| x + 1) {
+        sum += y
+    }
+    sum
+}
+
+fn scale<C: mut Collection<Item = u256>>(_ xs: mut C) uses C::E {
+    for (i, mut x) in xs.enumerate() {
+        x *= i as u256 + 1
+    }
+}
+
+#[test]
+fn chains_over_generic_collections() {
+    var xs: [u256; 4] = [1, 2, 3, 4]
+    assert!(weigh(xs) == 45)
+    scale(mut xs)
+    assert!(xs[0] == 1 && xs[1] == 4 && xs[2] == 9 && xs[3] == 16)
+
+    var tracked = Tracked { items: [1, 2, 3, 4], written: 0 }
+    scale(mut tracked)
+    assert!(tracked.items[3] == 16 && tracked.written == 4)
+}
+
+// A loop infers the base of a driver built without one, adapted too.
+#[test]
+fn adapted_driver_base_inferred() {
+    var xs: [u256; 3] = [1, 2, 3]
+    let e = core::iter::Identity {}.enumerate()
+    var t: u256 = 0
+    for (i, x) in xs.by(e) {
+        t += i as u256 * x
+    }
+    assert!(t == 8)
+    let w = core::iter::Identity {}.enumerate()
+    for (i, mut x) in xs.by(w) {
+        x += i as u256
+    }
+    assert!(xs[0] == 1 && xs[1] == 3 && xs[2] == 5)
+}

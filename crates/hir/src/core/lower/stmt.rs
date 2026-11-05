@@ -25,7 +25,6 @@ impl<'db> Stmt<'db> {
                 super::item::validate_for_loop_attrs(ctxt.f_ctxt, for_.attr_list());
                 let bind = Pat::lower_ast_opt(ctxt, for_.pat());
                 let iter = Expr::push_to_body_opt(ctxt, for_.iterable());
-                let driver = for_.driver().map(|driver| Expr::lower_ast(ctxt, driver));
                 let body = Expr::push_to_body_opt(
                     ctxt,
                     for_.body()
@@ -34,7 +33,7 @@ impl<'db> Stmt<'db> {
                 let unroll_hint = lower_loop_unroll_hint(ctxt, for_.attr_list());
 
                 (
-                    Stmt::For(bind, iter, driver, body, unroll_hint),
+                    Stmt::For(bind, iter, body, unroll_hint),
                     HirOrigin::raw(&ast),
                 )
             }

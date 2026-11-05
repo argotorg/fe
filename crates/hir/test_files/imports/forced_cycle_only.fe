@@ -1,0 +1,12 @@
+// `c::c` and the glob import of `c::c::*` wait on each other, since the glob
+// could bring in a value `c`. `d::X` only waits on the glob, so it isn't
+// taken to bring nothing in when the cycle is broken.
+pub mod c {
+    pub struct K {}
+    pub use super::c as c
+}
+pub use c::c::*
+mod d {
+    pub use super::K as X
+}
+fn f(x: d::X) {}

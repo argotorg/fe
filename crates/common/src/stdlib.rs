@@ -56,11 +56,11 @@ pub fn is_authorized_builtin_library(
         return true;
     }
     let graph = db.dependency_graph();
-    let Some(workspace_root) = graph.workspace_root_for_member(db, &base) else {
+    let Some(workspace_root) = graph.workspace_root_for_member(db, base) else {
         return false;
     };
     let members = graph.workspace_members_by_name(db, &workspace_root, &library.name().into());
-    matches!(members.as_slice(), [member] if member.url == base)
+    matches!(members.as_slice(), [member] if member.url == *base)
 }
 
 fn is_library_file(path: &Utf8Path) -> bool {

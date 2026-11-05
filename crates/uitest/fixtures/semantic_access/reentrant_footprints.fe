@@ -21,7 +21,7 @@ impl Pinger for CallPinger {
     uses E = (call: mut Call)
 
     fn go(self, _ a: Address) uses E {
-        call.call(addr: a, gas: 200000, value: 0, message: AMsg::Poke { v: a })
+        call.call(addr: a, gas: 200000, value: Wei::zero(), message: AMsg::Poke { v: a })
     }
 }
 
@@ -40,11 +40,11 @@ fn apply<F: Fn()>(_ f: F) uses F::E {
 }
 
 fn ping_with(_ e: mut Evm, _ a: Address) {
-    e.call(addr: a, gas: 200000, value: 0, message: AMsg::Poke { v: a })
+    e.call(addr: a, gas: 200000, value: Wei::zero(), message: AMsg::Poke { v: a })
 }
 
 fn poke<C: Call>(_ c: mut C, _ a: Address) {
-    c.call(addr: a, gas: 200000, value: 0, message: AMsg::Poke { v: a })
+    c.call(addr: a, gas: 200000, value: Wei::zero(), message: AMsg::Poke { v: a })
 }
 
 fn caller_of(_ e: Evm) -> Address {
@@ -83,7 +83,7 @@ pub contract V uses (call: mut Call, evm: mut Evm) {
         // Rejected: the closure's row calls out.
         Closure { a } uses (mut value, mut call) {
             let held = mut value
-            apply(|| call.call(addr: a, gas: 1000, value: 0, message: AMsg::Poke { v: a }))
+            apply(|| call.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a }))
             held = 1
         }
         // Rejected: a `mut Evm` data argument calls out.
@@ -119,7 +119,7 @@ pub contract V uses (call: mut Call, evm: mut Evm) {
         // Rejected: a local closure's body calls out.
         Local { a } uses (mut value, mut call) {
             let held = mut value
-            let f = || call.call(addr: a, gas: 1000, value: 0, message: AMsg::Poke { v: a })
+            let f = || call.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a })
             f()
             held = 1
         }

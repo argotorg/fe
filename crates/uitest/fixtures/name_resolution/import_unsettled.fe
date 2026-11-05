@@ -1,0 +1,18 @@
+mod N {
+    pub mod Y {
+        pub mod N {}
+    }
+}
+
+fn f() {
+    use X::N
+    use N::Y as X
+}
+
+mod A {}
+mod B {}
+
+fn g() {
+    use B as A
+    use A as B
+}

@@ -1,7 +1,7 @@
 // Closures are values of their captures, copied or moved in, and implement
 // the callable shape of their parameter modes; unannotated parameters take
 // their modes and types from the shape the callee expects.
-use core::iter::{Adapt, Collection, FromProducer, filter, map}
+use core::iter::{Collection, FromProducer}
 use core::option::Option
 use core::ptr::MemArray
 
@@ -50,18 +50,6 @@ fn adapters() {
         total += y
     }
     assert!(total == 14)
-
-    // A free adapter does not know the base, so its closure is annotated.
-    var odds = 0
-    for x in xs by filter(|x: u256| x % 2 == 1) {
-        odds += x
-    }
-    assert!(odds == 4)
-    var doubled = 0
-    for y in xs by map(|x: u256| x * 2) {
-        doubled += y
-    }
-    assert!(doubled == 20)
 }
 
 #[test]
@@ -96,7 +84,7 @@ fn control_flow_in_bodies() {
 #[test]
 fn collect_and_chains() {
     let xs: [u256; 4] = [1, 2, 3, 4]
-    let doubled = MemArray::collect(xs, map(|x: u256| x * 2))
+    let doubled = MemArray::collect(xs, xs.map(|x| x * 2))
     assert!(doubled.len() == 4)
     assert!(doubled[3] == 8)
     let offset = 100

@@ -1,5 +1,6 @@
 // Owner-side primitives move into and out of dynamically indexed elements
 // through stable `mut` accesses, which a direct move out of `xs[i]` cannot.
+use core::option::Option
 use core::ptr::MemArray
 
 struct Item { n: u256 }
@@ -18,4 +19,41 @@ fn owner_primitives() {
     assert!(xs[2].n == 30)
     xs.swap(1, 1)
     assert!(xs[1].n == 20)
+}
+
+struct Counter { calls: u256 }
+
+impl FnMut(usize) -> Item for Counter {
+    fn call_mut(mut self, _ i: usize) -> Item {
+        self.calls += 1
+        Item { n: i as u256 * 10 + self.calls }
+    }
+}
+
+#[test]
+fn from_fn_fills_each_element_in_order() {
+    let squares = MemArray::from_fn(4, |i| i * i)
+    assert!(squares.len() == 4 && squares[3] == 9)
+
+    // Non-`Copy` elements, from a callable that keeps state between calls.
+    var counter = Counter { calls: 0 }
+    let items = MemArray::from_fn(3, mut counter)
+    assert!(items[0].n == 1 && items[1].n == 12 && items[2].n == 23)
+    assert!(counter.calls == 3)
+
+    let none = MemArray<u256>::from_fn(0, |i| i as u256)
+    assert!(none.is_empty())
+}
+
+#[test]
+fn get_reaches_an_element_in_bounds() {
+    let xs = MemArray::from_fn(3, |i| i as u256 + 5)
+    match xs.get(2) {
+        Option::Some(x) => assert!(x == 7)
+        Option::None => assert!(false)
+    }
+    match xs.get(3) {
+        Option::Some(_) => assert!(false)
+        Option::None => {}
+    }
 }

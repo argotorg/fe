@@ -11,7 +11,7 @@ fn bump() uses (foo: mut Foo) {
     foo.b = foo.b + 2
 }
 
-fn test_effect_ptr_domains() uses (st: mut RawStorage) {
+pub fn main() uses (st: mut RawStorage) {
     let mp = ptr::alloc<Foo>()
     unsafe {
         with (mut *mp) {

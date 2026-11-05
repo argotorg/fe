@@ -1,0 +1,89 @@
+// A value of an associated shape not known here is passed on at most once.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (mut? u256, mut? u256)
+
+    fn at(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+
+fn take<D: Driver>(_ s: D::Step<ref>) {}
+
+fn twice<D: Driver>(_ s: D::Step<ref>) {
+    take<D>(s)
+    take<D>(s)
+}
+
+// Accepted: once on each path.
+fn once<D: Driver>(_ s: D::Step<ref>, _ c: bool) {
+    if c {
+        take<D>(s)
+    } else {
+        take<D>(s)
+    }
+}
+
+fn set<D: mut Driver>(_ s: D::Step<mut>) {}
+
+// A concrete caller passes the parts its impl's shape lists, which must be
+// disjoint.
+fn aliased_parts() {
+    var p = Pair { a: 1, b: 2 }
+    set<Pair>((mut p.a, mut p.a))
+}
+
+// Accepted: disjoint parts, and the impl's own step.
+fn concrete_parts() {
+    var p = Pair { a: 1, b: 2 }
+    set<Pair>((mut p.a, mut p.b))
+    set<Pair>(p.at())
+}
+
+// A part bound whole, and a closure's parameter of the shape, are passed
+// on at most once too.
+fn part_twice<D: Driver>(_ (i, s): (own usize, D::Step<ref>)) {
+    take<D>(s)
+    take<D>(s)
+}
+
+fn closure_twice<D: Driver>(_ d: D) {
+    let f = |s: D::Step<ref>| {
+        take<D>(s)
+        take<D>(s)
+    }
+    f(d.at())
+}
+
+fn sink<D: mut Driver>(_ s: D::Step<ref>, _ d: mut D) {}
+
+// A step passed on keeps its grant through the call: `d.at()` views `d`
+// while `mut d` is passed.
+fn open_while_passed<D: mut Driver>(_ d: mut D) {
+    sink<D>(d.at(), mut d)
+}
+
+fn pass_on<D: Driver>(_ s: D::Step<ref>) -> D::Step<ref> {
+    s
+}
+
+// And through a projection that passes it on.
+fn open_while_forwarded<D: mut Driver>(_ d: mut D) {
+    sink<D>(pass_on<D>(d.at()), mut d)
+}
+
+// Accepted: the caller's step does not hold `d`.
+fn passed_in<D: mut Driver>(_ s: D::Step<ref>, _ d: mut D) {
+    sink<D>(pass_on<D>(s), mut d)
+}

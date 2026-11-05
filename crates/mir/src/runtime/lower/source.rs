@@ -443,7 +443,8 @@ fn normalized_value_place<'db>(
                 }),
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
-                | NStatementKind::End { .. } => None,
+                | NStatementKind::End { .. }
+                | NStatementKind::Drop { .. } => None,
             },
             NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => None,
         }
@@ -485,7 +486,8 @@ pub(super) fn local_read_places_extractable_from_value(
                 }
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
-                | NStatementKind::End { .. } => true,
+                | NStatementKind::End { .. }
+                | NStatementKind::Drop { .. } => true,
             })
     })
 }

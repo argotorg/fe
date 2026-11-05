@@ -1,0 +1,148 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_enum_field_abi_type.fe
+---
+error[9-0006]: selector declares `uint256` but field `value` has ABI type `uint8`
+    ┌─ msg_enum_field_abi_type.fe:123:16
+    │
+123 │     Mismatch { value: Named },
+    │                ^^^^^^^^^^^^ expected a `uint256`-typed value
+    │
+    = `u256` decodes and encodes Solidity `uint256`
+
+error[9-0006]: selector declares `uint8` but field `value` has ABI type `uint8[0]`
+    ┌─ msg_enum_field_abi_type.fe:144:22
+    │
+144 │     EmptyArrayType { value: EmptyArray },
+    │                      ^^^^^^^^^^^^^^^^^ expected a `uint8`-typed value
+    │
+    = `u8` decodes and encodes Solidity `uint8`
+
+error[9-0006]: selector declares `uint8` but field `value` has ABI type `ufixed128x18`
+    ┌─ msg_enum_field_abi_type.fe:147:17
+    │
+147 │     FixedType { value: Fixed },
+    │                 ^^^^^^^^^^^^ expected a `uint8`-typed value
+    │
+    = `u8` decodes and encodes Solidity `uint8`
+
+error[9-0006]: selector declares `uint8` but field `value` has ABI type `uint8[2]`
+    ┌─ msg_enum_field_abi_type.fe:150:21
+    │
+150 │     DelegatedType { value: Delegated },
+    │                     ^^^^^^^^^^^^^^^^ expected a `uint8`-typed value
+    │
+    = `u8` decodes and encodes Solidity `uint8`
+
+error[9-0006]: selector declares `uint8` but field `value` has ABI type `bool`
+    ┌─ msg_enum_field_abi_type.fe:153:21
+    │
+153 │     ByteArrayType { value: ByteArray },
+    │                     ^^^^^^^^^^^^^^^^ expected a `uint8`-typed value
+    │
+    = `u8` decodes and encodes Solidity `uint8`
+
+error[9-0008]: unsupported ABI field type in msg variant `WithoutSolCompat`
+    ┌─ msg_enum_field_abi_type.fe:117:31
+    │
+117 │     WithoutSolCompat { value: Plain },
+    │                               ^^^^^ `Plain` cannot be represented in the Solidity ABI
+    │
+    = unsupported ABI enum type `Plain`: an enum needs a `std::abi::SolCompat` impl naming its Solidity type, such as `uint8`
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `WithoutCodec`
+    ┌─ msg_enum_field_abi_type.fe:120:27
+    │
+120 │     WithoutCodec { value: Named },
+    │                           ^^^^^ `Named` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+    │
+    = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `Mismatch`
+    ┌─ msg_enum_field_abi_type.fe:123:23
+    │
+123 │     Mismatch { value: Named },
+    │                       ^^^^^ `Named` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+    │
+    = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: unsupported ABI field type in msg variant `TupleType`
+    ┌─ msg_enum_field_abi_type.fe:126:24
+    │
+126 │     TupleType { value: Tuple },
+    │                        ^^^^^ `Tuple` cannot be represented in the Solidity ABI
+    │
+    = unsupported ABI enum type `Tuple`: its `SolCompat::SOL_TYPE` `tuple` is not a non-tuple Solidity ABI type
+
+error[9-0008]: unsupported ABI field type in msg variant `OddWidthType`
+    ┌─ msg_enum_field_abi_type.fe:129:27
+    │
+129 │     OddWidthType { value: OddWidth },
+    │                           ^^^^^^^^ `OddWidth` cannot be represented in the Solidity ABI
+    │
+    = unsupported ABI enum type `OddWidth`: its `SolCompat::SOL_TYPE` `uint7` is not a non-tuple Solidity ABI type
+
+error[9-0008]: unsupported ABI field type in msg variant `LongBytesType`
+    ┌─ msg_enum_field_abi_type.fe:132:28
+    │
+132 │     LongBytesType { value: LongBytes },
+    │                            ^^^^^^^^^ `LongBytes` cannot be represented in the Solidity ABI
+    │
+    = unsupported ABI enum type `LongBytes`: its `SolCompat::SOL_TYPE` `bytes33` is not a non-tuple Solidity ABI type
+
+error[9-0008]: unsupported ABI field type in msg variant `UnknownType`
+    ┌─ msg_enum_field_abi_type.fe:135:26
+    │
+135 │     UnknownType { value: Unknown },
+    │                          ^^^^^^^ `Unknown` cannot be represented in the Solidity ABI
+    │
+    = unsupported ABI enum type `Unknown`: its `SolCompat::SOL_TYPE` `foo` is not a non-tuple Solidity ABI type
+
+error[9-0008]: unsupported ABI field type in msg variant `BadFixedType`
+    ┌─ msg_enum_field_abi_type.fe:138:27
+    │
+138 │     BadFixedType { value: BadFixed },
+    │                           ^^^^^^^^ `BadFixed` cannot be represented in the Solidity ABI
+    │
+    = unsupported ABI enum type `BadFixed`: its `SolCompat::SOL_TYPE` `fixed8x81` is not a non-tuple Solidity ABI type
+
+error[9-0008]: unsupported ABI field type in msg variant `ZeroFixedType`
+    ┌─ msg_enum_field_abi_type.fe:141:28
+    │
+141 │     ZeroFixedType { value: ZeroFixed },
+    │                            ^^^^^^^^^ `ZeroFixed` cannot be represented in the Solidity ABI
+    │
+    = unsupported ABI enum type `ZeroFixed`: its `SolCompat::SOL_TYPE` `fixed128x0` is not a non-tuple Solidity ABI type
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `EmptyArrayType`
+    ┌─ msg_enum_field_abi_type.fe:144:29
+    │
+144 │     EmptyArrayType { value: EmptyArray },
+    │                             ^^^^^^^^^^ `EmptyArray` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+    │
+    = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `FixedType`
+    ┌─ msg_enum_field_abi_type.fe:147:24
+    │
+147 │     FixedType { value: Fixed },
+    │                        ^^^^^ `Fixed` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+    │
+    = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `DelegatedType`
+    ┌─ msg_enum_field_abi_type.fe:150:28
+    │
+150 │     DelegatedType { value: Delegated },
+    │                            ^^^^^^^^^ `Delegated` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+    │
+    = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `ByteArrayType`
+    ┌─ msg_enum_field_abi_type.fe:153:28
+    │
+153 │     ByteArrayType { value: ByteArray },
+    │                            ^^^^^^^^^ `ByteArray` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+    │
+    = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`

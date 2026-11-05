@@ -1,0 +1,92 @@
+// A closure whose body uses a trait-keyed effect takes its provider from
+// each call, as a function's does.
+use std::evm::{Evm, RawStorage, StorPtr, storage_at}
+
+trait Log {
+    fn n(self) -> u256
+}
+
+struct Fixed {
+    n: u256,
+}
+
+impl Log for Fixed {
+    fn n(self) -> u256 {
+        self.n
+    }
+}
+
+struct Other {
+    n: u256,
+}
+
+impl Log for Other {
+    fn n(self) -> u256 {
+        self.n
+    }
+}
+
+fn note() -> u256 uses (log: Log) {
+    log.n()
+}
+
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E {
+    f()
+}
+
+fn through_closure() -> u256 uses (log: Log) {
+    let g = || note() + 1
+    g()
+}
+
+unsafe fn slot_at(_ slot: u256) -> mut u256 uses (storage: mut RawStorage) {
+    unsafe { mut *(slot as StorPtr<u256>) }
+}
+
+fn bump_storage() uses (storage: mut RawStorage) {
+    let g = || {
+        unsafe { slot_at(0) += 1 }
+    }
+    g()
+    g()
+}
+
+#[test]
+fn closure_trait_effects() uses (evm: mut Evm) {
+    with (Log = Fixed { n: 4 }) {
+        assert!(through_closure() == 5)
+    }
+    with (RawStorage = evm) {
+        bump_storage()
+        assert!(unsafe { storage_at<u256>(0) } == 2)
+    }
+}
+
+#[test]
+fn same_closure_each_call_provider() {
+    let g = || note()
+    assert!(with (Log = Fixed { n: 70 }) { g() } == 70)
+    assert!(with (Log = Other { n: 100 }) { g() } == 100)
+    assert!(with (Log = Fixed { n: 7 }) { apply(g) } == 7)
+}
+
+// A closure made under one provider uses the one at each call.
+#[test]
+fn closure_escapes_its_with_block() {
+    let g = with (Log = Fixed { n: 7 }) {
+        || note()
+    }
+    assert!(with (Log = Fixed { n: 70 }) { g() } == 70)
+    assert!(with (Log = Other { n: 100 }) { apply(g) } == 100)
+}
+
+#[test]
+fn nested_closure_capture_and_provider() {
+    let offset: u256 = 3
+    let outer = || {
+        let inner = || note() + offset
+        apply(inner)
+    }
+    assert!(with (Log = Fixed { n: 70 }) { outer() } == 73)
+    assert!(with (Log = Other { n: 100 }) { outer() } == 103)
+}

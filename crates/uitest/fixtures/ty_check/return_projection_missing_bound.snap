@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/return_projection_missing_bound.fe
 ---
@@ -11,7 +10,7 @@ error[6-0003]: trait bound is not satisfied
   │                       ^^^^^^^^^^^^^^^^^^ `T` doesn't implement `Bound`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ return_projection_missing_bound.fe:10:5
+   ┌─ return_projection_missing_bound.fe:10:14
    │
-10 │     todo()
-   │     ^^^^^^ `T` doesn't implement `Bound`
+10 │     unsafe { todo() }
+   │              ^^^^^^ `T` doesn't implement `Bound`

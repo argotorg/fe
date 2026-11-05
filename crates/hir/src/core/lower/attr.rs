@@ -2,12 +2,10 @@ use parser::{
     TextRange,
     ast::{self, prelude::*},
 };
-use salsa::Accumulator as _;
 
 use super::FileLowerCtxt;
 use crate::core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*};
 
-#[salsa::accumulator]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrMisuseError {
     pub kind: AttrMisuseErrorKind,
@@ -291,15 +289,14 @@ fn report_attr_misuse<'db>(
     kind: AttrMisuseErrorKind,
 ) {
     let db = ctxt.db();
-    AttrMisuseError {
+    ctxt.report(AttrMisuseError {
         kind,
         file: ctxt.top_mod().file(db),
         primary_range,
         attr_name,
         target: target.kind,
         item_name: target.name,
-    }
-    .accumulate(db);
+    });
 }
 
 pub(super) fn lower_attrs_without_named<'db>(

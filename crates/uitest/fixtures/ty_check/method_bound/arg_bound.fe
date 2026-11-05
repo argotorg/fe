@@ -22,7 +22,7 @@ impl Extract for Maybe {
     fn extract<T>(self: own Self<T>) -> T {
         match self {
             Just(t) => t
-            Nothing => todo()
+            Nothing => unsafe { todo() }
         }
     }
 }

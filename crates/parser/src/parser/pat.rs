@@ -1,6 +1,9 @@
 use std::convert::Infallible;
 
-use super::{ErrProof, Parser, Recovery, define_scope, path::PathScope, token_stream::TokenStream};
+use super::{
+    Checkpoint, ErrProof, Parser, Recovery, define_scope, path::PathScope,
+    token_stream::TokenStream,
+};
 use crate::{
     ParseError, SyntaxKind,
     parser::{
@@ -11,6 +14,18 @@ use crate::{
 };
 
 pub fn parse_pat<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
+    let checkpoint = parse_pat_operand(parser)?;
+    if parser.current_kind() == Some(SyntaxKind::Pipe) {
+        parser.parse_cp(OrPatScope::default(), Some(checkpoint))?;
+    }
+    Ok(())
+}
+
+/// A pattern with no `|` at its top: a parameter's, where a closure's `|`
+/// ends the list. Returns where it starts.
+pub(crate) fn parse_pat_operand<S: TokenStream>(
+    parser: &mut Parser<S>,
+) -> Result<Checkpoint, Recovery<ErrProof>> {
     use SyntaxKind::*;
     parser.bump_trivias();
     let checkpoint = parser.checkpoint();
@@ -29,18 +44,14 @@ pub fn parse_pat<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<
             .unwrap(),
         _ => parser.parse_cp(PathPatScope::default(), Some(checkpoint))?,
     };
-
-    if parser.current_kind() == Some(SyntaxKind::Pipe) {
-        parser.parse_cp(OrPatScope::default(), Some(checkpoint))?;
-    }
-    Ok(())
+    Ok(checkpoint)
 }
 
-/// Bumps a binding's `mut`, `ref` or `var` marker, reporting one in front of
-/// a pattern that binds nothing or a second marker.
+/// Bumps a binding's `mut`, `mut?`, `ref` or `var` marker, reporting one in
+/// front of a pattern that binds nothing or a second marker.
 fn bump_binding_marker<S: TokenStream>(parser: &mut Parser<S>) {
     use SyntaxKind::*;
-    let Some(marker) = [MutKw, RefKw, VarKw]
+    let Some(marker) = [MutKw, MaybeMutKw, RefKw, VarKw]
         .into_iter()
         .find(|kind| parser.bump_if(*kind))
     else {
@@ -52,7 +63,7 @@ fn bump_binding_marker<S: TokenStream>(parser: &mut Parser<S>) {
     match token.syntax_kind() {
         Underscore | Dot2 | LParen => {}
         kind if is_lit(kind) => {}
-        MutKw | RefKw | VarKw => {
+        MutKw | MaybeMutKw | RefKw | VarKw => {
             parser.error_msg_on_current_token(&format!(
                 "a binding takes one marker, not {} and {}",
                 marker.describe(),
@@ -138,10 +149,10 @@ impl super::Parse for PathPatScope {
 
         parser.set_newline_as_trivia(false);
         if parser.current_kind() == Some(SyntaxKind::LParen) {
-            self.set_kind(SyntaxKind::PathTuplePat);
+            parser.set_scope_kind(SyntaxKind::PathTuplePat);
             parser.parse(TuplePatElemListScope::default())
         } else if parser.current_kind() == Some(SyntaxKind::LBrace) {
-            self.set_kind(SyntaxKind::RecordPat);
+            parser.set_scope_kind(SyntaxKind::RecordPat);
             parser.parse(RecordPatFieldListScope::default())
         } else {
             Ok(())
@@ -211,7 +222,7 @@ impl super::Parse for RecvArmPatScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         if parser.current_kind() == Some(SyntaxKind::Underscore) {
-            self.set_kind(SyntaxKind::WildCardPat);
+            parser.set_scope_kind(SyntaxKind::WildCardPat);
             parser
                 .parse(WildCardPatScope::default())
                 .expect("wildcard recv arm pattern parsing should be infallible");
@@ -227,7 +238,7 @@ impl super::Parse for RecvArmPatScope {
         parser.set_newline_as_trivia(false);
         match parser.current_kind() {
             Some(SyntaxKind::LBrace) => {
-                self.set_kind(SyntaxKind::RecordPat);
+                parser.set_scope_kind(SyntaxKind::RecordPat);
                 // Use restricted record field list parsing for recv arms
                 parser.parse(RecvArmRecordPatFieldListScope::default())
             }
@@ -236,7 +247,7 @@ impl super::Parse for RecvArmPatScope {
                 parser.error_msg_on_current_token(
                     "tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead",
                 );
-                self.set_kind(SyntaxKind::PathTuplePat);
+                parser.set_scope_kind(SyntaxKind::PathTuplePat);
                 parser.parse(TuplePatElemListScope::default())
             }
             _ => Ok(()),
@@ -337,11 +348,11 @@ impl super::Parse for RecvArmFieldPathPatScope {
 
         parser.set_newline_as_trivia(false);
         if parser.current_kind() == Some(SyntaxKind::LParen) {
-            self.set_kind(SyntaxKind::PathTuplePat);
+            parser.set_scope_kind(SyntaxKind::PathTuplePat);
             // Allow tuple destructuring in nested patterns
             parser.parse(RecvArmTuplePatElemListScope::default())
         } else if parser.current_kind() == Some(SyntaxKind::LBrace) {
-            self.set_kind(SyntaxKind::RecordPat);
+            parser.set_scope_kind(SyntaxKind::RecordPat);
             // Recursively use restricted record field parsing
             parser.parse(RecvArmRecordPatFieldListScope::default())
         } else {

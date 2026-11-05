@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/const_arg_paths.fe
+---
+error[2-0006]: expected type item here
+   ┌─ const_arg_paths.fe:28:25
+   │
+28 │ fn binding<T: Get<Out = N>>() {}
+   │                         ^ expected type here, but found const `N`
+
+error[2-0013]: unexpected const generic argument
+   ┌─ const_arg_paths.fe:23:21
+   │
+23 │ fn bare_for_type<T: Conv<N>>() {}
+   │                     ^^^^ expected type generic argument, given const `3`
+
+error[2-0013]: unexpected const generic argument
+   ┌─ const_arg_paths.fe:25:23
+   │
+25 │ fn braced_for_type<T: Conv<{ N }>>() {}
+   │                       ^^^^ expected type generic argument, given const `3`
+
+error[2-0013]: const generic argument expected for `Gate`
+   ┌─ const_arg_paths.fe:31:22
+   │
+31 │ fn type_for_const<T: Gate<u8>>() {}
+   │                      ^^^^ expected const argument of type `u256`

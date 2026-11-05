@@ -40,18 +40,6 @@ func private %logical_and(v0.i8) -> i1 {
         br v18 block2 block3;
 }
 
-func private %logical_ops() -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i1 = call %logical_or -1.i8;
-        v2.i1 = call %logical_and -1.i8;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
-        v7.@layout_0 = insert_value v5 1.i256 v2;
-        return v7;
-}
-
 func private %logical_or(v0.i8) -> i1 {
     block0:
         jump block1;
@@ -84,12 +72,24 @@ func private %logical_or(v0.i8) -> i1 {
         br v17 block2 block3;
 }
 
+func private %main() -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i1 = call %logical_or -1.i8;
+        v2.i1 = call %logical_and -1.i8;
+        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
+        v7.@layout_0 = insert_value v5 1.i256 v2;
+        return v7;
+}
+
 func private %main_root() {
     block0:
         jump block1;
 
     block1:
-        v0.@layout_0 = call %logical_ops;
+        v0.@layout_0 = call %main;
         evm_stop;
 }
 

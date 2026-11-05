@@ -504,6 +504,7 @@ async fn mock_lsp_scenarios() {
     scenario_format_during_generic_struct_keystroke_sequence(&mut client, &uri).await;
     scenario_diagnostics_published_for_broken_code(&mut client).await;
     scenario_arithmetic_attr_reports_errors(&mut client, &uri).await;
+    scenario_incomplete_attribute_is_reported_and_editing_continues(&mut client, &uri).await;
     scenario_contract_analysis_reports_errors(&mut client, &uri).await;
     scenario_payable_attr_reports_errors(&mut client, &uri).await;
     scenario_errors_reported_after_panic_recovery(&mut client, &uri).await;
@@ -740,6 +741,26 @@ fn bad() {}"#,
          got: {:?}",
         client.diagnostics_for_uri(uri),
     );
+}
+
+/// Regression test: typing `#` before `[test]` made parser recovery loop without end,
+/// which blocked the server for good. A document that is only `#` must get a
+/// diagnostic, and the edit that completes the attribute must still be analyzed.
+async fn scenario_incomplete_attribute_is_reported_and_editing_continues(
+    client: &mut MockLspClient,
+    uri: &Url,
+) {
+    client.clear_diagnostics();
+    client.did_change(uri, 760, "#");
+    let found = client
+        .wait_for_diagnostics(|d| &d.uri == uri && !d.diagnostics.is_empty())
+        .await;
+    assert!(found, "expected a syntax error for a document that is `#`");
+
+    let complete = "#[test]\nfn check() {}";
+    client.clear_diagnostics();
+    client.did_change(uri, 770, complete);
+    client.analyze(uri, complete).await;
 }
 
 /// Regression test: ContractAnalysisPass was absent from initialize_analysis_pass().
@@ -1138,6 +1159,192 @@ async fn mock_lsp_hover_shows_indexed_layouts_and_transactional_failures() {
         bad_text.contains("Invalid: layout extent overflowed"),
         "expected primary layout failure, got:\n{bad_text}"
     );
+
+    client.shutdown().await;
+}
+
+/// The start of the single definition goto finds at `position`, if any.
+async fn definition_start(
+    client: &mut MockLspClient,
+    uri: &Url,
+    position: Position,
+) -> Option<Position> {
+    match client
+        .goto_definition(uri, position.line, position.character)
+        .await
+        .expect("goto failed")?
+    {
+        GotoDefinitionResponse::Scalar(location) => Some(location.range.start),
+        response => panic!("expected one definition at {position:?}, got {response:?}"),
+    }
+}
+
+/// A parameter pattern is written in its signature, but the body that binds
+/// it records its references. Goto, hover and references find them there as
+/// in a body's `let` or a closure's parameter, and the parameter's own name,
+/// which source cannot write, is found nowhere.
+#[tokio::test]
+async fn mock_lsp_param_pattern_lookup() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    client.did_open(&uri, "");
+    client.wait_for_text(&uri, "").await;
+
+    let code = r#"struct Point {
+    x: u256,
+    y: u256,
+}
+
+struct Pair(u256, u256)
+
+mod shapes {
+    pub struct Square {
+        pub side: u256,
+    }
+}
+
+fn sum(_ (first, second): (u256, u256)) -> u256 {
+    first + second + first
+}
+
+fn norm(_ Point { x, y }: Point) -> u256 {
+    x + y
+}
+
+fn pair(_ Pair(lo, hi): Pair) -> u256 {
+    lo + hi
+}
+
+fn area(_ shapes::Square { side }: shapes::Square) -> u256 {
+    side * side
+}
+
+fn unpack(_ p: Point) -> u256 {
+    let Point { x, y } = p
+    let f = |(left, right): (u256, u256)| left + right
+    let g = |Point { x, y }: Point| x + y
+    f((x, y)) + g(Point { x, y })
+}
+
+pub contract Points {
+    total: u256
+
+    init(_ Point { x, y }: Point) uses (mut total) {
+        total = x * y
+    }
+}
+"#;
+    client.did_change(&uri, 720, code);
+    client.wait_for_text(&uri, code).await;
+
+    let at = |needle: &str, delta: usize| {
+        let offset = code.find(needle).unwrap() + delta;
+        let line_start = code[..offset].rfind('\n').map_or(0, |idx| idx + 1);
+        Position::new(
+            code[..offset].matches('\n').count() as u32,
+            (offset - line_start) as u32,
+        )
+    };
+
+    // A path in a signature's pattern, and the same path in a body's `let`
+    // and a closure's parameter.
+    let point = at("struct Point", 7);
+    for (path, definition) in [
+        (at("norm(_ Point", 7), point),
+        (at("init(_ Point", 7), point),
+        (at("let Point", 4), point),
+        (at("|Point", 1), point),
+        (at("Pair(lo", 0), at("struct Pair", 7)),
+        (at("shapes::Square {", 0), at("mod shapes", 4)),
+        (at("shapes::Square {", 8), at("struct Square", 7)),
+    ] {
+        assert_eq!(
+            definition_start(&mut client, &uri, path).await,
+            Some(definition),
+            "goto at {path:?}"
+        );
+        let hover = hover_at(&mut client, &uri, path.line, path.character).await;
+        assert_eq!(
+            hover.range.map(|range| range.start),
+            Some(path),
+            "hover range at {path:?}"
+        );
+    }
+    let point_refs = client
+        .references(&uri, point.line, point.character)
+        .await
+        .expect("references failed")
+        .expect("references of `Point`");
+    for path in [
+        at("norm(_ Point", 7),
+        at("init(_ Point", 7),
+        at("let Point", 4),
+    ] {
+        let refs = client
+            .references(&uri, path.line, path.character)
+            .await
+            .expect("references failed");
+        assert_eq!(refs.as_ref(), Some(&point_refs), "references at {path:?}");
+        assert!(
+            point_refs
+                .iter()
+                .any(|location| location.range.start == path),
+            "references of `Point` miss {path:?}: {point_refs:?}"
+        );
+    }
+
+    // A name a signature's pattern binds hovers with its type, and its
+    // references are those of its uses.
+    for name in [
+        at("first,", 0),
+        at("lo,", 0),
+        at("Square { side", 9),
+        at("init(_ Point { x", 15),
+    ] {
+        let hover = hover_at(&mut client, &uri, name.line, name.character).await;
+        let text = hover_text(&hover);
+        assert!(text.ends_with(": u256\n```"), "hover at {name:?}: {text}");
+    }
+    let first = at("first,", 0);
+    let decl_refs = client
+        .references(&uri, first.line, first.character)
+        .await
+        .expect("references failed")
+        .expect("references of `first`");
+    let first_use = at("first +", 0);
+    let use_refs = client
+        .references(&uri, first_use.line, first_use.character)
+        .await
+        .expect("references failed");
+    assert_eq!(
+        decl_refs.len(),
+        3,
+        "the pattern and both uses: {decl_refs:?}"
+    );
+    assert_eq!(use_refs.as_ref(), Some(&decl_refs));
+
+    // Nothing else in a parameter is a reference: not its `_`, its
+    // pattern's punctuation, or its colon.
+    for position in [
+        at("_ (first", 0),
+        at("(first", 0),
+        at("): (u256", 1),
+        at("|(left", 1),
+        at("): (u256, u256)|", 1),
+    ] {
+        assert_eq!(
+            definition_start(&mut client, &uri, position).await,
+            None,
+            "goto at {position:?}"
+        );
+        let hover = client
+            .hover(&uri, position.line, position.character)
+            .await
+            .expect("hover failed");
+        assert!(hover.is_none(), "hover at {position:?}: {hover:?}");
+    }
 
     client.shutdown().await;
 }

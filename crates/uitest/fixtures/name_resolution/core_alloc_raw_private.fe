@@ -2,11 +2,11 @@ use core::ptr
 
 // The raw allocator does not bound its size, so only `core::ptr`'s
 // allocators may call it.
-fn raw(len: u256) -> *u8 {
+fn raw(len: usize) -> *u8 {
     ptr::alloc_raw(len)
 }
 
 // The unchecked allocator is for core's decoders, which bound their payloads.
-fn unchecked(len: u256) -> *u8 {
+fn unchecked(len: usize) -> *u8 {
     unsafe { ptr::alloc_bytes_unchecked(len) }
 }

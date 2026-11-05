@@ -39,12 +39,8 @@ impl<T> Mutex<T> {
         self.lock.read()
     }
 
-    pub fn value(self) -> ref T @self.value {
-        ref self.value
-    }
-
-    pub fn value_mut(mut self) -> mut T @self.value {
-        mut self.value
+    pub fn value(mut? self) -> mut? T {
+        mut? self.value
     }
 
     /// Copies the protected value out without taking the lock, to keep

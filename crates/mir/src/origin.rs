@@ -3,7 +3,7 @@ use common::origin::{
     validate_origin_key_text,
 };
 use cranelift_entity::EntityRef;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{MirDb, RuntimeInstance, runtime::RBlockId, runtime::RLocalId};
 
@@ -16,7 +16,7 @@ pub const RUNTIME_LOOP_EXPORT_KIND: &str = "runtime.loop";
 pub const RUNTIME_TYPE_EXPORT_KIND: &str = "runtime.type";
 
 /// Stable export owner key for a runtime MIR instance.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct RuntimeInstanceOwnerKey(String);
 
 impl RuntimeInstanceOwnerKey {
@@ -49,7 +49,7 @@ impl OriginExportOwnerKey for RuntimeInstanceOwnerKey {
 }
 
 /// Statement index within a runtime MIR block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct RuntimeStmtIndex(u32);
 
 impl RuntimeStmtIndex {
@@ -67,7 +67,7 @@ impl RuntimeStmtIndex {
 }
 
 /// Block-local statement site in runtime MIR.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct RuntimeStmtSite {
     block: RBlockId,
     stmt: RuntimeStmtIndex,
@@ -110,7 +110,7 @@ impl OriginExportLocalKey for RuntimeFunctionOriginLocalKey {
 }
 
 /// Origin key for a runtime MIR function instance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeFunctionOrigin<'db> {
     instance: RuntimeInstance<'db>,
 }
@@ -143,7 +143,7 @@ impl OriginExportLocalKey for RuntimeBlockOriginLocalKey {
 
 /// Origin key for a runtime MIR block. Block IDs are scoped to the runtime
 /// function instance and must not escape without the owner key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeBlockOrigin<'db> {
     key: OriginKey<RuntimeInstance<'db>, RBlockId>,
 }
@@ -173,7 +173,7 @@ impl<'db> RuntimeBlockOrigin<'db> {
 }
 
 /// One natural-loop candidate produced from a MIR CFG backedge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct RuntimeLoopSite {
     header: RBlockId,
     latch: RBlockId,
@@ -204,7 +204,7 @@ impl OriginExportLocalKey for RuntimeLoopSite {
 }
 
 /// Origin key for a compiler-derived MIR natural loop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeLoopOrigin<'db> {
     key: OriginKey<RuntimeInstance<'db>, RuntimeLoopSite>,
 }
@@ -231,7 +231,7 @@ impl<'db> RuntimeLoopOrigin<'db> {
 
 /// Origin key for a runtime MIR local. Local IDs are scoped to a runtime
 /// instance and are not stable without the owner key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeLocalOrigin<'db> {
     key: OriginKey<RuntimeInstance<'db>, RLocalId>,
 }
@@ -261,7 +261,7 @@ impl<'db> RuntimeLocalOrigin<'db> {
 }
 
 /// Block-local terminator site in runtime MIR.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct RuntimeTerminatorSite {
     block: RBlockId,
 }
@@ -284,7 +284,7 @@ impl OriginExportLocalKey for RuntimeTerminatorSite {
 
 /// Origin key for a runtime MIR statement. Statement positions are only
 /// meaningful inside the owning runtime instance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeStmtOrigin<'db> {
     key: OriginKey<RuntimeInstance<'db>, RuntimeStmtSite>,
 }
@@ -311,7 +311,7 @@ impl<'db> RuntimeStmtOrigin<'db> {
 
 /// Origin key for a runtime MIR terminator. Terminators are represented
 /// separately from statements to prevent accidental statement/terminator mixes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct RuntimeTerminatorOrigin<'db> {
     key: OriginKey<RuntimeInstance<'db>, RuntimeTerminatorSite>,
 }

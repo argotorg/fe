@@ -1,0 +1,57 @@
+// A recv arm returns a constant `FixedBytes` value like any other constant
+// struct. The length of `Bytes4` and `Bytes32` comes from a type alias with no
+// parameters, so the return type is concrete.
+
+use std::abi::{Bytes32, Bytes4, FixedBytes}
+use std::evm::StorageMap
+
+const SELECTOR: u256 = 0x4ce34aa2
+
+msg ConstantsMsg {
+    #[selector = sol("selector()")]
+    Selector {} -> Bytes4,
+    #[selector = sol("key()")]
+    Key {} -> Bytes32,
+    #[selector = sol("written()")]
+    Written {} -> FixedBytes<4>,
+    #[selector = sol("open()")]
+    Open {} -> Bytes4,
+}
+
+pub contract Constants {
+    mut channels: StorageMap<Address, u256>,
+
+    recv ConstantsMsg {
+        Selector {} -> Bytes4 {
+            Bytes4 { val: SELECTOR }
+        }
+
+        Key {} -> Bytes32 {
+            Bytes32 { val: 0xabcd }
+        }
+
+        Written {} -> FixedBytes<4> {
+            FixedBytes<4> { val: 1 }
+        }
+
+        Open {} -> Bytes4 uses (channels) {
+            assert!(channels[Address::zero()] == 0)
+            Bytes4 { val: SELECTOR }
+        }
+    }
+}
+
+#[test]
+fn test_constant_fixed_bytes_returns() uses (evm: mut Evm, call: mut Call) {
+    let constants = evm.create2<Constants>(value: Wei::zero(), args: (), salt: 0)
+    assert!(constants.call(ConstantsMsg::Selector {}).val == SELECTOR)
+    assert!(constants.call(ConstantsMsg::Key {}).val == 0xabcd)
+    assert!(constants.call(ConstantsMsg::Written {}).val == 1)
+    assert!(constants.call(ConstantsMsg::Open {}).val == SELECTOR)
+
+    // A `bytes4` is left-aligned in its ABI word.
+    let outcome = constants.try_call(ConstantsMsg::Selector {})
+    assert!(outcome.success())
+    assert!(outcome.returndata_len() == 32)
+    assert!(outcome.returndata().word_at(0) == SELECTOR << 224)
+}

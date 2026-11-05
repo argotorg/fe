@@ -4,7 +4,7 @@ use core::functional::Fn
 pub struct A { x: u256 }
 
 struct Doubler {}
-impl Fn<u256, u256> for Doubler {
+impl Fn(own u256) -> u256 for Doubler {
     fn call(self, _ x: own u256) -> u256 {
         x * 2
     }
@@ -46,15 +46,15 @@ fn option_map() {
 struct MyError { pub code: u256 }
 
 struct MakeMyError {}
-impl Fn<(), MyError> for MakeMyError {
-    fn call(self, _ args: own ()) -> MyError {
+impl Fn() -> MyError for MakeMyError {
+    fn call(self) -> MyError {
         MyError { code: 7 }
     }
 }
 
 struct MakePanic {}
-impl Fn<(), Panic> for MakePanic {
-    fn call(self, _ args: own ()) -> Panic {
+impl Fn() -> Panic for MakePanic {
+    fn call(self) -> Panic {
         Panic { code: 0x31 }
     }
 }
@@ -74,7 +74,7 @@ fn option_ok_or_none_to_err() {
 }
 
 #[test(should_revert, panic = 0x31)]
-fn option_ok_or_unwrap_panics() uses (evm: mut Evm) {
+fn option_ok_or_unwrap_panics() {
     let opt: Option<u256> = Option::None
     let r: Result<Panic, u256> = opt.ok_or(Panic { code: 0x31 })
     r.unwrap()
@@ -95,14 +95,14 @@ fn option_ok_or_else_none_calls_fn() {
 }
 
 #[test(should_revert, panic = 0x31)]
-fn option_ok_or_else_unwrap_panics() uses (evm: mut Evm) {
+fn option_ok_or_else_unwrap_panics() {
     let opt: Option<u256> = Option::None
     let r: Result<Panic, u256> = opt.ok_or_else(MakePanic {})
     r.unwrap()
 }
 
 #[test(should_revert, panic = 0x31)]
-fn option_ok_or_panic_from_chain() uses (evm: mut Evm) {
+fn option_ok_or_panic_from_chain() {
     // `Panic::from(code)` is a one-arg shorthand for `Panic { code: code }`.
     let opt: Option<u256> = Option::None
     opt.ok_or(Panic::from(0x31)).unwrap()
@@ -113,7 +113,7 @@ fn option_ok_or_panic_from_chain() uses (evm: mut Evm) {
 // constant struct field in a folding `if` condition triggers codegen bug
 // IR0600 — see BUG_and_then_codegen.md.
 struct HalfIfEven {}
-impl Fn<u256, Option<u256>> for HalfIfEven {
+impl Fn(own u256) -> Option<u256> for HalfIfEven {
     fn call(self, _ x: own u256) -> Option<u256> {
         if x % 2 == 0 {
             Option::Some(x / 2)
@@ -144,8 +144,8 @@ fn option_and_then() {
 // --- unwrap family ------------------------------------------------------
 
 struct ConstSeven {}
-impl Fn<(), u256> for ConstSeven {
-    fn call(self, _ args: own ()) -> u256 {
+impl Fn() -> u256 for ConstSeven {
+    fn call(self) -> u256 {
         7
     }
 }

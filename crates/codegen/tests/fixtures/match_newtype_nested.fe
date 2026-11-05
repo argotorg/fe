@@ -13,7 +13,7 @@ pub fn match_newtype_nested(a: own A) -> u256 {
     }
 }
 
-fn f() -> u256 {
+pub fn main() -> u256 {
     let a = A { inner: B { inner: 10 }}
     match_newtype_nested(a)
 }

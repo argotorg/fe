@@ -23,7 +23,6 @@ pub async fn handle_selection_range(
 
     let file_text = file.text(&backend.db);
     let top_mod = map_file_to_mod(&backend.db, file);
-    let scope_graph = top_mod.scope_graph(&backend.db);
 
     let mut results = Vec::new();
 
@@ -33,7 +32,7 @@ pub async fn handle_selection_range(
         // Collect all items and their spans, sorted by span size (smallest first)
         let mut containing_spans = Vec::new();
 
-        for item in scope_graph.items_dfs(&backend.db) {
+        for &item in top_mod.all_items(&backend.db) {
             // Get the full item span
             let item_span: hir::span::DynLazySpan = item.span().into();
             if let Some(span) = item_span.resolve(&backend.db) {
@@ -120,10 +119,9 @@ mod tests {
         top_mod: hir::hir_def::TopLevelMod,
         cursor: parser::TextSize,
     ) -> Option<SelectionRange> {
-        let scope_graph = top_mod.scope_graph(db);
         let mut containing_spans = Vec::new();
 
-        for item in scope_graph.items_dfs(db) {
+        for &item in top_mod.all_items(db) {
             let item_span: hir::span::DynLazySpan = item.span().into();
             if let Some(span) = item_span.resolve(db) {
                 let start: usize = span.range.start().into();

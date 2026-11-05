@@ -19,13 +19,21 @@ func private %empty_field_assign() {
 
     block1:
         v2.constref<@layout_1> = const.ref $const_region_0;
-        v6.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
-        v7.@layout_1 = insert_value v6 1.i256 1.i256;
-        v8.objref<@layout_0> = obj.proj v0 0.i256;
-        v9.@layout_0 = extract_value v7 0.i256;
-        v10.objref<i256> = obj.proj v0 1.i256;
-        v11.i256 = extract_value v7 1.i256;
-        obj.store v10 v11;
+        v3.constref<@layout_1> = const.ref $const_region_0;
+        v4.@layout_1 = const.load v3;
+        obj.store v0 v4;
+        return;
+}
+
+func private %main() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %tuple_with_empty;
+        call %tuple_only_empty;
+        v2.i256 = call %struct_with_empty;
+        call %empty_field_assign;
         return;
 }
 
@@ -34,7 +42,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        call %empty_field_assign;
+        call %main;
         evm_stop;
 }
 

@@ -7,9 +7,8 @@ pub use workspace::Workspace;
 use crate::{InputDb, ingot::Ingot};
 
 #[salsa::input(constructor = __new_impl)]
-#[derive(Debug)]
+#[derive(Debug, PartialOrd, Ord)]
 pub struct File {
-    #[return_ref]
     pub text: String,
 }
 
@@ -24,19 +23,21 @@ pub enum IngotFileKind {
 
 #[salsa::tracked]
 impl File {
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn containing_ingot(self, db: &dyn InputDb) -> Option<Ingot<'_>> {
         self.url(db)
             .and_then(|url| db.workspace().containing_ingot(db, url))
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn path(self, db: &dyn InputDb) -> Option<Utf8PathBuf> {
-        self.containing_ingot(db)
-            .and_then(|ingot| db.workspace().get_relative_path(db, ingot.base(db), self))
+        let ingot = self.containing_ingot(db)?;
+        db.workspace()
+            .get_relative_path(db, ingot.base(db).clone(), self)
+            .clone()
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn kind(self, db: &dyn InputDb) -> Option<IngotFileKind> {
         self.path(db).as_ref().and_then(|path| {
             if path.as_str().ends_with(".fe") {

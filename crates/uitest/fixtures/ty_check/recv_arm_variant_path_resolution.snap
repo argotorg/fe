@@ -1,0 +1,93 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_variant_path_resolution.fe
+---
+error[2-0002]: `Nope` is not found
+    ┌─ recv_arm_variant_path_resolution.fe:102:25
+    │
+102 │         Manual::Generic<Nope> { value } -> u8 {
+    │                         ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+    ┌─ recv_arm_variant_path_resolution.fe:108:9
+    │
+108 │         Nope { x } -> u256 {
+    │         ^^^^ `Nope` is not found
+
+error[2-0002]: `W` is not found
+    ┌─ recv_arm_variant_path_resolution.fe:111:12
+    │
+111 │         M::W { y } -> u256 {
+    │            ^ `W` is not found
+
+error[2-0002]: `Gone` is not found
+    ┌─ recv_arm_variant_path_resolution.fe:114:9
+    │
+114 │         Gone -> u256 {
+    │         ^^^^ `Gone` is not found
+
+error[2-0003]: `Hidden` is not visible
+   ┌─ recv_arm_variant_path_resolution.fe:96:16
+   │
+ 9 │     msg Hidden {
+   │         ------ `Hidden` is defined here
+   ·
+96 │         inner::Hidden::V { n } -> u256 {
+   │                ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `hidden` is not visible
+    ┌─ recv_arm_variant_path_resolution.fe:129:16
+    │
+ 16 │     mod hidden {
+    │         ------ `hidden` is defined here
+    ·
+129 │         outer::hidden::M::V { n } -> u256 {
+    │                ^^^^^^ `hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+    ┌─ recv_arm_variant_path_resolution.fe:132:16
+    │
+  9 │     msg Hidden {
+    │         ------ `Hidden` is defined here
+    ·
+132 │         inner::Hidden::V { n } -> u256 {
+    │                ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Private` is not visible
+    ┌─ recv_arm_variant_path_resolution.fe:141:9
+    │
+ 58 │     struct Private {
+    │            ------- `Private` is defined here
+    ·
+141 │         Private { value } -> u8 {
+    │         ^^^^^^^ `Private` is not visible
+
+error[2-0003]: `Hidden` is not visible
+    ┌─ recv_arm_variant_path_resolution.fe:149:17
+    │
+  9 │     msg Hidden {
+    │         ------ `Hidden` is defined here
+    ·
+149 │     recv inner::Hidden {
+    │                 ^^^^^^ `Hidden` is not visible
+
+error[2-0006]: expected type item here
+    ┌─ recv_arm_variant_path_resolution.fe:117:9
+    │
+117 │         inner { z } -> u256 {
+    │         ^^^^^ expected type here, but found module `inner`
+
+error[3-0000]: expected `*` kind in this context
+   ┌─ recv_arm_variant_path_resolution.fe:99:9
+   │
+99 │         Manual::Generic { value } -> u8 {
+   │         ^^^^^^^^^^^^^^^ expected `*` kind here
+
+error[8-0048]: type is not a variant of the specified msg
+    ┌─ recv_arm_variant_path_resolution.fe:132:9
+    │
+132 │         inner::Hidden::V { n } -> u256 {
+    │         ^^^^^^^^^^^^^^^^^^^^^^ `V` is not a variant of `M`
+    │
+    = in a named recv block, only variants defined in that `msg` block are allowed

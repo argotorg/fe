@@ -1,0 +1,253 @@
+// `mut?` effects through generic dispatch, closures and contract fields.
+use std::evm::{Evm, StorageMap}
+
+struct Log {
+    n: u256,
+    writes: u256,
+}
+
+trait Slot {
+    fn slot(mut? self) -> mut? u256 uses (log: mut? Log)
+}
+
+struct Cell {
+    value: u256,
+}
+
+// Each mode's body takes the trait's effect at that mode.
+impl Slot for Cell {
+    fn slot(self) -> ref u256 uses (log: Log) {
+        ref self.value
+    }
+
+    fn slot(mut self) -> mut u256 uses (log: mut Log) {
+        log.writes += 1
+        mut self.value
+    }
+}
+
+struct Plain {
+    value: u256,
+}
+
+// One body for both modes.
+impl Slot for Plain {
+    fn slot(mut? self) -> mut? u256 uses (log: mut? Log) {
+        mut? self.value
+    }
+}
+
+fn read<T: Slot>(_ t: T) -> u256 uses (log: Log) {
+    t.slot()
+}
+
+fn write<T: mut Slot>(_ t: mut T, _ v: u256) uses (log: mut Log) {
+    t.slot() = v
+}
+
+// Its own `mut?` effect, at its mode, to the trait method at the same mode.
+fn forward<T: mut? Slot>(_ t: mut? T) -> mut? u256 uses (log: mut? Log) {
+    t.slot()
+}
+
+#[test]
+fn generic_dispatch() {
+    var log = Log { n: 0, writes: 0 }
+    var cell = Cell { value: 3 }
+    var plain = Plain { value: 7 }
+    with (Log = log) {
+        assert(read(cell) == 3)
+        assert(read(plain) == 7)
+        write(mut cell, 4)
+        write(mut plain, 8)
+        assert(forward(cell) == 4)
+        forward(mut cell) = 5
+        forward(mut plain) = 9
+        assert(forward(plain) == 9)
+    }
+    assert(cell.value == 5 && plain.value == 9 && log.writes == 2)
+}
+
+// A method whose mode reaches only its effect and its result.
+trait Get {
+    fn get(self) -> mut? u256 uses (log: mut? Log)
+}
+
+struct Split {}
+
+impl Get for Split {
+    fn get(self) -> ref u256 uses (log: Log) {
+        ref log.n
+    }
+
+    fn get(self) -> mut u256 uses (log: mut Log) {
+        log.writes += 1
+        mut log.n
+    }
+}
+
+struct One {}
+
+impl Get for One {
+    fn get(self) -> mut? u256 uses (log: mut? Log) {
+        mut? log.n
+    }
+}
+
+fn set<T: mut Get>(_ t: T, _ v: u256) uses (log: mut Log) {
+    t.get() = v
+}
+
+fn get<T: Get>(_ t: T) -> u256 uses (log: Log) {
+    t.get()
+}
+
+#[test]
+fn effect_only_modes() {
+    var log = Log { n: 0, writes: 0 }
+    with (Log = log) {
+        set(Split {}, 3)
+        assert(get(Split {}) == 3)
+        set(One {}, 4)
+        assert(get(One {}) == 4)
+        Split {}.get() = 5
+    }
+    assert(log.n == 5 && log.writes == 2)
+}
+
+// A `mut` body that writes back after its yield, and uses its effect on
+// both sides of it.
+struct Halved {
+    word: u256,
+}
+
+impl Slot for Halved {
+    fn slot(self) -> ref u256 uses (log: Log) {
+        self.word / 2
+    }
+
+    fn slot(mut self) -> mut u256 uses (log: mut Log) {
+        log.writes += 1
+        var value = self.word / 2
+        yield mut value
+        self.word = value * 2
+        log.n += value
+    }
+}
+
+fn bump<T: mut Slot>(_ t: mut T) uses (log: mut Log) {
+    t.slot() += 1
+}
+
+#[test]
+fn write_back() {
+    var log = Log { n: 0, writes: 0 }
+    var h = Halved { word: 10 }
+    with (Log = log) {
+        assert(read(h) == 5)
+        bump(mut h)
+        assert(read(h) == 6)
+        h.slot() = 9
+        let x = mut h.slot()
+        x += 1
+        assert(read(h) == 10)
+    }
+    assert(h.word == 20)
+    assert(log.writes == 3 && log.n == 6 + 9 + 10)
+}
+
+struct Store {
+    a: u256,
+}
+
+fn store_slot() -> mut? u256 uses (store: mut? Store) {
+    mut? store.a
+}
+
+// A closure's effect starts read and is raised by a later call.
+fn read_then_write() uses (store: mut Store) {
+    let g = || {
+        let v = store_slot()
+        store_slot() = v + 1
+    }
+    g()
+    g()
+}
+
+// A nested closure writes; the outer one forwards its effect.
+fn nested_write() uses (store: mut Store) {
+    let g = || {
+        let h = || { store_slot() = 50 }
+        h()
+    }
+    g()
+}
+
+// A closure in a `mut?` function's body that only reads.
+fn reads_in_closure() -> mut? u256 uses (store: mut? Store) {
+    let g = || store_slot()
+    let v = g()
+    mut? store.a
+}
+
+#[test]
+fn closures() {
+    var s = Store { a: 1 }
+    with (Store = s) {
+        read_then_write()
+        assert(store_slot() == 3)
+        nested_write()
+        assert(store_slot() == 50)
+        reads_in_closure() = 60
+        assert(reads_in_closure() == 60)
+    }
+    assert(s.a == 60)
+}
+
+// A contract field provides a `mut?` effect, read or raised.
+fn entry(_ k: u256) -> mut? u256 uses (map: mut? StorageMap<u256, u256>) {
+    mut? map[k]
+}
+
+msg FieldMsg {
+    #[selector = 1]
+    Set { v: u256 } -> u256,
+    #[selector = 2]
+    Get -> u256,
+    #[selector = 3]
+    SetEntry { k: u256, v: u256 } -> u256,
+    #[selector = 4]
+    GetEntry { k: u256 } -> u256,
+}
+
+pub contract Fields {
+    mut store: Store,
+    mut map: StorageMap<u256, u256>,
+
+    recv FieldMsg {
+        Set { v } -> u256 uses (mut store) {
+            store_slot() = v
+            store_slot()
+        }
+        Get -> u256 uses (store) {
+            store_slot()
+        }
+        SetEntry { k, v } -> u256 uses (mut map) {
+            entry(k) = v
+            entry(k)
+        }
+        GetEntry { k } -> u256 uses (map) {
+            entry(k)
+        }
+    }
+}
+
+#[test]
+fn contract_fields() uses (evm: mut Evm) {
+    let c = evm.create2<Fields>(value: Wei::zero(), args: (), salt: 0)
+    assert(evm.call(addr: c, gas: 300000, value: Wei::zero(), message: FieldMsg::Set { v: 7 }) == 7)
+    assert(evm.call(addr: c, gas: 300000, value: Wei::zero(), message: FieldMsg::Get {}) == 7)
+    assert(evm.call(addr: c, gas: 300000, value: Wei::zero(), message: FieldMsg::SetEntry { k: 3, v: 9 }) == 9)
+    assert(evm.call(addr: c, gas: 300000, value: Wei::zero(), message: FieldMsg::GetEntry { k: 3 }) == 9)
+    assert(evm.call(addr: c, gas: 300000, value: Wei::zero(), message: FieldMsg::GetEntry { k: 4 }) == 0)
+}

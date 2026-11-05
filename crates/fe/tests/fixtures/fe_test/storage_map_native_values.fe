@@ -127,56 +127,56 @@ pub contract NativeValues {
 
 #[test]
 fn wide_values_use_one_representation() uses (evm: mut Evm) {
-    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 1)
-    assert(c.inner != 0)
+    let c = evm.create2<NativeValues>(value: Wei::zero(), args: (), salt: 1)
+    assert(c.word() != 0)
     evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: NativeMsg::WideRoundTrip {},
     )
 }
 #[test]
 fn packed_values_use_one_representation() uses (evm: mut Evm) {
-    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 2)
-    assert(c.inner != 0)
+    let c = evm.create2<NativeValues>(value: Wei::zero(), args: (), salt: 2)
+    assert(c.word() != 0)
     evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: NativeMsg::PackedRoundTrip {},
     )
 }
 #[test]
 fn nested_values_use_one_representation() uses (evm: mut Evm) {
-    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 3)
-    assert(c.inner != 0)
+    let c = evm.create2<NativeValues>(value: Wei::zero(), args: (), salt: 3)
+    assert(c.word() != 0)
     evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: NativeMsg::NestedRoundTrip {},
     )
 }
 #[test]
 fn set_accepts_non_copy_values() uses (evm: mut Evm) {
-    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 4)
-    assert(c.inner != 0)
+    let c = evm.create2<NativeValues>(value: Wei::zero(), args: (), salt: 4)
+    assert(c.word() != 0)
     evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: NativeMsg::OwnedWrite {},
     )
 }
 #[test]
 fn narrow_signed_values_store_their_own_bytes() uses (evm: mut Evm) {
-    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 5)
-    assert(c.inner != 0)
+    let c = evm.create2<NativeValues>(value: Wei::zero(), args: (), salt: 5)
+    assert(c.word() != 0)
     evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: NativeMsg::SignedRoundTrip {},
     )
     // Like Solidity's `mapping(uint256 => int8)`: two's-complement bytes,
@@ -185,7 +185,7 @@ fn narrow_signed_values_store_their_own_bytes() uses (evm: mut Evm) {
         evm.call(
                 addr: c,
                 gas: 1000000,
-                value: 0,
+                value: Wei::zero(),
                 message: NativeMsg::SignedRaw { key: 1 },
             ) == 0xff,
     )
@@ -193,7 +193,7 @@ fn narrow_signed_values_store_their_own_bytes() uses (evm: mut Evm) {
         evm.call(
                 addr: c,
                 gas: 1000000,
-                value: 0,
+                value: Wei::zero(),
                 message: NativeMsg::SignedRaw { key: 2 },
             ) == 0x80,
     )
@@ -201,19 +201,19 @@ fn narrow_signed_values_store_their_own_bytes() uses (evm: mut Evm) {
         evm.call(
                 addr: c,
                 gas: 1000000,
-                value: 0,
+                value: Wei::zero(),
                 message: NativeMsg::SignedRaw { key: 3 },
             ) == 0x7f,
     )
 }
 #[test]
 fn sign_extended_legacy_words_read_back() uses (evm: mut Evm) {
-    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 6)
-    assert(c.inner != 0)
+    let c = evm.create2<NativeValues>(value: Wei::zero(), args: (), salt: 6)
+    assert(c.word() != 0)
     evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: NativeMsg::SignedLegacyWord {},
     )
 }

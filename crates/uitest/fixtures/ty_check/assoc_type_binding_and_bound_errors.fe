@@ -1,0 +1,54 @@
+// The types a trait reference binds to associated types, and the bounds an
+// associated type declares, are checked like any other written type or
+// trait reference, including the well-formedness of a bound's arguments.
+fn runtime() -> usize { 1 }
+
+trait Has { type Item }
+
+trait Sized<const N: usize> {}
+
+fn unknown<T: Has<Item = Missing>>() {}
+
+fn mistyped<T: Has<Item = [u8; true]>>() {}
+
+fn faulting<T>() where T: Has<Item = [u8; { 1 / 0 }]> {}
+
+trait Sub: Has<Item = [u8; { runtime() }]> {}
+
+trait UnknownBound { type Item: Missing }
+
+trait ArityBound { type Item: Sized<1, 2> }
+
+trait FaultingBound { type Item: Sized<{ 2 / 0 }> }
+
+trait ValidBound { type Item: Sized<1> }
+
+fn valid<T: Has<Item = [u8; 2]>>() {}
+
+trait Gate {}
+
+struct Guarded<T: Gate> {}
+
+trait Holds<T> {}
+
+trait IllFormedBound { type Item: Holds<Guarded<bool>> }
+
+trait Requires<T: Gate> {}
+
+trait UnmetRequirement { type Item: Requires<bool> }
+
+trait Base {}
+
+trait Derived<T>: Base {}
+
+trait InheritedBound { type Item: Derived<u8> }
+
+// A requirement on the associated type itself falls to the impls also when a
+// default or an argument places it there; one on the trait's `Self` holds.
+trait Defaulted<T = Self> where T: Gate {}
+
+trait DefaultsToItem { type Item: Defaulted }
+
+trait NamesItem { type Item: Requires<Self::Item> }
+
+trait NamesOuterSelf { type Item: Requires<Self> }

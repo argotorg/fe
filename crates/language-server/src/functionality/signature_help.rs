@@ -55,10 +55,9 @@ fn find_signature_at_cursor<'db>(
     file_text: &str,
 ) -> Option<SignatureHelp> {
     // Find the enclosing function
-    let scope_graph = top_mod.scope_graph(db);
     let mut enclosing_func = None;
 
-    for item in scope_graph.items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         if let ItemKind::Func(func) = item
             && let Some(span) = func.span().resolve(db)
             && span.range.contains(cursor)
@@ -157,7 +156,7 @@ fn resolve_method_func<'db>(
     // Look for impl blocks that match this type
     let ty_name = receiver_ty.pretty_print(db);
 
-    for item in top_mod.scope_graph(db).items_dfs(db) {
+    for &item in top_mod.all_items(db) {
         if let ItemKind::Impl(impl_) = item {
             let impl_ty_name = impl_.ty(db).pretty_print(db);
             if impl_ty_name == ty_name {

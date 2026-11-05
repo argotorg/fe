@@ -1,0 +1,33 @@
+// A trait effect key whose trait defaults a parameter to `Self` is provided
+// by a type that implements the trait for itself.
+pub trait Reads<T = Self> {
+    fn read(self) -> u256
+}
+
+pub struct Source {
+    n: u256,
+}
+
+impl Reads for Source {
+    fn read(self) -> u256 {
+        self.n
+    }
+}
+
+fn read() -> u256 uses (reader: Reads) {
+    reader.read()
+}
+
+fn read_forwarded() -> u256 uses (reader: Reads) {
+    read() + 1
+}
+
+#[test]
+fn provided_by_with() {
+    with (Reads = Source { n: 5 }) {
+        assert!(read() == 5)
+        assert!(read_forwarded() == 6)
+        let doubled = || read() * 2
+        assert!(doubled() == 10)
+    }
+}

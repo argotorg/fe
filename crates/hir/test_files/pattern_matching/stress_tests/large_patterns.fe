@@ -58,8 +58,8 @@ fn test_large_enum_complex_or_patterns(large: VeryLargeEnum) -> u8 {
     match large {
         VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4 | VeryLargeEnum::Variant5 => 100
         VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7 | VeryLargeEnum::Variant8 | VeryLargeEnum::Variant9 | VeryLargeEnum::Variant10 => 200
-        VeryLargeEnum::Variant11 | VeryLargeEnum::Variant12 | VeryLargeEnum::Variant13 | VeryLargeEnum::Variant14 | VeryLargeEnum::Variant15 => 300
-        VeryLargeEnum::Variant16 | VeryLargeEnum::Variant17 | VeryLargeEnum::Variant18 | VeryLargeEnum::Variant19 | VeryLargeEnum::Variant20 => 400
+        VeryLargeEnum::Variant11 | VeryLargeEnum::Variant12 | VeryLargeEnum::Variant13 | VeryLargeEnum::Variant14 | VeryLargeEnum::Variant15 => 250
+        VeryLargeEnum::Variant16 | VeryLargeEnum::Variant17 | VeryLargeEnum::Variant18 | VeryLargeEnum::Variant19 | VeryLargeEnum::Variant20 => 240
     }
 }
 
@@ -135,9 +135,9 @@ fn test_deeply_nested_tuple_patterns(data: ((((((u8, bool), u8), bool), u8), boo
 // Test mixed deep nesting with enums and tuples
 fn test_mixed_deep_nesting(data: (NestedA, ((VeryLargeEnum, bool), (u8, NestedB)))) -> u8 {
     match data {
-        (NestedA::DataA(NestedB::DataB(_)), ((VeryLargeEnum::Variant1, true), (0, NestedB::UnitB))) => 500
-        (NestedA::DataA(_), ((VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3, _), (_, NestedB::DataB(_)))) => 400
-        (NestedA::UnitA, ((_, false), (x, _))) => x + 300
+        (NestedA::DataA(NestedB::DataB(_)), ((VeryLargeEnum::Variant1, true), (0, NestedB::UnitB))) => 230
+        (NestedA::DataA(_), ((VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3, _), (_, NestedB::DataB(_)))) => 240
+        (NestedA::UnitA, ((_, false), (x, _))) => x + 30
         _ => 1
     }
 }
@@ -200,9 +200,9 @@ fn test_ultimate_complexity_pattern(data: (NestedA, (VeryLargeEnum, (u8, bool, u
 // Test maximum or-pattern complexity
 fn test_maximum_or_pattern_complexity(data: (VeryLargeEnum, VeryLargeEnum, VeryLargeEnum)) -> u8 {
     match data {
-        (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4 | VeryLargeEnum::Variant5, VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7 | VeryLargeEnum::Variant8 | VeryLargeEnum::Variant9 | VeryLargeEnum::Variant10, VeryLargeEnum::Variant11 | VeryLargeEnum::Variant12 | VeryLargeEnum::Variant13 | VeryLargeEnum::Variant14 | VeryLargeEnum::Variant15) => 500
+        (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4 | VeryLargeEnum::Variant5, VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7 | VeryLargeEnum::Variant8 | VeryLargeEnum::Variant9 | VeryLargeEnum::Variant10, VeryLargeEnum::Variant11 | VeryLargeEnum::Variant12 | VeryLargeEnum::Variant13 | VeryLargeEnum::Variant14 | VeryLargeEnum::Variant15) => 230
 
-        (VeryLargeEnum::Variant16 | VeryLargeEnum::Variant17, VeryLargeEnum::Variant18 | VeryLargeEnum::Variant19, VeryLargeEnum::Variant20) => 400
+        (VeryLargeEnum::Variant16 | VeryLargeEnum::Variant17, VeryLargeEnum::Variant18 | VeryLargeEnum::Variant19, VeryLargeEnum::Variant20) => 240
 
         _ => 1
     }

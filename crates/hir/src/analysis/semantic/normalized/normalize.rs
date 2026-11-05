@@ -13,14 +13,14 @@ use crate::{
             SemanticLocalRole, ValueProvenance, VariantIndex,
             capability::array::ArrayLength,
             capability::semantics::contains_capability,
-            eval_const_ref, get_or_build_semantic_instance,
+            eval_const_ref,
             lower::layout_backing_source_path_is_prefix,
             normalized::{
-                NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
-                NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId, NRootKind, NStatement,
-                NStatementId, NStatementKind, NStructuralPath, NSuccessor, NTerminator,
-                NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody, ReadMode,
-                StructuralRepack, ViewAccess, copied_scalar_ty, is_literal_allocation,
+                NBlock, NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg,
+                NEffectArgValue, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId,
+                NRootKind, NStatement, NStatementId, NStatementKind, NStructuralPath, NSuccessor,
+                NTerminator, NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody,
+                ReadMode, StructuralRepack, ViewAccess, copied_scalar_ty, is_literal_allocation,
                 layout_plan::{
                     NLayoutBackingSource, NLayoutPlan, NLayoutProjection, NLayoutSourcePath,
                     NLayoutUseBacking, NRootRepresentation, NValueRepresentation,
@@ -33,12 +33,11 @@ use crate::{
             adt_def::AdtRef,
             provider::{AddressSpace, ProviderKind},
             trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, LocalBinding},
+            ty_check::{BindingAccess, BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
             ty_is_copy,
         },
     },
-    hir_def::FuncParamMode,
     projection::{IndexSource, Projection},
     semantic::ProviderBinding,
 };
@@ -259,7 +258,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             self.mark_address_root(dst.local, &mut needs_slot);
                         }
                     }
-                    SStmtKind::End { .. } => {}
+                    SStmtKind::End { .. } | SStmtKind::Drop { .. } => {}
                 }
             }
         }
@@ -428,7 +427,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         self.normalize_expr(raw_block, statement.origin, *dst, expr)?;
                     let mut source = Some(statement.id);
                     if let NExpr::Call { callee, .. } = &normalized {
-                        let callee = get_or_build_semantic_instance(self.db, callee.key);
+                        let callee = SemanticInstance::new(self.db, callee.key);
                         let returned_ty = callee.normalized_result_ty(self.db);
                         let target_ty = self.normalized_local_ty(*dst);
                         if returned_ty.as_borrow(self.db).is_some()
@@ -460,7 +459,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     if let NExpr::Call { callee, .. } = &normalized
                         && let Some(target) = self.normalized_local_ty(*dst).as_view(self.db)
                     {
-                        let callee = get_or_build_semantic_instance(self.db, callee.key);
+                        let callee = SemanticInstance::new(self.db, callee.key);
                         let returned_ty = callee.normalized_result_ty(self.db);
                         if returned_ty.as_capability(self.db).is_none()
                             && !returned_ty.is_never(self.db)
@@ -582,6 +581,31 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         self.current_values[dst.index()].push(value);
                         pushed.push(*dst);
                     }
+                }
+                SStmtKind::Drop { place } => {
+                    let target = if place.path.is_empty() && !self.local_has_place(place.local) {
+                        NDropTarget::Value(self.current_value(place.local)?)
+                    } else {
+                        let mut target =
+                            self.normalize_place(raw_block, statement.origin, place)?;
+                        if target.ty.as_capability(self.db).is_some() {
+                            target = self.dereference_place(
+                                raw_block,
+                                statement.origin,
+                                place.local,
+                                target,
+                            )?;
+                        }
+                        NDropTarget::Place(target)
+                    };
+                    let id = NStatementId::new(self.statement_count);
+                    self.statement_count += 1;
+                    self.blocks[block_index].statements.push(NStatement {
+                        id,
+                        source: Some(statement.id),
+                        origin: statement.origin,
+                        kind: NStatementKind::Drop { target },
+                    });
                 }
                 SStmtKind::End { access } => {
                     // An access the normalization folded away has nothing to close.
@@ -1384,6 +1408,41 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 base: NPlaceBase::Deref {
                     pointer: value.value,
                 },
+                path: NDataPath::empty(),
+                ty,
+                origin,
+            }
+        } else if !self.local_has_place(raw.local)
+            && let Some(deref) = raw
+                .path
+                .iter()
+                .position(|projection| matches!(projection, Projection::Deref))
+        {
+            // A value local has no place to project from. Project the pointer
+            // out of its value and dereference that.
+            let mut prefix = crate::analysis::semantic::SemanticProjectionPath::new();
+            for projection in projections.by_ref().take(deref) {
+                prefix.push(projection.clone());
+            }
+            projections.next();
+            let value = self.read_operand(block, origin, SOperand::inherited(raw.local), None)?;
+            let path = self.normalize_path(block, origin, &prefix)?;
+            let pointer_ty = project_path_ty(
+                self.db,
+                self.instance,
+                &self.values,
+                self.values[value.value.index()].ty,
+                &path,
+            )
+            .map_err(|_| NormalizeError::InvalidProjection)?;
+            let (ty, _) = pointer_ty
+                .as_ptr(self.db)
+                .ok_or(NormalizeError::InvalidProjection)?;
+            let pointer =
+                self.normalize_value_projection(block, origin, raw.local, value, path, pointer_ty)?;
+            let pointer = self.emit_define(block, None, origin, pointer_ty, raw.local, pointer)?;
+            NPlace {
+                base: NPlaceBase::Deref { pointer },
                 path: NDataPath::empty(),
                 ty,
                 origin,
@@ -2209,11 +2268,12 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
         index: usize,
     ) -> Option<TyId<'db>> {
-        let instance = get_or_build_semantic_instance(self.db, callee.key);
-        let binding = instance
+        let instance = SemanticInstance::new(self.db, callee.key);
+        let binding = *instance
             .key(self.db)
             .typed_body(self.db)
-            .param_binding(index)?;
+            .input_bindings()
+            .get(index)?;
         Some(copied_scalar_ty(
             self.db,
             instance.normalized_binding_ty(self.db, binding),
@@ -2226,14 +2286,14 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         index: usize,
         local: SLocalId,
     ) -> Option<ReadMode> {
-        let BodyOwner::Func(func) = callee.key.owner(self.db) else {
+        let BodyOwner::Func(..) = callee.key.owner(self.db) else {
             return None;
         };
+        let typed_body = callee.key.typed_body(self.db);
+        let binding = *typed_body.input_bindings().get(index)?;
         matches!(
-            func.params(self.db)
-                .nth(index)
-                .map(|param| param.mode(self.db)),
-            Some(FuncParamMode::View)
+            typed_body.binding_access(binding),
+            Some(BindingAccess::View)
         )
         .then(|| {
             if self.ty_is_copy(self.normalized_local_ty(local)) {
@@ -2878,6 +2938,13 @@ fn block_uses_and_defs(
                         }
                     }
                 }
+                SStmtKind::Drop { place } => {
+                    for local in place.used_locals() {
+                        if !block_defs.contains(&local) {
+                            block_uses.insert(local);
+                        }
+                    }
+                }
                 SStmtKind::End { .. } => {}
             }
         }
@@ -2918,8 +2985,8 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                FieldIndex, Mutability, SConst, SStmtId, VariantIndex,
-                get_or_build_semantic_instance, identity_semantic_instance_key,
+                FieldIndex, Mutability, SConst, SStmtId, SemanticInstance, VariantIndex,
+                identity_semantic_instance_key,
                 normalized::{
                     NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NPlace, NPlaceBase,
                     NRootId, NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
@@ -2957,9 +3024,9 @@ mod tests {
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing function `{name}`"));
-        let instance = get_or_build_semantic_instance(
+        let instance = SemanticInstance::new(
             db,
-            identity_semantic_instance_key(db, BodyOwner::Func(func)),
+            identity_semantic_instance_key(db, BodyOwner::Func(func, None)),
         );
         let raw = instance
             .admitted_body(db)
@@ -3066,7 +3133,8 @@ fn read_twice(var _ index: own usize, values: [u256; 2]) -> u256 {
                 }),
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
-                | NStatementKind::End { .. } => None,
+                | NStatementKind::End { .. }
+                | NStatementKind::Drop { .. } => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(

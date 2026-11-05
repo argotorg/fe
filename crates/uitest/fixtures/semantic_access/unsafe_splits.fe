@@ -27,14 +27,14 @@ fn external_call() uses (call: mut Call, storage: mut RawStorage) {
     let (mut a, mut b) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
     a.push(1)
     var output = MemBuffer::empty()
-    let _ = call.raw_call(addr: Address { inner: 1 }, gas: 0, value: 0, args: MemSpan::empty(), ret: mut output)
+    let _ = call.raw_call(addr: Address::new(1), gas: 0, value: Wei::zero(), args: MemSpan::empty(), ret: mut output)
     b.push(2)
 }
 
 // Rejected: raw roots from two `unsafe` blocks are two all-storage sessions.
 fn two_blocks() uses (storage: mut RawStorage) {
-    let a = unsafe { SolArray<u256>::at(0) }
-    let b = unsafe { SolArray<u256>::at(1) }
+    let a = unsafe { mut SolArray<u256>::at(0) }
+    let b = unsafe { mut SolArray<u256>::at(1) }
     a.push(1)
     b.push(2)
 }

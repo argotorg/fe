@@ -28,7 +28,7 @@ impl<T> Codec for MyCodec {
     type Encoder = TypedSerializer<T>
 
     fn encode(self) -> Self::Encoder::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 

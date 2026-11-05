@@ -37,7 +37,7 @@ fn keccak_words_preserves_full_width_word_order() {
 #[test]
 fn keccak_packed_writes_each_type_at_its_width() {
     // abi.encodePacked(address(0xabc), int24(-60), uint24(3000), true, uint256(7))
-    let owner = Address { inner: 0xabc }
+    let owner = Address::new(0xabc)
     let packed = encode_packed((owner, Int24 { val: -60 }, Uint24 { val: 3000 }, true, 7 as u256))
     assert(packed.len() == 20 + 3 + 3 + 1 + 32)
     let span = packed.as_bytes().payload_span()
@@ -54,9 +54,9 @@ fn keccak_packed_writes_each_type_at_its_width() {
 fn create2_address_matches_eip1014() {
     // EIP-1014 example 2: deployer 0xdeadbeef00000000000000000000000000000000,
     // salt 0, init code 0x00 -> 0xB928f69Bb1D91Cd65274e3c79d8986362984fDA3
-    let deployer = Address { inner: 0xdeadbeef00000000000000000000000000000000 }
+    let deployer = Address::new(0xdeadbeef00000000000000000000000000000000)
     let init_code_hash = 0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a
-    assert(create2_address(deployer, salt: 0, init_code_hash).inner == 0xB928f69Bb1D91Cd65274e3c79d8986362984fDA3)
+    assert(create2_address(deployer, salt: 0, init_code_hash).word() == 0xB928f69Bb1D91Cd65274e3c79d8986362984fDA3)
 }
 
 #[test]
@@ -68,9 +68,4 @@ fn packed_builtin_bytes_and_large_tuples_match_builder() {
     let values = (1 as u8, 2 as u8, 3 as u8, 4 as u8, 5 as u8, 6 as u8, 7 as u8, 8 as u8, 9 as u8, 10 as u8, 11 as u8, 12 as u8, 13 as u8, 14 as u8, 15 as u8, 16 as u8)
     let built = (1 as u8, 2 as u8, 3 as u8, 4 as u8, 5 as u8, 6 as u8, 7 as u8, 8 as u8, 9 as u8, 10 as u8, 11 as u8, 12 as u8, 13 as u8, 14 as u8, 15 as u8, 16 as u8).pack_into(Packed::new())
     assert(keccak_packed(values) == built.keccak256())
-}
-
-#[test(should_revert)]
-fn create2_rejects_noncanonical_deployer() {
-    let _ = create2_address(deployer: Address { inner: 1 << 160 }, salt: 0, init_code_hash: 0)
 }

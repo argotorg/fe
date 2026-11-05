@@ -2,8 +2,7 @@ use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
         semantic::{
-            SExpr, SStmtKind, STerminatorKind, get_or_build_semantic_instance,
-            identity_semantic_instance_key,
+            SExpr, SStmtKind, STerminatorKind, SemanticInstance, identity_semantic_instance_key,
         },
         ty::ty_check::{BodyOwner, check_contract_recv_arm_body, check_func_body},
     },
@@ -103,7 +102,7 @@ pub contract C {
     let (diags, _) = check_contract_recv_arm_body(&db, contract, 0, 0).clone();
     assert!(diags.is_empty(), "{diags:?}");
 
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
         identity_semantic_instance_key(
             &db,
@@ -142,9 +141,9 @@ fn eliminate(value: Empty) -> u8 {
     let (diags, _) = check_func_body(&db, func).clone();
     assert!(diags.is_empty(), "{diags:?}");
 
-    let instance = get_or_build_semantic_instance(
+    let instance = SemanticInstance::new(
         &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
     );
     let body = instance.body(&db);
 

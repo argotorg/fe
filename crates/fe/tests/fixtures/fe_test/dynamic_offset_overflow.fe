@@ -17,26 +17,26 @@ pub contract OffsetProbe {
             unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 96), value: 0) }
             unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 128), value: 0) }
             if mode == 0 {
-                return <Bytes as Decode<Sol>>::decode_from_bounded(data.span(), offset, 160).len()
+                return <Bytes as Decode<Sol>>::decode_from_bounded(data.span(), offset, 160).len() as u256
             } else if mode == 1 {
-                return decode_field_from<Sol, Bytes, MemSpan>(data.span(), base: 32, head_pos: 0).len()
+                return decode_field_from<Sol, Bytes, MemSpan>(data.span(), base: 32, head_pos: 0).len() as u256
             } else if mode == 2 {
                 return abi_field_end<Sol, Bytes, MemSpan>(data.span(), base: 32, pos: 0)
             } else {
                 var decoder = Sol::decoder_with_base(32)
-                return decode_field<Sol, Bytes, SolDecoder, MemSpan>(mut decoder, data.span()).len()
+                return decode_field<Sol, Bytes, SolDecoder, MemSpan>(mut decoder, data.span()).len() as u256
             }
         }
     }
 }
 fn check_offset(_ mode: u256, _ offset: u256, _ valid: bool) uses (evm: mut Evm) {
-    let target = evm.create2<OffsetProbe>(value: 0, args: (), salt: mode)
+    let target = evm.create2<OffsetProbe>(value: Wei::zero(), args: (), salt: mode)
     let data = MemBuffer::alloc(68)
     unsafe { store_word(ptr: data.ptr(), value: (0x11223344 as u256) << 224) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: mode) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: offset) }
     var ret = MemBuffer::alloc(64)
-    let result = evm.raw_call(addr: target, gas: 1000000, value: 0, args: data.span(), ret: mut ret)
+    let result = evm.raw_call(addr: target, gas: 1000000, value: Wei::zero(), args: data.span(), ret: mut ret)
     assert!(result.success() == valid)
     if valid {
         assert!(result.returndata_len() == 32)

@@ -4,8 +4,10 @@ assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_access/pinned_impl_bound_spaces.fe
 ---
-error[16-0007]: transport violation in `fn get_mut`
-   ┌─ pinned_impl_bound_spaces.fe:30:9
+error[16-0007]: transport violation in `fn pick`
+   ┌─ pinned_impl_bound_spaces.fe:33:39
    │
-30 │         mut self.v
-   │         ^^^^^^^^^^ this yield names memory, but the signature declares transient storage
+33 │         if flag { mut self.v } else { mut slot.value }
+   │                   ----------          ^^^^^^^^^^^^^^ this yield names transient storage, but another yield names memory
+   │                   │
+   │                   yields memory

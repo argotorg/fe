@@ -1,5 +1,5 @@
 use rustc_hash::FxHashMap;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{
     const_ty::{ConstTyData, ConstTyId},
@@ -10,7 +10,7 @@ use super::{
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::collect_variables};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Canonical<T> {
     value: T,
 }
@@ -84,7 +84,7 @@ where
     where
         T: Copy,
         S: UnificationStore<'db>,
-        U: TyFoldable<'db> + Clone + Update,
+        U: TyFoldable<'db> + Clone + SalsaValue,
     {
         let solution = solution.fold_with(db, table);
 
@@ -162,7 +162,7 @@ where
     ) -> Solution<U>
     where
         S: UnificationStore<'db>,
-        U: TyFoldable<'db> + Clone + Update,
+        U: TyFoldable<'db> + Clone + SalsaValue,
     {
         self.canonical.canonicalize_solution(db, table, solution)
     }
@@ -188,7 +188,7 @@ where
         solution: Solution<U>,
     ) -> U
     where
-        U: TyFoldable<'db> + Update,
+        U: TyFoldable<'db> + SalsaValue,
         S: UnificationStore<'db>,
     {
         let map = self.subst.clone();
@@ -208,10 +208,10 @@ where
 ///
 /// To extract the internal value into the environment where the query was
 /// created, use [`Canonicalized::extract_solution`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct Solution<T>
 where
-    T: Update,
+    T: SalsaValue,
 {
     pub(super) value: T,
 }
@@ -319,7 +319,7 @@ where
             TyData::ConstTy(const_ty) => {
                 if let ConstTyData::TyVar(var, const_ty_ty) = const_ty.data(db) {
                     let new_key = self.table.new_key(&var.kind, var.sort);
-                    let new_ty = TyId::const_ty_var(db, *const_ty_ty, new_key);
+                    let new_ty = TyId::const_ty_var(db, *const_ty_ty, var.sort, new_key);
                     self.subst.insert(ty, new_ty);
                     new_ty
                 } else {
@@ -349,6 +349,7 @@ mod tests {
         let len = TyId::const_ty_var(
             &db,
             TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+            TyVarSort::General,
             table.new_key(&Kind::Star, TyVarSort::General),
         );
         let array = TyId::app_structural(&db, TyId::array(&db, elem), len);

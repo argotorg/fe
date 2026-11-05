@@ -10,8 +10,8 @@ msg M {
 
 pub contract C {
     // Rejected: an entry would take more slots than a layout can count.
-    mut too_long: StorageMap<u256, [u256; 0x10000000000000000]>,
-    mut nested: StorageMap<u256, StorageMap<u256, [u256; 0x10000000000000000]>>,
+    mut too_long: StorageMap<u256, [[u256; 0x100000000]; 0x100000000]>,
+    mut nested: StorageMap<u256, StorageMap<u256, [[u256; 0x100000000]; 0x100000000]>>,
     // Accepted.
     mut ok: StorageMap<u256, [u256; 4]>,
 

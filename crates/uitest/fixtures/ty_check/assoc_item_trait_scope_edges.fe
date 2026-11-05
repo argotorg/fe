@@ -1,0 +1,99 @@
+// Edge cases of choosing among traits in scope for `Type::Item` paths. In
+// each, an out-of-scope trait in `other` also provides the item for `u8`.
+
+mod other {
+    // The trait argument can't be inferred from `u8`.
+    pub trait Hidden<T> {
+        const SIZE: usize
+    }
+
+    impl<T> Hidden<T> for u8 {
+        const SIZE: usize = 1
+    }
+
+    pub trait Far {
+        const WIDTH: usize
+        const DEPTH: usize
+    }
+
+    impl Far for u8 {
+        const WIDTH: usize = 1
+        const DEPTH: usize = 1
+    }
+}
+
+// An out-of-scope candidate whose trait arguments are unknown doesn't make
+// the path ambiguous either.
+mod generic_hidden {
+    pub trait Local {
+        const SIZE: usize
+    }
+
+    impl Local for u8 {
+        const SIZE: usize = 2
+    }
+
+    pub fn size() -> usize { u8::SIZE }
+}
+
+// Importing a trait makes the items of all its super-traits available, not
+// only those of its direct super-traits.
+mod grand {
+    pub trait Base {
+        const WIDTH: usize
+    }
+
+    pub trait Middle: Base {}
+
+    pub trait Top: Middle {}
+
+    impl Base for u8 {
+        const WIDTH: usize = 2
+    }
+
+    impl Middle for u8 {}
+
+    impl Top for u8 {}
+}
+
+mod imports_top {
+    use super::grand::Top
+
+    pub fn width() -> usize { u8::WIDTH }
+}
+
+// `Self::DEPTH` in an impl of a trait named by a qualified path selects that
+// trait, although it is not imported.
+mod api {
+    pub trait Local {
+        const DEPTH: usize
+        fn depth() -> usize
+    }
+}
+
+impl api::Local for u8 {
+    const DEPTH: usize = 2
+    fn depth() -> usize { Self::DEPTH }
+}
+
+// The enclosing impl only selects its own items: `u16::DEPTH` in it selects
+// `Near`, the trait in scope, over `api::Local`'s impl for `u16`.
+impl api::Local for u16 {
+    const DEPTH: usize = 1
+    fn depth() -> usize { 1 }
+}
+
+pub trait Near {
+    const DEPTH: usize
+}
+
+impl Near for u16 {
+    const DEPTH: usize = 7
+}
+
+pub struct Probe {}
+
+impl api::Local for Probe {
+    const DEPTH: usize = 3
+    fn depth() -> usize { u16::DEPTH }
+}

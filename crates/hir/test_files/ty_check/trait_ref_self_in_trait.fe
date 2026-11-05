@@ -1,0 +1,60 @@
+// Inside a trait, a written `Self` in a trait reference is the enclosing
+// trait's `Self`, while an omitted `Rhs = Self` default is the bound's subject.
+trait Combine<Rhs = Self> {
+    type Out
+    fn combine(self, rhs: own Rhs) -> Self
+}
+
+trait Foo {
+    type A: Combine
+
+    fn by_default<T: Combine>(a: own T, b: own T) -> T {
+        a.combine(rhs: b)
+    }
+
+    fn by_where<T>(a: own T, b: own T) -> T
+    where
+        T: Combine,
+    {
+        a.combine(rhs: b)
+    }
+
+    fn by_assoc(a: own Self::A, b: own Self::A) -> Self::A {
+        a.combine(rhs: b)
+    }
+
+    fn written<T: Combine<Self>>(a: own T, b: own Self) -> T {
+        a.combine(rhs: b)
+    }
+
+    fn qualified(x: own <Self::A as Combine<Self::A>>::Out) -> <Self::A as Combine>::Out {
+        x
+    }
+}
+
+// The referenced trait is the enclosing one.
+trait Tr<R = Self> {
+    fn join(self, r: own R) -> Self
+
+    fn by_default<T: Tr>(a: own T, b: own T) -> T {
+        a.join(r: b)
+    }
+
+    fn written<T: Tr<Self>>(a: own T, b: own Self) -> T {
+        a.join(r: b)
+    }
+}
+
+struct S {}
+struct X {}
+
+impl Combine for X {
+    type Out = u256
+    fn combine(self, rhs: own X) -> X {
+        rhs
+    }
+}
+
+impl Foo for S {
+    type A = X
+}

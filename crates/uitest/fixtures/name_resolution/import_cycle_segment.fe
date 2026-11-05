@@ -1,0 +1,20 @@
+// The cycle is reported at the segments that wait on each other, not at
+// `self`, and not at the uses that only depend on it.
+mod g {
+    pub mod A {
+        pub struct SA {}
+    }
+    pub mod B {
+        pub struct SB {}
+    }
+}
+mod m {
+    use super::g::*
+    pub use self::B as A
+    pub use self::A as B
+}
+mod n {
+    use super::m::*
+}
+use self::m::A as Z
+use m::B as W

@@ -10,7 +10,7 @@ fn loop_examples(arr: Array<i32, 10>) {
         if i > 8 { break }
     }
 
-    for (i, x) in mut arr by enumerate().take(3) {
+    for (i, mut x) in arr.enumerate().take(3) {
         x = x + i
     }
 
@@ -21,7 +21,7 @@ fn loop_examples(arr: Array<i32, 10>) {
     }
 
     var maybe = Some(1)
-    while let Some(v,) = maybe {
+    while let Some(v) = maybe {
         maybe = None
         if v > 0 { break }
     }

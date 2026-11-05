@@ -1,0 +1,28 @@
+use core::hint::black_box
+use std::evm::Ctx
+
+msg GasProbeMsg {
+    #[selector = 0x01]
+    Kept { x: u256 } -> u256,
+    #[selector = 0x02]
+    Discarded { x: u256 } -> u256,
+}
+
+pub contract GasProbe uses (ctx: Ctx) {
+    recv GasProbeMsg {
+        Kept { x } -> u256 uses (ctx) {
+            let gas_before = ctx.gas()
+            black_box(mix(black_box(x)))
+            gas_before - ctx.gas()
+        }
+        Discarded { x } -> u256 uses (ctx) {
+            let gas_before = ctx.gas()
+            mix(x)
+            gas_before - ctx.gas()
+        }
+    }
+}
+
+fn mix(_ x: u256) -> u256 {
+    (x >> 7) ^ (x << 3)
+}

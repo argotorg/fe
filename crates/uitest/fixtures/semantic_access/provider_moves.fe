@@ -30,18 +30,18 @@ fn spend_token() -> u256 uses (t: Token) {
 
 fn bind_buffer() -> u256 uses (b: MemBuffer) {
     let x = b
-    x.len()
+    x.len() as u256
 }
 
 // Accepted: a `Copy` field, a view argument, a `ref` binding, and the effect
 // passed on to a callee.
 fn read_in_place() -> u256 uses (h: Holder) {
     let x = ref h.buf
-    h.n + x.len() + h.buf.len() + field_len()
+    h.n + x.len() as u256 + h.buf.len() as u256 + field_len()
 }
 
 fn field_len() -> u256 uses (h: Holder) {
-    h.buf.len()
+    h.buf.len() as u256
 }
 
 // Rejected: an owned argument from storage.

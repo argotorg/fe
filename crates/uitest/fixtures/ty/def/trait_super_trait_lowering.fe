@@ -1,0 +1,31 @@
+// A supertrait that does not lower to a trait is reported where it is
+// written.
+use core::option::Option
+
+trait Conv<X> {}
+
+struct S {}
+
+fn helper() {}
+
+// Accepted.
+trait Fine: Conv<Option<u8>> {}
+
+// Rejected: `Nope` is not found.
+trait Unknown: Nope {}
+
+// Rejected: `S` is a struct.
+trait NotATrait: S {}
+
+// Rejected: `Nope` is not found, where the argument writes it.
+trait UnknownArg: Conv<Nope> {}
+
+trait NestedArg: Conv<Option<Nope>> {}
+
+// Rejected: `helper` is a function.
+trait FunctionArg: Conv<helper> {}
+
+// Rejected: `Conv` takes one argument.
+trait TooMany: Conv<u8, u8> {}
+
+trait TooFew: Conv {}

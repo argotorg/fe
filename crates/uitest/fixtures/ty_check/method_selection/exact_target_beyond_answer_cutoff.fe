@@ -17,7 +17,7 @@ where
     Subject: Marker<T>
 {
     fn select(self) -> T {
-        todo()
+        unsafe { todo() }
     }
 }
 

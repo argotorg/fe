@@ -8,7 +8,7 @@ break
         }
     }
 
-    for  (i,x)  in  mut  arr   by  enumerate().take(3)  {
+    for  (i,mut  x)  in  arr .enumerate().take(3)  {
         x = x + i
     }
 

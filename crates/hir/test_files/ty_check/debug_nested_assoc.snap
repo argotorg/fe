@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/debug_nested_assoc.fe
 ---
@@ -30,21 +30,27 @@ note:
    │
 26 │   fn test_generic<T: HasAssoc>() -> T::Assoc {
    │ ╭────────────────────────────────────────────^
-27 │ │     todo()
+27 │ │     unsafe { todo() }
 28 │ │ }
    │ ╰─^ T::Assoc
 
 note:
    ┌─ debug_nested_assoc.fe:27:5
    │
-27 │     todo()
-   │     ^^^^ fn todo
+27 │     unsafe { todo() }
+   │     ^^^^^^^^^^^^^^^^^ T::Assoc
 
 note:
-   ┌─ debug_nested_assoc.fe:27:5
+   ┌─ debug_nested_assoc.fe:27:14
    │
-27 │     todo()
-   │     ^^^^^^ T::Assoc
+27 │     unsafe { todo() }
+   │              ^^^^ fn todo
+
+note:
+   ┌─ debug_nested_assoc.fe:27:14
+   │
+27 │     unsafe { todo() }
+   │              ^^^^^^ T::Assoc
 
 note:
    ┌─ debug_nested_assoc.fe:30:16

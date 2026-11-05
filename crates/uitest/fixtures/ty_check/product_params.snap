@@ -1,0 +1,146 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/product_params.fe
+---
+error[3-0059]: `MemSlice<u256>` is a `#[view]` type
+   ┌─ product_params.fe:23:18
+   │
+23 │ fn own_view_part(_ (s, mut n): (own MemSlice<u256>, mut u256)) {
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[3-0074]: a receiver cannot be a product
+   ┌─ product_params.fe:19:17
+   │
+19 │     fn receiver(self: (own u256, ref u256)) {}
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ `self` takes one mode: `self`, `mut self` or `own self`
+
+error[3-0075]: a product parameter must be destructured
+   ┌─ product_params.fe:14:10
+   │
+14 │ fn named(_ p: (own u256, ref u256)) -> u256 {
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^ its parts are passed apart, which no single name holds
+   │
+   = bind each part: `_ (i, ref x): (own usize, ref T)`
+
+error[3-0075]: a product parameter must be destructured
+    ┌─ product_params.fe:143:14
+    │
+143 │     let f = |p: (own u256, ref u256)| {}
+    │              ^^^^^^^^^^^^^^^^^^^^^^^ its parts are passed apart, which no single name holds
+    │
+    = bind each part: `|(i, ref x)| ..`
+
+error[3-0082]: a product's parts carry its modes
+   ┌─ product_params.fe:10:25
+   │
+10 │ fn outer_mode(_ (a, b): own (own u256, ref u256)) -> u256 {
+   │                         ^^^^^^^^^^^^^^^^^^^^^^^^ remove the mode before it: each part takes its own
+
+error[3-0082]: a product's parts carry its modes
+    ┌─ product_params.fe:128:35
+    │
+128 │ fn mode_on_nested(_ ((a, b), c): (ref (mut u256, bool), own u256)) {}
+    │                                   ^^^^^^^^^^^^^^^^^^^^ remove the mode before it: each part takes its own
+
+error[3-0082]: a product's parts carry its modes
+    ┌─ product_params.fe:144:22
+    │
+144 │     let g = |(a, b): own (own u256, ref u256)| a + b
+    │                      ^^^^^^^^^^^^^^^^^^^^^^^^ remove the mode before it: each part takes its own
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ product_params.fe:137:5
+    │
+132 │ fn apply<F: Fn((u256, u256)) -> u256>(_ f: F) -> u256 uses F::E {
+    │             ------------------------ required by this bound on `apply`
+    ·
+137 │     apply(total)
+    │     ^^^^^ `fn total` doesn't implement `Fn((u256, u256)) -> u256`
+    │
+    = `fn total` is `Fn((own u256, ref u256)) -> u256`
+
+error[6-0007]: method `modes` has incompatible argument type
+   ┌─ product_params.fe:50:14
+   │
+42 │     fn modes(_ parts: (own u256, mut u256))
+   │              ----------------------------- trait requires this type
+   ·
+50 │     fn modes(_ (a, b): (own u256, ref u256)) {}
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `(own u256, mut u256)`, found `(own u256, ref u256)`
+
+error[8-0018]: left-hand side of assignment is immutable
+    ┌─ product_params.fe:115:5
+    │
+114 │ fn write_ref_part(_ (mut a, ref b): (mut u256, ref u256)) {
+    │                             ----- `b` binds a `ref` part: declare the part `mut` and bind `mut b` to write through it
+115 │     b = 3
+    │     ^ immutable assignment
+
+error[8-0069]: explicit borrow required
+   ┌─ product_params.fe:91:11
+   │
+91 │     bump((y, ref x))
+   │           ^ this argument must be explicitly borrowed as `mut`
+   │
+   = help: try `mut y`
+
+error[8-0069]: explicit borrow required
+   ┌─ product_params.fe:97:23
+   │
+97 │     let r = mut pick((ref x, mut y), false)
+   │                       ^^^^^ this argument must be explicitly borrowed as `mut`
+   │
+   = help: try `mut <place>`
+
+error[8-0072]: a product's part that is a product must be destructured
+    ┌─ product_params.fe:119:20
+    │
+119 │ fn nested_whole(_ (p, c): ((mut u256, mut u256), own u256)) -> u256 {
+    │                    ^ bind its parts with a tuple pattern
+
+error[8-0072]: a product's part that is a product must be destructured
+    ┌─ product_params.fe:123:27
+    │
+123 │ fn nested_marked_whole(_ (ref p, c): ((mut u256, mut u256), own u256)) -> u256 {
+    │                           ^^^^^ bind its parts with a tuple pattern
+
+error[8-0109]: closure has the wrong number of parameters
+    ┌─ product_params.fe:148:11
+    │
+148 │     apply(|a, b| a + b)
+    │           ^^^^^^^^^^^^ expected a closure taking 1 parameter, found 2
+    │
+    = the closure is passed one tuple; take it apart with a pattern, as in `|(i, x)|`
+
+error[8-0109]: closure has the wrong number of parameters
+    ┌─ product_params.fe:158:19
+    │
+158 │     apply_product(|a, b| a + b)
+    │                   ^^^^^^^^^^^^ expected a closure taking 1 parameter, found 2
+    │
+    = the closure is passed one tuple; take it apart with a pattern, as in `|(i, x)|`
+
+error[8-0135]: a product parameter takes a tuple of its parts
+   ┌─ product_params.fe:80:11
+   │
+80 │     total(t)
+   │           ^ pass a part for each of `(own u256, ref u256)`
+
+error[8-0135]: a product parameter takes a tuple of its parts
+   ┌─ product_params.fe:85:11
+   │
+85 │     total((x, x, x))
+   │           ^^^^^^^^^ pass a part for each of `(own u256, ref u256)`
+
+error[8-0150]: this argument grants a product's parts too weakly
+    ┌─ product_params.fe:103:22
+    │
+103 │     let r = mut pick(p.views(), false)
+    │                      ^^^^^^^^^ it grants `(ref u256, ref u256)`, but the call at `mut` takes `(mut u256, mut u256)`
+
+error[8-0150]: this argument grants a product's parts too weakly
+    ┌─ product_params.fe:109:10
+    │
+109 │     bump(p.views())
+    │          ^^^^^^^^^ it grants `(ref u256, ref u256)`, but the parameter takes `(mut u256, ref u256)`

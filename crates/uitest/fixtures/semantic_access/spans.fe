@@ -3,12 +3,12 @@
 // derived from a span reserves the same owner.
 use core::ptr::{MemBuffer, MemSpan}
 
-fn length(_ span: MemSpan) -> u256 {
+fn length(_ span: MemSpan) -> usize {
     span.len()
 }
 
 // Rejected: the owner is written while its span is live.
-fn write_while_viewed() -> u256 {
+fn write_while_viewed() -> usize {
     var buffer = MemBuffer::with_capacity(4)
     let span = buffer.span()
     buffer.reserve(8)
@@ -16,7 +16,7 @@ fn write_while_viewed() -> u256 {
 }
 
 // Accepted: the span's last use ends its view.
-fn write_after_view() -> u256 {
+fn write_after_view() -> usize {
     var buffer = MemBuffer::with_capacity(4)
     let n = buffer.span().len()
     buffer.reserve(8)
@@ -24,7 +24,7 @@ fn write_after_view() -> u256 {
 }
 
 // Rejected: a span of a span still reserves the owner.
-fn sub_span_reserves_owner() -> u256 {
+fn sub_span_reserves_owner() -> usize {
     var buffer = MemBuffer::with_capacity(4)
     let head = buffer.span().head(1)
     buffer.reserve(8)
@@ -32,7 +32,7 @@ fn sub_span_reserves_owner() -> u256 {
 }
 
 // Accepted: a span and its owner are both read at once.
-fn read_together() -> u256 {
+fn read_together() -> usize {
     let buffer = MemBuffer::with_capacity(4)
     let span = buffer.span()
     length(span) + buffer.len()

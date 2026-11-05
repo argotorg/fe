@@ -19,7 +19,7 @@ struct S<T: Tr> {
 }
 
 impl S<K> {
-    fn a_mem(mut self) -> mut u8 @memory {
+    fn a_mem(mut self) -> mut u8 {
         mut self.a
     }
 }
@@ -45,7 +45,7 @@ pub contract C {
 
 #[test]
 fn associated_type_field_is_a_lane() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    let word = evm.call(addr: c, gas: 300000, value: 0, message: M::Run {})
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let word = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: M::Run {})
     assert(word == 6 | (2 << 8))
 }

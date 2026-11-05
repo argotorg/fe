@@ -18,5 +18,5 @@ impl<T> Foo<T> for Dummy<T> {
 }
 
 fn bad() -> <Dummy< <Missing as Bound>::Item > as Foo< <Missing as Bound>::Item >>::Out {
-    todo()
+    unsafe { todo() }
 }

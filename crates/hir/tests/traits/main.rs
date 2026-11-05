@@ -3,6 +3,7 @@ mod constraints;
 mod default_trait_methods;
 mod effect_binding_resolution;
 mod effect_key_normalization;
+mod evidence;
 mod generic_default_metadata;
 mod generic_elaboration_contracts;
 mod param_env;

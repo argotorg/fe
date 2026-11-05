@@ -1,0 +1,11 @@
+// `deps::merkle` and the glob of `merkle` wait on each other. Breaking that
+// cycle doesn't take `deps`'s globs of `std` and `core` to bring nothing in,
+// and those don't wait on each other for a glob that could bring in `std`.
+mod deps {
+    pub use std::evm::*
+    pub use core::num::*
+}
+fn f() {
+    use deps::merkle
+    use merkle::*
+}
