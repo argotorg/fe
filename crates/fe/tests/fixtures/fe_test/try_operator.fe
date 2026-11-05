@@ -32,6 +32,37 @@ impl Arr {
     }
 }
 
+// A generic owner's `?` exits with the instance's result type.
+struct Slots<T> {
+    xs: [T; 3],
+    len: usize,
+}
+
+impl<T> Slots<T> {
+    fn index(self, _ i: usize) -> Option<usize> {
+        if i < self.len { Option::Some(i) } else { Option::None }
+    }
+
+    fn position(self, _ i: usize) -> Result<usize, usize> {
+        if i < self.len { Result::Ok(i) } else { Result::Err(i) }
+    }
+
+    fn get_mut(mut self, _ i: usize) -> Option<mut T> {
+        let at = self.index(i)?
+        Option::Some(mut self.xs[at])
+    }
+
+    fn get(mut? self, _ i: usize) -> Option<mut? T> {
+        let at = self.index(i)?
+        Option::Some(mut? self.xs[at])
+    }
+
+    fn at_mut(mut self, _ i: usize) -> Result<usize, mut T> {
+        let at = self.position(i)?
+        Result::Ok(mut self.xs[at])
+    }
+}
+
 fn add(_ a: Option<u256>, _ b: Option<u256>) -> Option<u256> {
     Option::Some(a? + b?)
 }
@@ -94,4 +125,38 @@ fn sum_shapes() {
         x += 10
     }
     assert!(a.xs[2] == 7)
+}
+
+#[test]
+fn generic_sum_shapes() {
+    var s = Slots<u256> { xs: [1, 2, 3], len: 2 }
+    if let Option::Some(mut x) = s.get_mut(1) {
+        x += 10
+    }
+    assert!(s.xs[1] == 12)
+    if let Option::Some(_) = s.get_mut(2) {
+        assert!(false)
+    }
+
+    match s.get(0) {
+        Option::Some(x) => assert!(x == 1)
+        Option::None => assert!(false)
+    }
+    if let Option::Some(mut x) = s.get(0) {
+        x += 5
+    }
+    assert!(s.xs[0] == 6)
+    if let Option::Some(_) = s.get(2) {
+        assert!(false)
+    }
+
+    match s.at_mut(1) {
+        Result::Ok(mut x) => x += 1
+        Result::Err(_) => assert!(false)
+    }
+    assert!(s.xs[1] == 13)
+    match s.at_mut(5) {
+        Result::Ok(_) => assert!(false)
+        Result::Err(i) => assert!(i == 5)
+    }
 }
