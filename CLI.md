@@ -341,7 +341,7 @@ must be `i32`, `u32`, `i64`, `u64`, `usize`, `isize` or raw pointers, which C de
 be unique, must not start with `__fe_`, and must not be `environ`, a C variable native code reads.
 A Fe `extern` declaration of the same symbol calls the exported function, and must have the same
 signature. An executable defines its
-exported functions too. EVM builds and SP1 guests reject `#[unsafe(export)]`.
+exported functions too. EVM and WebAssembly builds and SP1 guests reject `#[unsafe(export)]`.
 
 #### Linking host code
 

@@ -68,8 +68,8 @@ node examples/wasm/verify.mjs out/lines.wasm
 ### What a program may export
 
 Every non-generic `pub fn` in the root of the file is exported under its own name,
-and the module always exports its linear memory as `memory`. Parameters and
-results are limited to:
+and the module always exports its linear memory as `memory`. `#[unsafe(export)]` is
+an error on this backend. Parameters and results are limited to:
 
 - `bool` and the integers `u8` to `u64` and `i8` to `i64`;
 - parameters of type `std::wasm::HostText`, text that the host placed in the

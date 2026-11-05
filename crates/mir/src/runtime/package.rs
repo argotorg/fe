@@ -630,6 +630,12 @@ pub fn build_wasm_export_package<'db>(
     top_mod: TopLevelMod<'db>,
 ) -> Result<WasmExportPackage<'db>, LowerError> {
     require_target(db, Target::Wasm)?;
+    if let Some(func) = native_exports(db, top_mod).first() {
+        return Err(LowerError::Unsupported(format!(
+            "`#[unsafe(export)]` requires `--backend native`, but `{}` is exported; a WebAssembly module exports the `pub fn` items in the root of the file",
+            func.scope().pretty_path(db).unwrap_or_default()
+        )));
+    }
     let mut exports = Vec::new();
     for item in top_mod.children_non_nested(db) {
         let ItemKind::Func(func) = item else {

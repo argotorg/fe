@@ -1229,6 +1229,29 @@ fn an_evm_only_instruction_is_a_named_error() {
 }
 
 #[test]
+fn unsafe_export_is_a_named_error() {
+    // A module exports the `pub fn` items in the root of the file, so the
+    // attribute would do nothing.
+    rejected(
+        "root_export",
+        "#[unsafe(export)]\npub fn answer() -> i32 { 42 }\n",
+        &["`#[unsafe(export)]` requires `--backend native`", "answer"],
+    );
+    rejected(
+        "nested_export",
+        "mod inner {\n\
+         \x20   #[unsafe(export)]\n\
+         \x20   pub fn nested() -> i32 { 1 }\n\
+         }\n\
+         pub fn top() -> i32 { inner::nested() }\n",
+        &[
+            "`#[unsafe(export)]` requires `--backend native`",
+            "inner::nested",
+        ],
+    );
+}
+
+#[test]
 fn a_function_named_memory_is_refused() {
     rejected(
         "reserved_name",
