@@ -254,7 +254,10 @@ fn lines_drop_their_terminators() {
     assert!(lines("\n") == "[]")
     assert!(lines("") == "")
     assert!(lines("a\rb\n") == "[a\rb]")
-    assert!(lines("a\r") == "[a]")
+    assert!(lines("a\r") == "[a\r]")
+    assert!(lines("a\n\r") == "[a][\r]")
+    assert!(lines("a\r\r\n") == "[a\r]")
+    assert!(lines("\r\n") == "[]")
 }
 
 #[test]

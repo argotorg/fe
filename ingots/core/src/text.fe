@@ -694,8 +694,9 @@ impl Driver for Lines {
     }
 
     fn at(self, _ base: MemSpan, _ s: (usize, usize)) -> ref MemSpan {
-        let carriage_return = s.1 > s.0 && base.byte_at(s.1 - 1) == b'\r'
-        let end = if carriage_return { s.1 - 1 } else { s.1 }
+        // A `\r` belongs to the terminator only before a `\n`.
+        let crlf = s.1 > s.0 && base.byte_at(s.1 - 1) == b'\r' && s.1 < base.len()
+        let end = if crlf { s.1 - 1 } else { s.1 }
         base.slice(offset: s.0, len: end - s.0)
     }
 }

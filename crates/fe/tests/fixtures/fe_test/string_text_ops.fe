@@ -41,3 +41,16 @@ fn words_append_their_low_bytes() {
     buffer.extend_from_word(0x65, len: 1)
     assert!(buffer.span() == "bcde")
 }
+
+#[test]
+fn string_byte_at_reads_the_text() {
+    let s: String<8> = "abc"
+    assert!(s.byte_at(0) == b'a')
+    assert!(s.byte_at(2) == b'c')
+}
+
+#[test(should_revert, panic = 0x32)]
+fn string_byte_at_rejects_an_index_past_the_text() {
+    let s: String<8> = "abc"
+    let _ = s.byte_at(3)
+}
