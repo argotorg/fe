@@ -1,23 +1,26 @@
-use common::layout::StorageLane;
 use hir::analysis::{semantic::FieldIndex, ty::AddressSpace};
 use mir::{
-    Layout, LayoutId, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout, ScalarClass,
-    ScalarRepr, VariantId,
+    Layout, LayoutId, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout, ScalarRepr, VariantId,
+    runtime::place::is_packed_newtype,
 };
 use sonatina_ir::{
     Type, ValueId,
     inst::{
         arith::{Add, Mul, Shl, Shr, Sub},
         cast::Zext,
-        cmp::Eq,
+        cmp::{Eq, Ne},
         control_flow::{BrTable, Jump, Phi, PhiArgs, Unreachable},
         data::{ConstLoad, InsertValue, ObjAlloc, ObjLoad, ObjMaterializeStack, ObjStore},
+        evm::EvmSignExtend,
         logic::{And, Not, Or},
     },
     types::CompoundType,
 };
 
-use super::{CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet};
+use super::{
+    CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet, cast_int_value,
+    condition_to_i1, scalar_ty,
+};
 
 // The descriptor's layout also records the referent's address space. Provider
 // kinds may be erased when a reference is stored inside an ordinary typed slot.
@@ -28,7 +31,9 @@ const REFERENCE_LAYOUTS: [Option<AddressSpace>; 8] = [
     Some(AddressSpace::Transient),
     Some(AddressSpace::Calldata),
     Some(AddressSpace::Code),
-    Some(AddressSpace::Storage), // Packed field; byte offset in layout >> 8.
+    // A packed field: its lane's byte offset is in bits 8..16 of the layout,
+    // its byte width in bits 16..24.
+    Some(AddressSpace::Storage),
     Some(AddressSpace::Transient),
 ];
 const PACKED_STORAGE: u64 = 6;
@@ -138,28 +143,69 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             .insert_inst(And::new(self.module.inst_set(), layout, mask), Type::I256)
     }
 
-    fn reference_lane_shift(&mut self, layout: ValueId) -> ValueId {
-        let eight = self.index_value(8);
-        let bytes = self
+    /// The byte at bit `shift` of a packed descriptor's `layout`: its lane's
+    /// byte offset at 8 and its byte width at 16.
+    fn reference_layout_byte(&mut self, layout: ValueId, shift: u64) -> ValueId {
+        let shift = self.index_value(shift);
+        let shifted = self
             .fb
-            .insert_inst(Shr::new(self.module.inst_set(), eight, layout), Type::I256);
+            .insert_inst(Shr::new(self.module.inst_set(), shift, layout), Type::I256);
+        let mask = self.index_value(0xff);
+        self.fb
+            .insert_inst(And::new(self.module.inst_set(), shifted, mask), Type::I256)
+    }
+
+    /// The bit offset of the lane a packed descriptor's `layout` records.
+    fn reference_lane_shift(&mut self, layout: ValueId) -> ValueId {
+        let bytes = self.reference_layout_byte(layout, 8);
+        let eight = self.index_value(8);
         self.fb
             .insert_inst(Mul::new(self.module.inst_set(), bytes, eight), Type::I256)
     }
 
-    fn reference_scalar_lane(class: &RuntimeClass<'db>) -> Option<StorageLane> {
-        let RuntimeClass::Scalar(scalar) = class else {
-            return None;
-        };
-        let byte_width = match scalar.repr {
-            ScalarRepr::Bool => 1,
-            ScalarRepr::Int { bits, .. } if bits < 256 => u32::from(bits / 8),
-            _ => return None,
-        };
-        Some(StorageLane {
-            byte_offset: 0,
-            byte_width,
-        })
+    /// A mask of as many low-order bytes of a word as the lane a packed
+    /// descriptor's `layout` records holds.
+    fn reference_lane_mask(&mut self, layout: ValueId) -> ValueId {
+        let bytes = self.reference_layout_byte(layout, 16);
+        let eight = self.index_value(8);
+        let bits = self
+            .fb
+            .insert_inst(Mul::new(self.module.inst_set(), bytes, eight), Type::I256);
+        let one = self.index_value(1);
+        let bit = self
+            .fb
+            .insert_inst(Shl::new(self.module.inst_set(), bits, one), Type::I256);
+        self.fb
+            .insert_inst(Sub::new(self.module.inst_set(), bit, one), Type::I256)
+    }
+
+    /// `value` sign-extended from the top byte of the lane a packed
+    /// descriptor's `layout` records.
+    fn reference_sign_extend(
+        &mut self,
+        layout: ValueId,
+        value: ValueId,
+    ) -> Result<ValueId, LowerError> {
+        let bytes = self.reference_layout_byte(layout, 16);
+        let one = self.index_value(1);
+        let byte = self
+            .fb
+            .insert_inst(Sub::new(self.module.inst_set(), bytes, one), Type::I256);
+        Ok(self.fb.insert_inst(
+            EvmSignExtend::new(self.module.required_inst::<EvmSignExtend>()?, byte, value),
+            Type::I256,
+        ))
+    }
+
+    /// Whether a referent of class `class` can lie in a packed lane: a bool,
+    /// an integer, or a packed newtype, whose field's value lies there.
+    fn lies_in_lane(&self, class: &RuntimeClass<'db>) -> bool {
+        match class {
+            RuntimeClass::Scalar(scalar) => {
+                matches!(scalar.repr, ScalarRepr::Bool | ScalarRepr::Int { .. })
+            }
+            _ => is_packed_newtype(self.module.db, class),
+        }
     }
 
     pub(super) fn load_referent(
@@ -171,12 +217,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             RuntimeClass::Scalar(scalar) => self.module.scalar_repr_ty(scalar),
             _ => self.module.ty_for_class(class)?,
         };
-        let packed = match class {
-            RuntimeClass::Scalar(scalar) => {
-                Self::reference_scalar_lane(class).map(|lane| (lane, scalar))
-            }
-            _ => None,
-        };
+        let packed = self.lies_in_lane(class).then_some(class);
         self.load_reference_value(reference, ty, packed, |this, memory| {
             this.load_memory_value(reference.addr, memory, class)
         })
@@ -201,7 +242,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         &mut self,
         reference: MemoryReference,
         ty: Type,
-        packed: Option<(StorageLane, &ScalarClass<'db>)>,
+        packed: Option<&RuntimeClass<'db>>,
         mut load: impl FnMut(&mut Self, ReferentLayout) -> Result<ValueId, LowerError>,
     ) -> Result<ValueId, LowerError> {
         let done = self.fb.append_block();
@@ -233,13 +274,37 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         for (tag, block, space) in blocks {
             self.fb.switch_to_block(block);
             let value = if tag >= PACKED_STORAGE as usize {
-                let (lane, scalar) = packed.expect("packed scalar");
+                let class = packed.expect("a referent that can lie in a lane");
                 let word = self.load_word(reference.addr, space.expect("packed space"))?;
                 let shift = self.reference_lane_shift(reference.layout);
                 let word = self
                     .fb
                     .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256);
-                self.extract_packed_scalar(word, lane, scalar)?
+                // `extract_packed_scalar` for a lane whose width the
+                // descriptor records.
+                self.lane_value(class, &mut |this, scalar| {
+                    let mask = this.reference_lane_mask(reference.layout);
+                    let value = this
+                        .fb
+                        .insert_inst(And::new(this.module.inst_set(), word, mask), Type::I256);
+                    let ty = scalar_ty(scalar);
+                    if ty == Type::I1 {
+                        return Ok(condition_to_i1(&mut this.fb, value, this.module.inst_set()));
+                    }
+                    let value = if scalar.is_signed_int() {
+                        this.reference_sign_extend(reference.layout, value)?
+                    } else {
+                        value
+                    };
+                    let is = this.module.inst_set();
+                    Ok(cast_int_value(
+                        &mut this.fb,
+                        is,
+                        value,
+                        ty,
+                        scalar.is_signed_int(),
+                    ))
+                })?
             } else {
                 load(
                     self,
@@ -274,15 +339,14 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             _ => self.module.ty_for_class(class)?,
         };
         let value = self.coerce_value_to_ty(value, ty)?;
+        let packed = self.lies_in_lane(class);
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
         let native = self.module.is_native_target();
         let blocks = REFERENCE_LAYOUTS
             .iter()
             .enumerate()
-            .filter(|(tag, _)| {
-                *tag < PACKED_STORAGE as usize || Self::reference_scalar_lane(class).is_some()
-            })
+            .filter(|(tag, _)| *tag < PACKED_STORAGE as usize || packed)
             .filter(|(_, space)| {
                 (!native || matches!(space, None | Some(AddressSpace::Memory)))
                     && !matches!(space, Some(AddressSpace::Code | AddressSpace::Calldata))
@@ -293,7 +357,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             .iter()
             .map(|(tag, block, _)| (self.index_value(*tag as u64), *block))
             .collect::<Vec<_>>();
-        let tag = if Self::reference_scalar_lane(class).is_some() {
+        let tag = if packed {
             self.reference_layout_tag(reference.layout)
         } else {
             reference.layout
@@ -307,17 +371,32 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         for (tag, block, space) in blocks {
             self.fb.switch_to_block(block);
             if tag >= PACKED_STORAGE as usize {
-                let RuntimeClass::Scalar(scalar) = class else {
-                    unreachable!()
-                };
-                let lane = Self::reference_scalar_lane(class).expect("packed scalar");
                 let space = space.expect("packed space");
-                let bits = self.packed_scalar_bits(value, lane, scalar)?;
+                // `packed_scalar_bits` for a lane whose width the descriptor
+                // records.
+                let bits = self.lane_bits(value, class, &mut |this, value, scalar| {
+                    let signed = scalar.is_signed_int();
+                    let word = this.cast_scalar_with_signedness(value, Type::I256, signed)?;
+                    let mask = this.reference_lane_mask(reference.layout);
+                    let clean = this
+                        .fb
+                        .insert_inst(And::new(this.module.inst_set(), word, mask), Type::I256);
+                    let fitted = if signed {
+                        this.reference_sign_extend(reference.layout, clean)?
+                    } else {
+                        clean
+                    };
+                    let lost = this
+                        .fb
+                        .insert_inst(Ne::new(this.module.inst_set(), fitted, word), Type::I1);
+                    this.emit_empty_revert(lost)?;
+                    Ok(clean)
+                })?;
                 let shift = self.reference_lane_shift(reference.layout);
                 let bits = self
                     .fb
                     .insert_inst(Shl::new(self.module.inst_set(), shift, bits), Type::I256);
-                let mask = self.fb.make_imm_value(super::lane_mask(lane, false));
+                let mask = self.reference_lane_mask(reference.layout);
                 let mask = self
                     .fb
                     .insert_inst(Shl::new(self.module.inst_set(), shift, mask), Type::I256);
@@ -518,11 +597,11 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         let (offset, class) = match elem {
             ResolvedPlaceElem::Field { field, class } => {
                 let placement = words.field_placement(base, *field)?;
-                if let Some(lane) = placement.lane
-                    && (placement.shared || lane.byte_offset != 0)
-                {
+                if let Some(lane) = placement.lane.filter(|_| placement.partial) {
                     // Memory fields remain unpacked. Only storage/transient
-                    // descriptors acquire a packed tag and a byte offset.
+                    // descriptors acquire a packed tag and their lane. A
+                    // packed descriptor keeps its lane: only a packed
+                    // newtype's field lies in one, and in the same bytes.
                     for tag in [2u64, 3] {
                         let old_tag = self.index_value(tag);
                         let flag = self.fb.insert_inst(
@@ -533,7 +612,10 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                             Zext::new(self.module.inst_set(), flag, Type::I256),
                             Type::I256,
                         );
-                        let delta = self.index_value(4 + (u64::from(lane.byte_offset) << 8));
+                        let delta = self.index_value(
+                            4 + (u64::from(lane.byte_offset) << 8)
+                                + (u64::from(lane.byte_width) << 16),
+                        );
                         let delta = self
                             .fb
                             .insert_inst(Mul::new(self.module.inst_set(), flag, delta), Type::I256);

@@ -9,13 +9,6 @@ use common::InputDb;
 use common::compilation::Target;
 use contract_harness::{ExecutionOptions, RuntimeInstance as EvmRuntime};
 use driver::DriverDataBase;
-#[cfg(any(
-    feature = "wasm",
-    all(
-        feature = "cranelift",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    )
-))]
 use hir::analysis::semantic::FieldIndex;
 #[cfg(all(
     feature = "cranelift",
@@ -23,9 +16,9 @@ use hir::analysis::semantic::FieldIndex;
 ))]
 use hir::analysis::ty::AddressSpace;
 use mir::{
-    ConstScalar, MirDb, PlaceRoot, RBlock, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind,
-    RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimePlace, build_runtime_package,
-    verify_runtime_body,
+    ConstScalar, MirDb, PlaceElem, PlaceRoot, RBlock, RExpr, RLocal, RLocalId, RStmt, RTerminator,
+    RefKind, RefView, RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeInstance, RuntimeLocalRoot,
+    RuntimePackage, RuntimePlace, build_runtime_package, verify_runtime_body,
 };
 #[cfg(any(
     feature = "wasm",
@@ -34,7 +27,7 @@ use mir::{
         any(target_arch = "x86_64", target_arch = "aarch64")
     )
 ))]
-use mir::{Layout, RuntimeMemoryLayout, RuntimePackage, VariantId};
+use mir::{Layout, RuntimeMemoryLayout, VariantId};
 #[cfg(all(
     feature = "cranelift",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -403,6 +396,58 @@ fn wasm_raw_memory_layouts_match_sonatina_objects() {
     assert_raw_memory_layouts_match_objects(&db, &package, &isa);
 }
 
+/// Deploys `contract` from `package` with `target`'s body replaced by `body`.
+fn deploy_with_body<'db>(
+    db: &'db DriverDataBase,
+    package: RuntimePackage<'db>,
+    target: RuntimeInstance<'db>,
+    body: RuntimeBody<'db>,
+    opt: OptLevel,
+    contract: &str,
+) -> EvmRuntime {
+    let program: &dyn MirDb = db;
+    verify_runtime_body(db, &program, &body).expect("valid runtime body");
+
+    let isa = create_evm_isa();
+    let mut lowerer = ModuleLowerer::new(
+        db,
+        ModuleBuilder::new(ModuleCtx::new(&isa)),
+        isa.inst_set(),
+        &package,
+        &[],
+        &[],
+        NativePanics::Trap,
+    )
+    .unwrap();
+    lowerer.declare_functions().unwrap();
+    lowerer.lower_const_regions().unwrap();
+    for &function in package.functions(db) {
+        let instance = function.instance(db);
+        let selected = if instance == target {
+            body.clone()
+        } else {
+            instance.body(db).clone()
+        };
+        let func_ref = lowerer.func_ref(instance).unwrap();
+        FunctionLowerer::new(&mut lowerer, selected, func_ref)
+            .unwrap()
+            .lower()
+            .unwrap();
+    }
+    lowerer.declare_objects().unwrap();
+    let (mut artifacts, _) = emit_runtime_module_sonatina_bytecode_with_options(
+        db,
+        &package,
+        lowerer.finish().0,
+        opt,
+        false,
+        None,
+    )
+    .unwrap_or_else(|error| panic!("compile {contract} at {opt:?}: {error}"));
+    let artifact = artifacts.remove(contract).unwrap();
+    EvmRuntime::deploy(&hex::encode(artifact.deploy)).unwrap()
+}
+
 #[test]
 fn stack_native_reference_borrows_preserve_slot_contents_and_identity() {
     for (opt, replace) in [
@@ -555,47 +600,7 @@ pub contract SlotContract {
             stmts,
             terminator: RTerminator::Return(Some(local(6))),
         }];
-        let program: &dyn MirDb = &db;
-        verify_runtime_body(&db, &program, &body).expect("valid native slot borrow");
-
-        let isa = create_evm_isa();
-        let mut lowerer = ModuleLowerer::new(
-            &db,
-            ModuleBuilder::new(ModuleCtx::new(&isa)),
-            isa.inst_set(),
-            &package,
-            &[],
-            &[],
-            NativePanics::Trap,
-        )
-        .unwrap();
-        lowerer.declare_functions().unwrap();
-        lowerer.lower_const_regions().unwrap();
-        for &function in package.functions(&db) {
-            let instance = function.instance(&db);
-            let selected = if instance == target {
-                body.clone()
-            } else {
-                instance.body(&db).clone()
-            };
-            let func_ref = lowerer.func_ref(instance).unwrap();
-            FunctionLowerer::new(&mut lowerer, selected, func_ref)
-                .unwrap()
-                .lower()
-                .unwrap();
-        }
-        lowerer.declare_objects().unwrap();
-        let (mut artifacts, _) = emit_runtime_module_sonatina_bytecode_with_options(
-            &db,
-            &package,
-            lowerer.finish().0,
-            opt,
-            false,
-            None,
-        )
-        .expect("compile native slot borrow");
-        let artifact = artifacts.remove("SlotContract").unwrap();
-        let mut runtime = EvmRuntime::deploy(&hex::encode(artifact.deploy)).unwrap();
+        let mut runtime = deploy_with_body(&db, package, target, body, opt, "SlotContract");
         let result = runtime
             .call_raw(&[0, 0, 0, 1], ExecutionOptions::default())
             .unwrap_or_else(|error| panic!("{opt:?}, replace={replace}: {error}"));
@@ -639,4 +644,169 @@ fn a_trapping_revert_drops_only_stores_into_its_own_allocations() {
     assert_eq!(start(through_parameter, RTerminator::RevertEmpty), 4);
     let before_payload = vec![constant(1), mstore(2, 0, 1), malloc(3, 1), mstore(4, 3, 1)];
     assert_eq!(start(before_payload, RTerminator::RevertEmpty), 2);
+}
+
+#[test]
+fn stored_references_to_storage_keep_packed_newtype_lanes() {
+    // A stored reference to a storage `S`, projected to the value of a packed
+    // newtype that shares its slot (`tag`, slot 0 from byte 1) and of one
+    // narrowed in a slot of its own (`lone`, slot 2). No source program
+    // stores a reference to storage, so the reference is built by hand.
+    const SOURCE: &str = r#"
+use std::abi::sol::Bytes4
+use std::evm::RawStorage
+
+struct S {
+    flag: bool,
+    tag: Bytes4,
+    big: u256,
+    lone: Bytes4,
+    after: u256,
+}
+
+#[inline(never)]
+fn probe(_ s: mut S, _ value: u256) -> u256 {
+    value
+}
+
+msg M {
+    #[selector = 1]
+    Probe { value: u256 } -> u256,
+    #[selector = 2]
+    Slot { slot: u256 } -> u256,
+    #[selector = 3]
+    Dirty { slot: u256, value: u256 },
+}
+
+pub contract C {
+    mut s: S,
+
+    recv M {
+        Probe { value } -> u256 uses (mut s) {
+            probe(mut s, value)
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            unsafe { raw.sload(slot) }
+        }
+        Dirty { slot, value } uses (raw: mut RawStorage) {
+            unsafe { raw.sstore(slot, value) }
+        }
+    }
+}
+"#;
+    // A word with `low` in its low bytes, and bit 200 set when `high`.
+    let word = |low: u64, high: bool| {
+        let mut word = [0; 32];
+        word[24..].copy_from_slice(&low.to_be_bytes());
+        word[6] = u8::from(high);
+        word
+    };
+    let call = |runtime: &mut EvmRuntime, selector: u8, args: &[[u8; 32]]| {
+        let mut calldata = vec![0, 0, 0, selector];
+        calldata.extend(args.iter().flatten());
+        runtime.call_raw(&calldata, ExecutionOptions::default())
+    };
+    for opt in [OptLevel::O0, OptLevel::O2] {
+        for (field, slot, offset) in [(1, 0, 1), (3, 2, 0)] {
+            for write in [false, true] {
+                let mut db = DriverDataBase::default();
+                let file = db.workspace().touch(
+                    &mut db,
+                    Url::parse("file:///stored_lane_reference.fe").unwrap(),
+                    Some(SOURCE.into()),
+                );
+                let top_mod = db.top_mod(file);
+                let diagnostics = db.run_on_top_mod(top_mod);
+                assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
+                let package = build_runtime_package(&db, top_mod).expect("runtime package");
+                let target = package
+                    .functions(&db)
+                    .iter()
+                    .find(|function| function.symbol(&db) == "probe")
+                    .expect("probe")
+                    .instance(&db);
+                let mut body = target.body(&db).clone();
+                let [s, value] = [0, 1].map(|idx| body.signature.params[idx].local);
+                let RuntimeClass::Ref { pointee, .. } = body.signature.params[0].class.clone()
+                else {
+                    panic!("`s` is a reference");
+                };
+                let reference = RLocalId::from_u32(body.locals.len() as u32);
+                let read = RLocalId::from_u32(reference.as_u32() + 1);
+                let semantic_ty = body.locals[0].semantic_ty;
+                body.locals.extend(
+                    [
+                        RuntimeClass::Ref {
+                            pointee,
+                            kind: RefKind::Native,
+                            view: RefView::Whole,
+                        },
+                        body.signature.ret.clone().expect("word return"),
+                    ]
+                    .map(|class| RLocal {
+                        semantic_ty,
+                        carrier: RuntimeCarrier::Value(class),
+                        root: RuntimeLocalRoot::None,
+                    }),
+                );
+                // `s.<field>.val`, through the stored reference.
+                let place = RuntimePlace {
+                    root: PlaceRoot::Ref(reference),
+                    path: Box::new([
+                        PlaceElem::Field(FieldIndex(field)),
+                        PlaceElem::Field(FieldIndex(0)),
+                    ]),
+                };
+                let stmts = vec![
+                    RStmt::Assign {
+                        dst: reference,
+                        expr: RExpr::NativeRef { value: s },
+                    },
+                    if write {
+                        RStmt::Store {
+                            dst: place,
+                            src: value,
+                        }
+                    } else {
+                        RStmt::Assign {
+                            dst: read,
+                            expr: RExpr::Load { place },
+                        }
+                    },
+                ];
+                let origin = body.terminator_origins[0];
+                body.stmt_origins = vec![vec![origin; stmts.len()]];
+                body.terminator_origins = vec![origin];
+                body.blocks = vec![RBlock {
+                    stmts,
+                    terminator: RTerminator::Return(Some(if write { value } else { read })),
+                }];
+                let mut runtime = deploy_with_body(&db, package, target, body, opt, "C");
+
+                // The shared lane's slot also holds `flag`.
+                let rest = u64::from(offset == 1);
+                let case = format!("{opt:?}, field {field}, write={write}");
+                if write {
+                    call(&mut runtime, 3, &[word(slot, false), word(rest, false)]).unwrap();
+                    assert!(
+                        call(&mut runtime, 1, &[word(1 << 32, false)]).is_err(),
+                        "{case}: a value wider than the lane must revert"
+                    );
+                    call(&mut runtime, 1, &[word(0x11223344, false)]).unwrap();
+                    let stored = call(&mut runtime, 2, &[word(slot, false)]).unwrap();
+                    assert_eq!(
+                        stored.return_data,
+                        word(rest | (0x11223344 << (8 * offset)), false),
+                        "{case}"
+                    );
+                } else {
+                    // Bits above the lane are not part of its value.
+                    let dirty = rest | (0x11223344 << (8 * offset));
+                    call(&mut runtime, 3, &[word(slot, false), word(dirty, true)]).unwrap();
+                    let read = call(&mut runtime, 1, &[word(0, false)]).unwrap();
+                    assert_eq!(read.return_data, word(0x11223344, false), "{case}");
+                }
+            }
+        }
+    }
 }

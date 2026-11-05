@@ -5251,8 +5251,34 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         lane: StorageLane,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
+        self.lane_value(class, &mut |this, scalar| {
+            this.extract_packed_scalar(word, lane, scalar)
+        })
+    }
+
+    /// `value`, of class `class`, encoded in `lane`'s bytes and moved into
+    /// the lane's position, with every other bit zero: a scalar, or a packed
+    /// newtype's field.
+    fn lane_value_bits(
+        &mut self,
+        value: ValueId,
+        lane: StorageLane,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        self.lane_bits(value, class, &mut |this, value, scalar| {
+            this.packed_scalar_bits(value, lane, scalar)
+        })
+    }
+
+    /// The value of class `class` whose lane holds the scalar `scalar`
+    /// extracts: that scalar, or a packed newtype whose field holds it.
+    fn lane_value(
+        &mut self,
+        class: &RuntimeClass<'db>,
+        scalar: &mut impl FnMut(&mut Self, &ScalarClass<'db>) -> Result<ValueId, LowerError>,
+    ) -> Result<ValueId, LowerError> {
         match class {
-            RuntimeClass::Scalar(scalar) => self.extract_packed_scalar(word, lane, scalar),
+            RuntimeClass::Scalar(class) => scalar(self, class),
             RuntimeClass::AggregateValue { layout } => {
                 let Layout::Struct(StructLayout {
                     fields,
@@ -5264,7 +5290,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         "packed storage lane on a non-scalar field: {class:?}"
                     )));
                 };
-                let field = self.extract_lane_value(word, lane, &fields[0])?;
+                let field = self.lane_value(&fields[0], scalar)?;
                 let ty = self.module.ty_for_layout(*layout)?;
                 let undef = self.fb.make_undef_value(ty);
                 let idx = self.index_value(0);
@@ -5279,17 +5305,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         }
     }
 
-    /// `value`, of class `class`, encoded in `lane`'s bytes and moved into
-    /// the lane's position, with every other bit zero: a scalar, or a packed
-    /// newtype's field.
-    fn lane_value_bits(
+    /// The lane bits `bits` encodes from the scalar that `value`, of class
+    /// `class`, holds in its lane: the value itself, or a packed newtype's
+    /// field.
+    fn lane_bits(
         &mut self,
         value: ValueId,
-        lane: StorageLane,
         class: &RuntimeClass<'db>,
+        bits: &mut impl FnMut(&mut Self, ValueId, &ScalarClass<'db>) -> Result<ValueId, LowerError>,
     ) -> Result<ValueId, LowerError> {
         match class {
-            RuntimeClass::Scalar(scalar) => self.packed_scalar_bits(value, lane, scalar),
+            RuntimeClass::Scalar(scalar) => bits(self, value, scalar),
             RuntimeClass::AggregateValue { layout } => {
                 let Layout::Struct(StructLayout {
                     fields,
@@ -5302,7 +5328,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     )));
                 };
                 let field = self.extract_aggregate_field(value, 0, &fields[0])?;
-                self.lane_value_bits(field, lane, &fields[0])
+                self.lane_bits(field, &fields[0], bits)
             }
             RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => Err(LowerError::Internal(
                 format!("packed storage lane on a non-scalar field: {class:?}"),
