@@ -152,7 +152,7 @@ impl<'db> DependencyIssues<'db> {
         let mut by_ingot = BTreeMap::<Url, DiagnosticsCollection<'db>>::new();
         for module in blocked.chain(mir_errors) {
             let url = module.ingot(db).base(db);
-            if !is_embedded_builtin(&url) || !seen.insert(module) {
+            if !is_embedded_builtin(url) || !seen.insert(module) {
                 continue;
             }
             let hir = db.run_on_top_mod(module);
