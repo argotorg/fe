@@ -50,6 +50,11 @@ impl<'db> Stmt<'db> {
                 (Stmt::While(cond, body), HirOrigin::raw(&ast))
             }
 
+            ast::StmtKind::Loop(loop_) => {
+                let body = Expr::push_to_body_opt(ctxt, loop_.body());
+                (Stmt::Loop(body), HirOrigin::raw(&ast))
+            }
+
             ast::StmtKind::Continue(_) => (Stmt::Continue, HirOrigin::raw(&ast)),
 
             ast::StmtKind::Break(_) => (Stmt::Break, HirOrigin::raw(&ast)),

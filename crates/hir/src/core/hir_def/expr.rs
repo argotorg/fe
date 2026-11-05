@@ -108,6 +108,13 @@ impl CondId {
     pub fn data<'db>(self, db: &'db dyn HirDb, body: Body<'db>) -> &'db Partial<Cond> {
         &body.conds(db)[self]
     }
+
+    /// Whether the condition is the literal `true`, so that a `while` on it
+    /// is a `loop`.
+    pub fn is_true_literal(self, db: &dyn HirDb, body: Body) -> bool {
+        matches!(self.data(db, body), Partial::Present(Cond::Expr(expr))
+            if matches!(expr.data(db, body), Partial::Present(Expr::Lit(LitKind::Bool(true)))))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]

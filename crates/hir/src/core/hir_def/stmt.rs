@@ -29,6 +29,8 @@ pub enum Stmt<'db> {
     /// The first `CondId` is the condition of the while-loop.
     /// The second `ExprId` is the body of the while-loop.
     While(CondId, ExprId),
+    /// `loop`, whose `ExprId` is its body.
+    Loop(ExprId),
     Continue,
     Break,
     Return(Option<ExprId>),

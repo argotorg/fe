@@ -1,0 +1,132 @@
+use core::ops::Drop
+use core::ptr
+
+fn search(_ n: u64) -> u64 {
+    var i: u64 = 0
+    loop {
+        if i * i >= n {
+            return i
+        }
+        i += 1
+    }
+}
+
+fn search_while(_ n: u64) -> u64 {
+    var i: u64 = 0
+    while true {
+        if i * i >= n {
+            return i
+        }
+        i += 1
+    }
+}
+
+fn first_even(_ items: [u64; 4]) -> Option<u64> {
+    var at: usize = 0
+    loop {
+        if at == 4 {
+            return Option::None
+        }
+        if items[at] % 2 == 0 {
+            return Option::Some(items[at])
+        }
+        at += 1
+    }
+}
+
+fn unwrap_or_spin(_ value: Option<u64>) -> u64 {
+    let Option::Some(v) = value else {
+        loop {}
+    }
+    v
+}
+
+const fn isqrt(_ n: u64) -> u64 {
+    var i: u64 = 0
+    loop {
+        if i * i >= n {
+            return i
+        }
+        i += 1
+    }
+}
+
+const ROOT: u64 = isqrt(50)
+
+#[test]
+fn loops_end_bodies_of_any_type() {
+    assert(search(50) == 8)
+    assert(search_while(50) == 8)
+    assert(first_even([1, 3, 6, 8]) == Option::Some(6))
+    assert(first_even([1, 3, 5, 7]) == Option::None)
+    assert(unwrap_or_spin(Option::Some(3)) == 3)
+    assert(ROOT == 8)
+}
+
+#[test]
+fn break_and_continue_leave_and_repeat_a_loop() {
+    var i: u64 = 0
+    var odd: u64 = 0
+    loop {
+        i += 1
+        if i > 9 {
+            break
+        }
+        if i % 2 == 0 {
+            continue
+        }
+        odd += i
+    }
+    assert(i == 10)
+    assert(odd == 25)
+
+    var outer: u64 = 0
+    while true {
+        outer += 1
+        var inner: u64 = 0
+        loop {
+            inner += 1
+            if inner == outer {
+                break
+            }
+        }
+        if outer == 3 {
+            break
+        }
+    }
+    assert(outer == 3)
+}
+
+// Each drop counts itself through a raw pointer, which no scope owns.
+struct Counted {
+    counter: *u256,
+}
+
+impl Drop for Counted {
+    fn drop(own self) {
+        unsafe { *self.counter += 1 }
+    }
+}
+
+fn count_to(_ counter: *u256, _ n: u256) -> u256 {
+    loop {
+        let _value = Counted { counter }
+        let seen = unsafe { *counter }
+        if seen + 1 == n {
+            return seen
+        }
+    }
+}
+
+#[test]
+fn loop_iterations_destroy_their_values() {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    assert(count_to(counter, 4) == 3)
+    assert(unsafe { *counter } == 4)
+    loop {
+        let _value = Counted { counter }
+        break
+    }
+    assert(unsafe { *counter } == 5)
+}

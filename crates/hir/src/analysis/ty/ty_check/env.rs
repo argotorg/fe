@@ -165,6 +165,8 @@ pub(crate) struct TyCheckEnv<'db> {
     row_components: Vec<ResolvedEffectBindingInfo<'db>>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
+    /// The loops a `break` leaves.
+    broken_loops: FxHashSet<StmtId>,
     expr_stack: Vec<ExprId>,
 
     /// Param bindings for transfer to TypedBody
@@ -317,6 +319,7 @@ impl<'db> TyCheckEnv<'db> {
             row_components: Vec::new(),
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
+            broken_loops: FxHashSet::default(),
             expr_stack: Vec::new(),
             param_bindings: Vec::new(),
             input_bindings: Vec::new(),
@@ -1391,6 +1394,14 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn current_loop(&self) -> Option<StmtId> {
         self.loop_stack.last().copied()
+    }
+
+    pub(super) fn break_loop(&mut self, stmt: StmtId) {
+        self.broken_loops.insert(stmt);
+    }
+
+    pub(super) fn is_broken_loop(&self, stmt: StmtId) -> bool {
+        self.broken_loops.contains(&stmt)
     }
 
     pub(super) fn enter_expr(&mut self, expr: ExprId) {

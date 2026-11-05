@@ -20,6 +20,11 @@ break
         }
     }
 
+    loop   {
+        x=x-1
+        if  x==0{  break  }
+    }
+
     var maybe = Some(1)
     while  let   Some(v)=maybe{
         maybe = None

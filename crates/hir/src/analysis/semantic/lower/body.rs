@@ -272,6 +272,7 @@ pub(super) struct LoopScope {
     pub(super) continue_bb: SBlockId,
     pub(super) break_bb: SBlockId,
     pub(super) has_reachable_continue: bool,
+    pub(super) has_reachable_break: bool,
     /// The scopes outside the loop body: `break` and `continue` destroy the
     /// owners of the scopes inside it.
     pub(super) drop_depth: usize,
@@ -2446,7 +2447,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     self.hold_declared(*pat);
                 }
             }
-            Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
+            Stmt::While(cond, body_expr) => self.lower_loop(Some(*cond), *body_expr),
+            Stmt::Loop(body_expr) => self.lower_loop(None, *body_expr),
             Stmt::For(pat, _, body_expr, _) => self.lower_for(stmt, *pat, *body_expr),
             Stmt::Continue => {
                 let is_reachable = !self.is_terminated(self.current);
@@ -2457,9 +2459,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.set_terminator(self.current, origin, STerminatorKind::Goto(continue_bb));
             }
             Stmt::Break => {
-                let scope = self.loop_stack.last().copied().expect("break outside loop");
-                self.destroy_scopes_from(scope.drop_depth, None);
-                self.set_terminator(self.current, origin, STerminatorKind::Goto(scope.break_bb));
+                let is_reachable = !self.is_terminated(self.current);
+                let scope = self.loop_stack.last_mut().expect("break outside loop");
+                scope.has_reachable_break |= is_reachable;
+                let (break_bb, drop_depth) = (scope.break_bb, scope.drop_depth);
+                self.destroy_scopes_from(drop_depth, None);
+                self.set_terminator(self.current, origin, STerminatorKind::Goto(break_bb));
             }
             Stmt::Return(expr) => {
                 let value = expr.map(|expr| self.lower_expr_operand(expr));
@@ -2485,7 +2490,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    fn lower_while(&mut self, cond: CondId, body_expr: ExprId) {
+    /// Lowers a `while`, or a `loop` when `cond` is `None`. A `while true`
+    /// branches on nothing, as a `loop` does, and only a `break` leaves either.
+    fn lower_loop(&mut self, cond: Option<CondId>, body_expr: ExprId) {
+        let cond = cond.filter(|cond| !cond.is_true_literal(self.db, self.body));
         let cond_bb = self.new_block();
         let body_bb = self.new_block();
         let exit_bb = self.new_block();
@@ -2495,12 +2503,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.switch_to(cond_bb);
         let drop_depth = self.drop_scopes.len();
         self.push_drop_scope(true);
-        self.lower_cond_branch(cond, body_bb, exit_bb, drop_depth, true);
+        match cond {
+            Some(cond) => self.lower_cond_branch(cond, body_bb, exit_bb, drop_depth, true),
+            None => self.set_synthetic_terminator(self.current, STerminatorKind::Goto(body_bb)),
+        }
 
         self.loop_stack.push(LoopScope {
             continue_bb: cond_bb,
             break_bb: exit_bb,
             has_reachable_continue: false,
+            has_reachable_break: false,
             drop_depth,
         });
         self.switch_to(body_bb);
@@ -2509,9 +2521,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         if !self.is_terminated(self.current) {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
         }
-        self.loop_stack.pop();
+        let scope = self.loop_stack.pop().expect("loop scope");
 
         self.switch_to(exit_bb);
+        if cond.is_none() && !scope.has_reachable_break {
+            // Nothing reaches the exit. Close it like a dead `if`/`match` join.
+            self.set_synthetic_terminator(exit_bb, STerminatorKind::Goto(exit_bb));
+        }
     }
 
     /// A loop base: the carrier of an access binding, a value the loop holds
@@ -2676,6 +2692,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             continue_bb: latch_bb,
             break_bb: exit_bb,
             has_reachable_continue: false,
+            has_reachable_break: false,
             drop_depth,
         });
         self.switch_to(body_bb);

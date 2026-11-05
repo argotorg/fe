@@ -38,6 +38,7 @@ fn nth_let(body: fe_hir::hir_def::Body<'_>, db: &HirAnalysisTestDb, idx: usize) 
             Partial::Present(
                 Stmt::Let(_, _, None, _)
                 | Stmt::While(..)
+                | Stmt::Loop(..)
                 | Stmt::For(..)
                 | Stmt::Continue
                 | Stmt::Break

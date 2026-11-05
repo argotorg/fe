@@ -6516,14 +6516,15 @@ impl<'db> TypedBody<'db> {
                     *saw_non_param = true;
                 }
             }
-            crate::hir_def::Stmt::Expr(expr) => self.collect_explicit_return_param_sources_in_expr(
-                db,
-                body,
-                *expr,
-                out,
-                saw_non_param,
-                seen,
-            ),
+            crate::hir_def::Stmt::Expr(expr) | crate::hir_def::Stmt::Loop(expr) => self
+                .collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *expr,
+                    out,
+                    saw_non_param,
+                    seen,
+                ),
             crate::hir_def::Stmt::Let(_, _, None, _)
             | crate::hir_def::Stmt::Return(None)
             | crate::hir_def::Stmt::Continue

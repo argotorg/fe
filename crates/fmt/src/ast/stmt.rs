@@ -15,6 +15,7 @@ impl ToDoc for ast::Stmt {
             StmtKind::Let(let_stmt) => let_stmt.to_doc(ctx),
             StmtKind::For(for_stmt) => for_stmt.to_doc(ctx),
             StmtKind::While(while_stmt) => while_stmt.to_doc(ctx),
+            StmtKind::Loop(loop_stmt) => loop_stmt.to_doc(ctx),
             StmtKind::Continue(continue_stmt) => continue_stmt.to_doc(ctx),
             StmtKind::Break(break_stmt) => break_stmt.to_doc(ctx),
             StmtKind::Return(ret) => ret.to_doc(ctx),
@@ -169,6 +170,30 @@ impl ToDoc for ast::WhileStmt {
             },
             |token| match token.kind() {
                 SyntaxKind::WhileKw => Some(TokenPiece::new(alloc.text("while")).space_after()),
+                _ => None,
+            },
+        )
+    }
+}
+
+impl ToDoc for ast::LoopStmt {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if !has_comment_tokens(self.syntax()) {
+            return match self.body() {
+                Some(body) => alloc.text("loop ").append(body.to_doc(ctx)),
+                None => alloc.text("loop"),
+            };
+        }
+
+        token_doc(
+            ctx,
+            self.syntax(),
+            ctx.config.indent_width as isize,
+            |node| ast::Expr::cast(node).map(|expr| TokenPiece::new(expr.to_doc(ctx))),
+            |token| match token.kind() {
+                SyntaxKind::LoopKw => Some(TokenPiece::new(alloc.text("loop")).space_after()),
                 _ => None,
             },
         )
