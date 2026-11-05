@@ -916,7 +916,7 @@ impl<I> StringView<I>
 /// `data` points at the start of an allocation that holds the ABI tail payload:
 /// the length word followed by packed UTF-8 bytes padded to a whole word count.
 /// The value owns the allocation and frees it when dropped, so it moves rather
-/// than copies. `clone` makes a second string, and `payload_span` views the bytes.
+/// than copies. `clone` makes a second string, and `span` views the bytes.
 pub struct DynString {
     unsafe data: *u8,
     unsafe len: usize,
@@ -932,7 +932,7 @@ impl Drop for DynString {
 
 impl Clone for DynString {
     fn clone(self) -> Self {
-        Self::from_payload(source: self.payload_span())
+        Self::from_payload(source: self.span())
     }
 }
 
@@ -964,7 +964,7 @@ impl DynString {
         Self::from_validated_abi_tail(data, len, size)
     }
 
-    /// Allocates a string of `len` zero bytes, to be filled through `payload_span`.
+    /// Allocates a string of `len` zero bytes, to be filled through `span`.
     #[inline(always)]
     pub fn zeroed(_ len: usize) -> Self {
         let size = 32 + round_up_words(len as u256)
@@ -1007,7 +1007,7 @@ impl DynString {
     ///
     /// Fails with an index-out-of-bounds panic if the range exceeds the string.
     pub fn slice(self, start: usize, len: usize) -> Self {
-        Self::from_payload(source: self.payload_span().slice(offset: start, len))
+        Self::from_payload(source: self.span().slice(offset: start, len))
     }
 
     pub fn from_payload(source: ptr::MemSpan) -> Self {
@@ -1037,7 +1037,7 @@ impl DynString {
         self.size
     }
 
-    pub fn payload_span(self) -> ref ptr::MemSpan {
+    pub fn span(self) -> ref ptr::MemSpan {
         unsafe {
             ptr::MemSpan::from_raw_parts(
                 ptr: ptr::offset_bytes(self.data, 32),
@@ -1051,7 +1051,7 @@ impl DynString {
     }
 
     pub fn byte_at(self, _ index: usize) -> u8 {
-        self.payload_span().byte_at(index)
+        self.span().byte_at(index)
     }
 }
 
@@ -1060,7 +1060,7 @@ impl DynString {
 /// `data` points at the start of an allocation that holds the ABI tail payload:
 /// the length word followed by packed bytes data padded to a whole word count.
 /// The value owns the allocation and frees it when dropped, so it moves rather
-/// than copies. `clone` makes a second value, and `payload_span` views the bytes.
+/// than copies. `clone` makes a second value, and `span` views the bytes.
 pub struct Bytes {
     unsafe data: *u8,
     unsafe len: usize,
@@ -1076,7 +1076,7 @@ impl Drop for Bytes {
 
 impl Clone for Bytes {
     fn clone(self) -> Self {
-        Self::from_payload(source: self.payload_span())
+        Self::from_payload(source: self.span())
     }
 }
 
@@ -1108,7 +1108,7 @@ impl Bytes {
         Self::from_validated_abi_tail(data, len, size)
     }
 
-    /// Allocates `len` zero bytes, to be filled through `payload_span`.
+    /// Allocates `len` zero bytes, to be filled through `span`.
     #[inline(always)]
     pub fn zeroed(_ len: usize) -> Self {
         let size = 32 + round_up_words(len as u256)
@@ -1181,7 +1181,7 @@ impl Bytes {
     }
 
     #[inline(always)]
-    pub fn payload_span(self) -> ref ptr::MemSpan {
+    pub fn span(self) -> ref ptr::MemSpan {
         unsafe { ptr::MemSpan::from_raw_parts(ptr: self.payload_ptr(), len: self.len) }
     }
 
@@ -1206,7 +1206,7 @@ impl Bytes {
     }
 
     pub fn byte_at(self, _ index: usize) -> u8 {
-        self.payload_span().byte_at(index)
+        self.span().byte_at(index)
     }
 }
 
@@ -1236,13 +1236,13 @@ fn payload_eq(_ a: ptr::MemSpan, _ b: ptr::MemSpan) -> bool {
 
 impl Eq for Bytes {
     fn eq(self, _ other: Bytes) -> bool {
-        payload_eq(self.payload_span(), other.payload_span())
+        payload_eq(self.span(), other.span())
     }
 }
 
 impl Eq for DynString {
     fn eq(self, _ other: DynString) -> bool {
-        payload_eq(self.payload_span(), other.payload_span())
+        payload_eq(self.span(), other.span())
     }
 }
 
@@ -1250,7 +1250,7 @@ impl Eq for DynString {
 /// literal longer than a `String<N>` holds.
 impl Eq<DynString> for ptr::MemSpan {
     fn eq(self, _ other: DynString) -> bool {
-        self == other.payload_span()
+        self == other.span()
     }
 }
 

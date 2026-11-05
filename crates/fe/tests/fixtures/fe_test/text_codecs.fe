@@ -36,7 +36,7 @@ fn all_bytes() -> Bytes {
 }
 
 fn decodes_base64(_ encoded: DynString, _ expected: DynString) -> bool {
-    text::decode_base64(encoded).unwrap().payload_span() == expected.payload_span()
+    text::decode_base64(encoded).unwrap().span() == expected.span()
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn base64_rfc4648_vectors() {
 #[test]
 fn base64_roundtrip() {
     let data = all_bytes()
-    let encoded = text::base64(data.payload_span())
+    let encoded = text::base64(data.span())
     assert!(text::decode_base64(encoded).unwrap() == data)
 }
 
@@ -82,7 +82,7 @@ fn base64_rejects() {
 
 fn base58_roundtrip(_ hex: DynString, _ encoded: DynString) -> bool {
     let data = from_hex(hex)
-    text::base58(data.payload_span()) == encoded && text::decode_base58(encoded).unwrap() == data
+    text::base58(data.span()) == encoded && text::decode_base58(encoded).unwrap() == data
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn base58_bitcoin_vectors() {
 #[test]
 fn base58_long_input() {
     let data = all_bytes()
-    let encoded = text::base58(data.payload_span())
+    let encoded = text::base58(data.span())
     assert!(
         encoded
             == "1cWB5HCBdLjAuqGGReWE3R3CguuwSjw6RHn39s2yuDRTS5NsBgNiFpWgAnEx6VQi8csexkgYw3mdYrMHr8x9i7aEwP8kZ7vccXWqKDvGv3u1GxFKPuAkn8JCPPGDMf3vMMnbzm6Nh9zh1gcNsMvH3ZNLmP5fSG6DGbbi2tuwMWPthr4boWwCxf7ewSgNQeacyozhKDDQQ1qL5fQFUW52QKUZDZ5fw3KXNQJMcNTcaB723LchjeKun7MuGW5qyCBZYzA1KjofN1gYBV3NqyhQJ3Ns746GNuf9N2pQPmHz4xpnSrrfCvy6TVVz5d4PdrjeshsWQwpZsZGzvbdAdN8MKV5QsBDY",
@@ -137,4 +137,16 @@ fn base58_rejects() {
     assert!(text::decode_base58("l1").is_none())
     assert!(text::decode_base58("2g ").is_none())
     assert!(text::decode_base58("2g+").is_none())
+}
+
+#[test]
+fn decoders_read_any_text() {
+    let encoded: DynString = "Zm9v"
+    assert!(text::decode_base64(encoded.span()).unwrap() == text::decode_base64("Zm9v").unwrap())
+    let buffer = MemBuffer::from_span(encoded.span())
+    assert!(text::decode_base64(buffer).unwrap() == text::decode_base64("Zm9v").unwrap())
+
+    let base58: DynString = "2g"
+    assert!(text::decode_base58(base58.span()).unwrap() == text::decode_base58("2g").unwrap())
+    assert!(text::decode_base58(MemBuffer::from_span(base58.span())).unwrap() == text::decode_base58("2g").unwrap())
 }

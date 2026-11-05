@@ -20,7 +20,7 @@ use super::effect_env as keyed_effect_env;
 use super::owner::BodyOwner;
 use super::{
     Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
-    TypedBodyTables, ValuePathRef, stmt::ForLoopPlan,
+    TypedBodyTables, ValuePathRef, callable::EffectProviderSpecialization, stmt::ForLoopPlan,
 };
 use crate::analysis::ty::pattern_ir::{
     PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
@@ -1507,6 +1507,52 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::Method(pending))
     }
 
+    pub(super) fn register_pending_effects(&mut self, pending: PendingEffects<'db>) {
+        self.deferred.push(DeferredTask::Effects(pending))
+    }
+
+    pub(super) fn take_pending_effects(&mut self) -> Vec<PendingEffects<'db>> {
+        let mut effects = Vec::new();
+        self.deferred.retain(|task| match task {
+            DeferredTask::Effects(pending) => {
+                effects.push(pending.clone());
+                false
+            }
+            _ => true,
+        });
+        effects
+    }
+
+    /// The effect providers of the call `expr`, resolved after it was
+    /// registered.
+    pub(super) fn set_call_effect_providers(
+        &mut self,
+        expr: ExprId,
+        providers: &[EffectProviderSpecialization<'db>],
+    ) {
+        if let Some(callable) = &mut self.callables[expr] {
+            *callable.effect_providers_mut() = providers.to_vec();
+        }
+        if let Some(lowering) = &mut self.semantic_expr_lowering[expr] {
+            *lowering.callable_mut().effect_providers_mut() = providers.to_vec();
+        }
+    }
+
+    pub(super) fn for_loop_plan(&self, stmt: StmtId) -> Option<&ForLoopPlan<'db>> {
+        self.for_loop_plans[stmt].as_ref()
+    }
+
+    pub(super) fn set_for_loop_call(
+        &mut self,
+        stmt: StmtId,
+        step: usize,
+        call: super::stmt::ForLoopCall<'db>,
+    ) {
+        if let Some(plan) = &mut self.for_loop_plans[stmt] {
+            plan.calls[step] = call;
+        }
+    }
+
     /// Whether a method call in `closure`'s body waits to resolve.
     pub(super) fn has_pending_method_in(&self, closure: ClosureDef<'db>) -> bool {
         self.deferred.iter().any(|task| {
@@ -2574,6 +2620,21 @@ pub(super) struct PendingMethod<'db> {
     pub site: CallSite<'db>,
 }
 
+/// A call or loop whose callee has a row inference can't yet expand, such as
+/// one of `S<P>` with `P` an open string literal. Its effects resolve once
+/// the row's instance is known, at its call site.
+#[derive(Debug, Clone)]
+pub(super) struct PendingEffects<'db> {
+    pub target: PendingEffectsTarget,
+    pub site: CallSite<'db>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum PendingEffectsTarget {
+    Call(ExprId),
+    Loop(StmtId),
+}
+
 /// Where a call is checked, for one resolved later to take its effects
 /// there: the frames of the `with` blocks it is under, and the closure whose
 /// body it is in.
@@ -2617,6 +2678,7 @@ impl PendingPrimitiveOp {
 pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
     Method(PendingMethod<'db>),
+    Effects(PendingEffects<'db>),
     PrimitiveOp(PendingPrimitiveOp),
     TypeEquality(TypeEquality<'db>),
 }

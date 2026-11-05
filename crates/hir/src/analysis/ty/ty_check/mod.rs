@@ -2539,6 +2539,18 @@ impl<'db> TyChecker<'db> {
 
     fn resolve_deferred(&mut self) {
         self.resolve_pending(None);
+        // A row that still waits sees a literal's fallback type only once
+        // nothing else resolves without it. Its effects can settle more.
+        loop {
+            let effects = self.env.take_pending_effects();
+            if effects.is_empty() {
+                break;
+            }
+            for pending in effects {
+                self.resolve_pending_effects(pending, true);
+            }
+            self.resolve_pending(None);
+        }
         let db = self.db;
         let body = self.env.body();
         let scope = self.env.scope();
@@ -2593,6 +2605,9 @@ impl<'db> TyChecker<'db> {
                 }
                 env::DeferredTask::PrimitiveOp(pending) => {
                     let _ = self.resolve_pending_primitive_op(&pending);
+                }
+                env::DeferredTask::Effects(pending) => {
+                    self.resolve_pending_effects(pending, true);
                 }
             }
         }
@@ -2685,6 +2700,14 @@ impl<'db> TyChecker<'db> {
                         } else {
                             self.env.register_pending_method(pending);
                         }
+                    }
+                    env::DeferredTask::Effects(pending)
+                        if closure.is_some() && pending.site.closure != closure =>
+                    {
+                        self.env.register_pending_effects(pending);
+                    }
+                    env::DeferredTask::Effects(pending) => {
+                        progressed |= self.resolve_pending_effects(pending, false);
                     }
                     env::DeferredTask::PrimitiveOp(pending) => {
                         match self.resolve_pending_primitive_op(&pending) {

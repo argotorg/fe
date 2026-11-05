@@ -12,7 +12,10 @@ use crate::span::DynLazySpan;
 
 use super::{
     AccessBinding, Callable, LocalBinding, TyChecker, Typeable,
-    env::{ExprProp, ParamSite, TraitObligation, TraitObligationOrigin, hir_param},
+    env::{
+        ExprProp, ParamSite, PendingEffects, PendingEffectsTarget, TraitObligation,
+        TraitObligationOrigin, hir_param,
+    },
 };
 use crate::analysis::ty::{
     canonical::Canonicalized,
@@ -445,7 +448,18 @@ impl<'db> TyChecker<'db> {
                 }
                 let authority = self.expr_has_authority(base.0);
                 self.bind_pattern_accesses(*pat, &plan.shape, authority, AccessBinding::Result);
+                let waits = plan
+                    .calls
+                    .iter()
+                    .any(|call| !self.rows_awaiting_inference(&call.callable).is_empty());
                 self.env.register_for_loop_plan(stmt, plan);
+                if waits {
+                    let site = self.env.call_site();
+                    self.env.register_pending_effects(PendingEffects {
+                        target: PendingEffectsTarget::Loop(stmt),
+                        site,
+                    });
+                }
             }
             None => {
                 self.check_pat(*pat, TyId::invalid(self.db, InvalidCause::Other));
@@ -691,7 +705,12 @@ impl<'db> TyChecker<'db> {
                 callable.set_mode(Some(BorrowKind::Mut));
             }
             callable.set_checked_input_tys(inputs);
-            let effect_args = this.resolve_callable_effects(span.clone(), &mut callable, None);
+            // `check_for` defers the effects of a call whose rows wait.
+            let effect_args = if this.rows_awaiting_inference(&callable).is_empty() {
+                this.resolve_callable_effects(span.clone(), &mut callable, None)
+            } else {
+                Vec::new()
+            };
             Some(ForLoopCall {
                 callable,
                 effect_args,

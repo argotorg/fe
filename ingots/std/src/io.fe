@@ -365,7 +365,7 @@ impl<const N: usize> Display for String<N> {
 }
 
 impl Display for DynString {
-    fn fmt(self, _ out: mut MemBuffer) { out.extend_from(self.payload_span()) }
+    fn fmt(self, _ out: mut MemBuffer) { out.extend_from(self.span()) }
 }
 
 /// The bytes themselves.

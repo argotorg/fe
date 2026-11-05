@@ -1,0 +1,192 @@
+// A row's instance can wait on inference: `S<P>::E` with `P` an open string
+// literal, which more than one string impl could take. Its effects resolve
+// once the instance is known, at the call's site.
+use core::iter::Driver
+use core::num::IntDowncast
+use core::ptr::MemSpan
+use std::abi::DynString
+
+struct Count { n: u256 }
+
+trait Pat { fn weight(self) -> u256 }
+impl<const N: usize> Pat for String<N> { fn weight(self) -> u256 { 1 } }
+impl Pat for DynString { fn weight(self) -> u256 { 100 } }
+
+trait Act {
+    uses E
+    fn act(self) uses E
+}
+struct Inc<P> { p: P }
+impl<P: Pat> Act for Inc<P> {
+    uses E = (count: mut Count)
+    fn act(self) uses E { count.n += self.p.weight() }
+}
+fn make<P: Pat>(_ p: own P) -> Inc<P> { Inc { p } }
+fn fire<A: Act>(_ a: own A) uses A::E { a.act() }
+fn fire_view<A: Act>(_ a: A) uses A::E { a.act() }
+
+#[test]
+fn a_literal_settles_the_row() {
+    var count = Count { n: 0 }
+    with (count) {
+        fire(make(", "))
+    }
+    assert!(count.n == 1)
+}
+
+#[test]
+fn a_nested_with_gives_the_innermost_provider() {
+    var outer = Count { n: 0 }
+    var inner = Count { n: 0 }
+    with (outer) {
+        with (inner) {
+            fire(make(", "))
+        }
+        fire(make("a"))
+    }
+    assert!(outer.n == 1)
+    assert!(inner.n == 1)
+}
+
+#[test]
+fn a_long_literal_is_a_dyn_string() {
+    var count = Count { n: 0 }
+    with (count) {
+        fire(make("0123456789012345678901234567890123456789"))
+    }
+    assert!(count.n == 100)
+}
+
+#[test]
+fn a_later_binding_picks_the_string_type() {
+    var count = Count { n: 0 }
+    let a = make(", ")
+    with (count) {
+        fire_view(a)
+    }
+    let b: Inc<DynString> = a
+    assert!(count.n == 100)
+    assert!(b.p.len() == 2)
+}
+
+#[test]
+fn a_let_keeps_the_literal_open() {
+    var count = Count { n: 0 }
+    let a = make(", ")
+    with (count) {
+        fire(a)
+    }
+    assert!(count.n == 1)
+}
+
+trait Quiet { uses E }
+struct Still<P> { p: P }
+impl<P: Pat> Quiet for Still<P> {}
+fn hush<P: Pat>(_ p: own P) -> Still<P> { Still { p } }
+fn wait<Q: Quiet>(_ q: own Q) uses Q::E {}
+
+#[test]
+fn a_closure_takes_an_empty_row() {
+    let f = || wait(hush(", "))
+    f()
+}
+
+#[test]
+fn a_closure_takes_a_settled_row() {
+    var count = Count { n: 0 }
+    let s: String<2> = ", "
+    with (count) {
+        let f = || fire(make(s))
+        f()
+    }
+    assert!(count.n == 1)
+}
+
+// A loop's driver that holds an open literal.
+trait Sep {
+    fn sep_len(self) -> usize
+    fn sep_byte(self, _ i: usize) -> u8
+}
+impl<const N: usize> Sep for String<N> {
+    fn sep_len(self) -> usize { self.len() }
+    fn sep_byte(self, _ i: usize) -> u8 { (((self as u256) >> (((self.len() - 1 - i) * 8) as u256)) & 0xff).downcast_truncate() }
+}
+impl Sep for DynString {
+    fn sep_len(self) -> usize { self.len() }
+    fn sep_byte(self, _ i: usize) -> u8 { self.byte_at(i) }
+}
+struct Parts<T> { sep: T }
+impl<T: Sep> Driver for Parts<T> {
+    type Base = MemSpan
+    type State = (usize, usize)
+    shape Step = ref MemSpan
+    fn start(self, _ base: MemSpan) -> (usize, usize) { from(base, self.sep, start: 0) }
+    fn has(self, _ base: MemSpan, _ s: (usize, usize)) -> bool { s.0 <= base.len() }
+    fn next(self, _ base: MemSpan, _ s: (usize, usize)) -> (usize, usize) { from(base, self.sep, start: s.1 + self.sep.sep_len()) }
+    fn at(self, _ base: MemSpan, _ s: (usize, usize)) -> ref MemSpan { base.slice(offset: s.0, len: s.1 - s.0) }
+}
+fn from<T: Sep>(_ text: MemSpan, _ sep: T, start: usize) -> (usize, usize) {
+    let len = sep.sep_len()
+    var end = start
+    while end + len <= text.len() {
+        var i: usize = 0
+        var hit = true
+        while i < len {
+            if text.byte_at(end + i) != sep.sep_byte(i) {
+                hit = false
+                break
+            }
+            i += 1
+        }
+        if hit { return (start, end) }
+        end += 1
+    }
+    (start, text.len())
+}
+trait SplitOn { fn parts<T: Sep>(self, _ sep: own T) -> Parts<T> }
+impl SplitOn for MemSpan { fn parts<T: Sep>(self, _ sep: own T) -> Parts<T> { Parts { sep } } }
+
+#[test]
+fn plain() {
+    let s: DynString = "a,b,c"
+    var n: usize = 0
+    for p in s.span().parts(",") { n += p.len() }
+    assert!(n == 3)
+}
+#[test]
+fn enumerated() {
+    let s: DynString = "a,b,c"
+    var n: usize = 0
+    for (i, p) in s.span().parts(",").enumerate() { n += i + p.len() }
+    assert!(n == 6)
+}
+#[test]
+fn taken() {
+    let s: DynString = "a,b,c"
+    var n: usize = 0
+    for p in s.span().parts(",").take(2) { n += p.len() }
+    assert!(n == 2)
+}
+#[test]
+fn chained() {
+    let s: DynString = "a,b,c"
+    var n: usize = 0
+    for (i, p) in s.span().parts(",").take(2).enumerate() { n += i + p.len() }
+    assert!(n == 3)
+}
+#[test]
+fn long_separator() {
+    let s: DynString = "a0123456789012345678901234567890123456789b"
+    var n: usize = 0
+    for (i, p) in s.span().parts("0123456789012345678901234567890123456789").enumerate() { n += i + p.len() }
+    assert!(n == 3)
+}
+#[test]
+fn an_unmatched_separator_gives_one_part() {
+    let s: DynString = "a,b"
+    var total: usize = 0
+    for (i, p) in s.span().parts(", ").enumerate() {
+        total += i + 1
+    }
+    assert!(total == 1)
+}

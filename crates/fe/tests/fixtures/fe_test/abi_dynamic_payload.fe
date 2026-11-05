@@ -240,13 +240,13 @@ fn test_owned_bytes_and_views_expose_explicit_spans() {
     let bytes = Bytes::from_payload(source: source.span())
     assert!(bytes.len() == 3)
     assert!(bytes.encoded_size() == 64)
-    assert!(bytes.payload_span().len() == 3)
+    assert!(bytes.span().len() == 3)
     assert!(bytes.encoded_span().len() == 64)
     assert!(bytes.encoded_span().byte_at(31) == 3)
-    assert!(bytes.payload_span().byte_at(1) == 0x22)
+    assert!(bytes.span().byte_at(1) == 0x22)
     assert!(bytes.encoded_span().byte_at(35) == 0)
 
-    let payload = bytes.payload_span()
+    let payload = bytes.span()
     let head = payload.head(1)
     let tail = payload.tail(1)
     assert!(head.len() == 1)
@@ -262,7 +262,7 @@ fn test_owned_bytes_and_views_expose_explicit_spans() {
 
     let string = DynString::from_payload(source: source.span())
     assert!(string.len() == 3)
-    assert!(string.payload_span().byte_at(2) == 0x33)
+    assert!(string.span().byte_at(2) == 0x33)
     assert!(string.encoded_span().len() == 64)
 
     let empty = Bytes::empty()

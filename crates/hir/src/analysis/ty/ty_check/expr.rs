@@ -21,11 +21,12 @@ use super::{
     effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
-        ParamSite, PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin,
-        TyCheckEnv, hir_param,
+        ParamSite, PendingEffects, PendingEffectsTarget, PendingPrimitiveOp, Prober,
+        ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv, hir_param,
     },
     has_invisible_newtype_field, merged_borrow_provider,
     path::ResolvedPathInBody,
+    stmt::ForLoopCall,
     transparent_newtype_field_ty, ty_may_be_code_region_token,
 };
 use crate::analysis::place::{Place, PlaceBase};
@@ -2257,11 +2258,111 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
+        if self.rows_awaiting_inference(callable).is_empty() {
+            self.resolve_call_effects(expr, callable);
+        } else {
+            let site = self.env.call_site();
+            self.env.register_pending_effects(PendingEffects {
+                target: PendingEffectsTarget::Call(expr),
+                site,
+            });
+        }
+    }
+
+    fn resolve_call_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
         let call_span: DynLazySpan<'db> = expr.span(self.body()).into();
         let args = self.resolve_callable_effects(call_span, callable, Some(expr));
         for arg in args {
             self.env.push_call_effect_arg(expr, arg);
         }
+    }
+
+    /// The rows of `callable`'s callee that stay abstract only because
+    /// inference hasn't finished with their instances, so whether their
+    /// implementations give them effects isn't known yet.
+    pub(super) fn rows_awaiting_inference(&mut self, callable: &Callable<'db>) -> Vec<RowKey<'db>> {
+        let CallableDef::Func(func) = callable.callable_def else {
+            return Vec::new();
+        };
+        if !func.has_effects(self.db) {
+            return Vec::new();
+        }
+        let rows = self.callee_rows(callable, func);
+        rows.abstract_rows
+            .iter()
+            .map(|&(_, row)| row)
+            .chain(
+                rows.components
+                    .iter()
+                    .filter_map(|component| component.requirement.key.key_row()),
+            )
+            .filter(|row| row.inst.args(self.db).iter().any(|ty| ty.has_var(self.db)))
+            .collect()
+    }
+
+    /// Resolves the effects `pending` waits for, at its call site. If its rows
+    /// still wait, registers it again and returns false, unless `force`, which
+    /// binds each open literal in them to its fallback type: their effects
+    /// depend on that type, so it can't change afterwards.
+    pub(super) fn resolve_pending_effects(
+        &mut self,
+        pending: PendingEffects<'db>,
+        force: bool,
+    ) -> bool {
+        let callables: Vec<_> = match pending.target {
+            PendingEffectsTarget::Call(expr) => {
+                self.env.callable_expr(expr).into_iter().cloned().collect()
+            }
+            PendingEffectsTarget::Loop(stmt) => self
+                .env
+                .for_loop_plan(stmt)
+                .into_iter()
+                .flat_map(|plan| &plan.calls)
+                .map(|call| call.callable.clone())
+                .collect(),
+        };
+        let waiting: Vec<_> = callables
+            .iter()
+            .flat_map(|callable| self.rows_awaiting_inference(callable))
+            .collect();
+        if !force && !waiting.is_empty() {
+            self.env.register_pending_effects(pending);
+            return false;
+        }
+        let scope = self.env.scope();
+        for &arg in waiting.iter().flat_map(|row| row.inst.args(self.db)) {
+            let settled = arg.fold_with(self.db, &mut Prober::new(&mut self.table, scope));
+            self.table.unify(arg, settled).ok();
+        }
+        self.env.enter_call_site(&pending.site);
+        match pending.target {
+            PendingEffectsTarget::Call(expr) => {
+                for mut callable in callables {
+                    self.resolve_call_effects(expr, &mut callable);
+                    self.env
+                        .set_call_effect_providers(expr, callable.effect_providers());
+                }
+            }
+            PendingEffectsTarget::Loop(stmt) => {
+                if let Some(plan) = self.env.for_loop_plan(stmt) {
+                    let span: DynLazySpan<'db> = plan.base.span(self.body()).into();
+                    for (step, mut callable) in callables.into_iter().enumerate() {
+                        let effect_args =
+                            self.resolve_callable_effects(span.clone(), &mut callable, None);
+                        self.env.set_for_loop_call(
+                            stmt,
+                            step,
+                            ForLoopCall {
+                                callable,
+                                effect_args,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        self.env.leave_call_site();
+        true
     }
 
     /// Resolves the effects `callable` requires where it is called. A missing

@@ -23,7 +23,7 @@ pub contract Blob uses (create: mut Create) {
 
     recv BlobMsg {
         Set { data } uses (mut blobs) {
-            blobs.store_view(key: 0, view: data.payload_span())
+            blobs.store_view(key: 0, view: data.span())
         }
 
         // Loads the stored bytes back into memory, then keeps executing:
