@@ -1,0 +1,30 @@
+// A compound assignment to a storage field wraps in unchecked code.
+use std::evm::Evm
+
+msg Msg {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract Wrapping {
+    mut total: u256,
+
+    recv Msg {
+        Run -> u256 uses (mut total) {
+            decrement(mut total)
+            total
+        }
+    }
+}
+
+#[arithmetic(unchecked)]
+fn decrement(_ total: mut u256) {
+    total -= 1
+}
+
+#[test]
+fn storage_compound_assignment_wraps() uses (evm: mut Evm) {
+    let c = evm.create2<Wrapping>(value: Wei::zero(), args: (), salt: 1)
+    let v: u256 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Msg::Run {})
+    assert!(v == u256::max())
+}

@@ -625,17 +625,29 @@ fn mut_self_aug_assign_receivers_lower_as_borrow_calls() {
     let file = db.new_stand_alone(
         "mut_self_aug_assign_receivers_lower_as_borrow_calls.fe".into(),
         r#"
+use core::ops::SubAssign
+
+pub struct Scan {
+    index: usize,
+}
+
+impl SubAssign<usize> for Scan {
+    fn sub_assign(mut self, _ other: own usize) {
+        self.index = self.index - other
+    }
+}
+
 pub struct Tower {
     counts: [u256; 24],
 }
 
 impl Tower {
     pub fn add(mut self) -> u256 {
-        var scan: usize = 24
-        while scan != 0 {
+        var scan = Scan { index: 24 }
+        while scan.index != 0 {
             scan -= 1
-            if self.counts[scan] != 0 {
-                return self.counts[scan]
+            if self.counts[scan.index] != 0 {
+                return self.counts[scan.index]
             }
         }
         0

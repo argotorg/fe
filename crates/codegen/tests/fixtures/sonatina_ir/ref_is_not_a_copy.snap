@@ -45,8 +45,7 @@ func private %test_ref_is_not_a_copy() {
         jump block11;
 
     block4:
-        v6.i256 = const.load v15;
-        v7.i1 = eq v6 20.i256;
+        v6.i256 = const.load v14;
         jump block13;
 
     block5:
@@ -61,18 +60,18 @@ func private %test_ref_is_not_a_copy() {
         return;
 
     block8:
-        obj.store v0 v23;
-        v14.constref<i256> = extract_value v23 0.i256;
-        v15.constref<i256> = extract_value v23 1.i256;
-        v16.i256 = const.load v14;
-        v17.i1 = eq v16 10.i256;
-        br v17 block2 block3;
+        obj.store v0 v22;
+        v13.constref<i256> = extract_value v22 0.i256;
+        v14.constref<i256> = extract_value v22 1.i256;
+        v15.i256 = const.load v13;
+        v16.i1 = eq v15 10.i256;
+        br v16 block2 block3;
 
     block9:
-        v19.constref<i256> = const.proj v4 0.i256;
-        v20.constref<i256> = const.proj v4 1.i256;
-        v22.@layout_1 = insert_value undef.@layout_1 0.i256 v19;
-        v23.@layout_1 = insert_value v22 1.i256 v20;
+        v18.constref<i256> = const.proj v4 0.i256;
+        v19.constref<i256> = const.proj v4 1.i256;
+        v21.@layout_1 = insert_value undef.@layout_1 0.i256 v18;
+        v22.@layout_1 = insert_value v21 1.i256 v19;
         jump block8;
 
     block10:
@@ -84,7 +83,8 @@ func private %test_ref_is_not_a_copy() {
         jump block10;
 
     block12:
-        br v7 block5 block6;
+        v24.i1 = eq v6 20.i256;
+        br v24 block5 block6;
 
     block13:
         jump block12;

@@ -32,7 +32,8 @@ fn write_cell(value: u256) -> u256 uses (cell: mut Cell) {
 }
 
 fn bump(_ cell: mut Cell, by: u256) -> u256 {
-    cell.value += by
+    let value = mut cell.value
+    value += by
     cell.value
 }
 

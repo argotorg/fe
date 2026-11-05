@@ -326,18 +326,16 @@ where
             (
                 ArithBinOp {
                     op: op1,
-                    mode: mode1,
                     lhs: lhs1,
                     rhs: rhs1,
                 },
                 ArithBinOp {
                     op: op2,
-                    mode: mode2,
                     lhs: lhs2,
                     rhs: rhs2,
                 },
             ) => {
-                if op1 != op2 || mode1 != mode2 {
+                if op1 != op2 {
                     return Err(UnificationError::TypeMismatch);
                 }
                 self.unify_ty(*lhs1, *lhs2)?;
@@ -346,16 +344,14 @@ where
             (
                 UnOp {
                     op: op1,
-                    mode: mode1,
                     expr: inner1,
                 },
                 UnOp {
                     op: op2,
-                    mode: mode2,
                     expr: inner2,
                 },
             ) => {
-                if op1 != op2 || mode1 != mode2 {
+                if op1 != op2 {
                     return Err(UnificationError::TypeMismatch);
                 }
                 self.unify_ty(*inner1, *inner2)

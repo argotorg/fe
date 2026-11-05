@@ -7,12 +7,13 @@ use std::{
 use fe_hir::{
     analysis::{
         semantic::{
-            ConstDesc, ConstRepr, CtfeConfig, CtfeError, EffectProviderSubst, EvalFailure,
-            EvalOutcome, GenericSubst, ImplEnv, SExpr, SStmtKind, SemConstId, SemConstScalar,
-            SemConstValue, SemOrigin, SemanticInstance, SemanticInstanceKey, array_const,
-            const_computation_for_instance, describe_const_computation, eval_body_owner_const,
-            force_const_computation, force_const_description, identity_semantic_instance_key,
-            int_const, reify_runtime_const, reify_runtime_const_for_ty, sem_const_ty,
+            BinaryOp, ConstDesc, ConstRepr, CtfeConfig, CtfeError, EffectProviderSubst,
+            EvalFailure, EvalOutcome, GenericSubst, ImplEnv, Overflow, SExpr, SStmtKind,
+            SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
+            SemanticInstanceKey, UnaryOp, array_const, const_computation_for_instance,
+            describe_const_computation, eval_body_owner_const, force_const_computation,
+            force_const_description, identity_semantic_instance_key, int_const,
+            reify_runtime_const, reify_runtime_const_for_ty, sem_const_ty,
             specialize_const_computation, specialize_const_description, tuple_const,
         },
         ty::{
@@ -24,7 +25,7 @@ use fe_hir::{
         },
     },
     diagnosable::Diagnosable,
-    hir_def::{ArithBinOp, Func, ItemKind, Partial, TopLevelMod, UnOp, attr::ArithmeticMode},
+    hir_def::{Func, ItemKind, Partial, TopLevelMod},
     test_db::HirAnalysisTestDb,
 };
 use num_bigint::BigInt;
@@ -210,8 +211,7 @@ fn negative_const_arg<'db>(db: &'db HirAnalysisTestDb, ty: TyId<'db>, magnitude:
                 ConstExprId::new(
                     db,
                     ConstExpr::UnOp {
-                        op: UnOp::Minus,
-                        mode: ArithmeticMode::Checked,
+                        op: UnaryOp::Neg(Overflow::Checked),
                         expr: integer_const_arg(db, ty, magnitude),
                     },
                 ),
@@ -1654,15 +1654,14 @@ const fn checked() -> u8 { check<255>() }
         ConstExprId::new(
             &db,
             ConstExpr::ArithBinOp {
-                op: ArithBinOp::Add,
-                mode,
+                op: BinaryOp::Add(mode),
                 lhs,
                 rhs,
             },
         )
     };
-    let checked = term(ArithmeticMode::Checked);
-    let unchecked = term(ArithmeticMode::Unchecked);
+    let checked = term(Overflow::Checked);
+    let unchecked = term(Overflow::Wrapping);
     assert_ne!(checked, unchecked);
     assert!(evaluate_type_level_int_const_expr(&db, checked, u8_ty).is_none());
     let wrapped = evaluate_type_level_int_const_expr(&db, unchecked, u8_ty).unwrap();
@@ -1760,15 +1759,11 @@ fn closed_term_inputs_force_with_their_recorded_arithmetic_mode() {
     let lhs = integer_const_arg(&db, u8_ty, 255);
     let rhs = integer_const_arg(&db, u8_ty, 1);
 
-    for (mode, expected) in [
-        (ArithmeticMode::Checked, None),
-        (ArithmeticMode::Unchecked, Some(0)),
-    ] {
+    for (mode, expected) in [(Overflow::Checked, None), (Overflow::Wrapping, Some(0))] {
         let term = ConstExprId::new(
             &db,
             ConstExpr::ArithBinOp {
-                op: ArithBinOp::Add,
-                mode,
+                op: BinaryOp::Add(mode),
                 lhs,
                 rhs,
             },
@@ -1900,8 +1895,7 @@ const fn selected<const X: usize, const Y: usize>() -> usize { Selected<{ X + 0 
                 ConstExprId::new(
                     &db,
                     ConstExpr::ArithBinOp {
-                        op: ArithBinOp::Add,
-                        mode: ArithmeticMode::Checked,
+                        op: BinaryOp::Add(Overflow::Checked),
                         lhs: parameter,
                         rhs: integer_const_arg(&db, usize_ty, 0),
                     },
@@ -2004,8 +1998,7 @@ fn whole_expression_terms_preserve_generic_identity() {
                 assert!(matches!(
                     expr.data(&db),
                     ConstExpr::ArithBinOp {
-                        op: ArithBinOp::Add,
-                        mode: ArithmeticMode::Checked,
+                        op: BinaryOp::Add(Overflow::Checked),
                         ..
                     }
                 ));
@@ -2444,8 +2437,7 @@ const fn pair() -> (u8, u8) { (1, 2) }
     let bad = term(
         u8_ty,
         ConstExpr::ArithBinOp {
-            op: ArithBinOp::Div,
-            mode: ArithmeticMode::Checked,
+            op: BinaryOp::Div(Overflow::Checked),
             lhs: *value,
             rhs: integer_const_arg(&db, u8_ty, 0),
         },
@@ -2541,8 +2533,7 @@ fn retained_terms_obey_step_and_depth_limits() {
                 ConstExprId::new(
                     &db,
                     ConstExpr::ArithBinOp {
-                        op: ArithBinOp::Add,
-                        mode: ArithmeticMode::Checked,
+                        op: BinaryOp::Add(Overflow::Checked),
                         lhs,
                         rhs: one,
                     },

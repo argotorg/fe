@@ -1,6 +1,8 @@
 // `e?` takes the payload of a `Some` or `Ok`, or ends the enclosing function
 // with the `None` or `Err`. On a sum-shape projection it binds the payload's
 // grant, and in a projection the early exit grants nothing.
+use std::evm::wei
+
 struct Arr {
     xs: [u256; 3],
     len: usize,
@@ -82,6 +84,46 @@ fn bump_first(_ a: mut Arr) -> Option<u256> {
     Option::Some(x)
 }
 
+fn assign_first(_ a: mut Arr) -> Option<()> {
+    a.get_mut(0)? = 9
+    Option::Some(())
+}
+
+fn add_first(_ a: mut Arr) -> Option<()> {
+    a.get_mut(0)? += a.xs[1]
+    Option::Some(())
+}
+
+#[arithmetic(unchecked)]
+fn sub_first_wrapping(_ a: mut Arr) -> Option<()> {
+    a.get_mut(0)? -= 10
+    Option::Some(())
+}
+
+// `Tally` counts how many times its grant opens.
+struct Tally {
+    value: Wei,
+    opened: u256,
+}
+
+impl Tally {
+    fn open(mut self) -> Option<mut Wei> {
+        self.opened += 1
+        Option::Some(mut self.value)
+    }
+}
+
+fn add_tally(_ t: mut Tally) -> Option<()> {
+    t.open()? += wei(1)
+    Option::Some(())
+}
+
+#[arithmetic(unchecked)]
+fn sub_tally_wrapping(_ t: mut Tally) -> Option<()> {
+    t.open()? -= wei(1)
+    Option::Some(())
+}
+
 #[test]
 fn values() {
     match add(Option::Some(1), Option::Some(2)) {
@@ -159,4 +201,38 @@ fn generic_sum_shapes() {
         Result::Ok(_) => assert!(false)
         Result::Err(i) => assert!(i == 5)
     }
+}
+
+#[test]
+fn assignment_through_grant() {
+    var a = Arr { xs: [5, 6, 7], len: 2 }
+    assert!(assign_first(mut a).is_some())
+    assert!(a.xs[0] == 9)
+    assert!(add_first(mut a).is_some())
+    assert!(a.xs[0] == 15)
+
+    var empty = Arr { xs: [5, 6, 7], len: 0 }
+    assert!(assign_first(mut empty).is_none())
+    assert!(add_first(mut empty).is_none())
+    assert!(empty.xs[0] == 5)
+}
+
+#[test]
+fn wrapping_assignment_through_grant() {
+    var a = Arr { xs: [5, 6, 7], len: 2 }
+    assert!(sub_first_wrapping(mut a).is_some())
+    assert!(a.xs[0] == u256::max() - 4)
+
+    var empty = Arr { xs: [5, 6, 7], len: 0 }
+    assert!(sub_first_wrapping(mut empty).is_none())
+    assert!(empty.xs[0] == 5)
+}
+
+#[test]
+fn compound_assignment_opens_grant_once() {
+    var t = Tally { value: wei(1), opened: 0 }
+    assert!(add_tally(mut t).is_some())
+    assert!(t.value == wei(2) && t.opened == 1)
+    assert!(sub_tally_wrapping(mut t).is_some())
+    assert!(t.value == wei(1) && t.opened == 2)
 }

@@ -195,8 +195,6 @@ fn checked_rem(value: i{bits}, divisor: i{bits}) -> i{bits} {{
 
 pub fn main() -> i32 {{
     let min: i{bits} = 1 << {sign_bit}
-    if !signed(value: -17, divisor: 0, quotient: 0, remainder: 0) {{ return 1 }}
-    if !unsigned(value: 17, divisor: 0, quotient: 0, remainder: 0) {{ return 2 }}
     if !signed(value: min, divisor: -1, quotient: min, remainder: 0) {{ return 3 }}
     if !signed(value: -17, divisor: 5, quotient: -3, remainder: -2) {{ return 4 }}
     if !signed(value: 17, divisor: -5, quotient: -3, remainder: 2) {{ return 5 }}
@@ -216,31 +214,42 @@ fn checked_arithmetic_traps() {
     for bits in [8, 128, 256] {
         let sign_bit = bits - 1;
         let min = format!("1 << {sign_bit}");
-        for (prefix, op, value, rhs) in [
-            ("u", "/", "17".to_string(), "0".to_string()),
-            ("u", "%", "17".to_string(), "0".to_string()),
-            ("i", "/", "-17".to_string(), "0".to_string()),
-            ("i", "%", "-17".to_string(), "0".to_string()),
-            ("i", "/", min.clone(), "-1".to_string()),
-            ("u", "*", "1 << 7".to_string(), format!("1 << {}", bits - 7)),
-            ("i", "-", min.clone(), "1".to_string()),
-            ("u", "**", "2".to_string(), bits.to_string()),
-            ("i", "**", "2".to_string(), sign_bit.to_string()),
-            ("i", "**", "3".to_string(), "-1".to_string()),
+        for (mode, prefix, op, value, rhs) in [
+            ("checked", "u", "/", "17".to_string(), "0".to_string()),
+            ("checked", "u", "%", "17".to_string(), "0".to_string()),
+            ("checked", "i", "/", "-17".to_string(), "0".to_string()),
+            ("checked", "i", "%", "-17".to_string(), "0".to_string()),
+            ("checked", "i", "/", min.clone(), "-1".to_string()),
+            (
+                "checked",
+                "u",
+                "*",
+                "1 << 7".to_string(),
+                format!("1 << {}", bits - 7),
+            ),
+            ("checked", "i", "-", min.clone(), "1".to_string()),
+            ("checked", "u", "**", "2".to_string(), bits.to_string()),
+            ("checked", "i", "**", "2".to_string(), sign_bit.to_string()),
+            ("checked", "i", "**", "3".to_string(), "-1".to_string()),
+            // Division by zero has no wrapped result, so it traps in either mode.
+            ("unchecked", "u", "/", "17".to_string(), "0".to_string()),
+            ("unchecked", "u", "%", "17".to_string(), "0".to_string()),
+            ("unchecked", "i", "/", "-17".to_string(), "0".to_string()),
+            ("unchecked", "i", "%", "-17".to_string(), "0".to_string()),
         ] {
-            cases.push((format!("{prefix}{bits}"), op, value, rhs));
+            cases.push((mode, format!("{prefix}{bits}"), op, value, rhs));
         }
     }
 
     // `getchar` selects a case, so one module covers every case.
     let mut source = String::from("extern {\n    fn getchar() -> i32\n}\n");
-    for (index, (ty, op, _, _)) in cases.iter().enumerate() {
+    for (index, (mode, ty, op, _, _)) in cases.iter().enumerate() {
         source.push_str(&format!(
-            "fn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
+            "#[arithmetic({mode})]\nfn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
         ));
     }
     source.push_str("pub fn main() -> i32 {\n    let selector = unsafe { getchar() }\n");
-    for (index, (_, _, value, rhs)) in cases.iter().enumerate() {
+    for (index, (_, _, _, value, rhs)) in cases.iter().enumerate() {
         source.push_str(&format!(
             "    if selector == {index} {{ if calculate_{index}(value: {value}, rhs: {rhs}) == 0 {{ return 0 }} else {{ return 1 }} }}\n"
         ));
@@ -253,10 +262,10 @@ fn checked_arithmetic_traps() {
     for level in LEVELS {
         let bytes = build_wasm(&path, level, &temp.path().join(format!("out-{level}")));
         assert_eq!(run(&bytes, &[]).exit, Ok(97), "control at O{level}");
-        for (index, (ty, op, value, rhs)) in cases.iter().enumerate() {
+        for (index, (mode, ty, op, value, rhs)) in cases.iter().enumerate() {
             assert!(
                 run(&bytes, &[u8::try_from(index).unwrap()]).exit.is_err(),
-                "checked {ty} {value} {op} {rhs} did not trap at O{level}"
+                "{mode} {ty} {value} {op} {rhs} did not trap at O{level}"
             );
         }
     }
