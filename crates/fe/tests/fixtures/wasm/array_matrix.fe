@@ -1,0 +1,71 @@
+fn identity() -> [[i32; 3]; 3] {
+    [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+}
+
+fn from_seed(s: i32) -> [[i32; 3]; 3] {
+    [[s, s + 1, s + 2], [s + 3, s + 4, s + 5], [s + 6, s + 7, s + 8]]
+}
+
+fn mul(a: [[i32; 3]; 3], b: [[i32; 3]; 3]) -> [[i32; 3]; 3] {
+    var r: [[i32; 3]; 3] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+    var i: usize = 0
+    while i < 3 {
+        var j: usize = 0
+        while j < 3 {
+            var k: usize = 0
+            var acc: i32 = 0
+            while k < 3 {
+                acc += a[i][k] * b[k][j]
+                k += 1
+            }
+            r[i][j] = acc
+            j += 1
+        }
+        i += 1
+    }
+    r
+}
+
+pub fn trace_of_square(s: i32) -> i32 {
+    let m = from_seed(s: s)
+    let sq = mul(a: m, b: m)
+    sq[0][0] + sq[1][1] + sq[2][2]
+}
+
+pub fn identity_is_neutral(s: i32) -> bool {
+    let m = from_seed(s: s)
+    let left = mul(a: identity(), b: m)
+    let right = mul(a: m, b: identity())
+    var i: usize = 0
+    while i < 3 {
+        var j: usize = 0
+        while j < 3 {
+            if left[i][j] != m[i][j] || right[i][j] != m[i][j] {
+                return false
+            }
+            j += 1
+        }
+        i += 1
+    }
+    true
+}
+
+pub fn cell(s: i32, row: u32, col: u32) -> i32 {
+    let m = mul(a: from_seed(s: s), b: from_seed(s: 1))
+    m[row as usize][col as usize]
+}
+
+pub fn transpose_sum(s: i32) -> i32 {
+    let m = from_seed(s: s)
+    var t: [[i32; 3]; 3] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+    var i: usize = 0
+    while i < 3 {
+        var j: usize = 0
+        while j < 3 {
+            t[j][i] = m[i][j]
+            j += 1
+        }
+        i += 1
+    }
+    t[0][1] * 100 + t[2][0] * 10 + t[1][2]
+}

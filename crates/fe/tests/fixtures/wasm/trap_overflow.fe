@@ -1,0 +1,29 @@
+pub fn add_i32(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+pub fn sub_u8(a: u8, b: u8) -> u8 {
+    a - b
+}
+
+pub fn mul_u64(a: u64, b: u64) -> u64 {
+    a * b
+}
+
+pub fn neg_i32(a: i32) -> i32 {
+    -a
+}
+
+pub fn mul_i16(a: i16, b: i16) -> i16 {
+    a * b
+}
+
+pub fn add_u32_loop(n: u32) -> u32 {
+    var total: u32 = 4000000000
+    var i: u32 = 0
+    while i < n {
+        total = total + 100000000
+        i = i + 1
+    }
+    total
+}

@@ -1,0 +1,114 @@
+// Tests for `fe test --backend native` and `fe test --backend wasm`. Both
+// backends must report the same result for every test: the first group passes;
+// `fails_on_purpose` ends in a failed assertion; the last three trap (checked
+// arithmetic, division by zero, an index outside an array). On both backends a
+// failed assertion and a trap end the test, which then fails.
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+enum Shape {
+    Dot,
+    Line(i32),
+    Rect(i32, i32),
+}
+
+fn sum_to(_ n: u32) -> u32 {
+    var total: u32 = 0
+    var i: u32 = 0
+    while i < n {
+        total += i
+        i += 1
+    }
+    total
+}
+
+fn area(_ shape: Shape) -> i32 {
+    match shape {
+        Shape::Dot => 0
+        Shape::Line(length) => length
+        Shape::Rect(width, height) => width * height
+    }
+}
+
+fn add_u8(_ a: u8, _ b: u8) -> u8 {
+    a + b
+}
+
+fn divide(_ a: u32, _ b: u32) -> u32 {
+    a / b
+}
+
+fn pick(_ values: [u32; 4], _ index: usize) -> u32 {
+    values[index]
+}
+
+#[test]
+fn sums_a_loop() {
+    assert(sum_to(10) == 45)
+}
+
+#[test]
+fn passes_structs_by_value() {
+    let p = Point { x: 3, y: -4 }
+    assert(p.x * p.x + p.y * p.y == 25)
+}
+
+#[test]
+fn matches_on_enums() {
+    assert(area(Shape::Dot) == 0)
+    assert(area(Shape::Line(7)) == 7)
+    assert(area(Shape::Rect(3, 4)) == 12)
+}
+
+#[test]
+fn sorts_an_array() {
+    var values: [u32; 4] = [4, 1, 3, 2]
+    var i: usize = 0
+    while i < 4 {
+        var j: usize = 0
+        while j + 1 < 4 - i {
+            if values[j] > values[j + 1] {
+                let t = values[j]
+                values[j] = values[j + 1]
+                values[j + 1] = t
+            }
+            j += 1
+        }
+        i += 1
+    }
+    assert(values[0] == 1 && values[1] == 2 && values[2] == 3 && values[3] == 4)
+}
+
+#[test]
+fn computes_with_wide_integers() {
+    let big: u256 = (1 as u256) << 200
+    assert(big + 1 > big)
+    assert((big >> 199) == 2)
+}
+
+#[test]
+fn checks_narrow_arithmetic_at_the_edge() {
+    assert(add_u8(100, 155) == 255)
+}
+
+#[test]
+fn fails_on_purpose() {
+    assert(sum_to(3) == 4)
+}
+
+#[test]
+fn traps_on_overflow() {
+    assert(add_u8(200, 100) == 44)
+}
+
+#[test]
+fn traps_on_division_by_zero() {
+    assert(divide(10, 0) == 0)
+}
+
+#[test]
+fn traps_on_an_index_outside_the_array() {
+    assert(pick([1, 2, 3, 4], 9) == 0)
+}

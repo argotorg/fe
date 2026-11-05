@@ -1,0 +1,39 @@
+pub fn add_u8(a: u8, b: u8) -> u8 {
+    a + b
+}
+
+pub fn sub_u8(a: u8, b: u8) -> u8 {
+    a - b
+}
+
+pub fn mul_i8(a: i8, b: i8) -> i8 {
+    a * b
+}
+
+pub fn add_i16(a: i16, b: i16) -> i16 {
+    a + b
+}
+
+pub fn mul_u16(a: u16, b: u16) -> u16 {
+    a * b
+}
+
+pub fn neg_i8(a: i8) -> i8 {
+    -a
+}
+
+pub fn lt_i8(a: i8, b: i8) -> bool {
+    a < b
+}
+
+pub fn lt_u8(a: u8, b: u8) -> bool {
+    a < b
+}
+
+pub fn shr_i16(a: i16, n: i16) -> i16 {
+    a >> n
+}
+
+pub fn div_i8(a: i8, b: i8) -> i8 {
+    a / b
+}

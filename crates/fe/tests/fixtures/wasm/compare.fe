@@ -1,0 +1,27 @@
+pub fn lt_i32(a: i32, b: i32) -> bool {
+    a < b
+}
+
+pub fn le_i32(a: i32, b: i32) -> bool {
+    a <= b
+}
+
+pub fn lt_u32(a: u32, b: u32) -> bool {
+    a < b
+}
+
+pub fn ge_u64(a: u64, b: u64) -> bool {
+    a >= b
+}
+
+pub fn gt_i64(a: i64, b: i64) -> bool {
+    a > b
+}
+
+pub fn eq_i32(a: i32, b: i32) -> bool {
+    a == b
+}
+
+pub fn ne_u32(a: u32, b: u32) -> bool {
+    a != b
+}

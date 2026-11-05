@@ -2,8 +2,19 @@ mod lower_runtime;
 #[cfg(feature = "cranelift")]
 mod native_tests;
 pub(crate) mod observability;
+#[cfg(feature = "wasm")]
+mod wasm;
+#[cfg(feature = "wasm")]
+mod wasm_tests;
 #[cfg(feature = "cranelift")]
 pub use native_tests::{NativeTestEntry, NativeTestSuite, emit_test_suite_native};
+#[cfg(feature = "wasm")]
+pub use wasm::{
+    WASM_HOST_CONTRACT_VERSION, WASM_REPLY_TYPE, WASM_TEXT_TYPE, WasmArtifacts, WasmExportInfo,
+    WasmOutputSelection, WasmParamInfo, emit_module_wasm_artifacts,
+};
+#[cfg(feature = "wasm")]
+pub use wasm_tests::{WasmTestModule, emit_test_wasm};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -22,7 +33,9 @@ use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
-use sonatina_codegen::{Compile, module_analysis::CallGraph};
+use sonatina_codegen::Compile;
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+use sonatina_codegen::module_analysis::CallGraph;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     machinst::vcode::{SectionCodeUnitId, VCodeInst},
@@ -34,6 +47,8 @@ use sonatina_codegen::{
 };
 #[cfg(feature = "cranelift")]
 use sonatina_cranelift::CraneliftObjectBackend;
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+use sonatina_ir::Linkage;
 use sonatina_ir::{
     BlockId, Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -43,7 +58,7 @@ use sonatina_ir::{
 };
 #[cfg(feature = "cranelift")]
 use sonatina_ir::{
-    Linkage, Signature, Type,
+    Signature, Type,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
@@ -94,7 +109,7 @@ impl From<mir::RuntimeMemoryLayoutError> for LowerError {
     fn from(error: mir::RuntimeMemoryLayoutError) -> Self {
         match error {
             mir::RuntimeMemoryLayoutError::Overflow => LowerError::Unsupported(
-                "runtime memory layout exceeds the supported 64-bit size".to_string(),
+                "runtime memory layout exceeds the target's largest size".to_string(),
             ),
             mir::RuntimeMemoryLayoutError::Recursive => {
                 LowerError::Unsupported("recursive runtime memory layout".to_string())
@@ -927,7 +942,7 @@ pub fn emit_module_native_artifacts(
 /// Removes the functions no public function calls. A native package holds
 /// every `core::rt` function, of which a module calls only some, and an
 /// unused C import would still need a definition when the module links.
-#[cfg(feature = "cranelift")]
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
 fn remove_unreachable_functions(module: &Module) {
     let calls = CallGraph::build_graph(module);
     let mut reached = module

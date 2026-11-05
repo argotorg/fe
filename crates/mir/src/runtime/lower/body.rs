@@ -199,8 +199,9 @@ pub(super) fn check_runtime_body_supported<'db>(
                 };
                 if let Some(ty) = oversized_size_of_ty(db, key, value) {
                     return Err(LowerError::Unsupported(format!(
-                        "type `{}` exceeds the supported 64-bit raw-memory layout size",
-                        ty.pretty_print(db)
+                        "type `{}` exceeds the supported {}-bit raw-memory layout size",
+                        ty.pretty_print(db),
+                        db.compilation_settings().target(db).memory_size_bits()
                     )));
                 }
                 let expected_ty = body.normalized.values[dst.index()].ty;
@@ -3417,9 +3418,9 @@ impl<'db> RmirEmitter<'db> {
     fn lower_panic_with_value(&mut self, bb: RBlockId, value: RLocalId) -> RLocalId {
         let value_ty = self.locals[value.index()].semantic_ty;
         let impl_env = self.current_semantic_key().impl_env(self.db);
-        // Natively a panic needs no revert data. On EVM, admission rejects
-        // a value without an encoding.
-        if self.target() == Target::Native
+        // Outside the EVM a panic needs no revert data. On EVM, admission
+        // rejects a value without an encoding.
+        if self.target() != Target::Evm
             && !panic_payload_encodable(
                 self.db,
                 impl_env.normalization_scope(self.db),

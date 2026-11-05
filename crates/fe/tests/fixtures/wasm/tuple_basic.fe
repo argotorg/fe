@@ -1,0 +1,43 @@
+fn divmod(a: u32, b: u32) -> (u32, u32) {
+    (a / b, a % b)
+}
+
+fn minmax(a: i32, b: i32, c: i32) -> (i32, i32) {
+    var lo = a
+    var hi = a
+    if b < lo { lo = b }
+    if b > hi { hi = b }
+    if c < lo { lo = c }
+    if c > hi { hi = c }
+    (lo, hi)
+}
+
+fn nested(a: i32, b: i32) -> ((i32, i32), i32) {
+    ((a, b), a * b)
+}
+
+pub fn quotient_and_remainder(a: u32, b: u32) -> u32 {
+    let (q, r) = divmod(a: a, b: b)
+    q * 1000 + r
+}
+
+pub fn range_of(a: i32, b: i32, c: i32) -> i32 {
+    let (lo, hi) = minmax(a: a, b: b, c: c)
+    hi - lo
+}
+
+pub fn nested_fields(a: i32, b: i32) -> i32 {
+    let t = nested(a: a, b: b)
+    t.0.0 * 100 + t.0.1 * 10 + t.1
+}
+
+pub fn array_of_pairs(n: i32) -> i32 {
+    let pairs: [(i32, i32); 3] = [(n, 1), (n + 1, 2), (n + 2, 3)]
+    var s: i32 = 0
+    var i: usize = 0
+    while i < 3 {
+        s += pairs[i].0 * pairs[i].1
+        i += 1
+    }
+    s
+}

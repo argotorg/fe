@@ -1,0 +1,54 @@
+struct Box2 {
+    lo: i32,
+    hi: i32,
+}
+
+impl Copy for Box2 {}
+
+fn widen(b: Box2, by: i32) -> Box2 {
+    Box2 { lo: b.lo - by, hi: b.hi + by }
+}
+
+pub fn alternate_boxes(n: u32) -> i32 {
+    var a = Box2 { lo: 0, hi: 1 }
+    var b = Box2 { lo: 10, hi: 20 }
+    var i: u32 = 0
+    while i < n {
+        let next = widen(b: a, by: 1)
+        a = b
+        b = next
+        i += 1
+    }
+    a.lo * 1000 + a.hi * 10 + b.lo - b.hi
+}
+
+pub fn pick_by_parity(n: u32) -> i32 {
+    var best = Box2 { lo: 0, hi: 0 }
+    var i: u32 = 0
+    while i < n {
+        let k: i32 = i.downcast_unchecked()
+        let candidate = if i % 2 == 0 {
+            Box2 { lo: k, hi: k + 5 }
+        } else {
+            Box2 { lo: -k, hi: k * 2 }
+        }
+        if candidate.hi > best.hi {
+            best = candidate
+        }
+        i += 1
+    }
+    best.lo * 100 + best.hi
+}
+
+pub fn array_phi(n: u32) -> i32 {
+    var cur: [i32; 3] = [1, 2, 3]
+    var prev: [i32; 3] = [0, 0, 0]
+    var i: u32 = 0
+    while i < n {
+        let next: [i32; 3] = [cur[1], cur[2], cur[0] + cur[1] + cur[2]]
+        prev = cur
+        cur = next
+        i += 1
+    }
+    cur[2] * 100 + prev[2]
+}

@@ -1055,8 +1055,9 @@ fn invalid_size_diagnostic<'db>(
     );
     let message = match error {
         RuntimeSizeError::Overflow => format!(
-            "`{}` exceeds the supported 64-bit raw-memory layout size",
-            ty.pretty_print(db)
+            "`{}` exceeds the supported {}-bit raw-memory layout size",
+            ty.pretty_print(db),
+            db.compilation_settings().target(db).memory_size_bits()
         ),
         RuntimeSizeError::UnavailableConcrete => {
             "concrete type size could not be determined".to_string()

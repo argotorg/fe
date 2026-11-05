@@ -1101,6 +1101,10 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             None
         };
 
+        // A part is never larger than its whole, so this bounds every part.
+        if result.is_some_and(|layout| layout.size > target.max_memory_size()) {
+            return Err(RuntimeSizeError::Overflow);
+        }
         visiting.remove(&ty);
         Ok(result)
     }

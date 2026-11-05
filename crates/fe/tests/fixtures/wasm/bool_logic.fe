@@ -1,0 +1,19 @@
+pub fn xor(a: bool, b: bool) -> bool {
+    (a && !b) || (!a && b)
+}
+
+pub fn majority(a: bool, b: bool, c: bool) -> bool {
+    (a && b) || (b && c) || (a && c)
+}
+
+pub fn not(a: bool) -> bool {
+    !a
+}
+
+pub fn pick(flag: bool, a: i32, b: i32) -> i32 {
+    if flag { a } else { b }
+}
+
+pub fn is_positive_even(x: i32) -> bool {
+    x > 0 && x % 2 == 0
+}

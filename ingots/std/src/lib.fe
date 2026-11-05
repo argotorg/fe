@@ -9,3 +9,4 @@ pub use process
 pub use time
 pub use core::text
 pub use sp1
+pub use wasm

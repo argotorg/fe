@@ -27,7 +27,7 @@ use crate::{
         PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator,
         RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass,
         RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot,
-        RuntimeMemoryLayout, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan,
+        RuntimeMemoryLayout, RuntimeParam, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan,
         RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
         TargetRootProviderMaterialization,
         lower::{
@@ -56,7 +56,9 @@ pub(crate) fn runtime_synthetic_exit_behavior<'db>(
     spec: RuntimeSyntheticSpec<'db>,
 ) -> RuntimeExitBehavior {
     match spec {
-        RuntimeSyntheticSpec::ContractInitAbi { .. } => RuntimeExitBehavior::MayReturn,
+        RuntimeSyntheticSpec::ContractInitAbi { .. } | RuntimeSyntheticSpec::ExportRoot { .. } => {
+            RuntimeExitBehavior::MayReturn
+        }
         RuntimeSyntheticSpec::MainRoot { .. }
         | RuntimeSyntheticSpec::TestRoot { .. }
         | RuntimeSyntheticSpec::ManualContractRoot { .. }
@@ -67,11 +69,28 @@ pub(crate) fn runtime_synthetic_exit_behavior<'db>(
 }
 
 pub(crate) fn runtime_synthetic_interface_signature<'db>(
-    _spec: RuntimeSyntheticSpec<'db>,
+    db: &'db dyn MirDb,
+    spec: RuntimeSyntheticSpec<'db>,
 ) -> RuntimeInterfaceSignature<'db> {
+    let RuntimeSyntheticSpec::ExportRoot { callee, entry_args } = spec else {
+        return RuntimeInterfaceSignature {
+            params: Vec::new(),
+            ret: None,
+        };
+    };
+    // The callee takes its own parameters, then its effects.
+    let callee = runtime_declaration_signature(db, callee.key(db));
+    let own = callee.params.len() - entry_args.effects.len();
     RuntimeInterfaceSignature {
-        params: Vec::new(),
-        ret: None,
+        params: callee.params[..own]
+            .iter()
+            .enumerate()
+            .map(|(idx, param)| RuntimeParam {
+                local: RLocalId::from_u32(idx as u32),
+                class: param.class.clone(),
+            })
+            .collect(),
+        ret: callee.ret,
     }
 }
 
@@ -84,7 +103,9 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
     if target != Target::Evm
         && !matches!(
             spec,
-            RuntimeSyntheticSpec::MainRoot { .. } | RuntimeSyntheticSpec::TestRoot { .. }
+            RuntimeSyntheticSpec::MainRoot { .. }
+                | RuntimeSyntheticSpec::TestRoot { .. }
+                | RuntimeSyntheticSpec::ExportRoot { .. }
         )
     {
         return Err(LowerError::Unsupported(format!(
@@ -100,6 +121,9 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
         | RuntimeSyntheticSpec::ManualContractRoot {
             callee, entry_args, ..
         } => builder.build_entry_root(callee, &entry_args)?,
+        RuntimeSyntheticSpec::ExportRoot { callee, entry_args } => {
+            builder.build_export_root(callee, &entry_args)?
+        }
         RuntimeSyntheticSpec::ContractInitAbi { plan } => builder.build_contract_init_abi(plan)?,
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => builder.build_contract_recv_abi(plan)?,
         RuntimeSyntheticSpec::ContractInitRoot {
@@ -315,6 +339,57 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let mut args = Vec::new();
         args.extend(self.owner_call_args(RBlockId::from_u32(0), callee, 0, entry_args)?);
         self.build_root_call(callee, args);
+        Ok(())
+    }
+
+    /// Passes the export's parameters on to `callee` with its effects, and
+    /// returns its result.
+    fn build_export_root(
+        &mut self,
+        callee: RuntimeInstance<'db>,
+        entry_args: &EntrySemanticArgsPlan<'db>,
+    ) -> Result<(), LowerError> {
+        let bb = RBlockId::from_u32(0);
+        let signature = self.instance.interface_signature(self.db).clone();
+        let callee_signature = runtime_declaration_signature(self.db, callee.key(self.db));
+        let callee_body = callee.body(self.db);
+        let mut args = Vec::new();
+        for (param, callee_param) in signature.params.iter().zip(&callee_signature.params) {
+            let semantic_ty = callee_body
+                .local(callee_param.local)
+                .expect("callee parameter local")
+                .semantic_ty;
+            let local = self.push_local(
+                semantic_ty,
+                RuntimeCarrier::Value(param.class.clone()),
+                RuntimeLocalRoot::None,
+            );
+            debug_assert_eq!(local, param.local);
+            args.push(local);
+        }
+        args.extend(self.owner_call_args(bb, callee, args.len(), entry_args)?);
+        let semantic = callee.key(self.db).semantic(self.db);
+        let dst = match signature.ret.clone() {
+            Some(class) => self.push_local(
+                semantic
+                    .map(|semantic| semantic_return_ty(self.db, semantic))
+                    .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
+                RuntimeCarrier::Value(class),
+                RuntimeLocalRoot::None,
+            ),
+            None => self.push_erased_local(TyId::unit(self.db)),
+        };
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Call {
+                    callee,
+                    args: args.into_boxed_slice(),
+                },
+            },
+        );
+        self.blocks[0].terminator = RTerminator::Return(signature.ret.is_some().then_some(dst));
         Ok(())
     }
 

@@ -1,0 +1,25 @@
+pub fn is_prime(n: u32) -> bool {
+    if n < 2 {
+        return false
+    }
+    var d: u32 = 2
+    while d * d <= n {
+        if n % d == 0 {
+            return false
+        }
+        d = d + 1
+    }
+    true
+}
+
+pub fn count_primes(limit: u32) -> u32 {
+    var count: u32 = 0
+    var n: u32 = 2
+    while n <= limit {
+        if is_prime(n: n) {
+            count = count + 1
+        }
+        n = n + 1
+    }
+    count
+}

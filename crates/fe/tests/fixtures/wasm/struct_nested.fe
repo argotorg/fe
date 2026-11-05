@@ -1,0 +1,61 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Segment {
+    from: Point,
+    to: Point,
+}
+
+struct Shape {
+    id: u8,
+    seg: Segment,
+    weight: i64,
+}
+
+impl Copy for Point {}
+impl Copy for Segment {}
+impl Copy for Shape {}
+
+fn shape(id: u8, a: i32, b: i32, c: i32, d: i32, weight: i64) -> Shape {
+    Shape {
+        id,
+        seg: Segment { from: Point { x: a, y: b }, to: Point { x: c, y: d } },
+        weight,
+    }
+}
+
+fn span_x(s: Shape) -> i32 {
+    s.seg.to.x - s.seg.from.x
+}
+
+fn span_y(s: Shape) -> i32 {
+    s.seg.to.y - s.seg.from.y
+}
+
+pub fn spans(a: i32, b: i32, c: i32, d: i32) -> i32 {
+    let s = shape(id: 1, a: a, b: b, c: c, d: d, weight: 0)
+    span_x(s: s) * 1000 + span_y(s: s)
+}
+
+pub fn reversed(a: i32, b: i32, c: i32, d: i32) -> i32 {
+    var s = shape(id: 2, a: a, b: b, c: c, d: d, weight: 5)
+    let old = s.seg
+    s.seg.from = old.to
+    s.seg.to = old.from
+    span_x(s: s) * 1000 + span_y(s: s)
+}
+
+pub fn weighted(a: i32, b: i32, w: i64) -> i64 {
+    let s = shape(id: 3, a: a, b: b, c: b, d: a, weight: w)
+    let t = s
+    (s.id as i64) + t.weight * (t.seg.from.x as i64) + (t.seg.to.y as i64)
+}
+
+pub fn untouched_copy(a: i32) -> i32 {
+    var s = shape(id: 4, a: a, b: 2, c: 3, d: 4, weight: 9)
+    let saved = s.seg.from
+    s.seg.from.x = a + 1000
+    saved.x * 10 + s.seg.from.x
+}

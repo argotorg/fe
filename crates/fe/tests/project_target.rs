@@ -35,6 +35,17 @@ pub fn called() -> u256 { answer() }
 fn answers() { assert!(answer() == 0) }
 "#;
 
+#[cfg(feature = "wasm")]
+const WASM_ONLY: &str = r#"
+#[cfg(target = "wasm")]
+fn answer() -> i32 { 0 }
+
+pub fn called() -> i32 { answer() }
+
+#[test]
+fn answers() { assert!(answer() == 0) }
+"#;
+
 fn write_ingot(dir: &Path, name: &str, config: &str, source: &str) {
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(
@@ -86,6 +97,20 @@ fn commands_use_the_ingots_target() {
     assert_ok(&fe(temp.path(), &["build"]));
     let result = Command::new(temp.path().join("out/tool")).output().unwrap();
     assert!(result.status.success(), "{result:?}");
+}
+
+#[cfg(feature = "wasm")]
+#[test]
+fn commands_use_a_wasm_target() {
+    let temp = tempdir().unwrap();
+    write_ingot(temp.path(), "module", "target = \"wasm\"\n", WASM_ONLY);
+
+    assert_ok(&fe(temp.path(), &["check"]));
+    assert_ok(&fe(temp.path(), &["test"]));
+    assert_err(
+        &fe(temp.path(), &["build"]),
+        "WebAssembly output only supports standalone",
+    );
 }
 
 #[test]

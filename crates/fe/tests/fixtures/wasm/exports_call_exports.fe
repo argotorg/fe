@@ -1,0 +1,11 @@
+pub fn square(x: i64) -> i64 {
+    x * x
+}
+
+pub fn sum_squares(a: i64, b: i64) -> i64 {
+    square(x: a) + square(x: b)
+}
+
+pub fn hypot_squared(a: i64, b: i64) -> i64 {
+    sum_squares(a: a, b: b)
+}

@@ -1,0 +1,19 @@
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+pub fn sub(a: i32, b: i32) -> i32 {
+    a - b
+}
+
+pub fn mul(a: i32, b: i32) -> i32 {
+    a * b
+}
+
+pub fn neg(a: i32) -> i32 {
+    -a
+}
+
+pub fn expr(a: i32, b: i32, c: i32) -> i32 {
+    (a + b) * c - a
+}
