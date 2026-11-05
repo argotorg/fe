@@ -2360,18 +2360,31 @@ impl<'db> RmirEmitter<'db> {
         place: &NPlace<'db>,
         class: &RuntimeClass<'db>,
     ) {
+        if let Some(place) = self.lower_place_read_outside_memory(bb, dst, place, class) {
+            self.lower_runtime_place_read_into(bb, dst, place, class);
+        }
+    }
+
+    /// Reads `place` into `dst` if a value or a lane holds it. Otherwise it is
+    /// in memory: `dst` stays unset, and the caller chooses what to load.
+    pub(super) fn lower_place_read_outside_memory(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        place: &NPlace<'db>,
+        class: &RuntimeClass<'db>,
+    ) -> Option<RuntimePlace<'db>> {
         if self.lower_value_extract_place_read(bb, dst, place) {
-            return;
+            return None;
         }
         match self.resolve_place(bb, place) {
             ResolvedPlace::Lane(lane) => {
                 let value = self.read_lane(bb, &lane);
                 let value = self.coerce_value(bb, value, class);
                 self.push_value_use(bb, dst, value);
+                None
             }
-            ResolvedPlace::Place(place) => {
-                self.lower_runtime_place_read_into(bb, dst, place, class)
-            }
+            ResolvedPlace::Place(place) => Some(place),
         }
     }
 
@@ -2743,51 +2756,11 @@ impl<'db> RmirEmitter<'db> {
         let semantic_ty = self.locals[value.local.index()].semantic_ty;
         let enum_layout = self.enum_layout_for_local(value.local);
         let variant_id = self.enum_variant_for_local(value.local, variant);
-        let expr = self.enum_tag_expr(bb, value);
-        if matches!(expr, RExpr::EnumGetTag { .. }) {
-            let tag_class = RuntimeClass::Scalar(ScalarClass {
-                repr: match enum_layout.data(self.db) {
-                    crate::runtime::Layout::Enum(layout) => layout.tag.repr,
-                    _ => unreachable!(),
-                },
-                role: ScalarRole::EnumTag { enum_layout },
-            });
-            let tag = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(tag_class));
-            self.push_stmt(bb, RStmt::Assign { dst: tag, expr });
-            let expected = self.alloc_runtime_temp(
-                semantic_ty,
-                RuntimeCarrier::Value(
-                    self.value_class(tag)
-                        .cloned()
-                        .expect("enum tag temp should have a class"),
-                ),
-            );
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: expected,
-                    expr: RExpr::ConstScalar(
-                        enum_tag_scalar(self.db, enum_layout, variant)
-                            .expect("enum variant should lower to a tag scalar"),
-                    ),
-                },
-            );
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst,
-                    expr: RExpr::Binary {
-                        op: hir::hir_def::BinOp::Comp(hir::hir_def::CompBinOp::Eq),
-                        lhs: tag,
-                        rhs: expected,
-                    },
-                },
-            );
-        } else {
-            let RExpr::EnumTagOfValue { value } = expr else {
-                unreachable!("enum tag query must read a value or a place");
-            };
-            self.push_stmt(
+        match self.enum_tag_expr(bb, value) {
+            RExpr::EnumGetTag { place } => {
+                self.lower_place_is_enum_variant(bb, dst, place, semantic_ty, enum_layout, variant);
+            }
+            RExpr::EnumTagOfValue { value } => self.push_stmt(
                 bb,
                 RStmt::Assign {
                     dst,
@@ -2796,8 +2769,59 @@ impl<'db> RmirEmitter<'db> {
                         variant: variant_id,
                     },
                 },
-            );
+            ),
+            _ => unreachable!("enum tag query must read a value or a place"),
         }
+    }
+
+    /// Sets `dst` to whether the enum at `place` holds `variant`, reading only
+    /// its tag.
+    pub(super) fn lower_place_is_enum_variant(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        place: RuntimePlace<'db>,
+        semantic_ty: TyId<'db>,
+        enum_layout: LayoutId<'db>,
+        variant: VariantIndex,
+    ) {
+        let tag_class = RuntimeClass::Scalar(ScalarClass {
+            repr: match enum_layout.data(self.db) {
+                crate::runtime::Layout::Enum(layout) => layout.tag.repr,
+                _ => unreachable!(),
+            },
+            role: ScalarRole::EnumTag { enum_layout },
+        });
+        let tag = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(tag_class.clone()));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: tag,
+                expr: RExpr::EnumGetTag { place },
+            },
+        );
+        let expected = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(tag_class));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: expected,
+                expr: RExpr::ConstScalar(
+                    enum_tag_scalar(self.db, enum_layout, variant)
+                        .expect("enum variant should lower to a tag scalar"),
+                ),
+            },
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Binary {
+                    op: hir::hir_def::BinOp::Comp(hir::hir_def::CompBinOp::Eq),
+                    lhs: tag,
+                    rhs: expected,
+                },
+            },
+        );
     }
 
     fn current_arithmetic_mode(&self) -> ArithmeticMode {
