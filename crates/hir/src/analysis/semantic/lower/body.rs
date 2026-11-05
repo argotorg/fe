@@ -2092,7 +2092,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         for (idx, part) in parts.iter().enumerate() {
             let mut place = SPlace::new(value);
             place.push_field(FieldIndex(idx as u16));
-            let read = self.emit_expr(part.carrier_ty(self.db), SExpr::ReadPlace { place });
+            let read = self.emit_expr_with_origin(
+                SemOrigin::Expr(arg),
+                part.carrier_ty(self.db),
+                SExpr::ReadPlace { place },
+            );
             self.lower_product_value(arg, read, part, values);
         }
     }

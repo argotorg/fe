@@ -3910,6 +3910,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "generated_type_param_names",
     "immutable_aggregate_forwarding",
     "impl_method_does_not_shadow_free_fn",
+    "known_product_destructure_storage",
     "lane_accesses",
     "lane_projection_spaces",
     "leading_zeros",
