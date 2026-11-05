@@ -68,8 +68,8 @@ dir-test.workspace = true
 test-utils.workspace = true
 semantic-indexing.workspace = true
 sha2 = "0.10"
-# Runs the WebAssembly modules that `--backend wasm` writes. Only the tests
-# in `tests/wasm_backend.rs` use it.
+# Runs the WebAssembly modules that `--backend wasm` writes. Only the
+# WebAssembly tests use it.
 wasmtime = { version = "44.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }
 
 [build-dependencies]

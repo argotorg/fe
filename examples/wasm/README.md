@@ -61,8 +61,9 @@ wasm-tools validate out/lines.wasm
 node examples/wasm/verify.mjs out/lines.wasm
 ```
 
-A module is built from one `.fe` file. Ingots, workspaces, `--ingot` and
-`--contract` are not supported with this backend.
+`fe build` makes a module from one `.fe` file: ingots, workspaces, `--ingot` and
+`--contract` are not supported. `fe check` and `fe test` take ingots, and
+`target = "wasm"` in `fe.toml` selects this backend for them.
 
 ### What a program may export
 
@@ -80,10 +81,11 @@ results are limited to:
 
 `usize` and `isize` have 32 bits in a module and cross as an `i32`. Any other
 type, including `u128`, `u256`, structs and pointers, is an error that names the
-function and the parameter. Exports cannot declare `uses`
-effects; a provider is chosen inside the function with `with`, as `lines.fe` does.
+function and the parameter. An export may declare the capabilities of
+`std::wasm::Host` in `uses`, as `lines.fe` does; a provider of anything else is chosen
+inside the function with `with`.
 Inside functions, structs, tuples, enums, arrays, constants, `usize` (32 bits, the
-width of an address in a module) and 256-bit integers work. Overflow, division by
+width of an address in a module) and 128-bit and 256-bit integers work. Overflow, division by
 zero, a failed `assert!` and an index outside an array trap (the WebAssembly
 instruction `unreachable`).
 
@@ -234,9 +236,9 @@ macOS).
 - The test host answers `Log`, `Clock` and `Abort`; it has no files, so `open` returns
   `NotFound`. Providers written in Fe (`mock()`) work as usual.
 - A test that uses something this backend cannot build fails with `cannot build
-  <name> for WebAssembly: unsupported: …` and the reason (an EVM built-in, or
-  `#[test(should_revert)]` and `balance`, which are EVM attributes). No test is
-  skipped silently, and a green run means that every selected test ran.
+  <name> for WebAssembly: unsupported: …` and the reason (`#[test(should_revert)]`
+  and `balance` are not supported). No test is skipped silently, and a green run
+  means that every selected test ran.
 - A missing or too old `node` ends the run with an error that names the
   requirement.
 - A test that runs for more than 60 seconds fails.
@@ -283,11 +285,12 @@ cargo test -p fe --all-features \
 
 ## Known limits
 
-- **Types.** Floats do not exist in Fe yet. 128-bit integers and the EVM built-ins are
-  not supported, and `core::hint::black_box` is rejected. 256-bit integers work
-  inside functions (as four 64-bit limbs) but cannot cross the boundary. Exports cannot return text or aggregates.
-- **Programs.** One standalone file per module. Contracts and EVM features are not
-  available. `fe check` and the language server do not know the export rule.
+- **Types.** Floats do not exist in Fe yet. 128-bit and 256-bit integers work inside
+  functions (as 64-bit limbs) but cannot cross the boundary. Exports cannot return
+  text or aggregates.
+- **Programs.** `fe build` makes one module from one standalone file. Contracts and
+  EVM features are not available: an EVM-only instruction is an error that names it.
+  `fe check` and the language server do not know the export rule.
 - **Imports.** The module is always `env`; no attribute names another module. Imports
   take scalars only, so the compiler does not check that an address and a length
   passed to an import describe a text; the host does.
@@ -314,5 +317,5 @@ cargo test -p fe --all-features \
   because the module has no name section.
 - **Tests.** Each test runs in a separate process, so tests share nothing. The test host
   has no files.
-- **Platforms.** The tests and checks ran on Linux. macOS and Windows were not run,
-  and neither were browsers.
+- **Platforms.** CI runs the compiler's WebAssembly tests on Linux and Windows, and
+  on macOS on `master`; `check.sh` runs on Linux. Browsers were not run.
