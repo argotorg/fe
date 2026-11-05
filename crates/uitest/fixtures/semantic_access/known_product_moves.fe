@@ -1,0 +1,65 @@
+// A known product parameter passed on whole is moved, as an opaque one is.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+}
+
+fn sum(_ s: Pair::Step<ref>) -> u256 {
+    let (a, b) = s
+    a + b
+}
+
+fn bump(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    b += a
+}
+
+fn twice(_ s: Pair::Step<ref>) -> u256 {
+    sum(s) + sum(s)
+}
+
+fn twice_mut(_ s: Pair::Step<mut>) {
+    bump(s)
+    bump(s)
+}
+
+fn pass_then_destructure(_ s: Pair::Step<ref>) -> u256 {
+    let x = sum(s)
+    let (a, b) = s
+    x + a + b
+}
+
+fn capture_after_move(_ s: Pair::Step<mut>) -> u256 {
+    bump(s)
+    let f = || s.0 + s.1
+    f()
+}
+
+// Accepted: a capture copies, so it moves nothing.
+fn capture_then_pass(_ s: Pair::Step<ref>) -> u256 {
+    let f = || s.0 + s.1
+    f() + sum(s)
+}
+
+// Accepted: once on each path.
+fn once(_ s: Pair::Step<ref>, _ c: bool) -> u256 {
+    if c {
+        sum(s)
+    } else {
+        sum(s)
+    }
+}

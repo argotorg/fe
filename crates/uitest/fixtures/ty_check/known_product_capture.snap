@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/known_product_capture.fe
+---
+error[8-0110]: cannot write to `s`, which a closure captures
+   ┌─ known_product_capture.fe:56:17
+   │
+56 │         let (a, mut b) = s
+   │                 ^^^^^ the closure only reads its copy
+   │
+   = closures capture by copy or move; thread state through parameters and results instead
+
+error[8-0110]: cannot write to `s`, which a closure captures
+   ┌─ known_product_capture.fe:63:9
+   │
+63 │         s.1 = 3
+   │         ^^^ the closure only reads its copy
+   │
+   = closures capture by copy or move; thread state through parameters and results instead
+
+error[8-0110]: cannot write to `s`, which a closure captures
+   ┌─ known_product_capture.fe:69:17
+   │
+69 │         let x = mut s.1
+   │                 ^^^^^^^ the closure only reads its copy
+   │
+   = closures capture by copy or move; thread state through parameters and results instead
+
+error[8-0111]: a closure cannot capture the access `s`
+   ┌─ known_product_capture.fe:80:16
+   │
+80 │     let f = || s.1
+   │                ^ an access of a non-`Copy` value is neither copied nor moved
+   │
+   = pass the value to the closure as a parameter instead
+
+error[8-0111]: a closure cannot capture the access `s`
+   ┌─ known_product_capture.fe:85:16
+   │
+85 │     let f = || s.0
+   │                ^ an access of a non-`Copy` value is neither copied nor moved
+   │
+   = pass the value to the closure as a parameter instead
+
+error[8-0111]: a closure cannot capture the access `s`
+   ┌─ known_product_capture.fe:90:16
+   │
+90 │     let f = || s.v
+   │                ^ an access of a non-`Copy` value is neither copied nor moved
+   │
+   = pass the value to the closure as a parameter instead
+
+error[8-0135]: a product parameter takes a tuple of its parts
+   ┌─ known_product_capture.fe:75:20
+   │
+75 │     let f = || sum(s)
+   │                    ^ pass a part for each of `(own u256, ref u256)`

@@ -1,0 +1,134 @@
+// A parameter of a known product shape used whole: passed on, returned,
+// forwarded at `mut`, or captured.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+}
+
+fn sum(_ s: Pair::Step<ref>) -> u256 {
+    let (a, b) = s
+    a + b
+}
+
+fn pass_on(_ s: Pair::Step<ref>) -> u256 {
+    sum(s)
+}
+
+fn ret(_ s: Pair::Step<ref>) -> Pair::Step<ref> {
+    s
+}
+
+fn bump(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    b += a
+}
+
+fn forward(_ s: Pair::Step<mut>) {
+    bump(s)
+}
+
+#[test]
+fn test_known_product_params_used_whole() {
+    var p = Pair { a: 1, b: 2 }
+    assert(pass_on(p.at()) == 3)
+    let (x, y) = ret(p.at())
+    assert(x + y == 3)
+    forward(p.at())
+    assert(p.b == 3)
+}
+
+// A closure copies the parts' values into a tuple of its own.
+fn captured(_ s: Pair::Step<ref>) -> u256 {
+    let f = || {
+        let (a, b) = s
+        a + sum((a, ref b))
+    }
+    f()
+}
+
+fn captured_fields(_ s: Pair::Step<ref>) -> u256 {
+    let f = || s.0 + s.1
+    f() + sum(s)
+}
+
+fn captured_by_nested_closure(_ s: Pair::Step<ref>) -> u256 {
+    let f = || {
+        let g = || s.0 + s.1
+        g()
+    }
+    f()
+}
+
+// The copy is taken at the capture.
+fn captured_before_write(_ s: Pair::Step<mut>) -> u256 {
+    let f = || s.0 + s.1
+    bump(s)
+    f()
+}
+
+struct Triple {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+impl Driver for Triple {
+    shape Step = (own u256, (mut? u256, mut? u256))
+
+    fn at(mut? self) -> (own u256, (mut? u256, mut? u256)) {
+        (self.a, (mut? self.b, mut? self.c))
+    }
+}
+
+fn captured_nested_product(_ s: Triple::Step<ref>) -> u256 {
+    let f = || {
+        let (a, (b, c)) = s
+        a + b + c
+    }
+    f()
+}
+
+trait Stepped {
+    shape Step
+}
+
+struct Owned {}
+
+impl Stepped for Owned {
+    shape Step = (own u256, own u256)
+}
+
+fn captured_owned_parts(_ s: Owned::Step<ref>) -> u256 {
+    let f = || {
+        let (a, b) = s
+        a + b
+    }
+    f()
+}
+
+#[test]
+fn test_known_product_params_captured() {
+    var p = Pair { a: 1, b: 2 }
+    assert(captured(p.at()) == 4)
+    assert(captured_fields(p.at()) == 6)
+    assert(captured_by_nested_closure(p.at()) == 3)
+    assert(captured_before_write(p.at()) == 3)
+    assert(p.b == 3)
+    let t = Triple { a: 1, b: 2, c: 3 }
+    assert(captured_nested_product(t.at()) == 6)
+    assert(captured_owned_parts((1, 2)) == 3)
+}
