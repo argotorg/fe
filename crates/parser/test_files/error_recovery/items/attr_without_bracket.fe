@@ -1,0 +1,14 @@
+#
+fn bare() {}
+
+# name
+fn named() {}
+
+fn first() {}
+#![inner]
+fn second() {}
+
+impl S {
+    #
+    fn method() {}
+}

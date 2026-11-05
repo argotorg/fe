@@ -1,6 +1,6 @@
 // Projected and `mut` traversal hold the element's session during the body,
 // so the body cannot change the base; by-value traversal does not.
-use core::iter::{Collection, CollectionMut}
+use core::iter::Collection
 
 struct Item { n: u256 }
 
@@ -22,7 +22,7 @@ fn mutable(_ xs: mut [u256; 2]) {
 // Rejected: a session the condition opens is held during the body.
 fn while_let(_ xs: mut MemArray<u256>) {
     var i: usize = 0
-    while let Option::Some(mut x) = xs.get_mut(i) {
+    while let Option::Some(mut x) = xs.get(i) {
         xs[0] = 7
         x += 1
         i += 1
@@ -33,5 +33,24 @@ fn while_let(_ xs: mut MemArray<u256>) {
 fn by_value(_ xs: mut [u256; 2]) {
     for x in xs {
         xs[0] = x
+    }
+}
+
+// Rejected: a driver's step holds its `ref` element's session through the
+// body.
+fn enumerated(_ items: mut [Item; 2]) {
+    for (i, ref item) in items.enumerate() {
+        items[i] = Item { n: 0 }
+        assert(item.n > 0)
+    }
+}
+
+// Accepted: a step whose elements are copied or discarded holds none.
+fn enumerated_copies(_ xs: mut [u256; 2], _ items: mut [Item; 2]) {
+    for (i, (j, x)) in xs.enumerate().enumerate() {
+        xs[i] = x + j as u256
+    }
+    for (i, _) in items.enumerate() {
+        items[i] = Item { n: 0 }
     }
 }

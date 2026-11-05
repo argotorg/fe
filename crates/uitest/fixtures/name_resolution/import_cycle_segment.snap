@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/import_cycle_segment.fe
+---
+error[2-0004]: `B` is ambiguous
+   ┌─ import_cycle_segment.fe:13:19
+   │
+ 4 │     pub mod A {
+   │             - candidate 1
+   ·
+ 7 │     pub mod B {
+   │             - candidate 2
+   ·
+13 │     pub use self::B as A
+   │                   ^ `B` is ambiguous
+
+error[2-0004]: `A` is ambiguous
+   ┌─ import_cycle_segment.fe:14:19
+   │
+ 4 │     pub mod A {
+   │             - candidate 1
+   ·
+ 7 │     pub mod B {
+   │             - candidate 2
+   ·
+14 │     pub use self::A as B
+   │                   ^ `A` is ambiguous

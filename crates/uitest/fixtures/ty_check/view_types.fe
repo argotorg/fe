@@ -126,3 +126,41 @@ struct Malformed {}
 
 #[view]
 fn not_a_type() {}
+
+// A type argument no field holds names a view's type without holding one; a
+// field of the argument's type holds it.
+struct Names<T> {}
+
+struct Holds<T> {
+    t: T,
+}
+
+fn names(_ n: Names<Span>) {}
+
+fn holds(_ h: Holds<Span>) {}
+
+// A field holds what its own type's fields hold: an argument only `Names`
+// takes is held by none.
+struct Outer<T> {
+    names: Names<T>,
+}
+
+struct Nested<T> {
+    holds: Holds<T>,
+}
+
+fn outer(_ o: Outer<Span>) {}
+
+fn nested(_ n: Nested<Span>) {}
+
+trait Equals {
+    type Out
+}
+
+// A projection may be any type, an equality's among them, so it holds every
+// parameter.
+struct Through<A, B: Equals<Out = A>> {
+    out: B::Out,
+}
+
+fn through<B: Equals<Out = Span>>(_ t: Through<Span, B>) {}

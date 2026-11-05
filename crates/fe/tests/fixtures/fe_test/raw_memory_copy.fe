@@ -3,7 +3,7 @@ mod local { pub fn memmove() -> u8 { 42 } }
 fn exercise() {
     let data = ptr::alloc_bytes(512)
     let other = ptr::alloc_bytes(512)
-    var i: u256 = 0
+    var i: usize = 0
     while i < 512 {
         unsafe { *ptr::offset(data, i) = (i % 251).downcast_truncate() }
         i += 1

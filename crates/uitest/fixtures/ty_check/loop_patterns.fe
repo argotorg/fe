@@ -1,0 +1,25 @@
+// A loop's pattern binds every step, as a `let` pattern binds its value: a
+// pattern that may not match is an error, not a filter.
+fn literal_index(_ xs: [u256; 3]) -> u256 {
+    var sum = 0
+    for (0, x) in xs.enumerate() {
+        sum += x
+    }
+    sum
+}
+
+fn literal_element(_ pairs: [(u256, u256); 2]) -> u256 {
+    var sum = 0
+    for (7, x) in pairs {
+        sum += x
+    }
+    sum
+}
+
+fn variant(_ xs: [Option<u256>; 2]) -> u256 {
+    var sum = 0
+    for Option::Some(x) in xs {
+        sum += x
+    }
+    sum
+}

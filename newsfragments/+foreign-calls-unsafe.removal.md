@@ -1,0 +1,1 @@
+Calling a function declared in an `extern` block now requires an `unsafe` block or function, unless the declaration is a `const fn` or belongs to `core` or `std`: nothing checks what foreign code does, so a call such as `memset(p, 0, n)` could corrupt memory from safe code.

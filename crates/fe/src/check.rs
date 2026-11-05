@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use camino::Utf8PathBuf;
 use common::{
     InputDb,
+    compilation::Target,
     config::{Config, WorkspaceConfig},
 };
 use driver::DriverDataBase;
@@ -40,6 +41,7 @@ pub fn check(
     path: &Utf8PathBuf,
     ingot: Option<&str>,
     force_standalone: bool,
+    target: Target,
     profile: &str,
     dump_mir: bool,
     report_out: Option<&Utf8PathBuf>,
@@ -53,6 +55,7 @@ pub fn check(
     db.compilation_settings()
         .set_profile(&mut db)
         .to(profile.into());
+    db.compilation_settings().set_target(&mut db).to(target);
 
     let report_root = report_out
         .map(|out| -> Result<_, String> {

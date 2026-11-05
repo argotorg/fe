@@ -2,74 +2,74 @@
 // Keeping the call's branch choices after every observed aggregate field made
 // the caller's availability requirements grow exponentially with field count.
 // This many fields can reach the separation budget; it must still terminate.
-use std::native::ByteBuffer
+use core::MemBuffer
 
 struct Frame {
-    b0: ByteBuffer,
-    b1: ByteBuffer,
-    b2: ByteBuffer,
-    b3: ByteBuffer,
-    b4: ByteBuffer,
-    b5: ByteBuffer,
-    b6: ByteBuffer,
-    b7: ByteBuffer,
-    b8: ByteBuffer,
-    b9: ByteBuffer,
-    b10: ByteBuffer,
-    b11: ByteBuffer,
-    b12: ByteBuffer,
-    b13: ByteBuffer,
-    b14: ByteBuffer,
-    b15: ByteBuffer,
-    pc: u64,
+    b0: MemBuffer,
+    b1: MemBuffer,
+    b2: MemBuffer,
+    b3: MemBuffer,
+    b4: MemBuffer,
+    b5: MemBuffer,
+    b6: MemBuffer,
+    b7: MemBuffer,
+    b8: MemBuffer,
+    b9: MemBuffer,
+    b10: MemBuffer,
+    b11: MemBuffer,
+    b12: MemBuffer,
+    b13: MemBuffer,
+    b14: MemBuffer,
+    b15: MemBuffer,
+    pc: usize,
 }
 
 impl Frame {
-    fn dispatch(mut self, op: u8, input: ByteBuffer) {
+    fn dispatch(mut self, op: u8, input: MemBuffer) {
         if op == 0 {
-            self.b0.set_byte(index: 0, value: input.byte_at(0))
+            self.b0[0] = input[0]
         } else if op == 1 {
-            self.b1.set_byte(index: 0, value: input.byte_at(1))
+            self.b1[0] = input[1]
         } else if op == 2 {
-            self.b2.set_byte(index: 0, value: input.byte_at(2))
+            self.b2[0] = input[2]
         } else if op == 3 {
-            self.b3.set_byte(index: 0, value: input.byte_at(3))
+            self.b3[0] = input[3]
         } else if op == 4 {
-            self.b4.set_byte(index: 0, value: input.byte_at(4))
+            self.b4[0] = input[4]
         } else if op == 5 {
-            self.b5.set_byte(index: 0, value: input.byte_at(5))
+            self.b5[0] = input[5]
         } else if op == 6 {
-            self.b6.set_byte(index: 0, value: input.byte_at(6))
+            self.b6[0] = input[6]
         } else if op == 7 {
-            self.b7.set_byte(index: 0, value: input.byte_at(7))
+            self.b7[0] = input[7]
         } else if op == 8 {
-            self.b8.set_byte(index: 0, value: input.byte_at(8))
+            self.b8[0] = input[8]
         } else if op == 9 {
-            self.b9.set_byte(index: 0, value: input.byte_at(9))
+            self.b9[0] = input[9]
         } else if op == 10 {
-            self.b10.set_byte(index: 0, value: input.byte_at(10))
+            self.b10[0] = input[10]
         } else if op == 11 {
-            self.b11.set_byte(index: 0, value: input.byte_at(11))
+            self.b11[0] = input[11]
         } else if op == 12 {
-            self.b12.set_byte(index: 0, value: input.byte_at(12))
+            self.b12[0] = input[12]
         } else if op == 13 {
-            self.b13.set_byte(index: 0, value: input.byte_at(13))
+            self.b13[0] = input[13]
         } else if op == 14 {
-            self.b14.set_byte(index: 0, value: input.byte_at(14))
+            self.b14[0] = input[14]
         } else if op == 15 {
-            self.b15.set_byte(index: 0, value: input.byte_at(15))
+            self.b15[0] = input[15]
         }
     }
 
-    fn run(mut self, code: ByteBuffer, input: ByteBuffer) {
+    fn run(mut self, code: MemBuffer, input: MemBuffer) {
         while self.pc < code.len() {
-            let op = code.byte_at(self.pc)
+            let op = code[self.pc]
             self.pc += 1
             self.dispatch(op, input)
         }
     }
 }
 
-fn caller(frame: mut Frame, code: ByteBuffer, input: ByteBuffer) {
+fn caller(frame: mut Frame, code: MemBuffer, input: MemBuffer) {
     frame.run(code, input)
 }

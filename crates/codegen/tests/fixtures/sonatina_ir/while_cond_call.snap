@@ -14,16 +14,7 @@ func private %lt_ten(v0.i64) -> i1 {
         return v3;
 }
 
-func private %main_root() {
-    block0:
-        jump block1;
-
-    block1:
-        v0.i64 = call %while_cond_call;
-        evm_stop;
-}
-
-func private %while_cond_call() -> i64 {
+func private %main() -> i64 {
     block0:
         jump block1;
 
@@ -49,6 +40,15 @@ func private %while_cond_call() -> i64 {
 
     block6:
         jump block2;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i64 = call %main;
+        evm_stop;
 }
 
 

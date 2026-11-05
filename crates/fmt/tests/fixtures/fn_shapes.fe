@@ -5,3 +5,5 @@ impl Fn( u256 )  ->  bool for IsEven {
 }
 
 fn unit<F:Fn()>(_ f: F) {}
+
+fn open<T,F:FnMut( T )->  _>(_ f: own F) {}

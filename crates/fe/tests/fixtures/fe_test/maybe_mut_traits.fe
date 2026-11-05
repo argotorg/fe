@@ -1,0 +1,185 @@
+// A trait's `mut?` method is granted at `mut` by the implementations that
+// give it a `mut` mode: `T: mut Trait` holds by them.
+
+trait Slot {
+    fn slot(mut? self) -> mut? u256
+}
+
+struct Cell {
+    value: u256,
+}
+
+impl Slot for Cell {
+    fn slot(mut? self) -> mut? u256 {
+        mut? self.value
+    }
+}
+
+/// Grants only `ref`.
+struct Fixed {
+    value: u256,
+}
+
+impl Slot for Fixed {
+    fn slot(self) -> ref u256 {
+        ref self.value
+    }
+}
+
+/// Keeps its slot halved: one body per mode, the `mut` one writing the
+/// changed slot back.
+struct Halved {
+    word: u256,
+}
+
+impl Slot for Halved {
+    fn slot(self) -> ref u256 {
+        self.word / 2
+    }
+
+    fn slot(mut self) -> mut u256 {
+        var value = self.word / 2
+        yield mut value
+        self.word = value * 2
+    }
+}
+
+/// Grants `mut` when its inner slot does.
+struct Wrap<S> {
+    inner: S,
+}
+
+impl<S: mut? Slot> Slot for Wrap<S> {
+    fn slot(mut? self) -> mut? u256 {
+        self.inner.slot()
+    }
+}
+
+/// Grants `mut` when its inner slot does, with one body per mode: each
+/// forwards to the inner slot at its own mode.
+struct Split<S> {
+    inner: S,
+}
+
+impl<S: mut? Slot> Slot for Split<S> {
+    fn slot(self) -> ref u256 {
+        self.inner.slot()
+    }
+
+    fn slot(mut self) -> mut u256 {
+        self.inner.slot()
+    }
+}
+
+/// Holds slots of a type that grants `mut`.
+trait Holder {
+    type Item: mut Slot
+}
+
+struct CellHolder {}
+
+impl Holder for CellHolder {
+    type Item = Cell
+}
+
+/// A slot that grants `mut`.
+trait Writable where Self: mut Slot {}
+
+impl Writable for Cell {}
+
+/// A result component that is `mut` at both modes, beside one that is
+/// `mut?`: only the second tells the bodies apart.
+trait Pick {
+    fn pick(_ a: mut u256, _ b: mut? u256) -> (mut u256, mut? u256)
+}
+
+struct Picker {}
+
+impl Pick for Picker {
+    fn pick(_ a: mut u256, _ b: u256) -> (mut u256, ref u256) {
+        (mut a, ref b)
+    }
+
+    fn pick(_ a: mut u256, _ b: mut u256) -> (mut u256, mut u256) {
+        (mut a, mut b)
+    }
+}
+
+fn read<S: Slot>(_ slot: S) -> u256 {
+    slot.slot()
+}
+
+fn bump<S: mut Slot>(_ slot: mut S) {
+    let value = mut slot.slot()
+    value += 1
+}
+
+fn bump_held<H: Holder>(_ slot: mut H::Item) {
+    let value = mut slot.slot()
+    value += 1
+}
+
+fn bump_writable<S: Writable>(_ slot: mut S) {
+    let value = mut slot.slot()
+    value += 1
+}
+
+#[test]
+fn reads_by_any_implementation() {
+    assert(read(Cell { value: 1 }) == 1)
+    assert(read(Fixed { value: 7 }) == 7)
+    assert(read(Wrap { inner: Fixed { value: 3 } }) == 3)
+    assert(read(Halved { word: 8 }) == 4)
+}
+
+#[test]
+fn writes_by_a_mut_implementation() {
+    var cell = Cell { value: 1 }
+    bump(mut cell)
+    assert(cell.value == 2)
+    var wrapped = Wrap { inner: Cell { value: 5 } }
+    bump(mut wrapped)
+    wrapped.slot() += 1
+    assert(wrapped.inner.value == 7)
+}
+
+#[test]
+fn the_mut_body_writes_back() {
+    var halved = Halved { word: 8 }
+    bump(mut halved)
+    assert(halved.word == 10)
+    var wrapped = Wrap { inner: Halved { word: 2 } }
+    bump(mut wrapped)
+    assert(wrapped.inner.word == 4)
+    // A read runs the `ref` body, which writes nothing.
+    assert(wrapped.slot() == 2)
+}
+
+#[test]
+fn split_bodies_forward_their_modes() {
+    var split = Split { inner: Halved { word: 2 } }
+    bump(mut split)
+    assert(split.inner.word == 4)
+    assert(read(split) == 2)
+    assert(read(Split { inner: Fixed { value: 3 } }) == 3)
+}
+
+#[test]
+fn mut_bounds_of_a_trait_grant_mut() {
+    var cell = Cell { value: 1 }
+    bump_held<CellHolder>(mut cell)
+    bump_writable(mut cell)
+    assert(cell.value == 3)
+}
+
+#[test]
+fn a_fixed_mut_component_is_no_mode() {
+    var a = 1
+    var b = 2
+    let (mut x, y) = Picker::pick(mut a, b)
+    x = y + 1
+    let (mut p, mut q) = Picker::pick(mut a, mut b)
+    p += 1
+    q += 1
+    assert(a == 4 && b == 3)
+}

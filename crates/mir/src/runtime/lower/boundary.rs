@@ -48,14 +48,6 @@ pub(super) struct BoundaryRef<'a, 'db> {
 }
 
 impl<'a, 'db> BoundaryRef<'a, 'db> {
-    pub(super) fn unstaged(boundary: &'a RuntimeBoundarySpec<'db>) -> Self {
-        Self {
-            site: None,
-            boundary,
-            matcher: None,
-        }
-    }
-
     pub(super) fn staged(boundary: &'a StagedBoundary<'db>) -> Self {
         Self {
             site: Some(boundary.site),
@@ -862,7 +854,7 @@ pub(crate) fn boundary_source_uses_transport_sensitive_aggregate<'db>(
     runtime_boundary_source_uses_transport_sensitive_aggregate(db, ty, scope, assumptions)
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn runtime_boundary_spec<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -935,7 +927,7 @@ fn runtime_boundary_spec<'db>(
     })
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn runtime_boundary_source_uses_transport_sensitive_aggregate<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,

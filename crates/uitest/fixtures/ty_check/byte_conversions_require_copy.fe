@@ -1,0 +1,26 @@
+// An array viewed as bytes gives up its elements without destroying them,
+// so they must be `Copy`.
+use core::ptr::{MemArray, MemBuffer}
+
+// Rejected: the buffers the array holds would leak.
+fn buffers_as_bytes(_ buffers: own MemArray<MemBuffer>) -> MemArray<u8> {
+    buffers.into_bytes()
+}
+
+fn buffers_into_buffer(_ buffers: own MemArray<MemBuffer>) -> MemBuffer {
+    buffers.into_buffer()
+}
+
+// Rejected: nothing says `T` is `Copy`.
+fn generic_into_buffer<T>(_ values: own MemArray<T>) -> MemBuffer {
+    values.into_buffer()
+}
+
+// Accepted.
+fn words_into_buffer(_ words: own MemArray<u256>) -> MemBuffer {
+    words.into_buffer()
+}
+
+fn copies_as_bytes<T: Copy>(_ values: own MemArray<T>) -> MemArray<u8> {
+    values.into_bytes()
+}

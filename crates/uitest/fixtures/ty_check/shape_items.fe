@@ -1,0 +1,39 @@
+// An associated shape is declared `shape Step` and given `shape Step = ..`.
+trait Driver {
+    shape Step
+    type Base
+}
+
+struct Typed {}
+
+// `Step` is a shape, not a type.
+impl Driver for Typed {
+    type Step = u256
+    type Base = u256
+}
+
+struct Shaped {}
+
+// `Base` is a type, not a shape.
+impl Driver for Shaped {
+    shape Step = u256
+    shape Base = u256
+}
+
+struct Missing {}
+
+impl Driver for Missing {
+    type Base = u256
+}
+
+// Only an associated shape takes a mode argument.
+fn mode_arg(_ x: Option<ref>) {}
+
+fn assoc_type_mode_arg<D: Driver>(_ x: D::Base<ref>) {}
+
+fn qualified_type_mode_arg<D: Driver>(_ x: <D as Driver>::Base<mut>) {}
+
+fn trait_mode_arg<D: Driver<ref>>() {}
+
+// A shape takes one mode.
+fn two_modes<D: Driver>(_ x: D::Step<ref, mut>) {}

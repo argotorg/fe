@@ -6,7 +6,7 @@ use crate::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
             normalize::normalize_ty,
             trait_resolution::PredicateListId,
-            ty_def::TyId,
+            ty_def::{ShapeCon, TyBase, TyData, TyId},
         },
     },
     hir_def::scope_graph::ScopeId,
@@ -14,7 +14,7 @@ use crate::{
 
 /// Whether a value of `ty` holds a capability carrier, without following one
 /// to its target. A pointer is data.
-#[salsa::tracked(cycle_fn=contains_capability_cycle_recover, cycle_initial=contains_capability_cycle_initial)]
+#[salsa::tracked(returns(copy), cycle_initial=contains_capability_cycle_initial)]
 pub fn contains_capability<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -49,6 +49,7 @@ pub fn contains_capability<'db>(
 
 fn contains_capability_cycle_initial<'db>(
     _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _: ScopeId<'db>,
     _: PredicateListId<'db>,
     _: TyId<'db>,
@@ -56,24 +57,15 @@ fn contains_capability_cycle_initial<'db>(
     false
 }
 
-fn contains_capability_cycle_recover<'db>(
-    _: &'db dyn HirAnalysisDb,
-    _: &bool,
-    _: u32,
-    _: ScopeId<'db>,
-    _: PredicateListId<'db>,
-    _: TyId<'db>,
-) -> salsa::CycleRecoveryAction<bool> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-/// Whether a semantic-IR value of `ty` carries accesses: a carrier, or a
-/// projection's tuple or sum shape holding one.
+/// Whether a semantic-IR value of `ty` carries accesses: a carrier, a
+/// projection's tuple or sum shape holding one, or the carrier of a shape
+/// not known here, which may hold any.
 pub fn holds_carrier<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    let (base, args) = ty.decompose_ty_app(db);
     ty.as_capability(db).is_some()
-        || ty
-            .decompose_ty_app(db)
-            .1
-            .iter()
-            .any(|arg| holds_carrier(db, *arg))
+        || matches!(
+            base.data(db),
+            TyData::TyBase(TyBase::Shape(ShapeCon::Carrier))
+        )
+        || args.iter().any(|arg| holds_carrier(db, *arg))
 }

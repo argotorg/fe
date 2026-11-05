@@ -18,14 +18,14 @@ impl<E, T> ingot::marker::Copy for Result<E, T>
 {}
 
 impl<E, T> Result<E, T> {
-    pub fn is_ok(own self) -> bool {
+    pub fn is_ok(self) -> bool {
         match self {
             Self::Ok(_) => true
             Self::Err(_) => false
         }
     }
 
-    pub fn is_err(own self) -> bool {
+    pub fn is_err(self) -> bool {
         !self.is_ok()
     }
 
@@ -64,28 +64,28 @@ impl<E, T> Result<E, T> {
         }
     }
 
-    pub fn map<U, F: Fn<T, U>>(own self, _ func: F) -> Result<E, U> uses F::E {
+    pub fn map<U, F: Fn(own T) -> U>(own self, _ func: F) -> Result<E, U> uses F::E {
         match self {
             Self::Ok(value) => Result::Ok(func(value))
             Self::Err(error) => Result::Err(error)
         }
     }
 
-    pub fn map_err<FError, F: Fn<E, FError>>(own self, _ func: F) -> Result<FError, T> uses F::E {
+    pub fn map_err<FError, F: Fn(own E) -> FError>(own self, _ func: F) -> Result<FError, T> uses F::E {
         match self {
             Self::Ok(value) => Result::Ok(value)
             Self::Err(error) => Result::Err(func(error))
         }
     }
 
-    pub fn and_then<U, F: Fn<T, Result<E, U>>>(own self, _ func: F) -> Result<E, U> uses F::E {
+    pub fn and_then<U, F: Fn(own T) -> Result<E, U>>(own self, _ func: F) -> Result<E, U> uses F::E {
         match self {
             Self::Ok(value) => func(value)
             Self::Err(error) => Result::Err(error)
         }
     }
 
-    pub fn or_else<E2, F: Fn<E, Result<E2, T>>>(own self, _ func: F) -> Result<E2, T> uses F::E {
+    pub fn or_else<E2, F: Fn(own E) -> Result<E2, T>>(own self, _ func: F) -> Result<E2, T> uses F::E {
         match self {
             Self::Ok(value) => Result::Ok(value)
             Self::Err(error) => func(error)
@@ -109,7 +109,7 @@ impl<E, T> Default for Result<E, T> where T: Default {
 }
 
 impl<E> Functor for Result<E> {
-    fn map<T, U, F: Fn<T, U>>(self: own Self<T>, _ func: F) -> Self<U> uses F::E {
+    fn map<T, U, F: Fn(own T) -> U>(self: own Self<T>, _ func: F) -> Self<U> uses F::E {
         match self {
             Result::Ok(value) => Result::Ok(func(value))
             Result::Err(error) => Result::Err(error)
@@ -122,7 +122,7 @@ impl<E> Applicative for Result<E> {
         Result::Ok(value)
     }
 
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> uses F::E {
+    fn ap<T, U, F: Fn(own T) -> U>(self: own Self<F>, _ value: own Self<T>) -> Self<U> uses F::E {
         match (self, value) {
             (Result::Ok(func), Result::Ok(arg)) => Result::Ok(func(arg))
             (Result::Err(error), _) => Result::Err(error)
@@ -132,7 +132,7 @@ impl<E> Applicative for Result<E> {
 }
 
 impl<E> Monad for Result<E> {
-    fn bind<T, U, F: Fn<T, Self<U>>>(self: own Self<T>, _ func: F) -> Self<U> uses F::E {
+    fn bind<T, U, F: Fn(own T) -> Self<U>>(self: own Self<T>, _ func: F) -> Self<U> uses F::E {
         match self {
             Result::Ok(value) => func(value)
             Result::Err(error) => Result::Err(error)

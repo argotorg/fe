@@ -50,7 +50,7 @@ fn triple_tuple_enum_data(data: (Item, Item, Item)) -> u8 {
         (Item::Value(x), Item::Value(y), Item::Value(z)) => x + y + z
         (Item::Empty, _, _) => 100
         (_, Item::Empty, _) => 200
-        (_, _, Item::Empty) => 300
+        (_, _, Item::Empty) => 250
     }
 }
 

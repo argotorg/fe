@@ -73,6 +73,6 @@ fn abs_runtime_i256() {
 fn abs_runtime_isize() {
     let x: isize = -42
     assert(x.unsigned_abs() == 42)
-    // |isize::MIN| = 2^255 (isize is 256 bits wide in Fe)
-    assert(isize::min().unsigned_abs() == 57896044618658097711785492504343953926634992332820282019728792003956564819968)
+    // |isize::MIN| is one past isize::MAX
+    assert(isize::min().unsigned_abs() == (usize::max() >> 1) + 1)
 }

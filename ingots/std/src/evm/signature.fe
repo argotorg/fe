@@ -21,7 +21,7 @@ const ERC1271_MAGIC_WORD: u256 = 0x1626ba7e0000000000000000000000000000000000000
 const LOW_255_BITS: u256 = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 fn offset(_ base: *u8, _ bytes: u256) -> *u8 {
-    ptr::offset_bytes(base, bytes)
+    ptr::offset_bytes(base, bytes.downcast_unchecked())
 }
 
 /// A decoded ECDSA signature. `v` is the recovery byte as encoded (27 or 28
@@ -107,9 +107,9 @@ pub fn recover_raw(digest: u256, _ signature: MemSpan) -> Option<Address> {
 pub fn is_valid_erc1271_signature_now(_ signer: Address, digest: u256, signature: MemSpan) -> bool
 uses (call: Call)
 {
-    let len = signature.len()
+    let len = signature.len() as u256
     let padded = (len + 31) / 32 * 32
-    let args = unsafe { MemBuffer::alloc_uninit(0x64 + padded) }
+    let args = unsafe { MemBuffer::alloc_uninit((0x64 + padded).downcast_unchecked()) }
     unsafe {
         ops::mstore(addr: args.ptr(), value: ERC1271_MAGIC_WORD)
         ops::mstore(addr: offset(args.ptr(), 0x04), value: digest)

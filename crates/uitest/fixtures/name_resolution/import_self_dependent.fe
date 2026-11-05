@@ -1,0 +1,25 @@
+// `t` re-exports the root's names, and the root's `m` is `use t::m` itself,
+// so it names nothing.
+mod real {
+    pub mod m {
+        pub struct S {}
+        pub mod m {}
+    }
+}
+use real::*
+use t::m
+mod t {
+    pub use super::*
+}
+
+// The glob of `n::*` brings in `n::n`, which makes `n` ambiguous with
+// `real2::n` for the glob's own path.
+mod real2 {
+    pub mod n {
+        pub mod n {}
+    }
+}
+mod g {
+    use super::real2::*
+    use n::*
+}

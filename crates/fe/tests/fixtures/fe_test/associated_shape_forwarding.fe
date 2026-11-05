@@ -1,0 +1,197 @@
+// Generic code forwards an associated shape whole, nested in a product, and
+// through a parameter of the shape; each instance grants what its impl's
+// shape lists, from memory or storage.
+use std::evm::{Create, Evm}
+
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (mut? u256, mut? u256)
+
+    fn at(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+fn first<D: mut? Driver>(_ d: mut? D) -> D::Step {
+    d.at()
+}
+
+fn pass_on<D: Driver>(_ s: D::Step<ref>) -> D::Step<ref> {
+    s
+}
+
+fn first_ref<D: Driver>(_ d: D) -> D::Step<ref> {
+    pass_on<D>(d.at())
+}
+
+fn tag<D: mut? Driver>(_ d: mut? D, _ i: usize) -> (own usize, D::Step) {
+    (i, d.at())
+}
+
+
+msg M {
+    #[selector = 1]
+    Set,
+    #[selector = 2]
+    Get -> u256,
+}
+
+pub contract C {
+    mut p: Pair,
+
+    recv M {
+        Set uses (mut p) {
+            let (i, (mut x, mut y)) = tag(mut p, 3)
+            x = 10 + i as u256
+            y = 20
+        }
+        Get -> u256 uses (p) {
+            let (i, (x, y)) = tag(p, 4)
+            x + y + i as u256
+        }
+    }
+}
+
+#[test]
+fn nested_storage() uses (cr: mut Create, evm: mut Evm) {
+    let c = cr.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Set {})
+    let r = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: M::Get {})
+    assert(r == 37)
+}
+
+#[test]
+fn nested_memory() {
+    var p = Pair { a: 1, b: 2 }
+    let (i, (mut x, mut y)) = tag(mut p, 5)
+    x = i as u256
+    y = i as u256 * 2
+    assert(p.a == 5 && p.b == 10)
+}
+
+#[test]
+fn pair_forward() {
+    var p = Pair { a: 1, b: 2 }
+    let (mut x, mut y) = first(mut p)
+    x = 10
+    y = 20
+    assert(p.a == 10 && p.b == 20)
+    let (r, s) = first(p)
+    assert(r + s == 30)
+}
+
+#[test]
+fn transport() {
+    let p = Pair { a: 3, b: 4 }
+    let (x, y) = first_ref(p)
+    assert(x + y == 7)
+}
+
+// A step named at `mut` is a consumer of the `mut` call: as a parameter, a
+// result and a closure's parameter, implicitly or with `mut`. A value of a
+// step has one type at both modes.
+fn set<D: mut Driver>(_ s: D::Step<mut>) -> D::Step<mut> {
+    s
+}
+
+fn first_mut<D: mut Driver>(_ d: mut D) -> D::Step<mut> {
+    set<D>(d.at())
+}
+
+fn first_mut_explicit<D: mut Driver>(_ d: mut D) -> D::Step<mut> {
+    set<D>(mut d.at())
+}
+
+fn forward<D: mut? Driver>(_ s: D::Step) -> D::Step {
+    s
+}
+
+fn first_forwarded<D: mut? Driver>(_ d: mut? D) -> D::Step {
+    forward<D>(d.at())
+}
+
+fn each_mut<D: mut Driver, F: FnMut(own usize, D::Step<mut>)>(_ d: mut D, _ f: own F) uses F::E {
+    var g = f
+    g(7, d.at())
+}
+
+#[test]
+fn mut_steps() {
+    var p = Pair { a: 1, b: 2 }
+    let (mut x, mut y) = first_mut(mut p)
+    x = 3
+    y = 4
+    let (mut x, _) = first_mut_explicit(mut p)
+    x += 10
+    let (_, mut y) = first_forwarded(mut p)
+    y += 20
+    assert(p.a == 13 && p.b == 24)
+    let (x, y) = first_forwarded(p)
+    assert(x + y == 37)
+    each_mut(mut p, |i, (mut x, mut y)| {
+        x = i as u256
+        y = 2 * i as u256
+    })
+    assert(p.a == 7 && p.b == 14)
+}
+
+// A concrete caller passes the shape its impl gives: the impl's step, or a
+// tuple of its parts.
+#[test]
+fn concrete_callers() {
+    var p = Pair { a: 1, b: 2 }
+    let (mut x, mut y) = set<Pair>(p.at())
+    x = 5
+    y = 6
+    let (x, y) = pass_on<Pair>(p.at())
+    assert(x == 5 && y == 6)
+    let (mut x, _) = set<Pair>((mut p.a, mut p.b))
+    x = 9
+    assert(p.a == 9)
+}
+
+// A destructured parameter binds an opaque part whole, as a parameter of
+// the shape takes it, and a closure's parameter may be of the shape.
+fn retag<D: Driver>(_ (i, s): (own usize, D::Step<ref>)) -> (own usize, D::Step<ref>) {
+    (i + 1, s)
+}
+
+fn untag<D: Driver>(_ (_, s): (own usize, D::Step<ref>)) -> D::Step<ref> {
+    s
+}
+
+fn tagged<D: Driver>(_ d: D) -> (own usize, D::Step<ref>) {
+    retag<D>((5, d.at()))
+}
+
+fn apply<D: Driver, F: Fn(D::Step<ref>) -> u256>(_ d: D, _ f: F) -> u256 uses F::E {
+    f(d.at())
+}
+
+fn first_of<D: Driver>(_ s: D::Step<ref>) -> u256 {
+    7
+}
+
+fn through_closure<D: Driver>(_ d: D) -> u256 {
+    apply(d, |s| first_of<D>(s))
+}
+
+#[test]
+fn opaque_parts() {
+    let p = Pair { a: 3, b: 4 }
+    let (i, (x, y)) = tagged(p)
+    assert(i == 6 && x == 3 && y == 4)
+    let (x, y) = untag<Pair>((0, p.at()))
+    assert(x + y == 7)
+    assert(through_closure(p) == 7)
+}

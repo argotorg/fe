@@ -82,6 +82,24 @@ error[3-0059]: `Mark` is a `#[view]` type
 100 │     let mark = Mark::Unset
     │                ^^^^^^^^^^^ a `#[view]` type cannot be constructed outside its defining module
 
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ view_types.fe:140:15
+    │
+140 │ fn holds(_ h: Holds<Span>) {}
+    │               ^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ view_types.fe:154:16
+    │
+154 │ fn nested(_ n: Nested<Span>) {}
+    │                ^^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
+error[3-0059]: `Span` is a `#[view]` type
+    ┌─ view_types.fe:166:40
+    │
+166 │ fn through<B: Equals<Out = Span>>(_ t: Through<Span, B>) {}
+    │                                        ^^^^^^^^^^^^^^^^ a `#[view]` type cannot be part of another type
+
 error[8-0105]: this call instantiates its callee at the `#[view]` type `Span`
     ┌─ view_types.fe:107:5
     │

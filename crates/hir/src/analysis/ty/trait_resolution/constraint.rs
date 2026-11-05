@@ -3,6 +3,7 @@ use crate::core::hir_def::{
     TraitRefId, TypeBound, WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
 use crate::hir_def::CallableDef;
+use crate::hir_def::ModeMarker;
 use common::indexmap::{IndexMap, IndexSet};
 use either::Either;
 
@@ -11,12 +12,14 @@ use crate::analysis::{
     name_resolution::{PathRes, resolve_path},
     ty::{
         binder::Binder,
-        const_ty::{ConstBodyLowering, LoweringContext},
+        const_ty::{ConstBodyLowering, LoweringContext, RebaseConstUseEnv},
         corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
             place_effect_provider_param_index_map,
         },
+        fold::TyFoldable,
+        instantiate_trait_self,
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref, lower_trait_ref_with_minter},
         trait_resolution::PredicateListId,
@@ -28,9 +31,10 @@ use crate::analysis::{
 
 /// Collect provider constraints induced by a function's `uses` clause.
 ///
-/// Type-key effects produce `EffectRef`/`EffectRefMut` bounds from the hidden
-/// provider type to the visible effect target, while trait-key effects produce
-/// the corresponding trait bound on the hidden provider type.
+/// Type-key effects produce an `EffectRef` bound from the hidden provider type
+/// to the visible effect target, whatever the effect's mutability, while
+/// trait-key effects produce the corresponding trait bound on the hidden
+/// provider type.
 pub(crate) fn collect_func_effect_provider_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
@@ -43,8 +47,9 @@ pub(crate) fn collect_func_effect_provider_constraints<'db>(
         .extend_all_bounds(db);
 
     let mut out = Vec::new();
-    let mut effect_ref_traits = None;
-    for binding in func.effect_requirements(db) {
+    let mut effect_ref_trait = None;
+    // The bounds don't depend on the effects' modes.
+    for binding in func.effect_requirements(db, func.modes(db)[0]) {
         if !matches!(
             binding.key.kind(),
             EffectKeyKind::Type | EffectKeyKind::Trait
@@ -74,55 +79,27 @@ pub(crate) fn collect_func_effect_provider_constraints<'db>(
 
         match (identity.key_ty, identity.key_trait) {
             (_, Some(inst)) => {
-                let mut args = inst.args(db).to_vec();
-                if args.is_empty() {
-                    args.push(provider_ty);
-                } else {
-                    args[0] = provider_ty;
-                }
-                out.push(TraitInstId::new(
-                    db,
-                    inst.def(db),
-                    args,
-                    inst.assoc_type_bindings(db).clone(),
-                ));
+                out.push(
+                    instantiate_trait_self(db, inst, provider_ty).with_mode(db, ModeMarker::None),
+                );
             }
             (Some(target_ty), None) => {
                 if !target_ty.is_star_kind(db) {
                     continue;
                 }
-                let (effect_ref_trait, effect_ref_mut_trait) =
-                    effect_ref_traits.unwrap_or_else(|| {
-                        let Some(effect_ref_trait) =
-                            resolve_core_trait(db, func.scope(), &["EffectRef"])
-                        else {
-                            panic!("missing required core trait EffectRef — stdlib is broken");
-                        };
-                        let Some(effect_ref_mut_trait) =
-                            resolve_core_trait(db, func.scope(), &["EffectRefMut"])
-                        else {
-                            panic!("missing required core trait EffectRefMut — stdlib is broken");
-                        };
-                        let traits = (effect_ref_trait, effect_ref_mut_trait);
-                        effect_ref_traits = Some(traits);
-                        traits
-                    });
-
-                out.push(TraitInstId::new(
+                let effect_ref_trait = *effect_ref_trait.get_or_insert_with(|| {
+                    let Some(effect_ref_trait) =
+                        resolve_core_trait(db, func.scope(), &["EffectRef"])
+                    else {
+                        panic!("missing required core trait EffectRef — stdlib is broken");
+                    };
+                    effect_ref_trait
+                });
+                out.push(TraitInstId::new_simple(
                     db,
                     effect_ref_trait,
                     vec![provider_ty, target_ty],
-                    IndexMap::new(),
                 ));
-
-                if identity.is_mut {
-                    out.push(TraitInstId::new(
-                        db,
-                        effect_ref_mut_trait,
-                        vec![provider_ty, target_ty],
-                        IndexMap::new(),
-                    ));
-                }
             }
             _ => {}
         }
@@ -132,7 +109,7 @@ pub(crate) fn collect_func_effect_provider_constraints<'db>(
 }
 
 /// Returns a constraints list which is derived from the given type.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn ty_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -166,7 +143,7 @@ pub(crate) fn ty_constraints<'db>(
 
 /// Collect super traits of the given trait.
 /// The returned trait ref is bound by the given trait's generic parameters.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn super_trait_cycle<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
@@ -198,10 +175,7 @@ pub fn super_trait_cycle_impl<'db>(
     None
 }
 
-#[salsa::tracked(
-    cycle_fn=collect_func_def_constraints_cycle_recover,
-    cycle_initial=collect_func_def_constraints_cycle_initial
-)]
+#[salsa::tracked(returns(copy), cycle_initial=collect_func_def_constraints_cycle_initial)]
 pub(crate) fn collect_func_decl_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: CallableDef<'db>,
@@ -215,19 +189,33 @@ pub(crate) fn collect_func_decl_constraints<'db>(
         CallableDef::VariantCtor(var) => {
             return Binder::bind(var.enum_.into(), PredicateListId::empty_list(db));
         }
+        CallableDef::StructCtor(s) if include_parent => {
+            return collect_constraints(db, s.into());
+        }
+        CallableDef::StructCtor(s) => {
+            return Binder::bind(s.into(), PredicateListId::empty_list(db));
+        }
     };
 
-    if !include_parent {
-        let func_constraints = collect_decl_constraints(db, hir_func.into());
-        return func_constraints;
-    }
-
+    // A method's own bounds resolve under its parent's, so without the parent
+    // they are the entries of the full list that the method itself declares.
     Binder::bind(
         hir_func.into(),
         PredicateListId::new(
             db,
             collect_func_decl_constraint_pairs(db, func)
                 .into_iter()
+                .filter(|(_, source)| {
+                    include_parent
+                        || match source {
+                            PredicateSource::GenericParamBound { owner, .. } => {
+                                *owner == GenericParamOwner::Func(hir_func)
+                            }
+                            PredicateSource::WherePredicateBound { owner, .. } => {
+                                *owner == WhereClauseOwner::Func(hir_func)
+                            }
+                        }
+                })
                 .map(|(inst, _)| inst)
                 .collect::<Vec<_>>(),
         ),
@@ -246,6 +234,9 @@ pub(crate) fn collect_func_decl_constraint_pairs<'db>(
         CallableDef::Func(func) => func,
         CallableDef::VariantCtor(var) => {
             return decl_constraint_pairs(db, var.enum_.into()).clone();
+        }
+        CallableDef::StructCtor(s) => {
+            return decl_constraint_pairs(db, s.into()).clone();
         }
     };
 
@@ -267,10 +258,7 @@ pub(crate) fn collect_func_decl_constraint_pairs<'db>(
     collect_decl_constraint_pairs_impl(db, hir_func.into(), parent_pairs, ConstBodyLowering::Eager)
 }
 
-#[salsa::tracked(
-    cycle_fn=collect_func_def_constraints_cycle_recover,
-    cycle_initial=collect_func_def_constraints_cycle_initial
-)]
+#[salsa::tracked(returns(copy), cycle_initial=collect_func_def_constraints_cycle_initial)]
 pub(crate) fn collect_func_def_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: CallableDef<'db>,
@@ -298,20 +286,11 @@ pub(crate) fn collect_func_def_constraints<'db>(
 
 fn collect_func_def_constraints_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     func: CallableDef<'db>,
     _include_parent: bool,
 ) -> Binder<'db, PredicateListId<'db>> {
     Binder::bind(func.generic_owner(), PredicateListId::empty_list(db))
-}
-
-fn collect_func_def_constraints_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Binder<'db, PredicateListId<'db>>,
-    _count: u32,
-    _func: CallableDef<'db>,
-    _include_parent: bool,
-) -> salsa::CycleRecoveryAction<Binder<'db, PredicateListId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 /// Where a collected predicate was written. Recorded during constraint
@@ -319,7 +298,7 @@ fn collect_func_def_constraints_cycle_recover<'db>(
 /// re-deriving it from a list index: the final list is parent-first,
 /// deduplicated, and resolution-ordered, so indices don't map back to
 /// written bounds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub(crate) enum PredicateSource<'db> {
     GenericParamBound {
         owner: GenericParamOwner<'db>,
@@ -333,10 +312,7 @@ pub(crate) enum PredicateSource<'db> {
     },
 }
 
-#[salsa::tracked(
-    cycle_fn=collect_constraints_cycle_recover,
-    cycle_initial=collect_constraints_cycle_initial
-)]
+#[salsa::tracked(returns(copy), cycle_initial=collect_constraints_cycle_initial)]
 pub(crate) fn collect_decl_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -355,11 +331,7 @@ pub(crate) fn collect_decl_constraints<'db>(
 
 /// Declared constraints of `owner` paired with the bound each was collected
 /// from. The key sequence is exactly the `PredicateListId` order.
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=decl_constraint_pairs_cycle_recover,
-    cycle_initial=decl_constraint_pairs_cycle_initial
-)]
+#[salsa::tracked(cycle_initial=decl_constraint_pairs_cycle_initial)]
 pub(crate) fn decl_constraint_pairs<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -367,11 +339,7 @@ pub(crate) fn decl_constraint_pairs<'db>(
     collect_decl_constraint_pairs_impl(db, owner, &[], ConstBodyLowering::Eager)
 }
 
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=decl_constraint_pairs_cycle_recover,
-    cycle_initial=decl_constraint_pairs_cycle_initial
-)]
+#[salsa::tracked(cycle_initial=decl_constraint_pairs_cycle_initial)]
 fn candidate_decl_constraint_pairs<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -388,18 +356,10 @@ fn candidate_decl_constraint_pairs<'db>(
 
 fn decl_constraint_pairs_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _owner: GenericParamOwner<'db>,
 ) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
     Vec::new()
-}
-
-fn decl_constraint_pairs_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Vec<(TraitInstId<'db>, PredicateSource<'db>)>,
-    _count: u32,
-    _owner: GenericParamOwner<'db>,
-) -> salsa::CycleRecoveryAction<Vec<(TraitInstId<'db>, PredicateSource<'db>)>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 fn collect_decl_constraint_pairs_impl<'db>(
@@ -422,10 +382,11 @@ fn collect_decl_constraint_pairs_impl<'db>(
             continue;
         };
         for (bound_idx, bound) in hir_param.bounds.iter().enumerate() {
-            if let TypeBound::Trait(trait_ref) = bound {
+            if let TypeBound::Trait(trait_ref, mode) = bound {
                 deferred.push(Deferred {
                     bound_ty: Either::Right(ty),
                     trait_ref: *trait_ref,
+                    mode: *mode,
                     scope: owner_scope,
                     source: PredicateSource::GenericParamBound {
                         owner,
@@ -458,10 +419,11 @@ fn collect_decl_constraint_pairs_impl<'db>(
             }
 
             for (bound_idx, bound) in pred.bounds.iter().enumerate() {
-                if let TypeBound::Trait(trait_ref) = *bound {
+                if let TypeBound::Trait(trait_ref, mode) = *bound {
                     deferred.push(Deferred {
                         bound_ty: Either::Left(hir_ty),
                         trait_ref,
+                        mode,
                         scope: owner_scope,
                         source: PredicateSource::WherePredicateBound {
                             owner: w_owner,
@@ -497,26 +459,33 @@ fn collect_decl_constraint_pairs_impl<'db>(
         }
     }
 
-    all_predicates.into_iter().collect()
+    // A const use in a bound records the constraints it was solved under,
+    // which include this very list while a cycle computes it, so recording
+    // them makes every iteration differ from the last and the cycle never
+    // settles. A use keeps the list's predicates its parameters reach, with
+    // the uses inside them in their comparison form instead: that cannot
+    // refer back to the list, and it holds the bounds, such as an enclosing
+    // item's `T: Gate<{ T::W }>`, that select the use's implementation once
+    // the list is instantiated.
+    let mut rebase = RebaseConstUseEnv::stored(db, all_predicates.keys().copied());
+    let mut rebased = IndexMap::new();
+    for (inst, source) in all_predicates {
+        rebased
+            .entry(inst.fold_with(db, &mut rebase))
+            .or_insert(source);
+    }
+    rebased.into_iter().collect()
 }
 
 fn collect_constraints_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     owner: GenericParamOwner<'db>,
 ) -> Binder<'db, PredicateListId<'db>> {
     Binder::bind(owner, PredicateListId::empty_list(db))
 }
 
-fn collect_constraints_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Binder<'db, PredicateListId<'db>>,
-    _count: u32,
-    _owner: GenericParamOwner<'db>,
-) -> salsa::CycleRecoveryAction<Binder<'db, PredicateListId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-#[salsa::tracked(cycle_fn=collect_constraints_cycle_recover, cycle_initial=collect_constraints_cycle_initial)]
+#[salsa::tracked(returns(copy), cycle_initial=collect_constraints_cycle_initial)]
 pub fn collect_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -527,7 +496,7 @@ pub fn collect_constraints<'db>(
     }
 }
 
-#[salsa::tracked(cycle_fn=collect_constraints_cycle_recover, cycle_initial=collect_constraints_cycle_initial)]
+#[salsa::tracked(returns(copy), cycle_initial=collect_constraints_cycle_initial)]
 pub(crate) fn collect_candidate_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -547,29 +516,17 @@ pub(crate) fn collect_candidate_constraints<'db>(
 struct Deferred<'db> {
     bound_ty: Either<HirTypeId<'db>, TyId<'db>>,
     trait_ref: TraitRefId<'db>,
+    /// The modes the bound grants the trait's `mut?` methods at.
+    mode: ModeMarker,
     scope: ScopeId<'db>,
     source: PredicateSource<'db>,
-}
-
-/// What `Self` denotes in bounds written at `scope`: the nearest enclosing
-/// trait's `Self` parameter, if any.
-///
-/// Bound lowering substitutes `Self` occurrences in trait-ref args with the
-/// bound's subject by default, which is only correct when the subject *is*
-/// `Self` (super-traits, impl headers). For bounds on other subjects inside a
-/// trait (`trait Tr<T: A<Self::Item>>`), `Self` must keep referring to the
-/// enclosing trait's `Self`.
-pub(crate) fn enclosing_trait_self_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-) -> Option<TyId<'db>> {
-    collect_generic_params(db, enclosing_trait(db, scope)?.into()).trait_self(db)
 }
 
 /// The trait instance and item a path names, among the items `item` finds
 /// in a trait by name: `I` or `Self::I` in a trait or an implementation of
 /// one (or one of its supertraits), and `X::I` for a type `X` the scope
-/// bounds by a trait with item `I`.
+/// bounds by a trait with item `I`, else the scope's own `I` when `X` is its
+/// self type, or an associated type of the enclosing trait bounded by one.
 pub(crate) fn resolve_assoc_item_path<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -591,10 +548,21 @@ pub(crate) fn resolve_assoc_item_path<'db>(
             _ => return None,
         },
     };
-    own.filter(|inst| inst.self_ty(db) == self_ty)
-        .map(|inst| PredicateListId::new(db, vec![inst]).extend_all_bounds(db))
+    // What the enclosing instance implies includes the bounds on its
+    // associated types: `Self::Base::E` is a row of `Base`'s bound.
+    let own = own.map(|inst| PredicateListId::new(db, vec![inst]).extend_all_bounds(db));
+    let bounds = Some(assumptions.extend_all_bounds(db));
+    // `I` and `Self::I` name the scope's own items first, and `X::I` those of
+    // the bounds on `X`, as an associated type's path does: in a blanket
+    // `impl Tr for F`, `F::E` is the row of a bound on `F`.
+    let lists = if path.parent(db).is_none_or(|parent| parent.is_self_ty(db)) {
+        [own, bounds]
+    } else {
+        [bounds, own]
+    };
+    lists
         .into_iter()
-        .chain([assumptions.extend_all_bounds(db)])
+        .flatten()
         .flat_map(|list| list.list(db).iter().copied())
         .filter(|inst| inst.self_ty(db) == self_ty)
         .find_map(|inst| Some((inst, item(inst.def(db), name)?)))
@@ -621,24 +589,6 @@ fn enclosing_trait_inst<'db>(
                 return impl_trait.candidate_trait_inst_result(db).ok();
             }
             ItemKind::Impl(_) => return None,
-            _ => {}
-        }
-        item = current.scope().parent_item(db);
-    }
-    None
-}
-
-/// The trait whose definition `scope` is in, outside any impl.
-pub(crate) fn enclosing_trait<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-) -> Option<crate::hir_def::Trait<'db>> {
-    let mut item = Some(scope.item());
-    while let Some(current) = item {
-        match current {
-            ItemKind::Trait(trait_) => return Some(trait_),
-            // `Self` inside impls resolves to the implementor type directly.
-            ItemKind::Impl(_) | ItemKind::ImplTrait(_) => return None,
             _ => {}
         }
         item = current.scope().parent_item(db);
@@ -676,7 +626,7 @@ fn try_resolve_type_bound<'db>(
             deferred.trait_ref,
             deferred.scope,
             assumptions,
-            enclosing_trait_self_ty(db, deferred.scope),
+            None,
         ),
         ConstBodyLowering::Deferred => {
             let lowering_cx = LoweringContext::deferred();
@@ -686,12 +636,13 @@ fn try_resolve_type_bound<'db>(
                 deferred.trait_ref,
                 deferred.scope,
                 assumptions,
-                enclosing_trait_self_ty(db, deferred.scope),
+                None,
                 &lowering_cx,
             )
         }
     }
     .ok()
+    .map(|inst| inst.with_mode(db, deferred.mode))
 }
 
 #[cfg(test)]
@@ -836,18 +787,15 @@ fn f() uses (evm: mut Evm) {}
         let evm_ty = resolve_lib_type_path(&db, func.scope(), "std::evm::Evm")
             .expect("missing std::evm::Evm");
         let effect_ref_trait = resolve_core_trait(&db, func.scope(), &["EffectRef"]).unwrap();
-        let effect_ref_mut_trait =
-            resolve_core_trait(&db, func.scope(), &["EffectRefMut"]).unwrap();
         let constraints = collect_func_effect_provider_constraints(&db, func);
 
+        // A `mut` effect's provider is bound as a read one's is.
         assert_ne!(provider_ty, evm_ty);
-        assert!(constraints.iter().any(|inst| {
-            inst.def(&db) == effect_ref_trait && inst.args(&db).as_slice() == [provider_ty, evm_ty]
-        }));
-        assert!(constraints.iter().any(|inst| {
-            inst.def(&db) == effect_ref_mut_trait
+        assert!(matches!(
+            constraints.as_slice(),
+            [inst] if inst.def(&db) == effect_ref_trait
                 && inst.args(&db).as_slice() == [provider_ty, evm_ty]
-        }));
+        ));
     }
 
     #[test]
@@ -908,7 +856,7 @@ where
         let slot_provider_idx = provider_map[1].expect("missing provider slot for slot");
         assert!(cap_provider_idx < slot_provider_idx);
 
-        let effect_bindings = func.effect_requirements(&db);
+        let effect_bindings = func.effect_requirements(&db, None);
         let slot_binding = effect_bindings
             .iter()
             .find(|binding| binding.binding_name.data(&db) == "slot")

@@ -5,7 +5,7 @@ mod evm {
 }
 
 pub fn todo() -> ! {
-    evm::abort()
+    unsafe { evm::abort() }
 }
 
 pub enum Option<T> {
@@ -35,7 +35,7 @@ impl<T> Option<T> {
 impl Option {
     pub fn unwrap<T>(self: own Self<T>) -> T {
         match self {
-            Self::None => evm::abort()
+            Self::None => unsafe { evm::abort() }
             Self::Some(t) => t
         }
     }

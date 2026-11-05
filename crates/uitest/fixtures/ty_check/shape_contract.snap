@@ -1,0 +1,70 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/shape_contract.fe
+---
+error[6-0008]: method `peek` has incompatible return type
+   ┌─ shape_contract.fe:54:8
+   │
+43 │     fn peek(self) -> Self::Step<ref>
+   │        ---- trait requires this return type
+   ·
+54 │     fn peek(self) -> own u256 {
+   │        ^^^^ expected `Self::Step<ref>`, found `u256`
+
+error[6-0008]: method `view` has incompatible return type
+   ┌─ shape_contract.fe:93:8
+   │
+81 │     fn view(self) -> Self::Part<ref>
+   │        ---- trait requires this return type
+   ·
+93 │     fn view(self) -> own u256 {
+   │        ^^^^ expected `Self::Part<ref>`, found `u256`
+
+error[6-0039]: `Part` grants `mut` where it is named at `ref`
+   ┌─ shape_contract.fe:11:18
+   │
+11 │     shape Part = mut u256
+   │                  ^^^^^^^^ a shape's accesses are at most its mode: write `mut?` for an access at it
+
+error[6-0039]: `Part` grants `mut` where it is named at `ref`
+   ┌─ shape_contract.fe:17:18
+   │
+17 │     shape Part = (own usize, D::Part<mut>)
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^ a shape's accesses are at most its mode: write `mut?` for an access at it
+
+error[6-0039]: `Part` grants `mut` where it is named at `ref`
+   ┌─ shape_contract.fe:24:18
+   │
+24 │     shape Part = A
+   │                  ^ `A` is a shape parameter, whose accesses may be `mut` at any mode
+
+error[6-0039]: `Step` grants `mut` where it is named at `ref`
+   ┌─ shape_contract.fe:61:18
+   │
+61 │     shape Step = mut u256
+   │                  ^^^^^^^^ a shape's accesses are at most its mode: write `mut?` for an access at it
+
+error[6-0040]: `Step` has no access
+   ┌─ shape_contract.fe:52:18
+   │
+52 │     shape Step = own u256
+   │                  ^^^^^^^^ `Driver` returns it as a projection, so it needs a `ref`, `mut?` or `mut` part
+
+error[6-0040]: `Step` has no access
+   ┌─ shape_contract.fe:71:18
+   │
+71 │     shape Step = H::Part
+   │                  ^^^^^^^ `Driver` returns it as a projection, so it needs a `ref`, `mut?` or `mut` part
+
+error[6-0040]: `Part` has no access
+   ┌─ shape_contract.fe:92:6
+   │
+92 │ impl Viewed for Cell {
+   │      ^^^^^^ `Viewed` returns it as a projection, so it needs a `ref`, `mut?` or `mut` part
+
+error[6-0040]: `Part` has no access
+    ┌─ shape_contract.fe:136:16
+    │
+136 │ impl<D: Holds> Viewed for Any<D> {
+    │                ^^^^^^ `Viewed` returns it as a projection, so it needs a `ref`, `mut?` or `mut` part

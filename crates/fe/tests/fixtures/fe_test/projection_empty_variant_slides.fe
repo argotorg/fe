@@ -1,0 +1,174 @@
+// A sum shape's empty variant grants nothing, so a projection that yields it
+// runs no slide, whether the `yield` spells it or forwards another
+// projection's: `yield e` of a sum shape exits on the empty variant like
+// `e?`. `log` counts the slides that ran: 1 for `entry`'s, 10 for an outer
+// one.
+struct Cell {
+    v: u256,
+    log: u256,
+}
+
+impl Cell {
+    fn state(self) -> u256 {
+        self.v * 1000 + self.log
+    }
+
+    fn entry(mut self, _ present: bool) -> Option<mut u256> {
+        if !present {
+            return Option::None
+        }
+        var tmp = self.v
+        yield Option::Some(mut tmp)
+        self.v = tmp
+        self.log += 1
+    }
+
+    fn forwarded(mut self, _ present: bool) -> Option<mut u256> {
+        yield self.entry(present)
+        self.log += 10
+    }
+
+    fn tried(mut self, _ present: bool) -> Option<mut u256> {
+        let x = mut self.entry(present)?
+        yield Option::Some(mut x)
+        self.log += 10
+    }
+
+    fn literal(mut self, _ present: bool) -> Option<mut u256> {
+        if present {
+            yield Option::Some(mut self.v)
+        } else {
+            yield Option::None
+        }
+        self.log += 10
+    }
+
+    // The ramp's own sessions still finish on the empty path: the inner
+    // write-back lands, the outer slide does not run.
+    fn chosen(mut self, _ present: bool) -> Option<mut u256> {
+        let x = mut self.entry(true)?
+        x += 5
+        yield if present { Option::Some(mut x) } else { Option::None }
+        self.log += 10
+    }
+
+    fn checked(mut self, _ ok: bool) -> Result<u256, mut u256> {
+        if !ok {
+            return Result::Err(7)
+        }
+        var tmp = self.v
+        yield Result::Ok(mut tmp)
+        self.v = tmp
+        self.log += 1
+    }
+
+    fn checked_forwarded(mut self, _ ok: bool) -> Result<u256, mut u256> {
+        yield self.checked(ok)
+        self.log += 10
+    }
+
+    fn checked_literal(mut self, _ ok: bool) -> Result<u256, mut u256> {
+        yield if ok { Result::Ok(mut self.v) } else { Result::Err(9) }
+        self.log += 10
+    }
+}
+
+#[test]
+fn forwarded_empty_variant_runs_no_slide() {
+    var none = Cell { v: 1, log: 0 }
+    if let Option::Some(mut x) = none.forwarded(false) {
+        x += 2
+    }
+    assert!(none.state() == 1000)
+
+    var some = Cell { v: 1, log: 0 }
+    if let Option::Some(mut x) = some.forwarded(true) {
+        x += 2
+    }
+    assert!(some.state() == 3011)
+}
+
+#[test]
+fn tried_empty_variant_runs_no_slide() {
+    var none = Cell { v: 1, log: 0 }
+    if let Option::Some(mut x) = none.tried(false) {
+        x += 2
+    }
+    assert!(none.state() == 1000)
+
+    var some = Cell { v: 1, log: 0 }
+    if let Option::Some(mut x) = some.tried(true) {
+        x += 2
+    }
+    assert!(some.state() == 3011)
+}
+
+#[test]
+fn literal_empty_variant_runs_no_slide() {
+    var none = Cell { v: 1, log: 0 }
+    if let Option::Some(mut x) = none.literal(false) {
+        x += 2
+    }
+    assert!(none.state() == 1000)
+
+    var some = Cell { v: 1, log: 0 }
+    if let Option::Some(mut x) = some.literal(true) {
+        x += 2
+    }
+    assert!(some.state() == 3010)
+}
+
+#[test]
+fn empty_variant_finishes_the_ramp_sessions() {
+    var none = Cell { v: 1, log: 0 }
+    if let Option::Some(mut x) = none.chosen(false) {
+        x += 2
+    }
+    assert!(none.state() == 6001)
+
+    var some = Cell { v: 1, log: 0 }
+    if let Option::Some(mut x) = some.chosen(true) {
+        x += 2
+    }
+    assert!(some.state() == 8011)
+}
+
+#[test]
+fn forwarded_err_runs_no_slide() {
+    var err = Cell { v: 1, log: 0 }
+    match err.checked_forwarded(false) {
+        Result::Ok(mut x) => {
+            x += 2
+        }
+        Result::Err(e) => {
+            assert!(e == 7)
+        }
+    }
+    assert!(err.state() == 1000)
+
+    var ok = Cell { v: 1, log: 0 }
+    if let Result::Ok(mut x) = ok.checked_forwarded(true) {
+        x += 2
+    }
+    assert!(ok.state() == 3011)
+}
+
+#[test]
+fn literal_err_runs_no_slide() {
+    var err = Cell { v: 1, log: 0 }
+    match err.checked_literal(false) {
+        Result::Ok(mut x) => {
+            x += 2
+        }
+        Result::Err(e) => {
+            assert!(e == 9)
+        }
+    }
+    assert!(err.state() == 1000)
+
+    var ok = Cell { v: 1, log: 0 }
+    if let Result::Ok(mut x) = ok.checked_literal(true) {
+        x += 2
+    }
+    assert!(ok.state() == 3010)
+}

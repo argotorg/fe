@@ -8,3 +8,9 @@ error[8-0075]: keyed effect binding `Logger` requires `Silent` to implement `Log
    │
 22 │     with (Logger = Silent {}) {
    │                    ^^^^^^^^^ `Silent` does not implement `Logger` for effect `Logger`
+
+error[8-0075]: keyed effect binding `Reads` requires `Other` to implement `Reads<Other>`
+   ┌─ effect_trait_unsatisfied.fe:48:19
+   │
+48 │     with (Reads = Other {}) {
+   │                   ^^^^^^^^ `Other` does not implement `Reads<Other>` for effect `Reads`

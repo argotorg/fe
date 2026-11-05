@@ -5,7 +5,6 @@ struct WordView { base: u256 }
 impl Copy for WordView {}
 
 impl Index<u256> for WordView {
-    space S = memory
     type Output = u256
 
     fn index(self, _ offset: u256) -> ref u256 {

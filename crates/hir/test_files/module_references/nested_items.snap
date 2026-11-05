@@ -1,0 +1,30 @@
+---
+source: crates/hir/tests/frontend/module_references.rs
+expression: output
+input_file: test_files/module_references/nested_items.fe
+---
+8: `Width` -> nested_items::Width
+8: `LEN` -> nested_items::LEN
+11: `FLAG` -> nested_items::FLAG
+17: `Foo` -> nested_items::Foo
+17: `Bar` -> nested_items::Bar
+18: `self` -> nested_items::Tr
+18: `Bar` -> nested_items::Bar
+19: `Bar` -> nested_items::Bar
+23: `Foo` -> nested_items::Foo
+24: `self` -> nested_items::Foo
+24: `Bar` -> nested_items::Bar
+24: `Foo` -> nested_items::Foo
+25: `Foo` -> nested_items::Foo
+29: `Tr` -> nested_items::Tr
+29: `Foo` -> nested_items::Foo
+30: `Foo` -> nested_items::Foo
+30: `Bar` -> nested_items::Bar
+31: `Bar` -> nested_items::Bar
+36: `Foo` -> nested_items::Foo
+36: `Bar` -> nested_items::Bar
+37: `Bar` -> nested_items::Bar
+39: `Width` -> nested_items::Width
+39: `COPY` -> nested_items::COPY
+40: `LEN` -> nested_items::LEN
+41: `LEN` -> nested_items::LEN

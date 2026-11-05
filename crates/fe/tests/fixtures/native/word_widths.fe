@@ -1,0 +1,20 @@
+use core::{MemBuffer, MemVec, size_of}
+use std::env::Args
+
+// Natively, `usize`, `isize` and raw pointers are 64 bits. With an argument,
+// checked `usize` arithmetic overflows at 2**64.
+pub fn main() -> i32 uses (args: Args) {
+    let one = if args.count() == 1 { args.count() } else { args.count() - 1 }
+    core::assert(size_of<usize>() == 8 && size_of<isize>() == 8 && size_of<*u8>() == 8)
+    core::assert(size_of<MemVec<u8>>() == 24 && size_of<MemBuffer>() == 24)
+    core::assert(usize::max() as u256 == 0xffffffffffffffff)
+    core::assert(isize::min() as i256 == -0x8000000000000000)
+    core::assert(usize::max().wrapping_add(one) == 0)
+    // A failed `unwrap` reverts with a `u256` length, an EVM word.
+    let parsed: Result<u64, usize> = Result::Ok(one)
+    core::assert(parsed.unwrap() == 1)
+    if args.count() > 1 {
+        let _ = usize::max() + one
+    }
+    0
+}

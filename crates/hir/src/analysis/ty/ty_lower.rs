@@ -4,7 +4,7 @@ use crate::core::hir_def::{
     TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
     scope_graph::ScopeId,
 };
-use salsa::Update;
+use salsa::SalsaValue;
 use smallvec::smallvec;
 
 use super::{
@@ -16,6 +16,7 @@ use super::{
     generic_defaults::DefaultApplication,
     normalize::normalize_ty,
     provider::AddressSpace,
+    shape::lower_shape_list,
     trait_def::TraitInstId,
     trait_resolution::{
         PredicateListId,
@@ -36,7 +37,7 @@ use crate::analysis::{
 };
 
 /// Lowers the given HirTy to `TyId`.
-#[salsa::tracked(cycle_fn=lower_hir_ty_cycle_recover, cycle_initial=lower_hir_ty_cycle_initial)]
+#[salsa::tracked(returns(copy), cycle_initial=lower_hir_ty_cycle_initial)]
 pub fn lower_hir_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
@@ -61,7 +62,7 @@ fn lower_hir_ty_impl<'db>(
         HirTyKind::Ptr(pointee) => TyId::ptr_to(db, lower_child(*pointee, 0)),
 
         HirTyKind::Mode(TypeMode::Own, inner) => lower_child(*inner, 0),
-        HirTyKind::Mode(TypeMode::Mut | TypeMode::Ref, _) => {
+        HirTyKind::Mode(TypeMode::Mut | TypeMode::MaybeMut | TypeMode::Ref, _) => {
             TyId::invalid(db, InvalidCause::ModeNotType)
         }
 
@@ -80,7 +81,7 @@ fn lower_hir_ty_impl<'db>(
             let tuple = TyId::tuple(db, len);
             elems.iter().enumerate().fold(tuple, |acc, (idx, &elem)| {
                 let elem_ty = lower_child(elem, idx);
-                if !elem_ty.has_star_kind(db) {
+                if !elem_ty.is_star_kind(db) {
                     return TyId::invalid(db, InvalidCause::NotFullyApplied);
                 }
 
@@ -163,16 +164,6 @@ pub(crate) fn lower_hir_ty_in_mode<'db>(
     }
 }
 
-pub(crate) fn lower_opt_hir_ty_with_minter<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: Partial<HirTyId<'db>>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    lowering_cx: &LoweringContext<'db>,
-) -> TyId<'db> {
-    lower_opt_hir_ty_impl(db, ty, scope, assumptions, lowering_cx)
-}
-
 pub fn lower_opt_hir_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: Partial<HirTyId<'db>>,
@@ -229,10 +220,8 @@ fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> O
 
 /// Extends `assumptions` with the enclosing trait's implicit `Self: Trait`
 /// predicate, mirroring the body-checking environment. Signature-position
-/// const bodies like `Slot<{ Self::N }>` in a trait method must resolve
-/// `Self::N` to a trait const the same way the body checker later does, or
-/// the const falls back to an unevaluated body whose CTFE cannot resolve the
-/// trait const reference.
+/// paths and const bodies like `Slot<Self::N>` and `Slot<{ Self::N }>` must
+/// resolve the trait's constants using the same implicit bound.
 fn with_enclosing_trait_self_predicate<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -261,7 +250,7 @@ fn with_enclosing_trait_self_predicate<'db>(
     assumptions
 }
 
-fn lower_opt_const_body<'db>(
+pub(crate) fn lower_opt_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Partial<Body<'db>>,
     scope: ScopeId<'db>,
@@ -341,8 +330,13 @@ pub(crate) fn lower_const_body_path<'db>(
                 if let Some(self_arg) = args.first_mut() {
                     *self_arg = recv_ty;
                 }
-                let inst =
-                    TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
+                let inst = TraitInstId::new(
+                    db,
+                    inst.def(db),
+                    args,
+                    inst.assoc_type_bindings(db).clone(),
+                    inst.mode(db),
+                );
 
                 if let Some(expected_ty) = inst
                     .def(db)
@@ -406,6 +400,7 @@ pub(crate) fn lower_type_position_path<'db>(
     position: TypePosition,
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
+    let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     let res = resolve_type_position_path_with_minter(
         db,
         path,
@@ -429,8 +424,13 @@ pub(crate) fn lower_type_position_path<'db>(
             if let Some(self_arg) = args.first_mut() {
                 *self_arg = recv_ty;
             }
-            let inst =
-                TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
+            let inst = TraitInstId::new(
+                db,
+                inst.def(db),
+                args,
+                inst.assoc_type_bindings(db).clone(),
+                inst.mode(db),
+            );
 
             if let Some(expected_ty) = inst
                 .def(db)
@@ -492,6 +492,7 @@ pub(crate) fn lower_type_position_path<'db>(
 
 fn lower_hir_ty_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _ty: HirTyId<'db>,
     _scope: ScopeId<'db>,
     _assumptions: PredicateListId<'db>,
@@ -504,20 +505,6 @@ fn lower_hir_ty_cycle_initial<'db>(
     TyId::invalid(db, InvalidCause::TypeLoweringCycle)
 }
 
-fn lower_hir_ty_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TyId<'db>,
-    _count: u32,
-    _ty: HirTyId<'db>,
-    _scope: ScopeId<'db>,
-    _assumptions: PredicateListId<'db>,
-) -> salsa::CycleRecoveryAction<TyId<'db>> {
-    // Keep iterating until we reach a fixpoint; the initial value is
-    // already marked invalid, so subsequent iterations will converge
-    // quickly without panicking.
-    salsa::CycleRecoveryAction::Iterate
-}
-
 fn lower_const_ty_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -528,15 +515,22 @@ fn lower_const_ty_ty<'db>(
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     };
 
-    if !path
-        .to_opt()
-        .is_none_or(|p| p.generic_args(db).is_empty(db))
-    {
+    let Some(path) = path.to_opt() else {
+        return TyId::invalid(db, InvalidCause::ParseError);
+    };
+    if !path.generic_args(db).is_empty(db) {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     }
     let ty = normalize_ty(
         db,
-        lower_path(db, scope, *path, assumptions),
+        lower_path_impl(
+            db,
+            scope,
+            Partial::Present(path),
+            assumptions,
+            TypePosition::Type,
+            &LoweringContext::new(),
+        ),
         scope,
         assumptions,
     );
@@ -550,26 +544,6 @@ fn lower_const_ty_ty<'db>(
     } else {
         TyId::invalid(db, InvalidCause::InvalidConstParamTy)
     }
-}
-
-fn lower_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    path: Partial<PathId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    if !path.is_present() {
-        return TyId::invalid(db, InvalidCause::ParseError);
-    }
-    let lowering_cx = LoweringContext::new();
-    lower_path_impl(
-        db,
-        scope,
-        path,
-        assumptions,
-        TypePosition::Type,
-        &lowering_cx,
-    )
 }
 
 pub(crate) fn generic_param_owner_assumptions<'db>(
@@ -588,10 +562,7 @@ pub(crate) fn generic_param_owner_assumptions<'db>(
 }
 
 /// Collects the generic parameters of the given generic parameter owner.
-#[salsa::tracked(
-    cycle_initial=collect_generic_params_cycle_initial,
-    cycle_fn=collect_generic_params_cycle_recover
-)]
+#[salsa::tracked(returns(copy), cycle_initial=collect_generic_params_cycle_initial)]
 pub(crate) fn collect_generic_params<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -601,7 +572,7 @@ pub(crate) fn collect_generic_params<'db>(
 
 /// Stable declaration parameters for shape discovery. This query must never
 /// depend on the hidden slots whose number is being discovered.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn collect_source_generic_params<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -611,6 +582,7 @@ pub(crate) fn collect_source_generic_params<'db>(
 
 fn collect_generic_params_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     owner: GenericParamOwner<'db>,
 ) -> GenericParamTypeSet<'db> {
     // Explicit parameters are available before signature-derived parameters.
@@ -624,18 +596,9 @@ fn collect_generic_params_cycle_initial<'db>(
     }
 }
 
-fn collect_generic_params_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &GenericParamTypeSet<'db>,
-    _count: u32,
-    _owner: GenericParamOwner<'db>,
-) -> salsa::CycleRecoveryAction<GenericParamTypeSet<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 /// The parameters a function adds after its inherited ones: one provider per
 /// keyed effect, in effect order.
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(crate) struct FuncImplicitParamPlan<'db> {
     pub(crate) implicit_precursors: Vec<TyParamPrecursor<'db>>,
     pub(crate) provider_param_index_by_effect: Vec<Option<usize>>,
@@ -685,7 +648,7 @@ pub(crate) fn func_implicit_param_plan<'db>(
 }
 
 /// Lowers the given type alias to [`TyAlias`].
-#[salsa::tracked(return_ref, cycle_fn=lower_type_alias_cycle_recover, cycle_initial=lower_type_alias_cycle_initial)]
+#[salsa::tracked(cycle_initial=lower_type_alias_cycle_initial)]
 pub(crate) fn lower_type_alias<'db>(
     db: &'db dyn HirAnalysisDb,
     alias: HirTypeAlias<'db>,
@@ -693,7 +656,7 @@ pub(crate) fn lower_type_alias<'db>(
     crate::core::semantic::lower_type_alias_body(db, alias)
 }
 
-#[salsa::tracked(return_ref, cycle_fn=lower_type_alias_cycle_recover, cycle_initial=lower_type_alias_cycle_initial)]
+#[salsa::tracked(cycle_initial=lower_type_alias_cycle_initial)]
 pub(crate) fn lower_type_alias_deferred<'db>(
     db: &'db dyn HirAnalysisDb,
     alias: HirTypeAlias<'db>,
@@ -773,6 +736,7 @@ fn lower_type_alias_from_hir_in_mode<'db>(
 
 fn lower_type_alias_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     alias: HirTypeAlias<'db>,
 ) -> TyAlias<'db> {
     TyAlias {
@@ -785,17 +749,8 @@ fn lower_type_alias_cycle_initial<'db>(
     }
 }
 
-fn lower_type_alias_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TyAlias<'db>,
-    _count: u32,
-    _alias: HirTypeAlias<'db>,
-) -> salsa::CycleRecoveryAction<TyAlias<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 #[doc(hidden)]
-#[salsa::tracked(return_ref, cycle_initial=evaluate_params_precursor_cycle_initial, cycle_fn=evaluate_params_precursor_cycle_recover)]
+#[salsa::tracked(cycle_initial=evaluate_params_precursor_cycle_initial)]
 pub(crate) fn evaluate_params_precursor<'db>(
     db: &'db dyn HirAnalysisDb,
     set: GenericParamTypeSet<'db>,
@@ -809,6 +764,7 @@ pub(crate) fn evaluate_params_precursor<'db>(
 
 fn evaluate_params_precursor_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     set: GenericParamTypeSet<'db>,
 ) -> Vec<TyId<'db>> {
     set.params_precursor(db)
@@ -817,22 +773,13 @@ fn evaluate_params_precursor_cycle_initial<'db>(
         .collect()
 }
 
-fn evaluate_params_precursor_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Vec<TyId<'db>>,
-    _count: u32,
-    _set: GenericParamTypeSet<'db>,
-) -> salsa::CycleRecoveryAction<Vec<TyId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 /// Represents a lowered type alias. `TyAlias` itself isn't a type, but
 /// can be instantiated to a `TyId` by substituting its type
 /// parameters with actual types.
 ///
 /// NOTE: `TyAlias` can't become an alias to partial applied types, i.e., the
 /// right hand side of the alias declaration must be a fully applied type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TyAlias<'db> {
     pub alias: HirTypeAlias<'db>,
     pub alias_to: Binder<'db, TyId<'db>>,
@@ -894,8 +841,8 @@ pub(crate) fn lower_generic_arg_list<'db>(
             // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
             // even when `String` expects a const generic arg, so a path is lowered as the
             // constant it names, if it names one.
-            GenericArg::Type(ty_arg) => match ty_arg.ty.to_opt().map(|ty| ty.data(db)) {
-                Some(HirTyKind::Path(path)) => lower_path_impl(
+            GenericArg::Type(ty_arg) => match ty_arg.ty.to_opt().map(|ty| (ty, ty.data(db))) {
+                Some((_, HirTyKind::Path(path))) => lower_path_impl(
                     db,
                     scope,
                     *path,
@@ -903,8 +850,16 @@ pub(crate) fn lower_generic_arg_list<'db>(
                     TypePosition::GenericArg,
                     lowering_cx,
                 ),
+                // A tuple whose parts carry modes or name a shape is a
+                // parameter list, a shape: `Fn<(own A, B)>`.
+                Some((ty, HirTyKind::Tuple(_)))
+                    if let Some(list) = lower_shape_list(db, ty, scope, assumptions) =>
+                {
+                    list
+                }
                 _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, lowering_cx),
             },
+            GenericArg::Mode(_) => TyId::invalid(db, InvalidCause::ModeArgNotShape),
             GenericArg::Const(const_arg) => TyId::const_ty(
                 db,
                 lower_opt_const_body(db, const_arg.value, scope, assumptions, lowering_cx),
@@ -921,26 +876,28 @@ pub(crate) fn lower_generic_arg_list<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct GenericParamTypeSet<'db> {
-    #[return_ref]
     pub(crate) params_precursor: Vec<TyParamPrecursor<'db>>,
+    #[returns(copy)]
     pub(crate) scope: ScopeId<'db>,
+    #[returns(copy)]
     offset_to_explicit: usize,
+    #[returns(copy)]
     pub(crate) basis: ParamBasis,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ParamBasis {
     Source,
     Full,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SourceParamIndex(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct LoweredSlot(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ParamKey<'db> {
     TraitSelf(crate::hir_def::Trait<'db>),
     Source {
@@ -958,9 +915,10 @@ pub enum ParamKey<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ParamSchemaId<'db> {
+    #[returns(copy)]
     pub owner: GenericParamOwner<'db>,
+    #[returns(copy)]
     pub basis: ParamBasis,
-    #[return_ref]
     pub keys: Vec<ParamKey<'db>>,
 }
 
@@ -1081,6 +1039,19 @@ impl<'db> ParamSchemaId<'db> {
             )
         })
     }
+
+    /// The source parameter whose allowed default dependencies are the
+    /// leading `len` slots; the inverse of `allowed_default_dependencies`.
+    pub(crate) fn default_dependency_index(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        len: usize,
+    ) -> Option<SourceParamIndex> {
+        let set = self.param_set(db);
+        len.checked_sub(set.offset_to_explicit_params_position(db))
+            .filter(|&index| index < set.explicit_param_count(db))
+            .map(SourceParamIndex)
+    }
 }
 
 /// The leading `len` slots of one parameter schema: the full schema, a
@@ -1088,7 +1059,9 @@ impl<'db> ParamSchemaId<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ParamDomainId<'db> {
+    #[returns(copy)]
     pub schema: ParamSchemaId<'db>,
+    #[returns(copy)]
     pub len: usize,
 }
 
@@ -1201,7 +1174,7 @@ impl<'db> PartialSubst<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct CompleteSubst<'db> {
     domain: ParamDomainId<'db>,
     values: Vec<TyId<'db>>,
@@ -1296,7 +1269,7 @@ impl<'db> CompleteSubst<'db> {
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn param_schema<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -1527,7 +1500,7 @@ impl<'db> GenericParamCollector<'db> {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TyParamPrecursor<'db> {
     name: Partial<IdentId<'db>>,
     kind: Option<Kind>,
@@ -1536,7 +1509,7 @@ pub struct TyParamPrecursor<'db> {
     default_hir_const: Option<Body<'db>>, // Only used for const params
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum Variant<'db> {
     TraitSelf,
     Normal,
@@ -1668,6 +1641,7 @@ impl<'db> TyParamPrecursor<'db> {
 pub(super) fn lower_kind(kind: &HirKindBound) -> Kind {
     match kind {
         HirKindBound::Mono => Kind::Star,
+        HirKindBound::Shape => Kind::Shape,
         HirKindBound::Abs(lhs, rhs) => match (lhs, rhs) {
             (Partial::Present(lhs), Partial::Present(rhs)) => {
                 Kind::Abs(Box::new((lower_kind(lhs), lower_kind(rhs))))
@@ -1685,7 +1659,7 @@ pub(super) fn lower_kind(kind: &HirKindBound) -> Kind {
 
 /// Helper for extracting a lowered kind from a slice of HIR `TypeBound`s.
 /// Returns the first kind bound if present.
-pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kind> {
+pub(crate) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kind> {
     for bound in bounds {
         if let TypeBound::Kind(Partial::Present(k)) = bound {
             return Some(lower_kind(k));

@@ -12,27 +12,27 @@ fn fill<T: Copy>(_ s: mut MemSlice<T>, _ v: T) {
 
 // S-72. Accepted: the marked halves of a split write.
 fn halves(_ buf: mut MemBuffer) {
-    let s = buf.span_mut()
-    let (mut a, mut b) = s.split_at_mut(1)
+    let s = mut buf.span()
+    let (mut a, mut b) = s.split_at(1)
     a[0] = 1
     b[0] = 2
 }
 
 // S-72. Rejected: plain halves are read accesses.
 fn plain_halves(_ buf: mut MemBuffer) {
-    let s = buf.span_mut()
-    let (a, b) = s.split_at_mut(1)
+    let s = mut buf.span()
+    let (a, b) = s.split_at(1)
     a[0] = 1
     b[0] = 2
 }
 
 // S-72. Rejected: a view has no value for `var` to hold.
 fn var_span(_ buf: mut MemBuffer) {
-    var s = buf.span_mut()
+    var s = mut buf.span()
 }
 
 // S-72. Rejected: nothing here is held mutably, so the grant could write an
 // owner its caller only reads.
 fn view_mut(_ buf: MemBuffer) -> mut MemSpan {
-    unsafe { MemSpan::from_raw_parts_mut(ptr: buf.ptr(), len: buf.len()) }
+    unsafe { MemSpan::from_raw_parts(ptr: buf.ptr(), len: buf.len()) }
 }

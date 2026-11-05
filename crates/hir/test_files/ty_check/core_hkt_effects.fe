@@ -3,14 +3,14 @@ use core::result::Result::{self, Ok, Err}
 use core::functional::{Fn, Functor, Applicative, Monad}
 
 struct AddOne {}
-impl Fn<i32, i32> for AddOne {
+impl Fn(own i32) -> i32 for AddOne {
     fn call(self, _ value: own i32) -> i32 {
         value + 1
     }
 }
 
 struct ToPositive {}
-impl Fn<i32, Option<i32>> for ToPositive {
+impl Fn(own i32) -> Option<i32> for ToPositive {
     fn call(self, _ value: own i32) -> Option<i32> {
         if value > 0 {
             Some(value)
@@ -21,7 +21,7 @@ impl Fn<i32, Option<i32>> for ToPositive {
 }
 
 struct ToEvenResult {}
-impl Fn<i32, Result<(), i32>> for ToEvenResult {
+impl Fn(own i32) -> Result<(), i32> for ToEvenResult {
     fn call(self, _ value: own i32) -> Result<(), i32> {
         if value % 2 == 0 {
             Ok(value)
@@ -72,9 +72,9 @@ pub fn log_and_chain(x: i32) -> Result<(), Option<i32>>
     }
 }
 
-pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: own L, _ func: F) -> R uses F::E {
+pub fn with_logger<R, L: Logger, F: Fn() -> R>(logger: own L, _ func: F) -> R uses F::E {
     with (Logger = logger) {
-        func(())
+        func()
     }
 }
 
@@ -85,8 +85,8 @@ pub fn log_once()
 }
 
 struct RunWithLogger {}
-impl Fn<(), Result<(), Option<i32>>> for RunWithLogger {
-    fn call(self, _ unit: own ()) -> Result<(), Option<i32>> {
+impl Fn() -> Result<(), Option<i32>> for RunWithLogger {
+    fn call(self) -> Result<(), Option<i32>> {
         with (Logger = ConsoleLogger {}) {
             log_once()
             log_and_chain(x: 10)

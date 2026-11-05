@@ -1,6 +1,6 @@
 [package]
 name = "fe-hir"
-version = "26.4.0"
+version = "26.5.0"
 edition.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/argotorg/fe"
@@ -24,6 +24,8 @@ matchcov.workspace = true
 num-bigint.workspace = true
 num-traits = "0.2.19"
 paste.workspace = true
+petgraph.workspace = true
+rayon = "1"
 rustc-hash.workspace = true
 ruint.workspace = true
 salsa.workspace = true
@@ -49,5 +51,4 @@ testutils = []
 ascii_tree = "0.1"
 camino.workspace = true
 dir-test.workspace = true
-driver.workspace = true
 test-utils.workspace = true

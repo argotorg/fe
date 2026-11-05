@@ -1,5 +1,5 @@
 use core::ptr
-use std::evm::{RawStorage, StorPtr, TStorPtr, storage_at_mut}
+use std::evm::{RawStorage, StorPtr, TStorPtr, storage_at}
 
 fn bump() uses (value: mut u256) {
     value += 1
@@ -71,8 +71,8 @@ fn closure_captured_pointer() uses (storage: mut RawStorage) {
     f()
 }
 
-// Accepted: `storage_at_mut` puts `storage: mut RawStorage` in the closure's
-// row, which its caller provides.
+// Accepted: a write through `storage_at` puts `storage: mut RawStorage` in
+// the closure's row, which its caller provides.
 fn closure_storage_at() uses (storage: mut RawStorage) {
-    apply(|| unsafe { storage_at_mut<u256>(0) = 9 })
+    apply(|| unsafe { storage_at<u256>(0) = 9 })
 }

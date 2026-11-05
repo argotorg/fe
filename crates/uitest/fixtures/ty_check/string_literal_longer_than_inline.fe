@@ -1,0 +1,12 @@
+// A string literal longer than the 31 bytes a `String<N>` holds is a
+// `DynString` unless its context fixes its type; a `String<N>` cannot hold it.
+fn takes_fixed(_ text: String<31>) {}
+
+fn returns_fixed() -> String<64> {
+    "this literal is definitely longer than thirty-one bytes"
+}
+
+fn callers() {
+    takes_fixed("this literal is definitely longer than thirty-one bytes")
+    let annotated: String<40> = "this literal is definitely longer than thirty-one bytes"
+}

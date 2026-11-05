@@ -6,9 +6,9 @@
 use cranelift_entity::EntityRef;
 
 use super::{
-    NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NOperand, NPlace, NPlaceBase,
-    NStatementKind, NStructuralPath, NSuccessor, NTerminatorKind, NValueId, NormalizedBody,
-    ReadMode,
+    NDataPath, NDataProjection, NDropTarget, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
+    NPlaceBase, NStatementKind, NStructuralPath, NSuccessor, NTerminatorKind, NValueId,
+    NormalizedBody, ReadMode,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -62,7 +62,9 @@ impl<'db> NStatementKind<'db> {
     ) -> Vec<OperationAccess<'a, 'db>> {
         let mut accesses = Vec::new();
         match self {
-            Self::End { .. } => {}
+            // The access checker gives a drop its own meaning: it consumes
+            // whatever is initialized, which no operand access describes.
+            Self::End { .. } | Self::Drop { .. } => {}
             Self::Store { destination, value } => {
                 accesses.push(OperationAccess::operand(db, body, *value));
                 accesses.push(OperationAccess {
@@ -146,20 +148,18 @@ impl<'db> NStatementKind<'db> {
         // Address operands never consume the containing value. Their availability
         // is required even for stores that do not require available contents.
         let mut address_values = Vec::new();
+        if let Self::Drop {
+            target: NDropTarget::Place(place),
+        } = self
+        {
+            address_values.extend(place_address_values(place));
+        }
         for access in &accesses {
-            let path = match access.target {
-                AccessTarget::Place(place) => {
-                    if let NPlaceBase::CapabilityTarget { carrier: value }
-                    | NPlaceBase::Deref { pointer: value } = place.base
-                    {
-                        address_values.push(value);
-                    }
-                    Some(&place.path)
+            match access.target {
+                AccessTarget::Place(place) => address_values.extend(place_address_values(place)),
+                AccessTarget::Value { path, .. } => {
+                    address_values.extend(path.into_iter().flat_map(|path| path_indices(&path.0)));
                 }
-                AccessTarget::Value { path, .. } => path.map(|path| &path.0),
-            };
-            if let Some(path) = path {
-                address_values.extend(path_indices(path));
             }
         }
         accesses.extend(address_values.into_iter().map(|value| OperationAccess {
@@ -175,6 +175,18 @@ impl<'db> NStatementKind<'db> {
         }));
         accesses
     }
+}
+
+/// The values computing a place's address: the carrier or pointer it is
+/// reached through, and its dynamic indices.
+fn place_address_values<'a>(place: &'a NPlace<'_>) -> impl Iterator<Item = NValueId> + 'a {
+    let base = match place.base {
+        NPlaceBase::CapabilityTarget { carrier: value } | NPlaceBase::Deref { pointer: value } => {
+            Some(value)
+        }
+        NPlaceBase::Root(_) => None,
+    };
+    base.into_iter().chain(path_indices(&place.path))
 }
 
 pub fn path_indices(path: &NDataPath) -> impl Iterator<Item = NValueId> + '_ {

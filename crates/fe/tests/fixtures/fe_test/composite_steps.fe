@@ -1,0 +1,48 @@
+// A driver's step may be made of its inner driver's steps alone. This one
+// reads each element twice, so it grants only `ref`.
+use core::iter::{Collection, Driver, Identity}
+
+pub struct Twice<D> {
+    inner: D,
+}
+
+impl<D: Copy> Copy for Twice<D> {}
+
+impl<D: Driver> Driver for Twice<D> {
+    uses E = D::E
+    type Base = D::Base
+    type State = D::State
+    shape Step = (D::Step, D::Step)
+
+    fn start(self, _ base: D::Base) -> D::State uses (D::Base::E, E) {
+        self.inner.start(base)
+    }
+
+    fn has(self, _ base: D::Base, _ s: D::State) -> bool uses (D::Base::E, E) {
+        self.inner.has(base, s)
+    }
+
+    fn next(self, _ base: D::Base, _ s: D::State) -> D::State uses (D::Base::E, E) {
+        self.inner.next(base, s)
+    }
+
+    fn at(self, _ base: D::Base, _ s: D::State) -> (D::Step<ref>, D::Step<ref>) uses (D::Base::E, E) {
+        (self.inner.at(base, s), self.inner.at(base, s))
+    }
+}
+
+#[test]
+fn steps_of_steps() {
+    let xs: [u256; 3] = [1, 2, 3]
+    let d = Twice { inner: Identity<[u256; 3]> {} }
+    var sum = 0
+    for (x, y) in xs.by(d) {
+        sum += x * y
+    }
+    assert(sum == 14)
+    var tagged = 0
+    for ((i, x), (j, y)) in xs.by(Twice { inner: Identity<[u256; 3]> {}.enumerate() }) {
+        tagged += (i + j) as u256 * (x + y)
+    }
+    assert(tagged == 32)
+}

@@ -6,8 +6,19 @@
 use std::fmt;
 
 use common::ingot::IngotKind;
+use ruint::aliases::U256;
 
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::semantic::{
+    EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const,
+    eval_body_owner_const_with_args, sem_const_ty,
+};
+use crate::analysis::ty::corelib::{concrete_usize, resolve_lib_trait_path};
+use crate::analysis::ty::evidence::prove;
+use crate::analysis::ty::normalize::normalize_ty;
+use crate::analysis::ty::trait_def::{TraitInstId, assoc_const_body_template_for_trait_inst};
+use crate::analysis::ty::trait_resolution::TraitSolveCx;
+use crate::analysis::ty::ty_check::BodyOwner;
 use crate::analysis::ty::{
     adt_def::{AdtRef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand},
     const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
@@ -15,6 +26,7 @@ use crate::analysis::ty::{
 };
 use crate::analysis::ty::{trait_resolution::PredicateListId, ty_is_copy};
 use crate::core::hir_def::scope_graph::ScopeId;
+use crate::hir_def::IdentId;
 use crate::span::{DesugaredOrigin, HirOrigin};
 
 /// The Solidity ABI type of a semantic Fe type.
@@ -189,8 +201,8 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
         return Ok(elem_desc.array(&len));
     }
 
-    if let Some(elem_ty) = core_dyn_array_elem_ty(db, ty) {
-        let source_elem = core_dyn_array_elem_ty(db, source).ok_or_else(|| {
+    if let Some(elem_ty) = std_dyn_array_elem_ty(db, ty) {
+        let source_elem = std_dyn_array_elem_ty(db, source).ok_or_else(|| {
             AbiTypeError::unsupported("ABI source and canonical dynamic arrays differ")
         })?;
         let elem_desc =
@@ -243,7 +255,11 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
             }
             match adt_ref {
                 AdtRef::Struct(struct_) => {
-                    if adt_ref.as_adt(db).recursive_cycle(db).is_some() {
+                    if adt_ref
+                        .as_adt(db)
+                        .recursive_cycle_through_arguments(db)
+                        .is_some()
+                    {
                         return Err(AbiTypeError::Recursive(format!(
                             "recursive ABI type `{}`",
                             ty.pretty_print(db)
@@ -277,9 +293,13 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
                                 ty.generic_args(db),
                                 source.generic_args(db),
                             );
+                            // Tuple struct fields are named by position only
+                            // for `.0` lookups; in the ABI they are unnamed,
+                            // like tuple components.
                             let name = field
                                 .name
                                 .to_opt()
+                                .filter(|_| !struct_.is_tuple(db))
                                 .map(|ident| ident.data(db).to_string())
                                 .unwrap_or_default();
                             Ok((name, semantic_ty_to_abi_desc_with_source(db, field_ty)?))
@@ -303,10 +323,22 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
                         canonical,
                     ))
                 }
-                AdtRef::Enum(_) => Err(AbiTypeError::unsupported(format!(
-                    "unsupported ABI enum type `{}`",
-                    ty.pretty_print(db)
-                ))),
+                // An enum has no structural ABI shape; it is represented by
+                // the Solidity type its `SolCompat` impl declares, e.g. a
+                // Solidity enum as `uint8`.
+                AdtRef::Enum(enum_) => match declared_sol_compat_abi_type(db, ty, enum_.scope()) {
+                    Some(sol_type) if is_canonical_non_tuple_sol_type(&sol_type) => {
+                        Ok(AbiTypeDesc::simple(&sol_type))
+                    }
+                    Some(sol_type) => Err(AbiTypeError::unsupported(format!(
+                        "unsupported ABI enum type `{}`: its `SolCompat::SOL_TYPE` `{sol_type}` is not a non-tuple Solidity ABI type",
+                        ty.pretty_print(db)
+                    ))),
+                    None => Err(AbiTypeError::unsupported(format!(
+                        "unsupported ABI enum type `{}`: an enum needs a `std::abi::SolCompat` impl naming its Solidity type, such as `uint8`",
+                        ty.pretty_print(db)
+                    ))),
+                },
             }
         }
         TyData::Invalid(_) => Err(AbiTypeError::unsupported(format!(
@@ -351,9 +383,9 @@ fn is_std_address_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>, adt_ref: AdtRef<'_>) 
         .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std)
 }
 
-fn core_dyn_array_elem_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
+fn std_dyn_array_elem_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
     if let Some((_, inner)) = ty.as_capability(db) {
-        return core_dyn_array_elem_ty(db, inner);
+        return std_dyn_array_elem_ty(db, inner);
     }
 
     let (base, args) = ty.decompose_ty_app(db);
@@ -367,7 +399,7 @@ fn core_dyn_array_elem_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
     }
     if !base
         .ingot(db)
-        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std)
     {
         return None;
     }
@@ -414,9 +446,9 @@ pub(crate) fn is_dynamic_event_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool 
             .is_some_and(|&elem_ty| is_dynamic_event_ty(db, elem_ty));
     }
     ty.is_string(db)
-        || ["Bytes", "DynString", "DynArray"]
-            .into_iter()
-            .any(|name| is_core_adt_named(db, ty, name))
+        || is_core_bytes_ty(db, ty)
+        || is_core_dyn_string_ty(db, ty)
+        || std_dyn_array_elem_ty(db, ty).is_some()
 }
 
 /// Fixed arrays, tuples and `#[abi]` structs. Solidity hashes the encoding
@@ -457,12 +489,135 @@ pub(crate) fn non_copy_fixed_array_elem<'db>(
             .iter()
             .find_map(|&elem| non_copy_fixed_array_elem(db, scope, elem, assumptions));
     }
-    core_dyn_array_elem_ty(db, ty)
+    std_dyn_array_elem_ty(db, ty)
         .and_then(|elem| non_copy_fixed_array_elem(db, scope, elem, assumptions))
 }
 
+/// The value of `<ty as SolCompat>::SOL_TYPE` as a string, if `ty`
+/// implements `std::abi::SolCompat` and the value's `AsBytes` conversion
+/// evaluates at compile time.
+fn declared_sol_compat_abi_type<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+) -> Option<String> {
+    let solve_cx = TraitSolveCx::new(db, scope);
+    let sol_compat = resolve_lib_trait_path(db, scope, "std::abi::SolCompat")?;
+    let inst = TraitInstId::new_simple(db, sol_compat, vec![ty]);
+    let sol_type_name = IdentId::new(db, "SOL_TYPE".to_string());
+    let (body, template_ty, subst) =
+        assoc_const_body_template_for_trait_inst(db, solve_cx, inst, sol_type_name)?;
+    let expected = normalize_ty(
+        db,
+        template_ty,
+        body.scope(),
+        PredicateListId::empty_list(db),
+    );
+    let EvalOutcome::Ready(value) = eval_body_owner_const(
+        db,
+        BodyOwner::AnonConstBody { body, expected },
+        GenericSubst::complete(db, subst),
+    ) else {
+        return None;
+    };
+
+    // `SolCompat::S` is any `AsBytes` type, so read the bytes the way the
+    // event `TOPIC0` hash does: through its `as_bytes` method.
+    let as_bytes = resolve_lib_trait_path(db, scope, "core::AsBytes")?;
+    let inst = TraitInstId::new_simple(db, as_bytes, vec![sem_const_ty(db, value)]);
+    let method = prove(db, solve_cx, inst)?.answering(db, inst)?.method(
+        db,
+        IdentId::new(db, "as_bytes".to_string()),
+        None,
+    )?;
+    let func = method.body()?;
+    let subst = method.complete_body_args(db, inst.args(db)).ok()?;
+    let EvalOutcome::Ready(bytes) = eval_body_owner_const_with_args(
+        db,
+        BodyOwner::func(db, func),
+        GenericSubst::complete(db, subst),
+        vec![value],
+    ) else {
+        return None;
+    };
+    // The result is a `PackedBytes<N>`: its first `N` bytes, big-endian
+    // across its `u256` words.
+    let len = concrete_usize(db, *sem_const_ty(db, bytes).generic_args(db).first()?)?;
+    let SemConstValue::Struct { fields, .. } = bytes.value(db) else {
+        return None;
+    };
+    let SemConstValue::Array { elems: words, .. } = fields.first()?.value(db) else {
+        return None;
+    };
+    let mut bytes = words
+        .iter()
+        .map(|word| match word.value(db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } => Some(
+                U256::try_from_be_slice(&value.to_biguint()?.to_bytes_be())?.to_be_bytes::<32>(),
+            ),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?
+        .concat();
+    bytes.truncate(len);
+    String::from_utf8(bytes).ok()
+}
+
+/// Whether `name` is a canonical non-tuple Solidity ABI type, such as
+/// `uint8`, `bytes32`, `fixed128x18` or `address[2][]`.
+fn is_canonical_non_tuple_sol_type(name: &str) -> bool {
+    let mut base = name;
+    while let Some(rest) = base.strip_suffix(']') {
+        let Some((elem, len)) = rest.rsplit_once('[') else {
+            return false;
+        };
+        let valid_len = len.is_empty()
+            || len == "0"
+            || (len.bytes().all(|b| b.is_ascii_digit()) && !len.starts_with('0'));
+        if !valid_len {
+            return false;
+        }
+        base = elem;
+    }
+
+    let width = |digits: &str| -> Option<u16> {
+        if !digits.bytes().all(|b| b.is_ascii_digit()) || digits.starts_with('0') {
+            return None;
+        }
+        digits.parse().ok()
+    };
+    let int_bits = |bits: u16| (8..=256).contains(&bits) && bits.is_multiple_of(8);
+    match base {
+        "address" | "bool" | "string" | "bytes" | "function" => true,
+        _ => {
+            if let Some(len) = base.strip_prefix("bytes") {
+                width(len).is_some_and(|len| (1..=32).contains(&len))
+            } else if let Some(mxn) = base
+                .strip_prefix("ufixed")
+                .or_else(|| base.strip_prefix("fixed"))
+            {
+                // `fixed<M>x<N>`: M as for integers, 0 < N <= 80.
+                mxn.split_once('x').is_some_and(|(bits, decimals)| {
+                    width(bits).is_some_and(int_bits) && width(decimals).is_some_and(|n| n <= 80)
+                })
+            } else if let Some(bits) = base
+                .strip_prefix("uint")
+                .or_else(|| base.strip_prefix("int"))
+            {
+                width(bits).is_some_and(int_bits)
+            } else {
+                false
+            }
+        }
+    }
+}
+
 /// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24`
-/// and return their Solidity ABI type string (e.g. `"uint160"`, `"int24"`).
+/// and the `std::evm::units` types (`Wei`, `Timestamp`, `Duration`) and return
+/// their Solidity ABI type string (e.g. `"uint160"`, `"int24"`, `"uint256"`).
 fn std_sol_compat_abi_type<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -479,6 +634,11 @@ fn std_sol_compat_abi_type<'db>(
         return Ok(None);
     };
     let name = name.data(db).to_string();
+
+    // The `std::evm::units` newtypes are plain `uint256` words.
+    if matches!(name.as_str(), "Wei" | "Timestamp" | "Duration") {
+        return Ok(Some("uint256".to_string()));
+    }
 
     if name == "FixedBytes" {
         let (_, args) = ty.decompose_ty_app(db);

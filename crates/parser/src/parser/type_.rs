@@ -18,9 +18,9 @@ pub fn parse_type<S: TokenStream>(
         Some(SyntaxKind::Star | SyntaxKind::Star2) => {
             parser.parse_cp(PtrTypeScope::default(), checkpoint)
         }
-        Some(SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw) => {
-            parser.parse_cp(ModeTypeScope::new(false), checkpoint)
-        }
+        Some(
+            SyntaxKind::MutKw | SyntaxKind::MaybeMutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw,
+        ) => parser.parse_cp(ModeTypeScope::new(false), checkpoint),
         Some(SyntaxKind::LParen) => parser.parse_cp(TupleTypeScope::default(), checkpoint),
         Some(SyntaxKind::LBracket) => parser.parse_cp(ArrayTypeScope::default(), checkpoint),
         Some(SyntaxKind::Not) => parser
@@ -37,7 +37,7 @@ pub(crate) fn parse_closure_param_type<S: TokenStream>(
 ) -> Result<(), Recovery<ErrProof>> {
     if matches!(
         parser.current_kind(),
-        Some(SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw)
+        Some(SyntaxKind::MutKw | SyntaxKind::MaybeMutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw)
     ) {
         parser.parse(ModeTypeScope::new(true))
     } else {
@@ -52,7 +52,7 @@ pub(crate) fn is_type_start(kind: SyntaxKind) -> bool {
         | SyntaxKind::SelfTypeKw
         | SyntaxKind::LParen
         | SyntaxKind::LBracket => true,
-        SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => true,
+        SyntaxKind::MutKw | SyntaxKind::MaybeMutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => true,
         kind if is_path_segment(kind) => true,
         _ => false,
     }
@@ -80,7 +80,12 @@ impl super::Parse for ModeTypeScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
         parser.expect(
-            &[SyntaxKind::MutKw, SyntaxKind::RefKw, SyntaxKind::OwnKw],
+            &[
+                SyntaxKind::MutKw,
+                SyntaxKind::MaybeMutKw,
+                SyntaxKind::RefKw,
+                SyntaxKind::OwnKw,
+            ],
             None,
         )?;
         parser.bump();
@@ -95,68 +100,7 @@ impl super::Parse for ModeTypeScope {
                 return Ok(());
             }
         }
-        parse_type(parser, None)?;
-        parse_space_annotation_opt(parser)
-    }
-}
-
-/// `@S`, `@p`, `@p.f[_]` or `@target(p)`, if present.
-pub(crate) fn parse_space_annotation_opt<S: TokenStream>(
-    parser: &mut Parser<S>,
-) -> Result<(), Recovery<ErrProof>> {
-    if parser.current_kind() == Some(SyntaxKind::At) {
-        parser.parse(SpaceAnnotationScope::default())?;
-    }
-    Ok(())
-}
-
-define_scope!(SpaceAnnotationScope, SpaceAnnotation);
-impl super::Parse for SpaceAnnotationScope {
-    type Error = Recovery<ErrProof>;
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.set_newline_as_trivia(false);
-        parser.bump_expected(SyntaxKind::At);
-        parser.or_recover(|p| p.parse(PathScope::default()))?;
-        if parser.bump_if(SyntaxKind::LParen) {
-            parser.or_recover(|p| p.parse(PathScope::default()))?;
-            parser.bump_or_recover(SyntaxKind::RParen, "expected `)`")?;
-        } else {
-            parse_space_path_opt(parser)?;
-        }
-        Ok(())
-    }
-}
-
-/// The steps after a result-space contract's root, if any: `.f`, `.0` and
-/// `[_]`.
-pub(crate) fn parse_space_path_opt<S: TokenStream>(
-    parser: &mut Parser<S>,
-) -> Result<(), Recovery<ErrProof>> {
-    if matches!(
-        parser.current_kind(),
-        Some(SyntaxKind::Dot | SyntaxKind::LBracket)
-    ) {
-        parser.parse(SpacePathScope::default())?;
-    }
-    Ok(())
-}
-
-define_scope!(SpacePathScope, SpacePath);
-impl super::Parse for SpacePathScope {
-    type Error = Recovery<ErrProof>;
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.set_newline_as_trivia(false);
-        loop {
-            if parser.bump_if(SyntaxKind::Dot) {
-                parser.expect(&[SyntaxKind::Ident, SyntaxKind::Int], None)?;
-                parser.bump();
-            } else if parser.bump_if(SyntaxKind::LBracket) {
-                parser.bump_or_recover(SyntaxKind::Underscore, "expected `_`")?;
-                parser.bump_or_recover(SyntaxKind::RBracket, "expected `]`")?;
-            } else {
-                return Ok(());
-            }
-        }
+        parse_type(parser, None).map(|_| ())
     }
 }
 

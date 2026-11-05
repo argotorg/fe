@@ -107,7 +107,7 @@ fn runtime_body_for_symbol<'db>(
         .copied()
         .find(|function| function.symbol(db).contains(symbol))
         .unwrap_or_else(|| panic!("missing runtime function `{symbol}`"));
-    function.instance(db).body(db)
+    function.instance(db).body(db).clone()
 }
 
 fn runtime_body_stmts<'a, 'db>(body: &'a RuntimeBody<'db>) -> impl Iterator<Item = &'a RStmt<'db>> {
@@ -381,6 +381,10 @@ pub fn pointer_roundtrip() -> u256 {
     unsafe { *ptr = 7 }
     unsafe { *ptr }
 }
+
+pub fn main() -> u256 {
+    pointer_roundtrip()
+}
 "#
         .to_string(),
         |db, package| {
@@ -474,7 +478,7 @@ fn replace(var _ data: own *Data, other: *Data) -> u256 {
     data.value
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let data = core::ptr::alloc<Data>()
     let other = core::ptr::alloc<Data>()
     data.value = 7
@@ -577,7 +581,7 @@ fn repack(wrapper: Wrapper) -> Inner {
     Inner { flag: copy }
 }
 
-fn entry() -> Inner {
+pub fn main() -> Inner {
     repack(Wrapper {
         inner: Inner { flag: Flag::A(42) },
     })
@@ -610,7 +614,7 @@ fn sum_two(i: usize, j: usize) -> u256 {
     VALS[i] + VALS[j]
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_two(i: 0, j: 1)
 }
 "#;
@@ -714,7 +718,7 @@ fn run(_ a: u256) -> u256 {
     sum_view(xs) + sum_own(xs) + sum_calls(xs) + sum_local(a)
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     run(1)
 }
 "#,
@@ -760,7 +764,7 @@ fn bump(size: u256) -> u256 {
     value
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     bump(size: 1)
 }
 "#,
@@ -823,7 +827,7 @@ fn sum_pair(_ pair: own Pair) -> u256 {
     pair.left + pair.right
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_pair(Pair { left: 1, right: 2 })
 }
 "#,
@@ -866,10 +870,10 @@ struct Note {
 }
 
 fn note_size(_ note: own Note) -> u256 {
-    note.id + note.body.len()
+    note.id + note.body.len() as u256
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     note_size(Note { id: 1, body: Bytes::empty() })
 }
 "#,
@@ -895,10 +899,14 @@ fn pointer_aggregate_temporaries_stay_values() {
         r#"use core::abi::store_word
 use core::ptr::MemBuffer
 
-fn buffer_len() -> u256 {
+fn buffer_len() -> usize {
     let buffer = MemBuffer::alloc(32)
     unsafe { store_word(ptr: buffer.ptr(), value: 42) }
     buffer.span().len()
+}
+
+pub fn main() -> usize {
+    buffer_len()
 }
 "#,
         |db, package| {
@@ -941,7 +949,7 @@ impl Pair {
     }
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     Pair { left: 1, right: 2 }.sum()
 }
 "#,
@@ -986,7 +994,7 @@ fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
     first.left + second.right
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
 }
 "#,
@@ -1035,7 +1043,7 @@ fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
     consume(first) + consume(second)
 }
 
-fn entry() -> u256 {
+pub fn main() -> u256 {
     sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
 }
 "#,
@@ -1082,7 +1090,7 @@ impl Pair {
     }
 }
 
-fn entry() -> Pair {
+pub fn main() -> Pair {
     Pair { left: 1, right: 2 }.bump()
 }
 "#,
@@ -1135,7 +1143,7 @@ impl Table {
     }
 }
 
-fn entry() -> u8 {
+pub fn main() -> u8 {
     Table { used: [1, 2, 3, 4] }.get(2)
 }
 "#,
@@ -1222,7 +1230,7 @@ impl Pair {
     }
 }
 
-pub fn entry() -> bool {
+pub fn main() -> bool {
     Pair { a: 1, b: 2 }.check(1)
 }
 "#,
@@ -1270,7 +1278,7 @@ fn linear_probe_big_struct_keeps_array_projection_reads_place_based() {
         file_url.clone(),
         Some(
             format!(
-                "{}\nfn entry() -> u256 {{\n    var table = Table::empty()\n    table.set(17, 99)\n    table.get(17)\n}}\n",
+                "{}\nfn entry() -> u256 {{\n    var table = Table::empty()\n    table.set(17, 99)\n    table.get(17)\n}}\n\npub fn main() -> u256 {{\n    entry()\n}}\n",
                 include_str!("../../fe/tests/fixtures/fe_test/linear_probe_big_struct.fe")
             ),
         ),
@@ -1396,7 +1404,7 @@ fn materialized_scalar_uses_do_not_keep_rawaddr_runtime_carriers() {
     x
 }
 
-fn entry() -> u8 {
+pub fn main() -> u8 {
     var x: u8 = 2
     bump(mut x)
 }
@@ -1513,7 +1521,7 @@ fn empty_revert_intrinsic_has_no_synthetic_pointer_operand() {
         r#"
 use std::abi::bytes_from_words_prefix
 
-fn trigger() {
+pub fn main() {
     let _ = bytes_from_words_prefix<33, 1>([0])
 }
 "#,
@@ -1534,7 +1542,7 @@ fn trigger() {
             let symbol = function.symbol(&db);
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
-            let function_ir = sonatina_function_body(&output, &symbol);
+            let function_ir = sonatina_function_body(&output, symbol);
             assert!(
                 function_ir.contains("evm_revert 0.i256 0.i256")
                     && !function_ir.contains("evm_malloc 0.i256"),
@@ -1598,7 +1606,7 @@ fn select(flag: bool) -> E {
     }
 }
 
-fn entry() -> u8 {
+pub fn main() -> u8 {
     match select(true) {
         E::A => 1,
         E::B => 0,
@@ -1715,14 +1723,14 @@ fn immutable_array_snapshots_retain_their_backing() {
         (
             r#"
 const VALUES: [u256; 3] = [11, 22, 33]
-pub fn entry() -> u256 { forward(VALUES) }
+pub fn main() -> u256 { forward(VALUES) }
 "#,
             "const.load",
         ),
         (
             r#"
 fn read_input() -> u256 uses (values: [u256; 3]) { forward(values) }
-pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
+pub fn main() -> u256 uses (evm: std::evm::RawOps) {
     let data = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
     unsafe { with (*data) { read_input() } }
 }
@@ -1766,7 +1774,7 @@ impl Copy for Input {}
 fn pick(_ input: Input) -> u256 { input.first }
 fn forward(_ input: Input) -> u256 { pick(input) }
 fn read_input() -> u256 uses (input: Input) { forward(input) }
-pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
+pub fn main() -> u256 uses (evm: std::evm::RawOps) {
     let data = unsafe { evm.calldata_ptr<Input>(0) }
     unsafe { with (*data) { read_input() } }
 }
@@ -1793,7 +1801,7 @@ fn pick(values: ref [u256; 4], idx: usize) -> u256 {
     values[idx]
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let values: [u256; 4] = C
     let idx: usize = 2
     pick(values: ref values, idx)
@@ -1810,7 +1818,7 @@ fn pick(values: [u256; 4], idx: usize) -> u256 {
     values[idx]
 }
 
-pub fn entry() -> u256 {
+pub fn main() -> u256 {
     let values: [u256; 4] = C
     let idx: usize = 2
     pick(values, idx)
@@ -1833,8 +1841,8 @@ pub fn entry() -> u256 {
             "{label} should load through const data projections:\n{pick}"
         );
         assert!(
-            !ir.contains("obj.init.const"),
-            "{label} should not materialize the full array:\n{ir}"
+            !ir.contains("[i256; 4] = const.load"),
+            "{label} should not load the full array:\n{ir}"
         );
     }
 }
@@ -1944,8 +1952,10 @@ fn mutable_with_provider_reuses_materialized_root_for_later_readonly_effects() {
 fn readonly_with_provider_can_remain_const_backed() {
     with_test_runtime_package!(
         "readonly_with_provider_can_remain_const_backed.fe",
+        // Two words: a one-word constant struct is passed as the plain word.
         r#"pub struct Counter {
     pub value: u256,
+    pub step: u256,
 }
 
 fn read() -> u256 uses (counter: Counter) {
@@ -1954,10 +1964,10 @@ fn read() -> u256 uses (counter: Counter) {
 
 #[test]
 fn test_readonly_with_provider() {
-    let out: u256 = with (Counter = Counter { value: 7 }) {
+    let out: u256 = with (Counter = Counter { value: 7, step: 1 }) {
         read() + read()
     }
-    let other: u256 = with (Counter = { Counter { value: 9 } }) {
+    let other: u256 = with (Counter = { Counter { value: 9, step: 1 } }) {
         read() + read()
     }
 
@@ -2040,6 +2050,10 @@ fn borrows_of_aggregate_constant_locals_lower_as_const_refs() {
 fn entry() -> u256 {
     let xs: [u256; 2] = [10, 20]
     first(xs: ref xs)
+}
+
+pub fn main() -> u256 {
+    entry()
 }"#,
         |db, package| {
             let first = package
@@ -2182,6 +2196,10 @@ fn test_add_overflow_u8() {
     let x: u8 = 255
     let y: u8 = x + 1
 }
+
+pub fn main() {
+    test_add_overflow_u8()
+}
 "#,
         |db, package| {
             let func = package
@@ -2266,7 +2284,7 @@ fn return_array_after_projection(xs: [u8; 4]) -> [u8; 4] {
     ys
 }
 
-fn use_returned_array() -> u8 {
+pub fn main() -> u8 {
     var xs: [u8; 4] = [1, 2, 3, 4]
     xs = return_array_after_projection(xs)
     xs[0]
@@ -2326,6 +2344,10 @@ fn use_returned_array() -> u8 {
     xs = return_array_after_projection(xs)
     xs[0]
 }
+
+pub fn main() -> u8 {
+    use_returned_array()
+}
 "#,
         |db, package| {
             let callee = package
@@ -2376,9 +2398,52 @@ fn use_returned_array() -> u8 {
 }
 
 #[test]
-fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+fn constant_aggregate_initializers_store_their_const_data_whole() {
+    with_test_runtime_package!(
+        "constant_aggregate_initializers_store_their_const_data_whole.fe",
+        r#"
+const TABLE: [u256; 4] = [1, 2, 3, 4]
+
+fn zeroed_bytes(i: usize) -> u8 {
+    var bytes: [u8; 64] = [0; 64]
+    bytes[i] = 7
+    bytes[1]
+}
+
+fn copied_table(i: usize) -> u256 {
+    var xs: [u256; 4] = TABLE
+    xs[i] = 7
+    xs[1]
+}
+
+#[test]
+fn initializers() {
+    assert(zeroed_bytes(i: 3) == 0 && copied_table(i: 1) == 7)
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
+            for (name, ty) in [("zeroed_bytes", "[i8; 64]"), ("copied_table", "[i256; 4]")] {
+                let body = sonatina_function_body(&output, name);
+                assert!(
+                    body.contains(&format!("{ty} = const.load")) && !body.contains("insert_value"),
+                    "a constant initializer should load its const data whole:\n{body}"
+                );
+                assert_eq!(
+                    body.matches("obj.alloc").count(),
+                    1,
+                    "a constant initializer should store into its binding without a temporary:\n{body}"
+                );
+            }
+        }
+    );
+}
+
+#[test]
+fn by_value_array_returns_store_whole_into_object_storage() {
     with_runtime_package!(
-        "by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+        "by_value_array_returns_store_whole_into_object_storage.fe",
         r#"
 fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
     let ys = xs
@@ -2391,28 +2456,41 @@ fn use_returned_array() -> u256 {
     xs = return_array_after_projection(xs)
     xs[0]
 }
+
+pub fn main() -> u256 {
+    use_returned_array()
+}
 "#,
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             let body = sonatina_function_body(&output, "use_returned_array");
+            let result = body
+                .lines()
+                .find_map(|line| {
+                    line.contains("call %return_array_after_projection")
+                        .then(|| line.trim().split('.').next())
+                        .flatten()
+                })
+                .unwrap_or_else(|| panic!("missing array call:\n{body}"));
 
             assert!(
-                body.contains("extract_value"),
-                "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+                body.lines().any(|line| line.contains("obj.store")
+                    && line.trim().ends_with(&format!(" {result};"))),
+                "a by-value array result should store into its object whole:\n{body}"
             );
             assert!(
-                body.contains("obj.load"),
-                "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+                !body.contains("extract_value"),
+                "a by-value array result should not be copied element by element:\n{body}"
             );
         }
     );
 }
 
 #[test]
-fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+fn enum_bearing_struct_results_store_whole_into_object_storage() {
     with_test_runtime_package!(
-        "fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe",
+        "enum_bearing_struct_results_store_whole_into_object_storage.fe",
         r#"
 enum E {
     A,
@@ -2432,16 +2510,17 @@ fn build(flag: bool) -> Pair {
 
 #[test]
 fn exercise() {
-    let pair = build(true)
-    assert(pair.xs[0] == 1)
+    var pair = build(true)
+    pair.xs[1] = 5
+    assert(pair.xs[0] == 1 && pair.xs[1] == 5)
 }
 "#,
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             assert!(
-                output.contains("enum.set_tag"),
-                "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
+                !output.contains("enum.set_tag") && !output.contains("br_table"),
+                "a struct result should keep its enum field inside one whole store:\n{output}"
             );
         }
     );
@@ -2752,7 +2831,7 @@ use std::evm::Mutex
 
 fn bump(_ m: mut Mutex<u256>) {
     assert!(m.try_lock())
-    m.value_mut() += 1
+    m.value() += 1
     m.unlock()
 }
 

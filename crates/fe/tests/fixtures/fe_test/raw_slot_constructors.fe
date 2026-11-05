@@ -1,10 +1,10 @@
-// A raw-slot constructor's result is the place at the slot it is given:
-// `storage_at` to read it, with read-only authority, `storage_at_mut` and
-// the collections' `at` to write it too.
-use std::evm::{Evm, RawStorage, StorageMap, storage_at, storage_at_mut}
+// A raw-slot constructor's result is the place at the slot it is given, read
+// with read-only authority, or written where its use asks for `mut`:
+// `storage_at` and the collections' `at`.
+use std::evm::{Evm, RawStorage, StorageMap, storage_at}
 
 fn bump(_ slot: u256) uses (storage: mut RawStorage) {
-    let m = unsafe { storage_at_mut<StorageMap<u256, u256>>(slot) }
+    let m = unsafe { mut storage_at<StorageMap<u256, u256>>(slot) }
     m[1] += 1
 }
 
@@ -13,7 +13,7 @@ fn get(_ slot: u256, key: u256) -> u256 uses (storage: RawStorage) {
 }
 
 fn bump_at(_ slot: u256) uses (storage: mut RawStorage) {
-    let m = unsafe { StorageMap<u256, u256>::at(slot) }
+    let m = unsafe { mut StorageMap<u256, u256>::at(slot) }
     m[1] += 1
 }
 
@@ -28,5 +28,23 @@ fn constructors_take_a_slot_argument() uses (evm: mut Evm) {
         assert(unsafe { StorageMap<u256, u256>::at(4) }[1] == 1)
         assert(unsafe { storage_at<StorageMap<u256, u256>>(4) }[1] == 1)
         assert(get(3, key: 1) == 3)
+    }
+}
+
+#[raw_place]
+unsafe fn two(_ slot: u256) -> (mut? u256, mut? u256) uses (storage: mut? RawStorage) {
+    unsafe { (storage_at<u256>(slot), storage_at<u256>(slot + 1)) }
+}
+
+// An unsafe split asks a `mut?` element granting a product for `mut` too.
+#[test]
+fn nested_splits() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let ((mut a, mut b), mut c) = unsafe { (two(10), storage_at<u256>(12)) }
+        a = 1
+        b = 2
+        c = 3
+        let ((x, y), z) = unsafe { (two(10), storage_at<u256>(12)) }
+        assert(x == 1 && y == 2 && z == 3)
     }
 }

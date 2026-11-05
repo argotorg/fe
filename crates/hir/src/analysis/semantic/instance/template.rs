@@ -37,7 +37,6 @@ pub fn typed_body_template<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct GenericSubst<'db> {
-    #[return_ref]
     pub mapping: Option<CompleteSubst<'db>>,
 }
 
@@ -73,19 +72,19 @@ impl<'db> GenericSubst<'db> {
         let generic_owner = match owner {
             // A closure's body shares its parent's generic context.
             BodyOwner::Closure { def, .. } => {
-                return BodyOwner::from_body(db, def.body).map_or_else(
+                return BodyOwner::closure_parent(db, def).map_or_else(
                     || Self::none(db),
                     |parent| Self::for_body_owner(db, parent, args),
                 );
             }
-            BodyOwner::Func(func) if args.is_empty() => {
+            BodyOwner::Func(func, _) if args.is_empty() => {
                 return Self::for_owner(
                     db,
                     func.into(),
                     CallableDef::Func(func).params(db).to_vec(),
                 );
             }
-            BodyOwner::Func(func) => Some(func.into()),
+            BodyOwner::Func(func, _) => Some(func.into()),
             BodyOwner::AnonConstBody { body, .. } if !args.is_empty() => {
                 lexical_const_body_owner(db, body)
             }
@@ -110,9 +109,10 @@ impl<'db> GenericSubst<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ImplEnv<'db> {
+    #[returns(copy)]
     pub normalization_scope: ScopeId<'db>,
+    #[returns(copy)]
     pub assumptions: PredicateListId<'db>,
-    #[return_ref]
     pub witnesses: Vec<TraitInstId<'db>>,
 }
 
@@ -133,9 +133,7 @@ impl<'db> ImplEnv<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct EffectProviderSubst<'db> {
-    #[return_ref]
     pub providers: Vec<ProviderBinding<'db>>,
-    #[return_ref]
     pub param_spaces: Vec<(u32, AddressSpace)>,
 }
 
@@ -150,7 +148,7 @@ pub fn instantiate_typed_body<'db>(
     template: TypedBodyTemplate<'db>,
     subst: GenericSubst<'db>,
 ) -> TypedBody<'db> {
-    if let BodyOwner::Func(func) = template.owner {
+    if let BodyOwner::Func(func, _) = template.owner {
         let mapping = subst
             .mapping(db)
             .as_ref()

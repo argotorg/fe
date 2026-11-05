@@ -1,0 +1,41 @@
+use core::hint::black_box
+use std::evm::Ctx
+
+fn square_plus_three(_ x: u256) -> u256 {
+    x * x + 3
+}
+
+fn hide<T>(_ value: own T) -> T {
+    black_box(value)
+}
+
+#[test]
+fn black_box_returns_its_argument() {
+    assert!(black_box(7 as u256) == 7)
+    assert!(black_box(-7 as i256) == -7)
+    assert!(black_box(200 as u8) == 200)
+    let minimum: i8 = -128
+    assert!(black_box(minimum) == minimum)
+    assert!(
+        hide(
+                0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff as u256,
+            )
+            == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+    )
+    assert!(black_box(true))
+    assert!(!black_box(false))
+    assert!(square_plus_three(black_box(5)) == 28)
+}
+
+#[test]
+fn black_box_keeps_discarded_work_between_gas_reads() uses (ctx: Ctx) {
+    let before = ctx.gas()
+    square_plus_three(5)
+    let discarded = before - ctx.gas()
+
+    let before = ctx.gas()
+    black_box(square_plus_three(black_box(5)))
+    let kept = before - ctx.gas()
+
+    assert!(kept > discarded)
+}

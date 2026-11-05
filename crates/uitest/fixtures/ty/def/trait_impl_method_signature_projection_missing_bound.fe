@@ -14,7 +14,7 @@ struct S {}
 
 impl UsesBound for S {
     fn run(self) -> <Self as Bound>::Item {
-        todo()
+        unsafe { todo() }
     }
 }
 

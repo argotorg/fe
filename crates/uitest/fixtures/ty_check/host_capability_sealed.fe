@@ -1,0 +1,16 @@
+use core::MemSpan
+use std::io::Stdout
+use std::native::Host
+
+// Only `Host` provides the host capabilities, and only the compiler creates one.
+struct Fake {}
+
+impl Stdout for Fake {
+    fn write_stdout(mut self, _ bytes: MemSpan) -> bool {
+        true
+    }
+}
+
+fn forge() -> Host {
+    Host { seal: Fake {} }
+}

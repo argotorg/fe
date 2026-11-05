@@ -4,55 +4,55 @@ expression: diags
 input_file: fixtures/ty_check/const_where/type_parameter_defaults_check_every_written_constant/selecting_an_impl.fe
 ---
 error[8-0093]: const requirement is not satisfied
-   ┌─ selecting_an_impl.fe:17:23
+   ┌─ selecting_an_impl.fe:19:23
    │
 10 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
    │                                               ----- required by this predicate
    ·
-17 │ struct S<T = Holder<{ dec<0>() }>::Out> { x: T }
+19 │ struct S<T = Holder<{ dec<0>() }>::Out> { x: T }
    │                       ^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ selecting_an_impl.fe:18:29
+   ┌─ selecting_an_impl.fe:20:29
    │
  4 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
    │                                      ----- required by this predicate
    ·
-18 │ struct Premise<T = Holder<{ Bounded<0>::D }>::Out> { x: T }
+20 │ struct Premise<T = Holder<{ Bounded<0>::D }>::Out> { x: T }
    │                             ^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ selecting_an_impl.fe:19:38
+   ┌─ selecting_an_impl.fe:21:38
    │
 11 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
    │                                                    ----- required by this predicate
    ·
-19 │ struct Qualified<T = <Plain as Sel<{ positive<0>() }>>::Out> { x: T }
+21 │ struct Qualified<T = <Plain as Sel<{ positive<0>() }>>::Out> { x: T }
    │                                      ^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ selecting_an_impl.fe:20:19
+   ┌─ selecting_an_impl.fe:22:19
    │
 10 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
    │                                               ----- required by this predicate
    ·
-20 │ fn g<T = Holder<{ dec<0>() }>::Out>() {}
+22 │ fn g<T = Holder<{ dec<0>() }>::Out>() {}
    │                   ^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ selecting_an_impl.fe:22:33
+   ┌─ selecting_an_impl.fe:24:33
    │
 10 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
    │                                               ----- required by this predicate
    ·
-22 │ impl Z { fn method<T = Holder<{ dec<0>() }>::Out>() {} }
+24 │ impl Z { fn method<T = Holder<{ dec<0>() }>::Out>() {} }
    │                                 ^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
-   ┌─ selecting_an_impl.fe:23:31
+   ┌─ selecting_an_impl.fe:25:31
    │
 10 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
    │                                               ----- required by this predicate
    ·
-23 │ trait Tr { fn go<T = Holder<{ dec<0>() }>::Out>() {} }
+25 │ trait Tr { fn go<T = Holder<{ dec<0>() }>::Out>() {} }
    │                               ^^^^^^^^ condition evaluated to `false`

@@ -6,7 +6,7 @@ use crate::extract::DocExtractor;
 
 /// Layer 2: per-ingot reference index, assembled from Layer 1 per-module data.
 /// Salsa caches this — builtins compute once and never again.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn ingot_references<'db>(
     db: &'db dyn hir::analysis::HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -16,7 +16,7 @@ pub fn ingot_references<'db>(
 
 /// Per-ingot doc extraction, cached by salsa.
 /// Builtins never recompute (their inputs never change).
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn docs_for_ingot<'db>(
     db: &'db dyn hir::SpannedHirDb,
     ingot: Ingot<'db>,
@@ -36,7 +36,7 @@ pub fn docs_for_ingot<'db>(
 }
 
 /// Per-ingot module tree extraction, cached by salsa.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn module_tree_for_ingot<'db>(
     db: &'db dyn hir::SpannedHirDb,
     ingot: Ingot<'db>,
@@ -47,7 +47,7 @@ pub fn module_tree_for_ingot<'db>(
 }
 
 /// Per-ingot trait impl links, cached by salsa.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn trait_impl_links_for_ingot<'db>(
     db: &'db dyn hir::SpannedHirDb,
     ingot: Ingot<'db>,

@@ -13,7 +13,9 @@ use crate::{
             adt_def::instantiate_adt_field_shape,
             const_ty::CallableInputOrigin,
             normalize::normalize_ty,
-            ty_check::{LocalBinding, ParamSite, ReturnProjectionStep, ReturnProvenance},
+            ty_check::{
+                LocalBinding, ParamSite, ReturnProjectionStep, ReturnProvenance, TypedBody,
+            },
             ty_def::TyId,
         },
     },
@@ -264,13 +266,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         args: &[crate::analysis::semantic::SOperand],
         effect_args: &[crate::analysis::semantic::SEffectArg<'db>],
     ) -> Vec<LayoutBackingSource<'db>> {
-        let ReturnProvenance::Forwarded(return_sources) =
-            callee.key.typed_body(self.db).return_provenance(self.db)
+        let typed_body = callee.key.typed_body(self.db);
+        let ReturnProvenance::Forwarded(return_sources) = typed_body.return_provenance(self.db)
         else {
             return Vec::new();
         };
         let mut out = Vec::new();
         for return_source in return_sources {
+            let mut projection = return_source.projection.as_slice();
             let (base_ty, base_sources) = match return_source.origin {
                 CallableInputOrigin::Receiver => {
                     let Some(base) = args.first().map(|arg| arg.value) else {
@@ -281,10 +284,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         self.local_layout_backing_sources(base),
                     )
                 }
+                // The argument for the input the return reads: a product
+                // parameter's part.
                 CallableInputOrigin::ValueParam(param_idx) => {
-                    let Some(base) = args.get(param_idx).map(|arg| arg.value) else {
+                    let Some((input, rest)) = typed_body.return_source_input(param_idx, projection)
+                    else {
                         continue;
                     };
+                    let Some(base) = args.get(input).map(|arg| arg.value) else {
+                        continue;
+                    };
+                    projection = rest;
                     (
                         self.locals[base.index()].ty,
                         self.local_layout_backing_sources(base),
@@ -315,7 +325,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             };
             let Some((target, path)) =
-                self.return_projection_path(base_ty, &return_source.projection, args)
+                self.return_projection_path(typed_body, base_ty, projection, args)
             else {
                 continue;
             };
@@ -330,8 +340,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         dedup_layout_backing_sources(out)
     }
 
+    /// The backing projection and the semantic path a callee's return
+    /// `projection` takes, with `args` its inputs: an index parameter names
+    /// the argument for its input in `typed_body`, the callee's.
     fn return_projection_path(
         &self,
+        typed_body: &TypedBody<'db>,
         base_ty: TyId<'db>,
         projection: &[ReturnProjectionStep],
         args: &[crate::analysis::semantic::SOperand],
@@ -373,10 +387,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     path.push(Projection::Index(IndexSource::Constant(index)));
                     ty = *ty.generic_args(self.db).first()?;
                 }
-                ReturnProjectionStep::ParamIndex(param_idx) => {
+                ReturnProjectionStep::ParamIndex { param, part } => {
+                    let input = typed_body.param_input_index(param, part)?;
                     target.push(LayoutBackingProjection::Index(None));
                     path.push(Projection::Index(IndexSource::Dynamic(
-                        args.get(param_idx)?.value,
+                        args.get(input)?.value,
                     )));
                     ty = *ty.generic_args(self.db).first()?;
                 }
@@ -410,7 +425,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     Some(LayoutBackingProjection::Index(Some(index)))
                 }
                 ReturnProjectionStep::AnyIndex => Some(LayoutBackingProjection::Index(None)),
-                ReturnProjectionStep::ParamIndex(_) => None,
+                ReturnProjectionStep::ParamIndex { .. } => None,
             })
             .collect()
     }

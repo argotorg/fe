@@ -1,0 +1,76 @@
+---
+source: crates/hir/tests/frontend/import.rs
+expression: res
+input_file: test_files/imports/named_shadows_glob_in_loop.fe
+---
+note:
+  ┌─ named_shadows_glob_in_loop.fe:5:5
+  │
+5 │     pub use super::b::*
+  │     ^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::c2::X as X | named_shadows_glob_in_loop::h::t as t | named_shadows_glob_in_loop::h::t::A as A
+
+note:
+  ┌─ named_shadows_glob_in_loop.fe:6:5
+  │
+6 │     pub use super::k::*
+  │     ^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::c2::X as X | named_shadows_glob_in_loop::h::t as t | named_shadows_glob_in_loop::h::t::A as A
+
+note:
+  ┌─ named_shadows_glob_in_loop.fe:9:5
+  │
+9 │     pub use super::a::*
+  │     ^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::c2::X as X | named_shadows_glob_in_loop::h::t as t | named_shadows_glob_in_loop::h::t::A as A
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:12:5
+   │
+12 │     pub use super::p::X
+   │     ^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::c2::X
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:13:5
+   │
+13 │     use super::g::*
+   │     ^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::g::t as t
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:14:5
+   │
+14 │     pub use super::y1::t3 as t
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::h::t
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:15:5
+   │
+15 │     pub use t::A
+   │     ^^^^^^^^^^^^ named_shadows_glob_in_loop::h::t::A
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:18:5
+   │
+18 │     pub use super::g1::*
+   │     ^^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::g1::X as X
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:19:5
+   │
+19 │     pub use super::c1::X
+   │     ^^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::c2::X
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:25:5
+   │
+25 │     pub use super::c2::X
+   │     ^^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::c2::X
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:47:5
+   │
+47 │     pub use super::y2::t2 as t3
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::h::t
+
+note:
+   ┌─ named_shadows_glob_in_loop.fe:50:5
+   │
+50 │     pub use super::h::t as t2
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ named_shadows_glob_in_loop::h::t

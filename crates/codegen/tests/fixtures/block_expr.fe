@@ -1,4 +1,4 @@
-pub fn block_expr() -> u64 {
+pub fn main() -> u64 {
     {
         1 + 2
     }

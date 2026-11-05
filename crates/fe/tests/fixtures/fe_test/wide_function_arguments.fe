@@ -218,12 +218,12 @@ pub contract Wide {
 
 #[test]
 fn wide_recv() uses (evm: mut Evm) {
-    let addr = evm.create2<Wide>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<Wide>(value: Wei::zero(), args: (), salt: 0)
     let value: u256 = evm
         .call(
             addr,
             gas: 10000000,
-            value: 0,
+            value: Wei::zero(),
             message: WideMsg::Sum {
                 a00: 1,
                 a01: 2,

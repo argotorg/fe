@@ -5,7 +5,7 @@ use common::{
 use parser::{
     FeLang, SyntaxNode, SyntaxToken, TextRange, ast, ast::prelude::*, syntax_node::NodeOrToken,
 };
-use salsa::Update;
+use salsa::SalsaValue;
 use thin_vec::ThinVec;
 
 use super::{
@@ -43,7 +43,7 @@ pub(crate) enum LazyArg {
     None,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Update)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, SalsaValue)]
 pub(crate) struct SpanTransitionChain<'db> {
     pub(crate) root: ChainRoot<'db>,
     pub(super) chain: ThinVec<LazyTransitionFn>,
@@ -119,7 +119,7 @@ impl<'db> SpanTransitionChain<'db> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, derive_more::From, Update)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, derive_more::From, SalsaValue)]
 pub(crate) enum ChainRoot<'db> {
     ItemKind(ItemKind<'db>),
     TopMod(TopLevelMod<'db>),
@@ -345,7 +345,7 @@ macro_rules! define_lazy_span_node {
             )?
         )?
     ) => {
-        #[derive(Clone, PartialEq, Eq, Hash, Debug, salsa::Update)]
+        #[derive(Clone, PartialEq, Eq, Hash, Debug, salsa::SalsaValue)]
         pub struct $name<'db>(pub(crate) crate::span::transition::SpanTransitionChain<'db>);
         $(
             $(

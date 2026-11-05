@@ -76,7 +76,6 @@
 
 [
   "as"
-  "by"
   "const"
   "contract"
   "else"
@@ -93,6 +92,7 @@
   "mod"
   "msg"
   "mut"
+  "mut?"
   "own"
   "recv"
   "self"

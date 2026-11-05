@@ -19,7 +19,7 @@ fn bump24(_ x: mut Uint24) { x.val += 1 }
 #[test]
 fn entry_lane_field_updates() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let arr = unsafe { SolArray<Uint24>::at(0) }
+        let arr = unsafe { mut SolArray<Uint24>::at(0) }
         arr.push(Uint24 { val: 1 })
         arr.push(Uint24 { val: 2 })
         arr[1].val += 5
@@ -39,7 +39,7 @@ fn entry_lane_field_updates() uses (evm: mut Evm) {
 #[test]
 fn field_lane_updates() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let arr = unsafe { SolArray<Flags>::at(1) }
+        let arr = unsafe { mut SolArray<Flags>::at(1) }
         arr.push(Flags { a: 1, b: 2, big: 3 })
         arr[0].a += 4
         bump(mut arr[0].b)
@@ -71,7 +71,7 @@ fn inc_generic<T: Inc>(_ x: mut T) {
 #[test]
 fn receivers_and_generics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let flags = unsafe { SolArray<Flags>::at(1) }
+        let flags = unsafe { mut SolArray<Flags>::at(1) }
         flags.push(Flags { a: 1, b: 2, big: 3 })
         flags[0].a.inc()
         inc_generic(mut flags[0].b)
@@ -79,7 +79,7 @@ fn receivers_and_generics() uses (evm: mut Evm) {
         let b = flags[0].b
         assert(a == 2)
         assert(b == 3)
-        let lanes = unsafe { SolArray<Uint24>::at(2) }
+        let lanes = unsafe { mut SolArray<Uint24>::at(2) }
         lanes.push(Uint24 { val: 5 })
         lanes.push(Uint24 { val: 6 })
         lanes[0].inc()

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{HirDb, span::expr::LazyExprSpan};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Expr<'db> {
     Lit(LitKind<'db>),
     Block(Vec<StmtId>, BlockKind),
@@ -70,13 +70,13 @@ pub enum Expr<'db> {
 }
 
 /// Whether a block is a plain `{ .. }` or an `unsafe { .. }` block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum BlockKind {
     Normal,
     Unsafe,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::SalsaValue)]
 pub struct ExprId(u32);
 entity_impl!(ExprId);
 
@@ -90,14 +90,7 @@ impl ExprId {
     }
 }
 
-/// A closure expression within the body that contains it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
-pub struct ClosureDef<'db> {
-    pub body: Body<'db>,
-    pub expr: ExprId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Cond {
     /// A plain boolean expression condition.
     Expr(ExprId),
@@ -107,7 +100,7 @@ pub enum Cond {
     Bin(CondId, CondId, LogicalBinOp),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::SalsaValue)]
 pub struct CondId(u32);
 entity_impl!(CondId);
 
@@ -117,7 +110,7 @@ impl CondId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum FieldIndex<'db> {
     /// The field is indexed by its name.
     /// `field.foo`.
@@ -127,13 +120,13 @@ pub enum FieldIndex<'db> {
     Index(IntegerId<'db>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct MatchArm {
     pub pat: PatId,
     pub body: ExprId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, salsa::SalsaValue)]
 pub enum BinOp {
     Arith(ArithBinOp),
     Comp(CompBinOp),
@@ -170,7 +163,7 @@ pub enum ArithBinOp {
     Range,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum CompBinOp {
     /// `==`
     Eq,
@@ -219,13 +212,15 @@ pub enum UnOp {
     BitNot,
     /// `mut`
     Mut,
+    /// `mut?`: an access at the item's mode.
+    MaybeMut,
     /// `ref`
     Ref,
     /// `*`
     Deref,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct CallArg<'db> {
     pub label: Option<IdentId<'db>>,
     pub expr: ExprId,
@@ -254,7 +249,7 @@ impl<'db> CallArg<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Field<'db> {
     pub label: Option<IdentId<'db>>,
     pub expr: ExprId,
@@ -278,7 +273,7 @@ impl<'db> Field<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WithBinding<'db> {
     /// Effect key path (e.g. `Ctx` / `Storage<u8>`). When absent, the binding is
     /// shorthand and the key is inferred from the bound value and effect usage.

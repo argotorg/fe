@@ -24,10 +24,10 @@ pub contract Factory {
             init_code_hash<ArgChild>((x, owner))
         }
         MakeChild { salt, n } -> Address uses (create: mut Create) {
-            create.create2<Child>(value: 0, args: (), salt: mix(salt, n))
+            create.create2<Child>(value: Wei::zero(), args: (), salt: mix(salt, n))
         }
         MakeArgChild { x, owner, salt } -> Address uses (create: mut Create) {
-            create.create2<ArgChild>(value: 0, args: (x, owner), salt)
+            create.create2<ArgChild>(value: Wei::zero(), args: (x, owner), salt)
         }
     }
 }

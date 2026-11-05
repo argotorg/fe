@@ -170,6 +170,25 @@ fn test_cli_check_color_flag_controls_diagnostic_escape_codes() {
     }
 }
 
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_check_uses_the_backend_target() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("widths.fe");
+    fs::write(
+        &source,
+        "pub fn main() -> i32 {\n    static_assert(core::size_of<*u8>() == 8)\n    0\n}\n",
+    )
+    .expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    let (output, exit_code) = run_fe_main(&["check", "--backend", "native", source]);
+    assert_eq!(exit_code, 0, "{output}");
+    // EVM pointers are words.
+    let (output, exit_code) = run_fe_main(&["check", source]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(output.contains("static assertion failed"), "{output}");
+}
+
 #[test]
 fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
@@ -261,6 +280,51 @@ fn test_cli_check_ingot_nested_in_its_dependency() {
 }
 
 #[test]
+fn test_cli_check_assoc_item_ignores_traits_of_dependencies_not_in_scope() {
+    // A dependency implements its own trait with an associated const of the
+    // same name for `String<N>`. Without importing it, `Self::SIZE` in the
+    // root ingot's impl must not become ambiguous.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("app/src")).unwrap();
+    fs::create_dir_all(root.join("dep/src")).unwrap();
+    fs::write(
+        root.join("fe.toml"),
+        "[workspace]\nname = \"scope\"\nversion = \"0.1.0\"\nmembers = [{ path = \"app\", name = \"app\" }, { path = \"dep\", name = \"dep\" }]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n[dependencies]\ndep = true\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("dep/fe.toml"),
+        "[ingot]\nname = \"dep\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let trait_src = |name: &str| {
+        format!(
+            "pub trait {name} {{\n    const SIZE: usize\n    fn bytes(self) -> [u8; Self::SIZE]\n}}\n\
+             impl<const LEN: usize> {name} for String<LEN> {{\n    const SIZE: usize = LEN\n    \
+             fn bytes(self) -> [u8; Self::SIZE] {{ self.as_bytes().to_array() }}\n}}\n"
+        )
+    };
+    fs::write(root.join("dep/src/lib.fe"), trait_src("Key")).unwrap();
+    fs::write(
+        root.join("app/src/lib.fe"),
+        format!(
+            "{}pub fn first() -> u8 {{ dep::Key::bytes(\"ab\")[0] }}\n",
+            trait_src("Literal")
+        ),
+    )
+    .unwrap();
+
+    let (output, exit_code) = run_fe_check(root.to_str().expect("utf8 path"));
+    assert_eq!(exit_code, 0, "expected a clean check:\n{output}");
+}
+
+#[test]
 fn test_cli_check_unresolved_record_init_path_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("unresolved_record_init_path.fe");
@@ -293,11 +357,11 @@ fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
     fs::write(
         &file,
         r#"
-fn type_size<T>() -> u256 {
+fn type_size<T>() -> usize {
     core::size_of<T>()
 }
 
-fn trigger() -> u256 {
+fn trigger() -> usize {
     type_size<[u256; 0x8000000000000000]>()
 }
 "#,
@@ -575,6 +639,81 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
     assert_eq!(function["outputs"][0]["type"], "uint256");
 }
 
+#[test]
+fn test_cli_build_emit_sizes_accounts_for_every_code_byte() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let build = |name: &str, emit: &str| {
+        let out_dir = temp.path().join(name);
+        let out_dir_str = out_dir.to_string_lossy().to_string();
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--emit",
+            emit,
+            "--out-dir",
+            out_dir_str.as_str(),
+            fixture_path_str,
+        ]);
+        assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+        (out_dir, output)
+    };
+    let (sized, output) = build("sized", "runtime-bytecode,sizes");
+    let (plain, _) = build("plain", "runtime-bytecode");
+
+    let runtime = fs::read_to_string(sized.join("Foo.runtime.bin")).expect("read runtime");
+    assert_eq!(
+        runtime,
+        fs::read_to_string(plain.join("Foo.runtime.bin")).expect("read runtime"),
+        "emitting sizes changed the runtime bytecode"
+    );
+    assert!(
+        !sized.join("Foo.bin").exists(),
+        "unexpected deploy artifact"
+    );
+    assert!(
+        output.contains("Foo.sizes.txt"),
+        "unexpected output:\n{output}"
+    );
+
+    // Each section header gives the section's bytes and code bytes; the
+    // function lines below it add up to the code bytes.
+    let report = fs::read_to_string(sized.join("Foo.sizes.txt")).expect("read sizes");
+    let mut sections: Vec<(&str, usize, usize, usize)> = Vec::new();
+    let mut functions = Vec::new();
+    for line in report.lines() {
+        if let Some((section, rest)) = line.split_once(": ") {
+            let numbers: Vec<usize> = rest
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|word| !word.is_empty())
+                .map(|word| word.parse().expect("byte count"))
+                .collect();
+            sections.push((section, numbers[0], numbers[1], 0));
+        } else {
+            let (bytes, name) = line.trim_start().split_once(' ').expect("function line");
+            sections.last_mut().expect("section header").3 +=
+                bytes.parse::<usize>().expect("function bytes");
+            functions.push(name);
+        }
+    }
+    let names: Vec<_> = sections.iter().map(|section| section.0).collect();
+    assert_eq!(
+        names,
+        ["runtime", "creation"],
+        "unexpected report:\n{report}"
+    );
+    assert_eq!(sections[0].1, runtime.trim().len() / 2, "report:\n{report}");
+    for (section, _, code, function_bytes) in &sections {
+        assert_eq!(code, function_bytes, "{section} code bytes:\n{report}");
+    }
+    assert!(
+        functions.contains(&"contract_runtime_root_Foo"),
+        "missing runtime root:\n{report}"
+    );
+}
+
 #[cfg(all(
     feature = "cranelift",
     any(
@@ -693,6 +832,7 @@ fn build_native_program(source: &str, level: &str, temp: &Path) -> PathBuf {
     )
 ))]
 fn native_program_exit_code(executable: &Path, args: &[&str], level: &str) -> Option<i32> {
+    test_utils::skip_crash_reports();
     let mut child = Command::new(executable)
         .args(args)
         .spawn()
@@ -852,7 +992,7 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
     }
     assert_eq!(cases.len(), 24);
 
-    let mut source = String::from("use std::native::Args\n");
+    let mut source = String::from("use std::env::Args\n");
     for (index, (ty, op, _, _)) in cases.iter().enumerate() {
         source.push_str(&format!(
             "fn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
@@ -860,12 +1000,11 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
     }
     source.push_str(
         r#"
-pub fn main(argc: i32, argv: **u8) -> i32 {
-    let args = unsafe { Args::new(argc, argv) }
-    if args.len() != 2 { return 97 }
+pub fn main() -> i32 uses (args: Args) {
+    if args.count() != 2 { return 97 }
     let arg = args.get(1)
     if arg.len() != 1 { return 97 }
-    let selector = arg.byte_at(0)
+    let selector = arg.span()[0]
 "#,
     );
     let selectors: Vec<_> = cases
@@ -1013,7 +1152,7 @@ fn test_cli_build_native_rejects_executable_on_unsupported_host() {
     assert_eq!(exit_code, 1, "expected native host rejection:\n{output}");
     assert!(
         output.contains(
-            "native executable output currently requires an x86-64 Linux or AArch64 macOS host"
+            "native executable and library output currently require an x86-64 Linux or AArch64 macOS host"
         ),
         "unexpected output:\n{output}"
     );
@@ -1036,9 +1175,53 @@ fn test_cli_build_native_rejects_evm_artifacts() {
     ]);
     assert_eq!(exit_code, 1, "expected native build rejection:\n{output}");
     assert!(
-        output.contains("native backend only supports `--emit executable` and `--emit ir`"),
+        output.contains(
+            "native backend only supports `--emit executable`, `--emit object`, `--emit staticlib` and `--emit ir`"
+        ),
         "unexpected output:\n{output}"
     );
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_library_needs_exports_and_no_executable() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("library.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write native source");
+    let out_dir = temp.path().join("out");
+    for (emit, error) in [
+        (
+            "executable,staticlib",
+            "`--emit executable` cannot be combined with `--emit object` or `--emit staticlib`, which build a library without `main`",
+        ),
+        (
+            "staticlib",
+            "native library output requires an `#[export]` function",
+        ),
+    ] {
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--backend",
+            "native",
+            "--emit",
+            emit,
+            "--out-dir",
+            out_dir.to_str().expect("UTF-8 out path"),
+            source.to_str().expect("UTF-8 source path"),
+        ]);
+        assert_eq!(exit_code, 1, "{emit}: expected rejection:\n{output}");
+        assert!(
+            output.contains(error),
+            "{emit}: unexpected output:\n{output}"
+        );
+        assert!(!out_dir.join("liblibrary.a").exists(), "{emit}");
+    }
 }
 
 #[test]
@@ -1061,6 +1244,169 @@ fn test_cli_build_sonatina_rejects_executable_emit() {
         output.contains("`--emit executable` requires `--backend native`"),
         "unexpected output:\n{output}"
     );
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_library_emits() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("library.fe");
+    fs::write(&source, "#[export]\npub fn answer() -> i64 { 42 }\n").expect("write source");
+    for emit in ["object", "staticlib"] {
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--emit",
+            emit,
+            source.to_str().expect("UTF-8 source path"),
+        ]);
+        assert_eq!(exit_code, 1, "{emit}: expected rejection:\n{output}");
+        assert!(
+            output.contains("`--emit object` and `--emit staticlib` require `--backend native`"),
+            "{emit}: unexpected output:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_build_link_inputs_need_native_executables() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("host.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    let mut requests = vec![
+        vec!["build", "--link", "host.o", source],
+        vec!["build", "--link-lib", "host", source],
+    ];
+    if cfg!(feature = "cranelift") {
+        requests.push(vec![
+            "build",
+            "--backend",
+            "native",
+            "--emit",
+            "staticlib",
+            "--link",
+            "host.o",
+            source,
+        ]);
+    }
+    for args in requests {
+        let (output, exit_code) = run_fe_main(&args);
+        assert_eq!(exit_code, 1, "{args:?}: expected rejection:\n{output}");
+        assert!(
+            output.contains(
+                "`--link` and `--link-lib` require `--backend native` and `--emit executable`"
+            ),
+            "{args:?}: unexpected output:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_exported_functions() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("exports.fe");
+    fs::write(
+        &source,
+        "#[export]\npub fn answer() -> i64 { 42 }\ncontract Counter {}\n",
+    )
+    .expect("write source");
+    let out_dir = temp.path().join("out");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--out-dir",
+        out_dir.to_str().expect("UTF-8 out path"),
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 1, "expected export rejection:\n{output}");
+    assert!(
+        output
+            .contains("`#[export]` requires `--backend native`, but `exports::answer` is exported"),
+        "unexpected output:\n{output}"
+    );
+    assert!(!out_dir.exists(), "a rejected build must write nothing");
+}
+
+#[cfg(feature = "sp1")]
+#[test]
+fn test_cli_build_sp1_ir_needs_no_toolchain_and_elf_preflights_it() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("guest.fe");
+    fs::write(&source, include_str!("../../../examples/sp1_increment.fe")).unwrap();
+    for emit in ["ir", "elf", "elf,ir"] {
+        let out = temp.path().join(emit);
+        let result = Command::new(fe_binary())
+            .args(["build", "--backend", "sp1", "--emit", emit, "--out-dir"])
+            .arg(&out)
+            .arg(&source)
+            .env_remove("SONATINA_SP1_TOOLCHAIN")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        if emit == "ir" {
+            assert!(result.status.success(), "{stderr}");
+            let ir = fs::read_to_string(out.join("guest.sp1.sona")).unwrap();
+            assert!(ir.contains("riscv64im-succinct-zkvm-elf"));
+            assert!(!out.join("guest.elf").exists());
+        } else {
+            assert_eq!(result.status.code(), Some(1), "{stderr}");
+            assert!(stderr.contains("set SONATINA_SP1_TOOLCHAIN"), "{stderr}");
+            assert!(!out.exists(), "failed preflight must not write artifacts");
+        }
+    }
+}
+
+#[cfg(feature = "sp1")]
+#[test]
+fn test_cli_build_sp1_rejects_incompatible_artifacts() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("guest.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").unwrap();
+    for emit in [
+        "bytecode",
+        "runtime-bytecode",
+        "abi",
+        "metadata",
+        "executable",
+    ] {
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--backend",
+            "sp1",
+            "--emit",
+            emit,
+            source.to_str().unwrap(),
+        ]);
+        assert_eq!(exit_code, 1, "{output}");
+        assert!(output.contains("SP1 backend only supports"), "{output}");
+    }
+}
+
+#[test]
+fn test_cli_test_rejects_sp1_backend() {
+    let (output, exit_code) = run_fe_main(&["test", "--backend", "sp1"]);
+    assert_eq!(exit_code, 2, "{output}");
+    assert!(output.contains("invalid value 'sp1'"), "{output}");
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_elf_emit() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("guest.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").unwrap();
+    let (output, exit_code) = run_fe_main(&["build", "--emit", "elf", source.to_str().unwrap()]);
+    assert_eq!(exit_code, 1, "{output}");
+    assert!(
+        output.contains("`--emit elf` requires `--backend sp1`"),
+        "{output}"
+    );
+}
+
+#[cfg(not(feature = "sp1"))]
+#[test]
+fn test_cli_sp1_requires_feature() {
+    let (output, exit_code) = run_fe_main(&["build", "--backend", "sp1"]);
+    assert_eq!(exit_code, 2, "{output}");
+    assert!(output.contains("invalid value 'sp1'"), "{output}");
 }
 
 #[test]
@@ -1103,6 +1449,95 @@ fn test_cli_build_emit_abi_dyn_string_matches_string_selector() {
 }
 
 #[test]
+fn test_cli_build_emit_abi_enum_field_uses_sol_compat_type() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_enum_field.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Foo.abi.json");
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+
+    // An enum is represented by the Solidity type its `SolCompat` impl names.
+    let function = abi
+        .as_array()
+        .expect("abi array")
+        .iter()
+        .find(|entry| entry["type"] == "function")
+        .expect("function entry");
+    assert_eq!(function["name"], "postOp");
+    let input_types: Vec<_> = function["inputs"]
+        .as_array()
+        .expect("inputs")
+        .iter()
+        .map(|input| input["type"].as_str().expect("input type"))
+        .collect();
+    assert_eq!(input_types, ["uint8", "bytes", "uint256", "uint256"]);
+    assert_eq!(function["inputs"][0]["name"], "mode");
+    assert_eq!(function["outputs"][0]["type"], "uint8");
+}
+
+#[test]
+fn test_cli_build_emit_abi_leaves_tuple_struct_fields_unnamed() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_tuple_struct.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Foo.abi.json");
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+
+    // Positional field names only exist for `.0` lookups; like tuple
+    // components, the fields are unnamed in the ABI.
+    let function = abi
+        .as_array()
+        .expect("abi array")
+        .iter()
+        .find(|entry| entry["type"] == "function")
+        .expect("function entry");
+    let components = function["inputs"][0]["components"]
+        .as_array()
+        .expect("tuple components");
+    assert_eq!(components.len(), 2);
+    for component in components {
+        assert_eq!(component["name"], "");
+        assert_eq!(component["type"], "uint256");
+    }
+}
+
+#[test]
 fn test_cli_build_emit_abi_follows_inherent_const_selector() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/emit_abi/abi_inherent_const_selector.fe");
@@ -1138,6 +1573,45 @@ fn test_cli_build_emit_abi_follows_inherent_const_selector() {
         .expect("function entry derived from inherent-const selector");
     assert_eq!(function["name"], "ping");
     assert_eq!(function["inputs"][0]["type"], "uint256");
+}
+
+#[test]
+fn test_cli_build_emit_abi_follows_the_called_mode() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_mut_body_events.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Foo.abi.json");
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+
+    // The recv arm calls `slot` at `mut`, through a `mut?` function: the
+    // event and the error of its `mut` body are the contract's.
+    let entries = abi.as_array().expect("abi array");
+    for (kind, name) in [("event", "Wrote"), ("error", "Overflow")] {
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["type"] == kind && entry["name"] == name),
+            "missing {kind} `{name}`: {abi}"
+        );
+    }
 }
 
 #[test]
@@ -2489,10 +2963,11 @@ fn test_cli_build_from_metadata_warns_on_compiler_commit_mismatch() {
 
 #[test]
 fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
-    // Two modules in the same ingot each define a contract named `Foo`;
-    // `settings.compilationTarget` records which source file the metadata is
-    // for. The rebuild must scope itself to that module instead of failing on
-    // the ambiguous name.
+    // Two modules in the same ingot each define a contract named `Foo`, so
+    // their artifacts are qualified by module path (`lib__a__Foo`,
+    // `lib__b__Foo`). `settings.compilationTarget` records the source file and
+    // the contract's path in it; the rebuild must produce the contract of that
+    // module.
     let temp = tempdir().expect("tempdir");
     let root = temp.path();
     fs::create_dir_all(root.join("app/src")).expect("create app/src");
@@ -2521,7 +2996,7 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
     assert_eq!(exit_code, 0, "original build failed:\n{output}");
 
     let metadata: Value = serde_json::from_str(
-        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+        &fs::read_to_string(out_dir.join("lib__a__Foo.metadata.json")).expect("read metadata"),
     )
     .expect("parse metadata");
     assert_eq!(
@@ -2536,7 +3011,7 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
         "build",
         "--from-metadata",
         out_dir
-            .join("Foo.metadata.json")
+            .join("lib__a__Foo.metadata.json")
             .to_str()
             .expect("metadata utf8"),
         "--emit",
@@ -2548,8 +3023,8 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
         exit_code, 0,
         "rebuild must honor the recorded source path:\n{output}"
     );
-    let rebuilt_runtime =
-        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+    let rebuilt_runtime = fs::read_to_string(recon_out.join("lib__a__Foo.runtime.bin"))
+        .expect("read rebuilt runtime.bin");
 
     // The rebuilt bytecode must be the `src/a.fe` contract: it must match a
     // reference build of an identical ingot containing only that module.
@@ -3314,6 +3789,284 @@ fn test_fe_test(fixture: Fixture<&str>) {
     );
 }
 
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+/// `fe_test` fixtures that need the EVM: contracts, storage, EVM
+/// instructions or EVM effects. Sorted.
+const EVM_ONLY_FE_TESTS: &[&str] = &[
+    "abi_array_overflow_revert",
+    "abi_array_view",
+    "abi_bounded_input_len_untrusted",
+    "abi_decode_input_len_bound",
+    "abi_dynamic_payload",
+    "abi_nested_msg_decode_bounds",
+    "abi_signed_int_boundary",
+    "abi_struct",
+    "abi_unpadded_dynamic_payload",
+    "acceptance",
+    "address_call_method",
+    "address_checksum",
+    "address_static_method",
+    "address_validation",
+    "assignment_order",
+    "assoc_type_fields",
+    "assoc_type_lanes",
+    "associated_shape_forwarding",
+    "black_box",
+    "buffer_capacity_bound",
+    "bytes_view_overflow_revert",
+    "call_with_default",
+    "clear_place",
+    "clear_zero_sized",
+    "closure_effects",
+    "closure_trait_effects",
+    "code_backed_array_storage_copy",
+    "code_backed_scalar_field",
+    "code_struct_field_offsets",
+    "coin",
+    "composed_abi_decoder",
+    "const_numeric_extern_intrinsics",
+    "const_trait_provider_contract",
+    "contract_field_explicit_slot",
+    "contract_field_mut_borrow_matrix",
+    "contract_init_fixed_array_arg",
+    "copied_state_words",
+    "ctx",
+    "delegatecall_state_effects",
+    "deploy_and_call",
+    "deposit_contract",
+    "dyn_array_from_slice",
+    "dyn_array_get",
+    "dynamic_offset_overflow",
+    "effect_handle_field_deref",
+    "eip712_domain",
+    "encode_msg_calldata",
+    "entry_space_numbering",
+    "enum",
+    "enum_state_machine",
+    "erc1167_clones",
+    "erc20",
+    "erc20_try_transfer",
+    "erc4337",
+    "erc721_erc1155_try_transfer",
+    "escrow",
+    "event_bytes",
+    "event_dyn_array_address",
+    "event_dyn_array_u256",
+    "event_dyn_string",
+    "event_dynamic_mixed",
+    "event_many_fields",
+    "event_zero_fields",
+    "evm_hashing",
+    "evm_init_code_hash",
+    "factory",
+    "fixed_bytes_constant_return",
+    "for_mut_index_base",
+    "gcd",
+    "generated_type_param_names",
+    "immutable_aggregate_forwarding",
+    "impl_method_does_not_shadow_free_fn",
+    "keccak_words",
+    "lane_accesses",
+    "lane_projection_spaces",
+    "leading_zeros",
+    "library_state_index",
+    "long_error_event_names",
+    "long_string_literals",
+    "loop_base_mutation",
+    "mandelbrot",
+    "mandelbrot_minimal",
+    "maybe_mut_effect_calls",
+    "mem_buffer_word_writes",
+    "mem_replace_take",
+    "mem_vec",
+    "merkle_proof",
+    "method_forwards_memory_mut_borrow",
+    "minimum_gas_calls",
+    "mixed_space_forwarding",
+    "mode_receivers_contract",
+    "msg_array_arg",
+    "msg_enum_field",
+    "msg_multiple_dynamic_bytes",
+    "msg_nested_array_arg",
+    "mul_div",
+    "multicall",
+    "mut_self_storage_receiver_regression",
+    "mutex_lock_slot_no_transient_collision",
+    "nested_index_assignment",
+    "never_returning_recv_returns",
+    "newtype_casts",
+    "non_mem_effect_provider_mut_struct_receiver",
+    "option_mut_scalar_match_regression",
+    "ownable",
+    "packed_encoding",
+    "packed_width_mismatch",
+    "param_patterns",
+    "pattern_accesses",
+    "payable",
+    "payable_return",
+    "per_type_pins",
+    "pinned_bound_layout",
+    "pinned_field_spaces",
+    "pinned_slots",
+    "pointer_first_class",
+    "precompile_in_mut_method",
+    "precompile_wrappers",
+    "product_params",
+    "projected_storage_map_effect_forwarding",
+    "projection_slides",
+    "random",
+    "raw_slot_constructors",
+    "receiver_returns_non_mem_with_same_typed_memory_arg",
+    "recv_arm_variant_paths",
+    "recv_fallback",
+    "recv_short_calldata_selector_guard",
+    "reentrancy_mutex",
+    "reentrancy_mutex_storage_map",
+    "reentrancy_tstor_ptr",
+    "revert_helpers",
+    "runtime_handle_preservation",
+    "runtime_packed_bytes",
+    "safe_erc20",
+    "shape",
+    "signature",
+    "simple_amm",
+    "snapshot_effects",
+    "sol_array_lanes",
+    "sol_compat_int_abi_roundtrip",
+    "sol_compat_int_wrapping",
+    "sol_slot",
+    "sol_storage_collections",
+    "specialized_adt_array_extent",
+    "state_only_sum_shapes",
+    "state_pointers",
+    "staticcall_decode",
+    "storage_bytes_encode_return",
+    "storage_bytes_to_memory",
+    "storage_collection_loops",
+    "storage_heap",
+    "storage_lane_grants",
+    "storage_layout_agreement",
+    "storage_layout_helpers",
+    "storage_map",
+    "storage_map_aggregate_effects",
+    "storage_map_allocating_key",
+    "storage_map_array",
+    "storage_map_effect_projection",
+    "storage_map_enum_payload_methods",
+    "storage_map_field_methods",
+    "storage_map_field_projection",
+    "storage_map_generic_pair_fields",
+    "storage_map_generic_struct_methods",
+    "storage_map_index",
+    "storage_map_key_types",
+    "storage_map_native_values",
+    "storage_map_projection_forwarding",
+    "storage_map_receiver_projection",
+    "storage_map_record_patterns",
+    "storage_map_recursive_views",
+    "storage_map_struct_entries",
+    "storage_map_tuple_keys",
+    "storage_map_tuple_patterns",
+    "storage_map_variant_projection",
+    "storage_nested_array_stride",
+    "storage_packed_array",
+    "storage_packed_projections",
+    "storage_packing",
+    "storage_slots_closures",
+    "text_parse",
+    "time_units",
+    "tslot_values",
+    "tstorptr_field_projection_shapes",
+    "tstorptr_struct_field",
+    "tuple_return_abi_params",
+    "tuple_struct",
+    "typed_calls",
+    "unchecked_signed_negation",
+    "unsafe_splits",
+    "vault",
+    "voting",
+    "wei_units",
+    "wide_function_arguments",
+    "zero_length_array_projections",
+    "zero_option_result",
+];
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+/// `fe_test` fixtures that fail natively at the listed optimization levels,
+/// and why.
+const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[(
+    "raw_record_layout",
+    &["0", "2"],
+    "EVM memory packs record fields big-endian; native memory aligns them little-endian",
+)];
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
+    glob: "*.fe",
+)]
+fn test_fe_test_native(fixture: Fixture<&str>) {
+    let path = fixture.path();
+    let name = Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .expect("fixture name");
+    if EVM_ONLY_FE_TESTS.binary_search(&name).is_ok() {
+        let (output, exit_code) = run_fe_main(&["test", "--backend", "native", path]);
+        assert!(
+            exit_code != 0
+                && (output.contains("needs the Evm compilation target")
+                    || output.contains("does not support instruction")
+                    || output.contains("the root effect `Host` does not provide")),
+            "{name} no longer needs the EVM; remove it from EVM_ONLY_FE_TESTS:\n{output}"
+        );
+        return;
+    }
+    for level in ["0", "2"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--backend",
+            "native",
+            "-O",
+            level,
+            "--jobs",
+            "1",
+            path,
+        ]);
+        match NATIVE_FE_TEST_FAILURES
+            .iter()
+            .find(|(fixture, levels, _)| *fixture == name && levels.contains(&level))
+        {
+            Some((_, _, reason)) => assert_ne!(
+                exit_code, 0,
+                "{name} now passes natively at O{level} ({reason}); remove it from NATIVE_FE_TEST_FAILURES"
+            ),
+            None => assert_eq!(
+                exit_code, 0,
+                "native fe test failed for {path} at O{level}:\n{output}\n\nTo reproduce:\n  cargo run --features cranelift --bin fe -- test --backend native -O {level} --jobs 1 {path}",
+            ),
+        }
+    }
+}
+
 #[test]
 fn test_fe_test_rejects_oversized_balance_literal() {
     let temp = tempdir().expect("tempdir");
@@ -3948,7 +4701,7 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
         ),
         (
             "unsafe_trust_create",
-            "evm.create2<dep::Vault>(value: 0, args: (), salt: 0)",
+            "evm.create2<dep::Vault>(value: Wei::zero(), args: (), salt: 0)",
             "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
         ),
     ] {

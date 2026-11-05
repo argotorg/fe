@@ -20,12 +20,12 @@ pub use name_resolver::{
 pub(crate) use path_resolver::resolve_type_path_definition;
 pub(crate) use path_resolver::{FindAssociatedTypeError, find_associated_type};
 pub use path_resolver::{
-    PathRes, PathResError, PathResErrorKind, ResolvedVariant, resolve_ident_to_bucket,
-    resolve_name_res, resolve_path,
+    PathRes, PathResError, PathResErrorKind, ResolvedVariant, resolve_ident_to_bucket, resolve_path,
 };
 pub(crate) use path_resolver::{
     TypePosition, resolve_name_res_with_minter, resolve_path_with_minter,
-    resolve_path_with_observer_and_minter, resolve_type_position_path_with_minter,
+    resolve_path_with_observer_and_minter, resolve_trait_path_with_observer_and_minter,
+    resolve_type_position_path_with_minter, trait_arg_path_diag,
 };
 pub(crate) use path_resolver::{
     earliest_conflicting_inherent_const_impl, shadowed_inherent_fn_for_const,
@@ -38,7 +38,7 @@ use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn resolve_query<'db>(
     db: &'db dyn HirAnalysisDb,
     query: EarlyNameQueryId<'db>,
@@ -68,7 +68,7 @@ impl ModuleAnalysisPass for ImportAnalysisPass {
     }
 }
 
-#[salsa::tracked(return_ref, cycle_fn=resolve_imports_cycle_recover, cycle_initial=resolve_imports_cycle_initial)]
+#[salsa::tracked(cycle_initial=resolve_imports_cycle_initial)]
 pub fn resolve_imports<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -77,27 +77,9 @@ pub fn resolve_imports<'db>(
     let (imports, diags) = resolver.resolve_imports();
     (diags, imports)
 }
-fn resolve_imports_cycle_recover<'db>(
-    db: &'db dyn HirAnalysisDb,
-    _value: &(Vec<ImportDiag<'db>>, ResolvedImports<'db>),
-    count: u32,
-    ingot: Ingot<'db>,
-) -> salsa::CycleRecoveryAction<(Vec<ImportDiag<'db>>, ResolvedImports<'db>)> {
-    // Log cycle information for debugging
-    debug!(
-        "[CYCLE DETECTED] resolve_imports cycle detected for ingot '{}' (kind={:?}), iteration #{}",
-        ingot.base(db),
-        ingot.kind(db),
-        count
-    );
-
-    // Return the iterate strategy to allow for fixpoint iteration
-    // This allows Salsa to iteratively converge to a fixpoint solution
-    salsa::CycleRecoveryAction::Iterate
-}
-
 fn resolve_imports_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     ingot: Ingot<'db>,
 ) -> (Vec<ImportDiag<'db>>, ResolvedImports<'db>) {
     // Log initial cycle value creation for debugging

@@ -223,8 +223,9 @@ fn standalone_file_warning() -> Diagnostic {
 mod tests {
     use super::*;
     use crate::test_utils::load_ingot_from_directory;
+    use ::test_utils::deadline::run_inputs;
     use common::InputDb;
-    use std::path::PathBuf;
+    use std::{path::PathBuf, time::Duration};
 
     const FIXTURE: &str = "single_ingot";
 
@@ -431,13 +432,12 @@ fn foo() -> u256 {
         }
     }
 
-    /// Fuzz diagnostics with many malformed inputs to find panics.
-    /// Uses catch_unwind to detect rather than crash.
+    /// Fuzz diagnostics with many malformed inputs to find panics and hangs.
+    /// Each input runs under a deadline, so an input that loops fails the test
+    /// and is named in its message.
     #[test]
-    #[ignore]
-    fn fuzz_diagnostics_for_panics() {
-        let mut db = setup_db();
-        let inputs = [
+    fn fuzz_diagnostics_for_panics_and_hangs() {
+        let hand_written = [
             // Sean's reported scenarios
             "impl Foo { fn set(mself, val: u256) { self.x = val } }",
             "struct S<T, const N: usize>",
@@ -511,29 +511,31 @@ fn foo() -> u256 {
             "enum E { A(",
         ];
 
-        let mut panics = Vec::new();
-        for input in &inputs {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                update_and_diagnose(&mut db, input);
-            }));
-            if let Err(e) = result {
-                let msg = e
-                    .downcast_ref::<&str>()
-                    .copied()
-                    .or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
-                    .unwrap_or("<non-string panic>");
-                panics.push(format!("PANIC on '{input}': {msg}"));
-                // Reset DB after panic since state may be corrupted
-                db = setup_db();
-            }
-        }
+        let mut inputs: Vec<String> = hand_written.map(String::from).into();
 
-        if !panics.is_empty() {
-            panic!(
-                "Found {} panic(s) in diagnostics:\n{}",
-                panics.len(),
-                panics.join("\n")
-            );
+        // A single punctuation character, alone and beside a valid item.
+        for c in ('!'..='~').filter(char::is_ascii_punctuation) {
+            inputs.push(format!("{c}"));
+            inputs.push(format!("{c}\nfn f() {{}}"));
+            inputs.push(format!("fn f() {{}}\n{c}"));
         }
+        // An attribute and the code after it, typed one character at a time.
+        let typed = "#[test]\nfn check() {\n    let x: u256 = 1\n}\n\nstruct S { x: u256 }\n";
+        inputs.extend(
+            typed
+                .char_indices()
+                .map(|(end, _)| typed[..end].to_string()),
+        );
+        // Inner attributes that are incomplete or out of place.
+        inputs.extend(["#!", "#![", "#![a]", "fn f() {}\n#![a]"].map(String::from));
+
+        // Edits accumulate in one database, as they do while typing. A panic
+        // rebuilds it, since its state may be corrupted.
+        run_inputs(inputs, Duration::from_secs(30), || {
+            let mut db = setup_db();
+            move |input: &str| {
+                update_and_diagnose(&mut db, input);
+            }
+        });
     }
 }

@@ -12,21 +12,17 @@ const LOREM_HEX: DynString = "4c6f72656d20697073756d20646f6c6f722073697420616d65
 fn from_hex(_ hex: DynString) -> Bytes {
     let len = hex.len() / 2
     let buffer = MemBuffer::alloc(len)
-    var i: u256 = 0
-    while i < len {
+    for i in 0..len {
         let byte = text::parse_hex_uint(hex.slice(start: 2 * i, len: 2)).unwrap()
         unsafe { *ptr::offset_bytes(buffer.ptr(), i) = byte.downcast_truncate() }
-        i += 1
     }
     Bytes::from_payload(source: buffer.span())
 }
 
 fn to_hex(_ bytes: Bytes) -> DynString {
     var builder = TextBuilder::new()
-    var i: u256 = 0
-    while i < bytes.len() {
+    for i in 0..bytes.len() {
         builder = builder.push(text::hex(bytes.byte_at(i) as u256, 1))
-        i += 1
     }
     builder.finish()
 }
@@ -66,7 +62,7 @@ fn hex_bool(_ hex: DynString) -> Option<bool> {
     rlp::decode(input.payload_span())?.as_bool(input.payload_span())
 }
 
-fn hex_items(_ hex: DynString) -> Option<u256> {
+fn hex_items(_ hex: DynString) -> Option<usize> {
     let input = from_hex(hex)
     Option::Some(rlp::decode(input.payload_span())?.items(input.payload_span())?.len())
 }
@@ -107,17 +103,12 @@ fn encode_scalars() {
             )
             == "a0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     )
-    let address = Address { inner: 0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed }
+    let address = Address::new(0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed)
     assert!(to_hex(rlp::encode_address(address)) == "945aaeb6053f3e94c9b9a09f33669435e7ef1beaed")
-    let zero = Address { inner: 0 }
+    let zero = Address::new(0)
     assert!(to_hex(rlp::encode_address(zero)) == "940000000000000000000000000000000000000000")
     assert!(to_hex(rlp::encode_bool(true)) == "01")
     assert!(to_hex(rlp::encode_bool(false)) == "80")
-}
-
-#[test(should_revert)]
-fn encode_noncanonical_address_reverts() {
-    let _ = rlp::encode_address(Address { inner: 1 << 160 })
 }
 
 #[test]
@@ -163,7 +154,7 @@ fn decode_scalars() {
         rlp::decode(max.payload_span()).unwrap().as_uint(max.payload_span()).unwrap()
             == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
     )
-    let address = Address { inner: 0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed }
+    let address = Address::new(0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed)
     let encoded = rlp::encode_address(address)
     let item = rlp::decode(encoded.payload_span()).unwrap()
     assert!(item.as_address(encoded.payload_span()).unwrap() == address)

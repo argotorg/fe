@@ -1,0 +1,16 @@
+trait Decoder<A> {
+    fn read(mut self) -> u256
+}
+
+trait Encoder {
+    type Output
+}
+
+// Inside `Abi`, bounds and qualified paths name the traits that the
+// associated types `Decoder` and `Encoder` shadow.
+trait Abi {
+    type Decoder: Decoder<Self>
+    type Encoder: Encoder
+    fn decoder() -> Self::Decoder
+    fn output() -> <Self::Encoder as Encoder>::Output
+}

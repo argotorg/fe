@@ -3,7 +3,7 @@ source: crates/parser/tests/syntax_node.rs
 expression: node
 input_file: crates/parser/test_files/syntax_node/stmts/for.fe
 ---
-Root@0..145
+Root@0..96
   ForStmt@0..34
     ForKw@0..3 "for"
     WhiteSpace@3..4 " "
@@ -119,58 +119,3 @@ Root@0..145
                   Ident@93..94 "y"
       Newline@94..95 "\n"
       RBrace@95..96 "}"
-  Newline@96..98 "\n\n"
-  ForStmt@98..145
-    ForKw@98..101 "for"
-    WhiteSpace@101..102 " "
-    PathPat@102..103
-      Path@102..103
-        PathSegment@102..103
-          Ident@102..103 "x"
-    WhiteSpace@103..104 " "
-    InKw@104..106 "in"
-    WhiteSpace@106..107 " "
-    PathExpr@107..109
-      Path@107..109
-        PathSegment@107..109
-          Ident@107..109 "xs"
-    WhiteSpace@109..110 " "
-    ForDriver@110..123
-      Ident@110..112 "by"
-      WhiteSpace@112..113 " "
-      CallExpr@113..123
-        PathExpr@113..121
-          Path@113..121
-            PathSegment@113..121
-              Ident@113..121 "reversed"
-        CallArgList@121..123
-          LParen@121..122 "("
-          RParen@122..123 ")"
-    WhiteSpace@123..124 " "
-    BlockExpr@124..145
-      LBrace@124..125 "{"
-      Newline@125..126 "\n"
-      WhiteSpace@126..130 "    "
-      ExprStmt@130..143
-        AssignExpr@130..143
-          PathExpr@130..133
-            Path@130..133
-              PathSegment@130..133
-                Ident@130..133 "sum"
-          WhiteSpace@133..134 " "
-          Eq@134..135 "="
-          WhiteSpace@135..136 " "
-          BinExpr@136..143
-            PathExpr@136..139
-              Path@136..139
-                PathSegment@136..139
-                  Ident@136..139 "sum"
-            WhiteSpace@139..140 " "
-            Plus@140..141 "+"
-            WhiteSpace@141..142 " "
-            PathExpr@142..143
-              Path@142..143
-                PathSegment@142..143
-                  Ident@142..143 "x"
-      Newline@143..144 "\n"
-      RBrace@144..145 "}"

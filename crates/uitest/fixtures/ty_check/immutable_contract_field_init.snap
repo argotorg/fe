@@ -5,49 +5,49 @@ expression: diags
 input_file: fixtures/ty_check/immutable_contract_field_init.fe
 ---
 error[3-0065]: contract state cannot hold a memory pointer
-    ┌─ immutable_contract_field_init.fe:200:10
+    ┌─ immutable_contract_field_init.fe:253:10
     │
-200 │     ptr: *u256
+253 │     ptr: *u256
     │          ^^^^^ `*u256` is a memory pointer
     │
     = memory lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a calldata pointer
-    ┌─ immutable_contract_field_init.fe:204:10
+    ┌─ immutable_contract_field_init.fe:257:10
     │
-204 │     ptr: std::evm::CalldataPtr<u256>
+257 │     ptr: std::evm::CalldataPtr<u256>
     │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<u256>` is a calldata pointer
     │
     = calldata lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a memory pointer
-    ┌─ immutable_contract_field_init.fe:308:10
+    ┌─ immutable_contract_field_init.fe:361:10
     │
-308 │     ptr: *()
+361 │     ptr: *()
     │          ^^^ `*()` is a memory pointer
     │
     = memory lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a calldata pointer
-    ┌─ immutable_contract_field_init.fe:312:10
+    ┌─ immutable_contract_field_init.fe:365:10
     │
-312 │     ptr: std::evm::CalldataPtr<()>
+365 │     ptr: std::evm::CalldataPtr<()>
     │          ^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<()>` is a calldata pointer
     │
     = calldata lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a memory pointer
-    ┌─ immutable_contract_field_init.fe:316:10
+    ┌─ immutable_contract_field_init.fe:369:10
     │
-316 │     ptr: *Empty
+369 │     ptr: *Empty
     │          ^^^^^^ `*Empty` is a memory pointer
     │
     = memory lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a calldata pointer
-    ┌─ immutable_contract_field_init.fe:320:10
+    ┌─ immutable_contract_field_init.fe:373:10
     │
-320 │     ptr: std::evm::CalldataPtr<Empty>
+373 │     ptr: std::evm::CalldataPtr<Empty>
     │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<Empty>` is a calldata pointer
     │
     = calldata lasts for one call, so a later one could not follow the pointer
@@ -99,170 +99,201 @@ error[8-0086]: immutable contract field is not initialized
    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
 error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:136:5
+    ┌─ immutable_contract_field_init.fe:143:5
     │
-136 │       x: u256
+143 │       x: u256
     │       ^ `x` must be assigned in `init` on every successful path
-137 │
-138 │       init(flag: bool, v: u256) uses (mut x) {
-    │ ╭────────────────────────────────────────────'
-139 │ │         while flag {
-140 │ │             x = v
-141 │ │         }
-142 │ │     }
-    │ ╰─────' this init block may finish without assigning `x`
-    │
-    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
-
-error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:146:5
-    │
-146 │       x: u256
-    │       ^ `x` must be assigned in `init` on every successful path
-147 │
-148 │       init(v: u256) uses (mut x) {
-    │ ╭────────────────────────────────'
-149 │ │         let b = true
-150 │ │         while let false = b {
-151 │ │             x = v
-152 │ │             break
-153 │ │         }
-154 │ │     }
-    │ ╰─────' this init block may finish without assigning `x`
-    │
-    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
-
-error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:158:5
-    │
-158 │       x: u256
-    │       ^ `x` must be assigned in `init` on every successful path
-159 │
-160 │       init(v: u256) uses (mut x) {
-    │ ╭────────────────────────────────'
-161 │ │         var run = true
-162 │ │         for _ in 0..1 {
-163 │ │             run = false
-    · │
-168 │ │         }
-169 │ │     }
-    │ ╰─────' this init block may finish without assigning `x`
-    │
-    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
-
-error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:173:5
-    │
-173 │       x: u256
-    │       ^ `x` must be assigned in `init` on every successful path
-    ·
-176 │       init(v: u256) uses (mut x, mut i) {
-    │ ╭───────────────────────────────────────'
-177 │ │         i = 0
-178 │ │         while i < 1 {
-179 │ │             x = v
-180 │ │             i += 1
-181 │ │         }
-182 │ │     }
-    │ ╰─────' this init block may finish without assigning `x`
-    │
-    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
-
-error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:186:5
-    │
-186 │       x: u256
-    │       ^ `x` must be assigned in `init` on every successful path
-    ·
-189 │       init(v: u256) uses (mut x, mut i) {
-    │ ╭───────────────────────────────────────'
-190 │ │         i = 0
-191 │ │         while i < 1 {
-192 │ │             x = v
-    · │
-195 │ │         }
-196 │ │     }
-    │ ╰─────' this init block may finish without assigning `x`
-    │
-    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
-
-error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:220:5
-    │
-220 │       x: u256
-    │       ^ `x` must be assigned in `init` on every successful path
-221 │
-222 │       init() uses (mut x) {
+144 │
+145 │       init() uses (mut x) {
     │ ╭─────────────────────────'
-223 │ │         own_write(v: x)
-224 │ │     }
+146 │ │         var a: u256 = 1
+147 │ │         var c: u256 = 2
+148 │ │         init_after_parts((mut a, mut x), mut c)
+149 │ │     }
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
 error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:228:5
+    ┌─ immutable_contract_field_init.fe:169:5
     │
-228 │       x: u256
+169 │       x: u256
     │       ^ `x` must be assigned in `init` on every successful path
-    ·
-231 │       init() uses (mut x, mut i) {
+170 │
+171 │       init() uses (mut x) {
+    │ ╭─────────────────────────'
+172 │ │         var c: u256 = 0
+173 │ │         init_after_nested(((1, mut x), 2), mut c)
+174 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0086]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:189:5
+    │
+189 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+190 │
+191 │       init(flag: bool, v: u256) uses (mut x) {
+    │ ╭────────────────────────────────────────────'
+192 │ │         while flag {
+193 │ │             x = v
+194 │ │         }
+195 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0086]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:199:5
+    │
+199 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+200 │
+201 │       init(v: u256) uses (mut x) {
     │ ╭────────────────────────────────'
-232 │ │         i = 0
-233 │ │         while i < 2 {
-234 │ │             i += 1
-235 │ │         }
-236 │ │     }
+202 │ │         let b = true
+203 │ │         while let false = b {
+204 │ │             x = v
+205 │ │             break
+206 │ │         }
+207 │ │     }
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
 error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:244:5
+    ┌─ immutable_contract_field_init.fe:211:5
     │
-244 │       x: u256
+211 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+212 │
+213 │       init(v: u256) uses (mut x) {
+    │ ╭────────────────────────────────'
+214 │ │         var run = true
+215 │ │         for _ in 0..1 {
+216 │ │             run = false
+    · │
+221 │ │         }
+222 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0086]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:226:5
+    │
+226 │       x: u256
     │       ^ `x` must be assigned in `init` on every successful path
     ·
-247 │       init(v: bool) uses (mut x, mut flag) {
-    │ ╭──────────────────────────────────────────'
-248 │ │         init_flag(v: v)
+229 │       init(v: u256) uses (mut x, mut i) {
+    │ ╭───────────────────────────────────────'
+230 │ │         i = 0
+231 │ │         while i < 1 {
+232 │ │             x = v
+233 │ │             i += 1
+234 │ │         }
+235 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0086]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:239:5
+    │
+239 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+    ·
+242 │       init(v: u256) uses (mut x, mut i) {
+    │ ╭───────────────────────────────────────'
+243 │ │         i = 0
+244 │ │         while i < 1 {
+245 │ │             x = v
+    · │
+248 │ │         }
 249 │ │     }
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
 error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:262:5
+    ┌─ immutable_contract_field_init.fe:273:5
     │
-262 │       x: u256
+273 │       x: u256
     │       ^ `x` must be assigned in `init` on every successful path
-263 │
-264 │       init(v: u256) uses (mut x) {
-    │ ╭────────────────────────────────'
-265 │ │         var b = true
-266 │ │         let r = mut b
-267 │ │         r = false
-    · │
-270 │ │         }
-271 │ │     }
+274 │
+275 │       init() uses (mut x) {
+    │ ╭─────────────────────────'
+276 │ │         own_write(v: x)
+277 │ │     }
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
 error[8-0086]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:279:5
+    ┌─ immutable_contract_field_init.fe:281:5
     │
-279 │       x: u256
+281 │       x: u256
     │       ^ `x` must be assigned in `init` on every successful path
-280 │
-281 │       init(v: u256) uses (mut x) {
+    ·
+284 │       init() uses (mut x, mut i) {
     │ ╭────────────────────────────────'
-282 │ │         var b = true
-283 │ │         make_false(b: mut b)
-284 │ │         if b {
-285 │ │             x = v
-286 │ │         }
-287 │ │     }
+285 │ │         i = 0
+286 │ │         while i < 2 {
+287 │ │             i += 1
+288 │ │         }
+289 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0086]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:297:5
+    │
+297 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+    ·
+300 │       init(v: bool) uses (mut x, mut flag) {
+    │ ╭──────────────────────────────────────────'
+301 │ │         init_flag(v: v)
+302 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0086]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:315:5
+    │
+315 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+316 │
+317 │       init(v: u256) uses (mut x) {
+    │ ╭────────────────────────────────'
+318 │ │         var b = true
+319 │ │         let r = mut b
+320 │ │         r = false
+    · │
+323 │ │         }
+324 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0086]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:332:5
+    │
+332 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+333 │
+334 │       init(v: u256) uses (mut x) {
+    │ ╭────────────────────────────────'
+335 │ │         var b = true
+336 │ │         make_false(b: mut b)
+337 │ │         if b {
+338 │ │             x = v
+339 │ │         }
+340 │ │     }
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage

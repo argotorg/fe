@@ -9,26 +9,24 @@ type @layout_0 = {i64, i256};
 
 global private const @layout_0 $const_region_0 = {42, 99};
 
-func private %main_root() {
-    block0:
-        jump block1;
-
-    block1:
-        v0.@layout_0 = call %make_dummy;
-        evm_stop;
-}
-
-func private %make_dummy() -> @layout_0 {
+func private %main() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
         v2.constref<@layout_0> = const.ref $const_region_0;
         v3.constref<@layout_0> = const.ref $const_region_0;
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v4 v3;
-        v5.@layout_0 = obj.load v4;
-        return v5;
+        v4.@layout_0 = const.load v3;
+        return v4;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.@layout_0 = call %main;
+        evm_stop;
 }
 
 

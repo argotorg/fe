@@ -1,0 +1,76 @@
+// Constant aggregates are read from const data wherever they are used as
+// values. A mutable binding gets a fresh copy on every initialization, and
+// passing, returning or wrapping a constant leaves it intact.
+const TABLE: [u256; 4] = [10, 20, 30, 40]
+const WIDE: [u256; 20] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
+struct Pair {
+    xs: [u8; 4],
+    y: u256,
+}
+
+fn sum(_ xs: [u256; 20]) -> u256 {
+    var total: u256 = 0
+    var i: usize = 0
+    while i < 20 {
+        total += xs[i]
+        i += 1
+    }
+    total
+}
+
+fn wide() -> [u256; 20] {
+    WIDE
+}
+
+fn first(_ value: Option<[u256; 4]>) -> u256 {
+    match value {
+        Option::Some(xs) => xs[0],
+        Option::None => 0,
+    }
+}
+
+#[test]
+fn repeat_initializers_copy_fresh_each_iteration() {
+    var i: u256 = 0
+    while i < 3 {
+        var bytes: [u8; 4] = [1; 4]
+        assert!(bytes[0] == 1 && bytes[3] == 1)
+        bytes[0] = 9
+        assert!(bytes[0] == 9 && bytes[1] == 1)
+        i += 1
+    }
+}
+
+#[test]
+fn literal_initializers_leave_the_constant_intact() {
+    var p = Pair { xs: [1, 2, 3, 4], y: 5 }
+    p.xs[2] = 7
+    p.y = 6
+    let q = Pair { xs: [1, 2, 3, 4], y: 5 }
+    assert!(p.xs[2] == 7 && p.y == 6 && q.xs[2] == 3 && q.y == 5)
+}
+
+#[test]
+fn named_initializers_leave_the_constant_intact() {
+    var xs = TABLE
+    var i: usize = 0
+    while i < 4 {
+        xs[i] = xs[i] + 1
+        i += 1
+    }
+    assert!(xs[1] == 21 && TABLE[1] == 20)
+}
+
+#[test]
+fn wide_constants_pass_and_return_by_value() {
+    var ws = wide()
+    ws[0] = 100
+    assert!(sum(WIDE) == 210 && sum(ws) == 309 && ws[19] == 20 && WIDE[0] == 1)
+}
+
+#[test]
+fn constants_wrap_in_enum_payloads() {
+    assert!(first(Option::Some(TABLE)) == 10 && first(Option::Some([5; 4])) == 5)
+    assert!(first(Option::None) == 0)
+}

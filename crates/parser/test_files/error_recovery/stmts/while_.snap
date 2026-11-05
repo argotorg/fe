@@ -8,7 +8,7 @@ Root@0..56
     WhileKw@0..5 "while"
     WhiteSpace@5..6 " "
     Error@6..7
-      At@6..7 "@"
+      InvalidToken@6..7 "@"
     WhiteSpace@7..8 " "
     BlockExpr@8..10
       LBrace@8..9 "{"

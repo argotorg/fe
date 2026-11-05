@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
+expression: diags
+input_file: fixtures/semantic_access/drop_moves.fe
+---
+error[16-0002]: move conflict in `fn steal`
+   ┌─ drop_moves.fe:22:10
+   │
+22 │     take(wrapper.inner)
+   │          ^^^^^^^^^^^^^ cannot move out of `Wrapper`, which implements `Drop`
+
+error[16-0002]: move conflict in `fn destructure`
+   ┌─ drop_moves.fe:27:19
+   │
+27 │     let Wrapper { inner, .. } = wrapper
+   │                   ^^^^^ cannot move out of `Wrapper`, which implements `Drop`
+
+error[16-0002]: move conflict in `fn drop`
+   ┌─ drop_moves.fe:45:14
+   │
+45 │         keep(self)
+   │              ^^^^ `drop` cannot move `self` whole: it is destroyed field by field

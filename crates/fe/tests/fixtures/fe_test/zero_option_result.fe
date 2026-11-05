@@ -38,9 +38,9 @@ pub contract C {
 
 #[test]
 fn never_written_state_is_none_and_ok() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    assert(evm.call(addr: c, gas: 1000000, value: 0, message: M::Absent {}) == 11)
-    assert(evm.call(addr: c, gas: 1000000, value: 0, message: M::Present {}) == 100)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    assert(evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Absent {}) == 11)
+    assert(evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Present {}) == 100)
 }
 
 #[test]

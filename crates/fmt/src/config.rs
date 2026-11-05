@@ -21,7 +21,7 @@ pub struct Config {
     pub clause_indent: usize,
     /// Whether `where` clauses should always start on a new line.
     pub where_new_line: bool,
-    /// Whether `uses` clauses should always start on a new line.
+    /// Whether `uses` clauses should start on a new line when unambiguous.
     pub uses_new_line: bool,
     /// When to add trailing commas in lists.
     pub trailing_comma: TrailingComma,

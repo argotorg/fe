@@ -103,7 +103,7 @@ note:
    ┌─ lib.fe:19:11
    │
 19 │ pub trait Calculatable {
-   │           ^^^^^^^^^^^^ def: defined here @ 19:10 (5 refs)
+   │           ^^^^^^^^^^^^ def: defined here @ 19:10 (4 refs)
 
 note: 
    ┌─ lib.fe:20:6
@@ -121,7 +121,7 @@ note:
    ┌─ lib.fe:24:8
    │
 24 │ struct Numbers {
-   │        ^^^^^^^ def: defined here @ 24:7 (5 refs)
+   │        ^^^^^^^ def: defined here @ 24:7 (4 refs)
 
 note: 
    ┌─ lib.fe:25:3
@@ -565,7 +565,7 @@ note:
    ┌─ lib.fe:92:5
    │
 92 │ msg TokenMsg {
-   │     ^^^^^^^^ def: defined here @ 92:4 (8 refs)
+   │     ^^^^^^^^ def: defined here @ 92:4 (2 refs)
 
 note: 
    ┌─ lib.fe:94:3

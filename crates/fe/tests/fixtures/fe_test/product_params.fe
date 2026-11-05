@@ -1,0 +1,446 @@
+// A product parameter takes several accesses, each part in its own mode, and
+// its pattern binds the parts as `let` would.
+use core::ptr::{MemArray, MemSlice}
+use std::evm::Evm
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Pair {
+    fn both(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+
+    fn views(self) -> (ref u256, ref u256) {
+        (ref self.a, ref self.b)
+    }
+
+    fn add(mut self, _ (mut x, y): (mut u256, ref u256)) -> u256 {
+        x += y
+        self.a += x
+        self.a
+    }
+}
+
+struct Big {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+struct Small {
+    a: u8,
+    b: u8,
+}
+
+impl Small {
+    fn both(mut? self) -> (mut? u8, mut? u8) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+struct Wide {
+    a: (u256, u8),
+    b: (u256, u8),
+}
+
+impl Wide {
+    fn both(mut? self) -> (mut? (u256, u8), mut? (u256, u8)) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+trait Absorb {
+    fn absorb(mut self, _ parts: (mut u256, own u256))
+}
+
+impl Absorb for Pair {
+    fn absorb(mut self, _ (mut x, y): (mut u256, own u256)) {
+        x += y
+        self.b += x
+    }
+}
+
+fn total(_ (a, b): (own u256, ref u256)) -> u256 {
+    a + b
+}
+
+fn add_to(_ (mut a, b): (mut u256, ref u256)) {
+    a += b
+}
+
+fn swap(_ (mut a, mut b): (mut u256, mut u256)) {
+    let t = a
+    a = b
+    b = t
+}
+
+fn nested(_ ((mut a, b), c): ((mut u256, ref u256), own u256)) {
+    a += b * c
+}
+
+fn copy_over<T: Copy>(_ (mut a, b): (mut T, ref T)) {
+    a = b
+}
+
+fn nested_over<T: Copy>(_ ((mut a, b), c): ((mut T, ref T), own T)) {
+    a = c
+}
+
+fn read_both<T: Copy>(_ (a, b): (ref T, ref T)) -> (T, T) {
+    (a, b)
+}
+
+fn first(_ (mut a, b): (mut u256, mut u256)) -> mut u256 {
+    mut a
+}
+
+fn count_at(_ (mut count, step): (mut u256, own u256), _ xs: mut [Pair; 2], _ i: usize) -> mut Pair {
+    count += step
+    mut xs[i]
+}
+
+fn single(_ (mut a,): (mut u256,)) {
+    a = 42
+}
+
+fn take_big(_ (big, mut n): (own Big, mut u256)) -> Big {
+    n = big.a + big.b + big.c
+    big
+}
+
+// A `mut?` part's two modes may have their own bodies.
+trait ReadWrite {
+    fn go(_ parts: (mut? u256, own u256)) -> mut? u256
+}
+
+impl ReadWrite for Big {
+    fn go(_ (a, _): (ref u256, own u256)) -> ref u256 {
+        a
+    }
+
+    fn go(_ (mut a, n): (mut u256, own u256)) -> mut u256 {
+        a += n
+        mut a
+    }
+}
+
+fn via<T: Absorb>(_ t: mut T, _ x: mut u256) {
+    t.absorb((mut x, 10))
+}
+
+fn pick(_ (mut? a, mut? b): (mut? u256, mut? u256), _ left: bool) -> mut? u256 {
+    if left { mut? a } else { mut? b }
+}
+
+fn countdown(_ (mut acc, n): (mut u256, own u256)) {
+    if n == 0 {
+        return
+    }
+    acc += n
+    countdown((mut acc, n - 1))
+}
+
+fn sum_into(_ (s, mut total): (MemSlice<u256>, mut u256)) {
+    for x in s {
+        total += x
+    }
+}
+
+fn fill(_ (mut s, v): (mut MemSlice<u256>, own u256)) {
+    for mut x in s {
+        x = v
+    }
+}
+
+const fn add_owned(_ (a, b): (own u256, own u256)) -> u256 {
+    a + b
+}
+
+const SUM: u256 = add_owned((1, 2))
+
+#[test]
+fn product_calls() {
+    let x: u256 = 5
+    assert(total((3, ref x)) == 8)
+    var y: u256 = 1
+    add_to((mut y, ref x))
+    assert(y == 6)
+    var p = Pair { a: 1, b: 2 }
+    add_to((mut p.a, ref p.b))
+    assert(p.a == 3)
+    single((mut y,))
+    assert(y == 42)
+    assert(SUM == 3)
+}
+
+#[test]
+fn product_arguments() {
+    var p = Pair { a: 1, b: 2 }
+    swap(p.both())
+    assert(p.a == 2 && p.b == 1)
+    var x: u256 = 1
+    let y: u256 = 2
+    nested(((mut x, ref y), 3))
+    assert(x == 7)
+    copy_over((mut x, ref y))
+    assert(x == 2)
+    var n: u256 = 0
+    let back = take_big((Big { a: 1, b: 2, c: 3 }, mut n))
+    assert(n == 6 && back.c == 3)
+}
+
+// A projection's result passed to a generic product parameter.
+#[test]
+fn generic_projection_arguments() {
+    var p = Pair { a: 1, b: 2 }
+    copy_over(p.both())
+    assert(p.a == 2)
+    nested_over((p.both(), 7))
+    assert(p.a == 7)
+    var s = Small { a: 1, b: 2 }
+    copy_over(s.both())
+    let (x, y) = read_both(s.both())
+    assert(x == 2 && y == 2)
+    var w = Wide { a: (1, 3), b: (2, 4) }
+    copy_over(w.both())
+    assert(w.a.0 == 2 && w.a.1 == 4)
+}
+
+#[test]
+fn forwarded_part() {
+    var x: u256 = 1
+    var y: u256 = 2
+    let r = mut first((mut x, mut y))
+    r = 5
+    assert(x == 5 && y == 2)
+}
+
+#[test]
+fn index_after_product() {
+    var xs = [Pair { a: 1, b: 2 }, Pair { a: 3, b: 4 }]
+    var count: u256 = 0
+    let x = mut count_at((mut count, 2), mut xs, 1)
+    x.b = 9
+    assert(count == 2 && xs[0].b == 2 && xs[1].b == 9)
+}
+
+#[test]
+fn methods_and_traits() {
+    var p = Pair { a: 1, b: 0 }
+    var x: u256 = 2
+    let y: u256 = 3
+    assert(p.add((mut x, ref y)) == 6)
+    assert(x == 5)
+    via(mut p, mut x)
+    assert(x == 15 && p.b == 15)
+    assert(Big::go((ref x, 2)) == 15)
+    let r = mut Big::go((mut x, 2))
+    assert(r == 17)
+    r = 1
+    assert(x == 1)
+}
+
+#[test]
+fn maybe_mut_parts() {
+    var x: u256 = 1
+    var y: u256 = 2
+    let r = mut pick((mut x, mut y), false)
+    r = 7
+    assert(y == 7)
+    assert(pick((ref x, ref y), true) == 1)
+    var p = Pair { a: 1, b: 2 }
+    let s = mut pick(p.both(), false)
+    s = 9
+    assert(p.b == 9)
+    assert(pick(p.views(), true) == 1)
+}
+
+#[test]
+fn view_parts() {
+    var xs = MemArray<u256>::new_zeroed(4)
+    fill((mut xs.as_slice(), 3))
+    var total: u256 = 1
+    sum_into((xs.as_slice(), mut total))
+    assert(total == 13)
+}
+
+#[test]
+fn access_bindings_as_parts() {
+    var x: u256 = 1
+    var y: u256 = 2
+    let m = mut x
+    let r = ref y
+    add_to((mut m, r))
+    assert(x == 3)
+}
+
+#[test]
+fn recursive_product() {
+    var acc: u256 = 0
+    countdown((mut acc, 4))
+    assert(acc == 10)
+}
+
+struct Counter {
+    count: u256,
+}
+
+fn add_and_read(_ (mut a, b): (mut u256, ref u256)) -> u256 uses (c: Counter) {
+    a += b
+    c.count
+}
+
+msg CounterMsg {
+    #[selector = 0x11223344]
+    Bump -> u256,
+    #[selector = 0x11223345]
+    Read -> u256,
+    #[selector = 0x11223346]
+    CopyPair -> u256,
+    #[selector = 0x11223347]
+    CopySmall -> u8,
+}
+
+pub contract Store {
+    mut counter: Counter
+    mut pair: Pair
+    mut small: Small
+
+    recv CounterMsg {
+        Bump -> u256 uses (mut counter) {
+            var local: u256 = 5
+            add_to((mut counter.count, ref local))
+            add_to((mut local, ref counter.count))
+            local
+        }
+        Read -> u256 uses (mut counter) {
+            var local: u256 = 1
+            counter.count = 4
+            let read = with (Counter = counter) {
+                add_and_read((mut local, ref counter.count))
+            }
+            read + local
+        }
+        CopyPair -> u256 uses (mut pair) {
+            pair.b = 9
+            copy_over(pair.both())
+            pair.a
+        }
+        CopySmall -> u8 uses (mut small) {
+            small.b = 7
+            copy_over(small.both())
+            small.a
+        }
+    }
+}
+
+#[test]
+fn storage_parts() uses (evm: mut Evm) {
+    let addr = evm.create2<Store>(value: Wei::zero(), args: (), salt: 0)
+    let bumped: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: CounterMsg::Bump {})
+    assert(bumped == 10)
+    let read: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: CounterMsg::Read {})
+    assert(read == 9)
+    let pair: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: CounterMsg::CopyPair {})
+    assert(pair == 9)
+    let small: u8 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: CounterMsg::CopySmall {})
+    assert(small == 7)
+}
+
+// Each part keeps its own space through forwarding and nesting.
+fn second(_ (mut a, mut b): (mut u256, mut u256)) -> mut u256 {
+    mut b
+}
+
+fn second_of_swapped(_ (mut a, mut b): (mut u256, mut u256)) -> mut u256 {
+    mut second((mut b, mut a))
+}
+
+fn both_back(_ (mut a, mut b): (mut u256, mut u256)) -> (mut u256, mut u256) {
+    (mut a, mut b)
+}
+
+fn nested_first(_ ((mut a, n), mut b): ((mut u256, own u256), mut u256)) -> mut u256 {
+    mut a
+}
+
+fn nested_second(_ ((mut a, n), mut b): ((mut u256, own u256), mut u256)) -> mut u256 {
+    mut b
+}
+
+fn elem_at(_ (mut xs, i): (mut [u256; 3], own usize)) -> mut u256 {
+    mut xs[i]
+}
+
+fn elem_at_fwd(_ (i, mut xs): (own usize, mut [u256; 3])) -> mut u256 {
+    mut elem_at((mut xs, i))
+}
+
+msg SpacesMsg {
+    #[selector = 0x11223346]
+    Forwarded -> u256,
+    #[selector = 0x11223347]
+    Chained -> u256,
+    #[selector = 0x11223348]
+    Nested -> u256,
+    #[selector = 0x11223349]
+    Indexed -> u256,
+}
+
+pub contract Spaces {
+    mut pair: Pair
+    mut xs: [u256; 3]
+
+    recv SpacesMsg {
+        Forwarded -> u256 uses (mut pair) {
+            pair.a = 1
+            var local: u256 = 2
+            // `second` of the swapped parts is the storage one,
+            let r = mut second_of_swapped((mut pair.a, mut local))
+            r = 50
+            // and here the memory one.
+            let s = mut second_of_swapped((mut local, mut pair.b))
+            s = 60
+            pair.a * 1000 + local
+        }
+        Chained -> u256 uses (mut pair) {
+            pair.a = 1
+            var local: u256 = 2
+            swap(both_back((mut pair.a, mut local)))
+            pair.a * 1000 + local
+        }
+        Nested -> u256 uses (mut pair) {
+            var local: u256 = 3
+            let r = mut nested_second(((mut local, 1), mut pair.b))
+            r = 70
+            let s = mut nested_first(((mut local, 1), mut pair.a))
+            s = 8
+            pair.b * 1000 + local
+        }
+        Indexed -> u256 uses (mut xs) {
+            xs = [1, 2, 3]
+            let r = mut elem_at_fwd((1, mut xs))
+            r = 9
+            var mem: [u256; 3] = [4, 5, 6]
+            let s = mut elem_at_fwd((2, mut mem))
+            s = 7
+            xs[1] * 100 + xs[0] * 10 + mem[2]
+        }
+    }
+}
+
+#[test]
+fn spaces_through_forwarding() uses (evm: mut Evm) {
+    let addr = evm.create2<Spaces>(value: Wei::zero(), args: (), salt: 0)
+    let forwarded: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: SpacesMsg::Forwarded {})
+    assert(forwarded == 50060)
+    let chained: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: SpacesMsg::Chained {})
+    assert(chained == 2001)
+    let nested: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: SpacesMsg::Nested {})
+    assert(nested == 70008)
+    let indexed: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: SpacesMsg::Indexed {})
+    assert(indexed == 917)
+}

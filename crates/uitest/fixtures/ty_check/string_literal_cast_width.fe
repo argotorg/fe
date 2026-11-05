@@ -1,0 +1,2 @@
+const TOO_NARROW: String<1> = "ab" as String<1>
+const TOO_WIDE: String<32> = "short" as String<32>

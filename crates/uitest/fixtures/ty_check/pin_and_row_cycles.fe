@@ -1,0 +1,66 @@
+use core::marker::Pinned
+use core::ops::Index
+
+// A pin's `Space` or an effect row must end somewhere: one that names
+// itself, directly or through other implementations, is rejected rather than
+// followed forever.
+struct Named {
+    v: u256,
+}
+
+// Rejected: `Named::Space` is this space.
+impl Pinned for Named {
+    type Space = Named::Space
+}
+
+struct Own {
+    v: u256,
+}
+
+// Rejected: `Self::Space` is this space.
+impl Pinned for Own {
+    type Space = Self::Space
+}
+
+trait Other {
+    type T
+}
+
+trait Marker: Pinned {}
+
+struct Left {
+    pub v: u256,
+}
+
+struct Right {
+    pub v: u256,
+}
+
+impl Marker for Left {}
+
+// Rejected: the two implementations name each other's space.
+impl Pinned for Left
+    where Right: Other
+{
+    type Space = Right::T
+}
+
+impl Other for Right
+    where Left: Marker
+{
+    type T = Left::Space
+}
+
+struct Words {
+    v: u256,
+}
+
+// Rejected: an index's effect row names itself.
+impl Index<u256> for Words {
+    uses E = Self::E
+    type Output = u256
+
+    fn index(self, _ i: u256) -> ref u256 {
+        ref self.v
+    }
+}

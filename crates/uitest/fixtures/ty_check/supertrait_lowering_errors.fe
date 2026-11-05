@@ -1,0 +1,22 @@
+// A super-trait reference's const argument that faults or calls a non-const
+// function is reported where it is written, and an ill-formed reference
+// names the obligation that fails.
+fn runtime() -> usize { 1 }
+
+trait Has<const N: usize> {}
+
+trait Faulting: Has<{ 1 / 0 }> {}
+
+trait NonConst: Has<{ runtime() }> {}
+
+trait Valid: Has<1> {}
+
+trait Missing {}
+
+trait Gate {}
+
+impl<T: Missing> Gate for T {}
+
+trait Holds<T: Gate> {}
+
+trait IllFormed: Holds<u8> {}

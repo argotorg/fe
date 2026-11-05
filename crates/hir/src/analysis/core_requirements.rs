@@ -83,7 +83,6 @@ const CORE_OP_REQUIREMENTS: &[(&str, &str)] = &[
 
 const CORE_TRAIT_REQUIREMENTS: &[&str] = &[
     "core::EffectRef",
-    "core::EffectRefMut",
     "core::message::MsgVariant",
     "core::abi::Decode",
 ];

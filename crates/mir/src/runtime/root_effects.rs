@@ -328,7 +328,9 @@ fn unsupported_entry_effect<'db>(
 fn binding_display_name<'db>(db: &'db dyn MirDb, binding: LocalBinding<'db>) -> String {
     match binding {
         LocalBinding::EffectParam { binding_name, .. } => binding_name.data(db).to_string(),
-        LocalBinding::Local { .. } | LocalBinding::Param { .. } => "<unknown>".to_string(),
+        LocalBinding::Local { .. }
+        | LocalBinding::Param { .. }
+        | LocalBinding::ParamPart { .. } => "<unknown>".to_string(),
     }
 }
 

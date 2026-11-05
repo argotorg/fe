@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/composite_steps.fe
+---
+error[16-0001]: access conflict in `fn at`
+   ┌─ composite_steps.fe:30:53
+   │
+30 │         (self.inner.at(mut? base, s), self.inner.at(mut? base, s))
+   │                        ---------                    ^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │                        │
+   │                        access opened here

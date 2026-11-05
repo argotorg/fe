@@ -31,3 +31,10 @@ pub fn empty_field_assign() {
     var w: Wrap = Wrap { empty: e, value: 1 }
     w.empty = Empty {}
 }
+
+pub fn main() {
+    let _ = tuple_with_empty()
+    let _ = tuple_only_empty()
+    let _ = struct_with_empty()
+    empty_field_assign()
+}

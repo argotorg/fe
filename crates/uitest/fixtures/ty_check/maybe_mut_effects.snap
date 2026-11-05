@@ -1,0 +1,154 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/maybe_mut_effects.fe
+---
+error[3-0078]: `mut?` effect of a row
+   ┌─ maybe_mut_effects.fe:51:15
+   │
+51 │     uses E = (store: mut? Store)
+   │               ^^^^^^^^^^^^^^^^^ a row has no mode: only a function is used at a mode
+
+error[3-0078]: `mut?` on a row
+   ┌─ maybe_mut_effects.fe:57:43
+   │
+57 │ fn bump_row<T: Counter>(_ t: mut T) uses (mut? T::E) {
+   │                                           ^^^^^^^^^ a row's effects carry their own modes
+
+error[6-0024]: method `slot` has incompatible effects
+   ┌─ maybe_mut_effects.fe:74:8
+   │
+65 │     fn slot(mut? self) -> mut? u256 uses (store: mut? Store)
+   │        ---- trait requires these effects
+   ·
+74 │     fn slot(self) -> ref u256 uses (store: mut Store) {
+   │        ^^^^ effect keys or mutability differ from the trait method at `ref`
+
+error[6-0024]: method `slot` has incompatible effects
+   ┌─ maybe_mut_effects.fe:89:8
+   │
+65 │     fn slot(mut? self) -> mut? u256 uses (store: mut? Store)
+   │        ---- trait requires these effects
+   ·
+89 │     fn slot(mut? self) -> mut? u256 uses (store: mut Store) {
+   │        ^^^^ effect keys or mutability differ from the trait method at `ref`
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ maybe_mut_effects.fe:13:5
+   │
+12 │ fn reset() -> mut? u256 uses (store: mut? Store) {
+   │                               ----------------- `store` is `mut?`, which a `mut?` function's `ref` body only reads
+13 │     store.n = 0
+   │     ^^^^^^^ immutable assignment
+
+error[8-0036]: missing effect `Store` required by `slot`
+   ┌─ maybe_mut_effects.fe:29:5
+   │
+29 │     slot()
+   │     ^^^^^^ `slot` requires effect `Store` to be in scope
+   │
+   = require it in this function's signature with `uses (store: Store)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Store = value) { .. }`
+
+error[8-0036]: missing effect `Store` required by `slot`
+   ┌─ maybe_mut_effects.fe:34:5
+   │
+34 │     slot() = 1
+   │     ^^^^^^ `slot` requires effect `Store` to be in scope
+   │
+   = require it in this function's signature with `uses (store: mut Store)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Store = value) { .. }`
+
+error[8-0036]: missing effect `Store` required by `slot`
+   ┌─ maybe_mut_effects.fe:39:5
+   │
+39 │     slot()
+   │     ^^^^^^ `slot` requires effect `Store` to be in scope
+   │
+   = require it in this function's signature with `uses (store: mut? Store)`, so that its callers provide it
+   = or provide it to a block of this function with `with (Store = value) { .. }`
+
+error[8-0037]: effect `Store` must be mutable when calling `slot`
+   ┌─ maybe_mut_effects.fe:19:5
+   │
+18 │ fn write_with_read() uses (store: Store) {
+   │                            ------------ effect `Store` is provided here
+19 │     slot() = 1
+   │     ^^^^^^ `slot` requires `mut Store`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0037]: effect `Store` must be mutable when calling `slot`
+   ┌─ maybe_mut_effects.fe:23:17
+   │
+22 │ fn take_with_read() uses (store: Store) {
+   │                           ------------ effect `Store` is provided here
+23 │     let n = mut slot()
+   │                 ^^^^^^ `slot` requires `mut Store`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0037]: effect `Pair` must be mutable when calling `items`
+    ┌─ maybe_mut_effects.fe:104:18
+    │
+103 │ fn loop_with_read() uses (pair: Pair) {
+    │                           ---------- effect `Pair` is provided here
+104 │     for mut x in items() {
+    │                  ^^^^^^^ `items` requires `mut Pair`
+    │
+    = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0037]: effect `RawStorage` must be mutable when calling `pair_at`
+    ┌─ maybe_mut_effects.fe:117:37
+    │
+116 │ fn nested_split_with_read() uses (storage: RawStorage) {
+    │                                   ------------------- effect `RawStorage` is provided here
+117 │     let ((mut a, b), c) = unsafe { (pair_at(0), storage_at<u256>(2)) }
+    │                                    -^^^^^^^^^^----------------------
+    │                                    ││
+    │                                    │`pair_at` requires `mut RawStorage`
+    │                                    a `mut` binding of this unsafe split asks each access in it for `mut`
+    │
+    = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0037]: effect `RawStorage` must be mutable when calling `storage_at`
+    ┌─ maybe_mut_effects.fe:117:49
+    │
+116 │ fn nested_split_with_read() uses (storage: RawStorage) {
+    │                                   ------------------- effect `RawStorage` is provided here
+117 │     let ((mut a, b), c) = unsafe { (pair_at(0), storage_at<u256>(2)) }
+    │                                    -------------^^^^^^^^^^^^^^^^^^^-
+    │                                    │            │
+    │                                    │            `storage_at` requires `mut RawStorage`
+    │                                    a `mut` binding of this unsafe split asks each access in it for `mut`
+    │
+    = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0037]: effect `Store` must be mutable when calling `needs_mut`
+    ┌─ maybe_mut_effects.fe:128:5
+    │
+127 │ fn pass_on_in_ref_body(_ s: mut? Store) -> mut? u256 uses (store: mut? Store) {
+    │                                                            ----------------- effect `Store` is provided here
+128 │     needs_mut()
+    │     ^^^^^^^^^^^ `needs_mut` requires `mut Store`
+    │
+    = `store` is `mut?`, which a `mut?` function's `ref` body only reads
+
+error[8-0066]: mutable borrow requires a mutable place
+    ┌─ maybe_mut_effects.fe:129:15
+    │
+127 │ fn pass_on_in_ref_body(_ s: mut? Store) -> mut? u256 uses (store: mut? Store) {
+    │                          - `s` does not provide mutable access
+128 │     needs_mut()
+129 │     takes_mut(mut s)
+    │               ^^^^^ cannot borrow as `mut`
+    │
+    = `s` is `mut?`, which a `mut?` function's `ref` body only reads
+
+error[8-0130]: `mut?` outside a `mut?` function
+   ┌─ maybe_mut_effects.fe:62:18
+   │
+62 │ contract C uses (ctx: mut? Ctx) {}
+   │                  ^^^^^^^^^^^^^ `mut?` is the mode of the function it is in
+   │
+   = a function has a mode when its signature writes `mut?`: `mut? self`, `x: mut? T`, `-> mut? T`, `uses (x: mut? T)` or a `mut?` bound

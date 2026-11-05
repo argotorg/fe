@@ -1,4 +1,4 @@
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::ty_def::TyId;
 use super::{
@@ -12,7 +12,7 @@ use crate::{
     hir_def::{IdentId, Impl, scope_graph::ScopeId},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct AssocConstUse<'db> {
     origin_scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -98,7 +98,7 @@ impl<'db> TyFoldable<'db> for AssocConstUse<'db> {
 /// Carries the receiver type so the impl's generic parameters can be
 /// recovered by unifying the impl self type against it once the receiver
 /// is concrete (after typed-body instantiation).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct InherentConstUse<'db> {
     origin_scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,

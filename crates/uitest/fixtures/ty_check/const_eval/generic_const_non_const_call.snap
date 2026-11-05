@@ -1,0 +1,46 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/generic_const_non_const_call.fe
+---
+error[3-0024]: non-const function call in const context
+  ┌─ generic_const_non_const_call.fe:9:18
+  │
+9 │     values: [u8; ordinary(N)],
+  │                  ^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ generic_const_non_const_call.fe:12:45
+   │
+12 │ fn signature<const N: usize>(_ values: [u8; ordinary(N)]) {}
+   │                                             ^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ generic_const_non_const_call.fe:14:56
+   │
+14 │ fn generic_arg<const N: usize>() -> usize { identity<{ ordinary(N) }>() }
+   │                                                        ^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ generic_const_non_const_call.fe:16:49
+   │
+16 │ fn defaulted<const N: usize, const M: usize = { ordinary(N) }>() {}
+   │                                                 ^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ generic_const_non_const_call.fe:21:24
+   │
+21 │     const LEN: usize = ordinary(N)
+   │                        ^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ generic_const_non_const_call.fe:29:24
+   │
+29 │     const LEN: usize = ordinary(N) + 1
+   │                        ^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ generic_const_non_const_call.fe:37:22
+   │
+37 │         for value in [N, 1] { result += value }
+   │                      ^^^^^^ calls in const context must be `const fn`

@@ -1,0 +1,43 @@
+fn annotated() -> u8 {
+    let x: u8 = 300
+    x
+}
+
+fn inferred(x: u16) -> u16 {
+    x + 65536
+}
+
+fn pattern(x: u8) -> bool {
+    match x {
+        256 => true
+        _ => false
+    }
+}
+
+// `usize` is 64 bits on native targets.
+fn usize_literal() -> usize {
+    0x10000000000000000
+}
+
+fn isize_literal() -> isize {
+    0x8000000000000000
+}
+
+fn in_range() -> (u8, i8, usize, isize) {
+    (255, -128, 0xffffffffffffffff, -0x8000000000000000)
+}
+
+// Literals in types, such as array lengths and const arguments, are checked
+// against the parameter's type.
+struct Small<const N: u8> {}
+struct Signed<const N: i8> {}
+
+fn array_length(_ a: [u8; 0x10000000000000001]) {}
+
+fn length_arithmetic(_ a: [u8; 0x10000000000000001 - 1]) {}
+
+fn const_argument(_ s: Small<256>) {}
+
+fn negated_const_argument(_ s: Signed<{ -129 }>) {}
+
+fn types_in_range(_ a: [u8; 3], _ s: Small<255>, _ t: Signed<{ -128 }>) {}

@@ -4,17 +4,17 @@ expression: diags
 input_file: fixtures/ty_check/abi_struct_array_not_copy.fe
 ---
 error[10-0010]: fixed-array ABI fields need `Copy` elements
-   ┌─ abi_struct_array_not_copy.fe:29:11
+   ┌─ abi_struct_array_not_copy.fe:25:11
    │
-29 │     keys: KeyPair,
+25 │     keys: KeyPair,
    │           ^^^^^^^ `[Key; 2]` holds a fixed array of `Key`, which is not `Copy`
    │
    = implement `Copy` for `Key`, or use `DynArray<Key>`
 
 error[13-0006]: fixed-array ABI fields need `Copy` elements
-   ┌─ abi_struct_array_not_copy.fe:34:11
+   ┌─ abi_struct_array_not_copy.fe:30:11
    │
-34 │     keys: KeyPair,
+30 │     keys: KeyPair,
    │           ^^^^^^^ `[Key; 2]` holds a fixed array of `Key`, which is not `Copy`
    │
    = implement `Copy` for `Key`, or use `DynArray<Key>`
@@ -42,50 +42,3 @@ error[18-0003]: fixed-array ABI fields need `Copy` elements
    │           ^^^^^^^^^^^^^^^^^^ `DynArray<[Key; 2]>` holds a fixed array of `Key`, which is not `Copy`
    │
    = implement `Copy` for `Key`, or use `DynArray<Key>`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ abi_struct_array_not_copy.fe:22:37
-    │
- 22 │     let _values: MemVec<[Key; 2]> = MemVec::zeroed(1)
-    │                                     ^^^^^^^^^^^^^^ `[Key; 2]` doesn't implement `StaticAbi`
-    │
-    ┌─ src/abi/dyn_array.fe:174:14
-    │
-174 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
-    │              --------- required by this bound on `zeroed`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ abi_struct_array_not_copy.fe:22:37
-    │
- 22 │     let _values: MemVec<[Key; 2]> = MemVec::zeroed(1)
-    │                                     ^^^^^^^^^^^^^^
-    │                                     │
-    │                                     `[Key; 2]` doesn't implement `Decode<Sol>`
-    │                                     trait bound `Key: Copy` is not satisfied
-    │
-    ┌─ src/abi/dyn_array.fe:174:26
-    │
-174 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
-    │                          ----------- required by this bound on `zeroed`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ abi_struct_array_not_copy.fe:22:37
-    │
- 22 │     let _values: MemVec<[Key; 2]> = MemVec::zeroed(1)
-    │                                     ^^^^^^^^^^^^^^ `[Key; 2]` doesn't implement `Encode<Sol>`
-    │
-    ┌─ src/abi/dyn_array.fe:174:40
-    │
-174 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
-    │                                        ----------- required by this bound on `zeroed`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ abi_struct_array_not_copy.fe:22:37
-    │
- 22 │     let _values: MemVec<[Key; 2]> = MemVec::zeroed(1)
-    │                                     ^^^^^^^^^^^^^^ `[Key; 2]` doesn't implement `AbiSize`
-    │
-    ┌─ src/abi/dyn_array.fe:174:54
-    │
-174 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
-    │                                                      ------- required by this bound on `zeroed`

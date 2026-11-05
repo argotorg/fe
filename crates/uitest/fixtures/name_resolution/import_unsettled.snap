@@ -1,0 +1,38 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/import_unsettled.fe
+---
+error[2-0004]: `N` is ambiguous
+  ┌─ import_unsettled.fe:9:9
+  │
+1 │ mod N {
+  │     - candidate 1
+2 │     pub mod Y {
+3 │         pub mod N {}
+  │                 - candidate 2
+  ·
+9 │     use N::Y as X
+  │         ^ `N` is ambiguous
+
+error[2-0004]: `B` is ambiguous
+   ┌─ import_unsettled.fe:16:9
+   │
+12 │ mod A {}
+   │     - candidate 1
+13 │ mod B {}
+   │     - candidate 2
+   ·
+16 │     use B as A
+   │         ^ `B` is ambiguous
+
+error[2-0004]: `A` is ambiguous
+   ┌─ import_unsettled.fe:17:9
+   │
+12 │ mod A {}
+   │     - candidate 1
+13 │ mod B {}
+   │     - candidate 2
+   ·
+17 │     use A as B
+   │         ^ `A` is ambiguous

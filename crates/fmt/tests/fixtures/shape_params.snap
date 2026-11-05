@@ -1,0 +1,8 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/shape_params.fe
+---
+trait Call<shape A> {}
+
+fn apply<shape A, T: Call<A>>(_ t: T) {}

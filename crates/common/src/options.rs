@@ -4,6 +4,7 @@ use crate::InputDb;
 #[derive(Debug)]
 pub struct CompilerOptions {
     /// Whether to use recovery mode when parsing.
+    #[returns(copy)]
     pub recovery_mode: bool,
 }
 

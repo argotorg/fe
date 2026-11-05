@@ -64,26 +64,26 @@ pub contract C {
 
 #[test]
 fn sum_shape_grants_reach_storage() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
     let closed: bool = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Credit { key: 7, amount: 5 },
     )
     assert!(!closed)
-    evm.call(addr: c, gas: 200000, value: 0, message: Msg::Open {})
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Open {})
     let credited: bool = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Credit { key: 7, amount: 5 },
     )
     assert!(credited)
     let value: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Get { key: 7 },
     )
     assert!(value == 5)

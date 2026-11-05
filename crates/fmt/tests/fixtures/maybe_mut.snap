@@ -1,0 +1,20 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 20
+expression: output
+input_file: tests/fixtures/maybe_mut.fe
+---
+impl Items {
+    fn at(mut? self, _ c: usize) -> mut? T
+    uses (storage: mut? RawStorage, mut? Log)
+    {
+        let (mut? head, tail) = mut? self.items
+        unsafe {
+            mut? *self.ptr
+        }
+    }
+}
+
+fn sort<S: mut Index<usize> + Len, D: mut? Driver<S>>(_ seq: mut S)
+where S: mut? Collection
+{}

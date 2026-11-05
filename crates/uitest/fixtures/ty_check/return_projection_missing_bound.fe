@@ -7,5 +7,5 @@ trait Bound {
 }
 
 fn bad_return<T>() -> <T as Bound>::Item {
-    todo()
+    unsafe { todo() }
 }

@@ -32,7 +32,7 @@ fn sol_array_loops() uses (evm: mut Evm) {
         assert(weighted == 80)
 
         var tail = 0
-        for x in a by core::iter::skip(1) {
+        for x in a.skip(1) {
             tail += x
         }
         assert(tail == 50)
@@ -43,7 +43,7 @@ fn sol_array_loops() uses (evm: mut Evm) {
         }
         assert(digits == 302010)
 
-        let empty = unsafe { SolArray<u256>::at(2) }
+        let empty = unsafe { mut SolArray<u256>::at(2) }
         for _ in empty {
             assert(false)
         }
@@ -51,9 +51,24 @@ fn sol_array_loops() uses (evm: mut Evm) {
 }
 
 #[test]
+fn raw_constructor_loops() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let a = unsafe { mut SolArray<u256>::at(4) }
+        a.push(1)
+        a.push(2)
+        // A `mut` item asks the `mut?` constructor for `mut`.
+        for mut x in unsafe { SolArray<u256>::at(4) } {
+            x += 10
+        }
+        let b = unsafe { SolArray<u256>::at(4) }
+        assert(b.get(0) == 11 && b.get(1) == 12)
+    }
+}
+
+#[test]
 fn sol_set_loops() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let s = unsafe { SolEnumerableSet<u256>::at(3) }
+        let s = unsafe { mut SolEnumerableSet<u256>::at(3) }
         assert(s.add(5))
         assert(s.add(7))
         assert(s.add(9))

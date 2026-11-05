@@ -5,7 +5,7 @@ use common::{
     ingot::Ingot,
 };
 use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
-use salsa::Update;
+use salsa::SalsaValue;
 
 use super::{IdentId, TopLevelMod};
 use crate::{HirDb, lower::map_file_to_mod_impl};
@@ -61,7 +61,7 @@ pub struct ModuleNotInTree;
 /// **NOTE:** `mod3` is not included in the main tree because it doesn't have a corresponding file.
 /// As a result, `baz` is represented as a "floating" node.
 /// In this case, the tree is actually a forest. But we don't need to care about it.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct ModuleTree<'db> {
     pub(crate) root: ModuleTreeNodeId,
     pub(crate) module_tree: PMap<ModuleTreeNodeId, ModuleTreeNode<'db>>,
@@ -70,35 +70,11 @@ pub struct ModuleTree<'db> {
     pub ingot: Ingot<'db>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PMap<K: EntityRef, V>(PrimaryMap<K, V>);
-
-unsafe impl<K, V> Update for PMap<K, V>
-where
-    K: EntityRef,
-    V: Update,
-{
-    unsafe fn maybe_update(old_pointer: *mut Self, new_vec: Self) -> bool {
-        unsafe {
-            let old_vec: &mut PMap<K, V> = &mut *old_pointer;
-
-            if old_vec.0.len() != new_vec.0.len() {
-                return true;
-            }
-
-            let mut changed = false;
-            for (old_element, new_element) in old_vec
-                .0
-                .values_mut()
-                .zip(new_vec.0.into_iter().map(|(_, v)| v))
-            {
-                changed |= V::maybe_update(old_element, new_element);
-            }
-
-            changed
-        }
-    }
-}
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+pub struct PMap<K: EntityRef, V>(
+    // SAFETY: A `PrimaryMap` owns its values; its keys are plain indices.
+    #[salsa_value(unsafe(prove(V: SalsaValue)))] PrimaryMap<K, V>,
+);
 
 impl ModuleTree<'_> {
     /// Returns the tree node data of the given id.
@@ -174,7 +150,7 @@ impl ModuleTree<'_> {
 /// Returns a module tree of the given ingot. The resulted tree only includes
 /// top level modules. This function only depends on an ingot structure and
 /// external ingot dependency, and not depends on file contents.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> ModuleTree<'db> {
     // Build everything in one tracked function to avoid passing complex data between functions
     let mut module_tree = PrimaryMap::default();
@@ -309,7 +285,7 @@ fn find_parent_module<'db>(
 }
 
 /// A top level module that is one-to-one mapped to a file.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ModuleTreeNode<'db> {
     pub top_mod: TopLevelMod<'db>,
     /// A parent of the top level module.
@@ -335,7 +311,7 @@ impl<'db> ModuleTreeNode<'db> {
 }
 
 /// An opaque identifier for a module tree node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ModuleTreeNodeId(u32);
 entity_impl!(ModuleTreeNodeId);
 

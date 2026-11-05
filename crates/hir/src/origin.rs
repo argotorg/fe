@@ -3,7 +3,7 @@ use common::origin::{
     validate_origin_key_text,
 };
 use cranelift_entity::EntityRef;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::hir_def::{Body, ExprId, StmtId};
 
@@ -11,7 +11,7 @@ pub const HIR_EXPR_EXPORT_KIND: &str = "hir.expr";
 pub const HIR_STMT_EXPORT_KIND: &str = "hir.stmt";
 
 /// Stable export owner key for a HIR body.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct HirOriginBodyOwnerKey(String);
 
 impl HirOriginBodyOwnerKey {
@@ -54,7 +54,7 @@ impl OriginExportLocalKey for HirStmtOriginLocalKey {
 
 /// Origin key for a HIR expression. The expression ID is only meaningful inside
 /// its owning HIR body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct HirExprOrigin<'db> {
     key: OriginKey<Body<'db>, ExprId>,
 }
@@ -85,7 +85,7 @@ impl<'db> HirExprOrigin<'db> {
 
 /// Origin key for a HIR statement. Statement and expression IDs are
 /// intentionally distinct origin types even though both are body-local integers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct HirStmtOrigin<'db> {
     key: OriginKey<Body<'db>, StmtId>,
 }

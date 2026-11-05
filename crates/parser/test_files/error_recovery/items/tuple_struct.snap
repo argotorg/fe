@@ -1,0 +1,61 @@
+---
+source: crates/parser/tests/error_recovery.rs
+assertion_line: 17
+expression: node
+input_file: test_files/error_recovery/items/tuple_struct.fe
+---
+Root@0..60
+  ItemList@0..59
+    Item@0..24
+      Struct@0..24
+        StructKw@0..6 "struct"
+        WhiteSpace@6..7 " "
+        Ident@7..14 "Missing"
+        TupleFieldDefList@14..24
+          LParen@14..15 "("
+          TupleFieldDef@15..17
+            PathType@15..17
+              Path@15..17
+                PathSegment@15..17
+                  Ident@15..17 "u8"
+          Comma@17..18 ","
+          TupleFieldDef@18..18
+            PathType@18..18
+              Path@18..18
+                PathSegment@18..18
+          Comma@18..19 ","
+          WhiteSpace@19..20 " "
+          TupleFieldDef@20..23
+            PathType@20..23
+              Path@20..23
+                PathSegment@20..23
+                  Ident@20..23 "u16"
+          RParen@23..24 ")"
+    Newline@24..25 "\n"
+    Item@25..43
+      Struct@25..43
+        StructKw@25..31 "struct"
+        WhiteSpace@31..32 " "
+        Ident@32..40 "Unclosed"
+        TupleFieldDefList@40..43
+          LParen@40..41 "("
+          TupleFieldDef@41..43
+            PathType@41..43
+              Path@41..43
+                PathSegment@41..43
+                  Ident@41..43 "u8"
+    Newline@43..44 "\n"
+    Item@44..59
+      Struct@44..59
+        StructKw@44..50 "struct"
+        WhiteSpace@50..51 " "
+        Ident@51..55 "Next"
+        TupleFieldDefList@55..59
+          LParen@55..56 "("
+          TupleFieldDef@56..58
+            PathType@56..58
+              Path@56..58
+                PathSegment@56..58
+                  Ident@56..58 "u8"
+          RParen@58..59 ")"
+  Newline@59..60 "\n"

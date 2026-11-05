@@ -1,14 +1,12 @@
 trait Collection {
     uses E
-    space S
     type Item
 
-    fn at(self, _ c: u256) -> ref Self::Item @S uses E
+    fn at(self, _ c: u256) -> ref Self::Item uses E
 }
 
 impl Collection for Words {
     uses E = (storage: RawStorage)
-    space S = storage
     type Item = u256
 
     fn at(self, _ c: u256) -> ref u256 uses E {
@@ -18,26 +16,9 @@ impl Collection for Words {
 
 impl<B: Collection> Collection for Identity<B> {
     uses E = B::E
-    space S = B::S
     type Item = B::Item
 
-    fn at(self, _ c: u256) -> (u256, ref B::Item) @B::S uses E {
+    fn at(self, _ c: u256) -> (u256, ref B::Item) uses E {
         (c, self.base.at(c))
     }
-}
-
-impl Cache {
-    fn entry(mut self, _ m: Map) -> mut u256 @target(m) {}
-}
-
-impl<T> Collection for Cells<T> {
-    space S = self[_]
-}
-
-impl Guarded {
-    fn value_mut(mut self) -> mut u256 @self.value {}
-
-    fn first(mut self) -> mut u256 @self.pair.0 {}
-
-    fn element(mut self) -> mut u256 @self.cells[_] {}
 }

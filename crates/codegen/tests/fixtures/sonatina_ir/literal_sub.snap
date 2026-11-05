@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/literal_sub.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %literal_sub() -> i64 {
+func private %main() -> i64 {
     block0:
         jump block1;
 
@@ -27,7 +27,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.i64 = call %literal_sub;
+        v0.i64 = call %main;
         evm_stop;
 }
 

@@ -1,0 +1,100 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/maybe_mut_traits.fe
+---
+error[3-0071]: `mut?` bound of an item without a mode
+    ┌─ maybe_mut_traits.fe:109:16
+    │
+109 │     type Item: mut? Slot
+    │                ^^^^^^^^^ only a function or an implementation is used at a mode
+
+error[3-0071]: `mut?` bound of an item without a mode
+    ┌─ maybe_mut_traits.fe:112:33
+    │
+112 │ trait MaybeWritable where Self: mut? Slot {}
+    │                                 ^^^^^^^^^ only a function or an implementation is used at a mode
+
+error[3-0071]: `mut?` bound of an item without a mode
+    ┌─ maybe_mut_traits.fe:114:23
+    │
+114 │ trait MaybeSlotted<S: mut? Slot> {}
+    │                       ^^^^^^^^^ only a function or an implementation is used at a mode
+
+error[3-0071]: `mut?` bound of an item without a mode
+    ┌─ maybe_mut_traits.fe:116:21
+    │
+116 │ struct MaybeWrap<S: mut? Slot> {
+    │                     ^^^^^^^^^ only a function or an implementation is used at a mode
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ maybe_mut_traits.fe:78:21
+   │
+78 │     let value = mut slot.slot()
+   │                     ^^^^^^^^^^^ `S` doesn't implement `mut Slot`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ maybe_mut_traits.fe:84:5
+   │
+71 │ fn bump<S: mut Slot>(_ slot: mut S) {
+   │                ---- required by this bound on `bump`
+   ·
+84 │     bump(mut fixed)
+   │     ^^^^ `Fixed` doesn't implement `mut Slot`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ maybe_mut_traits.fe:85:21
+   │
+85 │     let value = mut fixed.slot()
+   │                     ^^^^^^^^^^^^ `Fixed` doesn't implement `mut Slot`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ maybe_mut_traits.fe:88:5
+   │
+71 │ fn bump<S: mut Slot>(_ slot: mut S) {
+   │                ---- required by this bound on `bump`
+   ·
+88 │     bump(mut wrapped)
+   │     ^^^^
+   │     │
+   │     `Wrap<Fixed>` doesn't implement `mut Slot`
+   │     trait bound `Fixed: mut Slot` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ maybe_mut_traits.fe:99:17
+   │
+99 │     type Item = Fixed
+   │                 ^^^^^ `Fixed` doesn't implement `mut Slot`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ maybe_mut_traits.fe:105:19
+    │
+105 │ impl Writable for Fixed {}
+    │                   ^^^^^ `Fixed` doesn't implement `mut Slot`
+
+error[6-0008]: method `slot` has incompatible return type
+    ┌─ maybe_mut_traits.fe:127:8
+    │
+  2 │     fn slot(mut? self) -> mut? u256
+    │        ---- trait requires this return type
+    ·
+127 │     fn slot(mut? self) -> mut? u8 {
+    │        ^^^^ expected `ref u256`, found `ref u8`
+
+error[6-0035]: method `get` is `mut?`, but the trait method is not
+   ┌─ maybe_mut_traits.fe:66:8
+   │
+61 │     fn get(self) -> ref u256
+   │        --- trait method has no mode
+   ·
+66 │     fn get(mut? self) -> mut? u256 {
+   │        ^^^ this method takes the mode it is called at
+
+error[6-0036]: this implementation gives `slot` its `mut` mode but not `other`
+   ┌─ maybe_mut_traits.fe:38:6
+   │
+38 │ impl Slot for Half {
+   │      ^^^^ every `mut?` method of the trait has its `mut` mode here, or none does
+   │
+   = write `other` with `mut?` or add its `mut` body, or write `slot` without `mut?`

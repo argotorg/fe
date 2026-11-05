@@ -22,10 +22,9 @@ pub(crate) use instance::{CallSiteProviderRefinement, RefinedInput};
 pub use instance::{
     EffectProviderSubst, GenericSubst, ImplEnv, InstantiatedEffectEnv, RootSemanticInstanceError,
     SemanticEffectEnvInstantiationError, SemanticInstance, SemanticInstanceKey, TypedBodyTemplate,
-    core_method_callee_key, generated_callee_key, get_or_build_semantic_instance,
-    identity_semantic_instance_key, instantiate_typed_body, instantiated_effect_env,
-    resolved_provider_binding_for_instance_effect, root_semantic_instance_key, typed_body_template,
-    validate_instantiated_effect_env_key,
+    core_method_callee_key, generated_callee_key, identity_semantic_instance_key,
+    instantiate_typed_body, instantiated_effect_env, resolved_provider_binding_for_instance_effect,
+    root_semantic_instance_key, typed_body_template, validate_instantiated_effect_env_key,
 };
 pub(crate) use instance::{
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,

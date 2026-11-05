@@ -1,0 +1,123 @@
+// A call in a closure whose receiver's type is known only after the
+// closure's body resolves once the closure's row is fixed: it cannot add an
+// effect to the row, or make one `mut`.
+struct Log {
+    n: u256,
+}
+
+struct W<T> {
+    v: T,
+}
+
+trait Note {
+    fn note(self) -> u256 uses (log: Log)
+    fn bump(self) uses (log: mut Log)
+}
+
+impl Note for W<u256> {
+    fn note(self) -> u256 uses (log: Log) {
+        log.n
+    }
+
+    fn bump(self) uses (log: mut Log) {
+        log.n += 1
+    }
+}
+
+impl Note for W<u8> {
+    fn note(self) -> u256 uses (log: Log) {
+        log.n
+    }
+
+    fn bump(self) uses (log: mut Log) {
+        log.n += 1
+    }
+}
+
+fn read_log() -> u256 uses (log: Log) {
+    log.n
+}
+
+fn row_lacks_effect() uses (log: Log) {
+    let x = 5
+    let g = || {
+        let r = W { v: x }.note()
+    }
+    let y: u256 = x
+    g()
+}
+
+fn row_has_effect_read() uses (log: mut Log) {
+    let x = 5
+    let g = || {
+        let r = read_log()
+        W { v: x }.bump()
+    }
+    let y: u256 = x
+    g()
+}
+
+struct R {}
+
+trait Apply {
+    fn apply<F: Fn(R) -> u256>(self, _ f: F) -> u256 uses F::E
+}
+
+impl Apply for W<u256> {
+    fn apply<F: Fn(R) -> u256>(self, _ f: F) -> u256 uses F::E {
+        f(R {})
+    }
+}
+
+impl Apply for W<u8> {
+    fn apply<F: Fn(R) -> u256>(self, _ f: F) -> u256 uses F::E {
+        0
+    }
+}
+
+// A row the late call forwards is no more a component of the fixed row
+// than an effect is.
+fn row_lacks_row<F: Fn(R) -> u256>(_ f: own F) -> u256 uses F::E {
+    let x = 5
+    let g = || W { v: x }.apply(f)
+    let y: u256 = x
+    g()
+}
+
+trait Store {
+    fn n(self) -> u256
+}
+
+trait Peek {
+    fn peek(self) -> u256 uses (store: Store)
+}
+
+impl Peek for W<u256> {
+    fn peek(self) -> u256 uses (store: Store) {
+        store.n()
+    }
+}
+
+impl Peek for W<u8> {
+    fn peek(self) -> u256 uses (store: Store) {
+        0
+    }
+}
+
+fn row_lacks_trait_effect() -> u256 uses (store: Store) {
+    let x = 5
+    let g = || W { v: x }.peek()
+    let y: u256 = x
+    g()
+}
+
+// The row already reads `Log`, which is all the late `note` needs.
+fn row_has_effect() -> u256 uses (log: Log) {
+    let x = 5
+    let g = || {
+        let r = read_log()
+        W { v: x }.note()
+    }
+    let y: u256 = x
+    g()
+}

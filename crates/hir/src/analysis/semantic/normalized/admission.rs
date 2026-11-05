@@ -1,5 +1,9 @@
+// Diagnostics and CTFE stops are returned on the slow path; salsa's 8-byte ids
+// put them just past clippy's 128-byte `Err` threshold.
+#![allow(clippy::result_large_err)]
+
 use cranelift_entity::EntityRef;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -12,7 +16,7 @@ use crate::analysis::{
             normalized_body_verify_error_to_diag, normalized_layout_plan_verify_error_to_diag,
             smir_lowering_admission_diag,
         },
-        instance::SemanticBodyAdmissionError,
+        instance::{LayoutDemandBody, SemanticBodyAdmissionError},
         semantic_instance_base_assumptions_for_key,
     },
     ty::trait_resolution::PredicateListId,
@@ -26,13 +30,11 @@ use super::{
 #[salsa::interned]
 #[derive(Debug)]
 pub struct AdmittedSemanticBodyId<'db> {
-    #[return_ref]
     pub body: NormalizedBody<'db>,
-    #[return_ref]
     pub layout_plan: NLayoutPlan<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticBodyAdmission<'db> {
     Ready(AdmittedSemanticBodyId<'db>),
     Blocked(BlockedSemanticBody<'db>),
@@ -55,6 +57,15 @@ pub fn normalize_semantic_body<'db>(
     instance: SemanticInstance<'db>,
 ) -> Result<NormalizedArtifacts<'db>, SemanticNormalizationFailure<'db>> {
     artifacts_from_admission(db, semantic_body_admission(db, instance))
+}
+
+/// The admission of the body runtime lowering uses: the checked one's, with
+/// constant-evaluable operations folded.
+pub fn runtime_semantic_body_admission<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> SemanticBodyAdmission<'db> {
+    runtime_admitted_semantic_body_query(db, instance)
 }
 
 /// The verified body with constant-evaluable operations folded, which runtime
@@ -95,7 +106,7 @@ fn artifacts_from_admission<'db>(
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn admitted_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -104,11 +115,14 @@ fn admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, LayoutDemandBody::Admitted) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = canonicalize_semantic_const_refs(db, instance, raw);
     normalize_and_verify(db, instance, &raw, instance.assumptions(db))
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn runtime_admitted_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -117,6 +131,10 @@ fn runtime_admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    // Folding evaluates values of the body's types, so they must be valid.
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, LayoutDemandBody::Admitted) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let folded = canonicalize_semantic_consts_for_runtime(db, instance, raw);
     if folded == canonicalize_semantic_const_refs(db, instance, raw) {
         return admitted_semantic_body_query(db, instance);
@@ -124,7 +142,7 @@ fn runtime_admitted_semantic_body_query<'db>(
     normalize_and_verify(db, instance, &folded, instance.assumptions(db))
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn provisional_admitted_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -133,6 +151,9 @@ fn provisional_admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, LayoutDemandBody::Provisional) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = canonicalize_semantic_const_refs(db, instance, raw);
     normalize_and_verify(
         db,
@@ -230,9 +251,14 @@ fn admission_failure<'db>(
     error: SemanticBodyAdmissionError<'db>,
 ) -> SemanticBodyAdmission<'db> {
     match error {
-        SemanticBodyAdmissionError::BlockedByUpstreamDiagnostics(causes) => {
-            SemanticBodyAdmission::Blocked(BlockedSemanticBody { instance, causes })
-        }
+        // Type checking leaves a faulting specialized extent to concrete
+        // demand, so an expression it invalidates has no upstream report.
+        SemanticBodyAdmissionError::BlockedByUpstreamDiagnostics(causes) => instance
+            .concrete_layout_diagnostic(db, LayoutDemandBody::Expressions)
+            .map_or_else(
+                || SemanticBodyAdmission::Blocked(BlockedSemanticBody { instance, causes }),
+                SemanticBodyAdmission::Rejected,
+            ),
         SemanticBodyAdmissionError::IncompleteLoweringPlan(causes) => {
             internal_failure(db, smir_lowering_admission_diag(db, instance, &causes))
         }

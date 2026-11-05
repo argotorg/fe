@@ -25,7 +25,7 @@ use smallvec::SmallVec;
 /// - `Ty`: The type representation (e.g., `TyId<'db>`)
 /// - `Var`: The variant representation (e.g., `EnumVariant<'db>`)
 /// - `Idx`: The dynamic index ID type (e.g., `ExprId` in HIR, `ValueId` in MIR)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Projection<Ty, Var, Idx> {
     /// Struct/tuple field by index.
     Field(usize),
@@ -69,7 +69,7 @@ pub enum Projection<Ty, Var, Idx> {
 ///
 /// Type parameter `Idx` is the dynamic index ID type, allowing proper
 /// placeholder-based hashing in each layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum IndexSource<Idx> {
     /// Compile-time constant index.
     Constant(usize),
@@ -89,8 +89,12 @@ pub enum IndexSource<Idx> {
 /// ```text
 /// [Field(0), VariantField { ... }, Field(1)]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ProjectionPath<Ty, Var, Idx>(SmallVec<Projection<Ty, Var, Idx>, 4>);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct ProjectionPath<Ty, Var, Idx>(
+    // SAFETY: A `SmallVec` owns its elements.
+    #[salsa_value(unsafe(prove(Projection<Ty, Var, Idx>: salsa::SalsaValue)))]
+    SmallVec<Projection<Ty, Var, Idx>, 4>,
+);
 
 impl<Ty, Var, Idx> Default for ProjectionPath<Ty, Var, Idx> {
     fn default() -> Self {

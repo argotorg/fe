@@ -15,8 +15,8 @@ pub fn foo(x: u32, idx: u32, a: Address) -> (u8, i64, u256, u256, Address) {
 
     let z: u256 = x as u64 as u256
 
-    let a_word: u256 = (a) as u256
-    let a2: Address = a_word as Address
+    let a_word: u256 = a.word()
+    let a2: Address = Address::new(a_word)
 
     (b, i, word, z, a2)
 }

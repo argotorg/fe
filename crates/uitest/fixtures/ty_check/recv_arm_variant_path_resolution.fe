@@ -1,0 +1,154 @@
+use std::abi::sol
+
+msg M {
+    #[selector = 0x01]
+    V { n: u256 } -> u256,
+}
+
+mod inner {
+    msg Hidden {
+        #[selector = 0x02]
+        V { n: u256 } -> u256,
+    }
+}
+
+mod outer {
+    mod hidden {
+        pub use ingot::M
+    }
+}
+
+// A msg module with a variant whose type argument the arm must give, and a
+// variant that isn't visible outside it.
+pub mod Manual {
+    use std::abi::sol
+
+    pub struct Generic<T> {
+        pub value: u8,
+    }
+
+    impl<T> core::abi::AbiSize for Generic<T> {
+        const HEAD_SIZE: u256 = 32
+        const IS_DYNAMIC: bool = false
+
+        fn payload_size(self) -> u256 {
+            32
+        }
+    }
+
+    impl<T> core::abi::Encode<std::abi::Sol> for Generic<T> {
+        fn encode(own self, _ out: core::abi::AbiFrame) {
+            let Self { value } = self
+            value.encode(out)
+        }
+    }
+
+    impl<T> core::abi::Decode<std::abi::Sol> for Generic<T> {
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+            let value = u8::decode_payload(mut d, input)
+            Self { value }
+        }
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for Generic<u8> {
+        const SELECTOR: u32 = sol("generic(uint8)")
+        type Return = u8
+    }
+
+    struct Private {
+        pub value: u8,
+    }
+
+    impl core::abi::AbiSize for Private {
+        const HEAD_SIZE: u256 = 32
+        const IS_DYNAMIC: bool = false
+
+        fn payload_size(self) -> u256 {
+            32
+        }
+    }
+
+    impl core::abi::Encode<std::abi::Sol> for Private {
+        fn encode(own self, _ out: core::abi::AbiFrame) {
+            let Self { value } = self
+            value.encode(out)
+        }
+    }
+
+    impl core::abi::Decode<std::abi::Sol> for Private {
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+            let value = u8::decode_payload(mut d, input)
+            Self { value }
+        }
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for Private {
+        const SELECTOR: u32 = sol("private(uint8)")
+        type Return = u8
+    }
+}
+
+// An arm's path is resolved once, as a type written where the arm is, and
+// reported as one: its segments' visibility, its generic arguments, and
+// whether it names a type.
+pub contract Bare {
+    recv {
+        inner::Hidden::V { n } -> u256 {
+            n
+        }
+        Manual::Generic { value } -> u8 {
+            value
+        }
+        Manual::Generic<Nope> { value } -> u8 {
+            value
+        }
+        Manual::Generic<u8> { value } -> u8 {
+            value
+        }
+        Nope { x } -> u256 {
+            x
+        }
+        M::W { y } -> u256 {
+            y
+        }
+        Gone -> u256 {
+            1
+        }
+        inner { z } -> u256 {
+            z
+        }
+    }
+}
+
+// In a named block, a single segment names an item of the msg, as if written
+// after the msg's path, and a longer path resolves where it's written. A
+// segment that isn't visible is reported whether or not the path names one
+// of the msg's variants.
+pub contract Named {
+    recv M {
+        outer::hidden::M::V { n } -> u256 {
+            n
+        }
+        inner::Hidden::V { n } -> u256 {
+            n
+        }
+    }
+
+    recv Manual {
+        Generic<u8> { value } -> u8 {
+            value
+        }
+        Private { value } -> u8 {
+            value
+        }
+    }
+}
+
+// The msg path is checked where it's written, too.
+pub contract HiddenMsg {
+    recv inner::Hidden {
+        V { n } -> u256 {
+            n
+        }
+    }
+}

@@ -1,0 +1,294 @@
+// A use that asks a `mut?` call for `mut` needs the call's `mut?` effects
+// `mut`: each use here has a read-only provider.
+use core::option::Option
+use std::evm::{Evm, RawStorage, SolArray, StorPtr, storage_at}
+
+struct Counter {
+    n: u256,
+}
+
+impl Counter {
+    fn bump(mut self) {
+        self.n += 1
+    }
+}
+
+struct Store {
+    c: Counter,
+    a: u256,
+    b: u256,
+    present: bool,
+}
+
+fn cell() -> mut? Counter uses (store: mut? Store) {
+    mut? store.c
+}
+
+fn pair() -> (mut? u256, mut? u256) uses (store: mut? Store) {
+    (mut? store.a, mut? store.b)
+}
+
+fn find() -> Option<mut? Counter> uses (store: mut? Store) {
+    if store.present { Option::Some(mut? store.c) } else { Option::None }
+}
+
+fn count(_ c: mut? Counter) -> mut? u256 {
+    mut? c.n
+}
+
+fn add_ten(_ c: mut Counter) {
+    c.n += 10
+}
+
+fn receiver() uses (store: Store) {
+    cell().bump()
+}
+
+fn argument() uses (store: Store) {
+    add_ten(mut cell())
+}
+
+fn tuple() uses (store: Store) {
+    let (mut a, _) = pair()
+    a = 1
+}
+
+fn compound() uses (store: Store) {
+    cell().n += 1
+}
+
+fn arm() uses (store: Store) {
+    match pair() {
+        (mut a, _) => { a = 1 }
+    }
+}
+
+fn some() uses (store: Store) {
+    match find() {
+        Option::Some(mut c) => { c.n = 5 }
+        Option::None => {}
+    }
+}
+
+fn try_some() -> Option<u256> uses (store: Store) {
+    let c = mut find()?
+    c.n += 1
+    Option::Some(c.n)
+}
+
+fn nested_argument() uses (store: Store) {
+    count(cell()) = 6
+}
+
+fn yielded() -> mut Counter uses (store: Store) {
+    cell()
+}
+
+fn immutable_with() {
+    let s = Store { c: Counter { n: 0 }, a: 0, b: 0, present: false }
+    with (Store = s) {
+        cell().n = 1
+    }
+}
+
+fn ref_with() {
+    var s = Store { c: Counter { n: 0 }, a: 0, b: 0, present: false }
+    let r = ref s
+    with (Store = r) {
+        cell().n = 1
+    }
+}
+
+// The caller's own `mut?` effect, which its `ref` body only reads.
+fn forward_in_ref_body() -> mut? u256 uses (store: mut? Store) {
+    cell().n = 5
+    mut? store.a
+}
+
+// Raw-slot constructors with read-only raw storage.
+fn storage_receiver() uses (storage: RawStorage) {
+    unsafe { SolArray<u256>::at(3) }.push(1)
+}
+
+fn storage_split() uses (storage: RawStorage) {
+    let (mut a, mut b) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
+    a.push(1)
+    b.push(2)
+}
+
+fn storage_compound() uses (storage: RawStorage) {
+    unsafe { storage_at<u256>(9) += 1 }
+}
+
+fn read_only_evm() uses (evm: Evm) {
+    with (RawStorage = evm) {
+        unsafe { storage_at<u256>(9) = 1 }
+    }
+}
+
+// A closure's raised call needs the effect `mut` from its definer.
+fn closure_write() uses (store: Store) {
+    let g = || { cell().n = 1 }
+    g()
+}
+
+fn closure_read_then_write() uses (store: Store) {
+    let g = || {
+        let v = cell().n
+        cell().n = v + 1
+    }
+    g()
+}
+
+fn nested_closure() uses (store: Store) {
+    let g = || {
+        let h = || { cell().n = 50 }
+        h()
+    }
+    g()
+}
+
+fn closure_in_ref_body() -> mut? u256 uses (store: mut? Store) {
+    let g = || { cell().n = 5 }
+    g()
+    mut? store.a
+}
+
+// A contract field given read-only.
+msg M {
+    #[selector = 1]
+    Set { v: u256 } -> u256,
+}
+
+pub contract C {
+    mut store: Store,
+
+    recv M {
+        Set { v } -> u256 uses (store) {
+            cell().n = v
+            0
+        }
+    }
+}
+
+struct Cells {
+    a: u256,
+    b: u256,
+}
+
+// A `mut` binding of an unsafe split's `ref` grant.
+fn split_of_reads(_ c: mut Cells) {
+    let (mut a, mut b) = unsafe { (ref c.a, ref c.b) }
+    a = 1
+    b = 2
+}
+
+#[raw_place]
+fn cell_of(_ cells: mut? Cells, _ first: bool) -> mut? u256 {
+    if first { mut? cells.a } else { mut? cells.b }
+}
+
+// A `mut` binding of one part asks every access in the split for `mut`.
+fn split_asks_each(_ d: mut Cells, _ e: Cells) {
+    let (mut a, b) = unsafe { (cell_of(mut d, true), cell_of(e, false)) }
+    a = b
+}
+
+// Each access element is asked, whatever an earlier one answers, so `e`
+// must be `mut` in either order.
+fn split_read_first(_ c: mut Cells, _ e: Cells) {
+    let (mut a, mut b) = unsafe { (ref c.a, cell_of(e, false)) }
+}
+
+fn split_read_last(_ c: mut Cells, _ e: Cells) {
+    let (mut a, mut b) = unsafe { (cell_of(e, false), ref c.a) }
+}
+
+// A method resolved at the end of a closure's body raises a call in it while
+// the closure's row is open, so the definer must give the effect `mut`; one
+// resolved after the closure finds the row fixed.
+struct W<T> {
+    v: T,
+}
+
+trait Mark {
+    fn mark(mut self)
+}
+
+impl Mark for W<u256> {
+    fn mark(mut self) {
+        self.v += 1
+    }
+}
+
+impl Mark for W<u8> {
+    fn mark(mut self) {
+        self.v += 1
+    }
+}
+
+#[raw_place]
+unsafe fn w_at<T>(_ slot: u256, _ x: T) -> mut? W<T> uses (storage: mut? RawStorage) {
+    unsafe { mut? *(slot as StorPtr<W<T>>) }
+}
+
+fn late_raise_in_closure() uses (storage: RawStorage) {
+    let g = || {
+        let x = 5
+        unsafe { w_at(0, x) }.mark()
+        let y: u256 = x
+    }
+    g()
+}
+
+fn late_raise_after_closure() uses (storage: mut RawStorage) {
+    let x = 5
+    let g = || { unsafe { w_at(0, x) }.mark() }
+    let y: u256 = x
+    g()
+}
+
+impl Cells {
+    #[raw_place]
+    fn first(mut? self) -> mut? u256 {
+        mut? self.a
+    }
+}
+
+// The split's demand is named on a receiver it asks for `mut` and on an
+// effect it needs `mut`.
+fn split_receiver(_ d: mut Cells, _ e: Cells) {
+    let (mut a, b) = unsafe { (d.first(), e.first()) }
+}
+
+fn split_effect(_ d: mut Cells) uses (storage: RawStorage) {
+    let (mut a, b) = unsafe { (d.first(), storage_at<u256>(9)) }
+}
+
+fn bump_counter() uses (counter: mut Counter) {
+    counter.n += 1
+}
+
+// A `with` value calling a `mut?` function at `ref` provides a read; `mut`
+// before the call provides it mutably.
+fn with_ref_call() uses (store: mut Store) {
+    with (Counter = cell()) {
+        bump_counter()
+    }
+}
+
+fn with_mut_call() uses (store: mut Store) {
+    with (Counter = mut cell()) {
+        bump_counter()
+    }
+}
+
+fn take_parts(_ (x, mut y): (ref u256, mut u256)) {
+    y = x
+}
+
+// A product parameter's `mut` part asks the split for `mut`, which its read
+// access keeps it from granting.
+fn split_product_read(_ c: mut Cells, _ d: mut Cells) {
+    take_parts(unsafe { (ref c.a, cell_of(mut d, true)) })
+}

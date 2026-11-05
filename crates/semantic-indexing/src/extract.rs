@@ -59,10 +59,7 @@ impl<'db> DocExtractor<'db> {
         if self.include_tests {
             return false;
         }
-        matches!(item, ItemKind::Func(_))
-            && item
-                .attrs(self.db)
-                .is_some_and(|attrs| attrs.has_attr(self.db, "test"))
+        matches!(item, ItemKind::Func(func) if func.is_test(self.db))
     }
 
     /// Rewrite a path to use the ingot's config name instead of "lib".
@@ -86,7 +83,10 @@ impl<'db> DocExtractor<'db> {
         // the ingot name so a nested `foo::lib` submodule is left alone.
         if matches!(doc_item.kind, DocItemKind::Module)
             && doc_item.name == "lib"
-            && let Some(cfg_name) = ingot.config(self.db).and_then(|c| c.metadata.name)
+            && let Some(cfg_name) = ingot
+                .config(self.db)
+                .as_ref()
+                .and_then(|c| c.metadata.name.as_ref())
             && doc_item.path == cfg_name.as_str()
         {
             doc_item.name = cfg_name.to_string();
@@ -1184,7 +1184,8 @@ impl<'db> DocExtractor<'db> {
         let name = if is_root {
             ingot
                 .config(self.db)
-                .and_then(|c| c.metadata.name)
+                .as_ref()
+                .and_then(|c| c.metadata.name.as_ref())
                 .map_or_else(
                     || top_mod.name(self.db).data(self.db).to_string(),
                     |s| s.to_string(),

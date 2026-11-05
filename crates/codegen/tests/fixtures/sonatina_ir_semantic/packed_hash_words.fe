@@ -1,0 +1,40 @@
+pub fn hash_word(_ word: u256) -> u256 {
+    core::keccak(word)
+}
+pub fn hash_string(_ text: String<5>) -> u256 {
+    core::keccak(text)
+}
+pub fn hash_words(_ a: u256, _ b: u256) -> u256 {
+    core::keccak((a, b))
+}
+pub fn hash_nested(_ a: u256, _ text: String<5>, _ b: u256) -> u256 {
+    core::keccak(((a, text), (b,)))
+}
+
+msg HashMsg {
+    #[selector = 0x01]
+    Word { word: u256 } -> u256,
+    #[selector = 0x02]
+    Text { word: u256 } -> u256,
+    #[selector = 0x03]
+    Words { a: u256, b: u256 } -> u256,
+    #[selector = 0x04]
+    Nested { a: u256, text: u256, b: u256 } -> u256,
+}
+
+pub contract Hashes {
+    recv HashMsg {
+        Word { word } -> u256 {
+            hash_word(word)
+        }
+        Text { word } -> u256 {
+            hash_string(word as String<5>)
+        }
+        Words { a, b } -> u256 {
+            hash_words(a, b)
+        }
+        Nested { a, text, b } -> u256 {
+            hash_nested(a, text as String<5>, b)
+        }
+    }
+}

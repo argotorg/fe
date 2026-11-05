@@ -419,9 +419,10 @@ impl TestDb {
     where
         ItemKind<'db>: TryInto<T, Error = TryIntoError<ItemKind<'db>>>,
     {
-        let tree = self.parse_source(file);
-        tree.items_dfs(self)
-            .find_map(|it| it.try_into().ok())
+        map_file_to_mod(self, file)
+            .all_items(self)
+            .iter()
+            .find_map(|&it| it.try_into().ok())
             .unwrap()
     }
 
@@ -429,9 +430,10 @@ impl TestDb {
     where
         ItemKind<'db>: TryInto<T, Error = TryIntoError<ItemKind<'db>>>,
     {
-        let tree = self.parse_source(file);
-        tree.items_dfs(self)
-            .filter_map(|it| it.try_into().ok())
+        map_file_to_mod(self, file)
+            .all_items(self)
+            .iter()
+            .filter_map(|&it| it.try_into().ok())
             .collect()
     }
 

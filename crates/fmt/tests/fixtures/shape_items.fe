@@ -1,0 +1,18 @@
+trait Driver {
+    type Base
+      shape   Step
+    fn at(self, _ base: Self::Base) -> Self::Step< ref >
+}
+
+impl<B> Driver for Identity<B> {
+    type Base = B
+    shape Step   =  mut? B::Item
+}
+
+impl<D: Driver> Driver for Enumerate<D> {
+    shape Step = ( own usize,D::Step )
+}
+
+fn first<D: Driver, P: Fn(D::Step<mut>) -> bool>(_ d: D, _ p: P) {}
+
+fn sum<D: Driver<Step< ref > =ref u256, Base = [u256; 3]>>(_ d: D) {}

@@ -42,9 +42,9 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.*i8 = evm_malloc v0;
-        v13.i256 = ptr_to_int v12 i256;
-        return v13;
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
 func private %bump(v0.i256) {
@@ -99,7 +99,7 @@ func private %cast__gf772(v0.i256) -> i256 {
         return v0;
 }
 
-func private %explicit_raw_boundaries() {
+func private %main() {
     block0:
         jump block1;
 
@@ -116,7 +116,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        call %explicit_raw_boundaries;
+        call %main;
         evm_stop;
 }
 

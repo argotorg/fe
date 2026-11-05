@@ -1,5 +1,5 @@
 // For loop over a range
-pub fn for_range_sum() -> usize {
+pub fn main() -> usize {
     var sum: usize = 0
     let start: usize = 0
     let end: usize = 10

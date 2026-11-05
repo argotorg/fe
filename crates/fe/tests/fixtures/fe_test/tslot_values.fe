@@ -49,7 +49,7 @@ pub contract Cells {
 
 #[test]
 fn multi_word_values_keep_their_words() uses (evm: mut Evm) {
-    let cells = evm.create2<Cells>(value: 0, args: (), salt: 0)
-    let value: u256 = evm.call(addr: cells, gas: 300000, value: 0, message: CellsMsg::Run {})
+    let cells = evm.create2<Cells>(value: Wei::zero(), args: (), salt: 0)
+    let value: u256 = evm.call(addr: cells, gas: 300000, value: Wei::zero(), message: CellsMsg::Run {})
     assert(value == 12)
 }

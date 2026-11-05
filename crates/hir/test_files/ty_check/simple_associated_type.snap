@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/simple_associated_type.fe
 ---
@@ -8,21 +8,27 @@ note:
    │
 14 │   fn get_output<T: MyTrait>() -> T::Output {
    │ ╭──────────────────────────────────────────^
-15 │ │     todo()
+15 │ │     unsafe { todo() }
 16 │ │ }
    │ ╰─^ T::Output
 
 note:
    ┌─ simple_associated_type.fe:15:5
    │
-15 │     todo()
-   │     ^^^^ fn todo
+15 │     unsafe { todo() }
+   │     ^^^^^^^^^^^^^^^^^ T::Output
 
 note:
-   ┌─ simple_associated_type.fe:15:5
+   ┌─ simple_associated_type.fe:15:14
    │
-15 │     todo()
-   │     ^^^^^^ T::Output
+15 │     unsafe { todo() }
+   │              ^^^^ fn todo
+
+note:
+   ┌─ simple_associated_type.fe:15:14
+   │
+15 │     unsafe { todo() }
+   │              ^^^^^^ T::Output
 
 note:
    ┌─ simple_associated_type.fe:18:14

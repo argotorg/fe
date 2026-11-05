@@ -232,6 +232,7 @@ fn lower_contract_init<'db>(
     let body = Body::lower_ast_with_variant(
         ctxt,
         body_ast,
+        init_ast.params(),
         TrackedItemVariant::ContractInit,
         BodyKind::FuncBody,
     );

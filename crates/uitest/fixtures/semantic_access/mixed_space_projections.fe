@@ -22,9 +22,10 @@ impl Guarded {
         mut self.value
     }
 
-    // Accepted: a transient place forwarded through a helper keeps its space.
-    fn locked_forwarded(mut self) -> mut bool @transient {
-        forward(mut self.locked.value)
+    // Accepted: a transient place forwarded through a helper keeps its space,
+    // the space of the direct yield.
+    fn locked_forwarded(mut self, _ c: bool) -> mut bool {
+        if c { forward(mut self.locked.value) } else { mut self.locked.value }
     }
 
     // Rejected: the yields lie in storage and transient storage.
@@ -44,7 +45,7 @@ msg M {
 
 fn call_out(_ to: Address) uses (call: mut Call) {
     var output = MemBuffer::empty()
-    let _ = call.raw_call(addr: to, gas: 0, value: 0, args: MemSpan::empty(), ret: mut output)
+    let _ = call.raw_call(addr: to, gas: 0, value: Wei::zero(), args: MemSpan::empty(), ret: mut output)
 }
 
 // Accepted: each field's projection, the vault's value grant and the named
@@ -61,7 +62,7 @@ pub contract C {
             let v = mut g.value_mut()
             v += 1
             assert!(vault.try_lock())
-            let w = mut vault.value_mut()
+            let w = mut vault.value()
             w += 1
             let b = mut balances[to]
             if b >= 1 {
@@ -77,7 +78,7 @@ pub contract C {
 // Rejected: the vault's value grant is still open at the call.
 fn held_across(_ to: Address) uses (vault: mut Mutex<u256>, call: mut Call) {
     assert!(vault.try_lock())
-    let w = mut vault.value_mut()
+    let w = mut vault.value()
     call_out(to)
     w += 1
     vault.unlock()

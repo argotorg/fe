@@ -1,7 +1,6 @@
-// A loop's item pattern chooses its traversal: `mut` on the item selects
-// `at_mut` and opens the base mutably, as a `mut` component opens a matched
+// A loop's item pattern chooses its traversal: `mut` on the item takes `at`
+// at `mut` and opens the base mutably, as a `mut` component opens a matched
 // place, so the base needs no marker.
-use core::iter::zip
 
 // S-70. Accepted: each element, and each item of a chain, is written in
 // place.
@@ -24,16 +23,31 @@ fn view_base(_ xs: [u256; 2]) {
 // S-70. Rejected: `mut` on the owned index beside the item.
 fn mut_extra(_ xs: mut [u256; 2]) {
     for (mut i, x) in xs.enumerate() {
-        i += x as usize
+        i += x.downcast_unchecked()
     }
 }
 
-// S-70. Accepted: both items `mut`; rejected: only one of them.
-fn zipped(_ a: mut [u256; 2], _ b: mut [u256; 2]) {
-    for (mut x, mut y) in (a, b) by zip() {
-        x += y
+struct Account { balance: u256 }
+
+// S-70. Rejected: a step's non-`Copy` element is bound `ref`, and its owned
+// index by value.
+fn non_copy_step(_ accounts: [Account; 2]) {
+    for (i, account) in accounts.enumerate() {
     }
-    for (mut x, y) in (a, b) by zip() {
-        x += y
+}
+
+// Rejected: a step bound whole, which the pattern must take apart, or which
+// generic code only passes on; `ref` and `mut` on it add nothing more.
+fn whole_step(_ xs: mut [u256; 2]) {
+    for ref t in xs.enumerate() {
+    }
+    for mut t in xs.enumerate() {
+    }
+}
+
+fn whole_opaque_step<D: Copy + core::iter::Driver<Base = [u256; 2]>>(_ xs: [u256; 2], _ d: D)
+    uses D::E
+{
+    for ref x in xs.by(d) {
     }
 }

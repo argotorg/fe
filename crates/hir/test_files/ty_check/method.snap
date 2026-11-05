@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/frontend/ty_check.rs
-assertion_line: 46
 expression: res
 input_file: test_files/ty_check/method.fe
 ---
@@ -9,21 +8,27 @@ note:
   │
 7 │   pub fn todo() -> ! {
   │ ╭────────────────────^
-8 │ │     evm::abort()
+8 │ │     unsafe { evm::abort() }
 9 │ │ }
   │ ╰─^ !
 
 note:
   ┌─ method.fe:8:5
   │
-8 │     evm::abort()
-  │     ^^^^^^^^^^ fn abort
+8 │     unsafe { evm::abort() }
+  │     ^^^^^^^^^^^^^^^^^^^^^^^ !
 
 note:
-  ┌─ method.fe:8:5
+  ┌─ method.fe:8:14
   │
-8 │     evm::abort()
-  │     ^^^^^^^^^^^^ !
+8 │     unsafe { evm::abort() }
+  │              ^^^^^^^^^^ fn abort
+
+note:
+  ┌─ method.fe:8:14
+  │
+8 │     unsafe { evm::abort() }
+  │              ^^^^^^^^^^^^ !
 
 note:
    ┌─ method.fe:17:68
@@ -189,7 +194,7 @@ note:
 36 │       pub fn unwrap<T>(self: own Self<T>) -> T {
    │ ╭──────────────────────────────────────────────^
 37 │ │         match self {
-38 │ │             Self::None => evm::abort()
+38 │ │             Self::None => unsafe { evm::abort() }
 39 │ │             Self::Some(t) => t
 40 │ │         }
 41 │ │     }
@@ -199,7 +204,7 @@ note:
    ┌─ method.fe:37:9
    │
 37 │ ╭         match self {
-38 │ │             Self::None => evm::abort()
+38 │ │             Self::None => unsafe { evm::abort() }
 39 │ │             Self::Some(t) => t
 40 │ │         }
    │ ╰─────────^ T
@@ -213,20 +218,26 @@ note:
 note:
    ┌─ method.fe:38:13
    │
-38 │             Self::None => evm::abort()
+38 │             Self::None => unsafe { evm::abort() }
    │             ^^^^^^^^^^ Option<T>
 
 note:
    ┌─ method.fe:38:27
    │
-38 │             Self::None => evm::abort()
-   │                           ^^^^^^^^^^ fn abort
+38 │             Self::None => unsafe { evm::abort() }
+   │                           ^^^^^^^^^^^^^^^^^^^^^^^ T
 
 note:
-   ┌─ method.fe:38:27
+   ┌─ method.fe:38:36
    │
-38 │             Self::None => evm::abort()
-   │                           ^^^^^^^^^^^^ T
+38 │             Self::None => unsafe { evm::abort() }
+   │                                    ^^^^^^^^^^ fn abort
+
+note:
+   ┌─ method.fe:38:36
+   │
+38 │             Self::None => unsafe { evm::abort() }
+   │                                    ^^^^^^^^^^^^ T
 
 note:
    ┌─ method.fe:39:13

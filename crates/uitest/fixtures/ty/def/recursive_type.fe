@@ -106,3 +106,48 @@ pub struct Fine<T, F: * -> *> {
 fn fine_empty(x: Fine<u256, Empty>) -> u256 {
     x.value
 }
+
+// A generic type that keeps its argument behind a pointer breaks a cycle
+// through that argument; one that holds it in place does not.
+pub struct Indirect<T> {
+    target: *T,
+}
+
+pub struct Direct<T> {
+    value: T,
+}
+
+pub struct List {
+    next: core::Option<Indirect<List>>,
+}
+
+pub struct S17 {
+    next: core::Option<Direct<S17>>,
+}
+
+// A type argument an associated-type field projects from may be held there.
+pub trait Project {
+    type Out
+}
+
+pub struct Projected<T: Project> {
+    out: T::Out,
+}
+
+pub struct ThroughProjection {
+    p: Projected<ThroughProjection>,
+}
+
+impl Project for ThroughProjection {
+    type Out = ThroughProjection
+}
+
+// A higher-kinded parameter applied in place may be given an ADT that holds
+// its arguments.
+pub struct Applied<W: * -> *> {
+    w: W<u8>,
+}
+
+pub struct ThroughApplication {
+    a: Applied<core::Result<ThroughApplication>>,
+}

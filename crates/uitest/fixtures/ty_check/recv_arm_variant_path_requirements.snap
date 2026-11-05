@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_variant_path_requirements.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ recv_arm_variant_path_requirements.fe:30:51
+   │
+ 3 │ struct Bounded<const N: u256> where N > 0 {
+   │                                     ----- required by this predicate
+   ·
+30 │ impl core::message::MsgVariant<std::abi::Sol> for Bounded<0> {
+   │                                                   ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ recv_arm_variant_path_requirements.fe:45:9
+   │
+ 3 │ struct Bounded<const N: u256> where N > 0 {
+   │                                     ----- required by this predicate
+   ·
+45 │         Bounded<0> { value } -> u256 {
+   │         ^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`

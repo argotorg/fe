@@ -23,14 +23,18 @@ pub(crate) fn is_container_item(item: ItemKind) -> bool {
 
 /// Resolve the display name for an ingot, using config metadata with kind-based fallback.
 pub(crate) fn ingot_display_name(db: &dyn InputDb, ingot: Ingot) -> String {
-    ingot.config(db).and_then(|c| c.metadata.name).map_or_else(
-        || match ingot.kind(db) {
-            common::ingot::IngotKind::Core => "core".to_string(),
-            common::ingot::IngotKind::Std => "std".to_string(),
-            _ => "unknown".to_string(),
-        },
-        |n| n.to_string(),
-    )
+    ingot
+        .config(db)
+        .as_ref()
+        .and_then(|c| c.metadata.name.as_ref())
+        .map_or_else(
+            || match ingot.kind(db) {
+                common::ingot::IngotKind::Core => "core".to_string(),
+                common::ingot::IngotKind::Std => "std".to_string(),
+                _ => "unknown".to_string(),
+            },
+            |n| n.to_string(),
+        )
 }
 
 /// Byte-offset index of line starts in a text string.
@@ -97,6 +101,7 @@ impl<'db> IngotContext<'db> {
         let name = ingot_display_name(db, ingot);
         let version = ingot
             .version(db)
+            .as_ref()
             .map_or_else(|| "0.0.0".to_string(), |v| v.to_string());
 
         // Pre-warm per-module reference resolution in parallel.

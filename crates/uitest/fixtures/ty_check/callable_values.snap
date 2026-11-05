@@ -30,6 +30,28 @@ error[6-0003]: trait bound is not satisfied
    ·
 70 │     apply(two, 1)
    │     ^^^^^ `fn two` doesn't implement `Fn(u256) -> u256`
+   │
+   = `fn two` is `Fn(u256, u256) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_values.fe:96:13
+   │
+85 │ fn takes_bool<F: Fn() -> bool>(_ f: F) -> bool uses (F::E) {
+   │                  ------------ required by this bound on `takes_bool`
+   ·
+96 │     let b = takes_bool(read_store)
+   │             ^^^^^^^^^^ `fn read_store` doesn't implement `Fn() -> bool`
+   │
+   = `fn read_store` is `Fn() -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_values.fe:97:13
+   │
+89 │ fn takes_u256<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) {
+   │                  ------------ required by this bound on `takes_u256`
+   ·
+97 │     let n = takes_u256(slot)
+   │             ^^^^^^^^^^ `fn slot` doesn't implement `Fn() -> u256`
 
 error[8-0021]: expected function, found `u256`
    ┌─ callable_values.fe:36:5

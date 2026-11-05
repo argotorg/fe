@@ -42,7 +42,7 @@ impl<T> Level1 for ConcreteLevel1<T> {
 
 // Function that uses deeply nested associated types
 fn extract_value<T: Level1>() -> T::Middle::Nested::Value {
-    todo()
+    unsafe { todo() }
 }
 
 // Test with concrete type parameter
@@ -85,7 +85,7 @@ impl<T> Codec for MyCodec<T> {
     type Encoder = TypedSerializer<T>
 
     fn encode(self) -> Self::Encoder::Output {
-   todo()
+   unsafe { todo() }
     }
 }
 
@@ -117,8 +117,8 @@ where
 {
     // Here we need T::Assoc to resolve to something that implements Level1
     // and then we use its nested associated type
-    let _nested: T::Assoc::Middle::Nested::Value = todo()
-    todo()
+    let _nested: T::Assoc::Middle::Nested::Value = unsafe { todo() }
+    unsafe { todo() }
 }
 
 struct HasLevel1 {}

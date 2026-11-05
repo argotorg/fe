@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_type_rows.fe
+---
+error[6-0024]: method `bump_inner` has incompatible effects
+   ┌─ assoc_type_rows.fe:36:8
+   │
+12 │     fn bump_inner(self) uses Self::Inner::E
+   │        ---------- trait requires these effects
+   ·
+36 │     fn bump_inner(self) {
+   │        ^^^^^^^^^^ expected 1 effects, found 0
+
+error[8-0106]: missing effect row `H::Inner::E` required by `bump_inner`
+   ┌─ assoc_type_rows.fe:21:5
+   │
+21 │     h.bump_inner()
+   │     ^^^^^^^^^^^^^^ `bump_inner` requires the row `H::Inner::E`
+   │
+   = a row whose implementation is not known here is forwarded: require it via `uses H::Inner::E`
+
+error[8-0106]: missing effect row `H::Inner::E` required by `bump_inner`
+   ┌─ assoc_type_rows.fe:37:9
+   │
+37 │         self.held.bump_inner()
+   │         ^^^^^^^^^^^^^^^^^^^^^^ `bump_inner` requires the row `H::Inner::E`
+   │
+   = a row whose implementation is not known here is forwarded: require it via `uses H::Inner::E`

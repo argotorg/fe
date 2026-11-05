@@ -4,9 +4,8 @@ use std::fmt;
 
 use crate::{
     hir_def::{
-        Body, ClosureDef, Enum, ExprId, GenericParamOwner, IdentId, ItemKind, PathId,
+        Body, Enum, ExprId, GenericParamOwner, IdentId, ItemKind, PathId, Struct,
         TypeAlias as HirTypeAlias, VariantKind,
-        params::FuncParamMode,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
     },
@@ -14,23 +13,28 @@ use crate::{
 };
 use bitflags::bitflags;
 use common::{
+    compilation::Target,
     indexmap::IndexSet,
     ingot::{Ingot, IngotKind},
 };
-use num_bigint::BigInt;
+use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
+use ruint::aliases::U256;
 use rustc_hash::FxHashSet;
-use salsa::Update;
+use salsa::SalsaValue;
 use smallvec::SmallVec;
 
 use super::{
     adt_def::{AdtDef, Pin, instantiate_adt_field_shape},
     const_ty::{
-        ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy, const_ty_from_sem_const,
+        ConstCaptureEnv, ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy,
+        const_ty_from_sem_const,
     },
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::{place_effect_provider_param_index_map, rows::RowComponent},
+    fold::{TyFoldable, TyFolder},
     normalize::normalize_ty,
+    shape::Shape,
     trait_def::{TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
@@ -55,14 +59,13 @@ pub const MAX_INLINE_STRING_BYTES: usize = 31;
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TyId<'db> {
-    #[return_ref]
     pub data: TyData<'db>,
 }
 
 #[salsa::tracked]
 impl<'db> TyId<'db> {
     /// Returns the kind of the type.
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn kind(self, db: &'db dyn HirAnalysisDb) -> Kind {
         self.data(db).kind(db)
     }
@@ -89,27 +92,15 @@ impl<'db> TyId<'db> {
         !self.is_view(db) && self.pinned_part(db).is_none()
     }
 
-    /// A `#[view]` type this type holds as a part: a type argument of an
-    /// ADT, a tuple, an array or a pointer, at any depth.
+    /// A `#[view]` type this type holds as a part, at any depth: in a field,
+    /// a tuple or array element, or as a pointer's target. A type argument no
+    /// field holds is not a part: `Identity<MemSlice<T>>` names a view's type
+    /// without holding one.
     pub fn view_part(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
-        if let Some((_, target)) = self.as_capability(db) {
-            return target.view_part(db);
+        match self.as_capability(db) {
+            Some((_, target)) => target.view_part(db),
+            None => super::adt_def::ty_view_part(db, self),
         }
-        let holds_args = match self.base_ty(db).data(db) {
-            TyData::TyBase(TyBase::Adt(_)) => true,
-            TyData::TyBase(TyBase::Prim(prim)) => {
-                matches!(prim, PrimTy::Tuple(_) | PrimTy::Array | PrimTy::Ptr(_))
-            }
-            _ => false,
-        };
-        if !holds_args {
-            return None;
-        }
-        self.generic_args(db).iter().find_map(|arg| {
-            arg.is_view(db)
-                .then_some(*arg)
-                .or_else(|| arg.view_part(db))
-        })
     }
 
     /// The pinned type this type is or holds in a field, in a tuple or
@@ -285,12 +276,7 @@ impl<'db> TyId<'db> {
         self.flags(db).contains(TyFlags::HAS_PROJECTION)
     }
 
-    /// Returns `true` if the type has a `*` kind.
-    pub fn has_star_kind(self, db: &dyn HirAnalysisDb) -> bool {
-        !matches!(self.kind(db), Kind::Abs(..))
-    }
-
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         self.pretty_print_with_mode(db, TypePrintMode::Concrete)
     }
@@ -301,8 +287,13 @@ impl<'db> TyId<'db> {
             TyData::TyParam(param) => param.pretty_print(db),
             TyData::AssocTy(assoc_ty) => {
                 let self_ty = assoc_ty.trait_.self_ty(db);
+                let shape_mode = match assoc_ty.mode {
+                    Some(ShapeMode::Ref) => "<ref>",
+                    Some(ShapeMode::Mut) => "<mut>",
+                    Some(ShapeMode::Inherit) | None => "",
+                };
                 format!(
-                    "{}::{}",
+                    "{}::{}{shape_mode}",
                     self_ty.pretty_print_with_mode(db, mode),
                     assoc_ty.name.data(db)
                 )
@@ -388,6 +379,86 @@ impl<'db> TyId<'db> {
         }
     }
 
+    /// The shape term of the parameter list `params`.
+    pub fn params_shape(db: &'db dyn HirAnalysisDb, params: &[Shape<'db>]) -> TyId<'db> {
+        let params: Vec<_> = params
+            .iter()
+            .map(|param| Self::shape_term(db, param))
+            .collect();
+        Self::params_term(db, &params)
+    }
+
+    /// The shape term of a list of parameters' shape terms.
+    pub(crate) fn params_term(db: &'db dyn HirAnalysisDb, params: &[TyId<'db>]) -> TyId<'db> {
+        let con = ShapeCon::Params(u16::try_from(params.len()).expect("a parameter list fits"));
+        params.iter().fold(
+            Self::new(db, TyData::TyBase(TyBase::Shape(con))),
+            |acc, &param| Self::app(db, acc, param),
+        )
+    }
+
+    /// The shape term `con` of `ty`: `own T`, `ref T`, `mut T` or `mut? T`.
+    pub(crate) fn shape_part(
+        db: &'db dyn HirAnalysisDb,
+        con: ShapeCon,
+        ty: TyId<'db>,
+    ) -> TyId<'db> {
+        Self::app(db, Self::new(db, TyData::TyBase(TyBase::Shape(con))), ty)
+    }
+
+    /// The parameter list the shape term `self` is, one shape per parameter:
+    /// a product parameter is a `Shape::Tuple` of its parts.
+    pub fn as_params_shape(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<Shape<'db>>> {
+        let (base, args) = self.decompose_ty_app(db);
+        let TyData::TyBase(TyBase::Shape(ShapeCon::Params(_))) = base.data(db) else {
+            return None;
+        };
+        Some(args.iter().map(|param| param.as_shape_part(db)).collect())
+    }
+
+    /// The shape of one parameter the shape term `self` is: owned, an
+    /// access, a product of parts, or, for a term whose structure is not
+    /// known here (`D::Step<ref>`), opaque.
+    pub fn as_shape_part(self, db: &'db dyn HirAnalysisDb) -> Shape<'db> {
+        let (base, args) = self.decompose_ty_app(db);
+        match (base.data(db), args) {
+            (TyData::TyBase(TyBase::Shape(ShapeCon::Owned)), [ty]) => Shape::Owned(*ty),
+            (TyData::TyBase(TyBase::Shape(ShapeCon::Access(kind))), [ty]) => {
+                Shape::Access(*kind, *ty)
+            }
+            _ => self
+                .as_params_shape(db)
+                .map_or(Shape::Opaque(self), Shape::Tuple),
+        }
+    }
+
+    /// The shape whose value type `self` is, if it is one: an opaque shape's
+    /// value, before the shape is known.
+    pub fn as_shape_value(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        match self.decompose_ty_app(db) {
+            (base, &[shape])
+                if matches!(
+                    base.data(db),
+                    TyData::TyBase(TyBase::Shape(ShapeCon::Value))
+                ) =>
+            {
+                Some(shape)
+            }
+            _ => None,
+        }
+    }
+
+    /// The shape term of one parameter's shape.
+    pub fn shape_term(db: &'db dyn HirAnalysisDb, shape: &Shape<'db>) -> TyId<'db> {
+        match shape {
+            Shape::Owned(ty) => Self::shape_part(db, ShapeCon::Owned, *ty),
+            Shape::Access(kind, ty) => Self::shape_part(db, ShapeCon::Access(*kind), *ty),
+            Shape::Tuple(parts) => Self::params_shape(db, parts),
+            Shape::Opaque(term) => *term,
+            Shape::Sum { .. } => unreachable!("a parameter is no sum"),
+        }
+    }
+
     pub fn view_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
         let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::View)));
         Self::app(db, ctor, inner)
@@ -445,6 +516,10 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)))
     }
 
+    pub fn usize(db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)))
+    }
+
     pub(super) fn array(db: &'db dyn HirAnalysisDb, elem: TyId<'db>) -> Self {
         let base = TyBase::Prim(PrimTy::Array);
         let array = Self::new(db, TyData::TyBase(base));
@@ -490,8 +565,56 @@ impl<'db> TyId<'db> {
             trait_.def(db).assoc_ty(db, name).is_some(),
             "associated member must belong to its projection trait"
         );
-        let assoc_ty = AssocTy { trait_, name };
+        let assoc_ty = AssocTy {
+            trait_,
+            name,
+            mode: None,
+        };
         Self::new(db, TyData::AssocTy(assoc_ty))
+    }
+
+    /// `self`, an associated shape, named at `mode`; any other type as it
+    /// is.
+    pub fn with_shape_mode(self, db: &'db dyn HirAnalysisDb, mode: ShapeMode) -> Self {
+        match self.data(db) {
+            TyData::AssocTy(assoc) if assoc.is_shape(db) => Self::new(
+                db,
+                TyData::AssocTy(AssocTy {
+                    mode: Some(mode),
+                    ..*assoc
+                }),
+            ),
+            _ => self,
+        }
+    }
+
+    /// `self`, an impl's shape value or another projection an associated
+    /// shape resolves to, named at `mode`: its `mut?` accesses and the shapes
+    /// it names without a mode, or inheriting one, take it.
+    pub fn at_shape_mode(self, db: &'db dyn HirAnalysisDb, mode: ShapeMode) -> Self {
+        struct ShapeModeFolder(ShapeMode);
+        impl<'db> TyFolder<'db> for ShapeModeFolder {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                match ty.data(db) {
+                    TyData::TyBase(TyBase::Shape(ShapeCon::MaybeMut)) => match self.0.kind() {
+                        Some(kind) => {
+                            TyId::new(db, TyData::TyBase(TyBase::Shape(ShapeCon::Access(kind))))
+                        }
+                        None => ty,
+                    },
+                    TyData::AssocTy(assoc)
+                        if matches!(assoc.mode, None | Some(ShapeMode::Inherit)) =>
+                    {
+                        ty.with_shape_mode(db, self.0)
+                    }
+                    _ => ty.super_fold_with(db, self),
+                }
+            }
+        }
+        if mode == ShapeMode::Inherit {
+            return self;
+        }
+        self.fold_with(db, &mut ShapeModeFolder(mode))
     }
 
     pub(crate) fn qualified_ty(db: &'db dyn HirAnalysisDb, trait_: TraitInstId<'db>) -> Self {
@@ -591,7 +714,7 @@ impl<'db> TyId<'db> {
     /// - tuples/structs/arrays are zero-sized iff all elements/fields are zero-sized
     /// - a pinned type never is: its root number identifies its region
     // Borrow checking asks about the same types repeatedly.
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn is_zero_sized(self, db: &'db dyn HirAnalysisDb) -> bool {
         fn inner<'db>(
             db: &'db dyn HirAnalysisDb,
@@ -692,7 +815,14 @@ impl<'db> TyId<'db> {
     }
 
     pub fn is_prim(self, db: &dyn HirAnalysisDb) -> bool {
-        matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_)))
+        self.as_prim(db).is_some()
+    }
+
+    pub fn as_prim(self, db: &dyn HirAnalysisDb) -> Option<PrimTy> {
+        match self.base_ty(db).data(db) {
+            TyData::TyBase(TyBase::Prim(prim)) => Some(*prim),
+            _ => None,
+        }
     }
 
     pub fn is_unit_variant_only_enum(self, db: &'db dyn HirAnalysisDb) -> bool {
@@ -717,6 +847,27 @@ impl<'db> TyId<'db> {
         }
     }
 
+    /// Returns the tuple struct (`struct Month(pub u8)`) this type refers to.
+    pub fn as_tuple_struct(self, db: &'db dyn HirAnalysisDb) -> Option<Struct<'db>> {
+        match self.base_ty(db).adt_ref(db)? {
+            AdtRef::Struct(struct_) if struct_.is_tuple(db) => Some(struct_),
+            _ => None,
+        }
+    }
+
+    /// Returns the constructor function type of a tuple struct type, applied
+    /// to the type's generic arguments, e.g. `fn(u8) -> Month` for `Month`.
+    pub fn tuple_struct_ctor_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let struct_ = self.as_tuple_struct(db)?;
+        let mut ty = TyId::func(db, CallableDef::StructCtor(struct_));
+        for &arg in self.generic_args(db) {
+            if ty.applicable_ty(db).is_some() {
+                ty = TyId::app(db, ty, arg);
+            }
+        }
+        Some(ty)
+    }
+
     pub fn as_scope(self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         match self.base_ty(db).data(db) {
             TyData::TyParam(param) => Some(param.scope(db)),
@@ -725,7 +876,7 @@ impl<'db> TyId<'db> {
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
-            TyData::TyBase(TyBase::Closure(_) | TyBase::Prim(..)) => None,
+            TyData::TyBase(TyBase::Closure(_) | TyBase::Prim(..) | TyBase::Shape(_)) => None,
             TyData::ConstTy(const_ty) => match const_ty.data(db) {
                 ConstTyData::TyVar(..) => None,
                 ConstTyData::TyParam(ty_param, _) => Some(ty_param.scope(db)),
@@ -752,7 +903,7 @@ impl<'db> TyId<'db> {
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
             TyData::TyBase(TyBase::Contract(c)) => c.scope().name_span(db),
             TyData::TyBase(TyBase::Func(func)) => Some(func.name_span()),
-            TyData::TyBase(TyBase::Closure(_) | TyBase::Prim(_)) => None,
+            TyData::TyBase(TyBase::Closure(_) | TyBase::Prim(_) | TyBase::Shape(_)) => None,
 
             TyData::ConstTy(ty) => match ty.data(db) {
                 ConstTyData::TyParam(param, _) => param.scope(db).name_span(db),
@@ -809,10 +960,11 @@ impl<'db> TyId<'db> {
     pub(super) fn const_ty_var(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
+        sort: TyVarSort,
         key: InferenceKey<'db>,
     ) -> Self {
         let ty_var = TyVar {
-            sort: TyVarSort::General,
+            sort,
             kind: ty.kind(db).clone(),
             key,
         };
@@ -912,6 +1064,8 @@ impl<'db> TyId<'db> {
                 )?;
                 Ok(TyId::const_ty(db, const_ty.with_ty(db, ty)))
             }
+            // An argument that is already invalid keeps its own cause.
+            (Some(_), TyData::Invalid(cause)) => Err(cause.clone()),
             (Some(expected_const_ty), _) => {
                 if expected_const_ty.has_invalid(db) {
                     Err(InvalidCause::Other)
@@ -1015,6 +1169,9 @@ impl<'db> TyId<'db> {
                 }
             }
 
+            // An argument that is already invalid keeps its own cause.
+            (Some(_), TyData::Invalid(cause)) => Err(cause.clone()),
+
             (Some(expected_const_ty), _) => {
                 if expected_const_ty.has_invalid(db) {
                     Err(InvalidCause::Other)
@@ -1049,7 +1206,7 @@ impl<'db> TyId<'db> {
         }
 
         let applicable_kind = match self.kind(db) {
-            Kind::Star => return None,
+            Kind::Star | Kind::Shape => return None,
             Kind::Abs(inner) => inner.0.clone(),
             Kind::Any => Kind::Any,
         };
@@ -1118,7 +1275,7 @@ impl<'db> TyId<'db> {
 
 // Borrow checking and layout code ask for the same aggregates' field types
 // repeatedly; instantiating ADT field shapes is not free.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn ty_field_types<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<TyId<'db>> {
     if ty.is_tuple(db) {
         let (_, elems) = ty.decompose_ty_app(db);
@@ -1157,7 +1314,7 @@ pub struct ApplicableTyProp<'db> {
     pub const_ty: Option<TyId<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum TyData<'db> {
     /// Type variable.
     TyVar(TyVar<'db>),
@@ -1188,52 +1345,49 @@ pub enum TyData<'db> {
     Invalid(InvalidCause<'db>),
 }
 
+/// A closure expression within the body that contains it, at the mode that
+/// body is checked at: each body of a `mut?` function defines its own
+/// closure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct ClosureDef<'db> {
+    pub body: Body<'db>,
+    pub expr: ExprId,
+    pub mode: Option<BorrowKind>,
+}
+
 /// The type of a closure expression: an environment of captured values and a
 /// function of the closure's parameters. Closures are values of this type
-/// and implement the core callable shape traits of their parameter modes
+/// and implement the core callable traits at the shape of their parameters
 /// (see `ty::closure`).
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ClosureTy<'db> {
+    #[returns(copy)]
     pub def: ClosureDef<'db>,
     /// Generic arguments of the item whose body defines the closure. The
     /// closure's semantic instances substitute the parent's typed-body
     /// template with these.
-    #[return_ref]
     pub parent_args: Vec<TyId<'db>>,
     /// Environment field types, one per captured binding, in capture order.
-    #[return_ref]
     pub captures: Vec<TyId<'db>>,
-    /// The parameters' modes and types.
-    #[return_ref]
-    pub params: Vec<(FuncParamMode, TyId<'db>)>,
+    /// The parameters' shapes: each an owned value, a view or `mut`
+    /// access, or a product of parts.
+    pub params: Vec<Shape<'db>>,
+    #[returns(copy)]
     pub ret_ty: TyId<'db>,
     /// The effects the body uses that its own `with` blocks do not provide:
     /// its row `E`, which the caller of each call provides.
-    #[return_ref]
     pub effects: Vec<RowComponent<'db>>,
 }
 
 impl<'db> ClosureTy<'db> {
-    pub fn modes(self, db: &'db dyn HirAnalysisDb) -> Vec<FuncParamMode> {
-        self.params(db).iter().map(|&(mode, _)| mode).collect()
-    }
-
-    pub fn param_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<TyId<'db>> {
-        self.params(db).iter().map(|&(_, ty)| ty).collect()
-    }
-
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         let params = self
             .params(db)
             .iter()
-            .map(|(mode, ty)| {
-                let mode = match mode {
-                    FuncParamMode::View => "",
-                    FuncParamMode::Mut => "mut ",
-                    FuncParamMode::Own => "own ",
-                };
-                format!("{mode}{}", ty.pretty_print(db))
+            .map(|param| match param {
+                Shape::Access(BorrowKind::Ref, ty) => ty.pretty_print(db).to_string(),
+                _ => param.pretty_print_product(db),
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -1241,7 +1395,7 @@ impl<'db> ClosureTy<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum InvalidCause<'db> {
     /// Type is not fully applied where it is required.
     NotFullyApplied,
@@ -1249,6 +1403,10 @@ pub enum InvalidCause<'db> {
     /// `ref T` or `mut T` written where a type is required. Modes appear only
     /// on parameters and in projection return shapes.
     ModeNotType,
+
+    /// `ref` or `mut` as a generic argument of anything but an associated
+    /// shape.
+    ModeArgNotShape,
 
     /// A `#[view]` type held as part of another type.
     ViewPart {
@@ -1299,7 +1457,11 @@ pub enum InvalidCause<'db> {
         n_given_args: usize,
     },
 
-    AliasCycle(SmallVec<HirTypeAlias<'db>, 4>),
+    AliasCycle(
+        // SAFETY: A `SmallVec` owns its elements.
+        #[salsa_value(unsafe(prove(HirTypeAlias<'db>: salsa::SalsaValue)))]
+        SmallVec<HirTypeAlias<'db>, 4>,
+    ),
 
     // The given expression is not supported yet in the const type context.
     // TODO: Remove this error kind and introduce a new error kind for more specific cause when
@@ -1317,6 +1479,13 @@ pub enum InvalidCause<'db> {
         body: Body<'db>,
         expr: ExprId,
         message: Option<String>,
+    },
+
+    /// `core::panic_code(code)` was reached in const evaluation.
+    ConstEvalPanicked {
+        body: Body<'db>,
+        expr: ExprId,
+        code: U256,
     },
 
     ConstEvalNonConstCall {
@@ -1376,6 +1545,14 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    /// An integer literal a const body evaluates does not fit its type.
+    IntLiteralOutOfRange {
+        body: Body<'db>,
+        expr: ExprId,
+        literal: String,
+        ty: TyId<'db>,
+    },
+
     ConstEvalStepLimitExceeded {
         body: Body<'db>,
         expr: ExprId,
@@ -1417,6 +1594,108 @@ pub enum InvalidCause<'db> {
     /// `Other` indicates the cause is already reported in other analysis
     /// passes, e.g., parser or name resolution.
     Other,
+}
+
+impl<'db> InvalidCause<'db> {
+    /// An evaluation fault with the expression it occurred at and its label.
+    /// Type checking reports faults in instantiated call return types and
+    /// leaves other specialized layouts to concrete demand; any other invalid
+    /// type has an upstream report.
+    pub(crate) fn const_eval_fault(&self) -> Option<(Body<'db>, ExprId, String)> {
+        match self {
+            InvalidCause::ConstEvalUnsupported { body, expr } => Some((
+                *body,
+                *expr,
+                "the expression cannot be evaluated at compile time".to_string(),
+            )),
+            InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => Some((
+                *body,
+                *expr,
+                "assertion failed in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalPanicked { body, expr, .. } => {
+                Some((*body, *expr, "panic in const context".to_string()))
+            }
+            InvalidCause::ConstEvalNonConstCall { body, expr } => Some((
+                *body,
+                *expr,
+                "non-const function call in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalDivisionByZero { body, expr } => Some((
+                *body,
+                *expr,
+                "division by zero in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalOutOfBounds { body, expr } => Some((
+                *body,
+                *expr,
+                "index out of bounds in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalInvalidOperation {
+                body,
+                expr,
+                message,
+            } => Some((
+                *body,
+                *expr,
+                format!("invalid operation in const context: {message}"),
+            )),
+            InvalidCause::ConstEvalInvalidBorrow { body, expr } => {
+                Some((*body, *expr, "invalid borrow in const context".to_string()))
+            }
+            InvalidCause::ConstEvalInvalidProviderUse { body, expr } => Some((
+                *body,
+                *expr,
+                "invalid effect provider in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalVariantMismatch { body, expr } => Some((
+                *body,
+                *expr,
+                "variant mismatch in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalUninitializedLocal { body, expr } => Some((
+                *body,
+                *expr,
+                "uninitialized value in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalInvariant {
+                body,
+                expr,
+                message,
+            } => Some((
+                *body,
+                *expr,
+                format!("compiler invariant failed during const evaluation: {message}"),
+            )),
+            InvalidCause::ConstEvalArithmeticOverflow { body, expr } => Some((
+                *body,
+                *expr,
+                "arithmetic overflow in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalNegativeExponent { body, expr } => Some((
+                *body,
+                *expr,
+                "negative exponent in const context".to_string(),
+            )),
+            InvalidCause::IntLiteralOutOfRange { body, expr, .. } => {
+                Some((*body, *expr, "integer literal out of range".to_string()))
+            }
+            InvalidCause::ConstEvalStepLimitExceeded { body, expr } => Some((
+                *body,
+                *expr,
+                "const evaluation exceeded the step limit".to_string(),
+            )),
+            InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => Some((
+                *body,
+                *expr,
+                "const evaluation exceeded the recursion limit".to_string(),
+            )),
+            InvalidCause::ConstEvalRecursiveConst { body, expr } => {
+                Some((*body, *expr, "recursive constant definition".to_string()))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl InvalidCause<'_> {
@@ -1462,6 +1741,7 @@ impl InvalidCause<'_> {
             InvalidCause::ViewPart { view } => format!("ViewPart({})", view.pretty_print(db)),
             InvalidCause::NotFullyApplied
             | InvalidCause::ModeNotType
+            | InvalidCause::ModeArgNotShape
             | InvalidCause::TooManyGenericArgs { .. }
             | InvalidCause::InvalidConstParamTy
             | InvalidCause::RecursiveConstParamTy
@@ -1488,6 +1768,10 @@ impl InvalidCause<'_> {
                 "ConstEvalArithmeticOverflow".into()
             }
             InvalidCause::ConstEvalNegativeExponent { .. } => "ConstEvalNegativeExponent".into(),
+            InvalidCause::IntLiteralOutOfRange { ty, .. } => {
+                format!("IntLiteralOutOfRange({})", ty.pretty_print(db))
+            }
+            InvalidCause::ConstEvalPanicked { code, .. } => format!("ConstEvalPanicked({code:#x})"),
             InvalidCause::ConstEvalStepLimitExceeded { .. } => "ConstEvalStepLimitExceeded".into(),
             InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                 "ConstEvalRecursionLimitExceeded".into()
@@ -1518,6 +1802,11 @@ pub enum Kind {
 
     /// `Any` kind is set to the type iff the type is `Invalid`.
     Any,
+
+    /// The kind of a callable's parameter list, `Fn<shape A>`'s argument:
+    /// a list of parameter shapes, each `own T`, `ref T`, `mut T` or a
+    /// product of them. Never the kind of a value.
+    Shape,
 }
 
 impl Kind {
@@ -1527,7 +1816,7 @@ impl Kind {
 
     pub fn does_match(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Star, Self::Star) => true,
+            (Self::Star, Self::Star) | (Self::Shape, Self::Shape) => true,
             (Self::Abs(a), Self::Abs(b)) => a.0.does_match(&b.0) && a.1.does_match(&b.1),
             (Self::Any, _) => true,
             (_, Self::Any) => true,
@@ -1542,11 +1831,12 @@ impl fmt::Display for Kind {
             Self::Star => write!(f, "*"),
             Self::Abs(inner) => write!(f, "({} -> {})", inner.0, inner.1),
             Self::Any => write!(f, "Any"),
+            Self::Shape => write!(f, "shape"),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TyVar<'db> {
     pub sort: TyVarSort,
     pub kind: Kind,
@@ -1583,6 +1873,11 @@ pub enum TyVarSort {
 
     /// Type variable that can be unified with only integral types.
     Integral,
+
+    /// Const variable for the length of a string literal's `String<N>` type.
+    /// It can be unified with integer constants of at least `min_len`, and
+    /// defaults to `min_len` like the literal's own type would.
+    StringLen { min_len: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1611,6 +1906,10 @@ impl PartialOrd for TyVarSort {
                 other => other,
             },
             (Self::String { .. }, _) | (_, Self::String { .. }) => None,
+            (Self::StringLen { min_len: min_len1 }, Self::StringLen { min_len: min_len2 }) => {
+                min_len1.partial_cmp(min_len2)
+            }
+            (Self::StringLen { .. }, _) | (_, Self::StringLen { .. }) => None,
             (Self::Integral, Self::Integral) => Some(std::cmp::Ordering::Equal),
         }
     }
@@ -1619,7 +1918,7 @@ impl PartialOrd for TyVarSort {
 impl TyVar<'_> {
     pub(super) fn pretty_print(&self) -> String {
         match self.sort {
-            TyVarSort::General => ("_").to_string(),
+            TyVarSort::General | TyVarSort::StringLen { .. } => ("_").to_string(),
             TyVarSort::Integral => "{integer}".to_string(),
             TyVarSort::String { min_len, fallback } => match fallback {
                 StringFallback::Dynamic => format!("DynString({min_len})"),
@@ -1629,13 +1928,57 @@ impl TyVar<'_> {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AssocTy<'db> {
     pub trait_: TraitRefId<'db>,
     pub name: IdentId<'db>,
+    /// The mode an associated shape is named at; `None` for an associated
+    /// type, and for a shape named without one, which takes the mode of its
+    /// context.
+    pub mode: Option<ShapeMode>,
+}
+
+/// The mode an associated shape is named at: its `mut?` parts and the shapes
+/// it names without a mode are at it.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
+pub enum ShapeMode {
+    /// `D::Step<ref>`, or `D::Step` in an item used at `ref`.
+    Ref,
+    /// `D::Step<mut>`, or `D::Step` in an item used at `mut`.
+    Mut,
+    /// `D::Step` in an impl's shape value: the mode the value is named at.
+    Inherit,
+}
+
+impl ShapeMode {
+    /// The access kind of a known mode.
+    pub fn kind(self) -> Option<BorrowKind> {
+        match self {
+            Self::Ref => Some(BorrowKind::Ref),
+            Self::Mut => Some(BorrowKind::Mut),
+            Self::Inherit => None,
+        }
+    }
+}
+
+impl From<BorrowKind> for ShapeMode {
+    fn from(kind: BorrowKind) -> Self {
+        match kind {
+            BorrowKind::Ref => Self::Ref,
+            BorrowKind::Mut => Self::Mut,
+        }
+    }
 }
 
 impl<'db> AssocTy<'db> {
+    /// Whether this names an associated shape, `shape Step`.
+    pub fn is_shape(&self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.trait_
+            .def(db)
+            .assoc_ty(db, self.name)
+            .is_some_and(|decl| decl.is_shape())
+    }
+
     pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         // Find the index of this associated type in the trait's type list
         let trait_def = self.trait_.def(db);
@@ -1650,7 +1993,7 @@ impl<'db> AssocTy<'db> {
 
 /// Type generics parameter. We also treat `Self` type in a trait definition as
 /// a special type parameter.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TyParam<'db> {
     pub name: IdentId<'db>,
     // The index points to the lowered type parameter list, which means that the idx doesn't
@@ -1884,13 +2227,45 @@ enum Variant {
     Implicit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, SalsaValue)]
 pub enum TyBase<'db> {
     Prim(PrimTy),
     Adt(AdtDef<'db>),
     Contract(crate::hir_def::Contract<'db>),
     Func(CallableDef<'db>),
     Closure(ClosureTy<'db>),
+    Shape(ShapeCon),
+}
+
+/// A constructor of shape terms, the types of `shape` kind a callable's
+/// parameter list is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum ShapeCon {
+    /// `own T`, of kind `* -> shape`.
+    Owned,
+    /// `ref T` or `mut T`, of kind `* -> shape`.
+    Access(BorrowKind),
+    /// `mut? T` in an impl's shape value: an access at the mode the value
+    /// is named at, of kind `* -> shape`.
+    MaybeMut,
+    /// The type a value of a shape whose structure is not known has, of
+    /// kind `shape -> *`; it reduces once the shape is known.
+    Value,
+    /// The semantic-IR carrier type of such a value, of kind `shape -> *`.
+    Carrier,
+    /// A list of this many parameter shapes, of kind
+    /// `shape -> .. -> shape`; nested in a list, a product parameter.
+    Params(u16),
+}
+
+impl ShapeCon {
+    fn kind(self) -> Kind {
+        match self {
+            Self::Owned | Self::Access(_) | Self::MaybeMut => Kind::abs(Kind::Star, Kind::Shape),
+            Self::Value | Self::Carrier => Kind::abs(Kind::Shape, Kind::Star),
+            Self::Params(n) => (0..n).fold(Kind::Shape, |acc, _| Kind::abs(Kind::Shape, acc)),
+        }
+    }
 }
 
 impl<'db> TyBase<'db> {
@@ -1960,6 +2335,14 @@ impl<'db> TyBase<'db> {
             ),
 
             Self::Closure(closure) => closure.pretty_print(db),
+
+            Self::Shape(ShapeCon::Owned) => "own".to_string(),
+            Self::Shape(ShapeCon::Access(BorrowKind::Ref)) => "ref".to_string(),
+            Self::Shape(ShapeCon::Access(BorrowKind::Mut)) => "mut".to_string(),
+            Self::Shape(ShapeCon::MaybeMut) => "mut?".to_string(),
+            Self::Shape(ShapeCon::Value) => "value".to_string(),
+            Self::Shape(ShapeCon::Carrier) => "carrier".to_string(),
+            Self::Shape(ShapeCon::Params(_)) => "()".to_string(),
         }
     }
 
@@ -2038,7 +2421,7 @@ pub enum PrimTy {
 
 /// Access kinds, ordered by strength: a `mut` access can stand in for a
 /// `ref` one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::SalsaValue)]
 pub enum BorrowKind {
     Ref,
     Mut,
@@ -2094,8 +2477,9 @@ impl PrimTy {
     }
 }
 
-/// Returns the width (in bits) for the given primitive integer type, or `None` when unknown.
-pub fn prim_int_bits(prim: PrimTy) -> Option<usize> {
+/// The width in bits of a primitive integer type on `target`, or `None` for
+/// any other type.
+pub fn prim_int_bits(prim: PrimTy, target: Target) -> Option<usize> {
     use PrimTy::*;
     match prim {
         U8 | I8 => Some(8),
@@ -2103,9 +2487,29 @@ pub fn prim_int_bits(prim: PrimTy) -> Option<usize> {
         U32 | I32 => Some(32),
         U64 | I64 => Some(64),
         U128 | I128 => Some(128),
-        U256 | I256 | Usize | Isize => Some(256),
+        U256 | I256 => Some(256),
+        Usize | Isize => Some(target.usize_bits()),
         _ => None,
     }
+}
+
+/// Whether the primitive integer type `prim` holds the literal `value`, or
+/// `-value` if `negated`, on every target.
+pub fn int_literal_fits_prim(prim: PrimTy, value: &BigUint, negated: bool) -> bool {
+    Target::ALL.into_iter().all(|target| {
+        prim_int_bits(prim, target).is_some_and(|bits| {
+            if prim.is_signed_int() {
+                let min_magnitude = BigUint::from(1u8) << (bits - 1);
+                if negated {
+                    value <= &min_magnitude
+                } else {
+                    value < &min_magnitude
+                }
+            } else {
+                !negated && value.bits() <= bits as u64
+            }
+        })
+    })
 }
 
 pub(super) trait HasKind {
@@ -2155,6 +2559,7 @@ impl HasKind for TyBase<'_> {
             TyBase::Contract(_) => Kind::Star, // Contracts have no generic params
             TyBase::Func(func) => func.kind(db),
             TyBase::Closure(_) => Kind::Star,
+            TyBase::Shape(con) => con.kind(),
         }
     }
 }
@@ -2300,6 +2705,35 @@ fn pretty_print_ty_app<'db>(
             format!("[{elem_ty}; {len}]")
         }
 
+        TyData::TyBase(TyBase::Shape(
+            ShapeCon::Owned | ShapeCon::Access(_) | ShapeCon::MaybeMut,
+        )) => {
+            let Some(inner) = args.first() else {
+                return base.pretty_print(db).clone();
+            };
+            format!(
+                "{} {}",
+                base.pretty_print(db),
+                inner.pretty_print_with_mode(db, mode)
+            )
+        }
+
+        // A value of an opaque shape prints as the shape.
+        TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier)) => {
+            args.first().map_or_else(
+                || base.pretty_print(db).clone(),
+                |shape| shape.pretty_print_with_mode(db, mode).to_string(),
+            )
+        }
+
+        TyData::TyBase(TyBase::Shape(ShapeCon::Params(_))) => format!(
+            "({})",
+            args.iter()
+                .map(|arg| arg.pretty_print_with_mode(db, mode))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+
         TyData::TyBase(Prim(Tuple(_))) => {
             let mut args = args.iter();
             let mut s = ("(").to_string();
@@ -2354,7 +2788,7 @@ fn pretty_print_ty_app<'db>(
 
 /// Decompose type application into the base type and type arguments.
 /// e.g., `App(App(T, U), App(V, W))` -> `(T, [U, App(V, W)])`
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub(crate) fn decompose_ty_app<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -2379,7 +2813,7 @@ bitflags! {
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlags {
     struct Collector<'db> {
         db: &'db dyn HirAnalysisDb,
@@ -2414,6 +2848,18 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
         }
 
         fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+            // An identity capture reads its owner's formals without
+            // spelling them, so the body still depends on parameters. A
+            // capture with no formals, such as the `4` in
+            // `type Bytes4 = FixedBytes<4>`, depends on none.
+            if let ConstTyData::UnEvaluated {
+                capture: ConstCaptureEnv::Identity(domain),
+                ..
+            } = const_ty.data(self.db)
+                && domain.has_formals(self.db)
+            {
+                self.flags.insert(TyFlags::HAS_PARAM);
+            }
             walk_const_ty(self, const_ty);
         }
     }
@@ -2429,4 +2875,37 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
 
     walk_ty(&mut collector, ty);
     collector.flags
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_db::HirAnalysisTestDb;
+
+    #[test]
+    fn params_shape_terms() {
+        let db = HirAnalysisTestDb::default();
+        let (u256, bool) = (TyId::u256(&db), TyId::bool(&db));
+        let params = vec![
+            Shape::Owned(u256),
+            Shape::Access(BorrowKind::Ref, bool),
+            Shape::Tuple(vec![
+                Shape::Owned(u256),
+                Shape::Access(BorrowKind::Mut, u256),
+            ]),
+        ];
+        let term = TyId::params_shape(&db, &params);
+        assert_eq!(term.kind(&db), &Kind::Shape);
+        assert!(!term.is_star_kind(&db));
+        assert_eq!(term.as_params_shape(&db), Some(params));
+        assert_eq!(
+            term.pretty_print(&db),
+            "(own u256, ref bool, (own u256, mut u256))"
+        );
+        assert_eq!(
+            TyId::params_shape(&db, &[]).as_params_shape(&db),
+            Some(Vec::new())
+        );
+        assert_eq!(u256.as_params_shape(&db), None);
+    }
 }

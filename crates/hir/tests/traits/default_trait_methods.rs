@@ -1,12 +1,13 @@
 use camino::Utf8PathBuf;
 use fe_hir::analysis::semantic::{
-    GenericSubst, get_or_build_semantic_instance, instantiate_typed_body,
-    root_semantic_instance_key, typed_body_template,
+    GenericSubst, SemanticInstance, instantiate_typed_body, root_semantic_instance_key,
+    typed_body_template,
 };
-use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
-use fe_hir::analysis::ty::trait_resolution::{Selection, TraitSolveCx};
+use fe_hir::analysis::ty::evidence::prove;
+use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
 use fe_hir::analysis::ty::ty_check::{BodyOwner, check_func_body};
 use fe_hir::hir_def::{Expr, ItemKind, Partial};
+use fe_hir::semantic::param_env;
 use fe_hir::test_db::HirAnalysisTestDb;
 
 #[test]
@@ -58,14 +59,15 @@ fn run(evm: mut Evm) -> u256 {
         .map(|(name, method)| (*name, *method))
         .expect("missing trait method");
 
-    let Selection::Unique(resolved) = resolve_trait_method_instance(
+    let resolved = prove(
         &db,
-        TraitSolveCx::new(&db, impl_trait.scope()),
+        TraitSolveCx::new(&db, impl_trait.scope())
+            .with_assumptions(param_env(&db, ItemKind::ImplTrait(impl_trait))),
         inst,
-        method_name,
-    ) else {
-        panic!("missing resolved method");
-    };
+    )
+    .and_then(|evidence| evidence.answering(&db, inst))
+    .and_then(|selected| selected.method(&db, method_name, None))
+    .expect("missing resolved method");
     let resolved_method = resolved.body().expect("missing resolved method body");
 
     assert_eq!(resolved_method, trait_method);
@@ -73,7 +75,7 @@ fn run(evm: mut Evm) -> u256 {
 
     let instantiated = instantiate_typed_body(
         &db,
-        typed_body_template(&db, BodyOwner::Func(resolved_method)),
+        typed_body_template(&db, BodyOwner::Func(resolved_method, None)),
         GenericSubst::for_owner(&db, resolved_method.into(), resolved.body_args().to_vec()),
     );
     let self_binding = instantiated.param_binding(0).expect("missing self binding");
@@ -90,7 +92,7 @@ fn semantic_callee_key_uses_std_create2_default_body() {
 pub contract C {}
 
 fn run() uses (evm: mut Evm) {
-    let _ = evm.create2<C>(value: 0, args: (), salt: 0)
+    let _ = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
 }
 "#,
     );
@@ -121,15 +123,16 @@ fn run() uses (evm: mut Evm) {
     typed_body
         .callable_expr(method_call)
         .expect("missing callable for create2");
-    let semantic = get_or_build_semantic_instance(
+    let semantic = SemanticInstance::new(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(run)).expect("missing root semantic key"),
+        root_semantic_instance_key(&db, BodyOwner::Func(run, None))
+            .expect("missing root semantic key"),
     );
     let create2 = semantic
         .callees(&db)
         .iter()
         .find_map(|callee| match callee.key.owner(&db) {
-            BodyOwner::Func(func)
+            BodyOwner::Func(func, _)
                 if func
                     .name(&db)
                     .to_opt()
@@ -156,9 +159,9 @@ pub contract C {}
 
 #[test]
 fn test_large_by_value_array_args() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
     let out: Address = c
-    assert!(out.inner == c.inner)
+    assert!(out.word() == c.word())
 }
 "#,
     );
@@ -203,16 +206,16 @@ fn test_large_by_value_array_args() uses (evm: mut Evm) {
         target.containing_trait(&db).is_some(),
         "typed create2 callable should still be a trait method"
     );
-    let semantic = get_or_build_semantic_instance(
+    let semantic = SemanticInstance::new(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(test_func))
+        root_semantic_instance_key(&db, BodyOwner::Func(test_func, None))
             .expect("missing root semantic key"),
     );
     let create2 = semantic
         .callees(&db)
         .iter()
         .filter_map(|callee| match callee.key.owner(&db) {
-            BodyOwner::Func(func)
+            BodyOwner::Func(func, _)
                 if func
                     .name(&db)
                     .to_opt()
@@ -243,7 +246,7 @@ fn std_create2_raw_calls_the_low_level_extern_create2() {
 pub contract C {}
 
 fn run() uses (evm: mut Evm) {
-    let _ = evm.create2<C>(value: 0, args: (), salt: 0)
+    let _ = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
 }
 "#,
     );
@@ -264,21 +267,22 @@ fn run() uses (evm: mut Evm) {
             _ => None,
         })
         .expect("missing run function");
-    let root = get_or_build_semantic_instance(
+    let root = SemanticInstance::new(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(run)).expect("missing root semantic key"),
+        root_semantic_instance_key(&db, BodyOwner::Func(run, None))
+            .expect("missing root semantic key"),
     );
     let create2 = root
         .callees(&db)
         .iter()
         .find_map(|callee| match callee.key.owner(&db) {
-            BodyOwner::Func(func)
+            BodyOwner::Func(func, _)
                 if func
                     .name(&db)
                     .to_opt()
                     .is_some_and(|name| name.data(&db) == "create2") =>
             {
-                Some(get_or_build_semantic_instance(&db, callee.key))
+                Some(SemanticInstance::new(&db, callee.key))
             }
             _ => None,
         })
@@ -287,13 +291,13 @@ fn run() uses (evm: mut Evm) {
         .callees(&db)
         .iter()
         .find_map(|callee| match callee.key.owner(&db) {
-            BodyOwner::Func(func)
+            BodyOwner::Func(func, _)
                 if func
                     .name(&db)
                     .to_opt()
                     .is_some_and(|name| name.data(&db) == "create2_raw") =>
             {
-                Some(get_or_build_semantic_instance(&db, callee.key))
+                Some(SemanticInstance::new(&db, callee.key))
             }
             _ => None,
         })
@@ -302,7 +306,7 @@ fn run() uses (evm: mut Evm) {
         .callees(&db)
         .iter()
         .find_map(|callee| match callee.key.owner(&db) {
-            BodyOwner::Func(func)
+            BodyOwner::Func(func, _)
                 if func
                     .name(&db)
                     .to_opt()
@@ -327,7 +331,9 @@ fn run() uses (evm: mut Evm) {
             fe_hir::analysis::semantic::SStmtKind::Assign {
                 expr: fe_hir::analysis::semantic::SExpr::Call { callee, args, .. },
                 ..
-            } if callee.key.owner(&db) == BodyOwner::Func(low_level_create2) => Some(args.len()),
+            } if callee.key.owner(&db) == BodyOwner::Func(low_level_create2, None) => {
+                Some(args.len())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -374,11 +380,11 @@ pub contract C {
 
 #[test]
 fn test_large_by_value_array_args() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
     let out: u256 = evm.call(
         addr: c,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: BigArgsMsg::Run {},
     )
     assert!(out == 1)
@@ -402,16 +408,16 @@ fn test_large_by_value_array_args() uses (evm: mut Evm) {
             _ => None,
         })
         .expect("missing test function");
-    let semantic = get_or_build_semantic_instance(
+    let semantic = SemanticInstance::new(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(test_func))
+        root_semantic_instance_key(&db, BodyOwner::Func(test_func, None))
             .expect("missing root semantic key"),
     );
     let create2 = semantic
         .callees(&db)
         .iter()
         .filter_map(|callee| match callee.key.owner(&db) {
-            BodyOwner::Func(func)
+            BodyOwner::Func(func, _)
                 if func
                     .name(&db)
                     .to_opt()

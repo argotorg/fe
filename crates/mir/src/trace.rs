@@ -166,7 +166,7 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                 ))),
             )));
         }
-        let cfg = runtime_cfg(&body);
+        let cfg = runtime_cfg(body);
         let indexed_predecessors = cfg
             .predecessors
             .iter()
@@ -367,6 +367,7 @@ fn runtime_expr_display(expr: &RExpr<'_>) -> String {
             provider_ty,
             space,
         } => format!("provider_ref_from_raw {raw:?}, {provider_ty:?}, {space:?}"),
+        RExpr::ObjectFromRaw { raw } => format!("object_from_raw {raw:?}"),
         RExpr::WordToRawAddr { value, space } => {
             format!("word_to_raw_addr {value:?}, {space:?}")
         }
@@ -430,6 +431,7 @@ fn runtime_terminator_display(terminator: &RTerminator<'_>) -> String {
         RTerminator::ReturnData { offset, len } => format!("return_data {offset:?}, {len:?}"),
         RTerminator::Revert { offset, len } => format!("revert {offset:?}, {len:?}"),
         RTerminator::RevertEmpty => "revert_empty".to_string(),
+        RTerminator::Panic { code } => format!("panic {code:?}"),
         RTerminator::SelfDestruct { beneficiary } => format!("selfdestruct {beneficiary:?}"),
         RTerminator::Trap => "trap".to_string(),
         RTerminator::Return(value) => format!("return {value:?}"),
@@ -562,6 +564,7 @@ fn terminator_edges(from: RBlockId, terminator: &RTerminator<'_>) -> Vec<Runtime
         | RTerminator::ReturnData { .. }
         | RTerminator::Revert { .. }
         | RTerminator::RevertEmpty
+        | RTerminator::Panic { .. }
         | RTerminator::SelfDestruct { .. }
         | RTerminator::Trap
         | RTerminator::Return(_)
@@ -771,9 +774,9 @@ fn local_binding_trace_info<'db>(
         is_mut: binding.is_mut(),
         storage_class: match binding {
             LocalBinding::Local { .. } => VariableStorageClass::Local,
-            LocalBinding::Param { .. } | LocalBinding::EffectParam { .. } => {
-                VariableStorageClass::Parameter
-            }
+            LocalBinding::Param { .. }
+            | LocalBinding::ParamPart { .. }
+            | LocalBinding::EffectParam { .. } => VariableStorageClass::Parameter,
         },
     }
 }
@@ -794,6 +797,7 @@ fn local_binding_name<'db>(
                 .unwrap_or_else(|| "_".to_string())
         }
         LocalBinding::Param { idx, .. } => format!("%param{idx}"),
+        LocalBinding::ParamPart { idx, part, .. } => format!("%param{idx}.{part}"),
         LocalBinding::EffectParam {
             binding_name, idx, ..
         } => {

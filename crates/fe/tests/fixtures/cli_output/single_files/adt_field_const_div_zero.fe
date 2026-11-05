@@ -28,21 +28,21 @@ enum E<const N: usize> {
 }
 
 fn size_struct() -> u256 {
-    core::size_of<S<0>>()
+    core::size_of<S<0>>() as u256
 }
 
 fn size_nested() -> u256 {
-    core::size_of<Outer<0>>()
+    core::size_of<Outer<0>>() as u256
 }
 
 fn size_nested_argument() -> u256 {
-    core::size_of<ArgOuter<0>>()
+    core::size_of<ArgOuter<0>>() as u256
 }
 
 fn size_enum() -> u256 {
-    core::size_of<E<0>>()
+    core::size_of<E<0>>() as u256
 }
 
 fn size_array_element() -> u256 {
-    core::size_of<[Element<0>; 1]>()
+    core::size_of<[Element<0>; 1]>() as u256
 }

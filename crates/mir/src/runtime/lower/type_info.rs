@@ -1,3 +1,4 @@
+use common::compilation::Target;
 use hir::analysis::{
     semantic::SemanticInstance,
     ty::{
@@ -5,16 +6,22 @@ use hir::analysis::{
         const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
         normalize::normalize_ty,
         trait_resolution::PredicateListId,
-        ty_def::{BorrowKind, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData, TyId, TyVarSort},
+        ty_def::{
+            BorrowKind, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData, TyId, TyVarSort,
+            prim_int_bits,
+        },
     },
 };
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     db::MirDb,
-    runtime::{LowerError, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole},
+    runtime::{
+        ConstScalar, LowerError, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr,
+        ScalarRole,
+    },
 };
 
 use super::layout::layout_for_ty_in_env;
@@ -41,13 +48,13 @@ impl<'db> RuntimeTypeEnv<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, SalsaValue)]
 struct RuntimeTypeModel<'db> {
     repr_ty: TyId<'db>,
     shape: RuntimeTypeShape<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, SalsaValue)]
 enum RuntimeTypeShape<'db> {
     Borrow { kind: BorrowKind, inner: TyId<'db> },
     Capability { inner: TyId<'db> },
@@ -266,7 +273,7 @@ pub(crate) fn validate_runtime_array_extents_in_env<'db>(
     visit(db, env, ty, &mut FxHashSet::default())
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn runtime_interface_ty<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -284,7 +291,7 @@ pub(crate) fn runtime_interface_ty_in_env<'db>(
     runtime_interface_ty(db, ty, env.scope, env.assumptions)
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn runtime_storage_ty<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -306,10 +313,7 @@ pub(crate) fn runtime_storage_ty_in_env<'db>(
     runtime_storage_ty(db, ty, env.scope, env.assumptions)
 }
 
-#[salsa::tracked(
-    cycle_fn=runtime_zero_sized_ty_cycle_recover,
-    cycle_initial=runtime_zero_sized_ty_cycle_initial
-)]
+#[salsa::tracked(returns(copy), cycle_initial=runtime_zero_sized_ty_cycle_initial)]
 pub(super) fn runtime_zero_sized_ty<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -432,65 +436,16 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
     let repr = match ty.base_ty(db).data(db) {
         TyData::TyBase(TyBase::Prim(prim)) => match prim {
             PrimTy::Bool => ScalarRepr::Bool,
-            PrimTy::U8 => ScalarRepr::Int {
-                bits: 8,
-                signed: false,
-            },
-            PrimTy::U16 => ScalarRepr::Int {
-                bits: 16,
-                signed: false,
-            },
-            PrimTy::U32 => ScalarRepr::Int {
-                bits: 32,
-                signed: false,
-            },
-            PrimTy::U64 => ScalarRepr::Int {
-                bits: 64,
-                signed: false,
-            },
-            PrimTy::U128 => ScalarRepr::Int {
-                bits: 128,
-                signed: false,
-            },
-            // A pointer is the address word.
-            PrimTy::U256 | PrimTy::Usize | PrimTy::Ptr(_) => ScalarRepr::Int {
-                bits: 256,
-                signed: false,
-            },
-            PrimTy::I8 => ScalarRepr::Int {
-                bits: 8,
-                signed: true,
-            },
-            PrimTy::I16 => ScalarRepr::Int {
-                bits: 16,
-                signed: true,
-            },
-            PrimTy::I32 => ScalarRepr::Int {
-                bits: 32,
-                signed: true,
-            },
-            PrimTy::I64 => ScalarRepr::Int {
-                bits: 64,
-                signed: true,
-            },
-            PrimTy::I128 => ScalarRepr::Int {
-                bits: 128,
-                signed: true,
-            },
-            PrimTy::I256 | PrimTy::Isize => ScalarRepr::Int {
-                bits: 256,
-                signed: true,
-            },
+            PrimTy::Ptr(space) => return Some(pointer_class(db, *space)),
             PrimTy::String => ScalarRepr::FixedBytes {
                 // Fixed strings have at most 31 payload bytes, but casts and
                 // `to_word` operate on the full EVM word.
                 len: (MAX_INLINE_STRING_BYTES + 1) as u16,
             },
-            PrimTy::Array
-            | PrimTy::Tuple(_)
-            | PrimTy::View
-            | PrimTy::BorrowMut
-            | PrimTy::BorrowRef => return None,
+            _ => ScalarRepr::Int {
+                bits: prim_int_bits(*prim, db.compilation_settings().target(db))? as u16,
+                signed: prim.is_signed_int(),
+            },
         },
         TyData::TyBase(TyBase::Contract(_)) => ScalarRepr::Address { bits: 256 },
         TyData::TyVar(var) if matches!(var.sort, TyVarSort::Integral) => ScalarRepr::Int {
@@ -506,6 +461,55 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
     })
 }
 
+/// The integer an address in `space` converts to. A memory address is a
+/// `usize`, which takes the target's width; the EVM's other spaces are
+/// addressed by word.
+pub(crate) fn address_int_class<'db>(db: &dyn MirDb, space: AddressSpace) -> ScalarClass<'db> {
+    let bits = if space == AddressSpace::Memory {
+        db.compilation_settings().target(db).usize_bits() as u16
+    } else {
+        256
+    };
+    ScalarClass {
+        repr: ScalarRepr::Int {
+            bits,
+            signed: false,
+        },
+        role: ScalarRole::Plain,
+    }
+}
+
+/// The memory address or size `value` as a constant of the memory
+/// `address_int_class`, the target's `usize`.
+pub(crate) fn memory_int_const(db: &dyn MirDb, value: u64) -> ConstScalar {
+    let ScalarRepr::Int { bits, .. } = address_int_class(db, AddressSpace::Memory).repr else {
+        unreachable!("a memory integer is an integer");
+    };
+    ConstScalar::Int {
+        bits,
+        signed: false,
+        words: value
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|byte| *byte == 0)
+            .collect(),
+    }
+}
+
+/// The scalar a pointer into `space` is: its address integer, which for
+/// memory is a pointer.
+pub(crate) fn pointer_class<'db>(db: &dyn MirDb, space: AddressSpace) -> ScalarClass<'db> {
+    let class = address_int_class(db, space);
+    if space == AddressSpace::Memory {
+        ScalarClass {
+            role: ScalarRole::Pointer,
+            ..class
+        }
+    } else {
+        class
+    }
+}
+
 /// The transport a pointer of type `pointer_ty` converts to when
 /// dereferenced: a raw memory address, or a state space's provider reference,
 /// as for a `StateIndex` entry.
@@ -516,16 +520,21 @@ pub(crate) fn deref_transport_class_in_env<'db>(
 ) -> Option<RuntimeClass<'db>> {
     let (target, space) = runtime_repr_ty_in_env(db, env, pointer_ty).as_ptr(db)?;
     Some(match space {
-        AddressSpace::Memory => RuntimeClass::raw_addr(
-            db,
-            AddressSpace::Memory,
-            stored_class_for_ty_in_env(db, env, target),
-        ),
+        AddressSpace::Memory => match stored_class_for_ty_in_env(db, env, target) {
+            // Native memory has the object layout, so an aggregate there is
+            // an object in place, like a local's.
+            RuntimeClass::AggregateValue { layout }
+                if db.compilation_settings().target(db) == Target::Native =>
+            {
+                RuntimeClass::object_ref(layout)
+            }
+            stored => RuntimeClass::raw_addr(db, AddressSpace::Memory, stored),
+        },
         space => provider_class_for_target_in_env(db, env, Some(target), space),
     })
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn runtime_top_level_class<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -550,7 +559,7 @@ fn runtime_type_model<'db>(
     RuntimeTypeModel::new(db, ty, RuntimeTypeEnv::new(scope, assumptions))
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn runtime_stored_class<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -561,10 +570,7 @@ fn runtime_stored_class<'db>(
         .stored_class(db, RuntimeTypeEnv::new(scope, assumptions))
 }
 
-#[salsa::tracked(
-    cycle_fn=runtime_transport_sensitive_aggregate_cycle_recover,
-    cycle_initial=runtime_transport_sensitive_aggregate_cycle_initial
-)]
+#[salsa::tracked(returns(copy), cycle_initial=runtime_transport_sensitive_aggregate_cycle_initial)]
 pub(super) fn runtime_transport_sensitive_aggregate<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -577,26 +583,17 @@ pub(super) fn runtime_transport_sensitive_aggregate<'db>(
 
 fn runtime_zero_sized_ty_cycle_initial<'db>(
     _db: &'db dyn MirDb,
+    _: salsa::Id,
     _ty: TyId<'db>,
     _scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     _assumptions: PredicateListId<'db>,
 ) -> bool {
     false
-}
-
-fn runtime_zero_sized_ty_cycle_recover<'db>(
-    _db: &'db dyn MirDb,
-    _value: &bool,
-    _count: u32,
-    _ty: TyId<'db>,
-    _scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    _assumptions: PredicateListId<'db>,
-) -> salsa::CycleRecoveryAction<bool> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 fn runtime_transport_sensitive_aggregate_cycle_initial<'db>(
     _db: &'db dyn MirDb,
+    _: salsa::Id,
     _ty: TyId<'db>,
     _scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     _assumptions: PredicateListId<'db>,
@@ -604,30 +601,21 @@ fn runtime_transport_sensitive_aggregate_cycle_initial<'db>(
     false
 }
 
-fn runtime_transport_sensitive_aggregate_cycle_recover<'db>(
-    _db: &'db dyn MirDb,
-    _value: &bool,
-    _count: u32,
-    _ty: TyId<'db>,
-    _scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    _assumptions: PredicateListId<'db>,
-) -> salsa::CycleRecoveryAction<bool> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 #[cfg(test)]
 mod tests {
-    use common::InputDb;
+    use common::{InputDb, compilation::Target};
     use driver::DriverDataBase;
     use hir::{
-        analysis::semantic::{get_or_build_semantic_instance, root_semantic_instance_key},
+        analysis::semantic::{root_semantic_instance_key, runtime_size_bytes},
         analysis::ty::ty_check::BodyOwner,
         hir_def::TopLevelMod,
     };
+    use salsa::Setter;
     use url::Url;
 
     use crate::runtime::{
-        BorrowAccess, Layout, LayoutId, LayoutKey, RuntimeBoundarySpec, StructLayout,
+        BorrowAccess, Layout, LayoutId, LayoutKey, RuntimeBoundarySpec, RuntimeMemoryLayout,
+        StructLayout,
     };
 
     use super::super::boundary::boundary_spec_for_ty_in_env;
@@ -744,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn pointers_are_address_words() {
+    fn pointers_are_address_scalars() {
         let db = DriverDataBase::default();
         let assumptions = PredicateListId::new(&db, Vec::new());
         let env = RuntimeTypeEnv::new(None, assumptions);
@@ -753,20 +741,29 @@ mod tests {
         let word_ptr_ptr_ty = TyId::ptr_to(&db, word_ptr_ty);
         let slot_ty = TyId::ptr_in(&db, AddressSpace::Storage, TyId::u256(&db));
 
-        for ty in [word_ptr_ty, word_ptr_ptr_ty, slot_ty] {
+        // A memory pointer is a pointer, and a storage pointer its slot.
+        let pointer = RuntimeClass::Scalar(pointer_class(&db, AddressSpace::Memory));
+        for (ty, class) in [
+            (word_ptr_ty, &pointer),
+            (word_ptr_ptr_ty, &pointer),
+            (slot_ty, &word),
+        ] {
             assert_eq!(
-                top_level_class_for_ty_in_env(&db, env, ty, AddressSpace::Memory),
-                Some(word.clone())
+                top_level_class_for_ty_in_env(&db, env, ty, AddressSpace::Memory).as_ref(),
+                Some(class)
             );
         }
-        let memory = RuntimeClass::raw_addr(&db, AddressSpace::Memory, word.clone());
         assert_eq!(
             deref_transport_class_in_env(&db, env, word_ptr_ty),
-            Some(memory.clone())
+            Some(RuntimeClass::raw_addr(
+                &db,
+                AddressSpace::Memory,
+                word.clone()
+            ))
         );
         assert_eq!(
             deref_transport_class_in_env(&db, env, word_ptr_ptr_ty),
-            Some(memory)
+            Some(RuntimeClass::raw_addr(&db, AddressSpace::Memory, pointer))
         );
         assert_eq!(
             deref_transport_class_in_env(&db, env, slot_ty),
@@ -853,11 +850,50 @@ fn second(_ p: *Node, _ bytes: *u8, _ words: [u8; 2]) {}
 fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
 "#;
 
-    fn with_source<T>(f: impl for<'db> FnOnce(&'db DriverDataBase, TopLevelMod<'db>) -> T) -> T {
+    const LAYOUT_SOURCE: &str = r#"
+use core::option::Option
+use core::ptr::StorPtr
+use core::result::Result
+
+struct Flags { a: bool, b: bool, c: u8 }
+enum Three { A, B(bool, u16), C(u128) }
+enum Nested { X(Three), Y(Flags, u32) }
+struct Empty {}
+struct Spaced { e: Empty, x: u8, f: Empty, y: u16 }
+struct Overaligned { a: u8, none: [u256; 0] }
+enum EmptyPayload { A(u8), B([u256; 0]) }
+
+struct Zoo {
+    flags: Flags,
+    three: Three,
+    nested: Nested,
+    spaced: Spaced,
+    overaligned: Overaligned,
+    empty_payload: EmptyPayload,
+    tuple: (u8, u256, i16, bool),
+    options: [Option<u16>; 3],
+    bools: [bool; 3],
+    word: Option<u256>,
+    result: Result<u8, u128>,
+    text: String<5>,
+    node: *Zoo,
+    slot: StorPtr<u8>,
+    size: usize,
+}
+
+fn zoo(_ zoo: Zoo) {}
+"#;
+
+    fn with_source<T>(
+        source: &str,
+        target: Target,
+        f: impl for<'db> FnOnce(&'db DriverDataBase, TopLevelMod<'db>) -> T,
+    ) -> T {
         let mut db = DriverDataBase::default();
-        let url = Url::parse("file:///recursive_raw_pointees.fe").unwrap();
+        db.compilation_settings().set_target(&mut db).to(target);
+        let url = Url::parse("file:///runtime_type_info.fe").unwrap();
         db.workspace()
-            .touch(&mut db, url.clone(), Some(RECURSIVE_SOURCE.to_string()));
+            .touch(&mut db, url.clone(), Some(source.to_string()));
         let file = db
             .workspace()
             .get(&db, &url)
@@ -884,8 +920,8 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
                     .is_some_and(|name| name.data(db) == func)
             })
             .unwrap_or_else(|| panic!("missing function `{func}`"));
-        let key = root_semantic_instance_key(db, BodyOwner::Func(func)).expect("root key");
-        let semantic = get_or_build_semantic_instance(db, key);
+        let key = root_semantic_instance_key(db, BodyOwner::Func(func, None)).expect("root key");
+        let semantic = SemanticInstance::new(db, key);
         let typed_body = semantic.key(db).typed_body(db);
         let binding = typed_body.param_binding(idx).expect("parameter binding");
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
@@ -907,14 +943,36 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
     }
 
     #[test]
-    fn recursive_pointer_fields_are_words() {
-        with_source(|db, top_mod| {
+    fn size_of_agrees_with_raw_memory_layout() {
+        // `size_of` sizes allocations and MIR places values in them, so the
+        // two must agree on every target.
+        for target in Target::ALL {
+            with_source(LAYOUT_SOURCE, target, |db, top_mod| {
+                let (zoo, env) = param(db, top_mod, "zoo", 0);
+                let raw = RuntimeMemoryLayout::raw(db);
+                for ty in zoo.field_types(db).into_iter().chain([zoo]) {
+                    let stored = stored_class_for_ty_in_env(db, env, ty);
+                    assert_eq!(
+                        runtime_size_bytes(db, ty),
+                        Ok(raw.class_size(&stored).ok()),
+                        "{target:?} {}",
+                        ty.pretty_print(db)
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn recursive_pointer_fields_are_pointers() {
+        with_source(RECURSIVE_SOURCE, Target::Evm, |db, top_mod| {
             let (ptr_ty, env) = param(db, top_mod, "first", 0);
             let node = deref_transport_class_in_env(db, env, ptr_ty)
                 .and_then(|transport| transport.deref_target(db))
                 .expect("pointer parameter");
             let word = stored_class_for_ty_in_env(db, env, TyId::u256(db));
-            assert_eq!(struct_fields(db, &node), vec![word.clone(), word]);
+            let pointer = RuntimeClass::Scalar(pointer_class(db, AddressSpace::Memory));
+            assert_eq!(struct_fields(db, &node), vec![word, pointer]);
         });
     }
 

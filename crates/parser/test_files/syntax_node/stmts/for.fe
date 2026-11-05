@@ -5,7 +5,3 @@ for i in arr {
 for Struct {x, y} in s_list.iter() {
     sum = sum + x + y
 }
-
-for x in xs by reversed() {
-    sum = sum + x
-}

@@ -14,21 +14,21 @@
 //!
 //! ```fe
 //! // `address[] owners;` at slot 2, which no contract field uses
-//! let owners = unsafe { SolArray<Address>::at(2) }
+//! let owners = unsafe { mut SolArray<Address>::at(2) }
 //! owners.push(owner)
 //! let first = owners[0]
 //! ```
-use core::abi::{AbiFrame, AbiSize, DynArray, Encode, store_word}
-use core::iter::{Bidirectional, Collection, CollectionMut}
-use core::marker::{Clearable, Pinned}
-use core::ops::{LaneCodec, Location, StateIndex, clear_storage}
-use core::option::Option
-use core::intrinsic::storage_slots
+use core::abi::{AbiFrame, AbiSize, Encode, store_word}
+use ingot::abi::DynArray
+use core::iter::{Bidirectional, Collection}
+use core::marker::{Clearable, Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex, WrappingAdd, WrappingSub, clear_storage}
 use core::ptr
 use ingot::abi::{Sol, StaticAbiElement}
-use super::effects::{RawStorage, revert_error, storage_at_mut}
+use super::effects::{RawStorage, revert_error, storage_at}
 use super::panic::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY, PANIC_POP_EMPTY, Panic}
-use super::sol_slot::{SolPacked, data_slot, field_mask}
+use super::layout::{array_data_slot, element_location}
+use super::sol_slot::{SolPacked, field_mask}
 
 // Solidity refuses to `push` onto a storage array of 2**64 - 1 elements.
 const MAX_LEN: u256 = 0xffffffffffffffff
@@ -58,7 +58,7 @@ impl<T: SolPacked> LaneCodec<T> for SolLanes {
 }
 
 impl<T> Pinned for SolArray<T> {
-    space S = storage
+    type Space = Storage
 }
 
 unsafe impl<T> StateIndex for SolArray<T> {
@@ -70,26 +70,7 @@ unsafe impl<T> StateIndex for SolArray<T> {
         if index >= self.len {
             revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
         }
-        element_location(
-            first: data_slot(root),
-            index,
-            bits: <Self::Lanes as LaneCodec<T>>::BITS,
-            slots: storage_slots<T>(),
-        )
-    }
-}
-
-/// The location of element `index` laid out from slot `first` on: `256 /
-/// bits` to a slot when the elements are lanes of `bits` (at most 128), else
-/// `slots` each, the slots their storage layout takes. Wraps modulo
-/// `2**256`, like Solidity's storage slot arithmetic.
-#[arithmetic(unchecked)]
-fn element_location(first: u256, index: u256, bits: u256, slots: u256) -> Location {
-    if bits > 0 && bits <= 128 {
-        let per_slot = 256 / bits
-        Location { slot: first + index / per_slot, offset: (index % per_slot) * bits }
-    } else {
-        Location { slot: first + index * slots, offset: 0 }
+        element_location<T>(array_data_slot(root), index, bits: <Self::Lanes as LaneCodec<T>>::BITS)
     }
 }
 
@@ -99,8 +80,8 @@ impl<T> SolArray<T> {
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the elements' slots.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
-        unsafe { storage_at_mut(slot) }
+    pub unsafe fn at(_ slot: u256) -> mut? Self uses (storage: mut? RawStorage) {
+        unsafe { storage_at(slot) }
     }
 
     /// Number of elements.
@@ -180,72 +161,52 @@ impl<T> SolArray<T> {
     {
         let len = self.len
         let size = 32 + len * 32
-        let data = ptr::alloc_bytes(size)
+        let data = ptr::alloc_bytes(size.downcast_saturate())
         unsafe {
-            ptr::zero_bytes(data, size)
+            ptr::zero_bytes(data, size.downcast_unchecked())
             store_word(ptr: data, value: len)
         }
         var i: u256 = 0
         while i < len {
             let value = self[i]
             // The element's zeroed word, which only this encoding writes.
-            value.encode(unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32 + i * 32), len: 32) })
+            value.encode(unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, (32 + i * 32).downcast_unchecked()), len: 32) })
             i += 1
         }
-        unsafe { DynArray::from_abi_tail(data, len, size) }
+        unsafe { DynArray::from_abi_tail(data, len: len.downcast_unchecked(), size) }
     }
 }
 
 impl<T> Collection for SolArray<T> {
-    space S = self[_]
     type Cursor = u256
     type Item = T
 
-    fn start(self) -> Option<u256> {
-        first_index(self.len)
+    // Index cursors wrap, as core's do: the position before index 0 and the
+    // last position of an empty array are both `u256::MAX`, so `c < len`
+    // tests a position in either direction.
+    fn start(self) -> u256 {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> {
-        next_index(c, self.len)
+    fn has(self, _ c: u256) -> bool {
+        c < self.len
     }
 
-    fn at(self, _ c: u256) -> ref T @S {
-        ref self[c]
+    fn next(self, _ c: u256) -> u256 {
+        c.wrapping_add(1)
     }
-}
 
-impl<T> CollectionMut for SolArray<T> {
-    fn at_mut(mut self, _ c: u256) -> mut T @S {
-        mut self[c]
+    fn at(mut? self, _ c: u256) -> mut? T {
+        mut? self[c]
     }
 }
 
 impl<T> Bidirectional for SolArray<T> {
-    fn last(self) -> Option<u256> {
-        last_index(self.len)
+    fn last(self) -> u256 {
+        self.len.wrapping_sub(1)
     }
 
-    fn prev(self, _ c: u256) -> Option<u256> {
-        prev_index(c)
+    fn prev(self, _ c: u256) -> u256 {
+        c.wrapping_sub(1)
     }
-}
-
-/// The first index of a collection of `len` elements.
-pub(ingot) fn first_index(_ len: u256) -> Option<u256> {
-    if len == 0 { Option::None } else { Option::Some(0) }
-}
-
-/// The index after `i` in a collection of `len` elements.
-pub(ingot) fn next_index(_ i: u256, _ len: u256) -> Option<u256> {
-    if i + 1 < len { Option::Some(i + 1) } else { Option::None }
-}
-
-/// The last index of a collection of `len` elements.
-pub(ingot) fn last_index(_ len: u256) -> Option<u256> {
-    if len == 0 { Option::None } else { Option::Some(len - 1) }
-}
-
-/// The index before `i`.
-pub(ingot) fn prev_index(_ i: u256) -> Option<u256> {
-    if i == 0 { Option::None } else { Option::Some(i - 1) }
 }

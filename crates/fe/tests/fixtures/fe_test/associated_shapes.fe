@@ -1,0 +1,97 @@
+// A trait method returns its associated shape, `Self::Step`, which each
+// impl gives. A call on a known type grants what its impl's shape lists, and
+// generic code forwards the shape whole.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct One {
+    x: u256,
+}
+
+impl Driver for One {
+    shape Step = mut? u256
+
+    fn at(mut? self) -> mut? u256 {
+        mut? self.x
+    }
+}
+
+struct Two {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Two {
+    shape Step = (mut? u256, own u256)
+
+    fn at(mut? self) -> (mut? u256, own u256) {
+        (mut? self.a, self.b)
+    }
+}
+
+fn first<D: mut? Driver>(_ d: mut? D) -> D::Step {
+    d.at()
+}
+
+fn apply<D: Driver, F: Fn(D::Step<ref>) -> u256>(_ d: D, _ f: F) -> u256 uses F::E {
+    f(d.at())
+}
+
+#[test]
+fn concrete_steps() {
+    var one = One { x: 1 }
+    one.at() = 5
+    assert(one.x == 5)
+    let r: u256 = one.at()
+    assert(r == 5)
+    var two = Two { a: 1, b: 2 }
+    let (mut a, b) = two.at()
+    a = a + b
+    assert(two.a == 3)
+}
+
+#[test]
+fn generic_steps() {
+    var one = One { x: 1 }
+    first(mut one) = 9
+    assert(one.x == 9)
+    let t = Two { a: 3, b: 4 }
+    assert(apply(t, |(a, b)| a * b) == 12)
+}
+
+// A sub-trait's method may return a super-trait's shape, a projection in
+// every impl of the sub-trait.
+trait Holds {
+    shape Part
+}
+
+trait Viewed: Holds {
+    fn view(mut? self) -> Self::Part
+}
+
+impl Holds for Two {
+    shape Part = (mut? u256, own u256)
+}
+
+impl Viewed for Two {
+    fn view(mut? self) -> (mut? u256, own u256) {
+        (mut? self.a, self.b)
+    }
+}
+
+fn viewed<V: mut? Viewed>(_ v: mut? V) -> V::Part {
+    v.view()
+}
+
+#[test]
+fn super_trait_steps() {
+    var two = Two { a: 1, b: 2 }
+    let (mut a, b) = viewed(mut two)
+    a = a + b
+    assert(two.a == 3)
+    let (x, y) = viewed(two)
+    assert(x + y == 5)
+}

@@ -1,0 +1,110 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/callable_shape_table.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:19:13
+   │
+ 4 │ fn product<F: Fn((own usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+   │               ----------------------------- required by this bound on `product`
+   ·
+19 │     let _ = product(f_tuple)
+   │             ^^^^^^^ `fn f_tuple` doesn't implement `Fn((own usize, ref u256)) -> u256`
+   │
+   = `fn f_tuple` is `Fn((usize, u256)) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:20:13
+   │
+ 6 │ fn tuple<F: Fn((usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+   │             ------------------------- required by this bound on `tuple`
+   ·
+20 │     let _ = tuple(f_product)
+   │             ^^^^^ `fn f_product` doesn't implement `Fn((usize, u256)) -> u256`
+   │
+   = `fn f_product` is `Fn((own usize, ref u256)) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:21:13
+   │
+ 3 │ fn two<F: Fn(own usize, u256) -> u256>(_ f: F) -> u256 uses F::E { f(2, 3) }
+   │           --------------------------- required by this bound on `two`
+   ·
+21 │     let _ = two(f_product)
+   │             ^^^ `fn f_product` doesn't implement `Fn(own usize, u256) -> u256`
+   │
+   = `fn f_product` is `Fn((own usize, ref u256)) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:22:13
+   │
+ 5 │ fn views<F: Fn((ref usize, ref u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+   │             --------------------------------- required by this bound on `views`
+   ·
+22 │     let _ = views(f_product)
+   │             ^^^^^ `fn f_product` doesn't implement `Fn((ref usize, ref u256)) -> u256`
+   │
+   = `fn f_product` is `Fn((own usize, ref u256)) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:23:13
+   │
+ 9 │ fn unit<F: Fn(own ()) -> u256>(_ f: F) -> u256 uses F::E { f(()) }
+   │            ------------------ required by this bound on `unit`
+   ·
+23 │     let _ = unit(f_none)
+   │             ^^^^ `fn f_none` doesn't implement `Fn(own ()) -> u256`
+   │
+   = `fn f_none` is `Fn() -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:24:13
+   │
+ 8 │ fn none<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+   │            ------------ required by this bound on `none`
+   ·
+24 │     let _ = none(f_unit)
+   │             ^^^^ `fn f_unit` doesn't implement `Fn() -> u256`
+   │
+   = `fn f_unit` is `Fn(own ()) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:25:13
+   │
+ 7 │ fn tuple_own<F: Fn(own (usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+   │                 ----------------------------- required by this bound on `tuple_own`
+   ·
+25 │     let _ = tuple_own(f_tuple)
+   │             ^^^^^^^^^ `fn f_tuple` doesn't implement `Fn(own (usize, u256)) -> u256`
+   │
+   = `fn f_tuple` is `Fn((usize, u256)) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:26:13
+   │
+ 6 │ fn tuple<F: Fn((usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+   │             ------------------------- required by this bound on `tuple`
+   ·
+26 │     let _ = tuple(f_tuple_own)
+   │             ^^^^^ `fn f_tuple_own` doesn't implement `Fn((usize, u256)) -> u256`
+   │
+   = `fn f_tuple_own` is `Fn(own (usize, u256)) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:30:13
+   │
+ 4 │ fn product<F: Fn((own usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+   │               ----------------------------- required by this bound on `product`
+   ·
+30 │     let _ = product(|t: own (usize, u256)| t.0 as u256 + t.1)
+   │             ^^^^^^^ `|own (usize, u256)| -> u256` doesn't implement `Fn((own usize, ref u256)) -> u256`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ callable_shape_table.fe:31:13
+   │
+ 6 │ fn tuple<F: Fn((usize, u256)) -> u256>(_ f: F) -> u256 uses F::E { f((2, 3)) }
+   │             ------------------------- required by this bound on `tuple`
+   ·
+31 │     let _ = tuple(|t: own (usize, u256)| t.0 as u256 + t.1)
+   │             ^^^^^ `|own (usize, u256)| -> u256` doesn't implement `Fn((usize, u256)) -> u256`

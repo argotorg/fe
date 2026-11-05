@@ -21,11 +21,12 @@ mod workspace_ingot;
 use std::fs;
 use std::sync::OnceLock;
 
-use build::build;
+use build::{NativeLink, build};
 use camino::Utf8PathBuf;
 use check::check;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
+use common::compilation::Target;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
@@ -52,15 +53,43 @@ pub enum BuildEmit {
     Ir,
     Abi,
     Metadata,
+    /// Code bytes of each function in a contract (`<Contract>.sizes.txt`).
+    Sizes,
     Executable,
+    /// A native object of the `#[export]` functions (`<name>.o`).
+    Object,
+    /// A native static library of the `#[export]` functions (`lib<name>.a`).
+    Staticlib,
+    Elf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BuildBackend {
     Sonatina,
     #[cfg(feature = "cranelift")]
-    /// Host-native IR, or executables on x86-64 Linux and AArch64 macOS.
+    /// Host-native IR, or executables and libraries on x86-64 Linux and
+    /// AArch64 macOS.
     Native,
+    #[cfg(feature = "sp1")]
+    /// RV64IM SP1 guest IR or ELF executables.
+    Sp1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestBackend {
+    Sonatina,
+    #[cfg(feature = "cranelift")]
+    Native,
+}
+
+impl From<TestBackend> for BuildBackend {
+    fn from(backend: TestBackend) -> Self {
+        match backend {
+            TestBackend::Sonatina => Self::Sonatina,
+            #[cfg(feature = "cranelift")]
+            TestBackend::Native => Self::Native,
+        }
+    }
 }
 
 impl BuildBackend {
@@ -69,6 +98,19 @@ impl BuildBackend {
             Self::Sonatina => "sonatina",
             #[cfg(feature = "cranelift")]
             Self::Native => "native",
+            #[cfg(feature = "sp1")]
+            Self::Sp1 => "sp1",
+        }
+    }
+
+    /// The machine this backend compiles for. SP1 guests are native code.
+    pub fn target(self) -> Target {
+        match self {
+            Self::Sonatina => Target::Evm,
+            #[cfg(feature = "cranelift")]
+            Self::Native => Target::Native,
+            #[cfg(feature = "sp1")]
+            Self::Sp1 => Target::Native,
         }
     }
 
@@ -89,6 +131,8 @@ impl BuildBackend {
             ],
             #[cfg(feature = "cranelift")]
             Self::Native => vec![BuildEmit::Executable],
+            #[cfg(feature = "sp1")]
+            Self::Sp1 => vec![BuildEmit::Elf],
         }
     }
 }
@@ -175,7 +219,7 @@ pub enum Command {
         #[arg(
             long,
             value_name = "PATH",
-            conflicts_with_all = ["path", "ingot", "standalone", "report"]
+            conflicts_with_all = ["path", "ingot", "standalone", "report", "link", "link_lib"]
         )]
         from_metadata: Option<Utf8PathBuf>,
         /// Build a specific contract by name (defaults to all contracts in the target).
@@ -195,6 +239,14 @@ pub enum Command {
         /// Comma-delimited artifacts to emit.
         #[arg(long, short = 'e', value_enum, value_delimiter = ',')]
         emit: Vec<BuildEmit>,
+        /// Link an object file or archive into a native executable, to
+        /// implement `extern` functions. Repeatable.
+        #[arg(long, value_name = "PATH")]
+        link: Vec<Utf8PathBuf>,
+        /// Link the library `NAME` into a native executable, as the C
+        /// compiler's `-l<NAME>`. Repeatable.
+        #[arg(long, value_name = "NAME")]
+        link_lib: Vec<String>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).
         #[arg(long)]
         report: bool,
@@ -224,6 +276,10 @@ pub enum Command {
         /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
         #[arg(long)]
         standalone: bool,
+        /// Backend whose target to check for: integer widths and layouts
+        /// depend on it.
+        #[arg(long, value_enum, default_value = "sonatina")]
+        backend: BuildBackend,
         /// Compilation profile to use when resolving profile-aware config.
         #[arg(long, default_value = "dev", value_name = "PROFILE")]
         profile: String,
@@ -292,8 +348,8 @@ pub enum Command {
     /// Run Fe tests in a file or directory.
     Test {
         /// Execution backend for tests.
-        #[arg(long, value_enum, default_value_t = BuildBackend::Sonatina)]
-        backend: BuildBackend,
+        #[arg(long, value_enum, default_value_t = TestBackend::Sonatina)]
+        backend: TestBackend,
         /// Native test wall-time limit in seconds (default: 60, maximum: 3600).
         #[arg(long, value_name = "SECONDS")]
         native_timeout_secs: Option<u64>,
@@ -650,6 +706,8 @@ pub fn run(opts: &Options) {
             out_dir,
             profile,
             emit,
+            link,
+            link_lib,
             report,
             report_out,
             report_failed_only,
@@ -691,6 +749,10 @@ pub fn run(opts: &Options) {
                 *backend,
                 opt_level,
                 &emit,
+                NativeLink {
+                    paths: link,
+                    libraries: link_lib,
+                },
                 out_dir.as_ref(),
                 profile,
                 (*report).then_some(report_out),
@@ -702,6 +764,7 @@ pub fn run(opts: &Options) {
             path,
             ingot,
             standalone,
+            backend,
             profile,
             dump_mir,
             report,
@@ -713,6 +776,7 @@ pub fn run(opts: &Options) {
                 path,
                 ingot.as_deref(),
                 *standalone,
+                backend.target(),
                 profile,
                 *dump_mir,
                 (*report).then_some(report_out),
@@ -825,7 +889,7 @@ pub fn run(opts: &Options) {
                 *show_logs,
                 profile,
                 opt_level,
-                *backend,
+                (*backend).into(),
                 *native_timeout_secs,
                 *native_output_limit_kib,
                 emit,

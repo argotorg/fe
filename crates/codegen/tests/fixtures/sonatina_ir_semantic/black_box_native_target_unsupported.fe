@@ -1,0 +1,5 @@
+use core::hint::black_box
+
+pub fn main() -> i32 {
+    black_box(7)
+}

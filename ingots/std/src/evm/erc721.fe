@@ -8,6 +8,7 @@ use core::ptr::MemBuffer
 use ingot::abi::{Bytes, Bytes4, sol::sol}
 use super::effects::{Address, Call, Ctx}
 use super::token::{ReceiverCheck, TokenCall}
+use super::units::Wei
 use ingot::evm::ops
 
 /// `IERC721Receiver.onERC721Received.selector`.
@@ -49,7 +50,7 @@ uses (ctx: Ctx, call: mut Call)
     let outcome = call.try_call_into(
         addr: token,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc721Msg::TransferFrom { owner, receiver, tokenId: token_id },
         ret: mut ret,
     )
@@ -85,7 +86,7 @@ uses (ctx: Ctx, call: mut Call)
     let outcome = call.try_call_into(
         addr: receiver,
         gas: ops::gas(),
-        value: 0,
+        value: Wei::zero(),
         message: Erc721ReceiverMsg::OnErc721Received { operator, from, tokenId: token_id, data },
         ret: mut ret,
     )

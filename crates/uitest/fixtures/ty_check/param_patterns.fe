@@ -1,0 +1,90 @@
+use core::option::Option
+
+// A parameter destructured by a pattern is bound by its function's body.
+trait Pairs {
+    fn sum(_ (a, b): (u256, u256)) -> u256
+}
+
+fn refutable(_ Option::Some(x): Option<u256>) -> u256 {
+    x
+}
+
+fn arity(_ (a, b, c): (u256, u256)) -> u256 {
+    a
+}
+
+fn named_twice(a: u256, _ (a, b): (u256, u256)) -> u256 {
+    a + b
+}
+
+fn patterned_twice(_ (a, b): (u256, u256), _ (c, a): (u256, u256)) -> u256 {
+    a + b + c
+}
+
+fn named_after(_ (a, b): (u256, u256), a: u256) -> u256 {
+    a + b
+}
+
+fn closure_twice() -> u256 {
+    let f = |a: u256, (a, b): (u256, u256)| a + b
+    f(1, (2, 3))
+}
+
+fn closure_named_after() -> u256 {
+    let f = |(a, b): (u256, u256), a: u256| a + b
+    f((2, 3), 1)
+}
+
+// Accepted: a pattern may rebind a name of the enclosing function's.
+fn shadows(a: u256) -> u256 {
+    let f = |(a, b): (u256, u256)| a + b
+    f((a, 1))
+}
+
+struct Counter {
+    count: u256,
+}
+
+// A parameter, named or in a pattern, and an effect bind no name together.
+fn named_and_effect(c: u256) -> u256 uses (c: Counter) {
+    c.count
+}
+
+fn part_and_effect(_ (c, d): (u256, u256)) -> u256 uses (c: Counter) {
+    c + d
+}
+
+msg TallyMsg {
+    #[selector = 0x11223344]
+    Set { total: u256, by: u256 } -> u256,
+    #[selector = 0x11223345]
+    Add { total: u256 } -> u256,
+}
+
+// A contract's `init` parameters, and a recv arm's pattern, as well.
+pub contract Tally {
+    mut count: u256,
+    mut total: u256,
+    init(count: u256, _ (total, rest): (u256, u256)) uses (mut count, mut total) {
+        count = rest
+    }
+
+    recv TallyMsg {
+        Set { total, by } -> u256 uses (mut total, count) {
+            total + by + count
+        }
+        // Accepted: the field bound to another name.
+        Add { total: amount } -> u256 uses (mut total) {
+            total += amount
+            total
+        }
+    }
+}
+
+// Accepted: a closure's parameter may rebind an effect of its enclosing
+// function's.
+fn closure_shadows_effect() -> u256 uses (c: Counter) {
+    let f = |c: u256| c + 1
+    let g = |(c, d): (u256, u256)| c + d
+    f(c.count) + g((1, 2))
+}

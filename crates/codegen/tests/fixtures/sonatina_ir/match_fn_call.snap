@@ -14,42 +14,12 @@ func private %calldataload(v0.i256) -> i256 {
         return v2;
 }
 
-func private %standalone_match_fn_call__match_fn_call__example__gcd5c_8cef() -> i256 {
+func private %example() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v0.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_c232;
-        v2.i1 = eq v0 305419896.i256;
-        br v2 block3 block6;
-
-    block2:
-        v3.i256 = phi (1.i256 block3) (2.i256 block4) (3.i256 block5);
-        return v3;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        jump block2;
-
-    block6:
-        v9.i1 = eq v0 591751049.i256;
-        br v9 block4 block7;
-
-    block7:
-        jump block5;
-}
-
-func private %standalone_match_fn_call__match_fn_call__example__gcd5c_bf3f() -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v0.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_8799;
+        v0.i256 = call %read_selector;
         v2.i1 = eq v0 305419896.i256;
         br v2 block3 block6;
 
@@ -79,7 +49,7 @@ func private %main() -> i256 {
         jump block1;
 
     block1:
-        v0.i256 = call %standalone_match_fn_call__match_fn_call__example__gcd5c_bf3f;
+        v0.i256 = call %example;
         return v0;
 }
 
@@ -92,27 +62,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_8799() -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i256 = call %calldataload 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        return v3;
-}
-
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_bcc8() -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i256 = call %calldataload 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        return v3;
-}
-
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_c232() -> i256 {
+func private %read_selector() -> i256 {
     block0:
         jump block1;
 

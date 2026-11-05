@@ -1,0 +1,19 @@
+pub struct Month(pub u8)
+struct Pair( u256 ,bool, )
+struct Empty()
+struct Restricted(pub(ingot) u8, pub(super) u16)
+struct TupleField(pub (u8, u8))
+struct Wrapper<T>(pub T) where T: Copy
+/// A struct whose fields do not fit on a single line.
+pub struct Coordinates(pub very_long_module_name::VeryLongTypeName, pub very_long_module_name::AnotherLongTypeName)
+struct Attributed(
+    /// The first field
+    pub u8,
+    // a comment
+    u16,
+)
+
+fn use_them(p: Pair) -> u256 {
+    let Pair(n, flag) = p
+    Pair(n, !flag).0
+}

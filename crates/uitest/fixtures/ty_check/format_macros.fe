@@ -1,0 +1,27 @@
+use core::MemBuffer
+use std::io::{Stderr, Stdout}
+
+struct Point {
+    x: u64,
+}
+
+// Each argument is formatted on its own, so a view may be one.
+fn report(_ name: MemBuffer, count: u64) uses (out: mut Stdout, err: mut Stderr) {
+    let line = format!("name: ", name.span(), ", count: ", count)
+    println!(line)
+    print!("partial")
+    println!()
+    eprintln!("to stderr: ", name, " ", true)
+}
+
+fn no_stdout() {
+    println!("hi")
+}
+
+fn not_displayable() -> MemBuffer {
+    format!("point: ", Point { x: 1 })
+}
+
+fn untyped_integer() -> MemBuffer {
+    format!(7)
+}

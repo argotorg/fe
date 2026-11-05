@@ -6,9 +6,10 @@ use crate::{
         HirAnalysisDb,
         place::{Place, PlaceBase},
         semantic::{
-            CallSiteId, PlaceProvenance, RuntimeSizeError, SemOrigin, SemanticBody,
-            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            access::{CallSiteRefinements, PathSpace, provisional_call_site_provider_refinements},
+            CallSiteId, PlaceProvenance, RuntimeSizeError, SExpr, SLocalId, SStmtKind, SemOrigin,
+            SemanticBody, SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
+            access::{CallSiteRefinements, provisional_call_site_provider_refinements},
+            concrete_layout_fault,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
                 SemanticDiagnosticLabel, SemanticDiagnosticSpan, checker_name,
@@ -28,6 +29,7 @@ use crate::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, expand_rows},
             },
+            evidence::{EvidenceList, instance_evidence},
             fold::{TyFoldable, TyFolder},
             instantiate_trait_self,
             normalize::{
@@ -36,12 +38,8 @@ use crate::{
             },
             provider::{
                 AddressSpace, ProviderKind, ProviderTransport, RootProviderRegistration,
-                RootProviderScope, provider_semantics, provider_semantics_for_specialized_call,
+                RootProviderScope, provider_semantics_for_specialized_call,
                 registered_root_providers,
-            },
-            result_space::{
-                ResolvedSpace, SpaceContract, SpaceKey, declared_result_spaces, resolve_space_key,
-                space_path_steps,
             },
             subst::substitute_complete,
             trait_def::{MethodArgMapError, TraitInstId},
@@ -54,14 +52,13 @@ use crate::{
                 ForLoopStep, LocalBinding, ParamSite, ResolvedEffectArg, RowArg,
                 SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
-            ty_def::{InvalidCause, TyData, TyId},
+            ty_def::{BorrowKind, InvalidCause, TyData, TyId},
             ty_is_snapshot,
             ty_lower::{ParamSchemaId, SubstError},
+            visitor::collect_flags,
         },
     },
-    hir_def::{
-        CallableDef, Contract, ExprId, FuncParamMode, SpacePathId, StmtId, scope_graph::ScopeId,
-    },
+    hir_def::{CallableDef, Contract, ExprId, FuncParamMode, StmtId, scope_graph::ScopeId},
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
         ResolvedEffectBinding, effect_param_provider_semantics, effect_requirements_for_site,
@@ -70,25 +67,57 @@ use crate::{
 };
 use common::indexmap::IndexMap;
 use indexmap::IndexSet;
-use salsa::Update;
+use salsa::SalsaValue;
 use thin_vec::ThinVec;
 
 use super::{
-    EffectProviderSubst, GenericSubst, ImplEnv, const_ref::root_impl_env, instantiate_typed_body,
-    provisional_semantic_callee_key, semantic_callee_key_with_effect_providers,
-    typed_body_template,
+    EffectProviderSubst, GenericSubst, ImplEnv,
+    const_ref::{is_ground, root_impl_env},
+    instantiate_typed_body, provisional_semantic_callee_key,
+    semantic_callee_key_with_effect_providers, typed_body_template,
 };
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct SemanticInstanceKey<'db> {
+    #[returns(copy)]
     pub owner: BodyOwner<'db>,
+    #[returns(copy)]
     pub subst: GenericSubst<'db>,
+    #[returns(copy)]
     pub effect_providers: EffectProviderSubst<'db>,
+    #[returns(copy)]
     pub impl_env: ImplEnv<'db>,
+    /// Proofs of the assumptions the owner's body is checked under, from the
+    /// call that made this instance. One the list does not supply is proved
+    /// where the body needs it.
+    #[returns(copy)]
+    pub evidence: EvidenceList<'db>,
 }
 
 impl<'db> SemanticInstanceKey<'db> {
+    /// The key for `owner`'s instance with `subst`, given the proofs a use
+    /// supplies of the assumptions its body is checked under. One with
+    /// closed arguments carries none: its instance proves every assumption
+    /// itself (`instance_evidence`), so the keys for one body and
+    /// substitution are the same however they are made, and a key never
+    /// holds a proof whose types can hold the key.
+    pub fn of(
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        subst: GenericSubst<'db>,
+        effect_providers: EffectProviderSubst<'db>,
+        impl_env: ImplEnv<'db>,
+        supplied: EvidenceList<'db>,
+    ) -> Self {
+        let evidence = if is_ground(collect_flags(db, subst.generic_args(db))) {
+            EvidenceList::none(db)
+        } else {
+            supplied
+        };
+        Self::new(db, owner, subst, effect_providers, impl_env, evidence)
+    }
+
     /// This key instantiated with its data parameters naming places in
     /// `param_spaces`.
     fn with_param_spaces(
@@ -106,6 +135,7 @@ impl<'db> SemanticInstanceKey<'db> {
             self.subst(db),
             EffectProviderSubst::new(db, providers, param_spaces),
             self.impl_env(db),
+            self.evidence(db),
         )
     }
 
@@ -118,9 +148,10 @@ impl<'db> SemanticInstanceKey<'db> {
     }
 }
 
-#[salsa::tracked]
+#[salsa::interned]
 #[derive(Debug)]
 pub struct SemanticInstance<'db> {
+    #[returns(copy)]
     pub key: SemanticInstanceKey<'db>,
 }
 
@@ -148,21 +179,21 @@ pub(crate) enum SemanticBodyAdmissionError<'db> {
     InstanceLimit(crate::analysis::semantic::SemanticDiagnosticId<'db>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct CallSiteLowering<'db> {
     pub callee: Option<SemanticCalleeRef<'db>>,
     pub effect_args: Box<[ResolvedEffectArg<'db>]>,
     pub effect_pairs: Box<[(usize, usize)]>,
     pub provider_pairs: Box<[(u32, u32)]>,
     /// Whether the callee takes the operands after the call's receiver (a
-    /// function item called through a callable shape).
+    /// function item called through a callable trait).
     pub drops_receiver: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct ForLoopCallSites<'db> {
     /// The protocol's calls, in `ForLoopStep` order.
-    pub sites: [CallSiteLowering<'db>; 3],
+    pub sites: [CallSiteLowering<'db>; 4],
 }
 
 impl<'db> ForLoopCallSites<'db> {
@@ -173,14 +204,14 @@ impl<'db> ForLoopCallSites<'db> {
 
 /// The address space of the place a call supplies to one of its callee's
 /// inputs, which the callee is instantiated for.
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(crate) struct CallSiteProviderRefinement {
     pub call_site: CallSiteId,
     pub input: RefinedInput,
     pub address_space: AddressSpace,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SalsaValue)]
 pub(crate) enum RefinedInput {
     Effect {
         binding_idx: u32,
@@ -189,15 +220,15 @@ pub(crate) enum RefinedInput {
     Param(u32),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 struct CallSiteFinalizationData<'db> {
     call_sites: Vec<Option<CallSiteLowering<'db>>>,
     for_loop_call_sites: Vec<Option<ForLoopCallSites<'db>>>,
     diagnostic: Option<crate::analysis::semantic::SemanticDiagnosticId<'db>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
-struct ProvisionalCallSiteData<'db, T: Update + PartialEq + Eq + Clone> {
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+struct ProvisionalCallSiteData<'db, T: SalsaValue + PartialEq + Eq + Clone> {
     sites: Vec<Option<T>>,
     diagnostic: Option<SemanticDiagnosticId<'db>>,
 }
@@ -228,19 +259,17 @@ type InstantiatedEffectEnvData<'db> = (
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct InstantiatedEffectEnv<'db> {
+    #[returns(copy)]
     pub site: crate::analysis::ty::ty_check::EffectParamSite<'db>,
-    #[return_ref]
     pub requirements: Vec<EffectRequirement<'db>>,
-    #[return_ref]
     pub providers: Vec<ProviderBinding<'db>>,
-    #[return_ref]
     pub resolutions: Vec<ResolvedEffectBinding>,
-    #[return_ref]
     pub forwarded_witnesses: Vec<TraitInstId<'db>>,
+    #[returns(copy)]
     pub assumptions: PredicateListId<'db>,
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn instantiated_effect_env<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -259,19 +288,49 @@ pub fn instantiated_effect_env<'db>(
     ))
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn instantiated_typed_body<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
 ) -> TypedBody<'db> {
-    let body = instantiate_typed_body(db, typed_body_template(db, key.owner(db)), key.subst(db));
+    let mut body =
+        instantiate_typed_body(db, typed_body_template(db, key.owner(db)), key.subst(db));
+    // A spread's inputs are those its instantiated shape lists.
+    if let BodyOwner::Func(func, _) = key.owner(db)
+        && let Some(spread) = CallableDef::Func(func).spread(db)
+        && let Some(shape) = func.arg_ty(db, spread)
+    {
+        let env = key.impl_env(db);
+        let shape = normalize_ty(
+            db,
+            shape.instantiate(db, key.subst(db).generic_args(db)),
+            env.normalization_scope(db),
+            env.assumptions(db),
+        );
+        if let Some(listed) = shape.as_params_shape(db) {
+            body = body.with_spread_inputs(db, func, spread, listed);
+        }
+    }
+    // An opaque parameter's inputs are those its instantiated shape lists.
+    if let BodyOwner::Func(..) | BodyOwner::Closure { .. } = key.owner(db) {
+        let env = key.impl_env(db);
+        let (scope, assumptions) = (env.normalization_scope(db), env.assumptions(db));
+        body = body.with_known_params(db, |shape| normalize_ty(db, shape, scope, assumptions));
+    }
+    let evidence = instance_evidence(
+        db,
+        body.signature(),
+        key.evidence(db),
+        TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
+    );
+    body.bind_evidence(db, evidence);
     // A body's row provider parameters are the providers its call binds.
     let owner = match key.owner(db) {
         BodyOwner::Closure { def, .. } => (def.body.scope(), Some(def.expr)),
-        BodyOwner::Func(func)
+        BodyOwner::Func(func, mode)
             if let Some(func_body) = func.body(db)
                 && func
-                    .effect_requirements(db)
+                    .effect_requirements(db, mode)
                     .iter()
                     .any(|requirement| requirement.key.key_row().is_some()) =>
         {
@@ -308,7 +367,7 @@ impl<'db> TyFolder<'db> for RowProviderSubst<'_, 'db> {
     }
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn provisional_call_sites<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -351,7 +410,7 @@ fn provisional_call_sites<'db>(
     ProvisionalCallSiteData { sites, diagnostic }
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 fn provisional_for_loop_call_sites<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -417,7 +476,7 @@ fn expand_row_args<'db>(
     let scope = key.owner(db).scope();
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
     let requirements: Vec<_> = func
-        .effective_effect_requirements(db)
+        .effect_requirements(db, callable.mode())
         .iter()
         .map(|requirement| match requirement.key {
             EffectRequirementKey::Row(row) => EffectRequirement {
@@ -513,7 +572,7 @@ fn expand_row_args<'db>(
                 provider: ProviderBinding {
                     provider_idx: target,
                     source: ProviderSource::UsesParam {
-                        site: EffectParamSite::Func(func),
+                        site: EffectParamSite::Func(func, callable.mode()).slot_site(db, target),
                         requirement_idx: target,
                     },
                     ..provider.clone()
@@ -525,15 +584,11 @@ fn expand_row_args<'db>(
             });
         }
     }
-    // The call's providers for the components it resolved, renumbered.
+    // Renumber the callee's slots, not their origins: a provider's source can
+    // name a caller effect whose index happens to overlap a callee row slot.
     for specialization in callable.effect_providers_mut() {
         let provider = &mut specialization.provider;
-        if let ProviderSource::UsesParam {
-            requirement_idx, ..
-        } = &mut provider.source
-            && let Some(&slot) = slots.get(requirement_idx)
-        {
-            *requirement_idx = slot;
+        if let Some(&slot) = slots.get(&provider.provider_idx) {
             provider.provider_idx = slot;
         }
     }
@@ -605,11 +660,7 @@ fn provisional_call_site_diagnostic<'db>(
         .or(provisional_for_loop_call_sites(db, instance).diagnostic)
 }
 
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=final_call_site_data_cycle_recover,
-    cycle_initial=final_call_site_data_cycle_initial
-)]
+#[salsa::tracked(cycle_initial=final_call_site_data_cycle_initial)]
 fn final_call_site_data<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -633,15 +684,13 @@ fn final_call_site_data<'db>(
     };
     // Only effects, non-memory parameters and parameters holding a pinned
     // type, whose paths reach the pin's space, can supply non-memory places.
-    let pinned_param = (0..)
-        .map_while(|idx| typed_body.param_binding(idx))
-        .any(|binding| {
-            let ty = instance.normalized_binding_ty(db, binding);
-            ty.as_capability(db)
-                .map_or(ty, |(_, inner)| inner)
-                .pinned_part(db)
-                .is_some()
-        });
+    let pinned_param = typed_body.input_bindings().iter().any(|&binding| {
+        let ty = instance.normalized_binding_ty(db, binding);
+        ty.as_capability(db)
+            .map_or(ty, |(_, inner)| inner)
+            .pinned_part(db)
+            .is_some()
+    });
     let refinements = if call_sites_have_effect_args(&call_sites, &for_loop_call_sites)
         || !instance
             .key(db)
@@ -757,6 +806,7 @@ fn finalize_call_sites<'db>(
 
 fn final_call_site_data_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     instance: SemanticInstance<'db>,
 ) -> CallSiteFinalizationData<'db> {
     CallSiteFinalizationData {
@@ -766,45 +816,20 @@ fn final_call_site_data_cycle_initial<'db>(
     }
 }
 
-fn final_call_site_data_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &CallSiteFinalizationData<'db>,
-    _count: u32,
-    _instance: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<CallSiteFinalizationData<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 fn call_sites_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     instance: SemanticInstance<'db>,
 ) -> Vec<Option<CallSiteLowering<'db>>> {
     provisional_call_sites(db, instance).sites.clone()
 }
 
-fn call_sites_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Vec<Option<CallSiteLowering<'db>>>,
-    _count: u32,
-    _instance: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<Vec<Option<CallSiteLowering<'db>>>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
 fn for_loop_call_sites_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     instance: SemanticInstance<'db>,
 ) -> Vec<Option<ForLoopCallSites<'db>>> {
     provisional_for_loop_call_sites(db, instance).sites.clone()
-}
-
-fn for_loop_call_sites_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Vec<Option<ForLoopCallSites<'db>>>,
-    _count: u32,
-    _instance: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<Vec<Option<ForLoopCallSites<'db>>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 fn call_sites_have_effect_args<'db>(
@@ -1014,18 +1039,19 @@ fn replan_call_site<'db>(
 fn invalid_size_diagnostic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    origin: SemOrigin<'db>,
+    span: SemanticDiagnosticSpan<'db>,
     ty: TyId<'db>,
     error: RuntimeSizeError<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    let subject = match span {
+        SemanticDiagnosticSpan::LocalSourceOrBody { .. } => "value",
+        _ => "operation",
+    };
     let mut diagnostic = SemanticDiagnostic::new(
         instance,
         SemanticDiagnosticKind::InvalidConcreteType,
-        "this operation requires a valid concrete type size".into(),
-        SemanticDiagnosticSpan::Origin {
-            owner: instance.key(db).owner(db),
-            origin,
-        },
+        format!("this {subject} requires a valid concrete type size"),
+        span,
     );
     let message = match error {
         RuntimeSizeError::Overflow => format!(
@@ -1035,38 +1061,16 @@ fn invalid_size_diagnostic<'db>(
         RuntimeSizeError::UnavailableConcrete => {
             "concrete type size could not be determined".to_string()
         }
-        RuntimeSizeError::InvalidType(cause) => {
-            let source = match &cause {
-                InvalidCause::ConstEvalDivisionByZero { body, expr }
-                | InvalidCause::ConstEvalArithmeticOverflow { body, expr }
-                | InvalidCause::ConstEvalNegativeExponent { body, expr }
-                | InvalidCause::ConstEvalUnsupported { body, expr }
-                | InvalidCause::ConstEvalNonConstCall { body, expr }
-                | InvalidCause::ConstEvalStepLimitExceeded { body, expr }
-                | InvalidCause::ConstEvalRecursionLimitExceeded { body, expr }
-                | InvalidCause::ConstEvalRecursiveConst { body, expr }
-                | InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => {
-                    Some(SemanticDiagnosticSpan::HirExpr {
-                        body: *body,
-                        expr: *expr,
-                    })
-                }
-                _ => None,
-            };
-            let message = match cause {
-                InvalidCause::ConstEvalDivisionByZero { .. } => {
-                    "division by zero in const context".to_string()
-                }
-                InvalidCause::ConstEvalArithmeticOverflow { .. } => {
-                    "arithmetic overflow in const context".to_string()
-                }
-                _ => format!("invalid const value: {}", cause.pretty_print(db)),
-            };
-            if let Some(source) = source {
-                diagnostic.push_secondary(message.clone(), source);
+        RuntimeSizeError::InvalidType(cause) => match cause.const_eval_fault() {
+            Some((body, expr, message)) => {
+                diagnostic.push_secondary(
+                    message.clone(),
+                    SemanticDiagnosticSpan::HirExpr { body, expr },
+                );
+                message
             }
-            message
-        }
+            None => format!("invalid const value: {}", cause.pretty_print(db)),
+        },
     };
     if diagnostic.secondaries.is_empty() {
         diagnostic.primary.message = message;
@@ -1090,9 +1094,18 @@ fn specialize_provider_address_space<'db>(
     specialization.provider.semantics = semantics;
 }
 
+/// The body whose types a concrete instance's layout demand reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub(crate) enum LayoutDemandBody {
+    Admitted,
+    Provisional,
+    /// Lowering is blocked, so only expression types are read.
+    Expressions,
+}
+
 #[salsa::tracked]
 impl<'db> SemanticInstance<'db> {
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         instantiated_effect_env(db, self).map_or_else(
             || semantic_instance_base_assumptions_for_key(db, self.key(db)),
@@ -1100,20 +1113,12 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
-    #[salsa::tracked(
-        return_ref,
-        cycle_fn=call_sites_cycle_recover,
-        cycle_initial=call_sites_cycle_initial
-    )]
+    #[salsa::tracked(cycle_initial=call_sites_cycle_initial)]
     pub fn call_sites(self, db: &'db dyn HirAnalysisDb) -> Vec<Option<CallSiteLowering<'db>>> {
         final_call_site_data(db, self).call_sites.clone()
     }
 
-    #[salsa::tracked(
-        return_ref,
-        cycle_fn=for_loop_call_sites_cycle_recover,
-        cycle_initial=for_loop_call_sites_cycle_initial
-    )]
+    #[salsa::tracked(cycle_initial=for_loop_call_sites_cycle_initial)]
     pub fn for_loop_call_sites(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1121,7 +1126,7 @@ impl<'db> SemanticInstance<'db> {
         final_call_site_data(db, self).for_loop_call_sites.clone()
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn call_site_finalization_diagnostic(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1129,7 +1134,7 @@ impl<'db> SemanticInstance<'db> {
         final_call_site_data(db, self).diagnostic
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub(crate) fn provisional_body(self, db: &'db dyn HirAnalysisDb) -> SemanticBody<'db> {
         let key = self.key(db);
         let typed_body = key.typed_body(db);
@@ -1148,7 +1153,7 @@ impl<'db> SemanticInstance<'db> {
         body
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(clone))]
     pub fn binding_role(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1214,7 +1219,9 @@ impl<'db> SemanticInstance<'db> {
                 }
                 .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
             }
-            LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
+            LocalBinding::Local { .. }
+            | LocalBinding::Param { .. }
+            | LocalBinding::ParamPart { .. } => {
                 self.key(db).typed_body(db).binding_carrier_ty(db, binding)
             }
         }
@@ -1250,142 +1257,6 @@ impl<'db> SemanticInstance<'db> {
         bindings
     }
 
-    /// The result-space contracts the instance's return declares, per access
-    /// component: its own, or else its trait method's.
-    pub fn declared_result_spaces(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<Option<SpaceContract<'db>>> {
-        let BodyOwner::Func(func) = self.key(db).owner(db) else {
-            return Vec::new();
-        };
-        // The trait method's contracts, as far as they mean the same here:
-        // the trait's own spaces are the implementation's.
-        let inherited = func
-            .trait_method_def(db)
-            .zip(func.containing_impl_trait(db))
-            .map(|(method, impl_trait)| {
-                let trait_def = method.containing_trait(db);
-                let own = trait_def.map(|trait_def| {
-                    TraitInstId::new_simple(db, trait_def, trait_def.params(db).to_vec())
-                });
-                declared_result_spaces(db, method)
-                    .iter()
-                    .map(|contract| match (*contract)? {
-                        SpaceContract::Assoc(key) if Some(key.inst) == own => {
-                            Some(SpaceContract::Assoc(SpaceKey {
-                                inst: impl_trait.trait_inst_result(db).ok()?,
-                                ..key
-                            }))
-                        }
-                        SpaceContract::Assoc(_) | SpaceContract::Domain(..) => None,
-                        contract => Some(contract),
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        declared_result_spaces(db, func)
-            .iter()
-            .enumerate()
-            .map(|(index, contract)| contract.or_else(|| inherited.get(index).copied().flatten()))
-            .collect()
-    }
-
-    /// The space a contract the instance's owner declares names here, where
-    /// the instance tells.
-    pub fn contract_space(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        contract: SpaceContract<'db>,
-    ) -> Option<AddressSpace> {
-        let key = self.key(db);
-        match contract {
-            SpaceContract::Space(space) => Some(space),
-            SpaceContract::Param(param, steps) => {
-                let binding = key.typed_body(db).param_binding(param as usize)?;
-                self.sub_place_space(
-                    db,
-                    self.param_space(db, param),
-                    self.binding_ty(db, binding),
-                    steps,
-                )
-            }
-            SpaceContract::Target(param) => {
-                let binding = key.typed_body(db).param_binding(param as usize)?;
-                provider_semantics(db, self.binding_ty(db, binding)).address_space
-            }
-            SpaceContract::Domain(effect, steps) => {
-                let binding = self.effect_bindings(db).into_iter().find(|binding| {
-                    matches!(binding, LocalBinding::EffectParam { idx, .. } if *idx == effect as usize)
-                })?;
-                let provider = resolved_provider_binding_for_instance_effect(db, self, binding)?;
-                self.sub_place_space(
-                    db,
-                    provider.semantics.address_space?,
-                    provider
-                        .semantics
-                        .target_ty
-                        .unwrap_or_else(|| self.binding_ty(db, binding)),
-                    steps,
-                )
-            }
-            SpaceContract::Assoc(space) => match resolve_space_key(
-                db,
-                SpaceKey {
-                    inst: instantiate_normalized_trait_inst(db, key, space.inst).ok()?,
-                    ..space
-                },
-                key.owner(db).scope(),
-                self.assumptions(db),
-            )? {
-                ResolvedSpace::Space(space) => Some(space),
-                // The parameter holding the owner, if one alone does: its
-                // place, or the sub-place the implementation names.
-                ResolvedSpace::Owner(owner, steps) => {
-                    let owner = self.normalized_ty(db, owner);
-                    let typed_body = key.typed_body(db);
-                    let mut params = (0..)
-                        .map_while(|idx| Some((idx, typed_body.param_binding(idx)?)))
-                        .filter(|(_, binding)| {
-                            let ty = self.binding_ty(db, *binding);
-                            self.normalized_ty(
-                                db,
-                                ty.as_capability(db).map_or(ty, |(_, inner)| inner),
-                            ) == owner
-                        });
-                    match (params.next(), params.next()) {
-                        (Some((param, _)), None) => self.sub_place_space(
-                            db,
-                            self.param_space(db, param as u32),
-                            owner,
-                            steps,
-                        ),
-                        _ => None,
-                    }
-                }
-            },
-        }
-    }
-
-    /// The space of the sub-place `steps` reaches from a place of type
-    /// `root` in `start`: a pinned type or an entry along it moves it, and a
-    /// lane's grants lie in memory.
-    fn sub_place_space(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        start: AddressSpace,
-        root: TyId<'db>,
-        steps: SpacePathId<'db>,
-    ) -> Option<AddressSpace> {
-        let scope = self.normalization_scope(db);
-        let root = self.normalized_ty(db, root.as_capability(db).map_or(root, |(_, inner)| inner));
-        let mut walk = PathSpace::new(db, root);
-        for step in space_path_steps(db, scope, self.assumptions(db), root, steps)? {
-            walk.step(db, self, Some(start), step);
-        }
-        walk.grant_space(Some(start))
-    }
-
     /// The bindings of the components of the rows the instance's effects
     /// name.
     pub fn row_component_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<LocalBinding<'db>> {
@@ -1408,7 +1279,7 @@ impl<'db> SemanticInstance<'db> {
             .collect()
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn binding_ty(self, db: &'db dyn HirAnalysisDb, binding: LocalBinding<'db>) -> TyId<'db> {
         match binding {
             LocalBinding::EffectParam {
@@ -1425,7 +1296,9 @@ impl<'db> SemanticInstance<'db> {
                 ..
             } => effect_binding_ty_from_env(db, instantiated_effect_env(db, self), idx, None),
             LocalBinding::Param { ty, .. } if self.binding_is_session_copy(db, binding) => ty,
-            LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
+            LocalBinding::Local { .. }
+            | LocalBinding::Param { .. }
+            | LocalBinding::ParamPart { .. } => {
                 self.key(db).typed_body(db).binding_carrier_ty(db, binding)
             }
         }
@@ -1444,14 +1317,15 @@ impl<'db> SemanticInstance<'db> {
             LocalBinding::Param {
                 mode: FuncParamMode::View,
                 ty,
-                idx,
                 ..
             } if self.is_projection(db)
                 && ty_is_snapshot(db, self.normalization_scope(db), ty, self.assumptions(db))
-                && !matches!(
-                    self.param_space(db, idx as u32),
-                    AddressSpace::Code | AddressSpace::Calldata
-                )
+                && self.key(db).typed_body(db).input_index(binding).is_some_and(|input| {
+                    !matches!(
+                        self.param_space(db, input as u32),
+                        AddressSpace::Code | AddressSpace::Calldata
+                    )
+                })
         )
     }
 
@@ -1462,7 +1336,7 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Option<(ContractMetadataKind, Contract<'db>)> {
         let key = self.key(db);
-        let BodyOwner::Func(func) = key.owner(db) else {
+        let BodyOwner::Func(func, _) = key.owner(db) else {
             return None;
         };
         let kind = contract_metadata_kind(db, func)?;
@@ -1475,11 +1349,12 @@ impl<'db> SemanticInstance<'db> {
     }
 
     pub fn is_projection(self, db: &'db dyn HirAnalysisDb) -> bool {
-        matches!(self.key(db).owner(db), BodyOwner::Func(func) if func.is_projection(db))
+        matches!(self.key(db).owner(db), BodyOwner::Func(func, _) if func.is_projection(db))
     }
 
-    /// The address space of the place data parameter `param` names in this
-    /// instantiation: the caller's, or else its type's default.
+    /// The address space of the place data input `param` (a parameter, or a
+    /// product parameter's part) names in this instantiation: the caller's,
+    /// or else its type's default.
     pub fn param_space(self, db: &'db dyn HirAnalysisDb, param: u32) -> AddressSpace {
         let key = self.key(db);
         key.effect_providers(db)
@@ -1487,9 +1362,9 @@ impl<'db> SemanticInstance<'db> {
             .iter()
             .find(|(index, _)| *index == param)
             .map_or_else(
-                || match key.typed_body(db).param_binding(param as usize) {
-                    Some(LocalBinding::Param { ty, .. }) => {
-                        let ty = self.normalized_ty(db, ty);
+                || match key.typed_body(db).input_bindings().get(param as usize) {
+                    Some(LocalBinding::Param { ty, .. } | LocalBinding::ParamPart { ty, .. }) => {
+                        let ty = self.normalized_ty(db, *ty);
                         ty.as_capability(db)
                             .map_or(ty, |(_, inner)| inner)
                             .default_space(db)
@@ -1500,14 +1375,14 @@ impl<'db> SemanticInstance<'db> {
             )
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn normalized_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         normalize_ty(db, ty, self.normalization_scope(db), self.assumptions(db))
     }
 
     /// The state space `ty` is pinned to (`core::marker::Pinned`), where a
     /// collection's entries lie, in this instance.
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn pinned_space(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<AddressSpace> {
         crate::analysis::ty::provider::pinned_space(
             db,
@@ -1519,7 +1394,7 @@ impl<'db> SemanticInstance<'db> {
 
     /// How `ty` packs its elements into lanes when its elements are places
     /// (`core::ops::StateIndex`), in this instance.
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn state_index_lanes(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1535,7 +1410,7 @@ impl<'db> SemanticInstance<'db> {
 
     /// The key and element types of `ty` when its elements are places
     /// (`core::ops::StateIndex`), in this instance.
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn state_index_tys(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1549,7 +1424,7 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn normalized_field_types(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1581,7 +1456,7 @@ impl<'db> SemanticInstance<'db> {
         ThinVec::new()
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn normalized_enum_variant_field_tys(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1607,7 +1482,7 @@ impl<'db> SemanticInstance<'db> {
         ThinVec::new()
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     pub fn normalized_binding_ty(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1616,12 +1491,12 @@ impl<'db> SemanticInstance<'db> {
         self.normalized_ty(db, self.binding_ty(db, binding))
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     /// The semantic-IR result type: a projection returns the carriers of its
     /// grants.
     pub fn normalized_result_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        if let BodyOwner::Func(func) = self.key(db).owner(db)
-            && let Some(shape) = func.return_shape(db)
+        if let BodyOwner::Func(func, mode) = self.key(db).owner(db)
+            && let Some(shape) = func.return_shape(db, mode)
             && let Ok(ty) = instantiate_normalized_ty(db, self.key(db), shape.carrier_ty(db))
         {
             return ty;
@@ -1629,14 +1504,103 @@ impl<'db> SemanticInstance<'db> {
         self.normalized_ty(db, self.key(db).typed_body(db).result_ty())
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn body(self, db: &'db dyn HirAnalysisDb) -> SemanticBody<'db> {
         lower_semantic_body(db, self)
     }
 
-    #[salsa::tracked(return_ref)]
+    #[salsa::tracked]
     pub fn callees(self, db: &'db dyn HirAnalysisDb) -> Vec<SemanticCalleeRef<'db>> {
         collect_semantic_callees(db, self)
+    }
+
+    /// Borrow checking and runtime lowering consume concrete layouts, so a
+    /// concrete instance demands the layout of every type its body consumes:
+    /// each expression's and, given the semantic `body`, each local's
+    /// (parameters and bindings included) and each callee parameter's. A
+    /// deferred fault in a specialized extent, whether this body writes it or
+    /// receives it through a callee signature or a field, rejects the body
+    /// with its source, even when the value is unused or empty. Admission
+    /// demands this before canonicalization folds any value of such a type,
+    /// and from expression types alone when lowering is blocked. Compile-time
+    /// evaluation forces the same extents itself when it materializes them.
+    #[salsa::tracked(returns(copy))]
+    pub(crate) fn concrete_layout_diagnostic(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        body: LayoutDemandBody,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        let body = match body {
+            LayoutDemandBody::Admitted => Some(self.body(db)),
+            LayoutDemandBody::Provisional => Some(self.provisional_body(db)),
+            LayoutDemandBody::Expressions => None,
+        };
+        let key = self.key(db);
+        let typed_body = key.typed_body(db);
+        let at = move |origin| SemanticDiagnosticSpan::Origin {
+            owner: key.owner(db),
+            origin,
+        };
+        let exprs = typed_body.body().into_iter().flat_map(|hir| {
+            hir.exprs(db).iter().map(move |(expr, _)| {
+                (
+                    self.normalized_ty(db, typed_body.expr_ty(db, expr)),
+                    at(SemOrigin::Expr(expr)),
+                )
+            })
+        });
+        // A place carrier's own type is a reference; its layout is the value's.
+        let locals = body
+            .into_iter()
+            .flat_map(|body| body.locals.iter().enumerate())
+            .map(|(index, local)| {
+                (
+                    self.normalized_ty(db, local.role.layout_ty(local.ty)),
+                    SemanticDiagnosticSpan::LocalSourceOrBody {
+                        instance: self,
+                        local: SLocalId::new(index),
+                    },
+                )
+            });
+        // Normalization reads each argument's target type from the callee.
+        let params = body
+            .into_iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| match &stmt.kind {
+                SStmtKind::Assign {
+                    expr: SExpr::Call { callee, args, .. },
+                    ..
+                } => Some((stmt.origin, SemanticInstance::new(db, callee.key), args)),
+                _ => None,
+            })
+            .flat_map(|(origin, callee, args)| {
+                let typed_body = callee.key(db).typed_body(db);
+                args.iter().enumerate().filter_map(move |(index, _)| {
+                    Some((
+                        callee.normalized_binding_ty(db, *typed_body.input_bindings().get(index)?),
+                        at(origin),
+                    ))
+                })
+            });
+        let mut demanded = FxHashSet::default();
+        exprs.chain(locals).chain(params).find_map(|(ty, span)| {
+            let cause = demanded
+                .insert(ty)
+                .then(|| concrete_layout_fault(db, ty, &|ty| self.normalized_ty(db, ty)))??;
+            // A blocked body's other invalid types were reported upstream.
+            if body.is_none() && cause.const_eval_fault().is_none() {
+                return None;
+            }
+
+            Some(invalid_size_diagnostic(
+                db,
+                self,
+                span,
+                ty,
+                RuntimeSizeError::InvalidType(cause),
+            ))
+        })
     }
 }
 
@@ -1672,7 +1636,16 @@ impl<'db> SemanticInstance<'db> {
                     ConstIntrinsicKind::SizeOf => {
                         if let Err(error) = runtime_size_bytes(db, arg) {
                             return Err(SemanticBodyAdmissionError::InvalidConcreteType(
-                                invalid_size_diagnostic(db, self, origin, arg, error),
+                                invalid_size_diagnostic(
+                                    db,
+                                    self,
+                                    SemanticDiagnosticSpan::Origin {
+                                        owner: self.key(db).owner(db),
+                                        origin,
+                                    },
+                                    arg,
+                                    error,
+                                ),
                             ));
                         }
                     }
@@ -1738,7 +1711,7 @@ impl<'db> SemanticInstance<'db> {
     }
 
     fn is_nonreturning_builtin(self, db: &'db dyn HirAnalysisDb) -> bool {
-        let BodyOwner::Func(func) = self.key(db).owner(db) else {
+        let BodyOwner::Func(func, _) = self.key(db).owner(db) else {
             return false;
         };
         matches!(
@@ -1767,10 +1740,7 @@ impl<'db> SemanticInstance<'db> {
 /// that reaches a rejected one stops at the first chain to end: recursion
 /// growing its arguments in two ways makes exponentially many instances
 /// within the bounds, of which this follows one chain.
-#[salsa::tracked(
-    cycle_fn = instance_limit_violation_cycle_recover,
-    cycle_initial = instance_limit_violation_cycle_initial
-)]
+#[salsa::tracked(returns(copy), cycle_initial = instance_limit_violation_cycle_initial)]
 fn instance_limit_violation<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -1785,11 +1755,10 @@ fn instance_limit_violation<'db>(
     }
     // Growth a function's own calls make is visible in its identity instance,
     // where `{ N + 1 }` nests though concrete values do not grow.
-    if let BodyOwner::Func(_) = instance.key(db).owner(db) {
+    if let BodyOwner::Func(_, _) = instance.key(db).owner(db) {
         let identity = identity_semantic_instance_key(db, instance.key(db).owner(db));
         if identity != instance.key(db)
-            && let Some(diag) =
-                instance_limit_violation(db, get_or_build_semantic_instance(db, identity))
+            && let Some(diag) = instance_limit_violation(db, SemanticInstance::new(db, identity))
         {
             return Some(diag);
         }
@@ -1827,7 +1796,7 @@ fn instance_limit_violation<'db>(
                 })
                 .is_some();
         if !within {
-            let callee = checker_name(db, get_or_build_semantic_instance(db, callee.key));
+            let callee = checker_name(db, SemanticInstance::new(db, callee.key));
             return Some(SemanticDiagnosticId::new(
                 db,
                 SemanticDiagnostic::new(
@@ -1846,25 +1815,17 @@ fn instance_limit_violation<'db>(
             ));
         }
     }
-    calls.iter().find_map(|(_, callee)| {
-        instance_limit_violation(db, get_or_build_semantic_instance(db, callee.key))
-    })
+    calls
+        .iter()
+        .find_map(|(_, callee)| instance_limit_violation(db, SemanticInstance::new(db, callee.key)))
 }
 
 fn instance_limit_violation_cycle_initial<'db>(
     _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
     _: SemanticInstance<'db>,
 ) -> Option<SemanticDiagnosticId<'db>> {
     None
-}
-
-fn instance_limit_violation_cycle_recover<'db>(
-    _: &'db dyn HirAnalysisDb,
-    _: &Option<SemanticDiagnosticId<'db>>,
-    _: u32,
-    _: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<Option<SemanticDiagnosticId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 fn normalize_adt_field_types<'db>(
@@ -1883,7 +1844,7 @@ fn normalize_adt_field_types<'db>(
         .collect()
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn resolved_provider_binding_for_instance_effect<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -1899,7 +1860,9 @@ pub fn resolved_provider_binding_for_instance_effect<'db>(
             idx,
             ..
         } => (idx, None),
-        LocalBinding::Local { .. } | LocalBinding::Param { .. } => return None,
+        LocalBinding::Local { .. }
+        | LocalBinding::Param { .. }
+        | LocalBinding::ParamPart { .. } => return None,
     };
     provider_idx
         .and_then(|provider_idx| {
@@ -1958,7 +1921,9 @@ pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
                 )
             })
         }
-        LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
+        LocalBinding::Local { .. }
+        | LocalBinding::Param { .. }
+        | LocalBinding::ParamPart { .. } => None,
     }
 }
 
@@ -1968,7 +1933,7 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
     requirement_idx: u32,
 ) -> Option<u32> {
     match site {
-        EffectParamSite::Func(func) => place_effect_provider_param_index_map(db, func)
+        EffectParamSite::Func(func, _) => place_effect_provider_param_index_map(db, func)
             .get(requirement_idx as usize)
             .and_then(|param_idx| param_idx.map(|_| requirement_idx))
             .or_else(|| {
@@ -2013,7 +1978,7 @@ fn provisional_provider_binding_for_effect<'db>(
     is_mut: bool,
 ) -> Option<ProviderBinding<'db>> {
     match site {
-        EffectParamSite::Func(func) => {
+        EffectParamSite::Func(func, _) => {
             let provider_map = place_effect_provider_param_index_map(db, func);
             if provider_map
                 .get(requirement_idx as usize)
@@ -2030,7 +1995,7 @@ fn provisional_provider_binding_for_effect<'db>(
                     provider_ty,
                     is_mut,
                     source: ProviderSource::UsesParam {
-                        site,
+                        site: site.slot_site(db, requirement_idx),
                         requirement_idx,
                     },
                     semantics: effect_param_provider_semantics(db, provider_ty, &requirement.key),
@@ -2175,19 +2140,20 @@ pub fn root_semantic_instance_key<'db>(
     let generic_args = root_owner_generic_args(db, owner)?;
     let effect_providers = root_owner_effect_providers(db, owner);
     let subst = match owner {
-        BodyOwner::Func(func) => GenericSubst::for_owner(db, func.into(), generic_args),
+        BodyOwner::Func(func, _) => GenericSubst::for_owner(db, func.into(), generic_args),
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
         | BodyOwner::ContractRecvArm { .. }
         | BodyOwner::Closure { .. } => GenericSubst::none(db),
     };
-    let key = SemanticInstanceKey::new(
+    let key = SemanticInstanceKey::of(
         db,
         owner,
         subst,
         EffectProviderSubst::new(db, effect_providers, Vec::new()),
         root_impl_env(db, owner, subst),
+        EvidenceList::none(db),
     );
     validate_instantiated_effect_env_key(db, key)
         .map_err(RootSemanticInstanceError::UnclosedEffectEnv)?;
@@ -2199,21 +2165,14 @@ pub fn identity_semantic_instance_key<'db>(
     owner: BodyOwner<'db>,
 ) -> SemanticInstanceKey<'db> {
     let subst = GenericSubst::for_body_owner(db, owner, Vec::new());
-    SemanticInstanceKey::new(
+    SemanticInstanceKey::of(
         db,
         owner,
         subst,
         EffectProviderSubst::empty(db),
         root_impl_env(db, owner, subst),
+        EvidenceList::none(db),
     )
-}
-
-#[salsa::tracked]
-pub fn get_or_build_semantic_instance<'db>(
-    db: &'db dyn HirAnalysisDb,
-    key: SemanticInstanceKey<'db>,
-) -> SemanticInstance<'db> {
-    SemanticInstance::new(db, key)
 }
 
 fn lower_semantic_body<'db>(
@@ -2309,7 +2268,7 @@ pub fn validate_instantiated_effect_env_key<'db>(
 /// The rows an instance's effects name. Their components are effect
 /// requirements of the instance's own, numbered after its declared ones,
 /// each resolved to the provider of the same index.
-#[salsa::tracked(return_ref)]
+#[salsa::tracked]
 pub fn row_expansion_for_key<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
@@ -2408,7 +2367,7 @@ fn instantiate_provider_bindings_for_key<'db>(
     }
     if matches!(
         site,
-        crate::analysis::ty::ty_check::EffectParamSite::Func(_)
+        crate::analysis::ty::ty_check::EffectParamSite::Func(..)
     ) && !specializations.is_empty()
     {
         for resolution in resolutions {
@@ -2486,7 +2445,7 @@ fn root_owner_generic_args<'db>(
     owner: BodyOwner<'db>,
 ) -> Result<Vec<TyId<'db>>, RootSemanticInstanceError<'db>> {
     match owner {
-        BodyOwner::Func(func) => root_func_generic_args(db, func),
+        BodyOwner::Func(func, mode) => root_func_generic_args(db, func, mode),
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
@@ -2499,7 +2458,7 @@ fn root_owner_effect_providers<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> Vec<ProviderBinding<'db>> {
-    let BodyOwner::Func(func) = owner else {
+    let BodyOwner::Func(func, _) = owner else {
         return Vec::new();
     };
     let site = effect_param_site(owner).expect("function owners should always have an effect site");
@@ -2527,7 +2486,9 @@ fn root_owner_effect_providers<'db>(
             ProviderSource::UsesParam {
                 site: provider_site,
                 requirement_idx,
-            } if provider_site == site => Some((requirement_idx, provider.clone())),
+            } if provider_site == site.slot_site(db, requirement_idx) => {
+                Some((requirement_idx, provider.clone()))
+            }
             ProviderSource::UsesParam { .. }
             | ProviderSource::ContractField { .. }
             | ProviderSource::RootProvider { .. } => None,
@@ -2605,8 +2566,9 @@ fn root_provider_satisfies_effect_requirement<'db>(
 fn root_func_generic_args<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
+    mode: Option<BorrowKind>,
 ) -> Result<Vec<TyId<'db>>, RootSemanticInstanceError<'db>> {
-    let owner = BodyOwner::Func(func);
+    let owner = BodyOwner::Func(func, mode);
     let owner_scope = func.scope();
     let provider_param_idxs = place_effect_provider_param_index_map(db, func)
         .iter()
@@ -2796,6 +2758,7 @@ fn instantiate_normalized_trait_inst<'db>(
         trait_inst.def(db),
         args,
         assoc_type_bindings,
+        trait_inst.mode(db),
     ))
 }
 
@@ -2809,13 +2772,13 @@ where
     T: TyFoldable<'db>,
 {
     let Some(mapping) = subst.mapping(db).as_ref() else {
-        return if matches!(owner, BodyOwner::Func(_)) {
+        return if matches!(owner, BodyOwner::Func(_, _)) {
             Err(SemanticEffectEnvInstantiationError::MissingDomain { owner })
         } else {
             Ok(value)
         };
     };
-    if let BodyOwner::Func(func) = owner
+    if let BodyOwner::Func(func, _) = owner
         && mapping.domain().schema(db).owner(db) != func.into()
     {
         return Err(SemanticEffectEnvInstantiationError::WrongOwner {
@@ -2831,7 +2794,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        analysis::semantic::{get_or_build_semantic_instance, identity_semantic_instance_key},
+        analysis::semantic::identity_semantic_instance_key,
         test_db::{HirAnalysisTestDb, find_func},
     };
 
@@ -2853,9 +2816,12 @@ mod tests {
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
-        let instance = get_or_build_semantic_instance(
+        let instance = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "caller"))),
+            identity_semantic_instance_key(
+                &db,
+                BodyOwner::Func(find_func(&db, module, "caller"), None),
+            ),
         );
         assert_plain_call_plans(&db, instance);
     }
@@ -2910,9 +2876,12 @@ mod tests {
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
-        let instance = get_or_build_semantic_instance(
+        let instance = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "caller"))),
+            identity_semantic_instance_key(
+                &db,
+                BodyOwner::Func(find_func(&db, module, "caller"), None),
+            ),
         );
         assert_trait_signature_validation(&db, instance);
     }
@@ -2978,9 +2947,12 @@ mod tests {
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
-        let instance = get_or_build_semantic_instance(
+        let instance = SemanticInstance::new(
             &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "caller"))),
+            identity_semantic_instance_key(
+                &db,
+                BodyOwner::Func(find_func(&db, module, "caller"), None),
+            ),
         );
         assert_effect_refinement(&db, instance);
     }

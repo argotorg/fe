@@ -1,0 +1,3 @@
+trait Call<shape A> {
+    fn call(self, ..A) -> u256
+}

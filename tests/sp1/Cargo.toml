@@ -1,0 +1,14 @@
+[workspace]
+
+[package]
+name = "fe-sp1-integration"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+sp1-sdk = { version = "=6.8.0", default-features = false, features = ["blocking"] }
+tempfile = "3.23"
+
+[profile.release]
+debug = 1

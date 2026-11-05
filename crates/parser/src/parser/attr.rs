@@ -7,15 +7,19 @@ use super::{
 };
 use crate::{ExpectedKind, SyntaxKind};
 
+/// Parses the attributes and doc comments that start at the current token.
+///
+/// Every `#` starts an attribute here, including one that is not followed by
+/// `[`, which [`AttrScope`] reports. Scopes such as `ItemListScope` stop error
+/// recovery at `#` because an attribute can start an element, so a `#` that
+/// this function left alone would never be consumed.
 pub(super) fn parse_attr_list<S: TokenStream>(
     parser: &mut Parser<S>,
 ) -> Result<Option<Checkpoint>, Recovery<ErrProof>> {
-    let lookahead = parser.peek_n_non_trivia(2);
     if matches!(
-        lookahead.as_slice(),
-        [SyntaxKind::Pound, SyntaxKind::LBracket]
-    ) || parser.current_kind() == Some(SyntaxKind::DocComment)
-    {
+        parser.current_kind(),
+        Some(SyntaxKind::Pound | SyntaxKind::DocComment)
+    ) {
         parser.parse_cp(AttrListScope::default(), None).map(Some)
     } else {
         Ok(None)

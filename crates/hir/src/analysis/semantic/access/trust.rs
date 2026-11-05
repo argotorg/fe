@@ -42,7 +42,7 @@ impl UnsafeTrust {
     pub(super) fn for_root(db: &dyn HirAnalysisDb, top_mod: TopLevelMod<'_>) -> Option<Self> {
         let graph = db.dependency_graph();
         graph
-            .is_trust_root(db, &top_mod.ingot(db).base(db))
+            .is_trust_root(db, top_mod.ingot(db).base(db))
             .then(|| Self {
                 trusted: graph.trusted_ingots(db),
             })
@@ -53,8 +53,8 @@ impl UnsafeTrust {
         matches!(
             ingot.kind(db),
             IngotKind::Core | IngotKind::Std | IngotKind::StandAlone
-        ) || self.trusted.contains(&url)
-            || !db.dependency_graph().contains_url(db, &url)
+        ) || self.trusted.contains(url)
+            || !db.dependency_graph().contains_url(db, url)
     }
 
     /// The unsafe code `owner` runs, when its ingot is not trusted.
@@ -75,7 +75,7 @@ impl UnsafeTrust {
 /// or its first `unsafe` block.
 fn unsafe_site<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Option<SemOrigin<'db>> {
     let body = owner.body(db)?;
-    if let BodyOwner::Func(func) = owner
+    if let BodyOwner::Func(func, _) = owner
         && (func.is_unsafe(db)
             || matches!(
                 func.scope().parent_item(db),
@@ -137,9 +137,9 @@ impl UntrustedUnsafeUse<'_> {
     /// a dependent that already allows it.
     fn fix(&self, db: &dyn SpannedHirAnalysisDb, ingot: Ingot<'_>, name: &str) -> String {
         let graph = db.dependency_graph();
-        let dependents = graph.dependents(db, &ingot.base(db));
+        let dependents = graph.dependents(db, ingot.base(db));
         let root = self.root.base(db);
-        if dependents.iter().any(|(dependent, _)| *dependent == root) {
+        if dependents.iter().any(|(dependent, _)| dependent == root) {
             return format!(
                 "to trust `{name}`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml"
             );
@@ -148,7 +148,7 @@ impl UntrustedUnsafeUse<'_> {
         let vouchers: Vec<_> = dependents
             .iter()
             .filter(|(dependent, allows)| *allows && !trusted.contains(dependent))
-            .map(|(dependent, _)| format!("`{}`", ingot_name(db, dependent.clone())))
+            .map(|(dependent, _)| format!("`{}`", ingot_name(db, dependent)))
             .collect();
         if vouchers.is_empty() {
             format!(
@@ -165,10 +165,9 @@ impl UntrustedUnsafeUse<'_> {
     }
 }
 
-fn ingot_name(db: &dyn HirAnalysisDb, url: Url) -> String {
+fn ingot_name(db: &dyn HirAnalysisDb, url: &Url) -> String {
     db.workspace()
         .containing_ingot(db, url.clone())
-        .and_then(|ingot| ingot.config(db))
-        .and_then(|config| config.metadata.name)
+        .and_then(|ingot| ingot.config(db).as_ref()?.metadata.name.clone())
         .map_or_else(|| url.to_string(), |name| name.to_string())
 }

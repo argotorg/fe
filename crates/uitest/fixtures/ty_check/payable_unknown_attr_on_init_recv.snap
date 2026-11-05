@@ -21,6 +21,12 @@ error[12-0004]: unsupported `#[foo]` attribute on recv arm
 13 │         #[foo]
    │         ^^^^^^ expected `#[payable]`
 
+error[2-0002]: `Ping` is not found
+   ┌─ payable_unknown_attr_on_init_recv.fe:14:9
+   │
+14 │         Ping {} {
+   │         ^^^^ `Ping` is not found
+
 error[8-0012]: undefined variable
   ┌─ payable_unknown_attr_on_init_recv.fe:8:9
   │

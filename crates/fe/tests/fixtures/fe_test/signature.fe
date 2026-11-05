@@ -44,7 +44,7 @@ pub contract Wallet {
         IsValidSignature { hash, signature } -> u256 {
             match signature::recover(digest: hash.val, signature.payload_span()) {
                 Option::Some(signer) => {
-                    if signer.inner == OWNER {
+                    if signer.word() == OWNER {
                         return MAGIC_WORD
                     }
                 }
@@ -133,13 +133,13 @@ fn blob(len: u256) -> ref MemSpan {
         store_word(ptr: data.ptr(), value: R_1)
         store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: S_1)
         store_word(ptr: ptr::offset_bytes(data.ptr(), 64), value: 0x1c1c << 240)
-        MemSpan::from_raw_parts(ptr: data.ptr(), len)
+        MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked())
     }
 }
 
 fn is_addr(_ value: Option<Address>, _ expected: u256) -> bool {
     match value {
-        Option::Some(addr) => addr.inner == expected,
+        Option::Some(addr) => addr.word() == expected,
         Option::None => false,
     }
 }
@@ -220,12 +220,12 @@ fn high_s_only_recovers_raw() uses (evm: mut Evm) {
 
 #[test]
 fn erc1271_checks_magic_exactly() uses (evm: mut Evm) {
-    let wallet = evm.create2<Wallet>(value: 0, args: (), salt: 0)
-    let dirty = evm.create2<DirtyMagic>(value: 0, args: (), salt: 1)
-    let wrong = evm.create2<WrongMagic>(value: 0, args: (), salt: 2)
-    let short = evm.create2<ShortMagic>(value: 0, args: (), salt: 3)
-    let reverting = evm.create2<RevertMagic>(value: 0, args: (), salt: 4)
-    let long = evm.create2<LongMagic>(value: 0, args: (), salt: 5)
+    let wallet = evm.create2<Wallet>(value: Wei::zero(), args: (), salt: 0)
+    let dirty = evm.create2<DirtyMagic>(value: Wei::zero(), args: (), salt: 1)
+    let wrong = evm.create2<WrongMagic>(value: Wei::zero(), args: (), salt: 2)
+    let short = evm.create2<ShortMagic>(value: Wei::zero(), args: (), salt: 3)
+    let reverting = evm.create2<RevertMagic>(value: Wei::zero(), args: (), salt: 4)
+    let long = evm.create2<LongMagic>(value: Wei::zero(), args: (), salt: 5)
     let good = sig65(r: R_1, s: S_1, v: 28)
     let compact = sig64(r: R_1, vs: VS_1)
     let foreign = sig65(r: OTHER_R_1, s: OTHER_S_1, v: 28)
@@ -243,10 +243,10 @@ fn erc1271_checks_magic_exactly() uses (evm: mut Evm) {
         assert(signature::is_valid_erc1271_signature_now(long, digest: DIGEST_1, signature: blob(len: 0)))
 
         // Accounts without code never validate, not even for their own key.
-        assert(!signature::is_valid_erc1271_signature_now(Address { inner: OWNER }, digest: DIGEST_1, signature: good))
+        assert(!signature::is_valid_erc1271_signature_now(Address::new(OWNER), digest: DIGEST_1, signature: good))
         // The identity precompile echoes the calldata, whose first word is the
         // magic word when the digest's high 224 bits are zero; it has no code.
-        let identity = Address { inner: 0x04 }
+        let identity = Address::new(0x04)
         assert(!signature::is_valid_erc1271_signature_now(identity, digest: 0x1234, signature: good))
         assert(!signature::is_valid_signature_now(identity, digest: 0x1234, signature: good))
     }
@@ -254,10 +254,10 @@ fn erc1271_checks_magic_exactly() uses (evm: mut Evm) {
 
 #[test]
 fn is_valid_signature_now_ecdsa_then_erc1271() uses (evm: mut Evm) {
-    let wallet = evm.create2<Wallet>(value: 0, args: (), salt: 0)
-    let long = evm.create2<LongMagic>(value: 0, args: (), salt: 1)
-    let owner = Address { inner: OWNER }
-    let other = Address { inner: OTHER }
+    let wallet = evm.create2<Wallet>(value: Wei::zero(), args: (), salt: 0)
+    let long = evm.create2<LongMagic>(value: Wei::zero(), args: (), salt: 1)
+    let owner = Address::new(OWNER)
+    let other = Address::new(OTHER)
     let good = sig65(r: R_1, s: S_1, v: 28)
     let compact = sig64(r: R_1, vs: VS_1)
     let twin = sig65(r: R_1, s: HIGH_S_1, v: 27)

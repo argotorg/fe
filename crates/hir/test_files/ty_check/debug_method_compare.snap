@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/debug_method_compare.fe
 ---
@@ -8,18 +8,24 @@ note:
    │
 19 │       fn get_output(self) -> Self::Output {
    │ ╭─────────────────────────────────────────^
-20 │ │         todo()
+20 │ │         unsafe { todo() }
 21 │ │     }
    │ ╰─────^ T
 
 note:
    ┌─ debug_method_compare.fe:20:9
    │
-20 │         todo()
-   │         ^^^^ fn todo
+20 │         unsafe { todo() }
+   │         ^^^^^^^^^^^^^^^^^ T
 
 note:
-   ┌─ debug_method_compare.fe:20:9
+   ┌─ debug_method_compare.fe:20:18
    │
-20 │         todo()
-   │         ^^^^^^ T
+20 │         unsafe { todo() }
+   │                  ^^^^ fn todo
+
+note:
+   ┌─ debug_method_compare.fe:20:18
+   │
+20 │         unsafe { todo() }
+   │                  ^^^^^^ T

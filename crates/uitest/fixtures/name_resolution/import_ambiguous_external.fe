@@ -1,0 +1,7 @@
+use foo::*
+use core
+use core::option::Option
+
+mod foo {
+    pub mod core {}
+}

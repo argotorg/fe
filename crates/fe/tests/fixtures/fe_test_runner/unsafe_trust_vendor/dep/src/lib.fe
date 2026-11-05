@@ -1,5 +1,5 @@
 use core::abi::{load_word, store_word}
-use core::marker::Pinned
+use core::marker::{Pinned, Storage}
 use core::ops::{Location, StateIndex}
 use core::ptr
 use std::abi::Bytes
@@ -22,7 +22,7 @@ pub fn round_trip(_ value: u256) -> u256 {
 pub struct Slots<T> {}
 
 impl<T> Pinned for Slots<T> {
-    space S = storage
+    type Space = Storage
 }
 
 unsafe impl<T> StateIndex for Slots<T> {

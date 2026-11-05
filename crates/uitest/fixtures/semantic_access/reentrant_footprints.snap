@@ -1,6 +1,6 @@
 ---
 source: crates/uitest/tests/semantic_access.rs
-assertion_line: 25
+assertion_line: 32
 expression: diags
 input_file: fixtures/semantic_access/reentrant_footprints.fe
 ---
@@ -17,8 +17,8 @@ error[16-0001]: access conflict in `fn V::recv[0][1]`
    │
 85 │             let held = mut value
    │                        --------- access opened here
-86 │             apply(|| call.call(addr: a, gas: 1000, value: 0, message: AMsg::Poke { v: a }))
-   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
+86 │             apply(|| call.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a }))
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn V::recv[0][2]`
    ┌─ reentrant_footprints.fe:92:13
@@ -49,6 +49,6 @@ error[16-0001]: access conflict in `fn V::recv[0][7]`
     │
 121 │             let held = mut value
     │                        --------- access opened here
-122 │             let f = || call.call(addr: a, gas: 1000, value: 0, message: AMsg::Poke { v: a })
+122 │             let f = || call.call(addr: a, gas: 1000, value: Wei::zero(), message: AMsg::Poke { v: a })
 123 │             f()
     │             ^^^ this call may write storage while a `mut` access of it is open

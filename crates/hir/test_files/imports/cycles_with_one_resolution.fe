@@ -1,0 +1,40 @@
+// Imports that wait on each other but have one consistent resolution.
+
+// `a::X` and `b::X` wait on each other, and `b::X` shadows the `X` of `b`'s
+// glob, which is the only `X` either can name.
+mod defs {
+    pub struct X {}
+}
+mod a {
+    pub use super::b::X
+}
+mod b {
+    pub use super::defs::*
+    pub use super::a::X
+}
+fn g(x: a::X, y: b::X) {}
+
+// The root's glob of `self::a` waits on `c::a`, which `c::a::*` waits on.
+pub use c::a::*
+pub use self::a::*
+pub mod c {
+    pub use super::c as a
+}
+
+// `use d::e::f` waits on the glob of `f`, which could bring in a `d`, and the
+// glob waits on `use d::e::f`, whose `f` shadows the root's `f`. Breaking the
+// cycle takes the glob to bring in nothing first, so the named import
+// settles before the glob.
+pub mod d {
+    pub mod e {
+        pub mod f {
+            pub struct S {}
+        }
+    }
+}
+pub mod f {}
+fn h() {
+    use d::e::f
+    use f::*
+    let _x: S = S {}
+}

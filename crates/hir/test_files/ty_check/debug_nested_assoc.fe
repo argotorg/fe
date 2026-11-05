@@ -24,7 +24,7 @@ fn test_direct() {
 
 // Test through generic parameter - this is where it fails
 fn test_generic<T: HasAssoc>() -> T::Assoc {
-    todo()
+    unsafe { todo() }
 }
 
 fn test_call() {

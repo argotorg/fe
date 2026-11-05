@@ -1,8 +1,8 @@
 // Run-time results of the draft-13 acceptance list ("Acceptance tests"),
 // numbered as the spec lists it. Static results are in
 // `uitest/semantic_access/acceptance.fe` and `uitest/ty_check/acceptance.fe`.
-use core::iter::{Collection, Driver, Identity, reversed}
-use core::ops::{Index, IndexMut}
+use core::iter::{Collection, Driver, Identity}
+use core::ops::Index
 use core::ptr::{MemBuffer, MemSpan}
 use std::evm::{Address, Call, Evm, StorageMap}
 
@@ -109,28 +109,28 @@ pub contract StoredWords {
 
     init() uses (mut words) {
         var next: u256 = 1
-        for mut word in words by reversed() {
+        for mut word in words.reversed() {
             word = next
             next += 1
         }
         let d = Identity {}
-        for mut word in words by d {
+        for mut word in words.by(d) {
             word *= 10
         }
     }
 
     recv Words {
         Get { i } -> u256 uses (words) {
-            words[i as usize]
+            words[i.downcast_unchecked()]
         }
     }
 }
 
 #[test]
 fn case23_storage_base() uses (evm: mut Evm) {
-    let addr = evm.create2<StoredWords>(value: 0, args: (), salt: 0)
-    let first: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Words::Get { i: 0 })
-    let last: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Words::Get { i: 2 })
+    let addr = evm.create2<StoredWords>(value: Wei::zero(), args: (), salt: 0)
+    let first: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Words::Get { i: 0 })
+    let last: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: Words::Get { i: 2 })
     assert!(first == 30 && last == 10)
 }
 
@@ -190,58 +190,47 @@ fn case38_grant_writes() {
 
 struct Tag { n: u256 }
 
-struct Tagged {}
+struct Tagged<B> {}
 
-impl<B: Collection> Driver<B> for Tagged {
+impl<B: Collection> Driver for Tagged<B> {
+    type Base = B
     type State = B::Cursor
-    type Item = B::Item
-    type Extra = Tag
+    shape Step = (own Tag, ref B::Item)
 
-    fn start(self, _ base: B) -> Option<B::Cursor> uses (B::E, E) {
+    fn start(self, _ base: B) -> B::Cursor uses (B::E, E) {
         base.start()
     }
 
-    fn next(self, _ base: B, _ s: B::Cursor) -> Option<B::Cursor> uses (B::E, E) {
+    fn has(self, _ base: B, _ s: B::Cursor) -> bool uses (B::E, E) {
+        base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: B::Cursor) -> B::Cursor uses (B::E, E) {
         base.next(s)
     }
 
-    fn at(self, _ base: B, _ s: B::Cursor) -> (Tag, ref B::Item) uses (B::E, E) {
+    fn at(self, _ base: B, _ s: B::Cursor) -> (own Tag, ref B::Item) uses (B::E, E) {
         (Tag { n: 1 }, base.at(s))
     }
 }
 
-// 40. A copied traversal of `Copy` items keeps a non-`Copy` owned `Extra`.
+// 40. A step's owned part, a non-`Copy` tag, moves into the pattern beside a
+// copied element.
 #[test]
 fn case40_owned_extra() {
     let xs: [u256; 3] = [1, 2, 3]
     let d = Tagged {}
     var total: u256 = 0
-    for (tag, x) in xs by d {
+    for (tag, x) in xs.by(d) {
         total += tag.n + x
     }
     assert(total == 9)
 }
 
-// 20. A non-`Copy` driver over `Copy` items is borrowed by the loop, not
-// moved into an owned adapter: it drives a second loop after the first.
-#[test]
-fn case20_borrowed_driver() {
-    let xs: [u256; 3] = [1, 2, 3]
-    let d = Tagged {}
-    var total: u256 = 0
-    for (tag, x) in xs by d {
-        total += tag.n + x
-    }
-    for (tag, x) in xs by d {
-        total += tag.n * x
-    }
-    assert(total == 15)
-}
-
 fn ping() uses (call: mut Call) {
     var output = MemBuffer::empty()
     let outcome = call.raw_call(
-        addr: Address { inner: 1 }, gas: 100000, value: 0,
+        addr: Address::new(1), gas: 100000, value: Wei::zero(),
         args: MemSpan::empty(), ret: mut output,
     )
 }
@@ -293,8 +282,8 @@ pub contract Case22OwnReservation {
 
 #[test]
 fn case22_calls_in_ramp_and_slide() uses (evm: mut Evm) {
-    let c = evm.create2<Case22OwnReservation>(value: 0, args: (), salt: 22)
-    let value: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: ValueMsg::Value {})
+    let c = evm.create2<Case22OwnReservation>(value: Wei::zero(), args: (), salt: 22)
+    let value: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: ValueMsg::Value {})
     assert(value == 8)
 }
 
@@ -306,15 +295,12 @@ struct Scores {
 }
 
 impl Index<u256> for Scores {
-    space S = memory
     type Output = u32
     fn index(self, _ i: u256) -> ref u32 {
         (self.words[i / 8] >> ((i % 8) * 32)).downcast_truncate()
     }
-}
 
-impl IndexMut<u256> for Scores {
-    fn index_mut(mut self, _ i: u256) -> mut u32 {
+    fn index(mut self, _ i: u256) -> mut u32 {
         let shift = (i % 8) * 32
         var tmp: u32 = (self.words[i / 8] >> shift).downcast_truncate()
         yield mut tmp
@@ -344,10 +330,10 @@ pub contract Case24Board {
 
 #[test]
 fn case24_write_back_indexing() uses (evm: mut Evm) {
-    let board = evm.create2<Case24Board>(value: 0, args: (), salt: 24)
-    let first: u256 = evm.call(addr: board, gas: 300000, value: 0, message: ScoresMsg::Bump { i: 6 })
+    let board = evm.create2<Case24Board>(value: Wei::zero(), args: (), salt: 24)
+    let first: u256 = evm.call(addr: board, gas: 300000, value: Wei::zero(), message: ScoresMsg::Bump { i: 6 })
     assert(first == 9006)
-    let again: u256 = evm.call(addr: board, gas: 300000, value: 0, message: ScoresMsg::Bump { i: 6 })
+    let again: u256 = evm.call(addr: board, gas: 300000, value: Wei::zero(), message: ScoresMsg::Bump { i: 6 })
     assert(again == 9018)
 }
 
@@ -382,9 +368,9 @@ pub contract Case44Bank {
 
 #[test]
 fn case44_map_as_mut_argument() uses (evm: mut Evm) {
-    let bank = evm.create2<Case44Bank>(value: 0, args: (), salt: 44)
-    let who = Address { inner: 7 }
-    let first: u256 = evm.call(addr: bank, gas: 300000, value: 0, message: LedgerMsg::Credit { who, amount: 5 })
+    let bank = evm.create2<Case44Bank>(value: Wei::zero(), args: (), salt: 44)
+    let who = Address::new(7)
+    let first: u256 = evm.call(addr: bank, gas: 300000, value: Wei::zero(), message: LedgerMsg::Credit { who, amount: 5 })
     assert(first == 15)
 }
 
@@ -414,8 +400,8 @@ pub contract Case50Nested {
 
 #[test]
 fn case50_nested_maps_are_distinct() uses (evm: mut Evm) {
-    let nested = evm.create2<Case50Nested>(value: 0, args: (), salt: 50)
-    let values: (u256, u256) = evm.call(addr: nested, gas: 300000, value: 0, message: NestedMsg::Write {})
+    let nested = evm.create2<Case50Nested>(value: Wei::zero(), args: (), salt: 50)
+    let values: (u256, u256) = evm.call(addr: nested, gas: 300000, value: Wei::zero(), message: NestedMsg::Write {})
     assert(values.0 == 6)
     assert(values.1 == 7)
 }

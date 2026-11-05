@@ -57,7 +57,7 @@ fn take(_ x: mut Option<MemBuffer>) -> Option<MemBuffer> {
 
 fn len_of(_ o: own Option<MemBuffer>) -> u256 {
     match o {
-        Option::Some(buf) => buf.len()
+        Option::Some(buf) => buf.len() as u256
         Option::None => 0
     }
 }

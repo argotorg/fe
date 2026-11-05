@@ -1,0 +1,85 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/product_params.fe
+---
+error[16-0001]: access conflict in `fn same_ref`
+   ┌─ product_params.fe:25:20
+   │
+25 │     add_to((mut x, ref x))
+   │             -----  ^^^^^ cannot read this place while a `mut` access of it is open
+   │             │
+   │             access opened here
+
+error[16-0001]: access conflict in `fn same_mut`
+   ┌─ product_params.fe:30:18
+   │
+30 │     both((mut x, mut x))
+   │           -----  ^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │           │
+   │           access opened here
+
+error[16-0001]: access conflict in `fn other_arg`
+   ┌─ product_params.fe:36:30
+   │
+36 │     and_view((mut x, ref y), x)
+   │               -----          ^ cannot read this place while a `mut` access of it is open
+   │               │
+   │               access opened here
+
+error[16-0001]: access conflict in `fn receiver_and_mut_part`
+   ┌─ product_params.fe:66:5
+   │
+66 │     p.add((mut p.b, ref y))
+   │     ^      ------- access opened here
+   │     │
+   │     cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn receiver_and_ref_part`
+   ┌─ product_params.fe:72:5
+   │
+72 │     p.add((mut x, ref p.b))
+   │     ^             ------- access opened here
+   │     │
+   │     cannot mutably access this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn read_receiver_and_mut_part`
+   ┌─ product_params.fe:78:5
+   │
+78 │     p.read((mut p.b, ref y))
+   │     ^       ------- access opened here
+   │     │
+   │     cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn receiver_and_result_parts`
+   ┌─ product_params.fe:83:5
+   │
+83 │     p.add(p.both())
+   │     ^     - access opened here
+   │     │
+   │     cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn Store::recv[0][0]`
+    ┌─ product_params.fe:127:17
+    │
+127 │                 add_and_read((mut counter.count, ref local))
+    │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    │                 │             │
+    │                 │             access opened here
+    │                 cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn Store::recv[0][3]`
+    ┌─ product_params.fe:144:13
+    │
+143 │             let r = ref counter.count
+    │                     ----------------- access opened here
+144 │             write_part((mut s, 0)) + r
+    │             ^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn closure_parts`
+    ┌─ product_params.fe:155:18
+    │
+155 │     swap((mut y, mut y))
+    │           -----  ^^^^^ cannot mutably access this place while a `mut` access of it is open
+    │           │
+    │           access opened here

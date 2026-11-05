@@ -1,0 +1,21 @@
+struct Local {}
+struct Other {}
+
+trait Get {
+    type Out
+}
+impl Get for Local {
+    type Out = Local
+}
+impl Get for Option<u256> {
+    type Out = Other
+}
+
+trait Mark {}
+
+// Each pair implements the trait for the same type.
+impl Copy for <Option<u256> as Get>::Out {}
+impl Copy for Other {}
+
+impl Mark for <Local as Get>::Out {}
+impl Mark for Local {}

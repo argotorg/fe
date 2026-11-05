@@ -1,0 +1,1 @@
+Only the root module's `pub fn main()`, without parameters, is a program entry, on every target. A single-file EVM build no longer enters its other parameterless functions, so a file without contracts or `pub fn main()` builds nothing, and a `main` that is not `pub`, takes parameters or lies in an inline `mod` is an ordinary function.

@@ -1,14 +1,15 @@
+use common::compilation::Target;
 use hir::analysis::ty::AddressSpace;
-use std::{collections::HashSet, mem::size_of};
+use std::mem::size_of;
 
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        EvalOutcome, FieldIndex, RuntimeSizeError, SConst, SLocalId, SStmtId, SemConstId,
-        SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
-        SemanticLocalRole, VariantIndex, core_method_callee_key, eval_const_ref,
-        generated_callee_key, get_or_build_semantic_instance,
+        DropFlagPoint, EvalOutcome, FieldIndex, RuntimeSizeError, SConst, SLocalId, SStmtId,
+        SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef,
+        SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance,
+        SemanticInstanceKey, SemanticLocalRole, VariantIndex, core_method_callee_key,
+        eval_const_ref, generated_callee_key,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
             NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
@@ -20,9 +21,9 @@ use hir::analysis::{
         const_expr::ConstExpr,
         const_ty::ConstTyData,
         corelib::{
-            PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
-            resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
-            runtime_builtin_func_kind,
+            PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, concrete_usize,
+            core_primitive_wrapper_call_kind, resolve_core_trait, resolve_lib_func_path,
+            resolve_lib_type_path, runtime_builtin_func_kind,
         },
         trait_def::TraitInstId,
         trait_resolution::{
@@ -47,9 +48,9 @@ use crate::{
         project_field_class, project_index_class, project_variant_field_class, runtime_place_lane,
     },
     runtime::{
-        ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot,
-        RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
-        RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
+        ConstScalar, IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RBlock, RBlockId,
+        RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody, RuntimeBuiltin,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
         RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding,
         RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
@@ -70,9 +71,8 @@ use super::{
         is_immutable_reference, semantic_return_ty,
     },
     consts::{
-        aggregate_const_ref_class, aggregate_const_ref_region, collect_const_ref_regions,
-        const_scalar_for_class, const_scalar_from_value, enum_tag_scalar,
-        evaluated_const_ref_value, lower_const_region,
+        aggregate_const_ref_class, const_scalar_for_class, const_scalar_from_value,
+        enum_tag_scalar, evaluated_const_ref_value, lower_const_region,
     },
     conversion::{
         RuntimeConversionEmitter, RuntimeConversionError, RuntimeConversionPlanner,
@@ -98,11 +98,14 @@ use super::{
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
-        RuntimeTypeEnv, deref_transport_class_in_env, provider_class_for_target_in_env,
-        runtime_array_len, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
+        RuntimeTypeEnv, address_int_class, deref_transport_class_in_env, memory_int_const,
+        pointer_class, provider_class_for_target_in_env, runtime_array_len,
+        runtime_interface_ty_in_env, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
         validate_runtime_array_extents_in_env,
     },
 };
+
+mod drops;
 
 pub fn lower_to_rmir<'db>(
     db: &'db dyn MirDb,
@@ -167,11 +170,10 @@ pub(super) fn check_runtime_body_supported<'db>(
                 expr: NExpr::Call { callee, .. },
                 ..
             } = &stmt.kind
-                && let BodyOwner::Func(func) = callee.key.owner(db)
+                && let BodyOwner::Func(func, _) = callee.key.owner(db)
                 && func.containing_trait(db).is_some()
                 && func.body(db).is_none()
-                && contract_metadata_builtin(db, get_or_build_semantic_instance(db, callee.key))
-                    .is_none()
+                && contract_metadata_builtin(db, SemanticInstance::new(db, callee.key)).is_none()
             {
                 return Err(LowerError::Unsupported(format!(
                     "runtime call requires a selected implementation before layout planning: caller={key:?} callee={:?}",
@@ -247,7 +249,13 @@ pub(super) fn check_runtime_body_supported<'db>(
                 expr: NExpr::Call { callee, args, .. },
                 ..
             } = &stmt.kind
-                && let Some(value_ty) = panic_payload_ty(db, body, *callee, args)
+                && let Some(value_ty) = builtin_arg_ty(
+                    db,
+                    body,
+                    *callee,
+                    args,
+                    RuntimeBuiltinFuncKind::PanicWithValue,
+                )
             {
                 let impl_env = key.impl_env(db);
                 ensure_panic_payload_encodable(
@@ -256,6 +264,34 @@ pub(super) fn check_runtime_body_supported<'db>(
                     impl_env.assumptions(db),
                     value_ty,
                 )?;
+            }
+            if let NStatementKind::Define {
+                expr: NExpr::Call { callee, args, .. },
+                ..
+            } = &stmt.kind
+                && let Some(value_ty) =
+                    builtin_arg_ty(db, body, *callee, args, RuntimeBuiltinFuncKind::BlackBox)
+            {
+                let impl_env = key.impl_env(db);
+                let env = RuntimeTypeEnv::new(
+                    Some(impl_env.normalization_scope(db)),
+                    impl_env.assumptions(db),
+                );
+                let value_ty = runtime_interface_ty_in_env(db, env, value_ty);
+                // Pointer types become integer words in the runtime model.
+                // Reject them while their source-level distinction is available.
+                if value_ty.as_ptr(db).is_some()
+                    || !matches!(
+                        top_level_class_for_ty_in_env(db, env, value_ty, AddressSpace::Memory),
+                        Some(RuntimeClass::Scalar(_))
+                    )
+                {
+                    return Err(LowerError::Unsupported(format!(
+                        "`core::hint::black_box` requires a scalar argument, such as an integer \
+                         or `bool`, but found `{}`",
+                        value_ty.pretty_print(db)
+                    )));
+                }
             }
         }
     }
@@ -277,7 +313,7 @@ fn oversized_size_of_ty<'db>(
         return None;
     };
     let size_of = resolve_lib_func_path(db, key.owner(db).scope(), "core::size_of")?;
-    if invocation.key.owner(db) != BodyOwner::Func(size_of) {
+    if invocation.key.owner(db) != BodyOwner::Func(size_of, None) {
         return None;
     }
     let ty = *invocation.key.subst(db).generic_args(db).first()?;
@@ -306,16 +342,18 @@ fn semantic_const_ref_name<'db>(
     "<associated const>".to_string()
 }
 
-fn panic_payload_ty<'db>(
+/// Returns the argument type of a call to the single-argument builtin `kind`.
+fn builtin_arg_ty<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeSemanticBody<'db>,
     callee: SemanticCalleeRef<'db>,
     args: &[NOperand],
+    kind: RuntimeBuiltinFuncKind,
 ) -> Option<TyId<'db>> {
-    let BodyOwner::Func(func) = callee.key.owner(db) else {
+    let BodyOwner::Func(func, _) = callee.key.owner(db) else {
         return None;
     };
-    if runtime_builtin_func_kind(db, func) != Some(RuntimeBuiltinFuncKind::PanicWithValue) {
+    if runtime_builtin_func_kind(db, func) != Some(kind) {
         return None;
     }
     let [value] = args else {
@@ -427,7 +465,6 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) facts: BodyStaticFacts<'db>,
     pub(super) signature: RuntimeInterfaceSignature<'db>,
     pub(super) env: RuntimeTypeEnv<'db>,
-    const_ref_regions: HashSet<ConstRegionId<'db>>,
     pub(super) semantic_carriers: Vec<RuntimeCarrier<'db>>,
     pub(super) semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     pub(super) provider_bindings: Vec<RuntimeProviderBinding<'db>>,
@@ -449,6 +486,11 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) terminator_origins: Vec<SemOrigin<'db>>,
     pub(super) current_origin: SemOrigin<'db>,
     pub(super) terminated_blocks: Vec<bool>,
+    /// The local of each drop flag the body consults on its target
+    /// (`drops`).
+    drop_flags: Vec<Option<RLocalId>>,
+    /// The flags each point of the body sets.
+    drop_flag_updates: FxHashMap<DropFlagPoint, Vec<(u32, bool)>>,
 }
 
 /// An element a collection packs into a lane (`StateIndex::Lanes`): the
@@ -649,7 +691,6 @@ impl<'db> RmirEmitter<'db> {
         } = inferred;
         let semantic_carriers = carriers.clone();
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
-        let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
         let terminated_blocks = vec![false; semantic_body.normalized.blocks.len()];
         let stmt_origins = vec![Vec::new(); semantic_body.normalized.blocks.len()];
         let terminator_origins = vec![SemOrigin::Synthetic; semantic_body.normalized.blocks.len()];
@@ -673,7 +714,6 @@ impl<'db> RmirEmitter<'db> {
             facts,
             signature,
             env,
-            const_ref_regions,
             semantic_carriers,
             semantic_locals,
             provider_bindings,
@@ -688,6 +728,8 @@ impl<'db> RmirEmitter<'db> {
             terminator_origins,
             current_origin: SemOrigin::Synthetic,
             terminated_blocks,
+            drop_flags: Vec::new(),
+            drop_flag_updates: FxHashMap::default(),
         })
     }
 
@@ -714,6 +756,10 @@ impl<'db> RmirEmitter<'db> {
 
     fn layout_for_ty(&self, ty: TyId<'db>) -> LayoutId<'db> {
         layout_for_ty_in_env(self.db, self.env, ty)
+    }
+
+    fn target(&self) -> Target {
+        self.db.compilation_settings().target(self.db)
     }
 
     fn current_semantic_key(&self) -> SemanticInstanceKey<'db> {
@@ -743,14 +789,21 @@ impl<'db> RmirEmitter<'db> {
             vec![SemOrigin::Synthetic; self.semantic_body.normalized.blocks.len()];
         self.terminated_blocks = vec![false; self.semantic_body.normalized.blocks.len()];
         let blocks = self.semantic_body.normalized.blocks.clone();
+        self.prepare_drop_flags();
         for (idx, block) in blocks.iter().enumerate() {
-            let bb = RBlockId::from_u32(idx as u32);
+            let block_id = NBlockId::new(idx);
+            let mut bb = RBlockId::from_u32(idx as u32);
+            self.update_drop_flags(bb, DropFlagPoint::BlockStart(block_id));
             for (stmt_idx, stmt) in block.statements.iter().enumerate() {
-                self.with_current_origin(stmt.origin, |this| this.lower_stmt(bb, stmt_idx, stmt));
+                bb = self.with_current_origin(stmt.origin, |this| {
+                    this.lower_stmt(bb, block_id, stmt_idx, stmt)
+                });
+                self.update_drop_flags(bb, DropFlagPoint::After(stmt.id));
                 if self.terminated_blocks[bb.index()] {
                     break;
                 }
             }
+            self.update_drop_flags(bb, DropFlagPoint::BeforeTerminator(block_id));
             if !self.terminated_blocks[bb.index()] {
                 self.with_current_origin(block.terminator.origin, |this| {
                     this.blocks[bb.index()].terminator =
@@ -779,15 +832,25 @@ impl<'db> RmirEmitter<'db> {
         result
     }
 
-    fn lower_stmt(&mut self, bb: RBlockId, stmt_idx: usize, stmt: &NStatement<'db>) {
+    /// Lowers `stmt`, the statement at `stmt_idx` of `block`, into `bb`;
+    /// lowering goes on in the block it returns. A drop splits blocks, so
+    /// `bb` need not be `block`'s own.
+    fn lower_stmt(
+        &mut self,
+        bb: RBlockId,
+        block: NBlockId,
+        stmt_idx: usize,
+        stmt: &NStatement<'db>,
+    ) -> RBlockId {
         self.lower_stmt_index_checks(bb, &stmt.kind);
         if self.terminated_blocks[bb.index()] {
-            return;
+            return bb;
         }
         match &stmt.kind {
             NStatementKind::Define { result, expr } => {
-                self.lower_assign(bb, stmt_idx, stmt.source, *result, expr)
+                self.lower_assign(bb, block, stmt_idx, stmt.source, *result, expr)
             }
+            NStatementKind::Drop { target } => return self.lower_drop(bb, stmt.id, target),
             NStatementKind::End { access } => {
                 if !self.end_lane_extent(bb, LaneExtent::Access(*access))
                     && let NValueDefinition::Statement { block, statement } =
@@ -860,6 +923,7 @@ impl<'db> RmirEmitter<'db> {
                 }
             }
         }
+        bb
     }
 
     fn lower_local_root_assignment(
@@ -916,6 +980,7 @@ impl<'db> RmirEmitter<'db> {
     fn lower_assign(
         &mut self,
         bb: RBlockId,
+        block: NBlockId,
         stmt_idx: usize,
         stmt_id: Option<SStmtId>,
         result: NValueId,
@@ -932,7 +997,7 @@ impl<'db> RmirEmitter<'db> {
             .expect("normalized assignment result must exist")
             .ty;
         let normalized_id =
-            self.semantic_body.normalized.blocks[bb.index()].statements[stmt_idx].id;
+            self.semantic_body.normalized.blocks[block.index()].statements[stmt_idx].id;
         // A call that never returns ends its executable block and produces no
         // value, so carrier inference gives its result no class.
         if let NExpr::Call {
@@ -941,12 +1006,12 @@ impl<'db> RmirEmitter<'db> {
             effect_args,
             ..
         } = expr
-            && semantic_never_returns(self.db, get_or_build_semantic_instance(self.db, callee.key))
+            && semantic_never_returns(self.db, SemanticInstance::new(self.db, callee.key))
         {
             self.lower_call(bb, normalized_id, *callee, args, effect_args);
             return;
         }
-        let direct_class = self.current_expr_direct_class(bb.index(), stmt_idx, expr);
+        let direct_class = self.current_expr_direct_class(block.index(), stmt_idx, expr);
         if self.root_provider_value_load_is_lazy(dst, expr)
             || ((matches!(expr, NExpr::MakeView { .. })
                 || (stmt_id.is_none()
@@ -972,7 +1037,7 @@ impl<'db> RmirEmitter<'db> {
                 .semantic_body
                 .normalized
                 .blocks
-                .get(bb.index())
+                .get(block.index())
                 .and_then(|block| block.statements.get(stmt_idx + 1))
                 .is_some_and(|statement| {
                     let NStatementKind::Store { destination, value } = &statement.kind else {
@@ -1079,7 +1144,7 @@ impl<'db> RmirEmitter<'db> {
                     return;
                 }
                 let carrier = self
-                    .current_expr_direct_class(bb.index(), stmt_idx, expr)
+                    .current_expr_direct_class(block.index(), stmt_idx, expr)
                     .map(RuntimeCarrier::Value)
                     .unwrap_or(RuntimeCarrier::Erased);
                 let sink = self.alloc_runtime_temp(result_ty, RuntimeCarrier::Erased);
@@ -1397,41 +1462,7 @@ impl<'db> RmirEmitter<'db> {
             .cloned()
             .expect("const destination should have a runtime class");
         let expected_ty = self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
-        if matches!(const_, SConst::Ref(..)) {
-            self.lower_const_ref_for_class(bb, dst, value, expected_ty, &target);
-        } else {
-            self.lower_sem_const_for_class(bb, dst, value, expected_ty, &target);
-        }
-    }
-
-    fn lower_const_ref_for_class(
-        &mut self,
-        bb: RBlockId,
-        dst: RLocalId,
-        value: SemConstId<'db>,
-        expected_ty: TyId<'db>,
-        target: &RuntimeClass<'db>,
-    ) {
-        let value = self.reify_runtime_const(expected_ty, value);
-        if aggregate_const_ref_class(self.db, self.env, value).is_some()
-            && self.target_accepts_const_ref_source(target)
-        {
-            let src = self.lower_sem_const_as_const_handle(bb, value, expected_ty);
-            let value = if self.value_class(src) == Some(target) {
-                src
-            } else {
-                self.coerce_value(bb, src, target)
-            };
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst,
-                    expr: RExpr::Use(value),
-                },
-            );
-        } else {
-            self.lower_sem_const_for_class(bb, dst, value, expected_ty, target);
-        }
+        self.lower_sem_const_for_class(bb, dst, value, expected_ty, &target);
     }
 
     fn lower_sem_const_for_class(
@@ -1475,23 +1506,18 @@ impl<'db> RmirEmitter<'db> {
         if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
             return value;
         }
-        if let Some(value) = self.try_lower_bytes_array_const_as_class(bb, ty, value, target) {
+        if let Some(value) = self.try_lower_const_data(bb, ty, value, target) {
             return value;
         }
-        if self.known_const_ref_region(value).is_some() {
-            let value = self.lower_sem_const_as_const_handle(bb, value, ty);
-            return if self.value_class(value) == Some(target) {
-                value
-            } else {
-                self.coerce_value(bb, value, target)
-            };
+        if let Some(value) = self.try_lower_bytes_array_const_as_class(bb, ty, value, target) {
+            return value;
         }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
-        if let RuntimeClass::RawAddr { .. } = target
+        if let RuntimeClass::RawAddr { space, .. } = target
             && let SemConstValue::Scalar { value, .. } = value.value(self.db)
-            && let Some(scalar) = const_scalar_for_class(value, &word_scalar_class())
+            && let Some(scalar) = const_scalar_for_class(value, &address_int_class(self.db, *space))
         {
             return self.lower_sem_const_scalar_with_class(bb, ty, target.clone(), scalar);
         }
@@ -1576,13 +1602,13 @@ impl<'db> RmirEmitter<'db> {
         if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
             return value;
         }
-        let layout = self.layout_for_ty(ty);
-        if let Some(value) = self.try_lower_bytes_array_const_as_class(
-            bb,
-            ty,
-            value,
-            &RuntimeClass::AggregateValue { layout },
-        ) {
+        let aggregate = RuntimeClass::AggregateValue {
+            layout: self.layout_for_ty(ty),
+        };
+        if let Some(value) = self.try_lower_const_data(bb, ty, value, &aggregate) {
+            return value;
+        }
+        if let Some(value) = self.try_lower_bytes_array_const_as_class(bb, ty, value, &aggregate) {
             return value;
         }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
@@ -1602,12 +1628,9 @@ impl<'db> RmirEmitter<'db> {
             SemConstValue::Tuple { .. }
             | SemConstValue::Struct { .. }
             | SemConstValue::Array { .. }
-            | SemConstValue::Enum { .. } => self.lower_non_scalar_const_as_class(
-                bb,
-                value,
-                ty,
-                &RuntimeClass::AggregateValue { layout },
-            ),
+            | SemConstValue::Enum { .. } => {
+                self.lower_non_scalar_const_as_class(bb, value, ty, &aggregate)
+            }
             SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Description(..) => {
                 panic!("semantic const should lower as a natural runtime value: {value:?}")
             }
@@ -1629,6 +1652,27 @@ impl<'db> RmirEmitter<'db> {
         };
         ty.is_core_dyn_string(self.db)
             .then(|| self.lower_dyn_string_literal(bb, ty, bytes))
+    }
+
+    /// An aggregate constant with const data reads it from its region.
+    fn try_lower_const_data(
+        &mut self,
+        bb: RBlockId,
+        ty: TyId<'db>,
+        value: SemConstId<'db>,
+        target: &RuntimeClass<'db>,
+    ) -> Option<RLocalId> {
+        if aggregate_const_ref_class(self.db, self.env, value).is_none()
+            || !self.target_accepts_const_ref_source(target)
+        {
+            return None;
+        }
+        let handle = self.lower_sem_const_as_const_handle(bb, value, ty);
+        Some(if self.value_class(handle) == Some(target) {
+            handle
+        } else {
+            self.coerce_value(bb, handle, target)
+        })
     }
 
     fn try_lower_bytes_array_const_as_class(
@@ -1695,10 +1739,13 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn lower_dyn_string_literal(&mut self, bb: RBlockId, ty: TyId<'db>, bytes: &[u8]) -> RLocalId {
-        let len = self.alloc_u256_const(bb, bytes.len());
+        let len = self.alloc_memory_int_const(bb, bytes.len());
         let payload_size = 32 + bytes.len().next_multiple_of(32);
         let size = self.alloc_u256_const(bb, payload_size);
-        let ptr = self.malloc_bytes(bb, size);
+        let ptr = {
+            let size = self.alloc_memory_int_const(bb, payload_size);
+            self.malloc_bytes(bb, size)
+        };
 
         let layout = self.layout_for_ty(ty);
         let dst = self.alloc_runtime_temp(
@@ -1707,48 +1754,38 @@ impl<'db> RmirEmitter<'db> {
         );
         let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, 3);
         self.lower_aggregate_values(bb, dst, layout, &ctor_elems, &[ptr, len, size]);
+        // The length is stored apart from the bytes, as a word the backend can
+        // forward to later loads of it.
+        let len_word = self.alloc_u256_const(bb, bytes.len());
         self.push_ignored_builtin(
             bb,
             crate::runtime::RuntimeBuiltin::Mstore {
                 addr: ptr,
-                value: len,
+                value: len_word,
             },
         );
-        for (idx, chunk) in bytes.chunks(32).enumerate() {
-            let addr = self.alloc_runtime_temp(
-                TyId::u256(self.db),
-                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-            );
-            let offset = self.alloc_u256_const(bb, 32 * (idx + 1));
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: addr,
-                    expr: RExpr::Binary {
-                        op: BinOp::Arith(ArithBinOp::Add),
-                        lhs: ptr,
-                        rhs: offset,
-                    },
-                },
-            );
-            let word = self.alloc_runtime_temp(
-                TyId::u256(self.db),
-                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+        if !bytes.is_empty() {
+            let thirty_two = self.alloc_memory_int_const(bb, 32);
+            let data = self.alloc_runtime_temp(
+                TyId::ptr_to(self.db, TyId::u8(self.db)),
+                RuntimeCarrier::Value(RuntimeClass::Scalar(self.memory_pointer_class())),
             );
             self.push_stmt(
                 bb,
                 RStmt::Assign {
-                    dst: word,
-                    expr: RExpr::ConstScalar(ConstScalar::Int {
-                        bits: 256,
-                        signed: false,
-                        words: padded_word_bytes(chunk),
+                    dst: data,
+                    expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::PtrOffsetBytes {
+                        ptr,
+                        offset: thirty_two,
                     }),
                 },
             );
             self.push_ignored_builtin(
                 bb,
-                crate::runtime::RuntimeBuiltin::Mstore { addr, value: word },
+                crate::runtime::RuntimeBuiltin::StoreConstBytes {
+                    dst: data,
+                    bytes: bytes.into(),
+                },
             );
         }
         dst
@@ -1757,7 +1794,7 @@ impl<'db> RmirEmitter<'db> {
     fn malloc_bytes(&mut self, bb: RBlockId, size: RLocalId) -> RLocalId {
         let ptr = self.alloc_runtime_temp(
             TyId::ptr_to(self.db, TyId::u8(self.db)),
-            RuntimeCarrier::Value(word_class()),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(self.memory_pointer_class())),
         );
         self.push_stmt(
             bb,
@@ -1774,62 +1811,53 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         message: Option<hir::hir_def::StringId<'db>>,
     ) -> RTerminator<'db> {
-        let payload = if let Some(message) = message {
-            solidity_error_string_payload(message.data(self.db).as_bytes())
-        } else {
-            solidity_panic_payload(0x01)
-        };
-        let payload_len = self.alloc_u256_const(bb, payload.len());
-        let allocated_len = self.alloc_u256_const(bb, payload.len().next_multiple_of(32));
-        let ptr = self.malloc_bytes(bb, allocated_len);
-
-        for (idx, chunk) in payload.chunks(32).enumerate() {
-            let addr = if idx == 0 {
-                ptr
-            } else {
-                let addr = self.alloc_runtime_temp(
-                    TyId::u256(self.db),
-                    RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-                );
-                let offset = self.alloc_u256_const(bb, idx * 32);
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: addr,
-                        expr: RExpr::Binary {
-                            op: BinOp::Arith(ArithBinOp::Add),
-                            lhs: ptr,
-                            rhs: offset,
-                        },
-                    },
-                );
-                addr
+        // A failed assertion without a message panics with code 0x01.
+        let Some(message) = message else {
+            return RTerminator::Panic {
+                code: self.alloc_u256_const(bb, 0x01),
             };
-            let word = self.alloc_runtime_temp(
-                TyId::u256(self.db),
-                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-            );
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: word,
-                    expr: RExpr::ConstScalar(ConstScalar::Int {
-                        bits: 256,
-                        signed: false,
-                        words: padded_word_bytes(chunk),
-                    }),
-                },
-            );
-            self.push_ignored_builtin(
-                bb,
-                crate::runtime::RuntimeBuiltin::Mstore { addr, value: word },
-            );
-        }
+        };
+        let payload = solidity_error_string_payload(message.data(self.db).as_bytes());
+        let payload_len = self.alloc_u256_const(bb, payload.len());
+        let allocated_len = self.alloc_memory_int_const(bb, payload.len().next_multiple_of(32));
+        let ptr = self.malloc_bytes(bb, allocated_len);
+        self.push_ignored_builtin(
+            bb,
+            crate::runtime::RuntimeBuiltin::StoreConstBytes {
+                dst: ptr,
+                bytes: payload.into(),
+            },
+        );
 
         RTerminator::Revert {
             offset: ptr,
             len: payload_len,
         }
+    }
+
+    /// The class of a memory address, size or offset as an integer.
+    fn memory_int_class(&self) -> ScalarClass<'db> {
+        address_int_class(self.db, AddressSpace::Memory)
+    }
+
+    /// The class of a memory address as a pointer.
+    fn memory_pointer_class(&self) -> ScalarClass<'db> {
+        pointer_class(self.db, AddressSpace::Memory)
+    }
+
+    fn alloc_memory_int_const(&mut self, bb: RBlockId, value: usize) -> RLocalId {
+        let local = self.alloc_runtime_temp(
+            TyId::usize(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(self.memory_int_class())),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: local,
+                expr: RExpr::ConstScalar(memory_int_const(self.db, value as u64)),
+            },
+        );
+        local
     }
 
     fn alloc_u256_const(&mut self, bb: RBlockId, value: usize) -> RLocalId {
@@ -1883,11 +1911,6 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         local
-    }
-
-    fn known_const_ref_region(&self, value: SemConstId<'db>) -> Option<ConstRegionId<'db>> {
-        let region = aggregate_const_ref_region(self.db, self.env, value)?;
-        self.const_ref_regions.contains(&region).then_some(region)
     }
 
     fn lower_sem_const_scalar(
@@ -2240,21 +2263,23 @@ impl<'db> RmirEmitter<'db> {
             let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
             return (value, stored);
         }
-        let value = if let Some(boundary) =
-            boundary_spec_for_ty_in_env(self.db, self.env, field_ty, AddressSpace::Memory)
-        {
-            self.lower_semantic_operand_for_boundary(bb, field, &boundary)
-        } else {
-            let class = self
-                .top_level_class_for_ty(field_ty, AddressSpace::Memory)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "non-zst constructor field should have a runtime class: owner={:?} field_ty={} stored={stored:#?}",
-                        self.semantic_body.owner().key(self.db).owner(self.db),
-                        field_ty.pretty_print(self.db),
-                    )
-                });
-            self.lower_semantic_operand_for_class(bb, field, &class)
+        let boundary =
+            boundary_spec_for_ty_in_env(self.db, self.env, field_ty, AddressSpace::Memory);
+        let runtime_field = self.runtime_operand(field);
+        let roots = self.runtime_roots();
+        let value_classes = self.normalized_value_classes();
+        // The selection inference classified the field by.
+        let selected = self.with_current_body_cx(|cx| {
+            let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
+            RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
+                .with_concrete_roots(&roots)
+                .with_concrete_value_classes(&value_classes)
+                .selected_ctor_field(runtime_field, boundary.as_ref())
+        });
+        // With no source selected, inference gave the field its stored class.
+        let value = match selected {
+            Some(selected) => self.lower_selected_runtime_arg(bb, field, &selected),
+            None => self.lower_semantic_operand_for_class(bb, field, &stored),
         };
         let class = self.value_class(value).cloned().unwrap_or(stored);
         (value, class)
@@ -2935,7 +2960,7 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_intrinsic_arith_expr(IntrinsicArithBinOp::Sub, true, zero, value, class)
             }
             UnOp::Minus | UnOp::BitNot | UnOp::Not => RExpr::Unary { op, value },
-            UnOp::Plus | UnOp::Mut | UnOp::Ref | UnOp::Deref => return None,
+            UnOp::Plus | UnOp::Mut | UnOp::MaybeMut | UnOp::Ref | UnOp::Deref => return None,
         })
     }
 
@@ -2967,7 +2992,7 @@ impl<'db> RmirEmitter<'db> {
         semantic: SemanticInstance<'db>,
         args: &[NOperand],
     ) -> Option<RLocalId> {
-        let BodyOwner::Func(func) = semantic.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
             return None;
         };
         let ret_ty = semantic_return_ty(self.db, semantic);
@@ -3008,14 +3033,19 @@ impl<'db> RmirEmitter<'db> {
                     return None;
                 };
                 let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
+                // Raw addresses compare and step as their integers.
+                let raw_space = runtime_args
+                    .iter()
+                    .find_map(|arg| match self.value_class(*arg) {
+                        Some(RuntimeClass::RawAddr { space, .. }) => Some(*space),
+                        _ => None,
+                    });
                 if matches!(op, BinOp::Comp(_))
-                    && runtime_args.iter().any(|arg| {
-                        matches!(self.value_class(*arg), Some(RuntimeClass::RawAddr { .. }))
-                    })
+                    && let Some(space) = raw_space
                 {
-                    let word = RuntimeClass::Scalar(word_scalar_class());
-                    let lhs = self.coerce_value(bb, *lhs, &word);
-                    let rhs = self.coerce_value(bb, *rhs, &word);
+                    let address = RuntimeClass::Scalar(address_int_class(self.db, space));
+                    let lhs = self.coerce_value(bb, *lhs, &address);
+                    let rhs = self.coerce_value(bb, *rhs, &address);
                     let ret =
                         self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
                     self.push_stmt(
@@ -3028,20 +3058,17 @@ impl<'db> RmirEmitter<'db> {
                     return Some(ret);
                 }
                 if let BinOp::Arith(op @ (ArithBinOp::Add | ArithBinOp::Sub)) = op
-                    && runtime_args.iter().any(|arg| {
-                        matches!(self.value_class(*arg), Some(RuntimeClass::RawAddr { .. }))
-                    })
+                    && let Some(space) = raw_space
                 {
-                    let word = RuntimeClass::Scalar(word_scalar_class());
-                    let lhs = self.coerce_value(bb, *lhs, &word);
-                    let rhs = self.coerce_value(bb, *rhs, &word);
-                    let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(word.clone()));
-                    let RuntimeClass::Scalar(class) = &word else {
-                        unreachable!("word runtime class should be scalar")
-                    };
-                    let expr = self.lower_arith_expr_for_mode(bb, op, checked, lhs, rhs, class)?;
+                    let class = address_int_class(self.db, space);
+                    let address = RuntimeClass::Scalar(class.clone());
+                    let lhs = self.coerce_value(bb, *lhs, &address);
+                    let rhs = self.coerce_value(bb, *rhs, &address);
+                    let ret =
+                        self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(address.clone()));
+                    let expr = self.lower_arith_expr_for_mode(bb, op, checked, lhs, rhs, &class)?;
                     self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
-                    return Some(if ret_class == word {
+                    return Some(if ret_class == address {
                         ret
                     } else {
                         self.coerce_value(bb, ret, &ret_class)
@@ -3095,28 +3122,20 @@ impl<'db> RmirEmitter<'db> {
                         self.push_stmt(bb, RStmt::Assign { dst: result, expr });
                         result
                     }
-                    RuntimeClass::RawAddr { .. } => {
+                    RuntimeClass::RawAddr { space, .. } => {
                         let BinOp::Arith(op @ (ArithBinOp::Add | ArithBinOp::Sub)) = op else {
                             return None;
                         };
-                        let word = RuntimeClass::Scalar(word_scalar_class());
-                        let lhs = self.coerce_value(bb, lhs, &word);
-                        let rhs = self.coerce_value(bb, *rhs, &word);
-                        let result_word =
-                            self.alloc_runtime_temp(target_ty, RuntimeCarrier::Value(word.clone()));
-                        let RuntimeClass::Scalar(class) = &word else {
-                            unreachable!("word runtime class should be scalar")
-                        };
+                        let class = address_int_class(self.db, space);
+                        let address = RuntimeClass::Scalar(class.clone());
+                        let lhs = self.coerce_value(bb, lhs, &address);
+                        let rhs = self.coerce_value(bb, *rhs, &address);
+                        let result = self
+                            .alloc_runtime_temp(target_ty, RuntimeCarrier::Value(address.clone()));
                         let expr =
-                            self.lower_arith_expr_for_mode(bb, op, checked, lhs, rhs, class)?;
-                        self.push_stmt(
-                            bb,
-                            RStmt::Assign {
-                                dst: result_word,
-                                expr,
-                            },
-                        );
-                        self.coerce_value(bb, result_word, &target)
+                            self.lower_arith_expr_for_mode(bb, op, checked, lhs, rhs, &class)?;
+                        self.push_stmt(bb, RStmt::Assign { dst: result, expr });
+                        self.coerce_value(bb, result, &target)
                     }
                     RuntimeClass::Ref { .. } | RuntimeClass::AggregateValue { .. } => return None,
                 };
@@ -3134,7 +3153,7 @@ impl<'db> RmirEmitter<'db> {
         args: &[NOperand],
         effect_args: &[NEffectArg<'db>],
     ) -> RLocalId {
-        let semantic = get_or_build_semantic_instance(self.db, callee.key);
+        let semantic = SemanticInstance::new(self.db, callee.key);
         if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, args) {
             return ret;
         }
@@ -3229,7 +3248,7 @@ impl<'db> RmirEmitter<'db> {
             NStatementKind::Store { destination, .. } => {
                 self.lower_place_index_checks(bb, destination)
             }
-            NStatementKind::End { .. } => {}
+            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
         }
     }
 
@@ -3285,11 +3304,11 @@ impl<'db> RmirEmitter<'db> {
         args: &[NOperand],
         effect_args: &[NEffectArg<'db>],
     ) -> Option<RLocalId> {
-        let BodyOwner::Func(func) = semantic.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
             return None;
         };
 
-        if let Some(ret) = self.lower_intrinsic_keccak256_call(bb, func, args) {
+        if let Some(ret) = self.lower_intrinsic_keccak256_call(bb, semantic, func, args) {
             return Some(ret);
         }
         if let Some(ret) = self.lower_intrinsic_keccak_words_call(bb, func, args) {
@@ -3349,6 +3368,48 @@ impl<'db> RmirEmitter<'db> {
             };
             return Some(self.lower_panic_code(bb, *code));
         }
+        // The argument moved into the call, which destroys nothing; EVM
+        // memory is never reclaimed.
+        if kind == RuntimeBuiltinFuncKind::Forget
+            || kind == RuntimeBuiltinFuncKind::Free && self.target() == Target::Evm
+        {
+            return Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased));
+        }
+        // EVM memory is big-endian and native memory little-endian, so there
+        // an integer is its own representation in that byte order.
+        let big_endian = matches!(
+            kind,
+            RuntimeBuiltinFuncKind::ToBigEndian | RuntimeBuiltinFuncKind::FromBigEndian
+        );
+        if (big_endian
+            || matches!(
+                kind,
+                RuntimeBuiltinFuncKind::ToLittleEndian | RuntimeBuiltinFuncKind::FromLittleEndian
+            ))
+            && big_endian == (self.target() == Target::Evm)
+            && let [value] = args.as_slice()
+        {
+            let class = self.value_class(*value)?.clone();
+            let ret = self.alloc_runtime_temp(
+                semantic_return_ty(self.db, semantic),
+                RuntimeCarrier::Value(class),
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: ret,
+                    expr: RExpr::Use(*value),
+                },
+            );
+            return Some(ret);
+        }
+        if kind == RuntimeBuiltinFuncKind::NeedsDrop {
+            let ty = semantic.key(self.db).subst(self.db).generic_args(self.db)[0];
+            let needs_drop = self.needs_drop(ty);
+            let ret = self.alloc_bool_temp();
+            self.assign_bool(bb, ret, needs_drop);
+            return Some(ret);
+        }
         if kind == RuntimeBuiltinFuncKind::Clear {
             // A zero-sized place is erased: clearing it stores nothing.
             if let [place] = args.as_slice() {
@@ -3378,9 +3439,6 @@ impl<'db> RmirEmitter<'db> {
             }
             LoweredBuiltinCall::Binary { op, lhs, rhs } => {
                 let class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
-                let word = RuntimeClass::Scalar(word_scalar_class());
-                let lhs = self.coerce_value(bb, lhs, &word);
-                let rhs = self.coerce_value(bb, rhs, &word);
                 let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(class));
                 self.push_stmt(
                     bb,
@@ -3400,40 +3458,8 @@ impl<'db> RmirEmitter<'db> {
 
     /// Reverts with Solidity `Panic(uint256)` data for a runtime `code`.
     fn lower_panic_code(&mut self, bb: RBlockId, code: RLocalId) -> RLocalId {
-        // The call reverts, so the payload can use scratch memory at 0 like
-        // the checked-arithmetic panics do.
-        let word = RuntimeClass::Scalar(word_scalar_class());
-        let code = self.coerce_value(bb, code, &word);
-        let ptr = self.alloc_u256_const(bb, 0);
-        let selector = self.alloc_runtime_temp(TyId::u256(self.db), RuntimeCarrier::Value(word));
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: selector,
-                expr: RExpr::ConstScalar(ConstScalar::Int {
-                    bits: 256,
-                    signed: false,
-                    words: padded_word_bytes(&solidity_panic_payload(0)[..4]),
-                }),
-            },
-        );
-        self.push_ignored_builtin(
-            bb,
-            crate::runtime::RuntimeBuiltin::Mstore {
-                addr: ptr,
-                value: selector,
-            },
-        );
-        let code_addr = self.alloc_u256_const(bb, 4);
-        self.push_ignored_builtin(
-            bb,
-            crate::runtime::RuntimeBuiltin::Mstore {
-                addr: code_addr,
-                value: code,
-            },
-        );
-        let len = self.alloc_u256_const(bb, 36);
-        self.set_terminator(bb, RTerminator::Revert { offset: ptr, len });
+        let code = self.coerce_value(bb, code, &RuntimeClass::Scalar(word_scalar_class()));
+        self.set_terminator(bb, RTerminator::Panic { code });
         self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased)
     }
 
@@ -3470,10 +3496,7 @@ impl<'db> RmirEmitter<'db> {
         let semantic_key =
             generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
                 .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
-        runtime_instance_for_semantic(
-            self.db,
-            get_or_build_semantic_instance(self.db, semantic_key),
-        )
+        runtime_instance_for_semantic(self.db, SemanticInstance::new(self.db, semantic_key))
     }
 
     fn assert_panic_payload_encodable(
@@ -3492,7 +3515,7 @@ impl<'db> RmirEmitter<'db> {
         semantic: SemanticInstance<'db>,
         args: &[NOperand],
     ) -> Option<RLocalId> {
-        let BodyOwner::Func(func) = semantic.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
             return None;
         };
         if func.body(self.db).is_some() {
@@ -3779,7 +3802,7 @@ impl<'db> RmirEmitter<'db> {
         semantic: SemanticInstance<'db>,
         args: &[RLocalId],
     ) -> Option<LoweredBuiltinCall<'db>> {
-        let BodyOwner::Func(func) = semantic.key(self.db).owner(self.db) else {
+        let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
             return None;
         };
         let kind = runtime_builtin_func_kind(self.db, func)?;
@@ -3792,25 +3815,24 @@ impl<'db> RmirEmitter<'db> {
         });
         let builtin = |builtin, class| LoweredBuiltinCall::Expr { builtin, class };
         Some(match kind {
-            RuntimeBuiltinFuncKind::Malloc => {
+            RuntimeBuiltinFuncKind::Malloc | RuntimeBuiltinFuncKind::TryMalloc => {
                 let [size] = args else { return None };
+                let size = *size;
                 builtin(
-                    crate::runtime::RuntimeBuiltin::Malloc { size: *size },
+                    if kind == RuntimeBuiltinFuncKind::Malloc {
+                        crate::runtime::RuntimeBuiltin::Malloc { size }
+                    } else {
+                        crate::runtime::RuntimeBuiltin::TryMalloc { size }
+                    },
                     self.top_level_class_for_ty(
                         semantic_return_ty(self.db, semantic),
                         AddressSpace::Memory,
                     ),
                 )
             }
-            RuntimeBuiltinFuncKind::NativePtrIsNull => {
+            RuntimeBuiltinFuncKind::Free => {
                 let [ptr] = args else { return None };
-                builtin(
-                    crate::runtime::RuntimeBuiltin::NativePtrIsNull { ptr: *ptr },
-                    self.top_level_class_for_ty(
-                        semantic_return_ty(self.db, semantic),
-                        AddressSpace::Memory,
-                    ),
-                )
+                builtin(crate::runtime::RuntimeBuiltin::Free { ptr: *ptr }, None)
             }
             RuntimeBuiltinFuncKind::PtrOffsetBytes => {
                 let [ptr, offset] = args else { return None };
@@ -3819,7 +3841,7 @@ impl<'db> RmirEmitter<'db> {
                         ptr: *ptr,
                         offset: *offset,
                     },
-                    Some(word.clone()),
+                    Some(RuntimeClass::Scalar(self.memory_pointer_class())),
                 )
             }
             RuntimeBuiltinFuncKind::PtrEq => {
@@ -4033,6 +4055,30 @@ impl<'db> RmirEmitter<'db> {
                 builtin(
                     crate::runtime::RuntimeBuiltin::LeadingZeros { value: *value },
                     Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::ToBigEndian
+            | RuntimeBuiltinFuncKind::FromBigEndian
+            | RuntimeBuiltinFuncKind::ToLittleEndian
+            | RuntimeBuiltinFuncKind::FromLittleEndian
+            | RuntimeBuiltinFuncKind::SwapBytes => {
+                let [value] = args else { return None };
+                let class @ RuntimeClass::Scalar(_) = self.value_class(*value)? else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::SwapBytes { value: *value },
+                    Some(class.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::BlackBox => {
+                let [value] = args else { return None };
+                let class @ RuntimeClass::Scalar(_) = self.value_class(*value)? else {
+                    return None;
+                };
+                builtin(
+                    RuntimeBuiltin::BlackBox { value: *value },
+                    Some(class.clone()),
                 )
             }
             RuntimeBuiltinFuncKind::Byte => {
@@ -4331,9 +4377,12 @@ impl<'db> RmirEmitter<'db> {
                 let [_value] = args else { return None };
                 LoweredBuiltinCall::Terminator(RTerminator::Trap)
             }
-            // Lowered with its payload in `lower_panic_code`, and by
-            // `lower_clear`.
-            RuntimeBuiltinFuncKind::PanicCode | RuntimeBuiltinFuncKind::Clear => return None,
+            // Lowered with its payload in `lower_panic_code`, by
+            // `lower_clear`, as nothing, and as a constant.
+            RuntimeBuiltinFuncKind::PanicCode
+            | RuntimeBuiltinFuncKind::Clear
+            | RuntimeBuiltinFuncKind::Forget
+            | RuntimeBuiltinFuncKind::NeedsDrop => return None,
             RuntimeBuiltinFuncKind::IntrinsicKeccak256
             | RuntimeBuiltinFuncKind::IntrinsicKeccakWords => return None,
         })
@@ -4403,6 +4452,7 @@ impl<'db> RmirEmitter<'db> {
     fn lower_intrinsic_keccak256_call(
         &mut self,
         bb: RBlockId,
+        semantic: SemanticInstance<'db>,
         func: Func<'db>,
         args: &[NOperand],
     ) -> Option<RLocalId> {
@@ -4411,88 +4461,61 @@ impl<'db> RmirEmitter<'db> {
         {
             return None;
         }
-
-        let [bytes] = args else {
-            return None;
-        };
+        let [bytes] = args else { return None };
         let bytes_ty = self.semantic_body.normalized.value(bytes.value)?.ty;
-        let layout = self.layout_for_ty(bytes_ty);
-        let crate::runtime::Layout::Array(array_layout) = layout.data(self.db) else {
-            panic!(
-                "__keccak256 expects a byte-array argument, found {}",
-                bytes_ty.pretty_print(self.db)
-            );
-        };
-
-        let word_class = RuntimeClass::Scalar(ScalarClass {
-            repr: ScalarRepr::Int {
-                bits: 256,
-                signed: false,
-            },
-            role: ScalarRole::Plain,
-        });
-        let len = self.alloc_runtime_temp(
-            TyId::u256(self.db),
-            RuntimeCarrier::Value(word_class.clone()),
-        );
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: len,
-                expr: RExpr::ConstScalar(ConstScalar::Int {
-                    bits: 256,
-                    signed: false,
-                    words: if array_layout.len == 0 {
-                        Vec::new()
-                    } else {
-                        let bytes = array_layout.len.to_be_bytes();
-                        bytes
-                            .into_iter()
-                            .skip_while(|byte| *byte == 0)
-                            .collect::<Vec<_>>()
-                    },
-                }),
-            },
-        );
-
-        let value = self.read_semantic_operand(bb, *bytes);
-        let provider_class = provider_class_for_target_in_env(
+        let width = *semantic
+            .key(self.db)
+            .subst(self.db)
+            .generic_args(self.db)
+            .first()?;
+        let width = runtime_interface_ty_in_env(
             self.db,
-            self.env,
-            Some(bytes_ty),
-            AddressSpace::Memory,
+            RuntimeTypeEnv::for_semantic(self.db, semantic),
+            width,
         );
-        let provider = match self.value_class(value) {
-            Some(
-                RuntimeClass::Ref {
-                    kind:
-                        RefKind::Provider {
-                            space: AddressSpace::Memory,
-                            ..
-                        },
-                    ..
-                }
-                | RuntimeClass::RawAddr {
-                    space: AddressSpace::Memory,
-                    ..
+        let len = concrete_usize(self.db, width).unwrap_or_else(|| {
+            panic!(
+                "__keccak256 requires a concrete N: {}",
+                width.pretty_print(self.db)
+            )
+        });
+        let layout = self.layout_for_ty(bytes_ty);
+        let size = RuntimeMemoryLayout::raw(self.db)
+            .layout_size(layout)
+            .expect("packed hash input has an admitted raw-memory layout");
+        let size = usize::try_from(size).expect("raw-memory layout size fits usize");
+        assert!(size >= len);
+        let size = self.alloc_memory_int_const(bb, size);
+        let offset = self.malloc_bytes(bb, size);
+        let class = RuntimeClass::AggregateValue { layout };
+        if !self.class_is_runtime_zst(&class) {
+            let raw_ptr = self.coerce_value(
+                bb,
+                offset,
+                &RuntimeClass::raw_addr(self.db, AddressSpace::Memory, class.clone()),
+            );
+            let value = self.read_semantic_operand(bb, *bytes);
+            // Export numeric words into fresh raw memory. Memory providers hold
+            // objects, whose addresses and element layouts are not raw pointers.
+            self.write_value_to_place(
+                bb,
+                RuntimePlace {
+                    root: PlaceRoot::Ptr {
+                        addr: raw_ptr,
+                        space: AddressSpace::Memory,
+                        class: class.clone(),
+                    },
+                    path: Box::default(),
                 },
-            ) => value,
-            Some(_) => self.coerce_value(bb, value, &provider_class),
-            None => panic!(
-                "__keccak256 argument should have a runtime class: key={:?}; local={bytes:?}",
-                self.key
-            ),
-        };
-        let offset = self.coerce_value(
-            bb,
-            provider,
-            &RuntimeClass::raw_addr(
-                self.db,
-                AddressSpace::Memory,
-                RuntimeClass::AggregateValue { layout },
-            ),
+                value,
+                &class,
+            );
+        }
+        let len = self.alloc_u256_const(bb, len);
+        let ret = self.alloc_runtime_temp(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
         );
-        let ret = self.alloc_runtime_temp(TyId::u256(self.db), RuntimeCarrier::Value(word_class));
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -4674,12 +4697,8 @@ impl<'db> RmirEmitter<'db> {
         if params.is_empty() {
             return target;
         }
-        let edge = RBlockId::from_u32(self.blocks.len() as u32);
-        self.blocks.push(RBlock {
-            stmts: Vec::new(),
-            terminator: RTerminator::Goto(target),
-        });
-        self.terminated_blocks.push(false);
+        let edge = self.new_block();
+        self.blocks[edge.index()].terminator = RTerminator::Goto(target);
         let values = params
             .iter()
             .map(|(_, arg)| {
@@ -4780,7 +4799,7 @@ impl<'db> RmirEmitter<'db> {
             .semantic(self.db)
             .map(|semantic| semantic.key(self.db).owner(self.db));
         let owner_name = owner.and_then(|owner| match owner {
-            BodyOwner::Func(func) => func
+            BodyOwner::Func(func, _) => func
                 .name(self.db)
                 .to_opt()
                 .map(|name| name.data(self.db).to_string()),
@@ -4848,7 +4867,7 @@ impl<'db> RmirEmitter<'db> {
             let NExpr::Call { callee, args, effect_args, .. } = expr else {
                 return true;
             };
-            let semantic = get_or_build_semantic_instance(self.db, callee.key);
+            let semantic = SemanticInstance::new(self.db, callee.key);
             let mut sites = BoundarySiteAllocator::default();
             let plan = compile_call_input_plan_for_semantic(
                 self.db, &self.semantic_body, semantic, self.env, effect_args, &mut sites,
@@ -5681,13 +5700,10 @@ impl<'db> RmirEmitter<'db> {
             params,
         );
         let callee = get_or_build_runtime_instance(self.db, callee_key);
-        let class = runtime_declaration_signature(self.db, callee_key)
+        let carrier = runtime_declaration_signature(self.db, callee_key)
             .ret
-            .expect("a compiler-inserted call returns a value");
-        let result = self.alloc_runtime_temp(
-            semantic_return_ty(self.db, semantic),
-            RuntimeCarrier::Value(class),
-        );
+            .map_or(RuntimeCarrier::Erased, RuntimeCarrier::Value);
+        let result = self.alloc_runtime_temp(semantic_return_ty(self.db, semantic), carrier);
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -5721,7 +5737,7 @@ impl<'db> RmirEmitter<'db> {
                 .unwrap_or_else(|error| {
                     panic!("failed to finalize generated call to `{name}`: {error:?}")
                 });
-        get_or_build_semantic_instance(self.db, key)
+        SemanticInstance::new(self.db, key)
     }
 
     fn read_semantic_value(&mut self, bb: RBlockId, local: SLocalId) -> RLocalId {
@@ -5920,24 +5936,6 @@ impl<'db> RmirEmitter<'db> {
             RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => None,
             RuntimeClass::RawAddr { pointee: None, .. } => None,
         }
-    }
-
-    fn lower_semantic_operand_for_boundary(
-        &mut self,
-        bb: RBlockId,
-        operand: NOperand,
-        boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
-    ) -> RLocalId {
-        let runtime_operand = self.runtime_operand(operand);
-        let roots = self.runtime_roots();
-        let value_classes = self.normalized_value_classes();
-        let selected = self.with_current_body_cx(|cx| {
-            RuntimeArgSelector::new(cx.env, cx.carriers, None)
-                .with_concrete_roots(&roots)
-                .with_concrete_value_classes(&value_classes)
-                .selected_semantic_operand_for_boundary(runtime_operand, boundary)
-        });
-        self.lower_selected_runtime_arg(bb, operand, &selected)
     }
 
     fn lower_selected_runtime_arg(
@@ -6187,7 +6185,7 @@ impl<'db> RmirEmitter<'db> {
         reify_runtime_const_for_ty(self.db, semantic, expected_ty, value).unwrap_or_else(|| {
             let owner = semantic.key(self.db).owner(self.db);
             let owner_name = match owner {
-                BodyOwner::Func(func) => func
+                BodyOwner::Func(func, _) => func
                     .name(self.db)
                     .to_opt()
                     .map(|name| {
@@ -6446,23 +6444,10 @@ fn solidity_error_string_payload(bytes: &[u8]) -> Vec<u8> {
     payload
 }
 
-fn solidity_panic_payload(code: usize) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(36);
-    payload.extend([0x4e, 0x48, 0x7b, 0x71]);
-    push_abi_word_usize(&mut payload, code);
-    payload
-}
-
 fn push_abi_word_usize(out: &mut Vec<u8>, value: usize) {
     let mut word = [0; 32];
     word[32 - size_of::<usize>()..].copy_from_slice(&value.to_be_bytes());
     out.extend(word);
-}
-
-fn padded_word_bytes(bytes: &[u8]) -> Vec<u8> {
-    let mut word = [0; 32];
-    word[..bytes.len()].copy_from_slice(bytes);
-    trim_leading_zero_bytes(&word)
 }
 
 fn usize_word_bytes(value: usize) -> Vec<u8> {
@@ -6492,7 +6477,7 @@ mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::analysis::{
-        semantic::{get_or_build_semantic_instance, identity_semantic_instance_key},
+        semantic::{SemanticInstance, identity_semantic_instance_key},
         ty::ty_check::BodyOwner,
     };
     use url::Url;
@@ -6500,10 +6485,10 @@ mod tests {
     use crate::{build_test_runtime_package, runtime::package::runtime_instance_for_semantic};
 
     #[test]
-    fn mixed_compile_time_and_runtime_layout_components_lower_through_calls() {
+    fn const_generic_zero_sized_fields_lower_through_calls() {
         let mut db = DriverDataBase::default();
         let file_url = Url::from_file_path(
-            std::env::temp_dir().join("mixed_layout_component_runtime_lowering.fe"),
+            std::env::temp_dir().join("const_generic_zero_sized_fields_runtime_lowering.fe"),
         )
         .expect("fixture path should be absolute");
         db.workspace().touch(
@@ -6511,11 +6496,12 @@ mod tests {
             file_url.clone(),
             Some(
                 r#"
-use std::evm::StorageMap
+struct Marker<const ROOT: u256> {}
 
 struct Mixed<const ROOT: u256> {
-    fixed: StorageMap<u256, u256, 7>,
-    dynamic: StorageMap<u256, u256, ROOT>,
+    fixed: Marker<7>,
+    generic: Marker<ROOT>,
+    value: u256,
 }
 
 fn pass<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
@@ -6534,6 +6520,8 @@ fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
+        let diags = db.run_on_top_mod(top_mod);
+        assert!(diags.is_empty(), "{}", diags.format_diags(&db));
         for name in ["pass", "forward"] {
             let func = top_mod
                 .all_funcs(&db)
@@ -6545,11 +6533,16 @@ fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
                         .is_some_and(|func_name| func_name.data(&db) == name)
                 })
                 .unwrap_or_else(|| panic!("missing function `{name}`"));
-            let semantic = get_or_build_semantic_instance(
+            let semantic = SemanticInstance::new(
                 &db,
-                identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+                identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
             );
-            let _ = runtime_instance_for_semantic(&db, semantic).body(&db);
+            let body = runtime_instance_for_semantic(&db, semantic).body(&db);
+            assert_eq!(body.signature.params.len(), 1);
+            assert_eq!(
+                body.signature.ret.as_ref(),
+                Some(&body.signature.params[0].class)
+            );
         }
     }
 

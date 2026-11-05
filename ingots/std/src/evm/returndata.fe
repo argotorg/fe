@@ -1,4 +1,4 @@
-use core::abi::{AbiSize, ByteInput, Bytes, Decode, DynString, store_word}
+use core::abi::{AbiSize, ByteInput, ByteSource, Bytes, Decode, DynString, store_word}
 use core::Copy
 use core::error::ErrorVariant
 use core::num::IntDowncast
@@ -56,12 +56,12 @@ impl ReturnData {
     pub fn to_bytes(self) -> Bytes {
         let len = self.len()
         let padded = (len + 31) / 32 * 32
-        let data = ptr::alloc_bytes(32 + padded)
+        let data = ptr::alloc_bytes((32 + padded).downcast_saturate())
         unsafe { store_word(ptr: data, value: len) }
         if len != 0 {
             if padded != len {
                 // The copy leaves the padding of the last word untouched.
-                unsafe { store_word(ptr: ptr::offset_bytes(data, padded), value: 0) }
+                unsafe { store_word(ptr: ptr::offset_bytes(data, padded.downcast_unchecked()), value: 0) }
             }
             unsafe {
                 returndatacopy(
@@ -71,20 +71,20 @@ impl ReturnData {
                 )
             }
         }
-        unsafe { Bytes::from_abi_tail(data: data, len: len, size: 32 + padded) }
+        unsafe { Bytes::from_abi_tail(data: data, len: len.downcast_unchecked(), size: 32 + padded) }
     }
 }
 
-impl ByteInput for ReturnData {
+impl ByteSource for ReturnData {
     /// Bytes visible through the view: `returndatasize() - base`, or zero if
     /// `base` is past the end.
     #[inline(always)]
-    fn len(self) -> u256 {
+    fn size(self) -> u64 {
         let total = returndatasize()
         if self.base > total {
             0
         } else {
-            total - self.base
+            (total - self.base).downcast_truncate()
         }
     }
 
@@ -198,7 +198,7 @@ pub fn is_error<E>(_ data: MemSpan) -> bool where E: ErrorVariant<Sol> {
     if !has_selector<E>(data) {
         return false
     }
-    let payload_len = data.len() - 4
+    let payload_len = data.len() as u256 - 4
     if E::IS_DYNAMIC {
         payload_len >= E::HEAD_SIZE
     } else {
@@ -233,10 +233,10 @@ pub fn decode_error_string<I: ByteInput>(_ data: I) -> Option<DynString> {
         return Option::None
     }
     let padded = (length + 31) / 32 * 32
-    let tail = ptr::alloc_bytes(32 + padded)
+    let tail = ptr::alloc_bytes((32 + padded).downcast_saturate())
     unsafe { store_word(ptr: tail, value: length) }
     if padded > 0 {
-        unsafe { store_word(ptr: ptr::offset_bytes(tail, padded), value: 0) }
+        unsafe { store_word(ptr: ptr::offset_bytes(tail, padded.downcast_unchecked()), value: 0) }
     }
     unsafe {
         data.copy_to_memory(
@@ -245,7 +245,7 @@ pub fn decode_error_string<I: ByteInput>(_ data: I) -> Option<DynString> {
             len: length,
         )
         Option::Some(
-            DynString::from_abi_tail(data: tail, len: length, size: 32 + padded),
+            DynString::from_abi_tail(data: tail, len: length.downcast_unchecked(), size: 32 + padded),
         )
     }
 }

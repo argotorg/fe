@@ -259,7 +259,7 @@ impl<'a> IngotHandler<'a> {
             return forced_dependency_policy(mode);
         }
 
-        let profile = self.db.compilation_settings().profile(self.db);
+        let profile = self.db.compilation_settings().profile(self.db).clone();
         let workspace_root = self
             .db
             .dependency_graph()

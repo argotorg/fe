@@ -1,0 +1,55 @@
+// A signature may name an associated shape whose impl is known: in the impl
+// as `Self::Step`, or anywhere through its qualified path. It is the parts
+// the impl's shape lists.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+    fn sum(self, _ s: Self::Step<ref>) -> u256
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (mut? u256, mut? u256)
+
+    fn at(mut? self) -> Self::Step {
+        (mut? self.a, mut? self.b)
+    }
+
+    fn sum(self, _ s: Self::Step<ref>) -> u256 {
+        let (x, y) = s
+        x + y
+    }
+}
+
+fn read(_ p: Pair) -> <Pair as Driver>::Step<ref> {
+    p.at()
+}
+
+fn read_short(_ p: Pair) -> Pair::Step<ref> {
+    p.at()
+}
+
+fn write(_ p: mut Pair) -> <Pair as Driver>::Step<mut> {
+    p.at()
+}
+
+fn total<D: Driver>(_ d: D) -> u256 {
+    d.sum(d.at())
+}
+
+#[test]
+fn signatures_name_known_shapes() {
+    var p = Pair { a: 1, b: 2 }
+    assert(p.sum(p.at()) == 3)
+    let (mut x, mut y) = write(mut p)
+    x = 10
+    y = 20
+    let (x, y) = read(p)
+    let (a, b) = read_short(p)
+    assert(x + y == 30 && a + b == 30 && total(p) == 30)
+}

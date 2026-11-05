@@ -6,19 +6,19 @@ fn init() uses (evm: mut Evm) {
     { // create child contract
         let len = evm.code_region_len(child_init)
         let offset = evm.code_region_offset(child_init)
-        var dest = ptr::MemBuffer::alloc(len)
+        var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
         evm.codecopy(
             dest: mut dest,
             dest_offset: 0,
             src_offset: offset,
             len,
         )
-        evm.create2_raw(value: 0, init_code: dest.span(), salt: 0x1234)
+        evm.create2_raw(value: Wei::zero(), init_code: dest.span(), salt: 0x1234)
     }
 
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -44,7 +44,7 @@ fn runtime() uses (evm: mut Evm) {
 fn child_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(child_runtime)
     let offset = evm.code_region_offset(child_runtime)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len.downcast_unchecked())
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,

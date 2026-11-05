@@ -17,6 +17,10 @@ fn classifies_core_and_std_runtime_builtins() {
 
     let alloc = resolve_lib_func_path(&db, func.scope(), "core::ptr::alloc_raw")
         .expect("failed to resolve core::ptr::alloc_raw");
+    let try_alloc = resolve_lib_func_path(&db, func.scope(), "core::ptr::try_alloc_raw")
+        .expect("failed to resolve core::ptr::try_alloc_raw");
+    let dealloc = resolve_lib_func_path(&db, func.scope(), "core::ptr::dealloc_raw")
+        .expect("failed to resolve core::ptr::dealloc_raw");
     let ptr_eq = resolve_lib_func_path(&db, func.scope(), "core::ptr::addr_eq")
         .expect("failed to resolve core::ptr::addr_eq");
     let copy_mem = resolve_lib_func_path(&db, func.scope(), "core::ptr::copy_mem")
@@ -35,6 +39,14 @@ fn classifies_core_and_std_runtime_builtins() {
     assert_eq!(
         runtime_builtin_func_kind(&db, alloc),
         Some(RuntimeBuiltinFuncKind::Malloc)
+    );
+    assert_eq!(
+        runtime_builtin_func_kind(&db, try_alloc),
+        Some(RuntimeBuiltinFuncKind::TryMalloc)
+    );
+    assert_eq!(
+        runtime_builtin_func_kind(&db, dealloc),
+        Some(RuntimeBuiltinFuncKind::Free)
     );
     assert_eq!(
         runtime_builtin_func_kind(&db, ptr_eq),
@@ -96,6 +108,10 @@ fn external_executions_access_persistent_state() {
     ] {
         let func = resolve_lib_func_path(&db, scope, path)
             .unwrap_or_else(|| panic!("failed to resolve {path}"));
-        assert_eq!(external_call_state_access(&db, func), access, "{path}");
+        assert_eq!(
+            external_call_state_access(&db, func, None),
+            access,
+            "{path}"
+        );
     }
 }

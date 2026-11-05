@@ -98,7 +98,7 @@ fn test_destructured_accesses() {
 
 #[test]
 fn test_storage_payload_access() uses (evm: mut Evm) {
-    let c = evm.create2<Counter>(value: 0, args: (), salt: 7)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: Msg::Bump {}) == 6)
-    assert!(evm.call(addr: c, gas: 100000, value: 0, message: Msg::Bump {}) == 7)
+    let c = evm.create2<Counter>(value: Wei::zero(), args: (), salt: 7)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Bump {}) == 6)
+    assert!(evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Bump {}) == 7)
 }

@@ -1,0 +1,21 @@
+use ingot::Get
+
+pub contract C {
+    recv Get {
+        Get -> u256 {
+            1
+        }
+    }
+}
+
+pub mod inner {
+    use ingot::Get
+
+    pub contract C {
+        recv Get {
+            Get -> u256 {
+                3
+            }
+        }
+    }
+}

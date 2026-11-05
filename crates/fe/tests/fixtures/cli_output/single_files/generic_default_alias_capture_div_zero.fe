@@ -3,11 +3,11 @@ type A<const N: usize> = [u8; { 10 / N }]
 type B<const N: usize> = A<N>
 
 fn direct<const N: usize, T = A<N>>() -> u256 {
-    core::size_of<T>()
+    core::size_of<T>() as u256
 }
 
 fn nested<const N: usize, T = B<N>>() -> u256 {
-    core::size_of<T>()
+    core::size_of<T>() as u256
 }
 
 fn concrete_direct() -> u256 {

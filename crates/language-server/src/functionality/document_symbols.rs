@@ -41,7 +41,7 @@ fn collect_symbols(
     top_mod: TopLevelMod,
     symbols: &mut Vec<DocumentSymbol>,
 ) {
-    let items = top_mod.scope_graph(db).items_dfs(db);
+    let items = top_mod.all_items(db).iter().copied();
 
     for item in items {
         if let Some(symbol) = item_to_symbol(db, item) {

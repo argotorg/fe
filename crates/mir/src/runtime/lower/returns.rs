@@ -3,28 +3,29 @@ use std::collections::{BTreeMap, VecDeque};
 use cranelift_entity::{EntityRef, PrimaryMap, SecondaryMap, entity_impl};
 use hir::analysis::{
     semantic::{
-        ExecutableBlock, SLocalId, SemanticInstance, get_or_build_semantic_instance,
+        ExecutableBlock, SLocalId, SemanticInstance,
         normalized::{
             NExpr, NOperand, NPlace, NPlaceBase, NValueDefinition, NValueId, NormalizedBody,
             normalize_semantic_body,
         },
-        semantic_executable_control_flow, semantic_may_return,
+        projection_component_spaces, semantic_executable_control_flow, semantic_may_return,
     },
     ty::{
         AddressSpace,
+        const_ty::CallableInputOrigin,
         ty_check::{ReturnProjectionStep, ReturnProvenance},
         ty_def::TyId,
     },
 };
 use rustc_hash::FxHashSet;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::{
-        EnumLayoutKey, EnumVariantLayout, Layout, LayoutId, LayoutKey, RawPointeeId, RefKind,
-        RuntimeClass, RuntimeExitBehavior, StructLayout,
+        EnumLayoutKey, EnumVariantLayout, Layout, LayoutId, LayoutKey, LowerError, RawPointeeId,
+        RefKind, RuntimeClass, RuntimeExitBehavior, StructLayout,
     },
 };
 
@@ -44,7 +45,7 @@ use super::{
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
 
-#[derive(Clone, Debug, PartialEq, Eq, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, SalsaValue)]
 pub(crate) enum StaticRuntimeReturnDecision<'db> {
     Known(Option<RuntimeClass<'db>>),
     Dynamic,
@@ -62,23 +63,6 @@ pub(crate) struct RuntimeReturnSummary<'db> {
     pub(crate) slice_assignment_positions: SecondaryMap<AssignmentId, Option<SliceAssignmentId>>,
     pub(crate) slice_assignments_by_local: Vec<Vec<AssignmentId>>,
     pub(crate) slice_dynamic_dependents_by_local: Vec<Vec<SLocalId>>,
-}
-
-impl<'db> PartialEq for RuntimeReturnSummary<'db> {
-    fn eq(&self, _other: &Self) -> bool {
-        false
-    }
-}
-
-impl<'db> Eq for RuntimeReturnSummary<'db> {}
-
-unsafe impl<'db> salsa::Update for RuntimeReturnSummary<'db> {
-    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
-        unsafe {
-            *old_pointer = new_value;
-        }
-        true
-    }
 }
 
 impl<'db> RuntimeReturnSummary<'db> {
@@ -194,7 +178,7 @@ impl<'db> RuntimeReturnSummary<'db> {
 
 /// A projection is inlined into each of its callers, so its grant has the
 /// class its body yields rather than one fixed by its declaration.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn projection_return_class<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
@@ -245,15 +229,26 @@ pub(crate) fn declaration_runtime_return_class<'db>(
     );
     let mut replaced = FxHashSet::default();
     for source in typed_body.forwarded_return_sources(db) {
-        let Some((_, source_class)) = bindings
-            .iter()
-            .zip(key.params(db))
-            .find(|(binding, _)| binding.binding.callable_input_origin(db) == Some(source.origin))
-        else {
+        // The class of the argument the return reads, and the steps it takes
+        // from it: a product parameter's leading steps select its part.
+        let mut classes = bindings.iter().zip(key.params(db));
+        let found = match source.origin {
+            CallableInputOrigin::ValueParam(param) => typed_body
+                .return_source_input(param, &source.projection)
+                .and_then(|(input, projection)| {
+                    let input = typed_body.input_bindings()[input];
+                    let (_, class) = classes.find(|(binding, _)| binding.binding == input)?;
+                    Some((class, projection))
+                }),
+            origin => classes
+                .find(|(binding, _)| binding.binding.callable_input_origin(db) == Some(origin))
+                .map(|(_, class)| (class, source.projection.as_slice())),
+        };
+        let Some((source_class, projection)) = found else {
             continue;
         };
         let Some(projected) =
-            project_declaration_return_source(db, source_class.clone(), &source.projection)
+            project_declaration_return_source(db, source_class.clone(), projection)
         else {
             continue;
         };
@@ -328,11 +323,7 @@ pub(crate) fn declaration_runtime_return_class<'db>(
 /// The raw transport of each borrow a body returns, by its projection in the
 /// result: the memory space when every returning path takes the borrow
 /// through a raw pointer, `None` when paths disagree.
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=returned_raw_transports_cycle_recover,
-    cycle_initial=returned_raw_transports_cycle_initial
-)]
+#[salsa::tracked(cycle_initial=returned_raw_transports_cycle_initial)]
 fn returned_raw_transports<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
@@ -363,18 +354,10 @@ fn returned_raw_transports<'db>(
 
 fn returned_raw_transports_cycle_initial<'db>(
     _: &'db dyn MirDb,
+    _: salsa::Id,
     _: SemanticInstance<'db>,
 ) -> BTreeMap<Vec<ReturnProjectionStep>, Option<AddressSpace>> {
     BTreeMap::new()
-}
-
-fn returned_raw_transports_cycle_recover<'db>(
-    _: &'db dyn MirDb,
-    _: &BTreeMap<Vec<ReturnProjectionStep>, Option<AddressSpace>>,
-    _: u32,
-    _: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<BTreeMap<Vec<ReturnProjectionStep>, Option<AddressSpace>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 struct RawTransportTracer<'a, 'db> {
@@ -469,7 +452,7 @@ impl<'db> RawTransportTracer<'_, 'db> {
                         return self.record(projection, Some(AddressSpace::Memory));
                     }
                     NExpr::Call { callee, .. } => {
-                        let callee = get_or_build_semantic_instance(self.db, callee.key);
+                        let callee = SemanticInstance::new(self.db, callee.key);
                         let prefix = projection.len();
                         for (suffix, space) in returned_raw_transports(self.db, callee) {
                             projection.extend_from_slice(suffix);
@@ -486,6 +469,51 @@ impl<'db> RawTransportTracer<'_, 'db> {
             self.record(projection, None);
         }
     }
+}
+
+/// Holds the access checker's result space of each access component of a
+/// projection, which instantiates its callers' callees, to the class lowering
+/// returns the component in. A component no yield grants, such as the payload
+/// of a variant the projection never returns, and one with no runtime class
+/// carry nothing; a native reference keeps its space at run time; constant
+/// data is a read-only memory value. Any other disagreement is an error
+/// rather than a miscompile.
+pub(crate) fn check_projection_result_spaces<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    ret: Option<&RuntimeClass<'db>>,
+) -> Result<(), LowerError> {
+    for (steps, space) in projection_component_spaces(db, semantic) {
+        let (Some(space), Some(class)) = (
+            space,
+            ret.and_then(|ret| project_declaration_return_source(db, ret.clone(), &steps)),
+        ) else {
+            continue;
+        };
+        let agrees = match &class {
+            RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            } => true,
+            RuntimeClass::Ref {
+                kind: RefKind::Object | RefKind::Const,
+                ..
+            } => space == AddressSpace::Memory,
+            RuntimeClass::Ref {
+                kind: RefKind::Provider { space: actual, .. },
+                ..
+            }
+            | RuntimeClass::RawAddr { space: actual, .. } => *actual == space,
+            _ => false,
+        };
+        if !agrees {
+            return Err(LowerError::Unsupported(format!(
+                "internal error: the access checker places result component {steps:?} of {:?} in {space:?}, but lowering returns it as {class:?}",
+                semantic.key(db).owner(db),
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn project_declaration_return_source<'db>(
@@ -507,7 +535,7 @@ fn project_declaration_return_source<'db>(
                 .clone(),
             (
                 ReturnProjectionStep::ConstantIndex(_)
-                | ReturnProjectionStep::ParamIndex(_)
+                | ReturnProjectionStep::ParamIndex { .. }
                 | ReturnProjectionStep::AnyIndex,
                 Layout::Array(layout),
             ) => layout.elem,
@@ -515,7 +543,7 @@ fn project_declaration_return_source<'db>(
             | (ReturnProjectionStep::VariantField { .. }, Layout::Struct(_) | Layout::Array(_))
             | (
                 ReturnProjectionStep::ConstantIndex(_)
-                | ReturnProjectionStep::ParamIndex(_)
+                | ReturnProjectionStep::ParamIndex { .. }
                 | ReturnProjectionStep::AnyIndex,
                 Layout::Struct(_) | Layout::Enum(_),
             ) => return None,
@@ -595,7 +623,7 @@ fn merge_declaration_return_source<'db>(
         }
         (
             ReturnProjectionStep::ConstantIndex(_)
-            | ReturnProjectionStep::ParamIndex(_)
+            | ReturnProjectionStep::ParamIndex { .. }
             | ReturnProjectionStep::AnyIndex,
             Layout::Array(mut layout),
         ) => {
@@ -613,7 +641,7 @@ fn merge_declaration_return_source<'db>(
         | (ReturnProjectionStep::VariantField { .. }, Layout::Struct(_) | Layout::Array(_))
         | (
             ReturnProjectionStep::ConstantIndex(_)
-            | ReturnProjectionStep::ParamIndex(_)
+            | ReturnProjectionStep::ParamIndex { .. }
             | ReturnProjectionStep::AnyIndex,
             Layout::Struct(_) | Layout::Enum(_),
         ) => return None,
@@ -786,7 +814,7 @@ pub(crate) fn runtime_exit_behavior<'db>(
     }
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub(crate) fn static_runtime_return_decision<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
@@ -1079,10 +1107,8 @@ mod tests {
     use driver::DriverDataBase;
     use hir::{
         analysis::{
-            semantic::{
-                SemanticLocalKind, get_or_build_semantic_instance, root_semantic_instance_key,
-            },
-            ty::ty_check::BodyOwner,
+            semantic::{SemanticLocalKind, root_semantic_instance_key},
+            ty::ty_check::{BodyOwner, ReturnSource},
         },
         hir_def::TopLevelMod,
     };
@@ -1114,9 +1140,9 @@ mod tests {
                     .is_some_and(|func_name| func_name.data(db) == name)
             })
             .unwrap_or_else(|| panic!("missing function `{name}`"));
-        let key = root_semantic_instance_key(db, BodyOwner::Func(func))
+        let key = root_semantic_instance_key(db, BodyOwner::Func(func, None))
             .unwrap_or_else(|err| panic!("failed to root semantic function instance: {err:?}"));
-        get_or_build_semantic_instance(db, key)
+        SemanticInstance::new(db, key)
     }
 
     fn legacy_return_class_for_key<'db>(
@@ -1541,8 +1567,11 @@ fn choose(_ flag: bool) -> u256 {
             file_url.clone(),
             Some(
                 r#"
+fn local_bytes(value: String<8>) -> [u8; 8] {
+    value.as_bytes().to_array()
+}
 fn first(value: String<8>) -> u8 {
-    let bytes: [u8; 8] = value.as_bytes()
+    let bytes: [u8; 8] = local_bytes(value)
     bytes[0]
 }
 
@@ -1563,13 +1592,79 @@ pub fn main() -> u8 {
             .functions(&db)
             .iter()
             .copied()
-            .find(|function| function.symbol(&db).contains("as_bytes"))
-            .expect("missing String::as_bytes runtime function");
+            .find(|function| function.symbol(&db).contains("local_bytes"))
+            .expect("missing local array-returning runtime function");
 
         assert!(matches!(
             function.instance(&db).interface_signature(&db).ret,
             Some(RuntimeClass::AggregateValue { .. })
         ));
+    }
+
+    #[test]
+    fn product_part_indices_forward_return_provenance() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///product_part_indices_forward_return_provenance.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn at(_ (mut xs, i): (mut [Pair; 2], own usize)) -> mut Pair {
+    mut xs[i]
+}
+
+fn at_fwd(_ xs: mut [Pair; 2], _ i: usize) -> mut Pair {
+    mut at((mut xs, i))
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let sources = |name| {
+            semantic_instance_for_named_func(&db, top_mod, name)
+                .key(&db)
+                .typed_body(&db)
+                .forwarded_return_sources(&db)
+        };
+        // A part a product parameter's `let` binds indexes as the part the
+        // call passes, and a call passing a parameter as that part forwards it.
+        assert_eq!(
+            sources("at"),
+            vec![ReturnSource {
+                result_projection: Vec::new(),
+                origin: CallableInputOrigin::ValueParam(0),
+                projection: vec![
+                    ReturnProjectionStep::Field(0),
+                    ReturnProjectionStep::ParamIndex {
+                        param: 0,
+                        part: Some(1),
+                    },
+                ],
+            }]
+        );
+        assert_eq!(
+            sources("at_fwd"),
+            vec![ReturnSource {
+                result_projection: Vec::new(),
+                origin: CallableInputOrigin::ValueParam(0),
+                projection: vec![ReturnProjectionStep::ParamIndex {
+                    param: 1,
+                    part: None,
+                }],
+            }]
+        );
     }
 
     #[test]
@@ -1769,6 +1864,41 @@ fn first(_ arr: [u8; 4]) -> u8 {
                 false
             ),
             Some(merged)
+        );
+    }
+
+    #[test]
+    fn projection_result_spaces_hold_the_lowered_return_class() {
+        let source = r#"
+fn first(_ a: mut [u256; 2]) -> mut u256 {
+    mut a[0]
+}
+"#;
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///projection_result_spaces.fe").unwrap();
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(source.to_string()));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "first");
+        let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        let ret = declaration_runtime_return_class(&db, key).expect("a projection's grant class");
+
+        assert_eq!(
+            check_projection_result_spaces(&db, semantic, Some(&ret)),
+            Ok(())
+        );
+        assert!(
+            check_projection_result_spaces(
+                &db,
+                semantic,
+                Some(&RuntimeClass::opaque_raw_addr(AddressSpace::Storage)),
+            )
+            .is_err(),
+            "a memory grant returned as a storage address is an error"
         );
     }
 }

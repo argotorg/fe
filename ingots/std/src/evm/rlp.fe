@@ -24,7 +24,7 @@ use core::abi::Bytes
 use core::num::IntDowncast
 use core::option::Option
 use core::ptr::{self, MemArray, MemSpan}
-use super::effects::{Address, revert}
+use super::effects::Address
 
 /// Encodes a byte string.
 pub fn encode_bytes(_ data: MemSpan) -> Bytes {
@@ -49,17 +49,13 @@ pub fn encode_uint(_ value: u256) -> Bytes {
         return Bytes::from_word_prefix(word: value << 248, len: 1)
     }
     let out = ptr::alloc_bytes(1 + len)
-    unsafe { *out = (0x80 + len).downcast_truncate() }
+    unsafe { *out = (0x80 + len as u256).downcast_truncate() }
     write_be(ptr::offset_bytes(out, 1), value, len)
     unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: 1 + len)) }
 }
 
-/// Encodes an address as a 20-byte string. Reverts for a noncanonical
-/// `Address` with high bits set.
+/// Encodes an address as a 20-byte string.
 pub fn encode_address(_ address: Address) -> Bytes {
-    if address.inner >> 160 != 0 {
-        revert(())
-    }
     Bytes::from_word_prefix(word: (0x94 << 248) | (address.inner << 88), len: 21)
 }
 
@@ -70,7 +66,7 @@ pub fn encode_bool(_ value: bool) -> Bytes {
 
 /// Encodes a list of already encoded items.
 pub fn encode_list<const N: usize>(_ items: [Bytes; N]) -> Bytes {
-    var len: u256 = 0
+    var len: usize = 0
     var i: usize = 0
     while i < N {
         len += items[i].len()
@@ -90,24 +86,24 @@ pub fn encode_list<const N: usize>(_ items: [Bytes; N]) -> Bytes {
     unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len)) }
 }
 
-fn header_len(_ len: u256) -> u256 {
-    if len < 56 { 1 } else { 1 + byte_len(len) }
+fn header_len(_ len: usize) -> usize {
+    if len < 56 { 1 } else { 1 + byte_len(len as u256) }
 }
 
 // Writes the prefix of a string (`offset` 0x80) or list (`offset` 0xc0)
 // whose payload has `len` bytes.
-fn write_header(_ dest: *u8, offset: u256, len: u256) {
+fn write_header(_ dest: *u8, offset: u256, len: usize) {
     if len < 56 {
-        unsafe { *dest = (offset + len).downcast_truncate() }
+        unsafe { *dest = (offset + len as u256).downcast_truncate() }
         return
     }
-    let len_len = byte_len(len)
-    unsafe { *dest = (offset + 55 + len_len).downcast_truncate() }
-    write_be(ptr::offset_bytes(dest, 1), value: len, len_len)
+    let len_len = byte_len(len as u256)
+    unsafe { *dest = (offset + 55 + len_len as u256).downcast_truncate() }
+    write_be(ptr::offset_bytes(dest, 1), value: len as u256, len_len)
 }
 
-fn byte_len(_ value: u256) -> u256 {
-    var len: u256 = 0
+fn byte_len(_ value: u256) -> usize {
+    var len: usize = 0
     var rest = value
     while rest != 0 {
         len += 1
@@ -117,7 +113,7 @@ fn byte_len(_ value: u256) -> u256 {
 }
 
 // Writes the low `len` bytes of `value` big-endian.
-fn write_be(_ dest: *u8, value: u256, _ len: u256) {
+fn write_be(_ dest: *u8, value: u256, _ len: usize) {
     var rest = value
     var i = len
     while i > 0 {
@@ -131,8 +127,8 @@ fn write_be(_ dest: *u8, value: u256, _ len: u256) {
 /// in the input it was decoded from. Its accessors take that input.
 pub struct Item {
     is_list: bool,
-    start: u256,
-    len: u256,
+    start: usize,
+    len: usize,
 }
 
 impl Copy for Item {}
@@ -189,8 +185,8 @@ impl Item {
             return Option::None
         }
         let payload = self.payload(input)
-        var count: u256 = 0
-        var pos: u256 = 0
+        var count: usize = 0
+        var pos: usize = 0
         while pos < self.len {
             let (_, used) = split(payload.tail(pos))?
             pos += used
@@ -218,7 +214,7 @@ pub fn decode(_ input: MemSpan) -> Option<Item> {
 }
 
 // The first item of `input`, and the number of bytes it takes.
-fn split(_ input: MemSpan) -> Option<(Item, u256)> {
+fn split(_ input: MemSpan) -> Option<(Item, usize)> {
     let len = input.len()
     if len == 0 {
         return Option::None
@@ -228,8 +224,8 @@ fn split(_ input: MemSpan) -> Option<(Item, u256)> {
         return Option::Some((Item { is_list: false, start: 0, len: 1 }, 1))
     }
     let is_list = prefix >= 0xc0
-    let short = prefix - (if is_list { 0xc0 } else { 0x80 })
-    var header: u256 = 1
+    let short: usize = (prefix - (if is_list { 0xc0 } else { 0x80 })).downcast_unchecked()
+    var header: usize = 1
     var payload_len = short
     if short >= 56 {
         let len_len = short - 55
@@ -237,7 +233,7 @@ fn split(_ input: MemSpan) -> Option<(Item, u256)> {
         if len < header || input.byte_at(1) == 0 {
             return Option::None
         }
-        payload_len = read_be(input.slice(offset: 1, len: len_len))
+        payload_len = read_be(input.slice(offset: 1, len: len_len)).downcast_unchecked()
         if payload_len < 56 {
             return Option::None
         }
@@ -255,7 +251,7 @@ fn split(_ input: MemSpan) -> Option<(Item, u256)> {
 // Reads at most 32 bytes as a big-endian integer.
 fn read_be(_ bytes: MemSpan) -> u256 {
     var value: u256 = 0
-    var i: u256 = 0
+    var i: usize = 0
     while i < bytes.len() {
         value = (value << 8) | (bytes.byte_at(i) as u256)
         i += 1

@@ -1,8 +1,7 @@
 // A loop advances only after the current iteration: `at`'s ramp, the body,
 // `at`'s slide, then `next`. `break` leaves without advancing, and
 // `continue` advances.
-use core::iter::{Collection, CollectionMut}
-use core::option::Option
+use core::iter::Collection
 
 // `next` reverts when it advances past `stop`, or, when `check_written`,
 // before the write-back of the element it advances past has landed.
@@ -14,28 +13,30 @@ struct Tracked {
 }
 
 impl Collection for Tracked {
-    space S = memory
     type Cursor = usize
     type Item = u256
 
-    fn start(self) -> Option<usize> {
-        Option::Some(0)
+    fn start(self) -> usize {
+        0
     }
 
-    fn next(self, _ c: usize) -> Option<usize> {
+    fn has(self, _ c: usize) -> bool {
+        c < 3
+    }
+
+    fn next(self, _ c: usize) -> usize {
         assert!(c < self.stop)
         assert!(!self.check_written || self.written == c + 1)
-        if c + 1 < 3 { Option::Some(c + 1) } else { Option::None }
+        c + 1
     }
 
     fn at(self, _ c: usize) -> ref u256 {
         let item = self.items[c]
         yield ref item
     }
-}
 
-impl CollectionMut for Tracked {
-    fn at_mut(mut self, _ c: usize) -> mut u256 {
+    // At `mut`, the element is written back and its position recorded.
+    fn at(mut self, _ c: usize) -> mut u256 {
         var item = self.items[c]
         yield mut item
         self.items[c] = item

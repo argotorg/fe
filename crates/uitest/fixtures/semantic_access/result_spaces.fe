@@ -1,6 +1,6 @@
 // Each access component of a projection lies in one address space, its
-// result-space contract: callers combine grants by their contracts, never
-// by the projection bodies.
+// result space: callers combine grants by their result spaces, never by
+// the projection bodies.
 struct Counter {
     n: u256,
     m: u256,

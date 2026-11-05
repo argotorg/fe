@@ -14,5 +14,5 @@ pub contract Store {
 
 #[test]
 fn untrusted_locate() uses (evm: mut Evm) {
-    evm.create2<Store>(value: 0, args: (), salt: 0)
+    evm.create2<Store>(value: Wei::zero(), args: (), salt: 0)
 }

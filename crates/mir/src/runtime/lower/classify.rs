@@ -1,12 +1,14 @@
 #[cfg(test)]
 use hir::analysis::semantic::normalized::ReadMode;
 use hir::analysis::ty::AddressSpace;
+#[cfg(test)]
+use hir::analysis::ty::evidence::EvidenceList;
 
 use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
 use hir::analysis::{
     semantic::{
         FieldIndex, Mutability, SConst, SLocal, SLocalId, SemanticInstance, SemanticLocalKind,
-        SemanticLocalRole, ValueProvenance, VariantIndex, get_or_build_semantic_instance,
+        SemanticLocalRole, ValueProvenance, VariantIndex,
         normalized::{
             NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase,
             NRootKind, NStatementKind, NValueDefinition, NValueId, copied_scalar_ty,
@@ -24,7 +26,7 @@ use hir::analysis::{
 use hir::hir_def::{ArithBinOp, FuncParamMode, ItemKind};
 use hir::semantic::{ProviderBinding, ProviderSource, constraints_for};
 use rustc_hash::FxHashMap;
-use salsa::Update;
+use salsa::SalsaValue;
 
 use crate::{
     db::MirDb,
@@ -42,11 +44,10 @@ use crate::{
 use super::{
     arg_selector::RuntimeArgSelector,
     boundary::{
-        BoundaryRef, BoundarySiteAllocator, BoundarySpecializationCache, RuntimeClassShape,
-        StagedBoundary, aggregate_transport_depends_on_runtime_source,
+        BoundarySiteAllocator, BoundarySpecializationCache, RuntimeClassShape, StagedBoundary,
+        aggregate_transport_depends_on_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
         default_borrow_transport_set, specialize_boundary_for_aggregate_layout,
-        specialize_boundary_for_runtime_source_in_context,
     },
     call_input::{
         CompiledCallInputPlan, CompiledMaterializationPlan, compile_call_input_plan_for_semantic,
@@ -312,7 +313,7 @@ impl<'db> BodyStaticFacts<'db> {
                 // A call that never returns ends its executable block, and lowering
                 // never assigns its result.
                 if let NExpr::Call { callee, .. } = expr
-                    && semantic_never_returns(db, get_or_build_semantic_instance(db, callee.key))
+                    && semantic_never_returns(db, SemanticInstance::new(db, callee.key))
                 {
                     continue;
                 }
@@ -1064,23 +1065,6 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         Some(storage_field_lane(self.db, &parent, *field, root_space).is_some())
     }
 
-    pub(crate) fn specialize_boundary_for_source(
-        self,
-        carriers: &[RuntimeCarrier<'db>],
-        local: SLocalId,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> RuntimeBoundarySpec<'db> {
-        specialize_boundary_for_runtime_source_in_context(
-            self,
-            local,
-            BoundaryRef::unstaged(boundary),
-            carriers,
-            None,
-        )
-        .boundary
-        .into_owned()
-    }
-
     pub(crate) fn actual_aggregate_class_for_source(
         self,
         carriers: &[RuntimeCarrier<'db>],
@@ -1314,7 +1298,7 @@ fn local_disallows_const_ref_storage(body: &RuntimeSemanticBody<'_>, local: SLoc
             .statements
             .iter()
             .any(|statement| match &statement.kind {
-                NStatementKind::End { .. } => false,
+                NStatementKind::End { .. } | NStatementKind::Drop { .. } => false,
                 NStatementKind::Store { destination, .. } => mutable_place_uses_local(destination),
                 NStatementKind::Define {
                     expr: NExpr::Borrow { place, kind, .. },
@@ -1573,7 +1557,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                 effect_args,
                 ..
             } => {
-                let semantic = get_or_build_semantic_instance(db, callee.key);
+                let semantic = SemanticInstance::new(db, callee.key);
                 let builtin_return_class = extern_builtin_return_class(db, semantic, result_ty);
                 let return_decision = static_runtime_return_decision(db, semantic);
                 let needs_input_plan = builtin_return_class.is_none()
@@ -1604,7 +1588,7 @@ pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
     pub(crate) carriers: &'carriers [RuntimeCarrier<'db>],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) struct RuntimeVisibleBindingPlan<'db> {
     pub(crate) binding: LocalBinding<'db>,
     pub(crate) semantic_ty: TyId<'db>,
@@ -2058,7 +2042,7 @@ fn runtime_class_for_root_provider_param<'db>(
     let binding_ty = binding_ty
         .as_capability(db)
         .map_or(binding_ty, |(_, inner)| canonical(inner));
-    registered_root_providers(db, EffectParamSite::Func(func))
+    registered_root_providers(db, EffectParamSite::Func(func, None))
         .iter()
         .find(|provider| canonical(provider.provider_ty) == binding_ty)
         .map(|provider| {
@@ -2138,19 +2122,14 @@ fn aggregate_make_class_from_facts<'db>(
     let mut evaluator = RuntimeArgSelector::new(env, carriers, class_cache);
     for (field, field_facts) in fields.iter().copied().zip(facts.fields.iter()) {
         let field = env.body.runtime_operand(field)?;
-        let selected = if let Some(boundary) = field_facts.boundary.as_ref() {
-            let mut boundary_sites = BoundarySiteAllocator::default();
-            evaluator.selected_value_pass_plan(
+        let class = evaluator
+            .selected_ctor_field(
                 field,
-                &compile_value_pass_plan(
-                    RuntimeParamPlan::Boundary(boundary.boundary.clone()),
-                    &mut boundary_sites,
-                ),
+                field_facts
+                    .boundary
+                    .as_ref()
+                    .map(|boundary| &boundary.boundary),
             )
-        } else {
-            evaluator.selected_materialized_operand(field)
-        };
-        let class = selected
             .map(|arg| arg.class)
             .unwrap_or_else(|| field_facts.stored_class.clone());
         field_classes.push(class);
@@ -2234,7 +2213,7 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
     idx: usize,
 ) -> RuntimeParamPlan<'db> {
-    let Some(binding) = typed_body.param_binding(idx) else {
+    let Some(&binding) = typed_body.input_bindings().get(idx) else {
         return RuntimeParamPlan::Erased;
     };
     let binding_ty = semantic.binding_ty(db, binding);
@@ -2709,7 +2688,7 @@ pub(crate) fn contract_metadata_builtin<'db>(
     })
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn runtime_extern_builtin_return_class<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
@@ -2724,7 +2703,7 @@ fn runtime_extern_builtin_return_class<'db>(
             AddressSpace::Memory,
         ));
     }
-    let hir::analysis::ty::ty_check::BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+    let hir::analysis::ty::ty_check::BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
         return None;
     };
     if func.body(db).is_none()
@@ -2852,7 +2831,7 @@ pub(crate) fn semantic_return_ty<'db>(
     semantic: SemanticInstance<'db>,
 ) -> TyId<'db> {
     match semantic.key(db).owner(db) {
-        BodyOwner::Func(func) if func.is_projection(db) => semantic.normalized_result_ty(db),
+        BodyOwner::Func(func, _) if func.is_projection(db) => semantic.normalized_result_ty(db),
         _ => semantic.key(db).typed_body(db).result_ty(),
     }
 }
@@ -2945,8 +2924,7 @@ mod tests {
     use hir::{
         analysis::semantic::{
             EffectProviderSubst, GenericSubst, ImplEnv, NEffectArg, NStatementKind,
-            SemanticCalleeRef, SemanticInstance, SemanticInstanceKey,
-            get_or_build_semantic_instance, owner_effect_bindings,
+            SemanticCalleeRef, SemanticInstance, SemanticInstanceKey, owner_effect_bindings,
             resolved_provider_binding_for_instance_effect, root_semantic_instance_key,
         },
         analysis::ty::{
@@ -3012,6 +2990,7 @@ mod tests {
     ) -> RuntimeInterfaceSignature<'db> {
         runtime_instance_for_semantic(db, semantic_instance_for_named_func(db, top_mod, name))
             .interface_signature(db)
+            .clone()
     }
 
     fn func_by_name<'db>(
@@ -3037,10 +3016,11 @@ mod tests {
         name: &str,
     ) -> SemanticInstance<'db> {
         let func = func_by_name(db, top_mod, name);
-        let key = root_semantic_instance_key(db, BodyOwner::Func(func)).unwrap_or_else(|err| {
-            panic!("failed to build root semantic key for `{name}`: {err:?}")
-        });
-        get_or_build_semantic_instance(db, key)
+        let key =
+            root_semantic_instance_key(db, BodyOwner::Func(func, None)).unwrap_or_else(|err| {
+                panic!("failed to build root semantic key for `{name}`: {err:?}")
+            });
+        SemanticInstance::new(db, key)
     }
 
     #[test]
@@ -3142,7 +3122,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
         let trait_inst = TraitInstId::new_simple(&db, trait_, vec![TyId::bool(&db)]);
         let callee_key = SemanticInstanceKey::new(
             &db,
-            BodyOwner::Func(declaration),
+            BodyOwner::Func(declaration, None),
             GenericSubst::for_owner(&db, declaration.into(), trait_inst.args(&db).to_vec()),
             EffectProviderSubst::empty(&db),
             ImplEnv::new(
@@ -3151,6 +3131,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
                 PredicateListId::empty_list(&db),
                 vec![trait_inst],
             ),
+            EvidenceList::none(&db),
         );
         let mut replaced = false;
         for block in &mut body.normalized.blocks {
@@ -3510,15 +3491,14 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
             .expect("erc20 fixture should define a contract");
         let init_key = root_semantic_instance_key(&db, BodyOwner::ContractInit { contract })
             .unwrap_or_else(|err| panic!("failed to build root init semantic key: {err:?}"));
-        let init =
-            runtime_instance_for_semantic(&db, get_or_build_semantic_instance(&db, init_key));
+        let init = runtime_instance_for_semantic(&db, SemanticInstance::new(&db, init_key));
         let grant = init
             .calls(&db)
             .iter()
             .find_map(|call| {
                 let semantic = call.callee.key(&db).semantic(&db)?;
                 match semantic.key(&db).owner(&db) {
-                    BodyOwner::Func(func)
+                    BodyOwner::Func(func, _)
                         if func
                             .name(&db)
                             .to_opt()
@@ -3558,7 +3538,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
             "grant's ABI takes the receiver:\nsignature={signature:#?}"
         );
         assert_eq!(
-            signature,
+            *signature,
             runtime_declaration_signature(&db, callee.key(&db))
         );
     }
@@ -3695,7 +3675,7 @@ uses (slot: Slot<u256>)
         let top_mod = db.top_mod(file);
         let contract = contract_by_name(&db, top_mod, "B");
         for arm_idx in [1, 2, 4] {
-            let semantic = get_or_build_semantic_instance(
+            let semantic = SemanticInstance::new(
                 &db,
                 root_semantic_instance_key(
                     &db,
@@ -3777,7 +3757,7 @@ uses (slot: Slot<u256>)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let contract = contract_by_name(&db, top_mod, "B");
-        let semantic = get_or_build_semantic_instance(
+        let semantic = SemanticInstance::new(
             &db,
             root_semantic_instance_key(
                 &db,
@@ -3816,7 +3796,7 @@ uses (slot: Slot<u256>)
                 else {
                     continue;
                 };
-                let BodyOwner::Func(func) = callee.key.owner(&db) else {
+                let BodyOwner::Func(func, _) = callee.key.owner(&db) else {
                     continue;
                 };
                 let Some(name) = func.name(&db).to_opt().map(|name| name.data(&db)) else {
@@ -3954,7 +3934,7 @@ fn caller() -> u256 {
         )
         .run();
         let callee_name = |owner: BodyOwner<'_>| match owner {
-            BodyOwner::Func(func) => func.name(&db).to_opt().map(|name| name.data(&db).clone()),
+            BodyOwner::Func(func, _) => func.name(&db).to_opt().map(|name| name.data(&db).clone()),
             _ => None,
         };
         // Inference selects a local provider before the local is given a
@@ -4031,7 +4011,7 @@ fn caller() -> u256 {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let contract = contract_by_name(&db, top_mod, "C");
-        let semantic = get_or_build_semantic_instance(
+        let semantic = SemanticInstance::new(
             &db,
             root_semantic_instance_key(
                 &db,
@@ -4078,7 +4058,7 @@ fn caller() -> u256 {
                         else {
                             return None;
                         };
-                        let BodyOwner::Func(func) = callee.key.owner(&db) else {
+                        let BodyOwner::Func(func, _) = callee.key.owner(&db) else {
                             return None;
                         };
                         if func
@@ -4113,7 +4093,7 @@ fn caller() -> u256 {
             .find_map(|call| {
                 let semantic = call.callee.key(&db).semantic(&db)?;
                 match semantic.key(&db).owner(&db) {
-                    BodyOwner::Func(func)
+                    BodyOwner::Func(func, _)
                         if func
                             .name(&db)
                             .to_opt()
