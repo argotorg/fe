@@ -1045,12 +1045,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 },
             ))
         });
-        let exit_ty = match self.template_owner {
-            BodyOwner::Func(func, mode) if let Some(shape) = func.return_shape(self.db, mode) => {
-                shape.carrier_ty(self.db)
-            }
-            _ => self.typed_body.result_ty(),
-        };
+        let exit_ty = self.instance.normalized_result_ty(self.db);
         let exit = self.emit_expr_with_origin(
             origin,
             exit_ty,
