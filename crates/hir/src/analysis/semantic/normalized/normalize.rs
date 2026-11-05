@@ -323,7 +323,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn local_slot_root(&mut self, local: SLocalId) -> NRootId {
         let local_data = &self.raw.locals[local.index()];
         let param = local_data.source.and_then(|binding| match binding {
-            LocalBinding::Param { idx, .. } => Some(idx as u32),
+            // A product parameter's binding gathers its parts, the body's
+            // inputs: it is a local the body initializes.
+            LocalBinding::Param { idx, .. } if self.raw.entry_locals.contains(&local) => {
+                Some(idx as u32)
+            }
             _ => None,
         });
         let root = NRootId::new(self.roots.len());
@@ -1331,7 +1335,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             let Some((_, target)) = projected_ty.as_capability(self.db) else {
                 continue;
             };
-            if index + 1 == projections.len() {
+            // A read of the carrier itself takes it; any other reads what it
+            // reaches.
+            if index + 1 == projections.len() && result_ty.as_capability(self.db).is_some() {
                 break;
             }
             if self.ty_is_copy(projected_ty) {
@@ -1419,7 +1425,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 .position(|projection| matches!(projection, Projection::Deref))
         {
             // A value local has no place to project from. Project the pointer
-            // out of its value and dereference that.
+            // or carrier out of its value and dereference that.
             let mut prefix = crate::analysis::semantic::SemanticProjectionPath::new();
             for projection in projections.by_ref().take(deref) {
                 prefix.push(projection.clone());
@@ -1435,18 +1441,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 &path,
             )
             .map_err(|_| NormalizeError::InvalidProjection)?;
-            let (ty, _) = pointer_ty
-                .as_ptr(self.db)
-                .ok_or(NormalizeError::InvalidProjection)?;
             let pointer =
                 self.normalize_value_projection(block, origin, raw.local, value, path, pointer_ty)?;
             let pointer = self.emit_define(block, None, origin, pointer_ty, raw.local, pointer)?;
-            NPlace {
-                base: NPlaceBase::Deref { pointer },
-                path: NDataPath::empty(),
-                ty,
-                origin,
-            }
+            self.place_selected_by(pointer, origin)?
         } else {
             self.place_for_local(block, origin, raw.local)?
         };
@@ -1507,10 +1505,6 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         source_local: SLocalId,
         place: NPlace<'db>,
     ) -> Result<NPlace<'db>, NormalizeError<'db>> {
-        let pointer_target = place.ty.as_ptr(self.db).map(|(target, _)| target);
-        let target = pointer_target
-            .or_else(|| place.ty.as_capability(self.db).map(|(_, target)| target))
-            .ok_or(NormalizeError::InvalidProjection)?;
         let value = self.emit_define(
             block,
             None,
@@ -1522,14 +1516,28 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 mode: ReadMode::Copy,
             },
         )?;
+        self.place_selected_by(value, origin)
+    }
+
+    /// The place the pointer or capability carrier `value` selects.
+    fn place_selected_by(
+        &self,
+        value: NValueId,
+        origin: SemOrigin<'db>,
+    ) -> Result<NPlace<'db>, NormalizeError<'db>> {
+        let ty = self.values[value.index()].ty;
+        let (base, ty) = if let Some((target, _)) = ty.as_ptr(self.db) {
+            (NPlaceBase::Deref { pointer: value }, target)
+        } else {
+            let (_, target) = ty
+                .as_capability(self.db)
+                .ok_or(NormalizeError::InvalidProjection)?;
+            (NPlaceBase::CapabilityTarget { carrier: value }, target)
+        };
         Ok(NPlace {
-            base: if pointer_target.is_some() {
-                NPlaceBase::Deref { pointer: value }
-            } else {
-                NPlaceBase::CapabilityTarget { carrier: value }
-            },
+            base,
             path: NDataPath::empty(),
-            ty: target,
+            ty,
             origin,
         })
     }

@@ -327,7 +327,9 @@ at most once. A `let`, a pattern, a field read or a copy of it is an error.
 A product's part, `(own usize, H::Part<ref>)`, a closure's parameter and a
 callable bound, `F: Fn(H::Part<ref>) -> bool`, take one the same way. A
 bound that fixes the shape at a mode makes its parts known there, to bind,
-copy and destructure; each mode is fixed on its own:
+copy and destructure; each mode is fixed on its own. A pattern on a known
+parameter opens each marked binding's access on what its part reaches, so
+`let (mut a, _) = p` and `let (mut b, _) = p` may not overlap:
 
 ```fe
 fn bump<H: mut Holds<Part<ref> = (ref u256, ref u256), Part<mut> = (mut u256, mut u256)>>(

@@ -599,23 +599,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     /// Binds `pat`'s bindings to the components of `place`, which holds a
     /// `ty`, where they lie. A component that holds an access, such as an
-    /// access part of a product or of a projection's result, is read and
-    /// matched as a value: its bindings take what the access reaches.
+    /// access part of a product or of a projection's result, is matched
+    /// through it: a `ref` or `mut` binding opens an access on what it
+    /// reaches, and any other reads that.
     fn bind_validated_pattern_place(
         &mut self,
         pat: ValidatedPatId,
-        place: SPlace<'db>,
-        provider: Option<AddressSpace>,
-        ty: TyId<'db>,
+        mut place: SPlace<'db>,
+        mut provider: Option<AddressSpace>,
+        mut ty: TyId<'db>,
     ) {
-        let store = self.typed_body.pattern_store();
-        if ty.as_capability(self.db).is_some() {
-            if store.binds(pat) {
-                let carrier = self.emit_expr(ty, SExpr::ReadPlace { place });
-                self.bind_validated_pattern(pat, self.owned_pattern_value(carrier, ty));
-            }
-            return;
+        if let Some((_, target)) = ty.as_capability(self.db) {
+            place.push_deref();
+            (provider, ty) = (None, target);
         }
+        let store = self.typed_body.pattern_store();
         let kind = store.node(pat).kind().clone();
         match kind {
             ValidatedPatKind::Wildcard {
@@ -791,6 +789,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         projections: &mut DecisionTreeProjectionCache<'db>,
         target: DecisionTreeTarget<'_>,
     ) -> bool {
+        // A struct or tuple has one constructor, so an inspected place's tests
+        // read only the components they test below it.
+        if projections.inspected
+            && let [(Case::Constructor(ConstructorKind::Type(_)), tree)] = switch.arms.as_slice()
+        {
+            return self.lower_decision_tree(tree, projections, target);
+        }
         let origin = target.test_origin(switch_first_arm(switch));
         let occurrence = self.project_decision_tree_path(origin, projections, &switch.occurrence);
         let case_blocks = switch
@@ -908,38 +913,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     ) {
         if let Some((place, provider, place_ty)) = projections.place.clone() {
             for (binding_ref, path) in &leaf.bindings {
-                let pat = binding_ref.representative_pat;
-                // A binding at or below a component that holds an access
-                // takes what the access reaches from the tests' reading of
-                // the place, as a value pattern does; the place owns no part
-                // of it.
-                let mut ty = place_ty;
-                let carried = projections.inspected
-                    && path.iter().any(|projection| {
-                        let step = match projection {
-                            Projection::Field(field) => PatternProjectionStep::Field(*field),
-                            Projection::VariantField {
-                                variant, field_idx, ..
-                            } => PatternProjectionStep::VariantField {
-                                variant: *variant,
-                                field_idx: *field_idx,
-                            },
-                            _ => unreachable!("a pattern binds through fields and variant fields"),
-                        };
-                        ty = project_pattern_child_source_ty(self.db, ty, step);
-                        ty.as_capability(self.db).is_some()
-                    });
-                if carried {
-                    let value =
-                        self.project_decision_tree_path(SemOrigin::Pat(pat), projections, path);
-                    self.bind_value(pat, value);
-                } else {
-                    let mut component = place.clone();
-                    for projection in path.iter() {
-                        component.path.push(semantic_projection(projection));
-                    }
-                    self.bind_place_component(pat, component, provider);
-                }
+                let (component, _, behind_access) =
+                    pattern_place_component(self.db, place.clone(), place_ty, path);
+                self.bind_place_component(
+                    binding_ref.representative_pat,
+                    component,
+                    provider.filter(|_| !behind_access),
+                );
             }
             return;
         }
@@ -969,6 +949,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     ) -> PatternValue<'db> {
         if let Some(value) = projections.get(path) {
             return value;
+        }
+        // A test of what an inspected place's access reaches reads only that,
+        // through a read access on its path.
+        if projections.inspected
+            && let Some((place, _, ty)) = projections.place.clone()
+            && let (place, ty, true) = pattern_place_component(self.db, place, ty, path)
+        {
+            let ty = TyId::borrow_ref_of(self.db, ty);
+            let value = self.emit_expr_with_origin(
+                origin,
+                ty,
+                SExpr::Borrow {
+                    place,
+                    kind: BorrowKind::Ref,
+                    provider: None,
+                },
+            );
+            return self.owned_pattern_value(value, ty);
         }
         // A test reads a matched place through a read access of it, which
         // its last test closes, or reads an inspected place's value.
@@ -1096,6 +1094,37 @@ pub(crate) fn enum_tag_ty<'db>(db: &'db dyn HirAnalysisDb, enum_ty: TyId<'db>) -
         _ => unreachable!("enum tag width must be a primitive integer width"),
     };
     TyId::new(db, TyData::TyBase(TyBase::Prim(prim)))
+}
+
+/// The component at `path` of `place`, which holds a `ty`, matched through each
+/// access on the way; what it holds; and whether it lies behind an access.
+fn pattern_place_component<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut place: SPlace<'db>,
+    mut ty: TyId<'db>,
+    path: &ProjectionPath<'db>,
+) -> (SPlace<'db>, TyId<'db>, bool) {
+    let mut behind_access = false;
+    for projection in path.iter() {
+        let step = match projection {
+            Projection::Field(field) => PatternProjectionStep::Field(*field),
+            Projection::VariantField {
+                variant, field_idx, ..
+            } => PatternProjectionStep::VariantField {
+                variant: *variant,
+                field_idx: *field_idx,
+            },
+            _ => unreachable!("a pattern binds through fields and variant fields"),
+        };
+        place.path.push(semantic_projection(projection));
+        ty = project_pattern_child_source_ty(db, ty, step);
+        if let Some((_, target)) = ty.as_capability(db) {
+            place.push_deref();
+            ty = target;
+            behind_access = true;
+        }
+    }
+    (place, ty, behind_access)
 }
 
 /// A decision-tree path step as a place's projection.

@@ -1,0 +1,158 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/known_product_destructure.fe
+---
+error[16-0001]: access conflict in `fn overlapping`
+    ┌─ known_product_destructure.fe:112:13
+    │
+111 │     let (a, mut b) = s
+    │             ----- access opened here
+112 │     let (c, mut d) = s
+    │             ^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn passed_while_open`
+    ┌─ known_product_destructure.fe:120:10
+    │
+119 │     let (a, mut b) = s
+    │             ----- access opened here
+120 │     bump(s)
+    │          ^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn field_read_while_open`
+    ┌─ known_product_destructure.fe:126:13
+    │
+125 │     let (a, mut b) = s
+    │             ----- access opened here
+126 │     let r = s.1
+    │             ^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn copied_while_open`
+    ┌─ known_product_destructure.fe:132:13
+    │
+131 │     let (a, mut b) = s
+    │             ----- access opened here
+132 │     let (_, c) = s
+    │             ^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn tested_while_open`
+    ┌─ known_product_destructure.fe:139:9
+    │
+137 │     let (a, mut b) = s
+    │             ----- access opened here
+138 │     let r = match s {
+139 │         (_, 0) => 0
+    │         ^^^^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn enum_tested_while_open`
+    ┌─ known_product_destructure.fe:151:9
+    │
+147 │     let (a, Tag::Full(mut x)) = s else {
+    │                       ----- access opened here
+    ·
+151 │         (_, Tag::Empty) => 0
+    │         ^^^^^^^^^^^^^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn same_field_tested_while_open`
+    ┌─ known_product_destructure.fe:161:9
+    │
+159 │     let (_, Inner { mut x, .. }) = s
+    │                     ----- access opened here
+160 │     let r = match s {
+161 │         (_, Inner { x: 0, .. }) => 0
+    │         ^^^^^^^^^^^^^^^^^^^^^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn mut_under_ref`
+    ┌─ known_product_destructure.fe:170:13
+    │
+169 │     let (_, ref b) = s
+    │             ----- access opened here
+170 │     let (_, mut c) = s
+    │             ^^^^^ cannot mutably access this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn nested_match`
+    ┌─ known_product_destructure.fe:178:21
+    │
+176 │         (a, mut b) => {
+    │             ----- access opened here
+177 │             match s {
+178 │                 (c, mut d) => {
+    │                     ^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn let_else_overlapping`
+    ┌─ known_product_destructure.fe:191:13
+    │
+188 │     let (0, mut b) = s else {
+    │             ----- access opened here
+    ·
+191 │     let (_, mut c) = s
+    │             ^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn captured_while_open`
+    ┌─ known_product_destructure.fe:198:13
+    │
+197 │     let (a, mut b) = s
+    │             ----- access opened here
+198 │     let f = || s.0
+    │             ^^^^^^ cannot read this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn nested_part_overlapping`
+    ┌─ known_product_destructure.fe:204:14
+    │
+203 │     let (a, (mut x, _)) = s
+    │              ----- access opened here
+204 │     let (_, (mut z, _)) = s
+    │              ^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn same_field_overlapping`
+    ┌─ known_product_destructure.fe:212:24
+    │
+211 │     let (n, Inner { mut x, .. }) = s
+    │                     ----- access opened here
+212 │     let (_, Inner { x: mut z, .. }) = s
+    │                        ^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn mut_under_named_ref`
+    ┌─ known_product_destructure.fe:220:13
+    │
+219 │     let x = ref s.1
+    │             ------- access opened here
+220 │     let (a, mut b) = s
+    │             ^^^^^ cannot mutably access this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn passed_under_named_ref`
+    ┌─ known_product_destructure.fe:227:10
+    │
+226 │     let x = ref s.1
+    │             ------- access opened here
+227 │     bump(s)
+    │          ^ cannot mutably access this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn copy_enum_tested_while_open`
+    ┌─ known_product_destructure.fe:253:9
+    │
+251 │     let h = mut p.0
+    │             ------- access opened here
+252 │     let n = match p {
+253 │         (Mark::A, _) => 0
+    │         ^^^^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0002]: move conflict in `fn read_through_ref`
+    ┌─ known_product_destructure.fe:233:14
+    │
+233 │     let _b = s.1
+    │              ^^^ cannot move out of a place reached through a `ref` access; bind it with `ref` to read it in place
+
+error[16-0002]: move conflict in `fn moved_through_mut`
+    ┌─ known_product_destructure.fe:237:14
+    │
+237 │     let _b = s.1
+    │              ^^^ a `mut` parameter moved out of here must be reinitialized before the function returns; bind it with `mut` or `ref` to use it in place
+
+error[16-0002]: move conflict in `fn moved_twice`
+    ┌─ known_product_destructure.fe:242:13
+    │
+241 │     let (_, b) = s
+    │             - value is moved here
+242 │     let (_, c) = s
+    │             ^ cannot use a value after it was moved
