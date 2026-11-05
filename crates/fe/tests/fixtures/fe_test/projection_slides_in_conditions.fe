@@ -1,0 +1,79 @@
+// A projection called in a condition after `&&` runs its slide when the session
+// ends in the body it guards, whichever block the body is allocated.
+struct Counter {
+    v: u256,
+    hits: u256,
+}
+
+impl Counter {
+    fn counted(mut self) -> mut u256 {
+        yield mut self.v
+        self.hits += 1
+    }
+
+    fn counted_some(mut self) -> Option<mut u256> {
+        yield Option::Some(mut self.v)
+        self.hits += 1
+    }
+}
+
+fn counter() -> own Counter {
+    Counter { v: 1, hits: 0 }
+}
+
+#[test]
+fn if_chain() {
+    var c = counter()
+    let go = c.v == 1
+    if go && let Option::Some(mut x) = c.counted_some() {
+        x = 2
+    }
+    assert(c.v == 2)
+    assert(c.hits == 1)
+}
+
+#[test]
+fn if_chain_irrefutable() {
+    var c = counter()
+    let go = c.v == 1
+    if go && let mut x = c.counted() {
+        x = 2
+    }
+    assert(c.v == 2)
+    assert(c.hits == 1)
+}
+
+#[test]
+fn if_chain_skipped() {
+    var c = counter()
+    let go = c.v == 0
+    if go && let Option::Some(mut x) = c.counted_some() {
+        x = 2
+    }
+    assert(c.v == 1)
+    assert(c.hits == 0)
+}
+
+#[test]
+fn while_chain() {
+    var c = counter()
+    let go = c.v == 1
+    while go && c.hits < 3 && let Option::Some(mut x) = c.counted_some() {
+        x += 1
+    }
+    assert(c.v == 4)
+    assert(c.hits == 3)
+}
+
+#[test]
+fn nested_condition() {
+    var c = counter()
+    let go = c.v == 0
+    if go || c.hits == 0 {
+        if let Option::Some(mut x) = c.counted_some() {
+            x = 2
+        }
+    }
+    assert(c.v == 2)
+    assert(c.hits == 1)
+}

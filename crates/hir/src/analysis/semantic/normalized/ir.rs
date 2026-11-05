@@ -62,6 +62,45 @@ impl<'db> NormalizedBody<'db> {
         self.blocks.get(id.index())
     }
 
+    /// The blocks reachable from the entry, each after the blocks dominating
+    /// it.
+    pub fn reverse_postorder(&self) -> Vec<NBlockId> {
+        self.reverse_postorder_by(|block| {
+            self.blocks[block.index()]
+                .terminator
+                .kind
+                .successors()
+                .into_iter()
+                .map(|successor| successor.block)
+                .collect()
+        })
+    }
+
+    /// [`Self::reverse_postorder`] over the edges `successors` gives.
+    pub(crate) fn reverse_postorder_by(
+        &self,
+        successors: impl Fn(NBlockId) -> Vec<NBlockId>,
+    ) -> Vec<NBlockId> {
+        let mut visited = vec![false; self.blocks.len()];
+        let mut postorder = Vec::new();
+        let mut stack = vec![(self.entry, 0)];
+        visited[self.entry.index()] = true;
+        while let Some((block, next)) = stack.last_mut() {
+            if let Some(&successor) = successors(*block).get(*next) {
+                *next += 1;
+                if !visited[successor.index()] {
+                    visited[successor.index()] = true;
+                    stack.push((successor, 0));
+                }
+            } else {
+                postorder.push(*block);
+                stack.pop();
+            }
+        }
+        postorder.reverse();
+        postorder
+    }
+
     /// The block and expression that define a statement-defined value.
     pub fn defining_expr(&self, value: NValueId) -> Option<(NBlockId, &NExpr<'db>)> {
         let NValueDefinition::Statement { block, statement } = self.value(value)?.definition else {

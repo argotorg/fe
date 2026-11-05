@@ -1219,25 +1219,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     fn reverse_postorder(&self) -> Vec<NBlockId> {
-        let mut visited = vec![false; self.body.blocks.len()];
-        let mut postorder = Vec::new();
-        let mut stack = vec![(self.body.entry, 0)];
-        visited[self.body.entry.index()] = true;
-        while let Some((block, next)) = stack.last_mut() {
-            let successors = self.successors(*block);
-            if let Some(&successor) = successors.get(*next) {
-                *next += 1;
-                if !visited[successor.index()] {
-                    visited[successor.index()] = true;
-                    stack.push((successor, 0));
-                }
-            } else {
-                postorder.push(*block);
-                stack.pop();
-            }
-        }
-        postorder.reverse();
-        postorder
+        self.body
+            .reverse_postorder_by(|block| self.successors(block))
     }
 
     /// Runs a block's statements; returns the state at its terminator.
