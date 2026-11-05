@@ -1,0 +1,139 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/never_coercion_direction.fe
+---
+error[8-0000]: type mismatch
+   ┌─ never_coercion_direction.fe:18:17
+   │
+18 │     let _a: ! = x
+   │                 ^ expected `!`, but `_` is given
+
+error[8-0000]: type mismatch
+   ┌─ never_coercion_direction.fe:35:10
+   │
+35 │     sink(x)
+   │          ^ expected `!`, but `_` is given
+
+error[8-0000]: type mismatch
+   ┌─ never_coercion_direction.fe:43:10
+   │
+43 │     sink(x)
+   │          ^ expected `!`, but `u64` is given
+
+error[8-0000]: type mismatch
+   ┌─ never_coercion_direction.fe:49:5
+   │
+49 │     x
+   │     ^ expected `!`, but `_` is given
+
+error[8-0000]: type mismatch
+   ┌─ never_coercion_direction.fe:54:5
+   │
+54 │     x
+   │     ^ expected `!`, but `{integer}` is given
+
+error[8-0000]: type mismatch
+   ┌─ never_coercion_direction.fe:61:17
+   │
+61 │     let _a: ! = x
+   │                 ^ expected `!`, but `u64` is given
+
+error[8-0000]: type mismatch
+   ┌─ never_coercion_direction.fe:93:9
+   │
+93 │     let y = x
+   │         ^ expected `!`, but `_` is given
+
+error[8-0000]: type mismatch
+    ┌─ never_coercion_direction.fe:100:10
+    │
+100 │     take(w)
+    │          ^ expected `u64`, but `bool` is given
+
+error[8-0027]: ambiguous trait implementation
+   ┌─ never_coercion_direction.fe:24:13
+   │
+ 2 │ fn zero<T: Default>() -> T {
+   │            ------- required by this bound on `zero`
+   ·
+24 │     let x = zero()
+   │             ^^^^
+   │             │
+   │             multiple implementations are found
+   │             candidate: Default
+
+error[8-0027]: ambiguous trait implementation
+   ┌─ never_coercion_direction.fe:67:37
+   │
+ 2 │ fn zero<T: Default>() -> T {
+   │            ------- required by this bound on `zero`
+   ·
+67 │     let x = if c { panic() } else { zero() }
+   │                                     ^^^^
+   │                                     │
+   │                                     multiple implementations are found
+   │                                     candidate: Default
+
+error[8-0027]: ambiguous trait implementation
+   ┌─ never_coercion_direction.fe:78:37
+   │
+ 2 │ fn zero<T: Default>() -> T {
+   │            ------- required by this bound on `zero`
+   ·
+78 │     let y = if c { panic() } else { zero() }
+   │                                     ^^^^
+   │                                     │
+   │                                     multiple implementations are found
+   │                                     candidate: Default
+
+error[8-0027]: ambiguous trait implementation
+    ┌─ never_coercion_direction.fe:105:39
+    │
+  2 │ fn zero<T: Default>() -> T {
+    │            ------- required by this bound on `zero`
+    ·
+105 │     let _w = if c { return 1 } else { zero() }
+    │                                       ^^^^
+    │                                       │
+    │                                       multiple implementations are found
+    │                                       candidate: Default
+
+error[8-0031]: type annotation is needed
+   ┌─ never_coercion_direction.fe:48:9
+   │
+48 │     let x = any()
+   │         ^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: Type` here
+
+error[8-0031]: type annotation is needed
+   ┌─ never_coercion_direction.fe:53:9
+   │
+53 │     let x = 5
+   │         ^
+   │         │
+   │         type annotation is needed
+   │         no default type is provided for an integer type. consider giving integer type
+
+error[8-0031]: type annotation is needed
+   ┌─ never_coercion_direction.fe:72:36
+   │
+72 │     let Option::Some(x) = o else { any() }
+   │                                    ^^^^^
+   │                                    │
+   │                                    type annotation is needed
+   │                                    consider giving `: Type` here
+
+error[8-0102]: `let … else` block must diverge
+   ┌─ never_coercion_direction.fe:72:34
+   │
+72 │     let Option::Some(x) = o else { any() }
+   │                                  ^^^^^^^^^ this block must return, break, continue or revert
+
+error[8-0102]: `let … else` block must diverge
+   ┌─ never_coercion_direction.fe:87:34
+   │
+87 │     let Option::Some(x) = o else { y }
+   │                                  ^^^^^ this block must return, break, continue or revert

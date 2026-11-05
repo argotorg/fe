@@ -2545,6 +2545,11 @@ impl<'db> TyFolder<'db> for Prober<'db, '_> {
             return ty.super_fold_with(db, self);
         };
 
+        // A variable only `!` has met is `!`.
+        if var.sort == TyVarSort::Diverging {
+            return TyId::never(db);
+        }
+
         // String type variable fallback.
         if let TyVarSort::String { min_len, fallback } = var.sort {
             match fallback {
