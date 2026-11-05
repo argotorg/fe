@@ -1394,12 +1394,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     _ => self.take_expr_operand(*src),
                 };
                 // A projection's result is read and written through its
-                // access, as an assignment's target is.
+                // access, as an assignment's target is. A wrapping method
+                // runs between the read and the write, so the target's
+                // pointers and indices are read once, before it: the method
+                // may change them.
                 let projection = self.is_projection_target(*dst);
                 let dst_place = if projection {
                     SPlace::new(self.lower_access(*dst))
                 } else {
-                    self.lower_place(*dst)
+                    self.try_lower_place_expr(*dst, assigns_call)
+                        .unwrap_or_else(|| panic!("expected place expression: {dst:?}"))
                 };
                 let read = if projection {
                     Some(SExpr::UseValue(SOperand::expr(dst_place.local, *dst)))

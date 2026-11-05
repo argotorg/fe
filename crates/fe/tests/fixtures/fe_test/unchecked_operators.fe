@@ -5,6 +5,7 @@
 // own mode.
 use core::fixed::Wad
 use core::ops::{Add, WrappingAdd}
+use core::ptr
 use std::evm::{Duration, Timestamp, seconds, wei}
 
 struct Pair {
@@ -227,4 +228,57 @@ fn time_sub_reverts() {
 fn duration_sub_assign_reverts() {
     var span: Duration = seconds(0)
     span -= seconds(1)
+}
+
+struct Amount {
+    value: u256,
+}
+
+impl Copy for Amount {}
+
+struct Data {
+    amount: Amount,
+}
+
+struct Owner {
+    data: *Data,
+}
+
+// Points `owner.data` at `other` while adding.
+struct Retarget {
+    owner: *Owner,
+    other: *Data,
+}
+
+impl Copy for Retarget {}
+
+impl WrappingAdd<Retarget> for Amount {
+    fn wrapping_add(own self, _ retarget: own Retarget) -> Amount {
+        unsafe { (*retarget.owner).data = retarget.other }
+        Amount { value: self.value + 1 }
+    }
+}
+
+#[arithmetic(unchecked)]
+fn add_through_pointer(_ owner: *Owner, _ retarget: Retarget) {
+    unsafe { (*owner).data.amount += retarget }
+}
+
+// `x += y` writes the result where it read `x`, even if the wrapping method
+// changes a pointer on the way to `x`.
+#[test]
+fn compound_assignment_writes_where_it_read() {
+    let first = ptr::alloc<Data>()
+    let second = ptr::alloc<Data>()
+    let owner = ptr::alloc<Owner>()
+    unsafe {
+        *first = Data { amount: Amount { value: 10 } }
+        *second = Data { amount: Amount { value: 20 } }
+        *owner = Owner { data: first }
+    }
+    add_through_pointer(owner, Retarget { owner, other: second })
+    unsafe {
+        assert!((*first).amount.value == 11)
+        assert!((*second).amount.value == 20)
+    }
 }
