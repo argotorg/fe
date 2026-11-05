@@ -1,5 +1,7 @@
 // Tests for the `core::text` number parsers and `std::evm::parse_address`.
 use std::evm::{Address, checksum_address, parse_address}
+use core::ptr::MemBuffer
+use std::abi::DynString
 use std::text
 
 const U256_MAX: u256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
@@ -119,6 +121,26 @@ fn parse_hex_uint_rejects() {
                 "0x10000000000000000000000000000000000000000000000000000000000000000",
             ).is_none(),
     )
+}
+
+#[test]
+fn parse_text_inputs() {
+    // A literal in one word is a `String<N>`, a longer one a `DynString`.
+    assert!(text::parse_uint("7") == Option::Some(7))
+    let fixed: String<4> = "0x1f"
+    assert!(text::parse_hex_uint(fixed).unwrap() == 31)
+    let dynamic: DynString = "-17"
+    assert!(text::parse_int(dynamic).unwrap() == -17)
+
+    let owned = MemBuffer::from_span(text::decimal(90210).payload_span())
+    assert!(text::parse_uint(owned).unwrap() == 90210)
+    assert!(text::parse_int(owned).unwrap() == 90210)
+    assert!(text::parse_hex_uint(owned).unwrap() == 0x90210)
+
+    // A span reads only its own bytes.
+    let span = owned.slice(offset: 1, len: 3)
+    assert!(text::parse_uint(span).unwrap() == 21)
+    assert!(text::parse_uint(owned.slice(offset: 1, len: 0)).is_none())
 }
 
 #[test]

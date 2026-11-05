@@ -5,7 +5,35 @@
 use super::abi::{Bytes, DynString}
 use super::num::{Bounded, IntDowncast}
 use super::option::Option
-use super::ptr::{self, MemArray, MemSpan}
+use super::ptr::{self, MemArray, MemBuffer, MemSpan}
+
+/// Text the number parsers read in place: a literal, a `String<N>`, a
+/// `DynString`, a `MemSpan` or a `MemBuffer`.
+pub trait Text {
+    fn text_len(self) -> usize
+    /// The byte at `index`, which is below `text_len()`.
+    fn text_byte(self, _ index: usize) -> u8
+}
+
+impl<const N: usize> Text for String<N> {
+    fn text_len(self) -> usize { self.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+}
+
+impl Text for DynString {
+    fn text_len(self) -> usize { self.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+}
+
+impl Text for MemSpan {
+    fn text_len(self) -> usize { self.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+}
+
+impl Text for MemBuffer {
+    fn text_len(self) -> usize { self.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self[index] }
+}
 
 /// Returns the concatenation of `parts` (Solidity `string.concat`).
 pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
@@ -85,18 +113,17 @@ pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
 /// `None` for an empty string (OpenZeppelin returns 0), any byte other
 /// than `0` to `9` (signs and whitespace included) or a value above
 /// `u256::max()` (OpenZeppelin reverts).
-pub fn parse_uint(_ text: DynString) -> Option<u256> {
-    parse_digits(text.payload_span(), radix: 10)
+pub fn parse_uint<T: Text>(_ text: T) -> Option<u256> {
+    parse_digits(text, from: 0, radix: 10)
 }
 
 /// Parses decimal digits with an optional `+` or `-` sign as an `i256`
 /// (Solidity `Strings.tryParseInt`). `None` for invalid digits, a missing
 /// digit or a value outside the `i256` range.
-pub fn parse_int(_ text: DynString) -> Option<i256> {
-    let text = text.payload_span()
-    let negative = !text.is_empty() && text.byte_at(0) == 45
-    let signed = negative || (!text.is_empty() && text.byte_at(0) == 43)
-    let magnitude = match parse_digits(text.tail(signed as usize), radix: 10) {
+pub fn parse_int<T: Text>(_ text: T) -> Option<i256> {
+    let negative = text.text_len() != 0 && text.text_byte(0) == 45
+    let signed = negative || (text.text_len() != 0 && text.text_byte(0) == 43)
+    let magnitude = match parse_digits(text, from: signed as usize, radix: 10) {
         Option::Some(value) => value
         Option::None => return Option::None
     }
@@ -114,22 +141,23 @@ pub fn parse_int(_ text: DynString) -> Option<i256> {
 /// Parses hex digits of either case, with or without a `0x` prefix, as a
 /// `u256` (Solidity `Strings.tryParseHexUint`). `None` for an invalid
 /// digit, no digits or a value above `u256::max()`.
-pub fn parse_hex_uint(_ text: DynString) -> Option<u256> {
-    let text = text.payload_span()
-    let prefixed = text.len() >= 2 && text.byte_at(0) == 48 && text.byte_at(1) == 120
-    parse_digits(text.tail(if prefixed { 2 } else { 0 }), radix: 16)
+pub fn parse_hex_uint<T: Text>(_ text: T) -> Option<u256> {
+    let prefixed = text.text_len() >= 2 && text.text_byte(0) == 48 && text.text_byte(1) == 120
+    parse_digits(text, from: if prefixed { 2 } else { 0 }, radix: 16)
 }
 
-fn parse_digits(_ digits: MemSpan, radix: u256) -> Option<u256> {
-    if digits.is_empty() {
+// The value of the digits from byte `from` on.
+fn parse_digits<T: Text>(_ text: T, from: usize, radix: u256) -> Option<u256> {
+    let len = text.text_len()
+    if from >= len {
         return Option::None
     }
     let limit = u256::max() / radix
     let last = u256::max() % radix
     var value: u256 = 0
-    var i: usize = 0
-    while i < digits.len() {
-        let digit = digit_value(digits.byte_at(i))
+    var i = from
+    while i < len {
+        let digit = digit_value(text.text_byte(i))
         if digit >= radix || value > limit || (value == limit && digit > last) {
             return Option::None
         }

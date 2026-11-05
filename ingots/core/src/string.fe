@@ -1,6 +1,6 @@
 use super::ops::Eq
 use super::bytes::{AsBytes, PackedBytes}
-use super::num::{leading_zeros, word_to_usize}
+use super::num::{IntDowncast, leading_zeros, word_to_usize}
 use super::ptr::{MemBuffer, MemSlice, read_padded_word}
 
 /// Fixed-size string utilities.
@@ -29,6 +29,13 @@ impl<const N: usize> String<N> {
             return 0
         }
         word_to_usize(32 - leading_zeros(word) / 8)
+    }
+
+    /// Returns the byte at `index` of the string's `len()` bytes, the text
+    /// after the zero padding, which `index` must be below.
+    pub fn byte_at(self, _ index: usize) -> u8 {
+        let shift = ((self.len() - 1 - index) * 8) as u256
+        ((padded_word(self) >> shift) & 0xff).downcast_truncate()
     }
 }
 
