@@ -196,3 +196,33 @@ fn unwrap_panics_on_an_error() {
     var s = store()
     let _x = mut s.find(4).unwrap()
 }
+
+struct Cell {
+    value: u64,
+}
+
+impl Cell {
+    fn set(mut self, _ value: u64) {
+        self.value = value
+    }
+}
+
+fn advance(_ at: mut usize) -> u64 {
+    at += 1
+    99
+}
+
+// As for any projection receiver, the arguments run before `get` opens.
+#[test]
+fn unwrap_receivers_open_after_the_arguments() {
+    var cells = MemVec::new()
+    cells.push(Cell { value: 0 })
+    cells.push(Cell { value: 0 })
+    cells.push(Cell { value: 0 })
+    var at: usize = 0
+    cells.get(at).unwrap().set(advance(mut at))
+    assert(cells[0].value == 0)
+    assert(cells[1].value == 99)
+    cells.get(at).unwrap().value = advance(mut at)
+    assert(cells[2].value == 99)
+}

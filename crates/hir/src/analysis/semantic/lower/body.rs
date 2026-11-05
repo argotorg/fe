@@ -265,6 +265,9 @@ pub(super) enum Receiver<'db> {
     /// A projection call in the receiver chain, by its own receiver: its
     /// session opens after the arguments of the call it is the receiver of.
     Chain(ExprId, Box<Receiver<'db>>),
+    /// `e.unwrap()` on a sum shape in the receiver chain, by `e` prepared:
+    /// `e` opens after the arguments, and its payload is taken then.
+    Unwrap(Box<Receiver<'db>>),
 }
 
 #[derive(Clone, Copy)]
@@ -1897,16 +1900,51 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    /// Lowers `op` on `receiver`, a sum shape. A test reads the variant and
-    /// ends the access, destroying a `Result`'s error with the carrier.
-    /// `unwrap` continues with the payload as `?` does, and on the empty
-    /// variant calls the core function the method panics with.
+    /// Lowers `op` on `receiver`, a sum shape, which a place root prepared
+    /// may have opened already. A test reads the variant and ends the
+    /// access, destroying a `Result`'s error with the carrier. `unwrap`
+    /// takes the payload.
     fn lower_sum_shape_op(
         &mut self,
         expr: ExprId,
         ty: TyId<'db>,
         receiver: ExprId,
         op: SumShapeOp,
+    ) -> SValueId {
+        let value = match self.prepared_receivers.remove(&expr) {
+            Some(prepared) => self.open_access(receiver, prepared),
+            None => self.lower_source(receiver),
+        };
+        match op {
+            SumShapeOp::Test { payload } => {
+                let Some(Shape::Sum { variant, .. }) =
+                    self.typed_body.expr_prop(self.db, receiver).shape
+                else {
+                    unreachable!("a sum shape method's receiver is a sum shape")
+                };
+                self.hold_in_innermost(value);
+                self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    TyId::bool(self.db),
+                    SExpr::IsEnumVariant {
+                        value: SOperand::synthetic(value),
+                        variant: VariantIndex(if payload { variant } else { 1 - variant }),
+                    },
+                )
+            }
+            SumShapeOp::Unwrap => self.unwrap_sum_shape(expr, ty, receiver, value),
+        }
+    }
+
+    /// `expr`, `receiver.unwrap()` with `value` the carrier of `receiver`'s sum
+    /// shape: continues with the payload as `?` does, and on the empty variant
+    /// calls the core function `unwrap` panics with.
+    fn unwrap_sum_shape(
+        &mut self,
+        expr: ExprId,
+        ty: TyId<'db>,
+        receiver: ExprId,
+        value: SValueId,
     ) -> SValueId {
         let origin = SemOrigin::Expr(expr);
         let Some(Shape::Sum {
@@ -1915,92 +1953,75 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ..
         }) = self.typed_body.expr_prop(self.db, receiver).shape
         else {
-            unreachable!("a sum shape method's receiver is a sum shape")
+            unreachable!("`unwrap`'s receiver is a sum shape")
         };
-        let value = self.lower_source(receiver);
-        let test = |this: &mut Self, variant| {
-            this.emit_expr_with_origin(
-                origin,
-                TyId::bool(this.db),
-                SExpr::IsEnumVariant {
-                    value: SOperand::synthetic(value),
-                    variant: VariantIndex(variant),
-                },
-            )
-        };
-        match op {
-            SumShapeOp::Test { payload } => {
-                self.hold_in_innermost(value);
-                test(self, if payload { variant } else { 1 - variant })
-            }
-            SumShapeOp::Unwrap => {
-                let holds_payload = test(self, variant);
-                let payload_bb = self.new_block();
-                let empty_bb = self.new_block();
-                self.set_terminator(
-                    self.current,
-                    origin,
-                    STerminatorKind::Branch {
-                        cond: SOperand::synthetic(holds_payload),
-                        then_bb: payload_bb,
-                        else_bb: empty_bb,
-                    },
-                );
+        let holds_payload = self.emit_expr_with_origin(
+            origin,
+            TyId::bool(self.db),
+            SExpr::IsEnumVariant {
+                value: SOperand::synthetic(value),
+                variant: VariantIndex(variant),
+            },
+        );
+        let payload_bb = self.new_block();
+        let empty_bb = self.new_block();
+        self.set_terminator(
+            self.current,
+            origin,
+            STerminatorKind::Branch {
+                cond: SOperand::synthetic(holds_payload),
+                then_bb: payload_bb,
+                else_bb: empty_bb,
+            },
+        );
 
-                self.switch_to(empty_bb);
-                self.push_drop_scope(false);
-                let carrier_ty = self.locals[value.index()].ty;
-                let error = (sum_kind(self.db, self.body.scope(), sum_ty) == Some(SumKind::Result))
-                    .then(|| {
-                        SOperand::synthetic(self.emit_expr_with_origin(
-                            origin,
-                            carrier_ty.generic_args(self.db)[0],
-                            SExpr::ExtractEnumField {
-                                value: SOperand::synthetic(value),
-                                variant: VariantIndex(1 - variant),
-                                field: FieldIndex(0),
-                            },
-                        ))
-                    });
-                let call_site = self
-                    .call_sites
-                    .get(expr.index())
-                    .and_then(|site| site.as_ref())
-                    .unwrap_or_else(|| {
-                        panic!("`unwrap` on a sum shape has no panic callee: {expr:?}")
-                    });
-                let callee = call_site.callee.unwrap_or_else(|| {
-                    panic!("`unwrap` on a sum shape has no panic callee: {expr:?}")
-                });
-                let effect_args = self.lower_effect_arg_slice(&call_site.effect_args);
-                self.emit_expr_with_origin(
+        self.switch_to(empty_bb);
+        self.push_drop_scope(false);
+        let carrier_ty = self.locals[value.index()].ty;
+        let error =
+            (sum_kind(self.db, self.body.scope(), sum_ty) == Some(SumKind::Result)).then(|| {
+                SOperand::synthetic(self.emit_expr_with_origin(
                     origin,
-                    TyId::never(self.db),
-                    SExpr::Call {
-                        call_site: CallSiteId::Expr(expr),
-                        callee,
-                        args: error.into_iter().collect(),
-                        effect_args,
-                    },
-                );
-                self.set_synthetic_terminator(
-                    self.current,
-                    STerminatorKind::Assert { message: None },
-                );
-                self.take_drop_scope();
-
-                self.switch_to(payload_bb);
-                self.emit_expr_with_origin(
-                    origin,
-                    ty,
+                    carrier_ty.generic_args(self.db)[0],
                     SExpr::ExtractEnumField {
                         value: SOperand::synthetic(value),
-                        variant: VariantIndex(variant),
+                        variant: VariantIndex(1 - variant),
                         field: FieldIndex(0),
                     },
-                )
-            }
-        }
+                ))
+            });
+        let call_site = self
+            .call_sites
+            .get(expr.index())
+            .and_then(|site| site.as_ref())
+            .unwrap_or_else(|| panic!("`unwrap` on a sum shape has no panic callee: {expr:?}"));
+        let callee = call_site
+            .callee
+            .unwrap_or_else(|| panic!("`unwrap` on a sum shape has no panic callee: {expr:?}"));
+        let effect_args = self.lower_effect_arg_slice(&call_site.effect_args);
+        self.emit_expr_with_origin(
+            origin,
+            TyId::never(self.db),
+            SExpr::Call {
+                call_site: CallSiteId::Expr(expr),
+                callee,
+                args: error.into_iter().collect(),
+                effect_args,
+            },
+        );
+        self.set_synthetic_terminator(self.current, STerminatorKind::Assert { message: None });
+        self.take_drop_scope();
+
+        self.switch_to(payload_bb);
+        self.emit_expr_with_origin(
+            origin,
+            ty,
+            SExpr::ExtractEnumField {
+                value: SOperand::synthetic(value),
+                variant: VariantIndex(variant),
+                field: FieldIndex(0),
+            },
+        )
     }
 
     fn lower_code_region_target(
@@ -2314,16 +2335,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         if mode != FuncParamMode::Own
             && self.typed_body.expr_prop(self.db, receiver).shape.is_some()
         {
-            if let Some(SemanticExprLowering::Call { callable: inner }) =
-                self.typed_body.semantic_expr_lowering(receiver)
-                && let Partial::Present(
-                    Expr::MethodCall(root, ..) | Expr::Bin(root, _, BinOp::Index),
-                ) = receiver.data(self.db, self.body)
-            {
-                let root = *root;
-                return Receiver::Chain(root, Box::new(self.prepare_receiver(root, inner)));
-            }
-            return Receiver::Value(self.lower_access(receiver));
+            return self.prepare_access(receiver);
         }
         // An access binding is passed by its carrier.
         if mode != FuncParamMode::Own
@@ -2355,6 +2367,29 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         Receiver::Place(Some(place))
     }
 
+    /// Prepares `access`, an access a receiver chain grants. A projection
+    /// call, and `e.unwrap()` on a sum shape, open after the arguments of the
+    /// call they are the receiver of; anything else is lowered now.
+    fn prepare_access(&mut self, access: ExprId) -> Receiver<'db> {
+        match (
+            access.data(self.db, self.body),
+            self.typed_body.semantic_expr_lowering(access),
+        ) {
+            (
+                Partial::Present(Expr::MethodCall(root, ..) | Expr::Bin(root, _, BinOp::Index)),
+                Some(SemanticExprLowering::Call { callable }),
+            ) => Receiver::Chain(*root, Box::new(self.prepare_receiver(*root, callable))),
+            (
+                Partial::Present(Expr::MethodCall(inner, ..)),
+                Some(SemanticExprLowering::SumShape {
+                    op: SumShapeOp::Unwrap,
+                    ..
+                }),
+            ) => Receiver::Unwrap(Box::new(self.prepare_access(*inner))),
+            _ => Receiver::Value(self.lower_access(access)),
+        }
+    }
+
     /// Resolves the root of a place in a projection's grant, an assignment
     /// target or a receiver, before the value or the arguments: the innermost
     /// projection call on the place's path of fields and builtin indexes has
@@ -2375,6 +2410,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 Some(SemanticExprLowering::Call { callable }),
             ) if self.typed_body.expr_prop(self.db, place).shape.is_some() => {
                 let prepared = self.prepare_receiver(*receiver, callable);
+                self.prepared_receivers.insert(place, prepared);
+                true
+            }
+            (
+                Partial::Present(Expr::MethodCall(receiver, ..)),
+                Some(SemanticExprLowering::SumShape {
+                    op: SumShapeOp::Unwrap,
+                    ..
+                }),
+            ) => {
+                let prepared = self.prepare_access(*receiver);
                 self.prepared_receivers.insert(place, prepared);
                 true
             }
@@ -2408,30 +2454,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .callable_def()
             .param_mode(self.db, 0, callable.mode());
         match prepared {
-            Receiver::Value(value) => value,
             Receiver::Place(None) if mode != FuncParamMode::Mut => {
                 self.lower_callable_argument(receiver, callable, mode, true)
-            }
-            Receiver::Chain(root, prepared) => {
-                let Some(SemanticExprLowering::Call { callable: inner }) =
-                    self.typed_body.semantic_expr_lowering(receiver)
-                else {
-                    unreachable!("a receiver chain link is a call")
-                };
-                let args: Vec<ExprId> = match receiver.data(self.db, self.body) {
-                    Partial::Present(Expr::MethodCall(_, _, _, args)) => {
-                        args.iter().map(|arg| arg.expr).collect()
-                    }
-                    Partial::Present(Expr::Bin(_, index, BinOp::Index)) => vec![*index],
-                    _ => unreachable!("a receiver chain link has a receiver"),
-                };
-                let ty = self
-                    .typed_body
-                    .expr_prop(self.db, receiver)
-                    .shape
-                    .expect("a receiver chain link is an access")
-                    .carrier_ty(self.db);
-                self.lower_callable_expr(receiver, ty, Some((root, *prepared)), &args, inner)
             }
             Receiver::Place(place) => {
                 let place = place.unwrap_or_else(|| self.lower_place(receiver));
@@ -2443,6 +2467,46 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 );
                 self.emit_borrow(receiver, place, BorrowKind::Mut, ty)
             }
+            prepared => self.open_access(receiver, prepared),
+        }
+    }
+
+    /// Opens `access`, which `prepare_access` prepared: its chain's projection
+    /// sessions innermost first, taking an `unwrap`'s payload after its own.
+    fn open_access(&mut self, access: ExprId, prepared: Receiver<'db>) -> SValueId {
+        let ty = || {
+            self.typed_body
+                .expr_prop(self.db, access)
+                .shape
+                .expect("a receiver chain link is an access")
+                .carrier_ty(self.db)
+        };
+        match prepared {
+            Receiver::Value(value) => value,
+            Receiver::Chain(root, prepared) => {
+                let Some(SemanticExprLowering::Call { callable: inner }) =
+                    self.typed_body.semantic_expr_lowering(access)
+                else {
+                    unreachable!("a receiver chain link is a call")
+                };
+                let args: Vec<ExprId> = match access.data(self.db, self.body) {
+                    Partial::Present(Expr::MethodCall(_, _, _, args)) => {
+                        args.iter().map(|arg| arg.expr).collect()
+                    }
+                    Partial::Present(Expr::Bin(_, index, BinOp::Index)) => vec![*index],
+                    _ => unreachable!("a receiver chain link has a receiver"),
+                };
+                self.lower_callable_expr(access, ty(), Some((root, *prepared)), &args, inner)
+            }
+            Receiver::Unwrap(prepared) => {
+                let Partial::Present(Expr::MethodCall(inner, ..)) = access.data(self.db, self.body)
+                else {
+                    unreachable!("an `unwrap` link is a method call")
+                };
+                let value = self.open_access(*inner, *prepared);
+                self.unwrap_sum_shape(access, ty(), *inner, value)
+            }
+            Receiver::Place(_) => unreachable!("a receiver chain link is an access"),
         }
     }
 
