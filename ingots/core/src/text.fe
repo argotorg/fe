@@ -15,8 +15,8 @@ use super::panic_code
 use super::panics::PANIC_ASSERT
 use super::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan}
 
-/// Text the parsers and a span's searches read in place: a literal, a
-/// `String<N>`, a `DynString`, a `MemSpan` or a `MemBuffer`.
+/// Text the parsers read in place, and a span's searches look for: a
+/// literal, a `String<N>`, a `DynString`, a `MemSpan` or a `MemBuffer`.
 pub trait Text {
     fn text_len(self) -> usize
     /// The byte at `index`, which is below `text_len()`.
@@ -564,19 +564,19 @@ impl TextBuilder {
 
 impl MemSlice<u8> {
     /// Whether the span begins with `prefix`.
-    pub fn starts_with<T: Text>(self, _ prefix: T) -> bool {
-        prefix.text_len() <= self.len() && prefix.text_matches_at(self, offset: 0)
+    pub fn starts_with<P: Pattern>(self, _ prefix: P) -> bool {
+        prefix.pattern_len() <= self.len() && prefix.pattern_matches_at(self, offset: 0)
     }
 
     /// Whether the span ends with `suffix`.
-    pub fn ends_with<T: Text>(self, _ suffix: T) -> bool {
-        let len = suffix.text_len()
-        len <= self.len() && suffix.text_matches_at(self, offset: self.len() - len)
+    pub fn ends_with<P: Pattern>(self, _ suffix: P) -> bool {
+        let len = suffix.pattern_len()
+        len <= self.len() && suffix.pattern_matches_at(self, offset: self.len() - len)
     }
 
     /// The offset of the first match of `pattern`.
-    pub fn index_of<T: Text>(self, _ pattern: T) -> Option<usize> {
-        pattern.text_find(self, from: 0)
+    pub fn index_of<P: Pattern>(self, _ pattern: P) -> Option<usize> {
+        pattern.pattern_find(self, from: 0)
     }
 
     /// The span without its leading and trailing ASCII whitespace.
@@ -596,8 +596,8 @@ impl MemSlice<u8> {
     /// `for field in row.split(b',')`. Separators next to each other or at
     /// either end have empty parts between them, and a span with no match is
     /// its own one part.
-    pub fn split<S: Separator>(self, _ separator: own S) -> Split<S> {
-        if separator.byte_len() == 0 {
+    pub fn split<P: Pattern>(self, _ separator: own P) -> Split<P> {
+        if separator.pattern_len() == 0 {
             panic_code(PANIC_ASSERT)
         }
         Split { separator }
@@ -610,45 +610,57 @@ impl MemSlice<u8> {
     }
 }
 
-/// What `MemSpan::split` splits on: a byte (`b','`) or a `String<N>`, so a
-/// literal of up to 31 bytes (`", "`).
-pub trait Separator {
+/// What a span's searches and `split` look for: a byte (`b','`) or any
+/// `Text`, such as a literal.
+pub trait Pattern {
     /// The number of bytes a match covers.
-    fn byte_len(self) -> usize
+    fn pattern_len(self) -> usize
 
-    /// The first match in `text` at or after `from`.
-    fn find(self, _ text: MemSpan, from: usize) -> Option<usize>
+    /// Whether the pattern is the bytes of `span` from `offset` on, of which
+    /// there must be `pattern_len()`.
+    fn pattern_matches_at(self, _ span: MemSpan, offset: usize) -> bool
+
+    /// The first match in `span` at or after `from`.
+    fn pattern_find(self, _ span: MemSpan, from: usize) -> Option<usize>
 }
 
-impl Separator for u8 {
-    fn byte_len(self) -> usize {
+impl Pattern for u8 {
+    fn pattern_len(self) -> usize {
         1
     }
 
-    fn find(self, _ text: MemSpan, from: usize) -> Option<usize> {
-        find_byte(text, self, from)
+    fn pattern_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span.byte_at(offset) == self
+    }
+
+    fn pattern_find(self, _ span: MemSpan, from: usize) -> Option<usize> {
+        find_byte(span, self, from)
     }
 }
 
-impl<const N: usize> Separator for String<N> {
-    fn byte_len(self) -> usize {
-        self.len()
+impl<T: Text> Pattern for T {
+    fn pattern_len(self) -> usize {
+        self.text_len()
     }
 
-    fn find(self, _ text: MemSpan, from: usize) -> Option<usize> {
-        self.text_find(text, from)
+    fn pattern_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        self.text_matches_at(span, offset)
+    }
+
+    fn pattern_find(self, _ span: MemSpan, from: usize) -> Option<usize> {
+        self.text_find(span, from)
     }
 }
 
 /// The traversal `MemSpan::split` runs over a span. Its state is a part's
 /// start and end.
-pub struct Split<S> {
-    separator: S,
+pub struct Split<P> {
+    separator: P,
 }
 
-impl<S: Copy> Copy for Split<S> {}
+impl<P: Copy> Copy for Split<P> {}
 
-impl<S: Separator> Driver for Split<S> {
+impl<P: Pattern> Driver for Split<P> {
     type Base = MemSpan
     type State = (usize, usize)
     shape Step = ref MemSpan
@@ -662,7 +674,7 @@ impl<S: Separator> Driver for Split<S> {
     }
 
     fn next(self, _ base: MemSpan, _ s: (usize, usize)) -> (usize, usize) {
-        part_from(base, self.separator, start: s.1 + self.separator.byte_len())
+        part_from(base, self.separator, start: s.1 + self.separator.pattern_len())
     }
 
     fn at(self, _ base: MemSpan, _ s: (usize, usize)) -> ref MemSpan {
@@ -703,8 +715,8 @@ impl Driver for Lines {
 
 // The part beginning at `start`, which ends at the next separator or at the
 // span's end. A `start` past the end names no part.
-fn part_from<S: Separator>(_ text: MemSpan, _ separator: S, start: usize) -> (usize, usize) {
-    match separator.find(text, from: start) {
+fn part_from<P: Pattern>(_ text: MemSpan, _ separator: P, start: usize) -> (usize, usize) {
+    match separator.pattern_find(text, from: start) {
         Option::Some(end) => (start, end)
         Option::None => (start, text.len())
     }

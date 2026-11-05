@@ -200,9 +200,14 @@ fn split_composes_with_drivers() {
     }
     assert!(total == 140)
 
+    total = 0
+    for (i, part) in span.split(",").enumerate() {
+        total += (i as u256 + 1) * text::parse_uint(part).unwrap()
+    }
+    assert!(total == 140)
+
     var count: usize = 0
-    let separator: String<1> = ","
-    for _ in span.split(separator).take(2) {
+    for _ in span.split(",").take(2) {
         count += 1
     }
     assert!(count == 2)
@@ -237,6 +242,33 @@ fn searches_take_any_text() {
     )
     let fixed: String<5> = "value"
     assert!(span.ends_with(fixed))
+}
+
+#[test]
+fn searches_take_a_byte() {
+    let s: DynString = "GET /a,b HTTP"
+    let span = s.span()
+    assert!(span.index_of(b',').unwrap() == 6)
+    assert!(span.index_of(b'z').is_none())
+    assert!(span.starts_with(b'G'))
+    assert!(!span.starts_with(b'E'))
+    assert!(span.ends_with(b'P'))
+    assert!(!span.head(0).starts_with(b'G'))
+    assert!(!span.head(0).ends_with(b'G'))
+}
+
+#[test]
+fn split_takes_any_text() {
+    let s: DynString = "a::b::c"
+    let span = s.span()
+    let separator: DynString = "::"
+    assert!(bracketed(span, span.split(separator)) == "[a][b][c]")
+    let buffer = MemBuffer::from_span(DynString::span("::"))
+    assert!(bracketed(span, span.split(buffer)) == "[a][b][c]")
+
+    let long: DynString = "a0123456789012345678901234567890123456789b"
+    let parts = long.span().split("0123456789012345678901234567890123456789")
+    assert!(bracketed(long.span(), parts) == "[a][b]")
 }
 
 #[test(should_revert, panic = 0x01)]
