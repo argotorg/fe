@@ -1,0 +1,219 @@
+// Tests for the `core::text` searching and splitting of byte spans.
+use core::ptr::{MemBuffer, MemSpan}
+use std::abi::DynString
+use std::text
+
+// Each part in brackets, to compare whole traversals at once.
+fn bracketed<D: core::iter::Driver<Base = MemSpan, Step<ref> = ref MemSpan>>(
+    _ s: MemSpan,
+    _ parts: own D,
+) -> MemBuffer
+uses D::E
+{
+    var out = MemBuffer::new(0)
+    for part in s.by(parts) {
+        out.push(b'[')
+        out.extend_from(part)
+        out.push(b']')
+    }
+    out
+}
+
+fn split_comma(_ s: DynString) -> MemBuffer {
+    let span = s.span()
+    let by_byte = bracketed(span, span.split(b','))
+    assert!(by_byte.span() == bracketed(span, span.split(",")).span())
+    by_byte
+}
+
+fn lines(_ s: DynString) -> MemBuffer {
+    let span = s.span()
+    bracketed(span, span.lines())
+}
+
+fn trimmed(_ s: DynString) -> DynString {
+    DynString::from_payload(source: s.span().trim())
+}
+
+#[test]
+fn starts_and_ends_with() {
+    let s: DynString = "GET /index HTTP"
+    let span = s.span()
+    assert!(span.starts_with("GET "))
+    assert!(span.starts_with(""))
+    assert!(span.starts_with(span))
+    assert!(!span.starts_with("POST"))
+    assert!(span.ends_with("HTTP"))
+    assert!(span.ends_with(""))
+    assert!(span.ends_with(span))
+    assert!(!span.ends_with("HTTPS"))
+
+    let empty: DynString = ""
+    assert!(empty.span().starts_with(""))
+    assert!(empty.span().ends_with(""))
+    assert!(!empty.span().starts_with("a"))
+    assert!(!empty.span().ends_with("a"))
+}
+
+#[test]
+fn a_literal_past_the_span_does_not_match() {
+    let s: DynString = "abc"
+    assert!(!s.span().starts_with("abcd"))
+    assert!(!s.span().ends_with("zabc"))
+}
+
+#[test]
+fn a_prefix_stops_at_its_length() {
+    // Bytes after the prefix in the same word must not take part.
+    let s: DynString = "abcdefghijklmnopqrstuvwxyz0123456789"
+    let span = s.span()
+    assert!(span.starts_with("abc"))
+    assert!(span.tail(30).starts_with("456"))
+    assert!(span.tail(30).ends_with("789"))
+    assert!(span.head(3).ends_with("abc"))
+}
+
+#[test]
+fn index_of_finds_the_first_match() {
+    let s: DynString = "one, two, three"
+    let span = s.span()
+    assert!(span.index_of(", ").unwrap() == 3)
+    assert!(span.index_of("t").unwrap() == 5)
+    assert!(span.index_of("three").unwrap() == 10)
+    assert!(span.index_of("").unwrap() == 0)
+    assert!(span.index_of(span).unwrap() == 0)
+    assert!(span.index_of("four").is_none())
+    assert!(span.index_of("z").is_none())
+
+    let near_end: DynString = "aab"
+    assert!(near_end.span().index_of("ab").unwrap() == 1)
+    assert!(near_end.span().index_of("abb").is_none())
+}
+
+#[test]
+fn index_of_a_span_past_a_word() {
+    let s: DynString = "01234567890123456789012345678901234567890123456789needle"
+    let needle: DynString = "9012345678901234567890123456789012"
+    assert!(s.span().index_of(needle.span()).unwrap() == 9)
+}
+
+#[test]
+fn trim_removes_ascii_whitespace() {
+    assert!(trimmed("  a b\t\r\n") == "a b")
+    assert!(trimmed("a") == "a")
+    assert!(trimmed("") == "")
+    assert!(trimmed(" \t\n\r") == "")
+
+    // Vertical tab and form feed.
+    var buffer = MemBuffer::new(0)
+    buffer.push(11)
+    buffer.push(12)
+    buffer.push(b'a')
+    buffer.push(11)
+    buffer.push(12)
+    assert!(buffer.span().trim() == "a")
+}
+
+#[test]
+fn split_yields_the_parts_between_separators() {
+    assert!(split_comma("a,b,c") == "[a][b][c]")
+    assert!(split_comma("a") == "[a]")
+    assert!(split_comma("") == "[]")
+    assert!(split_comma(",") == "[][]")
+    assert!(split_comma(",a,,b,") == "[][a][][b][]")
+}
+
+#[test]
+fn split_takes_a_byte_no_literal_can_hold() {
+    var buffer = MemBuffer::new(0)
+    buffer.push(b'a')
+    buffer.push(0)
+    buffer.push(b'b')
+    let span = buffer.span()
+    assert!(bracketed(span, span.split(0 as u8)) == "[a][b]")
+}
+
+#[test]
+fn split_takes_a_longer_separator() {
+    let s: DynString = "a, b, , c,d"
+    let span = s.span()
+    let buffer = bracketed(span, span.split(", "))
+    assert!(buffer == "[a][b][][c,d]")
+}
+
+#[test]
+fn split_composes_with_drivers() {
+    let s: DynString = "10,20,30"
+    let span = s.span()
+    var total: u256 = 0
+    for (i, part) in span.split(b',').enumerate() {
+        total += (i as u256 + 1) * text::parse_uint(part).unwrap()
+    }
+    assert!(total == 140)
+
+    var count: usize = 0
+    let separator: String<1> = ","
+    for _ in span.split(separator).take(2) {
+        count += 1
+    }
+    assert!(count == 2)
+
+    for _ in span.lines().enumerate() {
+        count += 1
+    }
+    assert!(count == 3)
+}
+
+#[test]
+fn a_literal_longer_than_a_word_matches() {
+    let s: DynString = "0123456789012345678901234567890123456789"
+    let span = s.span()
+    assert!(span.starts_with("0123456789012345678901234567890123"))
+    assert!(!span.starts_with("0123456789012345678901234567890124"))
+    assert!(span.ends_with("6789012345678901234567890123456789"))
+    assert!(
+        span.index_of("3456789012345678901234567890123456").unwrap() == 3,
+    )
+}
+
+#[test]
+fn searches_take_any_text() {
+    let s: DynString = "key=value"
+    let span = s.span()
+    let key: DynString = "key"
+    assert!(span.starts_with(key))
+    assert!(span.starts_with(MemBuffer::from_span(key.span())))
+    assert!(
+        span.index_of(MemBuffer::from_span(span.tail(4))).unwrap() == 4,
+    )
+    let fixed: String<5> = "value"
+    assert!(span.ends_with(fixed))
+}
+
+#[test(should_revert, panic = 0x01)]
+fn split_rejects_an_empty_separator() {
+    let s: DynString = "abc"
+    let _ = s.span().split("")
+}
+
+#[test]
+fn lines_drop_their_terminators() {
+    assert!(lines("a\nb\nc") == "[a][b][c]")
+    assert!(lines("a\nb\n") == "[a][b]")
+    assert!(lines("a\r\nb\r\n") == "[a][b]")
+    assert!(lines("\n\na\n") == "[][][a]")
+    assert!(lines("\n") == "[]")
+    assert!(lines("") == "")
+    assert!(lines("a\rb\n") == "[a\rb]")
+    assert!(lines("a\r") == "[a]")
+}
+
+#[test]
+fn a_span_of_any_owner_searches_and_parses() {
+    let buffer = MemBuffer::from_span(DynString::span("key=42"))
+    let span = buffer.span()
+    let eq = span.index_of("=").unwrap()
+    assert!(span.head(eq) == "key")
+    assert!(text::parse_uint(span.tail(eq + 1)).unwrap() == 42)
+    assert!(text::parse_uint(span.tail(eq + 1).trim()).unwrap() == 42)
+}

@@ -1,14 +1,22 @@
-//! Formatting helpers that build `DynString` values, and their parsers.
+//! Formatting helpers that build `DynString` values, their parsers, and
+//! searching and splitting of byte spans.
 //!
 //! String literals can be used directly as `DynString`:
 //! `let s: DynString = "<svg>"`.
+//!
+//! Text is bytes here: searches compare bytes, which is exact for UTF-8, and
+//! offsets count bytes.
 use super::abi::{Bytes, DynString}
+use super::iter::Driver
+use super::marker::Copy
 use super::num::{Bounded, IntDowncast}
 use super::option::Option
-use super::ptr::{self, MemArray, MemBuffer, MemSpan}
+use super::panic_code
+use super::panics::PANIC_ASSERT
+use super::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan}
 
-/// Text the number parsers read in place: a literal, a `String<N>`, a
-/// `DynString`, a `MemSpan` or a `MemBuffer`.
+/// Text the parsers and a span's searches read in place: a literal, a
+/// `String<N>`, a `DynString`, a `MemSpan` or a `MemBuffer`.
 pub trait Text {
     fn text_len(self) -> usize
     /// The byte at `index`, which is below `text_len()`.
@@ -210,15 +218,14 @@ pub fn base64(_ data: MemSpan) -> DynString {
 /// standard alphabet, padding appears only as the last one or two bytes and
 /// the bits it leaves unused are zero, so each byte string has exactly one
 /// accepted encoding (RFC 4648).
-pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
-    let input = text.span()
-    let len = input.len()
+pub fn decode_base64<T: Text>(_ input: T) -> Option<Bytes> {
+    let len = input.text_len()
     if len % 4 != 0 {
         return Option::None
     }
     var padding: usize = 0
-    if len > 0 && input.byte_at(len - 1) == 61 {
-        padding = if input.byte_at(len - 2) == 61 { 2 } else { 1 }
+    if len > 0 && input.text_byte(len - 1) == 61 {
+        padding = if input.text_byte(len - 2) == 61 { 2 } else { 1 }
     }
     let out_len = len / 4 * 3 - padding
     let decoded = Bytes::zeroed(out_len)
@@ -226,10 +233,10 @@ pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
     var i: usize = 0
     var j: usize = 0
     while i < len {
-        let a = base64_value(input.byte_at(i))
-        let b = base64_value(input.byte_at(i + 1))
-        let c = if i + 2 < len - padding { base64_value(input.byte_at(i + 2)) } else { 0 }
-        let d = if i + 3 < len - padding { base64_value(input.byte_at(i + 3)) } else { 0 }
+        let a = base64_value(input.text_byte(i))
+        let b = base64_value(input.text_byte(i + 1))
+        let c = if i + 2 < len - padding { base64_value(input.text_byte(i + 2)) } else { 0 }
+        let d = if i + 3 < len - padding { base64_value(input.text_byte(i + 3)) } else { 0 }
         if a > 63 || b > 63 || c > 63 || d > 63 {
             return Option::None
         }
@@ -346,11 +353,10 @@ pub fn base58(_ data: MemSpan) -> DynString {
 /// Decodes Bitcoin base58, the inverse of `base58` (OpenZeppelin
 /// `Base58.decode`): each leading `1` becomes a zero byte. `None` if any
 /// byte is outside the alphabet.
-pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
-    let input = text.span()
-    let len = input.len()
+pub fn decode_base58<T: Text>(_ input: T) -> Option<Bytes> {
+    let len = input.text_len()
     var zeros: usize = 0
-    while zeros < len && input.byte_at(zeros) == 49 {
+    while zeros < len && input.text_byte(zeros) == 49 {
         zeros += 1
     }
     // Ten digits at a time, into limbs of 24 bytes. One limb holds more
@@ -364,7 +370,7 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         var factor: u256 = 1
         var j = i
         while j < end {
-            let value = base58_value(input.byte_at(j))
+            let value = base58_value(input.text_byte(j))
             if value > 57 {
                 return Option::None
             }
@@ -517,4 +523,180 @@ impl TextBuilder {
     pub fn finish(own self) -> DynString {
         DynString::from_payload(source: self.buffer.span())
     }
+}
+
+impl MemSlice<u8> {
+    /// Whether the span begins with `prefix`.
+    pub fn starts_with<T: Text>(self, _ prefix: T) -> bool {
+        prefix.text_len() <= self.len() && text_matches_at(self, prefix, offset: 0)
+    }
+
+    /// Whether the span ends with `suffix`.
+    pub fn ends_with<T: Text>(self, _ suffix: T) -> bool {
+        let len = suffix.text_len()
+        len <= self.len() && text_matches_at(self, suffix, offset: self.len() - len)
+    }
+
+    /// The offset of the first match of `pattern`.
+    pub fn index_of<T: Text>(self, _ pattern: T) -> Option<usize> {
+        let len = pattern.text_len()
+        var offset: usize = 0
+        while offset + len <= self.len() {
+            if text_matches_at(self, pattern, offset) {
+                return Option::Some(offset)
+            }
+            offset += 1
+        }
+        Option::None
+    }
+
+    /// The span without its leading and trailing ASCII whitespace.
+    pub fn trim(self) -> ref MemSpan {
+        var start: usize = 0
+        var end = self.len()
+        while start < end && is_ascii_whitespace(self.byte_at(start)) {
+            start += 1
+        }
+        while end > start && is_ascii_whitespace(self.byte_at(end - 1)) {
+            end -= 1
+        }
+        self.slice(offset: start, len: end - start)
+    }
+
+    /// The parts between matches of `separator`, which must not be empty:
+    /// `for field in row.split(b',')`. Separators next to each other or at
+    /// either end have empty parts between them, and a span with no match is
+    /// its own one part.
+    pub fn split<S: Separator>(self, _ separator: own S) -> Split<S> {
+        if separator.byte_len() == 0 {
+            panic_code(PANIC_ASSERT)
+        }
+        Split { separator }
+    }
+
+    /// The lines, each without its `\n` or `\r\n`. The last line needs no
+    /// terminator, and one at the end of the span starts no empty line.
+    pub fn lines(self) -> Lines {
+        Lines {}
+    }
+}
+
+/// What `MemSpan::split` splits on: a byte (`b','`) or a literal (`", "`).
+pub trait Separator {
+    /// The number of bytes a match covers.
+    fn byte_len(self) -> usize
+
+    /// Whether the separator is the bytes of `text` from `offset` on, of which
+    /// there must be `byte_len()`.
+    fn matches_at(self, _ text: MemSpan, offset: usize) -> bool
+}
+
+impl Separator for u8 {
+    fn byte_len(self) -> usize {
+        1
+    }
+
+    fn matches_at(self, _ text: MemSpan, offset: usize) -> bool {
+        text.byte_at(offset) == self
+    }
+}
+
+impl<const N: usize> Separator for String<N> {
+    fn byte_len(self) -> usize {
+        self.len()
+    }
+
+    fn matches_at(self, _ text: MemSpan, offset: usize) -> bool {
+        text_matches_at(text, self, offset)
+    }
+}
+
+/// The traversal `MemSpan::split` runs over a span. Its state is a part's
+/// start and end.
+pub struct Split<S> {
+    separator: S,
+}
+
+impl<S: Copy> Copy for Split<S> {}
+
+impl<S: Separator> Driver for Split<S> {
+    type Base = MemSpan
+    type State = (usize, usize)
+    shape Step = ref MemSpan
+
+    fn start(self, _ base: MemSpan) -> (usize, usize) {
+        part_from(base, self.separator, start: 0)
+    }
+
+    fn has(self, _ base: MemSpan, _ s: (usize, usize)) -> bool {
+        s.0 <= base.len()
+    }
+
+    fn next(self, _ base: MemSpan, _ s: (usize, usize)) -> (usize, usize) {
+        part_from(base, self.separator, start: s.1 + self.separator.byte_len())
+    }
+
+    fn at(self, _ base: MemSpan, _ s: (usize, usize)) -> ref MemSpan {
+        base.slice(offset: s.0, len: s.1 - s.0)
+    }
+}
+
+/// The traversal `MemSpan::lines` runs over a span. Its state is a line's
+/// start and the offset of its `\n`, or the span's end.
+pub struct Lines {}
+
+impl Copy for Lines {}
+
+impl Driver for Lines {
+    type Base = MemSpan
+    type State = (usize, usize)
+    shape Step = ref MemSpan
+
+    fn start(self, _ base: MemSpan) -> (usize, usize) {
+        part_from(base, b'\n', start: 0)
+    }
+
+    fn has(self, _ base: MemSpan, _ s: (usize, usize)) -> bool {
+        s.0 < base.len()
+    }
+
+    fn next(self, _ base: MemSpan, _ s: (usize, usize)) -> (usize, usize) {
+        part_from(base, b'\n', start: s.1 + 1)
+    }
+
+    fn at(self, _ base: MemSpan, _ s: (usize, usize)) -> ref MemSpan {
+        let carriage_return = s.1 > s.0 && base.byte_at(s.1 - 1) == b'\r'
+        let end = if carriage_return { s.1 - 1 } else { s.1 }
+        base.slice(offset: s.0, len: end - s.0)
+    }
+}
+
+// Whether `pattern`, which must fit, is the bytes of `text` from `offset` on.
+fn text_matches_at<T: Text>(_ text: MemSpan, _ pattern: T, offset: usize) -> bool {
+    var i: usize = 0
+    while i < pattern.text_len() {
+        if text.byte_at(offset + i) != pattern.text_byte(i) {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+// The part beginning at `start`, which ends at the next separator or at the
+// span's end. A `start` past the end names no part.
+fn part_from<S: Separator>(_ text: MemSpan, _ separator: S, start: usize) -> (usize, usize) {
+    let len = separator.byte_len()
+    var end = start
+    while end + len <= text.len() {
+        if separator.matches_at(text, offset: end) {
+            return (start, end)
+        }
+        end += 1
+    }
+    (start, text.len())
+}
+
+fn is_ascii_whitespace(_ byte: u8) -> bool {
+    byte == b' ' || (byte >= 9 && byte <= 13)
 }

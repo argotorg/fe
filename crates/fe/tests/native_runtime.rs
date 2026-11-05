@@ -677,6 +677,58 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_programs_parse_arguments_and_input_lines() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("sum.fe");
+    fs::write(
+        &source,
+        r#"
+use core::text
+use std::env::Args
+use std::io::{self, Stdin, Stdout}
+
+/// Sums the second comma-separated field of each `key` line, plus the first argument.
+pub fn main() -> i32 uses (args: Args, input: mut Stdin, out: mut Stdout) {
+    var total = text::parse_uint(args.get(1)).unwrap()
+    var stdin = MemBuffer::new(0)
+    io::read_to_end(mut stdin)
+    for line in stdin.span().lines() {
+        if line.trim().starts_with("key,") {
+            for (i, field) in line.split(b',').enumerate() {
+                if i == 1 {
+                    total += text::parse_uint(field.trim()).unwrap()
+                }
+            }
+        }
+    }
+    println!(total)
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("O{level}"));
+        build(&source, &out, level, &[]);
+        let mut child = Command::new(out.join("sum"))
+            .arg("100")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"key, 1\r\nother,1000\n  key,20, x\nkey,300")
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout), "421\n", "O{level}");
+    }
+}
+
+#[test]
 fn native_long_string_literals_hold_their_bytes() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("long_strings.fe");
@@ -873,6 +925,7 @@ fn aggregate_fixtures_run_at_every_level() {
         ("aggregate_equality.fe", 14),
         ("aggregate_object_copies.fe", 3),
         ("const_aggregate_values.fe", 5),
+        ("text_search.fe", 15),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")

@@ -138,3 +138,15 @@ fn base58_rejects() {
     assert!(text::decode_base58("2g ").is_none())
     assert!(text::decode_base58("2g+").is_none())
 }
+
+#[test]
+fn decoders_read_any_text() {
+    let encoded: DynString = "Zm9v"
+    assert!(text::decode_base64(encoded.span()).unwrap() == text::decode_base64("Zm9v").unwrap())
+    let buffer = MemBuffer::from_span(encoded.span())
+    assert!(text::decode_base64(buffer).unwrap() == text::decode_base64("Zm9v").unwrap())
+
+    let base58: DynString = "2g"
+    assert!(text::decode_base58(base58.span()).unwrap() == text::decode_base58("2g").unwrap())
+    assert!(text::decode_base58(MemBuffer::from_span(base58.span())).unwrap() == text::decode_base58("2g").unwrap())
+}

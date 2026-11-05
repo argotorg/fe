@@ -156,6 +156,15 @@ fn parse_address_values() {
 }
 
 #[test]
+fn parse_address_reads_any_text() {
+    let expected = Address::new(0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed)
+    let text: DynString = "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"
+    assert!(parse_address(text.span()).unwrap() == expected)
+    assert!(parse_address(MemBuffer::from_span(text.span())).unwrap() == expected)
+    assert!(parse_address(text.span().head(41)).is_none())
+}
+
+#[test]
 fn parse_address_rejects() {
     // 38 digits after the prefix, 42 digits without it, 39 and 41 digits.
     assert!(parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1bea").is_none())
