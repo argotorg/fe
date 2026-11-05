@@ -77,6 +77,29 @@ fn conditional_moves_destroy_once() {
     assert(count(counter) == 2)
 }
 
+fn counter_of(_ value: Counted) -> *u256 {
+    value.counter
+}
+
+// Reads its argument through a call, then moves it only when `c` holds.
+fn move_if(_ value: own Counted, _ c: bool) -> u256 {
+    let before = count(counter_of(value))
+    if c {
+        consume(value)
+    }
+    before
+}
+
+#[test]
+fn a_parameter_some_paths_move_holds_its_argument() {
+    let counter = counter()
+    unsafe { *counter = 5 }
+    assert(move_if(Counted { counter }, true) == 5)
+    assert(count(counter) == 6)
+    assert(move_if(Counted { counter }, false) == 6)
+    assert(count(counter) == 7)
+}
+
 #[test]
 fn reassignment_destroys_the_old_value() {
     let counter = counter()

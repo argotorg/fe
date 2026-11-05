@@ -88,6 +88,7 @@ impl<'db> RmirEmitter<'db> {
                         && let NDropTarget::Place(place) = target
                         && let NPlaceBase::Root(root) = place.base
                         && let Some(local) = self.semantic_body.root_local(root)
+                        && !self.semantic_body.source.entry_locals.contains(&local)
                     {
                         placeholders.push(self.runtime_value(local));
                     }
@@ -97,7 +98,8 @@ impl<'db> RmirEmitter<'db> {
         let entry = RBlockId::from_u32(self.semantic_body.normalized.entry.as_u32());
         // A part only some executions initialize is read under its flags,
         // perhaps on a path that never assigned its root. A root kept as a
-        // value needs a definition on every path: this one, never read.
+        // value needs a definition on every path: this one, never read. A
+        // parameter's argument already is one.
         placeholders.sort_unstable();
         placeholders.dedup();
         for local in placeholders {
