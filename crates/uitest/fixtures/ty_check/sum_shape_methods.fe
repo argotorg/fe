@@ -24,3 +24,8 @@ fn non_copy(_ v: ref MemVec<MemVec<u64>>) -> usize {
 fn read_only(_ p: mut Pair) {
     p.first().unwrap() = 3
 }
+
+// The methods take no arguments.
+fn extra_argument(_ v: ref MemVec<u64>) -> u64 {
+    v.get(0).unwrap(1)
+}

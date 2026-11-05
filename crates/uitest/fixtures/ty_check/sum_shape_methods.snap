@@ -9,10 +9,29 @@ error[8-0018]: left-hand side of assignment is immutable
 25 │     p.first().unwrap() = 3
    │     ^^^^^^^^^^^^^^^^^^ immutable assignment
 
+error[8-0023]: argument number mismatch
+   ┌─ sum_shape_methods.fe:30:20
+   │
+30 │     v.get(0).unwrap(1)
+   │                    ^^^ expected 1 arguments, but 2 given
+   │
+   ┌─ src/option.fe:60:12
+   │
+60 │     pub fn unwrap(own self) -> T {
+   │            ------ function defined here
+
 error[8-0070]: an access is not a value
    ┌─ sum_shape_methods.fe:15:5
    │
 15 │     v.get(0).unwrap_or(default: 5)
+   │     ^^^^^^^^ this access is used as a value
+   │
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
+
+error[8-0070]: an access is not a value
+   ┌─ sum_shape_methods.fe:30:5
+   │
+30 │     v.get(0).unwrap(1)
    │     ^^^^^^^^ this access is used as a value
    │
    = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection

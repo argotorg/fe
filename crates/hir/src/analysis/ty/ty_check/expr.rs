@@ -4236,7 +4236,10 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
+        // The methods take no arguments; a call with any is checked as usual,
+        // which reports them.
         if let Some(Shape::Sum { ty, payload, .. }) = &receiver_prop.shape
+            && args.is_empty()
             && let Some(op) = self.sum_shape_op(callable.callable_def())
         {
             let (sum_ty, payload) = (*ty, (**payload).clone());
