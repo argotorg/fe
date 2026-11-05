@@ -1,4 +1,8 @@
-//! Ethereum's Keccak-256 and FIPS 180-4's SHA-256, in Fe.
+//! Hashing for `core::map::HashMap`, and Ethereum's Keccak-256 and FIPS
+//! 180-4's SHA-256, in Fe.
+//!
+//! A `Hash` type feeds its value to a `Hasher` as words, and `FoldHasher`
+//! hashes them for a map.
 //!
 //! `Keccak256` and `Sha256` hash borrowed bytes without allocating, on any
 //! target. On the EVM, `std::evm::crypto::sha256` costs far less gas. On
@@ -8,9 +12,211 @@
 
 use super::assert
 use super::bytes::PackedBytes
-use super::num::{IntDowncast, swap_bytes}
+use super::num::{Bounded, IntDowncast, IntWord, swap_bytes}
 use super::ops::WrappingAdd
-use super::ptr::{MemBuffer, MemSpan}
+use super::option::Option
+use super::ptr::{self, MemBuffer, MemSpan}
+
+/// A value a `Hasher` reads, such as a `HashMap` key. Equal values must
+/// feed the same words, and so must values of two types with an `Eq`
+/// between them: text of every type feeds those of `hash_bytes`.
+pub trait Hash {
+    fn hash<H: Hasher>(self, _ state: mut H)
+}
+
+/// A hash function over a sequence of words.
+pub trait Hasher {
+    fn write_u64(mut self, _ value: u64)
+    fn write_word(mut self, _ value: u256)
+    /// The hash of the words written so far.
+    fn finish(self) -> u64
+}
+
+/// The hasher of `HashMap`: foldhash's folded multiply, which multiplies
+/// pairs of 64-bit limbs offset by constants and folds each 128-bit
+/// product's halves together. It is fast and deterministic, and gives no
+/// protection against keys chosen to collide.
+pub struct FoldHasher {
+    state: u64,
+}
+
+impl FoldHasher {
+    pub fn new() -> Self {
+        Self { state: 0 }
+    }
+}
+
+const FOLD1: u64 = 0x9e3779b185ebca87
+const FOLD2: u64 = 0xc2b2ae3d27d4eb4f
+const FOLD3: u64 = 0x165667b19e3779f9
+const FOLD4: u64 = 0x85ebca77c2b2ae63
+
+impl Hasher for FoldHasher {
+    fn write_u64(mut self, _ value: u64) {
+        self.state = folded_multiply(self.state ^ value ^ FOLD1, FOLD2)
+    }
+
+    fn write_word(mut self, _ value: u256) {
+        let low = folded_multiply(limb(value, 0) ^ FOLD1, limb(value, 1) ^ FOLD2)
+        let high = folded_multiply(limb(value, 2) ^ FOLD3, limb(value, 3) ^ FOLD4)
+        self.state = folded_multiply(self.state ^ low ^ FOLD2, high ^ FOLD1)
+    }
+
+    fn finish(self) -> u64 {
+        self.state
+    }
+}
+
+// The high and low words of the 128-bit product, folded together.
+fn folded_multiply(_ a: u64, _ b: u64) -> u64 {
+    let product = (a as u128) * (b as u128)
+    let low: u64 = product.downcast_truncate()
+    let high: u64 = (product >> 64).downcast_truncate()
+    low ^ high
+}
+
+// Limb `index` of `value`, from the least significant.
+fn limb(_ value: u256, _ index: u256) -> u64 {
+    (value >> (index * 64)).downcast_truncate()
+}
+
+/// The hash `FoldHasher` gives `value`, as a map finds it.
+pub fn fold_hash<T: Hash>(_ value: T) -> u64 {
+    var state = FoldHasher::new()
+    value.hash(mut state)
+    state.finish()
+}
+
+/// Feeds `bytes` to `state` as text of every type does: each 32-byte word,
+/// the last one padded with zeros, then the length.
+pub fn hash_bytes<H: Hasher>(_ bytes: MemSpan, _ state: mut H) {
+    let len = bytes.len()
+    var offset: usize = 0
+    while offset < len {
+        // The word's first `len - offset` bytes are in the span.
+        state.write_word(unsafe { ptr::read_padded_word(ptr::offset_bytes(bytes.ptr(), offset), len - offset) })
+        offset += 32
+    }
+    state.write_u64(len.downcast_truncate())
+}
+
+/// An integer feeds its bits: one 64-bit word for those that fit, else a
+/// 256-bit word.
+impl<T: IntWord> Hash for T {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        let bits = self.to_word() & T::MASK
+        if T::MASK <= u64::max() as u256 {
+            state.write_u64(bits.downcast_truncate())
+        } else {
+            state.write_word(bits)
+        }
+    }
+}
+
+impl Hash for bool {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        state.write_u64(if self { 1 } else { 0 })
+    }
+}
+
+impl<T: Hash> Hash for Option<T> {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        match self {
+            Option::Some(ref value) => {
+                state.write_u64(1)
+                value.hash(mut state)
+            }
+            Option::None => state.write_u64(0)
+        }
+    }
+}
+
+impl<T: Hash, const N: usize> Hash for [T; N] {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        for ref element in self {
+            element.hash(mut state)
+        }
+    }
+}
+
+impl Hash for () {
+    fn hash<H: Hasher>(self, _ state: mut H) {}
+}
+
+impl<T0> Hash for (T0,) where T0: Hash {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.0.hash(mut state)
+    }
+}
+
+impl<T0, T1> Hash for (T0, T1) where T0: Hash, T1: Hash {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.0.hash(mut state)
+        self.1.hash(mut state)
+    }
+}
+
+impl<T0, T1, T2> Hash for (T0, T1, T2) where T0: Hash, T1: Hash, T2: Hash {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.0.hash(mut state)
+        self.1.hash(mut state)
+        self.2.hash(mut state)
+    }
+}
+
+impl<T0, T1, T2, T3> Hash for (T0, T1, T2, T3) where T0: Hash, T1: Hash, T2: Hash, T3: Hash {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.0.hash(mut state)
+        self.1.hash(mut state)
+        self.2.hash(mut state)
+        self.3.hash(mut state)
+    }
+}
+
+impl<T0, T1, T2, T3, T4> Hash for (T0, T1, T2, T3, T4) where T0: Hash, T1: Hash, T2: Hash, T3: Hash, T4: Hash {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.0.hash(mut state)
+        self.1.hash(mut state)
+        self.2.hash(mut state)
+        self.3.hash(mut state)
+        self.4.hash(mut state)
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5> Hash for (T0, T1, T2, T3, T4, T5)
+where T0: Hash, T1: Hash, T2: Hash, T3: Hash, T4: Hash, T5: Hash {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.0.hash(mut state)
+        self.1.hash(mut state)
+        self.2.hash(mut state)
+        self.3.hash(mut state)
+        self.4.hash(mut state)
+        self.5.hash(mut state)
+    }
+}
+
+impl<const N: usize> Hash for String<N> {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        // The text fits one word, as `hash_bytes` reads it.
+        let len = self.len()
+        if len != 0 {
+            state.write_word(self.text_word(len))
+        }
+        state.write_u64(len.downcast_truncate())
+    }
+}
+
+impl Hash for MemSpan {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        hash_bytes(self, mut state)
+    }
+}
+
+impl Hash for MemBuffer {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        hash_bytes(self.span(), mut state)
+    }
+}
 
 /// Read-only bytes. Implementations must accept every index below `input_len()`.
 /// Hashing borrows its source and never allocates or retains a reference to it.

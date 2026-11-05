@@ -925,6 +925,7 @@ fn aggregate_fixtures_run_at_every_level() {
         ("aggregate_equality.fe", 14),
         ("aggregate_object_copies.fe", 3),
         ("const_aggregate_values.fe", 5),
+        ("hash_map.fe", 16),
         ("text_search.fe", 20),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))

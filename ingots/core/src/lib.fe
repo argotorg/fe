@@ -12,6 +12,7 @@ pub use bytes::{AsBytes, ByteWriter, PackedBytes, keccak}
 pub use string::{self, concat}
 pub use intrinsic::{contract_field_slot, size_of}
 pub use hash
+pub use map::HashMap
 pub use functional::{Fn, FnMut, Functor, Applicative, Monad}
 pub use effect_ref::EffectRef
 pub use contracts::{self, *}

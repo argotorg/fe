@@ -1,6 +1,7 @@
 use ingot::Copy
 use ingot::Option
 use ingot::clone::Clone
+use ingot::hash::{Hash, Hasher, hash_bytes}
 use ingot::mem::forget
 use ingot::num::{IntDowncast, WordValue, from_be, to_be, word_to_usize}
 use ingot::ptr
@@ -1266,6 +1267,26 @@ impl Eq<ptr::MemSpan> for DynString {
 impl Eq<DynString> for ptr::MemBuffer {
     fn eq(self, _ other: DynString) -> bool {
         self.span() == other
+    }
+}
+
+/// Whether the string holds the literal's text, so a literal finds a
+/// `DynString` key: `names.get("alice")`.
+impl<const N: usize> Eq<String<N>> for DynString {
+    fn eq(self, _ other: String<N>) -> bool {
+        self.span() == other
+    }
+}
+
+impl Hash for Bytes {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        hash_bytes(self.span(), mut state)
+    }
+}
+
+impl Hash for DynString {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        hash_bytes(self.span(), mut state)
     }
 }
 

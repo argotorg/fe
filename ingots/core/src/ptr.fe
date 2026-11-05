@@ -1348,7 +1348,7 @@ pub(ingot) unsafe fn alloc_bytes_unchecked(_ len: usize) -> *u8 {
 /// Allocates room for `len` values of `T`, without initializing them, or
 /// `None` when they would exceed `MAX_ALLOCATION` bytes or the allocation
 /// fails.
-fn try_alloc_elems<T>(_ len: usize) -> Option<*T> {
+pub(ingot) fn try_alloc_elems<T>(_ len: usize) -> Option<*T> {
     let size = size_of<T>()
     if size != 0 && len > MAX_ALLOCATION / size {
         return Option::None
@@ -1539,6 +1539,20 @@ impl<T: Eq> Eq for MemSlice<T> {
             }
         }
         true
+    }
+}
+
+/// Buffers are equal when they hold the same bytes.
+impl Eq for MemBuffer {
+    fn eq(self, _ other: MemBuffer) -> bool {
+        self.span() == other.span()
+    }
+}
+
+/// Whether the buffer holds the span's bytes.
+impl Eq<MemSpan> for MemBuffer {
+    fn eq(self, _ other: MemSpan) -> bool {
+        self.span() == other
     }
 }
 
