@@ -5,7 +5,7 @@
 //! `if`, `match` and `with` yield through their tails. Each yield site's shape
 //! is recorded for lowering.
 use super::{
-    Callable, ExprProp, TraitObligationOutcome, TyChecker, ValuePathRef,
+    Callable, ExprProp, SumShapeOp, TraitObligationOutcome, TyChecker, ValuePathRef,
     callable::place_borrow_suggestion,
     env::{TraitObligation, TraitObligationOrigin},
 };
@@ -189,15 +189,20 @@ impl<'db> TyChecker<'db> {
                 }
                 self.env.typed_expr(*tail).and_then(|tail| tail.shape)
             }
-            // `e?` grants the payload of what `e` does.
+            // `e?` and `e.unwrap()` grant the payload of what `e` does.
             Partial::Present(Expr::Try(inner)) => {
-                if !self.select_mut_place(*inner) {
+                let Some(shape) = self.select_mut_payload(*inner, &prop) else {
                     return false;
-                }
-                match self.env.typed_expr(*inner).and_then(|inner| inner.shape) {
-                    Some(Shape::Sum { payload, .. }) => Some(*payload),
-                    _ => prop.shape.clone(),
-                }
+                };
+                shape
+            }
+            Partial::Present(Expr::MethodCall(receiver, ..))
+                if self.env.sum_shape_op(expr) == Some(SumShapeOp::Unwrap) =>
+            {
+                let Some(shape) = self.select_mut_payload(*receiver, &prop) else {
+                    return false;
+                };
+                shape
             }
             // An unsafe split grants what its access elements do, a product
             // of accesses among them.
@@ -239,6 +244,24 @@ impl<'db> TyChecker<'db> {
             },
         );
         true
+    }
+
+    /// The shape of the payload of `inner`, a sum shape that `?` or `unwrap`
+    /// takes, once `inner` is selected at `mut`; `None` if it cannot be.
+    fn select_mut_payload(
+        &mut self,
+        inner: ExprId,
+        prop: &ExprProp<'db>,
+    ) -> Option<Option<Shape<'db>>> {
+        if !self.select_mut_place(inner) {
+            return None;
+        }
+        Some(
+            match self.env.typed_expr(inner).and_then(|inner| inner.shape) {
+                Some(Shape::Sum { payload, .. }) => Some(*payload),
+                _ => prop.shape.clone(),
+            },
+        )
     }
 
     /// The read accesses left in the unsafe split `expr` grants through, also

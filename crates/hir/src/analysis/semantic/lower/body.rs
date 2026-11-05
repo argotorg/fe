@@ -29,8 +29,8 @@ use crate::{
             ty_check::{
                 BindingAccess, BodyOwner, BuiltinOp, CallParam, Callable, CodeRegionIntrinsicKind,
                 ConstIntrinsicKind, ConstRef, ForLoopStep, LocalBinding, PathReadSemantics,
-                RecordInitLowering, RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
-                constructed_variant, infer_body, transparent_newtype_field_ty,
+                RecordInitLowering, RecordLike, SemanticExprLowering, SumShapeOp, TypedBody,
+                ValuePathRef, constructed_variant, infer_body, transparent_newtype_field_ty,
             },
             ty_def::{BorrowKind, TyData, TyId},
             ty_is_copy, ty_is_snapshot,
@@ -1887,6 +1887,118 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             SemanticExprLowering::ConstIntrinsic { callable, kind } => {
                 self.lower_const_intrinsic(expr, callable, *kind)
+            }
+            SemanticExprLowering::SumShape { op, .. } => self.lower_sum_shape_op(
+                expr,
+                ty,
+                receiver.expect("a sum shape method has a receiver"),
+                *op,
+            ),
+        }
+    }
+
+    /// Lowers `op` on `receiver`, a sum shape. A test reads the variant and
+    /// ends the access, destroying a `Result`'s error with the carrier.
+    /// `unwrap` continues with the payload as `?` does, and on the empty
+    /// variant calls the core function the method panics with.
+    fn lower_sum_shape_op(
+        &mut self,
+        expr: ExprId,
+        ty: TyId<'db>,
+        receiver: ExprId,
+        op: SumShapeOp,
+    ) -> SValueId {
+        let origin = SemOrigin::Expr(expr);
+        let Some(Shape::Sum {
+            ty: sum_ty,
+            variant,
+            ..
+        }) = self.typed_body.expr_prop(self.db, receiver).shape
+        else {
+            unreachable!("a sum shape method's receiver is a sum shape")
+        };
+        let value = self.lower_source(receiver);
+        let test = |this: &mut Self, variant| {
+            this.emit_expr_with_origin(
+                origin,
+                TyId::bool(this.db),
+                SExpr::IsEnumVariant {
+                    value: SOperand::synthetic(value),
+                    variant: VariantIndex(variant),
+                },
+            )
+        };
+        match op {
+            SumShapeOp::Test { payload } => {
+                self.hold_in_innermost(value);
+                test(self, if payload { variant } else { 1 - variant })
+            }
+            SumShapeOp::Unwrap => {
+                let holds_payload = test(self, variant);
+                let payload_bb = self.new_block();
+                let empty_bb = self.new_block();
+                self.set_terminator(
+                    self.current,
+                    origin,
+                    STerminatorKind::Branch {
+                        cond: SOperand::synthetic(holds_payload),
+                        then_bb: payload_bb,
+                        else_bb: empty_bb,
+                    },
+                );
+
+                self.switch_to(empty_bb);
+                self.push_drop_scope(false);
+                let carrier_ty = self.locals[value.index()].ty;
+                let error = (sum_kind(self.db, self.body.scope(), sum_ty) == Some(SumKind::Result))
+                    .then(|| {
+                        SOperand::synthetic(self.emit_expr_with_origin(
+                            origin,
+                            carrier_ty.generic_args(self.db)[0],
+                            SExpr::ExtractEnumField {
+                                value: SOperand::synthetic(value),
+                                variant: VariantIndex(1 - variant),
+                                field: FieldIndex(0),
+                            },
+                        ))
+                    });
+                let call_site = self
+                    .call_sites
+                    .get(expr.index())
+                    .and_then(|site| site.as_ref())
+                    .unwrap_or_else(|| {
+                        panic!("`unwrap` on a sum shape has no panic callee: {expr:?}")
+                    });
+                let callee = call_site.callee.unwrap_or_else(|| {
+                    panic!("`unwrap` on a sum shape has no panic callee: {expr:?}")
+                });
+                let effect_args = self.lower_effect_arg_slice(&call_site.effect_args);
+                self.emit_expr_with_origin(
+                    origin,
+                    TyId::never(self.db),
+                    SExpr::Call {
+                        call_site: CallSiteId::Expr(expr),
+                        callee,
+                        args: error.into_iter().collect(),
+                        effect_args,
+                    },
+                );
+                self.set_synthetic_terminator(
+                    self.current,
+                    STerminatorKind::Assert { message: None },
+                );
+                self.take_drop_scope();
+
+                self.switch_to(payload_bb);
+                self.emit_expr_with_origin(
+                    origin,
+                    ty,
+                    SExpr::ExtractEnumField {
+                        value: SOperand::synthetic(value),
+                        variant: VariantIndex(variant),
+                        field: FieldIndex(0),
+                    },
+                )
             }
         }
     }

@@ -4774,10 +4774,29 @@ pub enum BuiltinOp {
     Binary(BinaryOp),
 }
 
+/// A core `Option` or `Result` method called on a sum shape, the optional
+/// access a projection grants, which it consumes as `?` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum SumShapeOp {
+    /// `is_some` or `is_ok` when `payload`, else `is_none` or `is_err`:
+    /// whether the shape holds the payload variant.
+    Test { payload: bool },
+    /// `unwrap`: the payload's access, or a panic, as the method panics.
+    Unwrap,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub enum SemanticExprLowering<'db> {
     Call {
         callable: Callable<'db>,
+    },
+    /// `op` on a sum shape receiver. `method` is the core method the call
+    /// names; `panic` the core function `unwrap` calls on the empty variant,
+    /// `panic` or `panic_with_value` of a `Result`'s error.
+    SumShape {
+        op: SumShapeOp,
+        method: Callable<'db>,
+        panic: Option<Callable<'db>>,
     },
     CodeRegionIntrinsic {
         callable: Callable<'db>,
@@ -4791,11 +4810,34 @@ pub enum SemanticExprLowering<'db> {
 }
 
 impl<'db> SemanticExprLowering<'db> {
+    /// The callable the expression names: for a sum shape, the core method.
     pub(super) fn callable_mut(&mut self) -> &mut Callable<'db> {
         match self {
             Self::Call { callable }
             | Self::CodeRegionIntrinsic { callable, .. }
-            | Self::ConstIntrinsic { callable, .. } => callable,
+            | Self::ConstIntrinsic { callable, .. }
+            | Self::SumShape {
+                method: callable, ..
+            } => callable,
+        }
+    }
+
+    /// Every callable the expression records.
+    pub(super) fn callables_mut(&mut self) -> impl Iterator<Item = &mut Callable<'db>> {
+        match self {
+            Self::SumShape { method, panic, .. } => [Some(method), panic.as_mut()],
+            lowering => [Some(lowering.callable_mut()), None],
+        }
+        .into_iter()
+        .flatten()
+    }
+
+    /// The function the expression calls at run time, if any.
+    pub fn called(&self) -> Option<&Callable<'db>> {
+        match self {
+            Self::Call { callable } => Some(callable),
+            Self::SumShape { panic, .. } => panic.as_ref(),
+            Self::CodeRegionIntrinsic { .. } | Self::ConstIntrinsic { .. } => None,
         }
     }
 }
@@ -4851,6 +4893,12 @@ impl<'db> TyVisitable<'db> for SemanticExprLowering<'db> {
             Self::Call { callable }
             | Self::CodeRegionIntrinsic { callable, .. }
             | Self::ConstIntrinsic { callable, .. } => callable.visit_with(visitor),
+            Self::SumShape { method, panic, .. } => {
+                method.visit_with(visitor);
+                if let Some(panic) = panic {
+                    panic.visit_with(visitor);
+                }
+            }
         }
     }
 }
@@ -4876,6 +4924,11 @@ impl<'db> TyFoldable<'db> for SemanticExprLowering<'db> {
             Self::ConstIntrinsic { callable, kind } => Self::ConstIntrinsic {
                 callable: callable.fold_with(db, folder),
                 kind,
+            },
+            Self::SumShape { op, method, panic } => Self::SumShape {
+                op,
+                method: method.fold_with(db, folder),
+                panic: panic.map(|panic| panic.fold_with(db, folder)),
             },
         }
     }
@@ -5078,8 +5131,13 @@ impl<'db> TypedBody<'db> {
             return;
         }
         let tables = self.tables_mut();
-        for lowering in tables.semantic_expr_lowering.values_mut().flatten() {
-            lowering.callable_mut().bind_evidence(db, bound);
+        for callable in tables
+            .semantic_expr_lowering
+            .values_mut()
+            .flatten()
+            .flat_map(SemanticExprLowering::callables_mut)
+        {
+            callable.bind_evidence(db, bound);
         }
         for plan in tables.for_loop_plans.values_mut().flatten() {
             for call in &mut plan.calls {
@@ -5523,7 +5581,10 @@ impl<'db> TypedBody<'db> {
         match self.semantic_expr_lowering(expr)? {
             SemanticExprLowering::Call { callable }
             | SemanticExprLowering::CodeRegionIntrinsic { callable, .. }
-            | SemanticExprLowering::ConstIntrinsic { callable, .. } => Some(callable),
+            | SemanticExprLowering::ConstIntrinsic { callable, .. }
+            | SemanticExprLowering::SumShape {
+                method: callable, ..
+            } => Some(callable),
         }
     }
 
@@ -5536,7 +5597,9 @@ impl<'db> TypedBody<'db> {
             SemanticExprLowering::CodeRegionIntrinsic { region_arg, .. } => {
                 self.expr_code_region_ref(db, *region_arg)
             }
-            SemanticExprLowering::Call { .. } | SemanticExprLowering::ConstIntrinsic { .. } => None,
+            SemanticExprLowering::Call { .. }
+            | SemanticExprLowering::ConstIntrinsic { .. }
+            | SemanticExprLowering::SumShape { .. } => None,
         }
     }
 

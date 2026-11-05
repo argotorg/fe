@@ -1,0 +1,26 @@
+use core::{MemVec, Option}
+
+struct Pair {
+    items: MemVec<u64>,
+}
+
+impl Pair {
+    fn first(self) -> Option<ref u64> {
+        self.items.get(0)
+    }
+}
+
+// Only `is_some`, `is_none`, `is_ok`, `is_err` and `unwrap` take a sum shape.
+fn other_methods(_ v: ref MemVec<u64>) -> u64 {
+    v.get(0).unwrap_or(default: 5)
+}
+
+// `unwrap` grants a read access, which a non-`Copy` payload binds `ref`.
+fn non_copy(_ v: ref MemVec<MemVec<u64>>) -> usize {
+    let inner = v.get(0).unwrap()
+    inner.len()
+}
+
+fn read_only(_ p: mut Pair) {
+    p.first().unwrap() = 3
+}

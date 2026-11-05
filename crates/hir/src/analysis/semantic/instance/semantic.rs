@@ -389,7 +389,9 @@ fn provisional_call_sites<'db>(
     );
 
     for (expr, _) in body.exprs(db).iter() {
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        let Some(callable) = typed_body
+            .semantic_expr_lowering(expr)
+            .and_then(SemanticExprLowering::called)
         else {
             continue;
         };
@@ -762,7 +764,9 @@ fn finalize_call_sites<'db>(
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
             continue;
         };
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        let Some(callable) = typed_body
+            .semantic_expr_lowering(expr)
+            .and_then(SemanticExprLowering::called)
         else {
             continue;
         };
