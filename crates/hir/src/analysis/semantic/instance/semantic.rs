@@ -41,6 +41,7 @@ use crate::{
                 RootProviderScope, provider_semantics_for_specialized_call,
                 registered_root_providers,
             },
+            shape::Shape,
             subst::substitute_complete,
             trait_def::{MethodArgMapError, TraitInstId},
             trait_resolution::{
@@ -1490,6 +1491,19 @@ impl<'db> SemanticInstance<'db> {
         binding: LocalBinding<'db>,
     ) -> TyId<'db> {
         self.normalized_ty(db, self.binding_ty(db, binding))
+    }
+
+    /// The shape of what the instance returns, if it is a projection. Its
+    /// arguments make an associated shape's parts known.
+    #[salsa::tracked(returns(ref))]
+    pub fn return_shape(self, db: &'db dyn HirAnalysisDb) -> Option<Shape<'db>> {
+        let key = self.key(db);
+        let BodyOwner::Func(func, mode) = key.owner(db) else {
+            return None;
+        };
+        Some(func.return_shape(db, mode)?.map_tys(db, &mut |ty| {
+            instantiate_normalized_ty(db, key, ty).unwrap_or(ty)
+        }))
     }
 
     #[salsa::tracked(returns(copy))]

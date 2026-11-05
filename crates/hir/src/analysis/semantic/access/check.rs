@@ -822,11 +822,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 effect_args,
                 ..
             } => {
-                if let BodyOwner::Func(func, mode) = callee.key.owner(self.db)
-                    && let Some(shape) = func.return_shape(self.db, mode)
-                {
-                    self.sessions
-                        .insert(result, SemanticInstance::new(self.db, callee.key));
+                let instance = SemanticInstance::new(self.db, callee.key);
+                if let Some(shape) = instance.return_shape(self.db) {
+                    self.sessions.insert(result, instance);
                     return self.open_session(result, origin, callee.key, shape, args, effect_args);
                 }
                 Held::new()
@@ -1519,10 +1517,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// through them are discarded when the session finishes. A view
     /// descriptor is exempt, since its writes reach its owner.
     fn discarded_writes(&self) -> Vec<Diag<'db>> {
-        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
-            return Vec::new();
-        };
-        let Some(shape) = func.return_shape(self.db, mode) else {
+        let Some(shape) = self.instance.return_shape(self.db) else {
             return Vec::new();
         };
         let components = access_components(self.db, shape);
@@ -2824,10 +2819,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         state: &State,
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
-        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
-            return Ok(());
-        };
-        let Some(shape) = func.return_shape(self.db, mode) else {
+        let Some(shape) = self.instance.return_shape(self.db) else {
             return Ok(());
         };
         let held = &self.values[value.value.index()];
@@ -2881,10 +2873,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// none: every place but a grant has a space, and a grant of a callee's
     /// component that no yield of the callee grants is never live.
     fn check_yields(&self) -> Result<Vec<Option<AddressSpace>>, Diag<'db>> {
-        let BodyOwner::Func(func, mode) = self.instance.key(self.db).owner(self.db) else {
-            return Ok(Vec::new());
-        };
-        let Some(shape) = func.return_shape(self.db, mode) else {
+        let Some(shape) = self.instance.return_shape(self.db) else {
             return Ok(Vec::new());
         };
         let components = access_components(self.db, shape);

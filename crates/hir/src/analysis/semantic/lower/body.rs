@@ -870,7 +870,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 inspected: true,
             };
         }
-        self.value_pattern_source(value)
+        self.destructured_value_source(value)
     }
 
     /// Lowers what a binding, scrutinee or argument receives from `expr`: the
@@ -2692,7 +2692,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // The pattern binds the step as a `let` binds a projection's result:
         // copies end the step's session before the body runs.
         let yielded = call(self, ForLoopStep::At, at_args, shape.carrier_ty(self.db));
-        let step = self.value_pattern_source(yielded);
+        let step = self.destructured_value_source(yielded);
         self.bind_pattern(pat, step);
         let _ = self.lower_expr(body_expr);
         self.pop_drop_scope(None);

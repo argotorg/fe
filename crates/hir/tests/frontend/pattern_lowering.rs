@@ -116,11 +116,8 @@ pub contract C {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, body, |expr| matches!(
-            expr,
-            SExpr::ExtractEnumField { .. }
-        )),
-        "mut u256"
+        first_assignment_ty(&db, body, |expr| matches!(expr, SExpr::InspectPlace { .. })),
+        "Option<mut u256>"
     );
 }
 #[test]

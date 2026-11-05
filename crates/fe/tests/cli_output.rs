@@ -3942,6 +3942,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "impl_method_does_not_shadow_free_fn",
     "known_product_destructure_storage",
     "lane_accesses",
+    "lane_pattern_writes",
     "lane_projection_spaces",
     "leading_zeros",
     "library_state_index",

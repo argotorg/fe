@@ -7,7 +7,8 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             FieldIndex, SBlockId, SConst, SExpr, SLocalId, SOperand, SPlace, SStmtKind,
-            STerminatorKind, SValueId, SemOrigin, VariantIndex, bool_const, bytes_const, int_const,
+            STerminatorKind, SValueId, SemOrigin, VariantIndex, bool_const, bytes_const,
+            capability::semantics::holds_carrier, int_const,
         },
         ty::{
             decision_tree::{
@@ -52,8 +53,9 @@ pub(super) enum PatternSource<'db> {
     Value(PatternValue<'db>),
     /// A place matched by component: a `ref` or `mut` binding borrows its
     /// component's path, and the others read it, so nothing is opened on the
-    /// place beyond them. The tests of an `inspected` place, one with no
-    /// `ref` or `mut` binding, read its value instead of borrowing it.
+    /// place beyond them. The tests of an `inspected` place read what they
+    /// test instead of borrowing the place. A local holding an access names
+    /// what the access reaches.
     Place {
         place: SPlace<'db>,
         ty: TyId<'db>,
@@ -346,6 +348,23 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         PatternSource::Value(self.owned_pattern_value(value, self.locals[value.index()].ty))
     }
 
+    /// The source of a pattern that destructures `value`. A value holding an
+    /// access is matched in place, so a `mut` binding of what the access
+    /// reaches is an access that ends: a lane's copy is stored back then.
+    pub(super) fn destructured_value_source(&self, value: SValueId) -> PatternSource<'db> {
+        let ty = self.locals[value.index()].ty;
+        if holds_carrier(self.db, ty) {
+            PatternSource::Place {
+                place: SPlace::new(value),
+                ty,
+                provider: None,
+                inspected: true,
+            }
+        } else {
+            self.value_pattern_source(value)
+        }
+    }
+
     /// Test `pat` against `value`, jumping to `then_bb` with the pattern's
     /// bindings assigned, or to `else_bb` if the pattern doesn't match.
     pub(super) fn lower_pattern_branch(
@@ -609,9 +628,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         mut provider: Option<AddressSpace>,
         mut ty: TyId<'db>,
     ) {
-        if let Some((_, target)) = ty.as_capability(self.db) {
-            place.push_deref();
-            (provider, ty) = (None, target);
+        if through_access(self.db, &mut place, &mut ty) {
+            provider = None;
         }
         let store = self.typed_body.pattern_store();
         let kind = store.node(pat).kind().clone();
@@ -1104,7 +1122,7 @@ fn pattern_place_component<'db>(
     mut ty: TyId<'db>,
     path: &ProjectionPath<'db>,
 ) -> (SPlace<'db>, TyId<'db>, bool) {
-    let mut behind_access = false;
+    let mut behind_access = through_access(db, &mut place, &mut ty);
     for projection in path.iter() {
         let step = match projection {
             Projection::Field(field) => PatternProjectionStep::Field(*field),
@@ -1118,13 +1136,26 @@ fn pattern_place_component<'db>(
         };
         place.path.push(semantic_projection(projection));
         ty = project_pattern_child_source_ty(db, ty, step);
-        if let Some((_, target)) = ty.as_capability(db) {
-            place.push_deref();
-            ty = target;
-            behind_access = true;
-        }
+        behind_access |= through_access(db, &mut place, &mut ty);
     }
     (place, ty, behind_access)
+}
+
+/// Follows `place`, which holds a `ty`, through the access `ty` is, if it is
+/// one. A local's place is already what its carrier reaches.
+fn through_access<'db>(
+    db: &'db dyn HirAnalysisDb,
+    place: &mut SPlace<'db>,
+    ty: &mut TyId<'db>,
+) -> bool {
+    let Some((_, target)) = ty.as_capability(db) else {
+        return false;
+    };
+    if !place.path.is_empty() {
+        place.push_deref();
+    }
+    *ty = target;
+    true
 }
 
 /// A decision-tree path step as a place's projection.
