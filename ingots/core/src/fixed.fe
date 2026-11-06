@@ -19,6 +19,9 @@
 //! let compounded = rate ** 365                       // Ray, rounded half up
 //! ```
 //!
+//! `Wad::parse("0.25")` reads decimal text, and with `std`, `format!(wad)`
+//! writes it, without trailing zeros.
+//!
 //! Multiplication and division round down (towards zero for `Fixed`);
 //! `mul_up` and `div_up` round up. Overflow and division by zero fail like
 //! checked integer arithmetic (`Panic(0x11)` and `Panic(0x12)`).

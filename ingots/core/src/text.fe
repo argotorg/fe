@@ -7,6 +7,7 @@
 //! Text is bytes here: searches compare bytes, which is exact for UTF-8, and
 //! offsets count bytes.
 use super::abi::{Bytes, DynString}
+use super::fixed::{Fixed, UFixed}
 use super::iter::Driver
 use super::marker::Copy
 use super::num::{Bounded, IntDowncast}
@@ -159,16 +160,53 @@ pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
 /// than `0` to `9` (signs and whitespace included) or a value above
 /// `u256::max()` (OpenZeppelin reverts).
 pub fn parse_uint<T: Text>(_ text: T) -> Option<u256> {
-    parse_digits(text, from: 0, radix: 10)
+    parse_digits(text, from: 0, to: text.text_len(), radix: 10)
 }
 
 /// Parses decimal digits with an optional `+` or `-` sign as an `i256`
 /// (Solidity `Strings.tryParseInt`). `None` for invalid digits, a missing
 /// digit or a value outside the `i256` range.
 pub fn parse_int<T: Text>(_ text: T) -> Option<i256> {
+    parse_signed(text, decimals: 0)
+}
+
+/// Parses hex digits of either case, with or without a `0x` prefix, as a
+/// `u256` (Solidity `Strings.tryParseHexUint`). `None` for an invalid
+/// digit, no digits or a value above `u256::max()`.
+pub fn parse_hex_uint<T: Text>(_ text: T) -> Option<u256> {
+    let prefixed = text.text_len() >= 2 && text.text_byte(0) == 48 && text.text_byte(1) == 120
+    parse_digits(text, from: if prefixed { 2 } else { 0 }, to: text.text_len(), radix: 16)
+}
+
+impl<const D: u256> UFixed<D> {
+    /// Parses decimal digits, optionally followed by a `.` and at most `D`
+    /// fraction digits: `12`, `0.25` or `007.50`. `None` for any other byte
+    /// (signs and whitespace included), no digits on either side of the
+    /// `.`, more than `D` fraction digits or a value out of range.
+    pub fn parse<T: Text>(_ text: T) -> Option<Self> {
+        match parse_scaled(text, from: 0, decimals: D) {
+            Option::Some(raw) => Option::Some(UFixed::from_raw(raw)),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<const D: u256> Fixed<D> {
+    /// Like `UFixed::parse`, after an optional `+` or `-` sign.
+    pub fn parse<T: Text>(_ text: T) -> Option<Self> {
+        match parse_signed(text, decimals: D) {
+            Option::Some(raw) => Option::Some(Fixed::from_raw(raw)),
+            Option::None => Option::None,
+        }
+    }
+}
+
+// An optional `+` or `-` sign, then `parse_scaled`'s digits, in the `i256`
+// range.
+fn parse_signed<T: Text>(_ text: T, decimals: u256) -> Option<i256> {
     let negative = text.text_len() != 0 && text.text_byte(0) == 45
     let signed = negative || (text.text_len() != 0 && text.text_byte(0) == 43)
-    let magnitude = match parse_digits(text, from: signed as usize, radix: 10) {
+    let magnitude = match parse_scaled(text, from: signed as usize, decimals) {
         Option::Some(value) => value
         Option::None => return Option::None
     }
@@ -183,25 +221,49 @@ pub fn parse_int<T: Text>(_ text: T) -> Option<i256> {
     }
 }
 
-/// Parses hex digits of either case, with or without a `0x` prefix, as a
-/// `u256` (Solidity `Strings.tryParseHexUint`). `None` for an invalid
-/// digit, no digits or a value above `u256::max()`.
-pub fn parse_hex_uint<T: Text>(_ text: T) -> Option<u256> {
-    let prefixed = text.text_len() >= 2 && text.text_byte(0) == 48 && text.text_byte(1) == 120
-    parse_digits(text, from: if prefixed { 2 } else { 0 }, radix: 16)
+// The decimal digits from byte `from` on, with at most `decimals` fraction
+// digits after a `.`, times `10^decimals`.
+fn parse_scaled<T: Text>(_ text: T, from: usize, decimals: u256) -> Option<u256> {
+    let len = text.text_len()
+    if decimals == 0 {
+        return parse_digits(text, from, to: len, radix: 10)
+    }
+    var point = from
+    while point < len && text.text_byte(point) != b'.' {
+        point += 1
+    }
+    let whole = match parse_digits(text, from, to: point, radix: 10) {
+        Option::Some(value) => value
+        Option::None => return Option::None
+    }
+    let scale = 10 ** decimals
+    var fraction: u256 = 0
+    if point < len {
+        let digits = len - point - 1
+        if digits as u256 > decimals {
+            return Option::None
+        }
+        fraction = match parse_digits(text, from: point + 1, to: len, radix: 10) {
+            Option::Some(value) => value * 10 ** (decimals - digits as u256)
+            Option::None => return Option::None
+        }
+    }
+    if whole > (u256::max() - fraction) / scale {
+        return Option::None
+    }
+    Option::Some(whole * scale + fraction)
 }
 
-// The value of the digits from byte `from` on.
-fn parse_digits<T: Text>(_ text: T, from: usize, radix: u256) -> Option<u256> {
-    let len = text.text_len()
-    if from >= len {
+// The value of the digits from byte `from` to byte `to`.
+fn parse_digits<T: Text>(_ text: T, from: usize, to: usize, radix: u256) -> Option<u256> {
+    if from >= to {
         return Option::None
     }
     let limit = u256::max() / radix
     let last = u256::max() % radix
     var value: u256 = 0
     var i = from
-    while i < len {
+    while i < to {
         let digit = digit_value(text.text_byte(i))
         if digit >= radix || value > limit || (value == limit && digit > last) {
             return Option::None
