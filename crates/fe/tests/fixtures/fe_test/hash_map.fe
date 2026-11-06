@@ -1,0 +1,557 @@
+// Tests for `core::map::HashMap` and the `core::hash` hashing it uses.
+use core::hash::{Hash, Hasher, fold_hash}
+use core::map::HashMap
+use core::mem::drop
+use core::ops::Drop
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{Bytes, DynString}
+
+#[test]
+fn fold_hash_matches_swisstable() {
+    // fe-lang/swisstable's `hash_u256` reference vectors.
+    assert!(fold_hash(0 as u256) == 0xe0a7e05b32ab24b6)
+    assert!(fold_hash(1 as u256) == 0x7fba99af9d58edc9)
+    assert!(fold_hash((1 as u256) << 64) == 0xc320d13399174840)
+    assert!(fold_hash((1 as u256) << 128) == 0xbb7549e3223197aa)
+    assert!(fold_hash((1 as u256) << 192) == 0xbe42ec3b709f5d00)
+    assert!(fold_hash((1 as u256) << 255) == 0x4eb05caf2ed07349)
+    assert!(fold_hash(u256::max()) == 0xa0b88a029900681b)
+    assert!(
+        fold_hash(0x1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100 as u256)
+            == 0x5ddf4b116554d203,
+    )
+}
+
+#[test]
+fn text_hashes_alike_in_every_type() {
+    let literal: String<3> = "abc"
+    let s: DynString = "abc"
+    let buffer = MemBuffer::from_span(s.span())
+    let bytes = Bytes::from_payload(source: s.span())
+    assert!(fold_hash(literal) == fold_hash(s))
+    assert!(fold_hash(s.span()) == fold_hash(s))
+    assert!(fold_hash(buffer) == fold_hash(s))
+    assert!(fold_hash(bytes) == fold_hash(s))
+
+    let long: DynString = "0123456789012345678901234567890123456789"
+    assert!(fold_hash(MemBuffer::from_span(long.span())) == fold_hash(long))
+    assert!(fold_hash(long.span().head(39)) != fold_hash(long))
+
+    // A trailing zero byte is part of the text.
+    var zero = MemBuffer::from_span(s.span())
+    zero.push(0)
+    assert!(fold_hash(zero) != fold_hash(s))
+    let empty: DynString = ""
+    let none: String<1> = ""
+    assert!(fold_hash(empty) == fold_hash(none))
+}
+
+// The group of `hash` among 256 slots and its control byte's seven bits.
+fn group(_ hash: u64) -> usize {
+    let low: usize = hash.downcast_truncate()
+    (low & 255) / 16
+}
+
+fn fingerprint(_ hash: u64) -> usize {
+    (hash >> 57).downcast_truncate()
+}
+
+// Consecutive keys spread over the groups and the control bytes.
+fn spreads(_ hashes: [u64; 256]) -> bool {
+    var groups: [usize; 16] = [0; 16]
+    var seen: [bool; 128] = [false; 128]
+    var distinct: usize = 0
+    for hash in hashes {
+        groups[group(hash)] += 1
+        if !seen[fingerprint(hash)] {
+            seen[fingerprint(hash)] = true
+            distinct += 1
+        }
+    }
+    for count in groups {
+        if count < 4 || count > 32 {
+            return false
+        }
+    }
+    distinct >= 96
+}
+
+#[test]
+fn hashes_spread_consecutive_keys() {
+    var shift: u256 = 0
+    while shift < 256 {
+        var words: [u64; 256] = [0; 256]
+        var i: usize = 0
+        while i < 256 {
+            words[i] = fold_hash((i as u256) << shift)
+            i += 1
+        }
+        assert!(spreads(words))
+        shift += 64
+    }
+    var small: [u64; 256] = [0; 256]
+    var i: usize = 0
+    while i < 256 {
+        let key: u64 = i.downcast_truncate()
+        small[i] = fold_hash(key)
+        i += 1
+    }
+    assert!(spreads(small))
+}
+
+#[test]
+fn basic_operations() {
+    var map = HashMap<u256, u256>::new()
+    assert!(map.is_empty() && map.len() == 0 && map.capacity() == 0)
+    assert!(!map.contains_key(17))
+    assert!(map.remove(17).is_none())
+
+    assert!(map.insert(17, 99).is_none())
+    assert!(map.len() == 1 && map.capacity() == 14)
+    assert!(map[17] == 99)
+    match map.insert(17, 123) {
+        Option::Some(old) => assert!(old == 99)
+        Option::None => assert!(false)
+    }
+    assert!(map.len() == 1)
+    match map.get(17) {
+        Option::Some(value) => assert!(value == 123)
+        Option::None => assert!(false)
+    }
+    if let Option::Some(mut value) = map.get(17) {
+        value += 1
+    }
+    map[17] += 1
+    assert!(map[17] == 125)
+
+    match map.remove(17) {
+        Option::Some(value) => assert!(value == 125)
+        Option::None => assert!(false)
+    }
+    assert!(map.is_empty())
+    assert!(map.remove(17).is_none())
+    if let Option::Some(_) = map.get(17) {
+        assert!(false)
+    }
+}
+
+#[test(should_revert, panic = 0x32)]
+fn indexing_a_missing_key_panics() {
+    var map = HashMap<u256, u256>::new()
+    map.insert(1, 2)
+    let _ = map[3]
+}
+
+// Keys whose hashes all share one group at every table size: its last,
+// so searches wrap around.
+struct Colliding {
+    value: u256,
+    seed: u64,
+}
+
+impl Hash for Colliding {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        state.write_u64(self.seed)
+    }
+}
+
+impl core::ops::Eq for Colliding {
+    fn eq(self, _ other: Colliding) -> bool {
+        self.value == other.value
+    }
+}
+
+// A seed whose hash selects the last group of every table up to 512 slots.
+fn colliding_seed() -> u64 {
+    var seed: u64 = 0
+    while fold_hash(seed) & 0x1f0 != 0x1f0 {
+        seed += 1
+    }
+    seed
+}
+
+fn colliding(_ value: u256, _ seed: u64) -> Colliding {
+    Colliding { value, seed }
+}
+
+#[test]
+fn collisions_updates_and_churn() {
+    let seed = colliding_seed()
+    let count: u256 = 300
+    var map = HashMap<Colliding, u256>::new()
+    var i: u256 = 0
+    while i < count {
+        assert!(map.insert(colliding(i, seed), i + 1).is_none())
+        i += 1
+    }
+    assert!(map.len() == 300 && map.capacity() == 448)
+    // A tombstone before an existing key must not create a duplicate on update.
+    assert!(map.remove(colliding(0, seed)).is_some())
+    assert!(map.insert(colliding(255, seed), 999).is_some())
+    assert!(map.len() == 299)
+    assert!(map[colliding(255, seed)] == 999)
+    assert!(map.insert(colliding(0, seed), 1).is_none())
+    assert!(map.insert(colliding(255, seed), 256).is_some())
+
+    var generation: u256 = 0
+    while generation < 4 {
+        i = 0
+        while i < count {
+            let old = generation * count + i
+            let new = old + count
+            assert!(map[colliding(old, seed)] == old + 1)
+            assert!(map.remove(colliding(old, seed)).is_some())
+            assert!(map.remove(colliding(old, seed)).is_none())
+            assert!(!map.contains_key(colliding(old, seed)))
+            assert!(map.insert(colliding(new, seed), new + 1).is_none())
+            assert!(map.len() == 300)
+            i += 1
+        }
+        generation += 1
+    }
+    i = 0
+    while i < count {
+        let key = generation * count + i
+        assert!(map[colliding(key, seed)] == key + 1)
+        assert!(map.remove(colliding(key, seed)).is_some())
+        i += 1
+    }
+    // Churn drops tombstones without growing, and emptying the map frees
+    // every slot.
+    assert!(map.is_empty() && map.capacity() == 448)
+    assert!(!map.contains_key(colliding(5000, seed)))
+    assert!(map.insert(colliding(5000, seed), 17).is_none())
+    assert!(map[colliding(5000, seed)] == 17)
+}
+
+#[test]
+fn grows_and_keeps_every_entry() {
+    var map = HashMap<u256, u256>::new()
+    var i: u256 = 0
+    while i < 5000 {
+        let key = i * 257 + 11
+        assert!(map.insert(key, key + 1000).is_none())
+        assert!(map.len() <= map.capacity())
+        i += 1
+    }
+    assert!(map.len() == 5000 && map.capacity() == 7168)
+    i = 0
+    while i < 5000 {
+        let key = i * 257 + 11
+        assert!(map[key] == key + 1000)
+        assert!(!map.contains_key(key + 1))
+        i += 1
+    }
+}
+
+#[test]
+fn reserves_room() {
+    var map = HashMap<u256, u256>::new()
+    assert!(map.try_reserve(100))
+    assert!(map.capacity() == 112)
+    var i: u256 = 0
+    while i < 100 {
+        assert!(map.insert(i, i).is_none())
+        i += 1
+    }
+    assert!(map.capacity() == 112)
+    assert!(!map.try_reserve(usize::max()))
+    assert!(map.len() == 100 && map.capacity() == 112)
+
+    let sized = HashMap<u256, u256>::with_capacity(14)
+    assert!(sized.capacity() == 14)
+}
+
+#[test]
+fn removal_reclaims_slots() {
+    var map = HashMap<u256, u256>::new()
+    var round: u256 = 0
+    while round < 64 {
+        var i: u256 = 0
+        while i < 100 {
+            assert!(map.insert(round * 100 + i, i).is_none())
+            i += 1
+        }
+        i = 0
+        while i < 100 {
+            assert!(map.remove(round * 100 + i).is_some())
+            i += 1
+        }
+        round += 1
+    }
+    // Emptying the map frees every slot, so churn never grows it.
+    assert!(map.is_empty() && map.capacity() == 112)
+    for _ in map {
+        assert!(false)
+    }
+}
+
+#[test]
+fn loops_visit_each_entry_once() {
+    var map = HashMap<u256, u256>::new()
+    var i: u256 = 0
+    while i < 40 {
+        assert!(map.insert(i * 7, i).is_none())
+        i += 1
+    }
+    i = 0
+    while i < 40 {
+        if i % 3 == 0 {
+            assert!(map.remove(i * 7).is_some())
+        }
+        i += 1
+    }
+    var seen: [bool; 40] = [false; 40]
+    var count: usize = 0
+    for (key, value) in map.entries() {
+        let index: usize = (key / 7).downcast_unchecked()
+        assert!(key % 7 == 0 && index % 3 != 0 && !seen[index])
+        assert!(value == index as u256)
+        seen[index] = true
+        count += 1
+    }
+    assert!(count == map.len() && count == 26)
+
+    var keys: u256 = 0
+    for key in map.keys() {
+        keys += key
+    }
+    var values: u256 = 0
+    for value in map {
+        values += value
+    }
+    assert!(keys == values * 7)
+
+    for mut value in map {
+        value += 1
+    }
+    for (key, mut value) in map.entries() {
+        value += key
+    }
+    var total: u256 = 0
+    for value in map {
+        total += value
+    }
+    assert!(total == values + 26 + keys)
+
+    var indexed: usize = 0
+    for (n, (_, _)) in map.entries().enumerate() {
+        indexed = n + 1
+    }
+    assert!(indexed == 26)
+}
+
+#[test]
+fn text_keys_take_any_text() {
+    var ages = HashMap<DynString, u256>::new()
+    let alice: DynString = "alice"
+    let bob: DynString = "bob"
+    assert!(ages.insert(alice, 30).is_none())
+    assert!(ages.insert(bob, 40).is_none())
+    assert!(ages["alice"] == 30)
+    assert!(ages.contains_key("bob"))
+    assert!(!ages.contains_key("carol"))
+    let probe: DynString = "alice"
+    assert!(ages[probe] == 30)
+    assert!(ages[probe.span()] == 30)
+    let fixed: String<3> = "bob"
+    assert!(ages[fixed] == 40)
+    ages["bob"] += 1
+    assert!(ages["bob"] == 41)
+
+    let long: DynString = "0123456789012345678901234567890123456789"
+    assert!(ages.insert(long, 1).is_none())
+    assert!(ages["0123456789012345678901234567890123456789"] == 1)
+    match ages.remove("alice") {
+        Option::Some(age) => assert!(age == 30)
+        Option::None => assert!(false)
+    }
+    assert!(!ages.contains_key(probe))
+    assert!(ages.len() == 2)
+}
+
+#[test]
+fn counts_with_get_or_insert() {
+    let text: DynString = "a b a c b a"
+    var counts = HashMap<DynString, u256>::new()
+    for word in text.span().split(b' ') {
+        counts.get_or_insert(DynString::from_payload(source: word), 0) += 1
+    }
+    assert!(counts.len() == 3)
+    assert!(counts["a"] == 3 && counts["b"] == 2 && counts["c"] == 1)
+}
+
+#[test]
+fn values_may_own_memory() {
+    var storage = HashMap<u256, HashMap<u256, u256>>::new()
+    storage.get_or_insert(1, HashMap::new()).insert(10, 100)
+    storage.get_or_insert(1, HashMap::new()).insert(11, 110)
+    storage.get_or_insert(2, HashMap::new()).insert(10, 200)
+    assert!(storage.len() == 2)
+    assert!(storage[1].len() == 2 && storage[1][11] == 110)
+    assert!(storage[2][10] == 200)
+    match storage.remove(1) {
+        Option::Some(slots) => assert!(slots[10] == 100)
+        Option::None => assert!(false)
+    }
+
+    var names = HashMap<u256, MemBuffer>::new()
+    assert!(names.insert(1, MemBuffer::from_span(DynString::span("one"))).is_none())
+    match names.insert(1, MemBuffer::from_span(DynString::span("uno"))) {
+        Option::Some(old) => assert!(old == "one")
+        Option::None => assert!(false)
+    }
+    assert!(names[1] == "uno")
+    names.clear()
+    assert!(names.is_empty() && !names.contains_key(1))
+}
+
+#[test]
+fn tuple_and_buffer_keys() {
+    var slots = HashMap<(u256, u256), u256>::new()
+    assert!(slots.insert((1, 2), 3).is_none())
+    assert!(slots.insert((2, 1), 4).is_none())
+    assert!(slots[(1, 2)] == 3 && slots[(2, 1)] == 4)
+
+    var blobs = HashMap<MemBuffer, bool>::new()
+    let key: DynString = "key"
+    assert!(blobs.insert(MemBuffer::from_span(key.span()), true).is_none())
+    assert!(blobs[key.span()])
+    assert!(blobs.contains_key(MemBuffer::from_span(key.span())))
+
+    var flags = HashMap<bool, u8>::new()
+    assert!(flags.insert(true, 1).is_none())
+    assert!(flags.insert(false, 0).is_none())
+    assert!(flags[true] == 1 && flags[false] == 0)
+}
+
+// Counts its destructions in a shared counter.
+struct Tracked {
+    count: *u256,
+    id: u256,
+}
+
+impl Drop for Tracked {
+    fn drop(own self) {
+        unsafe { *self.count += 1 }
+    }
+}
+
+impl Hash for Tracked {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        state.write_word(self.id)
+    }
+}
+
+impl core::ops::Eq for Tracked {
+    fn eq(self, _ other: Tracked) -> bool {
+        self.id == other.id
+    }
+}
+
+fn tracked(_ count: *u256, _ id: u256) -> Tracked {
+    Tracked { count, id }
+}
+
+#[test]
+fn entries_are_destroyed_once() {
+    let count = ptr::alloc<u256>()
+    unsafe { *count = 0 }
+    var map = HashMap<Tracked, Tracked>::new()
+    var i: u256 = 0
+    while i < 100 {
+        assert!(map.insert(tracked(count, i), tracked(count, i)).is_none())
+        i += 1
+    }
+    assert!(unsafe { *count } == 0)
+    // An update keeps the old key, destroying the new one, and returns the
+    // old value.
+    let old = map.insert(tracked(count, 5), tracked(count, 500))
+    assert!(unsafe { *count } == 1)
+    drop(old)
+    assert!(unsafe { *count } == 2)
+    // A removal destroys the key and returns the value.
+    let removed = map.remove(tracked(count, 6))
+    assert!(unsafe { *count } == 4)
+    drop(removed)
+    assert!(unsafe { *count } == 5)
+    // `get_or_insert` of a key the map has destroys the new key and value.
+    let kept = mut map.get_or_insert(tracked(count, 7), tracked(count, 700))
+    assert!(kept.id == 7)
+    assert!(unsafe { *count } == 7)
+    // Growing moves entries without destroying them.
+    while i < 1000 {
+        assert!(map.insert(tracked(count, i), tracked(count, i)).is_none())
+        i += 1
+    }
+    assert!(unsafe { *count } == 7)
+    map.clear()
+    assert!(unsafe { *count } == 7 + 2 * 999)
+    assert!(map.insert(tracked(count, 1), tracked(count, 1)).is_none())
+    drop(map)
+    assert!(unsafe { *count } == 7 + 2 * 999 + 2)
+}
+
+
+// xorshift64
+fn next_random(_ state: mut u64) -> u64 {
+    var x = state
+    x ^= x << 13
+    x ^= x >> 7
+    x ^= x << 17
+    state = x
+    x
+}
+
+#[test]
+fn agrees_with_a_reference() {
+    // Keys below 512, so an array is the reference.
+    var present: [bool; 512] = [false; 512]
+    var values: [u256; 512] = [0; 512]
+    var len: usize = 0
+    var map = HashMap<u256, u256>::new()
+    var state: u64 = 0x2545f4914f6cdd1d
+    var step: usize = 0
+    while step < 3000 {
+        let r = next_random(mut state)
+        let index: usize = (r % 512).downcast_truncate()
+        let key = index as u256
+        let op = (r >> 32) % 8
+        if op < 4 {
+            let value = (r >> 40) as u256
+            let old = map.insert(key, value)
+            assert!(old.is_some() == present[index])
+            if let Option::Some(previous) = old {
+                assert!(previous == values[index])
+            }
+            if !present[index] {
+                len += 1
+            }
+            present[index] = true
+            values[index] = value
+        } else if op < 7 {
+            let removed = map.remove(key)
+            assert!(removed.is_some() == present[index])
+            if let Option::Some(value) = removed {
+                assert!(value == values[index])
+                len -= 1
+            }
+            present[index] = false
+        } else {
+            assert!(map.contains_key(key) == present[index])
+            match map.get(key) {
+                Option::Some(value) => assert!(value == values[index])
+                Option::None => assert!(!present[index])
+            }
+        }
+        assert!(map.len() == len)
+        step += 1
+    }
+    var seen: usize = 0
+    for (key, value) in map.entries() {
+        let index: usize = key.downcast_truncate()
+        assert!(present[index] && values[index] == value)
+        seen += 1
+    }
+    assert!(seen == len)
+}

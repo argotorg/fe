@@ -3,6 +3,7 @@ pub use super::{
     default::Default,
     marker::{Copy, Snapshot},
     error::ErrorVariant,
+    map::HashMap,
     message::MsgVariant,
     num::Abs,
     num::Bounded,

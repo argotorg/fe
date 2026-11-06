@@ -31,9 +31,9 @@ error[8-0097]: call to unsafe function `store_word` requires an `unsafe` block o
  14 │     store_word(ptr: p, value: 1)
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
     │
-    ┌─ src/abi.fe:316:15
+    ┌─ src/abi.fe:317:15
     │
-316 │ pub unsafe fn store_word(ptr: *u8, value: u256) {
+317 │ pub unsafe fn store_word(ptr: *u8, value: u256) {
     │               ---------- callee defined here
 
 error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` block or function
@@ -42,9 +42,9 @@ error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` blo
  18 │     value.encode(AbiFrame::from_raw_parts(ptr: p, len: 32))
     │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
     │
-    ┌─ src/abi.fe:268:19
+    ┌─ src/abi.fe:269:19
     │
-268 │     pub unsafe fn from_raw_parts(ptr: *u8, len: u256) -> Self {
+269 │     pub unsafe fn from_raw_parts(ptr: *u8, len: u256) -> Self {
     │                   -------------- callee defined here
 
 error[8-0097]: call to unsafe function `alloc_array` requires an `unsafe` block or function

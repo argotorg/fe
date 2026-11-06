@@ -82,6 +82,12 @@ impl core::ops::Eq for Address {
 impl Copy for Address {}
 impl Snapshot for Address {}
 
+impl core::hash::Hash for Address {
+    fn hash<H: core::hash::Hasher>(self, _ state: mut H) {
+        state.write_word(self.inner)
+    }
+}
+
 /// Orders addresses by their numeric value, like Solidity's `<` on
 /// `address`, so signer lists can be sorted and checked for duplicates.
 impl core::ops::Ord for Address {

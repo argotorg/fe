@@ -1,0 +1,531 @@
+//! `HashMap`, a hash table that owns its keys and values.
+//!
+//! ```fe
+//! use core::map::HashMap
+//!
+//! var ages = HashMap<DynString, u256>::new()
+//! ages.insert(name, 30)
+//! ages.get_or_insert(other, 0) += 1
+//! if let Option::Some(age) = ages.get("alice") { .. }
+//! for (name, age) in ages.entries() { .. }
+//! ```
+use super::default::Default
+use super::hash::{Hash, fold_hash}
+use super::iter::{Collection, Driver}
+use super::marker::Copy
+use super::mem::{needs_drop, replace}
+use super::num::IntDowncast
+use super::ops::{Drop, Eq, Index}
+use super::option::Option
+use super::panic_code
+use super::panics::PANIC_OUT_OF_MEMORY
+use super::ptr::{self, MAX_ALLOCATION, MemArray, index_out_of_bounds, try_alloc_elems}
+
+const GROUP_WIDTH: usize = 16
+
+// Control bytes. A slot holding an entry has its key's hash's top seven bits
+// with the high bit set.
+const EMPTY: u8 = 0
+const DELETED: u8 = 1
+const FULL: u8 = 0x80
+
+// The most entries a table may hold, so that its slot count cannot overflow.
+const MAX_ENTRIES: usize = MAX_ALLOCATION / 8
+
+/// A hash table that owns its keys and values, and destroys them when it is
+/// destroyed. A key is found by its `Hash` and `Eq`, and may be looked up by
+/// any type that hashes and compares equal to it: a `DynString` key by a
+/// literal or a `MemSpan`.
+///
+/// A loop over the map visits its values; `keys()` and `entries()` visit its
+/// keys and both, in no particular order. Inserting during a loop may move
+/// the entries, so that the loop visits one twice or misses one.
+///
+/// The slots come in groups of 16, a power of two of them, and each has a
+/// control byte: empty, deleted, or seven bits of its key's hash. A key is
+/// searched for from the group its hash selects, slot by slot, until an
+/// empty slot. Entries and tombstones never fill more than 7/8 of the
+/// slots: past that, the map moves its entries to fresh slots, doubling them
+/// unless the entries would fill at most half, which drops every tombstone.
+/// Keys hash with `FoldHasher`, which does not resist keys chosen to collide.
+pub struct HashMap<K, V> {
+    // A slot's key and value are initialized exactly when its control byte
+    // is full.
+    unsafe ctrl: MemArray<u8>,
+    unsafe keys: *K,
+    unsafe values: *V,
+    len: usize,
+    deleted: usize,
+}
+
+// Where a key is, or the slot inserting it takes.
+struct Search {
+    found: bool,
+    slot: usize,
+}
+
+impl<K, V> HashMap<K, V> {
+    /// An empty map, which allocates nothing until its first insertion.
+    pub fn new() -> Self {
+        // No slots, so nothing is initialized.
+        unsafe {
+            Self {
+                ctrl: MemArray::new_zeroed(0),
+                keys: ptr::cast<u8, K>(ptr::alloc_bytes(0)),
+                values: ptr::cast<u8, V>(ptr::alloc_bytes(0)),
+                len: 0,
+                deleted: 0,
+            }
+        }
+    }
+
+    /// An empty map with room for `capacity` entries. Reverts with
+    /// `Panic(0x41)` when it cannot allocate them.
+    pub fn with_capacity(_ capacity: usize) -> Self {
+        if capacity > MAX_ENTRIES {
+            panic_code(PANIC_OUT_OF_MEMORY)
+        }
+        let slots = slots_for(capacity)
+        let Option::Some((ctrl, keys, values)) = alloc_table<K, V>(slots) else {
+            panic_code(PANIC_OUT_OF_MEMORY)
+        }
+        // Every control byte is empty.
+        unsafe { Self { ctrl, keys, values, len: 0, deleted: 0 } }
+    }
+
+    pub fn len(self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// How many entries the map holds without moving them.
+    pub fn capacity(self) -> usize {
+        max_load(self.ctrl.len()) - self.deleted
+    }
+
+    /// Destroys every entry, keeping the slots.
+    pub fn clear(mut self) {
+        // Each entry is destroyed once, and then its slot is empty.
+        unsafe {
+            self.drop_entries()
+            self.ctrl.zero()
+        }
+        self.len = 0
+        self.deleted = 0
+    }
+
+    /// The keys: `for key in map.keys()`.
+    pub fn keys(self) -> Keys<K, V> {
+        Keys {}
+    }
+
+    /// Each key with its value: `for (key, mut value) in map.entries()`.
+    pub fn entries(self) -> Entries<K, V> {
+        Entries {}
+    }
+
+    /// The value of `key`, or `None` when the map has no such key.
+    pub fn get<Q: Hash>(mut? self, _ key: Q) -> Option<mut? V>
+        where K: Eq<Q>
+    {
+        let slot = self.find(key)?
+        // `find` returns a slot holding an entry.
+        Option::Some(unsafe { mut? *ptr::offset(self.values, slot) })
+    }
+
+    pub fn contains_key<Q: Hash>(self, _ key: Q) -> bool
+        where K: Eq<Q>
+    {
+        self.find(key).is_some()
+    }
+
+    /// Removes `key` and returns its value, or `None` when the map has no
+    /// such key.
+    pub fn remove<Q: Hash>(mut self, _ key: Q) -> Option<V>
+        where K: Eq<Q>
+    {
+        let slot = self.find(key)?
+        self.len -= 1
+        // The entry leaves the table before its key is destroyed and its
+        // value moved out.
+        unsafe {
+            self.vacate(slot)
+            ptr::drop_in_place(ptr::offset(self.keys, slot))
+            Option::Some(*ptr::offset(self.values, slot))
+        }
+    }
+
+    // The slot holding `key`.
+    fn find<Q: Hash>(self, _ key: Q) -> Option<usize>
+        where K: Eq<Q>
+    {
+        let search = self.search(key, fold_hash(key))
+        if search.found { Option::Some(search.slot) } else { Option::None }
+    }
+
+    fn search<Q>(self, _ key: Q, _ hash: u64) -> Search
+        where K: Eq<Q>
+    {
+        let slots = self.ctrl.len()
+        if slots == 0 {
+            return Search { found: false, slot: 0 }
+        }
+        let fingerprint = full_ctrl(hash)
+        // The first tombstone the search passes, if any, takes an insertion.
+        var tombstone = slots
+        var slot = group_start(hash, slots)
+        while true {
+            let ctrl = self.ctrl[slot]
+            // A full control byte means the slot holds a key.
+            if ctrl == fingerprint && unsafe { *ptr::offset(self.keys, slot) == key } {
+                return Search { found: true, slot }
+            }
+            if ctrl == EMPTY {
+                return Search { found: false, slot: if tombstone < slots { tombstone } else { slot } }
+            }
+            if ctrl == DELETED && tombstone == slots {
+                tombstone = slot
+            }
+            slot = (slot + 1) & (slots - 1)
+        }
+        Search { found: false, slot: 0 }
+    }
+
+    // Marks the entry at `slot` removed, before it is destroyed. Every
+    // search reads slots in the same circular order and ends at an empty
+    // slot, so one whose next slot is empty ends every search through it, as
+    // do the tombstones before it.
+    unsafe fn vacate(mut self, _ slot: usize) {
+        let slots = self.ctrl.len()
+        if self.len == 0 {
+            // Nothing is left to find.
+            self.ctrl.zero()
+            self.deleted = 0
+            return
+        }
+        if self.ctrl[(slot + 1) & (slots - 1)] != EMPTY {
+            self.ctrl[slot] = DELETED
+            self.deleted += 1
+            return
+        }
+        self.ctrl[slot] = EMPTY
+        var before = (slot + slots - 1) & (slots - 1)
+        while self.ctrl[before] == DELETED {
+            self.ctrl[before] = EMPTY
+            self.deleted -= 1
+            before = (before + slots - 1) & (slots - 1)
+        }
+    }
+
+    fn is_full(self, _ slot: usize) -> bool {
+        slot < self.ctrl.len() && self.ctrl[slot] >= FULL
+    }
+
+    // The first slot from `slot` on that holds an entry, or the slot count.
+    fn full_from(self, _ slot: usize) -> usize {
+        let slots = self.ctrl.len()
+        var at = slot
+        while at < slots && self.ctrl[at] < FULL {
+            at += 1
+        }
+        at
+    }
+
+    // Destroys every entry, leaving the control bytes as they are.
+    unsafe fn drop_entries(self) {
+        if needs_drop<K>() || needs_drop<V>() {
+            for slot in 0..self.ctrl.len() {
+                if self.ctrl[slot] >= FULL {
+                    ptr::drop_in_place(ptr::offset(self.keys, slot))
+                    ptr::drop_in_place(ptr::offset(self.values, slot))
+                }
+            }
+        }
+    }
+}
+
+impl<K: Hash + Eq, V> HashMap<K, V> {
+    /// Inserts `key` with `value` and returns `None`, or, when the map has
+    /// the key, replaces its value, keeping the key it has, and returns the
+    /// old value. Reverts with `Panic(0x41)` when the map cannot grow.
+    pub fn insert(mut self, _ key: own K, _ value: own V) -> Option<V> {
+        let hash = fold_hash(key)
+        let search = self.search(key, hash)
+        if search.found {
+            // The slot holds an entry, whose value the new one replaces.
+            return Option::Some(unsafe { replace(mut *ptr::offset(self.values, search.slot), value) })
+        }
+        let _ = self.add(search, hash, key, value)
+        Option::None
+    }
+
+    /// The value of `key`, inserting `key` with `value` first when the map
+    /// has no such key: `counts.get_or_insert(word, 0) += 1`. Reverts with
+    /// `Panic(0x41)` when the map cannot grow.
+    pub fn get_or_insert(mut self, _ key: own K, _ value: own V) -> mut V {
+        let hash = fold_hash(key)
+        let search = self.search(key, hash)
+        let slot = if search.found { search.slot } else { self.add(search, hash, key, value) }
+        // The slot holds an entry.
+        unsafe { mut *ptr::offset(self.values, slot) }
+    }
+
+    /// Makes room for `additional` more entries without moving them.
+    /// Reverts with `Panic(0x41)` when the map cannot grow.
+    pub fn reserve(mut self, _ additional: usize) {
+        if !self.try_reserve(additional) {
+            panic_code(PANIC_OUT_OF_MEMORY)
+        }
+    }
+
+    /// As `reserve`, but `false`, leaving the map as it was, when it cannot
+    /// grow.
+    pub fn try_reserve(mut self, _ additional: usize) -> bool {
+        if additional > MAX_ENTRIES - self.len {
+            return false
+        }
+        let needed = self.len + additional
+        needed + self.deleted <= max_load(self.ctrl.len()) || self.try_grow(needed)
+    }
+
+    // Inserts an entry for a key `search` did not find, and returns its slot.
+    fn add(mut self, _ search: Search, _ hash: u64, _ key: own K, _ value: own V) -> usize {
+        // An entry in a tombstone's slot adds no load.
+        var slot = search.slot
+        let reuses = self.ctrl.len() != 0 && self.ctrl[slot] == DELETED
+        if !reuses && self.len + self.deleted >= max_load(self.ctrl.len()) {
+            if self.len >= MAX_ENTRIES || !self.try_grow(self.len + 1) {
+                panic_code(PANIC_OUT_OF_MEMORY)
+            }
+            slot = empty_slot(self.ctrl, hash)
+        }
+        if self.ctrl[slot] == DELETED {
+            self.deleted -= 1
+        }
+        // The slot is empty or a tombstone, so the writes initialize its key
+        // and value.
+        unsafe {
+            self.ctrl[slot] = full_ctrl(hash)
+            *ptr::offset(self.keys, slot) = key
+            *ptr::offset(self.values, slot) = value
+        }
+        self.len += 1
+        slot
+    }
+
+    // Moves the entries to fresh slots for `needed` of them, which is at most
+    // `MAX_ENTRIES`: the same number when they fill at most half, else the
+    // fewest that hold them and more than the current ones. Every tombstone
+    // is dropped. `false`, leaving the map as it was, when it cannot
+    // allocate.
+    fn try_grow(mut self, _ needed: usize) -> bool {
+        let full = max_load(self.ctrl.len())
+        var slots = self.ctrl.len()
+        if needed > full / 2 {
+            slots = GROUP_WIDTH
+            while max_load(slots) < needed || max_load(slots) <= full {
+                slots *= 2
+            }
+        }
+        let Option::Some((var ctrl, keys, values)) = alloc_table<K, V>(slots) else {
+            return false
+        }
+        for slot in 0..self.ctrl.len() {
+            let fingerprint = self.ctrl[slot]
+            if fingerprint >= FULL {
+                // The entry moves to an empty slot of the new table, leaving
+                // its old slot uninitialized.
+                unsafe {
+                    let key = ptr::offset(self.keys, slot)
+                    let to = empty_slot(ctrl, fold_hash(ref *key))
+                    ctrl[to] = fingerprint
+                    *ptr::offset(keys, to) = *key
+                    *ptr::offset(values, to) = *ptr::offset(self.values, slot)
+                }
+            }
+        }
+        // The old allocations hold no entries now.
+        unsafe {
+            ptr::dealloc(self.keys)
+            ptr::dealloc(self.values)
+            self.ctrl = ctrl
+            self.keys = keys
+            self.values = values
+        }
+        self.deleted = 0
+        true
+    }
+}
+
+/// `map[key]`: the value of `key`, which the map must have. Panics with
+/// `0x32` when it does not.
+impl<K: Eq<Q>, V, Q: Hash> Index<Q> for HashMap<K, V> {
+    type Output = V
+
+    fn index(mut? self, _ key: Q) -> mut? V {
+        match self.find(key) {
+            // `find` returns a slot holding an entry.
+            Option::Some(slot) => unsafe { mut? *ptr::offset(self.values, slot) }
+            Option::None => index_out_of_bounds()
+        }
+    }
+}
+
+impl<K, V> Default for HashMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, V> Drop for HashMap<K, V> {
+    fn drop(own self) {
+        // Each entry is destroyed once, then the key and value allocations
+        // are freed; the control bytes free their own.
+        unsafe {
+            self.drop_entries()
+            ptr::dealloc(self.keys)
+            ptr::dealloc(self.values)
+        }
+    }
+}
+
+/// A map's values; a cursor is a slot.
+impl<K, V> Collection for HashMap<K, V> {
+    type Cursor = usize
+    type Item = V
+
+    fn start(self) -> usize {
+        self.full_from(0)
+    }
+
+    fn has(self, _ c: usize) -> bool {
+        self.is_full(c)
+    }
+
+    fn next(self, _ c: usize) -> usize {
+        self.full_from(c + 1)
+    }
+
+    fn at(mut? self, _ c: usize) -> mut? V {
+        if !self.is_full(c) {
+            index_out_of_bounds()
+        }
+        unsafe { mut? *ptr::offset(self.values, c) }
+    }
+}
+
+/// The traversal `HashMap::keys` runs over a map.
+pub struct Keys<K, V> {}
+
+impl<K, V> Copy for Keys<K, V> {}
+
+impl<K, V> Driver for Keys<K, V> {
+    type Base = HashMap<K, V>
+    type State = usize
+    shape Step = ref K
+
+    fn start(self, _ base: HashMap<K, V>) -> usize {
+        base.full_from(0)
+    }
+
+    fn has(self, _ base: HashMap<K, V>, _ s: usize) -> bool {
+        base.is_full(s)
+    }
+
+    fn next(self, _ base: HashMap<K, V>, _ s: usize) -> usize {
+        base.full_from(s + 1)
+    }
+
+    fn at(self, _ base: HashMap<K, V>, _ s: usize) -> ref K {
+        if !base.is_full(s) {
+            index_out_of_bounds()
+        }
+        unsafe { ref *ptr::offset(base.keys, s) }
+    }
+}
+
+/// The traversal `HashMap::entries` runs over a map.
+pub struct Entries<K, V> {}
+
+impl<K, V> Copy for Entries<K, V> {}
+
+impl<K, V> Driver for Entries<K, V> {
+    type Base = HashMap<K, V>
+    type State = usize
+    shape Step = (ref K, mut? V)
+
+    fn start(self, _ base: HashMap<K, V>) -> usize {
+        base.full_from(0)
+    }
+
+    fn has(self, _ base: HashMap<K, V>, _ s: usize) -> bool {
+        base.is_full(s)
+    }
+
+    fn next(self, _ base: HashMap<K, V>, _ s: usize) -> usize {
+        base.full_from(s + 1)
+    }
+
+    fn at(self, _ base: mut? HashMap<K, V>, _ s: usize) -> (ref K, mut? V) {
+        if !base.is_full(s) {
+            index_out_of_bounds()
+        }
+        unsafe { (ref *ptr::offset(base.keys, s), mut? *ptr::offset(base.values, s)) }
+    }
+}
+
+// The control byte of an entry whose key has `hash`: the top seven bits,
+// which no group index uses.
+fn full_ctrl(_ hash: u64) -> u8 {
+    let top: u8 = (hash >> 57).downcast_truncate()
+    top | FULL
+}
+
+// The group a hash selects among `slots` slots, a power of two.
+fn group_start(_ hash: u64, _ slots: usize) -> usize {
+    let low: usize = hash.downcast_truncate()
+    let slot = low & (slots - 1)
+    slot - slot % GROUP_WIDTH
+}
+
+// The most entries and tombstones `slots` slots hold.
+fn max_load(_ slots: usize) -> usize {
+    slots - slots / 8
+}
+
+// The fewest slots that hold `capacity` entries, at most `MAX_ENTRIES`.
+fn slots_for(_ capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0
+    }
+    var slots = GROUP_WIDTH
+    while max_load(slots) < capacity {
+        slots *= 2
+    }
+    slots
+}
+
+// The first empty slot of `hash`'s search in `ctrl`.
+fn empty_slot(_ ctrl: MemArray<u8>, _ hash: u64) -> usize {
+    let slots = ctrl.len()
+    var slot = group_start(hash, slots)
+    while ctrl[slot] != EMPTY {
+        slot = (slot + 1) & (slots - 1)
+    }
+    slot
+}
+
+// Empty control bytes and uninitialized keys and values for `slots` slots.
+fn alloc_table<K, V>(_ slots: usize) -> Option<(MemArray<u8>, *K, *V)> {
+    let ctrl = MemArray<u8>::try_new_zeroed(slots)?
+    let keys = try_alloc_elems<K>(slots)?
+    let Option::Some(values) = try_alloc_elems<V>(slots) else {
+        // Nothing is in the keys' allocation.
+        unsafe { ptr::dealloc(keys) }
+        return Option::None
+    }
+    Option::Some((ctrl, keys, values))
+}

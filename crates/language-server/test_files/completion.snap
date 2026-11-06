@@ -31,6 +31,7 @@ completions:
   - ErrorVariant (Interface)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
+  - HashMap (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
@@ -112,6 +113,7 @@ completions:
   - Duration (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
+  - HashMap (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
@@ -192,6 +194,7 @@ completions:
   - Duration (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
+  - HashMap (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
@@ -262,6 +265,7 @@ completions:
   - Duration (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
+  - HashMap (Struct)
   - Helper (Struct)
   - MemArray (Struct)
   - MemBuffer (Struct)
@@ -292,6 +296,7 @@ completions:
   - Duration (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
+  - HashMap (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+104:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+104:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+104:use shadow_test::Helper}
@@ -340,6 +345,7 @@ completions:
   - ErrorVariant (Interface)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
+  - HashMap (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
