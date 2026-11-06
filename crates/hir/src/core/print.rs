@@ -1107,6 +1107,11 @@ impl<'db> Stmt<'db> {
                 )
             }
 
+            Stmt::Loop(body_expr) => {
+                let body_block = unwrap_partial_ref(body_expr.data(db, body), "Loop::body");
+                format!("loop {}", body_block.pretty_print(db, body, indent))
+            }
+
             Stmt::Continue => "continue".to_string(),
             Stmt::Break => "break".to_string(),
 

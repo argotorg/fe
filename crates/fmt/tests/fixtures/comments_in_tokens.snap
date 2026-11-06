@@ -26,6 +26,13 @@ fn if_comment() -> bool {
     }
 }
 
+fn loop_comment() {
+    loop // mid
+        {
+            break
+        }
+}
+
 fn match_comment(x: u256) -> bool {
     match // mid
         x {

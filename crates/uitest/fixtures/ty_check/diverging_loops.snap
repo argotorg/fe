@@ -1,0 +1,41 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/diverging_loops.fe
+---
+error[8-0000]: type mismatch
+   ┌─ diverging_loops.fe:44:28
+   │
+44 │   fn breaks(_ n: u64) -> u64 {
+   │ ╭────────────────────────────^
+45 │ │     loop {
+46 │ │         if n == 0 {
+47 │ │             break
+   · │
+50 │ │     }
+51 │ │ }
+   │ ╰─^ expected `u64`, but `()` is given
+
+error[8-0000]: type mismatch
+   ┌─ diverging_loops.fe:53:34
+   │
+53 │   fn breaks_while(_ n: u64) -> u64 {
+   │ ╭──────────────────────────────────^
+54 │ │     while true {
+55 │ │         if n == 0 {
+56 │ │             break
+   · │
+59 │ │     }
+60 │ │ }
+   │ ╰─^ expected `u64`, but `()` is given
+
+error[8-0000]: type mismatch
+   ┌─ diverging_loops.fe:63:31
+   │
+63 │   fn condition(_ n: u64) -> u64 {
+   │ ╭───────────────────────────────^
+64 │ │     while n > 0 {
+65 │ │         return n
+66 │ │     }
+67 │ │ }
+   │ ╰─^ expected `u64`, but `()` is given

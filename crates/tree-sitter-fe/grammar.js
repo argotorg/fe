@@ -1317,6 +1317,7 @@ module.exports = grammar({
       $.let_statement,
       $.for_statement,
       $.while_statement,
+      $.loop_statement,
       $.return_statement,
       $.yield_statement,
       $.break_statement,
@@ -1353,6 +1354,11 @@ module.exports = grammar({
     while_statement: $ => seq(
       'while',
       field('condition', $._condition),
+      prec.dynamic(1, field('body', $.block)),
+    ),
+
+    loop_statement: $ => seq(
+      'loop',
       prec.dynamic(1, field('body', $.block)),
     ),
 

@@ -20,6 +20,11 @@ fn loop_examples(arr: Array<i32, 10>) {
         if x % 2 == 0 { continue }
     }
 
+    loop {
+        x = x - 1
+        if x == 0 { break }
+    }
+
     var maybe = Some(1)
     while let Some(v) = maybe {
         maybe = None

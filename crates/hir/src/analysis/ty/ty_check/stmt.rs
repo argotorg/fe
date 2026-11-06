@@ -6,7 +6,8 @@ use crate::analysis::{
     name_resolution::method_selection::{MethodCandidate, select_method_candidate},
 };
 use crate::core::hir_def::{
-    BindingMarker, Expr, ExprId, IdentId, ModeMarker, Partial, Pat, PatId, Stmt, StmtId, Trait,
+    BindingMarker, CondId, Expr, ExprId, IdentId, ModeMarker, Partial, Pat, PatId, Stmt, StmtId,
+    Trait,
 };
 use crate::span::DynLazySpan;
 
@@ -119,7 +120,8 @@ impl<'db> TyChecker<'db> {
         match stmt_data {
             Stmt::Let(..) => self.check_let(stmt, stmt_data),
             Stmt::For(..) => self.check_for(stmt, stmt_data),
-            Stmt::While(..) => self.check_while(stmt, stmt_data),
+            Stmt::While(cond, body) => self.check_loop(stmt, Some(*cond), *body),
+            Stmt::Loop(body) => self.check_loop(stmt, None, *body),
             Stmt::Continue => self.check_continue(stmt, stmt_data),
             Stmt::Break => self.check_break(stmt, stmt_data),
             Stmt::Return(..) => self.check_return(stmt, stmt_data),
@@ -796,26 +798,32 @@ impl<'db> TyChecker<'db> {
         Some(inst.fold_with(self.db, &mut self.table))
     }
 
-    fn check_while(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
-        let Stmt::While(cond, body) = stmt_data else {
-            unreachable!()
-        };
-
+    /// Checks a `while`, or a `loop` when `cond` is `None`. A `loop`, or a
+    /// `while true`, that no `break` leaves never completes.
+    fn check_loop(&mut self, stmt: StmtId, cond: Option<CondId>, body: ExprId) -> TyId<'db> {
         // Keep let-chain bindings local to the loop condition/body.
         self.env.enter_lexical_scope();
-        self.check_cond(*cond);
+        if let Some(cond) = cond {
+            self.check_cond(cond);
+        }
 
         self.env.enter_loop(stmt);
-        self.env.enter_scope(*body);
+        self.env.enter_scope(body);
         self.env.flush_pending_bindings();
         let body_ty = self.fresh_ty();
-        self.check_expr_with_discarded_result(*body, body_ty);
+        self.check_expr_with_discarded_result(body, body_ty);
         self.env.leave_scope();
         self.env.clear_pending_bindings();
         self.env.leave_loop();
         self.env.leave_scope();
 
-        TyId::unit(self.db)
+        if cond.is_none_or(|cond| cond.is_true_literal(self.db, self.body()))
+            && !self.env.is_broken_loop(stmt)
+        {
+            TyId::never(self.db)
+        } else {
+            TyId::unit(self.db)
+        }
     }
 
     fn check_continue(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
@@ -836,7 +844,9 @@ impl<'db> TyChecker<'db> {
     fn check_break(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
         assert!(matches!(stmt_data, Stmt::Break));
 
-        if self.env.current_loop().is_none() {
+        if let Some(loop_) = self.env.current_loop() {
+            self.env.break_loop(loop_);
+        } else {
             let span = stmt.span(self.env.body());
             let diag = BodyDiag::LoopControlOutsideOfLoop {
                 primary: span.into(),

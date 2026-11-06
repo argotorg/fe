@@ -109,6 +109,7 @@ define_scope! {
         LetKw,
         ForKw,
         WhileKw,
+        LoopKw,
         ContinueKw,
         BreakKw,
         ReturnKw,

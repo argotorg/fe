@@ -10,6 +10,7 @@ ast_node! {
     SK::LetStmt
     | SK::ForStmt
     | SK::WhileStmt
+    | SK::LoopStmt
     | SK::ContinueStmt
     | SK::BreakStmt
     | SK::ReturnStmt
@@ -23,6 +24,7 @@ impl Stmt {
             SK::LetStmt => StmtKind::Let(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ForStmt => StmtKind::For(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::WhileStmt => StmtKind::While(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::LoopStmt => StmtKind::Loop(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ContinueStmt => StmtKind::Continue(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BreakStmt => StmtKind::Break(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ReturnStmt => StmtKind::Return(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -118,6 +120,17 @@ impl WhileStmt {
 }
 
 ast_node! {
+    /// `loop {..}`
+    pub struct LoopStmt,
+    SK::LoopStmt
+}
+impl LoopStmt {
+    pub fn body(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     /// `continue`
     pub struct ContinueStmt,
     SK::ContinueStmt
@@ -176,6 +189,7 @@ pub enum StmtKind {
     Let(LetStmt),
     For(ForStmt),
     While(WhileStmt),
+    Loop(LoopStmt),
     Continue(ContinueStmt),
     Break(BreakStmt),
     Return(ReturnStmt),

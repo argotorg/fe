@@ -42,6 +42,9 @@ pub fn parse_stmt<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery
         Some(WhileKw) => parser
             .parse_cp(WhileStmtScope::default(), checkpoint)
             .map(|_| ()),
+        Some(LoopKw) => parser
+            .parse_cp(LoopStmtScope::default(), checkpoint)
+            .map(|_| ()),
         Some(ContinueKw) => {
             parser
                 .parse_cp(ContinueStmtScope::default(), checkpoint)
@@ -146,6 +149,20 @@ impl super::Parse for WhileStmtScope {
             SyntaxKind::LBrace,
             ExpectedKind::Body(SyntaxKind::WhileStmt),
         )? {
+            parser.parse(BlockExprScope::default())?;
+        }
+        Ok(())
+    }
+}
+
+define_scope! { LoopStmtScope, LoopStmt }
+impl super::Parse for LoopStmtScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::LoopKw);
+
+        if parser.find(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::LoopStmt))? {
             parser.parse(BlockExprScope::default())?;
         }
         Ok(())
