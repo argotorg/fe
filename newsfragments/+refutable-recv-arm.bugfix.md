@@ -1,0 +1,1 @@
+A recv arm whose pattern may not match every value of its variant is now an error (8-0153). With a constant `n` in scope, the arm `V { n, k }` ran for every `V`, and its `n` was the constant instead of the field. A literal field pattern, which the parser rejected, is reported by this check.

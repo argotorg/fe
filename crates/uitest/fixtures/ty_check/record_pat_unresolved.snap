@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/record_pat_unresolved.fe
+---
+error[2-0002]: `Foo` is not found
+  ┌─ record_pat_unresolved.fe:9:9
+  │
+9 │         Foo { a } => a
+  │         ^^^ `Foo` is not found
+
+error[2-0002]: `Foo` is not found
+   ┌─ record_pat_unresolved.fe:14:9
+   │
+14 │     let Foo { a } = x
+   │         ^^^ `Foo` is not found

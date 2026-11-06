@@ -207,8 +207,9 @@ impl super::Parse for OrPatScope {
 /// - Path patterns (e.g., `Baz`, `Foo::Bar`)
 /// - Record patterns with path (e.g., `Bar { a, b, .. }`, `Foo::Bar { x, y: _, .. }`)
 ///
-/// Tuple patterns like `Foo(a, b)` are rejected at parse time.
-/// Other restrictions (e.g., on record field patterns) are validated semantically.
+/// Tuple patterns like `Foo(a, b)` are rejected at parse time. A record
+/// pattern's fields may be any patterns; type checking rejects an arm whose
+/// pattern may not match every value of its variant.
 pub fn parse_recv_arm_pat<S: TokenStream>(
     parser: &mut Parser<S>,
 ) -> Result<(), Recovery<ErrProof>> {
@@ -239,8 +240,7 @@ impl super::Parse for RecvArmPatScope {
         match parser.current_kind() {
             Some(SyntaxKind::LBrace) => {
                 parser.set_scope_kind(SyntaxKind::RecordPat);
-                // Use restricted record field list parsing for recv arms
-                parser.parse(RecvArmRecordPatFieldListScope::default())
+                parser.parse(RecordPatFieldListScope::default())
             }
             Some(SyntaxKind::LParen) => {
                 // Tuple patterns are not allowed in recv arms - emit error but parse for recovery
@@ -252,137 +252,5 @@ impl super::Parse for RecvArmPatScope {
             }
             _ => Ok(()),
         }
-    }
-}
-
-// Restricted record pattern field list for recv arms.
-// Allows destructuring patterns but rejects literal patterns (constraints).
-define_scope! { RecvArmRecordPatFieldListScope, RecordPatFieldList, (Comma, RBrace) }
-impl super::Parse for RecvArmRecordPatFieldListScope {
-    type Error = Recovery<ErrProof>;
-
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parse_list(
-            parser,
-            true,
-            SyntaxKind::RecordPatFieldList,
-            (SyntaxKind::LBrace, SyntaxKind::RBrace),
-            |parser| parser.parse(RecvArmRecordPatFieldScope::default()),
-        )
-    }
-}
-
-// Restricted record pattern field for recv arms.
-// The pattern inside can be:
-// - An identifier (binding): `name` or `name: alias`
-// - A wildcard: `name: _`
-// - A rest pattern: `..`
-// - A nested record pattern: `name: Foo { a, b }`
-// - A nested tuple pattern: `name: (a, b)`
-// But NOT:
-// - A literal pattern: `name: 42` (pattern constraints)
-define_scope! { RecvArmRecordPatFieldScope, RecordPatField }
-impl super::Parse for RecvArmRecordPatFieldScope {
-    type Error = Recovery<ErrProof>;
-
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        let has_label = matches!(
-            parser.peek_n_non_trivia(2).as_slice(),
-            [SyntaxKind::Ident, SyntaxKind::Colon]
-        );
-        if has_label {
-            parser.bump_expected(SyntaxKind::Ident);
-            parser.bump_expected(SyntaxKind::Colon);
-        }
-        parse_recv_arm_field_pat(parser)
-    }
-}
-
-/// Parses a pattern for recv arm record fields with restrictions.
-/// Allows destructuring patterns but rejects literal patterns (constraints).
-fn parse_recv_arm_field_pat<S: TokenStream>(
-    parser: &mut Parser<S>,
-) -> Result<(), Recovery<ErrProof>> {
-    use SyntaxKind::*;
-    parser.bump_trivias();
-    let checkpoint = parser.checkpoint();
-    bump_binding_marker(parser);
-
-    match parser.current_kind() {
-        Some(Underscore) => parser
-            .parse_cp(WildCardPatScope::default(), Some(checkpoint))
-            .unwrap(),
-        Some(Dot2) => parser
-            .parse_cp(RestPatScope::default(), Some(checkpoint))
-            .unwrap(),
-        Some(LParen) => parser.parse_cp(RecvArmTuplePatScope::default(), Some(checkpoint))?,
-        Some(kind) if is_lit(kind) => {
-            // Reject literal patterns in recv arm fields
-            parser.error_msg_on_current_token(
-                "literal patterns are not allowed in recv arm patterns; use a binding pattern instead",
-            );
-            // Still parse for error recovery
-            parser
-                .parse_cp(LitPatScope::default(), Some(checkpoint))
-                .unwrap()
-        }
-        _ => parser.parse_cp(RecvArmFieldPathPatScope::default(), Some(checkpoint))?,
-    };
-
-    // Note: Or patterns are not allowed in recv arm fields - they would only make sense
-    // with pattern constraints which are not supported
-    Ok(())
-}
-
-// Path pattern scope for recv arm fields that recursively uses restricted parsing
-define_scope! { RecvArmFieldPathPatScope, PathPat, (Pipe) }
-impl super::Parse for RecvArmFieldPathPatScope {
-    type Error = Recovery<ErrProof>;
-
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.or_recover(|p| {
-            let pos = p.current_pos;
-            p.parse(PathScope::default())
-                .map_err(|_| ParseError::expected(&[SyntaxKind::PathPat], None, pos))
-        })?;
-
-        parser.set_newline_as_trivia(false);
-        if parser.current_kind() == Some(SyntaxKind::LParen) {
-            parser.set_scope_kind(SyntaxKind::PathTuplePat);
-            // Allow tuple destructuring in nested patterns
-            parser.parse(RecvArmTuplePatElemListScope::default())
-        } else if parser.current_kind() == Some(SyntaxKind::LBrace) {
-            parser.set_scope_kind(SyntaxKind::RecordPat);
-            // Recursively use restricted record field parsing
-            parser.parse(RecvArmRecordPatFieldListScope::default())
-        } else {
-            Ok(())
-        }
-    }
-}
-
-// Bare tuple pattern for recv arm fields (no path prefix)
-define_scope! { RecvArmTuplePatScope, TuplePat }
-impl super::Parse for RecvArmTuplePatScope {
-    type Error = Recovery<ErrProof>;
-
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.parse(RecvArmTuplePatElemListScope::default())
-    }
-}
-
-// Tuple pattern element list for recv arm fields (allows nested patterns but not literals)
-define_scope! { RecvArmTuplePatElemListScope, TuplePatElemList, (RParen, Comma) }
-impl super::Parse for RecvArmTuplePatElemListScope {
-    type Error = Recovery<ErrProof>;
-
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parse_list(
-            parser,
-            false,
-            SyntaxKind::TuplePatElemList,
-            (SyntaxKind::LParen, SyntaxKind::RParen),
-            parse_recv_arm_field_pat,
-        )
     }
 }

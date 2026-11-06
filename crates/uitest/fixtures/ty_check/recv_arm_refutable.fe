@@ -1,0 +1,21 @@
+const n: u256 = 30
+
+msg M {
+    #[selector = 0x01]
+    V { n: u256, k: u256 } -> u256,
+    #[selector = 0x02]
+    W { n: u256 } -> u256,
+    #[selector = 0x03]
+    L { flag: bool, k: u256 } -> u256,
+}
+
+// A message selects its arm by its variant alone, so a field pattern that
+// may not match, like the shorthand `n` in `V`'s arm, which names the
+// constant, or a literal, is an error.
+pub contract C {
+    recv M {
+        V { n, k } -> u256 { n * 100 + k }
+        W { n: m } -> u256 { m }
+        L { flag: true, k } -> u256 { k }
+    }
+}

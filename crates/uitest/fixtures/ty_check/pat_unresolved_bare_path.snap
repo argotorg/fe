@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/pat_unresolved_bare_path.fe
+---
+error[2-0002]: `Bar` is not found
+  ┌─ pat_unresolved_bare_path.fe:3:9
+  │
+3 │         Bar(y) => y
+  │         ^^^ `Bar` is not found
+
+error[2-0002]: `Baz` is not found
+  ┌─ pat_unresolved_bare_path.fe:4:9
+  │
+4 │         Baz { z } => z
+  │         ^^^ `Baz` is not found

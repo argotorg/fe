@@ -1,0 +1,1 @@
+A msg variant or `#[abi]` struct field named like a constant in scope now decodes to its value. The decoded variant held the constant instead, so an arm `V { n: x }` got the constant in `x`, and an `#[abi]` struct was rejected with a refutable `let` on its declaration.
