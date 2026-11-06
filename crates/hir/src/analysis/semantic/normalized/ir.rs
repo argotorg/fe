@@ -5,8 +5,8 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BinaryOp, CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemConstScalar,
-            SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
+            BinaryOp, CallSiteId, FailReason, FieldIndex, Mutability, SConst, SStmtId,
+            SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
             SemanticCodeRegionTarget, SemanticInstance, UnaryOp, VariantIndex,
         },
         ty::{
@@ -15,7 +15,7 @@ use crate::{
             ty_def::{BorrowKind, TyId},
         },
     },
-    hir_def::{ExprId, StringId},
+    hir_def::ExprId,
     semantic::ProviderBinding,
 };
 
@@ -110,7 +110,8 @@ impl<'db> NormalizedBody<'db> {
             NStatementKind::Define { expr, .. } => Some((block, expr)),
             NStatementKind::Store { .. }
             | NStatementKind::End { .. }
-            | NStatementKind::Drop { .. } => None,
+            | NStatementKind::Drop { .. }
+            | NStatementKind::CheckIndex { .. } => None,
         }
     }
 
@@ -233,6 +234,7 @@ impl<'db> NormalizedBody<'db> {
                     NStatementKind::Drop {
                         target: NDropTarget::Place(place),
                     } => place_uses_target(place),
+                    NStatementKind::CheckIndex { index, .. } => *index == NIndex::Value(target),
                 };
                 if used {
                     return true;
@@ -245,7 +247,8 @@ impl<'db> NormalizedBody<'db> {
                     value.value == target
                 }
                 NTerminatorKind::Goto(_)
-                | NTerminatorKind::Assert { .. }
+                | NTerminatorKind::Fail(_)
+                | NTerminatorKind::Unreachable
                 | NTerminatorKind::Return(None) => false,
             };
             if direct_use
@@ -656,6 +659,13 @@ pub enum NStatementKind<'db> {
     End {
         access: NValueId,
     },
+    /// Fails unless `index` is below the length of `array`, an array type a
+    /// place or value path indexes. It precedes the statement whose path
+    /// takes the index.
+    CheckIndex {
+        index: NIndex,
+        array: TyId<'db>,
+    },
     /// Destroys what `target` still owns (`SStmtKind::Drop`).
     Drop {
         target: NDropTarget<'db>,
@@ -695,9 +705,12 @@ pub enum NTerminatorKind<'db> {
         cases: Box<[(VariantIndex, NSuccessor)]>,
         default: Option<NSuccessor>,
     },
-    Assert {
-        message: Option<StringId<'db>>,
-    },
+    /// Execution fails.
+    Fail(FailReason<'db>),
+    /// Control never reaches here: the rest of a block after a call that
+    /// never returns, a match arm no value takes, or code runtime lowering
+    /// proved unreachable.
+    Unreachable,
     Return(Option<NOperand>),
     /// A projection grants `value` to its caller and suspends; its slide
     /// resumes at `resume` when the caller ends the session.
@@ -716,7 +729,8 @@ impl NTerminatorKind<'_> {
             Self::Goto(_)
             | Self::Branch { .. }
             | Self::MatchEnum { .. }
-            | Self::Assert { .. }
+            | Self::Fail(_)
+            | Self::Unreachable
             | Self::Return(None) => None,
         }
     }
@@ -735,7 +749,7 @@ impl NTerminatorKind<'_> {
                 .chain(default.iter())
                 .collect(),
             Self::Yield { resume, .. } => vec![resume],
-            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+            Self::Fail(_) | Self::Unreachable | Self::Return(_) => Vec::new(),
         }
     }
 
@@ -754,7 +768,7 @@ impl NTerminatorKind<'_> {
                 .chain(default.iter_mut())
                 .collect(),
             Self::Yield { resume, .. } => vec![resume],
-            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+            Self::Fail(_) | Self::Unreachable | Self::Return(_) => Vec::new(),
         }
     }
 }

@@ -5,11 +5,11 @@ use std::mem::size_of;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        BinaryOp, DropFlagPoint, EvalOutcome, FieldIndex, Overflow, RuntimeSizeError, SConst,
-        SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef,
-        SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance,
-        SemanticInstanceKey, SemanticLocalRole, VariantIndex, core_method_callee_key,
-        eval_const_ref, generated_callee_key,
+        BinaryOp, DropFlagPoint, EvalOutcome, FailReason, FieldIndex, Overflow, RuntimeSizeError,
+        SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
+        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex,
+        core_method_callee_key, eval_const_ref, generated_callee_key,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
             NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
@@ -90,7 +90,7 @@ use super::{
     source::{
         RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource,
         alias_source_place_for_local as source_alias_source_place_for_local,
-        data_path_index_bounds, nonself_alias_source_place_for_local,
+        nonself_alias_source_place_for_local,
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
@@ -784,11 +784,13 @@ impl<'db> RmirEmitter<'db> {
         stmt_idx: usize,
         stmt: &NStatement<'db>,
     ) -> RBlockId {
-        self.lower_stmt_index_checks(bb, &stmt.kind);
         if self.terminated_blocks[bb.index()] {
             return bb;
         }
         match &stmt.kind {
+            NStatementKind::CheckIndex { index, array } => {
+                self.lower_index_check(bb, *index, *array)
+            }
             NStatementKind::Define { result, expr } => {
                 self.lower_assign(bb, block, stmt_idx, stmt.source, *result, expr)
             }
@@ -1742,18 +1744,8 @@ impl<'db> RmirEmitter<'db> {
         ptr
     }
 
-    fn lower_assert_terminator(
-        &mut self,
-        bb: RBlockId,
-        message: Option<hir::hir_def::StringId<'db>>,
-    ) -> RTerminator<'db> {
-        // A failed assertion without a message panics with code 0x01.
-        let Some(message) = message else {
-            return RTerminator::Panic {
-                code: self.alloc_u256_const(bb, 0x01),
-            };
-        };
-        let payload = solidity_error_string_payload(message.data(self.db).as_bytes());
+    /// Reverts with `payload`.
+    fn lower_revert_terminator(&mut self, bb: RBlockId, payload: Vec<u8>) -> RTerminator<'db> {
         let payload_len = self.alloc_u256_const(bb, payload.len());
         let allocated_len = self.alloc_memory_int_const(bb, payload.len().next_multiple_of(32));
         let ptr = self.malloc_bytes(bb, allocated_len);
@@ -3023,70 +3015,27 @@ impl<'db> RmirEmitter<'db> {
         call_result
     }
 
-    fn lower_stmt_index_checks(&mut self, bb: RBlockId, stmt: &NStatementKind<'db>) {
-        match stmt {
-            NStatementKind::Define { expr, .. } => {
-                expr.for_each_place_operand(|place| self.lower_place_index_checks(bb, place));
-                if let NExpr::ProjectValue { value, path } = expr {
-                    let ty = self
-                        .semantic_body
-                        .normalized
-                        .value(value.value)
-                        .expect("verified structural projection source exists")
-                        .ty;
-                    self.lower_data_path_index_checks(bb, ty, &path.0);
-                }
-            }
-            NStatementKind::Store { destination, .. } => {
-                self.lower_place_index_checks(bb, destination)
-            }
-            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
-        }
-    }
-
-    fn lower_place_index_checks(&mut self, bb: RBlockId, place: &NPlace<'db>) {
-        if !place
-            .path
-            .iter()
-            .any(|projection| matches!(projection, NDataProjection::Index(_)))
-        {
-            return;
-        }
-        let Some(ty) = self.semantic_place_root_ty(place) else {
-            return;
+    fn lower_index_check(&mut self, bb: RBlockId, index: NIndex, array: TyId<'db>) {
+        let len = runtime_array_len(self.db, array)
+            .expect("valid runtime array length")
+            .expect("an index check's array has a concrete length");
+        let index = match index {
+            NIndex::Const(index) => IndexSource::Constant(index),
+            NIndex::Value(index) => IndexSource::Dynamic(self.read_normalized_value(bb, index)),
         };
-        self.lower_data_path_index_checks(bb, ty, &place.path);
-    }
-
-    fn lower_data_path_index_checks(&mut self, bb: RBlockId, ty: TyId<'db>, path: &NDataPath) {
-        if self.terminated_blocks[bb.index()] {
-            return;
+        self.push_stmt(
+            bb,
+            RStmt::AssertIndexInBounds {
+                index,
+                len: len
+                    .try_into()
+                    .expect("array length must fit the runtime index representation"),
+            },
+        );
+        // No index is below zero, so the check always fails.
+        if len == 0 {
+            self.set_terminator(bb, RTerminator::Trap);
         }
-        for (index, len) in data_path_index_bounds(self.db, self.semantic_body.owner(), ty, path) {
-            let index = match index {
-                NIndex::Const(index) => IndexSource::Constant(index),
-                NIndex::Value(index) => IndexSource::Dynamic(self.read_normalized_value(bb, index)),
-            };
-            self.push_stmt(
-                bb,
-                RStmt::AssertIndexInBounds {
-                    index,
-                    len: len
-                        .try_into()
-                        .expect("array length must fit the runtime index representation"),
-                },
-            );
-            if len == 0 {
-                self.set_terminator(bb, RTerminator::Trap);
-                return;
-            }
-        }
-    }
-
-    fn semantic_place_root_ty(&self, place: &NPlace<'db>) -> Option<TyId<'db>> {
-        self.semantic_body
-            .normalized
-            .place_base_ty(self.db, place.base)
     }
 
     fn lower_extern_builtin_call(
@@ -4428,7 +4377,18 @@ impl<'db> RmirEmitter<'db> {
                     default: default.as_ref().map(|target| self.lower_successor(target)),
                 }
             }
-            NTerminatorKind::Assert { message } => self.lower_assert_terminator(bb, *message),
+            NTerminatorKind::Fail(FailReason::Assert {
+                message: Some(message),
+            }) => {
+                let payload = solidity_error_string_payload(message.data(self.db).as_bytes());
+                self.lower_revert_terminator(bb, payload)
+            }
+            // A failed assertion without a message panics with code 0x01, as
+            // does reaching unreachable code, which is a compiler bug.
+            NTerminatorKind::Fail(FailReason::Assert { message: None })
+            | NTerminatorKind::Unreachable => RTerminator::Panic {
+                code: self.alloc_u256_const(bb, 0x01),
+            },
             // A projection's slide returns nothing: its caller inlines it.
             NTerminatorKind::Return(None)
                 if self

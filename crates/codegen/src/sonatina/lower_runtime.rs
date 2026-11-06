@@ -96,6 +96,7 @@ const WASM_RUNTIME_ROUTINES: [&str; 4] = ["malloc", "free", "memmove", "memcpy"]
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
+const PANIC_INVALID_ENUM_TAG: u64 = 0x21;
 const PANIC_INDEX_OUT_OF_BOUNDS: u64 = 0x32;
 
 macro_rules! define_lowering_inst_set {
@@ -5737,9 +5738,18 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             phi_args.push((value, pred));
         }
 
+        // A tag read from storage or raw memory can hold any value; one in an
+        // object was written from a valid enum.
         self.fb.switch_to_block(invalid);
-        self.fb
-            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+        if let ReferentLayout::Raw(_) = memory {
+            let panic =
+                self.get_or_build_shared_helper(SharedHelperKind::Panic(PANIC_INVALID_ENUM_TAG))?;
+            self.fb
+                .insert_inst_no_result(Jump::new(self.module.inst_set(), panic));
+        } else {
+            self.fb
+                .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+        }
 
         self.fb.switch_to_block(done);
         Ok(self
@@ -6963,7 +6973,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         }
     }
 
-    /// `index`, checked to be below `len`: an out-of-range index reverts. A
+    /// `index`, checked to be below `len`: an out-of-range index panics. A
     /// constant in range needs no check; a check whose index is, or after
     /// sealing becomes, a constant out of range always reverts, and
     /// `drop_dead_index_accesses` deletes the access behind it.
@@ -7001,12 +7011,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 .expect("`lt` has a result"),
             len,
         });
-        // EVM keeps the cheaper empty revert. A native panic reports its reason.
-        if self.module.is_native_target() {
-            self.emit_panic_revert(out_of_bounds, PANIC_INDEX_OUT_OF_BOUNDS)?;
-        } else {
-            self.emit_empty_revert(out_of_bounds)?;
-        }
+        self.emit_panic_revert(out_of_bounds, PANIC_INDEX_OUT_OF_BOUNDS)?;
         Ok(index)
     }
 

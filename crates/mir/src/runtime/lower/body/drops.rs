@@ -178,15 +178,7 @@ impl<'db> RmirEmitter<'db> {
         }
         let source = match target {
             NDropTarget::Value(value) => DropSource::Value(self.read_normalized_value(bb, *value)),
-            NDropTarget::Place(place) => {
-                // The drop before `a[i] = v` reads `a[i]`, so `i` is checked
-                // before the old element is destroyed, not only at the store.
-                self.lower_place_index_checks(bb, place);
-                if self.terminated_blocks[bb.index()] {
-                    return bb;
-                }
-                DropSource::Place(place.clone())
-            }
+            NDropTarget::Place(place) => DropSource::Place(place.clone()),
         };
         let mut bb = bb;
         for (part, part_ty) in parts {

@@ -3115,7 +3115,8 @@ fn pointer_values_are_direct_values() {
             fe_hir::analysis::semantic::STerminatorKind::Goto(_)
             | fe_hir::analysis::semantic::STerminatorKind::Branch { .. }
             | fe_hir::analysis::semantic::STerminatorKind::MatchEnum { .. }
-            | fe_hir::analysis::semantic::STerminatorKind::Assert { .. }
+            | fe_hir::analysis::semantic::STerminatorKind::Fail(_)
+            | fe_hir::analysis::semantic::STerminatorKind::Unreachable
             | fe_hir::analysis::semantic::STerminatorKind::Return(None)
             | fe_hir::analysis::semantic::STerminatorKind::Yield { .. } => None,
         })

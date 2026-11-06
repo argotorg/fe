@@ -5,7 +5,7 @@
 
 // --- used results (value is consumed) ---
 
-#[test(should_revert)]
+#[test(should_revert, panic = 0x32)]
 fn test_oob_read_reverts() {
     let arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 4
@@ -13,14 +13,14 @@ fn test_oob_read_reverts() {
     assert!(val == 0)
 }
 
-#[test(should_revert)]
+#[test(should_revert, panic = 0x32)]
 fn test_oob_write_reverts() {
     var arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 4
     arr[i.downcast_unchecked()] = 99
 }
 
-#[test(should_revert)]
+#[test(should_revert, panic = 0x32)]
 fn test_oob_large_index_reverts() {
     let arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 100
@@ -28,7 +28,7 @@ fn test_oob_large_index_reverts() {
     assert!(val == 0)
 }
 
-#[test(should_revert)]
+#[test(should_revert, panic = 0x32)]
 fn test_oob_into_adjacent_array_reverts() {
     let a: [u256; 4] = [10, 20, 30, 40]
     let b: [u256; 4] = [100, 200, 300, 400]
@@ -41,14 +41,14 @@ fn test_oob_into_adjacent_array_reverts() {
 
 // --- dead results (value unused — DCE must not drop the bounds check) ---
 
-#[test(should_revert)]
+#[test(should_revert, panic = 0x32)]
 fn test_oob_dead_read_reverts() {
     let arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 4
     let _val = arr[i.downcast_unchecked()]
 }
 
-#[test(should_revert)]
+#[test(should_revert, panic = 0x32)]
 fn test_oob_dead_write_reverts() {
     var arr: [u256; 4] = [10, 20, 30, 40]
     let i: u256 = 4

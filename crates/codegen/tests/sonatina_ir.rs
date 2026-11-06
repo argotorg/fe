@@ -403,12 +403,13 @@ fn raw_log_emit_sonatina_ir_lowers_native_pointer_provider(fixture: Fixture<&str
 fn constant_oob_index_terminates_without_continuation_projection(fixture: Fixture<&str>) {
     let output = with_top_mod_for_source(&fixture, |db, top_mod| {
         emit_module_sonatina_ir(db, top_mod)
-            .expect("constant out-of-bounds array access should lower to a revert")
+            .expect("constant out-of-bounds array access should lower to a panic")
     });
 
     assert!(
-        output.contains("evm_revert 0.i256 0.i256"),
-        "constant out-of-bounds array access should lower to a revert:\n{output}"
+        output.contains("mstore 4.i256 50.i256 i256;")
+            && output.contains("evm_revert 0.i256 36.i256"),
+        "constant out-of-bounds array access should lower to a `Panic(0x32)` revert:\n{output}"
     );
     assert!(
         !output.contains("br 1.i1"),

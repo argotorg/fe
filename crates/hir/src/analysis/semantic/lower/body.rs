@@ -11,8 +11,8 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BinaryOp, CallSiteId, FieldIndex, LayoutBackingSource, Mutability, SBlock, SBlockId,
-            SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
+            BinaryOp, CallSiteId, FailReason, FieldIndex, LayoutBackingSource, Mutability, SBlock,
+            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
             STerminator, STerminatorKind, SValueId, SemConstId, SemConstValue, SemOrigin,
             SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const,
             bytes_const, consts::instantiate_const_template, int_const, reify_runtime_const_for_ty,
@@ -1159,7 +1159,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             None => self.lower_expr_inner(expr),
         };
         if self.expr_ty(expr).is_never(self.db) && !self.is_terminated(self.current) {
-            self.set_synthetic_terminator(self.current, STerminatorKind::Assert { message: None });
+            self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
         }
         if let Some(shape) = yield_leaf
             && self.yield_depth == 0
@@ -1495,7 +1495,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.set_terminator(
             self.current,
             SemOrigin::Expr(expr),
-            STerminatorKind::Assert { message },
+            STerminatorKind::Fail(FailReason::Assert { message }),
         );
 
         self.switch_to(join_bb);
@@ -2018,7 +2018,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 effect_args,
             },
         );
-        self.set_synthetic_terminator(self.current, STerminatorKind::Assert { message: None });
+        self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
         self.take_drop_scope();
 
         self.switch_to(payload_bb);

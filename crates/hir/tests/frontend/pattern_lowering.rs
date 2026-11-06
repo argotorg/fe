@@ -121,7 +121,7 @@ pub contract C {
     );
 }
 #[test]
-fn empty_enum_match_lowers_to_terminal_failure() {
+fn empty_enum_match_lowers_to_unreachable() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "pattern_lowering.fe".into(),
@@ -144,8 +144,9 @@ fn eliminate(value: Empty) -> u8 {
     );
     let body = instance.body(&db);
 
-    assert!(body.blocks.iter().any(|block| matches!(
-        block.terminator.kind,
-        STerminatorKind::Assert { message: None }
-    )));
+    assert!(
+        body.blocks
+            .iter()
+            .any(|block| matches!(block.terminator.kind, STerminatorKind::Unreachable))
+    );
 }

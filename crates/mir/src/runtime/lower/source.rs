@@ -25,8 +25,8 @@ use super::{
     type_info::runtime_array_len,
 };
 
-/// Index bounds in projection order, stopping at the first empty array.
-/// Both alias erasure and emitted bounds checks must inspect the same path.
+/// Index bounds in projection order, stopping at the first empty array, as
+/// the normalized body's `CheckIndex` statements check them.
 pub(super) fn place_index_bounds<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeSemanticBody<'db>,
@@ -444,7 +444,8 @@ fn normalized_value_place<'db>(
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
                 | NStatementKind::End { .. }
-                | NStatementKind::Drop { .. } => None,
+                | NStatementKind::Drop { .. }
+                | NStatementKind::CheckIndex { .. } => None,
             },
             NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => None,
         }
@@ -487,7 +488,8 @@ pub(super) fn local_read_places_extractable_from_value(
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
                 | NStatementKind::End { .. }
-                | NStatementKind::Drop { .. } => true,
+                | NStatementKind::Drop { .. }
+                | NStatementKind::CheckIndex { .. } => true,
             })
     })
 }

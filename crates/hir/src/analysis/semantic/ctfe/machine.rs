@@ -20,14 +20,14 @@ use crate::{
         },
         semantic::{
             BinaryOp, BlockedInfo, ConstDemandKind, ConstDependency, EvalFailure, EvalOutcome,
-            FieldIndex, Overflow, PrimitiveFault, RuntimeSizeError, SConst, SEffectArgValue, SExpr,
-            SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind, STerminatorKind, SemConstId,
-            SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticConstRef, UnaryOp,
-            VariantIndex, array_const, bool_const, bytes_const, consts::instantiate_const_template,
-            enum_const, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
-            int_const, int_in_range, int_ty_shape, normalize_int_to_shape, runtime_size_bytes,
-            sem_const_eq, sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
-            wrapping_pow,
+            FailReason, FieldIndex, Overflow, PrimitiveFault, RuntimeSizeError, SConst,
+            SEffectArgValue, SExpr, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
+            STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
+            SemanticConstRef, UnaryOp, VariantIndex, array_const, bool_const, bytes_const,
+            consts::instantiate_const_template, enum_const, execute_scalar_cast,
+            execute_source_int_binary, execute_source_int_unary, int_const, int_in_range,
+            int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
+            sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const, wrapping_pow,
         },
         ty::{
             const_check::const_effects_supported,
@@ -1414,10 +1414,16 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                         .find(|(variant, _)| *variant == tag)
                         .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
                 }
-                STerminatorKind::Assert { message } => {
+                STerminatorKind::Fail(FailReason::Assert { message }) => {
                     return Err(CtfeError::AssertionFailed {
                         origin: term_origin,
                         message: message.map(|message| message.data(self.db).to_string()),
+                    }
+                    .into());
+                }
+                STerminatorKind::Unreachable => {
+                    return Err(CtfeError::InvalidBody {
+                        origin: term_origin,
                     }
                     .into());
                 }
