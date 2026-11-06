@@ -1,6 +1,8 @@
 use core::{MemVec, Option, Result}
 use core::ops::Drop
 use core::ptr
+use std::abi::DynString
+use std::evm::rlp
 
 // Each drop counts itself through a raw pointer, which no scope owns.
 struct Counted {
@@ -226,3 +228,18 @@ fn unwrap_receivers_open_after_the_arguments() {
     cells.get(at).unwrap().value = advance(mut at)
     assert(cells[2].value == 99)
 }
+
+// A `#[view]` payload is tested and taken in place: `as_bytes` grants a
+// `ref MemSpan`, and no `Option<MemSpan>` exists.
+#[test]
+fn view_payloads() {
+    let dog: DynString = "dog"
+    let string = rlp::encode_bytes(dog.span())
+    let item = rlp::decode(string.span()).unwrap()
+    assert(item.as_bytes(string.span()).is_some())
+    assert(item.as_bytes(string.span()).unwrap().len() == 3)
+    let list = rlp::encode_list([string])
+    let item = rlp::decode(list.span()).unwrap()
+    assert(item.as_bytes(list.span()).is_none())
+}
+

@@ -4,15 +4,15 @@ expression: diags
 input_file: fixtures/ty_check/sum_shape_methods.fe
 ---
 error[8-0018]: left-hand side of assignment is immutable
-   ┌─ sum_shape_methods.fe:25:5
+   ┌─ sum_shape_methods.fe:28:5
    │
-25 │     p.first().unwrap() = 3
+28 │     p.first().unwrap() = 3
    │     ^^^^^^^^^^^^^^^^^^ immutable assignment
 
 error[8-0023]: argument number mismatch
-   ┌─ sum_shape_methods.fe:30:20
+   ┌─ sum_shape_methods.fe:33:20
    │
-30 │     v.get(0).unwrap(1)
+33 │     v.get(0).unwrap(1)
    │                    ^^^ expected 1 arguments, but 2 given
    │
    ┌─ src/option.fe:60:12
@@ -21,25 +21,25 @@ error[8-0023]: argument number mismatch
    │            ------ function defined here
 
 error[8-0070]: an access is not a value
-   ┌─ sum_shape_methods.fe:15:5
+   ┌─ sum_shape_methods.fe:18:5
    │
-15 │     v.get(0).unwrap_or(default: 5)
+18 │     v.get(0).unwrap_or(default: 5)
    │     ^^^^^^^^ this access is used as a value
    │
    = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
 
 error[8-0070]: an access is not a value
-   ┌─ sum_shape_methods.fe:30:5
+   ┌─ sum_shape_methods.fe:33:5
    │
-30 │     v.get(0).unwrap(1)
+33 │     v.get(0).unwrap(1)
    │     ^^^^^^^^ this access is used as a value
    │
    = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
 
 error[8-0119]: a read access needs a `ref` binding
-   ┌─ sum_shape_methods.fe:20:9
+   ┌─ sum_shape_methods.fe:23:9
    │
-20 │     let inner = v.get(0).unwrap()
+23 │     let inner = v.get(0).unwrap()
    │         ^^^^^ this binds a read access of `MemVec<u64>`, which is not `Copy`
    │
    = mark the binding `ref` to hold the access, as `let x = ref …`, `(i, ref x)` or `for ref x in …`

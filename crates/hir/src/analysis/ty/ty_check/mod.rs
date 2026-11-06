@@ -7575,8 +7575,16 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
                     );
                 }
             }
+            // Values cross only into what the expression calls at run time:
+            // a sum shape method tests or unwraps its shape in place, as `?`
+            // does, and passes a `Result`'s error to its panic.
             Expr::Call(..) | Expr::MethodCall(..) => {
-                if let Some(callable) = self.body.callable_expr(expr).cloned() {
+                if let Some(callable) = self
+                    .body
+                    .semantic_expr_lowering(expr)
+                    .and_then(SemanticExprLowering::called)
+                    .cloned()
+                {
                     self.check_view_call(&callable, expr, ctxt.span().unwrap().into());
                     self.check_state_only_call(&callable, expr, ctxt.span().unwrap().into());
                 }

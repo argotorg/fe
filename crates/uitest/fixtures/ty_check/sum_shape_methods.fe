@@ -1,4 +1,7 @@
 use core::{MemVec, Option}
+use core::ptr::MemSpan
+use std::evm::StorageMap
+use std::evm::rlp::Item
 
 struct Pair {
     items: MemVec<u64>,
@@ -28,4 +31,32 @@ fn read_only(_ p: mut Pair) {
 // The methods take no arguments.
 fn extra_argument(_ v: ref MemVec<u64>) -> u64 {
     v.get(0).unwrap(1)
+}
+
+struct Maps {
+    m: StorageMap<u256, u256>,
+    open: bool,
+}
+
+impl Maps {
+    fn map(mut self) -> Option<mut StorageMap<u256, u256>> {
+        if !self.open {
+            return Option::None
+        }
+        Option::Some(mut self.m)
+    }
+}
+
+// Accepted: a `#[view]` or pinned payload is tested and taken in place, as
+// `?` takes it: no `Option` of it is passed or returned by value.
+fn view_payload(_ item: Item, _ input: MemSpan) -> usize {
+    if item.as_bytes(input).is_none() {
+        return 0
+    }
+    item.as_bytes(input).unwrap().len()
+}
+
+fn pinned_payload() -> bool uses (s: mut Maps) {
+    s.map().unwrap()[1] = 2
+    s.map().is_some()
 }
