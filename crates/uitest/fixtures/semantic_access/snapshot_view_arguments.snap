@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/snapshot_view_arguments.fe
+---
+error[16-0001]: access conflict in `fn exclusive_alias`
+   ┌─ snapshot_view_arguments.fe:36:30
+   │
+36 │     with (Handle = handle) { mutate(mut handle) }
+   │                              ^^^^^^^^^^^^^^^^^^
+   │                              │      │
+   │                              │      access opened here
+   │                              cannot mutably access this place while a `mut` access of it is open
