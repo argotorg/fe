@@ -5,7 +5,10 @@ use rustc_hash::FxHashSet;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
+        name_resolution::{
+            NameDomain, PathRes, method_selection::MethodCandidate, resolve_ident_to_bucket,
+            resolve_path,
+        },
         ty::{
             const_ty::demand_concrete_specialized_const_ty,
             trait_def::TraitInstId,
@@ -682,6 +685,10 @@ fn resolve_lib_func<'db>(
             Some(*func)
         }
         PathRes::TraitMethod(_, func) => Some(func),
+        PathRes::Method(_, MethodCandidate::InherentMethod(method)) => match method.def {
+            CallableDef::Func(func) => Some(func),
+            _ => None,
+        },
         _ => None,
     }
 }

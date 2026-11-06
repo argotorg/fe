@@ -17,7 +17,7 @@ use crate::span::{DynLazySpan, types::LazyTySpan};
 
 use super::{
     BodyOwner, BuiltinOp, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike,
-    RowArg, Typeable, ValuePathRef,
+    RowArg, SemanticExprLowering, SumShapeOp, Typeable, ValuePathRef,
     effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
@@ -251,6 +251,95 @@ impl<'db> TyChecker<'db> {
         } else {
             None
         }
+    }
+
+    /// The `Option` or `Result` method `callable_def` is, if it works on a sum
+    /// shape.
+    fn sum_shape_op(&self, callable_def: CallableDef<'db>) -> Option<SumShapeOp> {
+        let CallableDef::Func(func) = callable_def else {
+            return None;
+        };
+        [
+            (
+                "core::option::Option::is_some",
+                SumShapeOp::Test { payload: true },
+            ),
+            (
+                "core::option::Option::is_none",
+                SumShapeOp::Test { payload: false },
+            ),
+            ("core::option::Option::unwrap", SumShapeOp::Unwrap),
+            (
+                "core::result::Result::is_ok",
+                SumShapeOp::Test { payload: true },
+            ),
+            (
+                "core::result::Result::is_err",
+                SumShapeOp::Test { payload: false },
+            ),
+            ("core::result::Result::unwrap", SumShapeOp::Unwrap),
+        ]
+        .into_iter()
+        .find_map(|(path, op)| {
+            (resolve_lib_func_path(self.db, self.env.scope(), path) == Some(func)).then_some(op)
+        })
+    }
+
+    /// Checks `op` on `receiver`, a sum shape of `sum_ty` whose payload is
+    /// `payload`. The call consumes the shape: a test ends its access, and
+    /// `unwrap` grants the payload's, as `?` does, calling the core function
+    /// the method's empty variant panics with.
+    fn check_sum_shape_op(
+        &mut self,
+        expr: ExprId,
+        receiver: ExprId,
+        sum_ty: TyId<'db>,
+        payload: Shape<'db>,
+        method: Callable<'db>,
+        op: SumShapeOp,
+    ) -> ExprProp<'db> {
+        self.consume_access(receiver);
+        let (prop, panic) = match op {
+            SumShapeOp::Test { .. } => (ExprProp::new(TyId::bool(self.db), true), None),
+            SumShapeOp::Unwrap => {
+                let panic = self.sum_shape_panic(sum_ty, expr.span(self.body()).into());
+                let shape = (!matches!(payload, Shape::Owned(_))).then(|| payload.clone());
+                // The payload is mutable as a call's result is.
+                let prop = ExprProp {
+                    is_mut: matches!(shape, None | Some(Shape::Access(BorrowKind::Mut, _))),
+                    shape,
+                    ..ExprProp::new(payload.erased_ty(self.db), true)
+                };
+                (prop, Some(panic))
+            }
+        };
+        self.env.register_semantic_expr_lowering(
+            expr,
+            SemanticExprLowering::SumShape { op, method, panic },
+        );
+        prop
+    }
+
+    /// The core function `unwrap` of the `Option` or `Result` `sum_ty` panics
+    /// with on its empty variant: `panic`, or `panic_with_value` of the error.
+    fn sum_shape_panic(&mut self, sum_ty: TyId<'db>, span: DynLazySpan<'db>) -> Callable<'db> {
+        let kind = sum_kind(self.db, self.env.scope(), sum_ty)
+            .expect("a sum shape is an `Option` or a `Result`");
+        let path = match kind {
+            SumKind::Option => "core::panic",
+            SumKind::Result => "core::panic_with_value",
+        };
+        let func = resolve_lib_func_path(self.db, self.env.scope(), path)
+            .expect("core declares `panic` and `panic_with_value`");
+        let func_ty = self.instantiate_to_term(TyId::func(self.db, CallableDef::Func(func)));
+        let callable = Callable::new(self.db, func_ty, span, None)
+            .unwrap_or_else(|_| panic!("`{path}` is callable"));
+        if kind == SumKind::Result {
+            self.table
+                .unify(callable.generic_args()[0], sum_ty.generic_args(self.db)[0])
+                .expect("`panic_with_value` takes any error");
+        }
+        callable
     }
 
     fn check_and_register_const_intrinsic(
@@ -4145,6 +4234,16 @@ impl<'db> TyChecker<'db> {
             };
             self.push_diag(diag);
             return ExprProp::invalid(self.db);
+        }
+
+        // The methods take no arguments; a call with any is checked as usual,
+        // which reports them.
+        if let Some(Shape::Sum { ty, payload, .. }) = &receiver_prop.shape
+            && args.is_empty()
+            && let Some(op) = self.sum_shape_op(callable.callable_def())
+        {
+            let (sum_ty, payload) = (*ty, (**payload).clone());
+            return self.check_sum_shape_op(expr, *receiver, sum_ty, payload, callable, op);
         }
 
         if let Some(kind) = self

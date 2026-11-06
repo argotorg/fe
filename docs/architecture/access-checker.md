@@ -62,7 +62,9 @@ For a call `r.m(args)` the elaboration order is fixed: the receiver's root is
 resolved first (a temporary is evaluated, and hoisted into a local for a
 `mut` receiver), the arguments are evaluated, the receiver chain's
 projection sessions open innermost first, and the receiver's access opens
-last with its mode. A receiver place rooted at a binding, or in a
+last with its mode. A `?` or `unwrap` link in the chain takes its payload
+as its session opens, so its early exit or panic follows the arguments
+(`Receiver::Try`, `Receiver::Unwrap`). A receiver place rooted at a binding, or in a
 projection's grant, is lowered whole after the arguments, index operands
 included (`Receiver::Place(None)`), so the arguments may read and write it
 and the call sees what they wrote; an argument that moves it leaves the

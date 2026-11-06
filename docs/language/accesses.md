@@ -166,7 +166,11 @@ A shape groups owned values and accesses, `-> (usize, ref T)`, and the
 caller destructures it with `let (i, x) = ..`. Two `mut` components must be
 structurally disjoint, as in `(mut self.a, mut self.b)`. An optional shape,
 `-> Option<mut T>` or `-> Result<E, mut T>`, is consumed with `if let`,
-`match`, `let .. else` or `?`. Its empty variant grants nothing and runs no
+`match`, `let .. else` or `?`, or by a call of `is_some`, `is_none`,
+`is_ok`, `is_err` or `unwrap`: a test ends the access, and `unwrap` grants
+the payload as `?` does, panicking as the method does on the empty variant,
+so `xs.get(i).unwrap().push(x)` writes through. Other methods of `Option`
+and `Result` take a value. Its empty variant grants nothing and runs no
 slide: it may only be returned before the `yield`, and a `yield` of it,
 written out or forwarded from another projection as in
 `yield self.entry(k)`, ends the projection there, as `?` does.

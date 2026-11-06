@@ -19,8 +19,9 @@ use thin_vec::ThinVec;
 use super::effect_env as keyed_effect_env;
 use super::owner::BodyOwner;
 use super::{
-    BuiltinOp, Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
-    TypedBodyTables, ValuePathRef, callable::EffectProviderSpecialization, stmt::ForLoopPlan,
+    BuiltinOp, Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, SumShapeOp, TyChecker,
+    TypedBody, TypedBodyTables, ValuePathRef, callable::EffectProviderSpecialization,
+    stmt::ForLoopPlan,
 };
 use crate::analysis::ty::pattern_ir::{
     PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
@@ -747,6 +748,14 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
         self.callables[expr].as_ref()
+    }
+
+    /// The `Option` or `Result` method `expr` calls on a sum shape.
+    pub(super) fn sum_shape_op(&self, expr: ExprId) -> Option<SumShapeOp> {
+        match self.semantic_expr_lowering[expr] {
+            Some(SemanticExprLowering::SumShape { op, .. }) => Some(op),
+            _ => None,
+        }
     }
 
     pub(super) fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
@@ -1666,8 +1675,12 @@ impl<'db> TyCheckEnv<'db> {
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
         let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
-        for lowering in self.semantic_expr_lowering.values_mut().flatten() {
-            let callable = lowering.callable_mut();
+        for callable in self
+            .semantic_expr_lowering
+            .values_mut()
+            .flatten()
+            .flat_map(SemanticExprLowering::callables_mut)
+        {
             callable.record_evidence(self.db, solve_cx);
             callable.record_bound_evidence(self.db, solve_cx);
         }
