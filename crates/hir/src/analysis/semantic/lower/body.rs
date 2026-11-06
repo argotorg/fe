@@ -268,6 +268,9 @@ pub(super) enum Receiver<'db> {
     /// `e.unwrap()` on a sum shape in the receiver chain, by `e` prepared:
     /// `e` opens after the arguments, and its payload is taken then.
     Unwrap(Box<Receiver<'db>>),
+    /// `e?` on a sum shape in the receiver chain, by `e` prepared: `e` opens
+    /// after the arguments, and its payload is taken, or the body exits, then.
+    Try(Box<Receiver<'db>>),
 }
 
 #[derive(Clone, Copy)]
@@ -910,7 +913,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             {
                 self.lower_call_like_expr(expr, ty, Some(*base), &[*index])
             }
-            Partial::Present(Expr::Try(inner)) => self.lower_try(expr, *inner, ty),
+            Partial::Present(Expr::Try(inner)) => {
+                let value = self.lower_source(*inner);
+                self.lower_try(expr, ty, value)
+            }
             // An unsafe split: one session granting each component.
             Partial::Present(Expr::Tuple(elems)) if self.typed_body.is_unsafe_split(expr) => {
                 let fields: Vec<_> = elems
@@ -986,12 +992,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    /// Lowers `inner?`: the payload of a `Some` or `Ok` (a payload grant when
-    /// `inner` is a sum shape), or else an exit with the empty variant,
-    /// carrying an `Err`'s error.
-    fn lower_try(&mut self, expr: ExprId, inner: ExprId, ty: TyId<'db>) -> SValueId {
+    /// Lowers `expr`, `inner?` with `value` the lowered `inner`: the payload
+    /// of a `Some` or `Ok` (a payload grant when `inner` is a sum shape), or
+    /// else an exit with the empty variant, carrying an `Err`'s error.
+    fn lower_try(&mut self, expr: ExprId, ty: TyId<'db>, value: SValueId) -> SValueId {
         let origin = SemOrigin::Expr(expr);
-        let value = self.lower_source(inner);
         let variant = self.exit_on_empty(origin, value);
         self.emit_expr_with_origin(
             origin,
@@ -1207,7 +1212,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match expr_data {
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
             Expr::Path(_) => self.lower_path_expr(expr),
-            Expr::Try(inner) => self.lower_try(expr, *inner, ty),
+            Expr::Try(inner) => {
+                let value = self.lower_source(*inner);
+                self.lower_try(expr, ty, value)
+            }
             Expr::Tuple(elems) | Expr::Array(elems) => {
                 let fields = self.lower_expr_operands(elems).into_boxed_slice();
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
@@ -2368,8 +2376,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// Prepares `access`, an access a receiver chain grants. A projection
-    /// call, and `e.unwrap()` on a sum shape, open after the arguments of the
-    /// call they are the receiver of; anything else is lowered now.
+    /// call, and `e.unwrap()` or `e?` on a sum shape, open after the arguments
+    /// of the call they are the receiver of; anything else is lowered now.
     fn prepare_access(&mut self, access: ExprId) -> Receiver<'db> {
         match (
             access.data(self.db, self.body),
@@ -2386,6 +2394,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     ..
                 }),
             ) => Receiver::Unwrap(Box::new(self.prepare_access(*inner))),
+            (Partial::Present(Expr::Try(inner)), _) => {
+                Receiver::Try(Box::new(self.prepare_access(*inner)))
+            }
             _ => Receiver::Value(self.lower_access(access)),
         }
     }
@@ -2472,7 +2483,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// Opens `access`, which `prepare_access` prepared: its chain's projection
-    /// sessions innermost first, taking an `unwrap`'s payload after its own.
+    /// sessions innermost first, taking the payload of an `unwrap` or a `?`
+    /// after its own.
     fn open_access(&mut self, access: ExprId, prepared: Receiver<'db>) -> SValueId {
         let ty = || {
             self.typed_body
@@ -2505,6 +2517,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 };
                 let value = self.open_access(*inner, *prepared);
                 self.unwrap_sum_shape(access, ty(), *inner, value)
+            }
+            Receiver::Try(prepared) => {
+                let Partial::Present(Expr::Try(inner)) = access.data(self.db, self.body) else {
+                    unreachable!("a `?` link is a `?`")
+                };
+                let value = self.open_access(*inner, *prepared);
+                self.lower_try(access, ty(), value)
             }
             Receiver::Place(_) => unreachable!("a receiver chain link is an access"),
         }

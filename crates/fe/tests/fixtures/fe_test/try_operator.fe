@@ -1,6 +1,8 @@
 // `e?` takes the payload of a `Some` or `Ok`, or ends the enclosing function
 // with the `None` or `Err`. On a sum-shape projection it binds the payload's
 // grant, and in a projection the early exit grants nothing.
+use core::ops::Drop
+use core::ptr
 use std::evm::wei
 
 struct Arr {
@@ -124,6 +126,58 @@ fn sub_tally_wrapping(_ t: mut Tally) -> Option<()> {
     Option::Some(())
 }
 
+struct Cell {
+    value: u256,
+}
+
+impl Cell {
+    fn set(mut self, _ value: u256) {
+        self.value = value
+    }
+
+    fn keep(mut self, _ c: own Counted) {
+        self.value = c.id
+    }
+}
+
+// Each drop counts itself through a raw pointer, which no scope owns.
+struct Counted {
+    id: u256,
+    counter: *u256,
+}
+
+impl Drop for Counted {
+    fn drop(own self) {
+        unsafe { *self.counter += 1 }
+    }
+}
+
+fn advance(_ at: mut usize) -> u256 {
+    at += 1
+    99
+}
+
+fn cells() -> Slots<Cell> {
+    Slots { xs: [Cell { value: 0 }, Cell { value: 0 }, Cell { value: 0 }], len: 3 }
+}
+
+// As for any projection receiver, the arguments run before `get_mut` opens,
+// so it gets the advanced `at`, and an early exit follows them.
+fn set_at(_ s: mut Slots<Cell>, _ at: mut usize) -> Option<()> {
+    s.get_mut(at)?.set(advance(mut at))
+    Option::Some(())
+}
+
+fn assign_at(_ s: mut Slots<Cell>, _ at: mut usize) -> Option<()> {
+    s.get_mut(at)?.value = advance(mut at)
+    Option::Some(())
+}
+
+fn keep_at(_ s: mut Slots<Cell>, _ at: usize, _ counter: *u256) -> Option<()> {
+    s.get_mut(at)?.keep(Counted { id: 7, counter })
+    Option::Some(())
+}
+
 #[test]
 fn values() {
     match add(Option::Some(1), Option::Some(2)) {
@@ -235,4 +289,34 @@ fn compound_assignment_opens_grant_once() {
     assert!(t.value == wei(2) && t.opened == 1)
     assert!(sub_tally_wrapping(mut t).is_some())
     assert!(t.value == wei(1) && t.opened == 2)
+}
+
+#[test]
+fn receivers_open_after_the_arguments() {
+    var s = cells()
+    var at: usize = 0
+    assert!(set_at(mut s, mut at).is_some())
+    assert!(at == 1 && s.xs[0].value == 0 && s.xs[1].value == 99)
+    assert!(assign_at(mut s, mut at).is_some())
+    assert!(at == 2 && s.xs[2].value == 99)
+
+    // `get_mut(3)` is empty: the exit follows the arguments.
+    s.xs[2].value = 0
+    assert!(set_at(mut s, mut at).is_none())
+    assert!(at == 3 && s.xs[2].value == 0)
+    at = 2
+    assert!(assign_at(mut s, mut at).is_none())
+    assert!(at == 3 && s.xs[2].value == 0)
+}
+
+#[test]
+fn early_exit_destroys_the_arguments() {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    var s = cells()
+    assert!(keep_at(mut s, 1, counter).is_some())
+    assert!(s.xs[1].value == 7)
+    assert!(unsafe { *counter } == 1)
+    assert!(keep_at(mut s, 3, counter).is_none())
+    assert!(unsafe { *counter } == 2)
 }
