@@ -1,20 +1,10 @@
-// Tests for the `core::text` base64 decoder and base58 codec. Base64
-// vectors are from RFC 4648 section 10, base58 vectors from Bitcoin Core's
-// `base58_encode_decode.json`.
+// Tests for the `core::text` hex and base64 decoders and base58 codec.
+// Base64 vectors are from RFC 4648 section 10, base58 vectors from Bitcoin
+// Core's `base58_encode_decode.json`.
 use core::num::IntDowncast
 use core::ptr::{self, MemBuffer}
 use std::abi::{Bytes, DynString}
 use std::text::{self, TextBuilder}
-
-fn from_hex(_ hex: DynString) -> Bytes {
-    let len = hex.len() / 2
-    let buffer = MemBuffer::new(len)
-    for i in 0..len {
-        let byte = text::parse_hex_uint(hex.slice(start: 2 * i, len: 2)).unwrap()
-        unsafe { *ptr::offset_bytes(buffer.ptr(), i) = byte.downcast_truncate() }
-    }
-    Bytes::from_payload(source: buffer.span())
-}
 
 fn to_hex(_ bytes: Bytes) -> DynString {
     var builder = TextBuilder::new()
@@ -37,6 +27,32 @@ fn all_bytes() -> Bytes {
 
 fn decodes_base64(_ encoded: DynString, _ expected: DynString) -> bool {
     text::decode_base64(encoded).unwrap().span() == expected.span()
+}
+
+#[test]
+fn hex_decodes_either_case_and_prefix() {
+    assert!(to_hex(text::decode_hex("00ff7f80").unwrap()) == "00ff7f80")
+    assert!(to_hex(text::decode_hex("0xDeadBEEF").unwrap()) == "deadbeef")
+    assert!(text::decode_hex("").unwrap().len() == 0)
+    assert!(text::decode_hex("0x").unwrap().len() == 0)
+    let data = all_bytes()
+    assert!(text::decode_hex(to_hex(data)).unwrap() == data)
+    let long: DynString = "0x6000600055600160015560026002556003600355600460045560056005556006600655"
+    assert!(text::decode_hex(long).unwrap().len() == 35)
+}
+
+#[test]
+fn hex_rejects() {
+    // An odd number of digits.
+    assert!(text::decode_hex("0").is_none())
+    assert!(text::decode_hex("0x0").is_none())
+    assert!(text::decode_hex("abc").is_none())
+    // Bytes that are not digits, a second prefix, or an uppercase `X`.
+    assert!(text::decode_hex("0g").is_none())
+    assert!(text::decode_hex("0x0x00").is_none())
+    assert!(text::decode_hex("0X00").is_none())
+    assert!(text::decode_hex(" 0").is_none())
+    assert!(text::decode_hex("-1").is_none())
 }
 
 #[test]
@@ -81,7 +97,7 @@ fn base64_rejects() {
 }
 
 fn base58_roundtrip(_ hex: DynString, _ encoded: DynString) -> bool {
-    let data = from_hex(hex)
+    let data = text::decode_hex(hex).unwrap()
     text::base58(data.span()) == encoded && text::decode_base58(encoded).unwrap() == data
 }
 
@@ -145,6 +161,11 @@ fn decoders_read_any_text() {
     assert!(text::decode_base64(encoded.span()).unwrap() == text::decode_base64("Zm9v").unwrap())
     let buffer = MemBuffer::from_span(encoded.span())
     assert!(text::decode_base64(buffer).unwrap() == text::decode_base64("Zm9v").unwrap())
+
+    let hex = MemBuffer::from_span(encoded.span())
+    assert!(text::decode_hex(hex.span()).is_none())
+    let digits: DynString = "0x0a0b"
+    assert!(text::decode_hex(MemBuffer::from_span(digits.span())).unwrap() == text::decode_hex("0a0b").unwrap())
 
     let base58: DynString = "2g"
     assert!(text::decode_base58(base58.span()).unwrap() == text::decode_base58("2g").unwrap())

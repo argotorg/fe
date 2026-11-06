@@ -3,7 +3,7 @@ use super::marker::{Clearable, Copy}
 use super::mem::{drop, forget, needs_drop}
 use super::num::{Bounded, IntDowncast, IntWord, from_be, from_le, to_be, to_le, word_to_usize}
 use super::option::Option
-use super::ops::{Drop, Eq, Index, Len, WrappingAdd, WrappingMul, WrappingSub}
+use super::ops::{Drop, Eq, Index, Len, Ord, WrappingAdd, WrappingMul, WrappingSub}
 use super::result::Result
 use super::panic_code
 use super::panics::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY}
@@ -1539,6 +1539,60 @@ impl<T: Eq> Eq for MemSlice<T> {
             }
         }
         true
+    }
+}
+
+/// Slices order by their first unequal element, and a slice that begins
+/// another orders before it, so byte spans order as text: `"ab" < "abc"`
+/// and `"abc" < "b"`.
+impl<T: Ord> Ord for MemSlice<T> {
+    fn lt(self, _ other: MemSlice<T>) -> bool {
+        orders_before(self, other)
+    }
+
+    fn le(self, _ other: MemSlice<T>) -> bool {
+        !orders_before(other, self)
+    }
+
+    fn gt(self, _ other: MemSlice<T>) -> bool {
+        orders_before(other, self)
+    }
+
+    fn ge(self, _ other: MemSlice<T>) -> bool {
+        !orders_before(self, other)
+    }
+}
+
+// Whether `a` orders before `b`.
+fn orders_before<T: Ord>(_ a: MemSlice<T>, _ b: MemSlice<T>) -> bool {
+    let len = if a.len < b.len { a.len } else { b.len }
+    for i in 0..len {
+        if a[i].lt(b[i]) {
+            return true
+        }
+        if b[i].lt(a[i]) {
+            return false
+        }
+    }
+    a.len < b.len
+}
+
+/// Buffers order by their bytes, as spans do.
+impl Ord for MemBuffer {
+    fn lt(self, _ other: MemBuffer) -> bool {
+        self.span() < other.span()
+    }
+
+    fn le(self, _ other: MemBuffer) -> bool {
+        self.span() <= other.span()
+    }
+
+    fn gt(self, _ other: MemBuffer) -> bool {
+        self.span() > other.span()
+    }
+
+    fn ge(self, _ other: MemBuffer) -> bool {
+        self.span() >= other.span()
     }
 }
 

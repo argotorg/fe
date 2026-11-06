@@ -20,9 +20,21 @@
 //! `sort` uses insertion sort for up to 16 elements and heapsort above, so
 //! its cost is `O(n log n)` for every input, including inputs an attacker
 //! arranges to slow down a quicksort. It is not stable.
+//!
+//! The functions copy elements, so they need `Copy`. A `MemSlice`,
+//! `MemArray` or `MemVec` of any `Ord` type, such as text or buffers, sorts
+//! by swapping its elements in place, with the same algorithm:
+//!
+//! ```fe
+//! var words: MemVec<DynString> = MemVec::new()
+//! words.push("pear")
+//! words.push("apple")
+//! words.sort()                      // ["apple", "pear"]
+//! ```
 use super::marker::Copy
 use super::ops::{Eq, Index, Len, Ord}
 use super::option::Option
+use super::ptr::{MemArray, MemSlice, MemVec}
 
 const INSERTION_SORT_MAX_LEN: usize = 16
 
@@ -205,4 +217,69 @@ pub fn dedup_sorted<S: mut Index<usize> + Len>(_ seq: mut S) -> usize uses S::E
         i += 1
     }
     unique
+}
+
+impl<T: Ord> MemSlice<T> {
+    /// Sorts the elements in ascending order by swapping them, as `sort`
+    /// does with copies. Not stable.
+    pub fn sort(mut self) {
+        let n = self.len()
+        if n <= INSERTION_SORT_MAX_LEN {
+            var i: usize = 1
+            while i < n {
+                var j = i
+                while j > 0 && self[j].lt(self[j - 1]) {
+                    self.swap(j, j - 1)
+                    j -= 1
+                }
+                i += 1
+            }
+            return
+        }
+        var start = n / 2
+        while start > 0 {
+            start -= 1
+            self.sift_down(start, end: n)
+        }
+        var end = n - 1
+        while end > 0 {
+            self.swap(0, end)
+            self.sift_down(0, end)
+            end -= 1
+        }
+    }
+
+    // Swaps the element at `root` down until the max-heap property holds
+    // for the first `end` elements.
+    fn sift_down(mut self, _ root: usize, end: usize) {
+        var parent = root
+        while true {
+            var child = 2 * parent + 1
+            if child >= end {
+                break
+            }
+            if child + 1 < end && self[child].lt(self[child + 1]) {
+                child += 1
+            }
+            if !self[parent].lt(self[child]) {
+                break
+            }
+            self.swap(parent, child)
+            parent = child
+        }
+    }
+}
+
+impl<T: Ord> MemArray<T> {
+    /// Sorts the elements in ascending order; see `MemSlice::sort`.
+    pub fn sort(mut self) {
+        self.as_slice().sort()
+    }
+}
+
+impl<T: Ord> MemVec<T> {
+    /// Sorts the elements in ascending order; see `MemSlice::sort`.
+    pub fn sort(mut self) {
+        self.as_slice().sort()
+    }
 }
