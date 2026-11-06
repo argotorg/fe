@@ -293,6 +293,33 @@ pub fn decode_base64<T: Text>(_ input: T) -> Option<Bytes> {
     Option::Some(decoded)
 }
 
+/// Decodes hex digits of either case, with or without a `0x` prefix, two
+/// to a byte: `decode_hex("0x00ff")` is the bytes `0x00` and `0xff`. `None`
+/// for an odd number of digits or a byte that is not a hex digit. No digits
+/// decode to no bytes.
+pub fn decode_hex<T: Text>(_ input: T) -> Option<Bytes> {
+    let len = input.text_len()
+    let from: usize = if len >= 2 && input.text_byte(0) == b'0' && input.text_byte(1) == b'x' { 2 } else { 0 }
+    if (len - from) % 2 != 0 {
+        return Option::None
+    }
+    let decoded = Bytes::zeroed((len - from) / 2)
+    let out = decoded.span().ptr()
+    var i = from
+    var j: usize = 0
+    while i < len {
+        let high = digit_value(input.text_byte(i))
+        let low = digit_value(input.text_byte(i + 1))
+        if high > 15 || low > 15 {
+            return Option::None
+        }
+        unsafe { *ptr::offset_bytes(out, j) = ((high << 4) | low).downcast_truncate() }
+        i += 2
+        j += 1
+    }
+    Option::Some(decoded)
+}
+
 fn base64_digit(_ value: u8) -> u8 {
     if value < 26 {
         value + 65
