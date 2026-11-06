@@ -5,7 +5,7 @@ use ingot::hash::{Hash, Hasher, hash_bytes}
 use ingot::mem::forget
 use ingot::num::{IntDowncast, WordValue, from_be, to_be, word_to_usize}
 use ingot::ptr
-use ingot::ops::{Drop, Eq}
+use ingot::ops::{Drop, Eq, Ord}
 
 /// Errors returned by ABI decoding/encoding helpers.
 pub enum AbiError {
@@ -1244,6 +1244,25 @@ impl Eq for Bytes {
 impl Eq for DynString {
     fn eq(self, _ other: DynString) -> bool {
         payload_eq(self.span(), other.span())
+    }
+}
+
+/// Strings order by their bytes, as spans do.
+impl Ord for DynString {
+    fn lt(self, _ other: DynString) -> bool {
+        self.span() < other.span()
+    }
+
+    fn le(self, _ other: DynString) -> bool {
+        self.span() <= other.span()
+    }
+
+    fn gt(self, _ other: DynString) -> bool {
+        self.span() > other.span()
+    }
+
+    fn ge(self, _ other: DynString) -> bool {
+        self.span() >= other.span()
     }
 }
 

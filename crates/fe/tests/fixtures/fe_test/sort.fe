@@ -1,8 +1,10 @@
 // Tests for `core::sort` across containers (arrays, `MemSlice`, `MemArray`,
-// `MemVec`) and element types (unsigned, signed, `Address`, a user type).
+// `MemVec`) and element types (unsigned, signed, `Address`, a user type),
+// the `sort` methods of memory collections, which need no `Copy`, and the
+// order of slices and text.
 
-use core::ops::{Eq, Ord}
-use core::ptr::{MemArray, MemVec}
+use core::ops::{Drop, Eq, Ord}
+use core::ptr::{self, MemArray, MemBuffer, MemVec}
 use core::sort::{
     binary_search,
     dedup_sorted,
@@ -14,7 +16,7 @@ use core::sort::{
     reverse,
     sort,
 }
-use std::abi::DynArray
+use std::abi::{DynArray, DynString}
 use std::abi::dyn_array::dyn_array_from
 use std::evm::Address
 
@@ -201,3 +203,114 @@ fn dedups_and_reverses() {
     let empty: [u256; 0] = []
     assert!(is_sorted(empty) && is_sorted_unique(empty))
 }
+
+#[test]
+fn text_orders_by_bytes() {
+    let ab: DynString = "ab"
+    let abc: DynString = "abc"
+    let b: DynString = "b"
+    let empty: DynString = ""
+    assert!(ab < abc && abc < b && empty < ab)
+    assert!(!(abc < ab) && b > abc && b >= b && ab <= ab && !(ab < ab))
+    assert!(ab.span() < abc.span() && b.span() > abc.span())
+    assert!(MemBuffer::from_span(abc.span()) < MemBuffer::from_span(b.span()))
+    assert!(MemBuffer::from_span(ab.span()) >= MemBuffer::from_span(ab.span()))
+    // Bytes order unsigned, and an uppercase letter before a lowercase one.
+    var high = MemBuffer::empty()
+    high.push(0xff)
+    var low = MemBuffer::empty()
+    low.push(0x7f)
+    assert!(low < high)
+    let upper: DynString = "Z"
+    let lower: DynString = "a"
+    assert!(upper < lower)
+}
+
+#[test]
+fn slices_order_by_elements() {
+    var a = MemVec<u256>::new()
+    var b = MemVec<u256>::new()
+    for value in [1 as u256, 300, 2] {
+        a.push(value)
+        b.push(value)
+    }
+    assert!(a.as_slice() <= b.as_slice() && a.as_slice() >= b.as_slice())
+    b.push(0)
+    assert!(a.as_slice() < b.as_slice())
+    a.set(1, 301)
+    assert!(a.as_slice() > b.as_slice())
+}
+
+// Text from an index, so equal indexes give equal text.
+fn word(_ i: usize) -> DynString {
+    std::text::concat(["w", std::text::decimal(((i * 7919) % 101) as u256)])
+}
+
+#[test]
+fn sorts_owned_text() {
+    for n in [0 as usize, 1, 2, 16, 17, 100] {
+        var words = MemVec<DynString>::new()
+        for i in 0..n {
+            words.push(word(i))
+        }
+        words.sort()
+        assert!(words.len() == n)
+        for i in 1..words.len() {
+            assert!(words[i - 1] <= words[i])
+        }
+    }
+    var names = MemVec<MemBuffer>::new()
+    let fruit: [DynString; 4] = ["pear", "apple", "fig", "apple"]
+    for ref name in fruit {
+        names.push(MemBuffer::from_span(name.span()))
+    }
+    names.sort()
+    assert!(names[0] == "apple" && names[1] == "apple" && names[2] == "fig" && names[3] == "pear")
+    var array = MemArray<u256>::new_zeroed(3)
+    array[0] = 3
+    array[1] = 1
+    array[2] = 2
+    array.sort()
+    assert!(array[0] == 1 && array[1] == 2 && array[2] == 3)
+}
+
+// An element that counts its destruction.
+struct Tracked {
+    count: *u256,
+    key: u256,
+}
+
+impl Drop for Tracked {
+    fn drop(own self) {
+        unsafe { *self.count += 1 }
+    }
+}
+
+impl Ord for Tracked {
+    fn lt(self, _ other: Tracked) -> bool { self.key < other.key }
+    fn le(self, _ other: Tracked) -> bool { self.key <= other.key }
+    fn gt(self, _ other: Tracked) -> bool { self.key > other.key }
+    fn ge(self, _ other: Tracked) -> bool { self.key >= other.key }
+}
+
+#[test]
+fn sorting_swaps_without_destroying() {
+    let count = ptr::alloc<u256>()
+    unsafe { *count = 0 }
+    for n in [5 as usize, 40] {
+        var items = MemVec<Tracked>::new()
+        for i in 0..n {
+            items.push(Tracked { count, key: ((i * 37) % n) as u256 })
+        }
+        items.sort()
+        assert!(unsafe { *count } == 0)
+        for i in 0..n {
+            assert!(items[i].key == i as u256)
+        }
+        drop_all(items)
+        assert!(unsafe { *count } == n as u256)
+        unsafe { *count = 0 }
+    }
+}
+
+fn drop_all(_ items: own MemVec<Tracked>) {}
