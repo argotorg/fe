@@ -115,6 +115,156 @@ impl<'db> NormalizedBody<'db> {
         }
     }
 
+    /// The place `value` reads, borrows or views, through forwards and value
+    /// projections; a capability value with no such definition names its own
+    /// target.
+    pub fn value_place(&self, db: &'db dyn HirAnalysisDb, value: NValueId) -> Option<NPlace<'db>> {
+        self.value_place_visiting(db, value, &mut vec![false; self.values.len()])
+    }
+
+    fn value_place_visiting(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        value: NValueId,
+        visiting: &mut [bool],
+    ) -> Option<NPlace<'db>> {
+        if std::mem::replace(visiting.get_mut(value.index())?, true) {
+            return None;
+        }
+        let data = self.value(value)?;
+        let place = match data.definition {
+            NValueDefinition::Statement { block, statement } => {
+                match &self.block(block)?.statements.get(statement as usize)?.kind {
+                    NStatementKind::Define {
+                        expr:
+                            NExpr::Load { place, .. }
+                            | NExpr::Borrow { place, .. }
+                            | NExpr::MakeView { place, .. },
+                        ..
+                    } => Some(place.clone()),
+                    NStatementKind::Define {
+                        expr: NExpr::Forward { src },
+                        ..
+                    } => self.value_place_visiting(db, src.value, visiting),
+                    NStatementKind::Define {
+                        expr: NExpr::ProjectValue { value, path },
+                        ..
+                    } => self
+                        .value_place_visiting(db, value.value, visiting)
+                        .map(|mut place| {
+                            place.path = place.path.concat(&path.0);
+                            place.ty = data.ty;
+                            place
+                        }),
+                    NStatementKind::Define { .. }
+                    | NStatementKind::Store { .. }
+                    | NStatementKind::End { .. }
+                    | NStatementKind::Drop { .. }
+                    | NStatementKind::CheckIndex { .. } => None,
+                }
+            }
+            NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => None,
+        }
+        .or_else(|| {
+            data.ty.as_capability(db).map(|(_, ty)| NPlace {
+                base: NPlaceBase::CapabilityTarget { carrier: value },
+                path: Default::default(),
+                ty,
+                origin: data.origin,
+            })
+        });
+        visiting[value.index()] = false;
+        place
+    }
+
+    /// The place the access `carrier` reaches, followed through the accesses
+    /// it was derived from. A runtime choice between accesses is a
+    /// projection's, so every access has one target. `None` for an access
+    /// read back out of a place, which this does not track.
+    pub fn carrier_target(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        carrier: NValueId,
+    ) -> Option<CarrierTarget<'db>> {
+        if self.loads_access(db, carrier) {
+            return None;
+        }
+        let mut place = self.value_place(db, carrier)?;
+        loop {
+            let base = match place.base {
+                NPlaceBase::Root(root) => CarrierBase::Root(root),
+                NPlaceBase::Deref { pointer } => CarrierBase::Raw { pointer },
+                NPlaceBase::CapabilityTarget { carrier: inner } => {
+                    let data = self.value(inner)?;
+                    match data.definition {
+                        NValueDefinition::EntryParam { param } => CarrierBase::Param { param },
+                        NValueDefinition::BlockParam { .. } => return None,
+                        NValueDefinition::Statement { .. } if self.loads_access(db, inner) => {
+                            return None;
+                        }
+                        NValueDefinition::Statement { .. } => {
+                            if let Some(grant) = self.grant_of(inner) {
+                                grant
+                            } else {
+                                let outer = self.value_place(db, inner)?;
+                                if outer.base == place.base {
+                                    return None;
+                                }
+                                place.path = outer.path.concat(&place.path);
+                                place.base = outer.base;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
+            return Some(CarrierTarget {
+                base,
+                path: place.path,
+                ty: place.ty,
+            });
+        }
+    }
+
+    /// Whether `value` is an access loaded from the place that stores it.
+    fn loads_access(&self, db: &'db dyn HirAnalysisDb, value: NValueId) -> bool {
+        self.defining_expr(value).is_some_and(|(_, expr)| {
+            matches!(expr, NExpr::Load { place, .. } if place.ty.as_capability(db).is_some())
+        })
+    }
+
+    /// The grant `value` is, when it is a projection call's result or a
+    /// component of one.
+    fn grant_of(&self, value: NValueId) -> Option<CarrierBase> {
+        let NValueDefinition::Statement { block, statement } = self.value(value)?.definition else {
+            return None;
+        };
+        match &self.block(block)?.statements.get(statement as usize)?.kind {
+            NStatementKind::Define {
+                expr: NExpr::Call { .. },
+                ..
+            } => Some(CarrierBase::Grant {
+                session: value,
+                component: NDataPath::empty(),
+            }),
+            NStatementKind::Define {
+                expr:
+                    NExpr::ProjectValue {
+                        value: source,
+                        path,
+                    },
+                ..
+            } => match self.grant_of(source.value)? {
+                CarrierBase::Grant { session, component } => Some(CarrierBase::Grant {
+                    session,
+                    component: component.concat(&path.0),
+                }),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn place_base_ty(&self, db: &'db dyn HirAnalysisDb, base: NPlaceBase) -> Option<TyId<'db>> {
         match base {
             NPlaceBase::Root(root) => Some(self.root(root)?.ty),
@@ -311,6 +461,31 @@ pub enum NRootKind<'db> {
     Temporary {
         value: NValueId,
     },
+}
+
+/// What an access reaches: a place below `base` along `path`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CarrierTarget<'db> {
+    pub base: CarrierBase,
+    pub path: NDataPath,
+    pub ty: TyId<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CarrierBase {
+    /// A body's own storage: a local, an owned parameter, a temporary or
+    /// an effect provider.
+    Root(NRootId),
+    /// The place data parameter `param` names.
+    Param { param: u32 },
+    /// The component at `component` of what the projection call defining
+    /// `session` grants.
+    Grant {
+        session: NValueId,
+        component: NDataPath,
+    },
+    /// Memory a raw pointer addresses, outside the access analysis.
+    Raw { pointer: NValueId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
