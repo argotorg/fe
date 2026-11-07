@@ -54,6 +54,15 @@ fn nested_ref(_ s: Triple::Step<ref>) -> u256 {
     let (ref x, ref y) = s.1
     x + y
 }
+
+fn written(_ s: Pair::Step<mut>) {
+    s.1 = s.0
+    s.1 += 1
+}
+
+fn nested_written(_ s: Triple::Step<mut>) {
+    s.1.0 = s.0
+}
 "#,
     );
     let (top_mod, _) = db.top_mod(file);
@@ -65,7 +74,15 @@ fn nested_ref(_ s: Triple::Step<ref>) -> u256 {
             .expect("named")
             .data(&db)
             .to_string();
-        if !["named_ref", "passed_ref", "nested_ref"].contains(&name.as_str()) {
+        if ![
+            "named_ref",
+            "passed_ref",
+            "nested_ref",
+            "written",
+            "nested_written",
+        ]
+        .contains(&name.as_str())
+        {
             continue;
         }
         let instance = SemanticInstance::new(

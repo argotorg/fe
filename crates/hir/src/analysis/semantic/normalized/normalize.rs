@@ -289,12 +289,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             }
                         }
                     }
-                    SStmtKind::Store { dst, .. } => {
-                        if !matches!(dst.path.iter().next(), Some(Projection::Deref)) {
-                            self.mark_address_root(dst.local, &mut needs_slot);
-                        }
+                    // A write through an access or pointer needs no slot.
+                    SStmtKind::Store { dst, .. } if self.indirection_prefix_len(dst).is_none() => {
+                        self.mark_address_root(dst.local, &mut needs_slot);
                     }
-                    SStmtKind::End { .. } | SStmtKind::Drop { .. } => {}
+                    SStmtKind::Store { .. } | SStmtKind::End { .. } | SStmtKind::Drop { .. } => {}
                 }
             }
         }
