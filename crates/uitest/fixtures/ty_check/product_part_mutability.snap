@@ -1,0 +1,37 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/product_part_mutability.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ product_part_mutability.fe:53:5
+   │
+52 │ fn ref_part(_ s: Pair::Step<ref>) {
+   │               - `s` is a product parameter, whose owned and `ref` parts are read-only
+53 │     s.1 = 5
+   │     ^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ product_part_mutability.fe:58:5
+   │
+57 │ fn own_part(_ s: Pair::Step<mut>) {
+   │               - `s` is a product parameter, whose owned and `ref` parts are read-only
+58 │     s.0 = 5
+   │     ^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ product_part_mutability.fe:62:5
+   │
+61 │ fn single_ref_part(_ s: One::Step<ref>) {
+   │                      - `s` is a product parameter, whose owned and `ref` parts are read-only
+62 │     s.v = 1
+   │     ^^^ immutable assignment
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ product_part_mutability.fe:54:10
+   │
+52 │ fn ref_part(_ s: Pair::Step<ref>) {
+   │               - `s` does not provide mutable access
+53 │     s.1 = 5
+54 │     bump(mut s.1)
+   │          ^^^^^^^ cannot borrow as `mut`

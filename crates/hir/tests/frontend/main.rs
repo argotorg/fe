@@ -1,6 +1,7 @@
 mod arithmetic_attr;
 mod attr_semantics;
 mod body_references;
+mod carrier_targets;
 mod contract_recv;
 mod decision_tree;
 mod def_analysis;
@@ -18,4 +19,5 @@ mod pattern_ir;
 mod pattern_lowering;
 mod pattern_matching;
 mod pretty_print;
+mod shape_param_places;
 mod ty_check;

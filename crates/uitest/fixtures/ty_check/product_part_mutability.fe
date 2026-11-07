@@ -1,0 +1,63 @@
+// A place through a product parameter's `mut` part is writable; its owned
+// and `ref` parts are not.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+}
+
+struct Tok {
+    v: u256,
+}
+
+struct One {
+    t: Tok,
+}
+
+impl Driver for One {
+    shape Step = mut? Tok
+
+    fn at(mut? self) -> mut? Tok {
+        mut? self.t
+    }
+}
+
+fn bump(_ x: mut u256) {
+    x += 1
+}
+
+fn mut_part(_ s: Pair::Step<mut>) {
+    s.1 = s.0
+    s.1 += 1
+    bump(mut s.1)
+}
+
+fn single_mut_part(_ s: One::Step<mut>) {
+    s.v = 1
+}
+
+fn ref_part(_ s: Pair::Step<ref>) {
+    s.1 = 5
+    bump(mut s.1)
+}
+
+fn own_part(_ s: Pair::Step<mut>) {
+    s.0 = 5
+}
+
+fn single_ref_part(_ s: One::Step<ref>) {
+    s.v = 1
+}
