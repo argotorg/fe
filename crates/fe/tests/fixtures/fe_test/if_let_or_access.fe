@@ -1,0 +1,64 @@
+// An `if let` whose pattern has `|` alternatives binds an access once, where
+// the alternatives meet.
+use core::option::Option
+
+struct Pair { a: u256, b: u256 }
+
+impl Pair {
+    fn sum_and_b(mut self) -> Option<(u256, mut u256)> {
+        Option::Some((self.a + self.b, mut self.b))
+    }
+}
+
+fn bump(_ x: mut u256) {
+    x += 1
+}
+
+fn read(_ x: ref u256) -> u256 {
+    x
+}
+
+fn bump_if_small(_ p: mut Pair) -> bool {
+    if let Option::Some((0 | 1 | 2, mut x)) = p.sum_and_b() {
+        bump(mut x)
+        return true
+    }
+    false
+}
+
+fn read_if_small(_ p: mut Pair) -> u256 {
+    if let Option::Some((0 | 1 | 2, ref x)) = p.sum_and_b() {
+        return read(x)
+    }
+    100
+}
+
+fn bump_while_small(_ p: mut Pair) {
+    while let Option::Some((0 | 1, mut x)) = p.sum_and_b() {
+        x += 1
+    }
+}
+
+fn value_if_small(_ o: Option<(u256, u256)>) -> u256 {
+    if let Option::Some((0 | 1, x)) = o {
+        return x
+    }
+    100
+}
+
+#[test]
+fn test_if_let_or_access() {
+    var p = Pair { a: 0, b: 1 }
+    assert(bump_if_small(mut p))
+    assert(p.b == 2)
+    assert(read_if_small(mut p) == 2)
+    p.b = 5
+    assert(!bump_if_small(mut p))
+    assert(p.b == 5)
+    assert(read_if_small(mut p) == 100)
+    var q = Pair { a: 0, b: 0 }
+    bump_while_small(mut q)
+    assert(q.b == 2)
+    assert(value_if_small(Option::Some((1, 7))) == 7)
+    assert(value_if_small(Option::Some((3, 7))) == 100)
+}
