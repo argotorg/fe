@@ -25,7 +25,7 @@ func private %__TupleReturnContract_recv_0_0() -> @layout_1 {
         return v6;
 }
 
-func private %abi_field_size(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %abi_field_size(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -52,7 +52,7 @@ func private %abi_field_size(noalias nocapture v0.objref<@layout_1>) -> i256 {
         return v6;
 }
 
-func private %abi_payload_size(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %abi_payload_size(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -61,7 +61,7 @@ func private %abi_payload_size(noalias nocapture v0.objref<@layout_1>) -> i256 {
         return v2;
 }
 
-func private %abi_single_root_size(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %abi_single_root_size(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -324,7 +324,7 @@ func private %dynamic_payload_size__ge513(v0.i256) -> i256 {
         return 0.i256;
 }
 
-func inline(always) private %impl_trait_Address__encode__gf13e(noalias nocapture v0.objref<@layout_0>, v1.@layout_6) {
+func inline(always) private %impl_trait_Address__encode__gf13e(noalias nocapture readonly v0.objref<@layout_0>, v1.@layout_6) {
     block0:
         jump block1;
 
@@ -335,7 +335,7 @@ func inline(always) private %impl_trait_Address__encode__gf13e(noalias nocapture
         return;
 }
 
-func inline(always) private %encode__g753b(noalias nocapture v0.objref<@layout_1>, v1.@layout_6) {
+func inline(always) private %encode__g753b(noalias nocapture readonly v0.objref<@layout_1>, v1.@layout_6) {
     block0:
         jump block1;
 
@@ -374,7 +374,7 @@ func inline(always) private %encode_alloc(v0.@layout_1) -> @layout_7 {
         return v4;
 }
 
-func inline(always) private %encode_field__gff0b(noalias nocapture v0.objref<@layout_1>, v1.@layout_6, v2.i256, v3.@layout_6) -> @layout_6 {
+func inline(always) private %encode_field__gff0b(noalias nocapture readonly v0.objref<@layout_1>, v1.@layout_6, v2.i256, v3.@layout_6) -> @layout_6 {
     block0:
         jump block1;
 
@@ -428,7 +428,7 @@ func inline(always) private %encode_field__gac80(v0.i256, v1.@layout_6, v2.i256,
         return v3;
 }
 
-func inline(always) private %encode_field__g2917(noalias nocapture v0.objref<@layout_0>, v1.@layout_6, v2.i256, v3.@layout_6) -> @layout_6 {
+func inline(always) private %encode_field__g2917(noalias nocapture readonly v0.objref<@layout_0>, v1.@layout_6, v2.i256, v3.@layout_6) -> @layout_6 {
     block0:
         jump block1;
 
@@ -547,7 +547,7 @@ func inline(always) private %len__g8f43(v0.@layout_3) -> i256 {
         return v3;
 }
 
-func private %len__g79ff(noalias nocapture v0.objref<@layout_6>) -> i256 {
+func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_6>) -> i256 {
     block0:
         jump block1;
 
@@ -614,7 +614,7 @@ func private %core__lib__abi__trait_AbiSize__payload_size__g67a8_8121(v0.@layout
         return 32.i256;
 }
 
-func inline(always) private %payload_size__g6d15(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func inline(always) private %payload_size__g6d15(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -630,7 +630,7 @@ func inline(always) private %payload_size__g6d15(noalias nocapture v0.objref<@la
         return v12;
 }
 
-func private %core__lib__abi__trait_AbiSize__payload_size__g67a8_c7b8(noalias nocapture v0.objref<@layout_0>) -> i256 {
+func private %core__lib__abi__trait_AbiSize__payload_size__g67a8_c7b8(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -656,7 +656,7 @@ func private %impl_MemBuffer__ptr(v0.@layout_7) -> i256 {
         return v3;
 }
 
-func private %ptr__g79ff(noalias nocapture v0.objref<@layout_6>) -> i256 {
+func private %ptr__g79ff(noalias nocapture readonly v0.objref<@layout_6>) -> i256 {
     block0:
         jump block1;
 
@@ -685,7 +685,7 @@ func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v5;
 }
 
-func private %return_bytes(noalias nocapture v0.objref<@layout_6>) {
+func private %return_bytes(noalias nocapture readonly v0.objref<@layout_6>) {
     block0:
         jump block1;
 
@@ -694,7 +694,7 @@ func private %return_bytes(noalias nocapture v0.objref<@layout_6>) {
         unreachable;
 }
 
-func private %return_data(noalias nocapture v0.objref<@layout_6>) {
+func private %return_data(noalias nocapture readonly v0.objref<@layout_6>) {
     block0:
         jump block1;
 

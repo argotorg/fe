@@ -760,7 +760,7 @@ func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
         return v3;
 }
 
-func private %len__g79ff(noalias nocapture v0.objref<@layout_5>) -> i256 {
+func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_5>) -> i256 {
     block0:
         jump block1;
 
@@ -819,7 +819,7 @@ func inline(always) private %ptr__g03ed(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %ptr__g79ff(noalias nocapture v0.objref<@layout_5>) -> i256 {
+func private %ptr__g79ff(noalias nocapture readonly v0.objref<@layout_5>) -> i256 {
     block0:
         jump block1;
 
@@ -866,7 +866,7 @@ func private %read_cell(v0.i256) -> i256 {
         return v2;
 }
 
-func private %return_bytes(noalias nocapture v0.objref<@layout_5>) {
+func private %return_bytes(noalias nocapture readonly v0.objref<@layout_5>) {
     block0:
         jump block1;
 
@@ -875,7 +875,7 @@ func private %return_bytes(noalias nocapture v0.objref<@layout_5>) {
         unreachable;
 }
 
-func private %return_data(noalias nocapture v0.objref<@layout_5>) {
+func private %return_data(noalias nocapture readonly v0.objref<@layout_5>) {
     block0:
         jump block1;
 

@@ -30,7 +30,7 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         return v11;
 }
 
-func private %capacity(noalias nocapture v0.objref<@layout_0>) -> i256 {
+func private %capacity(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -154,7 +154,7 @@ func private %init() {
         jump block4;
 }
 
-func private %len__g79ff(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -164,7 +164,7 @@ func private %len__g79ff(noalias nocapture v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %impl_MemBuffer__len(noalias nocapture v0.objref<@layout_0>) -> i256 {
+func private %impl_MemBuffer__len(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -277,7 +277,7 @@ func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_0>, v
         jump block8;
 }
 
-func private %impl_MemBuffer__ptr(noalias nocapture v0.objref<@layout_0>) -> i256 {
+func private %impl_MemBuffer__ptr(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -287,7 +287,7 @@ func private %impl_MemBuffer__ptr(noalias nocapture v0.objref<@layout_0>) -> i25
         return v4;
 }
 
-func private %ptr__g79ff(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %ptr__g79ff(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -297,7 +297,7 @@ func private %ptr__g79ff(noalias nocapture v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %return_data(noalias nocapture v0.objref<@layout_1>) {
+func private %return_data(noalias nocapture readonly v0.objref<@layout_1>) {
     block0:
         jump block1;
 

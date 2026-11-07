@@ -92,7 +92,7 @@ func private %calldataload(v0.i256) -> i256 {
         return v2;
 }
 
-func private %capacity(noalias nocapture v0.objref<@layout_0>) -> i256 {
+func private %capacity(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -396,7 +396,7 @@ func private %init() {
         jump block4;
 }
 
-func private %keccak256(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %keccak256(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -407,7 +407,7 @@ func private %keccak256(noalias nocapture v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %impl_MemBuffer__len(noalias nocapture v0.objref<@layout_0>) -> i256 {
+func private %impl_MemBuffer__len(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -417,7 +417,7 @@ func private %impl_MemBuffer__len(noalias nocapture v0.objref<@layout_0>) -> i25
         return v4;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -427,7 +427,7 @@ func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias nocapt
         return v4;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_dde1(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_dde1(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -610,7 +610,7 @@ func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_0>, v
         jump block8;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -629,7 +629,7 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_8731(v0.@layout_0) -> i25
         return v3;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_8e81(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_8e81(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -648,7 +648,7 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8(v0.@layout_0) -> i25
         return v3;
 }
 
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_fc09(noalias nocapture v0.objref<@layout_0>) -> i256 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_fc09(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -658,7 +658,7 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_fc09(noalias nocapture v0
         return v4;
 }
 
-func private %return_data(noalias nocapture v0.objref<@layout_1>) {
+func private %return_data(noalias nocapture readonly v0.objref<@layout_1>) {
     block0:
         jump block1;
 

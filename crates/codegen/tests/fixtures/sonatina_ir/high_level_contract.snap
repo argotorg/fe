@@ -179,7 +179,7 @@ func inline(always) private %allocation_len(v0.i256) -> i256 {
         return v10;
 }
 
-func private %base(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %base(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -408,7 +408,7 @@ func private %decode_error() {
         evm_revert 0.i256 0.i256;
 }
 
-func inline(always) private %decode_field(noalias nocapture v0.objref<@layout_1>, noalias nocapture v1.objref<@layout_2>) -> i256 {
+func inline(always) private %decode_field(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -570,7 +570,7 @@ func inline(always) private %decode_msg_field_from(v0.@layout_3, v1.i256, v2.i25
         return v13;
 }
 
-func private %decode_payload__g6c12(noalias nocapture v0.objref<@layout_1>, noalias nocapture v1.objref<@layout_2>) -> @layout_1 {
+func private %decode_payload__g6c12(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_2>) -> @layout_1 {
     block0:
         jump block1;
 
@@ -582,7 +582,7 @@ func private %decode_payload__g6c12(noalias nocapture v0.objref<@layout_1>, noal
         return v10;
 }
 
-func inline(always) private %decode_payload__gdc8c(noalias nocapture v0.objref<@layout_1>, noalias nocapture v1.objref<@layout_2>) -> i256 {
+func inline(always) private %decode_payload__gdc8c(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -821,7 +821,7 @@ func inline(always) private %impl_AbiFrame__len(v0.@layout_2) -> i256 {
         return v3;
 }
 
-func inline(always) private %len__g140d(noalias nocapture v0.objref<@layout_2>) -> i256 {
+func inline(always) private %len__g140d(noalias nocapture readonly v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -831,7 +831,7 @@ func inline(always) private %len__g140d(noalias nocapture v0.objref<@layout_2>) 
         return v3;
 }
 
-func private %len__g79ff(noalias nocapture v0.objref<@layout_2>) -> i256 {
+func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -891,7 +891,7 @@ func private %payload_size(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %pos(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %pos(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -910,7 +910,7 @@ func private %impl_MemBuffer__ptr(v0.@layout_6) -> i256 {
         return v3;
 }
 
-func private %ptr__g79ff(noalias nocapture v0.objref<@layout_2>) -> i256 {
+func private %ptr__g79ff(noalias nocapture readonly v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -948,7 +948,7 @@ func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v5;
 }
 
-func inline(always) private %read_word(noalias nocapture v0.objref<@layout_1>, noalias nocapture v1.objref<@layout_2>) -> i256 {
+func inline(always) private %read_word(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -989,7 +989,7 @@ func inline(always) private %read_word(noalias nocapture v0.objref<@layout_1>, n
         br v16 block2 block5;
 }
 
-func private %return_bytes(noalias nocapture v0.objref<@layout_2>) {
+func private %return_bytes(noalias nocapture readonly v0.objref<@layout_2>) {
     block0:
         jump block1;
 
@@ -998,7 +998,7 @@ func private %return_bytes(noalias nocapture v0.objref<@layout_2>) {
         unreachable;
 }
 
-func private %return_data(noalias nocapture v0.objref<@layout_2>) {
+func private %return_data(noalias nocapture readonly v0.objref<@layout_2>) {
     block0:
         jump block1;
 
@@ -1153,7 +1153,7 @@ func private %sign_extend(v0.i256, v1.i256, v2.i256) -> i256 {
         return v17;
 }
 
-func private %impl_trait_MemSlice__size(noalias nocapture v0.objref<@layout_2>) -> i64 {
+func private %impl_trait_MemSlice__size(noalias nocapture readonly v0.objref<@layout_2>) -> i64 {
     block0:
         jump block1;
 
@@ -1341,7 +1341,7 @@ func inline(always) private %impl_trait_CallData__word_at(v0.@layout_3, v1.i256)
         return v7;
 }
 
-func inline(always) private %impl_trait_MemSlice__word_at(noalias nocapture v0.objref<@layout_2>, v1.i256) -> i256 {
+func inline(always) private %impl_trait_MemSlice__word_at(noalias nocapture readonly v0.objref<@layout_2>, v1.i256) -> i256 {
     block0:
         jump block1;
 

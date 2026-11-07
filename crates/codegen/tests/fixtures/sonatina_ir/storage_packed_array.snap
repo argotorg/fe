@@ -625,7 +625,7 @@ func private %input() -> @layout_1 {
         return v0;
 }
 
-func private %keccak256(noalias nocapture v0.objref<@layout_4>) -> i256 {
+func private %keccak256(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -636,7 +636,7 @@ func private %keccak256(noalias nocapture v0.objref<@layout_4>) -> i256 {
         return v4;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_3b2f(noalias nocapture v0.objref<@layout_4>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_3b2f(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -646,7 +646,7 @@ func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_3b2f(noalias nocapt
         return v4;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias nocapture v0.objref<@layout_4>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -785,7 +785,7 @@ func private %payload_size(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321(noalias nocapture v0.objref<@layout_4>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -804,7 +804,7 @@ func inline(always) private %ptr__g03ed(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_c239(noalias nocapture v0.objref<@layout_4>) -> i256 {
+func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_c239(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -851,7 +851,7 @@ func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v5;
 }
 
-func private %return_bytes(noalias nocapture v0.objref<@layout_4>) {
+func private %return_bytes(noalias nocapture readonly v0.objref<@layout_4>) {
     block0:
         jump block1;
 
@@ -860,7 +860,7 @@ func private %return_bytes(noalias nocapture v0.objref<@layout_4>) {
         unreachable;
 }
 
-func private %return_data(noalias nocapture v0.objref<@layout_4>) {
+func private %return_data(noalias nocapture readonly v0.objref<@layout_4>) {
     block0:
         jump block1;
 
