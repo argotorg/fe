@@ -4430,6 +4430,12 @@ impl<'db> TyChecker<'db> {
                     }
                     self.env.record_capture(binding, ty);
                 }
+                // A product parameter of one access part is that access.
+                let access = access.or(match self.env.param_product(&binding) {
+                    Some(Shape::Access(BorrowKind::Mut, _)) => Some(BindingAccess::Mut),
+                    Some(Shape::Access(BorrowKind::Ref, _)) => Some(BindingAccess::Ref),
+                    _ => None,
+                });
                 let is_mut = !captured && access.map_or(binding.is_mut(), BindingAccess::is_mut);
                 ExprProp {
                     binding: Some(binding),
@@ -5028,7 +5034,16 @@ impl<'db> TyChecker<'db> {
 
         if let Some(resolved_field) = resolve_place_field(self.db, lhs_place_ty, *field) {
             let (ty_base, ty_args) = resolved_field.base_ty.decompose_ty_app(self.db);
-            let is_mut = typed_lhs.is_mut || resolved_field.implicit_deref_ty.is_some();
+            // An access part of a product parameter is as writable as its
+            // access.
+            let part = match self.product_part_shape(*lhs) {
+                Some(Shape::Tuple(parts)) => parts.into_iter().nth(resolved_field.index.into()),
+                _ => None,
+            };
+            let is_mut = match part {
+                Some(Shape::Access(kind, _)) => kind == BorrowKind::Mut,
+                _ => typed_lhs.is_mut || resolved_field.implicit_deref_ty.is_some(),
+            };
 
             // Tuple struct fields are named by their position.
             let label = match field {
@@ -5850,6 +5865,9 @@ impl<'db> TyChecker<'db> {
                             MutabilityFix::Var
                         }
                     }
+                    LocalBinding::Param { .. } if self.env.param_product(&binding).is_some() => {
+                        MutabilityFix::ProductParam
+                    }
                     LocalBinding::Param { mode, .. } => {
                         match (mode == FuncParamMode::Own, ident.is_self(self.db)) {
                             (true, true) => MutabilityFix::OwnSelf,
@@ -5972,6 +5990,27 @@ impl<'db> TyChecker<'db> {
             Expr::Bin(lhs, _rhs, op) if *op == BinOp::Index => self.find_base_binding(*lhs),
             Expr::Un(inner, UnOp::Deref) => self.find_base_binding(*inner),
             Expr::Path(..) => self.env.typed_expr(expr)?.binding,
+            _ => None,
+        }
+    }
+
+    /// The part of a product parameter `expr` names through tuple fields. A
+    /// closure's copy of the parameter is a value, with no parts.
+    fn product_part_shape(&self, expr: ExprId) -> Option<Shape<'db>> {
+        match self.env.expr_data(expr) {
+            Partial::Present(Expr::Path(..)) => {
+                let binding = self.env.typed_expr(expr)?.binding?;
+                if self.env.binding_is_capture(binding) {
+                    return None;
+                }
+                self.env.param_product(&binding).cloned()
+            }
+            Partial::Present(Expr::Field(base, ..)) => match self.product_part_shape(*base)? {
+                Shape::Tuple(parts) => parts
+                    .into_iter()
+                    .nth(self.env.resolved_field_index(expr)?.into()),
+                _ => None,
+            },
             _ => None,
         }
     }

@@ -115,6 +115,103 @@ impl<'db> NormalizedBody<'db> {
         }
     }
 
+    /// The place the access `carrier` reaches, followed through the accesses
+    /// it was derived from and the aggregates that carried it. A runtime
+    /// choice between accesses is a projection's, so every access has one
+    /// target. `None` for an access read back out of a place, which this does
+    /// not track.
+    pub fn carrier_target(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        carrier: NValueId,
+    ) -> Option<CarrierTarget<'db>> {
+        let (_, ty) = self.value(carrier)?.ty.as_capability(db)?;
+        let (base, path) = self.access_target(db, carrier, NDataPath::empty())?;
+        Some(CarrierTarget { base, path, ty })
+    }
+
+    /// The base and path the access at `component` of `value` reaches.
+    fn access_target(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        value: NValueId,
+        component: NDataPath,
+    ) -> Option<(CarrierBase, NDataPath)> {
+        let data = self.value(value)?;
+        if data.ty.as_capability(db).is_some() && !component.is_empty() {
+            // A projection of an access is a sub-place of its target.
+            let (base, path) = self.access_target(db, value, NDataPath::empty())?;
+            return Some((base, path.concat(&component)));
+        }
+        match data.definition {
+            NValueDefinition::EntryParam { param } if component.is_empty() => {
+                return Some((CarrierBase::Param { param }, NDataPath::empty()));
+            }
+            NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => {
+                return None;
+            }
+            NValueDefinition::Statement { .. } => {}
+        }
+        match self.defining_expr(value)?.1 {
+            NExpr::Forward { src } => self.access_target(db, src.value, component),
+            NExpr::ProjectValue { value: src, path } => {
+                self.access_target(db, src.value, path.0.concat(&component))
+            }
+            NExpr::AggregateMake { fields, .. } => {
+                let (NDataProjection::Field(field), rest) = component.as_slice().split_first()?
+                else {
+                    return None;
+                };
+                self.access_target(
+                    db,
+                    fields.get(usize::from(field.0))?.value,
+                    NDataPath::new(rest),
+                )
+            }
+            NExpr::EnumMake {
+                variant, fields, ..
+            } => {
+                let (NDataProjection::VariantField { variant: v, field }, rest) =
+                    component.as_slice().split_first()?
+                else {
+                    return None;
+                };
+                (v == variant)
+                    .then(|| fields.get(usize::from(field.0)))
+                    .flatten()
+                    .and_then(|field| self.access_target(db, field.value, NDataPath::new(rest)))
+            }
+            NExpr::StructuralRepack {
+                value: src,
+                mapping,
+            } => mapping.fields.iter().find_map(|(target, source)| {
+                let rest = component.as_slice().strip_prefix(target.as_slice())?;
+                self.access_target(db, src.value, source.concat(&NDataPath::new(rest)))
+            }),
+            NExpr::Call { .. } => Some((
+                CarrierBase::Grant {
+                    session: value,
+                    component,
+                },
+                NDataPath::empty(),
+            )),
+            NExpr::Borrow { place, .. } | NExpr::MakeView { place, .. } => {
+                let (base, path) = match place.base {
+                    NPlaceBase::Root(root) => (CarrierBase::Root(root), NDataPath::empty()),
+                    NPlaceBase::Deref { pointer } => {
+                        (CarrierBase::Raw { pointer }, NDataPath::empty())
+                    }
+                    NPlaceBase::CapabilityTarget { carrier } => {
+                        self.access_target(db, carrier, NDataPath::empty())?
+                    }
+                };
+                Some((base, path.concat(&place.path)))
+            }
+            // An access loaded from the place that stores it.
+            _ => None,
+        }
+    }
+
     pub fn place_base_ty(&self, db: &'db dyn HirAnalysisDb, base: NPlaceBase) -> Option<TyId<'db>> {
         match base {
             NPlaceBase::Root(root) => Some(self.root(root)?.ty),
@@ -311,6 +408,32 @@ pub enum NRootKind<'db> {
     Temporary {
         value: NValueId,
     },
+}
+
+/// What an access reaches: a place below `base` along `path`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CarrierTarget<'db> {
+    pub base: CarrierBase,
+    pub path: NDataPath,
+    pub ty: TyId<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CarrierBase {
+    /// A body's own storage: a local, an owned parameter, a temporary or
+    /// an effect provider.
+    Root(NRootId),
+    /// The place entry input `param` names: an access parameter, or an
+    /// access part of a product parameter.
+    Param { param: u32 },
+    /// The component at `component` of what the projection call defining
+    /// `session` grants.
+    Grant {
+        session: NValueId,
+        component: NDataPath,
+    },
+    /// Memory a raw pointer addresses, outside the access analysis.
+    Raw { pointer: NValueId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]

@@ -231,9 +231,45 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             for statement in &block.stmts {
                 match &statement.kind {
                     SStmtKind::Assign { dst, expr } => {
-                        for_each_address_required_local(expr, |local| {
-                            self.mark_address_root(local, &mut needs_slot)
-                        });
+                        // A borrow needs its place's address, unless the
+                        // place lies behind an access or pointer.
+                        match expr {
+                            SExpr::Borrow { place, .. }
+                                if self.indirection_prefix_len(place).is_none() =>
+                            {
+                                self.mark_address_root(place.local, &mut needs_slot);
+                            }
+                            SExpr::Call { effect_args, .. } => {
+                                for arg in effect_args {
+                                    if let crate::analysis::semantic::SEffectArgValue::Place(
+                                        place,
+                                    ) = &arg.arg
+                                    {
+                                        self.mark_address_root(place.local, &mut needs_slot);
+                                    }
+                                }
+                            }
+                            SExpr::Borrow { .. }
+                            | SExpr::Forward(_)
+                            | SExpr::UseValue(_)
+                            | SExpr::ReadPlace { .. }
+                            | SExpr::InspectPlace { .. }
+                            | SExpr::CodeRegionRef { .. }
+                            | SExpr::Const(_)
+                            | SExpr::Unary { .. }
+                            | SExpr::Binary { .. }
+                            | SExpr::Cast { .. }
+                            | SExpr::ArrayRepeat { .. }
+                            | SExpr::AggregateMake { .. }
+                            | SExpr::EnumMake { .. }
+                            | SExpr::Field { .. }
+                            | SExpr::Index { .. }
+                            | SExpr::GetEnumTag { .. }
+                            | SExpr::IsEnumVariant { .. }
+                            | SExpr::ExtractEnumField { .. }
+                            | SExpr::CodeRegionOffset { .. }
+                            | SExpr::CodeRegionLen { .. } => {}
+                        }
                         if let SExpr::ReadPlace { place } = expr
                             && self.normalized_local_ty(*dst).as_view(self.db).is_some()
                             && !matches!(place.path.iter().next(), Some(Projection::Deref))
@@ -253,12 +289,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             }
                         }
                     }
-                    SStmtKind::Store { dst, .. } => {
-                        if !matches!(dst.path.iter().next(), Some(Projection::Deref)) {
-                            self.mark_address_root(dst.local, &mut needs_slot);
-                        }
+                    // A write through an access or pointer needs no slot.
+                    SStmtKind::Store { dst, .. } if self.indirection_prefix_len(dst).is_none() => {
+                        self.mark_address_root(dst.local, &mut needs_slot);
                     }
-                    SStmtKind::End { .. } | SStmtKind::Drop { .. } => {}
+                    SStmtKind::Store { .. } | SStmtKind::End { .. } | SStmtKind::Drop { .. } => {}
                 }
             }
         }
@@ -1431,18 +1466,15 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 origin,
             }
         } else if !self.local_has_place(raw.local)
-            && let Some(deref) = raw
-                .path
-                .iter()
-                .position(|projection| matches!(projection, Projection::Deref))
+            && let Some(len) = self.indirection_prefix_len(raw)
         {
             // A value local has no place to project from. Project the pointer
             // or carrier out of its value and dereference that.
             let mut prefix = crate::analysis::semantic::SemanticProjectionPath::new();
-            for projection in projections.by_ref().take(deref) {
+            for projection in projections.by_ref().take(len) {
                 prefix.push(projection.clone());
             }
-            projections.next();
+            projections.next_if(|projection| matches!(projection, Projection::Deref));
             let value = self.read_operand(block, origin, SOperand::inherited(raw.local), None)?;
             let path = self.normalize_path(block, origin, &prefix)?;
             let pointer_ty = project_path_ty(
@@ -2437,6 +2469,42 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             )
     }
 
+    /// The length of the prefix of `place`'s path that selects the first
+    /// access or pointer the place lies behind: an access field the path
+    /// continues or ends behind, or the pointer an explicit `Deref` follows.
+    fn indirection_prefix_len(&self, place: &SPlace<'db>) -> Option<usize> {
+        let deref = || {
+            place
+                .path
+                .iter()
+                .position(|projection| matches!(projection, Projection::Deref))
+        };
+        let mut ty = self.normalized_local_ty(place.local);
+        for (index, projection) in place.path.iter().enumerate() {
+            ty = match projection {
+                Projection::Deref => return Some(index),
+                Projection::Field(field) => *self
+                    .instance
+                    .normalized_field_types(self.db, ty)
+                    .get(*field)?,
+                Projection::VariantField {
+                    variant, field_idx, ..
+                } => *self
+                    .instance
+                    .normalized_enum_variant_field_tys(self.db, ty, *variant)
+                    .get(*field_idx)?,
+                // An element or entry is never an access.
+                Projection::Index(_) | Projection::Entry(_) | Projection::Discriminant => {
+                    return deref();
+                }
+            };
+            if ty.as_capability(self.db).is_some() {
+                return Some(index + 1);
+            }
+        }
+        None
+    }
+
     fn ty_is_copy(&self, ty: TyId<'db>) -> bool {
         if let Some(result) = self.copy_cache.borrow().get(&ty) {
             return *result;
@@ -2502,46 +2570,6 @@ fn semantic_root_provider<'db>(
             provenance: PlaceProvenance::Derived(_),
             ..
         } => None,
-    }
-}
-
-fn for_each_address_required_local(expr: &SExpr<'_>, mut f: impl FnMut(SLocalId)) {
-    match expr {
-        SExpr::Borrow { place, .. } => {
-            if !place
-                .path
-                .iter()
-                .any(|projection| matches!(projection, Projection::Deref))
-            {
-                f(place.local);
-            }
-        }
-        SExpr::Call { effect_args, .. } => {
-            for arg in effect_args {
-                if let crate::analysis::semantic::SEffectArgValue::Place(place) = &arg.arg {
-                    f(place.local);
-                }
-            }
-        }
-        SExpr::Forward(_)
-        | SExpr::UseValue(_)
-        | SExpr::ReadPlace { .. }
-        | SExpr::InspectPlace { .. }
-        | SExpr::CodeRegionRef { .. }
-        | SExpr::Const(_)
-        | SExpr::Unary { .. }
-        | SExpr::Binary { .. }
-        | SExpr::Cast { .. }
-        | SExpr::ArrayRepeat { .. }
-        | SExpr::AggregateMake { .. }
-        | SExpr::EnumMake { .. }
-        | SExpr::Field { .. }
-        | SExpr::Index { .. }
-        | SExpr::GetEnumTag { .. }
-        | SExpr::IsEnumVariant { .. }
-        | SExpr::ExtractEnumField { .. }
-        | SExpr::CodeRegionOffset { .. }
-        | SExpr::CodeRegionLen { .. } => {}
     }
 }
 

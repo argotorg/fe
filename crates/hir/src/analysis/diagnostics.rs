@@ -4701,6 +4701,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         MutabilityFix::OwnParam => {
                             format!("write `var {name}` to make this owned parameter mutable")
                         }
+                        MutabilityFix::ProductParam => format!(
+                            "`{name}` is a product parameter, whose owned and `ref` parts are read-only"
+                        ),
                         MutabilityFix::ViewParam => format!(
                             "a view parameter is read-only; write `{name}: mut …` for a mutable borrow"
                         ),

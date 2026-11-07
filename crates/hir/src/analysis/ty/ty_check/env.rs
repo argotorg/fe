@@ -794,6 +794,10 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    pub(super) fn resolved_field_index(&self, expr: ExprId) -> Option<u16> {
+        self.resolved_field_index[expr]
+    }
+
     pub(super) fn register_semantic_call(&mut self, expr: ExprId, callable: Callable<'db>) {
         self.register_callable(expr, callable.clone());
         self.register_semantic_expr_lowering(expr, SemanticExprLowering::Call { callable });

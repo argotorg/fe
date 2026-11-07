@@ -508,6 +508,8 @@ pub enum MutabilityFix {
     RefPart,
     /// An owned parameter: `var x: own T`.
     OwnParam,
+    /// A product parameter, whose owned and `ref` parts are read-only.
+    ProductParam,
     /// A view parameter: `x: mut T`, a mutable borrow.
     ViewParam,
     /// A view receiver: `mut self`.
