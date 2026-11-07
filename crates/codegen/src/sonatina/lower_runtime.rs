@@ -66,7 +66,7 @@ use sonatina_ir::{
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
             EvmBlockHash, EvmByte, EvmCall, EvmCallValue, EvmCalldataCopy, EvmCalldataLoad,
-            EvmCalldataSize, EvmCaller, EvmChainId, EvmClz, EvmCodeCopy, EvmCodeLoad, EvmCodeSize,
+            EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeLoad, EvmCodeSize,
             EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmExtCodeCopy,
             EvmExtCodeHash, EvmExtCodeSize, EvmGas, EvmGasLimit, EvmGasPrice, EvmInvalid,
             EvmKeccak256, EvmKeccak256Words, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
@@ -75,7 +75,7 @@ use sonatina_ir::{
             EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
             EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
-        logic::{And, Bswap, Not, Or, Xor},
+        logic::{And, Bswap, Clz, Not, Or, Xor},
     },
     isa::Isa,
     module::{FuncRef, ModuleCtx},
@@ -170,6 +170,7 @@ define_lowering_inst_set!(
     SymSize,
     And,
     Bswap,
+    Clz,
     Not,
     Or,
     Xor,
@@ -2968,10 +2969,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeBuiltin::LeadingZeros { value } => {
                 let value = self.local_value(*value)?;
-                self.fb.insert_inst(
-                    EvmClz::new(self.module.required_inst::<EvmClz>()?, value),
-                    Type::I256,
-                )
+                self.fb
+                    .insert_inst(Clz::new(self.module.inst_set(), value), Type::I256)
             }
             RuntimeBuiltin::SwapBytes { value } => {
                 let value = self.local_value(*value)?;
