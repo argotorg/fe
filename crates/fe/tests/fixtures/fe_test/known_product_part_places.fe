@@ -1,0 +1,131 @@
+// A place through a known product parameter's `mut` part writes what the
+// part's access reaches, as a `mut` pattern binding of the part does.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+}
+
+struct Inner {
+    x: u256,
+    y: u256,
+}
+
+struct Holder {
+    n: u256,
+    i: Inner,
+}
+
+impl Driver for Holder {
+    shape Step = (own u256, mut? Inner)
+
+    fn at(mut? self) -> (own u256, mut? Inner) {
+        (self.n, mut? self.i)
+    }
+}
+
+struct Triple {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+impl Driver for Triple {
+    shape Step = (own u256, (mut? u256, mut? u256))
+
+    fn at(mut? self) -> (own u256, (mut? u256, mut? u256)) {
+        (self.a, (mut? self.b, mut? self.c))
+    }
+}
+
+struct Tok {
+    v: u256,
+}
+
+struct One {
+    t: Tok,
+}
+
+impl Driver for One {
+    shape Step = mut? Tok
+
+    fn at(mut? self) -> mut? Tok {
+        mut? self.t
+    }
+}
+
+fn bump(_ x: mut u256) {
+    x += 1
+}
+
+fn assigned(_ s: Pair::Step<mut>) {
+    s.1 = s.0 + 10
+}
+
+fn updated(_ s: Pair::Step<mut>) {
+    s.1 += s.0
+}
+
+fn passed(_ s: Pair::Step<mut>) {
+    bump(mut s.1)
+}
+
+fn named(_ s: Pair::Step<mut>) {
+    let x = mut s.1
+    x *= 3
+}
+
+fn field_assigned(_ s: Holder::Step<mut>) {
+    s.1.x = s.0
+    bump(mut s.1.y)
+}
+
+fn nested(_ s: Triple::Step<mut>) {
+    s.1.0 = s.0
+    bump(mut s.1.1)
+}
+
+fn single(_ s: One::Step<mut>) {
+    s.v = 7
+}
+
+#[test]
+fn test_part_places_write_through() {
+    var p = Pair { a: 1, b: 2 }
+    assigned(p.at())
+    assert(p.b == 11)
+    updated(p.at())
+    assert(p.b == 12)
+    passed(p.at())
+    assert(p.b == 13)
+    named(p.at())
+    assert(p.b == 39)
+    assert(p.a == 1)
+
+    var h = Holder { n: 5, i: Inner { x: 0, y: 0 } }
+    field_assigned(h.at())
+    assert(h.i.x == 5)
+    assert(h.i.y == 1)
+
+    var t = Triple { a: 4, b: 0, c: 0 }
+    nested(t.at())
+    assert(t.b == 4)
+    assert(t.c == 1)
+
+    var o = One { t: Tok { v: 0 } }
+    single(mut o.at())
+    assert(o.t.v == 7)
+}
