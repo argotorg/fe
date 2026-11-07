@@ -5,10 +5,10 @@ use hir::analysis::{
         ExecutableBlock, PlaceProvenance, SLocal, SLocalId, SemOrigin, SemanticBody,
         SemanticInstance, SemanticLocalRole,
         normalized::{
-            NBlock, NBlockId, NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutLocals,
-            NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind,
-            NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
-            normalize_runtime_semantic_body,
+            NBlock, NBlockId, NDataProjection, NEffectArgValue, NExpr, NIndex,
+            NLayoutBackingSource, NLayoutLocals, NLayoutPlan, NOperand, NPlace, NPlaceBase,
+            NRootId, NRootKind, NStatementKind, NSuccessor, NTerminator, NTerminatorKind,
+            NValueDefinition, NValueId, NormalizedBody, normalize_runtime_semantic_body,
         },
         semantic_executable_control_flow,
     },
@@ -351,8 +351,19 @@ impl<'db> RuntimeSemanticBody<'db> {
                     }
                 }
             }
+            NExpr::ProjectValue { value, path } => {
+                // An element at a dynamic index is read from storage. The
+                // local's own storage serves every such read, where each would
+                // otherwise copy the whole value into an object of its own.
+                if self.operand_local(*value) == Some(local)
+                    && path.0.iter().any(|projection| {
+                        matches!(projection, NDataProjection::Index(NIndex::Value(_)))
+                    })
+                {
+                    demand.read_by_place = true;
+                }
+            }
             NExpr::Forward { .. }
-            | NExpr::ProjectValue { .. }
             | NExpr::StructuralRepack { .. }
             | NExpr::CodeRegionRef { .. }
             | NExpr::Const(_)
