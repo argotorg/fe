@@ -637,6 +637,15 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         destination,
                         self.values[value.value.index()].ty,
                     )?;
+                    // Equal source-level array types can carry different symbolic
+                    // extent representations across call and store boundaries.
+                    let value = self.repack_operand_as(
+                        raw_block,
+                        statement.origin,
+                        src.value,
+                        value,
+                        destination.ty,
+                    )?;
                     self.emit_store(
                         raw_block,
                         Some(statement.id),

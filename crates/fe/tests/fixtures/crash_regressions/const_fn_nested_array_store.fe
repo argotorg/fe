@@ -1,0 +1,34 @@
+const fn half(_ n: usize) -> usize {
+    n / 2
+}
+
+const fn zeros<const N: usize>() -> [u256; half(N)] {
+    [0; half(N)]
+}
+
+pub const fn double_rows<const OUT: usize, const N: usize>() -> [[u256; half(N)]; OUT] {
+    var out: [[u256; half(N)]; OUT] = [[1; half(N)]; OUT]
+    var j: usize = 0
+    while j < OUT {
+        out[j] = zeros<N>()
+        j += 1
+    }
+    out
+}
+
+const ROWS: [[u256; 4]; 2] = double_rows<2, 8>()
+
+#[test]
+fn stored_rows_are_zero() {
+    let rows = double_rows<2, 8>()
+    var row: usize = 0
+    while row < 2 {
+        var column: usize = 0
+        while column < 4 {
+            assert!(rows[row][column] == 0)
+            assert!(ROWS[row][column] == 0)
+            column += 1
+        }
+        row += 1
+    }
+}
