@@ -2489,6 +2489,13 @@ fn write_sonatina_bytecode_artifacts(
             had_errors = true;
             continue;
         };
+        for warning in contract_size_warnings(
+            name,
+            contract_bytecode.runtime.len(),
+            contract_bytecode.deploy.len(),
+        ) {
+            eprintln!("Warning: {warning}");
+        }
         let deploy_hex = hex::encode(&contract_bytecode.deploy);
         let runtime_hex = hex::encode(&contract_bytecode.runtime);
         let sizes = contract_bytecode.size_report();
@@ -2652,6 +2659,28 @@ fn write_native_library_artifacts(
     Ok(())
 }
 
+// https://eips.ethereum.org/EIPS/eip-170
+// https://eips.ethereum.org/EIPS/eip-3860
+fn contract_size_warnings(name: &str, runtime_size: usize, init_size: usize) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (kind, size, limit, eip) in [
+        ("runtime code", runtime_size, 24_576, "EIP-170"),
+        (
+            "initcode (before constructor arguments)",
+            init_size,
+            49_152,
+            "EIP-3860",
+        ),
+    ] {
+        if size > limit {
+            warnings.push(format!(
+                "contract `{name}` has {size} bytes of {kind}, exceeding the {eip} limit of {limit} bytes; deployment will fail on chains enforcing this limit"
+            ));
+        }
+    }
+    warnings
+}
+
 fn write_contract_artifacts(
     out_dir: &Utf8Path,
     report_dir: Option<&Utf8Path>,
@@ -2733,6 +2762,21 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use tempfile::tempdir;
+
+    #[test]
+    fn contract_size_warnings_respect_inclusive_byte_limits() {
+        assert!(contract_size_warnings("Small", 0, 0).is_empty());
+        assert!(contract_size_warnings("AtLimit", 24_576, 49_152).is_empty());
+        let runtime = contract_size_warnings("Big", 24_577, 49_152);
+        assert_eq!(runtime.len(), 1);
+        assert!(runtime[0].contains("`Big` has 24577 bytes of runtime code"));
+        assert!(runtime[0].contains("EIP-170 limit of 24576 bytes"));
+        let init = contract_size_warnings("LargeInit", 24_576, 49_153);
+        assert_eq!(init.len(), 1);
+        assert!(init[0].contains("49153 bytes of initcode"));
+        assert!(init[0].contains("EIP-3860 limit of 49152 bytes"));
+        assert_eq!(contract_size_warnings("Both", 24_577, 49_153).len(), 2);
+    }
 
     #[test]
     fn describe_emit_selection_lists_abi() {
