@@ -87,12 +87,17 @@ fn black_box_keeps_measured_work_between_gas_reads(fixture: Fixture<&str>) {
 
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_rejects_*.fe")]
 fn black_box_rejects_non_scalar_arguments(fixture: Fixture<&str>) {
-    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+    let message = with_top_mod_for_source(&fixture, |db, top_mod| {
         let diagnostics = db.run_on_top_mod(top_mod);
-        assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(db));
-        emit_module_sonatina_ir(db, top_mod).expect_err("black_box only accepts scalars")
+        // Known aggregate and pointer arguments are rejected at their source
+        // call. Keep the lowering guard for types only known after instantiation.
+        if !diagnostics.is_empty() {
+            return diagnostics.format_diags(db);
+        }
+        emit_module_sonatina_ir(db, top_mod)
+            .expect_err("black_box only accepts scalars")
+            .to_string()
     });
-    let message = err.to_string();
     assert!(
         message.contains("`core::hint::black_box` requires a scalar argument"),
         "unexpected error message:\n{message}"

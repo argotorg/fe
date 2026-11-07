@@ -1,0 +1,9 @@
+use core::hint::black_box
+
+const X: [i8; 4] = [1, 2, 3, 4]
+
+#[test]
+fn t() {
+    let x = black_box(X)
+    assert!(x[0] == 1)
+}
