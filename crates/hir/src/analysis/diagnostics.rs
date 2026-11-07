@@ -820,8 +820,14 @@ impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
             AbiFieldContext::Error => (DiagnosticPass::ErrorLower, "a custom error"),
         };
         let code = match (self.kind, self.context) {
-            (AbiFieldDiagnosticKind::Unsupported, AbiFieldContext::Event) => 7,
-            (AbiFieldDiagnosticKind::Unsupported, AbiFieldContext::Error) => 4,
+            (
+                AbiFieldDiagnosticKind::Unsupported | AbiFieldDiagnosticKind::UnsupportedArray,
+                AbiFieldContext::Event,
+            ) => 7,
+            (
+                AbiFieldDiagnosticKind::Unsupported | AbiFieldDiagnosticKind::UnsupportedArray,
+                AbiFieldContext::Error,
+            ) => 4,
             (AbiFieldDiagnosticKind::MissingSolCompat, AbiFieldContext::Event) => 11,
             (AbiFieldDiagnosticKind::MissingSolCompat, AbiFieldContext::Error) => 7,
         };
@@ -832,6 +838,11 @@ impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
                 format!("`{ty}` is not supported as {field_context} field"),
                 "tuples are not supported in event or custom error fields; use a struct type for grouped data"
                     .to_string(),
+            ),
+            AbiFieldDiagnosticKind::UnsupportedArray => (
+                "unsupported ABI field type",
+                format!("`{ty}` is not supported as {field_context} field"),
+                "fixed-size arrays are not supported in event or custom error fields yet; use `std::abi::DynArray` for array data".to_string(),
             ),
             AbiFieldDiagnosticKind::MissingSolCompat => (
                 "ABI field type has no Solidity type name",
