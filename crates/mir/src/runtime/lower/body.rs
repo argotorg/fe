@@ -3802,14 +3802,9 @@ impl<'db> RmirEmitter<'db> {
                     Some(word.clone()),
                 )
             }
-            RuntimeBuiltinFuncKind::LeadingZeros => {
-                let [value] = args else { return None };
-                builtin(
-                    crate::runtime::RuntimeBuiltin::LeadingZeros { value: *value },
-                    Some(word.clone()),
-                )
-            }
-            RuntimeBuiltinFuncKind::ToBigEndian
+            RuntimeBuiltinFuncKind::LeadingZeros
+            | RuntimeBuiltinFuncKind::TrailingZeros
+            | RuntimeBuiltinFuncKind::ToBigEndian
             | RuntimeBuiltinFuncKind::FromBigEndian
             | RuntimeBuiltinFuncKind::ToLittleEndian
             | RuntimeBuiltinFuncKind::FromLittleEndian
@@ -3818,10 +3813,15 @@ impl<'db> RmirEmitter<'db> {
                 let class @ RuntimeClass::Scalar(_) = self.value_class(*value)? else {
                     return None;
                 };
-                builtin(
-                    crate::runtime::RuntimeBuiltin::SwapBytes { value: *value },
-                    Some(class.clone()),
-                )
+                let value = *value;
+                let builtin_expr = match kind {
+                    RuntimeBuiltinFuncKind::LeadingZeros => RuntimeBuiltin::LeadingZeros { value },
+                    RuntimeBuiltinFuncKind::TrailingZeros => {
+                        RuntimeBuiltin::TrailingZeros { value }
+                    }
+                    _ => RuntimeBuiltin::SwapBytes { value },
+                };
+                builtin(builtin_expr, Some(class.clone()))
             }
             RuntimeBuiltinFuncKind::BlackBox => {
                 let [value] = args else { return None };

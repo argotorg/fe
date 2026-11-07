@@ -1288,7 +1288,12 @@ pub enum RuntimeBuiltin<'db> {
         rhs: RValueId,
         modulus: RValueId,
     },
+    /// The zero bits above an integer's highest set bit.
     LeadingZeros {
+        value: RValueId,
+    },
+    /// The zero bits below an integer's lowest set bit.
+    TrailingZeros {
         value: RValueId,
     },
     /// Reverses the bytes of an integer.
@@ -1710,6 +1715,7 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::AddMod { .. }
             | Self::MulMod { .. }
             | Self::LeadingZeros { .. }
+            | Self::TrailingZeros { .. }
             | Self::SwapBytes { .. }
             | Self::Byte { .. }
             | Self::SignExtend { .. }
@@ -1752,6 +1758,7 @@ impl<'db> RuntimeBuiltin<'db> {
             Self::Sload { slot: value }
             | Self::CallDataLoad { offset: value }
             | Self::LeadingZeros { value }
+            | Self::TrailingZeros { value }
             | Self::SwapBytes { value }
             | Self::BlackBox { value }
             | Self::BlockHash { block: value }

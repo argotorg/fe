@@ -75,7 +75,7 @@ use sonatina_ir::{
             EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
             EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
-        logic::{And, Bswap, Clz, Not, Or, Xor},
+        logic::{And, Bswap, Clz, Ctz, Not, Or, Xor},
     },
     isa::Isa,
     module::{FuncRef, ModuleCtx},
@@ -171,6 +171,7 @@ define_lowering_inst_set!(
     And,
     Bswap,
     Clz,
+    Ctz,
     Not,
     Or,
     Xor,
@@ -2977,8 +2978,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeBuiltin::LeadingZeros { value } => {
                 let value = self.local_value(*value)?;
+                let ty = self.fb.type_of(value);
                 self.fb
-                    .insert_inst(Clz::new(self.module.inst_set(), value), Type::I256)
+                    .insert_inst(Clz::new(self.module.inst_set(), value), ty)
+            }
+            RuntimeBuiltin::TrailingZeros { value } => {
+                let value = self.local_value(*value)?;
+                let ty = self.fb.type_of(value);
+                self.fb
+                    .insert_inst(Ctz::new(self.module.inst_set(), value), ty)
             }
             RuntimeBuiltin::SwapBytes { value } => {
                 let value = self.local_value(*value)?;

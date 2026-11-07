@@ -976,10 +976,22 @@ pub fn isqrt(_ x: u256) -> u256 {
 }
 
 extern {
-    /// Returns the number of leading zero bits in `x`, or 256 if `x == 0`.
+    /// The number of zero bits above the highest set bit of `x`, or the width
+    /// of `T` if `x` is zero. A signed `x` counts the bits of its two's
+    /// complement, so a negative `x` has none.
     ///
-    /// Lowers to the EVM `CLZ` instruction (EIP-7939).
-    pub const fn leading_zeros(_ x: u256) -> u256
+    /// Lowers to the EVM `CLZ` instruction (EIP-7939) and to a
+    /// count-leading-zeros instruction on native targets.
+    pub const fn leading_zeros<T: IntWord>(_ x: T) -> T
+
+    /// The number of zero bits below the lowest set bit of `x`, or the width
+    /// of `T` if `x` is zero. A signed `x` counts the bits of its two's
+    /// complement.
+    ///
+    /// Lowers to a count-trailing-zeros instruction on native targets. The
+    /// EVM has none, so there it takes `CLZ` of the bits below the lowest set
+    /// bit.
+    pub const fn trailing_zeros<T: IntWord>(_ x: T) -> T
 
     /// The integer whose representation in the target's memory holds `x`'s
     /// bytes in big-endian order: `x` itself on EVM, whose memory is
@@ -1002,16 +1014,6 @@ extern {
 
     /// `x` with the order of its bytes reversed, on every target.
     pub fn swap_bytes<T: IntWord>(_ x: T) -> T
-}
-
-/// Returns the number of trailing zero bits in `x`, or 256 if `x == 0`.
-#[arithmetic(unchecked)]
-pub const fn trailing_zeros(_ x: u256) -> u256 {
-    if x == 0 {
-        return 256
-    }
-    // `x & -x` isolates the lowest set bit.
-    255 - leading_zeros(x & (0 - x))
 }
 
 /// Returns the greatest common divisor of `a` and `b`.
