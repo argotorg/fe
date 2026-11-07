@@ -19,4 +19,5 @@ mod pattern_ir;
 mod pattern_lowering;
 mod pattern_matching;
 mod pretty_print;
+mod shape_param_places;
 mod ty_check;

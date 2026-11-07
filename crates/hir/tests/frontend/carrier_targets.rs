@@ -224,23 +224,21 @@ fn shape_parameter_part_targets_its_input() {
 }
 
 #[test]
-fn access_loaded_from_a_slot_has_no_target() {
-    // `ref s.1` spills `s` to a slot, and the access is loaded back out of it.
+fn named_shape_part_targets_its_input() {
+    // `ref s.1` borrows through the access part without giving `s` a slot.
     with_body("shape_part_named", |db, body| {
-        let loaded: Vec<_> = body
+        let targets: Vec<_> = body
             .values
             .iter()
             .enumerate()
-            .map(|(index, value)| (NValueId::new(index), value))
-            .filter(|(id, value)| {
-                value.ty.as_capability(db).is_some()
-                    && matches!(body.defining_expr(*id), Some((_, NExpr::Load { .. })))
-            })
-            .map(|(id, _)| id)
+            .filter(|(_, value)| value.ty.as_capability(db).is_some())
+            .map(|(index, _)| body.carrier_target(db, NValueId::new(index)))
             .collect();
-        assert!(!loaded.is_empty());
-        for carrier in loaded {
-            assert_eq!(body.carrier_target(db, carrier), None);
+        assert!(!targets.is_empty());
+        for target in targets {
+            let target = target.expect("every access has a target");
+            assert_eq!(target.base, CarrierBase::Param { param: 1 });
+            assert!(target.path.is_empty(), "{target:?}");
         }
     });
 }
