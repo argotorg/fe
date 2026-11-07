@@ -68,6 +68,26 @@ fn token_if_kind(_ k: own Kind, _ n: u256) -> u256 {
     100
 }
 
+enum Tag {
+    A,
+    B(u256),
+}
+
+fn token_if_tag(_ tag: own Tag, _ n: u256) -> u256 {
+    // The tests check `tag` first, so each alternative extracts the token on
+    // its own path and binds what it extracted.
+    if let (Option::Some(t), Tag::A | Tag::B(0)) = (Option::Some(Token { v: n }), tag) {
+        return t.v
+    }
+    100
+}
+
+fn bump_through(_ o: mut Option<(u256, u256)>) {
+    if let Option::Some((0 | 1, mut x)) = o {
+        x += 1
+    }
+}
+
 #[test]
 fn test_if_let_or_access() {
     var p = Pair { a: 0, b: 1 }
@@ -88,4 +108,13 @@ fn test_if_let_or_access() {
     assert(token_if_kind(Kind::A(0), 7) == 7)
     assert(token_if_kind(Kind::B(Token { v: 1 }), 8) == 8)
     assert(token_if_kind(Kind::A(1), 9) == 100)
+    assert(token_if_tag(Tag::A, 5) == 5)
+    assert(token_if_tag(Tag::B(0), 6) == 6)
+    assert(token_if_tag(Tag::B(1), 7) == 100)
+    var o = Option::Some((1, 5))
+    bump_through(mut o)
+    match o {
+        Option::Some((_, x)) => assert(x == 6),
+        Option::None => assert(false),
+    }
 }
