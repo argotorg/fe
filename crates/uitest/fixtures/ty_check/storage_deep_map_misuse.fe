@@ -1,0 +1,35 @@
+use std::evm::{DeepKey3, StorageDeepMap}
+
+// A `StorageDeepMap` entry can only be read or written once every key level
+// has been applied, with keys of the right type, in the right order. Writing
+// needs a cursor from `at_mut`, which in turn needs a mutable map.
+
+type Steps = StorageDeepMap<DeepKey3<u256, u256, u256>, u256, 0>
+
+pub fn ok_read(_ m: Steps, y: u256, mo: u256, d: u256) -> u256 {
+    m.at(y).at(mo).at(d).get()
+}
+
+pub fn ok_write(_ m: mut Steps, y: u256, mo: u256, d: u256) {
+    m.at_mut(y).at(mo).at(d).set(value: 1)
+}
+
+pub fn bad_too_few_keys(_ m: Steps, y: u256, mo: u256) -> u256 {
+    m.at(y).at(mo).get()
+}
+
+pub fn bad_too_many_keys(_ m: Steps, y: u256, mo: u256, d: u256) -> u256 {
+    m.at(y).at(mo).at(d).at(d).get()
+}
+
+pub fn bad_key_type(_ m: Steps, y: u256, flag: bool, d: u256) -> u256 {
+    m.at(y).at(flag).at(d).get()
+}
+
+pub fn bad_set_through_read_cursor(_ m: mut Steps, y: u256, mo: u256, d: u256) {
+    m.at(y).at(mo).at(d).set(value: 1)
+}
+
+pub fn bad_at_mut_on_immutable_map(_ m: Steps, y: u256, mo: u256, d: u256) {
+    m.at_mut(y).at(mo).at(d).set(value: 1)
+}
