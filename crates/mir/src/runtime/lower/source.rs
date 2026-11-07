@@ -485,6 +485,13 @@ pub(super) fn local_read_places_extractable_from_value(
                     place_root_local(body, place) != Some(local)
                         || place.path.iter().all(value_extractable_projection)
                 }
+                NStatementKind::Define {
+                    expr: NExpr::ProjectValue { value, path },
+                    ..
+                } => {
+                    body.operand_local(*value) != Some(local)
+                        || path.0.iter().all(value_extractable_projection)
+                }
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
                 | NStatementKind::End { .. }

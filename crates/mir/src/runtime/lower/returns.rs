@@ -1745,9 +1745,9 @@ pub contract C {
             file_url.clone(),
             Some(
                 r#"
-fn first(_ arr: [u8; 4]) -> u8 {
-    let local = arr
-    local[0]
+fn first(_ pair: (u8, u8)) -> u8 {
+    let local = pair
+    local.0
 }
 "#
                 .to_string(),

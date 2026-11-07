@@ -352,6 +352,25 @@ fn fixed_array_pair_read_leaves_no_loop(fixture: Fixture<&str>) {
     assert_eq!(ir.matches("evm_malloc").count(), 1, "{ir}");
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "dynamically_indexed_value_is_stored_once.fe")]
+fn dynamically_indexed_value_is_stored_once(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
+    let start = ir.find("%sum(").expect("`sum` should be emitted");
+    let body = &ir[start..start + ir[start..].find("\n}\n").expect("`sum` should end")];
+    // Each read used to copy the whole array into an object of its own.
+    assert_eq!(
+        body.matches("obj.alloc [i8; 64]").count(),
+        1,
+        "one object should hold `block` for every read:\n{body}"
+    );
+    assert!(
+        body.find("obj.alloc [i8; 64]") < body.find("phi"),
+        "`block` should be stored where it is defined, before the loop:\n{body}"
+    );
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "storage_map_root_effect_reports_runtime_root_error.fe")]
 fn storage_map_root_effect_reports_runtime_root_error(fixture: Fixture<&str>) {
     let err = with_top_mod_for_source(&fixture, |db, top_mod| {

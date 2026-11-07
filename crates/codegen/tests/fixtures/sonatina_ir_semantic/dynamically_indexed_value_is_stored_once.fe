@@ -1,0 +1,21 @@
+fn fill(_ seed: u8) -> [u8; 64] {
+    var block: [u8; 64] = [0; 64]
+    for i in 0..64 {
+        block[i] = seed
+    }
+    block
+}
+
+// `block` is read at dynamic indices in a loop.
+pub fn sum(_ seed: u8) -> u32 {
+    let block = fill(seed)
+    var total: u32 = 0
+    for i in 0..16 {
+        total += block[2 * i] as u32 + block[2 * i + 1] as u32
+    }
+    total
+}
+
+pub fn main() -> u32 {
+    sum(1)
+}
