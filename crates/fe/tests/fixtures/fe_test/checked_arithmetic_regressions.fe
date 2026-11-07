@@ -1,3 +1,4 @@
+use core::hint::black_box
 
 fn add_assign_overflow_u8(_ v: mut u8) {
     v += 1
@@ -109,4 +110,65 @@ fn signed_mul_no_overflow_i8_neg_neg() {
     let a: i8 = -6
     let b: i8 = -3
     assert!(a * b == 18)
+}
+
+// =====================================================================
+// Unused checked results
+// =====================================================================
+
+// An unused checked result is still checked, on the operand as written. The
+// optimizer used to drop a mask, xor or remainder feeding such an operation.
+// `black_box` keeps range analysis from removing the check.
+
+#[test]
+fn unused_sub_of_masked_operand_u256() {
+    let a: u256 = black_box(2000)
+    let b: u256 = black_box(1000)
+    let m: u256 = b - (a & 255)
+}
+
+#[test]
+fn unused_add_of_masked_operand_u256() {
+    let a: u256 = black_box(u256::max())
+    let b: u256 = black_box(1000)
+    let m: u256 = b + (a & 255)
+}
+
+#[test]
+fn unused_mul_of_masked_operand_u256() {
+    let a: u256 = black_box(u256::max())
+    let b: u256 = black_box(3)
+    let m: u256 = b * (a & 255)
+}
+
+#[test]
+fn unused_sub_of_power_of_two_remainder_u256() {
+    let a: u256 = black_box(0x400000000000000000)
+    let m: u256 = 1000 - (a % 0x10000000000000000)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn unused_sub_of_xor_operand_u256_reverts() {
+    let a: u256 = black_box(1)
+    let m: u256 = 2 - (a ^ 5)
+}
+
+#[test]
+fn unused_sub_of_masked_operand_u8() {
+    let a: u8 = black_box(200)
+    let b: u8 = black_box(100)
+    let m: u8 = b - (a & 7)
+}
+
+#[test]
+fn unused_sub_of_masked_operand_i8() {
+    let a: i8 = black_box(-128)
+    let b: i8 = black_box(1)
+    let m: i8 = (a & 127) - b
+}
+
+#[test]
+fn unused_neg_of_or_operand_i8() {
+    let a: i8 = black_box(-128)
+    let m: i8 = -(a | 1)
 }
