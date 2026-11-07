@@ -239,7 +239,11 @@ fn parse_event_fields<'db>(
         // supported as event fields.
         let TypeKind::Path(Partial::Present(_)) = ty.data(db) else {
             ctxt.report(AbiFieldDiagnostic {
-                kind: AbiFieldDiagnosticKind::Unsupported,
+                kind: if matches!(ty.data(db), TypeKind::Array(..)) {
+                    AbiFieldDiagnosticKind::UnsupportedArray
+                } else {
+                    AbiFieldDiagnosticKind::Unsupported
+                },
                 context: AbiFieldContext::Event,
                 ty: ty.pretty_print(db),
                 file,

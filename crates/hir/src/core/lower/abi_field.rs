@@ -9,6 +9,8 @@ pub enum AbiFieldContext {
 pub enum AbiFieldDiagnosticKind {
     /// A tuple, or a type that is not a path.
     Unsupported,
+    /// A fixed-size array, which cannot yet name its Solidity ABI type here.
+    UnsupportedArray,
     /// A type without a Solidity type name for the signature.
     MissingSolCompat,
 }
