@@ -45,7 +45,7 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
       - name: Generate tree-sitter parser
@@ -119,7 +119,7 @@ jobs:
         run: touch src/parser.c src/grammar.json src/node-types.json
       - name: Setup Node
         if: steps.tree-sitter-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
       - name: Generate tree-sitter parser
@@ -289,7 +289,7 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
       - name: Generate tree-sitter parser
