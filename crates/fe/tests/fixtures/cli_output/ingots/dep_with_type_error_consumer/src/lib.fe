@@ -1,0 +1,6 @@
+use dep_with_type_error::digit_count
+
+#[test]
+fn counts_digits() {
+    assert(digit_count(42) == 42)
+}

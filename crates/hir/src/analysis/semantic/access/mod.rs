@@ -389,6 +389,25 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+    collect_semantic_access_with_blocked(db, top_mod, &mut Vec::new())
+}
+
+/// Returns blocked bodies reached by the module's semantic access analysis.
+/// Drivers use their owning modules to recover otherwise suppressed HIR errors.
+pub fn collect_blocked_semantic_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<BlockedSemanticBody<'db>> {
+    let mut blocked = Vec::new();
+    collect_semantic_access_with_blocked(db, top_mod, &mut blocked);
+    blocked
+}
+
+fn collect_semantic_access_with_blocked<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    blocked: &mut Vec<BlockedSemanticBody<'db>>,
+) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
     let mut owners = Vec::new();
     for item in top_mod
         .all_items(db)
@@ -506,7 +525,7 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
                         .map(|(key, call)| (SemanticInstance::new(db, key), Some(call))),
                 );
             }
-            SemanticAccessCheckResult::Blocked(_) => {}
+            SemanticAccessCheckResult::Blocked(body) => blocked.push(body.clone()),
             SemanticAccessCheckResult::Err(diag) => {
                 if seen_diags.insert(*diag) {
                     diags.push(Box::new(*diag));
