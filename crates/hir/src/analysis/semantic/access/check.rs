@@ -40,7 +40,7 @@ use crate::{
                 SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan, operand_origin,
             },
             effect_param_site,
-            instance::row_expansion_for_key,
+            instance::{instance_limit_violation, row_expansion_for_key},
             normalized::{
                 NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue,
                 NExpr, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
@@ -2989,16 +2989,19 @@ impl<'a, 'db> Analysis<'a, 'db> {
 }
 
 /// Whether `instance`, a callee, is a projection that reaches `target`
-/// through projection calls. An instance is explored once, and an
-/// instantiation past the limit has no callee, which bounds polymorphic
-/// recursion.
+/// through projection calls. An instance is explored once, and one past the
+/// instance limits, which is rejected as itself, is not explored, which
+/// bounds polymorphic recursion.
 fn reaches_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     target: SemanticInstance<'db>,
     explored: &mut FxHashSet<SemanticInstance<'db>>,
 ) -> bool {
-    if !instance.is_projection(db) || !explored.insert(instance) {
+    if !instance.is_projection(db)
+        || !explored.insert(instance)
+        || instance_limit_violation(db, instance).is_some()
+    {
         return false;
     }
     instance == target

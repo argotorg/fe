@@ -45,3 +45,15 @@ error[16-0016]: instantiation limit exceeded in `fn count_up`
    │
 90 │     if x == 0 { N as u256 } else { count_up<{ N + 1 }>(x - 1) }
    │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `count_up` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
+
+error[16-0016]: instantiation limit exceeded in `fn count_up_with`
+    ┌─ growing_recursion.fe:106:36
+    │
+106 │     if n == 0 { N as u256 } else { count_up_with<T, { N + 1 }>(x, n - 1) }
+    │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `count_up_with` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
+
+error[16-0016]: instantiation limit exceeded in `fn pick`
+    ┌─ growing_recursion.fe:124:47
+    │
+124 │         if n == 0 { mut? self.x } else { mut? self.pick<(T, T)>(n - 1) }
+    │                                               ^^^^^^^^^^^^^^^^^^^^^^^^ this call instantiates `pick` with generic arguments that nest more than 64 levels deep or have more than 65536 type nodes
