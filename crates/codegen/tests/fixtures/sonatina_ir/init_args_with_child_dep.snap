@@ -9,6 +9,7 @@ type @layout_0 = {i256, i256};
 type @layout_1 = {i256};
 type @layout_2 = {i256, i256, i256};
 type @layout_3 = {i256, i256};
+type @layout_4 = {i256};
 
 func private %__Child_init(v0.i256, v1.i256) {
     block0:
@@ -26,11 +27,11 @@ func private %__Parent_init(v0.i256) {
         v3.@layout_1 = insert_value undef.@layout_1 0.i256 0.i256;
         v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
         v8.@layout_0 = insert_value v6 1.i256 v0;
-        v9.@layout_1 = call %create v3 v8;
+        v9.@layout_4 = call %create v3 v8;
         return;
 }
 
-func private %abi_payload_size(v0.@layout_0) -> i256 {
+func private %abi_payload_size(noalias nocapture v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -125,8 +126,8 @@ func inline(always) private %checked_tail(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v5.i256 = sub -1.i256 v0;
-        v7.i1 = gt v1 v5;
+        v6.i256 = sub -1.i256 v0;
+        v7.i1 = gt v1 v6;
         br v7 block2 block3;
 
     block2:
@@ -410,7 +411,7 @@ func private %copy_returndata() -> @layout_2 {
         return v2;
 }
 
-func private %create(v0.@layout_1, v1.@layout_0) -> @layout_1 {
+func private %create(v0.@layout_1, v1.@layout_0) -> @layout_4 {
     block0:
         v2.objref<@layout_3> = obj.alloc @layout_3;
         jump block1;
@@ -430,7 +431,7 @@ func private %create(v0.@layout_1, v1.@layout_0) -> @layout_1 {
         return v8;
 
     block5:
-        v8.@layout_1 = call %create_raw v0 v2;
+        v8.@layout_4 = call %create_raw v0 v2;
         jump block10;
 
     block6:
@@ -462,7 +463,7 @@ func private %create(v0.@layout_1, v1.@layout_0) -> @layout_1 {
         jump block11;
 }
 
-func private %create_raw(v0.@layout_1, noalias nocapture v1.objref<@layout_3>) -> @layout_1 {
+func private %create_raw(v0.@layout_1, noalias nocapture v1.objref<@layout_3>) -> @layout_4 {
     block0:
         jump block1;
 
@@ -471,7 +472,7 @@ func private %create_raw(v0.@layout_1, noalias nocapture v1.objref<@layout_3>) -
         v5.i256 = call %ptr__g79ff v1;
         v6.i256 = call %len__g79ff v1;
         v7.i256 = evm_create v3 v5 v6;
-        v10.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
+        v10.@layout_4 = insert_value undef.@layout_4 0.i256 v7;
         return v10;
 }
 
@@ -602,16 +603,18 @@ func private %dynamic_payload_size(v0.i256) -> i256 {
         return 0.i256;
 }
 
-func inline(always) private %encode__g4d3d(v0.@layout_0, v1.@layout_3) {
+func inline(always) private %encode__g4d3d(noalias nocapture v0.objref<@layout_0>, v1.@layout_3) {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 0.i256;
-        v6.i256 = extract_value v0 1.i256;
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v6.objref<i256> = obj.proj v0 1.i256;
         v9.@layout_3 = call %tail v1 64.i256;
-        v11.@layout_3 = call %encode_field v4 v1 0.i256 v9;
-        v12.@layout_3 = call %encode_field v6 v1 32.i256 v11;
+        v11.i256 = obj.load v4;
+        v12.@layout_3 = call %encode_field v11 v1 0.i256 v9;
+        v13.i256 = obj.load v6;
+        v14.@layout_3 = call %encode_field v13 v1 32.i256 v12;
         return;
 }
 
@@ -626,15 +629,17 @@ func inline(always) private %encode_abi_payload(v0.@layout_0) -> @layout_2 {
 
 func inline(always) private %encode_alloc(v0.@layout_0) -> @layout_2 {
     block0:
+        v1.objref<@layout_0> = obj.alloc @layout_0;
+        obj.store v1 v0;
         jump block1;
 
     block1:
-        v2.i256 = call %abi_payload_size v0;
+        v2.i256 = call %abi_payload_size v1;
         v3.i256 = call %allocation_len v2;
         v4.@layout_2 = call %new v3;
         v5.i256 = call %impl_MemBuffer__ptr v4;
         v6.@layout_3 = call %from_raw_parts v5 v2;
-        call %encode__g4d3d v0 v6;
+        call %encode__g4d3d v1 v6;
         return v4;
 }
 
@@ -772,26 +777,28 @@ func private %new_uninit(v0.i256) -> @layout_2 {
         return v9;
 }
 
+func inline(always) private %payload_size__gbd8e(noalias nocapture v0.objref<@layout_0>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        v6.i256 = call %dynamic_payload_size v5;
+        v7.i256 = add 64.i256 v6;
+        v9.objref<i256> = obj.proj v0 1.i256;
+        v10.i256 = obj.load v9;
+        v11.i256 = call %dynamic_payload_size v10;
+        v12.i256 = add v7 v11;
+        return v12;
+}
+
 func private %payload_size__ge513(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
         return 32.i256;
-}
-
-func inline(always) private %payload_size__gbd8e(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = extract_value v0 0.i256;
-        v5.i256 = call %dynamic_payload_size v4;
-        v6.i256 = add 64.i256 v5;
-        v8.i256 = extract_value v0 1.i256;
-        v9.i256 = call %dynamic_payload_size v8;
-        v10.i256 = add v6 v9;
-        return v10;
 }
 
 func private %pos(noalias nocapture v0.objref<@layout_0>) -> i256 {
@@ -933,8 +940,8 @@ func inline(always) private %slice(v0.@layout_3, v1.i256, v2.i256) -> @layout_3 
         jump block1;
 
     block1:
-        v5.i256 = extract_value v0 1.i256;
-        v7.i1 = gt v1 v5;
+        v6.i256 = extract_value v0 1.i256;
+        v7.i1 = gt v1 v6;
         br v7 block2 block5;
 
     block2:
@@ -952,9 +959,9 @@ func inline(always) private %slice(v0.@layout_3, v1.i256, v2.i256) -> @layout_3 
         return v16;
 
     block5:
-        v18.i256 = extract_value v0 1.i256;
-        v20.i256 = sub v18 v1;
-        v22.i1 = gt v2 v20;
+        v19.i256 = extract_value v0 1.i256;
+        v21.i256 = sub v19 v1;
+        v22.i1 = gt v2 v21;
         br v22 block2 block3;
 }
 
@@ -984,8 +991,8 @@ func inline(always) private %tail(v0.@layout_3, v1.i256) -> @layout_3 {
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 1.i256;
-        v6.i1 = gt v1 v4;
+        v5.i256 = extract_value v0 1.i256;
+        v6.i1 = gt v1 v5;
         br v6 block2 block3;
 
     block2:

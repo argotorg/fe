@@ -2,7 +2,7 @@
 use core::abi::DynString
 use core::option::Option
 use core::ptr
-use core::text
+use core::text::{self, Text}
 use super::effects::Address
 use super::crypto::keccak256
 
@@ -11,8 +11,9 @@ use super::crypto::keccak256
 /// Specification: https://eips.ethereum.org/EIPS/eip-55
 pub fn checksum_address(_ address: Address) -> DynString {
     let lower = text::hex(address.inner, 20)
-    let hash = keccak256(lower.payload_span())
-    let data = ptr::alloc_bytes(42)
+    let hash = keccak256(lower.span())
+    let checksummed = DynString::zeroed(42)
+    let data = checksummed.span().ptr()
     unsafe {
         *data = 48
         *ptr::offset_bytes(data, 1) = 120
@@ -24,7 +25,7 @@ pub fn checksum_address(_ address: Address) -> DynString {
         let cased = if uppercase { digit - 32 } else { digit }
         unsafe { *ptr::offset_bytes(digits, i) = cased }
     }
-    unsafe { DynString::from_payload(source: ptr::MemSpan::from_raw_parts(ptr: data, len: 42)) }
+    checksummed
 }
 
 /// Parses `0x` and 40 hex digits, or the 40 digits alone, as an address
@@ -32,9 +33,9 @@ pub fn checksum_address(_ address: Address) -> DynString {
 /// and the ERC-55 checksum is not verified; compare the input with
 /// `checksum_address` of the result to require it. `None` for any other
 /// length or an invalid digit.
-pub fn parse_address(_ text: DynString) -> Option<Address> {
-    let len = text.len()
-    let prefixed = len >= 2 && text.byte_at(0) == 48 && text.byte_at(1) == 120
+pub fn parse_address<T: Text>(_ text: T) -> Option<Address> {
+    let len = text.text_len()
+    let prefixed = len >= 2 && text.text_byte(0) == 48 && text.text_byte(1) == 120
     if len != (if prefixed { 42 } else { 40 }) {
         return Option::None
     }

@@ -63,8 +63,9 @@ impl<'db> NStatementKind<'db> {
         let mut accesses = Vec::new();
         match self {
             // The access checker gives a drop its own meaning: it consumes
-            // whatever is initialized, which no operand access describes.
-            Self::End { .. } | Self::Drop { .. } => {}
+            // whatever is initialized, which no operand access describes. An
+            // index check reads a `usize`, which accesses no memory.
+            Self::End { .. } | Self::Drop { .. } | Self::CheckIndex { .. } => {}
             Self::Store { destination, value } => {
                 accesses.push(OperationAccess::operand(db, body, *value));
                 accesses.push(OperationAccess {
@@ -212,7 +213,7 @@ impl<'db> NTerminatorKind<'db> {
             | Self::MatchEnum { value: cond, .. }
             | Self::Return(Some(cond))
             | Self::Yield { value: cond, .. } => Some(OperationAccess::operand(db, body, *cond)),
-            Self::Goto(_) | Self::Assert { .. } | Self::Return(None) => None,
+            Self::Goto(_) | Self::Fail(_) | Self::Unreachable | Self::Return(None) => None,
         }
     }
 }

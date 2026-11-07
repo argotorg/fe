@@ -372,7 +372,8 @@ msg EdgeMsg {
     GapNative {},
 }
 
-// Slots: gap 0, lone 1, scalar 2.
+// Slots: gap 0, then lone and scalar share slot 1: `Lone` is a newtype of
+// an `i8`, which packs like one.
 pub contract Edges {
     mut gap: Gap,
     mut lone: Lone,
@@ -449,7 +450,7 @@ fn test_narrow_signed_contract_field_keeps_its_bytes() uses (evm: mut Evm) {
     // A narrow signed contract field outside any struct is stored as its
     // own bytes too, not sign-extended to the whole slot.
     evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::AssignScalar {})
-    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 2 }) == 0xfffe)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Slot { slot: 1 }) == 0xfffe00)
     assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: EdgeMsg::Scalar {}) == -2)
 }
 

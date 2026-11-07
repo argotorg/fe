@@ -1,0 +1,27 @@
+pub fn sdiv(a: i32, b: i32) -> i32 {
+    a / b
+}
+
+pub fn srem(a: i32, b: i32) -> i32 {
+    a % b
+}
+
+pub fn udiv(a: u32, b: u32) -> u32 {
+    a / b
+}
+
+pub fn urem(a: u32, b: u32) -> u32 {
+    a % b
+}
+
+pub fn udiv64(a: u64, b: u64) -> u64 {
+    a / b
+}
+
+pub fn sdiv64(a: i64, b: i64) -> i64 {
+    a / b
+}
+
+pub fn srem64(a: i64, b: i64) -> i64 {
+    a % b
+}

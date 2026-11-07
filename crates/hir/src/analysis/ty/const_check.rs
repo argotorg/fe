@@ -212,7 +212,7 @@ impl<'db, 'a> ConstFnChecker<'db, 'a> {
                     self.check_expr(*expr);
                 }
             }
-            Stmt::Yield(expr) | Stmt::Expr(expr) => self.check_expr(*expr),
+            Stmt::Yield(expr) | Stmt::Expr(expr) | Stmt::Loop(expr) => self.check_expr(*expr),
         }
     }
 

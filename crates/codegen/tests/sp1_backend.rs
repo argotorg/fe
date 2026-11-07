@@ -71,7 +71,7 @@ fn sp1_guest_io_emits_rv64_object_with_external_adapters() {
 }
 
 #[test]
-fn sp1_memory_copy_reserves_the_runtime_symbol() {
+fn sp1_memory_copies_lower_to_memcopy() {
     let mut db = DriverDataBase::default();
     db.compilation_settings()
         .set_target(&mut db)
@@ -93,16 +93,20 @@ fn sp1_memory_copy_reserves_the_runtime_symbol() {
                 object: false,
             },
         )
-        .expect("SP1 memory copy must use the runtime import");
+        .expect("SP1 memory copy should lower");
         let ir = artifacts.ir.unwrap();
-        assert!(ir.contains("declare external %memmove("), "{ir}");
+        assert!(ir.contains("memcopy "), "{ir}");
         assert!(!ir.contains("evm_mcopy"), "{ir}");
+        // The backend's own `memmove` call never reaches a module function of
+        // that name, so `local::memmove` keeps it.
+        assert!(!ir.contains("declare external %memmove("), "{ir}");
         if level == OptLevel::O0 {
-            assert!(ir.contains("local__memmove("), "{ir}");
+            assert!(ir.contains("func private %memmove("), "{ir}");
         }
-        // Raw allocations are represented in IR, but the SP1 backend deliberately
-        // rejects host heap allocation when translating to machine code.
-        let error = emit_module_native_artifacts(
+        // Allocations call the C allocator, which SP1's runtime does not
+        // define, so a guest that allocates fails to link.
+        assert!(ir.contains("declare external %malloc("), "{ir}");
+        emit_module_native_artifacts(
             &db,
             db.top_mod(file),
             NativeTarget::Sp1,
@@ -113,13 +117,7 @@ fn sp1_memory_copy_reserves_the_runtime_symbol() {
                 object: true,
             },
         )
-        .expect_err("SP1 must reject unsupported host heap allocation");
-        assert!(
-            error
-                .to_string()
-                .contains("host heap allocation is unavailable on SP1"),
-            "{error}"
-        );
+        .expect("an SP1 guest that allocates should compile");
     }
 }
 
@@ -147,9 +145,9 @@ fn sp1_rejects_host_argv_entry() {
     )
     .expect_err("SP1 runtime requires a zero-argument entry");
     assert!(
-        error
-            .to_string()
-            .contains("native executable output requires `pub fn main() -> i32`"),
+        error.to_string().contains(
+            "native executable output requires `pub fn main()` or `pub fn main() -> i32`"
+        ),
         "{error}"
     );
 }
@@ -163,7 +161,10 @@ fn sp1_rejects_exported_functions() {
     let file = db.workspace().touch(
         &mut db,
         Url::parse("file:///sp1_export.fe").unwrap(),
-        Some("#[export]\npub fn answer() -> i64 { 42 }\npub fn main() -> i32 { 0 }\n".to_string()),
+        Some(
+            "#[unsafe(export)]\npub fn answer() -> i64 { 42 }\npub fn main() -> i32 { 0 }\n"
+                .to_string(),
+        ),
     );
     let error = emit_module_native_artifacts(
         &db,
@@ -178,9 +179,9 @@ fn sp1_rejects_exported_functions() {
     )
     .expect_err("an SP1 guest exports nothing");
     assert!(
-        error
-            .to_string()
-            .contains("SP1 guests export no functions, but `sp1_export::answer` is `#[export]`"),
+        error.to_string().contains(
+            "SP1 guests export no functions, but `sp1_export::answer` is `#[unsafe(export)]`"
+        ),
         "{error}"
     );
 }

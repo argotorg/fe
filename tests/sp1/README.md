@@ -9,8 +9,9 @@ uses the low eight bits of the return value as the exit code; zero means
 success. Checked arithmetic traps on overflow; normal Fe arithmetic
 attributes also apply to guests.
 
-Host heap allocation, including `core::ptr::alloc_bytes`, is unsupported by the
-pinned SP1 backend and is rejected during machine-code generation.
+Host heap allocation, including `core::ptr::alloc_bytes`, is unsupported: an
+allocation calls the C library's `malloc`, which the SP1 runtime does not
+define, so a guest that allocates fails to link.
 `fe test` supports EVM and host-native execution; run SP1 guests with the SDK
 integration harness described below.
 

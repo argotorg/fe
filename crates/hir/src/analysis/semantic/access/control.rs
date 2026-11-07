@@ -5,7 +5,7 @@ use salsa::SalsaValue;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        SStmtId, SemanticInstance,
+        SBlockId, SExpr, SStmtId, SStmtKind, STerminatorKind, SemanticInstance,
         normalized::{
             NExpr, NStatementKind, NTerminatorKind, NormalizedBody, normalize_semantic_body,
         },
@@ -100,6 +100,48 @@ pub fn semantic_may_return<'db>(
     }
     normalize_semantic_body(db, instance)
         .map_or(true, |artifacts| executable_flow(db, &artifacts.body).1)
+}
+
+/// Whether a call to `instance` can return normally, by its provisional body.
+/// A provisional analysis cuts its blocks by this rather than
+/// [`semantic_may_return`], whose final bodies depend on the refinements the
+/// analysis computes.
+#[salsa::tracked(returns(copy), cycle_initial=may_return_cycle_initial)]
+pub(crate) fn provisional_may_return<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> bool {
+    if instance.is_intrinsically_never_returning(db) {
+        return false;
+    }
+    let Ok(body) = instance.admitted_provisional_body(db) else {
+        return true;
+    };
+    let mut reached = vec![false; body.blocks.len()];
+    let mut stack = vec![SBlockId::new(0)];
+    reached[0] = true;
+    while let Some(block) = stack.pop() {
+        let data = &body.blocks[block.index()];
+        if data.stmts.iter().any(|stmt| {
+            matches!(&stmt.kind, SStmtKind::Assign { expr: SExpr::Call { callee, .. }, .. }
+                if !provisional_may_return(db, SemanticInstance::new(db, callee.key)))
+        }) {
+            continue;
+        }
+        if matches!(
+            data.terminator.kind,
+            STerminatorKind::Return(_) | STerminatorKind::Yield { .. }
+        ) {
+            return true;
+        }
+        for successor in data.terminator.kind.successors() {
+            if !reached[successor.index()] {
+                reached[successor.index()] = true;
+                stack.push(successor);
+            }
+        }
+    }
+    false
 }
 
 fn may_return_cycle_initial<'db>(

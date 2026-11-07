@@ -67,6 +67,11 @@ impl NormalAttr {
         self.path().is_some_and(|path| path.text() == name)
     }
 
+    /// Whether the attribute is wrapped in `unsafe(..)`.
+    pub fn is_unsafe(&self) -> bool {
+        support::token(self.syntax(), SK::UnsafeKw).is_some()
+    }
+
     pub fn args(&self) -> Option<AttrArgList> {
         support::child(self.syntax())
     }

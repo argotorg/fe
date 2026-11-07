@@ -76,7 +76,7 @@ fn push_grows_and_keeps_elements() {
     w.push(2)
     assert!(w.capacity() == 2)
     w.reserve(3)
-    assert!(w.capacity() == 8 && w.len() == 2 && w[1] == 2)
+    assert!(w.capacity() == 5 && w.len() == 2 && w[1] == 2)
 }
 
 #[test]

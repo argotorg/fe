@@ -1,0 +1,36 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/known_product_moves.fe
+---
+error[16-0002]: move conflict in `fn twice`
+   ┌─ known_product_moves.fe:32:18
+   │
+32 │     sum(s) + sum(s)
+   │         -        ^ cannot use a value after it was moved
+   │         │
+   │         value is moved here
+
+error[16-0002]: move conflict in `fn twice_mut`
+   ┌─ known_product_moves.fe:37:10
+   │
+36 │     bump(s)
+   │          - value is moved here
+37 │     bump(s)
+   │          ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn pass_then_destructure`
+   ┌─ known_product_moves.fe:42:10
+   │
+41 │     let x = sum(s)
+   │                 - value is moved here
+42 │     let (a, b) = s
+   │          ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn capture_after_move`
+   ┌─ known_product_moves.fe:48:13
+   │
+47 │     bump(s)
+   │          - value is moved here
+48 │     let f = || s.0 + s.1
+   │             ^^^^^^^^^^^^ cannot use a value after it was moved

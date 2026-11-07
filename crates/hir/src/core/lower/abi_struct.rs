@@ -367,8 +367,9 @@ fn lower_decode_impl<'db>(
             Some(builder.self_ty()),
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
-                for (name, ty) in field_specs.iter().copied() {
-                    body.decode_into(name, ty, [decoder_ident, input_ident], payload_tys);
+                for (idx, (_, ty)) in field_specs.iter().copied().enumerate() {
+                    let local = body.field_local(idx);
+                    body.decode_into(local, ty, [decoder_ident, input_ident], payload_tys);
                 }
                 body.return_record_self(&field_names);
             },
@@ -405,11 +406,12 @@ fn lower_decode_impl<'db>(
                     base_ident: pos_ident,
                     input_len_ident,
                 };
-                for (idx, (name, ty)) in field_specs.iter().copied().enumerate() {
+                for (idx, (_, ty)) in field_specs.iter().copied().enumerate() {
                     let head_pos = build_decode_head_pos_expr(body, pos_ident, &field_specs[..idx]);
+                    let local = body.field_local(idx);
                     body.decode_field_into(
                         "decode_field_from_prechecked_head",
-                        name,
+                        local,
                         ty,
                         input,
                         head_pos,

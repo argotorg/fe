@@ -42,3 +42,46 @@ fn write_after() {
     x = 1
     p.a = 5
 }
+
+// Accepted: a forwarded shape grants its parts apart.
+fn parts_apart() {
+    var p = Pair { a: 1, b: 2 }
+    let (mut x, mut y) = first(mut p)
+    x = 1
+    y = 2
+}
+
+// Accepted: a part beside a read of another.
+fn part_beside_read() {
+    var p = Pair { a: 1, b: 2 }
+    let (mut x, y) = first(mut p)
+    x = y
+}
+
+struct Counted {
+    n: u256,
+    v: u256,
+}
+
+impl Driver for Counted {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.n, mut? self.v)
+    }
+}
+
+// Accepted: an `own` part holds no access once the rest is dead.
+fn own_part_outlives_session() {
+    var c = Counted { n: 1, v: 2 }
+    let (n, mut v) = first(mut c)
+    v = 3
+    c.n = n + 1
+}
+
+fn write_under_part() {
+    var c = Counted { n: 1, v: 2 }
+    let (n, mut v) = first(mut c)
+    c.v = n
+    v = 3
+}

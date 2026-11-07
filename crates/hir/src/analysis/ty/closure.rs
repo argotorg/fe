@@ -368,7 +368,7 @@ impl<'db> RegionWalk<'db> {
                     self.expr(*expr, region);
                 }
             }
-            Stmt::Yield(expr) | Stmt::Expr(expr) => self.expr(*expr, region),
+            Stmt::Yield(expr) | Stmt::Expr(expr) | Stmt::Loop(expr) => self.expr(*expr, region),
             Stmt::Continue | Stmt::Break => {}
         }
     }

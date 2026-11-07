@@ -1,6 +1,7 @@
 use super::ops::Eq
 use super::bytes::{AsBytes, PackedBytes}
-use super::ptr::{MemBuffer, MemSlice}
+use super::num::{IntDowncast, leading_zeros, word_to_usize}
+use super::ptr::{MemBuffer, MemSlice, index_out_of_bounds, read_padded_word}
 
 /// Fixed-size string utilities.
 ///
@@ -23,15 +24,28 @@ impl<const N: usize> String<N> {
 
     /// Returns the effective (unpadded) length in bytes.
     pub const fn len(self) -> usize {
-        let bytes = self.as_bytes()
-        var i: usize = 0
-        while i < N {
-            if bytes[i] != 0 {
-                return N - i
-            }
-            i += 1
+        let word = padded_word(self)
+        if word == 0 {
+            return 0
         }
-        0
+        word_to_usize(32 - leading_zeros(word) / 8)
+    }
+
+    /// The text as a word's first `len` bytes, the rest zero, given the
+    /// string's `len()`.
+    pub(ingot) const fn text_word(self, _ len: usize) -> u256 {
+        padded_word(self) << (((32 - len) * 8) as u256)
+    }
+
+    /// Returns the byte at `index` of the string's `len()` bytes, the text
+    /// after the zero padding. Panics if `index` is not below `len()`.
+    pub fn byte_at(self, _ index: usize) -> u8 {
+        let len = self.len()
+        if index >= len {
+            index_out_of_bounds()
+        }
+        let shift = ((len - 1 - index) * 8) as u256
+        ((padded_word(self) >> shift) & 0xff).downcast_truncate()
     }
 }
 
@@ -80,14 +94,12 @@ impl<const N: usize> Eq for String<N> {
 /// zero padding, so a span compares with a literal: `arg.span() == "serve"`.
 impl<const N: usize> Eq<String<N>> for MemSlice<u8> {
     fn eq(self, _ other: String<N>) -> bool {
-        if self.len() != other.len() {
+        let len = self.len()
+        if len != other.len() {
             return false
         }
-        var word: u256 = 0
-        for i in 0..self.len() {
-            word = (word << 8) | (self[i] as u256)
-        }
-        word == padded_word(other)
+        // Both hold their text in the word's first `len` bytes, the rest zero.
+        unsafe { read_padded_word(self.ptr(), len) } == other.text_word(len)
     }
 }
 

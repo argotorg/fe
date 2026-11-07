@@ -1,0 +1,171 @@
+use std::evm::{Address, Evm, RawStorage, TSlot}
+
+// Contract fields narrower than a slot pack into shared slots the way
+// Solidity packs consecutive state variables. The expected raw slots are
+// what `solc --storage-layout` reports for:
+//
+//   address owner; bool paused; uint8 a; uint8 b;    owner 0/0, paused 0/20, a 0/21, b 0/22
+//   uint128 big;                                     big 1/0 (does not fit beside them)
+//   uint64 stamp;                                    stamp 1/16
+//   Pair pair;                                       pair 2..4 (a struct takes whole slots)
+//   uint16 after;                                    after 4/0 (and ends the run)
+//   uint256 total;                                   total 5
+//
+// (slot/byte offset from the low-order end of the slot)
+
+struct Pair {
+    left: u256,
+    right: u8,
+}
+
+impl Copy for Pair {}
+
+fn bump() uses (value: mut u8) {
+    value += 1
+}
+
+fn set_owner(_ to: Address) uses (owner: mut Address) {
+    owner = to
+}
+
+fn read_after() -> u16 uses (after: u16) {
+    after
+}
+
+msg Msg {
+    #[selector = 1]
+    Fill {},
+    #[selector = 2]
+    Slot { slot: u256 } -> u256,
+    #[selector = 3]
+    Update {} -> u256,
+    #[selector = 4]
+    Read -> u256,
+    #[selector = 5]
+    WriteThenLoad {} -> u256,
+}
+
+pub contract Packed {
+    mut owner: Address,
+    mut paused: bool,
+    mut a: u8,
+    mut b: u8,
+    mut big: u128,
+    mut stamp: u64,
+    mut pair: Pair,
+    mut after: u16,
+    mut total: u256,
+
+    init() uses (mut owner, mut paused) {
+        owner = Address::from_word_truncate(0x1234)
+        paused = true
+    }
+
+    recv Msg {
+        Fill {} uses (mut a, mut b, mut big, mut stamp, mut pair, mut after, mut total) {
+            a = 3
+            b = 4
+            big = 0x55
+            stamp = 7
+            pair = Pair { left: 8, right: 9 }
+            after = 0x0a0b
+            total = 99
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            unsafe { raw.sload(slot) }
+        }
+        // Each write keeps the other fields of its slot. A field provided
+        // to a callee is updated when the callee returns.
+        Update {} -> u256 uses (mut owner, mut paused, mut a, mut b) {
+            a += 1
+            with (mut b) {
+                bump()
+            }
+            let held = mut b
+            held += 10
+            paused = !paused
+            set_owner(Address::from_word_truncate(0xbeef))
+            (a as u256) * 1000 + (b as u256)
+        }
+        Read -> u256 uses (owner, paused, stamp, after) {
+            assert(owner == Address::from_word_truncate(0xbeef))
+            assert(!paused)
+            (stamp as u256) * 0x10000 + (read_after() as u256)
+        }
+        // An arm's write reaches storage when it happens, not when the arm
+        // returns.
+        WriteThenLoad {} -> u256 uses (mut a, raw: RawStorage) {
+            a = 0x77
+            unsafe { raw.sload(0) }
+        }
+    }
+}
+
+#[test]
+fn test_contract_fields_pack_like_solidity() uses (evm: mut Evm) {
+    let c = evm.create2<Packed>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Fill {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 0 }) == (4 << 176) | (3 << 168) | (1 << 160) | 0x1234)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 1 }) == (7 << 128) | 0x55)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 2 }) == 8)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 3 }) == 9)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 4 }) == 0x0a0b)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 5 }) == 99)
+}
+
+#[test]
+fn test_packed_contract_fields_read_and_write() uses (evm: mut Evm) {
+    let c = evm.create2<Packed>(value: Wei::zero(), args: (), salt: 2)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Fill {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Update {}) == 4015)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 0 }) == (15 << 176) | (4 << 168) | 0xbeef)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Read {}) == 0x70a0b)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::WriteThenLoad {}) == (15 << 176) | (0x77 << 168) | 0xbeef)
+}
+
+// ---------------------------------------------------------------------------
+// Explicit slots, transient fields and immutables do not interrupt a run.
+// ---------------------------------------------------------------------------
+
+msg PlacedMsg {
+    #[selector = 1]
+    Fill {},
+    #[selector = 2]
+    Slot { slot: u256 } -> u256,
+}
+
+// `x` packs with `y`, skipping the slot `placed` takes; the transient cell
+// and the immutable take no storage slot.
+pub contract Placed {
+    #[slot(0)]
+    mut placed: u8,
+    mut x: u8,
+    mut cell: TSlot<u256>,
+    limit: u8,
+    mut y: u8,
+
+    init() uses (mut limit) {
+        limit = 5
+    }
+
+    recv PlacedMsg {
+        Fill {} uses (mut placed, mut x, mut cell, mut y, limit) {
+            placed = 1
+            x = 2
+            cell.value = 3
+            y = limit
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            unsafe { raw.sload(slot) }
+        }
+    }
+}
+
+#[test]
+fn test_explicit_slots_and_other_spaces_leave_runs_alone() uses (evm: mut Evm) {
+    let c = evm.create2<Placed>(value: Wei::zero(), args: (), salt: 3)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: PlacedMsg::Fill {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: PlacedMsg::Slot { slot: 0 }) == 1)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: PlacedMsg::Slot { slot: 1 }) == (5 << 8) | 2)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: PlacedMsg::Slot { slot: 2 }) == 0)
+}

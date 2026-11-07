@@ -328,6 +328,9 @@ pub enum RefKind<'db> {
 pub enum RefView<'db> {
     Whole,
     EnumVariant(VariantId<'db>),
+    /// A contract field packed into its storage slot with other fields: the
+    /// reference holds the slot, and its referent is this lane of it.
+    Lane(StorageLaneView),
 }
 
 /// The bytes of a storage word that hold a packed scalar struct field, a
@@ -357,7 +360,8 @@ fn layouts_share_runtime_rep<'db>(
 ) -> bool {
     match (actual.data(db), desired.data(db)) {
         (Layout::Struct(actual), Layout::Struct(desired)) => {
-            actual.fields.len() == desired.fields.len()
+            actual.lane_bytes == desired.lane_bytes
+                && actual.fields.len() == desired.fields.len()
                 && actual
                     .fields
                     .iter()
@@ -501,6 +505,10 @@ pub struct StructLayout<'db> {
     /// its root number identifies its region, so it takes at least
     /// one storage slot and is never zero-sized, even without fields.
     pub pinned: bool,
+    /// For a newtype that packs into part of a storage slot, the bytes it
+    /// takes there, which its single field shares
+    /// (`hir::semantic::storage_lane_bytes`).
+    pub lane_bytes: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
@@ -851,11 +859,20 @@ pub enum RuntimeSyntheticSpec<'db> {
         callee: RuntimeInstance<'db>,
         entry_args: EntrySemanticArgsPlan<'db>,
     },
+    /// A WebAssembly export that takes effects: it takes the parameters of
+    /// `callee`, provides its effects from the root effect, and returns its
+    /// result.
+    ExportRoot {
+        callee: RuntimeInstance<'db>,
+        entry_args: EntrySemanticArgsPlan<'db>,
+    },
     ContractInitAbi {
         plan: ContractInitAbiPlan<'db>,
     },
+    /// Boxed: a receive plan holds many runtime classes, and is far larger
+    /// than any other spec.
     ContractRecvAbi {
-        plan: ContractRecvAbiPlan<'db>,
+        plan: Box<ContractRecvAbiPlan<'db>>,
     },
     ContractInitRoot {
         contract: Contract<'db>,
@@ -1057,7 +1074,7 @@ pub enum RuntimeSectionName {
     Runtime,
     Main,
     Test(String),
-    /// A native object's `#[export]` function, defined under this symbol.
+    /// A native object's `#[unsafe(export)]` function, defined under this symbol.
     Export(String),
 }
 

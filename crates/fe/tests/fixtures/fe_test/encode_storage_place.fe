@@ -1,0 +1,81 @@
+// `Encode` reads its value through a view, so a value in storage encodes where it
+// is, without first moving to memory.
+use core::abi::{AbiFrame, AbiSize, Encode, abi_payload_size}
+use core::ptr::{self, MemBuffer}
+use std::abi::Sol
+
+#[abi]
+pub struct Inner {
+    pub id: u256,
+    pub items: [u256; 2],
+}
+
+struct Store {
+    inner: Inner,
+    items: [u256; 3],
+    pair: (u256, bool),
+}
+
+fn encoded<T>(_ value: T) -> MemBuffer
+    where T: Encode<Sol> + AbiSize
+{
+    let total = abi_payload_size(value)
+    let buffer = MemBuffer::new(ptr::allocation_len(total))
+    value.encode(unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) })
+    buffer
+}
+
+msg M {
+    #[selector = 0x01]
+    Set { seed: u256 },
+    #[selector = 0x02]
+    Inner -> (u256, u256, u256),
+    #[selector = 0x03]
+    Items -> (u256, u256, u256),
+    #[selector = 0x04]
+    Pair -> (u256, u256),
+}
+
+pub contract C {
+    mut store: Store
+
+    recv M {
+        Set { seed } uses (mut store) {
+            store.inner.id = seed
+            store.inner.items[0] = seed + 1
+            store.inner.items[1] = seed + 2
+            store.items[0] = seed + 3
+            store.items[1] = seed + 4
+            store.items[2] = seed + 5
+            store.pair.0 = seed + 6
+            store.pair.1 = true
+        }
+
+        Inner -> (u256, u256, u256) uses (store) {
+            let out = encoded(store.inner)
+            (out.span().word_at(0), out.span().word_at(32), out.span().word_at(64))
+        }
+
+        Items -> (u256, u256, u256) uses (store) {
+            let out = encoded(store.items)
+            (out.span().word_at(0), out.span().word_at(32), out.span().word_at(64))
+        }
+
+        Pair -> (u256, u256) uses (store) {
+            let out = encoded(store.pair)
+            (out.span().word_at(0), out.span().word_at(32))
+        }
+    }
+}
+
+#[test]
+fn encodes_values_in_storage() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Set { seed: 10 })
+    let inner: (u256, u256, u256) = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Inner {})
+    assert!(inner.0 == 10 && inner.1 == 11 && inner.2 == 12)
+    let items: (u256, u256, u256) = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Items {})
+    assert!(items.0 == 13 && items.1 == 14 && items.2 == 15)
+    let pair: (u256, u256) = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Pair {})
+    assert!(pair.0 == 16 && pair.1 == 1)
+}

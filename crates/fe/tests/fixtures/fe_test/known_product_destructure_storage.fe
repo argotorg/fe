@@ -1,0 +1,115 @@
+// A pattern on a known product parameter reaches a part where it lies: storage
+// or memory, in one instance of the function each.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+}
+
+enum Tag {
+    Empty,
+    Full(u256),
+}
+
+struct Tagged {
+    n: u256,
+    tag: Tag,
+}
+
+impl Driver for Tagged {
+    shape Step = (own u256, mut? Tag)
+
+    fn at(mut? self) -> (own u256, mut? Tag) {
+        (self.n, mut? self.tag)
+    }
+}
+
+fn tested(_ s: Tagged::Step<mut>) -> u256 {
+    match s {
+        (_, Tag::Empty) => 0
+        (n, Tag::Full(mut x)) => {
+            x += n
+            x
+        }
+    }
+}
+
+fn in_turn(_ s: Pair::Step<mut>) -> u256 {
+    let (a, mut b) = s
+    b += a
+    let (c, mut d) = s
+    d += c
+    d
+}
+
+fn named_ref(_ s: Pair::Step<ref>) -> u256 {
+    let x = ref s.1
+    let (a, ref b) = s
+    a + b + x
+}
+
+msg StorageMsg {
+    #[selector = 0x11223344]
+    InTurn -> u256,
+    #[selector = 0x11223345]
+    NamedRef -> u256,
+    #[selector = 0x11223346]
+    Tested -> u256,
+}
+
+pub contract Store {
+    mut p: Pair
+    mut t: Tagged
+
+    recv StorageMsg {
+        InTurn -> u256 uses (mut p) {
+            p.a = 1
+            p.b = 2
+            let stored = in_turn(p.at())
+            var local = Pair { a: 3, b: 4 }
+            let memory = in_turn(local.at())
+            p.b * 10000 + stored * 100 + memory
+        }
+        NamedRef -> u256 uses (mut p) {
+            p.a = 1
+            p.b = 2
+            named_ref(p.at())
+        }
+        Tested -> u256 uses (mut t) {
+            t.n = 1
+            t.tag = Tag::Empty
+            let empty = tested(t.at())
+            t.tag = Tag::Full(2)
+            let full = tested(t.at())
+            let written = match t.tag {
+                Tag::Full(x) => x
+                Tag::Empty => 0
+            }
+            empty * 100 + full * 10 + written
+        }
+    }
+}
+
+#[test]
+fn test_parts_in_storage() uses (evm: mut Evm) {
+    let addr = evm.create2<Store>(value: Wei::zero(), args: (), salt: 0)
+    let in_turn: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: StorageMsg::InTurn {})
+    assert(in_turn == 40410)
+    let named: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: StorageMsg::NamedRef {})
+    assert(named == 5)
+    let tested: u256 = evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: StorageMsg::Tested {})
+    assert(tested == 33)
+}

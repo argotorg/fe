@@ -1,7 +1,5 @@
 use crate::analysis::ty::ty_def::{BorrowKind, ClosureDef, ClosureTy, TyId};
-use crate::hir_def::{
-    Expr, ExprId, ItemKind, Partial, attr::ArithmeticMode, params::FuncParamMode,
-};
+use crate::hir_def::{Expr, ExprId, ItemKind, Partial, params::FuncParamMode};
 use crate::span::{DynLazySpan, types::LazyTySpan};
 use crate::{
     analysis::HirAnalysisDb,
@@ -235,35 +233,6 @@ impl<'db> BodyOwner<'db> {
                     .iter()
                     .map(move |&body| Self::const_predicate(db, body))
             })
-    }
-
-    pub fn arithmetic_mode(self, db: &'db dyn HirAnalysisDb) -> ArithmeticMode {
-        if let Self::Func(func, _) = self {
-            return func.arithmetic_mode(db);
-        }
-
-        let mut scope = self.scope().parent_module(db);
-        while let Some(module_scope) = scope {
-            if let ItemKind::Mod(mod_) = module_scope.item()
-                && let Some(mode) = mod_.arithmetic_mode(db)
-            {
-                return mode;
-            }
-            scope = module_scope.parent_module(db);
-        }
-
-        let top_mod = self.scope().top_mod(db);
-        if let Some(mode) = top_mod.attributes(db).arithmetic_mode(db) {
-            return mode;
-        }
-        if let Some(mode) = top_mod.ingot(db).arithmetic_mode(db) {
-            return match mode {
-                common::config::ArithmeticMode::Checked => ArithmeticMode::Checked,
-                common::config::ArithmeticMode::Unchecked => ArithmeticMode::Unchecked,
-            };
-        }
-
-        ArithmeticMode::Checked
     }
 
     pub fn recv_arm(

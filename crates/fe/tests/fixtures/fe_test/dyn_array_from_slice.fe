@@ -11,8 +11,6 @@ pub struct Entry {
     pub data: Bytes,
 }
 
-impl Copy for Entry {}
-
 msg Build {
     #[selector = 0x01]
     Parts {} -> DynArray<Bytes>,
@@ -110,6 +108,18 @@ fn abi_struct_elements() {
 }
 
 #[test]
+fn from_mem_vec_encodes_like_from_slice() {
+    var parts = MemVec<Bytes>::new()
+    parts.push(Bytes::from_word_prefix(word: 0xaa << 248, len: 1))
+    parts.push(Bytes::empty())
+    assert_payload(DynArray::from_mem_vec(parts), [2, 0x40, 0x80, 1, 0xaa << 248, 0])
+    var words = MemVec<u256>::new()
+    words.push(7)
+    assert_payload(DynArray::from_mem_vec(words), [1, 7])
+    assert_payload(DynArray::from_mem_vec(MemVec<Bytes>::new()), [0])
+}
+
+#[test]
 fn empty_arrays() {
     assert_payload(DynArray::from_slice(MemVec<Bytes>::new().as_slice()), [0])
 }
@@ -149,19 +159,19 @@ fn from_slice_is_a_snapshot() {
 #[test]
 fn loops_decode_each_element() {
     var total = 0
-    for row in nested() {
+    for ref row in nested() {
         for x in row {
             total += x
         }
     }
     assert(total == 6)
     var lengths = 0
-    for (i, part) in bytes_parts().enumerate() {
+    for (i, ref part) in bytes_parts().enumerate() {
         lengths += (i + 1) * part.len()
     }
     assert(lengths == 1 + 0 + 3 * 32)
     var reversed = 0
-    for entry in entries().reversed() {
+    for ref entry in entries().reversed() {
         reversed = reversed * 10 + entry.id
     }
     assert(reversed == 87)

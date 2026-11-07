@@ -1,0 +1,32 @@
+struct Frame {
+    depth: u32,
+    pad: [u32; 4],
+}
+
+fn descend(f: Frame, limit: u32) -> u32 {
+    if f.depth >= limit {
+        return f.pad[0] + f.pad[3]
+    }
+    let next = Frame {
+        depth: f.depth + 1,
+        pad: [f.pad[0] + 1, f.pad[1], f.pad[2], f.pad[3] + 2],
+    }
+    descend(f: next, limit: limit) + 1
+}
+
+pub fn depth_sum(limit: u32) -> u32 {
+    descend(f: Frame { depth: 0, pad: [0, 0, 0, 0] }, limit: limit)
+}
+
+fn sum_range(a: [u32; 8], lo: usize, hi: usize) -> u32 {
+    if hi - lo == 1 {
+        return a[lo]
+    }
+    let mid = lo + (hi - lo) / 2
+    sum_range(a: a, lo: lo, hi: mid) + sum_range(a: a, lo: mid, hi: hi)
+}
+
+pub fn halving_sum(x: u32) -> u32 {
+    let a: [u32; 8] = [x, x + 1, x + 2, x + 3, x + 4, x + 5, x + 6, x + 7]
+    sum_range(a: a, lo: 0, hi: 8)
+}

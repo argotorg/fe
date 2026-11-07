@@ -18,7 +18,8 @@ use crate::{
         ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RLocalId, RefKind, RefView,
         ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass,
         RuntimeLocalRoot, RuntimeMemoryLayout, RuntimeProgramView, RuntimeProviderBinding,
-        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, StorageLaneView, VariantId,
+        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, StorageLaneView,
+        StructLayout, VariantId,
     },
     verify::VerifyError,
 };
@@ -228,7 +229,8 @@ fn runtime_place_address_root<'db>(
 }
 
 /// The lane `place` ends at: a field packed into a storage word, which no
-/// reference can point at (see `storage_field_lane`).
+/// reference can point at (see `field_path_lane`), or the place a reference
+/// to a packed contract field roots (`RefView::Lane`).
 pub(crate) fn runtime_place_lane<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
@@ -236,23 +238,99 @@ pub(crate) fn runtime_place_lane<'db>(
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<Option<StorageLaneView>, VerifyError<'db>> {
     let resolved = resolve_runtime_place(db, program, body, place)?;
-    let (Some((PlaceElem::Field(field), parent_path)), Some(ResolvedPlaceElem::Field { .. })) =
-        (place.path.split_last(), resolved.path.last())
-    else {
-        return Ok(None);
-    };
     let (_, root_space, _) = runtime_place_address_root(db, body, &resolved, place)?;
-    let parent = crate::runtime::RuntimePlace {
-        root: place.root.clone(),
-        path: parent_path.to_vec().into(),
+    let (mut parent, mut root_lane) = match &resolved.root_kind {
+        ResolvedPlaceRootKind::Slot { class, .. } => (class.clone(), None),
+        ResolvedPlaceRootKind::Ref { value, class }
+        | ResolvedPlaceRootKind::Ptr {
+            addr: value, class, ..
+        } => (
+            class.clone(),
+            body.place_value_class(*value).and_then(ref_lane),
+        ),
+        ResolvedPlaceRootKind::Provider {
+            provider_class,
+            class,
+            ..
+        } => (class.clone(), ref_lane(provider_class)),
     };
-    let parent_class = resolve_runtime_place(db, program, body, &parent)?.result_class;
-    Ok(storage_field_lane(db, &parent_class, *field, root_space))
+    // The fields the path ends with, each with the class it projects from.
+    let mut fields = Vec::new();
+    for elem in resolved.path.iter() {
+        match elem {
+            ResolvedPlaceElem::Field { field, class } => {
+                fields.push((std::mem::replace(&mut parent, class.clone()), *field));
+            }
+            ResolvedPlaceElem::Deref {
+                carrier_class,
+                class,
+            } => {
+                fields.clear();
+                root_lane = ref_lane(carrier_class);
+                parent = class.clone();
+            }
+            ResolvedPlaceElem::Index { class, .. }
+            | ResolvedPlaceElem::VariantField { class, .. } => {
+                fields.clear();
+                root_lane = None;
+                parent = class.clone();
+            }
+        }
+    }
+    Ok(field_path_lane(db, root_lane, &fields, root_space))
 }
 
-/// The lane field `field` of a value of class `parent` in `space` occupies:
-/// a scalar packed into a storage word with other fields, or placed anywhere
-/// but at its word's start. A packed scalar alone at the start of its word is
+/// The lane a reference of class `class` views: a packed contract field's.
+pub fn ref_lane(class: &RuntimeClass<'_>) -> Option<StorageLaneView> {
+    match class {
+        RuntimeClass::Ref {
+            view: RefView::Lane(lane),
+            ..
+        } => Some(*lane),
+        _ => None,
+    }
+}
+
+/// The lane the place a path of fields reaches lies in, in a value of
+/// `space`: the lane of the last field packed into a storage word, or
+/// `root`, the lane the path starts in. The field of a packed newtype lies
+/// in its newtype's lane, so a lane holding the newtype comes before the
+/// field's own. `fields` holds each field with the class it projects from.
+pub(crate) fn field_path_lane<'db>(
+    db: &'db dyn MirDb,
+    root: Option<StorageLaneView>,
+    fields: &[(RuntimeClass<'db>, FieldIndex)],
+    space: AddressSpace,
+) -> Option<StorageLaneView> {
+    let mut inner = None;
+    for (parent, field) in fields.iter().rev() {
+        let lane = storage_field_lane(db, parent, *field, space).or(inner);
+        if !is_packed_newtype(db, parent) {
+            return lane;
+        }
+        inner = lane;
+    }
+    root.or(inner)
+}
+
+/// Whether `class` is a newtype that packs into part of a storage word.
+pub fn is_packed_newtype<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> bool {
+    class.aggregate_layout().is_some_and(|layout| {
+        matches!(
+            layout.data(db),
+            Layout::Struct(StructLayout {
+                lane_bytes: Some(_),
+                ..
+            })
+        )
+    })
+}
+
+/// The lane field `field` of a value of class `parent` in `space` occupies,
+/// when it is read and written apart from the rest of its storage word
+/// (`StorageFieldPlacement::partial_lane`): a packed scalar that shares its
+/// word or lies above the word's start, or the field of a newtype narrower
+/// than its value. Any other packed scalar alone at the start of its word is
 /// the whole word.
 pub(crate) fn storage_field_lane<'db>(
     db: &'db dyn MirDb,
@@ -266,8 +344,8 @@ pub(crate) fn storage_field_lane<'db>(
     let placement = RuntimeMemoryLayout::for_space(db, space)
         .field_placement(parent, field)
         .ok()?;
-    let lane = placement.lane?;
-    (placement.shared || lane.byte_offset != 0).then_some(StorageLaneView {
+    let lane = placement.lane.filter(|_| placement.partial)?;
+    Some(StorageLaneView {
         byte_offset: lane.byte_offset as u8,
         byte_width: lane.byte_width as u8,
         shared: placement.shared,
@@ -782,6 +860,7 @@ mod tests {
             LayoutKey::Struct(StructLayout {
                 fields: Box::new([]),
                 pinned: false,
+                lane_bytes: None,
             }),
         );
         for stored in [

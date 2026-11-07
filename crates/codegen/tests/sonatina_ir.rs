@@ -329,6 +329,24 @@ fn fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend(fixture: Fixt
     );
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "fixed_array_pair_read_leaves_no_loop.fe")]
+fn fixed_array_pair_read_leaves_no_loop(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir_optimized(db, top_mod, OptLevel::O1, None)
+            .expect("optimized Sonatina IR should emit")
+    });
+    assert!(
+        ir.contains("evm_calldata_load 4.i256") && ir.contains("evm_calldata_load 36.i256"),
+        "the elements should load straight from calldata:\n{ir}"
+    );
+    assert!(
+        !ir.contains("obj.") && !ir.contains("phi") && !ir.contains("mload"),
+        "the pair should leave no array object, loop or load from memory:\n{ir}"
+    );
+    // The only allocation left holds the return value.
+    assert_eq!(ir.matches("evm_malloc").count(), 1, "{ir}");
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "storage_map_root_effect_reports_runtime_root_error.fe")]
 fn storage_map_root_effect_reports_runtime_root_error(fixture: Fixture<&str>) {
     let err = with_top_mod_for_source(&fixture, |db, top_mod| {
@@ -385,12 +403,13 @@ fn raw_log_emit_sonatina_ir_lowers_native_pointer_provider(fixture: Fixture<&str
 fn constant_oob_index_terminates_without_continuation_projection(fixture: Fixture<&str>) {
     let output = with_top_mod_for_source(&fixture, |db, top_mod| {
         emit_module_sonatina_ir(db, top_mod)
-            .expect("constant out-of-bounds array access should lower to a revert")
+            .expect("constant out-of-bounds array access should lower to a panic")
     });
 
     assert!(
-        output.contains("evm_revert 0.i256 0.i256"),
-        "constant out-of-bounds array access should lower to a revert:\n{output}"
+        output.contains("mstore 4.i256 50.i256 i256;")
+            && output.contains("evm_revert 0.i256 36.i256"),
+        "constant out-of-bounds array access should lower to a `Panic(0x32)` revert:\n{output}"
     );
     assert!(
         !output.contains("br 1.i1"),

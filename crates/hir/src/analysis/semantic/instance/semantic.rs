@@ -23,7 +23,7 @@ use crate::{
             closure::closure_regions,
             corelib::{
                 ContractMetadataKind, RuntimeBuiltinFuncKind, contract_metadata_kind,
-                runtime_builtin_func_kind,
+                resolve_core_trait, resolve_lib_type_path, runtime_builtin_func_kind,
             },
             effects::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
@@ -41,6 +41,7 @@ use crate::{
                 RootProviderScope, provider_semantics_for_specialized_call,
                 registered_root_providers,
             },
+            shape::Shape,
             subst::substitute_complete,
             trait_def::{MethodArgMapError, TraitInstId},
             trait_resolution::{
@@ -65,7 +66,7 @@ use crate::{
         storage_slot_span,
     },
 };
-use common::indexmap::IndexMap;
+use common::{compilation::Target, indexmap::IndexMap};
 use indexmap::IndexSet;
 use salsa::SalsaValue;
 use thin_vec::ThinVec;
@@ -388,7 +389,9 @@ fn provisional_call_sites<'db>(
     );
 
     for (expr, _) in body.exprs(db).iter() {
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        let Some(callable) = typed_body
+            .semantic_expr_lowering(expr)
+            .and_then(SemanticExprLowering::called)
         else {
             continue;
         };
@@ -701,7 +704,7 @@ fn final_call_site_data<'db>(
         || pinned_param
     {
         match provisional_call_site_provider_refinements(db, instance).clone() {
-            CallSiteRefinements::Refined(refinements) => refinements,
+            CallSiteRefinements::Refined { refinements, .. } => refinements,
             CallSiteRefinements::Blocked => {
                 return CallSiteFinalizationData {
                     call_sites,
@@ -761,7 +764,9 @@ fn finalize_call_sites<'db>(
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
             continue;
         };
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        let Some(callable) = typed_body
+            .semantic_expr_lowering(expr)
+            .and_then(SemanticExprLowering::called)
         else {
             continue;
         };
@@ -802,6 +807,63 @@ fn finalize_call_sites<'db>(
         }
     }
     Ok(())
+}
+
+/// The instance the call at `site` of `instance` runs once `refinements`
+/// give its inputs' spaces, as `final_call_site_data` finalizes it.
+pub(crate) fn refined_callee<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    site: CallSiteId,
+    refinements: Option<&[CallSiteProviderRefinement]>,
+) -> Option<SemanticInstance<'db>> {
+    let typed_body = instance.key(db).typed_body(db);
+    let same_assumptions = instance.assumptions(db)
+        == semantic_instance_base_assumptions_for_key(db, instance.key(db));
+    let (mut lowering, callable, effect_args, origin) = match site {
+        CallSiteId::Expr(expr) => {
+            let Some(SemanticExprLowering::Call { callable }) =
+                typed_body.semantic_expr_lowering(expr)
+            else {
+                return None;
+            };
+            (
+                provisional_call_sites(db, instance)
+                    .sites
+                    .get(expr.index())?
+                    .clone()?,
+                callable,
+                typed_body.call_effect_args(expr).unwrap_or(&[]),
+                SemOrigin::Expr(expr),
+            )
+        }
+        CallSiteId::ForLoop(stmt, step) => {
+            let call = typed_body.for_loop_plan(stmt)?.call(step);
+            (
+                provisional_for_loop_call_sites(db, instance)
+                    .sites
+                    .get(stmt.index())?
+                    .as_ref()?
+                    .site(step)
+                    .clone(),
+                &call.callable,
+                call.effect_args.as_slice(),
+                SemOrigin::Stmt(stmt),
+            )
+        }
+    };
+    finalize_call_site(
+        db,
+        instance,
+        callable,
+        &mut lowering,
+        effect_args,
+        refinements,
+        origin,
+        same_assumptions,
+    )
+    .ok()?;
+    Some(SemanticInstance::new(db, lowering.callee?.key))
 }
 
 fn final_call_site_data_cycle_initial<'db>(
@@ -1055,8 +1117,9 @@ fn invalid_size_diagnostic<'db>(
     );
     let message = match error {
         RuntimeSizeError::Overflow => format!(
-            "`{}` exceeds the supported 64-bit raw-memory layout size",
-            ty.pretty_print(db)
+            "`{}` exceeds the supported {}-bit raw-memory layout size",
+            ty.pretty_print(db),
+            db.compilation_settings().target(db).memory_size_bits()
         ),
         RuntimeSizeError::UnavailableConcrete => {
             "concrete type size could not be determined".to_string()
@@ -1491,6 +1554,19 @@ impl<'db> SemanticInstance<'db> {
         self.normalized_ty(db, self.binding_ty(db, binding))
     }
 
+    /// The shape of what the instance returns, if it is a projection. Its
+    /// arguments make an associated shape's parts known.
+    #[salsa::tracked(returns(ref))]
+    pub fn return_shape(self, db: &'db dyn HirAnalysisDb) -> Option<Shape<'db>> {
+        let key = self.key(db);
+        let BodyOwner::Func(func, mode) = key.owner(db) else {
+            return None;
+        };
+        Some(func.return_shape(db, mode)?.map_tys(db, &mut |ty| {
+            instantiate_normalized_ty(db, key, ty).unwrap_or(ty)
+        }))
+    }
+
     #[salsa::tracked(returns(copy))]
     /// The semantic-IR result type: a projection returns the carriers of its
     /// grants.
@@ -1677,6 +1753,35 @@ impl<'db> SemanticInstance<'db> {
         if let Some(diag) = instance_limit_violation(db, self) {
             return Err(SemanticBodyAdmissionError::InstanceLimit(diag));
         }
+        // A native panic needs no revert data. This follows calls out of
+        // `self`, whose instance limits the check above has bounded.
+        if db.compilation_settings().target(db) == Target::Evm
+            && let Some((origin, ty)) =
+                instance_calls(db, self)
+                    .into_iter()
+                    .find_map(|(origin, callee)| {
+                        Some((origin, unencodable_call_panic(db, self, callee)?))
+                    })
+        {
+            return Err(SemanticBodyAdmissionError::InvalidConcreteType(
+                SemanticDiagnosticId::new(
+                    db,
+                    SemanticDiagnostic::new(
+                        self,
+                        SemanticDiagnosticKind::UnencodablePanic,
+                        format!(
+                            "this call can panic with `{}`, which must implement `Encode<Sol>` \
+                             and `AbiSize` to be revert data",
+                            ty.pretty_print(db)
+                        ),
+                        SemanticDiagnosticSpan::Origin {
+                            owner: self.key(db).owner(db),
+                            origin,
+                        },
+                    ),
+                ),
+            ));
+        }
         Ok(())
     }
 
@@ -1730,6 +1835,109 @@ impl<'db> SemanticInstance<'db> {
     }
 }
 
+/// The calls `instance` makes, with where it makes them.
+fn instance_calls<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<(SemOrigin<'db>, SemanticCalleeRef<'db>)> {
+    let calls = provisional_call_sites(db, instance)
+        .sites
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, site)| {
+            Some((SemOrigin::Expr(ExprId::new(idx)), site.as_ref()?.callee?))
+        });
+    let loops = provisional_for_loop_call_sites(db, instance)
+        .sites
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, sites)| {
+            sites.iter().flat_map(move |sites| {
+                sites
+                    .sites
+                    .iter()
+                    .filter_map(move |site| Some((SemOrigin::Stmt(StmtId::new(idx)), site.callee?)))
+            })
+        });
+    calls.chain(loops).collect()
+}
+
+/// Whether `panic_with_value` can revert with a `ty`, as Sol-encoded data.
+pub fn panic_payload_encodable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    let Some(abi) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
+        return false;
+    };
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let satisfied = |inst| {
+        matches!(
+            is_goal_satisfiable(db, solve_cx, inst),
+            GoalSatisfiability::Satisfied(_)
+        )
+    };
+    resolve_core_trait(db, scope, &["abi", "Encode"])
+        .is_some_and(|encode| satisfied(TraitInstId::new_simple(db, encode, vec![ty, abi])))
+        && resolve_core_trait(db, scope, &["abi", "AbiSize"])
+            .is_some_and(|size| satisfied(TraitInstId::new_simple(db, size, vec![ty])))
+}
+
+/// The type `callee` panics with, called from `instance`, that can't be
+/// revert data: in its own `panic_with_value`, or in any instance it calls.
+fn unencodable_call_panic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    callee: SemanticCalleeRef<'db>,
+) -> Option<TyId<'db>> {
+    let is_panic = matches!(
+        callee.key.owner(db),
+        BodyOwner::Func(func, _)
+            if runtime_builtin_func_kind(db, func) == Some(RuntimeBuiltinFuncKind::PanicWithValue)
+    );
+    if !is_panic {
+        return unencodable_panic(db, SemanticInstance::new(db, callee.key));
+    }
+    let &[ty] = callee.key.subst(db).generic_args(db) else {
+        return None;
+    };
+    let env = instance.key(db).impl_env(db);
+    (!ty.has_param(db)
+        && !ty.has_invalid(db)
+        && !panic_payload_encodable(db, env.normalization_scope(db), env.assumptions(db), ty))
+    .then_some(ty)
+}
+
+/// The type `instance`, or any instance it calls, panics with that can't be
+/// revert data.
+#[salsa::tracked(returns(copy), cycle_initial = unencodable_panic_cycle_initial)]
+fn unencodable_panic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<TyId<'db>> {
+    if !instance
+        .key(db)
+        .typed_body(db)
+        .smir_lowering_issues(db)
+        .is_empty()
+    {
+        return None;
+    }
+    instance_calls(db, instance)
+        .into_iter()
+        .find_map(|(_, callee)| unencodable_call_panic(db, instance, callee))
+}
+
+fn unencodable_panic_cycle_initial<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _: SemanticInstance<'db>,
+) -> Option<TyId<'db>> {
+    None
+}
+
 /// The first call, in `instance` or in any instance it makes, that makes an
 /// instance whose generic arguments nest more than [`PROJECTION_DEPTH_LIMIT`]
 /// levels deep or have more than [`PROJECTION_WORK_LIMIT`] type nodes.
@@ -1763,26 +1971,7 @@ fn instance_limit_violation<'db>(
             return Some(diag);
         }
     }
-    let calls = provisional_call_sites(db, instance)
-        .sites
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, site)| {
-            Some((SemOrigin::Expr(ExprId::new(idx)), site.as_ref()?.callee?))
-        });
-    let loops = provisional_for_loop_call_sites(db, instance)
-        .sites
-        .iter()
-        .enumerate()
-        .flat_map(|(idx, sites)| {
-            sites.iter().flat_map(move |sites| {
-                sites
-                    .sites
-                    .iter()
-                    .filter_map(move |site| Some((SemOrigin::Stmt(StmtId::new(idx)), site.callee?)))
-            })
-        });
-    let calls: Vec<_> = calls.chain(loops).collect();
+    let calls = instance_calls(db, instance);
     for &(origin, callee) in &calls {
         let args = callee.key.subst(db).generic_args(db);
         let within = args
@@ -1946,7 +2135,7 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
         | EffectParamSite::ContractRecvArm { contract, .. } => {
             let field_provider_idx = contract
                 .storage_layout(db)
-                .values()
+                .valid_fields()
                 .enumerate()
                 .map(|(provider_idx, field)| (field.field.index, provider_idx as u32))
                 .collect::<IndexMap<_, _>>();
@@ -2006,11 +2195,10 @@ fn provisional_provider_binding_for_effect<'db>(
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
-            if let Some((_, field)) = contract
+            if let Some(field) = contract
                 .storage_layout(db)
-                .values()
-                .enumerate()
-                .find(|(idx, _)| *idx as u32 == provider_idx)
+                .valid_fields()
+                .nth(provider_idx as usize)
             {
                 let provider_ty = field.declared;
                 return Some(ProviderBinding {

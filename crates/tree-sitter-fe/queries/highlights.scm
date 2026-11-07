@@ -107,6 +107,7 @@
   "var"
   "where"
   "while"
+  "loop"
   "with"
 ] @keyword
 

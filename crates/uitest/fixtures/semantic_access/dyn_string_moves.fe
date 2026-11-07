@@ -1,0 +1,34 @@
+use core::abi::DynString
+
+struct Named {
+    name: DynString,
+}
+
+fn view(_ text: DynString) -> usize {
+    text.len()
+}
+
+fn consume(_ text: own DynString) {}
+
+// A view does not move the string.
+fn viewed_twice(_ text: own DynString) -> usize {
+    view(text) + view(text)
+}
+
+fn moved_twice(_ text: own DynString) -> (DynString, DynString) {
+    (text, text)
+}
+
+fn used_after_moved() -> usize {
+    let text: DynString = "a string literal of more than thirty-one bytes"
+    consume(text)
+    text.len()
+}
+
+fn moved_out_of_a_view(_ named: Named) -> DynString {
+    named.name
+}
+
+fn cloned(_ text: own DynString) -> (DynString, DynString) {
+    (text.clone(), text)
+}

@@ -1,0 +1,56 @@
+use core::MemBuffer
+
+const HELLO: String<8> = "hello"
+const HELLO_LEN: usize = HELLO.len()
+
+#[test]
+fn len_counts_bytes_past_the_padding() {
+    let empty: String<8> = ""
+    let short: String<8> = "abc"
+    let full: String<3> = "abc"
+    let word: String<31> = "0123456789abcdef0123456789abcde"
+    assert!(HELLO_LEN == 5)
+    assert!(empty.len() == 0)
+    assert!(short.len() == 3)
+    assert!(full.len() == 3)
+    assert!(word.len() == 31)
+}
+
+#[test]
+fn span_compares_with_a_literal() {
+    var buffer = MemBuffer::empty()
+    buffer.extend_from_word(0x616263, len: 3)
+    assert!(buffer.span() == "abc")
+    assert!(buffer.span() != "abd")
+    assert!(buffer.span() != "ab")
+    assert!(buffer.span() != "abcd")
+    buffer.clear()
+    assert!(buffer.span() == "")
+    assert!(buffer.span() != "a")
+}
+
+#[test]
+fn words_append_their_low_bytes() {
+    var buffer = MemBuffer::empty()
+    buffer.extend_from_word(0x616263, len: 2)
+    buffer.extend_from_word(0x64, len: 1)
+    buffer.extend_from_word(0xff, len: 0)
+    assert!(buffer.len() == 3)
+    assert!(buffer.span() == "bcd")
+    // Whatever lies past the appended bytes stays past the extent.
+    buffer.extend_from_word(0x65, len: 1)
+    assert!(buffer.span() == "bcde")
+}
+
+#[test]
+fn string_byte_at_reads_the_text() {
+    let s: String<8> = "abc"
+    assert!(s.byte_at(0) == b'a')
+    assert!(s.byte_at(2) == b'c')
+}
+
+#[test(should_revert, panic = 0x32)]
+fn string_byte_at_rejects_an_index_past_the_text() {
+    let s: String<8> = "abc"
+    let _ = s.byte_at(3)
+}

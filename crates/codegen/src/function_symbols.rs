@@ -41,25 +41,10 @@ pub(crate) struct FunctionSymbolInput<'db> {
 pub(crate) fn assign_function_symbols<'db>(
     db: &'db DriverDataBase,
     inputs: &[FunctionSymbolInput<'db>],
-    reserved: &[&str],
 ) -> Vec<String> {
     let candidates = inputs
         .iter()
-        .map(|input| {
-            let mut candidates = function_symbol_candidates(db, input);
-            if input.fixed_symbol.is_none() {
-                candidates.retain(|symbol| !reserved.contains(&symbol.as_str()));
-                if candidates.is_empty() {
-                    let fingerprint = stable_identity_fingerprint(&input.disambiguator);
-                    let mut symbol = format!("{}_{fingerprint}", input.fallback_symbol);
-                    while reserved.contains(&symbol.as_str()) {
-                        symbol.push('_');
-                    }
-                    candidates.push(symbol);
-                }
-            }
-            candidates
-        })
+        .map(|input| function_symbol_candidates(db, input))
         .collect::<Vec<_>>();
     let mut selected = vec![0usize; candidates.len()];
 
@@ -89,7 +74,7 @@ pub(crate) fn assign_function_symbols<'db>(
         .zip(selected)
         .map(|(candidates, selected)| candidates[selected].clone())
         .collect::<Vec<_>>();
-    uniquify_function_symbols(&mut symbols, &candidates, inputs, reserved);
+    uniquify_function_symbols(&mut symbols, &candidates, inputs);
     symbols
 }
 
@@ -245,7 +230,6 @@ fn uniquify_function_symbols(
     symbols: &mut [String],
     candidates: &[Vec<String>],
     inputs: &[FunctionSymbolInput<'_>],
-    reserved: &[&str],
 ) {
     let conflicts = symbols.iter().enumerate().fold(
         BTreeMap::<String, Vec<usize>>::new(),
@@ -260,7 +244,6 @@ fn uniquify_function_symbols(
             group.len() == 1 || group.iter().any(|&idx| inputs[idx].fixed_symbol.is_some())
         })
         .map(|(symbol, _)| symbol.clone())
-        .chain(reserved.iter().map(|symbol| (*symbol).to_string()))
         .collect::<FxHashSet<_>>();
     for group in conflicts.values().filter(|group| group.len() > 1) {
         let mut group = group.clone();

@@ -226,6 +226,36 @@ fn test_cli_check_module_cfg_drops_submodules() {
     }
 }
 
+#[cfg(all(feature = "cranelift", feature = "wasm"))]
+#[test]
+fn test_cli_check_usize_literals_fit_the_backend_target() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("literals.fe");
+    fs::write(
+        &source,
+        "pub fn beyond_32_bits() -> usize {\n    0x100000000\n}\n\npub fn beyond_64_bits() -> isize {\n    0x8000000000000000\n}\n\npub fn length(_ a: [u8; 0x100000001 - 1]) {}\n",
+    )
+    .expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    let (output, exit_code) = run_fe_main(&["check", source]);
+    assert_eq!(exit_code, 0, "{output}");
+    let (output, exit_code) = run_fe_main(&["check", "--backend", "native", source]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(
+        output.contains("`9223372036854775808` is not representable in `isize`")
+            && !output.contains("`4294967296`")
+            && !output.contains("`4294967297`"),
+        "{output}"
+    );
+    let (output, exit_code) = run_fe_main(&["check", "--backend", "wasm", source]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(
+        output.contains("`4294967296` is not representable in `usize`")
+            && output.contains("`4294967297` is not representable in `usize`"),
+        "{output}"
+    );
+}
+
 #[test]
 fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
@@ -399,7 +429,7 @@ fn type_size<T>() -> usize {
 }
 
 fn trigger() -> usize {
-    type_size<[u256; 0x8000000000000000]>()
+    type_size<[[u256; 0x80000000]; 0x80000000]>()
 }
 "#,
     )
@@ -970,13 +1000,11 @@ fn checked_rem(value: i{bits}, divisor: i{bits}) -> i{bits} {{
 
 pub fn main() -> i32 {{
     let min: i{bits} = 1 << {sign_bit}
-    if !signed(value: -17, divisor: 0, quotient: 0, remainder: 0) {{ return 1 }}
-    if !unsigned(value: 17, divisor: 0, quotient: 0, remainder: 0) {{ return 2 }}
-    if !signed(value: min, divisor: -1, quotient: min, remainder: 0) {{ return 3 }}
-    if !signed(value: -17, divisor: 5, quotient: -3, remainder: -2) {{ return 4 }}
-    if !signed(value: 17, divisor: -5, quotient: -3, remainder: 2) {{ return 5 }}
-    if !unsigned(value: 17, divisor: 5, quotient: 3, remainder: 2) {{ return 6 }}
-    if checked_rem(value: min, divisor: -1) != 0 {{ return 7 }}
+    if !signed(value: min, divisor: -1, quotient: min, remainder: 0) {{ return 1 }}
+    if !signed(value: -17, divisor: 5, quotient: -3, remainder: -2) {{ return 2 }}
+    if !signed(value: 17, divisor: -5, quotient: -3, remainder: 2) {{ return 3 }}
+    if !unsigned(value: 17, divisor: 5, quotient: 3, remainder: 2) {{ return 4 }}
+    if checked_rem(value: min, divisor: -1) != 0 {{ return 5 }}
     0
 }}
 "#
@@ -999,19 +1027,24 @@ pub fn main() -> i32 {{
     )
 ))]
 #[test]
-fn test_cli_build_native_checked_arithmetic_still_traps() {
+fn test_cli_build_native_arithmetic_traps() {
     let mut cases = Vec::new();
     for bits in [8, 128, 256] {
         let sign_bit = bits - 1;
         let min = format!("1 << {sign_bit}");
-        for (prefix, op, value, rhs) in [
-            ("u", "/", "17", "0"),
-            ("u", "%", "17", "0"),
-            ("i", "/", "-17", "0"),
-            ("i", "%", "-17", "0"),
-            ("i", "/", min.as_str(), "-1"),
+        for (mode, prefix, op, value, rhs) in [
+            ("checked", "u", "/", "17", "0"),
+            ("checked", "u", "%", "17", "0"),
+            ("checked", "i", "/", "-17", "0"),
+            ("checked", "i", "%", "-17", "0"),
+            ("checked", "i", "/", min.as_str(), "-1"),
+            ("unchecked", "u", "/", "17", "0"),
+            ("unchecked", "u", "%", "17", "0"),
+            ("unchecked", "i", "/", "-17", "0"),
+            ("unchecked", "i", "%", "-17", "0"),
         ] {
             cases.push((
+                mode,
                 format!("{prefix}{bits}"),
                 op,
                 value.to_owned(),
@@ -1020,6 +1053,7 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
         }
         for (prefix, base, exponent) in [("u", 2, bits), ("i", 2, sign_bit), ("i", 3, -1)] {
             cases.push((
+                "checked",
                 format!("{prefix}{bits}"),
                 "**",
                 base.to_string(),
@@ -1027,12 +1061,12 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
             ));
         }
     }
-    assert_eq!(cases.len(), 24);
+    assert_eq!(cases.len(), 36);
 
     let mut source = String::from("use std::env::Args\n");
-    for (index, (ty, op, _, _)) in cases.iter().enumerate() {
+    for (index, (mode, ty, op, _, _)) in cases.iter().enumerate() {
         source.push_str(&format!(
-            "fn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
+            "#[arithmetic({mode})]\nfn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
         ));
     }
     source.push_str(
@@ -1047,7 +1081,7 @@ pub fn main() -> i32 uses (args: Args) {
     let selectors: Vec<_> = cases
         .iter()
         .enumerate()
-        .map(|(index, (_, _, value, rhs))| {
+        .map(|(index, (_, _, _, value, rhs))| {
             let selector = b'A' + u8::try_from(index).expect("case selector fits u8");
             source.push_str(&format!(
                 "    if selector == {selector} {{ if calculate_{index}(value: {value}, rhs: {rhs}) == 0 {{ return 0 }} else {{ return 1 }} }}\n"
@@ -1055,7 +1089,7 @@ pub fn main() -> i32 uses (args: Args) {
             char::from(selector).to_string()
         })
         .collect();
-    source.push_str("    if selector == 89 { 0 } else { 97 }\n}\n");
+    source.push_str("    if selector == 48 { 0 } else { 97 }\n}\n");
 
     // Each exceptional input still runs in a separate process, sharing one
     // compiled executable per optimization level instead of rebuilding it.
@@ -1064,8 +1098,8 @@ pub fn main() -> i32 uses (args: Args) {
         let executable = build_native_program(&source, level, temp.path());
         for (args, expected) in [
             (&[][..], 97),
-            (&["Y"][..], 0),
-            (&["Z"][..], 97),
+            (&["0"][..], 0),
+            (&["1"][..], 97),
             (&[""][..], 97),
         ] {
             assert_eq!(
@@ -1074,11 +1108,11 @@ pub fn main() -> i32 uses (args: Args) {
                 "native arithmetic selector control {args:?} failed at O{level}"
             );
         }
-        for ((ty, op, value, rhs), selector) in cases.iter().zip(&selectors) {
+        for ((mode, ty, op, value, rhs), selector) in cases.iter().zip(&selectors) {
             assert_eq!(
                 native_program_exit_code(&executable, &[selector], level),
                 None,
-                "checked {ty} {value} {op} {rhs} did not trap at O{level}"
+                "{mode} {ty} {value} {op} {rhs} did not trap at O{level}"
             );
         }
     }
@@ -1239,7 +1273,7 @@ fn test_cli_build_native_library_needs_exports_and_no_executable() {
         ),
         (
             "staticlib",
-            "native library output requires an `#[export]` function",
+            "native library output requires an `#[unsafe(export)]` function",
         ),
     ] {
         let (output, exit_code) = run_fe_main(&[
@@ -1287,7 +1321,11 @@ fn test_cli_build_sonatina_rejects_executable_emit() {
 fn test_cli_build_sonatina_rejects_library_emits() {
     let temp = tempdir().expect("tempdir");
     let source = temp.path().join("library.fe");
-    fs::write(&source, "#[export]\npub fn answer() -> i64 { 42 }\n").expect("write source");
+    fs::write(
+        &source,
+        "#[unsafe(export)]\npub fn answer() -> i64 { 42 }\n",
+    )
+    .expect("write source");
     for emit in ["object", "staticlib"] {
         let (output, exit_code) = run_fe_main(&[
             "build",
@@ -1343,7 +1381,7 @@ fn test_cli_build_sonatina_rejects_exported_functions() {
     let source = temp.path().join("exports.fe");
     fs::write(
         &source,
-        "#[export]\npub fn answer() -> i64 { 42 }\ncontract Counter {}\n",
+        "#[unsafe(export)]\npub fn answer() -> i64 { 42 }\ncontract Counter {}\n",
     )
     .expect("write source");
     let out_dir = temp.path().join("out");
@@ -1356,8 +1394,9 @@ fn test_cli_build_sonatina_rejects_exported_functions() {
     ]);
     assert_eq!(exit_code, 1, "expected export rejection:\n{output}");
     assert!(
-        output
-            .contains("`#[export]` requires `--backend native`, but `exports::answer` is exported"),
+        output.contains(
+            "`#[unsafe(export)]` requires `--backend native`, but `exports::answer` is exported"
+        ),
         "unexpected output:\n{output}"
     );
     assert!(!out_dir.exists(), "a rejected build must write nothing");
@@ -3506,7 +3545,7 @@ impl core::abi::AbiSize for Weird {
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    fn encode(own self, _ out: core::abi::AbiFrame) {
+    fn encode(self, _ out: core::abi::AbiFrame) {
         out.store_word(at: 0, value: if self.flag { 1 } else { 0 })
         out.store_word(at: 32, value: self.amount as u256)
     }
@@ -3839,6 +3878,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "abi_array_overflow_revert",
     "abi_array_view",
     "abi_bounded_input_len_untrusted",
+    "abi_decode_field_names",
     "abi_decode_input_len_bound",
     "abi_dynamic_payload",
     "abi_nested_msg_decode_bounds",
@@ -3867,6 +3907,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "const_trait_provider_contract",
     "contract_field_explicit_slot",
     "contract_field_mut_borrow_matrix",
+    "contract_field_packing",
     "contract_field_projection_types",
     "contract_init_fixed_array_arg",
     "copied_state_words",
@@ -3880,6 +3921,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "effect_handle_field_deref",
     "eip712_domain",
     "encode_msg_calldata",
+    "encode_storage_place",
     "entry_space_numbering",
     "enum",
     "enum_state_machine",
@@ -3900,11 +3942,15 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "factory",
     "fixed_bytes_constant_return",
     "for_mut_index_base",
+    "forwarded_projection_spaces",
     "gcd",
     "generated_type_param_names",
     "immutable_aggregate_forwarding",
     "impl_method_does_not_shadow_free_fn",
+    "invalid_enum_tag",
+    "known_product_destructure_storage",
     "lane_accesses",
+    "lane_pattern_writes",
     "lane_projection_spaces",
     "leading_zeros",
     "library_state_index",
@@ -4006,6 +4052,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "storage_packed_array",
     "storage_packed_projections",
     "storage_packing",
+    "storage_packing_value_types",
     "storage_slots_closures",
     "time_units",
     "tslot_values",
@@ -4015,6 +4062,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "tuple_struct",
     "typed_calls",
     "unchecked_signed_negation",
+    "unchecked_storage_compound_assignment",
     "unsafe_splits",
     "vault",
     "voting",
@@ -4560,7 +4608,11 @@ fn test_cli_test_profile_selects_ingot_arithmetic() {
     assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
     assert!(
         test_output.contains("PASS  [<time>] arithmetic_profile_ingot_wraps_in_test_profile")
-            && test_output.contains("1 passed"),
+            && test_output
+                .contains("PASS  [<time>] arithmetic_profile_ingot_wraps_wei_in_test_profile")
+            && test_output
+                .contains("PASS  [<time>] arithmetic_profile_ingot_generic_operator_is_checked")
+            && test_output.contains("3 passed"),
         "expected test profile to run unchecked arithmetic:\n{test_output}"
     );
 
@@ -4571,7 +4623,7 @@ fn test_cli_test_profile_selects_ingot_arithmetic() {
         "expected release profile test failure:\n{release_output}"
     );
     assert!(
-        release_output.contains("1 failed"),
+        release_output.contains("2 failed"),
         "expected checked arithmetic failure in release profile:\n{release_output}"
     );
 }

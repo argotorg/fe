@@ -33,7 +33,9 @@ pattern binds an element `mut` takes it at `mut`, which needs a
 traverses in reverse. Arrays, `MemArray`, `MemVec`, `MemSlice`, ranges,
 `SolArray` and `SolEnumerableSet` are collections, and so is `DynArray`,
 whose loop decodes each element as it reaches it; a collection declares the
-effects its methods need (`uses E`).
+effects its methods need (`uses E`). A `HashMap` is a collection of its
+values, and its `keys()` and `entries()` drivers step through its keys and
+its `(ref K, mut? V)` entries.
 
 A loop whose pattern copies or discards every element of a step (a `Copy`
 element bound by a plain name or `var`, `_`, or a producer's value) holds no

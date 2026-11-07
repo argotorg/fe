@@ -1,6 +1,10 @@
 // `e?` takes the payload of a `Some` or `Ok`, or ends the enclosing function
 // with the `None` or `Err`. On a sum-shape projection it binds the payload's
 // grant, and in a projection the early exit grants nothing.
+use core::ops::Drop
+use core::ptr
+use std::evm::wei
+
 struct Arr {
     xs: [u256; 3],
     len: usize,
@@ -32,6 +36,37 @@ impl Arr {
     }
 }
 
+// A generic owner's `?` exits with the instance's result type.
+struct Slots<T> {
+    xs: [T; 3],
+    len: usize,
+}
+
+impl<T> Slots<T> {
+    fn index(self, _ i: usize) -> Option<usize> {
+        if i < self.len { Option::Some(i) } else { Option::None }
+    }
+
+    fn position(self, _ i: usize) -> Result<usize, usize> {
+        if i < self.len { Result::Ok(i) } else { Result::Err(i) }
+    }
+
+    fn get_mut(mut self, _ i: usize) -> Option<mut T> {
+        let at = self.index(i)?
+        Option::Some(mut self.xs[at])
+    }
+
+    fn get(mut? self, _ i: usize) -> Option<mut? T> {
+        let at = self.index(i)?
+        Option::Some(mut? self.xs[at])
+    }
+
+    fn at_mut(mut self, _ i: usize) -> Result<usize, mut T> {
+        let at = self.position(i)?
+        Result::Ok(mut self.xs[at])
+    }
+}
+
 fn add(_ a: Option<u256>, _ b: Option<u256>) -> Option<u256> {
     Option::Some(a? + b?)
 }
@@ -49,6 +84,98 @@ fn bump_first(_ a: mut Arr) -> Option<u256> {
     let x = mut a.first_mut()?
     x += 1
     Option::Some(x)
+}
+
+fn assign_first(_ a: mut Arr) -> Option<()> {
+    a.get_mut(0)? = 9
+    Option::Some(())
+}
+
+fn add_first(_ a: mut Arr) -> Option<()> {
+    a.get_mut(0)? += a.xs[1]
+    Option::Some(())
+}
+
+#[arithmetic(unchecked)]
+fn sub_first_wrapping(_ a: mut Arr) -> Option<()> {
+    a.get_mut(0)? -= 10
+    Option::Some(())
+}
+
+// `Tally` counts how many times its grant opens.
+struct Tally {
+    value: Wei,
+    opened: u256,
+}
+
+impl Tally {
+    fn open(mut self) -> Option<mut Wei> {
+        self.opened += 1
+        Option::Some(mut self.value)
+    }
+}
+
+fn add_tally(_ t: mut Tally) -> Option<()> {
+    t.open()? += wei(1)
+    Option::Some(())
+}
+
+#[arithmetic(unchecked)]
+fn sub_tally_wrapping(_ t: mut Tally) -> Option<()> {
+    t.open()? -= wei(1)
+    Option::Some(())
+}
+
+struct Cell {
+    value: u256,
+}
+
+impl Cell {
+    fn set(mut self, _ value: u256) {
+        self.value = value
+    }
+
+    fn keep(mut self, _ c: own Counted) {
+        self.value = c.id
+    }
+}
+
+// Each drop counts itself through a raw pointer, which no scope owns.
+struct Counted {
+    id: u256,
+    counter: *u256,
+}
+
+impl Drop for Counted {
+    fn drop(own self) {
+        unsafe { *self.counter += 1 }
+    }
+}
+
+fn advance(_ at: mut usize) -> u256 {
+    at += 1
+    99
+}
+
+fn cells() -> Slots<Cell> {
+    Slots { xs: [Cell { value: 0 }, Cell { value: 0 }, Cell { value: 0 }], len: 3 }
+}
+
+// As for any projection receiver, the arguments run before `get_mut` opens,
+// so it gets the advanced `at`, and an early exit follows them.
+fn set_at(_ s: mut Slots<Cell>, _ at: mut usize) -> Option<()> {
+    s.get_mut(at)?.set(advance(mut at))
+    Option::Some(())
+}
+
+fn assign_at(_ s: mut Slots<Cell>, _ at: mut usize) -> Option<()> {
+    s.get_mut(at)?.value = advance(mut at)
+    Option::Some(())
+}
+
+fn keep_at(_ s: mut Slots<Cell>, _ at: usize, _ counter: *u256) -> Option<()> {
+    s.get_mut(at)?.keep(Counted { id: 7, counter })
+    Option::Some(())
 }
 
 #[test]
@@ -94,4 +221,102 @@ fn sum_shapes() {
         x += 10
     }
     assert!(a.xs[2] == 7)
+}
+
+#[test]
+fn generic_sum_shapes() {
+    var s = Slots<u256> { xs: [1, 2, 3], len: 2 }
+    if let Option::Some(mut x) = s.get_mut(1) {
+        x += 10
+    }
+    assert!(s.xs[1] == 12)
+    if let Option::Some(_) = s.get_mut(2) {
+        assert!(false)
+    }
+
+    match s.get(0) {
+        Option::Some(x) => assert!(x == 1)
+        Option::None => assert!(false)
+    }
+    if let Option::Some(mut x) = s.get(0) {
+        x += 5
+    }
+    assert!(s.xs[0] == 6)
+    if let Option::Some(_) = s.get(2) {
+        assert!(false)
+    }
+
+    match s.at_mut(1) {
+        Result::Ok(mut x) => x += 1
+        Result::Err(_) => assert!(false)
+    }
+    assert!(s.xs[1] == 13)
+    match s.at_mut(5) {
+        Result::Ok(_) => assert!(false)
+        Result::Err(i) => assert!(i == 5)
+    }
+}
+
+#[test]
+fn assignment_through_grant() {
+    var a = Arr { xs: [5, 6, 7], len: 2 }
+    assert!(assign_first(mut a).is_some())
+    assert!(a.xs[0] == 9)
+    assert!(add_first(mut a).is_some())
+    assert!(a.xs[0] == 15)
+
+    var empty = Arr { xs: [5, 6, 7], len: 0 }
+    assert!(assign_first(mut empty).is_none())
+    assert!(add_first(mut empty).is_none())
+    assert!(empty.xs[0] == 5)
+}
+
+#[test]
+fn wrapping_assignment_through_grant() {
+    var a = Arr { xs: [5, 6, 7], len: 2 }
+    assert!(sub_first_wrapping(mut a).is_some())
+    assert!(a.xs[0] == u256::max() - 4)
+
+    var empty = Arr { xs: [5, 6, 7], len: 0 }
+    assert!(sub_first_wrapping(mut empty).is_none())
+    assert!(empty.xs[0] == 5)
+}
+
+#[test]
+fn compound_assignment_opens_grant_once() {
+    var t = Tally { value: wei(1), opened: 0 }
+    assert!(add_tally(mut t).is_some())
+    assert!(t.value == wei(2) && t.opened == 1)
+    assert!(sub_tally_wrapping(mut t).is_some())
+    assert!(t.value == wei(1) && t.opened == 2)
+}
+
+#[test]
+fn receivers_open_after_the_arguments() {
+    var s = cells()
+    var at: usize = 0
+    assert!(set_at(mut s, mut at).is_some())
+    assert!(at == 1 && s.xs[0].value == 0 && s.xs[1].value == 99)
+    assert!(assign_at(mut s, mut at).is_some())
+    assert!(at == 2 && s.xs[2].value == 99)
+
+    // `get_mut(3)` is empty: the exit follows the arguments.
+    s.xs[2].value = 0
+    assert!(set_at(mut s, mut at).is_none())
+    assert!(at == 3 && s.xs[2].value == 0)
+    at = 2
+    assert!(assign_at(mut s, mut at).is_none())
+    assert!(at == 3 && s.xs[2].value == 0)
+}
+
+#[test]
+fn early_exit_destroys_the_arguments() {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    var s = cells()
+    assert!(keep_at(mut s, 1, counter).is_some())
+    assert!(s.xs[1].value == 7)
+    assert!(unsafe { *counter } == 1)
+    assert!(keep_at(mut s, 3, counter).is_none())
+    assert!(unsafe { *counter } == 2)
 }

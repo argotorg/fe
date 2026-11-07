@@ -23,7 +23,7 @@ pub contract Blob uses (create: mut Create) {
 
     recv BlobMsg {
         Set { data } uses (mut blobs) {
-            blobs.store_view(key: 0, view: data.payload_span())
+            blobs.store_view(key: 0, view: data.span())
         }
 
         // Loads the stored bytes back into memory, then keeps executing:
@@ -55,7 +55,7 @@ pub contract Blob uses (create: mut Create) {
     }
 }
 
-fn set_bytes(addr: Address, data: Bytes)
+fn set_bytes(addr: Address, data: own Bytes)
 uses (evm: mut Evm)
 {
     evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: BlobMsg::Set { data: data })

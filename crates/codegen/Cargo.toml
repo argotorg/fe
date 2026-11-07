@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 cranelift = ["dep:sonatina-cranelift"]
 sp1 = ["cranelift", "sonatina-cranelift/sp1"]
+wasm = ["dep:sonatina-wasm"]
 
 [dependencies]
 driver = { path = "../driver", package = "fe-driver" }
@@ -23,6 +24,7 @@ sonatina-ir.workspace = true
 sonatina-triple.workspace = true
 sonatina-codegen.workspace = true
 sonatina-cranelift = { workspace = true, optional = true }
+sonatina-wasm = { workspace = true, optional = true }
 sonatina-verifier.workspace = true
 smallvec.workspace = true
 smallvec1.workspace = true

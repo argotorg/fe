@@ -47,3 +47,6 @@ contract Placed {
     #[slot(keccak(keccak("example.main") - 1) & !(0xff as u256))]
     mut main: u256,
 }
+
+#[unsafe(export)]
+pub fn exported() {}

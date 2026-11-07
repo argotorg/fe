@@ -5,24 +5,23 @@ use std::mem::size_of;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        DropFlagPoint, EvalOutcome, FieldIndex, RuntimeSizeError, SConst, SLocalId, SStmtId,
-        SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef,
-        SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance,
-        SemanticInstanceKey, SemanticLocalRole, VariantIndex, core_method_callee_key,
-        eval_const_ref, generated_callee_key,
+        BinaryOp, DropFlagPoint, EvalOutcome, FailReason, FieldIndex, Overflow, RuntimeSizeError,
+        SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
+        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex,
+        core_method_callee_key, eval_const_ref, generated_callee_key,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
             NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
             NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
         },
-        reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
+        panic_payload_encodable, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
     },
     ty::{
         const_expr::ConstExpr,
         const_ty::ConstTyData,
         corelib::{
-            PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, concrete_usize,
-            core_primitive_wrapper_call_kind, resolve_core_trait, resolve_lib_func_path,
+            RuntimeBuiltinFuncKind, concrete_usize, resolve_core_trait, resolve_lib_func_path,
             resolve_lib_type_path, runtime_builtin_func_kind,
         },
         trait_def::TraitInstId,
@@ -33,12 +32,9 @@ use hir::analysis::{
         ty_def::{BorrowKind, TyId},
     },
 };
-use hir::hir_def::{
-    ArithBinOp, BinOp, CompBinOp, Expr, Func, Partial, UnOp, attr::ArithmeticMode,
-    scope_graph::ScopeId,
-};
+use hir::hir_def::{ArithBinOp, BinOp, CompBinOp, Expr, Func, Partial, UnOp, scope_graph::ScopeId};
 use hir::projection::IndexSource;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     db::MirDb,
@@ -94,7 +90,7 @@ use super::{
     source::{
         RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource,
         alias_source_place_for_local as source_alias_source_place_for_local,
-        data_path_index_bounds, nonself_alias_source_place_for_local,
+        nonself_alias_source_place_for_local,
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
@@ -199,8 +195,9 @@ pub(super) fn check_runtime_body_supported<'db>(
                 };
                 if let Some(ty) = oversized_size_of_ty(db, key, value) {
                     return Err(LowerError::Unsupported(format!(
-                        "type `{}` exceeds the supported 64-bit raw-memory layout size",
-                        ty.pretty_print(db)
+                        "type `{}` exceeds the supported {}-bit raw-memory layout size",
+                        ty.pretty_print(db),
+                        db.compilation_settings().target(db).memory_size_bits()
                     )));
                 }
                 let expected_ty = body.normalized.values[dst.index()].ty;
@@ -245,26 +242,6 @@ pub(super) fn check_runtime_body_supported<'db>(
                 }
             }
 
-            if let NStatementKind::Define {
-                expr: NExpr::Call { callee, args, .. },
-                ..
-            } = &stmt.kind
-                && let Some(value_ty) = builtin_arg_ty(
-                    db,
-                    body,
-                    *callee,
-                    args,
-                    RuntimeBuiltinFuncKind::PanicWithValue,
-                )
-            {
-                let impl_env = key.impl_env(db);
-                ensure_panic_payload_encodable(
-                    db,
-                    impl_env.normalization_scope(db),
-                    impl_env.assumptions(db),
-                    value_ty,
-                )?;
-            }
             if let NStatementKind::Define {
                 expr: NExpr::Call { callee, args, .. },
                 ..
@@ -362,31 +339,6 @@ fn builtin_arg_ty<'db>(
     Some(body.normalized.value(value.value)?.ty)
 }
 
-fn ensure_panic_payload_encodable<'db>(
-    db: &'db dyn MirDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    value_ty: TyId<'db>,
-) -> Result<(), LowerError> {
-    let abi_ty = resolve_lib_type_path(db, scope, "std::abi::Sol")
-        .ok_or_else(|| LowerError::Unsupported("missing std::abi::Sol".to_string()))?;
-    let encode_trait = resolve_core_trait(db, scope, &["abi", "Encode"])
-        .ok_or_else(|| LowerError::Unsupported("missing core::abi::Encode".to_string()))?;
-    let abi_size_trait = resolve_core_trait(db, scope, &["abi", "AbiSize"])
-        .ok_or_else(|| LowerError::Unsupported("missing core::abi::AbiSize".to_string()))?;
-    let encode = TraitInstId::new_simple(db, encode_trait, vec![value_ty, abi_ty]);
-    let abi_size = TraitInstId::new_simple(db, abi_size_trait, vec![value_ty]);
-    if trait_goal_satisfied(db, scope, assumptions, encode)
-        && trait_goal_satisfied(db, scope, assumptions, abi_size)
-    {
-        return Ok(());
-    }
-    Err(LowerError::Unsupported(format!(
-        "`unwrap()` requires the error type `{}` to implement `Encode<Sol>` and `AbiSize`",
-        value_ty.pretty_print(db)
-    )))
-}
-
 fn panic_payload_is_error_variant<'db>(
     db: &'db dyn MirDb,
     scope: ScopeId<'db>,
@@ -401,18 +353,9 @@ fn panic_payload_is_error_variant<'db>(
         return false;
     };
     let error_variant = TraitInstId::new_simple(db, error_variant_trait, vec![value_ty, abi_ty]);
-    trait_goal_satisfied(db, scope, assumptions, error_variant)
-}
-
-fn trait_goal_satisfied<'db>(
-    db: &'db dyn MirDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    inst: TraitInstId<'db>,
-) -> bool {
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     matches!(
-        is_goal_satisfiable(db, solve_cx, inst),
+        is_goal_satisfiable(db, solve_cx, error_variant),
         GoalSatisfiability::Satisfied(_)
     )
 }
@@ -420,30 +363,19 @@ fn trait_goal_satisfied<'db>(
 fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
     match expr {
         NExpr::ArrayRepeat { .. } => false,
-        NExpr::Unary {
-            op: UnOp::Minus, ..
+        // An operation that can panic runs even when its result is unused.
+        NExpr::Unary { op, .. } => op.overflow() == Some(Overflow::Checked),
+        NExpr::Binary { op, .. } => {
+            matches!(op, BinaryOp::Div(_) | BinaryOp::Rem)
+                || op.overflow() == Some(Overflow::Checked)
         }
-        | NExpr::Binary {
-            op:
-                BinOp::Arith(
-                    ArithBinOp::Add
-                    | ArithBinOp::Sub
-                    | ArithBinOp::Mul
-                    | ArithBinOp::Div
-                    | ArithBinOp::Rem
-                    | ArithBinOp::Pow,
-                ),
-            ..
-        }
-        | NExpr::Call { .. } => true,
+        NExpr::Call { .. } => true,
         NExpr::Forward { .. }
         | NExpr::ProjectValue { .. }
         | NExpr::StructuralRepack { .. }
         | NExpr::CodeRegionRef { .. }
         | NExpr::Load { .. }
         | NExpr::Const(_)
-        | NExpr::Unary { .. }
-        | NExpr::Binary { .. }
         | NExpr::PointerCast { .. }
         | NExpr::ScalarCast { .. }
         | NExpr::AggregateMake { .. }
@@ -790,9 +722,19 @@ impl<'db> RmirEmitter<'db> {
         self.terminated_blocks = vec![false; self.semantic_body.normalized.blocks.len()];
         let blocks = self.semantic_body.normalized.blocks.clone();
         self.prepare_drop_flags();
-        for (idx, block) in blocks.iter().enumerate() {
-            let block_id = NBlockId::new(idx);
-            let mut bb = RBlockId::from_u32(idx as u32);
+        // Each block is lowered after the blocks dominating it, which block
+        // allocation can put later: an `End` needs what the definition of its
+        // access or session recorded.
+        let mut order = self.semantic_body.normalized.reverse_postorder();
+        let reachable: FxHashSet<_> = order.iter().copied().collect();
+        order.extend(
+            (0..blocks.len())
+                .map(NBlockId::new)
+                .filter(|block| !reachable.contains(block)),
+        );
+        for block_id in order {
+            let block = &blocks[block_id.index()];
+            let mut bb = RBlockId::from_u32(block_id.index() as u32);
             self.update_drop_flags(bb, DropFlagPoint::BlockStart(block_id));
             for (stmt_idx, stmt) in block.statements.iter().enumerate() {
                 bb = self.with_current_origin(stmt.origin, |this| {
@@ -842,41 +784,19 @@ impl<'db> RmirEmitter<'db> {
         stmt_idx: usize,
         stmt: &NStatement<'db>,
     ) -> RBlockId {
-        self.lower_stmt_index_checks(bb, &stmt.kind);
         if self.terminated_blocks[bb.index()] {
             return bb;
         }
         match &stmt.kind {
+            NStatementKind::CheckIndex { index, array } => {
+                self.lower_index_check(bb, *index, *array)
+            }
             NStatementKind::Define { result, expr } => {
                 self.lower_assign(bb, block, stmt_idx, stmt.source, *result, expr)
             }
             NStatementKind::Drop { target } => return self.lower_drop(bb, stmt.id, target),
             NStatementKind::End { access } => {
-                if !self.end_lane_extent(bb, LaneExtent::Access(*access))
-                    && let NValueDefinition::Statement { block, statement } =
-                        self.semantic_body.normalized.values[access.index()].definition
-                    && let NStatementKind::Define {
-                        expr:
-                            NExpr::Borrow {
-                                place,
-                                kind: BorrowKind::Mut,
-                                ..
-                            },
-                        ..
-                    } = &self.semantic_body.normalized.blocks[block.index()].statements
-                        [statement as usize]
-                        .kind
-                {
-                    assert!(
-                        !self.with_current_body_cx(|cx| cx
-                            .env
-                            .place_entry_root(place)
-                            .flatten()
-                            .is_some_and(|entry| entry.lane))
-                            || !self.semantic_body.normalized.access_is_used(*access),
-                        "a lane borrow ends before it is lowered"
-                    );
-                }
+                self.end_lane_extent(bb, LaneExtent::Access(*access));
                 if let NValueDefinition::Statement { block, statement } =
                     self.semantic_body.normalized.values[access.index()].definition
                     && let Some(&session) = self.sessions.get(
@@ -1296,24 +1216,42 @@ impl<'db> RmirEmitter<'db> {
             }
             NExpr::Unary { op, value } => {
                 let value = self.read_semantic_operand(bb, *value);
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Unary { op: *op, value },
-                    },
-                );
+                let RuntimeClass::Scalar(class) = &dst_class else {
+                    panic!("a unary operation has a scalar result");
+                };
+                let expr = self
+                    .lower_unary_expr_for_mode(
+                        bb,
+                        op.un_op(),
+                        op.overflow() == Some(Overflow::Checked),
+                        value,
+                        self.locals[dst.index()].semantic_ty,
+                        class,
+                    )
+                    .expect("a built-in unary operation lowers");
+                self.push_stmt(bb, RStmt::Assign { dst, expr });
             }
             NExpr::Binary { op, lhs, rhs } => {
                 let lhs = self.read_semantic_operand(bb, *lhs);
                 let rhs = self.read_semantic_operand(bb, *rhs);
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Binary { op: *op, lhs, rhs },
-                    },
-                );
+                let expr = match op.bin_op() {
+                    BinOp::Arith(arith) => {
+                        let RuntimeClass::Scalar(class) = &dst_class else {
+                            panic!("an arithmetic operation has a scalar result");
+                        };
+                        self.lower_arith_expr_for_mode(
+                            bb,
+                            arith,
+                            op.overflow() == Some(Overflow::Checked),
+                            lhs,
+                            rhs,
+                            class,
+                        )
+                        .expect("a built-in arithmetic operation lowers")
+                    }
+                    op => RExpr::Binary { op, lhs, rhs },
+                };
+                self.push_stmt(bb, RStmt::Assign { dst, expr });
             }
             NExpr::ScalarCast { value, .. } | NExpr::PointerCast { value, .. } => {
                 let value = self.read_semantic_operand(bb, *value);
@@ -1806,18 +1744,8 @@ impl<'db> RmirEmitter<'db> {
         ptr
     }
 
-    fn lower_assert_terminator(
-        &mut self,
-        bb: RBlockId,
-        message: Option<hir::hir_def::StringId<'db>>,
-    ) -> RTerminator<'db> {
-        // A failed assertion without a message panics with code 0x01.
-        let Some(message) = message else {
-            return RTerminator::Panic {
-                code: self.alloc_u256_const(bb, 0x01),
-            };
-        };
-        let payload = solidity_error_string_payload(message.data(self.db).as_bytes());
+    /// Reverts with `payload`.
+    fn lower_revert_terminator(&mut self, bb: RBlockId, payload: Vec<u8>) -> RTerminator<'db> {
         let payload_len = self.alloc_u256_const(bb, payload.len());
         let allocated_len = self.alloc_memory_int_const(bb, payload.len().next_multiple_of(32));
         let ptr = self.malloc_bytes(bb, allocated_len);
@@ -2413,18 +2341,31 @@ impl<'db> RmirEmitter<'db> {
         place: &NPlace<'db>,
         class: &RuntimeClass<'db>,
     ) {
+        if let Some(place) = self.lower_place_read_outside_memory(bb, dst, place, class) {
+            self.lower_runtime_place_read_into(bb, dst, place, class);
+        }
+    }
+
+    /// Reads `place` into `dst` if a value or a lane holds it. Otherwise it is
+    /// in memory: `dst` stays unset, and the caller chooses what to load.
+    pub(super) fn lower_place_read_outside_memory(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        place: &NPlace<'db>,
+        class: &RuntimeClass<'db>,
+    ) -> Option<RuntimePlace<'db>> {
         if self.lower_value_extract_place_read(bb, dst, place) {
-            return;
+            return None;
         }
         match self.resolve_place(bb, place) {
             ResolvedPlace::Lane(lane) => {
                 let value = self.read_lane(bb, &lane);
                 let value = self.coerce_value(bb, value, class);
                 self.push_value_use(bb, dst, value);
+                None
             }
-            ResolvedPlace::Place(place) => {
-                self.lower_runtime_place_read_into(bb, dst, place, class)
-            }
+            ResolvedPlace::Place(place) => Some(place),
         }
     }
 
@@ -2796,51 +2737,11 @@ impl<'db> RmirEmitter<'db> {
         let semantic_ty = self.locals[value.local.index()].semantic_ty;
         let enum_layout = self.enum_layout_for_local(value.local);
         let variant_id = self.enum_variant_for_local(value.local, variant);
-        let expr = self.enum_tag_expr(bb, value);
-        if matches!(expr, RExpr::EnumGetTag { .. }) {
-            let tag_class = RuntimeClass::Scalar(ScalarClass {
-                repr: match enum_layout.data(self.db) {
-                    crate::runtime::Layout::Enum(layout) => layout.tag.repr,
-                    _ => unreachable!(),
-                },
-                role: ScalarRole::EnumTag { enum_layout },
-            });
-            let tag = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(tag_class));
-            self.push_stmt(bb, RStmt::Assign { dst: tag, expr });
-            let expected = self.alloc_runtime_temp(
-                semantic_ty,
-                RuntimeCarrier::Value(
-                    self.value_class(tag)
-                        .cloned()
-                        .expect("enum tag temp should have a class"),
-                ),
-            );
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: expected,
-                    expr: RExpr::ConstScalar(
-                        enum_tag_scalar(self.db, enum_layout, variant)
-                            .expect("enum variant should lower to a tag scalar"),
-                    ),
-                },
-            );
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst,
-                    expr: RExpr::Binary {
-                        op: hir::hir_def::BinOp::Comp(hir::hir_def::CompBinOp::Eq),
-                        lhs: tag,
-                        rhs: expected,
-                    },
-                },
-            );
-        } else {
-            let RExpr::EnumTagOfValue { value } = expr else {
-                unreachable!("enum tag query must read a value or a place");
-            };
-            self.push_stmt(
+        match self.enum_tag_expr(bb, value) {
+            RExpr::EnumGetTag { place } => {
+                self.lower_place_is_enum_variant(bb, dst, place, semantic_ty, enum_layout, variant);
+            }
+            RExpr::EnumTagOfValue { value } => self.push_stmt(
                 bb,
                 RStmt::Assign {
                     dst,
@@ -2849,14 +2750,59 @@ impl<'db> RmirEmitter<'db> {
                         variant: variant_id,
                     },
                 },
-            );
+            ),
+            _ => unreachable!("enum tag query must read a value or a place"),
         }
     }
 
-    fn current_arithmetic_mode(&self) -> ArithmeticMode {
-        self.current_semantic_key()
-            .owner(self.db)
-            .arithmetic_mode(self.db)
+    /// Sets `dst` to whether the enum at `place` holds `variant`, reading only
+    /// its tag.
+    pub(super) fn lower_place_is_enum_variant(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        place: RuntimePlace<'db>,
+        semantic_ty: TyId<'db>,
+        enum_layout: LayoutId<'db>,
+        variant: VariantIndex,
+    ) {
+        let tag_class = RuntimeClass::Scalar(ScalarClass {
+            repr: match enum_layout.data(self.db) {
+                crate::runtime::Layout::Enum(layout) => layout.tag.repr,
+                _ => unreachable!(),
+            },
+            role: ScalarRole::EnumTag { enum_layout },
+        });
+        let tag = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(tag_class.clone()));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: tag,
+                expr: RExpr::EnumGetTag { place },
+            },
+        );
+        let expected = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(tag_class));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: expected,
+                expr: RExpr::ConstScalar(
+                    enum_tag_scalar(self.db, enum_layout, variant)
+                        .expect("enum variant should lower to a tag scalar"),
+                ),
+            },
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Binary {
+                    op: hir::hir_def::BinOp::Comp(hir::hir_def::CompBinOp::Eq),
+                    lhs: tag,
+                    rhs: expected,
+                },
+            },
+        );
     }
 
     fn alloc_zero_scalar(
@@ -2986,165 +2932,6 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn lower_core_primitive_wrapper_call(
-        &mut self,
-        bb: RBlockId,
-        semantic: SemanticInstance<'db>,
-        args: &[NOperand],
-    ) -> Option<RLocalId> {
-        let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
-            return None;
-        };
-        let ret_ty = semantic_return_ty(self.db, semantic);
-        let kind = core_primitive_wrapper_call_kind(self.db, func, ret_ty)?;
-        let checked = self.current_arithmetic_mode() == ArithmeticMode::Checked;
-        let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            &self.semantic_body,
-            semantic,
-            self.env,
-            &[],
-            &mut boundary_sites,
-        );
-        let (runtime_args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
-
-        match kind {
-            PrimitiveWrapperCallKind::Unary(op) => {
-                let [value] = runtime_args.as_slice() else {
-                    return None;
-                };
-                let RuntimeClass::Scalar(class) =
-                    self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?
-                else {
-                    return None;
-                };
-                let ret = self.alloc_runtime_temp(
-                    ret_ty,
-                    RuntimeCarrier::Value(RuntimeClass::Scalar(class.clone())),
-                );
-                let expr =
-                    self.lower_unary_expr_for_mode(bb, op, checked, *value, ret_ty, &class)?;
-                self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
-                Some(ret)
-            }
-            PrimitiveWrapperCallKind::Binary(op) => {
-                let [lhs, rhs] = runtime_args.as_slice() else {
-                    return None;
-                };
-                let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
-                // Raw addresses compare and step as their integers.
-                let raw_space = runtime_args
-                    .iter()
-                    .find_map(|arg| match self.value_class(*arg) {
-                        Some(RuntimeClass::RawAddr { space, .. }) => Some(*space),
-                        _ => None,
-                    });
-                if matches!(op, BinOp::Comp(_))
-                    && let Some(space) = raw_space
-                {
-                    let address = RuntimeClass::Scalar(address_int_class(self.db, space));
-                    let lhs = self.coerce_value(bb, *lhs, &address);
-                    let rhs = self.coerce_value(bb, *rhs, &address);
-                    let ret =
-                        self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
-                    self.push_stmt(
-                        bb,
-                        RStmt::Assign {
-                            dst: ret,
-                            expr: RExpr::Binary { op, lhs, rhs },
-                        },
-                    );
-                    return Some(ret);
-                }
-                if let BinOp::Arith(op @ (ArithBinOp::Add | ArithBinOp::Sub)) = op
-                    && let Some(space) = raw_space
-                {
-                    let class = address_int_class(self.db, space);
-                    let address = RuntimeClass::Scalar(class.clone());
-                    let lhs = self.coerce_value(bb, *lhs, &address);
-                    let rhs = self.coerce_value(bb, *rhs, &address);
-                    let ret =
-                        self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(address.clone()));
-                    let expr = self.lower_arith_expr_for_mode(bb, op, checked, lhs, rhs, &class)?;
-                    self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
-                    return Some(if ret_class == address {
-                        ret
-                    } else {
-                        self.coerce_value(bb, ret, &ret_class)
-                    });
-                }
-                let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
-                let expr = match op {
-                    BinOp::Arith(op) => {
-                        let RuntimeClass::Scalar(class) = &ret_class else {
-                            return None;
-                        };
-                        self.lower_arith_expr_for_mode(bb, op, checked, *lhs, *rhs, class)?
-                    }
-                    BinOp::Comp(_) | BinOp::Logical(_) => RExpr::Binary {
-                        op,
-                        lhs: *lhs,
-                        rhs: *rhs,
-                    },
-                    BinOp::Index => return None,
-                };
-                self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
-                Some(ret)
-            }
-            PrimitiveWrapperCallKind::Assign(op) => {
-                let [dst_addr, rhs] = runtime_args.as_slice() else {
-                    return None;
-                };
-                let place = self.runtime_place_from_addr_value(*dst_addr)?;
-                let target = self.project_place_class(&place);
-                let target_ty = self.semantic_operand_ty(args[0]);
-                let lhs = self.alloc_runtime_temp(target_ty, RuntimeCarrier::Value(target.clone()));
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: lhs,
-                        expr: RExpr::Load {
-                            place: place.clone(),
-                        },
-                    },
-                );
-                let result = match target.clone() {
-                    RuntimeClass::Scalar(class) => {
-                        let result = self
-                            .alloc_runtime_temp(target_ty, RuntimeCarrier::Value(target.clone()));
-                        let expr = match op {
-                            BinOp::Arith(op) => {
-                                self.lower_arith_expr_for_mode(bb, op, checked, lhs, *rhs, &class)?
-                            }
-                            BinOp::Comp(_) | BinOp::Logical(_) | BinOp::Index => return None,
-                        };
-                        self.push_stmt(bb, RStmt::Assign { dst: result, expr });
-                        result
-                    }
-                    RuntimeClass::RawAddr { space, .. } => {
-                        let BinOp::Arith(op @ (ArithBinOp::Add | ArithBinOp::Sub)) = op else {
-                            return None;
-                        };
-                        let class = address_int_class(self.db, space);
-                        let address = RuntimeClass::Scalar(class.clone());
-                        let lhs = self.coerce_value(bb, lhs, &address);
-                        let rhs = self.coerce_value(bb, *rhs, &address);
-                        let result = self
-                            .alloc_runtime_temp(target_ty, RuntimeCarrier::Value(address.clone()));
-                        let expr =
-                            self.lower_arith_expr_for_mode(bb, op, checked, lhs, rhs, &class)?;
-                        self.push_stmt(bb, RStmt::Assign { dst: result, expr });
-                        self.coerce_value(bb, result, &target)
-                    }
-                    RuntimeClass::Ref { .. } | RuntimeClass::AggregateValue { .. } => return None,
-                };
-                self.write_value_to_place(bb, place, result, &target);
-                Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased))
-            }
-        }
-    }
-
     fn lower_call(
         &mut self,
         bb: RBlockId,
@@ -3154,9 +2941,6 @@ impl<'db> RmirEmitter<'db> {
         effect_args: &[NEffectArg<'db>],
     ) -> RLocalId {
         let semantic = SemanticInstance::new(self.db, callee.key);
-        if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, args) {
-            return ret;
-        }
         if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
             return ret;
         }
@@ -3231,70 +3015,27 @@ impl<'db> RmirEmitter<'db> {
         call_result
     }
 
-    fn lower_stmt_index_checks(&mut self, bb: RBlockId, stmt: &NStatementKind<'db>) {
-        match stmt {
-            NStatementKind::Define { expr, .. } => {
-                expr.for_each_place_operand(|place| self.lower_place_index_checks(bb, place));
-                if let NExpr::ProjectValue { value, path } = expr {
-                    let ty = self
-                        .semantic_body
-                        .normalized
-                        .value(value.value)
-                        .expect("verified structural projection source exists")
-                        .ty;
-                    self.lower_data_path_index_checks(bb, ty, &path.0);
-                }
-            }
-            NStatementKind::Store { destination, .. } => {
-                self.lower_place_index_checks(bb, destination)
-            }
-            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
-        }
-    }
-
-    fn lower_place_index_checks(&mut self, bb: RBlockId, place: &NPlace<'db>) {
-        if !place
-            .path
-            .iter()
-            .any(|projection| matches!(projection, NDataProjection::Index(_)))
-        {
-            return;
-        }
-        let Some(ty) = self.semantic_place_root_ty(place) else {
-            return;
+    fn lower_index_check(&mut self, bb: RBlockId, index: NIndex, array: TyId<'db>) {
+        let len = runtime_array_len(self.db, array)
+            .expect("valid runtime array length")
+            .expect("an index check's array has a concrete length");
+        let index = match index {
+            NIndex::Const(index) => IndexSource::Constant(index),
+            NIndex::Value(index) => IndexSource::Dynamic(self.read_normalized_value(bb, index)),
         };
-        self.lower_data_path_index_checks(bb, ty, &place.path);
-    }
-
-    fn lower_data_path_index_checks(&mut self, bb: RBlockId, ty: TyId<'db>, path: &NDataPath) {
-        if self.terminated_blocks[bb.index()] {
-            return;
+        self.push_stmt(
+            bb,
+            RStmt::AssertIndexInBounds {
+                index,
+                len: len
+                    .try_into()
+                    .expect("array length must fit the runtime index representation"),
+            },
+        );
+        // No index is below zero, so the check always fails.
+        if len == 0 {
+            self.set_terminator(bb, RTerminator::Trap);
         }
-        for (index, len) in data_path_index_bounds(self.db, self.semantic_body.owner(), ty, path) {
-            let index = match index {
-                NIndex::Const(index) => IndexSource::Constant(index),
-                NIndex::Value(index) => IndexSource::Dynamic(self.read_normalized_value(bb, index)),
-            };
-            self.push_stmt(
-                bb,
-                RStmt::AssertIndexInBounds {
-                    index,
-                    len: len
-                        .try_into()
-                        .expect("array length must fit the runtime index representation"),
-                },
-            );
-            if len == 0 {
-                self.set_terminator(bb, RTerminator::Trap);
-                return;
-            }
-        }
-    }
-
-    fn semantic_place_root_ty(&self, place: &NPlace<'db>) -> Option<TyId<'db>> {
-        self.semantic_body
-            .normalized
-            .place_base_ty(self.db, place.base)
     }
 
     fn lower_extern_builtin_call(
@@ -3470,6 +3211,20 @@ impl<'db> RmirEmitter<'db> {
 
     fn lower_panic_with_value(&mut self, bb: RBlockId, value: RLocalId) -> RLocalId {
         let value_ty = self.locals[value.index()].semantic_ty;
+        let impl_env = self.current_semantic_key().impl_env(self.db);
+        // Outside the EVM a panic needs no revert data. On EVM, admission
+        // rejects a value without an encoding.
+        if self.target() != Target::Evm
+            && !panic_payload_encodable(
+                self.db,
+                impl_env.normalization_scope(self.db),
+                impl_env.assumptions(self.db),
+                value_ty,
+            )
+        {
+            self.set_terminator(bb, RTerminator::Trap);
+            return self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased);
+        }
         let revert = self.resolve_panic_payload_revert(value_ty);
         let [param_class] = revert.key(self.db).params(self.db).as_slice() else {
             panic!("panic payload revert should have one runtime parameter");
@@ -3490,7 +3245,6 @@ impl<'db> RmirEmitter<'db> {
         let impl_env = key.impl_env(self.db);
         let scope = impl_env.normalization_scope(self.db);
         let assumptions = impl_env.assumptions(self.db);
-        self.assert_panic_payload_encodable(scope, assumptions, value_ty);
         let func_path = if panic_payload_is_error_variant(self.db, scope, assumptions, value_ty) {
             "std::evm::revert_error"
         } else {
@@ -3502,16 +3256,6 @@ impl<'db> RmirEmitter<'db> {
             generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
                 .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
         runtime_instance_for_semantic(self.db, SemanticInstance::new(self.db, semantic_key))
-    }
-
-    fn assert_panic_payload_encodable(
-        &self,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-        value_ty: TyId<'db>,
-    ) {
-        ensure_panic_payload_encodable(self.db, scope, assumptions, value_ty)
-            .expect("panic payload support should be checked before rMIR emission");
     }
 
     fn lower_numeric_intrinsic_call(
@@ -3751,13 +3495,6 @@ impl<'db> RmirEmitter<'db> {
                 let [value] = args else { return None };
                 RExpr::Unary {
                     op: UnOp::Not,
-                    value: *value,
-                }
-            }
-            "neg" => {
-                let [value] = args else { return None };
-                RExpr::Unary {
-                    op: UnOp::Minus,
                     value: *value,
                 }
             }
@@ -4640,7 +4377,18 @@ impl<'db> RmirEmitter<'db> {
                     default: default.as_ref().map(|target| self.lower_successor(target)),
                 }
             }
-            NTerminatorKind::Assert { message } => self.lower_assert_terminator(bb, *message),
+            NTerminatorKind::Fail(FailReason::Assert {
+                message: Some(message),
+            }) => {
+                let payload = solidity_error_string_payload(message.data(self.db).as_bytes());
+                self.lower_revert_terminator(bb, payload)
+            }
+            // A failed assertion without a message panics with code 0x01, as
+            // does reaching unreachable code, which is a compiler bug.
+            NTerminatorKind::Fail(FailReason::Assert { message: None })
+            | NTerminatorKind::Unreachable => RTerminator::Panic {
+                code: self.alloc_u256_const(bb, 0x01),
+            },
             // A projection's slide returns nothing: its caller inlines it.
             NTerminatorKind::Return(None)
                 if self
@@ -5504,15 +5252,11 @@ impl<'db> RmirEmitter<'db> {
     }
 
     /// Stores back the lane copies held for `extent`, which ends here; an
-    /// extent can end on several paths. Whether it held any.
-    fn end_lane_extent(&mut self, bb: RBlockId, extent: LaneExtent) -> bool {
-        let Some(copies) = self.lane_extents.get(&extent).cloned() else {
-            return false;
-        };
-        for copy in copies {
+    /// extent can end on several paths.
+    fn end_lane_extent(&mut self, bb: RBlockId, extent: LaneExtent) {
+        for copy in self.lane_extents.get(&extent).cloned().unwrap_or_default() {
             self.store_lane_copy(bb, copy);
         }
-        true
     }
 
     /// Whether `expr`, defining `value`, accesses a lane that nothing reads

@@ -936,25 +936,6 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
     }
 }
 
-impl DiagnosticVoucher for crate::analysis::analysis_pass::AbiArrayElemNotCopy {
-    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        let Self { ty, elem_ty, .. } = self;
-        CompleteDiagnostic::new(
-            Severity::Error,
-            "fixed-array ABI fields need `Copy` elements".to_string(),
-            vec![SubDiagnostic::new(
-                LabelStyle::Primary,
-                format!("`{ty}` holds a fixed array of `{elem_ty}`, which is not `Copy`"),
-                Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
-            )],
-            vec![format!(
-                "implement `Copy` for `{elem_ty}`, or use `DynArray<{elem_ty}>`"
-            )],
-            self.error_code.clone(),
-        )
-    }
-}
-
 pub trait LazyDiagnostic<'db> {
     fn to_complete(&self, db: &'db dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;
 }
@@ -1732,6 +1713,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::AssocBindingNotOnTrait(span) => primary_diag(
+                Severity::Error,
+                "an associated type binding names a trait's associated type",
+                "only a trait takes a binding, as in `T: Tr<Item = u8>`",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ModeOnProduct { span, shape } => {
                 let (message, label) = if *shape {
                     (
@@ -1783,20 +1772,63 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::InvalidCAbi {
+                span,
+                ty,
+                mutable,
+                exported,
+            } => {
+                let prefix = if *mutable { "mut " } else { "" };
+                let kind = if *exported {
+                    "an `#[unsafe(export)]`"
+                } else {
+                    "an `extern`"
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("{kind} function cannot pass this type to or from C"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{prefix}{}` has no C form", ty.pretty_print(db)),
+                        span: span.resolve(db),
+                    }],
+                    notes: vec![
+                        "C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` \
+                         and raw pointers, and may return nothing"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+            Self::InvalidMainReturn { span, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "a native `main` must return `i32` or nothing".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("`main` returns `{}`", ty.pretty_print(db)),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "the `i32` is the process's exit status, and a `main` that returns nothing \
+                     exits with 0"
+                        .to_string(),
+                ],
+                error_code,
+            },
             Self::InvalidExport { span, issue } => {
                 let (message, label, note) = match issue {
                     ExportIssue::NotPub => (
-                        "an `#[export]` function must be `pub`",
+                        "an `#[unsafe(export)]` function must be `pub`",
                         "this function is not `pub`",
                         None,
                     ),
                     ExportIssue::Generic => (
-                        "an `#[export]` function cannot be generic",
+                        "an `#[unsafe(export)]` function cannot be generic",
                         "generic parameters",
                         Some("a C caller supplies no generic arguments: export a function for each one"),
                     ),
                     ExportIssue::Effects => (
-                        "an `#[export]` function cannot take effects",
+                        "an `#[unsafe(export)]` function cannot take effects",
                         "effects",
                         Some("a C caller provides no effects: provide them in the body with `with`"),
                     ),
@@ -2898,7 +2930,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let mut labels = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: format!("expected unit variant here, but found {kind_name}"),
+                    message: if let Some(kind_name) = kind_name {
+                        format!("expected unit variant here, but found {kind_name}")
+                    } else {
+                        "expected unit variant here".to_string()
+                    },
                     span: primary.resolve(db),
                 }];
 
@@ -3670,8 +3706,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 severity,
                 "type is too large",
                 format!(
-                    "`{}` exceeds the supported 64-bit raw-memory layout size",
-                    ty.pretty_print(db)
+                    "`{}` exceeds the supported {}-bit raw-memory layout size",
+                    ty.pretty_print(db),
+                    db.compilation_settings().target(db).memory_size_bits()
                 ),
                 primary.resolve(db),
                 error_code,
@@ -3908,7 +3945,10 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 ty,
                 op,
                 trait_path,
+                wraps,
+                needs_bound,
             } => {
+                let trait_path_str = trait_path.pretty_print(db);
                 let sub_diagnostics = vec![
                     SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -3918,20 +3958,28 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     // TODO move to hint
                     SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!(
-                            "Try implementing `{}` for `{}`",
-                            trait_path.pretty_print(db),
-                            ty
-                        ),
+                        message: if *needs_bound {
+                            format!("Add a `{ty}: {trait_path_str}` bound")
+                        } else {
+                            format!("Try implementing `{trait_path_str}` for `{ty}`")
+                        },
                         span: span.resolve(db),
                     },
                 ];
 
+                let notes = if *wraps {
+                    vec![format!(
+                        "arithmetic is unchecked here, so `{}` wraps on overflow, which calls `{trait_path_str}`",
+                        op.data(db),
+                    )]
+                } else {
+                    vec![]
+                };
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!("`{}` trait is not implemented", trait_path.pretty_print(db)),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes,
                     error_code,
                 }
             }
@@ -4401,6 +4449,41 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 Severity::Error,
                 "refutable pattern in `for`",
                 "this pattern may not match every step",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::RefutableRecvArmPattern { primary } => primary_diag(
+                Severity::Error,
+                "refutable pattern in a recv arm",
+                "this pattern may not match every value of its variant",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstPatternType { primary, ty } => primary_diag(
+                Severity::Error,
+                "unsupported constant pattern",
+                format!(
+                    "a constant pattern must be an integer or `bool`, but this has type `{}`",
+                    ty.pretty_print(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::GenericConstPattern { primary } => primary_diag(
+                Severity::Error,
+                "unsupported constant pattern",
+                "a constant pattern can't depend on generic parameters",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::InvalidConstPattern { primary } => primary_diag(
+                Severity::Error,
+                "failed to evaluate constant pattern",
+                "this constant's definition is invalid or depends on this pattern",
                 primary.resolve(db),
                 error_code,
             ),

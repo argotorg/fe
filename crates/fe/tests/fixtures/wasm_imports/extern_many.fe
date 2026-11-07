@@ -1,0 +1,24 @@
+//host: extern {
+//host:     fn host_note(_ tag: u32, _ a: i32, _ b: i32, _ c: i64, _ d: i64, _ flag: bool)
+//host:     fn host_ping()
+//host: }
+//mock: fn host_note(_ tag: u32, _ a: i32, _ b: i32, _ c: i64, _ d: i64, _ flag: bool) {}
+//mock: fn host_ping() {}
+
+pub fn report(a: i32, b: i32) -> i32 {
+    unsafe { host_ping() }
+    unsafe { host_note(1, a, b, 5000000000, -5000000000, a < b) }
+    unsafe { host_ping() }
+    unsafe { host_note(2, b, a, 0, a as i64, a == b) }
+    unsafe { host_ping() }
+    a + b
+}
+
+pub fn repeat(n: u32) -> u32 {
+    var i: u32 = 0
+    while i < n {
+        unsafe { host_note(i, 0, 0, 0, 0, i % 2 == 0) }
+        i += 1
+    }
+    i
+}

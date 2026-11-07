@@ -49,3 +49,14 @@ error[8-0151]: `peek` needs `Store` after its closure's effects are inferred
     │             this closure's effects are inferred from its body, without `Store`
     │
     = annotate the types the call depends on in the closure's body, so that it resolves there
+
+error[8-0151]: `fire` needs `Log` after its closure's effects are inferred
+    ┌─ late_closure_effects.fe:150:16
+    │
+150 │     let f = || fire(make(", "))
+    │             ---^^^^^^^^^^^^^^^^
+    │             │  │
+    │             │  this call's effects are known only after the closure's body is checked
+    │             this closure's effects are inferred from its body, without `Log`
+    │
+    = annotate the types the call depends on in the closure's body, so that it resolves there

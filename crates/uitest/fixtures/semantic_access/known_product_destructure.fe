@@ -1,0 +1,369 @@
+// A pattern on a known product parameter opens each marked binding's access on
+// what its part reaches, as a pattern on any place does.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+}
+
+struct Triple {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+impl Driver for Triple {
+    shape Step = (own u256, (mut? u256, mut? u256))
+
+    fn at(mut? self) -> (own u256, (mut? u256, mut? u256)) {
+        (self.a, (mut? self.b, mut? self.c))
+    }
+}
+
+struct Inner {
+    x: u256,
+    y: u256,
+}
+
+struct Holder {
+    n: u256,
+    i: Inner,
+}
+
+impl Driver for Holder {
+    shape Step = (own u256, mut? Inner)
+
+    fn at(mut? self) -> (own u256, mut? Inner) {
+        (self.n, mut? self.i)
+    }
+}
+
+enum Tag {
+    Empty,
+    Full(u256),
+}
+
+enum Mark {
+    A,
+    B,
+}
+
+impl Copy for Mark {}
+
+struct Tagged {
+    n: u256,
+    tag: Tag,
+}
+
+impl Driver for Tagged {
+    shape Step = (own u256, mut? Tag)
+
+    fn at(mut? self) -> (own u256, mut? Tag) {
+        (self.n, mut? self.tag)
+    }
+}
+
+struct Buf {
+    data: *u256,
+}
+
+impl core::ops::Drop for Buf {
+    fn drop(own self) {}
+}
+
+struct Owner {
+    n: u256,
+    buf: Buf,
+}
+
+impl Driver for Owner {
+    shape Step = (own u256, mut? Buf)
+
+    fn at(mut? self) -> (own u256, mut? Buf) {
+        (self.n, mut? self.buf)
+    }
+}
+
+fn bump(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    b += a
+}
+
+fn sum(_ s: Pair::Step<ref>) -> u256 {
+    let (a, b) = s
+    a + b
+}
+
+fn overlapping(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    let (c, mut d) = s
+    b += a
+    d += c
+    b += a
+}
+
+fn passed_while_open(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    bump(s)
+    b += a
+}
+
+fn field_read_while_open(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    let r = s.1
+    b += a + r
+}
+
+fn copied_while_open(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    let (_, c) = s
+    b += a + c
+}
+
+fn tested_while_open(_ s: Pair::Step<mut>) -> u256 {
+    let (a, mut b) = s
+    let r = match s {
+        (_, 0) => 0
+        _ => 1
+    }
+    b += a
+    r
+}
+
+fn enum_tested_while_open(_ s: Tagged::Step<mut>) -> u256 {
+    let (a, Tag::Full(mut x)) = s else {
+        return 0
+    }
+    let r = match s {
+        (_, Tag::Empty) => 0
+        _ => 1
+    }
+    x += a
+    r
+}
+
+fn same_field_tested_while_open(_ s: Holder::Step<mut>) -> u256 {
+    let (_, Inner { mut x, .. }) = s
+    let r = match s {
+        (_, Inner { x: 0, .. }) => 0
+        _ => 1
+    }
+    x += 1
+    r
+}
+
+fn mut_under_ref(_ s: Pair::Step<mut>) {
+    let (_, ref b) = s
+    let (_, mut c) = s
+    c += b
+}
+
+fn nested_match(_ s: Pair::Step<mut>) {
+    match s {
+        (a, mut b) => {
+            match s {
+                (c, mut d) => {
+                    d += c
+                }
+            }
+            b += a
+        }
+    }
+}
+
+fn let_else_overlapping(_ s: Pair::Step<mut>) {
+    let (0, mut b) = s else {
+        return
+    }
+    let (_, mut c) = s
+    b += 1
+    c += 1
+}
+
+fn captured_while_open(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    let f = || s.0
+    b += f() + a
+}
+
+fn nested_part_overlapping(_ s: Triple::Step<mut>) {
+    let (a, (mut x, _)) = s
+    let (_, (mut z, _)) = s
+    x += a
+    z += a
+    x += a
+}
+
+fn same_field_overlapping(_ s: Holder::Step<mut>) {
+    let (n, Inner { mut x, .. }) = s
+    let (_, Inner { x: mut z, .. }) = s
+    x += n
+    z += n
+    x += n
+}
+
+fn mut_under_named_ref(_ s: Pair::Step<mut>) -> u256 {
+    let x = ref s.1
+    let (a, mut b) = s
+    b += a
+    x
+}
+
+fn passed_under_named_ref(_ s: Pair::Step<mut>) -> u256 {
+    let x = ref s.1
+    bump(s)
+    x
+}
+
+// A non-`Copy` part is read as any place behind an access is.
+fn read_through_ref(_ s: Owner::Step<ref>) {
+    let _b = s.1
+}
+
+fn moved_through_mut(_ s: Owner::Step<mut>) {
+    let _b = s.1
+}
+
+fn moved_twice(_ s: Owner::Step<mut>) {
+    let (_, b) = s
+    let (_, c) = s
+    consume(b)
+    consume(c)
+}
+
+fn consume(_ b: own Buf) {}
+
+// A test of a `Copy` tuple behind a plain `mut` access reads its component.
+fn copy_enum_tested_while_open(_ p: mut (Mark, u256)) -> u256 {
+    let h = mut p.0
+    let n = match p {
+        (Mark::A, _) => 0
+        (Mark::B, _) => 1
+    }
+    h = Mark::A
+    n
+}
+
+// Accepted: each access ends before the next opens.
+fn in_turn(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    b += a
+    let (c, mut d) = s
+    d += c
+}
+
+fn then_passed(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    b += a
+    bump(s)
+}
+
+fn loops(_ s: Pair::Step<mut>) {
+    var i: u256 = 0
+    while i < 3 {
+        let (a, mut b) = s
+        b += a
+        i += 1
+    }
+}
+
+// Accepted: they overlap nowhere.
+fn own_part_beside_mut(_ s: Pair::Step<mut>) {
+    let (_, mut b) = s
+    let (c, _) = s
+    b += c
+}
+
+fn nested_parts(_ s: Triple::Step<mut>) {
+    let (a, (mut x, _)) = s
+    let (_, (_, mut y)) = s
+    x += a
+    y += a
+    x += a
+}
+
+fn other_field_tested(_ s: Holder::Step<mut>) -> u256 {
+    let (_, Inner { mut x, .. }) = s
+    let r = match s {
+        (_, Inner { y: 0, .. }) => 0
+        _ => 1
+    }
+    x += 1
+    r
+}
+
+fn other_component_tested(_ p: mut (Mark, u256)) -> u256 {
+    let h = mut p.1
+    let n = match p {
+        (Mark::A, _) => 0
+        (Mark::B, _) => 1
+    }
+    h = 1
+    n
+}
+
+fn fields_of_a_part(_ s: Holder::Step<mut>) {
+    let (n, Inner { mut x, .. }) = s
+    let (_, Inner { mut y, .. }) = s
+    x += n
+    y += n
+    x += n
+}
+
+// Accepted: all of these read.
+fn tested_beside_ref(_ s: Pair::Step<mut>) -> u256 {
+    let (a, ref b) = s
+    match s {
+        (_, 0) => 0
+        _ => a + b
+    }
+}
+
+fn copies(_ s: Pair::Step<mut>) -> u256 {
+    let (a, b) = s
+    let (c, d) = s
+    a + b + c + d
+}
+
+fn two_refs(_ s: Pair::Step<ref>) -> u256 {
+    let (a, ref b) = s
+    let (c, ref d) = s
+    a + b + c + d
+}
+
+fn ref_then_passed(_ s: Pair::Step<ref>) -> u256 {
+    let (a, ref b) = s
+    let x = sum(s)
+    a + b + x
+}
+
+fn field_read_beside_ref(_ s: Pair::Step<mut>) -> u256 {
+    let (a, ref b) = s
+    let r = s.1
+    a + b + r
+}
+
+fn captured_beside_ref(_ s: Pair::Step<ref>) -> u256 {
+    let (a, ref b) = s
+    let f = || s.0 + s.1
+    a + b + f()
+}
+
+fn named_ref_beside_ref(_ s: Pair::Step<ref>) -> u256 {
+    let x = ref s.1
+    let (a, ref b) = s
+    a + b + x
+}

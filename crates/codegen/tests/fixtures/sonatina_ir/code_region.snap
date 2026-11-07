@@ -8,6 +8,7 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {i256};
 type @layout_1 = {i256, i256, i256};
 type @layout_2 = {i256, i256};
+type @layout_3 = {i256};
 
 func inline(always) private %alloc_bytes(v0.i256) -> i256 {
     block0:
@@ -247,7 +248,7 @@ func private %codecopy(noalias nocapture v0.objref<@layout_1>, v1.i256, v2.i256,
         br v24 block5 block6;
 }
 
-func private %create2_raw(v0.@layout_0, noalias nocapture v1.objref<@layout_2>, v2.i256) -> @layout_0 {
+func private %create2_raw(v0.@layout_0, noalias nocapture v1.objref<@layout_2>, v2.i256) -> @layout_3 {
     block0:
         jump block1;
 
@@ -256,7 +257,7 @@ func private %create2_raw(v0.@layout_0, noalias nocapture v1.objref<@layout_2>, 
         v6.i256 = call %ptr__g79ff v1;
         v7.i256 = call %len__g79ff v1;
         v9.i256 = evm_create2 v4 v6 v7 v2;
-        v12.@layout_0 = insert_value undef.@layout_0 0.i256 v9;
+        v12.@layout_3 = insert_value undef.@layout_3 0.i256 v9;
         return v12;
 }
 
@@ -307,7 +308,7 @@ func private %init() {
         jump block3;
 
     block2:
-        v15.@layout_0 = call %create2_raw v11 v2 4660.i256;
+        v15.@layout_3 = call %create2_raw v11 v2 4660.i256;
         jump block7;
 
     block3:
@@ -449,8 +450,8 @@ func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_1>, v
         jump block1;
 
     block1:
-        v4.i256 = call %capacity v0;
-        v6.i1 = gt v1 v4;
+        v5.i256 = call %capacity v0;
+        v6.i1 = gt v1 v5;
         br v6 block2 block5;
 
     block2:
@@ -465,31 +466,31 @@ func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_1>, v
         br v10 block9 block7;
 
     block5:
-        v12.i256 = call %capacity v0;
-        (v14.i256, v15.i1) = usubo v12 v1;
-        br v15 block10 block11;
+        v13.i256 = call %capacity v0;
+        (v15.i256, v16.i1) = usubo v13 v1;
+        br v16 block10 block11;
 
     block6:
-        v23.i256 = call %impl_MemBuffer__ptr v0;
-        v24.i256 = call %impl_MemBuffer__len v0;
-        v25.i256 = add v23 v24;
-        v27.i256 = call %impl_MemBuffer__len v0;
-        (v28.i256, v29.i1) = usubo v1 v27;
-        br v29 block10 block12;
+        v24.i256 = call %impl_MemBuffer__ptr v0;
+        v25.i256 = call %impl_MemBuffer__len v0;
+        v26.i256 = add v24 v25;
+        v28.i256 = call %impl_MemBuffer__len v0;
+        (v29.i256, v30.i1) = usubo v1 v28;
+        br v30 block10 block12;
 
     block7:
         jump block8;
 
     block8:
-        v34.i256 = call %impl_MemBuffer__ptr v0;
-        v36.i256 = call %downcast_unchecked v1;
-        v37.i256 = add v34 v36;
-        return v37;
+        v35.i256 = call %impl_MemBuffer__ptr v0;
+        v37.i256 = call %downcast_unchecked v1;
+        v38.i256 = add v35 v37;
+        return v38;
 
     block9:
-        v39.i256 = call %impl_MemBuffer__len v0;
-        v41.i1 = gt v1 v39;
-        br v41 block6 block7;
+        v41.i256 = call %impl_MemBuffer__len v0;
+        v42.i1 = gt v1 v41;
+        br v42 block6 block7;
 
     block10:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -497,12 +498,12 @@ func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_1>, v
         evm_revert 0.i256 36.i256;
 
     block11:
-        v21.i1 = gt v2 v14;
-        br v21 block2 block3;
+        v22.i1 = gt v2 v15;
+        br v22 block2 block3;
 
     block12:
-        v30.i256 = call %downcast_unchecked v28;
-        call %zero_bytes v25 v30;
+        v31.i256 = call %downcast_unchecked v29;
+        call %zero_bytes v26 v31;
         jump block8;
 }
 
@@ -601,9 +602,9 @@ func private %set_len(noalias nocapture v0.objref<@layout_1>, v1.i256) {
         jump block1;
 
     block1:
-        v4.objref<i256> = obj.proj v0 2.i256;
-        v5.i256 = obj.load v4;
-        v7.i1 = gt v1 v5;
+        v5.objref<i256> = obj.proj v0 2.i256;
+        v6.i256 = obj.load v5;
+        v7.i1 = gt v1 v6;
         br v7 block2 block3;
 
     block2:

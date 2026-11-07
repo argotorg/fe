@@ -1,0 +1,67 @@
+// A `loop` or `while true` that no `break` leaves never completes, so it can
+// end a body of any type.
+fn search(_ n: u64) -> u64 {
+    var i: u64 = 0
+    loop {
+        if i * i >= n {
+            return i
+        }
+        i += 1
+    }
+}
+
+fn search_while(_ n: u64) -> u64 {
+    var i: u64 = 0
+    while true {
+        if i * i >= n {
+            return i
+        }
+        i += 1
+    }
+}
+
+// A `break` of an inner loop doesn't leave the outer one.
+fn nested(_ n: usize) -> usize {
+    loop {
+        while true {
+            break
+        }
+        for _ in 0..n {
+            break
+        }
+        return n
+    }
+}
+
+fn let_else(_ value: Option<u64>) -> u64 {
+    let Option::Some(v) = value else {
+        loop {}
+    }
+    v
+}
+
+// A `break` makes the loop complete, with no value.
+fn breaks(_ n: u64) -> u64 {
+    loop {
+        if n == 0 {
+            break
+        }
+        return n
+    }
+}
+
+fn breaks_while(_ n: u64) -> u64 {
+    while true {
+        if n == 0 {
+            break
+        }
+        return n
+    }
+}
+
+// Any other condition may be false.
+fn condition(_ n: u64) -> u64 {
+    while n > 0 {
+        return n
+    }
+}

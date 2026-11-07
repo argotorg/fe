@@ -1,0 +1,107 @@
+// `!` coerces to any type, but no type coerces to `!`.
+fn zero<T: Default>() -> T {
+    T::default()
+}
+
+fn any<T>() -> T {
+    panic()
+}
+
+fn sink(_ x: !) {}
+
+fn take(_ x: u64) -> u64 {
+    x
+}
+
+fn local_as_never_then_value() -> u64 {
+    let x = zero()
+    let _a: ! = x
+    let b: u64 = x
+    take(b)
+}
+
+fn returned_as_never_then_value(_ c: bool) -> ! {
+    let x = zero()
+    if c {
+        return x
+    }
+    let y: u64 = x
+    take(y)
+    panic()
+}
+
+fn passed_as_never_then_value() {
+    let x = any()
+    sink(x)
+    let y: u64 = x
+    take(y)
+}
+
+fn value_then_never() {
+    let x = any()
+    let y: u64 = x
+    sink(x)
+    take(y)
+}
+
+fn generic_as_never() -> ! {
+    let x = any()
+    x
+}
+
+fn literal_as_never() -> ! {
+    let x = 5
+    x
+}
+
+// A variable a value of another type has fixed isn't `!` any more.
+fn fixed_then_never(_ c: bool) {
+    let x = if c { return } else { any() }
+    let y: u64 = x
+    let _a: ! = x
+    take(y)
+}
+
+// A variable that became `!` still has to satisfy its bounds.
+fn never_then_trait_bound(_ c: bool) -> ! {
+    let x = if c { panic() } else { zero() }
+    x
+}
+
+fn let_else_must_still_diverge(_ o: Option<u64>) -> u64 {
+    let Option::Some(x) = o else { any() }
+    x
+}
+
+// A let-else block fixes its value as `!`, so a later use can't make it return.
+fn let_else_fixes_never(_ c: bool, _ o: Option<u64>) -> u64 {
+    let y = if c { panic() } else { zero() }
+    let Option::Some(x) = o else { y }
+    let _z: u64 = y
+    x
+}
+
+fn let_else_after_value(_ c: bool, _ o: Option<u64>) -> u64 {
+    let y = if c { panic() } else { any() }
+    let _z: u64 = y
+    let Option::Some(x) = o else { y }
+    x
+}
+
+// Only a diverging expression coerces to a binding, not a place of type `!`.
+fn never_param(_ x: !) -> u64 {
+    let y = x
+    y
+}
+
+// A diverging branch leaves its conditional's type to the other branch.
+fn branch_mismatch(_ c: bool) -> u64 {
+    let w = if c { return 1 } else { true }
+    take(w)
+}
+
+// Nothing fixes this type, so the bound can't be chosen.
+fn branch_unconstrained(_ c: bool) -> u64 {
+    let _w = if c { return 1 } else { zero() }
+    2
+}

@@ -6,6 +6,9 @@ fn evm() { evm_kept }
 #[cfg(target = "native")]
 fn native() { native_kept }
 
+#[cfg(target = "wasm")]
+fn wasm() { wasm_kept }
+
 #[cfg(target_os = "linux")]
 fn linux() { linux_kept }
 

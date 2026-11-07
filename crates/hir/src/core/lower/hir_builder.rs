@@ -253,10 +253,10 @@ where
         (list, idents.map(|(ident, _)| self.ty_ident(ident)))
     }
 
-    pub(super) fn param_own_self(&self) -> FuncParam<'db> {
+    pub(super) fn param_self(&self) -> FuncParam<'db> {
         let db = self.db();
         FuncParam {
-            mode: FuncParamMode::Own,
+            mode: FuncParamMode::View,
             is_mut: false,
             has_ref_prefix: false,
             has_own_prefix: false,
@@ -584,13 +584,13 @@ where
         )
     }
 
-    /// `fn encode(own self, _ out: core::abi::AbiFrame)`, writing `fields` in
+    /// `fn encode(self, _ out: core::abi::AbiFrame)`, writing `fields` in
     /// the head/tail layout of `Self`.
     pub(super) fn encode_func(&mut self, fields: &[(IdentId<'db>, TypeId<'db>)]) {
         let out_ident = self.generated_ident("out");
         let frame_ty = self.ty_path(self.path_from_root(self.roots.core, &["abi", "AbiFrame"]));
         let params = self.params([
-            self.param_own_self(),
+            self.param_self(),
             self.param_underscore_named(out_ident, frame_ty),
         ]);
         self.func_with_body_inline_always(
@@ -650,6 +650,13 @@ where
 
     pub(super) fn generated_ident(&self, name: &str) -> IdentId<'db> {
         fresh_ident(self.db(), &self.reserved, name)
+    }
+
+    /// The local that holds field `index` while a value is decoded. Unlike
+    /// the field's own name, it can't capture a name that a field type refers
+    /// to.
+    pub(super) fn field_local(&self, index: usize) -> IdentId<'db> {
+        self.generated_ident(&format!("field_{index}"))
     }
 
     pub(super) fn roots(&self) -> LibRoots<'db> {
@@ -819,16 +826,10 @@ where
         self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero), None));
 
         for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
-            let field_ident = self.generated_ident(&format!("field_{index}"));
-            let field_pat = self.push_pat(Pat::Path(
-                Partial::Present(PathId::from_ident(db, field_ident)),
-                BindingMarker::Plain,
-            ));
-            let receiver = self.push_expr(Expr::Field(
+            let field_value = self.push_expr(Expr::Field(
                 self_expr,
                 Partial::Present(FieldIndex::Ident(field)),
             ));
-            self.emit_stmt(Stmt::Let(field_pat, None, Some(receiver), None));
             let encode_field_args = GenericArgListId::given(
                 db,
                 vec![
@@ -844,7 +845,6 @@ where
                 .push_str(db, "abi")
                 .push_str_args(db, "encode_field", encode_field_args);
             let encode_field_callee = self.path_expr(encode_field_path);
-            let field_value = self.ident_expr(field_ident);
             let out_arg = self.ident_expr(out_ident);
             let head_pos_arg = self.ident_expr(head_pos_ident);
             let tails_arg = self.ident_expr(tails_ident);
@@ -1001,15 +1001,18 @@ where
         self.emit_stmt(Stmt::Let(bind_pat, Some(u256_ty), Some(len_call), None));
     }
 
+    /// `return Self { a: __fe_field_0, b: __fe_field_1, .. }`, from the
+    /// fields' locals (see [`Self::field_local`]).
     pub(super) fn return_record_self(&mut self, fields: &[IdentId<'db>]) {
         let db = self.db();
         let self_path = Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db)));
         let fields = fields
             .iter()
             .copied()
-            .map(|field_name| crate::hir_def::Field {
+            .enumerate()
+            .map(|(index, field_name)| crate::hir_def::Field {
                 label: Some(field_name),
-                expr: self.ident_expr(field_name),
+                expr: self.ident_expr(self.field_local(index)),
             })
             .collect();
         let record_expr = self.push_expr(Expr::RecordInit(self_path, fields));

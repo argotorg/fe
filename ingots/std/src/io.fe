@@ -18,6 +18,7 @@
 /// returns the host's reason as an `Error`.
 use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes}
 use core::abi::DynString
+use core::fixed::{Fixed, UFixed}
 use core::num::{IntWord, UnsignedAbs}
 use super::env::c_string_len
 use super::native::{Host, HostCapabilitySeal}
@@ -351,6 +352,39 @@ impl Display for isize {
     fn fmt(self, _ out: mut MemBuffer) { push_signed(mut out, negative: self < 0, magnitude: self.unsigned_abs()) }
 }
 
+/// The integer part, then any fraction after a `.` without trailing zeros:
+/// `Wad::from_ratio(5, 2)` is `2.5` and `Wad::from_int(3)` is `3`.
+impl<const D: u256> Display for UFixed<D> {
+    fn fmt(self, _ out: mut MemBuffer) {
+        let scale = UFixed<D>::SCALE
+        push_decimal(mut out, self.raw() / scale)
+        var fraction = self.raw() % scale
+        if fraction == 0 {
+            return
+        }
+        out.push(b'.')
+        var place = scale / 10
+        while fraction < place {
+            out.push(b'0')
+            place /= 10
+        }
+        while fraction % 10 == 0 {
+            fraction /= 10
+        }
+        push_decimal(mut out, fraction)
+    }
+}
+
+/// Like `UFixed`, after a `-` if negative.
+impl<const D: u256> Display for Fixed<D> {
+    fn fmt(self, _ out: mut MemBuffer) {
+        if self.is_negative() {
+            out.push(b'-')
+        }
+        self.abs().fmt(mut out)
+    }
+}
+
 impl Display for bool {
     fn fmt(self, _ out: mut MemBuffer) {
         write!(mut out, if self { "true" } else { "false" })
@@ -360,18 +394,12 @@ impl Display for bool {
 impl<const N: usize> Display for String<N> {
     fn fmt(self, _ out: mut MemBuffer) {
         // The text is the low `len` bytes of the string's word, big endian.
-        let len = self.len()
-        let word = self as u256
-        var i: usize = len
-        while i > 0 {
-            i -= 1
-            out.push(((word >> ((i * 8) as u256)) & 0xff).downcast_unchecked())
-        }
+        out.extend_from_word(self as u256, len: self.len())
     }
 }
 
 impl Display for DynString {
-    fn fmt(self, _ out: mut MemBuffer) { out.extend_from(self.payload_span()) }
+    fn fmt(self, _ out: mut MemBuffer) { out.extend_from(self.span()) }
 }
 
 /// The bytes themselves.

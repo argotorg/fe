@@ -1,9 +1,9 @@
 use super::intrinsic::size_of
 use super::marker::{Clearable, Copy}
 use super::mem::{drop, forget, needs_drop}
-use super::num::{IntWord, from_be, from_le, to_be, to_le, word_to_usize}
+use super::num::{Bounded, IntDowncast, IntWord, from_be, from_le, to_be, to_le, word_to_usize}
 use super::option::Option
-use super::ops::{Drop, Eq, Index, Len, WrappingAdd, WrappingMul, WrappingSub}
+use super::ops::{Drop, Eq, Index, Len, Ord, WrappingAdd, WrappingMul, WrappingSub}
 use super::result::Result
 use super::panic_code
 use super::panics::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY}
@@ -28,7 +28,7 @@ extern {
     fn try_alloc_raw(_ size: usize) -> *u8
 
     /// Releases an allocation that `alloc_raw` or `try_alloc_raw` made. Native
-    /// hosts free it; EVM memory is never reclaimed.
+    /// hosts and WebAssembly modules free it; EVM memory is never reclaimed.
     unsafe fn dealloc_raw(_ ptr: *u8)
 
     /// Copies `len` bytes between linear-memory regions.
@@ -397,10 +397,7 @@ impl<T> MemVec<T> {
     /// `reserve`'s check stays small where it is inlined.
     #[inline(never)]
     fn grow(mut self, needed: usize) {
-        var capacity = if self.capacity == 0 { 4 } else { self.capacity }
-        while capacity < needed {
-            capacity *= 2
-        }
+        let capacity = grown_capacity(self.capacity, needed, initial: 4, max: MAX_ALLOCATION)
         let replacement = cast<u8, T>(alloc_bytes(capacity * size_of<T>()))
         unsafe { self.move_to(replacement, capacity) }
     }
@@ -983,18 +980,16 @@ impl MemBuffer {
     /// larger region and copies the initialized bytes.
     pub fn reserve(mut self, _ additional: usize) {
         let needed = self.len + additional
-        if needed <= self.capacity {
-            return
+        if needed > self.capacity {
+            self.grow(needed)
         }
+    }
 
-        var capacity = self.capacity
-        if capacity == 0 {
-            capacity = 32
-        }
-        while capacity < needed {
-            capacity *= 2
-        }
-
+    /// Grows the allocation to hold `needed` bytes. Out of line, so that
+    /// `reserve`'s check stays small where it is inlined.
+    #[inline(never)]
+    fn grow(mut self, needed: usize) {
+        let capacity = grown_capacity(self.capacity, needed, initial: 32, max: MAX_ALLOCATION)
         let replacement = alloc_bytes(capacity)
         unsafe { self.move_to(replacement, capacity) }
     }
@@ -1062,20 +1057,34 @@ impl MemBuffer {
     /// Append bytes, growing the allocation when necessary.
     pub fn extend_from(mut self, _ source: MemSpan) {
         self.reserve(source.len())
-        // `reserve` made room, and the copy initializes the added bytes.
+        // `reserve` made room, and the copy initializes the added bytes. They
+        // lie within the allocation, so the new length cannot overflow.
         unsafe {
             copy(dest: offset_bytes(self.ptr, self.len), source)
-            self.len += source.len()
+            self.len = self.len.wrapping_add(source.len())
         }
     }
 
     /// Append one byte, growing the allocation when necessary.
     pub fn push(mut self, _ byte: u8) {
-        self.reserve(1)
-        // `reserve` made room for the byte.
+        if self.len == self.capacity {
+            self.grow(needed: self.len + 1)
+        }
+        // There is room for the byte, which lies within the allocation, so
+        // `len + 1` cannot overflow.
         unsafe {
             *offset_bytes(self.ptr, self.len) = byte
-            self.len += 1
+            self.len = self.len.wrapping_add(1)
+        }
+    }
+
+    /// Append the low `len` bytes of `word`, at most 32, big-endian.
+    pub fn extend_from_word(mut self, _ word: u256, len: usize) {
+        // One store writes all 32 bytes, those from `len` on past the extent.
+        self.reserve(32)
+        unsafe {
+            *cast<u8, u256>(offset_bytes(self.ptr, self.len)) = to_be(word << (((32 - len) * 8) as u256))
+            self.len = self.len.wrapping_add(len)
         }
     }
 
@@ -1284,8 +1293,9 @@ pub fn alloc<T>() -> *T {
     cast<u8, T>(alloc_bytes(size_of<T>()))
 }
 
-/// The largest allocation, as Solidity's.
-pub(ingot) const MAX_ALLOCATION: usize = 0xffffffffffffffff
+/// The largest allocation: the Solidity bound of `2**64 - 1`, or the largest
+/// `usize` where the address space is narrower (WebAssembly).
+pub(ingot) const MAX_ALLOCATION: usize = u64::max().downcast_saturate()
 
 /// The `usize` length of an allocation sized as a word. A length the
 /// target's `usize` cannot hold exceeds `MAX_ALLOCATION`, so it reverts with
@@ -1338,7 +1348,7 @@ pub(ingot) unsafe fn alloc_bytes_unchecked(_ len: usize) -> *u8 {
 /// Allocates room for `len` values of `T`, without initializing them, or
 /// `None` when they would exceed `MAX_ALLOCATION` bytes or the allocation
 /// fails.
-fn try_alloc_elems<T>(_ len: usize) -> Option<*T> {
+pub(ingot) fn try_alloc_elems<T>(_ len: usize) -> Option<*T> {
     let size = size_of<T>()
     if size != 0 && len > MAX_ALLOCATION / size {
         return Option::None
@@ -1346,14 +1356,12 @@ fn try_alloc_elems<T>(_ len: usize) -> Option<*T> {
     Option::Some(cast<u8, T>(try_alloc_bytes(len * size)?))
 }
 
-/// The capacity growing from `capacity` to fit `needed` takes, at most
-/// `max`: doubling, from `initial` when empty.
+/// The capacity growing from `capacity` to fit `needed` takes: double, within
+/// `max`, or `needed` if that is more, and `initial` at least.
 fn grown_capacity(_ capacity: usize, needed: usize, initial: usize, max: usize) -> usize {
-    var capacity = if capacity == 0 { initial } else { capacity }
-    while capacity < needed {
-        capacity = if capacity > max / 2 { needed } else { capacity * 2 }
-    }
-    capacity
+    let doubled = if capacity > max / 2 { needed } else { capacity * 2 }
+    let grown = if doubled > needed { doubled } else { needed }
+    if grown > initial { grown } else { initial }
 }
 
 /// Allocates an array without initializing its contents. The caller must
@@ -1531,6 +1539,74 @@ impl<T: Eq> Eq for MemSlice<T> {
             }
         }
         true
+    }
+}
+
+/// Slices order by their first unequal element, and a slice that begins
+/// another orders before it, so byte spans order as text: `"ab" < "abc"`
+/// and `"abc" < "b"`.
+impl<T: Ord> Ord for MemSlice<T> {
+    fn lt(self, _ other: MemSlice<T>) -> bool {
+        orders_before(self, other)
+    }
+
+    fn le(self, _ other: MemSlice<T>) -> bool {
+        !orders_before(other, self)
+    }
+
+    fn gt(self, _ other: MemSlice<T>) -> bool {
+        orders_before(other, self)
+    }
+
+    fn ge(self, _ other: MemSlice<T>) -> bool {
+        !orders_before(self, other)
+    }
+}
+
+// Whether `a` orders before `b`.
+fn orders_before<T: Ord>(_ a: MemSlice<T>, _ b: MemSlice<T>) -> bool {
+    let len = if a.len < b.len { a.len } else { b.len }
+    for i in 0..len {
+        if a[i].lt(b[i]) {
+            return true
+        }
+        if b[i].lt(a[i]) {
+            return false
+        }
+    }
+    a.len < b.len
+}
+
+/// Buffers order by their bytes, as spans do.
+impl Ord for MemBuffer {
+    fn lt(self, _ other: MemBuffer) -> bool {
+        self.span() < other.span()
+    }
+
+    fn le(self, _ other: MemBuffer) -> bool {
+        self.span() <= other.span()
+    }
+
+    fn gt(self, _ other: MemBuffer) -> bool {
+        self.span() > other.span()
+    }
+
+    fn ge(self, _ other: MemBuffer) -> bool {
+        self.span() >= other.span()
+    }
+}
+
+/// Buffers are equal when they hold the same bytes.
+impl Eq for MemBuffer {
+    fn eq(self, _ other: MemBuffer) -> bool {
+        self.span() == other.span()
+    }
+}
+
+/// Whether the buffer holds the span's bytes.
+impl Eq<MemSpan> for MemBuffer {
+    fn eq(self, _ other: MemSpan) -> bool {
+        self.span() == other
     }
 }
 

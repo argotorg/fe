@@ -50,10 +50,10 @@ note:
    │                                                           ^^^^^^^^^^ T
 
 note:
-   ┌─ contract_recv_generic_variant.fe:21:53
+   ┌─ contract_recv_generic_variant.fe:21:49
    │
-21 │       fn encode(own self, _ out: core::abi::AbiFrame) {
-   │ ╭─────────────────────────────────────────────────────^
+21 │       fn encode(self, _ out: core::abi::AbiFrame) {
+   │ ╭─────────────────────────────────────────────────^
 22 │ │         let Self { value } = self
 23 │ │         value.encode(out)
 24 │ │     }

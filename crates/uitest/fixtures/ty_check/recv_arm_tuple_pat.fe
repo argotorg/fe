@@ -1,0 +1,22 @@
+msg M {
+    #[selector = 0x01]
+    V { n: u256 } -> u256,
+    #[selector = 0x02]
+    W { n: u256 } -> u256,
+}
+
+// A tuple pattern in a recv arm is a parse error. The arm's path is resolved
+// once, by the recv block, so a single segment isn't reported as not found
+// where the arm is written, and the elements still bind.
+pub contract C {
+    recv M {
+        V(n) -> u256 { n }
+        M::W(n) -> u256 { n }
+    }
+}
+
+pub contract D {
+    recv {
+        M::V(n) -> u256 { n }
+    }
+}

@@ -25,7 +25,7 @@ use crate::{
                     NLayoutBackingSource, NLayoutPlan, NLayoutProjection, NLayoutSourcePath,
                     NLayoutUseBacking, NRootRepresentation, NValueRepresentation,
                 },
-                verify::project_path_ty,
+                verify::{project_path_ty, project_path_ty_indexing},
             },
             sem_const_ty,
         },
@@ -139,7 +139,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 statements: Vec::new(),
                 terminator: NTerminator {
                     origin: crate::analysis::semantic::SemOrigin::Synthetic,
-                    kind: NTerminatorKind::Assert { message: None },
+                    kind: NTerminatorKind::Unreachable,
                 },
             })
             .collect();
@@ -323,7 +323,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn local_slot_root(&mut self, local: SLocalId) -> NRootId {
         let local_data = &self.raw.locals[local.index()];
         let param = local_data.source.and_then(|binding| match binding {
-            LocalBinding::Param { idx, .. } => Some(idx as u32),
+            // A product parameter's binding gathers its parts, the body's
+            // inputs: it is a local the body initializes.
+            LocalBinding::Param { idx, .. } if self.raw.entry_locals.contains(&local) => {
+                Some(idx as u32)
+            }
             _ => None,
         });
         let root = NRootId::new(self.roots.len());
@@ -567,7 +571,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             )?;
                             value = self.operand(result, statement.origin, ReadMode::Move);
                         }
-                        self.emit_store(raw_block, None, statement.origin, destination, value);
+                        self.emit_store(raw_block, None, statement.origin, destination, value)?;
                     } else {
                         let value = self.emit_define(
                             raw_block,
@@ -596,6 +600,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                 target,
                             )?;
                         }
+                        // The drop before `a[i] = v` reads `a[i]`, so `i` is
+                        // checked before the old element is destroyed.
+                        self.emit_place_index_checks(raw_block, statement.origin, &target)?;
                         NDropTarget::Place(target)
                     };
                     let id = NStatementId::new(self.statement_count);
@@ -636,7 +643,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         statement.origin,
                         destination,
                         value,
-                    );
+                    )?;
                 }
             }
         }
@@ -1331,7 +1338,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             let Some((_, target)) = projected_ty.as_capability(self.db) else {
                 continue;
             };
-            if index + 1 == projections.len() {
+            // A read of the carrier itself takes it; any other reads what it
+            // reaches.
+            if index + 1 == projections.len() && result_ty.as_capability(self.db).is_some() {
                 break;
             }
             if self.ty_is_copy(projected_ty) {
@@ -1419,7 +1428,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 .position(|projection| matches!(projection, Projection::Deref))
         {
             // A value local has no place to project from. Project the pointer
-            // out of its value and dereference that.
+            // or carrier out of its value and dereference that.
             let mut prefix = crate::analysis::semantic::SemanticProjectionPath::new();
             for projection in projections.by_ref().take(deref) {
                 prefix.push(projection.clone());
@@ -1435,18 +1444,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 &path,
             )
             .map_err(|_| NormalizeError::InvalidProjection)?;
-            let (ty, _) = pointer_ty
-                .as_ptr(self.db)
-                .ok_or(NormalizeError::InvalidProjection)?;
             let pointer =
                 self.normalize_value_projection(block, origin, raw.local, value, path, pointer_ty)?;
             let pointer = self.emit_define(block, None, origin, pointer_ty, raw.local, pointer)?;
-            NPlace {
-                base: NPlaceBase::Deref { pointer },
-                path: NDataPath::empty(),
-                ty,
-                origin,
-            }
+            self.place_selected_by(pointer, origin)?
         } else {
             self.place_for_local(block, origin, raw.local)?
         };
@@ -1507,10 +1508,6 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         source_local: SLocalId,
         place: NPlace<'db>,
     ) -> Result<NPlace<'db>, NormalizeError<'db>> {
-        let pointer_target = place.ty.as_ptr(self.db).map(|(target, _)| target);
-        let target = pointer_target
-            .or_else(|| place.ty.as_capability(self.db).map(|(_, target)| target))
-            .ok_or(NormalizeError::InvalidProjection)?;
         let value = self.emit_define(
             block,
             None,
@@ -1522,14 +1519,28 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 mode: ReadMode::Copy,
             },
         )?;
+        self.place_selected_by(value, origin)
+    }
+
+    /// The place the pointer or capability carrier `value` selects.
+    fn place_selected_by(
+        &self,
+        value: NValueId,
+        origin: SemOrigin<'db>,
+    ) -> Result<NPlace<'db>, NormalizeError<'db>> {
+        let ty = self.values[value.index()].ty;
+        let (base, ty) = if let Some((target, _)) = ty.as_ptr(self.db) {
+            (NPlaceBase::Deref { pointer: value }, target)
+        } else {
+            let (_, target) = ty
+                .as_capability(self.db)
+                .ok_or(NormalizeError::InvalidProjection)?;
+            (NPlaceBase::CapabilityTarget { carrier: value }, target)
+        };
         Ok(NPlace {
-            base: if pointer_target.is_some() {
-                NPlaceBase::Deref { pointer: value }
-            } else {
-                NPlaceBase::CapabilityTarget { carrier: value }
-            },
+            base,
             path: NDataPath::empty(),
-            ty: target,
+            ty,
             origin,
         })
     }
@@ -1822,7 +1833,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .map(|target| self.successor(block, raw.origin, target))
                     .transpose()?,
             },
-            STerminatorKind::Assert { message } => NTerminatorKind::Assert { message: *message },
+            STerminatorKind::Fail(reason) => NTerminatorKind::Fail(*reason),
+            STerminatorKind::Unreachable => NTerminatorKind::Unreachable,
             STerminatorKind::Return(value) => NTerminatorKind::Return(
                 value
                     .map(|value| self.read_result(block, raw.origin, value))
@@ -1917,6 +1929,15 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         if forwarded.is_none() && !constructed {
             self.prepare_layout_backing_indices(block, origin, source_local)?;
         }
+        let mut places = Vec::new();
+        expr.for_each_place_operand(|place| places.push(place.clone()));
+        for place in places {
+            self.emit_place_index_checks(block, origin, &place)?;
+        }
+        if let NExpr::ProjectValue { value, path } = &expr {
+            let ty = self.values[value.value.index()].ty;
+            self.emit_index_checks(block, origin, ty, &path.0)?;
+        }
         let statement = self.blocks[block.index()].statements.len() as u32;
         let source_binding = forwarded
             .and_then(|source| self.values.get(source.index())?.source)
@@ -1970,7 +1991,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         origin: SemOrigin<'db>,
         destination: NPlace<'db>,
         value: NOperand,
-    ) {
+    ) -> Result<(), NormalizeError<'db>> {
+        self.emit_place_index_checks(block, origin, &destination)?;
         let id = NStatementId::new(self.statement_count);
         self.statement_count += 1;
         self.blocks[block.index()].statements.push(NStatement {
@@ -1979,6 +2001,49 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             origin,
             kind: NStatementKind::Store { destination, value },
         });
+        Ok(())
+    }
+
+    fn emit_place_index_checks(
+        &mut self,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+        place: &NPlace<'db>,
+    ) -> Result<(), NormalizeError<'db>> {
+        let ty = self.place_base_ty(place.base)?;
+        self.emit_index_checks(block, origin, ty, &place.path)
+    }
+
+    /// Checks each array index `path` takes from a value of type `ty`, before
+    /// the statement that takes it.
+    fn emit_index_checks(
+        &mut self,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+        ty: TyId<'db>,
+        path: &NDataPath,
+    ) -> Result<(), NormalizeError<'db>> {
+        let mut checks = Vec::new();
+        project_path_ty_indexing(
+            self.db,
+            self.instance,
+            &self.values,
+            ty,
+            path,
+            |index, array| checks.push((index, array)),
+        )
+        .map_err(|_| NormalizeError::InvalidProjection)?;
+        for (index, array) in checks {
+            let id = NStatementId::new(self.statement_count);
+            self.statement_count += 1;
+            self.blocks[block.index()].statements.push(NStatement {
+                id,
+                source: None,
+                origin,
+                kind: NStatementKind::CheckIndex { index, array },
+            });
+        }
+        Ok(())
     }
 
     fn record_layout_backings(
@@ -2985,8 +3050,8 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                FieldIndex, Mutability, SConst, SStmtId, SemanticInstance, VariantIndex,
-                identity_semantic_instance_key,
+                BinaryOp, FieldIndex, Mutability, Overflow, SConst, SStmtId, SemanticInstance,
+                UnaryOp, VariantIndex, identity_semantic_instance_key,
                 normalized::{
                     NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NPlace, NPlaceBase,
                     NRootId, NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
@@ -3000,7 +3065,7 @@ mod tests {
                 ty_def::TyId,
             },
         },
-        hir_def::{ArithBinOp, BinOp, ItemKind, LogicalBinOp, UnOp},
+        hir_def::ItemKind,
         test_db::HirAnalysisTestDb,
     };
 
@@ -3134,7 +3199,8 @@ fn read_twice(var _ index: own usize, values: [u256; 2]) -> u256 {
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
                 | NStatementKind::End { .. }
-                | NStatementKind::Drop { .. } => None,
+                | NStatementKind::Drop { .. }
+                | NStatementKind::CheckIndex { .. } => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -3301,7 +3367,7 @@ struct Wide {
 }
 
 fn unary(wide: own Wide, value: u256) -> u256 {
-    +value
+    ~value
 }
 
 fn compare(flag: bool, value: u256) -> u8 {
@@ -3328,7 +3394,11 @@ fn widen(wide: own Wide, value: u8) -> u256 {
                 .find_map(|statement| match statement.kind {
                     NStatementKind::Define {
                         result,
-                        expr: NExpr::Unary { op: UnOp::Plus, .. },
+                        expr:
+                            NExpr::Unary {
+                                op: UnaryOp::BitNot,
+                                ..
+                            },
                     } => Some(result),
                     _ => None,
                 })
@@ -3364,8 +3434,8 @@ fn widen(wide: own Wide, value: u8) -> u256 {
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 
-        let mut borrow_operator = unary.clone();
-        let unary_op = borrow_operator
+        let mut bool_operator = unary.clone();
+        let unary_op = bool_operator
             .blocks
             .iter_mut()
             .flat_map(|block| &mut block.statements)
@@ -3377,9 +3447,9 @@ fn widen(wide: own Wide, value: u8) -> u256 {
                 _ => None,
             })
             .expect("unary expression");
-        *unary_op = UnOp::Ref;
+        *unary_op = UnaryOp::Not;
         assert_eq!(
-            verify_normalized_body(&db, &borrow_operator),
+            verify_normalized_body(&db, &bool_operator),
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 
@@ -3401,7 +3471,8 @@ fn widen(wide: own Wide, value: u8) -> u256 {
                     result,
                     expr:
                         NExpr::Binary {
-                            op: BinOp::Comp(_), ..
+                            op: BinaryOp::Comp(_),
+                            ..
                         },
                 } => Some(result),
                 _ => None,
@@ -3417,11 +3488,11 @@ fn widen(wide: own Wide, value: u8) -> u256 {
                 NStatementKind::Define {
                     expr: NExpr::Binary { op, .. },
                     ..
-                } if matches!(op, BinOp::Comp(_)) => Some(op),
+                } if matches!(op, BinaryOp::Comp(_)) => Some(op),
                 _ => None,
             })
             .expect("literal comparison expression");
-        *comparison_op = BinOp::Arith(ArithBinOp::Add);
+        *comparison_op = BinaryOp::Add(Overflow::Checked);
         assert_eq!(
             verify_normalized_body(&db, &arithmetic_result_mismatch),
             Err(NormalizedBodyVerifyError::ExpressionType)
@@ -3431,25 +3502,6 @@ fn widen(wide: own Wide, value: u8) -> u256 {
         comparison_result_mismatch.values[comparison_result.index()].ty = TyId::u256(&db);
         assert_eq!(
             verify_normalized_body(&db, &comparison_result_mismatch),
-            Err(NormalizedBodyVerifyError::ExpressionType)
-        );
-
-        let mut logical_node = comparison.clone();
-        let comparison_op = logical_node
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.statements)
-            .find_map(|statement| match &mut statement.kind {
-                NStatementKind::Define {
-                    expr: NExpr::Binary { op, .. },
-                    ..
-                } if matches!(op, BinOp::Comp(_)) => Some(op),
-                _ => None,
-            })
-            .expect("literal comparison expression");
-        *comparison_op = BinOp::Logical(LogicalBinOp::And);
-        assert_eq!(
-            verify_normalized_body(&db, &logical_node),
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 

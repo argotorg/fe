@@ -13,7 +13,7 @@ use crate::{
     db::MirDb,
     runtime::{
         ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, RuntimeClass, ScalarClass,
-        ScalarRepr,
+        ScalarRepr, synthetic::uint_scalar,
     },
 };
 
@@ -275,16 +275,12 @@ pub(super) fn enum_tag_scalar<'db>(
     let crate::runtime::Layout::Enum(layout_data) = layout.data(db) else {
         return None;
     };
-    let ScalarRepr::Int { bits, signed } = layout_data.tag.repr else {
+    let ScalarRepr::Int {
+        bits,
+        signed: false,
+    } = layout_data.tag.repr
+    else {
         return None;
     };
-    Some(ConstScalar::Int {
-        bits,
-        signed,
-        words: if variant.0 == 0 {
-            Vec::new()
-        } else {
-            vec![variant.0 as u8]
-        },
-    })
+    Some(uint_scalar(bits, u64::from(variant.0)))
 }

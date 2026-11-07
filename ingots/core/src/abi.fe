@@ -1,8 +1,11 @@
 use ingot::Copy
 use ingot::Option
+use ingot::clone::Clone
+use ingot::hash::{Hash, Hasher, hash_bytes}
+use ingot::mem::forget
 use ingot::num::{IntDowncast, WordValue, from_be, to_be, word_to_usize}
 use ingot::ptr
-use ingot::ops::Eq
+use ingot::ops::{Drop, Eq, Ord}
 
 /// Errors returned by ABI decoding/encoding helpers.
 pub enum AbiError {
@@ -241,7 +244,7 @@ pub trait Decode<A: Abi>: AbiSize {
 pub trait Encode<A: Abi>: AbiSize {
     /// Writes the ABI payload of `self` into `out`, which holds
     /// `self.payload_size()` bytes.
-    fn encode(own self, _ out: AbiFrame)
+    fn encode(self, _ out: AbiFrame)
 }
 
 /// The bytes an ABI encoding writes: `len` bytes in linear memory.
@@ -483,7 +486,7 @@ pub fn decode_field_from_prechecked_head<A: Abi, T, I>(_ input: I, base: u256, h
 /// costs one bounds check against what is left.
 #[arithmetic(unchecked)]
 #[inline(always)]
-pub fn encode_field<A: Abi, T>(_ value: own T, _ out: AbiFrame, head_pos: u256, tails: own AbiFrame) -> AbiFrame
+pub fn encode_field<A: Abi, T>(_ value: T, _ out: AbiFrame, head_pos: u256, tails: own AbiFrame) -> AbiFrame
     where T: Encode<A> + AbiSize
 {
     if T::IS_DYNAMIC {
@@ -727,11 +730,11 @@ fn decode_string_payload_after_head<A: Abi, I: ByteInput, const N: usize>(_ inpu
         } else {
             // The input may end immediately after the last string byte.
             // Load from a full scratch word only after a bounded copy.
-            let scratch = ptr::alloc_bytes(32)
+            let scratch = unsafe { ptr::FixedMemBuffer<32>::alloc_uninit() }
             unsafe {
-                store_word(ptr: scratch, value: 0)
-                input.copy_to_memory(dest: scratch, src_offset: data_start, len: data_len)
-                mem_word_at(base: scratch, offset: 0) >> ((32 - data_len) * 8)
+                store_word(ptr: scratch.ptr(), value: 0)
+                input.copy_to_memory(dest: scratch.ptr(), src_offset: data_start, len: data_len)
+                mem_word_at(base: scratch.ptr(), offset: 0) >> ((32 - data_len) * 8)
             }
         }
     }
@@ -909,14 +912,29 @@ impl<I> StringView<I>
     }
 }
 
-/// Owned handle to a Solidity ABI `string` payload stored in linear memory.
+/// A Solidity ABI `string` payload stored in linear memory.
 ///
-/// `data` points at the ABI tail payload: the length word followed by packed
-/// UTF-8 bytes padded to a whole word count.
+/// `data` points at the start of an allocation that holds the ABI tail payload:
+/// the length word followed by packed UTF-8 bytes padded to a whole word count.
+/// The value owns the allocation and frees it when dropped, so it moves rather
+/// than copies. `clone` makes a second string, and `span` views the bytes.
 pub struct DynString {
     unsafe data: *u8,
     unsafe len: usize,
     unsafe size: u256,
+}
+
+impl Drop for DynString {
+    fn drop(own self) {
+        // The string owns its allocation.
+        unsafe { ptr::dealloc(self.data) }
+    }
+}
+
+impl Clone for DynString {
+    fn clone(self) -> Self {
+        Self::from_payload(source: self.span())
+    }
 }
 
 impl DynString {
@@ -929,15 +947,16 @@ impl DynString {
         }
     }
 
-    /// `data` must point to a validated ABI tail of `size` initialized
-    /// bytes in a live allocation, holding `len` elements.
+    /// `data` must be the start of an allocation that holds a validated ABI
+    /// tail of `size` initialized bytes and `len` elements. The value takes
+    /// over the allocation.
     unsafe fn from_validated_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         DynString { data, len, size }
     }
 
-    /// Wraps a complete ABI tail. `data` must point to `size` valid,
-    /// initialized bytes in an allocation that outlives the value, which
-    /// never frees it.
+    /// Takes ownership of a complete ABI tail. `data` must be the start of an
+    /// allocation from `ptr::alloc_bytes` that holds `size` initialized bytes,
+    /// and nothing else may free it: the value frees it when dropped.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         let expected_size = 32 + round_up_words(len as u256)
         if size != expected_size || mem_word_at(base: data, offset: 0) != len as u256 {
@@ -946,7 +965,8 @@ impl DynString {
         Self::from_validated_abi_tail(data, len, size)
     }
 
-    /// Allocates a string of `len` zero bytes, to be filled through `payload_span`.
+    /// Allocates a string of `len` zero bytes, to be filled through `span`.
+    #[inline(always)]
     pub fn zeroed(_ len: usize) -> Self {
         let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(ptr::allocation_len(size))
@@ -964,17 +984,31 @@ impl DynString {
     /// e.g. a `bytes32` label.
     pub fn from_word_prefix(word: u256, len: usize) -> Self {
         let bytes = Bytes::from_word_prefix(word, len)
-        // `bytes` holds a valid tail of the same layout.
-        unsafe {
+        // `bytes` holds a valid tail of the same layout, and the string takes
+        // over its allocation.
+        let string = unsafe {
             Self::from_validated_abi_tail(data: bytes.data, len: bytes.len, size: bytes.size)
         }
+        forget(bytes)
+        string
+    }
+
+    /// The string's bytes, in the same allocation.
+    pub fn into_bytes(own self) -> Bytes {
+        // A string's tail is a valid bytes tail, and the bytes take over its
+        // allocation.
+        let bytes = unsafe {
+            Bytes::from_validated_abi_tail(data: self.data, len: self.len, size: self.size)
+        }
+        forget(self)
+        bytes
     }
 
     /// Returns a copy of the `len` bytes starting at `start`.
     ///
     /// Fails with an index-out-of-bounds panic if the range exceeds the string.
     pub fn slice(self, start: usize, len: usize) -> Self {
-        Self::from_payload(source: self.payload_span().slice(offset: start, len))
+        Self::from_payload(source: self.span().slice(offset: start, len))
     }
 
     pub fn from_payload(source: ptr::MemSpan) -> Self {
@@ -1004,7 +1038,7 @@ impl DynString {
         self.size
     }
 
-    pub fn payload_span(self) -> ref ptr::MemSpan {
+    pub fn span(self) -> ref ptr::MemSpan {
         unsafe {
             ptr::MemSpan::from_raw_parts(
                 ptr: ptr::offset_bytes(self.data, 32),
@@ -1017,30 +1051,34 @@ impl DynString {
         unsafe { ptr::MemSpan::from_raw_parts(ptr: self.data, len: word_to_usize(self.size)) }
     }
 
-    pub fn as_bytes(self) -> Bytes {
-        // A string's tail is a valid bytes tail.
-        unsafe {
-            Bytes::from_validated_abi_tail(
-                data: self.data,
-                len: self.len,
-                size: self.size,
-            )
-        }
-    }
-
     pub fn byte_at(self, _ index: usize) -> u8 {
-        self.payload_span().byte_at(index)
+        self.span().byte_at(index)
     }
 }
 
-/// Owned handle to a Solidity ABI `bytes` payload stored in linear memory.
+/// A Solidity ABI `bytes` payload stored in linear memory.
 ///
-/// `data` points at the ABI tail payload: the length word followed by packed
-/// bytes data padded to a whole word count.
+/// `data` points at the start of an allocation that holds the ABI tail payload:
+/// the length word followed by packed bytes data padded to a whole word count.
+/// The value owns the allocation and frees it when dropped, so it moves rather
+/// than copies. `clone` makes a second value, and `span` views the bytes.
 pub struct Bytes {
     unsafe data: *u8,
     unsafe len: usize,
     unsafe size: u256,
+}
+
+impl Drop for Bytes {
+    fn drop(own self) {
+        // The value owns its allocation.
+        unsafe { ptr::dealloc(self.data) }
+    }
+}
+
+impl Clone for Bytes {
+    fn clone(self) -> Self {
+        Self::from_payload(source: self.span())
+    }
 }
 
 impl Bytes {
@@ -1053,21 +1091,37 @@ impl Bytes {
         }
     }
 
-    /// `data` must point to a validated ABI tail of `size` initialized
-    /// bytes in a live allocation, holding `len` elements.
+    /// `data` must be the start of an allocation that holds a validated ABI
+    /// tail of `size` initialized bytes and `len` elements. The value takes
+    /// over the allocation.
     unsafe fn from_validated_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         Bytes { data, len, size }
     }
 
-    /// Wraps a complete ABI tail. `data` must point to `size` valid,
-    /// initialized bytes in an allocation that outlives the value, which
-    /// never frees it.
+    /// Takes ownership of a complete ABI tail. `data` must be the start of an
+    /// allocation from `ptr::alloc_bytes` that holds `size` initialized bytes,
+    /// and nothing else may free it: the value frees it when dropped.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         let expected_size = 32 + round_up_words(len as u256)
         if size != expected_size || mem_word_at(base: data, offset: 0) != len as u256 {
             super::panic()
         }
         Self::from_validated_abi_tail(data, len, size)
+    }
+
+    /// Allocates `len` zero bytes, to be filled through `span`.
+    #[inline(always)]
+    pub fn zeroed(_ len: usize) -> Self {
+        let size = 32 + round_up_words(len as u256)
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
+        unsafe {
+            ptr::zero_bytes(data, word_to_usize(size))
+            store_word(ptr: data, value: len as u256)
+        }
+        // The tail was allocated and written above.
+        unsafe {
+            Self::from_validated_abi_tail(data: data, len: len, size: size)
+        }
     }
 
     pub fn from_payload(source: ptr::MemSpan) -> Self {
@@ -1128,7 +1182,7 @@ impl Bytes {
     }
 
     #[inline(always)]
-    pub fn payload_span(self) -> ref ptr::MemSpan {
+    pub fn span(self) -> ref ptr::MemSpan {
         unsafe { ptr::MemSpan::from_raw_parts(ptr: self.payload_ptr(), len: self.len) }
     }
 
@@ -1153,7 +1207,7 @@ impl Bytes {
     }
 
     pub fn byte_at(self, _ index: usize) -> u8 {
-        self.payload_span().byte_at(index)
+        self.span().byte_at(index)
     }
 }
 
@@ -1183,13 +1237,32 @@ fn payload_eq(_ a: ptr::MemSpan, _ b: ptr::MemSpan) -> bool {
 
 impl Eq for Bytes {
     fn eq(self, _ other: Bytes) -> bool {
-        payload_eq(self.payload_span(), other.payload_span())
+        payload_eq(self.span(), other.span())
     }
 }
 
 impl Eq for DynString {
     fn eq(self, _ other: DynString) -> bool {
-        payload_eq(self.payload_span(), other.payload_span())
+        payload_eq(self.span(), other.span())
+    }
+}
+
+/// Strings order by their bytes, as spans do.
+impl Ord for DynString {
+    fn lt(self, _ other: DynString) -> bool {
+        self.span() < other.span()
+    }
+
+    fn le(self, _ other: DynString) -> bool {
+        self.span() <= other.span()
+    }
+
+    fn gt(self, _ other: DynString) -> bool {
+        self.span() > other.span()
+    }
+
+    fn ge(self, _ other: DynString) -> bool {
+        self.span() >= other.span()
     }
 }
 
@@ -1197,7 +1270,7 @@ impl Eq for DynString {
 /// literal longer than a `String<N>` holds.
 impl Eq<DynString> for ptr::MemSpan {
     fn eq(self, _ other: DynString) -> bool {
-        self == other.payload_span()
+        self == other.span()
     }
 }
 
@@ -1213,6 +1286,26 @@ impl Eq<ptr::MemSpan> for DynString {
 impl Eq<DynString> for ptr::MemBuffer {
     fn eq(self, _ other: DynString) -> bool {
         self.span() == other
+    }
+}
+
+/// Whether the string holds the literal's text, so a literal finds a
+/// `DynString` key: `names.get("alice")`.
+impl<const N: usize> Eq<String<N>> for DynString {
+    fn eq(self, _ other: String<N>) -> bool {
+        self.span() == other
+    }
+}
+
+impl Hash for Bytes {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        hash_bytes(self.span(), mut state)
+    }
+}
+
+impl Hash for DynString {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        hash_bytes(self.span(), mut state)
     }
 }
 
@@ -1283,7 +1376,7 @@ impl<const N: usize> AbiSize for String<N> {
 }
 
 impl<T, const N: usize> AbiSize for [T; N]
-    where T: AbiSize + Copy
+    where T: AbiSize
 {
     const HEAD_SIZE: u256 = (N as u256) * abi_field_head_size<T>()
     const IS_DYNAMIC: bool = T::IS_DYNAMIC
@@ -2041,7 +2134,7 @@ impl<A: Abi> Decode<A> for u256 {
 
 impl<A: Abi> Encode<A> for u256 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self)
     }
 }
@@ -2075,7 +2168,7 @@ impl<A: Abi, const N: usize> Decode<A> for String<N> {
 impl<A: Abi, const N: usize> Encode<A> for String<N> {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         let word = self.to_word()
         let len = packed_string_len(word)
         out.store_word(at: 0, value: len)
@@ -2153,7 +2246,7 @@ impl<A: Abi> Decode<A> for DynString {
 
 impl<A: Abi> Encode<A> for DynString {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.copy_from(at: 0, self.encoded_span())
     }
 }
@@ -2172,7 +2265,7 @@ impl<A: Abi> Decode<A> for bool {
 
 impl<A: Abi> Encode<A> for bool {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
 }
@@ -2190,7 +2283,7 @@ impl<A: Abi> Decode<A> for u8 {
 
 impl<A: Abi> Encode<A> for u8 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
 }
@@ -2208,7 +2301,7 @@ impl<A: Abi> Decode<A> for u16 {
 
 impl<A: Abi> Encode<A> for u16 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
 }
@@ -2226,7 +2319,7 @@ impl<A: Abi> Decode<A> for u32 {
 
 impl<A: Abi> Encode<A> for u32 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
 }
@@ -2244,7 +2337,7 @@ impl<A: Abi> Decode<A> for u64 {
 
 impl<A: Abi> Encode<A> for u64 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
 }
@@ -2262,7 +2355,7 @@ impl<A: Abi> Decode<A> for u128 {
 
 impl<A: Abi> Encode<A> for u128 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
 }
@@ -2280,7 +2373,7 @@ impl<A: Abi> Decode<A> for i8 {
 
 impl<A: Abi> Encode<A> for i8 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
 }
@@ -2298,7 +2391,7 @@ impl<A: Abi> Decode<A> for i16 {
 
 impl<A: Abi> Encode<A> for i16 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
 }
@@ -2316,7 +2409,7 @@ impl<A: Abi> Decode<A> for i32 {
 
 impl<A: Abi> Encode<A> for i32 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
 }
@@ -2334,7 +2427,7 @@ impl<A: Abi> Decode<A> for i64 {
 
 impl<A: Abi> Encode<A> for i64 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
 }
@@ -2352,7 +2445,7 @@ impl<A: Abi> Decode<A> for i128 {
 
 impl<A: Abi> Encode<A> for i128 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
 }
@@ -2370,7 +2463,7 @@ impl<A: Abi> Decode<A> for i256 {
 
 impl<A: Abi> Encode<A> for i256 {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
 }
@@ -2397,7 +2490,7 @@ fn decode_usize_word<A: Abi>(_ word: u256) -> usize {
 
 impl<A: Abi> Encode<A> for usize {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
 }
@@ -2426,7 +2519,7 @@ fn decode_isize_word<A: Abi>(_ word: u256) -> isize {
 
 impl<A: Abi> Encode<A> for isize {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
 }
@@ -2443,7 +2536,7 @@ impl<A: Abi> Decode<A> for () {
 }
 
 impl<A: Abi> Encode<A> for () {
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
     }
 }
 
@@ -2515,7 +2608,7 @@ impl<A: Abi> Decode<A> for Bytes {
 
 impl<A: Abi> Encode<A> for Bytes {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.copy_from(at: 0, self.encoded_span())
     }
 }
@@ -2552,8 +2645,8 @@ impl<A: Abi, T0> Encode<A> for (T0,)
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0,) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0,) = self
         encode_field<A, T0>(v0, out, head_pos: 0, tails: out.tail(Self::HEAD_SIZE))
     }
 }
@@ -2611,8 +2704,8 @@ impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         tails = encode_field<A, T0>(v0, out, head_pos: 0, tails)
@@ -2685,8 +2778,8 @@ impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -2776,8 +2869,8 @@ impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -2886,8 +2979,8 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -3010,8 +3103,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -3148,8 +3241,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -3300,8 +3393,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -3466,8 +3559,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7, ref v8) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -3648,8 +3741,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7, ref v8, ref v9) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -3845,8 +3938,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7, ref v8, ref v9, ref v10) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -4056,8 +4149,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7, ref v8, ref v9, ref v10, ref v11) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -4281,8 +4374,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> Encode<A>
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7, ref v8, ref v9, ref v10, ref v11, ref v12) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -4520,8 +4613,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> Encode<
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7, ref v8, ref v9, ref v10, ref v11, ref v12, ref v13) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -4773,8 +4866,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> En
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7, ref v8, ref v9, ref v10, ref v11, ref v12, ref v13, ref v14) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -5040,8 +5133,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T1
 {
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) = self
+    fn encode(self, _ out: AbiFrame) {
+        let (ref v0, ref v1, ref v2, ref v3, ref v4, ref v5, ref v6, ref v7, ref v8, ref v9, ref v10, ref v11, ref v12, ref v13, ref v14, ref v15) = self
         var tails = out.tail(Self::HEAD_SIZE)
         let head1 = abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
@@ -5171,58 +5264,65 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T1
     }
 }
 
+/// Moves an array out of raw memory, every element of which is initialized, and
+/// frees the memory.
+unsafe fn take_array<T, const N: usize>(_ elements: *[T; N]) -> [T; N] {
+    let array = *elements
+    ptr::dealloc(elements)
+    array
+}
+
 impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
-    where T: Decode<A> + AbiSize + Copy
+    where T: Decode<A> + AbiSize
 {
+    // The elements are written through raw places, which destroy nothing, so an
+    // element type need not be `Copy`. The memory is read as an array only once full.
+    //
+    // Decoding element 0 ahead of the loop leaves `N == 2` a loop of one iteration,
+    // which the optimizer removes, and the elements are then used where they decode.
     fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
-        // Empty arrays contain no values to initialize or decode.
-        if N == 0 {
-            return unsafe { *ptr::alloc<[T; N]>() }
+        let elements = ptr::alloc<[T; N]>()
+        if N > 0 {
+            unsafe { (*elements)[0] = decode_field<A, T, D, I>(mut d, input) }
         }
-        let first = decode_field<A, T, D, I>(mut d, input)
-        var out: [T; N] = [first; N]
         var i: usize = 1
         while i < N {
-            out[i] = decode_field<A, T, D, I>(mut d, input)
+            unsafe { (*elements)[i] = decode_field<A, T, D, I>(mut d, input) }
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-        // Empty arrays contain no values to initialize or decode.
-        if N == 0 {
-            return unsafe { *ptr::alloc<[T; N]>() }
+        let elements = ptr::alloc<[T; N]>()
+        if N > 0 {
+            unsafe { (*elements)[0] = decode_field_from<A, T, I>(input, base: pos, head_pos: pos) }
         }
-        let first = decode_field_from<A, T, I>(input, base: pos, head_pos: pos)
-        var out: [T; N] = [first; N]
         var i: usize = 1
         var head_pos = pos + abi_field_head_size<T>()
         while i < N {
-            out[i] = decode_field_from<A, T, I>(input, base: pos, head_pos: head_pos)
+            unsafe { (*elements)[i] = decode_field_from<A, T, I>(input, base: pos, head_pos: head_pos) }
             head_pos += abi_field_head_size<T>()
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-        // Empty arrays contain no values to initialize or decode.
-        if N == 0 {
-            return unsafe { *ptr::alloc<[T; N]>() }
+        let elements = ptr::alloc<[T; N]>()
+        if N > 0 {
+            unsafe { (*elements)[0] = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: pos, input_len: input_len) }
         }
-        let first = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: pos, input_len: input_len)
-        var out: [T; N] = [first; N]
         var i: usize = 1
         var head_pos = pos + abi_field_head_size<T>()
         while i < N {
-            out[i] = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+            unsafe { (*elements)[i] = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: head_pos, input_len: input_len) }
             head_pos += abi_field_head_size<T>()
             i += 1
         }
-        out
+        unsafe { take_array(elements) }
     }
 
     #[inline(always)]
@@ -5233,7 +5333,7 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
 }
 
 impl<A: Abi, T, const N: usize> AbiSpan<A> for [T; N]
-    where T: AbiSpan<A> + AbiSize + Copy
+    where T: AbiSpan<A> + AbiSize
 {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
         let _ = base
@@ -5264,16 +5364,14 @@ impl<A: Abi, T, const N: usize> AbiSpan<A> for [T; N]
 }
 
 impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
-    where T: Encode<A> + AbiSize + Copy
+    where T: Encode<A> + AbiSize
 {
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         var head_pos: u256 = 0
         var tails = out.tail(Self::HEAD_SIZE)
-        var i: usize = 0
-        while i < N {
-            tails = encode_field<A, T>(self[i], out, head_pos, tails)
+        for ref element in self {
+            tails = encode_field<A, T>(element, out, head_pos, tails)
             head_pos += abi_field_head_size<T>()
-            i += 1
         }
     }
 }

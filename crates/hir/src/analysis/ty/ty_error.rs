@@ -1,17 +1,26 @@
 use crate::{
     hir_def::{
-        GenericArg, PathId, PathKind, TraitRefId, TypeId, TypeKind, TypeMode, scope_graph::ScopeId,
+        GenericArg, GenericArgListId, ItemKind, PathId, PathKind, TraitRefId, TypeId, TypeKind,
+        TypeMode, scope_graph::ScopeId,
     },
-    span::{params::LazyGenericArgSpan, path::LazyPathSpan, types::LazyTySpan},
-    visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_path, walk_type},
+    span::{
+        params::{LazyGenericArgListSpan, LazyGenericArgSpan},
+        path::LazyPathSpan,
+        types::LazyTySpan,
+    },
+    visitor::{
+        Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_generic_arg_list,
+        walk_path, walk_type,
+    },
 };
 
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path,
-        resolve_path_with_minter, resolve_path_with_observer_and_minter,
-        resolve_trait_path_with_observer_and_minter, trait_arg_path_diag,
+        ExpectedPathKind, NameResKind, PathRes, PathResErrorKind, diagnostics::PathResDiag,
+        resolve_path, resolve_path_with_minter, resolve_path_with_observer_and_minter,
+        resolve_trait_path_with_observer_and_minter, resolve_type_path_definition,
+        trait_arg_path_diag,
     },
     ty::visitor::{TyVisitor, walk_ty},
 };
@@ -100,17 +109,6 @@ pub(crate) fn path_arg_diags<'db>(
                 return vec![diag];
             }
             match arg {
-                // A tuple whose parts carry modes or name a shape is a shape,
-                // checked as a product parameter's type is.
-                GenericArg::Type(ty_arg)
-                    if let Some(ty) = ty_arg.ty.to_opt()
-                        && lower_shape_list(db, ty, scope, assumptions).is_some() =>
-                {
-                    let span = span.into_type_arg().ty();
-                    let mut diags = maybe_mut_parts(db, ty, span.clone());
-                    diags.extend(param_product_diags(db, ty, scope, span, assumptions));
-                    diags
-                }
                 GenericArg::Type(_) => {
                     let mut vis = HirTyErrVisitor {
                         db,
@@ -230,7 +228,26 @@ pub(crate) fn path_generic_arg_diags<'db>(
         diags: Vec::new(),
         const_bodies: ConstBodyLowering::Eager,
     };
-    walk_path(&mut vis, &mut VisitorCtxt::new(db, scope, path_span), path);
+    vis.visit_path_args(path, path_span, scope);
+    vis.diags
+}
+
+/// Diagnostics for the types written in `args`, a method call's generic
+/// arguments, each at its own span, as a written type reports them.
+pub(crate) fn generic_arg_list_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    args: GenericArgListId<'db>,
+    span: LazyGenericArgListSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let mut vis = HirTyErrVisitor {
+        db,
+        assumptions,
+        diags: Vec::new(),
+        const_bodies: ConstBodyLowering::Eager,
+    };
+    walk_generic_arg_list(&mut vis, &mut VisitorCtxt::new(db, scope, span), args);
     vis.diags
 }
 
@@ -395,6 +412,42 @@ impl<'db> HirTyErrVisitor<'db> {
             self.diags.push(diag)
         }
     }
+
+    /// Visits what `path`'s segments write. A trait's arguments are checked as
+    /// a trait reference's are, since a binding's value depends on what it binds.
+    fn visit_path_args(
+        &mut self,
+        path: PathId<'db>,
+        path_span: LazyPathSpan<'db>,
+        scope: ScopeId<'db>,
+    ) {
+        let db = self.db;
+        if let Some(parent) = path.parent(db) {
+            self.visit_path_args(parent, path_span.clone(), scope);
+        }
+        if path.generic_args(db).is_given(db)
+            && let Some(NameResKind::Scope(ScopeId::Item(ItemKind::Trait(_)))) =
+                resolve_type_path_definition(db, path, scope)
+        {
+            self.diags
+                .extend(path_arg_diags(db, path, path_span, scope, self.assumptions));
+            return;
+        }
+        if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {
+            let span = path_span
+                .clone()
+                .segment(path.segment_index(db))
+                .qualified_type();
+            self.visit_ty(&mut VisitorCtxt::new(db, scope, span.clone().ty()), type_);
+            self.visit_trait_ref(
+                &mut VisitorCtxt::new(db, scope, span.trait_qualifier()),
+                trait_,
+            );
+        }
+        for (arg, span) in path_generic_args(db, path, path_span) {
+            self.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
+        }
+    }
 }
 
 impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
@@ -403,22 +456,75 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyGenericArgSpan<'db>>,
         arg: &GenericArg<'db>,
     ) {
+        // A trait checks its own bindings. Anywhere else, lowering rejects a
+        // binding whatever it binds.
+        if matches!(arg, GenericArg::AssocType(_)) {
+            return;
+        }
+
+        // A tuple whose parts carry modes or name a shape is a shape, checked
+        // as a product parameter's type is.
+        if let GenericArg::Type(type_arg) = arg
+            && let Some(ty) = type_arg.ty.to_opt()
+            && lower_shape_list(self.db, ty, ctxt.scope(), self.assumptions).is_some()
+            && let Some(span) = ctxt.span()
+        {
+            let span = span.into_type_arg().ty();
+            self.diags
+                .extend(maybe_mut_parts(self.db, ty, span.clone()));
+            self.diags.extend(param_product_diags(
+                self.db,
+                ty,
+                ctxt.scope(),
+                span,
+                self.assumptions,
+            ));
+            return;
+        }
+
         // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
         // even when `String` expects a const generic arg. Avoid emitting spurious
         // type-expected diagnostics for const-like paths in generic-arg position.
-        if let GenericArg::Type(type_arg) = arg
+        let resolved = if let GenericArg::Type(type_arg) = arg
             && let Some(hir_ty) = type_arg.ty.to_opt()
             && let TypeKind::Path(path_partial) = hir_ty.data(self.db)
             && let Some(path) = path_partial.to_opt()
-            && let Ok(resolved) = resolve_path_with_minter(
-                self.db,
-                path,
-                ctxt.scope(),
-                self.assumptions,
-                true,
-                &self.path_context(),
-            )
         {
+            Some((
+                path,
+                resolve_path_with_minter(
+                    self.db,
+                    path,
+                    ctxt.scope(),
+                    self.assumptions,
+                    true,
+                    &self.path_context(),
+                ),
+            ))
+        } else {
+            None
+        };
+
+        // A name that can't be told apart isn't missing, as looking it up again
+        // as a type would say.
+        if let Some((path, Err(err))) = &resolved
+            && matches!(
+                err.kind,
+                PathResErrorKind::Ambiguous(_) | PathResErrorKind::Conflict(_)
+            )
+            && let Some(span) = ctxt.span()
+        {
+            let path_span = span.into_type_arg().ty().into_path_type().path();
+            self.diags.extend(err.clone().into_diag(
+                self.db,
+                *path,
+                path_span,
+                ExpectedPathKind::Value,
+            ));
+            return;
+        }
+
+        if let Some((path, Ok(resolved))) = resolved {
             let is_const_like = match resolved {
                 PathRes::Const(..) | PathRes::TraitConst(..) | PathRes::InherentConst(..) => true,
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
@@ -482,8 +588,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
 
                     // Walk the underlying path to validate any nested generic arguments,
                     // but don't validate the path itself as a type.
-                    let mut path_ctxt = VisitorCtxt::new(ctxt.db(), ctxt.scope(), path_span);
-                    walk_path(self, &mut path_ctxt, path);
+                    self.visit_path_args(path, path_span, ctxt.scope());
                 }
                 return;
             }
@@ -514,9 +619,10 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
 
         // This will report errors with nested types that are fundamental to the nested type,
         // but will not catch cases where the nested type is fine on its own, but incompatible
-        // with the current type we're visiting. If !did_find_child_err, we use a TyVisitor to
-        // report a diag about a nested invalid type; the downside of this is that the diag's
-        // span will be too wide (it'll be the span of the current type, not the nested type).
+        // with the current type we're visiting. An invalid nested type makes the current type
+        // invalid too, so it's only reported here if no nested type reported an error; the
+        // downside of this is that the diag's span will be too wide (it'll be the span of the
+        // current type, not the nested type).
         let before = self.diags.len();
         // If the semantic type is a const type, don't traverse the underlying HIR type
         // structure as a normal type. Const expressions inside types are validated via
@@ -525,7 +631,9 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         if !ty.is_const_ty(self.db) {
             walk_type(self, ctxt, hir_ty);
         }
-        let did_fild_child_err = self.diags.len() > before;
+        if self.diags.len() > before {
+            return;
+        }
 
         let span = ctxt.span().unwrap().into();
         match ty.data(self.db) {
@@ -545,7 +653,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 //
                 // We could match other TyId structures manually to refine the spans
                 // for common error cases.
-                if !did_fild_child_err && ty.has_invalid(self.db) {
+                if ty.has_invalid(self.db) {
                     self.push_opt_diag(emit_invalid_ty_error(self.db, ty, span))
                 }
             }
@@ -578,9 +686,16 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         let res = match resolved {
             Ok(res) => res,
 
+            // Written arguments that could be why the path failed report their
+            // own errors, and what fails through them reports nothing more.
             Err(err) => {
-                if let Some(diag) =
-                    err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
+                let before = self.diags.len();
+                if !err.is_independent_of_args(self.db) {
+                    self.visit_path_args(path, path_span.clone(), scope);
+                }
+                if self.diags.len() == before
+                    && let Some(diag) =
+                        err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
                 {
                     self.diags.push(diag);
                 }
@@ -595,13 +710,16 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 .push(PathResDiag::ExpectedType(span.into(), ident, res.kind_name()).into());
         }
         if let Some((path, deriv_span)) = invisible {
-            let span = path_span.segment(path.segment_index(self.db)).ident();
+            let span = path_span
+                .clone()
+                .segment(path.segment_index(self.db))
+                .ident();
             let ident = path.ident(self.db);
             let diag = PathResDiag::Invisible(span.into(), ident.unwrap(), deriv_span);
             self.diags.push(diag.into());
         }
 
-        walk_path(self, ctxt, path);
+        self.visit_path_args(path, path_span, scope);
     }
 
     fn visit_trait_ref(
@@ -859,6 +977,8 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         InvalidCause::ModeNotType => TyLowerDiag::ModeNotType(span).into(),
 
         InvalidCause::ModeArgNotShape => TyLowerDiag::ModeArgNotShape(span).into(),
+
+        InvalidCause::AssocBindingNotOnTrait => TyLowerDiag::AssocBindingNotOnTrait(span).into(),
 
         InvalidCause::ViewPart { view } => TyLowerDiag::ViewTypeMode {
             span,

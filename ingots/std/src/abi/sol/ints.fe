@@ -1,7 +1,7 @@
 use core::abi::{Abi, AbiDecoder, AbiFrame, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
 use core::num::IntDowncast
 use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
-use ingot::evm::{EncodePacked, Packed, packed::write_word_prefix, SolPacked, StorageKey, TopicValue, ops::{revert_empty, signextend}}
+use ingot::evm::{EncodePacked, Packed, packed::write_word_prefix, SolPacked, sol_slot::SolValueType, StorageKey, TopicValue, ops::{revert_empty, signextend}}
 
 use super::types::{SolCompat, StaticAbiElement, StaticAbiElementSeal}
 
@@ -919,18 +919,18 @@ impl SolWrappingInt for Int248 {
 impl SolInt for Int248 {}
 
 impl<T: SolWrappingInt + SolInt> WrappingAdd for T {
-    fn wrapping_add(self, _ other: T) -> T { sol_wrapping_add(a: self, b: other) }
+    fn wrapping_add(own self, _ other: own T) -> T { sol_wrapping_add(a: self, b: other) }
 }
 impl<T: SolWrappingInt + SolInt> WrappingSub for T {
-    fn wrapping_sub(self, _ other: T) -> T { sol_wrapping_sub(a: self, b: other) }
+    fn wrapping_sub(own self, _ other: own T) -> T { sol_wrapping_sub(a: self, b: other) }
 }
 impl<T: SolWrappingInt + SolInt> WrappingMul for T {
-    fn wrapping_mul(self, _ other: T) -> T { sol_wrapping_mul(a: self, b: other) }
+    fn wrapping_mul(own self, _ other: own T) -> T { sol_wrapping_mul(a: self, b: other) }
 }
 
 impl<T: SolWordRepr + SolInt, A: Abi> Encode<A> for T {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.canonical_word())
     }
 }
@@ -1670,3 +1670,5 @@ impl<T: SolWordRepr + SolWrappingInt + SolInt> SolPacked for T {
         T::from_wrapping_word(bits)
     }
 }
+
+impl<T: SolInt> SolValueType for T {}

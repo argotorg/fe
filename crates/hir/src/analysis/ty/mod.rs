@@ -80,6 +80,7 @@ pub use provider::{
 
 const EVM_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
 const NATIVE_ROOT_EFFECT_TY_PATH: &[&str] = &["std", "native", "Host"];
+const WASM_ROOT_EFFECT_TY_PATH: &[&str] = &["std", "wasm", "Host"];
 
 pub fn ty_is_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -415,58 +416,6 @@ fn events_with_indexed_dynamic_fields<'db>(
     events
 }
 
-/// A field of an `#[abi]`, `#[event]` or `#[error]` struct whose type holds
-/// a fixed array of non-`Copy` elements, which the fixed-array ABI codecs
-/// cannot handle.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub(crate) struct NonCopyArrayAbiField<'db> {
-    pub(crate) origin: DesugaredOrigin,
-    pub(crate) ast_struct: parser::ast::AstPtr<parser::ast::Struct>,
-    pub(crate) field_idx: usize,
-    pub(crate) field_ty: TyId<'db>,
-    pub(crate) elem_ty: TyId<'db>,
-}
-
-/// Shared by the `#[abi]`, `#[event]` and `#[error]` lowering passes, which
-/// report the fields, and the body pass, which skips the generated bodies.
-#[salsa::tracked]
-pub(crate) fn non_copy_array_abi_fields<'db>(
-    db: &'db dyn HirAnalysisDb,
-    top_mod: TopLevelMod<'db>,
-) -> Vec<NonCopyArrayAbiField<'db>> {
-    let mut fields = Vec::new();
-    for struct_ in top_mod.all_structs(db).iter().copied() {
-        let HirOrigin::Desugared(origin) = struct_.origin(db) else {
-            continue;
-        };
-        let ast_struct = match origin {
-            DesugaredOrigin::AbiStruct(origin) => origin.abi_struct.clone(),
-            DesugaredOrigin::Event(origin) => origin.event_struct.clone(),
-            DesugaredOrigin::Error(origin) => origin.error_struct.clone(),
-            _ => continue,
-        };
-        let assumptions = crate::semantic::constraints_for(db, struct_.into());
-        for (field_idx, field) in struct_.hir_fields(db).data(db).iter().enumerate() {
-            let Some(hir_ty) = field.type_ref().to_opt() else {
-                continue;
-            };
-            let field_ty = lower_hir_ty(db, hir_ty, struct_.scope(), assumptions);
-            if let Some(elem_ty) =
-                abi_ty::non_copy_fixed_array_elem(db, struct_.scope(), field_ty, assumptions)
-            {
-                fields.push(NonCopyArrayAbiField {
-                    origin: origin.clone(),
-                    ast_struct: ast_struct.clone(),
-                    field_idx,
-                    field_ty,
-                    elem_ty,
-                });
-            }
-        }
-    }
-    fields
-}
-
 /// A field of an `#[abi]` struct whose type lacks ABI traits that the
 /// generated codec needs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -498,7 +447,6 @@ pub(crate) fn abi_struct_field_checks<'db>(
     top_mod: TopLevelMod<'db>,
 ) -> AbiStructFieldChecks<'db> {
     let mut checks = AbiStructFieldChecks::default();
-    let non_copy_fields = non_copy_array_abi_fields(db, top_mod);
     for struct_ in top_mod.all_structs(db).iter().copied() {
         let HirOrigin::Desugared(origin @ DesugaredOrigin::AbiStruct(abi_origin)) =
             struct_.origin(db)
@@ -563,12 +511,8 @@ pub(crate) fn abi_struct_field_checks<'db>(
                 continue;
             };
             let field_ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-            // Invalid types and non-`Copy` fixed arrays are reported on their own.
-            if field_ty.has_invalid(db)
-                || non_copy_fields
-                    .iter()
-                    .any(|field| field.origin == *origin && field.field_idx == field_idx)
-            {
+            // Invalid types are reported on their own.
+            if field_ty.has_invalid(db) {
                 reported_at_source = true;
                 continue;
             }
@@ -604,15 +548,21 @@ pub(crate) fn abi_struct_field_checks<'db>(
 }
 
 /// Origins of generated ABI code whose failures are reported at the source
-/// struct instead: at its fields, or at its recursive type.
+/// struct or msg variant instead: at its fields, or at its recursive type.
 fn generated_abi_reported_at_source<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> FxHashSet<&'db DesugaredOrigin> {
-    non_copy_array_abi_fields(db, top_mod)
+    let msg_variants = top_mod.all_structs(db).iter().filter_map(|&struct_| {
+        let HirOrigin::Desugared(origin @ DesugaredOrigin::Msg(_)) = struct_.origin(db) else {
+            return None;
+        };
+        msg_selector::msg_variant_reported_at_source(db, struct_).then_some(origin)
+    });
+    abi_struct_field_checks(db, top_mod)
+        .reported_at_source
         .iter()
-        .map(|field| &field.origin)
-        .chain(&abi_struct_field_checks(db, top_mod).reported_at_source)
+        .chain(msg_variants)
         .collect()
 }
 
@@ -649,7 +599,6 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             .iter()
             // Generated ABI body failures are diagnosed once at their source declarations.
             .filter(|func| match func.origin(db) {
-                HirOrigin::Desugared(DesugaredOrigin::Msg(_)) => false,
                 HirOrigin::Desugared(origin @ DesugaredOrigin::Event(event)) => {
                     !indexed_dynamic_events.contains(event) && keep(origin)
                 }
@@ -960,8 +909,9 @@ pub fn resolve_contract_root_effect_ty<'db>(
     ))
 }
 
-/// The type `main` and tests take their target capabilities from:
-/// `std::native::Host` for native code, else the contracts' root effect.
+/// The type entries take their target capabilities from: `std::native::Host`
+/// for native `main` and tests, `std::wasm::Host` for WebAssembly exports and
+/// tests, else the contracts' root effect.
 pub fn resolve_func_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -970,6 +920,7 @@ pub fn resolve_func_root_effect_ty<'db>(
     match db.compilation_settings().target(db) {
         Target::Native => resolve_ty_path(db, NATIVE_ROOT_EFFECT_TY_PATH, scope, assumptions),
         Target::Evm => resolve_contract_root_effect_ty(db, scope, assumptions),
+        Target::Wasm => resolve_ty_path(db, WASM_ROOT_EFFECT_TY_PATH, scope, assumptions),
     }
 }
 

@@ -1107,6 +1107,11 @@ impl<'db> Stmt<'db> {
                 )
             }
 
+            Stmt::Loop(body_expr) => {
+                let body_block = unwrap_partial_ref(body_expr.data(db, body), "Loop::body");
+                format!("loop {}", body_block.pretty_print(db, body, indent))
+            }
+
             Stmt::Continue => "continue".to_string(),
             Stmt::Break => "break".to_string(),
 
@@ -1228,8 +1233,20 @@ impl<'db> Func<'db> {
             result.push_str("const ");
         }
 
-        // fn keyword
-        result.push_str("fn ");
+        result.push_str(&self.pretty_print_prototype(db));
+
+        // Effects
+        result.push_str(&self.declared_effects(db).pretty_print(db));
+
+        // Where clause
+        result.push_str(&self.where_clause(db).pretty_print(db));
+        result
+    }
+
+    /// Pretty-prints the name, generic parameters, parameters and return type,
+    /// as in `fn clock() -> i64`.
+    pub fn pretty_print_prototype(self, db: &'db dyn HirDb) -> String {
+        let mut result = "fn ".to_string();
 
         // Name
         match self.name(db) {
@@ -1251,12 +1268,6 @@ impl<'db> Func<'db> {
             result.push_str(" -> ");
             result.push_str(&ret_ty.pretty_print(db));
         }
-
-        // Effects
-        result.push_str(&self.declared_effects(db).pretty_print(db));
-
-        // Where clause
-        result.push_str(&self.where_clause(db).pretty_print(db));
         result
     }
 }

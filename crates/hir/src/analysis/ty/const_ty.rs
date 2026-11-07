@@ -16,7 +16,7 @@ use super::{
     diagnostics::{BodyDiag, FuncBodyDiag},
     evidence::EvidenceList,
     fold::{TyFoldable, TyFolder},
-    generic_defaults::DefaultApplication,
+    generic_defaults::{DefaultApplication, default_param_of_body},
     normalize::{normalize_ty, normalize_with_trait_evidence},
     subst::substitute_complete,
     trait_def::{
@@ -38,9 +38,9 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
     semantic::{
-        ConstDesc, ConstRepr, CtfeConfig, CtfeError, EffectProviderSubst, EvalFailure, EvalOutcome,
-        GenericSubst, ImplEnv, PrimitiveFault, SConst, SemConstId, SemConstScalar, SemConstValue,
-        SemOrigin, SemanticInstanceKey, VariantIndex, VerifiedConstValueId,
+        BinaryOp, ConstDesc, ConstRepr, CtfeConfig, CtfeError, EffectProviderSubst, EvalFailure,
+        EvalOutcome, GenericSubst, ImplEnv, PrimitiveFault, SConst, SemConstId, SemConstScalar,
+        SemConstValue, SemOrigin, SemanticInstanceKey, UnaryOp, VariantIndex, VerifiedConstValueId,
         const_computation_for_instance, describe_const_computation, enum_const,
         eval_body_owner_const, execute_source_int_binary, execute_source_int_unary,
         force_const_description, force_const_term_value, int_const, int_ty_shape,
@@ -49,8 +49,8 @@ use crate::analysis::{
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
 };
-use crate::hir_def::{CallableDef, ItemKind, attr::ArithmeticMode, scope_graph::ScopeId};
-use common::indexmap::IndexMap;
+use crate::hir_def::{CallableDef, ItemKind, scope_graph::ScopeId};
+use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,7 +128,6 @@ pub(crate) struct LoweringContext<'db> {
     /// The impl whose associated type this lowering lowers: there `Self::A`
     /// is the impl's own binding of `A`.
     impl_assoc_type: Option<ImplTrait<'db>>,
-    default_capture: Option<(GenericParamOwner<'db>, SourceParamIndex)>,
     /// Every path segment this lowering resolved, in resolution order, when
     /// the caller asked for them (`recording_resolutions`).
     resolutions: Option<std::cell::RefCell<Vec<(PathId<'db>, PathRes<'db>)>>>,
@@ -153,7 +152,6 @@ impl<'db> LoweringContext<'db> {
         Self {
             const_bodies,
             impl_assoc_type: None,
-            default_capture: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
         }
@@ -203,19 +201,6 @@ impl<'db> LoweringContext<'db> {
 
     pub(crate) fn const_bodies(&self) -> ConstBodyLowering {
         self.const_bodies
-    }
-
-    pub(crate) fn with_default_capture(
-        mut self,
-        owner: GenericParamOwner<'db>,
-        param_idx: SourceParamIndex,
-    ) -> Self {
-        self.default_capture = Some((owner, param_idx));
-        self
-    }
-
-    pub(crate) fn default_capture(&self) -> Option<(GenericParamOwner<'db>, SourceParamIndex)> {
-        self.default_capture
     }
 }
 
@@ -554,29 +539,18 @@ fn canonicalize_const_expr_for_mode<'db>(
                 }),
             )
         }
-        ConstExpr::ArithBinOp {
-            op,
-            mode: arithmetic_mode,
-            lhs,
-            rhs,
-        } => ConstExprId::new(
+        ConstExpr::ArithBinOp { op, lhs, rhs } => ConstExprId::new(
             db,
             ConstExpr::ArithBinOp {
                 op: *op,
-                mode: *arithmetic_mode,
                 lhs: canonicalize_ty_for_mode(db, *lhs, env, mode),
                 rhs: canonicalize_ty_for_mode(db, *rhs, env, mode),
             },
         ),
-        ConstExpr::UnOp {
-            op,
-            mode: arithmetic_mode,
-            expr,
-        } => ConstExprId::new(
+        ConstExpr::UnOp { op, expr } => ConstExprId::new(
             db,
             ConstExpr::UnOp {
                 op: *op,
-                mode: *arithmetic_mode,
                 expr: canonicalize_ty_for_mode(db, *expr, env, mode),
             },
         ),
@@ -640,8 +614,10 @@ fn canonicalize_const_expr_for_mode<'db>(
 }
 
 /// Unification identifies an associated or inherent const use by its trait
-/// instance (or impl and receiver) and name. The scope and assumptions it is
-/// solved under only decide how evaluation finds it.
+/// and arguments (or impl and receiver) and name, not by the bound it was found
+/// through: `T::LEN` is the same constant under `T: Len` and `T: Len<Item = u8>`.
+/// The scope and assumptions it is solved under only decide how evaluation
+/// finds it.
 pub(crate) enum RebaseConstUseEnv<'db> {
     /// The comparison form, once evaluation has used the environment: the
     /// root of the ingot defining the constant (the trait's, or the inherent
@@ -848,7 +824,9 @@ impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
         };
         let rebased = match expr.data(db) {
             ConstExpr::TraitConst(use_) => {
-                let inst = use_.inst().fold_with(db, self);
+                let inst = use_.inst();
+                let inst = TraitInstId::new_simple(db, inst.def(db), inst.args(db).clone())
+                    .fold_with(db, self);
                 let (scope, assumptions) = self.env(
                     db,
                     use_.origin_scope(),
@@ -1644,8 +1622,7 @@ fn const_int_error<'db>(fault: PrimitiveFault, expr: ExprId) -> ConstIntError<'d
         PrimitiveFault::ArithmeticOverflow => ConstIntError::Overflow(expr),
         PrimitiveFault::DivisionByZero => ConstIntError::DivisionByZero(expr),
         PrimitiveFault::NegativeExponent => ConstIntError::NegativeExponent(expr),
-        PrimitiveFault::InvalidPowerExponent
-        | PrimitiveFault::OutsideSupportedSubset
+        PrimitiveFault::OutsideSupportedSubset
         | PrimitiveFault::InvalidCast
         | PrimitiveFault::UnsupportedCast => ConstIntError::NotIntExpr,
     }
@@ -1677,6 +1654,8 @@ fn invalid_cause_from_const_int_error<'db>(
     }
 }
 
+/// The value of an integer expression of literals, constants and arithmetic,
+/// before type checking, in the arithmetic mode of the body's scope.
 fn eval_int_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -1709,17 +1688,19 @@ fn eval_int_expr<'db>(
                 }
                 _ => eval_int_expr(db, body, *inner, expected, has_captures)?,
             };
-            if matches!(op, UnOp::Minus) && expected.is_none() {
-                return Err(ConstIntError::Overflow(expr));
+            match op {
+                UnOp::Plus => Ok(value),
+                UnOp::Minus => {
+                    let Some(expected) = expected else {
+                        return Err(ConstIntError::Overflow(expr));
+                    };
+                    let op = UnaryOp::Neg(body.scope().arithmetic_mode(db).into());
+                    let value = execute_source_int_unary(db, expected, op, value)
+                        .map_err(|fault| const_int_error(fault, expr))?;
+                    wrap_int(db, expected, value)
+                }
+                _ => Err(ConstIntError::NotIntExpr),
             }
-            execute_source_int_unary(
-                db,
-                expected.unwrap_or_else(|| TyId::u256(db)),
-                ArithmeticMode::Checked,
-                *op,
-                value,
-            )
-            .map_err(|fault| const_int_error(fault, expr))
         }
         Expr::Bin(lhs, rhs, op) => {
             let (Partial::Present(_), Partial::Present(_)) =
@@ -1730,11 +1711,11 @@ fn eval_int_expr<'db>(
             let expected = expected.unwrap_or_else(|| TyId::u256(db));
             let lhs = eval_int_expr(db, body, *lhs, Some(expected), has_captures)?;
             let rhs = eval_int_expr(db, body, *rhs, Some(expected), has_captures)?;
-            let BinOp::Arith(op) = op else {
-                return Err(ConstIntError::NotIntExpr);
-            };
-            execute_source_int_binary(db, expected, ArithmeticMode::Checked, *op, lhs, rhs)
-                .map_err(|fault| const_int_error(fault, expr))
+            let op = BinaryOp::new(*op, body.scope().arithmetic_mode(db).into())
+                .ok_or(ConstIntError::NotIntExpr)?;
+            let value = execute_source_int_binary(db, expected, op, lhs, rhs)
+                .map_err(|fault| const_int_error(fault, expr))?;
+            wrap_int(db, expected, value)
         }
         // A path's meaning under captured generic arguments needs full CTFE.
         Expr::Path(path) => {
@@ -1770,9 +1751,7 @@ fn eval_int_expr<'db>(
             let Some(value) = const_ty.evaluate(db, None).integer_value(db) else {
                 return Err(ConstIntError::NotIntExpr);
             };
-            let (bits, signed) = int_ty_shape(db, expected.unwrap_or_else(|| TyId::u256(db)))
-                .ok_or(ConstIntError::NotIntExpr)?;
-            Ok(normalize_int_to_shape(value, bits, signed))
+            wrap_int(db, expected.unwrap_or_else(|| TyId::u256(db)), value)
         }
         _ => Err(ConstIntError::NotIntExpr),
     }
@@ -1791,7 +1770,7 @@ fn int_literal_value<'db>(
     if let Some(ty) = expected
         && let Some(prim) = ty.as_prim(db)
         && prim.is_integral()
-        && !int_literal_fits_prim(prim, value, negated)
+        && !int_literal_fits_prim(db.compilation_settings().target(db), prim, value, negated)
     {
         let sign = if negated { "-" } else { "" };
         return Err(ConstIntError::LiteralOutOfRange {
@@ -1801,6 +1780,16 @@ fn int_literal_value<'db>(
         });
     }
     Ok(BigInt::from(value.clone()))
+}
+
+/// `value` reduced to the range of `ty`, as a wrapping operation's result is.
+fn wrap_int<'db>(
+    db: &dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    value: BigInt,
+) -> Result<BigInt, ConstIntError<'db>> {
+    let (bits, signed) = int_ty_shape(db, ty).ok_or(ConstIntError::NotIntExpr)?;
+    Ok(normalize_int_to_shape(value, bits, signed))
 }
 
 pub(super) fn try_eval_const_int_expr<'db>(
@@ -1817,32 +1806,6 @@ pub(super) fn try_eval_const_int_expr<'db>(
         &|| false,
     )
     .ok()
-}
-
-/// A default's capture contains only parameters available before that default.
-/// Its declaration assumptions may still mention the current or later
-/// parameters; those predicates cannot justify evaluating the default.
-fn specialize_available_const_assumptions<'db>(
-    db: &'db dyn HirAnalysisDb,
-    assumptions: PredicateListId<'db>,
-    subst: Option<&CompleteSubst<'db>>,
-) -> PredicateListId<'db> {
-    let Some(subst) = subst else {
-        return assumptions;
-    };
-    let predicates: Vec<_> = assumptions
-        .list(db)
-        .iter()
-        .copied()
-        .filter_map(
-            |predicate| match substitute_complete(db, predicate, subst) {
-                Ok(predicate) => Some(predicate),
-                Err(SubstError::MissingArgument { .. }) => None,
-                Err(error) => panic!("invalid const assumption capture: {error:?}"),
-            },
-        )
-        .collect();
-    PredicateListId::new(db, predicates)
 }
 
 #[salsa::tracked(returns(copy), cycle_initial=evaluate_const_ty_cycle_initial)]
@@ -2026,8 +1989,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         inst.mode(db),
                     );
                     let inst = capture.specialize(db, inst);
-                    let assumptions =
-                        specialize_available_const_assumptions(db, assumptions, capture_subst());
+                    let assumptions = capture.specialize(db, assumptions);
 
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let expr = ConstExprId::new(
@@ -2060,8 +2022,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                 }
                 PathRes::InherentConst(recv_ty, impl_, name) => {
                     let recv_ty = capture.specialize(db, recv_ty);
-                    let assumptions =
-                        specialize_available_const_assumptions(db, assumptions, capture_subst());
+                    let assumptions = capture.specialize(db, assumptions);
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
                             use_scope,
@@ -2342,7 +2303,7 @@ fn stmt_primary_expr_for_const_eval_diag<'db>(
         Stmt::Let(_, _, expr, _) | Stmt::Return(expr) => expr,
         Stmt::Yield(expr) | Stmt::Expr(expr) => Some(expr),
         Stmt::For(_, expr, ..) => Some(expr),
-        Stmt::While(_, _) | Stmt::Continue | Stmt::Break => None,
+        Stmt::While(_, _) | Stmt::Loop(_) | Stmt::Continue | Stmt::Break => None,
     }
 }
 
@@ -2387,7 +2348,7 @@ pub(crate) fn const_body_assumptions<'db>(
         parent_item = parent.scope().parent_item(db);
     }
 
-    match parent_item {
+    let assumptions = match parent_item {
         // A const body has no mode: a `mut?` bound is plain in it.
         Some(ItemKind::Func(func)) => {
             crate::semantic::func_body_assumptions(db, func).at_mode(db, None)
@@ -2402,7 +2363,54 @@ pub(crate) fn const_body_assumptions<'db>(
             || PredicateListId::empty_list(db),
             |owner| collect_constraints(db, owner).instantiate_identity(),
         ),
+    };
+
+    if let ScopeId::Item(ItemKind::Body(body)) = scope
+        && let Some(domain) = ConstCaptureDomain::of_body(db, body)
+        && domain.before.is_some()
+        && let Some(prefix) = ConstCaptureEnv::Identity(domain).complete(db)
+    {
+        project_assumptions(db, assumptions, &prefix)
+    } else {
+        assumptions
     }
+}
+
+/// What `assumptions` say about the parameters `prefix` covers, for the body
+/// of a default, which is evaluated with only those parameters. It can't
+/// assume a predicate on its own or a later parameter, such as a trait's
+/// `Self: Trait<.., L>` in the default of `L`, but it keeps what such a
+/// predicate implies of the parameters before it: a supertrait, or the trait
+/// itself where only an associated type binding names a later one.
+fn project_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assumptions: PredicateListId<'db>,
+    prefix: &CompleteSubst<'db>,
+) -> PredicateListId<'db> {
+    let expressible = |ty: TyId<'db>| {
+        !matches!(
+            substitute_complete(db, ty, prefix),
+            Err(SubstError::MissingArgument { .. })
+        )
+    };
+    let predicates: IndexSet<_> = assumptions
+        .extend_all_bounds(db)
+        .list(db)
+        .iter()
+        .filter(|predicate| predicate.args(db).iter().all(|&arg| expressible(arg)))
+        .map(|predicate| {
+            let mut bindings = predicate.assoc_type_bindings(db).clone();
+            bindings.retain(|_, ty| expressible(*ty));
+            TraitInstId::new(
+                db,
+                predicate.def(db),
+                predicate.args(db).clone(),
+                bindings,
+                predicate.mode(db),
+            )
+        })
+        .collect();
+    PredicateListId::new(db, predicates.into_iter().collect::<Vec<_>>())
 }
 
 fn evaluate_const_ty_cycle_initial<'db>(
@@ -2605,7 +2613,7 @@ pub(super) fn const_ty_from_trait_const<'db>(
     const_ty_from_resolved_trait_const(db, resolved, name)
 }
 
-pub(super) fn const_ty_from_resolved_trait_const<'db>(
+pub(crate) fn const_ty_from_resolved_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
     resolved: ResolvedImplInstance<'db>,
     name: IdentId<'db>,
@@ -2913,7 +2921,7 @@ impl<'db> ConstTyId<'db> {
             ty,
             template_ty: ty,
             const_def,
-            capture: ConstCaptureEnv::identity_for_body(db, body, None),
+            capture: ConstCaptureEnv::identity_for_body(db, body),
             policy: UnevaluatedConstPolicy::Evaluate,
         };
         Self::new(db, data)
@@ -3077,6 +3085,18 @@ impl<'db> ConstCaptureDomain<'db> {
         }
     }
 
+    /// The parameters `body` can read: those before the default it is written
+    /// in, or else all of its owner's. Lowering a bound asks this for the
+    /// bound's const bodies, so it depends only on the body's source position,
+    /// and the bounds a body assumes are derived from it.
+    fn of_body(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<Self> {
+        let owner = lexical_const_body_owner(db, body)?;
+        Some(match default_param_of_body(db, owner, body) {
+            Some(index) => Self::before(owner, ParamBasis::Full, index),
+            None => Self::full(owner, ParamBasis::Full),
+        })
+    }
+
     fn materialize(self, db: &'db dyn HirAnalysisDb) -> ParamDomainId<'db> {
         let schema = param_schema(db, self.owner, self.basis);
         self.before.map_or_else(
@@ -3177,22 +3197,8 @@ impl<'db> ConstCaptureEnv<'db> {
         Self::Bound(subst)
     }
 
-    pub(crate) fn identity_for_body(
-        db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
-        context: Option<&LoweringContext<'db>>,
-    ) -> Self {
-        if let Some((owner, param_idx)) = context.and_then(LoweringContext::default_capture) {
-            return Self::Identity(ConstCaptureDomain::before(
-                owner,
-                ParamBasis::Full,
-                param_idx,
-            ));
-        }
-        let Some(owner) = lexical_const_body_owner(db, body) else {
-            return Self::Empty;
-        };
-        Self::Identity(ConstCaptureDomain::full(owner, ParamBasis::Full))
+    pub(crate) fn identity_for_body(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Self {
+        ConstCaptureDomain::of_body(db, body).map_or(Self::Empty, Self::Identity)
     }
 
     pub(crate) fn bound(

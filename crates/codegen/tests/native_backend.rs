@@ -57,6 +57,38 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_modules_keep_only_the_runtime_functions_they_call() {
+    // The first `main` cannot panic, so nothing of `core::rt` remains. The
+    // second can overflow: it keeps the panic report and its C imports, but
+    // neither the allocator's release nor the `fe test` hook.
+    for (name, source, kept, dropped) in [
+        (
+            "native_runtime_unused.fe",
+            "pub fn main() -> i32 {\n    0\n}\n",
+            &[][..],
+            &["declare external", "%report_"][..],
+        ),
+        (
+            "native_runtime_panics.fe",
+            "use std::env::Args\npub fn main() -> i32 uses (args: Args) {\n    let argc: i32 = args.count().downcast_truncate()\n    argc + 1\n}\n",
+            &["%report_panic(", "declare external %write("][..],
+            &["%dealloc(", "%free(", "__fe_revert"][..],
+        ),
+    ] {
+        let ir = with_top_mod_for_source(name, source, |db, top_mod| {
+            fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0)
+        })
+        .expect("native executable should lower");
+        for function in kept {
+            assert!(ir.contains(function), "{name}: missing {function}:\n{ir}");
+        }
+        for function in dropped {
+            assert!(!ir.contains(function), "{name}: kept {function}:\n{ir}");
+        }
+    }
+}
+
+#[test]
 fn native_entry_symbol_is_reserved_when_reachable_helpers_are_named_main() {
     let ir = with_top_mod_for_source(
         "native_entry_collision.fe",
@@ -101,7 +133,7 @@ fn native_executable_rejects_main_outside_the_root_scope() {
     assert!(
         error
             .to_string()
-            .contains("requires `pub fn main() -> i32`"),
+            .contains("requires `pub fn main()` or `pub fn main() -> i32`"),
         "unexpected error: {error}"
     );
 }
@@ -148,7 +180,7 @@ fn native_object_emission_requires_c_main_signature() {
     assert!(
         error
             .to_string()
-            .contains("native executable `main` must have signature `pub fn main() -> i32`"),
+            .contains("native executable `main` must have signature `pub fn main()` or"),
         "unexpected error: {error}"
     );
 }
@@ -332,15 +364,15 @@ fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
     for (signature, expected) in [
         (
             "(argc: i32, argv: **u8) -> i32",
-            "native executable output requires `pub fn main() -> i32`",
+            "native executable output requires `pub fn main()` or `pub fn main() -> i32`",
         ),
         (
             "(argc: i32) -> i32",
-            "native executable output requires `pub fn main() -> i32`",
+            "native executable output requires `pub fn main()` or `pub fn main() -> i32`",
         ),
         (
             "(argc: i32) -> i32 uses (greeting: Greeting)",
-            "native executable output requires `pub fn main() -> i32`",
+            "native executable output requires `pub fn main()` or `pub fn main() -> i32`",
         ),
         ("() -> u32", "native executable `main` must have signature"),
     ] {
@@ -495,10 +527,10 @@ mod math {
     pub fn add(_ a: i64, _ b: i64) -> i64 { a - b }
 }
 
-#[export]
+#[unsafe(export)]
 pub fn add(_ a: i64, _ b: i64) -> i64 { a + b }
 
-#[export]
+#[unsafe(export)]
 pub fn store(_ p: *i64, _ value: i64) {
     unsafe { *p = value }
 }
@@ -535,31 +567,35 @@ pub fn main() -> i32 {
 fn native_exports_reject_symbols_and_values_c_cannot_share() {
     for (source, error) in [
         (
-            "#[export]\npub fn narrow(_ a: u8, _ b: bool) -> u8 { a }",
+            "#[unsafe(export)]\npub fn narrow(_ a: u8, _ b: bool) -> u8 { a }",
             "exported function `narrow` must take and return i32/i64 or raw-pointer ABI values, found lowered `narrow(i8, i1) -> i8`",
         ),
         (
-            "#[export]\npub fn wide(_ a: u256) -> u256 { a }",
+            "#[unsafe(export)]\npub fn wide(_ a: u256) -> u256 { a }",
             "found lowered `wide(i256) -> i256`",
         ),
         (
-            "#[export]\npub fn bump(_ a: mut i64) { a += 1 }",
+            "#[unsafe(export)]\npub fn bump(_ a: mut i64) { a += 1 }",
             "found lowered `bump(objref<i64>)`",
         ),
         (
-            "#[export]\npub fn write(_ a: i64) -> i64 { a }",
-            "exported symbol `write` is reserved: native code calls the C library's `write`",
+            "mod host {\n    extern {\n        pub fn shared(_ a: i32) -> i32\n    }\n}\n#[unsafe(export)]\npub fn shared(_ a: i64) -> i64 { a }\n#[unsafe(export)]\npub fn call() -> i32 { unsafe { host::shared(1) } }",
+            "conflicting declarations of `shared`",
         ),
         (
-            "#[export]\npub fn __fe_answer() -> i64 { 42 }",
+            "#[unsafe(export)]\npub fn environ() -> i64 { 1 }",
+            "exported symbol `environ` is reserved: native code reads the C library's `environ` variable",
+        ),
+        (
+            "#[unsafe(export)]\npub fn __fe_answer() -> i64 { 42 }",
             "exported symbol `__fe_answer` is reserved: symbols starting with `__fe_` are the compiler's",
         ),
         (
-            "mod a {\n    #[export]\n    pub fn same() -> i64 { 1 }\n}\n#[export]\npub fn same() -> i64 { 2 }",
+            "mod a {\n    #[unsafe(export)]\n    pub fn same() -> i64 { 1 }\n}\n#[unsafe(export)]\npub fn same() -> i64 { 2 }",
             "`native_exports_reject::a::same` and `native_exports_reject::same` both define the native symbol `same`",
         ),
         (
-            "mod cli {\n    #[export]\n    pub fn main() -> i32 { 1 }\n}",
+            "mod cli {\n    #[unsafe(export)]\n    pub fn main() -> i32 { 1 }\n}",
             "`native_exports_reject::main` and `native_exports_reject::cli::main` both define the native symbol `main`",
         ),
     ] {

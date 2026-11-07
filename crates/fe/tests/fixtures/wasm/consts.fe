@@ -1,0 +1,25 @@
+const BASE: u32 = 1000
+const OFFSET: u32 = BASE / 8 + 3
+const MASK: u64 = 0xff00ff00ff00ff00
+
+const fn triple(x: u32) -> u32 {
+    x * 3
+}
+
+const TRIPLED: u32 = triple(x: 7)
+
+pub fn offset() -> u32 {
+    OFFSET
+}
+
+pub fn tripled_plus(x: u32) -> u32 {
+    TRIPLED + x
+}
+
+pub fn masked(x: u64) -> u64 {
+    x & MASK
+}
+
+pub fn scaled(x: u32) -> u32 {
+    x * BASE + OFFSET
+}

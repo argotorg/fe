@@ -20,7 +20,7 @@ error[2-0003]: `alloc_bytes_unchecked` is not visible
   11 │     unsafe { ptr::alloc_bytes_unchecked(len) }
      │                   ^^^^^^^^^^^^^^^^^^^^^ `alloc_bytes_unchecked` is not visible
      │
-     ┌─ src/ptr.fe:1334:22
+     ┌─ src/ptr.fe:1344:22
      │
-1334 │ pub(ingot) unsafe fn alloc_bytes_unchecked(_ len: usize) -> *u8 {
+1344 │ pub(ingot) unsafe fn alloc_bytes_unchecked(_ len: usize) -> *u8 {
      │                      --------------------- `alloc_bytes_unchecked` is defined here

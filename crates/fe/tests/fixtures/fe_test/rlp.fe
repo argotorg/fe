@@ -32,11 +32,11 @@ fn span_hex(_ span: MemSpan) -> DynString {
 }
 
 fn encode_str(_ s: DynString) -> Bytes {
-    rlp::encode_bytes(s.payload_span())
+    rlp::encode_bytes(s.span())
 }
 
 fn decode_hex(_ hex: DynString) -> Option<Item> {
-    rlp::decode(from_hex(hex).payload_span())
+    rlp::decode(from_hex(hex).span())
 }
 
 // An item's accessors take the input it was decoded from.
@@ -49,43 +49,43 @@ fn bytes_hex(_ item: Item, _ input: MemSpan) -> DynString {
 
 fn hex_bytes_hex(_ hex: DynString) -> DynString {
     let input = from_hex(hex)
-    bytes_hex(rlp::decode(input.payload_span()).unwrap(), input.payload_span())
+    bytes_hex(rlp::decode(input.span()).unwrap(), input.span())
 }
 
 fn hex_uint(_ hex: DynString) -> Option<u256> {
     let input = from_hex(hex)
-    rlp::decode(input.payload_span())?.as_uint(input.payload_span())
+    rlp::decode(input.span())?.as_uint(input.span())
 }
 
 fn hex_bool(_ hex: DynString) -> Option<bool> {
     let input = from_hex(hex)
-    rlp::decode(input.payload_span())?.as_bool(input.payload_span())
+    rlp::decode(input.span())?.as_bool(input.span())
 }
 
 fn hex_items(_ hex: DynString) -> Option<usize> {
     let input = from_hex(hex)
-    Option::Some(rlp::decode(input.payload_span())?.items(input.payload_span())?.len())
+    Option::Some(rlp::decode(input.span())?.items(input.span())?.len())
 }
 
 #[test]
 fn encode_strings() {
     assert!(to_hex(encode_str("dog")) == "83646f67")
     assert!(to_hex(encode_str("")) == "80")
-    assert!(to_hex(rlp::encode_bytes(from_hex("00").payload_span())) == "00")
-    assert!(to_hex(rlp::encode_bytes(from_hex("0f").payload_span())) == "0f")
-    assert!(to_hex(rlp::encode_bytes(from_hex("80").payload_span())) == "8180")
-    assert!(to_hex(rlp::encode_bytes(from_hex("0400").payload_span())) == "820400")
+    assert!(to_hex(rlp::encode_bytes(from_hex("00").span())) == "00")
+    assert!(to_hex(rlp::encode_bytes(from_hex("0f").span())) == "0f")
+    assert!(to_hex(rlp::encode_bytes(from_hex("80").span())) == "8180")
+    assert!(to_hex(rlp::encode_bytes(from_hex("0400").span())) == "820400")
     // 55 bytes is the longest short string, 56 bytes the shortest long one.
     let lorem = from_hex(LOREM_HEX)
     assert!(lorem.len() == 56)
     assert!(
-        to_hex(rlp::encode_bytes(lorem.payload_span().head(55)))
+        to_hex(rlp::encode_bytes(lorem.span().head(55)))
             == text::concat(["b7", LOREM_HEX.slice(start: 0, len: 110)]),
     )
-    assert!(to_hex(rlp::encode_bytes(lorem.payload_span())) == text::concat(["b838", LOREM_HEX]))
+    assert!(to_hex(rlp::encode_bytes(lorem.span())) == text::concat(["b838", LOREM_HEX]))
     let long = rlp::encode_bytes(MemBuffer::new(1024).span())
     assert!(long.len() == 1027)
-    assert!(span_hex(long.payload_span().head(3)) == "b90400")
+    assert!(span_hex(long.span().head(3)) == "b90400")
 }
 
 #[test]
@@ -119,10 +119,10 @@ fn encode_lists() {
     let nil = rlp::encode_list(empty)
     assert!(to_hex(nil) == "c0")
     // The set theoretical representation of three, [ [], [[]], [ [], [[]] ] ].
-    let one = rlp::encode_list([nil])
-    let two = rlp::encode_list([nil, one])
+    let one = rlp::encode_list([nil.clone()])
+    let two = rlp::encode_list([nil.clone(), one.clone()])
     assert!(to_hex(rlp::encode_list([nil, one, two])) == "c7c0c1c0c3c0c1c0")
-    let lorem = rlp::encode_bytes(from_hex(LOREM_HEX).payload_span())
+    let lorem = rlp::encode_bytes(from_hex(LOREM_HEX).span())
     assert!(
         to_hex(rlp::encode_list([lorem, encode_str("dog")]))
             == text::concat(["f83eb838", LOREM_HEX, "83646f67"]),
@@ -132,7 +132,7 @@ fn encode_lists() {
 #[test]
 fn decode_strings() {
     let input = from_hex("83646f67")
-    let span = input.payload_span()
+    let span = input.span()
     let dog = rlp::decode(span).unwrap()
     assert!(!dog.is_list())
     assert!(bytes_hex(dog, span) == "646f67")
@@ -151,13 +151,13 @@ fn decode_scalars() {
     assert!(hex_uint("820400").unwrap() == 1024)
     let max = rlp::encode_uint(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
     assert!(
-        rlp::decode(max.payload_span()).unwrap().as_uint(max.payload_span()).unwrap()
+        rlp::decode(max.span()).unwrap().as_uint(max.span()).unwrap()
             == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
     )
     let address = Address::new(0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed)
     let encoded = rlp::encode_address(address)
-    let item = rlp::decode(encoded.payload_span()).unwrap()
-    assert!(item.as_address(encoded.payload_span()).unwrap() == address)
+    let item = rlp::decode(encoded.span()).unwrap()
+    assert!(item.as_address(encoded.span()).unwrap() == address)
     assert!(hex_bool("01").unwrap())
     assert!(!hex_bool("80").unwrap())
 }
@@ -170,7 +170,7 @@ fn decode_scalar_rejects() {
     // More than 32 bytes.
     assert!(hex_uint("a1010000000000000000000000000000000000000000000000000000000000000000").is_none())
     let dog = from_hex("83646f67")
-    assert!(rlp::decode(dog.payload_span()).unwrap().as_address(dog.payload_span()).is_none())
+    assert!(rlp::decode(dog.span()).unwrap().as_address(dog.span()).is_none())
     assert!(hex_bool("02").is_none())
     assert!(hex_uint("c0").is_none())
     assert!(hex_bytes_hex("c0") == "none")
@@ -179,7 +179,7 @@ fn decode_scalar_rejects() {
 #[test]
 fn decode_lists() {
     let input = from_hex("c88363617483646f67")
-    let span = input.payload_span()
+    let span = input.span()
     let pair = rlp::decode(span).unwrap()
     assert!(pair.is_list())
     assert!(bytes_hex(pair, span) == "none")
@@ -191,7 +191,7 @@ fn decode_lists() {
     assert!(hex_items("c0").unwrap() == 0)
 
     let three_input = from_hex("c7c0c1c0c3c0c1c0")
-    let three_span = three_input.payload_span()
+    let three_span = three_input.span()
     let three = rlp::decode(three_span).unwrap().items(three_span).unwrap()
     assert!(three.len() == 3)
     assert!(three[0].items(three_span).unwrap().len() == 0)
@@ -201,7 +201,7 @@ fn decode_lists() {
     assert!(last[1].items(three_span).unwrap()[0].items(three_span).unwrap().len() == 0)
 
     let long_input = from_hex(text::concat(["f83eb838", LOREM_HEX, "83646f67"]))
-    let long_span = long_input.payload_span()
+    let long_span = long_input.span()
     let long = rlp::decode(long_span).unwrap().items(long_span).unwrap()
     assert!(long.len() == 2)
     assert!(bytes_hex(long[0], long_span) == LOREM_HEX)
@@ -229,6 +229,6 @@ fn decode_rejects() {
     assert!(hex_items("c28100").is_none())
     assert!(hex_items("c3836461").is_none())
     let nested = from_hex("c3c28100")
-    let span = nested.payload_span()
+    let span = nested.span()
     assert!(rlp::decode(span).unwrap().items(span).unwrap()[0].items(span).is_none())
 }

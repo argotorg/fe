@@ -78,8 +78,10 @@ In a pattern, a binding's marker sits on its name: `x` takes a value,
 A pattern matched against a place opens each marked binding's access on that
 binding's own part of the place, and nothing else: in
 `match p { Pair { ref a, mut b, .. } => … }`, `p.a` is held for reading and
-`p.b` for writing, and `p.c` stays free. `mut x` needs a mutable place or
-access behind it, and `ref` or `mut` on an owned value is an error. Markers
+`p.b` for writing, and `p.c` stays free. A pattern on a projection's result,
+as in `let Pair { mut a, .. } = p.me()`, does the same with what the result
+reaches. `mut x` needs a mutable place or access behind it, and `ref` or `mut`
+on an owned value is an error. Markers
 go on the names only: `match ref x`, `if let Some(v) = mut o` and
 `let (a, b) = mut t` are errors, fixed by marking each name
 (`match x { V(ref v) => … }`). A marker on the scrutinee would hold all of
@@ -164,7 +166,11 @@ A shape groups owned values and accesses, `-> (usize, ref T)`, and the
 caller destructures it with `let (i, x) = ..`. Two `mut` components must be
 structurally disjoint, as in `(mut self.a, mut self.b)`. An optional shape,
 `-> Option<mut T>` or `-> Result<E, mut T>`, is consumed with `if let`,
-`match`, `let .. else` or `?`. Its empty variant grants nothing and runs no
+`match`, `let .. else` or `?`, or by a call of `is_some`, `is_none`,
+`is_ok`, `is_err` or `unwrap`: a test ends the access, and `unwrap` grants
+the payload as `?` does, panicking as the method does on the empty variant,
+so `xs.get(i).unwrap().push(x)` writes through. Other methods of `Option`
+and `Result` take a value. Its empty variant grants nothing and runs no
 slide: it may only be returned before the `yield`, and a `yield` of it,
 written out or forwarded from another projection as in
 `yield self.entry(k)`, ends the projection there, as `?` does.
@@ -327,7 +333,9 @@ at most once. A `let`, a pattern, a field read or a copy of it is an error.
 A product's part, `(own usize, H::Part<ref>)`, a closure's parameter and a
 callable bound, `F: Fn(H::Part<ref>) -> bool`, take one the same way. A
 bound that fixes the shape at a mode makes its parts known there, to bind,
-copy and destructure; each mode is fixed on its own:
+copy and destructure; each mode is fixed on its own. A pattern on a known
+parameter opens each marked binding's access on what its part reaches, so
+`let (mut a, _) = p` and `let (mut b, _) = p` may not overlap:
 
 ```fe
 fn bump<H: mut Holds<Part<ref> = (ref u256, ref u256), Part<mut> = (mut u256, mut u256)>>(

@@ -121,3 +121,32 @@ fn row_has_effect() -> u256 uses (log: Log) {
     let y: u256 = x
     g()
 }
+
+// A row that waits on an open literal resolves after the closure's body too:
+// the enclosing body can still decide the literal's type.
+trait Pat {}
+impl<const N: usize> Pat for String<N> {}
+impl Pat for core::abi::DynString {}
+
+trait Act {
+    uses E
+}
+
+struct Inc<P> {
+    p: P,
+}
+
+impl<P: Pat> Act for Inc<P> {
+    uses E = (log: Log)
+}
+
+fn make<P: Pat>(_ p: own P) -> Inc<P> {
+    Inc { p }
+}
+
+fn fire<A: Act>(_ a: own A) uses A::E {}
+
+fn literal_row_in_closure() uses (log: Log) {
+    let f = || fire(make(", "))
+    f()
+}

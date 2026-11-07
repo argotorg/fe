@@ -9,7 +9,7 @@ struct PublicType {}
 impl PublicMarker for PublicType {}
 
 impl<T: PublicMarker> WrappingAdd for T {
-    fn wrapping_add(self, _ other: T) -> Self {
+    fn wrapping_add(own self, _ other: own T) -> Self {
         self
     }
 }
@@ -19,7 +19,7 @@ trait MethodMarker {
 }
 
 impl<T: MethodMarker> WrappingSub for T {
-    fn wrapping_sub(self, _ other: T) -> Self {
+    fn wrapping_sub(own self, _ other: own T) -> Self {
         self
     }
 }
@@ -27,7 +27,7 @@ impl<T: MethodMarker> WrappingSub for T {
 trait GenericMarker<U> {}
 
 impl<T: GenericMarker<u256>> WrappingMul for T {
-    fn wrapping_mul(self, _ other: T) -> Self {
+    fn wrapping_mul(own self, _ other: own T) -> Self {
         self
     }
 }

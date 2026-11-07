@@ -1,0 +1,63 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/stmts/loop.fe
+---
+Root@0..60
+  LoopStmt@0..59
+    LoopKw@0..4 "loop"
+    WhiteSpace@4..5 " "
+    BlockExpr@5..59
+      LBrace@5..6 "{"
+      Newline@6..7 "\n"
+      WhiteSpace@7..11 "    "
+      ExprStmt@11..20
+        AssignExpr@11..20
+          PathExpr@11..12
+            Path@11..12
+              PathSegment@11..12
+                Ident@11..12 "i"
+          WhiteSpace@12..13 " "
+          Eq@13..14 "="
+          WhiteSpace@14..15 " "
+          BinExpr@15..20
+            PathExpr@15..16
+              Path@15..16
+                PathSegment@15..16
+                  Ident@15..16 "i"
+            WhiteSpace@16..17 " "
+            Plus@17..18 "+"
+            WhiteSpace@18..19 " "
+            LitExpr@19..20
+              Lit@19..20
+                Int@19..20 "1"
+      Newline@20..21 "\n"
+      WhiteSpace@21..25 "    "
+      ExprStmt@25..57
+        IfExpr@25..57
+          IfKw@25..27 "if"
+          WhiteSpace@27..28 " "
+          BinExpr@28..35
+            PathExpr@28..29
+              Path@28..29
+                PathSegment@28..29
+                  Ident@28..29 "i"
+            WhiteSpace@29..30 " "
+            Eq2@30..32 "=="
+            WhiteSpace@32..33 " "
+            LitExpr@33..35
+              Lit@33..35
+                Int@33..35 "10"
+          WhiteSpace@35..36 " "
+          BlockExpr@36..57
+            LBrace@36..37 "{"
+            Newline@37..38 "\n"
+            WhiteSpace@38..46 "        "
+            BreakStmt@46..51
+              BreakKw@46..51 "break"
+            Newline@51..52 "\n"
+            WhiteSpace@52..56 "    "
+            RBrace@56..57 "}"
+      Newline@57..58 "\n"
+      RBrace@58..59 "}"
+  Newline@59..60 "\n"

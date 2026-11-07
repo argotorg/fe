@@ -1,5 +1,6 @@
 use core::MemBuffer
-use core::hash::{Keccak256, keccak256, keccak256_word}
+use core::abi::DynString
+use core::hash::{Keccak256, Sha256, keccak256, keccak256_word, sha256, sha256_word}
 
 fn digest_word(_ digest: [u8; 32]) -> u256 {
     var value: u256 = 0
@@ -119,4 +120,117 @@ fn keccak_matches_compile_time_hashes() {
     let abc: u256 = core::keccak("abc")
     core::assert(abc == 0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45)
     core::assert(keccak256_word([97 as u8, 98, 99]) == abc)
+}
+
+fn sha256_text(_ text: DynString) -> u256 {
+    sha256_word(text.span())
+}
+
+// FIPS 180-4's example messages.
+#[test]
+fn sha256_known_answers() {
+    core::assert(digest_word(sha256([0 as u8; 0])) == 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
+    core::assert(digest_word(sha256([97 as u8, 98, 99])) == 0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad)
+    core::assert(sha256_word([97 as u8, 98, 99]) == 0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad)
+    core::assert(
+        sha256_text("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+            == 0x248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1,
+    )
+    core::assert(
+        sha256_text(
+                "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+            )
+            == 0xcf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1,
+    )
+}
+
+// Digests of the bytes 0, 1, 2, ... around the block and padding boundaries.
+const SHA256_LENS: [usize; 10] = [55, 56, 57, 63, 64, 65, 119, 120, 121, 128]
+const SHA256_DIGESTS: [u256; 10] = [
+    0x463eb28e72f82e0a96c0a4cc53690c571281131f672aa229e0d45ae59b598b59,
+    0xda2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562,
+    0x2fe741af801cc238602ac0ec6a7b0c3a8a87c7fc7d7f02a3fe03d1c12eac4d8f,
+    0x29af2686fd53374a36b0846694cc342177e428d1647515f078784d69cdb9e488,
+    0xfdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108,
+    0x4bfd2c8b6f1eec7a2afeb48b934ee4b2694182027e6d0fc075074f2fabb31781,
+    0xda18797ed7c3a777f0847f429724a2d8cd5138e6ed2895c3fa1a6d39d18f7ec6,
+    0xf52b23db1fbb6ded89ef42a23ce0c8922c45f25c50b568a93bf1c075420bbb7c,
+    0x335a461692b30bba1d647cc71604e88e676c90e4c22455d0b8c83f4bd7c8ac9b,
+    0x471fb943aa23c511f6f72f8d1652d9c880cfa392ad80503120547703e56a2be5,
+]
+
+#[test]
+fn sha256_pads_at_block_boundaries() {
+    var input: [u8; 128] = [0; 128]
+    for index in 0..128 {
+        input[index] = index.downcast_truncate()
+    }
+    for i in 0..10 {
+        var state = Sha256::new()
+        state.update(input, offset: 0, len: SHA256_LENS[i])
+        core::assert(state.finish_word() == SHA256_DIGESTS[i])
+    }
+}
+
+#[test]
+fn sha256_updates_cross_block_boundaries_and_preserve_the_input() {
+    var input: [u8; 409] = [0; 409]
+    var index: usize = 0
+    while index < 409 {
+        input[index] = index.downcast_truncate()
+        index += 1
+    }
+    let expected = 0x2d3d9aa4aaf1e4207280b79552a0efb8abc3af1e444696619340bd9e594faf09
+    core::assert(sha256_word(input) == expected)
+    for chunk in [1 as usize, 3, 4, 7, 8, 9, 63, 64, 65, 127, 128, 409] {
+        var state = Sha256::new()
+        var offset: usize = 0
+        while offset < 409 {
+            state.update(input, offset, len: 0)
+            let len = if chunk < 409 - offset { chunk } else { 409 - offset }
+            state.update(input, offset, len)
+            offset += len
+        }
+        state.update(input, offset: 409, len: 0)
+        core::assert(digest_word(state.finish()) == expected)
+    }
+    core::assert(input[0] == 0 && input[1] == 1 && input[408] == 152)
+}
+
+#[test]
+fn sha256_buffer_lanes_match_bytes_at_every_alignment() {
+    var bytes = MemBuffer::new(409)
+    var index: usize = 0
+    while index < 409 {
+        bytes[index] = (index * 7).downcast_truncate()
+        index += 1
+    }
+    let expected = 0x6dc29604bedf4c88cd1b7ef3f364dc7d478a6c6c84dd0fc7fbcc179e14dded9f
+    for chunk in [1 as usize, 3, 8, 13, 32, 63, 64, 65, 409] {
+        var buffered = Sha256::new()
+        var spanned = Sha256::new()
+        var offset: usize = 0
+        while offset < 409 {
+            let len = if chunk < 409 - offset { chunk } else { 409 - offset }
+            buffered.update(bytes, offset, len)
+            spanned.update(bytes.span(), offset, len)
+            offset += len
+        }
+        core::assert(buffered.finish_word() == expected)
+        core::assert(digest_word(spanned.finish()) == expected)
+    }
+}
+
+#[test]
+fn sha256_borrows_buffer_ranges() {
+    var bytes = MemBuffer::new(5)
+    bytes[0] = 255
+    bytes[1] = 97
+    bytes[2] = 98
+    bytes[3] = 99
+    bytes[4] = 255
+    var state = Sha256::new()
+    state.update(bytes, offset: 1, len: 3)
+    core::assert(state.finish_word() == 0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad)
+    core::assert(bytes.len() == 5 && bytes[0] == 255 && bytes[4] == 255)
 }

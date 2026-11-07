@@ -1,0 +1,37 @@
+// Reading an enum whose stored tag names no variant panics with
+// `Panic(0x21)`, as Solidity does for an invalid enum value.
+use std::evm::{Evm, RawStorage, storage_at}
+
+enum Light {
+    Red,
+    Green,
+}
+
+fn write_word(slot: u256, value: u256) uses (storage: mut RawStorage) {
+    unsafe { storage.sstore(slot, value) }
+}
+
+fn is_red(_ slot: u256) -> bool uses (storage: RawStorage) {
+    match unsafe { storage_at<Light>(slot) } {
+        Light::Red => true,
+        Light::Green => false,
+    }
+}
+
+#[test]
+fn stored_tags_match_their_variants() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        write_word(slot: 7, value: 0)
+        assert(is_red(7))
+        write_word(slot: 7, value: 1)
+        assert(!is_red(7))
+    }
+}
+
+#[test(should_revert, panic = 0x21)]
+fn invalid_stored_tag_panics() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        write_word(slot: 7, value: 2)
+        is_red(7)
+    }
+}

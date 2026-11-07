@@ -2,8 +2,19 @@ mod lower_runtime;
 #[cfg(feature = "cranelift")]
 mod native_tests;
 pub(crate) mod observability;
+#[cfg(feature = "wasm")]
+mod wasm;
+#[cfg(feature = "wasm")]
+mod wasm_tests;
 #[cfg(feature = "cranelift")]
 pub use native_tests::{NativeTestEntry, NativeTestSuite, emit_test_suite_native};
+#[cfg(feature = "wasm")]
+pub use wasm::{
+    WASM_HOST_CONTRACT_VERSION, WASM_REPLY_TYPE, WASM_TEXT_TYPE, WasmArtifacts, WasmExportInfo,
+    WasmOutputSelection, WasmParamInfo, emit_module_wasm_artifacts,
+};
+#[cfg(feature = "wasm")]
+pub use wasm_tests::{WasmTestModule, emit_test_wasm};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -23,6 +34,8 @@ use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
 use sonatina_codegen::Compile;
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+use sonatina_codegen::module_analysis::CallGraph;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     machinst::vcode::{SectionCodeUnitId, VCodeInst},
@@ -34,6 +47,8 @@ use sonatina_codegen::{
 };
 #[cfg(feature = "cranelift")]
 use sonatina_cranelift::CraneliftObjectBackend;
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+use sonatina_ir::Linkage;
 use sonatina_ir::{
     BlockId, Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -43,7 +58,7 @@ use sonatina_ir::{
 };
 #[cfg(feature = "cranelift")]
 use sonatina_ir::{
-    Linkage, Signature, Type,
+    Signature, Type,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
@@ -94,7 +109,7 @@ impl From<mir::RuntimeMemoryLayoutError> for LowerError {
     fn from(error: mir::RuntimeMemoryLayoutError) -> Self {
         match error {
             mir::RuntimeMemoryLayoutError::Overflow => LowerError::Unsupported(
-                "runtime memory layout exceeds the supported 64-bit size".to_string(),
+                "runtime memory layout exceeds the target's largest size".to_string(),
             ),
             mir::RuntimeMemoryLayoutError::Recursive => {
                 LowerError::Unsupported("recursive runtime memory layout".to_string())
@@ -765,7 +780,7 @@ fn compile_native_module(
         NativeTarget::Sp1 => {
             if let Some(func) = mir::native_exports(db, top_mod).first() {
                 return Err(LowerError::Unsupported(format!(
-                    "SP1 guests export no functions, but `{}` is `#[export]`",
+                    "SP1 guests export no functions, but `{}` is `#[unsafe(export)]`",
                     func.scope().pretty_path(db).unwrap_or_default()
                 )));
             }
@@ -903,6 +918,7 @@ pub fn emit_module_native_artifacts(
         Some(main) => prepare_native_main(db, top_mod, target, module, main)?,
         None => module,
     };
+    remove_unreachable_functions(&module);
 
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
@@ -924,6 +940,28 @@ pub fn emit_module_native_artifacts(
     Ok(NativeArtifacts { ir, object })
 }
 
+/// Removes the functions no public function calls. A native package holds
+/// every `core::rt` function, of which a module calls only some, and an
+/// unused C import would still need a definition when the module links.
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+fn remove_unreachable_functions(module: &Module) {
+    let calls = CallGraph::build_graph(module);
+    let mut reached = module
+        .funcs()
+        .into_iter()
+        .filter(|&func| module.ctx.func_linkage(func) == Linkage::Public)
+        .collect::<FxHashSet<_>>();
+    let mut pending = reached.iter().copied().collect::<Vec<_>>();
+    while let Some(func) = pending.pop() {
+        for &callee in calls.callee_of(func) {
+            if reached.insert(callee) {
+                pending.push(callee);
+            }
+        }
+    }
+    module.retain_defined_funcs(|func| reached.contains(&func));
+}
+
 #[cfg(feature = "cranelift")]
 fn prepare_native_main(
     db: &DriverDataBase,
@@ -936,18 +974,24 @@ fn prepare_native_main(
         .main_entry(db)
         .ok_or_else(|| LowerError::Internal("native entry disappeared after lowering".into()))?;
     let i32_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::I32)));
-    let valid = func.return_ty(db) == i32_ty;
+    let returns_status = func.return_ty(db) == i32_ty;
+    // An SP1 guest's runtime reads an exit status.
+    let returns_nothing =
+        matches!(target, NativeTarget::Host) && func.return_ty(db) == TyId::unit(db);
     module.ctx.func_sig(main, |signature| {
-        if valid && signature.args().is_empty() && signature.ret_tys() == [Type::I32] {
+        if signature.args().is_empty()
+            && ((returns_status && signature.ret_tys() == [Type::I32])
+                || (returns_nothing && signature.ret_tys().is_empty()))
+        {
             Ok(())
         } else {
-            let executable = match target {
-                NativeTarget::Host => "native",
+            let (executable, expected) = match target {
+                NativeTarget::Host => ("native", "`pub fn main()` or `pub fn main() -> i32`"),
                 #[cfg(feature = "sp1")]
-                NativeTarget::Sp1 => "SP1",
+                NativeTarget::Sp1 => ("SP1", "`pub fn main() -> i32`"),
             };
             Err(LowerError::Unsupported(format!(
-                "{executable} executable `main` must have signature `pub fn main() -> i32`, found lowered `main({}) -> {}`",
+                "{executable} executable `main` must have signature {expected}, found lowered `main({}) -> {}`",
                 format_native_types(signature.args(), &module),
                 format_native_types(signature.ret_tys(), &module)
             )))
@@ -1009,8 +1053,14 @@ fn prepare_native_main(
         let address = fb.make_global_value(global);
         fb.insert_inst_no_result(Mstore::new(inst_set, address, value, ty));
     }
-    let result = fb.insert_inst(Call::new(inst_set, main, vec![].into()), Type::I32);
-    fb.insert_inst_no_result(Return::new_single(inst_set, result));
+    let call = Call::new(inst_set, main, vec![].into());
+    let status = if returns_nothing {
+        fb.insert_inst_no_result(call);
+        fb.make_imm_value(0i32)
+    } else {
+        fb.insert_inst(call, Type::I32)
+    };
+    fb.insert_inst_no_result(Return::new_single(inst_set, status));
     fb.seal_all();
     fb.finish();
     Ok(builder.build())
@@ -2301,6 +2351,7 @@ mod tests {
         let (module, _) =
             compile_native_module(&db, top_mod, NativeTarget::Host, NativeOutputKind::Library)
                 .expect("native pointer fixture should lower");
+        remove_unreachable_functions(&module);
         let mut compile = Compile::new(module, CraneliftObjectBackend::new())
             .with_opt_level(SonatinaOptLevel::O0);
         compile.optimize();
@@ -2327,7 +2378,7 @@ fn zero_buffer(ptr: *u8, len: usize) {
     unsafe { core::ptr::zero_bytes(ptr, len) }
 }
 
-#[export]
+#[unsafe(export)]
 pub fn zero(_ ptr: *u8, _ len: usize) {
     zero_buffer(ptr, len)
 }
@@ -2358,7 +2409,7 @@ fn replace_byte(ptr: *u8, value: u8) -> u8 {
     previous
 }
 
-#[export]
+#[unsafe(export)]
 pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
     replace_byte(ptr, value.downcast_truncate()) as u32
 }

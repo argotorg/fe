@@ -1,0 +1,13 @@
+pub fn pow_mod(base: u64, exp: u64, modulus: u64) -> u64 {
+    var result: u64 = 1
+    var b = base % modulus
+    var e = exp
+    while e > 0 {
+        if e & 1 == 1 {
+            result = result * b % modulus
+        }
+        b = b * b % modulus
+        e = e >> 1
+    }
+    result
+}

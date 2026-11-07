@@ -66,7 +66,7 @@ where M: MsgVariant<Sol> + Encode<Sol>
     Bytes::from_payload(source: encode_msg_calldata(message).span())
 }
 
-fn batch(_ target: Address, _ data: DynArray<Bytes>) -> CallOutcome uses (call: mut Call) {
+fn batch(_ target: Address, _ data: own DynArray<Bytes>) -> CallOutcome uses (call: mut Call) {
     target.try_call(MulticallMsg::Multicall { data })
 }
 

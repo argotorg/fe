@@ -1,0 +1,178 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_binding_not_on_trait.fe
+---
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:78:10
+   │
+78 │     take<Item = u8>()
+   │          ^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:79:13
+   │
+79 │     two<u8, Item = u8>()
+   │             ^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:80:13
+   │
+80 │     S::take<Item = u8>()
+   │             ^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:81:15
+   │
+81 │     G<u8>::tk<Item = u8>()
+   │               ^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:82:11
+   │
+82 │     Tr::f<Item = u8>()
+   │           ^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:83:10
+   │
+83 │     s.me<Item = u8>()
+   │          ^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:84:6
+   │
+84 │     G<Item = u8>::mk()
+   │      ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:85:6
+   │
+85 │     G<Item = u8>::C
+   │      ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:86:7
+   │
+86 │     Al<Item = u8>::mk()
+   │       ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:87:10
+   │
+87 │     take<G<Item = u8>>()
+   │          ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:88:10
+   │
+88 │     take<Item = Missing>()
+   │          ^^^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:89:10
+   │
+89 │     take<Step<ref> = ref u256>()
+   │          ^^^^^^^^^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:90:6
+   │
+90 │     G<Step<ref> = ref u256>::mk()
+   │      ^^^^^^^^^^^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:91:10
+   │
+91 │     s.me<Step<ref> = ref u256>()
+   │          ^^^^^^^^^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:92:14
+   │
+92 │     let _ = E<Item = u8>::A
+   │              ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:93:14
+   │
+93 │     let _ = E<Item = u8>::B(1)
+   │              ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:94:14
+   │
+94 │     let _ = G<Item = u8> { x: 0 }
+   │              ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:95:16
+   │
+95 │     let _ = Tup<Item = u8>(1)
+   │                ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:96:12
+   │
+96 │     let _: G<Item = u8> = G<u8> { x: 0 }
+   │            ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:98:10
+   │
+98 │         E<Item = u8>::A => {}
+   │          ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+   ┌─ assoc_binding_not_on_trait.fe:99:10
+   │
+99 │         E<Item = u8>::B(_) => {}
+   │          ^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+    ┌─ assoc_binding_not_on_trait.fe:103:18
+    │
+103 │ fn in_param(_ x: G<Item = u8>) {}
+    │                  ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+    ┌─ assoc_binding_not_on_trait.fe:105:19
+    │
+105 │ fn in_return() -> G<Item = u8> {
+    │                   ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+    ┌─ assoc_binding_not_on_trait.fe:109:20
+    │
+109 │ fn in_bound<T: Cap<G<Item = u8>>>() {}
+    │                    ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+    ┌─ assoc_binding_not_on_trait.fe:111:19
+    │
+111 │ fn in_default<T = G<Item = u8>>() {}
+    │                   ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+    ┌─ assoc_binding_not_on_trait.fe:114:8
+    │
+114 │     a: G<Item = u8>,
+    │        ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+    ┌─ assoc_binding_not_on_trait.fe:117:16
+    │
+117 │ type InAlias = G<Item = u8>
+    │                ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+    ┌─ assoc_binding_not_on_trait.fe:119:6
+    │
+119 │ impl G<Item = u8> {}
+    │      ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`
+
+error[3-0089]: an associated type binding names a trait's associated type
+    ┌─ assoc_binding_not_on_trait.fe:121:13
+    │
+121 │ impl Tr for W<Item = u8> {
+    │             ^^^^^^^^^^^^ only a trait takes a binding, as in `T: Tr<Item = u8>`

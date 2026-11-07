@@ -51,7 +51,7 @@ pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
-    ValidatedFieldLayoutPlan,
+    ValidatedFieldLayoutPlan, contract_field_lane, storage_lane_bytes,
 };
 pub(crate) use storage_layout::{storage_field_lanes, storage_slot_span};
 pub use symbol::{
@@ -665,43 +665,57 @@ impl<'db> TopLevelMod<'db> {
 impl<'db> Mod<'db> {
     // Note: semantic child iteration and module-scoped diagnostics can be
     // added here if direct `scope_graph` traversal in analysis becomes noisy.
-    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> Option<ArithmeticMode> {
-        self.attributes(db).arithmetic_mode(db)
+}
+
+impl<'db> ScopeId<'db> {
+    /// The arithmetic mode of the code in this scope, which is lexical: the
+    /// innermost `#[arithmetic]` on an enclosing function or module, then the
+    /// file's `#![arithmetic]`, then the ingot's, and otherwise checked. A
+    /// function's covers its body, including the closures and constant
+    /// expressions there, but not the constants in its signature, such as
+    /// its `where` conditions.
+    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> ArithmeticMode {
+        self.source_arithmetic_mode(db).unwrap_or_else(|| {
+            match self.top_mod(db).ingot(db).arithmetic_mode(db) {
+                Some(common::config::ArithmeticMode::Unchecked) => ArithmeticMode::Unchecked,
+                Some(common::config::ArithmeticMode::Checked) | None => ArithmeticMode::Checked,
+            }
+        })
+    }
+
+    /// The arithmetic mode this scope's source selects with an `#[arithmetic]`
+    /// or `#![arithmetic]` attribute. Without one, the mode comes from
+    /// configuration, which a profile or a dependent ingot can change.
+    pub fn source_arithmetic_mode(self, db: &'db dyn HirDb) -> Option<ArithmeticMode> {
+        let mut inner = None;
+        let mut scope = Some(self);
+        while let Some(current) = scope
+            && !matches!(current, ScopeId::Item(ItemKind::TopMod(_)))
+        {
+            let attrs = match current {
+                ScopeId::Item(ItemKind::Func(func))
+                    if inner.is_none_or(|inner| {
+                        func.body(db).is_some_and(|body| inner == body.scope())
+                    }) =>
+                {
+                    Some(func.attributes(db))
+                }
+                ScopeId::Item(ItemKind::Mod(mod_)) => Some(mod_.attributes(db)),
+                _ => None,
+            };
+            if let Some(mode) = attrs.and_then(|attrs| attrs.arithmetic_mode(db)) {
+                return Some(mode);
+            }
+            inner = Some(current);
+            scope = current.parent(db);
+        }
+        self.top_mod(db).attributes(db).arithmetic_mode(db)
     }
 }
 
 // Function items ------------------------------------------------------------
 
 impl<'db> Func<'db> {
-    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> ArithmeticMode {
-        if let Some(mode) = self.attributes(db).arithmetic_mode(db) {
-            return mode;
-        }
-
-        let mut scope = self.scope().parent_module(db);
-        while let Some(module_scope) = scope {
-            if let ItemKind::Mod(mod_) = module_scope.item()
-                && let Some(mode) = mod_.attributes(db).arithmetic_mode(db)
-            {
-                return mode;
-            }
-            scope = module_scope.parent_module(db);
-        }
-
-        if let Some(mode) = self.top_mod(db).attributes(db).arithmetic_mode(db) {
-            return mode;
-        }
-
-        if let Some(mode) = self.top_mod(db).ingot(db).arithmetic_mode(db) {
-            return match mode {
-                common::config::ArithmeticMode::Checked => ArithmeticMode::Checked,
-                common::config::ArithmeticMode::Unchecked => ArithmeticMode::Unchecked,
-            };
-        }
-
-        ArithmeticMode::Checked
-    }
-
     /// Semantic predicate list (assumptions) for this function.
     pub(crate) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         constraints_for(db, self.into())
@@ -2213,16 +2227,15 @@ impl<'db> Contract<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> IndexMap<IdentId<'db>, ContractFieldInfo<'db>> {
         self.storage_layout(db)
-            .semantic_fields()
-            .into_iter()
-            .map(|(name, field, is_mut, declared)| {
+            .valid_fields()
+            .map(|field| {
                 (
-                    name,
+                    field.name,
                     ContractFieldInfo {
-                        index: field.index,
-                        name,
-                        declared,
-                        is_mut,
+                        index: field.field.index,
+                        name: field.name,
+                        declared: field.declared,
+                        is_mut: field.is_mut,
                     },
                 )
             })
@@ -2565,16 +2578,11 @@ fn contract_scoped_effect_requirements_canonical<'db>(
 
         if key_path.len(db) == 1
             && let Some(name) = key_path.ident(db).to_opt()
-            && fields.contains_key(&name)
+            && let Some(field) = fields.get(&name)
         {
-            let key = match contract.storage_layout(db).field(&name) {
-                Some(layout) => EffectRequirementKey::Type(layout.declared),
-                None => EffectRequirementKey::Other,
-            };
-
             out.push(EffectRequirement {
                 binding_name: name,
-                key,
+                key: EffectRequirementKey::Type(field.declared),
                 is_mut: effect.is_mut(),
                 binding_site: list_site,
                 binding_idx: idx as u32,
@@ -2626,8 +2634,7 @@ fn contract_provider_bindings_canonical<'db>(
     let is_init_site = matches!(site, EffectParamSite::ContractInit { .. });
     let mut providers = contract
         .storage_layout(db)
-        .values()
-        .cloned()
+        .valid_fields()
         .enumerate()
         .map(|(idx, field)| {
             let provider_ty = field.declared;

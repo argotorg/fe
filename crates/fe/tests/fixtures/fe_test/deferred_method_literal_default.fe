@@ -5,17 +5,17 @@ use core::ops::Eq
 struct Width {}
 
 trait Measure<T> {
-    fn measure(self, _ x: own T) -> u256
+    fn measure(self, _ x: T) -> u256
 }
 
 impl<const N: usize> Measure<String<N>> for Width {
-    fn measure(self, _ x: own String<N>) -> u256 {
+    fn measure(self, _ x: String<N>) -> u256 {
         N as u256
     }
 }
 
 impl Measure<DynString> for Width {
-    fn measure(self, _ x: own DynString) -> u256 {
+    fn measure(self, _ x: DynString) -> u256 {
         0
     }
 }

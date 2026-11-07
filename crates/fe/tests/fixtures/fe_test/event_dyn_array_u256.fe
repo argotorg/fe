@@ -10,7 +10,7 @@ impl AbiSize for DynArray<u256> {
 }
 
 impl<A: Abi> Encode<A> for DynArray<u256> {
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.value)
     }
 }
@@ -101,7 +101,7 @@ fn test_dyn_array_u256_event() uses (log: mut Log) {
     unsafe { store_word(ptr: ptr, value: 1) }
     unsafe { store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: 7) }
     let values = unsafe { Values::from_abi_tail(data: ptr, len: 1, size: 64) }
-    let buffer = encode_abi_payload((values, 3 as u256))
+    let buffer = encode_abi_payload((values.clone(), 3 as u256))
     let data = buffer.ptr()
     let len = buffer.len()
 

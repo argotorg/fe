@@ -43,9 +43,9 @@ use crate::hir_def::{
 };
 use crate::{
     hir_def::{
-        BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
-        GenericParam, GenericParamOwner, IntegerId, LitKind, ManualContractRootAttr, Partial, Pat,
-        PatId, PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId,
+        ArithBinOp, BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr,
+        ExprId, Func, GenericParam, GenericParamOwner, IntegerId, LitKind, ManualContractRootAttr,
+        Partial, Pat, PatId, PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId,
         TypeId as HirTyId, TypeKind, UnOp, WhereClauseOwner,
     },
     span::{
@@ -108,11 +108,12 @@ use super::{
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{
-    BlockedInfo, ConstDependency, ConstUsePolicy, CtfeConfig, CtfeError, EffectProviderSubst,
-    EvalFailure, EvalOutcome, GenericSubst, ImplEnv, RuntimeSizeError, SemConstId, SemConstScalar,
-    SemConstValue, SemOrigin, SemanticInstance, SemanticInstanceKey,
-    const_computation_for_instance, describe_const_computation, eval_body_owner_const,
-    eval_const_instance, reify_runtime_const_for_ty, runtime_size_bytes_with_source,
+    BinaryOp, BlockedInfo, ConstDependency, ConstUsePolicy, CtfeConfig, CtfeError,
+    EffectProviderSubst, EvalFailure, EvalOutcome, GenericSubst, ImplEnv, Overflow,
+    RuntimeSizeError, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
+    SemanticInstanceKey, UnaryOp, const_computation_for_instance, describe_const_computation,
+    eval_body_owner_const, eval_const_instance, reify_runtime_const_for_ty,
+    runtime_size_bytes_with_source,
 };
 use crate::analysis::ty::ty_def::{ClosureDef, ClosureTy, TyBase, TyData};
 use crate::analysis::ty::{
@@ -128,7 +129,8 @@ use crate::analysis::ty::{
     registered_root_providers,
     ty_error::{
         collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause,
-        normalization_limit_diag, path_arg_diags, qualified_path_wf_diags,
+        emit_invalid_ty_error, normalization_limit_diag, path_arg_diags, path_generic_arg_diags,
+        qualified_path_wf_diags,
     },
 };
 use crate::analysis::{
@@ -1465,6 +1467,8 @@ fn typed_body_for_bodyless_func<'db>(
         unsafe_splits: FxHashSet::default(),
         product_args: FxHashSet::default(),
         value_calls: FxHashSet::default(),
+        builtin_ops: FxHashMap::default(),
+        operator_assigns: FxHashSet::default(),
         matched_places: FxHashSet::default(),
         inspected_places: FxHashSet::default(),
         covered_providers: FxHashSet::default(),
@@ -1539,6 +1543,9 @@ pub struct TyChecker<'db> {
     /// Set once deferred work is resolved for the last time, after which type
     /// equalities are decided rather than retained.
     final_pass: bool,
+    /// What the arithmetic operators written in the body do on overflow, by
+    /// its arithmetic mode. They wrap in unchecked code.
+    overflow: Overflow,
 }
 
 pub(crate) struct TyCheckerSnapshot<'db> {
@@ -1635,6 +1642,15 @@ impl<'db> TyChecker<'db> {
                 self.resolve_recv_arm_types(contract, recv_idx, arm_idx, arm, arm_span);
             self.expected = ret_ty;
             self.check_recv_arm_pat(arm.pat, pat_ty);
+            // A message selects its arm by its variant alone, so the arm's
+            // pattern must match every value of that variant.
+            if let Some(root) = self.env.pattern_store().root(arm.pat)
+                && !self.env.pattern_store().is_irrefutable(self.db, root)
+            {
+                self.push_diag(BodyDiag::RefutableRecvArmPattern {
+                    primary: arm.pat.span(self.body()).into(),
+                });
+            }
             self.seed_pat_bindings(arm.pat);
             self.check_arm_effect_names(arm.pat);
             self.env.flush_pending_bindings();
@@ -1971,6 +1987,17 @@ impl<'db> TyChecker<'db> {
                         });
                     }
                 }
+                // A field whose layout failed has reported its own error.
+                _ if key_ty
+                    .as_path(self.db)
+                    .filter(|path| path.len(self.db) == 1)
+                    .and_then(|path| path.ident(self.db).to_opt())
+                    .is_some_and(|name| {
+                        contract
+                            .storage_layout(self.db)
+                            .field_errors(&name)
+                            .is_some()
+                    }) => {}
                 _ => {
                     self.push_diag(BodyDiag::InvalidEffectKey {
                         owner,
@@ -2538,6 +2565,18 @@ impl<'db> TyChecker<'db> {
 
     fn resolve_deferred(&mut self) {
         self.resolve_pending(None);
+        // A row that still waits sees a literal's fallback type only once
+        // nothing else resolves without it. Its effects can settle more.
+        loop {
+            let effects = self.env.take_pending_effects();
+            if effects.is_empty() {
+                break;
+            }
+            for pending in effects {
+                self.resolve_pending_effects(pending, true);
+            }
+            self.resolve_pending(None);
+        }
         let db = self.db;
         let body = self.env.body();
         let scope = self.env.scope();
@@ -2590,8 +2629,11 @@ impl<'db> TyChecker<'db> {
                         });
                     }
                 }
-                env::DeferredTask::PrimitiveOp(pending) => {
-                    let _ = self.resolve_pending_primitive_op(&pending);
+                env::DeferredTask::Negation(pending) => {
+                    self.check_pending_negation(pending);
+                }
+                env::DeferredTask::Effects(pending) => {
+                    self.resolve_pending_effects(pending, true);
                 }
             }
         }
@@ -2685,15 +2727,17 @@ impl<'db> TyChecker<'db> {
                             self.env.register_pending_method(pending);
                         }
                     }
-                    env::DeferredTask::PrimitiveOp(pending) => {
-                        match self.resolve_pending_primitive_op(&pending) {
-                            expr::PendingPrimitiveOpResolution::Pending => {
-                                self.env.register_pending_primitive_op(pending);
-                            }
-                            expr::PendingPrimitiveOpResolution::Resolved => {
-                                progressed = true;
-                            }
-                            expr::PendingPrimitiveOpResolution::Done => {}
+                    env::DeferredTask::Effects(pending)
+                        if closure.is_some() && pending.site.closure != closure =>
+                    {
+                        self.env.register_pending_effects(pending);
+                    }
+                    env::DeferredTask::Effects(pending) => {
+                        progressed |= self.resolve_pending_effects(pending, false);
+                    }
+                    env::DeferredTask::Negation(pending) => {
+                        if !self.check_pending_negation(pending) {
+                            self.env.register_pending_negation(pending);
                         }
                     }
                 }
@@ -3006,7 +3050,6 @@ impl<'db> TyChecker<'db> {
             .any(|stmt| matches!(stmt, Partial::Present(crate::hir_def::Stmt::Yield(_))));
         Self {
             db,
-            env,
             table,
             expected,
             projection_shape,
@@ -3025,6 +3068,8 @@ impl<'db> TyChecker<'db> {
             split_reads: Vec::new(),
             diags: Vec::new(),
             final_pass: false,
+            overflow: env.owner().scope().arithmetic_mode(db).into(),
+            env,
         }
     }
 
@@ -4005,7 +4050,11 @@ impl<'db> TyChecker<'db> {
     ) -> TyId<'db> {
         // FIXME: This is a temporary workaround, this should be removed when we
         // implement subtyping.
-        if expected.is_never(self.db) && !actual.is_never(self.db) {
+        if expected.is_never(self.db)
+            && !actual
+                .fold_with(self.db, &mut self.table)
+                .is_diverging(self.db)
+        {
             if !actual.has_invalid(self.db) && !expected.has_invalid(self.db) {
                 let diag = BodyDiag::TypeMismatch {
                     span,
@@ -4022,7 +4071,19 @@ impl<'db> TyChecker<'db> {
         let expected = expected.fold_with(self.db, &mut self.table);
         let actual = self.normalize_ty(actual);
         let expected = self.normalize_ty(expected);
-        match self.table.unify(actual, expected) {
+        // A diverging expression coerces to a variable still open, which only
+        // this direction allows: a type doesn't coerce to `!`.
+        let unified = match expected.data(self.db) {
+            TyData::TyVar(var)
+                if actual.is_never(self.db)
+                    && var.kind == Kind::Star
+                    && matches!(var.sort, TyVarSort::General | TyVarSort::Diverging) =>
+            {
+                self.table.mark_diverging(var)
+            }
+            _ => self.table.unify(actual, expected),
+        };
+        match unified {
             Ok(()) => {
                 // FIXME: This is a temporary workaround, this should be removed when we
                 // implement subtyping.
@@ -4087,7 +4148,7 @@ impl<'db> TyChecker<'db> {
             }
         };
 
-        let res = match resolve_path_with_observer_and_minter(
+        let res = resolve_path_with_observer_and_minter(
             self.db,
             path,
             scope,
@@ -4095,13 +4156,7 @@ impl<'db> TyChecker<'db> {
             resolve_tail_as_value,
             &mut observe_segment,
             lowering_cx,
-        ) {
-            Ok(r) => {
-                self.env.register_path_applications(site, applications);
-                Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty)))
-            }
-            Err(err) => Err(err),
-        };
+        );
 
         if let Some((path, deriv_span)) = invisible {
             let span = span.clone().segment(path.segment_index(self.db)).ident();
@@ -4110,7 +4165,33 @@ impl<'db> TyChecker<'db> {
             self.diags.push(diag.into());
         }
 
-        res
+        // A path that fails whatever its arguments are reports that alone.
+        if let Err(err) = &res
+            && err.is_independent_of_args(self.db)
+        {
+            return res;
+        }
+
+        // The path's generic arguments report their errors as a written type's
+        // do, and an invalid type that none of them reports is reported for
+        // its segment. What resolves through them reports nothing more.
+        let mut arg_diags =
+            path_generic_arg_diags(self.db, path, span.clone(), scope, self.env.assumptions());
+        if arg_diags.is_empty()
+            && path.generic_args(self.db).is_given(self.db)
+            && let Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) = res
+        {
+            let args_span = span.segment(path.segment_index(self.db)).generic_args();
+            arg_diags.extend(emit_invalid_ty_error(self.db, ty, args_span.into()));
+        }
+        if !arg_diags.is_empty() {
+            self.diags.extend(arg_diags.into_iter().map(Into::into));
+            return Err(PathResError::new(PathResErrorKind::InvalidGenericArg, path));
+        }
+
+        let res = res?;
+        self.env.register_path_applications(site, applications);
+        Ok(res.map_over_ty(|ty| self.instantiate_to_term(ty)))
     }
 
     fn instantiate_to_term(&mut self, ty: TyId<'db>) -> TyId<'db> {
@@ -4434,6 +4515,7 @@ pub enum SmirLoweringIssue {
     InvalidStmt(StmtId),
     IncompleteStmt(StmtId),
     InvalidCond(CondId),
+    InvalidPat(PatId),
 }
 
 impl SmirLoweringIssue {
@@ -4520,6 +4602,12 @@ mod typed_body_tables {
         /// The calls `f(..)` of callable values: the callee is the receiver
         /// of a callable trait's method.
         pub(super) value_calls: FxHashSet<ExprId>,
+        /// The operators on primitive operands, by their built-in operation.
+        pub(super) builtin_ops: FxHashMap<ExprId, BuiltinOp>,
+        /// The compound assignments that assign their operator method's
+        /// result (`x = x.wrapping_add(y)`) rather than call an `*Assign`
+        /// method.
+        pub(super) operator_assigns: FxHashSet<ExprId>,
         /// The places a pattern is matched against, which bind each
         /// component where it lies.
         pub(super) matched_places: FxHashSet<ExprId>,
@@ -4698,10 +4786,38 @@ pub enum ConstIntrinsicKind {
     StorageSlots,
 }
 
+/// The operation an operator expression on primitive operands performs,
+/// which the language defines: no operator trait is called. Its overflow
+/// behavior is the arithmetic mode of the body the operator is written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum BuiltinOp {
+    Unary(UnaryOp),
+    Binary(BinaryOp),
+}
+
+/// A core `Option` or `Result` method called on a sum shape, the optional
+/// access a projection grants, which it consumes as `?` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum SumShapeOp {
+    /// `is_some` or `is_ok` when `payload`, else `is_none` or `is_err`:
+    /// whether the shape holds the payload variant.
+    Test { payload: bool },
+    /// `unwrap`: the payload's access, or a panic, as the method panics.
+    Unwrap,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub enum SemanticExprLowering<'db> {
     Call {
         callable: Callable<'db>,
+    },
+    /// `op` on a sum shape receiver. `method` is the core method the call
+    /// names; `panic` the core function `unwrap` calls on the empty variant,
+    /// `panic` or `panic_with_value` of a `Result`'s error.
+    SumShape {
+        op: SumShapeOp,
+        method: Callable<'db>,
+        panic: Option<Callable<'db>>,
     },
     CodeRegionIntrinsic {
         callable: Callable<'db>,
@@ -4715,11 +4831,34 @@ pub enum SemanticExprLowering<'db> {
 }
 
 impl<'db> SemanticExprLowering<'db> {
+    /// The callable the expression names: for a sum shape, the core method.
     pub(super) fn callable_mut(&mut self) -> &mut Callable<'db> {
         match self {
             Self::Call { callable }
             | Self::CodeRegionIntrinsic { callable, .. }
-            | Self::ConstIntrinsic { callable, .. } => callable,
+            | Self::ConstIntrinsic { callable, .. }
+            | Self::SumShape {
+                method: callable, ..
+            } => callable,
+        }
+    }
+
+    /// Every callable the expression records.
+    pub(super) fn callables_mut(&mut self) -> impl Iterator<Item = &mut Callable<'db>> {
+        match self {
+            Self::SumShape { method, panic, .. } => [Some(method), panic.as_mut()],
+            lowering => [Some(lowering.callable_mut()), None],
+        }
+        .into_iter()
+        .flatten()
+    }
+
+    /// The function the expression calls at run time, if any.
+    pub fn called(&self) -> Option<&Callable<'db>> {
+        match self {
+            Self::Call { callable } => Some(callable),
+            Self::SumShape { panic, .. } => panic.as_ref(),
+            Self::CodeRegionIntrinsic { .. } | Self::ConstIntrinsic { .. } => None,
         }
     }
 }
@@ -4775,6 +4914,12 @@ impl<'db> TyVisitable<'db> for SemanticExprLowering<'db> {
             Self::Call { callable }
             | Self::CodeRegionIntrinsic { callable, .. }
             | Self::ConstIntrinsic { callable, .. } => callable.visit_with(visitor),
+            Self::SumShape { method, panic, .. } => {
+                method.visit_with(visitor);
+                if let Some(panic) = panic {
+                    panic.visit_with(visitor);
+                }
+            }
         }
     }
 }
@@ -4800,6 +4945,11 @@ impl<'db> TyFoldable<'db> for SemanticExprLowering<'db> {
             Self::ConstIntrinsic { callable, kind } => Self::ConstIntrinsic {
                 callable: callable.fold_with(db, folder),
                 kind,
+            },
+            Self::SumShape { op, method, panic } => Self::SumShape {
+                op,
+                method: method.fold_with(db, folder),
+                panic: panic.map(|panic| panic.fold_with(db, folder)),
             },
         }
     }
@@ -5002,8 +5152,13 @@ impl<'db> TypedBody<'db> {
             return;
         }
         let tables = self.tables_mut();
-        for lowering in tables.semantic_expr_lowering.values_mut().flatten() {
-            lowering.callable_mut().bind_evidence(db, bound);
+        for callable in tables
+            .semantic_expr_lowering
+            .values_mut()
+            .flatten()
+            .flat_map(SemanticExprLowering::callables_mut)
+        {
+            callable.bind_evidence(db, bound);
         }
         for plan in tables.for_loop_plans.values_mut().flatten() {
             for call in &mut plan.calls {
@@ -5068,6 +5223,29 @@ impl<'db> TypedBody<'db> {
         issues.extend(body.conds(db).iter().filter_map(|(cond, cond_data)| {
             matches!(cond_data, Partial::Absent).then_some(SmirLoweringIssue::InvalidCond(cond))
         }));
+        // Lowering tests and binds a whole pattern, one no other pattern
+        // holds, through its checked form. Checking leaves none for a pattern
+        // it rejects, so the body is never lowered.
+        let mut sub_pats = FxHashSet::default();
+        for (_, pat) in body.pats(db).iter() {
+            match pat {
+                Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+                    sub_pats.extend(pats.iter().copied())
+                }
+                Partial::Present(Pat::Record(_, fields)) => {
+                    sub_pats.extend(fields.iter().map(|field| field.pat))
+                }
+                Partial::Present(Pat::Or(lhs, rhs)) => sub_pats.extend([*lhs, *rhs]),
+                Partial::Present(Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(..))
+                | Partial::Absent => {}
+            }
+        }
+        issues.extend(
+            body.pats(db)
+                .keys()
+                .filter(|pat| !sub_pats.contains(pat) && self.pattern_root(*pat).is_none())
+                .map(SmirLoweringIssue::InvalidPat),
+        );
         issues
     }
 
@@ -5116,6 +5294,17 @@ impl<'db> TypedBody<'db> {
             {
                 missing_plan()
             }
+            // An operator calls an operator method or performs a built-in
+            // operation.
+            Expr::Bin(_, _, BinOp::Arith(_) | BinOp::Comp(_))
+            | Expr::Un(_, UnOp::Minus | UnOp::Not | UnOp::BitNot)
+            | Expr::AugAssign(..)
+                if !matches!(expr_data, Expr::Bin(_, _, BinOp::Arith(ArithBinOp::Range)))
+                    && self.semantic_expr_lowering(expr).is_none()
+                    && self.builtin_op(expr).is_none() =>
+            {
+                missing_plan()
+            }
             Expr::UnsupportedMacroCall => Some(SmirLoweringIssue::InvalidExpr(expr)),
             Expr::Assert(_) | Expr::Cast(..) if expr_ty.has_invalid(db) => {
                 Some(SmirLoweringIssue::InvalidExpr(expr))
@@ -5149,28 +5338,13 @@ impl<'db> TypedBody<'db> {
                 Some(self.missing_place_issue(db, expr, *dst))
             }
             Expr::AugAssign(dst, _, _)
-                if self.semantic_expr_lowering(expr).is_none()
+                if (self.semantic_expr_lowering(expr).is_none()
+                    || self.assigns_operator_result(expr))
                     && !self.has_lowerable_place(db, *dst) =>
             {
                 Some(self.missing_place_issue(db, expr, *dst))
             }
             Expr::Match(_, Partial::Absent) => Some(SmirLoweringIssue::InvalidExpr(expr)),
-            Expr::Match(_, Partial::Present(arms)) => {
-                if arms.iter().any(|arm| {
-                    matches!(
-                        self.pattern_status(arm.pat),
-                        PatternAnalysisStatus::Unsupported
-                    )
-                }) {
-                    Some(SmirLoweringIssue::IncompleteExpr(expr))
-                } else if arms.iter().any(|arm| {
-                    matches!(self.pattern_status(arm.pat), PatternAnalysisStatus::Invalid)
-                }) {
-                    Some(SmirLoweringIssue::InvalidExpr(expr))
-                } else {
-                    None
-                }
-            }
             _ => None,
         }
     }
@@ -5285,6 +5459,17 @@ impl<'db> TypedBody<'db> {
     /// whose elements are places (`core::ops::StateIndex`), a path step.
     pub fn is_place_entry(&self, expr: ExprId) -> bool {
         self.tables.place_entries.contains(&expr)
+    }
+
+    pub fn builtin_op(&self, expr: ExprId) -> Option<BuiltinOp> {
+        self.tables.builtin_ops.get(&expr).copied()
+    }
+
+    /// Whether the compound assignment `expr`, `x op= y`, assigns the result
+    /// of its operator method, `x = x.wrapping_add(y)`, reading and writing
+    /// the place once, rather than calling an `*Assign` method.
+    pub fn assigns_operator_result(&self, expr: ExprId) -> bool {
+        self.tables.operator_assigns.contains(&expr)
     }
 
     /// Whether `expr` is a place a pattern is matched against: its bindings
@@ -5424,7 +5609,10 @@ impl<'db> TypedBody<'db> {
         match self.semantic_expr_lowering(expr)? {
             SemanticExprLowering::Call { callable }
             | SemanticExprLowering::CodeRegionIntrinsic { callable, .. }
-            | SemanticExprLowering::ConstIntrinsic { callable, .. } => Some(callable),
+            | SemanticExprLowering::ConstIntrinsic { callable, .. }
+            | SemanticExprLowering::SumShape {
+                method: callable, ..
+            } => Some(callable),
         }
     }
 
@@ -5437,7 +5625,9 @@ impl<'db> TypedBody<'db> {
             SemanticExprLowering::CodeRegionIntrinsic { region_arg, .. } => {
                 self.expr_code_region_ref(db, *region_arg)
             }
-            SemanticExprLowering::Call { .. } | SemanticExprLowering::ConstIntrinsic { .. } => None,
+            SemanticExprLowering::Call { .. }
+            | SemanticExprLowering::ConstIntrinsic { .. }
+            | SemanticExprLowering::SumShape { .. } => None,
         }
     }
 
@@ -6456,14 +6646,15 @@ impl<'db> TypedBody<'db> {
                     *saw_non_param = true;
                 }
             }
-            crate::hir_def::Stmt::Expr(expr) => self.collect_explicit_return_param_sources_in_expr(
-                db,
-                body,
-                *expr,
-                out,
-                saw_non_param,
-                seen,
-            ),
+            crate::hir_def::Stmt::Expr(expr) | crate::hir_def::Stmt::Loop(expr) => self
+                .collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *expr,
+                    out,
+                    saw_non_param,
+                    seen,
+                ),
             crate::hir_def::Stmt::Let(_, _, None, _)
             | crate::hir_def::Stmt::Return(None)
             | crate::hir_def::Stmt::Continue
@@ -6935,6 +7126,8 @@ impl<'db> TypedBody<'db> {
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
+            builtin_ops: FxHashMap::default(),
+            operator_assigns: FxHashSet::default(),
             matched_places: FxHashSet::default(),
             inspected_places: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
@@ -7411,8 +7604,16 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
                     );
                 }
             }
+            // Values cross only into what the expression calls at run time:
+            // a sum shape method tests or unwraps its shape in place, as `?`
+            // does, and passes a `Result`'s error to its panic.
             Expr::Call(..) | Expr::MethodCall(..) => {
-                if let Some(callable) = self.body.callable_expr(expr).cloned() {
+                if let Some(callable) = self
+                    .body
+                    .semantic_expr_lowering(expr)
+                    .and_then(SemanticExprLowering::called)
+                    .cloned()
+                {
                     self.check_view_call(&callable, expr, ctxt.span().unwrap().into());
                     self.check_state_only_call(&callable, expr, ctxt.span().unwrap().into());
                 }
@@ -7488,7 +7689,7 @@ impl<'db> TyCheckerFinalizer<'db> {
         }
     }
 
-    /// A literal must fit its type on every target.
+    /// A literal must fit its type on the compilation target.
     fn check_int_literal_range(
         &mut self,
         int: IntegerId<'db>,
@@ -7498,7 +7699,12 @@ impl<'db> TyCheckerFinalizer<'db> {
         let value = int.data(self.db);
         if let Some(prim) = ty.as_prim(self.db)
             && prim.is_integral()
-            && !int_literal_fits_prim(prim, value, false)
+            && !int_literal_fits_prim(
+                self.db.compilation_settings().target(self.db),
+                prim,
+                value,
+                false,
+            )
         {
             self.diags.push(
                 BodyDiag::IntLiteralOutOfRange {
@@ -7707,7 +7913,6 @@ mod smir_lowering_readiness_tests {
     use camino::Utf8PathBuf;
 
     use crate::{
-        analysis::ty::pattern_ir::PatternAnalysisStatus,
         hir_def::{Expr, ItemKind, Partial},
         test_db::HirAnalysisTestDb,
     };
@@ -7751,9 +7956,10 @@ fn target() -> u256 {
             !diags.is_empty(),
             "fixture must have an unrelated type error"
         );
+        // The error leaves `wrong` unchecked, which alone blocks lowering.
         assert_eq!(
             checked.smir_lowering_readiness(&db),
-            SmirLoweringReadiness::Ready
+            SmirLoweringReadiness::BlockedByInvalidProgram
         );
 
         let mut incomplete = checked.clone();
@@ -7772,64 +7978,5 @@ fn target() -> u256 {
             incomplete.smir_lowering_readiness(&db),
             SmirLoweringReadiness::IncompletePlan
         );
-    }
-
-    #[test]
-    fn incomplete_match_pattern_dominates_invalid_pattern_in_any_arm_order() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("smir_match_readiness.fe"),
-            r#"
-enum Choice {
-    First,
-    Second,
-}
-
-fn target(choice: Choice) -> u256 {
-    match choice {
-        Choice::First => 0,
-        Choice::Second => 1,
-    }
-}
-"#,
-        );
-        let (top_mod, _) = db.top_mod(file);
-        let target = top_mod
-            .all_items(&db)
-            .iter()
-            .find_map(|item| match item {
-                ItemKind::Func(func)
-                    if func
-                        .name(&db)
-                        .to_opt()
-                        .is_some_and(|name| name.data(&db) == "target") =>
-                {
-                    Some(*func)
-                }
-                _ => None,
-            })
-            .expect("target function");
-        let (_, checked) = check_func_body(&db, target);
-        let body = checked.body().expect("target body");
-        let arms = body
-            .exprs(&db)
-            .iter()
-            .find_map(|(_, data)| match data {
-                Partial::Present(Expr::Match(_, Partial::Present(arms))) => Some(arms),
-                _ => None,
-            })
-            .expect("target match");
-        assert_eq!(arms.len(), 2);
-
-        for (invalid, unsupported) in [(0, 1), (1, 0)] {
-            let mut mixed = checked.clone();
-            mixed.tables_mut().pattern_status[arms[invalid].pat] = PatternAnalysisStatus::Invalid;
-            mixed.tables_mut().pattern_status[arms[unsupported].pat] =
-                PatternAnalysisStatus::Unsupported;
-            assert_eq!(
-                mixed.smir_lowering_readiness(&db),
-                SmirLoweringReadiness::IncompletePlan
-            );
-        }
     }
 }

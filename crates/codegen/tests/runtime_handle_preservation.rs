@@ -760,7 +760,8 @@ fn mutated_scalar_locals_stay_rooted() {
         r#"
 fn bump(size: u256) -> u256 {
     var value: u256 = size
-    value += 1
+    let counter = mut value
+    counter += 1
     value
 }
 
@@ -794,7 +795,13 @@ pub fn main() -> u256 {
                     } if place.root == PlaceRoot::Slot(rooted_scalar) => Some(*dst),
                     _ => None,
                 })
-                .map(|rooted_ptr| transported_local_from_param(&body, rooted_ptr))
+                // The address and the copies the access binding makes of it.
+                .flat_map(|rooted_ptr| {
+                    std::iter::successors(Some(rooted_ptr), |&ptr| {
+                        let next = transported_local_from_param(&body, ptr);
+                        (next != ptr).then_some(next)
+                    })
+                })
                 .collect::<Vec<_>>();
             assert!(
                 !rooted_ptrs.is_empty(),
@@ -862,11 +869,26 @@ pub fn main() -> u256 {
 fn immutable_own_pointer_aggregate_param_field_reads_stay_unrooted() {
     with_runtime_package!(
         "immutable_own_pointer_aggregate_param_field_reads_stay_unrooted.fe",
-        r#"use core::abi::Bytes
+        r#"use core::marker::Snapshot
+use core::ptr
+
+struct Handle {
+    data: *u8,
+    len: usize,
+}
+
+impl Copy for Handle {}
+impl Snapshot for Handle {}
+
+impl Handle {
+    fn len(self) -> usize {
+        self.len
+    }
+}
 
 struct Note {
     id: u256,
-    body: Bytes,
+    body: Handle,
 }
 
 fn note_size(_ note: own Note) -> u256 {
@@ -874,7 +896,7 @@ fn note_size(_ note: own Note) -> u256 {
 }
 
 pub fn main() -> u256 {
-    note_size(Note { id: 1, body: Bytes::empty() })
+    note_size(Note { id: 1, body: Handle { data: ptr::alloc_bytes(32), len: 0 } })
 }
 "#,
         |db, package| {
@@ -1085,7 +1107,8 @@ fn mutating_mut_own_aggregate_receiver_stays_rooted() {
 
 impl Pair {
     fn bump(var own self) -> Pair {
-        self.left += 1
+        let left = mut self.left
+        left += 1
         self
     }
 }
@@ -1781,10 +1804,10 @@ pub fn main() -> u256 uses (evm: std::evm::RawOps) {
 "#,
     );
     // A `Copy` view argument is a copy: copying untrusted calldata validates
-    // its enum tags before the call.
+    // its enum tags before the call, panicking with `Panic(0x21)`.
     let read_input = sonatina_function_body(&ir, "read_input");
     assert!(
-        read_input.contains("unreachable"),
+        read_input.contains("mstore 4.i256 33.i256 i256;"),
         "snapshotting nested enums must still validate their tags before the call:\n{ir}"
     );
 }

@@ -66,6 +66,19 @@ pub trait TyFolder<'db> {
         capture.fold_ranges(db, self)
     }
 
+    /// The assumptions a const use or instance is solved under. They only
+    /// decide how evaluation finds the constant, not what it depends on.
+    fn fold_const_env(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        assumptions: PredicateListId<'db>,
+    ) -> PredicateListId<'db>
+    where
+        Self: Sized,
+    {
+        assumptions.fold_with(db, self)
+    }
+
     fn fold_ty_app(
         &mut self,
         db: &'db dyn HirAnalysisDb,
@@ -299,7 +312,7 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
             ImplEnv::new(
                 db,
                 folder.fold_scope(env.normalization_scope(db)),
-                env.assumptions(db).fold_with(db, folder),
+                folder.fold_const_env(db, env.assumptions(db)),
                 env.witnesses(db).clone().fold_with(db, folder),
             ),
             self.evidence(db).fold_with(db, folder),
@@ -323,29 +336,14 @@ where
                 args: invocation.args.clone().fold_with(db, folder),
             }),
         ),
-        ConstExpr::ArithBinOp { op, mode, lhs, rhs } => {
+        ConstExpr::ArithBinOp { op, lhs, rhs } => {
             let lhs = folder.fold_ty(db, *lhs);
             let rhs = folder.fold_ty(db, *rhs);
-            ConstExprId::new(
-                db,
-                ConstExpr::ArithBinOp {
-                    op: *op,
-                    mode: *mode,
-                    lhs,
-                    rhs,
-                },
-            )
+            ConstExprId::new(db, ConstExpr::ArithBinOp { op: *op, lhs, rhs })
         }
-        ConstExpr::UnOp { op, mode, expr } => {
+        ConstExpr::UnOp { op, expr } => {
             let expr = folder.fold_ty(db, *expr);
-            ConstExprId::new(
-                db,
-                ConstExpr::UnOp {
-                    op: *op,
-                    mode: *mode,
-                    expr,
-                },
-            )
+            ConstExprId::new(db, ConstExpr::UnOp { op: *op, expr })
         }
         ConstExpr::Cast { expr, to } => {
             let expr = folder.fold_ty(db, *expr);

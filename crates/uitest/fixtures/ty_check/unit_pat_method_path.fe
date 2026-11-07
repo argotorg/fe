@@ -1,0 +1,26 @@
+struct S {}
+
+impl S {
+    fn m(self) -> u8 {
+        1
+    }
+}
+
+trait Tr {
+    fn tm(self) -> u8
+}
+
+// A unit pattern's path that names a method is an error.
+fn method(_ x: u8) -> u8 {
+    match x {
+        S::m => 0
+        _ => 1
+    }
+}
+
+fn trait_method(_ x: u8) -> u8 {
+    match x {
+        Tr::tm => 0
+        _ => 1
+    }
+}

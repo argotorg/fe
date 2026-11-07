@@ -1,16 +1,14 @@
-use num_bigint::{BigInt, BigUint, Sign};
-use num_traits::{One, ToPrimitive, Zero};
+use num_bigint::{BigInt, BigUint};
+use num_traits::{One, Zero};
 
-use crate::{
-    analysis::{
-        HirAnalysisDb,
-        semantic::{
-            SemConstId, SemConstScalar, SemConstValue, bool_const, bytes_const,
-            consts::fixed_string_capacity_bytes, int_const, int_ty_shape, normalize_int_to_shape,
-        },
-        ty::ty_def::TyId,
+use crate::analysis::{
+    HirAnalysisDb,
+    semantic::{
+        BinaryOp, Overflow, SemConstId, SemConstScalar, SemConstValue, UnaryOp, bool_const,
+        bytes_const, consts::fixed_string_capacity_bytes, int_const, int_ty_shape,
+        normalize_int_to_shape,
     },
-    hir_def::{ArithBinOp, UnOp, attr::ArithmeticMode},
+    ty::ty_def::TyId,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,7 +16,6 @@ pub(crate) enum PrimitiveFault {
     ArithmeticOverflow,
     DivisionByZero,
     NegativeExponent,
-    InvalidPowerExponent,
     OutsideSupportedSubset,
     InvalidCast,
     UnsupportedCast,
@@ -36,90 +33,99 @@ pub(crate) fn int_in_range(db: &dyn HirAnalysisDb, result_ty: TyId<'_>, value: &
     }
 }
 
+/// The integer result of the arithmetic operation `op`, before a wrapping
+/// operation reduces it to `result_ty`'s range.
 pub(crate) fn execute_source_int_binary(
     db: &dyn HirAnalysisDb,
     result_ty: TyId<'_>,
-    mode: ArithmeticMode,
-    op: ArithBinOp,
+    op: BinaryOp,
     lhs: BigInt,
     rhs: BigInt,
 ) -> Result<BigInt, PrimitiveFault> {
     let value = match op {
-        ArithBinOp::Add => lhs + rhs,
-        ArithBinOp::Sub => lhs - rhs,
-        ArithBinOp::Mul => lhs * rhs,
-        ArithBinOp::Div => {
-            if rhs.is_zero() {
-                return Err(PrimitiveFault::DivisionByZero);
-            }
-            lhs / rhs
+        BinaryOp::Add(_) => lhs + rhs,
+        BinaryOp::Sub(_) => lhs - rhs,
+        BinaryOp::Mul(_) => lhs * rhs,
+        BinaryOp::Div(_) | BinaryOp::Rem if rhs.is_zero() => {
+            return Err(PrimitiveFault::DivisionByZero);
         }
-        ArithBinOp::Rem => {
-            if rhs.is_zero() {
-                return Err(PrimitiveFault::DivisionByZero);
-            }
-            lhs % rhs
-        }
-        ArithBinOp::Pow => {
-            if rhs.sign() == Sign::Minus {
+        BinaryOp::Div(_) => lhs / rhs,
+        BinaryOp::Rem => lhs % rhs,
+        BinaryOp::Pow(Overflow::Wrapping) => wrapping_pow(db, result_ty, &lhs, &rhs)?,
+        BinaryOp::Pow(Overflow::Checked) => {
+            let Some(mut exp) = rhs.to_biguint() else {
                 return Err(PrimitiveFault::NegativeExponent);
-            }
-            if mode == ArithmeticMode::Unchecked {
-                lhs.pow(rhs.to_u32().ok_or(PrimitiveFault::InvalidPowerExponent)?)
-            } else {
-                let Some(mut exp) = rhs.to_biguint() else {
-                    return Err(PrimitiveFault::NegativeExponent);
-                };
-                let mut acc = BigInt::one();
-                let mut base = lhs;
-                while !exp.is_zero() {
-                    if (&exp & BigUint::one()) == BigUint::one() {
-                        acc *= base.clone();
-                        if !int_in_range(db, result_ty, &acc) {
-                            return Err(PrimitiveFault::ArithmeticOverflow);
-                        }
-                    }
-                    exp >>= 1usize;
-                    if exp.is_zero() {
-                        break;
-                    }
-                    base = base.clone() * base;
-                    if !int_in_range(db, result_ty, &base) {
+            };
+            let mut acc = BigInt::one();
+            let mut base = lhs;
+            while !exp.is_zero() {
+                if (&exp & BigUint::one()) == BigUint::one() {
+                    acc *= base.clone();
+                    if !int_in_range(db, result_ty, &acc) {
                         return Err(PrimitiveFault::ArithmeticOverflow);
                     }
                 }
-                acc
+                exp >>= 1usize;
+                if exp.is_zero() {
+                    break;
+                }
+                base = base.clone() * base;
+                if !int_in_range(db, result_ty, &base) {
+                    return Err(PrimitiveFault::ArithmeticOverflow);
+                }
             }
+            acc
         }
-        ArithBinOp::Range
-        | ArithBinOp::LShift
-        | ArithBinOp::RShift
-        | ArithBinOp::BitAnd
-        | ArithBinOp::BitOr
-        | ArithBinOp::BitXor => return Err(PrimitiveFault::OutsideSupportedSubset),
+        BinaryOp::Shl
+        | BinaryOp::Shr
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::Comp(_) => return Err(PrimitiveFault::OutsideSupportedSubset),
     };
-    if mode == ArithmeticMode::Checked && !int_in_range(db, result_ty, &value) {
-        Err(PrimitiveFault::ArithmeticOverflow)
-    } else {
-        Ok(value)
-    }
+    checked_result(db, result_ty, op.overflow(), value)
 }
 
+/// `lhs ** rhs` modulo `2^bits` of `result_ty`, with both operands read as
+/// unsigned words, so a negative exponent is a large one, as at runtime.
+pub(crate) fn wrapping_pow(
+    db: &dyn HirAnalysisDb,
+    result_ty: TyId<'_>,
+    lhs: &BigInt,
+    rhs: &BigInt,
+) -> Result<BigInt, PrimitiveFault> {
+    let (bits, _) = int_ty_shape(db, result_ty).ok_or(PrimitiveFault::OutsideSupportedSubset)?;
+    let word = |value: &BigInt| {
+        normalize_int_to_shape(value.clone(), bits, false)
+            .into_parts()
+            .1
+    };
+    let modulus = BigUint::one() << usize::from(bits);
+    Ok(BigInt::from(word(lhs).modpow(&word(rhs), &modulus)))
+}
+
+/// The integer result of the arithmetic operation `op`, before a wrapping
+/// operation reduces it to `result_ty`'s range.
 pub(crate) fn execute_source_int_unary(
     db: &dyn HirAnalysisDb,
     result_ty: TyId<'_>,
-    mode: ArithmeticMode,
-    op: UnOp,
+    op: UnaryOp,
     value: BigInt,
 ) -> Result<BigInt, PrimitiveFault> {
     let value = match op {
-        UnOp::Plus => value,
-        UnOp::Minus => -value,
-        UnOp::Not | UnOp::BitNot | UnOp::Mut | UnOp::MaybeMut | UnOp::Ref | UnOp::Deref => {
-            return Err(PrimitiveFault::OutsideSupportedSubset);
-        }
+        UnaryOp::Neg(_) => -value,
+        UnaryOp::Not | UnaryOp::BitNot => return Err(PrimitiveFault::OutsideSupportedSubset),
     };
-    if mode == ArithmeticMode::Checked && !int_in_range(db, result_ty, &value) {
+    checked_result(db, result_ty, op.overflow(), value)
+}
+
+fn checked_result(
+    db: &dyn HirAnalysisDb,
+    result_ty: TyId<'_>,
+    overflow: Option<Overflow>,
+    value: BigInt,
+) -> Result<BigInt, PrimitiveFault> {
+    if overflow == Some(Overflow::Checked) && !int_in_range(db, result_ty, &value) {
         Err(PrimitiveFault::ArithmeticOverflow)
     } else {
         Ok(value)

@@ -1,0 +1,32 @@
+pub fn popcount(x: u32) -> u32 {
+    var v = x
+    var count: u32 = 0
+    while v != 0 {
+        count = count + (v & 1)
+        v = v >> 1
+    }
+    count
+}
+
+pub fn popcount64(x: u64) -> u64 {
+    var v = x
+    var count: u64 = 0
+    while v != 0 {
+        v = v & (v - 1)
+        count = count + 1
+    }
+    count
+}
+
+pub fn leading_zeros(x: u32) -> u32 {
+    if x == 0 {
+        return 32
+    }
+    var n: u32 = 0
+    var v = x
+    while v & 0x80000000 == 0 {
+        v = v << 1
+        n = n + 1
+    }
+    n
+}

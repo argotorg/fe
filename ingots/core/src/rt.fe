@@ -1,0 +1,268 @@
+//! The native runtime. Native code calls these functions to allocate memory
+//! and to report panics; the EVM calls none of them. Their C functions are
+//! ordinary `extern` declarations, so a program's own declarations of the
+//! same functions must agree with them, and an `#[unsafe(export)]` of one
+//! replaces it here too.
+//!
+//! The reports never panic themselves: their arithmetic wraps and their
+//! memory accesses are raw.
+
+use super::abi::{load_word, store_word}
+use super::num::IntDowncast
+use super::ops::{WrappingAdd, WrappingMul, WrappingSub}
+use super::panic_code
+use super::panics::{
+    PANIC_ASSERT, PANIC_DIVISION_BY_ZERO, PANIC_ENUM_CONVERSION, PANIC_GENERIC,
+    PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY, PANIC_OVERFLOW, PANIC_POP_EMPTY,
+    PANIC_STORAGE_ENCODING, PANIC_ZERO_INIT_FUNCTION_POINTER,
+}
+use super::ptr::offset_bytes
+
+extern {
+    fn malloc(_ size: usize) -> *u8
+    fn free(_ ptr: *u8)
+    fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize
+    fn fflush(_ stream: *u8) -> i32
+    fn abort() -> !
+    /// The `fe test` launcher's: it records a revert's data and ends the test.
+    fn __fe_revert(_ data: *u8, _ len: usize) -> !
+}
+
+/// The address of every zero-size allocation, which takes nothing from the
+/// host. It is aligned for any value and lies in the unmapped first page, so
+/// no host allocation has it.
+const EMPTY_ALLOCATION: usize = 16
+
+/// The selectors of Solidity `Panic(uint256)` and `Error(string)` data.
+const PANIC_SELECTOR: u32 = 0x4e487b71
+const ERROR_SELECTOR: u32 = 0x08c379a0
+
+/// The first word of `Panic(uint256)` data: the selector, then zeros.
+const PANIC_HEAD: u256 = 0x4e487b7100000000000000000000000000000000000000000000000000000000
+
+/// The most text a report writes at once.
+const TEXT_BYTES: usize = 64
+
+/// Allocates `size` bytes, as `core::ptr::alloc_raw`. Reverts with
+/// `Panic(0x41)` when the host is out of memory.
+fn alloc(_ size: usize) -> *u8 {
+    let ptr = try_alloc(size)
+    if ptr as usize == 0 {
+        panic_code(PANIC_OUT_OF_MEMORY)
+    }
+    ptr
+}
+
+/// Allocates `size` bytes, as `core::ptr::try_alloc_raw`, or returns null
+/// when the host is out of memory.
+fn try_alloc(_ size: usize) -> *u8 {
+    if size == 0 {
+        return EMPTY_ALLOCATION as *u8
+    }
+    unsafe { malloc(size) }
+}
+
+/// Releases an allocation, as `core::ptr::dealloc_raw`.
+unsafe fn dealloc(_ ptr: *u8) {
+    if ptr as usize != EMPTY_ALLOCATION {
+        unsafe { free(ptr) }
+    }
+}
+
+/// Reports a panic without data, as `core::panic`.
+fn report_trap() -> ! {
+    var report = Report::new()
+    report.push("panicked\n")
+    report.abort()
+}
+
+/// Reports `Panic(code)` data, as `core::panic_code`.
+fn report_panic(_ code: u256) -> ! {
+    report_revert(panic_data(code), 36)
+}
+
+/// Reports `Panic(uint256)` data by its code's reason, `Error(string)` data
+/// by its message, and other revert data in hex.
+fn report_revert(_ data: *u8, _ len: usize) -> ! {
+    var report = Report::new()
+    let selector = data_selector(data, len)
+    if selector == PANIC_SELECTOR && len == 36 {
+        let code = unsafe { load_word(offset_bytes(data, 4)) }
+        if report.push_panic(code) {
+            report.abort()
+        }
+    }
+    // `Error(string)` data is the selector, the offset 32, the message length
+    // and the message.
+    if selector == ERROR_SELECTOR && len >= 68 {
+        let message_len = unsafe { load_word(offset_bytes(data, 36)) }
+        if unsafe { load_word(offset_bytes(data, 4)) } == 32
+            && message_len <= len.wrapping_sub(68) as u256
+        {
+            report.push("panicked: ")
+            report.flush()
+            report.write(offset_bytes(data, 68), message_len.downcast_unchecked())
+            report.push("\n")
+            report.abort()
+        }
+    }
+    if len == 0 {
+        report.push("panicked: ")
+        report.push("reverted without data\n")
+    } else {
+        report.push("panicked: reverted with 0x")
+        report.push_hex(data, len)
+        report.push("\n")
+    }
+    report.abort()
+}
+
+/// Passes `Panic(code)` data to the `fe test` launcher.
+fn host_panic(_ code: u256) -> ! {
+    host_revert(panic_data(code), 36)
+}
+
+/// Passes revert data to the `fe test` launcher.
+fn host_revert(_ data: *u8, _ len: usize) -> ! {
+    unsafe { __fe_revert(data, len) }
+}
+
+/// `Panic(code)` data: the selector, then `code` as a big-endian word.
+fn panic_data(_ code: u256) -> *u8 {
+    let data = unsafe { malloc(36) }
+    if data as usize == 0 {
+        unsafe { abort() }
+    }
+    unsafe {
+        store_word(ptr: data, value: PANIC_HEAD)
+        store_word(ptr: offset_bytes(data, 4), value: code)
+    }
+    data
+}
+
+/// The big-endian selector at the start of `len` bytes of data, or zero when
+/// there are fewer than four.
+fn data_selector(_ data: *u8, _ len: usize) -> u32 {
+    if len < 4 {
+        return 0
+    }
+    var selector: u32 = 0
+    var i: usize = 0
+    while i < 4 {
+        let byte = unsafe { *offset_bytes(data, i) }
+        selector = selector.wrapping_mul(256).wrapping_add(byte as u32)
+        i = i.wrapping_add(1)
+    }
+    selector
+}
+
+/// A panic report, written to stderr from a buffer of text.
+struct Report {
+    buffer: *u8,
+    len: usize,
+}
+
+impl Report {
+    /// Flushes the C streams, so that the report follows the output before
+    /// the panic, and allocates the text buffer. Without a buffer the report
+    /// is lost, but the program still aborts.
+    fn new() -> Self {
+        let null: usize = 0
+        // A null stream flushes them all.
+        let _ = unsafe { fflush(null as *u8) }
+        // A word stored at the end of the text overruns it by 32 bytes.
+        let buffer = unsafe { malloc(TEXT_BYTES.wrapping_add(32)) }
+        if buffer as usize == 0 {
+            unsafe { abort() }
+        }
+        Self { buffer, len: 0 }
+    }
+
+    /// Appends `text`, which is shorter than 32 bytes.
+    fn push<const N: usize>(mut self, _ text: String<N>) {
+        if self.len.wrapping_add(N) > TEXT_BYTES {
+            self.flush()
+        }
+        // A string is the low bytes of its word.
+        let pad: usize = 32
+        let word = (text as u256) << (pad.wrapping_sub(N).wrapping_mul(8) as u256)
+        unsafe { store_word(ptr: offset_bytes(self.buffer, self.len), value: word) }
+        self.len = self.len.wrapping_add(N)
+    }
+
+    /// Appends `len` bytes at `data` as lowercase hex digits.
+    fn push_hex(mut self, _ data: *u8, _ len: usize) {
+        var i: usize = 0
+        while i < len {
+            if self.len.wrapping_add(2) > TEXT_BYTES {
+                self.flush()
+            }
+            let byte = unsafe { *offset_bytes(data, i) }
+            unsafe {
+                *offset_bytes(self.buffer, self.len) = hex_digit(byte >> 4)
+                *offset_bytes(self.buffer, self.len.wrapping_add(1)) = hex_digit(byte & 15)
+            }
+            self.len = self.len.wrapping_add(2)
+            i = i.wrapping_add(1)
+        }
+    }
+
+    /// Appends the report of the Solidity panic `code`, or returns false when
+    /// the code has no reason.
+    fn push_panic(mut self, _ code: u256) -> bool {
+        if code == PANIC_GENERIC {
+            self.panicked("generic panic")
+        } else if code == PANIC_ASSERT {
+            self.panicked("assertion failed")
+        } else if code == PANIC_OVERFLOW {
+            self.panicked("arithmetic overflow")
+        } else if code == PANIC_DIVISION_BY_ZERO {
+            self.panicked("division by zero")
+        } else if code == PANIC_ENUM_CONVERSION {
+            self.panicked("invalid enum value")
+        } else if code == PANIC_STORAGE_ENCODING {
+            self.panicked("invalid storage encoding")
+        } else if code == PANIC_POP_EMPTY {
+            self.panicked("pop from an empty array")
+        } else if code == PANIC_INDEX_OUT_OF_BOUNDS {
+            self.panicked("index out of bounds")
+        } else if code == PANIC_OUT_OF_MEMORY {
+            self.panicked("out of memory")
+        } else if code == PANIC_ZERO_INIT_FUNCTION_POINTER {
+            self.push("panicked: call to a zero-")
+            self.push("initialized function\n")
+        } else {
+            return false
+        }
+        true
+    }
+
+    /// Appends a panic report line with `reason`.
+    fn panicked<const N: usize>(mut self, _ reason: String<N>) {
+        self.push("panicked: ")
+        self.push(reason)
+        self.push("\n")
+    }
+
+    /// Writes the buffered text. A failed or short write is ignored.
+    fn flush(mut self) {
+        self.write(self.buffer, self.len)
+        self.len = 0
+    }
+
+    /// Writes `len` bytes at `data`, after any buffered text.
+    fn write(self, _ data: *u8, _ len: usize) {
+        let _ = unsafe { write(2, data, len) }
+    }
+
+    /// Writes the buffered text and aborts.
+    fn abort(mut self) -> ! {
+        self.flush()
+        unsafe { abort() }
+    }
+}
+
+/// The lowercase hex digit of `nibble`.
+fn hex_digit(_ nibble: u8) -> u8 {
+    if nibble < 10 { nibble.wrapping_add(48) } else { nibble.wrapping_add(87) }
+}

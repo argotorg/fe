@@ -1,0 +1,17 @@
+// A WebAssembly panic carries no revert data, so `unwrap` takes an error type
+// without a Sol encoding.
+enum PlainError {
+    Oops,
+}
+
+fn fallible(_ ok: bool) -> Result<PlainError, i32> {
+    if ok {
+        Result::Ok(7)
+    } else {
+        Result::Err(PlainError::Oops)
+    }
+}
+
+pub fn unwrapped(ok: bool) -> i32 {
+    fallible(ok).unwrap()
+}

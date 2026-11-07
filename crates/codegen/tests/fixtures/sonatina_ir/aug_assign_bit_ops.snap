@@ -7,60 +7,45 @@ target = "evm-ethereum-osaka"
 
 func private %aug_assign_bit_ops(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        obj.store v2 v0;
-        v5.i256 = obj.load v2;
         jump block2;
 
     block2:
-        v8.i256 = phi (1.i256 block1) (v20 block10);
-        v9.i256 = phi (v5 block1) (v23 block10);
-        v10.i256 = phi (v1 block1) (v21 block10);
-        v11.i1 = is_zero v10;
-        br v11 block7 block3;
+        v6.i256 = phi (1.i256 block1) (v18 block10);
+        v7.i256 = phi (v0 block1) (v21 block10);
+        v8.i256 = phi (v1 block1) (v19 block10);
+        v9.i1 = is_zero v8;
+        br v9 block7 block3;
 
     block3:
-        v12.i256 = and v10 1.i256;
-        v13.i1 = is_zero v12;
-        br v13 block5 block4;
+        v10.i256 = and v8 1.i256;
+        v11.i1 = is_zero v10;
+        br v11 block5 block4;
 
     block4:
-        (v14.i256, v15.i1) = umulo v8 v9;
-        br v15 block8 block9;
+        (v12.i256, v13.i1) = umulo v6 v7;
+        br v13 block8 block9;
 
     block5:
-        v20.i256 = phi (v8 block3) (v14 block9);
-        v21.i256 = shr 1.i256 v10;
-        v22.i1 = is_zero v21;
-        br v22 block7 block6;
+        v18.i256 = phi (v6 block3) (v12 block9);
+        v19.i256 = shr 1.i256 v8;
+        v20.i1 = is_zero v19;
+        br v20 block7 block6;
 
     block6:
-        (v23.i256, v24.i1) = umulo v9 v9;
-        br v24 block8 block10;
+        (v21.i256, v22.i1) = umulo v7 v7;
+        br v22 block8 block10;
 
     block7:
-        v25.i256 = phi (v8 block2) (v20 block5);
-        obj.store v2 v25;
-        v28.i256 = obj.load v2;
-        v29.i256 = shl 3.i256 v28;
-        obj.store v2 v29;
-        v30.i256 = obj.load v2;
-        v31.i256 = shr 1.i256 v30;
-        obj.store v2 v31;
-        v33.i256 = obj.load v2;
-        v34.i256 = and v33 255.i256;
-        obj.store v2 v34;
-        v35.i256 = obj.load v2;
-        v36.i256 = or v35 1.i256;
-        obj.store v2 v36;
-        v38.i256 = obj.load v2;
-        v39.i256 = xor v38 2.i256;
-        obj.store v2 v39;
-        v40.i256 = obj.load v2;
-        return v40;
+        v23.i256 = phi (v6 block2) (v18 block5);
+        v25.i256 = shl 3.i256 v23;
+        v26.i256 = shr 1.i256 v25;
+        v28.i256 = and v26 255.i256;
+        v29.i256 = or v28 1.i256;
+        v31.i256 = xor v29 2.i256;
+        return v31;
 
     block8:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;

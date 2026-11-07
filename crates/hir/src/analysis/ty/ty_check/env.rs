@@ -1,8 +1,8 @@
 use crate::{
     analysis::place::{Place, is_grant_place_expr, is_pointer_place_expr},
     hir_def::{
-        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, ModeMarker, Partial, Pat, PatId, Stmt,
-        StmtId, TypeId as HirTypeId, UnOp, scope_graph::ScopeId,
+        Body, Contract, Expr, ExprId, Func, IdentId, ModeMarker, Partial, Pat, PatId, Stmt, StmtId,
+        TypeId as HirTypeId, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -19,8 +19,9 @@ use thin_vec::ThinVec;
 use super::effect_env as keyed_effect_env;
 use super::owner::BodyOwner;
 use super::{
-    Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
-    TypedBodyTables, ValuePathRef, stmt::ForLoopPlan,
+    BuiltinOp, Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, SumShapeOp, TyChecker,
+    TypedBody, TypedBodyTables, ValuePathRef, callable::EffectProviderSpecialization,
+    stmt::ForLoopPlan,
 };
 use crate::analysis::ty::pattern_ir::{
     PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
@@ -165,6 +166,8 @@ pub(crate) struct TyCheckEnv<'db> {
     row_components: Vec<ResolvedEffectBindingInfo<'db>>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
+    /// The loops a `break` leaves.
+    broken_loops: FxHashSet<StmtId>,
     expr_stack: Vec<ExprId>,
 
     /// Param bindings for transfer to TypedBody
@@ -207,6 +210,11 @@ pub(crate) struct TyCheckEnv<'db> {
     product_args: FxHashSet<ExprId>,
     /// The calls `f(..)` of callable values, whose callee is the receiver.
     value_calls: FxHashSet<ExprId>,
+    /// The operators on primitive operands, by their built-in operation.
+    builtin_ops: FxHashMap<ExprId, BuiltinOp>,
+    /// The compound assignments that assign their operator method's result
+    /// (`x = x.wrapping_add(y)`) rather than call an `*Assign` method.
+    operator_assigns: FxHashSet<ExprId>,
     covered_providers: FxHashSet<ExprId>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
@@ -317,6 +325,7 @@ impl<'db> TyCheckEnv<'db> {
             row_components: Vec::new(),
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
+            broken_loops: FxHashSet::default(),
             expr_stack: Vec::new(),
             param_bindings: Vec::new(),
             input_bindings: Vec::new(),
@@ -335,6 +344,8 @@ impl<'db> TyCheckEnv<'db> {
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
+            builtin_ops: FxHashMap::default(),
+            operator_assigns: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
@@ -739,6 +750,14 @@ impl<'db> TyCheckEnv<'db> {
         self.callables[expr].as_ref()
     }
 
+    /// The `Option` or `Result` method `expr` calls on a sum shape.
+    pub(super) fn sum_shape_op(&self, expr: ExprId) -> Option<SumShapeOp> {
+        match self.semantic_expr_lowering[expr] {
+            Some(SemanticExprLowering::SumShape { op, .. }) => Some(op),
+            _ => None,
+        }
+    }
+
     pub(super) fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
         self.const_refs[expr]
     }
@@ -964,6 +983,14 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn record_place_entry(&mut self, expr: ExprId) {
         self.place_entries.insert(expr);
+    }
+
+    pub(super) fn register_builtin_op(&mut self, expr: ExprId, op: BuiltinOp) {
+        self.builtin_ops.insert(expr, op);
+    }
+
+    pub(super) fn register_operator_assign(&mut self, expr: ExprId) {
+        self.operator_assigns.insert(expr);
     }
 
     pub(super) fn record_unsafe_split(&mut self, tuple: ExprId) {
@@ -1393,6 +1420,14 @@ impl<'db> TyCheckEnv<'db> {
         self.loop_stack.last().copied()
     }
 
+    pub(super) fn break_loop(&mut self, stmt: StmtId) {
+        self.broken_loops.insert(stmt);
+    }
+
+    pub(super) fn is_broken_loop(&self, stmt: StmtId) -> bool {
+        self.broken_loops.contains(&stmt)
+    }
+
     pub(super) fn enter_expr(&mut self, expr: ExprId) {
         self.expr_stack.push(expr);
     }
@@ -1424,9 +1459,7 @@ impl<'db> TyCheckEnv<'db> {
     pub(super) fn set_pattern_status(&mut self, pat: PatId, status: PatternAnalysisStatus) {
         match status {
             PatternAnalysisStatus::Ready(root) => self.pattern_store.set_root(pat, root),
-            PatternAnalysisStatus::Invalid | PatternAnalysisStatus::Unsupported => {
-                self.pattern_store.clear_root(pat)
-            }
+            PatternAnalysisStatus::Invalid => self.pattern_store.clear_root(pat),
         }
         self.pattern_status[pat] = status;
     }
@@ -1507,6 +1540,52 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::Method(pending))
     }
 
+    pub(super) fn register_pending_effects(&mut self, pending: PendingEffects<'db>) {
+        self.deferred.push(DeferredTask::Effects(pending))
+    }
+
+    pub(super) fn take_pending_effects(&mut self) -> Vec<PendingEffects<'db>> {
+        let mut effects = Vec::new();
+        self.deferred.retain(|task| match task {
+            DeferredTask::Effects(pending) => {
+                effects.push(pending.clone());
+                false
+            }
+            _ => true,
+        });
+        effects
+    }
+
+    /// The effect providers of the call `expr`, resolved after it was
+    /// registered.
+    pub(super) fn set_call_effect_providers(
+        &mut self,
+        expr: ExprId,
+        providers: &[EffectProviderSpecialization<'db>],
+    ) {
+        if let Some(callable) = &mut self.callables[expr] {
+            *callable.effect_providers_mut() = providers.to_vec();
+        }
+        if let Some(lowering) = &mut self.semantic_expr_lowering[expr] {
+            *lowering.callable_mut().effect_providers_mut() = providers.to_vec();
+        }
+    }
+
+    pub(super) fn for_loop_plan(&self, stmt: StmtId) -> Option<&ForLoopPlan<'db>> {
+        self.for_loop_plans[stmt].as_ref()
+    }
+
+    pub(super) fn set_for_loop_call(
+        &mut self,
+        stmt: StmtId,
+        step: usize,
+        call: super::stmt::ForLoopCall<'db>,
+    ) {
+        if let Some(plan) = &mut self.for_loop_plans[stmt] {
+            plan.calls[step] = call;
+        }
+    }
+
     /// Whether a method call in `closure`'s body waits to resolve.
     pub(super) fn has_pending_method_in(&self, closure: ClosureDef<'db>) -> bool {
         self.deferred.iter().any(|task| {
@@ -1514,8 +1593,8 @@ impl<'db> TyCheckEnv<'db> {
         })
     }
 
-    pub(super) fn register_pending_primitive_op(&mut self, pending: PendingPrimitiveOp) {
-        self.deferred.push(DeferredTask::PrimitiveOp(pending))
+    pub(super) fn register_pending_negation(&mut self, pending: PendingNegation) {
+        self.deferred.push(DeferredTask::Negation(pending))
     }
 
     pub(super) fn register_type_equality(&mut self, equality: TypeEquality<'db>) {
@@ -1596,8 +1675,12 @@ impl<'db> TyCheckEnv<'db> {
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
         let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
-        for lowering in self.semantic_expr_lowering.values_mut().flatten() {
-            let callable = lowering.callable_mut();
+        for callable in self
+            .semantic_expr_lowering
+            .values_mut()
+            .flatten()
+            .flat_map(SemanticExprLowering::callables_mut)
+        {
             callable.record_evidence(self.db, solve_cx);
             callable.record_bound_evidence(self.db, solve_cx);
         }
@@ -1657,6 +1740,8 @@ impl<'db> TyCheckEnv<'db> {
             unsafe_splits: self.unsafe_splits,
             product_args: self.product_args,
             value_calls: self.value_calls,
+            builtin_ops: self.builtin_ops,
+            operator_assigns: self.operator_assigns,
             matched_places: self.matched_places,
             inspected_places: self.inspected_places,
             covered_providers: self.covered_providers,
@@ -2545,6 +2630,11 @@ impl<'db> TyFolder<'db> for Prober<'db, '_> {
             return ty.super_fold_with(db, self);
         };
 
+        // A variable only `!` has met is `!`.
+        if var.sort == TyVarSort::Diverging {
+            return TyId::never(db);
+        }
+
         // String type variable fallback.
         if let TyVarSort::String { min_len, fallback } = var.sort {
             match fallback {
@@ -2569,6 +2659,21 @@ pub(super) struct PendingMethod<'db> {
     pub site: CallSite<'db>,
 }
 
+/// A call or loop whose callee has a row inference can't yet expand, such as
+/// one of `S<P>` with `P` an open string literal. Its effects resolve once
+/// the row's instance is known, at its call site.
+#[derive(Debug, Clone)]
+pub(super) struct PendingEffects<'db> {
+    pub target: PendingEffectsTarget,
+    pub site: CallSite<'db>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum PendingEffectsTarget {
+    Call(ExprId),
+    Loop(StmtId),
+}
+
 /// Where a call is checked, for one resolved later to take its effects
 /// there: the frames of the `with` blocks it is under, and the closure whose
 /// body it is in.
@@ -2585,34 +2690,19 @@ pub(super) struct PendingMethodCandidate<'db> {
     pub needs_confirmation: bool,
 }
 
-#[derive(Debug, Clone)]
-pub(super) enum PendingPrimitiveOp {
-    Unary {
-        expr: ExprId,
-        inner: ExprId,
-        op: UnOp,
-    },
-    Binary {
-        expr: ExprId,
-        lhs: ExprId,
-        rhs: ExprId,
-        op: BinOp,
-    },
-}
-
-impl PendingPrimitiveOp {
-    pub(super) fn expr(&self) -> ExprId {
-        match self {
-            Self::Unary { expr, .. } | Self::Binary { expr, .. } => *expr,
-        }
-    }
+/// `-inner`, at `expr`, on an integer whose type is not yet known.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PendingNegation {
+    pub expr: ExprId,
+    pub inner: ExprId,
 }
 
 #[derive(Debug, Clone)]
 pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
     Method(PendingMethod<'db>),
-    PrimitiveOp(PendingPrimitiveOp),
+    Effects(PendingEffects<'db>),
+    Negation(PendingNegation),
     TypeEquality(TypeEquality<'db>),
 }
 

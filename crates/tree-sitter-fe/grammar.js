@@ -1317,6 +1317,7 @@ module.exports = grammar({
       $.let_statement,
       $.for_statement,
       $.while_statement,
+      $.loop_statement,
       $.return_statement,
       $.yield_statement,
       $.break_statement,
@@ -1353,6 +1354,11 @@ module.exports = grammar({
     while_statement: $ => seq(
       'while',
       field('condition', $._condition),
+      prec.dynamic(1, field('body', $.block)),
+    ),
+
+    loop_statement: $ => seq(
+      'loop',
       prec.dynamic(1, field('body', $.block)),
     ),
 
@@ -1503,7 +1509,12 @@ module.exports = grammar({
 
     attribute_list: $ => repeat1(choice($.attribute, $.doc_comment)),
 
-    attribute: $ => seq('#', '[', $._attribute_body, ']'),
+    attribute: $ => seq(
+      '#',
+      '[',
+      choice($._attribute_body, seq('unsafe', '(', $._attribute_body, ')')),
+      ']',
+    ),
 
     // Attributes of the enclosing module, at the start of a file or `mod`
     // body: #![cfg(target_os = "linux")]

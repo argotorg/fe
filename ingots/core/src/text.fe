@@ -1,11 +1,85 @@
-//! Formatting helpers that build `DynString` values, and their parsers.
+//! Formatting helpers that build `DynString` values, their parsers, and
+//! searching and splitting of byte spans.
 //!
 //! String literals can be used directly as `DynString`:
 //! `let s: DynString = "<svg>"`.
+//!
+//! Text is bytes here: searches compare bytes, which is exact for UTF-8, and
+//! offsets count bytes.
 use super::abi::{Bytes, DynString}
+use super::fixed::{Fixed, UFixed}
+use super::iter::Driver
+use super::marker::Copy
 use super::num::{Bounded, IntDowncast}
 use super::option::Option
-use super::ptr::{self, MemArray, MemSpan}
+use super::panic_code
+use super::panics::PANIC_ASSERT
+use super::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan}
+
+/// Text the parsers read in place, and a span's searches look for: a
+/// literal, a `String<N>`, a `DynString`, a `MemSpan` or a `MemBuffer`.
+pub trait Text {
+    fn text_len(self) -> usize
+    /// The byte at `index`, which is below `text_len()`.
+    fn text_byte(self, _ index: usize) -> u8
+
+    /// Whether the text is the bytes of `span` from `offset` on, of which
+    /// there must be `text_len()`.
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        let len = self.text_len()
+        var i: usize = 0
+        while i < len {
+            if span.byte_at(offset + i) != self.text_byte(i) {
+                return false
+            }
+            i += 1
+        }
+        true
+    }
+
+    /// The first match in `span` at or after `from`.
+    fn text_find(self, _ span: MemSpan, from: usize) -> Option<usize> {
+        let len = self.text_len()
+        var offset = from
+        while offset + len <= span.len() {
+            if self.text_matches_at(span, offset) {
+                return Option::Some(offset)
+            }
+            offset += 1
+        }
+        Option::None
+    }
+}
+
+impl<const N: usize> Text for String<N> {
+    fn text_len(self) -> usize { self.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+
+    // `byte_at` finds the string's `len()` for each byte, so these compare words.
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span.slice(offset, len: self.len()) == self
+    }
+
+    fn text_find(self, _ span: MemSpan, from: usize) -> Option<usize> {
+        let len = self.len()
+        find_word(span, word: self.text_word(len), len, from)
+    }
+}
+
+impl Text for DynString {
+    fn text_len(self) -> usize { self.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+}
+
+impl Text for MemSpan {
+    fn text_len(self) -> usize { self.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+}
+
+impl Text for MemBuffer {
+    fn text_len(self) -> usize { self.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self[index] }
+}
 
 /// Returns the concatenation of `parts` (Solidity `string.concat`).
 pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
@@ -16,11 +90,11 @@ pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
         i += 1
     }
     let out = DynString::zeroed(len)
-    let data = out.payload_span().ptr()
+    let data = out.span().ptr()
     var offset: usize = 0
     i = 0
     while i < N {
-        let part = parts[i].payload_span()
+        let part = parts[i].span()
         unsafe { ptr::copy(dest: ptr::offset_bytes(data, offset), source: part) }
         offset += part.len()
         i += 1
@@ -37,7 +111,7 @@ pub fn decimal(_ value: u256) -> DynString {
         rest /= 10
     }
     let out = DynString::zeroed(digits)
-    let data = out.payload_span().ptr()
+    let data = out.span().ptr()
     var remaining = value
     var i = digits
     while i > 0 {
@@ -53,7 +127,7 @@ pub fn decimal(_ value: u256) -> DynString {
 pub fn hex(_ value: u256, _ bytes: usize) -> DynString {
     let digits = bytes * 2
     let out = DynString::zeroed(digits)
-    let data = out.payload_span().ptr()
+    let data = out.span().ptr()
     var remaining = value
     var i = digits
     while i > 0 {
@@ -69,7 +143,7 @@ pub fn hex(_ value: u256, _ bytes: usize) -> DynString {
 pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
     let digits = bytes * 2
     let out = DynString::zeroed(digits)
-    let data = out.payload_span().ptr()
+    let data = out.span().ptr()
     var remaining = value
     var i = digits
     while i > 0 {
@@ -85,18 +159,54 @@ pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
 /// `None` for an empty string (OpenZeppelin returns 0), any byte other
 /// than `0` to `9` (signs and whitespace included) or a value above
 /// `u256::max()` (OpenZeppelin reverts).
-pub fn parse_uint(_ text: DynString) -> Option<u256> {
-    parse_digits(text.payload_span(), radix: 10)
+pub fn parse_uint<T: Text>(_ text: T) -> Option<u256> {
+    parse_digits(text, from: 0, to: text.text_len(), radix: 10)
 }
 
 /// Parses decimal digits with an optional `+` or `-` sign as an `i256`
 /// (Solidity `Strings.tryParseInt`). `None` for invalid digits, a missing
 /// digit or a value outside the `i256` range.
-pub fn parse_int(_ text: DynString) -> Option<i256> {
-    let text = text.payload_span()
-    let negative = !text.is_empty() && text.byte_at(0) == 45
-    let signed = negative || (!text.is_empty() && text.byte_at(0) == 43)
-    let magnitude = match parse_digits(text.tail(signed as usize), radix: 10) {
+pub fn parse_int<T: Text>(_ text: T) -> Option<i256> {
+    parse_signed(text, decimals: 0)
+}
+
+/// Parses hex digits of either case, with or without a `0x` prefix, as a
+/// `u256` (Solidity `Strings.tryParseHexUint`). `None` for an invalid
+/// digit, no digits or a value above `u256::max()`.
+pub fn parse_hex_uint<T: Text>(_ text: T) -> Option<u256> {
+    let prefixed = text.text_len() >= 2 && text.text_byte(0) == 48 && text.text_byte(1) == 120
+    parse_digits(text, from: if prefixed { 2 } else { 0 }, to: text.text_len(), radix: 16)
+}
+
+impl<const D: u256> UFixed<D> {
+    /// Parses decimal digits, optionally followed by a `.` and at most `D`
+    /// fraction digits: `12`, `0.25` or `007.50`. `None` for any other byte
+    /// (signs and whitespace included), no digits on either side of the
+    /// `.`, more than `D` fraction digits or a value out of range.
+    pub fn parse<T: Text>(_ text: T) -> Option<Self> {
+        match parse_scaled(text, from: 0, decimals: D) {
+            Option::Some(raw) => Option::Some(UFixed::from_raw(raw)),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<const D: u256> Fixed<D> {
+    /// Like `UFixed::parse`, after an optional `+` or `-` sign.
+    pub fn parse<T: Text>(_ text: T) -> Option<Self> {
+        match parse_signed(text, decimals: D) {
+            Option::Some(raw) => Option::Some(Fixed::from_raw(raw)),
+            Option::None => Option::None,
+        }
+    }
+}
+
+// An optional `+` or `-` sign, then `parse_scaled`'s digits, in the `i256`
+// range.
+fn parse_signed<T: Text>(_ text: T, decimals: u256) -> Option<i256> {
+    let negative = text.text_len() != 0 && text.text_byte(0) == 45
+    let signed = negative || (text.text_len() != 0 && text.text_byte(0) == 43)
+    let magnitude = match parse_scaled(text, from: signed as usize, decimals) {
         Option::Some(value) => value
         Option::None => return Option::None
     }
@@ -111,25 +221,50 @@ pub fn parse_int(_ text: DynString) -> Option<i256> {
     }
 }
 
-/// Parses hex digits of either case, with or without a `0x` prefix, as a
-/// `u256` (Solidity `Strings.tryParseHexUint`). `None` for an invalid
-/// digit, no digits or a value above `u256::max()`.
-pub fn parse_hex_uint(_ text: DynString) -> Option<u256> {
-    let text = text.payload_span()
-    let prefixed = text.len() >= 2 && text.byte_at(0) == 48 && text.byte_at(1) == 120
-    parse_digits(text.tail(if prefixed { 2 } else { 0 }), radix: 16)
+// The decimal digits from byte `from` on, with at most `decimals` fraction
+// digits after a `.`, times `10^decimals`.
+fn parse_scaled<T: Text>(_ text: T, from: usize, decimals: u256) -> Option<u256> {
+    let len = text.text_len()
+    if decimals == 0 {
+        return parse_digits(text, from, to: len, radix: 10)
+    }
+    var point = from
+    while point < len && text.text_byte(point) != b'.' {
+        point += 1
+    }
+    let whole = match parse_digits(text, from, to: point, radix: 10) {
+        Option::Some(value) => value
+        Option::None => return Option::None
+    }
+    let scale = 10 ** decimals
+    var fraction: u256 = 0
+    if point < len {
+        let digits = len - point - 1
+        if digits as u256 > decimals {
+            return Option::None
+        }
+        fraction = match parse_digits(text, from: point + 1, to: len, radix: 10) {
+            Option::Some(value) => value * 10 ** (decimals - digits as u256)
+            Option::None => return Option::None
+        }
+    }
+    if whole > (u256::max() - fraction) / scale {
+        return Option::None
+    }
+    Option::Some(whole * scale + fraction)
 }
 
-fn parse_digits(_ digits: MemSpan, radix: u256) -> Option<u256> {
-    if digits.is_empty() {
+// The value of the digits from byte `from` to byte `to`.
+fn parse_digits<T: Text>(_ text: T, from: usize, to: usize, radix: u256) -> Option<u256> {
+    if from >= to {
         return Option::None
     }
     let limit = u256::max() / radix
     let last = u256::max() % radix
     var value: u256 = 0
-    var i: usize = 0
-    while i < digits.len() {
-        let digit = digit_value(digits.byte_at(i))
+    var i = from
+    while i < to {
+        let digit = digit_value(text.text_byte(i))
         if digit >= radix || value > limit || (value == limit && digit > last) {
             return Option::None
         }
@@ -158,7 +293,7 @@ fn digit_value(_ byte: u8) -> u256 {
 pub fn base64(_ data: MemSpan) -> DynString {
     let len = data.len()
     let out = DynString::zeroed(4 * ((len + 2) / 3))
-    let dest = out.payload_span().ptr()
+    let dest = out.span().ptr()
     var i: usize = 0
     var j: usize = 0
     while i < len {
@@ -182,25 +317,25 @@ pub fn base64(_ data: MemSpan) -> DynString {
 /// standard alphabet, padding appears only as the last one or two bytes and
 /// the bits it leaves unused are zero, so each byte string has exactly one
 /// accepted encoding (RFC 4648).
-pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
-    let input = text.payload_span()
-    let len = input.len()
+pub fn decode_base64<T: Text>(_ input: T) -> Option<Bytes> {
+    let len = input.text_len()
     if len % 4 != 0 {
         return Option::None
     }
     var padding: usize = 0
-    if len > 0 && input.byte_at(len - 1) == 61 {
-        padding = if input.byte_at(len - 2) == 61 { 2 } else { 1 }
+    if len > 0 && input.text_byte(len - 1) == 61 {
+        padding = if input.text_byte(len - 2) == 61 { 2 } else { 1 }
     }
     let out_len = len / 4 * 3 - padding
-    let out = ptr::alloc_bytes(out_len)
+    let decoded = Bytes::zeroed(out_len)
+    let out = decoded.span().ptr()
     var i: usize = 0
     var j: usize = 0
     while i < len {
-        let a = base64_value(input.byte_at(i))
-        let b = base64_value(input.byte_at(i + 1))
-        let c = if i + 2 < len - padding { base64_value(input.byte_at(i + 2)) } else { 0 }
-        let d = if i + 3 < len - padding { base64_value(input.byte_at(i + 3)) } else { 0 }
+        let a = base64_value(input.text_byte(i))
+        let b = base64_value(input.text_byte(i + 1))
+        let c = if i + 2 < len - padding { base64_value(input.text_byte(i + 2)) } else { 0 }
+        let d = if i + 3 < len - padding { base64_value(input.text_byte(i + 3)) } else { 0 }
         if a > 63 || b > 63 || c > 63 || d > 63 {
             return Option::None
         }
@@ -217,7 +352,34 @@ pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
         i += 4
         j += 3
     }
-    Option::Some(Bytes::from_payload(source: unsafe { MemSpan::from_raw_parts(ptr: out, len: out_len) }))
+    Option::Some(decoded)
+}
+
+/// Decodes hex digits of either case, with or without a `0x` prefix, two
+/// to a byte: `decode_hex("0x00ff")` is the bytes `0x00` and `0xff`. `None`
+/// for an odd number of digits or a byte that is not a hex digit. No digits
+/// decode to no bytes.
+pub fn decode_hex<T: Text>(_ input: T) -> Option<Bytes> {
+    let len = input.text_len()
+    let from: usize = if len >= 2 && input.text_byte(0) == b'0' && input.text_byte(1) == b'x' { 2 } else { 0 }
+    if (len - from) % 2 != 0 {
+        return Option::None
+    }
+    let decoded = Bytes::zeroed((len - from) / 2)
+    let out = decoded.span().ptr()
+    var i = from
+    var j: usize = 0
+    while i < len {
+        let high = digit_value(input.text_byte(i))
+        let low = digit_value(input.text_byte(i + 1))
+        if high > 15 || low > 15 {
+            return Option::None
+        }
+        unsafe { *ptr::offset_bytes(out, j) = ((high << 4) | low).downcast_truncate() }
+        i += 2
+        j += 1
+    }
+    Option::Some(decoded)
 }
 
 fn base64_digit(_ value: u8) -> u8 {
@@ -292,7 +454,7 @@ pub fn base58(_ data: MemSpan) -> DynString {
         digits += (used - 1) * 10
     }
     let out = DynString::zeroed(zeros + digits)
-    let dest = out.payload_span().ptr()
+    let dest = out.span().ptr()
     i = 0
     while i < zeros {
         unsafe { *ptr::offset_bytes(dest, i) = 49 }
@@ -317,11 +479,10 @@ pub fn base58(_ data: MemSpan) -> DynString {
 /// Decodes Bitcoin base58, the inverse of `base58` (OpenZeppelin
 /// `Base58.decode`): each leading `1` becomes a zero byte. `None` if any
 /// byte is outside the alphabet.
-pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
-    let input = text.payload_span()
-    let len = input.len()
+pub fn decode_base58<T: Text>(_ input: T) -> Option<Bytes> {
+    let len = input.text_len()
     var zeros: usize = 0
-    while zeros < len && input.byte_at(zeros) == 49 {
+    while zeros < len && input.text_byte(zeros) == 49 {
         zeros += 1
     }
     // Ten digits at a time, into limbs of 24 bytes. One limb holds more
@@ -335,7 +496,7 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         var factor: u256 = 1
         var j = i
         while j < end {
-            let value = base58_value(input.byte_at(j))
+            let value = base58_value(input.text_byte(j))
             if value > 57 {
                 return Option::None
             }
@@ -356,8 +517,9 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         }
         bytes += (used - 1) * 24
     }
-    let out = ptr::alloc_bytes(zeros + bytes)
-    unsafe { ptr::zero_bytes(out, zeros) }
+    // The leading `zeros` bytes stay zero.
+    let decoded = Bytes::zeroed(zeros + bytes)
+    let out = decoded.span().ptr()
     var pos = zeros + bytes
     var k: usize = 0
     while pos > zeros {
@@ -371,8 +533,7 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         }
         k += 1
     }
-    let decoded = unsafe { MemSpan::from_raw_parts(ptr: out, len: zeros + bytes) }
-    Option::Some(Bytes::from_payload(source: decoded))
+    Option::Some(decoded)
 }
 
 // Sets the number in `limbs` (base `base`, least significant limb first,
@@ -439,10 +600,10 @@ pub fn concat_slice(_ parts: ptr::MemSlice<DynString>) -> DynString {
     var offset: usize = 0
     i = 0
     while i < parts.len() {
-        let part = unsafe { (*parts.ptr_at(i)).payload_span() }
+        let part = unsafe { (*parts.ptr_at(i)).span() }
         unsafe {
             ptr::copy(
-                dest: ptr::offset_bytes(out.payload_span().ptr(), offset),
+                dest: ptr::offset_bytes(out.span().ptr(), offset),
                 source: part,
             )
         }
@@ -476,7 +637,7 @@ impl TextBuilder {
     /// Append a string without copying the already accumulated prefix unless
     /// the buffer must grow.
     pub fn push(own self, _ value: DynString) -> Self {
-        self.push_bytes(value.payload_span())
+        self.push_bytes(value.span())
     }
 
     /// Append arbitrary bytes, including zero bytes and non-UTF-8 sequences.
@@ -488,4 +649,202 @@ impl TextBuilder {
     pub fn finish(own self) -> DynString {
         DynString::from_payload(source: self.buffer.span())
     }
+}
+
+impl MemSlice<u8> {
+    /// Whether the span begins with `prefix`.
+    pub fn starts_with<P: Pattern>(self, _ prefix: P) -> bool {
+        prefix.pattern_len() <= self.len() && prefix.pattern_matches_at(self, offset: 0)
+    }
+
+    /// Whether the span ends with `suffix`.
+    pub fn ends_with<P: Pattern>(self, _ suffix: P) -> bool {
+        let len = suffix.pattern_len()
+        len <= self.len() && suffix.pattern_matches_at(self, offset: self.len() - len)
+    }
+
+    /// The offset of the first match of `pattern`.
+    pub fn index_of<P: Pattern>(self, _ pattern: P) -> Option<usize> {
+        pattern.pattern_find(self, from: 0)
+    }
+
+    /// The span without its leading and trailing ASCII whitespace.
+    pub fn trim(self) -> ref MemSpan {
+        var start: usize = 0
+        var end = self.len()
+        while start < end && is_ascii_whitespace(self.byte_at(start)) {
+            start += 1
+        }
+        while end > start && is_ascii_whitespace(self.byte_at(end - 1)) {
+            end -= 1
+        }
+        self.slice(offset: start, len: end - start)
+    }
+
+    /// The parts between matches of `separator`, which must not be empty:
+    /// `for field in row.split(b',')`. Separators next to each other or at
+    /// either end have empty parts between them, and a span with no match is
+    /// its own one part.
+    pub fn split<P: Pattern>(self, _ separator: own P) -> Split<P> {
+        if separator.pattern_len() == 0 {
+            panic_code(PANIC_ASSERT)
+        }
+        Split { separator }
+    }
+
+    /// The lines, each without its `\n` or `\r\n`. The last line needs no
+    /// terminator, and one at the end of the span starts no empty line.
+    pub fn lines(self) -> Lines {
+        Lines {}
+    }
+}
+
+/// What a span's searches and `split` look for: a byte (`b','`) or any
+/// `Text`, such as a literal.
+pub trait Pattern {
+    /// The number of bytes a match covers.
+    fn pattern_len(self) -> usize
+
+    /// Whether the pattern is the bytes of `span` from `offset` on, of which
+    /// there must be `pattern_len()`.
+    fn pattern_matches_at(self, _ span: MemSpan, offset: usize) -> bool
+
+    /// The first match in `span` at or after `from`.
+    fn pattern_find(self, _ span: MemSpan, from: usize) -> Option<usize>
+}
+
+impl Pattern for u8 {
+    fn pattern_len(self) -> usize {
+        1
+    }
+
+    fn pattern_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span.byte_at(offset) == self
+    }
+
+    fn pattern_find(self, _ span: MemSpan, from: usize) -> Option<usize> {
+        find_byte(span, self, from)
+    }
+}
+
+impl<T: Text> Pattern for T {
+    fn pattern_len(self) -> usize {
+        self.text_len()
+    }
+
+    fn pattern_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        self.text_matches_at(span, offset)
+    }
+
+    fn pattern_find(self, _ span: MemSpan, from: usize) -> Option<usize> {
+        self.text_find(span, from)
+    }
+}
+
+/// The traversal `MemSpan::split` runs over a span. Its state is a part's
+/// start and end.
+pub struct Split<P> {
+    separator: P,
+}
+
+impl<P: Copy> Copy for Split<P> {}
+
+impl<P: Pattern> Driver for Split<P> {
+    type Base = MemSpan
+    type State = (usize, usize)
+    shape Step = ref MemSpan
+
+    fn start(self, _ base: MemSpan) -> (usize, usize) {
+        part_from(base, self.separator, start: 0)
+    }
+
+    fn has(self, _ base: MemSpan, _ s: (usize, usize)) -> bool {
+        s.0 <= base.len()
+    }
+
+    fn next(self, _ base: MemSpan, _ s: (usize, usize)) -> (usize, usize) {
+        part_from(base, self.separator, start: s.1 + self.separator.pattern_len())
+    }
+
+    fn at(self, _ base: MemSpan, _ s: (usize, usize)) -> ref MemSpan {
+        base.slice(offset: s.0, len: s.1 - s.0)
+    }
+}
+
+/// The traversal `MemSpan::lines` runs over a span. Its state is a line's
+/// start and the offset of its `\n`, or the span's end.
+pub struct Lines {}
+
+impl Copy for Lines {}
+
+impl Driver for Lines {
+    type Base = MemSpan
+    type State = (usize, usize)
+    shape Step = ref MemSpan
+
+    fn start(self, _ base: MemSpan) -> (usize, usize) {
+        part_from(base, b'\n', start: 0)
+    }
+
+    fn has(self, _ base: MemSpan, _ s: (usize, usize)) -> bool {
+        s.0 < base.len()
+    }
+
+    fn next(self, _ base: MemSpan, _ s: (usize, usize)) -> (usize, usize) {
+        part_from(base, b'\n', start: s.1 + 1)
+    }
+
+    fn at(self, _ base: MemSpan, _ s: (usize, usize)) -> ref MemSpan {
+        // A `\r` belongs to the terminator only before a `\n`.
+        let crlf = s.1 > s.0 && base.byte_at(s.1 - 1) == b'\r' && s.1 < base.len()
+        let end = if crlf { s.1 - 1 } else { s.1 }
+        base.slice(offset: s.0, len: end - s.0)
+    }
+}
+
+// The part beginning at `start`, which ends at the next separator or at the
+// span's end. A `start` past the end names no part.
+fn part_from<P: Pattern>(_ text: MemSpan, _ separator: P, start: usize) -> (usize, usize) {
+    match separator.pattern_find(text, from: start) {
+        Option::Some(end) => (start, end)
+        Option::None => (start, text.len())
+    }
+}
+
+// The first offset at or after `from` where `len` bytes of `text` are `word`'s
+// first `len` bytes, the rest of `word` being zero. Testing the first byte
+// avoids most of the word reads.
+fn find_word(_ text: MemSpan, word: u256, len: usize, from: usize) -> Option<usize> {
+    let end = text.len()
+    if len == 0 && from <= end {
+        return Option::Some(from)
+    }
+    let base = text.ptr()
+    let first: u8 = (word >> 248).downcast_truncate()
+    var offset = from
+    while offset + len <= end {
+        let at = ptr::offset_bytes(base, offset)
+        if unsafe { *at } == first && unsafe { ptr::read_padded_word(at, len) } == word {
+            return Option::Some(offset)
+        }
+        offset += 1
+    }
+    Option::None
+}
+
+fn find_byte(_ text: MemSpan, _ byte: u8, from: usize) -> Option<usize> {
+    let end = text.len()
+    let base = text.ptr()
+    var offset = from
+    while offset < end {
+        if unsafe { *ptr::offset_bytes(base, offset) } == byte {
+            return Option::Some(offset)
+        }
+        offset += 1
+    }
+    Option::None
+}
+
+fn is_ascii_whitespace(_ byte: u8) -> bool {
+    byte == b' ' || (byte >= 9 && byte <= 13)
 }

@@ -1,0 +1,130 @@
+struct G<T> {
+    x: u256,
+}
+
+struct W<T> {
+    x: u256,
+}
+
+struct Tup<T>(u256)
+
+struct S {}
+
+enum E<T> {
+    A,
+    B(u256),
+}
+
+type Al<T> = G<T>
+
+trait It {
+    type Item
+
+    fn i() -> u256
+}
+
+trait Tr {
+    fn f<U>() -> u256
+}
+
+trait Cap<T> {}
+
+impl<T> G<T> {
+    const C: u256 = 1
+
+    fn mk() -> u256 {
+        0
+    }
+
+    fn tk<U>() -> u256 {
+        0
+    }
+}
+
+impl S {
+    fn me<T>(self) -> u256 {
+        0
+    }
+
+    fn take<T>() -> u256 {
+        0
+    }
+}
+
+impl It for S {
+    type Item = u8
+
+    fn i() -> u256 {
+        0
+    }
+}
+
+impl Tr for S {
+    fn f<U>() -> u256 {
+        0
+    }
+}
+
+fn take<T>() -> u256 {
+    0
+}
+
+fn two<A, B>() -> u256 {
+    0
+}
+
+fn in_bodies(_ e: E<u8>) {
+    let s = S {}
+    take<Item = u8>()
+    two<u8, Item = u8>()
+    S::take<Item = u8>()
+    G<u8>::tk<Item = u8>()
+    Tr::f<Item = u8>()
+    s.me<Item = u8>()
+    G<Item = u8>::mk()
+    G<Item = u8>::C
+    Al<Item = u8>::mk()
+    take<G<Item = u8>>()
+    take<Item = Missing>()
+    take<Step<ref> = ref u256>()
+    G<Step<ref> = ref u256>::mk()
+    s.me<Step<ref> = ref u256>()
+    let _ = E<Item = u8>::A
+    let _ = E<Item = u8>::B(1)
+    let _ = G<Item = u8> { x: 0 }
+    let _ = Tup<Item = u8>(1)
+    let _: G<Item = u8> = G<u8> { x: 0 }
+    match e {
+        E<Item = u8>::A => {}
+        E<Item = u8>::B(_) => {}
+    }
+}
+
+fn in_param(_ x: G<Item = u8>) {}
+
+fn in_return() -> G<Item = u8> {
+    G<u8> { x: 0 }
+}
+
+fn in_bound<T: Cap<G<Item = u8>>>() {}
+
+fn in_default<T = G<Item = u8>>() {}
+
+struct InField {
+    a: G<Item = u8>,
+}
+
+type InAlias = G<Item = u8>
+
+impl G<Item = u8> {}
+
+impl Tr for W<Item = u8> {
+    fn f<U>() -> u256 {
+        0
+    }
+}
+
+// A trait takes bindings.
+fn valid<T: It<Item = u8> + Cap<G<u8>>>() -> u256 {
+    <T as It<Item = u8>>::i() + <S as It<Item = u8>>::i()
+}

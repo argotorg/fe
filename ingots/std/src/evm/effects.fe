@@ -82,6 +82,12 @@ impl core::ops::Eq for Address {
 impl Copy for Address {}
 impl Snapshot for Address {}
 
+impl core::hash::Hash for Address {
+    fn hash<H: core::hash::Hasher>(self, _ state: mut H) {
+        state.write_word(self.inner)
+    }
+}
+
 /// Orders addresses by their numeric value, like Solidity's `<` on
 /// `address`, so signer lists can be sorted and checked for duplicates.
 impl core::ops::Ord for Address {
@@ -132,7 +138,7 @@ impl<A: Abi> Decode<A> for Address {
 
 impl<A: Abi> Encode<A> for Address {
     #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
+    fn encode(self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.inner)
     }
 }
@@ -1148,11 +1154,15 @@ where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
     let payload_size = abi_payload_size(message)
-    let buffer = unsafe { MemBuffer::new_uninit(selector_size + payload_size.downcast_unchecked()) }
+    let len = selector_size + payload_size.downcast_unchecked()
+    // The selector is stored as a whole word, whose low bytes the payload
+    // overwrites, so the allocation holds a word even for a shorter message.
+    // A long enough head settles that without a runtime check of the length.
+    let capacity = if M::HEAD_SIZE < 28 && len < 32 { 32 } else { len }
+    var buffer = unsafe { MemBuffer::new_uninit(capacity) }
     let payload = ptr::offset_bytes(buffer.ptr(), selector_size)
     unsafe {
-        // The selector word's low bytes are overwritten by the payload, or
-        // lie past the buffer's end in unallocated memory.
+        buffer.set_len(len)
         ops::mstore(addr: buffer.ptr(), value: (selector as u256) << 224)
         // The payload bytes, zeroed for the encoding to fill.
         ptr::zero_bytes(payload, payload_size.downcast_unchecked())

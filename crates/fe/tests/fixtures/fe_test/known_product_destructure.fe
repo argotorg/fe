@@ -1,0 +1,648 @@
+// A pattern on a known product parameter binds through each part's access: a
+// `ref` or `mut` binding opens one on what the part reaches, a plain name takes
+// its value then, and a part left unbound stays in the product.
+use core::Option
+use core::ops::Drop
+use core::ptr
+
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Driver for Pair {
+    shape Step = (own u256, mut? u256)
+
+    fn at(mut? self) -> (own u256, mut? u256) {
+        (self.a, mut? self.b)
+    }
+}
+
+struct Triple {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+impl Driver for Triple {
+    shape Step = (own u256, (mut? u256, mut? u256))
+
+    fn at(mut? self) -> (own u256, (mut? u256, mut? u256)) {
+        (self.a, (mut? self.b, mut? self.c))
+    }
+}
+
+struct Inner {
+    x: u256,
+    y: u256,
+}
+
+impl Copy for Inner {}
+
+struct Holder {
+    n: u256,
+    i: Inner,
+}
+
+impl Driver for Holder {
+    shape Step = (own u256, mut? Inner)
+
+    fn at(mut? self) -> (own u256, mut? Inner) {
+        (self.n, mut? self.i)
+    }
+}
+
+fn bump(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    b += a
+}
+
+fn sum(_ s: Pair::Step<ref>) -> u256 {
+    let (a, b) = s
+    a + b
+}
+
+fn in_turn(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    b += a
+    let (c, mut d) = s
+    d += c
+}
+
+fn then_passed(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    b += a
+    bump(s)
+}
+
+fn own_part_beside_mut(_ s: Pair::Step<mut>) {
+    let (_, mut b) = s
+    let (c, _) = s
+    b += c
+}
+
+fn in_a_loop(_ s: Pair::Step<mut>) {
+    var i: u256 = 0
+    while i < 3 {
+        let (a, mut b) = s
+        b += a
+        i += 1
+    }
+}
+
+fn reborrowed(_ s: Pair::Step<mut>) {
+    let (a, mut b) = s
+    let c = mut b
+    c += a
+    b += a
+}
+
+fn annotated(_ s: Pair::Step<mut>) {
+    let (a, mut b): (u256, u256) = s
+    b += a
+    let (c, mut d): (u256, u256) = s
+    d += c
+}
+
+#[test]
+fn test_mut_parts_write_their_places() {
+    var p = Pair { a: 1, b: 2 }
+    in_turn(p.at())
+    assert(p.b == 4)
+    then_passed(p.at())
+    assert(p.b == 6)
+    own_part_beside_mut(p.at())
+    assert(p.b == 7)
+    in_a_loop(p.at())
+    assert(p.b == 10)
+    reborrowed(p.at())
+    assert(p.b == 12)
+    annotated(p.at())
+    assert(p.b == 14)
+}
+
+fn two_refs(_ s: Pair::Step<ref>) -> u256 {
+    let (a, ref b) = s
+    let (c, ref d) = s
+    a + b + c + d
+}
+
+fn ref_then_passed(_ s: Pair::Step<ref>) -> u256 {
+    let (a, ref b) = s
+    let x = sum(s)
+    a + b + x
+}
+
+fn captured_beside_ref(_ s: Pair::Step<ref>) -> u256 {
+    let (a, ref b) = s
+    let f = || s.0 + s.1
+    a + b + f()
+}
+
+fn named_ref(_ s: Pair::Step<ref>) -> u256 {
+    let x = ref s.1
+    let (a, ref b) = s
+    s.0 + s.1 + x + a + b
+}
+
+fn field_read_beside_ref(_ s: Pair::Step<mut>) -> u256 {
+    let (a, ref b) = s
+    let r = s.1
+    a + b + r
+}
+
+fn named_ref_then_written(_ s: Pair::Step<mut>) -> u256 {
+    let x = ref s.1
+    let y = x + 1
+    let (a, mut b) = s
+    b += a + y
+    b
+}
+
+fn named_ref_then_passed(_ s: Pair::Step<mut>) -> u256 {
+    let x = ref s.1
+    let y = x + 1
+    bump(s)
+    y
+}
+
+#[test]
+fn test_ref_parts_read_their_places() {
+    var p = Pair { a: 1, b: 2 }
+    assert(two_refs(p.at()) == 6)
+    assert(ref_then_passed(p.at()) == 6)
+    assert(captured_beside_ref(p.at()) == 6)
+    assert(named_ref(p.at()) == 8)
+    assert(field_read_beside_ref(p.at()) == 5)
+    assert(named_ref_then_written(p.at()) == 6)
+    assert(p.b == 6)
+    assert(named_ref_then_passed(p.at()) == 7)
+    assert(p.b == 7)
+}
+
+// A plain name holds the value the part had when it was bound.
+fn copies(_ s: Pair::Step<mut>) -> u256 {
+    let (a, b) = s
+    let (c, d) = s
+    a + b + c + d
+}
+
+fn field_read_before_write(_ s: Pair::Step<mut>) -> u256 {
+    let r = s.1
+    let (a, c) = s
+    let (_, mut b) = s
+    b += a
+    r + c * 100
+}
+
+fn copied_aggregate(_ s: Holder::Step<mut>) -> u256 {
+    let (_, i) = s
+    let (_, mut j) = s
+    j.x = 100
+    i.x
+}
+
+fn field_read_aggregate(_ s: Holder::Step<mut>) -> u256 {
+    let i = s.1
+    let (_, mut j) = s
+    j.y = 200
+    i.y
+}
+
+fn matched_aggregate(_ s: Holder::Step<mut>) -> u256 {
+    match s {
+        (_, i) => {
+            let (_, mut j) = s
+            j.x = 300
+            i.x
+        }
+    }
+}
+
+#[test]
+fn test_plain_names_copy() {
+    var p = Pair { a: 1, b: 2 }
+    assert(copies(p.at()) == 6)
+    assert(field_read_before_write(p.at()) == 202)
+    assert(p.b == 3)
+    var h = Holder { n: 1, i: Inner { x: 2, y: 3 } }
+    assert(copied_aggregate(h.at()) == 2)
+    assert(h.i.x == 100)
+    assert(field_read_aggregate(h.at()) == 3)
+    assert(h.i.y == 200)
+    assert(matched_aggregate(h.at()) == 100)
+    assert(h.i.x == 300)
+}
+
+fn nested_parts(_ s: Triple::Step<mut>) {
+    let (a, (mut x, _)) = s
+    let (_, (_, mut y)) = s
+    x += a
+    y += a
+    x += a
+}
+
+fn nested_ref_place(_ s: Triple::Step<ref>) -> u256 {
+    let (ref x, ref y) = s.1
+    x + y
+}
+
+fn nested_plain_place(_ s: Triple::Step<ref>) -> u256 {
+    let (x, y) = s.1
+    x + y
+}
+
+fn fields_of_a_part(_ s: Holder::Step<mut>) {
+    let (n, Inner { mut x, .. }) = s
+    let (_, Inner { mut y, .. }) = s
+    x += n
+    y += n
+    x += n
+}
+
+fn other_field_tested(_ s: Holder::Step<mut>) -> u256 {
+    let (_, Inner { mut x, .. }) = s
+    let r = match s {
+        (_, Inner { y: 0, .. }) => 10
+        _ => 20
+    }
+    x += 1
+    r
+}
+
+fn other_field_tested_nested_tuple(_ s: Triple::Step<mut>) -> u256 {
+    let (a, (mut x, _)) = s
+    let r = match s {
+        (_, (_, 0)) => 10
+        _ => 20
+    }
+    x += a
+    r
+}
+
+fn plain_fields_of_a_part(_ s: Holder::Step<mut>) -> u256 {
+    let (n, Inner { x, y }) = s
+    n + x + y
+}
+
+#[test]
+fn test_nested_parts_and_fields() {
+    var t = Triple { a: 1, b: 2, c: 3 }
+    nested_parts(t.at())
+    assert(t.b == 4)
+    assert(t.c == 4)
+    assert(nested_ref_place(t.at()) == 8)
+    assert(nested_plain_place(t.at()) == 8)
+    var h = Holder { n: 1, i: Inner { x: 2, y: 3 } }
+    fields_of_a_part(h.at())
+    assert(h.i.x == 4)
+    assert(h.i.y == 4)
+    assert(plain_fields_of_a_part(h.at()) == 9)
+    assert(other_field_tested(h.at()) == 20)
+    assert(h.i.x == 5)
+    h.i.y = 0
+    assert(other_field_tested(h.at()) == 10)
+    assert(h.i.x == 6)
+    assert(other_field_tested_nested_tuple(t.at()) == 20)
+    assert(t.b == 5)
+    t.c = 0
+    assert(other_field_tested_nested_tuple(t.at()) == 10)
+    assert(t.b == 6)
+}
+
+fn returned(_ s: Pair::Step<mut>) -> mut u256 {
+    let (_, mut b) = s
+    mut b
+}
+
+fn returned_tail(_ s: Pair::Step<mut>) -> mut u256 {
+    let (a, mut b) = s
+    b += a
+    b
+}
+
+fn returned_product(_ s: Pair::Step<mut>) -> (own u256, mut u256) {
+    let (a, mut b) = s
+    b += 1
+    (a, mut b)
+}
+
+#[test]
+fn test_returned_parts_reach_their_places() {
+    var p = Pair { a: 1, b: 2 }
+    let r = mut returned(p.at())
+    r = 7
+    assert(p.b == 7)
+    let t = mut returned_tail(p.at())
+    t += 10
+    assert(p.b == 18)
+    let (a, mut b) = returned_product(p.at())
+    b += a
+    assert(p.b == 20)
+}
+
+fn matched(_ s: Pair::Step<mut>) {
+    match s {
+        (0, mut b) => {
+            b += 100
+        }
+        (a, mut b) => {
+            b += a
+        }
+    }
+}
+
+fn matched_on_a_part(_ s: Pair::Step<mut>) -> u256 {
+    match s {
+        (_, 0) => 1000
+        (a, mut b) => {
+            b += a
+            b
+        }
+    }
+}
+
+fn if_let_then_let(_ s: Pair::Step<mut>) {
+    if let (1, mut b) = s {
+        b += 10
+    }
+    let (a, mut c) = s
+    c += a
+}
+
+fn let_else(_ s: Pair::Step<mut>) -> u256 {
+    let (1, mut b) = s else {
+        return 0
+    }
+    b += 5
+    b
+}
+
+fn tested_then_written(_ s: Pair::Step<mut>) -> u256 {
+    let r = match s {
+        (_, 0) => 0
+        _ => 1
+    }
+    let (a, mut b) = s
+    b += a
+    r
+}
+
+#[test]
+fn test_refutable_patterns() {
+    var p = Pair { a: 1, b: 2 }
+    matched(p.at())
+    assert(p.b == 3)
+    assert(matched_on_a_part(p.at()) == 4)
+    assert(p.b == 4)
+    if_let_then_let(p.at())
+    assert(p.b == 15)
+    assert(let_else(p.at()) == 20)
+    assert(tested_then_written(p.at()) == 1)
+    assert(p.b == 21)
+    p.a = 2
+    assert(let_else(p.at()) == 0)
+    assert(p.b == 21)
+    var q = Pair { a: 0, b: 1 }
+    matched(q.at())
+    assert(q.b == 101)
+    var z = Pair { a: 3, b: 0 }
+    assert(matched_on_a_part(z.at()) == 1000)
+}
+
+enum Tag {
+    Empty,
+    Full(u256),
+}
+
+struct Tagged {
+    n: u256,
+    tag: Tag,
+}
+
+impl Driver for Tagged {
+    shape Step = (own u256, mut? Tag)
+
+    fn at(mut? self) -> (own u256, mut? Tag) {
+        (self.n, mut? self.tag)
+    }
+}
+
+fn enum_behind_a_part(_ s: Tagged::Step<mut>) -> u256 {
+    match s {
+        (_, Tag::Empty) => 0
+        (n, Tag::Full(mut x)) => {
+            x += n
+            x
+        }
+    }
+}
+
+fn enum_tested_beside_ref(_ s: Tagged::Step<mut>) -> u256 {
+    let (n, ref slot) = s
+    match s {
+        (_, Tag::Empty) => 0
+        (_, Tag::Full(x)) => {
+            match slot {
+                Tag::Full(y) => n + x + y
+                Tag::Empty => 0
+            }
+        }
+    }
+}
+
+fn enum_in_turn(_ s: Tagged::Step<mut>) -> u256 {
+    let (n, Tag::Full(mut x)) = s else {
+        return 0
+    }
+    x += n
+    let (_, Tag::Full(mut y)) = s else {
+        return 0
+    }
+    y += n
+    y
+}
+
+#[test]
+fn test_enum_behind_a_part() {
+    var t = Tagged { n: 1, tag: Tag::Full(2) }
+    assert(enum_behind_a_part(t.at()) == 3)
+    assert(enum_tested_beside_ref(t.at()) == 7)
+    assert(enum_in_turn(t.at()) == 5)
+    var e = Tagged { n: 1, tag: Tag::Empty }
+    assert(enum_behind_a_part(e.at()) == 0)
+    assert(enum_tested_beside_ref(e.at()) == 0)
+    assert(enum_in_turn(e.at()) == 0)
+}
+
+fn tested_beside_ref(_ s: Pair::Step<mut>) -> u256 {
+    let (a, ref b) = s
+    match s {
+        (_, 0) => 0
+        _ => a + b
+    }
+}
+
+#[test]
+fn test_tests_read_beside_ref() {
+    var p = Pair { a: 1, b: 2 }
+    assert(tested_beside_ref(p.at()) == 3)
+    p.b = 0
+    assert(tested_beside_ref(p.at()) == 0)
+}
+
+struct Counted {
+    counter: *u256,
+}
+
+impl Drop for Counted {
+    fn drop(own self) {
+        unsafe { *self.counter += 1 }
+    }
+}
+
+fn consume(_ value: own Counted) {}
+
+fn counter() -> *u256 {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    counter
+}
+
+fn count(_ counter: *u256) -> u256 {
+    unsafe { *counter }
+}
+
+struct Slot {
+    x: u256,
+    counter: *u256,
+}
+
+impl Driver for Slot {
+    shape Step = (own Counted, mut? u256)
+
+    fn at(mut? self) -> (own Counted, mut? u256) {
+        (Counted { counter: self.counter }, mut? self.x)
+    }
+}
+
+struct Held {
+    n: u256,
+    c: Counted,
+}
+
+impl Driver for Held {
+    shape Step = (own u256, mut? Counted)
+
+    fn at(mut? self) -> (own u256, mut? Counted) {
+        (self.n, mut? self.c)
+    }
+}
+
+fn own_part_unbound(_ s: Slot::Step<mut>) {
+    let (_, mut b) = s
+    b += 1
+    let (_, mut c) = s
+    c += 1
+}
+
+fn own_part_moved(_ s: Slot::Step<mut>) {
+    let (o, mut b) = s
+    b += 1
+    let (_, mut c) = s
+    c += 1
+    consume(o)
+}
+
+fn own_part_then_passed(_ s: Slot::Step<mut>) {
+    let (_, mut b) = s
+    b += 1
+    own_part_unbound(s)
+}
+
+fn own_part_named_ref(_ s: Slot::Step<ref>) -> u256 {
+    let x = ref s.1
+    x + 1
+}
+
+fn taken_and_restored(_ s: Held::Step<mut>, _ k: *u256) {
+    let (_, mut c) = s
+    consume(c)
+    c = Counted { counter: k }
+}
+
+fn refs_of_a_value(_ s: Held::Step<ref>) -> *u256 {
+    let (_, ref c) = s
+    let (_, ref d) = s
+    let x = ref s.1
+    let _ = d.counter
+    let _ = x.counter
+    c.counter
+}
+
+#[test]
+fn test_owned_parts_are_destroyed_once() {
+    let k = counter()
+    var s = Slot { x: 1, counter: k }
+    own_part_unbound(s.at())
+    assert(s.x == 3)
+    assert(count(k) == 1)
+    own_part_moved(s.at())
+    assert(s.x == 5)
+    assert(count(k) == 2)
+    own_part_then_passed(s.at())
+    assert(s.x == 8)
+    assert(count(k) == 3)
+    assert(own_part_named_ref(s.at()) == 9)
+    assert(count(k) == 4)
+}
+
+#[test]
+fn test_parts_through_access_are_not_destroyed() {
+    let k = counter()
+    {
+        var h = Held { n: 1, c: Counted { counter: k } }
+        taken_and_restored(h.at(), k)
+        assert(count(k) == 1)
+        assert(count(refs_of_a_value(h.at())) == 1)
+    }
+    assert(count(k) == 2)
+}
+
+trait Holds {
+    shape Part
+
+    fn part(mut? self) -> Self::Part
+}
+
+impl Holds for Pair {
+    shape Part = (mut? u256, mut? u256)
+
+    fn part(mut? self) -> (mut? u256, mut? u256) {
+        (mut? self.a, mut? self.b)
+    }
+}
+
+fn generic<H: mut Holds<Part<ref> = (ref u256, ref u256), Part<mut> = (mut u256, mut u256)>>(
+    _ p: H::Part<mut>,
+) {
+    let (mut a, _) = p
+    a += 1
+    let (mut c, mut d) = p
+    c += 1
+    d += 1
+}
+
+#[test]
+fn test_parts_a_bound_fixes() {
+    var p = Pair { a: 1, b: 2 }
+    generic<Pair>(p.part())
+    assert(p.a == 3)
+    assert(p.b == 3)
+}

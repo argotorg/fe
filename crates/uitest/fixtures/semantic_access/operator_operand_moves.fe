@@ -1,0 +1,104 @@
+// An operator moves the same operands in either arithmetic mode: the wrapping
+// traits that unchecked code calls take them `own`, as the checked ones do.
+use core::ops::{Add, AddAssign, Neg, WrappingAdd, WrappingNeg}
+
+// Not `Copy`, so a moved value cannot be used.
+struct Amount {
+    value: i8,
+}
+
+impl Add for Amount {
+    fn add(own self, _ other: own Amount) -> Amount {
+        Amount { value: self.value + other.value }
+    }
+}
+
+impl AddAssign for Amount {
+    fn add_assign(mut self, _ other: own Amount) {
+        self.value += other.value
+    }
+}
+
+impl Neg for Amount {
+    fn neg(own self) -> Amount {
+        Amount { value: -self.value }
+    }
+}
+
+impl WrappingAdd for Amount {
+    #[arithmetic(unchecked)]
+    fn wrapping_add(own self, _ other: own Amount) -> Amount {
+        Amount { value: self.value + other.value }
+    }
+}
+
+impl WrappingNeg for Amount {
+    #[arithmetic(unchecked)]
+    fn wrapping_neg(own self) -> Amount {
+        Amount { value: -self.value }
+    }
+}
+
+// Rejected: `+` moves its left operand.
+pub fn add_checked() -> i8 {
+    let x = Amount { value: 1 }
+    let y = Amount { value: 2 }
+    let z = x + y
+    x.value
+}
+
+#[arithmetic(unchecked)]
+pub fn add_unchecked() -> i8 {
+    let x = Amount { value: 1 }
+    let y = Amount { value: 2 }
+    let z = x + y
+    x.value
+}
+
+// Rejected: `-` moves its operand.
+pub fn neg_checked() -> i8 {
+    let x = Amount { value: 1 }
+    let z = -x
+    x.value
+}
+
+#[arithmetic(unchecked)]
+pub fn neg_unchecked() -> i8 {
+    let x = Amount { value: 1 }
+    let z = -x
+    x.value
+}
+
+// Rejected: `+=` moves its right operand.
+pub fn add_assign_checked() -> i8 {
+    var x = Amount { value: 1 }
+    let y = Amount { value: 2 }
+    x += y
+    y.value
+}
+
+#[arithmetic(unchecked)]
+pub fn add_assign_unchecked() -> i8 {
+    var x = Amount { value: 1 }
+    let y = Amount { value: 2 }
+    x += y
+    y.value
+}
+
+// Rejected: as `x += y` does, the method call it means moves `y`.
+#[arithmetic(unchecked)]
+pub fn wrapping_add_call() -> i8 {
+    var x = Amount { value: 1 }
+    let y = Amount { value: 2 }
+    x = x.wrapping_add(y)
+    y.value
+}
+
+// Accepted: `x += y` gives `x` a new value.
+#[arithmetic(unchecked)]
+pub fn reassigned() -> i8 {
+    var x = Amount { value: 1 }
+    let y = Amount { value: 2 }
+    x += y
+    x.value
+}

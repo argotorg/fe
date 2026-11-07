@@ -284,10 +284,7 @@ pub fn projection_component_spaces<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<(Vec<ReturnProjectionStep>, Option<AddressSpace>)> {
-    let BodyOwner::Func(func, mode) = instance.key(db).owner(db) else {
-        return Vec::new();
-    };
-    let Some(shape) = func.return_shape(db, mode) else {
+    let Some(shape) = instance.return_shape(db) else {
         return Vec::new();
     };
     let spaces = projection_result_spaces(db, instance);
@@ -631,6 +628,7 @@ fn generated_callees<'db>(
                 target: NDropTarget::Place(destination),
             } => visit(destination),
             NStatementKind::End { .. }
+            | NStatementKind::CheckIndex { .. }
             | NStatementKind::Drop {
                 target: NDropTarget::Value(_),
             } => {}

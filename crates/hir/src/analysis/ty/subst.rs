@@ -3,11 +3,12 @@
 use super::{
     const_ty::ConstCaptureEnv,
     fold::{TyFoldable, TyFolder},
+    trait_resolution::PredicateListId,
     ty_def::TyId,
     ty_lower::{CompleteSubst, ParamSchemaId, SubstError},
 };
 use crate::{
-    analysis::HirAnalysisDb,
+    analysis::{HirAnalysisDb, semantic::SemanticInstanceKey},
     hir_def::{GenericParamOwner, scope_graph::ScopeId},
 };
 
@@ -22,7 +23,11 @@ pub(crate) fn substitute_complete<'db, T>(
 where
     T: TyFoldable<'db>,
 {
-    let mut folder = SubstFolder { subst, error: None };
+    let mut folder = SubstFolder {
+        subst,
+        error: None,
+        in_context: false,
+    };
     let value = value.fold_with(db, &mut folder);
     folder.error.map_or(Ok(value), Err)
 }
@@ -42,6 +47,19 @@ pub(crate) fn is_owned_by_schema<'db>(
 struct SubstFolder<'a, 'db> {
     subst: &'a CompleteSubst<'db>,
     error: Option<SubstError<'db>>,
+    /// Folding what only decides how evaluation finds a constant, where a
+    /// parameter without a value is not something the value depends on, and
+    /// stays as it is.
+    in_context: bool,
+}
+
+impl<'db> SubstFolder<'_, 'db> {
+    fn in_context<T>(&mut self, fold: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = std::mem::replace(&mut self.in_context, true);
+        let folded = fold(self);
+        self.in_context = outer;
+        folded
+    }
 }
 
 impl<'db> TyFolder<'db> for SubstFolder<'_, 'db> {
@@ -51,10 +69,12 @@ impl<'db> TyFolder<'db> for SubstFolder<'_, 'db> {
             if let Some(replacement) = self.subst.get(db, key) {
                 return replacement;
             }
-            self.error.get_or_insert(SubstError::MissingArgument {
-                domain: self.subst.domain(),
-                key,
-            });
+            if !self.in_context {
+                self.error.get_or_insert(SubstError::MissingArgument {
+                    domain: self.subst.domain(),
+                    key,
+                });
+            }
             return ty;
         }
 
@@ -78,12 +98,30 @@ impl<'db> TyFolder<'db> for SubstFolder<'_, 'db> {
             return match bound {
                 Ok(bound) => bound,
                 Err(error) => {
-                    self.error.get_or_insert(error);
+                    if !self.in_context {
+                        self.error.get_or_insert(error);
+                    }
                     capture.clone()
                 }
             };
         }
         capture.fold_ranges(db, self)
+    }
+
+    fn fold_const_context_key(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        key: SemanticInstanceKey<'db>,
+    ) -> SemanticInstanceKey<'db> {
+        self.in_context(|folder| key.fold_with(db, folder))
+    }
+
+    fn fold_const_env(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        assumptions: PredicateListId<'db>,
+    ) -> PredicateListId<'db> {
+        self.in_context(|folder| assumptions.fold_with(db, folder))
     }
 }
 

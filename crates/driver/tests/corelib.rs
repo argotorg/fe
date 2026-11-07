@@ -21,25 +21,30 @@ use url::Url;
 #[cfg(target_arch = "wasm32")]
 use test_utils::url_utils::UrlExt;
 
+// Core is checked for each target, since the width of `usize` depends on it.
 #[test]
 fn analyze_corelib() {
-    let db = DriverDataBase::default();
-    let core = db.builtin_core();
-    assert!(
-        core.files(&db).iter().next().is_some(),
-        "builtin core ingot should not be empty"
-    );
+    for target in Target::ALL {
+        let mut db = DriverDataBase::default();
+        db.compilation_settings().set_target(&mut db).to(target);
+        let core = db.builtin_core();
+        assert!(
+            core.files(&db).iter().next().is_some(),
+            "builtin core ingot should not be empty"
+        );
 
-    let core_diags = db.run_on_ingot(core);
-    assert_builtin_clean(&db, core, core_diags, "core");
+        let core_diags = db.run_on_ingot(core);
+        assert_builtin_clean(&db, core, core_diags, &format!("core ({target:?})"));
+    }
 }
 
 // Std is checked for each target and operating system, since `#[cfg]`
 // selects its items by them.
 #[test]
 fn analyze_stdlib() {
-    let configs = [(Target::Evm, None), (Target::Native, None)]
+    let configs = Target::ALL
         .into_iter()
+        .map(|target| (target, None))
         .chain(Os::ALL.map(|os| (Target::Native, Some(os))));
     for (target, os) in configs {
         let mut db = DriverDataBase::default();
@@ -508,7 +513,7 @@ fn string_literals_can_pick_up_dynstring_api_from_later_use() {
     let src = r#"
 pub fn root() -> u8 {
     let text = "hello-dynamic-api"
-    text.payload_span().byte_at(0)
+    text.span().byte_at(0)
 }
 "#;
 
@@ -548,7 +553,7 @@ fn long_string_literals_can_pick_up_dynstring_api_from_later_use() {
     let src = r#"
 pub fn root() -> u8 {
     let text = "hello-dynamic-api-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
-    text.payload_span().byte_at(0)
+    text.span().byte_at(0)
 }
 "#;
 

@@ -84,6 +84,9 @@ pub enum VerifyError<'db> {
         class: RuntimeClass<'db>,
     },
     ContractFieldKindMismatch(ContractFieldId<'db>),
+    /// A binding that views its field's slot otherwise than the layout packs
+    /// the field into it.
+    ContractFieldViewMismatch(ContractFieldId<'db>),
     ContractFieldSpanMismatch {
         field: ContractFieldId<'db>,
         hir_span: usize,
@@ -132,6 +135,7 @@ impl<'db> VerifyError<'db> {
             | VerifyError::ContractFieldSlotMismatch { .. }
             | VerifyError::InvalidContractFieldClass { .. }
             | VerifyError::ContractFieldKindMismatch(_)
+            | VerifyError::ContractFieldViewMismatch(_)
             | VerifyError::ContractFieldSpanMismatch { .. } => None,
         }
     }

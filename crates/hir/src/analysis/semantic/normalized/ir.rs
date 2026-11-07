@@ -5,9 +5,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemConstScalar, SemConstValue,
-            SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget,
-            SemanticInstance, VariantIndex,
+            BinaryOp, CallSiteId, FailReason, FieldIndex, Mutability, SConst, SStmtId,
+            SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
+            SemanticCodeRegionTarget, SemanticInstance, UnaryOp, VariantIndex,
         },
         ty::{
             provider::AddressSpace,
@@ -15,7 +15,7 @@ use crate::{
             ty_def::{BorrowKind, TyId},
         },
     },
-    hir_def::{BinOp, ExprId, StringId, UnOp},
+    hir_def::ExprId,
     semantic::ProviderBinding,
 };
 
@@ -62,6 +62,45 @@ impl<'db> NormalizedBody<'db> {
         self.blocks.get(id.index())
     }
 
+    /// The blocks reachable from the entry, each after the blocks dominating
+    /// it.
+    pub fn reverse_postorder(&self) -> Vec<NBlockId> {
+        self.reverse_postorder_by(|block| {
+            self.blocks[block.index()]
+                .terminator
+                .kind
+                .successors()
+                .into_iter()
+                .map(|successor| successor.block)
+                .collect()
+        })
+    }
+
+    /// [`Self::reverse_postorder`] over the edges `successors` gives.
+    pub(crate) fn reverse_postorder_by(
+        &self,
+        successors: impl Fn(NBlockId) -> Vec<NBlockId>,
+    ) -> Vec<NBlockId> {
+        let mut visited = vec![false; self.blocks.len()];
+        let mut postorder = Vec::new();
+        let mut stack = vec![(self.entry, 0)];
+        visited[self.entry.index()] = true;
+        while let Some((block, next)) = stack.last_mut() {
+            if let Some(&successor) = successors(*block).get(*next) {
+                *next += 1;
+                if !visited[successor.index()] {
+                    visited[successor.index()] = true;
+                    stack.push((successor, 0));
+                }
+            } else {
+                postorder.push(*block);
+                stack.pop();
+            }
+        }
+        postorder.reverse();
+        postorder
+    }
+
     /// The block and expression that define a statement-defined value.
     pub fn defining_expr(&self, value: NValueId) -> Option<(NBlockId, &NExpr<'db>)> {
         let NValueDefinition::Statement { block, statement } = self.value(value)?.definition else {
@@ -71,7 +110,8 @@ impl<'db> NormalizedBody<'db> {
             NStatementKind::Define { expr, .. } => Some((block, expr)),
             NStatementKind::Store { .. }
             | NStatementKind::End { .. }
-            | NStatementKind::Drop { .. } => None,
+            | NStatementKind::Drop { .. }
+            | NStatementKind::CheckIndex { .. } => None,
         }
     }
 
@@ -194,6 +234,7 @@ impl<'db> NormalizedBody<'db> {
                     NStatementKind::Drop {
                         target: NDropTarget::Place(place),
                     } => place_uses_target(place),
+                    NStatementKind::CheckIndex { index, .. } => *index == NIndex::Value(target),
                 };
                 if used {
                     return true;
@@ -206,7 +247,8 @@ impl<'db> NormalizedBody<'db> {
                     value.value == target
                 }
                 NTerminatorKind::Goto(_)
-                | NTerminatorKind::Assert { .. }
+                | NTerminatorKind::Fail(_)
+                | NTerminatorKind::Unreachable
                 | NTerminatorKind::Return(None) => false,
             };
             if direct_use
@@ -429,11 +471,11 @@ pub enum NExpr<'db> {
     },
     Const(SConst<'db>),
     Unary {
-        op: UnOp,
+        op: UnaryOp,
         value: NOperand,
     },
     Binary {
-        op: BinOp,
+        op: BinaryOp,
         lhs: NOperand,
         rhs: NOperand,
     },
@@ -617,6 +659,13 @@ pub enum NStatementKind<'db> {
     End {
         access: NValueId,
     },
+    /// Fails unless `index` is below the length of `array`, an array type a
+    /// place or value path indexes. It precedes the statement whose path
+    /// takes the index.
+    CheckIndex {
+        index: NIndex,
+        array: TyId<'db>,
+    },
     /// Destroys what `target` still owns (`SStmtKind::Drop`).
     Drop {
         target: NDropTarget<'db>,
@@ -656,9 +705,12 @@ pub enum NTerminatorKind<'db> {
         cases: Box<[(VariantIndex, NSuccessor)]>,
         default: Option<NSuccessor>,
     },
-    Assert {
-        message: Option<StringId<'db>>,
-    },
+    /// Execution fails.
+    Fail(FailReason<'db>),
+    /// Control never reaches here: the rest of a block after a call that
+    /// never returns, a match arm no value takes, or code runtime lowering
+    /// proved unreachable.
+    Unreachable,
     Return(Option<NOperand>),
     /// A projection grants `value` to its caller and suspends; its slide
     /// resumes at `resume` when the caller ends the session.
@@ -677,7 +729,8 @@ impl NTerminatorKind<'_> {
             Self::Goto(_)
             | Self::Branch { .. }
             | Self::MatchEnum { .. }
-            | Self::Assert { .. }
+            | Self::Fail(_)
+            | Self::Unreachable
             | Self::Return(None) => None,
         }
     }
@@ -696,7 +749,7 @@ impl NTerminatorKind<'_> {
                 .chain(default.iter())
                 .collect(),
             Self::Yield { resume, .. } => vec![resume],
-            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+            Self::Fail(_) | Self::Unreachable | Self::Return(_) => Vec::new(),
         }
     }
 
@@ -715,7 +768,7 @@ impl NTerminatorKind<'_> {
                 .chain(default.iter_mut())
                 .collect(),
             Self::Yield { resume, .. } => vec![resume],
-            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+            Self::Fail(_) | Self::Unreachable | Self::Return(_) => Vec::new(),
         }
     }
 }

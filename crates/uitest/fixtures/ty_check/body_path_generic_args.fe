@@ -1,0 +1,327 @@
+struct W<T> {
+    x: u256,
+}
+
+struct S {}
+
+struct G<T> {
+    x: u256,
+}
+
+enum E<T> {
+    A,
+    B(u256),
+    C { v: u256 },
+}
+
+type Al<T> = G<T>
+
+trait Tr {
+    fn f<U>() -> u256
+    fn g() -> u256
+}
+
+trait Pa<T> {
+    fn h() -> u256
+}
+
+trait Ha {
+    type T
+}
+
+trait Dd {
+    shape Step
+    type Out
+
+    fn run(self) -> u256
+}
+
+struct One {}
+
+impl Dd for One {
+    shape Step = ref u256
+    type Out = u8
+
+    fn run(self) -> u256 {
+        0
+    }
+}
+
+struct Sh<shape A> {
+    x: u256,
+}
+
+impl<shape A> Sh<A> {
+    fn mk() -> u256 {
+        0
+    }
+}
+
+impl S {
+    fn take<T>() -> u256 {
+        0
+    }
+
+    fn me<T>(self) -> u256 {
+        0
+    }
+
+    fn me2<A, B>(self) -> u256 {
+        0
+    }
+
+    fn me_shape<shape A>(self) -> u256 {
+        0
+    }
+}
+
+impl<T> G<T> {
+    const C: u256 = 1
+
+    fn mk() -> u256 {
+        0
+    }
+
+    fn tk<U>() -> u256 {
+        0
+    }
+}
+
+impl Tr for S {
+    fn f<U>() -> u256 {
+        0
+    }
+
+    fn g() -> u256 {
+        0
+    }
+}
+
+impl<T> Pa<T> for S {
+    fn h() -> u256 {
+        0
+    }
+}
+
+impl<T> Ha for G<T> {
+    type T = u8
+}
+
+fn take<T>() -> u256 {
+    0
+}
+
+fn two<A, B>() -> u256 {
+    0
+}
+
+fn take_const<const K: u256>() -> u256 {
+    K
+}
+
+fn take_value<T>(_ x: T) -> u256 {
+    0
+}
+
+fn take_shape<shape A>() -> u256 {
+    0
+}
+
+mod m {
+    pub struct D<T> {
+        pub x: u256,
+    }
+
+    impl<T> D<T> {
+        pub fn mk() -> u256 {
+            0
+        }
+    }
+
+    pub fn t<T>() -> u256 {
+        0
+    }
+
+    struct Hidden {}
+}
+
+fn callee_args() {
+    take<Missing>()
+    take<(u256, Missing)>()
+    take<[Missing; 2]>()
+    take<W<Missing>>()
+    take<m::Missing>()
+    two<Missing, Nope>()
+    take_const<Missing>()
+    take_value<Missing>(1)
+    m::t<Missing>()
+    S::take<Missing>()
+    G<u8>::tk<Missing>()
+    Tr::f<Missing>()
+    <S as Tr>::f<Missing>()
+}
+
+fn method_args() {
+    let s = S {}
+    s.me<Missing>()
+    s.me2<Missing, Nope>()
+}
+
+fn type_segment_args() {
+    G<Missing>::mk()
+    G<(u256, Missing)>::mk()
+    G<W<Missing>>::mk()
+    G<Missing>::C
+    G<Missing>::nope()
+    G<Missing>::tk<Nope>()
+    m::D<Missing>::mk()
+    Al<Missing>::mk()
+    Al<Missing>::C
+    Pa<Missing>::h()
+    <G<Missing> as Tr>::g()
+    let _ = E<Missing>::A
+    let _ = E<Missing>::B(1)
+    let _ = E<Missing>::C { v: 1 }
+}
+
+fn record_args() {
+    let _ = W<Missing> { x: 0 }
+    let _ = W<W<Missing>> { x: 0 }
+    let _ = Al<Missing> { x: 0 }
+    let _ = W<Missing>
+}
+
+fn pattern_args(_ e: E<u8>, _ w: W<u8>) {
+    match e {
+        E<Missing>::A => {}
+        E<Missing>::B(_) => {}
+        E<Missing>::C { .. } => {}
+    }
+    let W<Missing> { .. } = w
+}
+
+fn private_args() {
+    let s = S {}
+    take<m::Hidden>()
+    G<m::Hidden>::mk()
+    s.me<m::Hidden>()
+}
+
+// An argument that is fine on its own, but not for its parameter.
+fn invalid_for_param() {
+    G<W>::mk()
+    G<W>::C
+    G<{ 1 }>::mk()
+    G<[u8; true]>::mk()
+    <G<W> as Tr>::g()
+    let _ = E<W>::A
+    let _ = W<W> { x: 0 }
+    take<W>()
+    take_const<u8>()
+    let s = S {}
+    s.me<W>()
+}
+
+// Shape arguments are checked as shapes.
+fn shape_args() {
+    let s = S {}
+    take_shape<(mut Missing,)>()
+    take_shape<(mut? u256,)>()
+    Sh<(own Missing,)>::mk()
+    s.me_shape<(ref Missing,)>()
+    take<(mut u256,)>()
+    G<(mut u256,)>::mk()
+}
+
+// A trait checks its own arguments, whatever a binding binds.
+fn trait_args(_ d: One) {
+    Dd<Step = ref u256>::run(d)
+    Dd<Step<ref> = mut u256>::run(d)
+    Dd<Step<ref> = mut? u256>::run(d)
+    Dd<Step<ref> = ref Missing>::run(d)
+    Dd<Out<ref> = u8>::run(d)
+    Dd<Out = u8, Out = u16>::run(d)
+    Dd<Out = Missing>::run(d)
+    Pa<ref>::h()
+}
+
+// The body reports its own error, and the name isn't blamed on an invalid type.
+fn const_body_arg() {
+    G<[u8; missing()]>::mk()
+}
+
+// A path that fails whatever its arguments are reports that alone.
+fn own_errors() {
+    nope<Missing>()
+    Missing<Nope>::mk()
+    m::nope<Missing>()
+    S::nope<Missing>()
+    G<u8, Missing>::mk()
+    G<W, Missing>::C
+}
+
+fn type_positions(_ a: G<Missing>::T, _ b: G<W>::T, _ c: G<Tr>::Nope) {
+    let _: G<Missing>::T = 1
+    let _: G<W>::T = 1
+    let _: G<Tr>::Nope = 1
+    let _: Missing<Nope>::T = 1
+}
+
+trait Valid {
+    fn a() -> u256
+
+    fn b() -> u256 {
+        take<Self>() + Self::a() + G<Self>::mk()
+    }
+}
+
+const SIZE: u256 = 2
+
+struct K<const N: u256> {
+    x: u256,
+}
+
+impl<const N: u256> K<N> {
+    fn mk() -> u256 {
+        N
+    }
+}
+
+fn valid<T: Ha, const N: usize>() -> u256 {
+    let s = S {}
+    G<[T; N]>::mk()
+        + take<(T, u8)>()
+        + G<*T>::mk()
+        + G<T::T>::mk()
+        + take<<T as Ha>::T>()
+        + K<SIZE>::mk()
+        + K<3>::mk()
+        + K<{ SIZE + 1 }>::mk()
+        + take_const<SIZE>()
+        + take_const<3>()
+        + s.me<(T, u8)>()
+}
+
+fn valid_shapes<shape B, D: Dd>(_ s: S, _ x: Sh<(mut u256, B)>) -> u256 {
+    take_shape<(mut u256,)>()
+        + take_shape<(own u256, ref bool)>()
+        + take_shape<(u256, bool)>()
+        + take_shape<B>()
+        + take_shape<(B, mut u256)>()
+        + take_shape<D::Step<ref>>()
+        + take_shape<(D::Step<ref>, u8)>()
+        + Sh<(mut u256,)>::mk()
+        + s.me_shape<(mut u256,)>()
+}
+
+fn valid_bindings(_ d: One) -> u256 {
+    Dd<Step<ref> = ref u256>::run(d)
+}
+
+fn valid_bindings_both(_ d: One) -> u256 {
+    Dd<Out = u8, Step<ref> = ref u256>::run(d)
+}
+
+fn valid_bindings_product<X: Dd<Step<ref> = (own usize, ref u256)>>(_ d: X) -> u256 {
+    Dd<Step<ref> = (own usize, ref u256)>::run(d)
+}

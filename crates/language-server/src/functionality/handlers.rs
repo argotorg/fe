@@ -11,7 +11,11 @@ use async_lsp::{
 };
 
 use common::InputDb;
-use driver::init_ingot;
+use common::compilation::Target;
+use driver::{
+    init_ingot,
+    project_target::{ingots_target, set_target},
+};
 use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
@@ -124,7 +128,35 @@ async fn discover_and_load_ingots(
         );
     }
 
+    backend.project_ingots = discovered.ingot_urls;
+    sync_project_target(backend);
+
     Ok(())
+}
+
+/// Sets the database's target from `fe.toml`. A database has one target, so a
+/// project that sets different ones is checked for the default.
+fn sync_project_target(backend: &mut Backend) {
+    let (target, conflict) = match ingots_target(&backend.project_ingots) {
+        Ok(target) => (target.unwrap_or_default(), None),
+        Err(conflict) => (Target::default(), Some(conflict.to_string())),
+    };
+    if let Some(conflict) = &conflict
+        && backend.target_conflict.as_ref() != Some(conflict)
+    {
+        let _ = backend.client.clone().show_message(ShowMessageParams {
+            typ: MessageType::WARNING,
+            message: format!(
+                "Fe projects here target different machines ({conflict}), so the language server \
+                 checks them all for `{}`.",
+                target.name(),
+            ),
+        });
+    }
+    backend.target_conflict = conflict;
+    if set_target(&mut backend.db, target) {
+        info!(target: "fe::lsp::workspace", target = target.name(), "project target changed");
+    }
 }
 
 fn read_file_text_optional(path: &std::path::Path) -> Option<String> {
@@ -405,6 +437,12 @@ pub async fn handle_did_save_text_document(
     message: async_lsp::lsp_types::DidSaveTextDocumentParams,
 ) -> Result<(), ResponseError> {
     debug!("file saved: {:?}", message.text_document.uri);
+    if message.text_document.uri.path().ends_with("/fe.toml") {
+        let _ = backend.client.clone().emit(FileChange {
+            uri: message.text_document.uri,
+            kind: ChangeKind::Edit(None),
+        });
+    }
     if backend.doc_reload_tx.is_some() {
         let _ = backend.client.clone().emit(DocReloadRequest);
     }
@@ -531,6 +569,8 @@ pub async fn handle_file_change(
                     }
                 }
 
+                sync_project_target(backend);
+
                 // Emit diagnostics for all workspace files
                 let all_files: Vec<_> = backend
                     .db
@@ -601,6 +641,11 @@ fn load_ingot_files(
             ingot_dir
         );
     }
+
+    if !backend.project_ingots.contains(&ingot_url) {
+        backend.project_ingots.push(ingot_url);
+    }
+    sync_project_target(backend);
 
     // Emit diagnostics for all files that were loaded
     let all_files: Vec<_> = backend

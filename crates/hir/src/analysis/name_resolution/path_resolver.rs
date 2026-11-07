@@ -82,6 +82,10 @@ pub enum PathResErrorKind<'db> {
     /// the error is already emitted from parsing phase.
     ParseError,
 
+    /// A generic argument written on the path is invalid, and its error is
+    /// already reported where it's written.
+    InvalidGenericArg,
+
     /// The name is found, but it's ambiguous.
     Ambiguous(ThinVec<NameRes<'db>>),
 
@@ -152,6 +156,24 @@ impl<'db> PathResError<'db> {
         Self::new(PathResErrorKind::ParseError, path)
     }
 
+    /// Whether this error is about the path's names or how many arguments it
+    /// writes, whatever those arguments are. A name that's looked up in a type
+    /// its arguments made invalid isn't, and neither is a trait rejecting them.
+    pub(crate) fn is_independent_of_args(&self, db: &'db dyn HirAnalysisDb) -> bool {
+        match &self.kind {
+            PathResErrorKind::NotFound {
+                parent: Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)),
+                ..
+            } => !ty.has_invalid(db),
+            PathResErrorKind::NotFound { .. }
+            | PathResErrorKind::Ambiguous(_)
+            | PathResErrorKind::Conflict(_)
+            | PathResErrorKind::InvalidPathSegment(_)
+            | PathResErrorKind::ArgNumMismatch { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn method_selection(err: MethodSelectionError<'db>, path: PathId<'db>) -> Self {
         Self::new(PathResErrorKind::MethodSelection(err), path)
     }
@@ -175,6 +197,7 @@ impl<'db> PathResError<'db> {
         match &self.kind {
             PathResErrorKind::NotFound { .. } => "Not found".to_string(),
             PathResErrorKind::ParseError => "Parse error".to_string(),
+            PathResErrorKind::InvalidGenericArg => "Invalid generic argument".to_string(),
             PathResErrorKind::InvalidTraitArg { .. } => {
                 "Trait argument failed compile-time evaluation".to_string()
             }
@@ -287,7 +310,7 @@ impl<'db> PathResError<'db> {
         };
 
         let diag = match kind {
-            PathResErrorKind::ParseError => return None,
+            PathResErrorKind::ParseError | PathResErrorKind::InvalidGenericArg => return None,
             PathResErrorKind::InvalidTraitArg {
                 arg,
                 applied_default,
@@ -303,6 +326,25 @@ impl<'db> PathResError<'db> {
                 } else {
                     fault
                 });
+            }
+            // `G<W>::mk`: the written arguments made the parent type invalid, so
+            // the error is theirs, not the missing name's.
+            PathResErrorKind::NotFound {
+                parent: Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)),
+                ..
+            } if let Some(parent) = self.failed_at.parent(db)
+                && parent.generic_args(db).is_given(db)
+                && let Some(diag) = emit_invalid_ty_error(
+                    db,
+                    ty,
+                    path_span
+                        .clone()
+                        .segment(parent.segment_index(db))
+                        .generic_args()
+                        .into(),
+                ) =>
+            {
+                return Some(diag);
             }
             PathResErrorKind::NotFound { parent, bucket } => {
                 if let Some(nr) = bucket.iter_ok().next() {
@@ -323,12 +365,14 @@ impl<'db> PathResError<'db> {
                             ExpectedPathKind::Value => {
                                 PathResDiag::ExpectedValue(span, ident, nr.kind_name())
                             }
-                            ExpectedPathKind::Function => func_not_found_err(span, ident, parent),
+                            ExpectedPathKind::Function => {
+                                func_not_found_err(db, span, ident, parent)
+                            }
                             _ => PathResDiag::NotFound(span, ident),
                         }
                     }
                 } else if expected == ExpectedPathKind::Function {
-                    func_not_found_err(span, ident, parent)
+                    func_not_found_err(db, span, ident, parent)
                 } else {
                     PathResDiag::NotFound(span, ident)
                 }
@@ -511,16 +555,19 @@ impl<'db> PathResError<'db> {
 }
 
 fn func_not_found_err<'db>(
+    db: &'db dyn HirAnalysisDb,
     span: DynLazySpan<'db>,
     ident: IdentId<'db>,
     parent: Option<PathRes<'db>>,
 ) -> PathResDiag<'db> {
     match parent {
-        Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => PathResDiag::MethodNotFound {
-            primary: span,
-            method_name: ident,
-            receiver: Either::Left(ty),
-        },
+        Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) if !ty.has_invalid(db) => {
+            PathResDiag::MethodNotFound {
+                primary: span,
+                method_name: ident,
+                receiver: Either::Left(ty),
+            }
+        }
         Some(PathRes::Trait(t)) => PathResDiag::MethodNotFound {
             primary: span,
             method_name: ident,
@@ -1151,18 +1198,21 @@ fn trait_arg_path_error<'db>(
             visited += 1;
             match resolve_path_with_minter(db, arg_path, scope, assumptions, false, lowering_cx) {
                 Ok(PathRes::Ty(_) | PathRes::TyAlias(..)) => None,
-                _ if position == TypePosition::GenericArg
-                    && lower_type_position_path(
+                result if position == TypePosition::GenericArg => {
+                    match lower_type_position_path(
                         db,
                         arg_path,
                         scope,
                         assumptions,
                         position,
                         lowering_cx,
-                    )
-                    .is_ok_and(|ty| ty.is_const_ty(db)) =>
-                {
-                    None
+                    ) {
+                        Ok(ty) if ty.is_const_ty(db) => None,
+                        Ok(_) => Some((nth, result)),
+                        // Why it names nothing as an argument, which may be a
+                        // constant, not only why it names no type.
+                        Err(err) => Some((nth, Err(err))),
+                    }
                 }
                 result => Some((nth, result)),
             }
@@ -1655,14 +1705,26 @@ fn resolve_segment<'db>(
     };
 
     let bucket = resolve_query(db, make_query(db, path, parent_scope));
-    let res = if is_tail
-        && resolve_tail_as_value
-        && let Ok(res) = bucket.pick(NameDomain::VALUE)
-    {
+    let value = (is_tail && resolve_tail_as_value).then(|| bucket.pick(NameDomain::VALUE));
+    let res = if let Some(Ok(res)) = value {
         *decided_by_value = true;
         res.clone()
     } else {
-        pick_type_domain_from_bucket(parent_res, bucket, path)?
+        match pick_type_domain_from_bucket(parent_res, bucket, path) {
+            // A value that can't be told apart is the error when no type has
+            // the name: the name isn't missing.
+            Err(PathResError {
+                kind: PathResErrorKind::NotFound { .. },
+                ..
+            }) if let Some(Err(
+                err @ (NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)),
+            )) = value =>
+            {
+                *decided_by_value = true;
+                return Err(PathResError::from_name_res_error(err.clone(), path));
+            }
+            res => res?,
+        }
     };
     resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx)
 }

@@ -5,7 +5,7 @@ use super::{
     shape::Shape,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{BorrowKind, Kind, TyId},
+    ty_def::{BorrowKind, Kind, TyData, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -71,14 +71,30 @@ pub enum TyLowerDiag<'db> {
     /// `ref` or `mut` as a generic argument of anything but an associated
     /// shape.
     ModeArgNotShape(DynLazySpan<'db>),
+    /// An associated type binding as a generic argument of anything but a
+    /// trait.
+    AssocBindingNotOnTrait(DynLazySpan<'db>),
     /// An associated shape named without a mode where nothing gives it one.
     ShapeWithoutMode(DynLazySpan<'db>),
     /// A parameter pattern of a function without a body to bind it.
     DestructuredParamWithoutBody(DynLazySpan<'db>),
-    /// An `#[export]` function a C caller cannot call as declared.
+    /// An `#[unsafe(export)]` function a C caller cannot call as declared.
     InvalidExport {
         span: DynLazySpan<'db>,
         issue: ExportIssue,
+    },
+    /// A value that an `#[unsafe(export)]` or `extern` function can't pass to
+    /// or from C.
+    InvalidCAbi {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        mutable: bool,
+        exported: bool,
+    },
+    /// A native `main` that doesn't return `i32` or nothing.
+    InvalidMainReturn {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
     },
     /// A mode on a product parameter's type, whose parts carry the modes;
     /// with `shape`, on an associated shape's, which is named at its mode.
@@ -348,7 +364,7 @@ pub enum RevealedBy {
     Evaluation,
 }
 
-/// Why a C caller cannot call an `#[export]` function.
+/// Why a C caller cannot call an `#[unsafe(export)]` function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ExportIssue {
     NotPub,
@@ -370,11 +386,14 @@ impl TyLowerDiag<'_> {
             Self::ModeNotType(_) => 58,
             Self::ModeOnProduct { .. } => 82,
             Self::ModeArgNotShape(_) => 83,
+            Self::AssocBindingNotOnTrait(_) => 89,
             Self::ShapeWithoutMode(_) => 84,
             Self::ProductReceiver(_) => 74,
             Self::ProductParamNotDestructured { .. } => 75,
             Self::DestructuredParamWithoutBody(_) => 76,
             Self::InvalidExport { .. } => 88,
+            Self::InvalidCAbi { .. } => 90,
+            Self::InvalidMainReturn { .. } => 91,
             Self::MaybeMutWithoutResult(_) => 77,
             Self::MaybeMutRowEffect { .. } => 78,
             Self::MisplacedSpread(_) => 80,
@@ -540,7 +559,7 @@ pub enum BodyDiag<'db> {
 
     UnitVariantExpected {
         primary: DynLazySpan<'db>,
-        kind_name: String,
+        kind_name: Option<String>,
         hint: Option<String>,
     },
 
@@ -786,6 +805,12 @@ pub enum BodyDiag<'db> {
         ty: String,
         op: IdentId<'db>,
         trait_path: PathId<'db>,
+        /// The operator is written in unchecked code, so it calls a
+        /// wrapping trait.
+        wraps: bool,
+        /// `ty` is a type parameter or associated type, which implements what
+        /// its bounds say.
+        needs_bound: bool,
     },
     UnsupportedUnaryPlus(DynLazySpan<'db>),
     UnsupportedMacroCall(DynLazySpan<'db>),
@@ -972,6 +997,29 @@ pub enum BodyDiag<'db> {
 
     /// A `for` loop's pattern that may not match.
     RefutableLoopPattern {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// A recv arm's pattern that may not match every value of its variant.
+    RefutableRecvArmPattern {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// A pattern naming a constant of type `ty`, which is not an integer or
+    /// `bool`.
+    ConstPatternType {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// A pattern naming a constant whose value depends on generic parameters.
+    GenericConstPattern {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// A pattern naming a constant that fails to evaluate without a fault of
+    /// its own: its definition is invalid, or depends on the pattern.
+    InvalidConstPattern {
         primary: DynLazySpan<'db>,
     },
 
@@ -1345,10 +1393,16 @@ impl<'db> BodyDiag<'db> {
     pub(super) fn unit_variant_expected(
         db: &'db dyn HirAnalysisDb,
         primary: DynLazySpan<'db>,
-        record_like: RecordLike<'db>,
+        record_like: Option<RecordLike<'db>>,
     ) -> Self {
-        let kind_name = record_like.kind_name(db);
-        let hint = record_like.initializer_hint(db);
+        let (kind_name, hint) = if let Some(record_like) = record_like {
+            (
+                Some(record_like.kind_name(db)),
+                record_like.initializer_hint(db),
+            )
+        } else {
+            (None, None)
+        };
 
         Self::UnitVariantExpected {
             primary,
@@ -1405,6 +1459,7 @@ impl<'db> BodyDiag<'db> {
         ty: TyId<'db>,
         ops: &dyn TraitOps,
     ) -> Self {
+        let needs_bound = matches!(ty.data(db), TyData::TyParam(_) | TyData::AssocTy(_));
         let ty = ty.pretty_print(db).to_string();
         let op = ops.op_symbol(db);
         let trait_path = ops.core_trait_path(db);
@@ -1413,6 +1468,8 @@ impl<'db> BodyDiag<'db> {
             ty,
             op,
             trait_path,
+            wraps: ops.wraps(),
+            needs_bound,
         }
     }
 
@@ -1495,6 +1552,10 @@ impl<'db> BodyDiag<'db> {
             Self::MaybeMutWithoutMode { .. } => 130,
             Self::RefutableParamPattern { .. } => 133,
             Self::RefutableLoopPattern { .. } => 148,
+            Self::RefutableRecvArmPattern { .. } => 153,
+            Self::ConstPatternType { .. } => 154,
+            Self::GenericConstPattern { .. } => 155,
+            Self::InvalidConstPattern { .. } => 156,
             Self::LoopDriverBase { .. } => 149,
             Self::ProductArgExpected { .. } => 135,
             Self::ProductArgTooWeak { .. } => 150,

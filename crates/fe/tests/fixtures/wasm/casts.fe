@@ -1,0 +1,31 @@
+pub fn u8_to_u32(a: u8) -> u32 {
+    a as u32
+}
+
+pub fn i8_to_i32(a: i8) -> i32 {
+    a as i32
+}
+
+pub fn i8_to_i64(a: i8) -> i64 {
+    a as i64
+}
+
+pub fn u16_to_i64(a: u16) -> i64 {
+    a as i64
+}
+
+pub fn u32_to_u64(a: u32) -> u64 {
+    a as u64
+}
+
+pub fn i32_to_i64(a: i32) -> i64 {
+    a as i64
+}
+
+pub fn bool_to_u8(a: bool) -> u8 {
+    if a { 1 } else { 0 }
+}
+
+pub fn widen_sum(a: u8, b: u16, c: u32) -> u64 {
+    a as u64 + b as u64 + c as u64
+}

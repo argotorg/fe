@@ -1,0 +1,51 @@
+struct Vec3 {
+    x: i64,
+    y: i64,
+    z: i64,
+}
+
+impl Copy for Vec3 {}
+
+impl Vec3 {
+    fn new(x: i64, y: i64, z: i64) -> Vec3 {
+        Vec3 { x, y, z }
+    }
+
+    fn add(self, o: Vec3) -> Vec3 {
+        Vec3 { x: self.x + o.x, y: self.y + o.y, z: self.z + o.z }
+    }
+
+    fn scale(self, k: i64) -> Vec3 {
+        Vec3 { x: self.x * k, y: self.y * k, z: self.z * k }
+    }
+
+    fn dot(self, o: Vec3) -> i64 {
+        self.x * o.x + self.y * o.y + self.z * o.z
+    }
+
+    fn cross(self, o: Vec3) -> Vec3 {
+        Vec3 {
+            x: self.y * o.z - self.z * o.y,
+            y: self.z * o.x - self.x * o.z,
+            z: self.x * o.y - self.y * o.x,
+        }
+    }
+}
+
+pub fn triple_product(a: i64, b: i64, c: i64) -> i64 {
+    let u = Vec3::new(x: a, y: 1, z: 0)
+    let v = Vec3::new(x: 0, y: b, z: 1)
+    let w = Vec3::new(x: 1, y: 0, z: c)
+    u.cross(o: v).dot(o: w)
+}
+
+pub fn lincomb(a: i64, b: i64) -> i64 {
+    let e1 = Vec3::new(x: 1, y: 0, z: 0)
+    let e2 = Vec3::new(x: 0, y: 1, z: 0)
+    let v = e1.scale(k: a).add(o: e2.scale(k: b)).add(o: Vec3::new(x: 1, y: 1, z: 1))
+    v.x * 10000 + v.y * 100 + v.z
+}
+
+pub fn cross_z(ax: i64, ay: i64, bx: i64, by: i64) -> i64 {
+    Vec3::new(x: ax, y: ay, z: 0).cross(o: Vec3::new(x: bx, y: by, z: 0)).z
+}

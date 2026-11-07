@@ -3,12 +3,12 @@ use std::collections::BTreeMap;
 use smol_str::SmolStr;
 use toml::Value;
 
-use crate::ingot::Version;
+use crate::{compilation::Target, ingot::Version};
 
 use super::{
     ArithmeticMode, ConfigDiagnostic, DependencyArithmeticMode, ProfileSettings, dependency,
     is_valid_name, parse_arithmetic_field, parse_dependency_arithmetic_field, parse_profiles_table,
-    parse_string_array_field,
+    parse_string_array_field, parse_target_field,
 };
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -20,6 +20,7 @@ pub struct WorkspaceSettings {
     pub default_members: Option<Vec<SmolStr>>,
     pub exclude: Vec<SmolStr>,
     pub metadata: Option<toml::value::Table>,
+    pub target: Option<Target>,
     pub arithmetic: Option<ArithmeticMode>,
     pub dependency_arithmetic: Option<DependencyArithmeticMode>,
     pub profiles: BTreeMap<SmolStr, ProfileSettings>,
@@ -344,6 +345,7 @@ fn parse_arithmetic(
     workspace: &mut WorkspaceSettings,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) {
+    workspace.target = parse_target_field("workspace", table, diagnostics);
     workspace.arithmetic = parse_arithmetic_field("workspace", table, diagnostics);
     workspace.dependency_arithmetic =
         parse_dependency_arithmetic_field("workspace", table, diagnostics);

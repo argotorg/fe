@@ -22,6 +22,7 @@ use common::{
 };
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
+use driver::project_target::dependency_target_mismatch;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use hir::lower::map_file_to_mod;
 use mir::build_runtime_package;
@@ -75,6 +76,7 @@ struct EmitSelection {
     object: bool,
     staticlib: bool,
     elf: bool,
+    wasm: bool,
 }
 
 impl EmitSelection {
@@ -90,6 +92,7 @@ impl EmitSelection {
             object: false,
             staticlib: false,
             elf: false,
+            wasm: false,
         };
         for emit in requested {
             match emit {
@@ -103,6 +106,7 @@ impl EmitSelection {
                 BuildEmit::Object => selection.object = true,
                 BuildEmit::Staticlib => selection.staticlib = true,
                 BuildEmit::Elf => selection.elf = true,
+                BuildEmit::Wasm => selection.wasm = true,
             }
         }
         selection
@@ -112,7 +116,7 @@ impl EmitSelection {
         self.bytecode || self.runtime_bytecode || self.sizes
     }
 
-    /// Native library output, of the `#[export]` functions only.
+    /// Native library output, of the `#[unsafe(export)]` functions only.
     fn library(self) -> bool {
         self.object || self.staticlib
     }
@@ -143,7 +147,7 @@ fn validate_build_request(
     emit: EmitSelection,
     link: NativeLink<'_>,
 ) -> Result<(), String> {
-    #[cfg(not(feature = "sp1"))]
+    #[cfg(not(any(feature = "sp1", feature = "wasm")))]
     let _ = ingot;
     #[cfg(not(feature = "cranelift"))]
     let _ = contract;
@@ -156,6 +160,9 @@ fn validate_build_request(
             "`--link` and `--link-lib` require `--backend native` and `--emit executable`"
                 .to_string(),
         );
+    }
+    if emit.wasm && backend.name() != "wasm" {
+        return Err("`--emit wasm` requires `--backend wasm`".to_string());
     }
 
     match backend {
@@ -207,6 +214,22 @@ fn validate_build_request(
         }
         #[cfg(feature = "sp1")]
         BuildBackend::Sp1 => Ok(()),
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm if ingot.is_some() || contract.is_some() => {
+            Err("WebAssembly output does not support `--ingot` or `--contract`".to_string())
+        }
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm
+            if emit.writes_any_bytecode()
+                || emit.abi
+                || emit.metadata
+                || emit.executable
+                || emit.library() =>
+        {
+            Err("WebAssembly backend only supports `--emit wasm` and `--emit ir`".to_string())
+        }
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm => Ok(()),
     }
 }
 
@@ -399,6 +422,11 @@ pub fn build(
         #[cfg(feature = "sp1")]
         CliTarget::Directory(_) if matches!(backend, BuildBackend::Sp1) => {
             eprintln!("Error: sp1 executable output only supports standalone `.fe` files");
+            true
+        }
+        #[cfg(feature = "wasm")]
+        CliTarget::Directory(_) if matches!(backend, BuildBackend::Wasm) => {
+            eprintln!("Error: WebAssembly output only supports standalone `.fe` files");
             true
         }
         CliTarget::Directory(dir_path) => build_directory(
@@ -776,6 +804,10 @@ fn build_directory(
                 eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
                 return true;
             }
+            if let Some(mismatch) = dependency_target_mismatch(db, &url) {
+                eprintln!("Error: {mismatch}");
+                return true;
+            }
             let default_out_dir = canonical.join("out");
             let out_dir = out_dir.cloned().unwrap_or(default_out_dir);
             let report_dir = report_scope_dir(
@@ -887,7 +919,7 @@ fn build_workspace(
         }
         if built.is_empty() {
             if emit.library() {
-                eprintln!("Error: No native `#[export]` functions found to build");
+                eprintln!("Error: No native `#[unsafe(export)]` functions found to build");
             } else {
                 eprintln!("Error: No native executable entry points found to build");
             }
@@ -1067,6 +1099,10 @@ fn analyze_ingot_build_artifacts(
     ingot_url: &Url,
     include_abi_artifact_names: bool,
 ) -> Result<IngotBuildAnalysis, ()> {
+    if let Some(mismatch) = dependency_target_mismatch(db, ingot_url) {
+        eprintln!("Error: {mismatch}");
+        return Err(());
+    }
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
         eprintln!("Error: Could not resolve ingot from directory");
         return Err(());
@@ -1525,6 +1561,25 @@ fn build_top_mod(
         };
     }
 
+    #[cfg(feature = "wasm")]
+    if matches!(backend, BuildBackend::Wasm) {
+        let result = build_wasm_top_mod(
+            db,
+            top_mod,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir.map(Utf8PathBuf::as_path),
+        );
+        if let Err(err) = &result {
+            eprintln!("Error: Failed to compile WebAssembly output: {err}");
+        }
+        return BuildSummary {
+            had_errors: result.is_err(),
+        };
+    }
+
     if report_evm_exports(db, top_mod) {
         return BuildSummary { had_errors: true };
     }
@@ -1617,13 +1672,13 @@ fn build_top_mod(
     BuildSummary { had_errors }
 }
 
-/// Reports `top_mod`'s ingot's `#[export]` functions, which only native
+/// Reports `top_mod`'s ingot's `#[unsafe(export)]` functions, which only native
 /// objects define, rather than dropping them from an EVM build.
 fn report_evm_exports(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
     let exports = mir::native_exports(db, top_mod);
     for func in &exports {
         eprintln!(
-            "Error: `#[export]` requires `--backend native`, but `{}` is exported",
+            "Error: `#[unsafe(export)]` requires `--backend native`, but `{}` is exported",
             func.scope().pretty_path(db).unwrap_or_default()
         );
     }
@@ -1739,6 +1794,61 @@ fn build_sp1_top_mod(
             let _ = fs::write(report_dir.join(&name), &elf);
         }
         println!("Wrote {file}");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "wasm")]
+fn build_wasm_top_mod(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8Path>,
+) -> Result<(), String> {
+    let artifacts = codegen::emit_module_wasm_artifacts(
+        db,
+        top_mod,
+        opt_level,
+        codegen::WasmOutputSelection {
+            ir: emit.ir,
+            wasm: emit.wasm,
+        },
+    )
+    .map_err(|err| err.to_string())?;
+    // Nothing is written unless compilation succeeded.
+    ensure_output_dirs(emit, out_dir, out_dir)?;
+    if let Some(ir) = artifacts.ir {
+        write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "wasm.sona", &ir)?;
+    }
+    if let Some(wasm) = artifacts.wasm {
+        let stem = sanitize_name_with_default(ir_file_stem, "main");
+        let name = format!("{stem}.wasm");
+        let manifest = crate::wasm_manifest::render(&crate::wasm_manifest::ManifestInput {
+            module_file: &name,
+            module: &wasm,
+            optimization: &opt_level.to_string(),
+            compiler: &format!("fe {}", crate::cli_version()),
+            exports: &artifacts.exports,
+        })
+        .map_err(|err| format!("Failed to describe the WebAssembly module: {err}"))?;
+        let file = out_dir.join(&name);
+        fs::write(&file, &wasm)
+            .map_err(|err| format!("Failed to write WebAssembly module {file}: {err}"))?;
+        if let Some(report_dir) = report_dir {
+            let _ = fs::write(report_dir.join(&name), &wasm);
+        }
+        println!("Wrote {file}");
+        let manifest_name = format!("{stem}.manifest.json");
+        let manifest_file = out_dir.join(&manifest_name);
+        fs::write(&manifest_file, &manifest)
+            .map_err(|err| format!("Failed to write build manifest {manifest_file}: {err}"))?;
+        if let Some(report_dir) = report_dir {
+            let _ = fs::write(report_dir.join(&manifest_name), &manifest);
+        }
+        println!("Wrote {manifest_file}");
     }
     Ok(())
 }
@@ -1885,6 +1995,7 @@ fn ensure_output_dirs(
         || emit.executable
         || emit.library()
         || emit.elf
+        || emit.wasm
     {
         fs::create_dir_all(out_dir.as_std_path())
             .map_err(|err| format!("Failed to create output directory {out_dir}: {err}"))?;
@@ -2454,6 +2565,9 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     if emit.elf {
         parts.push("elf");
     }
+    if emit.wasm {
+        parts.push("wasm");
+    }
     parts.join(",")
 }
 
@@ -2495,7 +2609,7 @@ fn link_native_executable_artifact(
     Ok(())
 }
 
-/// Writes `object`, the native object of a library's `#[export]` functions,
+/// Writes `object`, the native object of a library's `#[unsafe(export)]` functions,
 /// as `<name>.o` and as the static library `lib<name>.a`, as `emit` asks.
 #[cfg(feature = "cranelift")]
 fn write_native_library_artifacts(
@@ -2633,6 +2747,7 @@ mod tests {
             object: false,
             staticlib: false,
             elf: false,
+            wasm: false,
         };
         assert_eq!(describe_emit_selection(emit), "abi");
     }

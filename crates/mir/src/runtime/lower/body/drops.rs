@@ -88,6 +88,7 @@ impl<'db> RmirEmitter<'db> {
                         && let NDropTarget::Place(place) = target
                         && let NPlaceBase::Root(root) = place.base
                         && let Some(local) = self.semantic_body.root_local(root)
+                        && !self.semantic_body.source.entry_locals.contains(&local)
                     {
                         placeholders.push(self.runtime_value(local));
                     }
@@ -97,7 +98,8 @@ impl<'db> RmirEmitter<'db> {
         let entry = RBlockId::from_u32(self.semantic_body.normalized.entry.as_u32());
         // A part only some executions initialize is read under its flags,
         // perhaps on a path that never assigned its root. A root kept as a
-        // value needs a definition on every path: this one, never read.
+        // value needs a definition on every path: this one, never read. A
+        // parameter's argument already is one.
         placeholders.sort_unstable();
         placeholders.dedup();
         for local in placeholders {
@@ -176,15 +178,7 @@ impl<'db> RmirEmitter<'db> {
         }
         let source = match target {
             NDropTarget::Value(value) => DropSource::Value(self.read_normalized_value(bb, *value)),
-            NDropTarget::Place(place) => {
-                // The drop before `a[i] = v` reads `a[i]`, so `i` is checked
-                // before the old element is destroyed, not only at the store.
-                self.lower_place_index_checks(bb, place);
-                if self.terminated_blocks[bb.index()] {
-                    return bb;
-                }
-                DropSource::Place(place.clone())
-            }
+            NDropTarget::Place(place) => DropSource::Place(place.clone()),
         };
         let mut bb = bb;
         for (part, part_ty) in parts {
@@ -337,11 +331,7 @@ impl<'db> RmirEmitter<'db> {
                 dst
             }
             DropSource::Place(place) => {
-                let mut part = place.clone();
-                for projection in path {
-                    part.path.push(*projection);
-                }
-                part.ty = ty;
+                let part = place_part(place, path, ty);
                 let Some(class) = self
                     .with_current_body_cx(|cx| cx.env.normalized_place_class(cx.carriers, &part))
                 else {
@@ -368,7 +358,8 @@ impl<'db> RmirEmitter<'db> {
         self.alloc_runtime_temp(ty, RuntimeCarrier::Erased)
     }
 
-    /// Whether the enum at `path` of `source` holds `variant`.
+    /// Whether the enum at `path` of `source` holds `variant`. An enum in
+    /// memory answers from its tag: reading the value would copy its payload.
     fn is_variant(
         &mut self,
         bb: RBlockId,
@@ -377,12 +368,30 @@ impl<'db> RmirEmitter<'db> {
         variant: VariantIndex,
     ) -> RLocalId {
         let ty = self.prefix_ty(source, path);
-        let value = self.read_part(bb, source, path, ty);
+        let dst = self.alloc_bool_temp();
+        let value = match source {
+            DropSource::Value(_) => self.read_part(bb, source, path, ty),
+            DropSource::Place(place) => {
+                let part = place_part(place, path, ty);
+                let class = self
+                    .with_current_body_cx(|cx| cx.env.normalized_place_class(cx.carriers, &part))
+                    .expect("an enum has a runtime class");
+                let value = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(class.clone()));
+                if let Some(place) = self.lower_place_read_outside_memory(bb, value, &part, &class)
+                {
+                    let enum_layout = class
+                        .aggregate_layout()
+                        .expect("an enum value has an aggregate layout");
+                    self.lower_place_is_enum_variant(bb, dst, place, ty, enum_layout, variant);
+                    return dst;
+                }
+                value
+            }
+        };
         let enum_layout = self
             .value_class(value)
             .and_then(RuntimeClass::aggregate_layout)
             .expect("an enum value has an aggregate layout");
-        let dst = self.alloc_bool_temp();
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -518,6 +527,16 @@ impl<'db> RmirEmitter<'db> {
     }
 }
 
+/// The part of type `ty` at `path` of `place`.
+fn place_part<'db>(place: &NPlace<'db>, path: &[NDataProjection], ty: TyId<'db>) -> NPlace<'db> {
+    let mut part = place.clone();
+    for projection in path {
+        part.path.push(*projection);
+    }
+    part.ty = ty;
+    part
+}
+
 fn has_drop_impl<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {
     ty.adt_def(db)
         .is_some_and(|adt| adt_drop_impl(db, adt.adt_ref(db)).is_some())
@@ -579,7 +598,7 @@ fn runtime_needs_drop_cycle_initial<'db>(_: &'db dyn MirDb, _: salsa::Id, _: TyI
 }
 
 /// Whether destroying a value of `ty` does anything on the compilation
-/// target. Natively,
+/// target. On the native and WebAssembly targets,
 /// every value with drop glue is destroyed. On EVM, a part is destroyed when
 /// its `drop` has an effect there. As for effects, recursion adds nothing: a
 /// type that holds itself, such as a list of boxed nodes, needs destroying
@@ -589,7 +608,7 @@ pub(crate) fn runtime_needs_drop<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool
     if !ty_has_drop_glue(db, ty) {
         return false;
     }
-    if db.compilation_settings().target(db) == Target::Native {
+    if db.compilation_settings().target(db) != Target::Evm {
         return true;
     }
     if let Some(adt) = ty.adt_def(db)

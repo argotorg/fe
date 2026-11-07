@@ -1,0 +1,27 @@
+struct Wrapper { value: i32 }
+type Word = i64
+
+pub fn main() -> u8 { 0 }
+
+extern {
+    fn accepted(_ a: i32, _ b: u32, _ c: i64, _ d: u64, _ e: isize, _ f: usize, _ g: *u8, _ h: **u8, _ i: Word) -> i32
+    fn nothing()
+    fn never() -> !
+    fn narrow(_ a: u8) -> i32
+    fn flag() -> bool
+    fn wide(_ a: u256) -> u256
+    fn wrapped(_ a: Wrapper) -> Wrapper
+    fn pair(_ a: (i32, i32))
+}
+
+#[unsafe(export)]
+pub fn exported(_ a: i64, _ b: *u8) -> i32 { 0 }
+
+#[unsafe(export)]
+pub fn exported_narrow(_ a: u8, _ b: bool) -> u8 { a }
+
+#[unsafe(export)]
+pub fn exported_borrow(_ a: mut i64) { a += 1 }
+
+// Ordinary functions pass anything.
+pub fn plain(_ a: u8, _ b: Wrapper) -> u256 { 0 }

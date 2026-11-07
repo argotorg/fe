@@ -275,7 +275,9 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         let mut state = in_state.clone();
         for statement in &self.body.blocks[block.index()].statements {
             match &statement.kind {
-                NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
+                NStatementKind::End { .. }
+                | NStatementKind::Drop { .. }
+                | NStatementKind::CheckIndex { .. } => {}
                 NStatementKind::Store { destination, .. } => {
                     if let Some(target) = self.write_target_of_place(destination) {
                         state.assigned.insert(target);
@@ -505,7 +507,9 @@ fn block_successors<'db>(
             .chain(default.iter().map(|target| target.block))
             .collect(),
         NTerminatorKind::Yield { resume, .. } => vec![resume.block],
-        NTerminatorKind::Assert { .. } | NTerminatorKind::Return(_) => Vec::new(),
+        NTerminatorKind::Fail(_) | NTerminatorKind::Unreachable | NTerminatorKind::Return(_) => {
+            Vec::new()
+        }
     }
 }
 

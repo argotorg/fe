@@ -42,35 +42,35 @@ error[12-0001]: unsupported `#[cfg]` attribute on for loop
 error[12-0002]: invalid `#[cfg]` attribute form on item
   ┌─ cfg_attr.fe:1:1
   │
-1 │ #[cfg(target = "wasm")]
-  │ ^^^^^^^^^^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
+1 │ #[cfg(target = "jvm")]
+  │ ^^^^^^^^^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target = "wasm")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
 
 error[12-0002]: invalid `#[cfg]` attribute form on item
   ┌─ cfg_attr.fe:4:1
   │
 4 │ #[cfg(os = "linux")]
-  │ ^^^^^^^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
+  │ ^^^^^^^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target = "wasm")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
 
 error[12-0002]: invalid `#[cfg]` attribute form on item
   ┌─ cfg_attr.fe:7:1
   │
 7 │ #[cfg(target)]
-  │ ^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
+  │ ^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target = "wasm")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
 
 error[12-0002]: invalid `#[cfg]` attribute form on item
    ┌─ cfg_attr.fe:10:1
    │
 10 │ #[cfg(target = native)]
-   │ ^^^^^^^^^^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
+   │ ^^^^^^^^^^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target = "wasm")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
 
 error[12-0002]: invalid `#[cfg]` attribute form on item
    ┌─ cfg_attr.fe:13:1
    │
 13 │ #[cfg]
-   │ ^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
+   │ ^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target = "wasm")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
 
 error[12-0002]: invalid `#[cfg]` attribute form on item
    ┌─ cfg_attr.fe:16:1
    │
 16 │ #[cfg(target = "evm", target_os = "linux")]
-   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `#[cfg(target = "evm")]`, `#[cfg(target = "native")]`, `#[cfg(target = "wasm")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(target_family = "unix")]`

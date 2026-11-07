@@ -1,0 +1,439 @@
+// A `mut` binding of a packed field works on a copy of its lane that is stored
+// back when the access ends, however a pattern on a projection's result reaches
+// the field: through the result, a part of it or its payload.
+use core::abi::{AbiSize, Decode, Encode}
+use core::message::MsgVariant
+use core::ops::Index
+use std::abi::sol::Sol
+use std::evm::Evm
+
+struct Flags {
+    a: u8,
+    b: u8,
+    big: u256,
+}
+
+impl Flags {
+    fn me(mut? self) -> mut? Flags {
+        mut? self
+    }
+
+    fn a_of(mut? self) -> mut? u8 {
+        let Flags { mut? a, .. } = self.me()
+        mut? a
+    }
+
+    fn a_counted(mut self) -> mut u8 {
+        let Flags { mut a, .. } = self.me()
+        yield mut a
+        self.big += 1
+    }
+
+    fn reset(mut self) {
+        self.a = 1
+        self.b = 2
+        self.big = 3
+    }
+
+    fn code(self) -> u256 {
+        self.a as u256 * 100 + self.b as u256 * 10 + self.big
+    }
+}
+
+struct Duo {
+    l: Flags,
+    r: Flags,
+    n: u256,
+}
+
+impl Duo {
+    fn both(mut? self) -> (mut? Flags, mut? Flags) {
+        (mut? self.l, mut? self.r)
+    }
+
+    fn with_n(mut? self) -> (own u256, mut? Flags) {
+        (self.n, mut? self.l)
+    }
+
+    fn maybe(mut? self, _ present: bool) -> Option<mut? Flags> {
+        if present {
+            Option::Some(mut? self.l)
+        } else {
+            Option::None
+        }
+    }
+
+    fn maybe_with_n(mut? self) -> Option<(own u256, mut? Flags)> {
+        Option::Some((self.n, mut? self.l))
+    }
+
+    fn reset(mut self) {
+        self.l.reset()
+        self.r.reset()
+        self.n = 0
+    }
+}
+
+struct Items {
+    items: [Flags; 2],
+}
+
+impl Index<usize> for Items {
+    type Output = Flags
+
+    fn index(mut? self, _ i: usize) -> mut? Flags {
+        mut? self.items[i]
+    }
+}
+
+// An associated shape forwarded whole grants its parts apart.
+trait Driver {
+    shape Step
+
+    fn at(mut? self) -> Self::Step
+}
+
+impl Driver for Duo {
+    shape Step = (mut? Flags, mut? Flags)
+
+    fn at(mut? self) -> (mut? Flags, mut? Flags) {
+        (mut? self.l, mut? self.r)
+    }
+}
+
+fn first<D: mut? Driver>(_ d: mut? D) -> D::Step {
+    d.at()
+}
+
+msg WriteMsg {
+    #[selector = 0x11223301]
+    Let -> u256,
+    #[selector = 0x11223302]
+    Compound -> u256,
+    #[selector = 0x11223303]
+    Alias -> u256,
+    #[selector = 0x11223304]
+    Match -> u256,
+    #[selector = 0x11223305]
+    MatchTested -> u256,
+    #[selector = 0x11223306]
+    IfLet -> u256,
+    #[selector = 0x11223307]
+    LetElse -> u256,
+    #[selector = 0x11223308]
+    WhileLet -> u256,
+    #[selector = 0x11223309]
+    For -> u256,
+    #[selector = 0x1122330a]
+    UserIndex -> u256,
+    #[selector = 0x1122330b]
+    ArrayElement -> u256,
+    #[selector = 0x1122330c]
+    ProductParts -> u256,
+    #[selector = 0x1122330d]
+    OwnAndPart -> u256,
+    #[selector = 0x1122330e]
+    Payload -> u256,
+    #[selector = 0x1122330f]
+    PayloadTested -> u256,
+    #[selector = 0x11223310]
+    PayloadHandle -> u256,
+    #[selector = 0x11223311]
+    ModeResult -> u256,
+    #[selector = 0x11223312]
+    Slide -> u256,
+    #[selector = 0x11223313]
+    Forwarded -> u256,
+    #[selector = 0x11223314]
+    ForwardedSameField -> u256,
+    #[selector = 0x11223315]
+    ForwardedRef -> u256,
+    #[selector = 0x11223316]
+    Reads -> u256,
+}
+
+pub contract Store {
+    mut f: Flags
+    mut duo: Duo
+    mut items: Items
+    mut arr: [Flags; 2]
+
+    recv WriteMsg {
+        Let -> u256 uses (mut f) {
+            f.reset()
+            let Flags { mut a, .. } = f.me()
+            a = 5
+            f.code()
+        }
+        Compound -> u256 uses (mut f) {
+            f.reset()
+            let Flags { mut a, .. } = f.me()
+            a += 4
+            f.code()
+        }
+        Alias -> u256 uses (mut f) {
+            f.reset()
+            let Flags { mut a, .. } = f.me()
+            let r = mut a
+            r = 5
+            f.code()
+        }
+        Match -> u256 uses (mut f) {
+            f.reset()
+            match f.me() {
+                Flags { mut a, .. } => {
+                    a = 5
+                }
+            }
+            f.code()
+        }
+        MatchTested -> u256 uses (mut f) {
+            f.reset()
+            match f.me() {
+                Flags { b: 0, .. } => {}
+                Flags { mut a, b: 2, .. } => {
+                    a = 5
+                }
+                _ => {}
+            }
+            f.code()
+        }
+        IfLet -> u256 uses (mut f) {
+            f.reset()
+            if let Flags { mut a, b: 2, .. } = f.me() {
+                a = 5
+            }
+            f.code()
+        }
+        LetElse -> u256 uses (mut f) {
+            f.reset()
+            let Flags { mut a, b: 2, .. } = f.me() else {
+                return 0
+            }
+            a = 5
+            f.code()
+        }
+        WhileLet -> u256 uses (mut f) {
+            f.reset()
+            while let Flags { mut a, b: 2, .. } = f.me() {
+                a = 5
+                f.b = 3
+            }
+            f.b = 2
+            f.code()
+        }
+        For -> u256 uses (mut arr) {
+            arr[0].reset()
+            arr[1].reset()
+            for Flags { mut a, .. } in arr {
+                a = 5
+            }
+            arr[0].code() * 1000 + arr[1].code()
+        }
+        UserIndex -> u256 uses (mut items) {
+            items.items[0].reset()
+            let Flags { mut a, .. } = items[0]
+            a = 5
+            items.items[0].code()
+        }
+        ArrayElement -> u256 uses (mut arr) {
+            arr[0].reset()
+            let Flags { mut a, .. } = arr[0].me()
+            a = 5
+            arr[0].code()
+        }
+        ProductParts -> u256 uses (mut duo) {
+            duo.reset()
+            let (Flags { mut a, .. }, Flags { mut b, .. }) = duo.both()
+            a = 5
+            b = 6
+            duo.l.code() * 1000 + duo.r.code()
+        }
+        OwnAndPart -> u256 uses (mut duo) {
+            duo.reset()
+            duo.n = 7
+            let (n, Flags { mut a, .. }) = duo.with_n()
+            a = 5
+            n * 1000 + duo.l.code()
+        }
+        Payload -> u256 uses (mut duo) {
+            duo.reset()
+            if let Option::Some(Flags { mut a, .. }) = duo.maybe(true) {
+                a = 5
+            }
+            duo.l.code()
+        }
+        PayloadTested -> u256 uses (mut duo) {
+            duo.reset()
+            if let Option::Some((0, Flags { mut a, b: 2, .. })) = duo.maybe_with_n() {
+                a = 5
+            }
+            duo.l.code()
+        }
+        PayloadHandle -> u256 uses (mut duo) {
+            duo.reset()
+            match duo.maybe(true) {
+                Option::Some(mut h) => {
+                    h.a = 5
+                }
+                Option::None => {}
+            }
+            duo.l.code()
+        }
+        ModeResult -> u256 uses (mut f) {
+            f.reset()
+            let r = mut f.a_of()
+            r += 4
+            f.code()
+        }
+        Slide -> u256 uses (mut f) {
+            f.reset()
+            let r = mut f.a_counted()
+            r = 5
+            f.code()
+        }
+        Forwarded -> u256 uses (mut duo) {
+            duo.reset()
+            let (Flags { mut a, .. }, Flags { mut b, .. }) = first(mut duo)
+            a = 5
+            b = 6
+            duo.l.code() * 1000 + duo.r.code()
+        }
+        ForwardedSameField -> u256 uses (mut duo) {
+            duo.reset()
+            let (Flags { mut a, .. }, Flags { a: mut c, .. }) = first(mut duo)
+            a = 5
+            c = 6
+            duo.l.code() * 1000 + duo.r.code()
+        }
+        ForwardedRef -> u256 uses (mut duo) {
+            duo.reset()
+            let (Flags { mut a, .. }, ref r) = first(mut duo)
+            a = r.b + 3
+            duo.l.code() * 1000 + duo.r.code()
+        }
+        Reads -> u256 uses (mut f) {
+            f.reset()
+            let Flags { a, b, .. } = f.me()
+            let Flags { ref big, .. } = f.me()
+            a as u256 * 100 + b as u256 * 10 + big
+        }
+    }
+}
+
+fn run<M>(_ message: own M) -> M::Return uses (evm: mut Evm)
+where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+{
+    let addr = evm.create2<Store>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: addr, gas: 1000000, value: Wei::zero(), message: message)
+}
+
+#[test]
+fn let_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::Let {}) == 523)
+}
+
+#[test]
+fn compound_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::Compound {}) == 523)
+}
+
+#[test]
+fn alias_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::Alias {}) == 523)
+}
+
+#[test]
+fn match_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::Match {}) == 523)
+}
+
+#[test]
+fn match_tested_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::MatchTested {}) == 523)
+}
+
+#[test]
+fn if_let_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::IfLet {}) == 523)
+}
+
+#[test]
+fn let_else_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::LetElse {}) == 523)
+}
+
+#[test]
+fn while_let_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::WhileLet {}) == 523)
+}
+
+#[test]
+fn for_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::For {}) == 523523)
+}
+
+#[test]
+fn user_index_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::UserIndex {}) == 523)
+}
+
+#[test]
+fn array_element_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::ArrayElement {}) == 523)
+}
+
+#[test]
+fn product_parts_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::ProductParts {}) == 523163)
+}
+
+#[test]
+fn own_and_part_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::OwnAndPart {}) == 7523)
+}
+
+#[test]
+fn payload_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::Payload {}) == 523)
+}
+
+#[test]
+fn payload_tested_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::PayloadTested {}) == 523)
+}
+
+#[test]
+fn payload_handle_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::PayloadHandle {}) == 523)
+}
+
+#[test]
+fn mode_result_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::ModeResult {}) == 523)
+}
+
+#[test]
+fn slide_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::Slide {}) == 524)
+}
+
+#[test]
+fn forwarded_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::Forwarded {}) == 523163)
+}
+
+#[test]
+fn forwarded_same_field_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::ForwardedSameField {}) == 523623)
+}
+
+#[test]
+fn forwarded_ref_write() uses (evm: mut Evm) {
+    assert(run(WriteMsg::ForwardedRef {}) == 523123)
+}
+
+#[test]
+fn reads() uses (evm: mut Evm) {
+    assert(run(WriteMsg::Reads {}) == 123)
+}

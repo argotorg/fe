@@ -1173,7 +1173,10 @@ pub fn walk_stmt<'db, V>(
             visit_node_in_body!(visitor, ctxt, while_body_id, expr);
         }
 
-        Stmt::Return(Some(expr_id)) | Stmt::Yield(expr_id) | Stmt::Expr(expr_id) => {
+        Stmt::Return(Some(expr_id))
+        | Stmt::Yield(expr_id)
+        | Stmt::Expr(expr_id)
+        | Stmt::Loop(expr_id) => {
             visit_node_in_body!(visitor, ctxt, expr_id, expr);
         }
 

@@ -1,4 +1,4 @@
-#[cfg(target = "wasm")]
+#[cfg(target = "jvm")]
 fn unknown_target() {}
 
 #[cfg(os = "linux")]

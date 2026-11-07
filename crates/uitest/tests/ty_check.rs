@@ -74,6 +74,24 @@ fn check_formatting_keeps_meaning(db: &mut DriverDataBase, fixture: &Fixture) {
     );
 }
 
+// Natively, `main` and the functions that C calls or that call C must have
+// signatures native code can compile. The EVM has no such functions to check.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_signatures() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/native/signatures.fe");
+    let content = include_str!("../fixtures/native/signatures.fe");
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    snap_test!(diagnostics(&mut db, path, content), path);
+
+    let evm = diagnostics(&mut DriverDataBase::default(), path, content);
+    assert!(!evm.contains("to or from C"), "{evm}");
+    assert!(!evm.contains("native `main`"), "{evm}");
+}
+
 // `#[cfg]` keeps the items whose predicates hold for the target and OS.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -83,6 +101,7 @@ fn cfg_selects_items() {
     for (target, os, kept) in [
         (Target::Evm, None, &["evm"][..]),
         (Target::Native, None, &["native", "native_mod"]),
+        (Target::Wasm, None, &["wasm"]),
         (
             Target::Native,
             Some(Os::Linux),

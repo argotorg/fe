@@ -1,0 +1,26 @@
+fn build() -> [u64; 40] {
+    var t: [u64; 40] = [0; 40]
+    t[1] = 1
+    var i: usize = 2
+    while i < 40 {
+        t[i] = t[i - 1] + t[i - 2]
+        i += 1
+    }
+    t
+}
+
+pub fn fib(n: u32) -> u64 {
+    let t = build()
+    t[n as usize]
+}
+
+pub fn sum_to(n: u32) -> u64 {
+    let t = build()
+    var s: u64 = 0
+    var i: usize = 0
+    while i <= (n as usize) {
+        s += t[i]
+        i += 1
+    }
+    s
+}

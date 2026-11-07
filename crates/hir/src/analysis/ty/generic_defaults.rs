@@ -32,8 +32,8 @@ use crate::{
         scope_graph::ScopeId,
     },
     semantic::trait_self_predicate,
-    span::path::LazyPathSpan,
-    visitor::{Visitor, VisitorCtxt, walk_path},
+    span::{item::LazyBodySpan, path::LazyPathSpan},
+    visitor::{Visitor, VisitorCtxt, walk_body, walk_path},
 };
 
 /// Unelaborated declaration predicates. No caller or effect-provider predicates
@@ -135,8 +135,7 @@ pub(crate) fn generic_default<'db>(
             let Some(hir_ty) = param.default_ty else {
                 return Ok(None);
             };
-            let lowering_cx = LoweringContext::deferred()
-                .with_default_capture(owner, SourceParamIndex(param_idx));
+            let lowering_cx = LoweringContext::deferred();
             let ty = lower_hir_ty_with_minter(
                 db,
                 hir_ty,
@@ -553,12 +552,50 @@ pub(crate) fn default_dependencies<'db>(
     owner: GenericParamOwner<'db>,
     param_idx: usize,
 ) -> Vec<usize> {
-    let view = owner.param_view(db, param_idx);
     let mut collector = DefaultDependencies {
         db,
         owner,
         indices: Vec::new(),
     };
+    visit_default(db, owner, param_idx, &mut collector);
+    collector.indices.sort_unstable();
+    collector.indices.dedup();
+    collector.indices
+}
+
+/// The parameter whose default `body` is written in, directly or nested in
+/// another const body. That default is evaluated with only the parameters
+/// before it, so `body` can read only those.
+pub(crate) fn default_param_of_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    body: Body<'db>,
+) -> Option<SourceParamIndex> {
+    owner
+        .params(db)
+        .find(|view| default_const_bodies(db, owner, view.idx).contains(&body))
+        .map(|view| SourceParamIndex(view.idx))
+}
+
+/// The const bodies written in a parameter's default.
+#[salsa::tracked]
+fn default_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    param_idx: usize,
+) -> Vec<Body<'db>> {
+    let mut collector = DefaultConstBodies { bodies: Vec::new() };
+    visit_default(db, owner, param_idx, &mut collector);
+    collector.bodies
+}
+
+fn visit_default<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    param_idx: usize,
+    visitor: &mut impl Visitor<'db>,
+) {
+    let view = owner.param_view(db, param_idx);
     match view.param {
         GenericParam::Type(param) => {
             if let Some(ty) = param.default_ty {
@@ -567,18 +604,26 @@ pub(crate) fn default_dependencies<'db>(
                     owner.scope(),
                     view.span().into_type_param().default_ty(),
                 );
-                collector.visit_ty(&mut ctxt, ty);
+                visitor.visit_ty(&mut ctxt, ty);
             }
         }
         GenericParam::Const(param) => {
             if let Some(body) = param.default {
-                collector.visit_body(&mut VisitorCtxt::with_body(db, body), body);
+                visitor.visit_body(&mut VisitorCtxt::with_body(db, body), body);
             }
         }
     }
-    collector.indices.sort_unstable();
-    collector.indices.dedup();
-    collector.indices
+}
+
+struct DefaultConstBodies<'db> {
+    bodies: Vec<Body<'db>>,
+}
+
+impl<'db> Visitor<'db> for DefaultConstBodies<'db> {
+    fn visit_body(&mut self, ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, body: Body<'db>) {
+        self.bodies.push(body);
+        walk_body(self, ctxt, body);
+    }
 }
 
 struct DefaultDependencies<'db> {
@@ -614,7 +659,10 @@ mod tests {
     use super::*;
     use crate::{
         analysis::semantic::runtime_size_bytes,
-        analysis::ty::{const_ty::ConstTyData, ty_lower::collect_source_generic_params},
+        analysis::ty::{
+            const_ty::{ConstTyData, const_body_assumptions},
+            ty_lower::collect_source_generic_params,
+        },
         test_db::{HirAnalysisTestDb, find_func},
     };
 
@@ -677,6 +725,47 @@ fn array<const N: usize, T = [u8; { N + 1 }]>() {}
         };
         assert_eq!(*policy, UnevaluatedConstPolicy::DeferValidation);
         assert_eq!(capture.complete(&db).unwrap().values(), &[arg]);
+    }
+
+    #[test]
+    fn default_body_assumes_only_what_earlier_parameters_express() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("default_assumptions.fe"),
+            r#"
+trait Width { type Item }
+trait Sub<X>: Width {}
+trait Tag<const V: usize> {}
+trait Earlier { const C: usize }
+fn f<T: Earlier, const K: usize, const N: usize = 1, U = u8>()
+where
+    T: Sub<U>,
+    T: Tag<K>,
+    T: Tag<N>,
+    T: Tag<{ K + 1 }>,
+    T: Tag<{ T::C }>,
+    T: Width<Item = U>,
+{}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let func = find_func(&db, top_mod, "f");
+        let GenericDefault::Const { value, .. } = generic_default(&db, func.into(), 2)
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+        else {
+            panic!("const default")
+        };
+        // `T: Sub<U>` and `T: Tag<N>` name later parameters. `T: Width` is
+        // what `T: Sub<U>` implies, and what `T: Width<Item = U>` says of `T`.
+        // The computed arguments were solved under the later bounds, but don't
+        // depend on them.
+        assert_eq!(
+            const_body_assumptions(&db, value.scope()).pretty_print(&db),
+            "{T: Earlier, T: Tag<const K: usize>, T: Tag<(const K: usize + 1)>, T: Tag<T::C>, T: Width}",
+        );
     }
 
     #[test]

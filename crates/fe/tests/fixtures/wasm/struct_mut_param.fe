@@ -1,0 +1,36 @@
+struct Counter {
+    hits: i32,
+    misses: i32,
+    last: i32,
+}
+
+fn record(c: mut Counter, value: i32, threshold: i32) {
+    if value >= threshold {
+        c.hits += 1
+    } else {
+        c.misses += 1
+    }
+    c.last = value
+}
+
+fn reset(c: mut Counter) {
+    c.hits = 0
+    c.misses = 0
+    c.last = -1
+}
+
+pub fn run(a: i32, b: i32, c: i32, threshold: i32) -> i32 {
+    var counter = Counter { hits: 0, misses: 0, last: 0 }
+    record(c: mut counter, value: a, threshold: threshold)
+    record(c: mut counter, value: b, threshold: threshold)
+    record(c: mut counter, value: c, threshold: threshold)
+    counter.hits * 100 + counter.misses * 10 + counter.last
+}
+
+pub fn reset_then_count(a: i32) -> i32 {
+    var counter = Counter { hits: 7, misses: 8, last: 9 }
+    record(c: mut counter, value: a, threshold: 0)
+    reset(c: mut counter)
+    record(c: mut counter, value: a, threshold: 0)
+    counter.hits * 100 + counter.misses * 10 + counter.last
+}

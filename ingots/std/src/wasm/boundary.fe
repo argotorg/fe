@@ -1,0 +1,99 @@
+//! The shapes that cross the WebAssembly boundary besides numbers.
+//!
+//! An exported function may take `HostText` parameters and return a `Reply`.
+//! The compiler gives such a function the signature below; a parameter or result
+//! of any other type besides `bool` and integers of at most 64 bits is an error.
+//!
+//! - A `HostText` parameter is two `i32` parameters: the address and then the
+//!   length in bytes of text that the host placed in linear memory. The host
+//!   obtains the memory from the exported `alloc` and frees it with
+//!   `arena_mark` and `arena_release`. The text is valid for the call only.
+//! - A `Reply` result is one `i64`: the tag in the low 32 bits and the payload
+//!   in the high 32 bits. Tag 0 is success and carries a value; any other tag is
+//!   a stable error number of the contract, and the payload is then 0.
+//!
+//! Imports use the same reply word, so one layout serves both directions.
+use core::abi::DynString
+use core::marker::{Copy, Snapshot}
+use core::ptr::MemSpan
+
+/// Text that the host lent for the duration of one call.
+///
+/// The address and the length are checked by the host before the call; they are
+/// not forgeable in safe code. `copy` makes a string that the program owns.
+pub struct HostText {
+    unsafe addr: u32,
+    unsafe len: u32,
+}
+
+// A text is two numbers: a copy of it is all that a callee can observe.
+impl Copy for HostText {}
+impl Snapshot for HostText {}
+
+impl HostText {
+    /// A text over `len` bytes at `addr`. The bytes must stay valid and
+    /// unchanged for as long as the text is used.
+    pub unsafe fn from_raw_parts(addr: u32, len: u32) -> HostText {
+        HostText { addr, len }
+    }
+
+    /// The length in bytes.
+    pub fn len(self) -> u32 {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// The address of the first byte in linear memory.
+    pub fn addr(self) -> u32 {
+        self.addr
+    }
+
+    /// A copy of the bytes in a new string.
+    pub fn copy(self) -> DynString {
+        // The host guarantees that the range holds `len` readable bytes.
+        unsafe {
+            let source = MemSpan::from_raw_parts(
+                ptr: (self.addr as usize) as *u8,
+                len: self.len as usize,
+            )
+            DynString::from_payload(source)
+        }
+    }
+}
+
+/// The result of an operation: a tag and a payload, as described above.
+pub struct Reply {
+    pub tag: u32,
+    pub payload: u32,
+}
+
+impl Copy for Reply {}
+
+impl Reply {
+    pub fn ok(_ payload: u32) -> Reply {
+        Reply { tag: 0, payload }
+    }
+
+    /// A failure with the contract's number for the error. `code` must not be
+    /// 0.
+    pub fn error(_ code: u32) -> Reply {
+        assert!(code != 0)
+        Reply { tag: code, payload: 0 }
+    }
+
+    pub fn is_ok(self) -> bool {
+        self.tag == 0
+    }
+
+    /// The reply as the single `i64` that crosses the boundary.
+    pub fn word(self) -> u64 {
+        (self.tag as u64) | ((self.payload as u64) << 32)
+    }
+
+    pub fn from_word(_ word: u64) -> Reply {
+        Reply { tag: word.downcast_truncate(), payload: (word >> 32).downcast_truncate() }
+    }
+}

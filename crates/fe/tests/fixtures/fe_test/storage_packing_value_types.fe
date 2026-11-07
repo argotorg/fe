@@ -1,0 +1,408 @@
+use std::abi::sol::{Bytes4, Int24, Uint24, Uint40}
+use std::evm::{Address, Evm, RawStorage, SolPacked, StorageMap}
+use std::evm::layout::mapping_slot
+
+// Solidity value types pack into shared storage slots like booleans and
+// narrow integers: `Address` takes 20 bytes, `bytesN` N, and the odd-width
+// integers their width. A newtype, a struct with one field, packs like its
+// field, or, for a std value type, at its `SolPacked` width when that is
+// narrower. The expected raw
+// slots are what `solc --storage-layout` reports for the same Solidity
+// structs, with `type Stamp is uint64`:
+//
+//   struct Rec { address owner; bool flag; Stamp stamp; }   owner: 0/0, flag: 0/20, stamp: 0/21
+//   struct Odd { bytes4 tag; uint24 wide; int24 neg;        tag: 0/0, wide: 0/4, neg: 0/7,
+//                address nested; uint40 time; }             nested: 0/10, time: 1/0
+//
+// (slot/byte offset from the low-order end of the slot)
+
+struct Stamp {
+    t: u64,
+}
+
+impl Copy for Stamp {}
+
+struct Owner {
+    a: Address,
+}
+
+impl Copy for Owner {}
+
+struct Rec {
+    owner: Address,
+    flag: bool,
+    stamp: Stamp,
+}
+
+impl Copy for Rec {}
+
+struct Odd {
+    tag: Bytes4,
+    wide: Uint24,
+    neg: Int24,
+    nested: Owner,
+    time: Uint40,
+}
+
+impl Copy for Odd {}
+
+fn bump() uses (stamp: mut Stamp) {
+    stamp.t += 1
+}
+
+fn set_owner(_ owner: mut Address, _ to: Address) {
+    owner = to
+}
+
+msg Msg {
+    #[selector = 1]
+    Fill {},
+    #[selector = 2]
+    Slot { slot: u256 } -> u256,
+    #[selector = 3]
+    Update {},
+    #[selector = 4]
+    Read -> u256,
+    #[selector = 5]
+    FillOdd {},
+    #[selector = 6]
+    ReadOdd -> i256,
+    #[selector = 7]
+    DirtyTag {},
+    #[selector = 8]
+    DirtyNeg {},
+    #[selector = 9]
+    DirtyTime {},
+    #[selector = 10]
+    FillEntry {},
+    #[selector = 11]
+    FillPair {},
+}
+
+// Slots: rec 0, odd 1..3, pair 3, entries 4.
+pub contract ValueTypes {
+    mut rec: Rec,
+    mut odd: Odd,
+    mut pair: (Address, bool),
+    mut entries: StorageMap<u256, Rec>,
+
+    recv Msg {
+        Fill {} uses (mut rec) {
+            rec = Rec { owner: Address::from_word_truncate(0x1234), flag: true, stamp: Stamp { t: 7 } }
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            unsafe { raw.sload(slot) }
+        }
+        Update {} uses (mut rec) {
+            // Each write keeps the other fields of the slot.
+            rec.flag = false
+            rec.stamp.t = 11
+            with (mut rec.stamp) {
+                bump()
+            }
+            set_owner(mut rec.owner, Address::from_word_truncate(0xbeef))
+        }
+        Read -> u256 uses (rec) {
+            let copy = rec
+            assert(copy.owner == Address::from_word_truncate(0xbeef))
+            assert(rec.owner == Address::from_word_truncate(0xbeef))
+            assert(!rec.flag)
+            (rec.stamp.t as u256) * 1000 + (copy.stamp.t as u256)
+        }
+        FillOdd {} uses (mut odd) {
+            odd = Odd {
+                tag: Bytes4 { val: 0x01ffc9a7 },
+                wide: Uint24 { val: 0xabcdef },
+                neg: Int24 { val: -5 },
+                nested: Owner { a: Address::from_word_truncate(0x77) },
+                time: Uint40 { val: 0x1122334455 },
+            }
+        }
+        ReadOdd -> i256 uses (odd) {
+            assert(odd.tag.val == 0x01ffc9a7)
+            assert(odd.wide.val == 0xabcdef)
+            assert(odd.nested.a == Address::from_word_truncate(0x77))
+            assert(odd.time.val == 0x1122334455)
+            let copy = odd
+            assert(copy.neg.val == -5)
+            odd.neg.val as i256
+        }
+        // A value its lane cannot hold reverts, as its `SolPacked` encoding
+        // does, instead of losing its high bits.
+        DirtyTag {} uses (mut odd) {
+            odd.tag = Bytes4 { val: 0x100000000 }
+        }
+        DirtyNeg {} uses (mut odd) {
+            odd.neg.val = 0x800000
+        }
+        DirtyTime {} uses (mut odd) {
+            odd.time.val = 0x10000000000
+        }
+        FillEntry {} uses (mut entries) {
+            entries[3] = Rec { owner: Address::from_word_truncate(0x99), flag: true, stamp: Stamp { t: 2 } }
+            entries[3].stamp.t = 5
+            assert(entries[3].owner == Address::from_word_truncate(0x99))
+            assert(entries[3].flag)
+        }
+        FillPair {} uses (mut pair) {
+            pair = (Address::from_word_truncate(0xaa), false)
+            pair.1 = true
+        }
+    }
+}
+
+#[test]
+fn test_value_types_pack_like_solidity() uses (evm: mut Evm) {
+    let c = evm.create2<ValueTypes>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Fill {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 0 }) == (7 << 168) | (1 << 160) | 0x1234)
+
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Update {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 0 }) == (12 << 168) | 0xbeef)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Read {}) == 12012)
+
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::FillOdd {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 1 }) == (0x77 << 80) | (0xfffffb << 56) | (0xabcdef << 32) | 0x01ffc9a7)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 2 }) == 0x1122334455)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::ReadOdd {}) == -5)
+
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::FillPair {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Slot { slot: 3 }) == (1 << 160) | 0xaa)
+
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::FillEntry {})
+}
+
+#[test(should_revert)]
+fn test_dirty_bytes4_reverts() uses (evm: mut Evm) {
+    let c = evm.create2<ValueTypes>(value: Wei::zero(), args: (), salt: 2)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::DirtyTag {})
+}
+
+#[test(should_revert)]
+fn test_out_of_range_int24_reverts() uses (evm: mut Evm) {
+    let c = evm.create2<ValueTypes>(value: Wei::zero(), args: (), salt: 3)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::DirtyNeg {})
+}
+
+#[test(should_revert)]
+fn test_out_of_range_custom_width_reverts() uses (evm: mut Evm) {
+    let c = evm.create2<ValueTypes>(value: Wei::zero(), args: (), salt: 4)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::DirtyTime {})
+}
+
+// ---------------------------------------------------------------------------
+// A newtype narrower than its value holds it in its lane wherever it lies:
+// alone in a slot, at an explicit slot or as a map value, a write still
+// checks the value fits and a read still masks.
+// ---------------------------------------------------------------------------
+
+struct Tagged {
+    tag: Bytes4,
+    big: u256,
+}
+
+impl Copy for Tagged {}
+
+fn set_tag(_ tag: mut Bytes4, _ to: Bytes4) {
+    tag = to
+}
+
+fn pick_mut<T>(_ value: mut T) -> Option<mut T> {
+    Option::Some(value)
+}
+
+msg LoneMsg {
+    #[selector = 1]
+    FieldDirty {},
+    #[selector = 2]
+    WideDirty {},
+    #[selector = 3]
+    HeldDirty {},
+    #[selector = 4]
+    StoredRefHeldDirty {},
+    #[selector = 5]
+    ReadDirtySlots -> u256,
+    #[selector = 6]
+    PlacedDirty {},
+    #[selector = 7]
+    PlacedHeldDirty {},
+    #[selector = 8]
+    EntryDirty {},
+}
+
+// Slots: tag 0, big 1, wide 2, after 3, tagged 4..6, tags 6, placed 9.
+pub contract Lone {
+    mut tag: Bytes4,
+    mut big: u256,
+    mut wide: Uint24,
+    mut after: u256,
+    mut tagged: Tagged,
+    mut tags: StorageMap<u256, Bytes4>,
+    #[slot(9)]
+    mut placed: Bytes4,
+
+    recv LoneMsg {
+        FieldDirty {} uses (mut tag) {
+            tag = Bytes4 { val: 0x100000000 }
+        }
+        WideDirty {} uses (mut wide) {
+            wide = Uint24 { val: 0x1000000 }
+        }
+        HeldDirty {} uses (mut tagged) {
+            set_tag(mut tagged.tag, Bytes4 { val: 0x100000000 })
+        }
+        StoredRefHeldDirty {} uses (mut tagged) {
+            match pick_mut(mut tagged) {
+                Option::Some(mut held) => set_tag(mut held.tag, Bytes4 { val: 0x100000000 }),
+                Option::None => {}
+            }
+        }
+        PlacedDirty {} uses (mut placed) {
+            placed = Bytes4 { val: 0x100000000 }
+        }
+        PlacedHeldDirty {} uses (mut placed) {
+            set_tag(mut placed, Bytes4 { val: 0x100000000 })
+        }
+        EntryDirty {} uses (mut tags) {
+            tags[1] = Bytes4 { val: 0x100000000 }
+        }
+        // Bits a raw write leaves above a lone lane are not part of its value.
+        ReadDirtySlots -> u256 uses (tag, wide, tagged, tags, placed, raw: mut RawStorage) {
+            unsafe {
+                raw.sstore(slot: 0, value: (1 << 200) | 0x01ffc9a7)
+                raw.sstore(slot: 2, value: (1 << 200) | 0xabcdef)
+                raw.sstore(slot: 4, value: (1 << 200) | 0x11223344)
+                raw.sstore(slot: mapping_slot(6, 1 as u256), value: (1 << 200) | 0x55667788)
+                raw.sstore(slot: 9, value: (1 << 200) | 0x99aabbcc)
+            }
+            assert(tag.val == 0x01ffc9a7)
+            assert(wide.val == 0xabcdef)
+            assert(tags[1].val == 0x55667788)
+            assert(placed.val == 0x99aabbcc)
+            tagged.tag.val
+        }
+    }
+}
+
+#[test]
+fn test_lone_narrowed_lanes_mask_reads() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 1)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::ReadDirtySlots {}) == 0x11223344)
+}
+
+#[test(should_revert)]
+fn test_lone_narrowed_field_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 2)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::FieldDirty {})
+}
+
+#[test(should_revert)]
+fn test_lone_narrowed_int_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 3)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::WideDirty {})
+}
+
+#[test(should_revert)]
+fn test_lone_narrowed_held_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 4)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::HeldDirty {})
+}
+
+#[test(should_revert)]
+fn test_lone_narrowed_held_through_stored_ref_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 5)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::StoredRefHeldDirty {})
+}
+
+#[test(should_revert)]
+fn test_placed_narrowed_field_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 6)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::PlacedDirty {})
+}
+
+#[test(should_revert)]
+fn test_placed_narrowed_held_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 7)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::PlacedHeldDirty {})
+}
+
+#[test(should_revert)]
+fn test_narrowed_map_value_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 8)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::EntryDirty {})
+}
+
+// ---------------------------------------------------------------------------
+// A `SolPacked` impl outside std leaves its newtype at its field's width, as
+// its encoding need not be its field's value: `Time` declares 40 bits but
+// takes its `u64`'s eight bytes, and `Milli` its `u256`'s whole slot.
+// ---------------------------------------------------------------------------
+
+struct Time {
+    secs: u64,
+}
+
+impl Copy for Time {}
+
+impl SolPacked for Time {
+    const BITS: u256 = 40
+    fn to_packed(own self) -> u256 {
+        self.secs as u256
+    }
+    fn from_packed(_ bits: u256) -> Self {
+        Time { secs: bits.downcast_truncate() }
+    }
+}
+
+struct Milli {
+    raw: u256,
+}
+
+impl Copy for Milli {}
+
+impl SolPacked for Milli {
+    const BITS: u256 = 64
+    fn to_packed(own self) -> u256 {
+        self.raw / 1000
+    }
+    fn from_packed(_ bits: u256) -> Self {
+        Milli { raw: bits * 1000 }
+    }
+}
+
+msg UserMsg {
+    #[selector = 1]
+    Fill {},
+    #[selector = 2]
+    Slot { slot: u256 } -> u256,
+}
+
+// Slots: time and flag 0, milli 1, after 2.
+pub contract UserPacked {
+    mut time: Time,
+    mut flag: u8,
+    mut milli: Milli,
+    mut after: u8,
+
+    recv UserMsg {
+        Fill {} uses (mut time, mut flag, mut milli, mut after) {
+            // Beyond `Time`'s 40 bits, within its `u64`.
+            time = Time { secs: 0x10000000000 }
+            flag = 0x55
+            milli = Milli { raw: 5000 }
+            after = 0x66
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            unsafe { raw.sload(slot) }
+        }
+    }
+}
+
+#[test]
+fn test_user_sol_packed_keeps_field_width() uses (evm: mut Evm) {
+    let c = evm.create2<UserPacked>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: UserMsg::Fill {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: UserMsg::Slot { slot: 0 }) == (0x55 << 64) | 0x10000000000)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: UserMsg::Slot { slot: 1 }) == 5000)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: UserMsg::Slot { slot: 2 }) == 0x66)
+}

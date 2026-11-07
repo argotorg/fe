@@ -68,7 +68,7 @@ fn paymaster_and_data() -> Bytes {
     )
 }
 
-fn user_op(_ signature: Bytes) -> PackedUserOperation {
+fn user_op(_ signature: own Bytes) -> PackedUserOperation {
     PackedUserOperation {
         sender: Address::new(SENDER),
         nonce: 42,
@@ -445,11 +445,8 @@ fn account_rejects_other_callers() uses (evm: mut Evm) {
     }
 }
 
-#[test]
-fn paymaster_validates_and_runs_post_op() uses (evm: mut Evm) {
-    let entry_point = evm.create2<EntryPoint>(value: Wei::zero(), args: (), salt: 0)
-    let paymaster = evm.create2<Paymaster>(value: Wei::zero(), args: (entry_point,), salt: 0)
-    // Paymaster data: valid until 0x0000cafe0000 (the first six bytes).
+// Paymaster data: valid until 0x0000cafe0000 (the first six bytes).
+fn paymaster_op(_ paymaster: Address) -> PackedUserOperation {
     var op = owner_signed()
     op.paymaster_and_data = bytes(
         [
@@ -458,9 +455,16 @@ fn paymaster_validates_and_runs_post_op() uses (evm: mut Evm) {
         ],
         len: 58,
     )
+    op
+}
+
+#[test]
+fn paymaster_validates_and_runs_post_op() uses (evm: mut Evm) {
+    let entry_point = evm.create2<EntryPoint>(value: Wei::zero(), args: (), salt: 0)
+    let paymaster = evm.create2<Paymaster>(value: Wei::zero(), args: (entry_point,), salt: 0)
     with (Call = evm, Ctx = evm) {
         let (context, validation): (Bytes, u256) = entry_point.call(
-            EntryPointMsg::ValidatePaymaster { paymaster, user_op: op },
+            EntryPointMsg::ValidatePaymaster { paymaster, user_op: paymaster_op(paymaster) },
         )
         assert!(context.len() == 32 && context.word_at(0) == SENDER)
         let data = ValidationData::unpack(validation)
@@ -468,7 +472,7 @@ fn paymaster_validates_and_runs_post_op() uses (evm: mut Evm) {
         assert!(data.valid_after == 0 && data.valid_until == 0x0000cafe0000)
 
         entry_point.call(
-            EntryPointMsg::PostOp { paymaster, mode: PostOpMode::OpReverted.to_u8(), context, actual_gas_cost: wei(77) },
+            EntryPointMsg::PostOp { paymaster, mode: PostOpMode::OpReverted.to_u8(), context: context.clone(), actual_gas_cost: wei(77) },
         )
         let (mode, sender, cost): (u256, Address, Wei) = paymaster.call(PaymasterStateMsg::LastPostOp {})
         assert!(mode == 2 && sender == addr(SENDER) && cost == wei(77))
@@ -476,7 +480,7 @@ fn paymaster_validates_and_runs_post_op() uses (evm: mut Evm) {
         // Only the EntryPoint may call either message.
         let expected = encode_error(PaymasterUnauthorized { sender: evm.address() })
         let outcome = paymaster.try_call(
-            PaymasterMsg::ValidatePaymasterUserOp { user_op: op, user_op_hash: Bytes32 { val: 0 }, max_cost: Wei::zero() },
+            PaymasterMsg::ValidatePaymasterUserOp { user_op: paymaster_op(paymaster), user_op_hash: Bytes32 { val: 0 }, max_cost: Wei::zero() },
         )
         assert!(!outcome.success() && same_bytes(outcome.returndata(), expected.span()))
         let outcome = paymaster.try_call(
@@ -502,7 +506,7 @@ fn post_op_mode_converts_strictly() uses (evm: mut Evm) {
     let context = bytes([SENDER], len: 32)
     with (Call = evm, Ctx = evm) {
         let ok = paymaster.try_call(
-            PaymasterMsg::PostOp { mode: 2, context, actual_gas_cost: wei(5), actual_user_op_fee_per_gas: 1 },
+            PaymasterMsg::PostOp { mode: 2, context: context.clone(), actual_gas_cost: wei(5), actual_user_op_fee_per_gas: 1 },
         )
         assert!(ok.success())
         let (mode, _, cost): (u256, Address, Wei) = paymaster.call(PaymasterStateMsg::LastPostOp {})

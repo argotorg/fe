@@ -10,7 +10,7 @@ use crate::{
     core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*},
 };
 
-const CFG_EXPECTED: &str = "`#[cfg(target = \"evm\")]`, `#[cfg(target = \"native\")]`, `#[cfg(target_os = \"linux\")]`, `#[cfg(target_os = \"macos\")]`, or `#[cfg(target_family = \"unix\")]`";
+const CFG_EXPECTED: &str = "`#[cfg(target = \"evm\")]`, `#[cfg(target = \"native\")]`, `#[cfg(target = \"wasm\")]`, `#[cfg(target_os = \"linux\")]`, `#[cfg(target_os = \"macos\")]`, or `#[cfg(target_family = \"unix\")]`";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrMisuseError {
@@ -92,6 +92,8 @@ pub(super) struct AttrRule {
     pub form: AttrForm,
     pub expected_form: &'static str,
     pub singleton: bool,
+    /// Whether it must be written `#[unsafe(name)]`.
+    pub requires_unsafe: bool,
     pub support: AttrSupport,
 }
 
@@ -112,7 +114,21 @@ impl AttrRule {
             form,
             expected_form,
             singleton: true,
+            requires_unsafe: false,
             support: AttrSupport::Supported,
+        }
+    }
+
+    /// An attribute whose correctness the compiler can't check, which must be
+    /// written `#[unsafe(name)]`.
+    pub(super) const fn supported_unsafe(
+        name: &'static str,
+        form: AttrForm,
+        expected_form: &'static str,
+    ) -> Self {
+        Self {
+            requires_unsafe: true,
+            ..Self::supported(name, form, expected_form)
         }
     }
 
@@ -122,6 +138,7 @@ impl AttrRule {
             form: AttrForm::Bare,
             expected_form: "",
             singleton: true,
+            requires_unsafe: false,
             support: AttrSupport::Unsupported { supported_targets },
         }
     }
@@ -145,6 +162,7 @@ pub(super) struct AstAttrSpec {
     pub value: Option<ast::AttrArgValueKind>,
     pub has_args: bool,
     pub args: Vec<AstAttrArgSpec>,
+    pub is_unsafe: bool,
 }
 
 impl AstAttrSpec {
@@ -156,6 +174,7 @@ impl AstAttrSpec {
         let args = ast.args();
         Self {
             range: ast.syntax().text_range(),
+            is_unsafe: ast.is_unsafe(),
             value: ast.value(),
             has_args: args.is_some(),
             args: args
@@ -214,7 +233,9 @@ pub(super) fn validate_attr_rules<'db>(
                 }
             }
             AttrSupport::Supported => {
-                if let Some(spec) = specs.iter().find(|spec| !rule.form.accepts(spec)) {
+                if let Some(spec) = specs.iter().find(|spec| {
+                    !rule.form.accepts(spec) || rule.requires_unsafe && !spec.is_unsafe
+                }) {
                     report_attr_misuse(
                         ctxt,
                         spec.range,
@@ -428,6 +449,18 @@ impl<'db> Attr<'db> {
 
 impl<'db> NormalAttr<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::NormalAttr) -> Self {
+        if ast.is_unsafe() && !ast.is_named("export") {
+            report_attr_misuse(
+                ctxt,
+                ast.syntax().text_range(),
+                ast.path()
+                    .map_or_else(String::new, |path| path.text().to_string()),
+                AttrTarget::new("item", None),
+                AttrMisuseErrorKind::InvalidForm {
+                    expected_form: "an attribute without `unsafe(..)`",
+                },
+            );
+        }
         let path = PathId::lower_ast_partial(ctxt, ast.path());
         let value = ast.value();
         let has_value = value.is_some();

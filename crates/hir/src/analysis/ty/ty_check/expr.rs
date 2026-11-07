@@ -6,9 +6,9 @@ use smallvec1::SmallVec;
 
 use crate::core::{
     hir_def::{
-        ArithBinOp, BinOp, BindingMarker, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr,
-        ExprId, FieldIndex, Func, FuncParam, FuncParamListId, FuncParamMode, IdentId, IntegerId,
-        LitKind, LogicalBinOp, ModeMarker, Partial, Pat, PatId, PathId, Stmt, StmtId,
+        ArithBinOp, BinOp, BindingMarker, CallArg as HirCallArg, CallableDef, CompBinOp, Cond,
+        CondId, Expr, ExprId, FieldIndex, Func, FuncParam, FuncParamListId, FuncParamMode, IdentId,
+        IntegerId, LitKind, LogicalBinOp, ModeMarker, Partial, Pat, PatId, PathId, Stmt, StmtId,
         TypeId as HirTyId, TypeKind, TypeMode, UnOp, VariantKind, WithBinding,
     },
     semantic::{EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey},
@@ -16,16 +16,17 @@ use crate::core::{
 use crate::span::{DynLazySpan, types::LazyTySpan};
 
 use super::{
-    BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike, RowArg, Typeable,
-    ValuePathRef,
+    BodyOwner, BuiltinOp, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike,
+    RowArg, SemanticExprLowering, SumShapeOp, Typeable, ValuePathRef,
     effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
-        ParamSite, PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin,
-        TyCheckEnv, hir_param,
+        ParamSite, PendingEffects, PendingEffectsTarget, PendingNegation, Prober, ProvidedEffect,
+        TraitObligation, TraitObligationOrigin, TyCheckEnv, hir_param,
     },
     has_invisible_newtype_field, merged_borrow_provider,
     path::ResolvedPathInBody,
+    stmt::ForLoopCall,
     transparent_newtype_field_ty, ty_may_be_code_region_token,
 };
 use crate::analysis::place::{Place, PlaceBase};
@@ -81,7 +82,7 @@ use crate::analysis::ty::{
         BorrowKind, ClosureDef, ClosureTy, PrimTy, TyBase, TyData, TyVarSort,
         int_literal_fits_prim, prim_int_bits,
     },
-    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause},
+    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause, generic_arg_list_diags},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -99,8 +100,9 @@ use crate::analysis::{
     },
     place::resolve_place_field,
     semantic::{
-        CtfeConfig, EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
-        force_const_term_value, instance::resolve_semantic_const_ref, int_const,
+        BinaryOp, CtfeConfig, EvalOutcome, Overflow, SemConstScalar, SemConstValue, SemOrigin,
+        UnaryOp, eval_const_ref, force_const_term_value, instance::resolve_semantic_const_ref,
+        int_const,
     },
     ty::{
         const_ty::{ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
@@ -191,12 +193,6 @@ fn evidence_provider<'db>(evidence: &EffectEvidence<'db>) -> ProvidedEffect<'db>
     }
 }
 
-pub(super) enum PendingPrimitiveOpResolution {
-    Pending,
-    Resolved,
-    Done,
-}
-
 impl<'db> TyChecker<'db> {
     fn code_region_intrinsic_kind(
         &self,
@@ -255,6 +251,95 @@ impl<'db> TyChecker<'db> {
         } else {
             None
         }
+    }
+
+    /// The `Option` or `Result` method `callable_def` is, if it works on a sum
+    /// shape.
+    fn sum_shape_op(&self, callable_def: CallableDef<'db>) -> Option<SumShapeOp> {
+        let CallableDef::Func(func) = callable_def else {
+            return None;
+        };
+        [
+            (
+                "core::option::Option::is_some",
+                SumShapeOp::Test { payload: true },
+            ),
+            (
+                "core::option::Option::is_none",
+                SumShapeOp::Test { payload: false },
+            ),
+            ("core::option::Option::unwrap", SumShapeOp::Unwrap),
+            (
+                "core::result::Result::is_ok",
+                SumShapeOp::Test { payload: true },
+            ),
+            (
+                "core::result::Result::is_err",
+                SumShapeOp::Test { payload: false },
+            ),
+            ("core::result::Result::unwrap", SumShapeOp::Unwrap),
+        ]
+        .into_iter()
+        .find_map(|(path, op)| {
+            (resolve_lib_func_path(self.db, self.env.scope(), path) == Some(func)).then_some(op)
+        })
+    }
+
+    /// Checks `op` on `receiver`, a sum shape of `sum_ty` whose payload is
+    /// `payload`. The call consumes the shape: a test ends its access, and
+    /// `unwrap` grants the payload's, as `?` does, calling the core function
+    /// the method's empty variant panics with.
+    fn check_sum_shape_op(
+        &mut self,
+        expr: ExprId,
+        receiver: ExprId,
+        sum_ty: TyId<'db>,
+        payload: Shape<'db>,
+        method: Callable<'db>,
+        op: SumShapeOp,
+    ) -> ExprProp<'db> {
+        self.consume_access(receiver);
+        let (prop, panic) = match op {
+            SumShapeOp::Test { .. } => (ExprProp::new(TyId::bool(self.db), true), None),
+            SumShapeOp::Unwrap => {
+                let panic = self.sum_shape_panic(sum_ty, expr.span(self.body()).into());
+                let shape = (!matches!(payload, Shape::Owned(_))).then(|| payload.clone());
+                // The payload is mutable as a call's result is.
+                let prop = ExprProp {
+                    is_mut: matches!(shape, None | Some(Shape::Access(BorrowKind::Mut, _))),
+                    shape,
+                    ..ExprProp::new(payload.erased_ty(self.db), true)
+                };
+                (prop, Some(panic))
+            }
+        };
+        self.env.register_semantic_expr_lowering(
+            expr,
+            SemanticExprLowering::SumShape { op, method, panic },
+        );
+        prop
+    }
+
+    /// The core function `unwrap` of the `Option` or `Result` `sum_ty` panics
+    /// with on its empty variant: `panic`, or `panic_with_value` of the error.
+    fn sum_shape_panic(&mut self, sum_ty: TyId<'db>, span: DynLazySpan<'db>) -> Callable<'db> {
+        let kind = sum_kind(self.db, self.env.scope(), sum_ty)
+            .expect("a sum shape is an `Option` or a `Result`");
+        let path = match kind {
+            SumKind::Option => "core::panic",
+            SumKind::Result => "core::panic_with_value",
+        };
+        let func = resolve_lib_func_path(self.db, self.env.scope(), path)
+            .expect("core declares `panic` and `panic_with_value`");
+        let func_ty = self.instantiate_to_term(TyId::func(self.db, CallableDef::Func(func)));
+        let callable = Callable::new(self.db, func_ty, span, None)
+            .unwrap_or_else(|_| panic!("`{path}` is callable"));
+        if kind == SumKind::Result {
+            self.table
+                .unify(callable.generic_args()[0], sum_ty.generic_args(self.db)[0])
+                .expect("`panic_with_value` takes any error");
+        }
+        callable
     }
 
     fn check_and_register_const_intrinsic(
@@ -1007,17 +1092,24 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if prop.ty.is_integral_var(self.db) && matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
+        if prop.ty.is_integral_var(self.db)
+            && matches!(op, UnOp::Plus | UnOp::Minus | UnOp::Not | UnOp::BitNot)
         {
-            if matches!(op, UnOp::Minus) {
-                self.env
-                    .register_pending_primitive_op(PendingPrimitiveOp::Unary {
-                        expr,
-                        inner: *lhs,
-                        op: *op,
-                    });
+            if *op == UnOp::Plus {
+                return prop;
             }
-            return prop;
+            // Every integer type has `!` and `~`. `-` needs a signed type,
+            // which is checked once the operand's type is known.
+            let builtin = if *op == UnOp::Minus {
+                self.env
+                    .register_pending_negation(PendingNegation { expr, inner: *lhs });
+                UnaryOp::Neg(self.overflow)
+            } else {
+                UnaryOp::BitNot
+            };
+            self.env
+                .register_builtin_op(expr, BuiltinOp::Unary(builtin));
+            return ExprProp::new(prop.ty, true);
         }
 
         if matches!(op, UnOp::Mut | UnOp::Ref) {
@@ -1080,7 +1172,101 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        self.check_ops_trait(expr, prop.ty, op, None)
+        if let Some(builtin) = self.builtin_unary_op(prop.ty, *op) {
+            self.env
+                .register_builtin_op(expr, BuiltinOp::Unary(builtin));
+            return ExprProp::new(prop.ty, true);
+        }
+        let op = self.mode_op(prop.ty, *op);
+        self.check_ops_trait(expr, prop.ty, &op, None)
+    }
+
+    /// The operator `op` on an operand of type `ty` as written in this body.
+    /// In unchecked code, an operator that can overflow calls its wrapping
+    /// trait. On a concrete type that doesn't implement it for any right
+    /// operand, it calls the trait it calls in checked code. So does a type
+    /// parameter or associated type whose bounds don't say it implements it,
+    /// if the mode comes from configuration, which code doesn't choose. An
+    /// `#[arithmetic(unchecked)]` over the code requires the bound.
+    fn mode_op<T: Copy>(&mut self, ty: TyId<'db>, op: T) -> ModeOp<T>
+    where
+        ModeOp<T>: TraitOps,
+    {
+        let mode_op = ModeOp {
+            op,
+            overflow: self.overflow,
+        };
+        if !mode_op.wraps() {
+            return mode_op;
+        }
+        let Some(trait_def) =
+            resolve_core_trait(self.db, self.env.scope(), &mode_op.trait_path_segments())
+        else {
+            return mode_op;
+        };
+        let ty = ty.fold_with(self.db, &mut self.table);
+        if matches!(ty.data(self.db), TyData::TyParam(_) | TyData::AssocTy(_))
+            && self
+                .env
+                .owner()
+                .scope()
+                .source_arithmetic_mode(self.db)
+                .is_some()
+        {
+            return mode_op;
+        }
+        let snapshot = self.snapshot_state();
+        let mut args = vec![ty];
+        args.extend(self.fresh_tys_n(trait_def.params(self.db).len() - 1));
+        let goal = TraitInstId::new_simple(self.db, trait_def, args);
+        let solve_cx =
+            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let implemented = !matches!(
+            is_goal_satisfiable(self.db, solve_cx, goal),
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+        );
+        self.rollback_state(snapshot);
+        if implemented {
+            mode_op
+        } else {
+            ModeOp {
+                op,
+                overflow: Overflow::Checked,
+            }
+        }
+    }
+
+    /// The built-in operation of the unary operator `op` on an operand of
+    /// type `ty`. Operators on integers and `bool`s are built in, not calls of
+    /// operator traits.
+    fn builtin_unary_op(&mut self, ty: TyId<'db>, op: UnOp) -> Option<UnaryOp> {
+        let ty = ty.fold_with(self.db, &mut self.table);
+        Some(match op {
+            UnOp::Minus if ty.as_prim(self.db).is_some_and(PrimTy::is_signed_int) => {
+                UnaryOp::Neg(self.overflow)
+            }
+            UnOp::Not if ty.is_bool(self.db) => UnaryOp::Not,
+            UnOp::Not | UnOp::BitNot if ty.is_integral(self.db) => UnaryOp::BitNot,
+            _ => return None,
+        })
+    }
+
+    /// The built-in operation of the binary operator `op` on a left operand
+    /// of type `ty`, whose right operand has the same type. Operators on
+    /// integers and `bool`s are built in, not calls of operator traits.
+    fn builtin_binary_op(&mut self, ty: TyId<'db>, op: BinOp) -> Option<BinaryOp> {
+        let ty = ty.fold_with(self.db, &mut self.table);
+        let builtin = BinaryOp::new(op, self.overflow)?;
+        (ty.is_integral(self.db)
+            || ty.is_bool(self.db)
+                && matches!(
+                    builtin,
+                    BinaryOp::BitAnd
+                        | BinaryOp::BitOr
+                        | BinaryOp::BitXor
+                        | BinaryOp::Comp(CompBinOp::Eq | CompBinOp::NotEq)
+                ))
+        .then_some(builtin)
     }
 
     /// `e?` on an `Option` or `Result`, a value or a sum shape: the payload,
@@ -1404,13 +1590,27 @@ impl<'db> TyChecker<'db> {
     fn int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {
         self.peel_transparent_newtypes(target_ty)
             .as_prim(self.db)
-            .is_some_and(|prim| int_literal_fits_prim(prim, value, false))
+            .is_some_and(|prim| {
+                int_literal_fits_prim(
+                    self.db.compilation_settings().target(self.db),
+                    prim,
+                    value,
+                    false,
+                )
+            })
     }
 
     fn negated_int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {
         self.peel_transparent_newtypes(target_ty)
             .as_prim(self.db)
-            .is_some_and(|prim| int_literal_fits_prim(prim, value, true))
+            .is_some_and(|prim| {
+                int_literal_fits_prim(
+                    self.db.compilation_settings().target(self.db),
+                    prim,
+                    value,
+                    true,
+                )
+            })
     }
 
     fn check_binary(
@@ -1482,37 +1682,18 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        if lhs.ty.is_integral_var(self.db) {
-            // Avoid 'type must be known' diagnostics when lhs is an unknown integer ty.
-            // For unknown integer types, the result type depends on the operator:
-            // - arithmetic: same integer type
-            // - comparison: bool
+        // The operators on integers, including ones whose type is not yet
+        // known, and on bools are built in.
+        if let Some(builtin) = self.builtin_binary_op(lhs.ty, op) {
             self.check_expr(rhs_expr, lhs.ty);
-            if matches!(
-                op,
-                BinOp::Arith(
-                    ArithBinOp::Add
-                        | ArithBinOp::Sub
-                        | ArithBinOp::Mul
-                        | ArithBinOp::Div
-                        | ArithBinOp::Rem
-                        | ArithBinOp::Pow
-                ) | BinOp::Comp(..)
-            ) {
-                self.env
-                    .register_pending_primitive_op(PendingPrimitiveOp::Binary {
-                        expr,
-                        lhs: lhs_expr,
-                        rhs: rhs_expr,
-                        op,
-                    });
-            }
-
-            if matches!(op, BinOp::Comp(_)) {
-                return ExprProp::new(TyId::bool(self.db), true);
-            }
-
-            return lhs;
+            self.env
+                .register_builtin_op(expr, BuiltinOp::Binary(builtin));
+            let ty = if matches!(op, BinOp::Comp(_)) {
+                TyId::bool(self.db)
+            } else {
+                lhs.ty
+            };
+            return ExprProp::new(ty, true);
         }
 
         // Fail if lhs ty is unknown. An open string literal's operator is
@@ -1526,104 +1707,57 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
+        let op = self.mode_op(lhs.ty, op);
         self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
     }
 
-    pub(super) fn resolve_pending_primitive_op(
-        &mut self,
-        pending: &PendingPrimitiveOp,
-    ) -> PendingPrimitiveOpResolution {
-        if self.env.callable_expr(pending.expr()).is_some() {
-            return PendingPrimitiveOpResolution::Done;
-        }
-
-        let Some(expr_prop) = self.env.typed_expr(pending.expr()) else {
-            return PendingPrimitiveOpResolution::Done;
+    /// Checks `-x` on an integer whose type was not known where it is
+    /// written, once it is: a negated literal must fit the type, and the type
+    /// must be signed. Returns whether the type is known.
+    pub(super) fn check_pending_negation(&mut self, pending: PendingNegation) -> bool {
+        let PendingNegation { expr, inner } = pending;
+        let Some(inner_prop) = self.env.typed_expr(inner) else {
+            return true;
         };
-        let expr_ty = {
+        let operand_ty = {
             let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
-            expr_prop.ty.fold_with(self.db, &mut prober)
+            inner_prop.ty.fold_with(self.db, &mut prober)
         };
-        if expr_ty.has_invalid(self.db) {
-            return PendingPrimitiveOpResolution::Done;
+        let operand_ty = self.normalize_ty(operand_ty);
+        if operand_ty.has_invalid(self.db) {
+            return true;
         }
-
-        let resolved = match pending {
-            PendingPrimitiveOp::Unary { expr, inner, op } => {
-                let Some(inner_prop) = self.env.typed_expr(*inner) else {
-                    return PendingPrimitiveOpResolution::Done;
-                };
-                let operand_ty = {
-                    let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
-                    inner_prop.ty.fold_with(self.db, &mut prober)
-                };
-                let operand_ty = self.normalize_ty(operand_ty);
-                if operand_ty.has_invalid(self.db) {
-                    return PendingPrimitiveOpResolution::Done;
-                }
-                if operand_ty.is_integral_var(self.db)
-                    || operand_ty.base_ty(self.db).is_ty_var(self.db)
-                {
-                    return PendingPrimitiveOpResolution::Pending;
-                }
-                if matches!(op, UnOp::Minus)
-                    && let Some(int_id) = self.try_get_literal_int(*inner)
-                {
-                    let literal = int_id.data(self.db);
-                    if self.negated_int_literal_fits_in_ty(literal, operand_ty) {
-                        return PendingPrimitiveOpResolution::Done;
-                    }
-                    if self
-                        .peel_transparent_newtypes(operand_ty)
-                        .base_ty(self.db)
-                        .is_prim(self.db)
-                    {
-                        self.push_diag(BodyDiag::IntLiteralOutOfRange {
-                            primary: expr.span(self.body()).into(),
-                            literal: format!("-{literal}"),
-                            ty: operand_ty,
-                        });
-                        return PendingPrimitiveOpResolution::Done;
-                    }
-                }
-                self.check_ops_trait(*expr, operand_ty, op, None)
-            }
-            PendingPrimitiveOp::Binary { expr, lhs, rhs, op } => {
-                let Some(lhs_prop) = self.env.typed_expr(*lhs) else {
-                    return PendingPrimitiveOpResolution::Done;
-                };
-                let Some(rhs_prop) = self.env.typed_expr(*rhs) else {
-                    return PendingPrimitiveOpResolution::Done;
-                };
-                let lhs_ty = {
-                    let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
-                    lhs_prop.ty.fold_with(self.db, &mut prober)
-                };
-                let rhs_ty = {
-                    let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
-                    rhs_prop.ty.fold_with(self.db, &mut prober)
-                };
-                let lhs_ty = self.normalize_ty(lhs_ty);
-                let rhs_ty = self.normalize_ty(rhs_ty);
-                if lhs_ty.has_invalid(self.db) || rhs_ty.has_invalid(self.db) {
-                    return PendingPrimitiveOpResolution::Done;
-                }
-                if lhs_ty.is_integral_var(self.db)
-                    || lhs_ty.base_ty(self.db).is_ty_var(self.db)
-                    || rhs_ty.is_integral_var(self.db)
-                    || rhs_ty.base_ty(self.db).is_ty_var(self.db)
-                {
-                    return PendingPrimitiveOpResolution::Pending;
-                }
-                self.check_ops_trait(*expr, lhs_ty, op, Some(*rhs))
-            }
-        };
-
-        if resolved.ty.has_invalid(self.db) {
-            return PendingPrimitiveOpResolution::Done;
+        if operand_ty.is_integral_var(self.db) || operand_ty.base_ty(self.db).is_ty_var(self.db) {
+            return false;
         }
-        self.table.unify(expr_ty, resolved.ty).ok();
-        PendingPrimitiveOpResolution::Resolved
+        if let Some(int_id) = self.try_get_literal_int(inner) {
+            let literal = int_id.data(self.db);
+            if self.negated_int_literal_fits_in_ty(literal, operand_ty) {
+                return true;
+            }
+            if self
+                .peel_transparent_newtypes(operand_ty)
+                .base_ty(self.db)
+                .is_prim(self.db)
+            {
+                self.push_diag(BodyDiag::IntLiteralOutOfRange {
+                    primary: expr.span(self.body()).into(),
+                    literal: format!("-{literal}"),
+                    ty: operand_ty,
+                });
+                return true;
+            }
+        }
+        if self.builtin_unary_op(operand_ty, UnOp::Minus).is_none() {
+            let diag = BodyDiag::ops_trait_not_implemented(
+                self.db,
+                expr.span(self.body()).into(),
+                operand_ty,
+                &UnOp::Minus,
+            );
+            self.push_diag(diag);
+        }
+        true
     }
 
     fn check_let_condition(&mut self, pat: PatId, scrutinee: ExprId) -> ExprProp<'db> {
@@ -2243,11 +2377,111 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
+        if self.rows_awaiting_inference(callable).is_empty() {
+            self.resolve_call_effects(expr, callable);
+        } else {
+            let site = self.env.call_site();
+            self.env.register_pending_effects(PendingEffects {
+                target: PendingEffectsTarget::Call(expr),
+                site,
+            });
+        }
+    }
+
+    fn resolve_call_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
         let call_span: DynLazySpan<'db> = expr.span(self.body()).into();
         let args = self.resolve_callable_effects(call_span, callable, Some(expr));
         for arg in args {
             self.env.push_call_effect_arg(expr, arg);
         }
+    }
+
+    /// The rows of `callable`'s callee that stay abstract only because
+    /// inference hasn't finished with their instances, so whether their
+    /// implementations give them effects isn't known yet.
+    pub(super) fn rows_awaiting_inference(&mut self, callable: &Callable<'db>) -> Vec<RowKey<'db>> {
+        let CallableDef::Func(func) = callable.callable_def else {
+            return Vec::new();
+        };
+        if !func.has_effects(self.db) {
+            return Vec::new();
+        }
+        let rows = self.callee_rows(callable, func);
+        rows.abstract_rows
+            .iter()
+            .map(|&(_, row)| row)
+            .chain(
+                rows.components
+                    .iter()
+                    .filter_map(|component| component.requirement.key.key_row()),
+            )
+            .filter(|row| row.inst.args(self.db).iter().any(|ty| ty.has_var(self.db)))
+            .collect()
+    }
+
+    /// Resolves the effects `pending` waits for, at its call site. If its rows
+    /// still wait, registers it again and returns false, unless `force`, which
+    /// binds each open literal in them to its fallback type: their effects
+    /// depend on that type, so it can't change afterwards.
+    pub(super) fn resolve_pending_effects(
+        &mut self,
+        pending: PendingEffects<'db>,
+        force: bool,
+    ) -> bool {
+        let callables: Vec<_> = match pending.target {
+            PendingEffectsTarget::Call(expr) => {
+                self.env.callable_expr(expr).into_iter().cloned().collect()
+            }
+            PendingEffectsTarget::Loop(stmt) => self
+                .env
+                .for_loop_plan(stmt)
+                .into_iter()
+                .flat_map(|plan| &plan.calls)
+                .map(|call| call.callable.clone())
+                .collect(),
+        };
+        let waiting: Vec<_> = callables
+            .iter()
+            .flat_map(|callable| self.rows_awaiting_inference(callable))
+            .collect();
+        if !force && !waiting.is_empty() {
+            self.env.register_pending_effects(pending);
+            return false;
+        }
+        let scope = self.env.scope();
+        for &arg in waiting.iter().flat_map(|row| row.inst.args(self.db)) {
+            let settled = arg.fold_with(self.db, &mut Prober::new(&mut self.table, scope));
+            self.table.unify(arg, settled).ok();
+        }
+        self.env.enter_call_site(&pending.site);
+        match pending.target {
+            PendingEffectsTarget::Call(expr) => {
+                for mut callable in callables {
+                    self.resolve_call_effects(expr, &mut callable);
+                    self.env
+                        .set_call_effect_providers(expr, callable.effect_providers());
+                }
+            }
+            PendingEffectsTarget::Loop(stmt) => {
+                if let Some(plan) = self.env.for_loop_plan(stmt) {
+                    let span: DynLazySpan<'db> = plan.base.span(self.body()).into();
+                    for (step, mut callable) in callables.into_iter().enumerate() {
+                        let effect_args =
+                            self.resolve_callable_effects(span.clone(), &mut callable, None);
+                        self.env.set_for_loop_call(
+                            stmt,
+                            step,
+                            ForLoopCall {
+                                callable,
+                                effect_args,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        self.env.leave_call_site();
+        true
     }
 
     /// Resolves the effects `callable` requires where it is called. A missing
@@ -3875,7 +4109,16 @@ impl<'db> TyChecker<'db> {
         };
 
         let receiver_prop = self.check_expr_unknown(*receiver);
-        if receiver_prop.ty.has_invalid(self.db) {
+        let arg_diags = generic_arg_list_diags(
+            self.db,
+            *generic_args,
+            call_span.clone().generic_args(),
+            self.env.scope(),
+            self.env.assumptions(),
+        );
+        let args_invalid = !arg_diags.is_empty();
+        self.diags.extend(arg_diags.into_iter().map(Into::into));
+        if args_invalid || receiver_prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 
@@ -3991,6 +4234,16 @@ impl<'db> TyChecker<'db> {
             };
             self.push_diag(diag);
             return ExprProp::invalid(self.db);
+        }
+
+        // The methods take no arguments; a call with any is checked as usual,
+        // which reports them.
+        if let Some(Shape::Sum { ty, payload, .. }) = &receiver_prop.shape
+            && args.is_empty()
+            && let Some(op) = self.sum_shape_op(callable.callable_def())
+        {
+            let (sum_ty, payload) = (*ty, (**payload).clone());
+            return self.check_sum_shape_op(expr, *receiver, sum_ty, payload, callable, op);
         }
 
         if let Some(kind) = self
@@ -4144,11 +4397,16 @@ impl<'db> TyChecker<'db> {
                             shape: *shape,
                         });
                     }
-                    // An access's type still being inferred is checked once
-                    // it is known.
-                    if access.is_some() && ty.has_var(self.db) {
+                    // A known product's accesses are captured as any access
+                    // is. An access's type still being inferred is checked
+                    // once it is known.
+                    let is_access = access.is_some()
+                        || self.env.param_product(&binding).is_some_and(|shape| {
+                            !matches!(shape, Shape::Opaque(_)) && shape.has_access()
+                        });
+                    if is_access && ty.has_var(self.db) {
                         self.env.record_access_capture(expr, binding, ty);
-                    } else if access.is_some() && !self.ty_is_copy(ty) {
+                    } else if is_access && !self.ty_is_copy(ty) {
                         self.push_diag(BodyDiag::AccessCapture {
                             primary: path_expr_span.into(),
                             name: binding.binding_name(&self.env),
@@ -4160,27 +4418,48 @@ impl<'db> TyChecker<'db> {
                 ExprProp {
                     binding: Some(binding),
                     borrow_provider: self.concrete_borrow_provider_for_binding(binding),
-                    // A product parameter is the accesses its parts grant.
-                    shape: self.env.param_product(&binding).cloned(),
+                    // A product parameter is the accesses its parts grant;
+                    // a closure's copy of a tuple of them is a value.
+                    shape: self
+                        .env
+                        .param_product(&binding)
+                        .filter(|shape| !captured || !matches!(shape, Shape::Tuple(_)))
+                        .cloned(),
                     ..ExprProp::new(ty, is_mut)
                 }
             }
             ResolvedPathInBody::NewBinding(ident) => {
                 let diag = match self.env.owner() {
+                    // A field whose layout failed has reported its own error.
+                    BodyOwner::ContractRecvArm { contract, .. }
+                    | BodyOwner::ContractInit { contract }
+                        if contract
+                            .storage_layout(self.db)
+                            .field_errors(&ident)
+                            .is_some() =>
+                    {
+                        None
+                    }
                     BodyOwner::ContractRecvArm { contract, .. }
                         if contract.fields(self.db).contains_key(&ident) =>
                     {
-                        BodyDiag::ContractFieldNotInUses {
+                        Some(BodyDiag::ContractFieldNotInUses {
                             primary: path_expr_span.into(),
                             field: ident,
-                        }
+                        })
                     }
                     _ => {
                         let assoc_fn = enclosing_assoc_fn(self.db, self.body(), ident);
-                        BodyDiag::UndefinedVariable(path_expr_span.into(), ident, assoc_fn)
+                        Some(BodyDiag::UndefinedVariable(
+                            path_expr_span.into(),
+                            ident,
+                            assoc_fn,
+                        ))
                     }
                 };
-                self.push_diag(diag);
+                if let Some(diag) = diag {
+                    self.push_diag(diag);
+                }
 
                 ExprProp::invalid(self.db)
             }
@@ -4213,7 +4492,7 @@ impl<'db> TyChecker<'db> {
                             BodyDiag::unit_variant_expected(
                                 self.db,
                                 path_expr_span.clone().into(),
-                                record_like,
+                                Some(record_like),
                             )
                         } else {
                             BodyDiag::NotValue {
@@ -4272,7 +4551,7 @@ impl<'db> TyChecker<'db> {
                             let diag = BodyDiag::unit_variant_expected(
                                 self.db,
                                 expr.span(self.body()).into(),
-                                record_like,
+                                Some(record_like),
                             );
                             self.push_diag(diag);
 
@@ -5156,9 +5435,13 @@ impl<'db> TyChecker<'db> {
             return unit;
         }
 
-        // Avoid 'type must be known' diagnostics for unknown integer ty
-        if lhs_place_ty.is_integral_var(self.db) {
+        // `x op= y` on an integer or `bool` writes the built-in operation's
+        // result back.
+        let bin_op = BinOp::Arith(*op);
+        if let Some(builtin) = self.builtin_binary_op(lhs_place_ty, bin_op) {
             self.check_expr(*rhs, lhs_place_ty);
+            self.env
+                .register_builtin_op(expr, BuiltinOp::Binary(builtin));
             return unit;
         }
 
@@ -5169,12 +5452,22 @@ impl<'db> TyChecker<'db> {
             return unit;
         }
 
-        // `x += y` is semantically defined by the `*Assign` traits. Primitive
-        // integer fast paths are introduced later during MIR lowering without
-        // changing which trait method the source program resolves to here.
-        self.check_ops_trait(expr, lhs_place_ty, &AugAssignOp(*op), Some(*rhs));
-
-        // Return unit ty even if trait resolution fails
+        // In unchecked code, an operator that can overflow calls its wrapping
+        // trait if the type implements it, which has no `*Assign`
+        // counterpart: `x += y` is `x = x.wrapping_add(y)`, with the place
+        // read and written once. Otherwise `x += y` calls
+        // `AddAssign::add_assign`. The assignment is unit even if resolution
+        // fails.
+        let mode_op = self.mode_op(lhs_place_ty, bin_op);
+        if mode_op.wraps() {
+            let result = self.check_ops_trait(expr, lhs_place_ty, &mode_op, Some(*rhs));
+            if !result.ty.has_invalid(self.db) {
+                self.equate_ty(result.ty, lhs_place_ty, expr.span(self.body()).into());
+                self.env.register_operator_assign(expr);
+            }
+        } else {
+            self.check_ops_trait(expr, lhs_place_ty, &AugAssignOp(*op), Some(*rhs));
+        }
         unit
     }
 
@@ -5918,7 +6211,60 @@ pub(crate) trait TraitOps {
         IdentId::new(db, self.triple()[2].to_string())
     }
 
+    /// Whether the operator calls a wrapping trait, as it does in unchecked
+    /// code.
+    fn wraps(&self) -> bool {
+        false
+    }
+
     fn triple(&self) -> [&str; 3];
+}
+
+/// An operator in the arithmetic mode of the body it is written in. In
+/// unchecked code, `+`, `-`, `*`, `**` and unary `-` call the wrapping traits
+/// (`WrappingAdd::wrapping_add`, ...) on a type that implements them; every
+/// other operator calls the same trait in either mode.
+#[derive(Clone, Copy, Debug)]
+struct ModeOp<T> {
+    op: T,
+    overflow: Overflow,
+}
+
+impl TraitOps for ModeOp<BinOp> {
+    fn wraps(&self) -> bool {
+        self.overflow == Overflow::Wrapping
+            && matches!(
+                self.op,
+                BinOp::Arith(ArithBinOp::Add | ArithBinOp::Sub | ArithBinOp::Mul | ArithBinOp::Pow)
+            )
+    }
+
+    fn triple(&self) -> [&str; 3] {
+        if !self.wraps() {
+            return self.op.triple();
+        }
+        match self.op {
+            BinOp::Arith(ArithBinOp::Add) => ["WrappingAdd", "wrapping_add", "+"],
+            BinOp::Arith(ArithBinOp::Sub) => ["WrappingSub", "wrapping_sub", "-"],
+            BinOp::Arith(ArithBinOp::Mul) => ["WrappingMul", "wrapping_mul", "*"],
+            BinOp::Arith(ArithBinOp::Pow) => ["WrappingPow", "wrapping_pow", "**"],
+            _ => unreachable!("only `+`, `-`, `*` and `**` wrap"),
+        }
+    }
+}
+
+impl TraitOps for ModeOp<UnOp> {
+    fn wraps(&self) -> bool {
+        self.overflow == Overflow::Wrapping && self.op == UnOp::Minus
+    }
+
+    fn triple(&self) -> [&str; 3] {
+        if self.wraps() {
+            ["WrappingNeg", "wrapping_neg", "-"]
+        } else {
+            self.op.triple()
+        }
+    }
 }
 
 impl TraitOps for UnOp {

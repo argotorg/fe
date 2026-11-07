@@ -195,6 +195,9 @@ pub enum SyntaxKind {
     /// `while`
     #[token("while")]
     WhileKw,
+    /// `loop`
+    #[token("loop")]
+    LoopKw,
     /// `pub`
     #[token("pub")]
     PubKw,
@@ -352,6 +355,8 @@ pub enum SyntaxKind {
     ForStmt,
     /// `while expr {..}`
     WhileStmt,
+    /// `loop {..}`
+    LoopStmt,
     /// `continue`
     ContinueStmt,
     /// `break`
@@ -693,6 +698,7 @@ impl SyntaxKind {
             SyntaxKind::InKw => "`in`",
             SyntaxKind::WhereKw => "`where`",
             SyntaxKind::WhileKw => "`while`",
+            SyntaxKind::LoopKw => "`loop`",
             SyntaxKind::PubKw => "`pub`",
             SyntaxKind::ReturnKw => "`return`",
             SyntaxKind::YieldKw => "`yield`",
@@ -774,6 +780,7 @@ impl SyntaxKind {
             SyntaxKind::LetStmt => "`let` statement",
             SyntaxKind::ForStmt => "`for` statement",
             SyntaxKind::WhileStmt => "`while` statement",
+            SyntaxKind::LoopStmt => "`loop` statement",
             SyntaxKind::ContinueStmt => "`continue` statement",
             SyntaxKind::BreakStmt => "`break` statement",
             SyntaxKind::ReturnStmt => "`return` statement",
@@ -929,6 +936,7 @@ impl SyntaxKind {
                 | SyntaxKind::InKw
                 | SyntaxKind::WhereKw
                 | SyntaxKind::WhileKw
+                | SyntaxKind::LoopKw
                 | SyntaxKind::PubKw
                 | SyntaxKind::ReturnKw
                 | SyntaxKind::YieldKw

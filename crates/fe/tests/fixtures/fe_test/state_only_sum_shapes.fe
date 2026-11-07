@@ -1,5 +1,6 @@
 // A projection may yield a state-only access inside a sum shape: the variant
 // constructor at the yield site builds the shape, not an `Option` value.
+// `is_some`, `is_none` and `unwrap` take the shape in place, as `?` does.
 use std::evm::{Evm, StorageMap}
 
 struct Ledger {
@@ -34,6 +35,12 @@ msg Msg {
 
     #[selector = 3]
     Get { key: u256 } -> u256,
+
+    #[selector = 4]
+    Deposit { key: u256, amount: u256 } -> bool,
+
+    #[selector = 5]
+    Peek { key: u256 } -> u256,
 }
 
 pub contract C {
@@ -58,6 +65,18 @@ pub contract C {
                 Option::Some(map) => map[key]
                 Option::None => 0
             }
+        }
+
+        Deposit { key, amount } -> bool uses (mut ledger) {
+            if ledger.balances_if_open().is_none() {
+                return false
+            }
+            ledger.balances_if_open().unwrap()[key] += amount
+            true
+        }
+
+        Peek { key } -> u256 uses (ledger) {
+            if ledger.view_if_open().is_some() { ledger.view_if_open().unwrap()[key] } else { 0 }
         }
     }
 }
@@ -86,5 +105,29 @@ fn sum_shape_grants_reach_storage() uses (evm: mut Evm) {
         value: Wei::zero(),
         message: Msg::Get { key: 7 },
     )
+    assert!(value == 5)
+}
+
+#[test]
+fn sum_shape_methods_reach_storage() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 2)
+    let closed: bool = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Deposit { key: 7, amount: 5 },
+    )
+    assert!(!closed)
+    let unread: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Peek { key: 7 })
+    assert!(unread == 0)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Open {})
+    let deposited: bool = evm.call(
+        addr: c,
+        gas: 200000,
+        value: Wei::zero(),
+        message: Msg::Deposit { key: 7, amount: 5 },
+    )
+    assert!(deposited)
+    let value: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Peek { key: 7 })
     assert!(value == 5)
 }

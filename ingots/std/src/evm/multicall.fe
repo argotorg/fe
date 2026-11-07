@@ -50,12 +50,12 @@ uses (ctx: Ctx, call: mut Call)
 {
     let this = ctx.address()
     var results = MemVec<Bytes>::with_capacity(data.len())
-    for entry in data {
+    for ref entry in data {
         var ret = MemBuffer::empty()
         let outcome = call.raw_delegatecall(
             addr: this,
             gas: ops::gas(),
-            args: entry.payload_span(),
+            args: entry.span(),
             ret: mut ret,
         )
         if !outcome.success() {
@@ -63,5 +63,5 @@ uses (ctx: Ctx, call: mut Call)
         }
         results.push(ReturnData::new().to_bytes())
     }
-    DynArray::from_slice(results.as_slice())
+    DynArray::from_mem_vec(results)
 }
