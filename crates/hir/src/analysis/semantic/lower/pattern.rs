@@ -281,6 +281,8 @@ enum DecisionTreeTarget<'a> {
         then_bb: SBlockId,
         else_bb: SBlockId,
         pat: PatId,
+        /// Whether a matching leaf binds before its jump, or `then_bb` binds.
+        bind: bool,
     },
 }
 
@@ -303,6 +305,23 @@ fn first_arm(tree: &DecisionTree<'_>) -> Option<usize> {
         DecisionTree::Unreachable => None,
         DecisionTree::Leaf(leaf) => Some(leaf.arm_index),
         DecisionTree::Switch(switch) => switch_first_arm(switch),
+    }
+}
+
+/// The leaves of `tree` where its pattern, arm 0, matches.
+fn matched_leaves<'t, 'db>(tree: &'t DecisionTree<'db>, leaves: &mut Vec<&'t LeafNode<'db>>) {
+    match tree {
+        DecisionTree::Unreachable => {}
+        DecisionTree::Leaf(leaf) => {
+            if leaf.arm_index == 0 {
+                leaves.push(leaf);
+            }
+        }
+        DecisionTree::Switch(switch) => {
+            for (_, subtree) in &switch.arms {
+                matched_leaves(subtree, leaves);
+            }
+        }
     }
 }
 
@@ -376,17 +395,46 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let root = self.validated_root(pat);
         let pattern_store = self.typed_body.pattern_store();
         let tree = build_pattern_branch_decision_tree(self.db, pattern_store, root);
+        let mut matched = Vec::new();
+        matched_leaves(&tree, &mut matched);
+        // The leaves of `|` alternatives bind the same names at the same
+        // paths, since an alternative binds nothing. Bindings of a place or
+        // through an access bind once where the leaves meet: an access
+        // binding has one definition. A value's leaves each bind from the
+        // parts their tests extracted, which binding again would move twice.
+        let joins = match &source {
+            PatternSource::Place { .. } => true,
+            PatternSource::Value(value) => holds_carrier(self.db, value.carrier_ty.0),
+        };
+        let bind_bb = (joins && matched.len() > 1).then(|| self.new_block());
         let mut projections =
-            DecisionTreeProjectionCache::new(self.db, pattern_store, &[root], source);
+            DecisionTreeProjectionCache::new(self.db, pattern_store, &[root], source.clone());
         self.lower_decision_tree(
             &tree,
             &mut projections,
             DecisionTreeTarget::Branch {
-                then_bb,
+                then_bb: bind_bb.unwrap_or(then_bb),
                 else_bb,
                 pat,
+                bind: bind_bb.is_none(),
             },
         );
+        if let Some(bind_bb) = bind_bb {
+            debug_assert!(
+                matched
+                    .iter()
+                    .all(|leaf| leaf.bindings == matched[0].bindings)
+            );
+            self.switch_to(bind_bb);
+            let mut projections =
+                DecisionTreeProjectionCache::new(self.db, pattern_store, &[root], source);
+            self.bind_decision_tree_leaf(matched[0], &mut projections);
+            self.set_terminator(
+                self.current,
+                SemOrigin::Pat(pat),
+                STerminatorKind::Goto(then_bb),
+            );
+        }
     }
 
     fn owned_pattern_value(&self, value: SValueId, carrier_ty: TyId<'db>) -> PatternValue<'db> {
@@ -772,10 +820,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     falls
                 }
                 DecisionTreeTarget::Branch {
-                    then_bb, else_bb, ..
+                    then_bb,
+                    else_bb,
+                    bind,
+                    ..
                 } => {
                     if leaf.arm_index == 0 {
-                        self.bind_decision_tree_leaf(leaf, projections);
+                        if bind {
+                            self.bind_decision_tree_leaf(leaf, projections);
+                        }
                         let origin = target.test_origin(Some(0));
                         self.set_terminator(self.current, origin, STerminatorKind::Goto(then_bb));
                     } else {
