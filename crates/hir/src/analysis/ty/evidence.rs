@@ -391,7 +391,15 @@ pub(crate) fn instantiated_selection<'db>(
     inst: TraitInstId<'db>,
 ) -> Option<ResolvedImplInstance<'db>> {
     let scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let goal = || normalize_trait_inst_preserving_validity(db, inst, scope, solve_cx.assumptions());
+    let goal = || {
+        normalize_trait_inst_preserving_validity(
+            db,
+            inst,
+            scope,
+            solve_cx.assumptions(),
+            solve_cx.resolve_impls(),
+        )
+    };
     match evidence.map(|evidence| evidence.data(db)) {
         // The proof names no goal: the use answers its own, normalized as
         // selection resolves it. An instantiated body can expose projections

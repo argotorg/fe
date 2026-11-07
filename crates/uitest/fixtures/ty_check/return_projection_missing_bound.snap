@@ -8,9 +8,3 @@ error[6-0003]: trait bound is not satisfied
   │
 9 │ fn bad_return<T>() -> <T as Bound>::Item {
   │                       ^^^^^^^^^^^^^^^^^^ `T` doesn't implement `Bound`
-
-error[6-0003]: trait bound is not satisfied
-   ┌─ return_projection_missing_bound.fe:10:14
-   │
-10 │     unsafe { todo() }
-   │              ^^^^^^ `T` doesn't implement `Bound`
