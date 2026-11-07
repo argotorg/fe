@@ -1,5 +1,6 @@
 pub mod ethdebug;
 pub mod model;
+pub mod source_lookup;
 
 pub use ethdebug::{
     ETHDEBUG_FALLBACK_PROGRAM_ID, ETHDEBUG_SCHEMA_VERSION, EthdebugArtifact, EthdebugByteRange,
@@ -15,3 +16,5 @@ pub use model::{
     DebugSourceFile, DebugSourceSpan, DebugType, DebugVariable, InstructionClassification,
     build_debug_bundle,
 };
+
+pub use source_lookup::{ResolvedInstruction, SourceLocation, SourceLookup};

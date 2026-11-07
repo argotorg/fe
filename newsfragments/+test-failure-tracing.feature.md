@@ -1,0 +1,1 @@
+Added `fe test --explain-failure` to explain failed EVM tests using the actual call tree, decoded revert data, and verified source locations from the executed test build. Diagnostic reports retain structured traces, compiler facts, and source snapshots. Combined tracing options now observe the same execution in this mode, including test deployment failures.
