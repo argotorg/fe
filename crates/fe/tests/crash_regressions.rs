@@ -138,6 +138,13 @@ fn selected_const_invocation_extents_reduce_before_structural_repacking() {
 }
 
 #[test]
+fn const_fn_extents_allow_storing_whole_array_rows() {
+    let run = run_fe_check(&fixtures_dir().join("const_fn_nested_array_store.fe"));
+    assert!(!run.timed_out, "timed out: {}", run.combined);
+    assert_eq!(run.code, 0, "{}", run.combined);
+}
+
+#[test]
 fn crash_regressions_do_not_panic() {
     assert_fixtures_check_cleanly(&fixtures_dir(), &[]);
 }
