@@ -1,0 +1,28 @@
+use std::abi::SolCompat
+
+struct WrongType { value: u256 }
+impl SolCompat for WrongType {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "address"
+}
+
+struct InvalidType { value: u256 }
+impl SolCompat for InvalidType {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "uint7"
+}
+
+struct WrongTuple { value: u256 }
+impl SolCompat for WrongTuple {
+    type S = String<9>
+    const SOL_TYPE: Self::S = "(address)"
+}
+
+msg Invalid {
+    #[selector = sol("mismatch(uint256)")]
+    Mismatch { value: WrongType },
+    #[selector = sol("invalid(uint256)")]
+    InvalidName { value: InvalidType },
+    #[selector = sol("tuple((uint256))")]
+    InvalidTuple { value: WrongTuple },
+}

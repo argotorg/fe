@@ -3971,6 +3971,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "msg_enum_field",
     "msg_multiple_dynamic_bytes",
     "msg_nested_array_arg",
+    "msg_struct_sol_compat",
     "mul_div",
     "multicall",
     "mut_self_storage_receiver_regression",
