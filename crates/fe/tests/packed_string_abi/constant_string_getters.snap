@@ -3,7 +3,7 @@ source: crates/fe/tests/packed_string_abi.rs
 assertion_line: 116
 expression: report
 ---
-runtime bytes: 315
-name() gas: 565
-symbol() gas: 583
-empty() gas: 549
+runtime bytes: 296
+name() gas: 522
+symbol() gas: 540
+empty() gas: 492
