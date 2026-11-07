@@ -93,3 +93,40 @@ fn count_up<const N: usize>(_ x: u256) -> u256 {
 fn calls_count_up() -> u256 {
     count_up<0>(3)
 }
+
+// A generic function is not rejected for the instances without parameters it
+// calls: `grow<u256>` is rejected as itself, at `grow`'s growing call.
+fn generic_calls_grow<T: Copy>(_ x: T) -> u256 {
+    grow(1 as u256, 2)
+}
+
+// Rejected: a const argument grows in an instance that keeps a type parameter,
+// reached from a generic caller and from a concrete one.
+fn count_up_with<T: Copy, const N: usize>(_ x: T, _ n: u256) -> u256 {
+    if n == 0 { N as u256 } else { count_up_with<T, { N + 1 }>(x, n - 1) }
+}
+
+fn calls_count_up_with<T: Copy>(_ x: T) -> u256 {
+    count_up_with<T, 0>(x, 3)
+}
+
+fn calls_count_up_with_u256() -> u256 {
+    calls_count_up_with(1 as u256)
+}
+
+struct Cell {
+    x: u256,
+}
+
+impl Cell {
+    // Rejected: a projection whose argument doubles at each call.
+    fn pick<T>(mut? self, _ n: u256) -> mut? u256 {
+        if n == 0 { mut? self.x } else { mut? self.pick<(T, T)>(n - 1) }
+    }
+
+    // A generic projection is not rejected for the growing instance it calls,
+    // and checking whether it reaches itself stops there.
+    fn generic_pick<T>(mut? self) -> mut? u256 {
+        mut? self.pick<u8>(3)
+    }
+}

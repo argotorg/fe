@@ -1754,7 +1754,7 @@ impl<'db> SemanticInstance<'db> {
             return Err(SemanticBodyAdmissionError::InstanceLimit(diag));
         }
         // A native panic needs no revert data. This follows calls out of
-        // `self`, whose instance limits the check above has bounded.
+        // `self`, stopping at instances past the instance limits.
         if db.compilation_settings().target(db) == Target::Evm
             && let Some((origin, ty)) =
                 instance_calls(db, self)
@@ -1911,7 +1911,8 @@ fn unencodable_call_panic<'db>(
 }
 
 /// The type `instance`, or any instance it calls, panics with that can't be
-/// revert data.
+/// revert data. An instance past the instance limits is rejected as itself,
+/// and its calls need not end, so this does not follow them.
 #[salsa::tracked(returns(copy), cycle_initial = unencodable_panic_cycle_initial)]
 fn unencodable_panic<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -1922,6 +1923,7 @@ fn unencodable_panic<'db>(
         .typed_body(db)
         .smir_lowering_issues(db)
         .is_empty()
+        || instance_limit_violation(db, instance).is_some()
     {
         return None;
     }
@@ -1938,7 +1940,7 @@ fn unencodable_panic_cycle_initial<'db>(
     None
 }
 
-/// The first call, in `instance` or in any instance it makes, that makes an
+/// The first call, in `instance` or in an instance it reaches, that makes an
 /// instance whose generic arguments nest more than [`PROJECTION_DEPTH_LIMIT`]
 /// levels deep or have more than [`PROJECTION_WORK_LIMIT`] type nodes.
 ///
@@ -1948,8 +1950,20 @@ fn unencodable_panic_cycle_initial<'db>(
 /// that reaches a rejected one stops at the first chain to end: recursion
 /// growing its arguments in two ways makes exponentially many instances
 /// within the bounds, of which this follows one chain.
+///
+/// An instance reaches the instances it calls, except that a generic one,
+/// whose arguments mention generic parameters, reaches only its generic
+/// callees: a concrete callee of a generic body is judged as itself, and the
+/// body is not rejected for it. A function instance also reaches its identity
+/// instance, unless its arguments are all generic parameters.
+///
+/// Instances that call one another, as an interpreter's handlers do by
+/// dispatching to one another, would otherwise make one salsa cycle, whose
+/// bookkeeping grows faster than the cycle: the concrete instances with their
+/// identity instances, and the generic instances each identity instance
+/// calls, which name its own parameters, with the other identity instances.
 #[salsa::tracked(returns(copy), cycle_initial = instance_limit_violation_cycle_initial)]
-fn instance_limit_violation<'db>(
+pub(crate) fn instance_limit_violation<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Option<SemanticDiagnosticId<'db>> {
@@ -1962,8 +1976,13 @@ fn instance_limit_violation<'db>(
         return None;
     }
     // Growth a function's own calls make is visible in its identity instance,
-    // where `{ N + 1 }` nests though concrete values do not grow.
-    if let BodyOwner::Func(_, _) = instance.key(db).owner(db) {
+    // where `{ N + 1 }` nests though concrete values do not grow. An instance
+    // whose arguments are all parameters, a renaming of its identity instance,
+    // shows that growth itself. A generic instance's identity instance is
+    // generic too.
+    let args = instance.key(db).subst(db).generic_args(db);
+    let renaming = !args.is_empty() && args.iter().all(|arg| arg.as_generic_param(db).is_some());
+    if !renaming && let BodyOwner::Func(_, _) = instance.key(db).owner(db) {
         let identity = identity_semantic_instance_key(db, instance.key(db).owner(db));
         if identity != instance.key(db)
             && let Some(diag) = instance_limit_violation(db, SemanticInstance::new(db, identity))
@@ -2004,8 +2023,11 @@ fn instance_limit_violation<'db>(
             ));
         }
     }
+    let generic = |args: &[TyId<'db>]| args.iter().any(|arg| arg.has_param(db));
+    let instance_generic = generic(args);
     calls
         .iter()
+        .filter(|(_, callee)| !instance_generic || generic(callee.key.subst(db).generic_args(db)))
         .find_map(|(_, callee)| instance_limit_violation(db, SemanticInstance::new(db, callee.key)))
 }
 
