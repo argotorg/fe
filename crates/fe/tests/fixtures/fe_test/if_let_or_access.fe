@@ -46,6 +46,28 @@ fn value_if_small(_ o: Option<(u256, u256)>) -> u256 {
     100
 }
 
+struct Token { v: u256 }
+
+enum Kind {
+    A(u256),
+    B(Token),
+}
+
+fn token_if_small(_ n: u256) -> u256 {
+    // The test extracts the payload, which the binding takes from.
+    if let Option::Some((0 | 1, t)) = Option::Some((n, Token { v: n + 10 })) {
+        return t.v
+    }
+    100
+}
+
+fn token_if_kind(_ k: own Kind, _ n: u256) -> u256 {
+    if let Option::Some((Kind::A(0) | Kind::B(_), t)) = Option::Some((k, Token { v: n })) {
+        return t.v
+    }
+    100
+}
+
 #[test]
 fn test_if_let_or_access() {
     var p = Pair { a: 0, b: 1 }
@@ -61,4 +83,9 @@ fn test_if_let_or_access() {
     assert(q.b == 2)
     assert(value_if_small(Option::Some((1, 7))) == 7)
     assert(value_if_small(Option::Some((3, 7))) == 100)
+    assert(token_if_small(1) == 11)
+    assert(token_if_small(3) == 100)
+    assert(token_if_kind(Kind::A(0), 7) == 7)
+    assert(token_if_kind(Kind::B(Token { v: 1 }), 8) == 8)
+    assert(token_if_kind(Kind::A(1), 9) == 100)
 }

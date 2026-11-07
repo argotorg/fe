@@ -251,6 +251,16 @@ impl<'db> DecisionTreeProjectionCache<'db> {
             .find_map(|(candidate, ty)| (candidate == path).then_some(*ty))
     }
 
+    /// Keep the projections `other` holds too: the ones made before their
+    /// paths through the tree split.
+    fn retain_shared(&mut self, other: &Self) {
+        self.entries.retain(|(path, value)| {
+            other
+                .get(path)
+                .is_some_and(|shared| shared.value == value.value)
+        });
+    }
+
     fn longest_prefix(
         &self,
         path: &ProjectionPath<'db>,
@@ -265,8 +275,7 @@ impl<'db> DecisionTreeProjectionCache<'db> {
 }
 
 /// What a decision-tree leaf does once a pattern row is known to match.
-#[derive(Clone, Copy)]
-enum DecisionTreeTarget<'a> {
+enum DecisionTreeTarget<'a, 'db> {
     /// `match` expression: lower the arm body, assign the result, jump to the
     /// join block.
     MatchArms {
@@ -281,15 +290,16 @@ enum DecisionTreeTarget<'a> {
         then_bb: SBlockId,
         else_bb: SBlockId,
         pat: PatId,
-        /// Whether a matching leaf binds before its jump, or `then_bb` binds.
-        bind: bool,
+        /// When `then_bb` binds instead of the matching leaves, the
+        /// projections each leaf made before its jump.
+        unbound: Option<Vec<DecisionTreeProjectionCache<'db>>>,
     },
 }
 
-impl DecisionTreeTarget<'_> {
+impl<'db> DecisionTreeTarget<'_, 'db> {
     /// Where a test the tree makes on the way to arm `arm` is reported: that
     /// arm's pattern.
-    fn test_origin<'db>(&self, arm: Option<usize>) -> SemOrigin<'db> {
+    fn test_origin(&self, arm: Option<usize>) -> SemOrigin<'db> {
         match self {
             Self::MatchArms { arms, .. } => arm
                 .and_then(|arm| arms.get(arm))
@@ -400,28 +410,36 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // The leaves of `|` alternatives bind the same names at the same
         // paths, since an alternative binds nothing, so they bind once where
         // they meet: an access binding has one definition.
+        // A binding reuses the projections the leaves share, which the tests
+        // made before the leaves' paths split: a non-`Copy` component is
+        // moved out of the scrutinee once.
         let bind_bb = (matched.len() > 1).then(|| self.new_block());
         let mut projections =
-            DecisionTreeProjectionCache::new(self.db, pattern_store, &[root], source.clone());
-        self.lower_decision_tree(
-            &tree,
-            &mut projections,
-            DecisionTreeTarget::Branch {
-                then_bb: bind_bb.unwrap_or(then_bb),
-                else_bb,
-                pat,
-                bind: bind_bb.is_none(),
-            },
-        );
-        if let Some(bind_bb) = bind_bb {
+            DecisionTreeProjectionCache::new(self.db, pattern_store, &[root], source);
+        let mut target = DecisionTreeTarget::Branch {
+            then_bb: bind_bb.unwrap_or(then_bb),
+            else_bb,
+            pat,
+            unbound: bind_bb.map(|_| Vec::new()),
+        };
+        self.lower_decision_tree(&tree, &mut projections, &mut target);
+        if let Some(bind_bb) = bind_bb
+            && let DecisionTreeTarget::Branch {
+                unbound: Some(leaves),
+                ..
+            } = target
+        {
             debug_assert!(
                 matched
                     .iter()
                     .all(|leaf| leaf.bindings == matched[0].bindings)
             );
+            let mut leaves = leaves.into_iter();
+            let mut projections = leaves.next().expect("a matching leaf");
+            for leaf in leaves {
+                projections.retain_shared(&leaf);
+            }
             self.switch_to(bind_bb);
-            let mut projections =
-                DecisionTreeProjectionCache::new(self.db, pattern_store, &[root], source);
             self.bind_decision_tree_leaf(matched[0], &mut projections);
             self.set_terminator(
                 self.current,
@@ -754,12 +772,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             &roots,
             source,
         );
-        let target = DecisionTreeTarget::MatchArms {
+        let mut target = DecisionTreeTarget::MatchArms {
             result,
             join_bb,
             arms,
         };
-        let join_reachable = self.lower_decision_tree(&tree, &mut projections, target);
+        let join_reachable = self.lower_decision_tree(&tree, &mut projections, &mut target);
         self.switch_to(join_bb);
         if join_reachable {
             self.hold_defined(result);
@@ -773,10 +791,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         tree: &DecisionTree<'db>,
         projections: &mut DecisionTreeProjectionCache<'db>,
-        target: DecisionTreeTarget<'_>,
+        target: &mut DecisionTreeTarget<'_, 'db>,
     ) -> bool {
         match tree {
-            DecisionTree::Unreachable => match target {
+            DecisionTree::Unreachable => match *target {
                 DecisionTreeTarget::MatchArms { .. } => {
                     self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
                     false
@@ -786,7 +804,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     true
                 }
             },
-            DecisionTree::Leaf(leaf) => match target {
+            DecisionTree::Leaf(leaf) => match *target {
                 // An arm's scope holds what it binds.
                 DecisionTreeTarget::MatchArms {
                     result,
@@ -816,14 +834,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 DecisionTreeTarget::Branch {
                     then_bb,
                     else_bb,
-                    bind,
-                    ..
+                    pat,
+                    ref mut unbound,
                 } => {
                     if leaf.arm_index == 0 {
-                        if bind {
-                            self.bind_decision_tree_leaf(leaf, projections);
+                        match unbound {
+                            Some(leaves) => leaves.push(projections.clone()),
+                            None => self.bind_decision_tree_leaf(leaf, projections),
                         }
-                        let origin = target.test_origin(Some(0));
+                        let origin = SemOrigin::Pat(pat);
                         self.set_terminator(self.current, origin, STerminatorKind::Goto(then_bb));
                     } else {
                         self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
@@ -841,7 +860,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         switch: &SwitchNode<'db>,
         projections: &mut DecisionTreeProjectionCache<'db>,
-        target: DecisionTreeTarget<'_>,
+        target: &mut DecisionTreeTarget<'_, 'db>,
     ) -> bool {
         // A struct or tuple has one constructor, so an inspected place's tests
         // read only the components they test below it.
