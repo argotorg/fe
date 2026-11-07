@@ -2881,7 +2881,7 @@ pub contract C uses (evm: mut Evm) {
 
         let file_url = temp_fixture_url("test_failure_debug_facts.fe");
         let source = r#"
-use std::evm::{Call, Create, Evm}
+use std::evm::{Call, Create, Evm, Wei}
 use std::abi::sol
 msg ProbeMsg {
     #[selector = sol("read()")]
@@ -2894,8 +2894,8 @@ pub contract Probe {
 }
 #[test]
 fn deploy_and_call() uses (evm: mut Evm) {
-    let addr = evm.create2<Probe>(value: 0, args: (), salt: 0)
-    let value = evm.call(addr: addr, gas: 100000, value: 0, message: ProbeMsg::Read {})
+    let addr = evm.create2<Probe>(value: Wei::zero(), args: (), salt: 0)
+    let value = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: ProbeMsg::Read {})
     assert!(value == 7)
 }
 "#;
