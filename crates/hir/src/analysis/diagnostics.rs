@@ -3792,6 +3792,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 diag
             }
 
+            Self::RuntimeParameterInConst { primary, path } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "runtime parameter cannot be used in a type-level const expression".to_string(),
+                sub_diagnostics: vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    format!("`{}` resolves to a function parameter here", path.pretty_print(db)),
+                    primary.resolve(db),
+                )],
+                notes: vec!["if a function or constant has the same name, rename the parameter or qualify the item path".to_string()],
+                error_code,
+            },
             Self::ConstValueMustBeKnown(span) => primary_diag(
                 severity,
                 "const value must be resolvable during type checking",

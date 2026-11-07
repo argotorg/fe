@@ -15,8 +15,10 @@ error[8-0064]: const value must be resolvable during type checking
 18 │ fn closed_opaque() -> u8 { [0 as u8; opaque()][0] }
    │                                      ^^^^^^^^ requires fully-resolved const value
 
-error[8-0064]: const value must be resolvable during type checking
+error[8-0158]: runtime parameter cannot be used in a type-level const expression
    ┌─ array_rep_unforceable_length.fe:22:44
    │
 22 │ fn runtime(_ n: usize) -> u8 { [0 as u8; { n + 1 }][0] }
-   │                                            ^ requires fully-resolved const value
+   │                                            ^ `n` resolves to a function parameter here
+   │
+   = if a function or constant has the same name, rename the parameter or qualify the item path

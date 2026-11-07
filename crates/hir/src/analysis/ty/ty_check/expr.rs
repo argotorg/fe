@@ -4820,9 +4820,10 @@ impl<'db> TyChecker<'db> {
                 PathRes::FuncParam(..) => {
                     // An anonymous const body can see the declaration's scope,
                     // but does not have its runtime parameter bindings.
-                    self.push_diag(BodyDiag::ConstValueMustBeKnown(
-                        path_expr_span.clone().into(),
-                    ));
+                    self.push_diag(BodyDiag::RuntimeParameterInConst {
+                        primary: path_expr_span.clone().into(),
+                        path,
+                    });
                     ExprProp::invalid(self.db)
                 }
             },

@@ -9,26 +9,34 @@ error[8-0012]: undefined variable
 14 │     let values: [u8; { n }] = [1]
    │                        ^ undefined variable `n`
 
-error[8-0064]: const value must be resolvable during type checking
+error[8-0158]: runtime parameter cannot be used in a type-level const expression
   ┌─ const_type_runtime_value.fe:6:24
   │
 6 │     let values: [u8; { n }] = [1, 2]
-  │                        ^ requires fully-resolved const value
+  │                        ^ `n` resolves to a function parameter here
+  │
+  = if a function or constant has the same name, rename the parameter or qualify the item path
 
-error[8-0064]: const value must be resolvable during type checking
+error[8-0158]: runtime parameter cannot be used in a type-level const expression
    ┌─ const_type_runtime_value.fe:10:36
    │
 10 │ fn signature(_ n: usize) -> [u8; { n }] { [1] }
-   │                                    ^ requires fully-resolved const value
+   │                                    ^ `n` resolves to a function parameter here
+   │
+   = if a function or constant has the same name, rename the parameter or qualify the item path
 
-error[8-0064]: const value must be resolvable during type checking
+error[8-0158]: runtime parameter cannot be used in a type-level const expression
    ┌─ const_type_runtime_value.fe:18:42
    │
 18 │ fn repeat(_ n: usize) -> [u8; 1] { [0; { n }] }
-   │                                          ^ requires fully-resolved const value
+   │                                          ^ `n` resolves to a function parameter here
+   │
+   = if a function or constant has the same name, rename the parameter or qualify the item path
 
-error[8-0064]: const value must be resolvable during type checking
+error[8-0158]: runtime parameter cannot be used in a type-level const expression
    ┌─ const_type_runtime_value.fe:20:41
    │
 20 │ fn argument(_ n: usize) -> usize { id<{ n }>() }
-   │                                         ^ requires fully-resolved const value
+   │                                         ^ `n` resolves to a function parameter here
+   │
+   = if a function or constant has the same name, rename the parameter or qualify the item path

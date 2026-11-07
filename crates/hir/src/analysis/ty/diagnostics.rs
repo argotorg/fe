@@ -751,6 +751,10 @@ pub enum BodyDiag<'db> {
         reason: &'static str,
     },
     ConstValueMustBeKnown(DynLazySpan<'db>),
+    RuntimeParameterInConst {
+        primary: DynLazySpan<'db>,
+        path: PathId<'db>,
+    },
     ConstDependencyMustBeKnown {
         primary: DynLazySpan<'db>,
         dependency: String,
@@ -1508,6 +1512,7 @@ impl<'db> BodyDiag<'db> {
             Self::NoStorageLayout { .. } => 128,
             Self::InvalidCast { .. } => 55,
             Self::ConstValueMustBeKnown(..) => 64,
+            Self::RuntimeParameterInConst { .. } => 158,
             Self::ConstDependencyMustBeKnown { .. } => 90,
             Self::ConstEvaluationFailed { .. } => 89,
             Self::CallReturnTypeConstFault { .. } => 96,
