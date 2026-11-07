@@ -818,6 +818,10 @@ pub enum BodyDiag<'db> {
     },
     UnsupportedUnaryPlus(DynLazySpan<'db>),
     UnsupportedMacroCall(DynLazySpan<'db>),
+    BlackBoxNonScalar {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
     IntLiteralOutOfRange {
         primary: DynLazySpan<'db>,
         literal: String,
@@ -1526,6 +1530,7 @@ impl<'db> BodyDiag<'db> {
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,
             Self::UnsupportedMacroCall(..) => 89,
+            Self::BlackBoxNonScalar { .. } => 157,
             Self::IntLiteralOutOfRange { .. } => 74,
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,

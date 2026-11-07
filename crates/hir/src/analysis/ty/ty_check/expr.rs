@@ -4282,6 +4282,22 @@ impl<'db> TyChecker<'db> {
         self.check_drop_call(expr, callable.callable_def());
         let ret_ty = callable.ret_ty(self.db);
         let ret_ty = self.normalize_ty(ret_ty);
+        // black_box returns its argument type. Diagnose known non-scalar
+        // arguments here, while the source call span is still available.
+        if let CallableDef::Func(func) = callable.callable_def()
+            && Some(func)
+                == resolve_lib_func_path(self.db, self.env.scope(), "core::hint::black_box")
+            && (ret_ty.is_array(self.db)
+                || ret_ty.is_tuple(self.db)
+                || ret_ty.adt_ref(self.db).is_some()
+                || ret_ty.as_ptr(self.db).is_some())
+        {
+            self.push_diag(BodyDiag::BlackBoxNonScalar {
+                primary: expr.span(self.body()).into(),
+                ty: ret_ty,
+            });
+            return ExprProp::invalid(self.db);
+        }
         self.report_instantiated_const_fault(&callable, ret_ty, expr);
         let shape = callable
             .ret_shape(self.db)

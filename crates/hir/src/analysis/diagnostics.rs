@@ -4005,6 +4005,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+            Self::BlackBoxNonScalar { primary, ty } => primary_diag(
+                Severity::Error,
+                "`core::hint::black_box` requires a scalar argument",
+                format!("expected an integer or `bool`, but found `{}`", ty.pretty_print(db)),
+                primary.resolve(db),
+                error_code,
+            ),
             Self::UnsupportedMacroCall(primary) => primary_diag(
                 Severity::Error,
                 "unsupported macro call",
