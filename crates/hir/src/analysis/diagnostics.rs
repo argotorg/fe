@@ -3986,7 +3986,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::BlackBoxNonScalar { primary, ty } => primary_diag(
                 Severity::Error,
                 "`core::hint::black_box` requires a scalar argument",
-                &format!("expected an integer or `bool`, but found `{}`", ty.pretty_print(db)),
+                format!("expected an integer or `bool`, but found `{}`", ty.pretty_print(db)),
                 primary.resolve(db),
                 error_code,
             ),
