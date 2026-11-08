@@ -1709,10 +1709,49 @@ impl<'db> TyChecker<'db> {
                     let Some(hir_ty) = param.ty.to_opt() else {
                         continue;
                     };
-                    let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions);
-                    let span: DynLazySpan<'db> =
-                        contract.span().init_block().params().param(idx).ty().into();
-                    let source = lower_hir_ty_deferred(self.db, hir_ty, scope, assumptions);
+                    let ty_span = contract.span().init_block().params().param(idx).ty();
+                    // The type is checked where it is written. The outer mode
+                    // belongs to the parameter, not to its type.
+                    let (inner_ty, inner_span) = match hir_ty.data(self.db) {
+                        TypeKind::Mode(_, inner) => {
+                            (inner.to_opt(), ty_span.clone().into_mode_type().inner())
+                        }
+                        _ => (Some(hir_ty), ty_span.clone()),
+                    };
+                    if let Some(inner_ty) = inner_ty {
+                        let checked = check_written_ty(
+                            self.db,
+                            scope,
+                            inner_ty,
+                            inner_span,
+                            assumptions,
+                            ConstBodyLowering::Eager,
+                            Some(TraitSolveCx::new(self.db, scope).with_assumptions(assumptions)),
+                        );
+                        let reported = if checked.errors.is_empty() {
+                            checked.ill_formed
+                        } else {
+                            checked.errors
+                        };
+                        if !reported.is_empty() {
+                            reported.into_iter().for_each(|diag| self.push_diag(diag));
+                            continue;
+                        }
+                    }
+                    // A parameter has its normalized type's size.
+                    let ty = normalize_ty(
+                        self.db,
+                        lower_hir_ty(self.db, hir_ty, scope, assumptions),
+                        scope,
+                        assumptions,
+                    );
+                    let span: DynLazySpan<'db> = ty_span.into();
+                    let source = normalize_ty(
+                        self.db,
+                        lower_hir_ty_deferred(self.db, hir_ty, scope, assumptions),
+                        scope,
+                        assumptions,
+                    );
                     match runtime_size_bytes_with_source(self.db, ConcreteTypeView::new(ty, source))
                     {
                         Err(RuntimeSizeError::InvalidType(cause)) => {

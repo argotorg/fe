@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/contract_init_param_types.fe
+---
+error[2-0002]: `Missing` is not found
+   ┌─ contract_init_param_types.fe:20:13
+   │
+20 │     init(a: Missing, b: Foo<u8>, c: own Foo<bool>) {}
+   │             ^^^^^^^ `Missing` is not found
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ contract_init_param_types.fe:16:13
+   │
+16 │     init(a: <W<u16> as Ty>::A) {}
+   │             ^^^^^^^^^^^^^^^^^
+   │             │
+   │             `W<u16>` doesn't implement `Ty`
+   │             trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ contract_init_param_types.fe:20:25
+   │
+20 │     init(a: Missing, b: Foo<u8>, c: own Foo<bool>) {}
+   │                         ^^^^^^^ `u8` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ contract_init_param_types.fe:20:41
+   │
+20 │     init(a: Missing, b: Foo<u8>, c: own Foo<bool>) {}
+   │                                         ^^^^^^^^^ `bool` doesn't implement `Marker`
