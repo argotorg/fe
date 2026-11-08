@@ -1,0 +1,49 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_default_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ generic_default_bounds.fe:9:13
+  │
+9 │ fn take<U = <W<u16> as Ty>::A>(_ x: U) {}
+  │             ^^^^^^^^^^^^^^^^^
+  │             │
+  │             `W<u16>` doesn't implement `Ty`
+  │             trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ generic_default_bounds.fe:13:17
+   │
+13 │     fn take<U = <W<u16> as Ty>::A>(self, _ x: U) {}
+   │                 ^^^^^^^^^^^^^^^^^
+   │                 │
+   │                 `W<u16>` doesn't implement `Ty`
+   │                 trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ generic_default_bounds.fe:16:15
+   │
+16 │ trait Get<U = <W<u16> as Ty>::A> {
+   │               ^^^^^^^^^^^^^^^^^
+   │               │
+   │               `W<u16>` doesn't implement `Ty`
+   │               trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ generic_default_bounds.fe:20:19
+   │
+20 │ struct Holder<U = <W<u16> as Ty>::A> { x: U }
+   │                   ^^^^^^^^^^^^^^^^^
+   │                   │
+   │                   `W<u16>` doesn't implement `Ty`
+   │                   trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ generic_default_bounds.fe:24:21
+   │
+24 │ fn unbounded<T, U = <W<T> as Ty>::A>(_ t: T, _ u: U) {}
+   │                     ^^^^^^^^^^^^^^^
+   │                     │
+   │                     `W<T>` doesn't implement `Ty`
+   │                     trait bound `T: Gate` is not satisfied

@@ -301,27 +301,6 @@ pub fn collect_hir_ty_diags<'db>(
     .errors
 }
 
-/// The errors in a declaration template's written type. Anonymous const
-/// bodies are checked by the declaration's body-validation owner.
-pub(crate) fn collect_hir_ty_diags_deferred<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    hir_ty: TypeId<'db>,
-    span: LazyTySpan<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    check_written_ty(
-        db,
-        scope,
-        hir_ty,
-        span,
-        assumptions,
-        ConstBodyLowering::Deferred,
-        None,
-    )
-    .errors
-}
-
 /// What [`check_written_ty`] found in a written type.
 #[derive(Default)]
 pub(crate) struct WrittenTyDiags<'db> {
