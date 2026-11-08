@@ -60,7 +60,7 @@ func private %alloc__g8571() -> i256 {
         return v2;
 }
 
-func private %impl_MemSlice__byte_len__ge513(noalias nocapture v0.objref<@layout_0>) -> i256 {
+func private %impl_MemSlice__byte_len__ge513(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -570,7 +570,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func inline(always) private %mem_array_elem(noalias nocapture v0.objref<@layout_0>, v1.i256) -> i256 {
+func inline(always) private %mem_array_elem(noalias nocapture readonly v0.objref<@layout_0>, v1.i256) -> i256 {
     block0:
         jump block1;
 

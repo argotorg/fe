@@ -1,14 +1,17 @@
 use hir::analysis::ty::AddressSpace;
 use hir::analysis::{
     semantic::{SemanticBody, SemanticInstance, same_owner_effect_binding},
-    ty::ty_check::{BodyOwner, LocalBinding},
+    ty::{
+        ty_check::{BodyOwner, LocalBinding},
+        ty_def::BorrowKind,
+    },
 };
 use hir::hir_def::FuncParamMode;
 
 use crate::{
     RuntimeInstanceKey,
     db::MirDb,
-    runtime::{RuntimeBoundarySpec, RuntimeParamPlan},
+    runtime::{BorrowAccess, RuntimeBoundarySpec, RuntimeParamPlan},
 };
 
 use super::{
@@ -53,21 +56,46 @@ pub(crate) fn runtime_param_locals<'db>(
         .collect()
 }
 
-/// Whether each runtime parameter of `key` is an access of its caller's
-/// place: a view or `mut` parameter, an access part of a product, or an
-/// effect. Fe's access rules make such a place exclusive to the call or
-/// unwritten during it.
-pub fn runtime_param_accesses<'db>(db: &'db dyn MirDb, key: RuntimeInstanceKey<'db>) -> Vec<bool> {
+/// How each runtime parameter of `key` accesses its caller's place, if it
+/// is an access rather than an owned value: a view parameter, a `ref` part
+/// of a product and a read-only effect read it, and a `mut` parameter or
+/// part and a mutable effect may write it. Fe's access rules make such a
+/// place exclusive to the call or unwritten during it, and nothing writes
+/// it through a read-only access.
+pub fn runtime_param_accesses<'db>(
+    db: &'db dyn MirDb,
+    key: RuntimeInstanceKey<'db>,
+) -> Vec<Option<BorrowAccess>> {
     let Some(semantic) = key.semantic(db) else {
         return Vec::new();
     };
     runtime_visible_binding_plans(db, semantic)
         .iter()
         .map(|entry| match entry.binding {
-            LocalBinding::Param { mode, .. } => mode != FuncParamMode::Own,
-            LocalBinding::ParamPart { access, .. } => access.is_some(),
-            LocalBinding::EffectParam { .. } => true,
-            LocalBinding::Local { .. } => false,
+            LocalBinding::Param {
+                mode: FuncParamMode::View,
+                ..
+            }
+            | LocalBinding::ParamPart {
+                access: Some(BorrowKind::Ref),
+                ..
+            }
+            | LocalBinding::EffectParam { is_mut: false, .. } => Some(BorrowAccess::ReadOnly),
+            LocalBinding::Param {
+                mode: FuncParamMode::Mut,
+                ..
+            }
+            | LocalBinding::ParamPart {
+                access: Some(BorrowKind::Mut),
+                ..
+            }
+            | LocalBinding::EffectParam { is_mut: true, .. } => Some(BorrowAccess::ReadWrite),
+            LocalBinding::Param {
+                mode: FuncParamMode::Own,
+                ..
+            }
+            | LocalBinding::ParamPart { access: None, .. }
+            | LocalBinding::Local { .. } => None,
         })
         .collect()
 }

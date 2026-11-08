@@ -33,14 +33,14 @@ use mir::runtime::{
     stable_key::{ingot_component_for_scope, module_path_components_for_scope},
 };
 use mir::{
-    ArrayLayout, ConstNode, ConstRegionId, ConstScalar, FieldPlacement, IntrinsicArithBinOp,
-    Layout, LayoutId, NativeRuntimeFunc, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator,
-    ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass,
-    RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot,
-    RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp,
-    ScalarClass, ScalarRepr, StructLayout, VariantId, WasmParamShape, WasmResultShape,
-    instance::RuntimeInstanceSource, resolve_runtime_place, runtime_param_accesses,
-    scalar_raw_memory_size_bytes,
+    ArrayLayout, BorrowAccess, ConstNode, ConstRegionId, ConstScalar, FieldPlacement,
+    IntrinsicArithBinOp, Layout, LayoutId, NativeRuntimeFunc, RBlock, RBlockId, RExpr, RLocalId,
+    RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin,
+    RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage,
+    RuntimeLocalRoot, RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec,
+    SaturatingBinOp, ScalarClass, ScalarRepr, StructLayout, VariantId, WasmParamShape,
+    WasmResultShape, instance::RuntimeInstanceSource, resolve_runtime_place,
+    runtime_param_accesses, scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
@@ -66,7 +66,7 @@ use sonatina_ir::{
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
             EvmBlockHash, EvmByte, EvmCall, EvmCallValue, EvmCalldataCopy, EvmCalldataLoad,
-            EvmCalldataSize, EvmCaller, EvmChainId, EvmClz, EvmCodeCopy, EvmCodeLoad, EvmCodeSize,
+            EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeLoad, EvmCodeSize,
             EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmExtCodeCopy,
             EvmExtCodeHash, EvmExtCodeSize, EvmGas, EvmGasLimit, EvmGasPrice, EvmInvalid,
             EvmKeccak256, EvmKeccak256Words, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
@@ -75,7 +75,7 @@ use sonatina_ir::{
             EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
             EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
-        logic::{And, Bswap, Not, Or, Xor},
+        logic::{And, Bswap, Clz, Not, Or, Xor},
     },
     isa::Isa,
     module::{FuncRef, ModuleCtx},
@@ -170,6 +170,7 @@ define_lowering_inst_set!(
     SymSize,
     And,
     Bswap,
+    Clz,
     Not,
     Or,
     Xor,
@@ -753,10 +754,18 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             None => Signature::new_unit(&symbol, linkage, &args),
         };
         // No access outlives the call it is passed to: Fe stores, returns
-        // and captures none.
+        // and captures none. Nothing writes through a read-only access.
+        let accesses = if self.argument_packs.contains_key(&instance) {
+            Vec::new()
+        } else {
+            runtime_param_accesses(self.db, instance.key(self.db))
+        };
         for (idx, ty) in args.iter().enumerate() {
             if ty.is_obj_ref(&self.builder.ctx) {
                 signature.set_nocapture_arg(idx);
+                if accesses.get(idx) == Some(&Some(BorrowAccess::ReadOnly)) {
+                    signature.set_readonly_arg(idx);
+                }
             }
         }
         Ok(signature)
@@ -1895,7 +1904,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         if !self.module.argument_packs.contains_key(&self.body.owner) {
             let accesses = runtime_param_accesses(self.module.db, self.body.key);
             for (idx, access) in accesses.into_iter().enumerate() {
-                if access
+                if access.is_some()
                     && let Some(&arg) = self.fb.func.arg_values.get(idx)
                     && self.fb.type_of(arg).is_obj_ref(&self.fb.module_builder.ctx)
                 {
@@ -2968,10 +2977,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeBuiltin::LeadingZeros { value } => {
                 let value = self.local_value(*value)?;
-                self.fb.insert_inst(
-                    EvmClz::new(self.module.required_inst::<EvmClz>()?, value),
-                    Type::I256,
-                )
+                self.fb
+                    .insert_inst(Clz::new(self.module.inst_set(), value), Type::I256)
             }
             RuntimeBuiltin::SwapBytes { value } => {
                 let value = self.local_value(*value)?;

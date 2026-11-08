@@ -443,7 +443,7 @@ func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
         return v3;
 }
 
-func private %len__g79ff(noalias nocapture v0.objref<@layout_4>) -> i256 {
+func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -502,7 +502,7 @@ func private %payload_size(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %ptr__g79ff(noalias nocapture v0.objref<@layout_4>) -> i256 {
+func private %ptr__g79ff(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
 
@@ -549,7 +549,7 @@ func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v5;
 }
 
-func private %return_bytes(noalias nocapture v0.objref<@layout_4>) {
+func private %return_bytes(noalias nocapture readonly v0.objref<@layout_4>) {
     block0:
         jump block1;
 
@@ -558,7 +558,7 @@ func private %return_bytes(noalias nocapture v0.objref<@layout_4>) {
         unreachable;
 }
 
-func private %return_data(noalias nocapture v0.objref<@layout_4>) {
+func private %return_data(noalias nocapture readonly v0.objref<@layout_4>) {
     block0:
         jump block1;
 

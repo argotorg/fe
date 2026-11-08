@@ -468,9 +468,9 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_object_parameters_are_nocapture_and_accesses_noalias() {
+fn native_object_parameter_marks() {
     let ir = with_top_mod_for_source(
-        "noalias_parameters.fe",
+        "parameter_marks.fe",
         r#"
 use core::option::Option
 struct Big { a: i32, b: i32, c: i32 }
@@ -480,6 +480,8 @@ impl Big {
     fn bump(mut self) { self.a += 1 }
 }
 fn tick() uses (ctx: mut Ctx) { ctx.n += 1 }
+fn peek() -> i32 uses (ctx: Ctx) { ctx.n }
+fn add_to(_ (mut out, ref big): (mut Ctx, ref Big)) { out.n += big.b }
 fn consume(var _ current: own Option<i32>) -> i32 {
     var sum = 0
     while let Option::Some(value) = current {
@@ -493,25 +495,40 @@ pub fn main() -> i32 {
     big.bump()
     var ctx = Ctx { n: 0 }
     with (ctx) { tick() }
-    big.total() + consume(Option::Some(3)) + ctx.n
+    add_to((mut ctx, ref big))
+    let seen = with (ctx) { peek() }
+    big.total() + consume(Option::Some(3)) + ctx.n + seen
 }
 "#,
         |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
     )
-    .expect("native noalias parameter IR");
+    .expect("native parameter mark IR");
     let signature = |name: &str| {
         ir.lines()
             .find(|line| line.starts_with("func ") && line.contains(name))
             .unwrap_or_else(|| panic!("missing {name}:\n{ir}"))
     };
     // A view, `mut` or effect parameter is an access of its caller's place,
-    // and no reference to any parameter outlives the call.
-    for name in ["total", "bump", "tick"] {
+    // and no reference to any parameter outlives the call. Nothing writes
+    // through a view, a `ref` part or a read-only effect.
+    for name in ["total", "peek"] {
+        assert!(
+            signature(name).contains("(noalias nocapture readonly v0.objref<"),
+            "{name}:\n{ir}"
+        );
+    }
+    for name in ["bump", "tick"] {
         assert!(
             signature(name).contains("(noalias nocapture v0.objref<"),
             "{name}:\n{ir}"
         );
     }
+    let add_to = signature("add_to");
+    assert!(
+        add_to.contains("(noalias nocapture v0.objref<")
+            && add_to.contains(", noalias nocapture readonly v1.objref<"),
+        "{ir}"
+    );
     // An owned parameter is no access, even when passed by reference.
     let consume = signature("consume");
     assert!(
