@@ -44,13 +44,14 @@ use crate::hir_def::{
 use crate::{
     hir_def::{
         ArithBinOp, BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr,
-        ExprId, Func, GenericParam, GenericParamOwner, IntegerId, LitKind, ManualContractRootAttr,
-        Partial, Pat, PatId, PathId, PathKind, StaticAssert, StaticAssertComparison, Stmt, StmtId,
-        StringId, TypeId as HirTyId, TypeKind, UnOp, WhereClauseOwner,
+        ExprId, Func, GenericParam, GenericParamOwner, IntegerId, ItemKind, LitKind,
+        ManualContractRootAttr, Partial, Pat, PatId, PathId, PathKind, StaticAssert,
+        StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, TypeKind, UnOp,
+        WhereClauseOwner,
     },
     span::{
-        DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, stmt::LazyStmtSpan,
-        types::LazyTySpan,
+        DynLazySpan, expr::LazyExprSpan, item::LazyItemSpan, pat::LazyPatSpan, path::LazyPathSpan,
+        stmt::LazyStmtSpan, types::LazyTySpan,
     },
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_path, walk_stmt},
 };
@@ -7624,12 +7625,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         walk_expr(self, ctxt, expr);
     }
 
-    fn visit_item(
-        &mut self,
-        _: &mut VisitorCtxt<'db, crate::core::visitor::prelude::LazyItemSpan<'db>>,
-        _: crate::core::hir_def::ItemKind<'db>,
-    ) {
-    }
+    fn visit_item(&mut self, _: &mut VisitorCtxt<'db, LazyItemSpan<'db>>, _: ItemKind<'db>) {}
 }
 
 impl<'db> TyCheckerFinalizer<'db> {
@@ -7706,6 +7702,14 @@ impl<'db> TyCheckerFinalizer<'db> {
                 let outer = self.stmt.replace(stmt);
                 walk_stmt(self, ctxt, stmt);
                 self.stmt = outer;
+            }
+
+            // A nested item is checked under its own bounds.
+            fn visit_item(
+                &mut self,
+                _: &mut VisitorCtxt<'db, LazyItemSpan<'db>>,
+                _: ItemKind<'db>,
+            ) {
             }
 
             fn visit_ty(
