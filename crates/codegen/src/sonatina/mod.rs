@@ -1152,7 +1152,7 @@ fn root_objects_named<'db>(
         .root_objects(db)
         .iter()
         .copied()
-        .filter(|object| object.name(db) == &name)
+        .filter(|object| object.name(db) == name)
         .collect()
 }
 
