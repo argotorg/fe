@@ -1,0 +1,33 @@
+// A recv arm's return type is written outside its body, and its bounds are
+// checked where it is written. An ill-formed one isn't compared with the
+// message's return type.
+trait Gate {}
+trait Marker {}
+trait Ty { type A }
+struct W<T> { t: T }
+struct Foo<X: Marker> { x: X }
+impl Gate for u32 {}
+impl<T: Gate> Ty for W<T> { type A = u8 }
+
+msg M {
+    #[selector = 0x01]
+    Proved -> u8,
+    #[selector = 0x02]
+    Unproved -> u8,
+    #[selector = 0x03]
+    Unbounded -> u8,
+}
+
+pub contract C {
+    recv M {
+        Proved -> <W<u32> as Ty>::A {
+            1
+        }
+        Unproved -> <W<u16> as Ty>::A {
+            1
+        }
+        Unbounded -> Foo<u8> {
+            1
+        }
+    }
+}

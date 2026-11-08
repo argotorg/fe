@@ -3147,11 +3147,29 @@ impl<'db> TyChecker<'db> {
         };
         let pat_ty = variant.ty;
 
-        // Get annotated return type from the arm
+        // The arm's return type is written outside its body, so its bounds
+        // are checked here, not with the body's written types. An ill-formed
+        // one isn't compared with the message's.
         let arm_ret_span = arm_span.clone().ret_ty();
-        let annotated = arm
-            .ret_ty
-            .map(|hir_ty| self.lower_ty(hir_ty, arm_ret_span.clone(), true));
+        let annotated = arm.ret_ty.map(|hir_ty| {
+            let ty = self.lower_ty(hir_ty, arm_ret_span.clone(), true);
+            let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
+            let ill_formed = check_written_ty(
+                self.db,
+                scope,
+                hir_ty,
+                arm_ret_span.clone(),
+                assumptions,
+                ConstBodyLowering::Eager,
+                Some(TraitSolveCx::new(self.db, scope).with_assumptions(assumptions)),
+            )
+            .ill_formed;
+            if ill_formed.is_empty() {
+                return ty;
+            }
+            ill_formed.into_iter().for_each(|diag| self.push_diag(diag));
+            TyId::invalid(self.db, InvalidCause::Other)
+        });
         let variant_ret = contract::get_msg_variant_return_type(self.db, pat_ty, self.env.scope());
 
         let ret_ty = match (variant_ret, annotated) {
