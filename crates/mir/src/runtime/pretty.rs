@@ -765,6 +765,9 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::LeadingZeros { value } => {
             format!("leading_zeros {}", format_local_id(*value))
         }
+        RuntimeBuiltin::TrailingZeros { value } => {
+            format!("trailing_zeros {}", format_local_id(*value))
+        }
         RuntimeBuiltin::SwapBytes { value } => {
             format!("swap_bytes {}", format_local_id(*value))
         }

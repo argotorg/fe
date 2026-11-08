@@ -219,6 +219,7 @@ define_runtime_intrinsics! {
     AddMod => (Core, ["num", "addmod"]),
     MulMod => (Core, ["num", "mulmod"]),
     LeadingZeros => (Core, ["num", "leading_zeros"]),
+    TrailingZeros => (Core, ["num", "trailing_zeros"]),
     ToBigEndian => (Core, ["num", "to_be"]),
     FromBigEndian => (Core, ["num", "from_be"]),
     ToLittleEndian => (Core, ["num", "to_le"]),
@@ -293,6 +294,7 @@ pub(crate) enum CtfeExternIntrinsic {
     AddMod,
     MulMod,
     LeadingZeros,
+    TrailingZeros,
     PanicCode,
 }
 
@@ -308,6 +310,9 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(RuntimeBuiltinFuncKind::MulMod) => return Some(CtfeExternIntrinsic::MulMod),
         Some(RuntimeBuiltinFuncKind::LeadingZeros) => {
             return Some(CtfeExternIntrinsic::LeadingZeros);
+        }
+        Some(RuntimeBuiltinFuncKind::TrailingZeros) => {
+            return Some(CtfeExternIntrinsic::TrailingZeros);
         }
         Some(RuntimeBuiltinFuncKind::PanicCode) => return Some(CtfeExternIntrinsic::PanicCode),
         _ => {}

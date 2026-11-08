@@ -1827,7 +1827,10 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 self.eval_evm_modular_arithmetic(result_ty, args, EvmModularArithmetic::Mul, origin)
             }
             Some(CtfeExternIntrinsic::LeadingZeros) => {
-                self.eval_leading_zeros(result_ty, args, origin)
+                self.eval_bit_count(true, result_ty, args, origin)
+            }
+            Some(CtfeExternIntrinsic::TrailingZeros) => {
+                self.eval_bit_count(false, result_ty, args, origin)
             }
             Some(CtfeExternIntrinsic::PanicCode) => {
                 let [code] = args else {
@@ -2103,21 +2106,31 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         Ok(CtfeConstValue::int_word(self.db, result_ty, value))
     }
 
-    fn eval_leading_zeros(
+    /// `leading_zeros` or `trailing_zeros`: the zero bits of `x` above its
+    /// highest set bit or below its lowest, within the width of its type.
+    fn eval_bit_count(
         &self,
+        leading: bool,
         result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        if result_ty != TyId::u256(self.db) {
-            return Err(CtfeError::NotConstEvaluable { origin });
-        }
-        let [value] = args else {
+        let ([value], Some((bits, _))) = (args, int_ty_shape(self.db, result_ty)) else {
             return Err(CtfeError::NotConstEvaluable { origin });
         };
-        let value = self.expect_u256_const(value, origin)?;
-        let zeros = U256::from(value.leading_zeros());
-        Ok(CtfeConstValue::int_word(self.db, result_ty, zeros))
+        let value = self.expect_int(value.clone(), origin)?;
+        let word = u256_from_bigint(&normalize_int_to_shape(value, bits, false));
+        let bits = usize::from(bits);
+        let zeros = if leading {
+            word.leading_zeros() - (256 - bits)
+        } else {
+            word.trailing_zeros().min(bits)
+        };
+        Ok(CtfeConstValue::int_word(
+            self.db,
+            result_ty,
+            U256::from(zeros),
+        ))
     }
 
     fn expect_u256_const(

@@ -312,6 +312,7 @@ pub fn main() -> i32 {
 fn the_test_runner_executes_host_fixtures() {
     for name in [
         "aggregate_object_copies",
+        "bit_counts",
         "const_aggregate_values",
         "drops",
         "fallible_allocation",

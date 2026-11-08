@@ -1,0 +1,126 @@
+// `core::num::leading_zeros` and `trailing_zeros` at every integer width.
+// `black_box` keeps the runtime cases out of constant evaluation.
+
+use core::hint::black_box
+use core::num::{leading_zeros, trailing_zeros}
+
+#[test]
+fn zero_counts_the_width() {
+    assert!(leading_zeros(black_box(0 as u8)) == 8 && trailing_zeros(black_box(0 as u8)) == 8)
+    assert!(leading_zeros(black_box(0 as u16)) == 16 && trailing_zeros(black_box(0 as u16)) == 16)
+    assert!(leading_zeros(black_box(0 as u32)) == 32 && trailing_zeros(black_box(0 as u32)) == 32)
+    assert!(leading_zeros(black_box(0 as u64)) == 64 && trailing_zeros(black_box(0 as u64)) == 64)
+    assert!(leading_zeros(black_box(0 as u128)) == 128 && trailing_zeros(black_box(0 as u128)) == 128)
+    assert!(leading_zeros(black_box(0 as u256)) == 256 && trailing_zeros(black_box(0 as u256)) == 256)
+    assert!(leading_zeros(black_box(0 as i8)) == 8 && trailing_zeros(black_box(0 as i8)) == 8)
+    assert!(leading_zeros(black_box(0 as i64)) == 64 && trailing_zeros(black_box(0 as i64)) == 64)
+    assert!(leading_zeros(black_box(0 as i256)) == 256 && trailing_zeros(black_box(0 as i256)) == 256)
+}
+
+#[test]
+fn all_ones_has_no_zeros() {
+    let byte: u8 = 0xff
+    assert!(leading_zeros(black_box(byte)) == 0 && trailing_zeros(black_box(byte)) == 0)
+    let short: u16 = 0xffff
+    assert!(leading_zeros(black_box(short)) == 0 && trailing_zeros(black_box(short)) == 0)
+    let int: u32 = 0xffffffff
+    assert!(leading_zeros(black_box(int)) == 0 && trailing_zeros(black_box(int)) == 0)
+    let lane: u64 = 0xffffffffffffffff
+    assert!(leading_zeros(black_box(lane)) == 0 && trailing_zeros(black_box(lane)) == 0)
+    let wide: u128 = 0xffffffffffffffffffffffffffffffff
+    assert!(leading_zeros(black_box(wide)) == 0 && trailing_zeros(black_box(wide)) == 0)
+    let word: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    assert!(leading_zeros(black_box(word)) == 0 && trailing_zeros(black_box(word)) == 0)
+    let minus_one: i32 = -1
+    assert!(leading_zeros(black_box(minus_one)) == 0 && trailing_zeros(black_box(minus_one)) == 0)
+}
+
+// A signed value counts the bits of its two's complement.
+#[test]
+fn signed_values_count_their_bits() {
+    let one: i8 = 1
+    assert!(leading_zeros(black_box(one)) == 7 && trailing_zeros(black_box(one)) == 0)
+    let min: i8 = -128
+    assert!(leading_zeros(black_box(min)) == 0 && trailing_zeros(black_box(min)) == 7)
+    let negative: i64 = -256
+    assert!(leading_zeros(black_box(negative)) == 0 && trailing_zeros(black_box(negative)) == 8)
+    let positive: i128 = 0x100
+    assert!(leading_zeros(black_box(positive)) == 119 && trailing_zeros(black_box(positive)) == 8)
+    let word_min: i256 = i256::min()
+    assert!(leading_zeros(black_box(word_min)) == 0 && trailing_zeros(black_box(word_min)) == 255)
+}
+
+#[test]
+fn every_bit_position() {
+    var bit: u8 = 0
+    while bit < 8 {
+        let power: u8 = black_box(1 << bit)
+        assert!(leading_zeros(power) == 7 - bit && trailing_zeros(power) == bit)
+        assert!(leading_zeros(power | 1) == 7 - bit && trailing_zeros(black_box(0xff as u8) << bit) == bit)
+        bit += 1
+    }
+    var bit: u16 = 0
+    while bit < 16 {
+        let power: u16 = black_box(1 << bit)
+        assert!(leading_zeros(power) == 15 - bit && trailing_zeros(power) == bit)
+        assert!(leading_zeros(power | 1) == 15 - bit && trailing_zeros(black_box(0xffff as u16) << bit) == bit)
+        bit += 1
+    }
+    var bit: u32 = 0
+    while bit < 32 {
+        let power: u32 = black_box(1 << bit)
+        assert!(leading_zeros(power) == 31 - bit && trailing_zeros(power) == bit)
+        assert!(leading_zeros(power | 1) == 31 - bit && trailing_zeros(black_box(0xffffffff as u32) << bit) == bit)
+        bit += 1
+    }
+    var bit: u64 = 0
+    while bit < 64 {
+        let power: u64 = black_box(1 << bit)
+        assert!(leading_zeros(power) == 63 - bit && trailing_zeros(power) == bit)
+        assert!(
+            leading_zeros(power | 1) == 63 - bit
+                && trailing_zeros(black_box(0xffffffffffffffff as u64) << bit) == bit,
+        )
+        bit += 1
+    }
+    var bit: u128 = 0
+    while bit < 128 {
+        let power: u128 = black_box(1 << bit)
+        assert!(leading_zeros(power) == 127 - bit && trailing_zeros(power) == bit)
+        assert!(
+            leading_zeros(power | 1) == 127 - bit
+                && trailing_zeros(black_box(0xffffffffffffffffffffffffffffffff as u128) << bit) == bit,
+        )
+        bit += 1
+    }
+    var bit: u256 = 0
+    while bit < 256 {
+        let power: u256 = black_box(1 << bit)
+        assert!(leading_zeros(power) == 255 - bit && trailing_zeros(power) == bit)
+        assert!(
+            leading_zeros(power | 1) == 255 - bit
+                && trailing_zeros(
+                    black_box(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff as u256) << bit,
+                ) == bit,
+        )
+        bit += 1
+    }
+}
+
+const LEADING_U8: u8 = leading_zeros(0x10 as u8)
+const TRAILING_U8: u8 = trailing_zeros(0 as u8)
+const TRAILING_U16: u16 = trailing_zeros(0x0f00 as u16)
+const LEADING_U32: u32 = leading_zeros(1 as u32)
+const LEADING_U64: u64 = leading_zeros(0 as u64)
+const TRAILING_U64: u64 = trailing_zeros(0x10000000000 as u64)
+const LEADING_U128: u128 = leading_zeros(0x300000000000000000000000000 as u128)
+const TRAILING_U256: u256 = trailing_zeros(1 << 200)
+const TRAILING_I8: i8 = trailing_zeros(i8::min())
+const LEADING_I256: i256 = leading_zeros(-1 as i256)
+
+#[test]
+fn counts_are_const() {
+    assert!(LEADING_U8 == 3 && TRAILING_U8 == 8 && TRAILING_U16 == 8 && LEADING_U32 == 31)
+    assert!(LEADING_U64 == 64 && TRAILING_U64 == 40 && LEADING_U128 == 22)
+    assert!(TRAILING_U256 == 200 && TRAILING_I8 == 7 && LEADING_I256 == 0)
+}

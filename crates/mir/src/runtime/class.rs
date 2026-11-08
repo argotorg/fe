@@ -503,16 +503,13 @@ fn builtin_result_class<'db>(
             verify_word_value(body, *modulus)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
-        RuntimeBuiltin::LeadingZeros { value } => {
-            verify_word_value(body, *value)?;
-            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
-        }
-        RuntimeBuiltin::SwapBytes { value } | RuntimeBuiltin::BlackBox { value } => {
-            match runtime_value_class(body, *value)? {
-                class @ RuntimeClass::Scalar(_) => Ok(Some(class.clone())),
-                _ => Err(VerifyError::InvalidExprClass(*value)),
-            }
-        }
+        RuntimeBuiltin::LeadingZeros { value }
+        | RuntimeBuiltin::TrailingZeros { value }
+        | RuntimeBuiltin::SwapBytes { value }
+        | RuntimeBuiltin::BlackBox { value } => match runtime_value_class(body, *value)? {
+            class @ RuntimeClass::Scalar(_) => Ok(Some(class.clone())),
+            _ => Err(VerifyError::InvalidExprClass(*value)),
+        },
         RuntimeBuiltin::Byte { pos, value } => {
             verify_word_value(body, *pos)?;
             verify_word_value(body, *value)?;
