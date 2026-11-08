@@ -209,7 +209,9 @@ impl<'db> WherePredicateBoundView<'db> {
         subject: ty::ty_def::TyId<'db>,
     ) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_lower;
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf, check_ty_wf};
+        use ty::trait_resolution::{
+            WellFormedness, check_trait_inst_wf, check_trait_inst_wf_without_self, check_ty_wf,
+        };
 
         let mut out = Vec::new();
         let owner_item = ItemKind::from(self.pred.clause.owner);
@@ -276,23 +278,24 @@ impl<'db> WherePredicateBoundView<'db> {
                     return out;
                 }
 
-                // For trait-level `Self: Bound` constraints, treat as preconditions;
-                // do not emit unsatisfied bound diagnostics here.
-                if !is_trait_self_subject {
-                    match check_trait_inst_wf(db, solve_cx, inst) {
-                        WellFormedness::WellFormed => {}
-                        WellFormedness::IllFormed { goal, .. } => {
-                            out.push(
-                                TraitConstraintDiag::TraitBoundNotSat {
-                                    span: span.into(),
-                                    primary_goal: goal,
-                                    unsat_subgoal: None,
-                                    required_by: None,
-                                }
-                                .into(),
-                            );
+                // A trait's `Self: Bound` is a requirement on its implementors,
+                // which provide what the bound's trait requires of `Self`. The
+                // rest, such as the bound's arguments, must hold here.
+                let wf = if is_trait_self_subject {
+                    check_trait_inst_wf_without_self(db, solve_cx, inst)
+                } else {
+                    check_trait_inst_wf(db, solve_cx, inst)
+                };
+                if let WellFormedness::IllFormed { goal, .. } = wf {
+                    out.push(
+                        TraitConstraintDiag::TraitBoundNotSat {
+                            span: span.into(),
+                            primary_goal: goal,
+                            unsat_subgoal: None,
+                            required_by: None,
                         }
-                    }
+                        .into(),
+                    );
                 }
             }
             Err(error) => out.extend(trait_bound_lowering_diag(
