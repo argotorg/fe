@@ -76,6 +76,30 @@ fn base64_roundtrip() {
 }
 
 #[test]
+fn base64_encodes_rfc4648_vectors() {
+    assert!(text::base64(("").span()) == "")
+    assert!(text::base64(("f").span()) == "Zg==")
+    assert!(text::base64(("fo").span()) == "Zm8=")
+    assert!(text::base64(("foo").span()) == "Zm9v")
+    assert!(text::base64(("foob").span()) == "Zm9vYg==")
+    assert!(text::base64(("fooba").span()) == "Zm9vYmE=")
+    assert!(text::base64(("foobar").span()) == "Zm9vYmFy")
+}
+
+#[test]
+fn base64_roundtrips_every_tail_length() {
+    // Inputs of every length up to 40 end in each tail and cross the
+    // encoder's 4-byte reads; the bytes from 0xd7 on have their high bits set.
+    let data = all_bytes()
+    for n in 0..41 {
+        let input = data.span().slice(offset: 215, len: n)
+        let encoded = text::base64(input)
+        assert!(encoded.len() == 4 * ((n + 2) / 3))
+        assert!(text::decode_base64(encoded).unwrap().span() == input)
+    }
+}
+
+#[test]
 fn base64_rejects() {
     // Wrong length or missing padding.
     assert!(text::decode_base64("Zg").is_none())

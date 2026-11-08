@@ -10,7 +10,7 @@ use super::abi::{Bytes, DynString}
 use super::fixed::{Fixed, UFixed}
 use super::iter::Driver
 use super::marker::Copy
-use super::num::{Bounded, IntDowncast}
+use super::num::{Bounded, IntDowncast, from_be}
 use super::option::Option
 use super::panic_code
 use super::panics::PANIC_ASSERT
@@ -291,23 +291,36 @@ fn digit_value(_ byte: u8) -> u256 {
 /// Returns the standard base64 encoding of `data`, with `=` padding
 /// (Solidity `Base64.encode`).
 pub fn base64(_ data: MemSpan) -> DynString {
-    let len = data.len()
-    let out = DynString::zeroed(4 * ((len + 2) / 3))
-    let dest = out.span().ptr()
-    var i: usize = 0
-    var j: usize = 0
-    while i < len {
-        let a = data.byte_at(i)
-        let b = if i + 1 < len { data.byte_at(i + 1) } else { 0 }
-        let c = if i + 2 < len { data.byte_at(i + 2) } else { 0 }
+    let out = DynString::zeroed(4 * ((data.len() + 2) / 3))
+    let alphabet: DynString = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let digits = alphabet.span().ptr()
+    var src = data.ptr()
+    var dest = out.span().ptr()
+    var remaining = data.len()
+    // While four bytes remain, read them at once and encode the first three.
+    while remaining > 3 {
         unsafe {
-            *ptr::offset_bytes(dest, j) = base64_digit(a >> 2)
-            *ptr::offset_bytes(dest, j + 1) = base64_digit(((a & 3) << 4) | (b >> 4))
-            *ptr::offset_bytes(dest, j + 2) = if i + 1 < len { base64_digit(((b & 15) << 2) | (c >> 6)) } else { 61 }
-            *ptr::offset_bytes(dest, j + 3) = if i + 2 < len { base64_digit(c & 63) } else { 61 }
+            let bits: u32 = from_be(*ptr::cast<u8, u32>(src)) >> 8
+            *dest = *ptr::offset_bytes(digits, ((bits >> 18) & 63) as usize)
+            *ptr::offset_bytes(dest, 1) = *ptr::offset_bytes(digits, ((bits >> 12) & 63) as usize)
+            *ptr::offset_bytes(dest, 2) = *ptr::offset_bytes(digits, ((bits >> 6) & 63) as usize)
+            *ptr::offset_bytes(dest, 3) = *ptr::offset_bytes(digits, (bits & 63) as usize)
+            src = ptr::offset_bytes(src, 3)
+            dest = ptr::offset_bytes(dest, 4)
         }
-        i += 3
-        j += 4
+        remaining -= 3
+    }
+    // The last one to three bytes, padded with `=`.
+    if remaining > 0 {
+        unsafe {
+            let a = *src
+            let b = if remaining > 1 { *ptr::offset_bytes(src, 1) } else { 0 }
+            let c = if remaining > 2 { *ptr::offset_bytes(src, 2) } else { 0 }
+            *dest = *ptr::offset_bytes(digits, (a >> 2) as usize)
+            *ptr::offset_bytes(dest, 1) = *ptr::offset_bytes(digits, (((a & 3) << 4) | (b >> 4)) as usize)
+            *ptr::offset_bytes(dest, 2) = if remaining > 1 { *ptr::offset_bytes(digits, (((b & 15) << 2) | (c >> 6)) as usize) } else { b'=' }
+            *ptr::offset_bytes(dest, 3) = if remaining > 2 { *ptr::offset_bytes(digits, (c & 63) as usize) } else { b'=' }
+        }
     }
     out
 }
@@ -382,21 +395,7 @@ pub fn decode_hex<T: Text>(_ input: T) -> Option<Bytes> {
     Option::Some(decoded)
 }
 
-fn base64_digit(_ value: u8) -> u8 {
-    if value < 26 {
-        value + 65
-    } else if value < 52 {
-        value + 71
-    } else if value < 62 {
-        value - 4
-    } else if value == 62 {
-        43
-    } else {
-        47
-    }
-}
-
-// Inverse of `base64_digit`, 64 for a byte outside the alphabet.
+// The index of `byte` in the base64 alphabet, 64 for a byte outside it.
 fn base64_value(_ byte: u8) -> u256 {
     let c = byte as u256
     if c >= 65 && c <= 90 {
