@@ -4041,6 +4041,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "storage_map_index",
     "storage_map_key_types",
     "storage_map_native_values",
+    "storage_map_nested_solidity_layout",
     "storage_map_projection_forwarding",
     "storage_map_receiver_projection",
     "storage_map_record_patterns",
