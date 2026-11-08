@@ -856,9 +856,12 @@ impl<'db> Impl<'db> {
     pub fn diags_preconditions(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
 
-        let mut out = self.ty_errors(db);
+        let checked = self.check_ty(db);
+        if !checked.errors.is_empty() {
+            return checked.errors;
+        }
+        let mut out = Vec::new();
         match self.inherent_impl_admissibility(db) {
-            InherentImplAdmissibility::Admissible { .. } => {}
             InherentImplAdmissibility::NotAllowed { ty, is_nominal } => {
                 let base = ty.base_ty(db);
                 out.push(
@@ -872,15 +875,17 @@ impl<'db> Impl<'db> {
                 return out;
             }
             InherentImplAdmissibility::InvalidTy { ty } => {
-                if out.is_empty()
-                    && let Some(diag) =
-                        ty::ty_error::emit_invalid_ty_error(db, ty, self.span().target_ty().into())
-                {
-                    out.push(diag);
-                }
+                out.extend(ty::ty_error::emit_invalid_ty_error(
+                    db,
+                    ty,
+                    self.span().target_ty().into(),
+                ));
                 return out;
             }
-            InherentImplAdmissibility::IllFormed { goal, subgoal, .. } => {
+            // A part written ill-formed is reported where it is written.
+            InherentImplAdmissibility::IllFormed { goal, subgoal, .. }
+                if checked.ill_formed.is_empty() =>
+            {
                 out.push(
                     TraitConstraintDiag::TraitBoundNotSat {
                         span: self.span().target_ty().into(),
@@ -891,8 +896,10 @@ impl<'db> Impl<'db> {
                     .into(),
                 );
             }
+            InherentImplAdmissibility::Admissible { .. }
+            | InherentImplAdmissibility::IllFormed { .. } => {}
         }
-
+        out.extend(checked.ill_formed);
         out
     }
 
