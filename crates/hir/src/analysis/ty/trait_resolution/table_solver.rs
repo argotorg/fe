@@ -26,12 +26,12 @@ use crate::analysis::{
         canonical::{Canonical, Solution},
         clearable::clearable_implementor,
         closure::callable_implementor,
-        fold::TyFoldable,
+        fold::{TyFoldable, TyFolder},
         normalize::{normalize_from_assumptions, normalize_ty},
         sol_codec::sol_codec_implementor,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         trait_lower::complete_candidate_impl_assoc_ty,
-        ty_def::{BorrowKind, TyData, TyId},
+        ty_def::{BorrowKind, TyData, TyId, TyVarSort},
         unify::{PersistentUnificationTable, Unifiable},
         visitor::{TyVisitable, TyVisitor},
     },
@@ -117,27 +117,9 @@ enum Mismatch {
     Undecided,
 }
 
-/// Whether `value` names a projection.
-fn names_projection<'db>(db: &'db dyn HirAnalysisDb, value: impl TyVisitable<'db>) -> bool {
-    struct Finder<'db> {
-        db: &'db dyn HirAnalysisDb,
-        found: bool,
-    }
-    impl<'db> TyVisitor<'db> for Finder<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            self.found |= ty.has_projection(self.db);
-        }
-    }
-    let mut finder = Finder { db, found: false };
-    value.visit_with(&mut finder);
-    finder.found
-}
-
-/// Unifies `a` with `b`, which is undecided rather than a mismatch when
-/// impls weren't asked to resolve a projection in either.
+/// Unifies `a` with `b`. In a search that doesn't resolve projections
+/// through impls, a mismatch that only a projection is in the way of is
+/// undecided: with each projection a fresh variable, the two unify.
 fn unify_or_undecided<'db, T>(
     db: &'db dyn HirAnalysisDb,
     table: &mut PersistentUnificationTable<'db>,
@@ -146,15 +128,37 @@ fn unify_or_undecided<'db, T>(
     resolve_impls: bool,
 ) -> Result<(), Mismatch>
 where
-    T: Copy + TyVisitable<'db> + Unifiable<'db>,
+    T: Copy + TyFoldable<'db> + Unifiable<'db>,
 {
-    if table.unify(a, b).is_ok() {
-        Ok(())
-    } else if !resolve_impls && (names_projection(db, a) || names_projection(db, b)) {
-        Err(Mismatch::Undecided)
-    } else {
-        Err(Mismatch::Rejected)
+    struct OpenProjections<'a, 'db> {
+        table: &'a mut PersistentUnificationTable<'db>,
     }
+    impl<'db> TyFolder<'db> for OpenProjections<'_, 'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_)) {
+                self.table.new_var(TyVarSort::General, ty.kind(db))
+            } else {
+                ty.super_fold_with(db, self)
+            }
+        }
+    }
+
+    if table.unify(a, b).is_ok() {
+        return Ok(());
+    }
+    if resolve_impls {
+        return Err(Mismatch::Rejected);
+    }
+    let snapshot = table.snapshot();
+    let mut open = OpenProjections { table };
+    let (a, b) = (a.fold_with(db, &mut open), b.fold_with(db, &mut open));
+    let undecided = table.unify(a, b).is_ok();
+    table.rollback_to(snapshot);
+    Err(if undecided {
+        Mismatch::Undecided
+    } else {
+        Mismatch::Rejected
+    })
 }
 
 fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
