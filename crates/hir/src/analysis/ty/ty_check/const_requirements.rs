@@ -10,10 +10,10 @@ use crate::analysis::name_resolution::{
     resolve_path_with_minter,
 };
 use crate::analysis::ty::canonical::Canonicalized;
-use crate::analysis::ty::trait_resolution::mentions_ty;
 use crate::analysis::ty::{
     const_ty::ConstBodyLowering,
     subst::substitute_complete,
+    ty_error::written_ty_ill_formed,
     ty_lower::{CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_type_alias},
 };
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
@@ -1719,30 +1719,65 @@ pub(crate) fn check_declared_type_requirements<'db>(
         .collect()
 }
 
-/// A position in an item or body that `written_type_check` checks, in the
-/// order it checks them.
+/// A position in an item or body that the checks of what is written check:
+/// `written_type_check` for requirements, and the bounds of written types
+/// (`written_type_bounds`, and the body finalizer for a body's).
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
-enum WrittenEntry<'db> {
+pub(super) enum WrittenEntry<'db> {
     /// Anonymous constants written in a type or trait reference, each with
     /// the type its position checks it against.
     ConstBodies(Vec<(Body<'db>, TyId<'db>)>),
     /// A written type, listed after the types nested in it.
     Type(WrittenType<'db>),
+    /// A projection a qualified path names in a body's expression or
+    /// pattern, as `<V<T> as Ty>::A` in `<V<T> as Ty>::A { x }`.
+    Projection(WrittenProjection<'db>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
-struct WrittenType<'db> {
+pub(super) struct WrittenType<'db> {
+    pub(super) hir_ty: crate::hir_def::TypeId<'db>,
     span: DynLazySpan<'db>,
-    scope: ScopeId<'db>,
+    /// Its span as a type, unless it is written as a path, as a `with` key
+    /// is.
+    pub(super) ty_span: Option<crate::span::types::LazyTySpan<'db>>,
+    pub(super) scope: ScopeId<'db>,
+    /// The statement it is written in, in a body.
+    pub(super) stmt: Option<StmtId>,
     /// Its lowering, unless that is invalid.
     lowered: Option<TyId<'db>>,
     /// The constrained applications its paths passed through.
     applications: Vec<TyId<'db>>,
-    /// Whether it is in an argument its alias drops, which no expansion
-    /// holds for its position to check.
-    dropped: bool,
     /// The index of the first entry nested in this type.
     nested_from: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+pub(super) struct WrittenProjection<'db> {
+    pub(super) path: PathId<'db>,
+    pub(super) scope: ScopeId<'db>,
+    pub(super) span: DynLazySpan<'db>,
+    /// The statement it is written in.
+    pub(super) stmt: Option<StmtId>,
+}
+
+/// The written types in `entries` that no other is written in, in order.
+pub(super) fn written_roots<'a, 'db>(
+    entries: &'a [WrittenEntry<'db>],
+) -> impl Iterator<Item = &'a WrittenType<'db>> {
+    // An entry follows the entries nested in it, so scanning backwards, a
+    // type before the nested range of the last root is a root.
+    let mut roots = Vec::new();
+    let mut nested_from = entries.len();
+    for (idx, entry) in entries.iter().enumerate().rev() {
+        if let WrittenEntry::Type(written) = entry
+            && idx < nested_from
+        {
+            roots.push(written);
+            nested_from = written.nested_from;
+        }
+    }
+    roots.into_iter().rev()
 }
 
 #[salsa::interned]
@@ -1757,7 +1792,10 @@ struct WrittenTypeRegion<'db> {
 /// the default of a const parameter. Listing them only lowers types, so a
 /// body's requirement check can read the list while a requirement is being
 /// discharged; `written_type_check` discharges.
-fn written_types<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> &'db [WrittenEntry<'db>] {
+pub(super) fn written_types<'db>(
+    db: &'db dyn HirAnalysisDb,
+    item: ItemKind<'db>,
+) -> &'db [WrittenEntry<'db>] {
     written_types_query(db, WrittenTypeRegion::new(db, item))
 }
 
@@ -1771,10 +1809,9 @@ fn written_types_query<'db>(
     use crate::visitor::{
         Visitor, VisitorCtxt,
         prelude::{
-            LazyBodySpan, LazyExprSpan, LazyGenericArgListSpan, LazyItemSpan, LazyTraitRefSpan,
+            LazyBodySpan, LazyExprSpan, LazyItemSpan, LazyPathSpan, LazyStmtSpan, LazyTraitRefSpan,
         },
-        walk_body, walk_expr, walk_generic_arg_list, walk_item, walk_path, walk_trait_ref,
-        walk_type,
+        walk_body, walk_expr, walk_item, walk_path, walk_stmt, walk_trait_ref, walk_type,
     };
     struct Collector<'db> {
         db: &'db dyn HirAnalysisDb,
@@ -1785,10 +1822,10 @@ fn written_types_query<'db>(
         /// and finds them with the same rule (`written_type_const_args`).
         defaults: FxHashSet<crate::hir_def::TypeId<'db>>,
         default_depth: usize,
-        /// The arguments of the alias path being walked, each with whether
-        /// the alias drops it, and how deep the walk is inside one dropped.
-        alias_args: Option<(GenericArgListId<'db>, Vec<bool>)>,
-        dropped_depth: usize,
+        /// The statement being walked, in a body.
+        stmt: Option<StmtId>,
+        /// How deep the walk is inside a written type.
+        type_depth: usize,
     }
     impl<'db> Visitor<'db> for Collector<'db> {
         // Nested items and bodies are their own regions.
@@ -1845,28 +1882,51 @@ fn written_types_query<'db>(
             hir_ty: crate::hir_def::TypeId<'db>,
         ) {
             let scope = ctxt.scope();
-            let span = ctxt.span().map(Into::into);
-            self.written_type(hir_ty, scope, span, |this| walk_type(this, ctxt, hir_ty));
+            let ty_span = ctxt.span();
+            let span = ty_span.clone().map(Into::into);
+            self.written_type(hir_ty, scope, span, ty_span, |this| {
+                walk_type(this, ctxt, hir_ty)
+            });
         }
 
-        fn visit_generic_arg_list(
+        fn visit_stmt(
             &mut self,
-            ctxt: &mut VisitorCtxt<'db, LazyGenericArgListSpan<'db>>,
-            args: GenericArgListId<'db>,
+            ctxt: &mut VisitorCtxt<'db, LazyStmtSpan<'db>>,
+            stmt: StmtId,
+            _: &Stmt<'db>,
         ) {
-            let alias_args = self
-                .alias_args
-                .take_if(|(alias_args, _)| *alias_args == args);
-            let (Some((_, dropped)), Some(span)) = (alias_args, ctxt.span()) else {
-                return walk_generic_arg_list(self, ctxt, args);
-            };
-            for (idx, arg) in args.data(self.db).iter().enumerate() {
-                let in_dropped = dropped.get(idx).copied().unwrap_or_default();
-                self.dropped_depth += usize::from(in_dropped);
-                let mut arg_ctxt = VisitorCtxt::new(self.db, ctxt.scope(), span.clone().arg(idx));
-                self.visit_generic_arg(&mut arg_ctxt, arg);
-                self.dropped_depth -= usize::from(in_dropped);
+            let outer = self.stmt.replace(stmt);
+            walk_stmt(self, ctxt, stmt);
+            self.stmt = outer;
+        }
+
+        // A qualified path outside a written type names a projection.
+        fn visit_path(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>,
+            path: PathId<'db>,
+        ) {
+            let db = self.db;
+            if self.type_depth == 0
+                && let Some(span) = ctxt.span()
+            {
+                for segment in
+                    std::iter::successors(Some(path), |path| path.parent(db)).filter(|segment| {
+                        segment.parent(db).is_some_and(|parent| {
+                            matches!(parent.kind(db), PathKind::QualifiedType { .. })
+                        })
+                    })
+                {
+                    self.entries
+                        .push(WrittenEntry::Projection(WrittenProjection {
+                            path: segment,
+                            scope: ctxt.scope(),
+                            span: span.clone().into(),
+                            stmt: self.stmt,
+                        }));
+                }
             }
+            walk_path(self, ctxt, path);
         }
 
         // A `with` key is a type written in the body, whose paths are
@@ -1890,7 +1950,7 @@ fn written_types_query<'db>(
                         .param(idx)
                         .path();
                     let mut key_ctxt = VisitorCtxt::new(self.db, ctxt.scope(), span.clone());
-                    self.written_type(hir_ty, ctxt.scope(), Some(span.into()), |this| {
+                    self.written_type(hir_ty, ctxt.scope(), Some(span.into()), None, |this| {
                         walk_path(this, &mut key_ctxt, key)
                     });
                 }
@@ -1907,6 +1967,7 @@ fn written_types_query<'db>(
             hir_ty: crate::hir_def::TypeId<'db>,
             scope: ScopeId<'db>,
             span: Option<DynLazySpan<'db>>,
+            ty_span: Option<LazyTySpan<'db>>,
             walk_nested: impl FnOnce(&mut Self),
         ) {
             let db = self.db;
@@ -1942,34 +2003,19 @@ fn written_types_query<'db>(
                     self.entries.push(WrittenEntry::ConstBodies(bodies));
                 }
             }
-            let alias_args = match hir_ty.data(db) {
-                TypeKind::Path(Partial::Present(path)) => {
-                    match resolve_path(db, *path, scope, assumptions, false) {
-                        Ok(PathRes::TyAlias(alias, _)) => {
-                            let expansion = *alias.alias_to.skip_binder();
-                            let dropped = alias
-                                .params(db)
-                                .iter()
-                                .map(|&param| !mentions_ty(db, expansion, param))
-                                .collect();
-                            Some((path.generic_args(db), dropped))
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            let enclosing_alias_args = std::mem::replace(&mut self.alias_args, alias_args);
             let nested_from = self.entries.len();
+            self.type_depth += 1;
             walk_nested(self);
-            self.alias_args = enclosing_alias_args;
+            self.type_depth -= 1;
             if let Some(span) = span {
                 self.entries.push(WrittenEntry::Type(WrittenType {
+                    hir_ty,
                     span,
+                    ty_span,
                     scope,
+                    stmt: self.stmt,
                     lowered: (!ty.has_invalid(db)).then_some(ty),
                     applications,
-                    dropped: self.dropped_depth > 0,
                     nested_from,
                 }));
             }
@@ -1983,8 +2029,8 @@ fn written_types_query<'db>(
         entries: Vec::new(),
         defaults: FxHashSet::default(),
         default_depth: 0,
-        alias_args: None,
-        dropped_depth: 0,
+        stmt: None,
+        type_depth: 0,
     };
     collector.visit_item(&mut VisitorCtxt::with_item(db, root), root);
     collector.entries
@@ -2012,37 +2058,9 @@ fn written_type_check_query<'db>(
     let mut diags = Vec::new();
     // The failing application each entry reported, if any.
     let mut reported: Vec<Option<TyId<'db>>> = Vec::with_capacity(entries.len());
-    // Whether each entry reported itself ill-formed.
-    let mut ill_formed: Vec<bool> = Vec::with_capacity(entries.len());
     for entry in entries {
-        // A type in an argument its alias drops is checked for its bounds
-        // here, where it is written, once for the innermost one that fails.
-        ill_formed.push(match entry {
-            WrittenEntry::Type(written)
-                if written.dropped && !ill_formed[written.nested_from..].contains(&true) =>
-            {
-                written.lowered.is_some_and(|ty| {
-                    let solve_cx = TraitSolveCx::new(db, written.scope)
-                        .with_assumptions(param_env(db, enclosing_item(db, written.scope)));
-                    let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty)
-                    else {
-                        return false;
-                    };
-                    diags.push(FuncBodyDiag::Ty(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: written.span.clone(),
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
-                        }
-                        .into(),
-                    ));
-                    true
-                })
-            }
-            _ => false,
-        });
         let report = match entry {
+            WrittenEntry::Projection(_) => None,
             WrittenEntry::ConstBodies(bodies) => {
                 for &(body, expected) in bodies {
                     diags.extend(anon_const_position_check(db, body, expected).diags);
@@ -2077,6 +2095,67 @@ fn written_type_check_query<'db>(
         reported.push(report);
     }
     diags
+}
+
+/// The bounds of the types written in an item outside its bodies.
+#[derive(Debug, Clone, Default, PartialEq, Eq, SalsaValue)]
+pub(crate) struct WrittenTypeBounds<'db> {
+    /// Each part of a written type whose bounds don't hold, at the innermost.
+    pub(crate) diags: Vec<TyDiagCollection<'db>>,
+    /// The written types with such a part.
+    ill_formed: Vec<crate::hir_def::TypeId<'db>>,
+}
+
+impl<'db> WrittenTypeBounds<'db> {
+    /// Whether `hir_ty`, a type the item writes, has a part whose bounds
+    /// don't hold. A check of what follows from the type doesn't add to
+    /// that: a projection whose impl doesn't apply stays unresolved.
+    pub(crate) fn is_ill_formed(&self, hir_ty: crate::hir_def::TypeId<'db>) -> bool {
+        self.ill_formed.contains(&hir_ty)
+    }
+}
+
+/// The bounds of every type written in `item` itself (`written_types`),
+/// each checked where it is written under the item's bounds. No site that
+/// writes a type checks its bounds, so none can forget to. A body's types
+/// are checked with the body, under its assumptions (`TyCheckerFinalizer`).
+pub(crate) fn written_type_bounds<'db>(
+    db: &'db dyn HirAnalysisDb,
+    item: ItemKind<'db>,
+) -> &'db WrittenTypeBounds<'db> {
+    written_type_bounds_query(db, WrittenTypeRegion::new(db, item))
+}
+
+#[salsa::tracked(returns(ref))]
+fn written_type_bounds_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    region: WrittenTypeRegion<'db>,
+) -> WrittenTypeBounds<'db> {
+    let mut bounds = WrittenTypeBounds::default();
+    let item = region.item(db);
+    if matches!(item, ItemKind::Body(_)) {
+        return bounds;
+    }
+    for written in written_roots(written_types(db, item)) {
+        let Some(span) = written.ty_span.clone() else {
+            continue;
+        };
+        let solve_cx = TraitSolveCx::new(db, written.scope)
+            .with_assumptions(param_env(db, enclosing_item(db, written.scope)));
+        let ill_formed = written_ty_ill_formed(
+            db,
+            written.scope,
+            written.hir_ty,
+            span,
+            assumptions_at(db, written.scope),
+            solve_cx,
+        );
+        if !ill_formed.is_empty() {
+            bounds.ill_formed.push(written.hir_ty);
+            bounds.diags.extend(ill_formed);
+        }
+    }
+    bounds
 }
 
 /// The anonymous constants written in `hir_ty` and in every type and trait

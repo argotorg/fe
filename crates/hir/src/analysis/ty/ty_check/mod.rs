@@ -1,7 +1,7 @@
 mod callable;
 mod const_requirements;
-pub(crate) use const_requirements::check_declared_type_requirements;
 pub use const_requirements::{EvaluationStop, RequirementFailure};
+pub(crate) use const_requirements::{check_declared_type_requirements, written_type_bounds};
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -53,7 +53,7 @@ use crate::{
         DynLazySpan, expr::LazyExprSpan, item::LazyItemSpan, pat::LazyPatSpan, path::LazyPathSpan,
         stmt::LazyStmtSpan, types::LazyTySpan,
     },
-    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_path, walk_stmt},
+    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_stmt},
 };
 use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{CallParam, Callable, EffectProviderProvenance, EffectProviderSpecialization};
@@ -97,7 +97,7 @@ use super::{
     trait_def::{TraitInstId, selected_assoc_const_body_template},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness,
-        check_trait_inst_wf_without_self, check_ty_wf, goal_query_has_no_distinct_solution,
+        check_trait_requirements_without_self, check_ty_wf, goal_query_has_no_distinct_solution,
         is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_def::{
@@ -131,8 +131,8 @@ use crate::analysis::ty::{
     },
     registered_root_providers,
     ty_error::{
-        check_written_ty, collect_hir_ty_diags, diag_from_invalid_cause, emit_invalid_ty_error,
-        path_arg_diags, path_generic_arg_diags,
+        check_written_ty, diag_from_invalid_cause, emit_invalid_ty_error, path_arg_diags,
+        path_generic_arg_diags, written_ty_ill_formed,
     },
 };
 use crate::analysis::{
@@ -198,23 +198,20 @@ pub fn check_const_body<'db>(
     // An invalid declared type suppresses body/value checking. Diagnose the
     // declaration itself rather than passing an invalid constant to CTFE.
     if let Some(hir_ty) = const_.hir_ty(db) {
-        let assumptions = PredicateListId::empty_list(db);
-        let checked = check_written_ty(
+        let errors = check_written_ty(
             db,
             const_.scope(),
             hir_ty,
             const_.span().ty(),
-            assumptions,
+            PredicateListId::empty_list(db),
             ConstBodyLowering::Eager,
-            Some(TraitSolveCx::new(db, const_.scope()).with_assumptions(assumptions)),
         );
-        if checked.errors.is_empty() {
+        if errors.is_empty() {
             diags.extend(
                 const_type_diag(db, const_.span().ty().into(), const_.ty(db)).map(Into::into),
             );
-            diags.extend(checked.ill_formed.into_iter().map(Into::into));
         }
-        diags.extend(checked.errors.into_iter().map(Into::into));
+        diags.extend(errors.into_iter().map(Into::into));
     }
     (diags, body)
 }
@@ -776,7 +773,7 @@ pub(crate) fn invalid_effect_key_diags<'db>(
             let arg_diags = || path_arg_diags(db, *path, path_span.clone(), scope, assumptions);
             match resolve_path(db, *path, scope, assumptions, false) {
                 Ok(PathRes::Ty(_) | PathRes::TyAlias(..)) => {
-                    collect_hir_ty_diags(db, scope, key, span, assumptions)
+                    check_written_ty(db, scope, key, span, assumptions, ConstBodyLowering::Eager)
                 }
                 Ok(PathRes::Trait(_)) => arg_diags(),
                 // A fault in the reference's own arguments, such as a const
@@ -796,7 +793,7 @@ pub(crate) fn invalid_effect_key_diags<'db>(
                 Ok(_) => Vec::new(),
             }
         }
-        _ => collect_hir_ty_diags(db, scope, key, span, assumptions),
+        _ => check_written_ty(db, scope, key, span, assumptions, ConstBodyLowering::Eager),
     };
     if written.is_empty() {
         vec![BodyDiag::InvalidEffectKey { owner, key, idx }.into()]
@@ -805,10 +802,11 @@ pub(crate) fn invalid_effect_key_diags<'db>(
     }
 }
 
-/// The diagnostic for an effect key that names a type or trait whose
-/// arguments do not satisfy their bounds. A trait key's `Self` is its
-/// provider, which answers for the trait's requirements on it; a default the
-/// key applies names it as the trait's own `Self`.
+/// The diagnostic for an effect key that names a trait whose requirements its
+/// arguments do not meet. The types a key writes have their bounds checked
+/// with the item's written types (`written_type_bounds`). A trait key's
+/// `Self` is its provider, which answers for the trait's requirements on it;
+/// a default the key applies names it as the trait's own `Self`.
 pub(crate) fn effect_key_wf_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: EffectParamOwner<'db>,
@@ -816,21 +814,18 @@ pub(crate) fn effect_key_wf_diag<'db>(
     key: &ResolvedEffectKey<'db>,
     solve_cx: TraitSolveCx<'db>,
 ) -> Option<FuncBodyDiag<'db>> {
-    let wf = match key {
-        ResolvedEffectKey::Type(schema) => check_ty_wf(db, solve_cx, schema.carrier),
-        ResolvedEffectKey::Trait(schema) => check_trait_inst_wf_without_self(
-            db,
-            solve_cx,
-            instantiate_trait_self(
-                db,
-                schema.clone().into_trait_inst(db),
-                schema.def.self_param(db),
-            ),
-        ),
-        ResolvedEffectKey::Row(_) | ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
-            return None;
-        }
+    let ResolvedEffectKey::Trait(schema) = key else {
+        return None;
     };
+    let wf = check_trait_requirements_without_self(
+        db,
+        solve_cx,
+        instantiate_trait_self(
+            db,
+            schema.clone().into_trait_inst(db),
+            schema.def.self_param(db),
+        ),
+    );
     let WellFormedness::IllFormed { goal, subgoal } = wf else {
         return None;
     };
@@ -1710,33 +1705,33 @@ impl<'db> TyChecker<'db> {
                         continue;
                     };
                     let ty_span = contract.span().init_block().params().param(idx).ty();
-                    // The type is checked where it is written. The outer mode
-                    // belongs to the parameter, not to its type.
+                    // The type's errors are reported where it is written. The
+                    // outer mode belongs to the parameter, not to its type.
                     let (inner_ty, inner_span) = match hir_ty.data(self.db) {
                         TypeKind::Mode(_, inner) => {
                             (inner.to_opt(), ty_span.clone().into_mode_type().inner())
                         }
                         _ => (Some(hir_ty), ty_span.clone()),
                     };
-                    if let Some(inner_ty) = inner_ty {
-                        let checked = check_written_ty(
+                    let errors = inner_ty.map_or_else(Vec::new, |inner_ty| {
+                        check_written_ty(
                             self.db,
                             scope,
                             inner_ty,
                             inner_span,
                             assumptions,
                             ConstBodyLowering::Eager,
-                            Some(TraitSolveCx::new(self.db, scope).with_assumptions(assumptions)),
-                        );
-                        let reported = if checked.errors.is_empty() {
-                            checked.ill_formed
-                        } else {
-                            checked.errors
-                        };
-                        if !reported.is_empty() {
-                            reported.into_iter().for_each(|diag| self.push_diag(diag));
-                            continue;
-                        }
+                        )
+                    });
+                    if !errors.is_empty() {
+                        errors.into_iter().for_each(|diag| self.push_diag(diag));
+                        continue;
+                    }
+                    // A type whose bounds don't hold has no size to check.
+                    if written_type_bounds(self.db, ItemKind::Contract(contract))
+                        .is_ill_formed(hir_ty)
+                    {
+                        continue;
                     }
                     // A parameter has its normalized type's size.
                     let ty = normalize_ty(
@@ -1828,6 +1823,8 @@ impl<'db> TyChecker<'db> {
                 ) {
                     self.push_diag(diag);
                 }
+            } else if EffectParamOwner::Func(func).key_is_ill_formed(self.db, key_ty) {
+                // Its bounds are reported with the function's written types.
             } else if let Some(diag) = effect_key_wf_diag(
                 self.db,
                 EffectParamOwner::Func(func),
@@ -1935,6 +1932,10 @@ impl<'db> TyChecker<'db> {
 
             // Labeled effects are always type/trait keyed: `name: Type`.
             if effect.name.is_some() {
+                // Its bounds are reported with the contract's written types.
+                if owner.key_is_ill_formed(self.db, key_ty) {
+                    continue;
+                }
                 let key = resolve_effect_key(self.db, key_ty, contract.scope(), assumptions);
                 if let Some(diag) = effect_key_wf_diag(
                     self.db,
@@ -3147,28 +3148,17 @@ impl<'db> TyChecker<'db> {
         };
         let pat_ty = variant.ty;
 
-        // The arm's return type is written outside its body, so its bounds
-        // are checked here, not with the body's written types. An ill-formed
-        // one isn't compared with the message's.
+        // The arm's return type is written in the contract, whose written
+        // types' bounds are checked with it. An ill-formed one isn't compared
+        // with the message's.
         let arm_ret_span = arm_span.clone().ret_ty();
         let annotated = arm.ret_ty.map(|hir_ty| {
             let ty = self.lower_ty(hir_ty, arm_ret_span.clone(), true);
-            let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
-            let ill_formed = check_written_ty(
-                self.db,
-                scope,
-                hir_ty,
-                arm_ret_span.clone(),
-                assumptions,
-                ConstBodyLowering::Eager,
-                Some(TraitSolveCx::new(self.db, scope).with_assumptions(assumptions)),
-            )
-            .ill_formed;
-            if ill_formed.is_empty() {
-                return ty;
+            if written_type_bounds(self.db, ItemKind::Contract(contract)).is_ill_formed(hir_ty) {
+                TyId::invalid(self.db, InvalidCause::Other)
+            } else {
+                ty
             }
-            ill_formed.into_iter().for_each(|diag| self.push_diag(diag));
-            TyId::invalid(self.db, InvalidCause::Other)
         });
         let variant_ret = contract::get_msg_variant_return_type(self.db, pat_ty, self.env.scope());
 
@@ -3328,8 +3318,8 @@ impl<'db> TyChecker<'db> {
     ) -> TyId<'db> {
         let ty = lower_hir_ty(self.db, hir_ty, self.env.scope(), self.env.assumptions());
 
-        // The written type's errors; its well-formedness is checked with every
-        // other type written in the body (see `TyCheckerFinalizer`).
+        // The written type's errors; its bounds are checked with every other
+        // type written where it is (`written_types`).
         let errors = check_written_ty(
             self.db,
             self.env.scope(),
@@ -3337,9 +3327,7 @@ impl<'db> TyChecker<'db> {
             span.clone(),
             self.env.assumptions(),
             ConstBodyLowering::Eager,
-            None,
-        )
-        .errors;
+        );
         let reported = !errors.is_empty();
         for diag in errors {
             self.push_diag(diag);
@@ -7739,100 +7727,34 @@ impl<'db> TyCheckerFinalizer<'db> {
     }
 
     /// Checks the well-formedness of each type written in the body where it is
-    /// written; its errors were reported when it was lowered.
+    /// written (`written_types`); its errors were reported when it was
+    /// lowered.
     fn check_written_tys(&mut self) {
-        struct WrittenTys<'db> {
-            db: &'db dyn HirAnalysisDb,
-            tys: Vec<(HirTyId<'db>, ScopeId<'db>, LazyTySpan<'db>, Option<StmtId>)>,
-            /// The projections that qualified paths in expressions and
-            /// patterns name, as `<V<T> as Ty>::A` in `<V<T> as Ty>::A { x }`.
-            projections: Vec<(PathId<'db>, ScopeId<'db>, DynLazySpan<'db>, Option<StmtId>)>,
-            stmt: Option<StmtId>,
-        }
-        impl<'db> Visitor<'db> for WrittenTys<'db> {
-            fn visit_stmt(
-                &mut self,
-                ctxt: &mut VisitorCtxt<'db, LazyStmtSpan<'db>>,
-                stmt: StmtId,
-                _: &Stmt<'db>,
-            ) {
-                let outer = self.stmt.replace(stmt);
-                walk_stmt(self, ctxt, stmt);
-                self.stmt = outer;
-            }
-
-            // A nested item is checked under its own bounds.
-            fn visit_item(
-                &mut self,
-                _: &mut VisitorCtxt<'db, LazyItemSpan<'db>>,
-                _: ItemKind<'db>,
-            ) {
-            }
-
-            fn visit_ty(
-                &mut self,
-                ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>,
-                hir_ty: HirTyId<'db>,
-            ) {
-                if let Some(span) = ctxt.span() {
-                    self.tys.push((hir_ty, ctxt.scope(), span, self.stmt));
-                }
-            }
-
-            fn visit_path(
-                &mut self,
-                ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>,
-                path: PathId<'db>,
-            ) {
-                if let Some(span) = ctxt.span() {
-                    for segment in std::iter::successors(Some(path), |path| path.parent(self.db))
-                        .filter(|segment| {
-                            segment.parent(self.db).is_some_and(|parent| {
-                                matches!(parent.kind(self.db), PathKind::QualifiedType { .. })
-                            })
-                        })
-                    {
-                        self.projections.push((
-                            segment,
-                            ctxt.scope(),
-                            span.clone().into(),
-                            self.stmt,
-                        ));
-                    }
-                }
-                walk_path(self, ctxt, path);
-            }
-        }
-
         let Some(body) = self.body.body() else {
             return;
         };
-        let mut written = WrittenTys {
-            db: self.db,
-            tys: Vec::new(),
-            projections: Vec::new(),
-            stmt: None,
-        };
-        written.visit_body(&mut VisitorCtxt::with_body(self.db, body), body);
-        for (hir_ty, scope, span, stmt) in written.tys {
-            let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(self.assumptions);
-            let ill_formed = check_written_ty(
+        let entries = const_requirements::written_types(self.db, ItemKind::Body(body));
+        for written in const_requirements::written_roots(entries) {
+            let Some(span) = written.ty_span.clone() else {
+                continue;
+            };
+            let solve_cx =
+                TraitSolveCx::new(self.db, written.scope).with_assumptions(self.assumptions);
+            let ill_formed = written_ty_ill_formed(
                 self.db,
-                scope,
-                hir_ty,
+                written.scope,
+                written.hir_ty,
                 span,
                 self.assumptions,
-                ConstBodyLowering::Eager,
-                Some(solve_cx),
-            )
-            .ill_formed;
+                solve_cx,
+            );
             for diag in ill_formed {
                 if let TyDiagCollection::Satisfiability(TraitConstraintDiag::TraitBoundNotSat {
                     primary_goal,
                     ..
                 }) = &diag
                 {
-                    self.written_goals.insert((stmt, *primary_goal));
+                    self.written_goals.insert((written.stmt, *primary_goal));
                 }
                 self.diags.push(diag.into());
             }
@@ -7841,9 +7763,12 @@ impl<'db> TyCheckerFinalizer<'db> {
         // reference, so an associated type a path names is checked where it
         // is written, as a written type is, unless the statement's written
         // types reported the bound.
-        for (path, scope, span, stmt) in written.projections {
-            let projection = HirTyId::new(self.db, TypeKind::Path(Partial::Present(path)));
-            let ty = lower_hir_ty(self.db, projection, scope, self.assumptions);
+        for projection in entries.iter().filter_map(|entry| match entry {
+            const_requirements::WrittenEntry::Projection(projection) => Some(projection),
+            _ => None,
+        }) {
+            let path = HirTyId::new(self.db, TypeKind::Path(Partial::Present(projection.path)));
+            let ty = lower_hir_ty(self.db, path, projection.scope, self.assumptions);
             if let TyData::AssocTy(assoc) = ty.data(self.db)
                 && assoc
                     .trait_
@@ -7853,13 +7778,13 @@ impl<'db> TyCheckerFinalizer<'db> {
                 && !ty.has_invalid(self.db)
                 && let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
                     self.db,
-                    TraitSolveCx::new(self.db, scope).with_assumptions(self.assumptions),
+                    TraitSolveCx::new(self.db, projection.scope).with_assumptions(self.assumptions),
                     ty,
                 )
-                && self.written_goals.insert((stmt, goal))
+                && self.written_goals.insert((projection.stmt, goal))
             {
                 let diag = TraitConstraintDiag::TraitBoundNotSat {
-                    span,
+                    span: projection.span.clone(),
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,

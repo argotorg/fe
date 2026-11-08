@@ -750,19 +750,31 @@ pub(crate) fn check_trait_inst_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> WellFormedness<'db> {
-    trait_inst_wf(db, solve_cx, trait_inst, true)
+    trait_inst_wf(db, solve_cx, trait_inst, true, true)
 }
 
-/// [`check_trait_inst_wf`] for a trait reference whose `Self` stands for a
-/// type not known where it is written, as an associated type's bound or an
-/// effect key's trait: the trait's requirements that mention that `Self`,
-/// once instantiated, fall to what provides it.
-pub(crate) fn check_trait_inst_wf_without_self<'db>(
+/// What a written bound's trait requires of its arguments. A type argument's
+/// own bounds are checked where it is written (`written_type_bounds`), as any
+/// written type's are; a const argument is a body, whose uses are checked
+/// here.
+pub(crate) fn check_trait_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> WellFormedness<'db> {
-    trait_inst_wf(db, solve_cx, trait_inst, false)
+    trait_inst_wf(db, solve_cx, trait_inst, true, false)
+}
+
+/// [`check_trait_requirements`] for a bound whose `Self` stands for a type not
+/// known where it is written, as an associated type's bound, an effect key's
+/// trait or a trait's own `where Self:` bound: the trait's requirements that
+/// mention that `Self`, once instantiated, fall to what provides it.
+pub(crate) fn check_trait_requirements_without_self<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    trait_inst: TraitInstId<'db>,
+) -> WellFormedness<'db> {
+    trait_inst_wf(db, solve_cx, trait_inst, false, false)
 }
 
 fn trait_inst_wf<'db>(
@@ -770,11 +782,13 @@ fn trait_inst_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     trait_inst: TraitInstId<'db>,
     with_self: bool,
+    with_args: bool,
 ) -> WellFormedness<'db> {
     let args = &trait_inst.args(db)[usize::from(!with_self)..];
     for &ty in args
         .iter()
         .chain(trait_inst.assoc_type_bindings(db).values())
+        .filter(|ty| with_args || ty.is_const_ty(db))
     {
         let wf = check_ty_wf(db, solve_cx, ty);
         if !wf.is_wf() {

@@ -4,7 +4,7 @@ expression: diags
 input_file: fixtures/ty/def/trait_impl_nested_generic_trait_const_arg_missing_bound.fe
 ---
 error[6-0003]: trait bound is not satisfied
-   ┌─ trait_impl_nested_generic_trait_const_arg_missing_bound.fe:11:9
+   ┌─ trait_impl_nested_generic_trait_const_arg_missing_bound.fe:11:13
    │
 11 │ impl<T> Foo<Slot<{ <T as HasN>::N }>> for S<T> {}
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `T` doesn't implement `HasN`
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^ `T` doesn't implement `HasN`

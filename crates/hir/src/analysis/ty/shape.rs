@@ -11,11 +11,11 @@ use salsa::SalsaValue;
 use super::{
     const_ty::{ConstBodyLowering, LoweringContext},
     corelib::resolve_lib_type_path,
-    diagnostics::TyLowerDiag,
+    diagnostics::{TyDiagCollection, TyLowerDiag},
     fold::{TyFoldable, TyFolder},
     trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{AssocTy, BorrowKind, InvalidCause, Kind, ShapeCon, ShapeMode, TyData, TyId},
-    ty_error::{WrittenTyDiags, check_written_ty},
+    ty_error::{WrittenTyDiags, check_written_ty, written_ty_diags},
     ty_lower::{lower_hir_ty, lower_hir_ty_with_minter},
     visitor::{TyVisitable, TyVisitor, walk_assoc_ty},
 };
@@ -837,31 +837,27 @@ pub(crate) fn lower_shape_value<'db>(
     }
 }
 
-/// Checks a written associated shape value (see [`check_written_ty`]): each
-/// part's type is checked as a type, under its mode if it has one.
+/// The errors in a written associated shape value (see [`check_written_ty`]):
+/// each part's type is checked as a type, under its mode if it has one.
 pub(crate) fn check_shape_value<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
-    solve_cx: Option<TraitSolveCx<'db>>,
-) -> WrittenTyDiags<'db> {
+) -> Vec<TyDiagCollection<'db>> {
     match ty.data(db) {
-        TypeKind::Mode(_, inner) => inner
-            .to_opt()
-            .map_or_else(WrittenTyDiags::default, |inner| {
-                check_written_ty(
-                    db,
-                    scope,
-                    inner,
-                    span.into_mode_type().inner(),
-                    assumptions,
-                    ConstBodyLowering::Eager,
-                    solve_cx,
-                )
-            }),
-        _ => check_param_product(db, ty, scope, span, assumptions, solve_cx),
+        TypeKind::Mode(_, inner) => inner.to_opt().map_or_else(Vec::new, |inner| {
+            check_written_ty(
+                db,
+                scope,
+                inner,
+                span.into_mode_type().inner(),
+                assumptions,
+                ConstBodyLowering::Eager,
+            )
+        }),
+        _ => check_param_product(db, ty, scope, span, assumptions),
     }
 }
 
@@ -871,9 +867,22 @@ pub fn is_param_product<'db>(db: &'db dyn HirAnalysisDb, ty: HirTyId<'db>) -> bo
     matches!(ty.data(db), TypeKind::Tuple(_)) && mentions_mode(db, ty)
 }
 
-/// Checks a written product parameter type (see [`check_written_ty`]): each
-/// part's type is checked as a type, under its mode if it has one.
+/// The errors in a written product parameter type (see
+/// [`check_written_ty`]): each part's type is checked as a type, under its
+/// mode if it has one.
 pub(crate) fn check_param_product<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: HirTyId<'db>,
+    scope: ScopeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    param_product_diags(db, ty, scope, span, assumptions, None).errors
+}
+
+/// [`check_param_product`], with the bounds of each part checked too when
+/// given a `solve_cx` (see [`written_ty_diags`]).
+pub(super) fn param_product_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
@@ -882,7 +891,7 @@ pub(crate) fn check_param_product<'db>(
     solve_cx: Option<TraitSolveCx<'db>>,
 ) -> WrittenTyDiags<'db> {
     let check = |ty: HirTyId<'db>, span: LazyTySpan<'db>| {
-        check_written_ty(
+        written_ty_diags(
             db,
             scope,
             ty,
@@ -939,7 +948,7 @@ pub(crate) fn check_param_product<'db>(
                 })
                 .unwrap_or_default(),
             _ if mentions_mode(db, elem) => {
-                check_param_product(db, elem, scope, span, assumptions, solve_cx)
+                param_product_diags(db, elem, scope, span, assumptions, solve_cx)
             }
             _ => check(elem, span),
         })
@@ -1049,7 +1058,7 @@ fn sum_shape<'db>(
     })
 }
 
-/// Checks a written return type (see [`check_written_ty`]). Modes are
+/// The errors in a written return type (see [`check_written_ty`]). Modes are
 /// accepted exactly where the shape grammar allows them; every other position
 /// is checked as a type.
 pub(crate) fn check_return_shape<'db>(
@@ -1058,21 +1067,12 @@ pub(crate) fn check_return_shape<'db>(
     scope: ScopeId<'db>,
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
-    solve_cx: Option<TraitSolveCx<'db>>,
-) -> WrittenTyDiags<'db> {
+) -> Vec<TyDiagCollection<'db>> {
     let check = |ty: HirTyId<'db>, span: LazyTySpan<'db>| {
-        check_written_ty(
-            db,
-            scope,
-            ty,
-            span,
-            assumptions,
-            ConstBodyLowering::Eager,
-            solve_cx,
-        )
+        check_written_ty(db, scope, ty, span, assumptions, ConstBodyLowering::Eager)
     };
     let shape = |ty: HirTyId<'db>, span: LazyTySpan<'db>| {
-        check_return_shape(db, ty, scope, span, assumptions, solve_cx)
+        check_return_shape(db, ty, scope, span, assumptions)
     };
     // A tuple is checked part by part: a part may name a shape.
     if !mentions_mode(db, ty) && !matches!(ty.data(db), TypeKind::Tuple(_)) {
@@ -1093,6 +1093,7 @@ pub(crate) fn check_return_shape<'db>(
                     span.clone().into_tuple_type().elem_ty(idx),
                 ))
             })
+            .flatten()
             .collect(),
         TypeKind::Path(Partial::Present(path))
             if let Some((_, _, arg)) = sum_shape_slot(db, *path, scope, assumptions)
@@ -1102,7 +1103,7 @@ pub(crate) fn check_return_shape<'db>(
             let segment = path.segment_index(db);
             args.iter()
                 .enumerate()
-                .map(|(idx, &ty_arg)| {
+                .flat_map(|(idx, &ty_arg)| {
                     let span = span
                         .clone()
                         .into_path_type()

@@ -758,6 +758,10 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                     continue;
                 };
 
+                // Its bounds are reported with the contract's written types.
+                if EffectParamOwner::Contract(contract).key_is_ill_formed(db, key_ty) {
+                    continue;
+                }
                 let key = resolve_effect_key(db, key_ty, contract.scope(), assumptions);
                 if let Some(diag) = ty_check::effect_key_wf_diag(
                     db,
@@ -1032,15 +1036,52 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         top_mod
             .all_impl_traits(db)
             .iter()
-            // Generated ABI impl failures are diagnosed once at their source declarations.
-            .filter(|impl_trait| match impl_trait.origin(db) {
-                HirOrigin::Desugared(origin) => {
-                    !reported_at_source.contains(origin)
-                        && !is_inapplicable_sol_compat_impl(db, top_mod, **impl_trait)
+            .filter(|&&impl_trait| reports_impl_trait(db, top_mod, &reported_at_source, impl_trait))
+            .flat_map(|impl_trait| impl_trait.diags(db))
+            .map(|diag| diag.to_voucher())
+            .collect()
+    }
+}
+
+/// Whether an impl's own diagnostics are reported: a generated ABI impl's
+/// failures are reported once at its source declaration.
+fn reports_impl_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    reported_at_source: &FxHashSet<&'db DesugaredOrigin>,
+    impl_trait: crate::hir_def::ImplTrait<'db>,
+) -> bool {
+    match impl_trait.origin(db) {
+        HirOrigin::Desugared(origin) => {
+            !reported_at_source.contains(origin)
+                && !is_inapplicable_sol_compat_impl(db, top_mod, impl_trait)
+        }
+        _ => true,
+    }
+}
+
+/// An analysis pass for the bounds of the types each item writes outside its
+/// bodies (`written_type_bounds`). No site that writes a type checks its
+/// bounds, so none can forget to; a body's are checked with the body.
+pub struct WrittenTypeBoundsPass {}
+
+impl ModuleAnalysisPass for WrittenTypeBoundsPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+        let reported_at_source = generated_abi_reported_at_source(db, top_mod);
+        top_mod
+            .all_items(db)
+            .iter()
+            .filter(|item| match item {
+                ItemKind::ImplTrait(impl_trait) => {
+                    reports_impl_trait(db, top_mod, &reported_at_source, *impl_trait)
                 }
                 _ => true,
             })
-            .flat_map(|impl_trait| impl_trait.diags(db))
+            .flat_map(|&item| &ty_check::written_type_bounds(db, item).diags)
             .map(|diag| diag.to_voucher())
             .collect()
     }

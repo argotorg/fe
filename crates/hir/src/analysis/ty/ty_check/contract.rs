@@ -958,12 +958,11 @@ fn valid_contract_fields<'db>(
         .valid_fields()
         .filter(|field| !field.declared.has_invalid(db))
         .filter(move |field| {
-            FieldView {
+            let view = FieldView {
                 parent: FieldParent::Contract(contract),
                 idx: field.field.index as usize,
-            }
-            .ty_diags(db)
-            .is_empty()
+            };
+            view.ty_diags(db).is_empty() && !view.ty_is_ill_formed(db)
         })
 }
 

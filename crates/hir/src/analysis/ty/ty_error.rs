@@ -29,7 +29,7 @@ use super::{
     const_ty::{ConstBodyLowering, ConstTyData, LoweringContext, ty_is_fully_ground},
     diagnostics::{ImplDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     normalize::normalize_ty,
-    shape::{check_param_product, check_shape_value, lower_shape_list, lower_shape_value},
+    shape::{check_shape_value, lower_shape_list, lower_shape_value, param_product_diags},
     trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
     ty_def::{InvalidCause, Kind, ShapeMode, TyData, TyId},
     ty_lower::{lower_hir_ty, lower_hir_ty_in_mode, lower_kind_in_bounds},
@@ -142,9 +142,7 @@ pub(crate) fn path_arg_diags<'db>(
                             if !diags.is_empty() {
                                 return diags;
                             }
-                            let diags =
-                                check_shape_value(db, ty, scope, span.clone(), assumptions, None)
-                                    .errors;
+                            let diags = check_shape_value(db, ty, scope, span.clone(), assumptions);
                             if !diags.is_empty() || mode == TypeMode::Mut {
                                 return diags;
                             }
@@ -181,8 +179,14 @@ pub(crate) fn path_arg_diags<'db>(
                         }
                         (false, None) => {
                             let span = span.ty();
-                            let diags =
-                                collect_hir_ty_diags(db, scope, ty, span.clone(), assumptions);
+                            let diags = check_written_ty(
+                                db,
+                                scope,
+                                ty,
+                                span.clone(),
+                                assumptions,
+                                ConstBodyLowering::Eager,
+                            );
                             // A type is of its declaration's kind: `*`, unless
                             // a bound gives another.
                             let expected = decl
@@ -280,37 +284,16 @@ fn maybe_mut_parts<'db>(
     }
 }
 
-/// The errors in a written type: path and lowering errors, invalid types, and
-/// projections past the normalization limit (see [`check_written_ty`]).
-pub fn collect_hir_ty_diags<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    hir_ty: TypeId<'db>,
-    span: LazyTySpan<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    check_written_ty(
-        db,
-        scope,
-        hir_ty,
-        span,
-        assumptions,
-        ConstBodyLowering::Eager,
-        None,
-    )
-    .errors
-}
-
-/// What [`check_written_ty`] found in a written type.
+/// What [`written_ty_diags`] found in a written type.
 #[derive(Default)]
-pub(crate) struct WrittenTyDiags<'db> {
+pub(super) struct WrittenTyDiags<'db> {
     /// Path and lowering errors, invalid types, and projections past the
     /// normalization limit. They come before any other diagnostic of the
     /// type.
-    pub(crate) errors: Vec<TyDiagCollection<'db>>,
+    pub(super) errors: Vec<TyDiagCollection<'db>>,
     /// The parts of an otherwise valid type whose bounds do not hold,
     /// including the trait of a projection.
-    pub(crate) ill_formed: Vec<TyDiagCollection<'db>>,
+    pub(super) ill_formed: Vec<TyDiagCollection<'db>>,
 }
 
 impl<'db> FromIterator<WrittenTyDiags<'db>> for WrittenTyDiags<'db> {
@@ -324,15 +307,53 @@ impl<'db> FromIterator<WrittenTyDiags<'db>> for WrittenTyDiags<'db> {
     }
 }
 
+/// The errors in the type `hir_ty` written at `span`: path and lowering
+/// errors, invalid types, and projections past the normalization limit (see
+/// [`written_ty_diags`]). Its bounds are not the site's to check: every
+/// written type's are checked in one place (`written_type_bounds`, and the
+/// body finalizer for a body's).
+pub(crate) fn check_written_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
+) -> Vec<TyDiagCollection<'db>> {
+    written_ty_diags(db, scope, hir_ty, span, assumptions, const_bodies, None).errors
+}
+
+/// The parts of the type `hir_ty` written at `span` whose bounds don't hold
+/// when it is fully applied, the trait of a projection included:
+/// normalization resolves a projection without proving it. Only the checks
+/// of every written type call this.
+pub(super) fn written_ty_ill_formed<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    solve_cx: TraitSolveCx<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    written_ty_diags(
+        db,
+        scope,
+        hir_ty,
+        span,
+        assumptions,
+        ConstBodyLowering::Eager,
+        Some(solve_cx),
+    )
+    .ill_formed
+}
+
 /// Checks the type `hir_ty` written at `span`: each type it is made of is
 /// checked where it is written, inner types first, and only if the types in
 /// it have no diagnostic, so each problem is reported once, at the innermost
 /// type that has it. A type is checked for a path or lowering error, an
 /// invalid type, a projection past the normalization limit, and, with a
-/// `solve_cx`, whether its bounds hold when it is fully applied, including
-/// the trait of a projection: normalization resolves a projection without
-/// proving it.
-pub(crate) fn check_written_ty<'db>(
+/// `solve_cx`, whether its bounds hold when it is fully applied.
+pub(super) fn written_ty_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     hir_ty: TypeId<'db>,
@@ -433,7 +454,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
             self.diags
                 .errors
                 .extend(maybe_mut_parts(self.db, ty, span.clone()));
-            let product = check_param_product(
+            let product = param_product_diags(
                 self.db,
                 ty,
                 ctxt.scope(),

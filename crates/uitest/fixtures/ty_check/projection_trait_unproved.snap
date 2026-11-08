@@ -55,16 +55,19 @@ error[6-0003]: trait bound is not satisfied
    │             trait bound `u16: Foo` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:61:41
+   ┌─ projection_trait_unproved.fe:61:27
    │
 61 │ impl<X> Needs for X where <X as Ty>::A: Show {}
-   │                                         ^^^^ `X` doesn't implement `Ty`
+   │                           ^^^^^^^^^^^^ `X` doesn't implement `Ty`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:73:47
+   ┌─ projection_trait_unproved.fe:73:26
    │
 73 │ impl Tr for Direct where <Direct as Tr>::Out: Show {
-   │                                               ^^^^ `Direct` doesn't implement `Tr`
+   │                          ^^^^^^^^^^^^^^^^^^^
+   │                          │
+   │                          `Direct` doesn't implement `Tr`
+   │                          trait bound `Direct::Out: Show` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
    ┌─ projection_trait_unproved.fe:78:12

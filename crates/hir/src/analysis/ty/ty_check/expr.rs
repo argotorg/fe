@@ -1022,7 +1022,7 @@ impl<'db> TyChecker<'db> {
             }
             Some(ty) if is_param_product(db, ty) => {
                 let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
-                let diags = check_param_product(db, ty, scope, span, assumptions, None).errors;
+                let diags = check_param_product(db, ty, scope, span, assumptions);
                 if !diags.is_empty() {
                     diags.into_iter().for_each(|diag| self.push_diag(diag));
                     return Shape::Owned(TyId::invalid(db, InvalidCause::Other));

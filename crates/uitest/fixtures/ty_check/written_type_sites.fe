@@ -1,0 +1,72 @@
+// Every place a type can be written has its bounds checked where it is
+// written, once. Each `<W<u16> as Ty>::A` below names a projection whose impl
+// needs `u16: Gate`: normalization picks the impl by its header without
+// proving that, so a site that went unchecked would accept a `u8`.
+trait Gate {}
+trait Ty { type A }
+struct W<T> { t: T }
+impl<T: Gate> Ty for W<T> { type A = u8 }
+trait Show {}
+trait Tr<X> {}
+trait Out { type O }
+struct S {}
+struct Foo<X> { x: X }
+
+// Items.
+struct Field { x: <W<u16> as Ty>::A }
+enum Variants { Tuple(<W<u16> as Ty>::A), Record { x: <W<u16> as Ty>::A } }
+type Alias = <W<u16> as Ty>::A
+const C: <W<u16> as Ty>::A = 1
+struct Default<U = <W<u16> as Ty>::A> { u: U }
+struct Where<T> where T: Tr<<W<u16> as Ty>::A> { t: T }
+
+// Functions.
+fn param(_ x: <W<u16> as Ty>::A) {}
+fn ret() -> <W<u16> as Ty>::A { 1 }
+fn tuple(_ x: (<W<u16> as Ty>::A, u8)) {}
+fn array(_ x: [<W<u16> as Ty>::A; 2]) {}
+fn const_param<const N: <W<u16> as Ty>::A>() {}
+fn bound<T: Tr<<W<u16> as Ty>::A>>() {}
+fn binding<T: Out<O = <W<u16> as Ty>::A>>() {}
+fn where_subject<T>() where <W<u16> as Ty>::A: Show {}
+fn effect() uses (e: <W<u16> as Ty>::A) {}
+
+// Traits.
+trait Super: Tr<<W<u16> as Ty>::A> {}
+trait SelfWhere where Self: Tr<<W<u16> as Ty>::A> {}
+trait AssocDefault { type B = <W<u16> as Ty>::A }
+trait AssocConst { const K: <W<u16> as Ty>::A }
+trait Method { fn m(self, _ x: <W<u16> as Ty>::A) }
+
+// Impls.
+impl Tr<<W<u16> as Ty>::A> for S {}
+impl Out for Foo<bool> { type O = <W<u16> as Ty>::A }
+impl Foo<<W<u16> as Ty>::A> {}
+impl Show for Foo<<W<u16> as Ty>::A> {}
+impl<T: Tr<<W<u16> as Ty>::A>> Show for Foo<T> {}
+
+// Contracts.
+msg M {
+    #[selector = 0x01]
+    Get { a: <W<u16> as Ty>::A } -> u8,
+}
+
+pub contract K {
+    x: <W<u16> as Ty>::A,
+
+    init(a: <W<u16> as Ty>::A) {}
+
+    recv M {
+        Get { a } -> <W<u16> as Ty>::A {
+            a
+        }
+    }
+}
+
+// Bodies.
+fn id<X>(_ x: X) -> X { x }
+fn body(_ v: u8) {
+    let _l: <W<u16> as Ty>::A = v
+    let _c = |x: <W<u16> as Ty>::A| -> u8 { x }
+    let _g = id<<W<u16> as Ty>::A>(v)
+}

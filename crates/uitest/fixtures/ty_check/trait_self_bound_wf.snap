@@ -4,10 +4,13 @@ expression: diags
 input_file: fixtures/ty_check/trait_self_bound_wf.fe
 ---
 error[6-0003]: trait bound is not satisfied
-   ┌─ trait_self_bound_wf.fe:14:29
+   ┌─ trait_self_bound_wf.fe:14:32
    │
 14 │ trait Projected where Self: Tr<<W<u16> as Ty>::A> {}
-   │                             ^^^^^^^^^^^^^^^^^^^^^ `W<u16>` doesn't implement `Ty`
+   │                                ^^^^^^^^^^^^^^^^^
+   │                                │
+   │                                `W<u16>` doesn't implement `Ty`
+   │                                trait bound `u16: Gate` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_self_bound_wf.fe:15:28

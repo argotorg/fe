@@ -13,7 +13,7 @@ use self::name_resolution::ImportAnalysisPass;
 use self::ty::{
     AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
     FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, MsgAnalysisPass, TraitAnalysisPass,
-    TypeAliasAnalysisPass,
+    TypeAliasAnalysisPass, WrittenTypeBoundsPass,
 };
 
 #[salsa::db]
@@ -42,6 +42,7 @@ pub(crate) fn initialize_pre_contract_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass("Impl", Box::new(ImplAnalysisPass {}));
     pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
     pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
+    pass_manager.add_module_pass("WrittenTypeBounds", Box::new(WrittenTypeBoundsPass {}));
     pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
     pass_manager
 }

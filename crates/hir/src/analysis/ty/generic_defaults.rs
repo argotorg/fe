@@ -11,7 +11,7 @@ use super::{
     diagnostics::{TyDiagCollection, TyLowerDiag},
     shape::Shape,
     subst::substitute_complete,
-    trait_resolution::{PredicateListId, TraitSolveCx, constraint::collect_candidate_constraints},
+    trait_resolution::{PredicateListId, constraint::collect_candidate_constraints},
     ty_check::check_generic_default_body_types,
     ty_def::{BorrowKind, InvalidCause, Kind, PrimTy, TyBase, TyData, TyId, TyParam},
     ty_error::{check_written_ty, emit_invalid_ty_error, first_invalid_ty_cause},
@@ -31,7 +31,7 @@ use crate::{
         Body, GenericParam, GenericParamOwner, IdentId, ItemKind, Partial, PathId,
         scope_graph::ScopeId,
     },
-    semantic::{param_env, trait_self_predicate},
+    semantic::trait_self_predicate,
     span::{item::LazyBodySpan, path::LazyPathSpan},
     visitor::{Visitor, VisitorCtxt, walk_body, walk_path},
 };
@@ -257,22 +257,15 @@ pub(crate) fn type_default_diags<'db>(
         if has_forward_source_dependency(db, owner, view.idx) {
             continue;
         }
-        // A default is checked where it is written, under the item's bounds:
-        // where it applies, it is no written type, and normalizing it proves
-        // nothing.
         let span = view.span().into_type_param().default_ty();
-        let checked = check_written_ty(
+        let mut errors = check_written_ty(
             db,
             owner.scope(),
             hir_ty,
             span.clone(),
             default_assumptions(db, owner),
             ConstBodyLowering::Deferred,
-            Some(
-                TraitSolveCx::new(db, owner.scope()).with_assumptions(param_env(db, owner.into())),
-            ),
         );
-        let mut errors = checked.errors;
         if errors.is_empty()
             && let Err(error) = generic_default(db, owner, view.idx)
         {
@@ -291,9 +284,6 @@ pub(crate) fn type_default_diags<'db>(
                     span.into(),
                 ));
             }
-        }
-        if errors.is_empty() {
-            diags.extend(checked.ill_formed);
         }
         diags.extend(errors);
     }
