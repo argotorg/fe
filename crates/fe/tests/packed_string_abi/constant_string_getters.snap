@@ -1,9 +1,8 @@
 ---
 source: crates/fe/tests/packed_string_abi.rs
-assertion_line: 116
 expression: report
 ---
-runtime bytes: 296
-name() gas: 522
-symbol() gas: 540
-empty() gas: 492
+runtime bytes: 300
+name() gas: 534
+symbol() gas: 552
+empty() gas: 504
