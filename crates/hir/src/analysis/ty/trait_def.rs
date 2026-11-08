@@ -645,8 +645,8 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
 }
 
 /// Returns the implementors of `inst`'s trait whose header, the self type and
-/// every trait argument, unifies with `inst`. Nothing is proved: an impl's
-/// where clauses only choose between impls whose headers both match (see
+/// every trait argument, unifies with `inst`. Nothing is proved: normalization
+/// drops only the impls whose where clauses are known not to hold (see
 /// [`impl_where_clause_refuted`]), and the trait reference of a projection
 /// is checked where its type is written. Not a tracked query: lowering an
 /// impl's header can normalize a projection, which looks up the impls of a

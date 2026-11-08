@@ -597,11 +597,14 @@ impl<'db> TypeNormalizer<'db> {
     }
 
     /// Resolves `assoc` through the impls whose header, every trait argument
-    /// included, matches its trait reference. Nothing is proved: where clauses
-    /// only choose between impls whose headers both match, and the trait
-    /// reference itself is checked where the projection is written. So an
-    /// impl whose where clause names the projection it defines, as
-    /// `impl Tr for S where <S as Tr>::Out: Show`, needs nothing special.
+    /// included, matches its trait reference, and whose where clauses are not
+    /// known not to hold. Nothing is proved: the clauses are solved without
+    /// resolving projections through impls, so an impl whose where clause
+    /// names the projection it defines, as `impl Tr for S where <S as
+    /// Tr>::Out: Show`, needs nothing special, and the trait reference itself
+    /// is checked where the projection is written. A clause known not to hold
+    /// keeps a projection that is written somewhere nothing checks from
+    /// resolving as though it did.
     fn try_resolve_assoc_ty_from_impls(&mut self, assoc: &AssocTy<'db>) -> Option<TyId<'db>> {
         let trait_inst = assoc.trait_.fold_with(self.db, self).as_predicate(self.db);
         let canonical_inst = Canonical::new(self.db, trait_inst);
@@ -613,11 +616,9 @@ impl<'db> TypeNormalizer<'db> {
             .flatten()
             .flat_map(|ingot| impls_for_trait_inst(self.db, ingot, canonical_inst))
             .collect();
-        if candidates.len() > 1 {
-            candidates.retain(|&implementor| {
-                !impl_where_clause_refuted(self.db, solve_cx, implementor, canonical_inst)
-            });
-        }
+        candidates.retain(|&implementor| {
+            !impl_where_clause_refuted(self.db, solve_cx, implementor, canonical_inst)
+        });
 
         // The definitions the candidates give, each with the impl giving it.
         let mut definitions: IndexMap<TyId<'db>, ImplementorId<'db>> = IndexMap::default();

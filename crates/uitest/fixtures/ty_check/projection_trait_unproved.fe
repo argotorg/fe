@@ -1,5 +1,6 @@
 // A projection resolves through the impl whose header matches. Where that
-// impl does not apply, the projection is rejected where it is written.
+// impl does not apply, the projection is rejected where it is written, and
+// where its where clauses are known not to hold it stays unresolved.
 trait Foo {}
 trait Show {}
 impl Show for u16 {}

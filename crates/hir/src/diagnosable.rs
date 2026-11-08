@@ -2112,8 +2112,16 @@ impl<'db> GenericParamOwner<'db> {
                         .with_assumptions(param_env(db, self.into())),
                 ),
             );
-            if !checked.errors.is_empty() {
-                out.extend(checked.errors);
+            // A part whose bounds don't hold is reported before what the type
+            // is: a projection whose impl doesn't apply stays unresolved, and
+            // no parameter has that type.
+            let reported = if checked.errors.is_empty() {
+                checked.ill_formed
+            } else {
+                checked.errors
+            };
+            if !reported.is_empty() {
+                out.extend(reported);
                 continue;
             }
             if let Some(ty) = param_set.param_by_original_idx(db, view.idx) {
@@ -2153,10 +2161,8 @@ impl<'db> GenericParamOwner<'db> {
                             }
                         }
                     }
-                    continue;
                 }
             }
-            out.extend(checked.ill_formed);
         }
         out
     }

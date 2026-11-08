@@ -4,73 +4,117 @@ expression: diags
 input_file: fixtures/ty_check/projection_trait_unproved.fe
 ---
 error[2-0002]: `Nonexistent` is not found
-   ┌─ projection_trait_unproved.fe:64:27
+   ┌─ projection_trait_unproved.fe:65:27
    │
-64 │ impl Needs for S where S: Nonexistent {}
+65 │ impl Needs for S where S: Nonexistent {}
    │                           ^^^^^^^^^^^ `Nonexistent` is not found
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:19:10
+   ┌─ projection_trait_unproved.fe:20:10
    │
-19 │ const C: <W<u16> as Ty>::A = 1
+20 │ const C: <W<u16> as Ty>::A = 1
    │          ^^^^^^^^^^^^^^^^^
    │          │
    │          `W<u16>` doesn't implement `Ty`
    │          trait bound `u16: Foo` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:26:12
+   ┌─ projection_trait_unproved.fe:27:12
    │
-26 │     let a: <W<u16> as Ty>::A = x
+27 │     let a: <W<u16> as Ty>::A = x
    │            ^^^^^^^^^^^^^^^^^
    │            │
    │            `W<u16>` doesn't implement `Ty`
    │            trait bound `u16: Foo` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:31:10
+   ┌─ projection_trait_unproved.fe:32:10
    │
-31 │     x as <W<u16> as Ty>::A
+32 │     x as <W<u16> as Ty>::A
    │          ^^^^^^^^^^^^^^^^^
    │          │
    │          `W<u16>` doesn't implement `Ty`
    │          trait bound `u16: Foo` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:35:8
+   ┌─ projection_trait_unproved.fe:36:8
    │
-35 │     id<<W<u16> as Ty>::A>(x)
+36 │     id<<W<u16> as Ty>::A>(x)
    │        ^^^^^^^^^^^^^^^^^
    │        │
    │        `W<u16>` doesn't implement `Ty`
    │        trait bound `u16: Foo` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:54:13
+   ┌─ projection_trait_unproved.fe:55:13
    │
-54 │     let p = <V<u16> as Ty>::A { x: 1 }
+55 │     let p = <V<u16> as Ty>::A { x: 1 }
    │             ^^^^^^^^^^^^^^^^^
    │             │
    │             `V<u16>` doesn't implement `Ty`
    │             trait bound `u16: Foo` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:60:41
+   ┌─ projection_trait_unproved.fe:61:41
    │
-60 │ impl<X> Needs for X where <X as Ty>::A: Show {}
+61 │ impl<X> Needs for X where <X as Ty>::A: Show {}
    │                                         ^^^^ `X` doesn't implement `Ty`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:72:47
+   ┌─ projection_trait_unproved.fe:73:47
    │
-72 │ impl Tr for Direct where <Direct as Tr>::Out: Show {
+73 │ impl Tr for Direct where <Direct as Tr>::Out: Show {
    │                                               ^^^^ `Direct` doesn't implement `Tr`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ projection_trait_unproved.fe:77:12
+   ┌─ projection_trait_unproved.fe:78:12
    │
-77 │     let a: <Direct as Tr>::Out = x
+78 │     let a: <Direct as Tr>::Out = x
    │            ^^^^^^^^^^^^^^^^^^^
    │            │
    │            `Direct` doesn't implement `Tr`
    │            trait bound `Direct::Out: Show` is not satisfied
+
+error[8-0000]: type mismatch
+   ┌─ projection_trait_unproved.fe:20:30
+   │
+20 │ const C: <W<u16> as Ty>::A = 1
+   │                              ^ expected `W<u16>::A`, but `{integer}` is given
+
+error[8-0000]: type mismatch
+   ┌─ projection_trait_unproved.fe:27:32
+   │
+27 │     let a: <W<u16> as Ty>::A = x
+   │                                ^ expected `W<u16>::A`, but `u16` is given
+
+error[8-0000]: type mismatch
+   ┌─ projection_trait_unproved.fe:36:5
+   │
+36 │     id<<W<u16> as Ty>::A>(x)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^ expected `u16`, but `W<u16>::A` is given
+
+error[8-0000]: type mismatch
+   ┌─ projection_trait_unproved.fe:36:27
+   │
+36 │     id<<W<u16> as Ty>::A>(x)
+   │                           ^ expected `W<u16>::A`, but `u16` is given
+
+error[8-0000]: type mismatch
+   ┌─ projection_trait_unproved.fe:40:5
+   │
+40 │     C
+   │     ^ expected `u16`, but `W<u16>::A` is given
+
+error[8-0006]: expected record variant or struct
+   ┌─ projection_trait_unproved.fe:55:13
+   │
+55 │     let p = <V<u16> as Ty>::A { x: 1 }
+   │             ^^^^^^^^^^^^^^^^^ expected record variant or struct here, but found V<u16>::A
+
+error[8-0055]: cast is not provably lossless
+   ┌─ projection_trait_unproved.fe:32:5
+   │
+32 │     x as <W<u16> as Ty>::A
+   │     ^^^^^^^^^^^^^^^^^^^^^^ cannot cast `u8` to `W<u16>::A` with `as`
+   │
+   = try using `.downcast()` for checked narrowing/sign changes, or `.downcast_truncate()` / `.downcast_saturate()` / `.downcast_unchecked()`

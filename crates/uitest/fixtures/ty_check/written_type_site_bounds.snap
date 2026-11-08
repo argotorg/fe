@@ -62,3 +62,15 @@ error[6-0003]: trait bound is not satisfied
    │              │
    │              `W<u16>` doesn't implement `Ty`
    │              trait bound `u16: Foo` is not satisfied
+
+error[8-0000]: type mismatch
+   ┌─ written_type_site_bounds.fe:20:34
+   │
+20 │     const C: <W<u16> as Ty>::A = 1
+   │                                  ^ expected `W<u16>::A`, but `{integer}` is given
+
+error[8-0000]: type mismatch
+   ┌─ written_type_site_bounds.fe:24:34
+   │
+24 │     const C: <W<u16> as Ty>::A = 1
+   │                                  ^ expected `W<u16>::A`, but `{integer}` is given
