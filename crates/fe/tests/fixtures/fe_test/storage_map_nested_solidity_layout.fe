@@ -1,0 +1,81 @@
+// Nested `StorageMap`s against the storage layout of Solidity 0.8 nested
+// mappings. The expected slots were produced by running the equivalent
+// Solidity contract below and recording its storage writes with `vm.record`.
+//
+// contract L {
+//     uint256 x;                                                    // slot 0
+//     mapping(address => mapping(address => uint256)) allowance;    // slot 1
+//     struct Pair { uint128 a; uint128 b; uint256 c; }
+//     mapping(uint256 => mapping(uint8 => mapping(int8 => Pair))) deep; // slot 2
+//     struct Account { uint256 balance; mapping(address => bool) approved; }
+//     mapping(bool => Account) accounts;                            // slot 3
+//     function run() external {
+//         allowance[address(0xa)][address(0xb)] = 42;
+//         allowance[address(0xa)][address(0xc)] = 7;
+//         deep[1][2][-3] = Pair(5, 6, 7);
+//         accounts[true].balance = 100;
+//         accounts[true].approved[address(0xd)] = true;
+//     }
+// }
+use std::evm::{Address, Evm, RawStorage, StorageMap}
+
+struct Pair {
+    a: u128,
+    b: u128,
+    c: u256,
+}
+
+impl Copy for Pair {}
+
+struct Account {
+    balance: u256,
+    approved: StorageMap<Address, bool>,
+}
+
+msg M {
+    #[selector = 1]
+    Run,
+    #[selector = 2]
+    Load { slot: u256 } -> u256,
+}
+
+pub contract L {
+    mut x: u256,
+    mut allowance: StorageMap<Address, StorageMap<Address, u256>>,
+    mut deep: StorageMap<u256, StorageMap<u8, StorageMap<i8, Pair>>>,
+    mut accounts: StorageMap<bool, Account>,
+
+    recv M {
+        Run uses (mut allowance, mut deep, mut accounts) {
+            allowance[Address::new(0xa)][Address::new(0xb)] = 42
+            let owner = mut allowance[Address::new(0xa)]
+            owner[Address::new(0xc)] = 7
+            deep[1][2][-3] = Pair { a: 5, b: 6, c: 7 }
+            accounts[true].balance = 100
+            accounts[true].approved[Address::new(0xd)] = true
+        }
+        Load { slot } -> u256 uses (raw: RawStorage) {
+            unsafe { raw.sload(slot) }
+        }
+    }
+}
+
+#[test]
+fn nested_maps_match_solidity_layout() uses (evm: mut Evm) {
+    let l = evm.create2<L>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: l, gas: 1000000, value: Wei::zero(), message: M::Run {})
+    let load = |slot: u256| evm.call(addr: l, gas: 100000, value: Wei::zero(), message: M::Load { slot })
+
+    // allowance[0xa][0xb], allowance[0xa][0xc]
+    assert(load(0x0e7d00d544dc526294665b47dd780d51de792c7641ca2135860f543e68345aeb) == 42)
+    assert(load(0x2db75ad4f938e64731c3f887dfc52ada2f0aa36be3771830ec1be46890af2edc) == 7)
+    // deep[1][2][-3]: `a` and `b` packed into the first slot, `c` in the next.
+    assert(
+        load(0x9f1c05c0593281e2f4239704cb5aa7234702fb3e5023fcf680b2752933bae268)
+            == 0x0000000000000000000000000000000600000000000000000000000000000005,
+    )
+    assert(load(0x9f1c05c0593281e2f4239704cb5aa7234702fb3e5023fcf680b2752933bae269) == 7)
+    // accounts[true].balance, accounts[true].approved[0xd]
+    assert(load(0xa15bc60c955c405d20d9149c709e2460f1c2d9a497496a7f46004d1772c3054c) == 100)
+    assert(load(0x0b25e02cfd1165498572d71db7ebb50b0a4e6ad3f6553b63cd63bccd6604351a) == 1)
+}
