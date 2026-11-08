@@ -18,6 +18,13 @@ extern {
     fn clock() -> i64
 }
 
+extern {
+    /// One SHA-256 compression: `state` after the 64 rounds of the sixteen
+    /// message words of `block`, which the caller has read big-endian. A host
+    /// with SHA instructions (x86-64 SHA extensions) computes it with them.
+    pub fn sha256_compress(_ state: [u32; 8], _ block: [u32; 16]) -> [u32; 8]
+}
+
 /// Process CPU time in host clock ticks. Negative readings are unavailable.
 ///
 /// The origin is unspecified. Subtract readings to measure CPU work, excluding

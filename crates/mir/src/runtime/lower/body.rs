@@ -3114,6 +3114,12 @@ impl<'db> RmirEmitter<'db> {
             };
             return Some(self.lower_panic_code(bb, *code));
         }
+        if kind == RuntimeBuiltinFuncKind::Sha256Compress {
+            let [state, block] = args.as_slice() else {
+                return None;
+            };
+            return Some(self.lower_sha256_compress(bb, *state, *block));
+        }
         // The argument moved into the call, which destroys nothing; EVM
         // memory is never reclaimed.
         if kind == RuntimeBuiltinFuncKind::Forget
@@ -4136,7 +4142,8 @@ impl<'db> RmirEmitter<'db> {
             | RuntimeBuiltinFuncKind::Forget
             | RuntimeBuiltinFuncKind::NeedsDrop => return None,
             RuntimeBuiltinFuncKind::IntrinsicKeccak256
-            | RuntimeBuiltinFuncKind::IntrinsicKeccakWords => return None,
+            | RuntimeBuiltinFuncKind::IntrinsicKeccakWords
+            | RuntimeBuiltinFuncKind::Sha256Compress => return None,
         })
     }
 
@@ -4247,6 +4254,37 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         Some(ret)
+    }
+
+    /// Compresses `std::native::sha256_compress`'s state array by its block
+    /// array, each read as an array value.
+    fn lower_sha256_compress(
+        &mut self,
+        bb: RBlockId,
+        state: RLocalId,
+        block: RLocalId,
+    ) -> RLocalId {
+        let array = |this: &mut Self, local: RLocalId| {
+            let ty = this.locals[local.index()].semantic_ty;
+            let class = RuntimeClass::AggregateValue {
+                layout: this.layout_for_ty(ty),
+            };
+            (ty, class.clone(), this.coerce_value(bb, local, &class))
+        };
+        let (state_ty, state_class, state) = array(self, state);
+        let (_, _, block) = array(self, block);
+        let ret = self.alloc_runtime_temp(state_ty, RuntimeCarrier::Value(state_class));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: ret,
+                expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::Sha256Compress {
+                    state,
+                    block,
+                }),
+            },
+        );
+        ret
     }
 
     fn lower_intrinsic_keccak256_call(
