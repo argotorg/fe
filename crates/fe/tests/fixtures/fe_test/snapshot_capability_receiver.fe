@@ -1,0 +1,24 @@
+// A snapshot receiver viewed through a capability is copied before the call,
+// so the callee's `mut` effect on the same place leaves the receiver as it was.
+
+struct Handle { value: u256 }
+impl Copy for Handle {}
+impl Snapshot for Handle {}
+
+impl Handle {
+    fn read(self) -> u256 uses (current: mut Handle) {
+        current.value = 2
+        self.value
+    }
+}
+
+fn read_aliased(_ handle: mut Handle) -> u256 {
+    with (Handle = handle) { handle.read() }
+}
+
+#[test]
+fn copies_capability_receiver() {
+    var handle = Handle { value: 1 }
+    assert(read_aliased(mut handle) == 1)
+    assert(handle.value == 2)
+}

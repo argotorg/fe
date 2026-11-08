@@ -35,7 +35,7 @@ use crate::{
             trait_resolution::PredicateListId,
             ty_check::{BindingAccess, BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
-            ty_is_copy,
+            ty_is_copy, ty_is_snapshot,
         },
     },
     projection::{IndexSource, Projection},
@@ -1027,12 +1027,38 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                             | AddressSpace::Storage
                                             | AddressSpace::Transient => true,
                                         });
+                            // A snapshot viewed through a capability is copied
+                            // from the carrier's target, which the callee's
+                            // effects could write.
+                            let capability_copy =
+                                matches!(place.base, NPlaceBase::CapabilityTarget { .. })
+                                    && ty_is_snapshot(
+                                        self.db,
+                                        self.raw.template_owner.scope(),
+                                        target,
+                                        self.assumptions,
+                                    );
                             if provider_copy
+                                || capability_copy
                                 || structural_repack_mapping(self.db, self.instance, place.ty, target)
                                     .is_none()
                             {
-                                let value =
-                                    self.read_operand(block, origin, *arg, Some(ReadMode::Copy))?;
+                                let value = if capability_copy {
+                                    let value = self.emit_define(
+                                        block,
+                                        None,
+                                        arg.sem_origin(origin),
+                                        place.ty,
+                                        arg.value,
+                                        NExpr::Load {
+                                            place: place.clone(),
+                                            mode: ReadMode::Copy,
+                                        },
+                                    )?;
+                                    self.operand(value, origin, ReadMode::Copy)
+                                } else {
+                                    self.read_operand(block, origin, *arg, Some(ReadMode::Copy))?
+                                };
                                 let from = self.values[value.value.index()].ty;
                                 let mapping =
                                     structural_repack_mapping(self.db, self.instance, from, target)

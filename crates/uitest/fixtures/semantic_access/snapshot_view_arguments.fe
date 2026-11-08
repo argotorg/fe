@@ -1,0 +1,37 @@
+use std::abi::sol
+use std::evm::{Address, Call}
+
+msg PingMsg {
+    #[selector = sol("ping()")]
+    Ping,
+}
+
+// Accepted: `Address` is a snapshot, so a storage address is copied before the
+// call, both directly and through an effect.
+fn call_through_address() uses (target: Address, call: mut Call) {
+    target.call(PingMsg::Ping {})
+}
+
+contract Forwarder {
+    mut target: Address,
+    recv PingMsg {
+        Ping uses (target, call: mut Call) {
+            call_through_address()
+            target.call(PingMsg::Ping {})
+        }
+    }
+}
+
+struct Handle { value: u256 }
+impl Copy for Handle {}
+impl Snapshot for Handle {}
+
+fn mutate(_ argument: mut Handle) uses (current: mut Handle) {
+    argument.value += 1
+    current.value += 1
+}
+
+// Rejected: Snapshot does not permit overlapping exclusive accesses.
+fn exclusive_alias(_ handle: mut Handle) {
+    with (Handle = handle) { mutate(mut handle) }
+}
