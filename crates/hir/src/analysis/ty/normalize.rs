@@ -481,23 +481,22 @@ impl<'db> TypeNormalizer<'db> {
         // Equality evidence is separate from the projection's identity. Match
         // its entire trait reference before using an assumption's binding.
         let target = assoc.trait_.fold_with(self.db, self);
-        let mut matching_bounds: IndexMap<TyId<'db>, ()> = IndexMap::new();
-        for &pred in self.assumptions.list(self.db) {
-            let binding = AssocBinding {
-                name: assoc.name,
-                mode: assoc.mode,
-            };
-            let Some(bound) = pred.bound_assoc_ty(self.db, binding) else {
-                continue;
-            };
-            if self.trait_refs_match(target, pred.trait_ref(self.db)) {
-                matching_bounds.insert(self.fold_ty(self.db, bound), ());
-            }
+        let binding = AssocBinding {
+            name: assoc.name,
+            mode: assoc.mode,
+        };
+        let bounds = self.assumption_bounds(target, binding);
+        if bounds.len() == 1 && self.equates_back(ty, bounds[0]) {
+            return None;
         }
+        let matching_bounds: IndexSet<TyId<'db>> = bounds
+            .into_iter()
+            .map(|bound| self.fold_ty(self.db, bound))
+            .collect();
         if matching_bounds.len() > 1 {
             return None;
         }
-        if let Some((&bound, _)) = matching_bounds.first() {
+        if let Some(&bound) = matching_bounds.first() {
             return (bound != ty).then_some(bound);
         }
 
@@ -518,6 +517,63 @@ impl<'db> TypeNormalizer<'db> {
         }
 
         self.try_resolve_assoc_ty_from_impls(assoc)
+    }
+
+    /// The bindings of `binding` that the assumptions on `target` give, as
+    /// written.
+    fn assumption_bounds(
+        &mut self,
+        target: TraitRefId<'db>,
+        binding: AssocBinding<'db>,
+    ) -> IndexSet<TyId<'db>> {
+        let mut bounds = IndexSet::new();
+        for &pred in self.assumptions.list(self.db) {
+            if let Some(bound) = pred.bound_assoc_ty(self.db, binding)
+                && self.trait_refs_match(target, pred.trait_ref(self.db))
+            {
+                bounds.insert(bound);
+            }
+        }
+        bounds
+    }
+
+    /// Whether `bound`, the one binding the assumptions give the projection
+    /// `ty`, leads back to `ty` through projections the assumptions each
+    /// equate with the next one, as in `T: Tr<Out = <T as Tr>::Out>` or
+    /// `A: Tr<Out = B::Out>, B: Tr<Out = A::Out>`. Such a cycle says only that
+    /// its projections are one type, so it resolves none of them; following
+    /// it would repeat until the nesting limit. Projections are compared with
+    /// their trait arguments normalized.
+    fn equates_back(&mut self, ty: TyId<'db>, bound: TyId<'db>) -> bool {
+        let db = self.db;
+        let is_projection = |ty: TyId<'db>| matches!(ty.data(db), TyData::AssocTy(_));
+        if !is_projection(bound) {
+            return false;
+        }
+        let start = ty.super_fold_with(db, self);
+        let mut seen = IndexSet::new();
+        let mut next = bound;
+        loop {
+            let projection = next.super_fold_with(db, self);
+            let TyData::AssocTy(assoc) = projection.data(db) else {
+                return false;
+            };
+            if projection == start {
+                return true;
+            }
+            if !seen.insert(projection) {
+                return false;
+            }
+            let binding = AssocBinding {
+                name: assoc.name,
+                mode: assoc.mode,
+            };
+            let bounds = self.assumption_bounds(assoc.trait_, binding);
+            if bounds.len() != 1 || !is_projection(bounds[0]) {
+                return false;
+            }
+            next = bounds[0];
+        }
     }
 
     /// A pure normalization query may observe established equality, but may
