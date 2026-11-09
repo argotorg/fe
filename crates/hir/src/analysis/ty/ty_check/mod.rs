@@ -123,7 +123,7 @@ use crate::analysis::ty::{
         CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext, const_body_assumptions,
         invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag, root_ctfe_error,
     },
-    decision_tree::{ProjectionPath, binding_ways},
+    decision_tree::{ProjectionPath, binding_occurrences},
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
         ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
@@ -1527,6 +1527,10 @@ pub struct TyChecker<'db> {
     ref_part_bindings: FxHashSet<PatId>,
     /// Names bound to a shape whole, which is reported where they bind.
     shape_bindings: FxHashSet<PatId>,
+    /// Patterns outside a `match`, where `|` alternatives meet before what
+    /// follows: checked for accesses the alternatives bind apart once the
+    /// body's types are known.
+    joined_patterns: Vec<PatId>,
     /// The missing effects of `mut?` calls at `ref`, reported once the calls'
     /// modes are final: the call, the effect's binding index in its callee,
     /// and the report.
@@ -1674,6 +1678,7 @@ impl<'db> TyChecker<'db> {
         self.check_access_uses();
         self.check_marked_bindings();
         self.check_joined_binding_modes();
+        self.check_joined_accesses();
         self.report_initializer_markers();
     }
 
@@ -3065,6 +3070,7 @@ impl<'db> TyChecker<'db> {
             param_pattern_sites: FxHashMap::default(),
             ref_part_bindings: FxHashSet::default(),
             shape_bindings: FxHashSet::default(),
+            joined_patterns: Vec::new(),
             missing_effects: Vec::new(),
             effect_providers: FxHashMap::default(),
             split_demand: None,
@@ -3978,15 +3984,19 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    /// Reports each access that the alternatives of a `|` pattern in `pat`
-    /// bind to different parts of what `pat` destructures. Outside a
-    /// `match`, whose arm each alternative reaches separately, the
-    /// alternatives meet before what follows, and an access has one target.
-    pub(super) fn check_joined_accesses(&mut self, pat: PatId) {
-        let Some(root) = self.env.pattern_store().root(pat) else {
-            return;
-        };
-        if !self.env.pattern_store().binds_in_alternatives(root) {
+    /// Reports each access that the alternatives of a `|` pattern bind to
+    /// different parts of what the pattern destructures, for the patterns
+    /// outside a `match` (`joined_patterns`). There the alternatives meet
+    /// before what follows, and an access has one target; a `match` arm is
+    /// reached from each alternative separately.
+    fn check_joined_accesses(&mut self) {
+        let pats = std::mem::take(&mut self.joined_patterns);
+        let roots: Vec<_> = pats
+            .into_iter()
+            .filter_map(|pat| self.env.pattern_store().root(pat))
+            .filter(|&root| self.env.pattern_store().binds_in_alternatives(root))
+            .collect();
+        if roots.is_empty() {
             return;
         }
         let mut prober = env::Prober::new(&mut self.table, self.env.scope());
@@ -3995,10 +4005,19 @@ impl<'db> TyChecker<'db> {
             .pattern_store()
             .clone()
             .fold_with(self.db, &mut prober);
-        let mut firsts: Vec<(LocalBinding<'db>, PatId, ProjectionPath<'db>)> = Vec::new();
-        let mut reported = Vec::new();
-        for (_, bindings) in binding_ways(self.db, &store, root, &ProjectionPath::default()) {
-            for (binding_ref, path) in bindings {
+        for root in roots {
+            // An access is at one part in every alternative when all its
+            // occurrences are at one path.
+            let mut occurrences = Vec::new();
+            binding_occurrences(
+                self.db,
+                &store,
+                root,
+                &ProjectionPath::default(),
+                &mut occurrences,
+            );
+            let mut firsts: Vec<(LocalBinding<'db>, PatId, ProjectionPath<'db>)> = Vec::new();
+            for (binding_ref, path) in occurrences {
                 let occurrence = binding_ref.representative_pat;
                 if !matches!(
                     self.env.pat_binding_mode(occurrence),
@@ -4011,10 +4030,7 @@ impl<'db> TyChecker<'db> {
                 };
                 match firsts.iter().find(|(first, ..)| *first == binding) {
                     None => firsts.push((binding, occurrence, path)),
-                    Some(&(_, first, ref first_path))
-                        if *first_path != path && !reported.contains(&occurrence) =>
-                    {
-                        reported.push(occurrence);
+                    Some(&(_, first, ref first_path)) if *first_path != path => {
                         self.push_diag(BodyDiag::OrPatAccessJoined {
                             primary: occurrence.span(self.body()).into(),
                             first: first.span(self.body()).into(),

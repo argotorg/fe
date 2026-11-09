@@ -201,7 +201,7 @@ impl<'db> TyChecker<'db> {
             };
             if prop.shape.is_some() {
                 self.bind_pattern_source(*pat, *expr, &prop, true);
-                self.check_joined_accesses(*pat);
+                self.joined_patterns.push(*pat);
             }
             if else_.is_none()
                 && let Some(root) = self.env.pattern_store().root(*pat)
@@ -472,7 +472,7 @@ impl<'db> TyChecker<'db> {
                 }
                 let authority = self.expr_has_authority(base.0);
                 self.bind_pattern_accesses(*pat, &plan.shape, authority, AccessBinding::Result);
-                self.check_joined_accesses(*pat);
+                self.joined_patterns.push(*pat);
                 let waits = plan
                     .calls
                     .iter()
