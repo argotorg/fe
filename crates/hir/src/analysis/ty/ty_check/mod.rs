@@ -82,8 +82,9 @@ use super::{
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::Canonical,
     diagnostics::{
-        BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, MarkerPosition, RevealedBy,
-        StaticAssertComparisonValues, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
+        BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, JoinedBindingMode, MarkerPosition,
+        RevealedBy, StaticAssertComparisonValues, TraitConstraintDiag, TyDiagCollection,
+        TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key, rows::RowPath},
     evidence::{
@@ -122,6 +123,7 @@ use crate::analysis::ty::{
         CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext, const_body_assumptions,
         invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag, root_ctfe_error,
     },
+    decision_tree::{ProjectionPath, binding_ways},
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
         ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
@@ -1671,6 +1673,7 @@ impl<'db> TyChecker<'db> {
         }
         self.check_access_uses();
         self.check_marked_bindings();
+        self.check_joined_binding_modes();
         self.report_initializer_markers();
     }
 
@@ -3341,24 +3344,6 @@ impl<'db> TyChecker<'db> {
         candidates
     }
 
-    fn pattern_binds_any(&self, pat: PatId) -> bool {
-        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
-            return false;
-        };
-        match pat_data {
-            Pat::WildCard | Pat::Rest | Pat::Lit(_) => false,
-            Pat::Path(..) => self
-                .env
-                .pat_binding(pat)
-                .is_some_and(|binding| matches!(binding, LocalBinding::Local { .. })),
-            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
-                pats.iter().any(|pat| self.pattern_binds_any(*pat))
-            }
-            Pat::Record(_, fields) => fields.iter().any(|field| self.pattern_binds_any(field.pat)),
-            Pat::Or(lhs, rhs) => self.pattern_binds_any(*lhs) || self.pattern_binds_any(*rhs),
-        }
-    }
-
     /// Binds `pat`, the pattern of a `let` when `is_let`, to what `source`
     /// grants, when it grants accesses: see `AccessBinding` for how each kind
     /// of source binds.
@@ -3967,49 +3952,106 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    /// Ensure all binding patterns are registered in the current scope.
-    fn seed_pat_bindings(&mut self, pat: PatId) {
-        let Partial::Present(pat_data) = pat.data(self.db, self.env.body()) else {
+    /// Reports each binding in a `|` alternative that binds its name in
+    /// another way than the alternative whose binding it joins: as another
+    /// access, or as a `var` against a value.
+    fn check_joined_binding_modes(&mut self) {
+        let body = self.body();
+        for (pat, data) in body.pats(self.db).iter() {
+            if let Partial::Present(Pat::Path(Partial::Present(path), _)) = data
+                && let Some(LocalBinding::Local { pat: first, .. }) = self.env.pat_binding(pat)
+                && first != pat
+                && let Some(name) = path.as_ident(self.db)
+            {
+                let mode = self.joined_binding_mode(pat);
+                let first_mode = self.joined_binding_mode(first);
+                if mode != first_mode {
+                    self.push_diag(BodyDiag::OrPatBindingModeMismatch {
+                        primary: pat.span(body).into(),
+                        first: first.span(body).into(),
+                        name,
+                        mode,
+                        first_mode,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Reports each access that the alternatives of a `|` pattern in `pat`
+    /// bind to different parts of what `pat` destructures. Outside a
+    /// `match`, whose arm each alternative reaches separately, the
+    /// alternatives meet before what follows, and an access has one target.
+    pub(super) fn check_joined_accesses(&mut self, pat: PatId) {
+        let Some(root) = self.env.pattern_store().root(pat) else {
             return;
         };
-
-        match pat_data {
-            Pat::Path(path, marker) => {
-                let Partial::Present(path) = path else {
-                    return;
+        if !self.env.pattern_store().binds_in_alternatives(root) {
+            return;
+        }
+        let mut prober = env::Prober::new(&mut self.table, self.env.scope());
+        let store = self
+            .env
+            .pattern_store()
+            .clone()
+            .fold_with(self.db, &mut prober);
+        let mut firsts: Vec<(LocalBinding<'db>, PatId, ProjectionPath<'db>)> = Vec::new();
+        let mut reported = Vec::new();
+        for (_, bindings) in binding_ways(self.db, &store, root, &ProjectionPath::default()) {
+            for (binding_ref, path) in bindings {
+                let occurrence = binding_ref.representative_pat;
+                if !matches!(
+                    self.env.pat_binding_mode(occurrence),
+                    Some(PatBindingMode::Access { .. })
+                ) {
+                    continue;
+                }
+                let Some(binding) = self.env.pat_binding(occurrence) else {
+                    continue;
                 };
-                let Some(LocalBinding::Local { .. }) = self.env.pat_binding(pat) else {
-                    return;
-                };
-                if let Some(ident) = path.as_ident(self.db) {
-                    let current = self.env.current_block_idx();
-                    if self.env.get_block(current).lookup_var(ident).is_none() {
-                        let binding = LocalBinding::local(
-                            pat,
-                            matches!(
-                                self.binding_marker(pat, *marker),
-                                BindingMarker::Var | BindingMarker::Mut
-                            ),
-                        );
-                        self.env.register_pending_binding(ident, binding);
+                match firsts.iter().find(|(first, ..)| *first == binding) {
+                    None => firsts.push((binding, occurrence, path)),
+                    Some(&(_, first, ref first_path))
+                        if *first_path != path && !reported.contains(&occurrence) =>
+                    {
+                        reported.push(occurrence);
+                        self.push_diag(BodyDiag::OrPatAccessJoined {
+                            primary: occurrence.span(self.body()).into(),
+                            first: first.span(self.body()).into(),
+                            name: binding_ref.name,
+                        });
                     }
+                    Some(_) => {}
                 }
             }
-            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
-                for &p in pats {
-                    self.seed_pat_bindings(p);
-                }
+        }
+    }
+
+    /// How the binding pattern `pat` binds its name.
+    fn joined_binding_mode(&self, pat: PatId) -> JoinedBindingMode {
+        let is_var = matches!(
+            pat.data(self.db, self.body()),
+            Partial::Present(Pat::Path(_, marker))
+                if matches!(self.binding_marker(pat, *marker), BindingMarker::Var | BindingMarker::Mut)
+        );
+        match self.env.pat_binding_mode(pat) {
+            Some(PatBindingMode::Access { kind, .. }) => JoinedBindingMode::Access(kind),
+            Some(PatBindingMode::ByValue) | None if is_var => JoinedBindingMode::Var,
+            Some(PatBindingMode::ByValue) | None => JoinedBindingMode::Value,
+        }
+    }
+
+    /// Registers the bindings of `pat` that the current scope doesn't have.
+    fn seed_pat_bindings(&mut self, pat: PatId) {
+        let mut names = Vec::new();
+        self.bound_names(pat, &mut names);
+        let current = self.env.current_block_idx();
+        for (pat, name) in names {
+            if self.env.get_block(current).lookup_var(name).is_none()
+                && let Some(binding) = self.env.pat_binding(pat)
+            {
+                self.env.register_pending_binding(name, binding);
             }
-            Pat::Record(_, fields) => {
-                for field in fields {
-                    self.seed_pat_bindings(field.pat);
-                }
-            }
-            Pat::Or(lhs, rhs) => {
-                self.seed_pat_bindings(*lhs);
-                self.seed_pat_bindings(*rhs);
-            }
-            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
         }
     }
 
@@ -5903,8 +5945,12 @@ impl<'db> TypedBody<'db> {
         binding_pat: PatId,
     ) -> Option<Vec<ReturnProjectionStep>> {
         match self.tables.pattern_store.node(pat).kind() {
+            // The alternatives of a `|` pattern bind a name at patterns of
+            // their own, which are occurrences of one binding.
             ValidatedPatKind::Wildcard { binding } => binding
-                .filter(|binding| binding.representative_pat == binding_pat)
+                .filter(|binding| {
+                    self.pat_binding(binding.representative_pat) == self.pat_binding(binding_pat)
+                })
                 .map(|_| Vec::new()),
             ValidatedPatKind::Constructor { ctor, fields } => {
                 fields.iter().enumerate().find_map(|(field_idx, child)| {

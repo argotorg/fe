@@ -134,6 +134,18 @@ impl<'db> PatternStore<'db> {
             ValidatedPatKind::Or(pats) => pats.iter().any(|&pat| self.binds(pat)),
         }
     }
+
+    /// Whether `id` has a `|` pattern that binds names, whose bindings
+    /// depend on which alternative matches.
+    pub fn binds_in_alternatives(&self, id: ValidatedPatId) -> bool {
+        match self.node(id).kind() {
+            ValidatedPatKind::Wildcard { .. } => false,
+            ValidatedPatKind::Constructor { fields, .. } => fields
+                .iter()
+                .any(|&field| self.binds_in_alternatives(field)),
+            ValidatedPatKind::Or(_) => self.binds(id),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]

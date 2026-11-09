@@ -536,6 +536,14 @@ pub enum MarkerPosition {
     LoopBase,
 }
 
+/// How a binding in an alternative of a `|` pattern binds its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum JoinedBindingMode {
+    Value,
+    Var,
+    Access(BorrowKind),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum BodyDiag<'db> {
     TypeMismatch {
@@ -550,7 +558,38 @@ pub enum BodyDiag<'db> {
         conflicat_with: DynLazySpan<'db>,
         name: IdentId<'db>,
     },
-    BindingsInOrPat(DynLazySpan<'db>),
+    /// An alternative of a `|` pattern, `primary`, doesn't bind `name`,
+    /// which another binds at `binding`.
+    OrPatBindingMissing {
+        primary: DynLazySpan<'db>,
+        binding: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+    /// `name` is a `ty` at `primary` but a `first_ty` at `first`, in another
+    /// alternative of the same `|` pattern.
+    OrPatBindingTypeMismatch {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        name: IdentId<'db>,
+        ty: TyId<'db>,
+        first_ty: TyId<'db>,
+    },
+    /// `name` is bound as `mode` at `primary` but as `first_mode` at
+    /// `first`, in another alternative of the same `|` pattern.
+    OrPatBindingModeMismatch {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        name: IdentId<'db>,
+        mode: JoinedBindingMode,
+        first_mode: JoinedBindingMode,
+    },
+    /// `name`, an access, is bound at `primary` and at `first` to different
+    /// parts of what a `|` pattern outside a `match` destructures.
+    OrPatAccessJoined {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
     DuplicatedRestPat(DynLazySpan<'db>),
     UnexpectedRestPat(DynLazySpan<'db>),
 
@@ -1489,7 +1528,10 @@ impl<'db> BodyDiag<'db> {
             Self::InfiniteOccurrence(..) => 1,
             Self::DuplicatedRestPat(..) => 2,
             Self::UnexpectedRestPat(..) => 75,
-            Self::BindingsInOrPat(..) => 76,
+            Self::OrPatBindingMissing { .. } => 159,
+            Self::OrPatBindingTypeMismatch { .. } => 160,
+            Self::OrPatBindingModeMismatch { .. } => 161,
+            Self::OrPatAccessJoined { .. } => 162,
             Self::InvalidPathDomainInPat { .. } => 3,
             Self::UnitVariantExpected { .. } => 4,
             Self::TupleVariantExpected { .. } => 5,

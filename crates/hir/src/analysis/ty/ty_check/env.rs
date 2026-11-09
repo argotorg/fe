@@ -1051,19 +1051,20 @@ impl<'db> TyCheckEnv<'db> {
         self.local_borrow_providers[pat] = provider;
     }
 
+    pub(super) fn pat_binding_mode(&self, pat: PatId) -> Option<PatBindingMode> {
+        self.pat_binding_modes[pat]
+    }
+
     pub(super) fn set_pat_binding_mode(&mut self, pat: PatId, mode: PatBindingMode) {
         if self.pat_bindings[pat].is_some() {
             self.pat_binding_modes[pat] = Some(mode);
         }
     }
 
-    pub(super) fn discard_pat_binding(&mut self, pat: PatId) {
-        let Some(binding) = self.pat_bindings[pat].take() else {
-            return;
-        };
-        self.local_borrow_providers[pat] = None;
-        self.pat_binding_modes[pat] = None;
-        self.pending_vars.retain(|_, pending| *pending != binding);
+    /// Makes `pat`, a binding of a `|` alternative, an occurrence of
+    /// `binding`, which an earlier alternative binds by the same name.
+    pub(super) fn join_pat_binding(&mut self, pat: PatId, binding: LocalBinding<'db>) {
+        self.pat_bindings[pat] = Some(binding);
     }
 
     pub(super) fn effect_env_mut(&mut self) -> &mut keyed_effect_env::EffectEnv<'db> {
@@ -1526,6 +1527,25 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn clear_pending_bindings(&mut self) {
         self.pending_vars.clear();
+    }
+
+    pub(super) fn pending_bindings(&self) -> &FxHashMap<IdentId<'db>, LocalBinding<'db>> {
+        &self.pending_vars
+    }
+
+    /// Replaces the pending bindings with `bindings`, returning them.
+    pub(super) fn replace_pending_bindings(
+        &mut self,
+        bindings: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
+    ) -> FxHashMap<IdentId<'db>, LocalBinding<'db>> {
+        std::mem::replace(&mut self.pending_vars, bindings)
+    }
+
+    pub(super) fn extend_pending_bindings(
+        &mut self,
+        bindings: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
+    ) {
+        self.pending_vars.extend(bindings);
     }
 
     pub(super) fn register_trait_obligation(&mut self, obligation: TraitObligation<'db>) {

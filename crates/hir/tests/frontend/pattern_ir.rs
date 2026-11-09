@@ -1,6 +1,6 @@
 use fe_hir::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use fe_hir::analysis::ty::pattern_ir::ValidatedPatKind;
-use fe_hir::analysis::ty::ty_check::check_func_body;
+use fe_hir::analysis::ty::ty_check::{LocalBinding, check_func_body};
 use fe_hir::hir_def::{Partial, Pat};
 use fe_hir::test_db::HirAnalysisTestDb;
 
@@ -274,7 +274,53 @@ fn test(x: (u8, u8)) -> u8 {
 }
 
 #[test]
-fn or_pattern_bindings_are_rejected_and_not_seeded_into_scope() {
+fn or_pattern_bindings_join_into_the_first_alternatives_binding() {
+    with_func_body(
+        r#"
+enum E {
+    A(u8),
+    B(u8, u8),
+}
+
+fn test(e: E) -> u8 {
+    match e {
+        E::A(x) | E::B(_, x) => x
+    }
+}
+"#,
+        "test",
+        |db, diags, typed_body| {
+            assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+
+            let body = typed_body.body().unwrap();
+            let binding_pats: Vec<_> = body
+                .pats(db)
+                .keys()
+                .filter(|pat| {
+                    let Partial::Present(Pat::Path(Partial::Present(path), _)) = pat.data(db, body)
+                    else {
+                        return false;
+                    };
+                    path.as_ident(db).is_some_and(|ident| ident.data(db) == "x")
+                })
+                .collect();
+            let [first, other] = binding_pats.as_slice() else {
+                panic!("expected two `x` bindings, got {binding_pats:?}");
+            };
+            let binding = typed_body.pat_binding(*first).unwrap();
+            assert!(matches!(binding, LocalBinding::Local { pat, .. } if pat == *first));
+            assert_eq!(typed_body.pat_binding(*other), Some(binding));
+            assert!(
+                typed_body
+                    .pattern_root(first_or_pat(db, &typed_body))
+                    .is_some()
+            );
+        },
+    );
+}
+
+#[test]
+fn or_pattern_binding_missing_from_an_alternative_is_reported() {
     with_func_body(
         r#"
 enum E {
@@ -291,36 +337,24 @@ fn test(e: E) -> u8 {
         "test",
         |db, diags, typed_body| {
             assert!(
-                body_has_diag(&diags, |diag| matches!(diag, BodyDiag::BindingsInOrPat(..))),
-                "expected or-pattern binding diagnostic, got {diags:?}",
-            );
-            assert!(
                 body_has_diag(&diags, |diag| matches!(
                     diag,
-                    BodyDiag::UndefinedVariable(_, ident, _) if ident.data(db) == "x"
+                    BodyDiag::OrPatBindingMissing { name, .. } if name.data(db) == "x"
                 )),
-                "expected undefined-variable diagnostic, got {diags:?}",
+                "expected missing-binding diagnostic, got {diags:?}",
             );
-
-            let body = typed_body.body().unwrap();
-            let binding_pat = body
-                .pats(db)
-                .keys()
-                .find(|pat| {
-                    let Partial::Present(Pat::Path(Partial::Present(path), _)) = pat.data(db, body)
-                    else {
-                        return false;
-                    };
-                    path.as_ident(db).is_some_and(|ident| ident.data(db) == "x")
-                })
-                .unwrap();
-
+            assert!(
+                !body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::UndefinedVariable(..)
+                )),
+                "unexpected undefined-variable diagnostic: {diags:?}",
+            );
             assert!(
                 typed_body
                     .pattern_root(first_or_pat(db, &typed_body))
                     .is_none()
             );
-            assert!(typed_body.pat_binding(binding_pat).is_none());
         },
     );
 }
