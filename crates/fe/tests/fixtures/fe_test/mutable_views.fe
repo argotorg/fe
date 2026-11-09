@@ -1,6 +1,7 @@
 // Mutable views write their owners: a `mut` span from `span` or `slice`, a
 // generic `mut MemSlice` parameter, the halves of `split_at` and the parts of
 // `as_chunks` at `mut`, and owner-side byte indexing on `MemBuffer`.
+use core::abi::{Bytes, DynString}
 use core::ptr::{MemArray, MemBuffer, MemSlice}
 
 fn fill<T: Copy>(_ s: mut MemSlice<T>, _ v: T) {
@@ -78,4 +79,21 @@ fn chunks_of_no_elements_revert() {
     let buf = MemBuffer::new(4)
     let (chunks, _) = buf.span().as_chunks<0>()
     assert!(chunks.is_empty())
+}
+
+#[test]
+fn string_and_bytes_spans_write_their_payloads() {
+    var s = DynString::zeroed(3)
+    let text = mut s.span()
+    text[0] = b'a'
+    text[1] = b'b'
+    text[2] = b'c'
+    let expected: DynString = "abc"
+    assert!(s == expected && s.len() == 3)
+
+    var b = Bytes::zeroed(33)
+    b.span()[32] = 7
+    assert!(b.len() == 33 && b.byte_at(32) == 7 && b.byte_at(31) == 0)
+    // The padding after the payload stays zero.
+    assert!(b.encoded_span().read_word(64) == 7 << 248)
 }
