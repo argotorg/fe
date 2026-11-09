@@ -421,21 +421,27 @@ impl<'db> TopLevelMod<'db> {
                     .into_iter()
                     .collect();
 
-                // Filter body references by their expression ID context
+                // Filter body references by their expression ID context. A
+                // `|` pattern's later alternatives bind the name again, at
+                // occurrences of the binding the first defines.
                 body.references(db)
                     .iter()
                     .filter_map(|r| {
-                        if let ReferenceView::Path(path_view) = r
-                            && let Some(super::BodyPathContext::Expr(expr_id)) = path_view.body_ctx
-                            && expr_ids.contains(&expr_id)
-                        {
-                            Some(MatchedReference {
-                                span: r.span(),
-                                is_self_ty: false,
-                            })
-                        } else {
-                            None
-                        }
+                        let ReferenceView::Path(path_view) = r else {
+                            return None;
+                        };
+                        let referenced = match path_view.body_ctx? {
+                            super::BodyPathContext::Expr(expr_id) => expr_ids.contains(&expr_id),
+                            super::BodyPathContext::PatBinding(pat) => {
+                                typed_body.pat_binding(pat) == Some(*binding)
+                                    && !matches!(binding, LocalBinding::Local { pat: def, .. } if *def == pat)
+                            }
+                            super::BodyPathContext::PatReference(_) => false,
+                        };
+                        referenced.then(|| MatchedReference {
+                            span: r.span(),
+                            is_self_ty: false,
+                        })
                     })
                     .collect()
             }

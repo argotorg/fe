@@ -426,9 +426,15 @@ impl<'db> PathView<'db> {
                 // Pattern binding definition site (e.g., `x` in `let x = ...`)
                 // If the type checker recorded this as a binding, it's a local variable.
                 // Otherwise it's something else (enum variant, etc.) - return None.
+                // The alternatives of a `|` pattern bind a name as one
+                // binding, defined in the first.
                 let binding = typed_body.pat_binding(pat_id)?;
                 let ty = typed_body.pat_ty(db, pat_id);
-                let def_span = pat_id.span(body).into();
+                let def_pat = match binding {
+                    LocalBinding::Local { pat, .. } => pat,
+                    _ => pat_id,
+                };
+                let def_span = def_pat.span(body).into();
 
                 Some(Target::Local {
                     span: def_span,
