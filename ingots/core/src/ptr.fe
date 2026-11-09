@@ -671,6 +671,7 @@ impl<T> MemSlice<T> {
         self.slice(offset: n, len: self.len - n)
     }
 
+    #[inline(always)]
     pub fn ptr_at(self, _ index: usize) -> *T {
         if index >= self.len {
             index_out_of_bounds()
