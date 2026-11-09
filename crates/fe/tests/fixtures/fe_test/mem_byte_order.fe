@@ -111,3 +111,21 @@ fn rejects_writes_past_the_capacity() {
     var buffer = MemBuffer::with_capacity(8)
     buffer.write_le<u32>(offset: 5, value: 1)
 }
+
+#[test]
+fn reads_chunks_as_words() {
+    let buffer = counting_bytes(40)
+    let (triples, _) = buffer.span().as_chunks<3>()
+    assert!(triples.word_at(0) == 0x010203 << 232)
+    assert!(triples.word_at(12) == 0x252627 << 232)
+    let (wide, rest) = buffer.span().as_chunks<33>()
+    assert!(wide.len() == 1 && rest.len() == 7)
+    assert!(wide.word_at(0) == buffer.read_word(0))
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn chunk_word_at_past_the_chunks_reverts() {
+    let buffer = counting_bytes(8)
+    let (pairs, _) = buffer.span().as_chunks<3>()
+    let _ = pairs.word_at(2)
+}
