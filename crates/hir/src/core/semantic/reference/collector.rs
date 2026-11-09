@@ -224,7 +224,7 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
                 // The read of a destructured parameter that its `let` begins
                 // with is not in source; its span is the whole parameter's.
                 Expr::Path(Partial::Present(path))
-                    if FuncParamName::is_destructured_read(self.db, *path) =>
+                    if FuncParamName::is_destructured_name(self.db, *path) =>
                 {
                     return;
                 }
@@ -266,6 +266,13 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
         pat: PatId,
         pat_data: &Pat<'db>,
     ) {
+        // The name a recv arm binds a destructured field by is not in
+        // source; its span is the field's whole pattern.
+        if let Pat::Path(Partial::Present(path), _) = pat_data
+            && FuncParamName::is_destructured_name(self.db, *path)
+        {
+            return;
+        }
         // Set context for pattern paths before walking
         if matches!(pat_data, Pat::Path(_, _)) {
             let old_ctx = self.path_context;

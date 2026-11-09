@@ -44,18 +44,19 @@ impl<'db> ContractRecvArm<'db> {
         let mut body_ctxt = BodyCtxt::new(ctxt, id);
 
         let pat = Pat::lower_ast_opt(&mut body_ctxt, ast.pat());
+        let lets = body_ctxt.lower_field_lets(pat, ast.pat());
         let body_ast = ast
             .body()
             .map(|b| ast::Expr::cast(b.syntax().clone()).unwrap());
         let body_expr = if let Some(body_ast) = body_ast.clone() {
-            Expr::push_to_body_opt(&mut body_ctxt, Some(body_ast))
+            Expr::lower_ast_after(&mut body_ctxt, Some(body_ast), lets)
         } else {
             // `Ping {}` in a recv arm is parsed as a record-pattern arm with no
             // explicit body block. Lower that shorthand as an empty block so
             // later typed/semantic stages never see an absent executable body.
             body_ctxt.f_ctxt.enter_block_scope();
             let body_expr =
-                body_ctxt.push_expr(Expr::Block(Vec::new(), BlockKind::Normal), HirOrigin::None);
+                body_ctxt.push_expr(Expr::Block(lets, BlockKind::Normal), HirOrigin::None);
             body_ctxt.f_ctxt.leave_block_scope(body_expr);
             body_expr
         };

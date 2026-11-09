@@ -364,9 +364,17 @@ impl<'db> FuncParamName<'db> {
         IdentId::new(db, format!("%{idx}"))
     }
 
-    /// Whether `path` reads a destructured parameter by its name, as the
-    /// `let` that destructures it does. Source cannot write such a path.
-    pub fn is_destructured_read(db: &'db dyn HirDb, path: PathId<'db>) -> bool {
+    /// The name a recv arm binds its field `label` by when the field's
+    /// pattern destructures it, as `V { t: (a, b) }` does: the arm's pattern
+    /// binds `%t`, and its body begins with `let (a, b) = %t`.
+    pub fn destructured_field(db: &'db dyn HirDb, label: IdentId<'db>) -> IdentId<'db> {
+        IdentId::new(db, format!("%{}", label.data(db)))
+    }
+
+    /// Whether `path` is the name of a destructured parameter or recv field,
+    /// as the `let` that destructures it reads. Source cannot write such a
+    /// path.
+    pub fn is_destructured_name(db: &'db dyn HirDb, path: PathId<'db>) -> bool {
         path.as_ident(db)
             .is_some_and(|name| name.data(db).starts_with('%'))
     }

@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/frontend/ty_check.rs
-assertion_line: 46
+assertion_line: 48
 expression: res
 input_file: test_files/ty_check/recv_nested_patterns.fe
 ---
@@ -33,6 +33,12 @@ note:
    │
 20 │         SetPair { pair: (first, second) } -> u64 uses () {
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetPair
+
+note:
+   ┌─ recv_nested_patterns.fe:20:19
+   │
+20 │         SetPair { pair: (first, second) } -> u64 uses () {
+   │                   ^^^^^^^^^^^^^^^^^^^^^ (u64, bool)
 
 note:
    ┌─ recv_nested_patterns.fe:20:25
@@ -118,6 +124,12 @@ note:
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetTriple
 
 note:
+   ┌─ recv_nested_patterns.fe:29:21
+   │
+29 │         SetTriple { triple: (a, b, c) } -> u64 uses () {
+   │                     ^^^^^^^^^^^^^^^^^ (u64, u64, u64)
+
+note:
    ┌─ recv_nested_patterns.fe:29:29
    │
 29 │         SetTriple { triple: (a, b, c) } -> u64 uses () {
@@ -185,6 +197,12 @@ note:
    │
 34 │         SetNested { nested: ((x, y), flag) } -> u64 uses () {
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetNested
+
+note:
+   ┌─ recv_nested_patterns.fe:34:21
+   │
+34 │         SetNested { nested: ((x, y), flag) } -> u64 uses () {
+   │                     ^^^^^^^^^^^^^^^^^^^^^^ ((u64, u64), bool)
 
 note:
    ┌─ recv_nested_patterns.fe:34:29
@@ -294,6 +312,12 @@ note:
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Multi
 
 note:
+   ┌─ recv_nested_patterns.fe:43:17
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │                 ^^^^^^^^^ (u64, u64)
+
+note:
    ┌─ recv_nested_patterns.fe:43:20
    │
 43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
@@ -310,6 +334,12 @@ note:
    │
 43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
    │                        ^ u64
+
+note:
+   ┌─ recv_nested_patterns.fe:43:28
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │                            ^^^^^^^^^ (bool, bool)
 
 note:
    ┌─ recv_nested_patterns.fe:43:31
@@ -394,6 +424,12 @@ note:
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^ SetPair
 
 note:
+   ┌─ recv_nested_patterns.fe:56:19
+   │
+56 │         SetPair { pair: (val, _) } -> u64 uses () {
+   │                   ^^^^^^^^^^^^^^ (u64, bool)
+
+note:
    ┌─ recv_nested_patterns.fe:56:25
    │
 56 │         SetPair { pair: (val, _) } -> u64 uses () {
@@ -431,6 +467,12 @@ note:
    │
 61 │         SetTriple { triple: (first, _, last) } -> u64 uses () {
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetTriple
+
+note:
+   ┌─ recv_nested_patterns.fe:61:21
+   │
+61 │         SetTriple { triple: (first, _, last) } -> u64 uses () {
+   │                     ^^^^^^^^^^^^^^^^^^^^^^^^ (u64, u64, u64)
 
 note:
    ┌─ recv_nested_patterns.fe:61:29
@@ -490,6 +532,12 @@ note:
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetNested
 
 note:
+   ┌─ recv_nested_patterns.fe:66:21
+   │
+66 │         SetNested { nested: ((x, _), _) } -> u64 uses () {
+   │                     ^^^^^^^^^^^^^^^^^^^ ((u64, u64), bool)
+
+note:
    ┌─ recv_nested_patterns.fe:66:29
    │
 66 │         SetNested { nested: ((x, _), _) } -> u64 uses () {
@@ -541,6 +589,12 @@ note:
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Multi
 
 note:
+   ┌─ recv_nested_patterns.fe:71:17
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │                 ^^^^^^^^^ (u64, u64)
+
+note:
    ┌─ recv_nested_patterns.fe:71:20
    │
 71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
@@ -557,6 +611,12 @@ note:
    │
 71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
    │                        ^ u64
+
+note:
+   ┌─ recv_nested_patterns.fe:71:28
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │                            ^^^^^^^^^ (bool, bool)
 
 note:
    ┌─ recv_nested_patterns.fe:71:31
@@ -615,6 +675,12 @@ note:
    │
 83 │         SetPair { pair: (amount, is_valid) } -> u64 uses () {
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetPair
+
+note:
+   ┌─ recv_nested_patterns.fe:83:19
+   │
+83 │         SetPair { pair: (amount, is_valid) } -> u64 uses () {
+   │                   ^^^^^^^^^^^^^^^^^^^^^^^^ (u64, bool)
 
 note:
    ┌─ recv_nested_patterns.fe:83:25
@@ -686,6 +752,12 @@ note:
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetTriple
 
 note:
+   ┌─ recv_nested_patterns.fe:87:21
+   │
+87 │         SetTriple { triple: (x, y, z) } -> u64 uses () {
+   │                     ^^^^^^^^^^^^^^^^^ (u64, u64, u64)
+
+note:
    ┌─ recv_nested_patterns.fe:87:29
    │
 87 │         SetTriple { triple: (x, y, z) } -> u64 uses () {
@@ -753,6 +825,12 @@ note:
    │
 91 │         SetNested { nested: ((left, right), enabled) } -> u64 uses () {
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetNested
+
+note:
+   ┌─ recv_nested_patterns.fe:91:21
+   │
+91 │         SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+   │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ((u64, u64), bool)
 
 note:
    ┌─ recv_nested_patterns.fe:91:29
@@ -848,6 +926,12 @@ note:
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Multi
 
 note:
+   ┌─ recv_nested_patterns.fe:95:17
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │                 ^^^^^^^^^^^ (u64, u64)
+
+note:
    ┌─ recv_nested_patterns.fe:95:20
    │
 95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
@@ -864,6 +948,12 @@ note:
    │
 95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
    │                         ^^ u64
+
+note:
+   ┌─ recv_nested_patterns.fe:95:30
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │                              ^^^^^^^^^^^ (bool, bool)
 
 note:
    ┌─ recv_nested_patterns.fe:95:33
@@ -954,6 +1044,12 @@ note:
     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ TypeMismatch
 
 note:
+    ┌─ recv_nested_patterns.fe:117:24
+    │
+117 │         TypeMismatch { pair: (a, b) } -> u64 uses () {
+    │                        ^^^^^^^^^^^^ (u64, u64)
+
+note:
     ┌─ recv_nested_patterns.fe:117:30
     │
 117 │         TypeMismatch { pair: (a, b) } -> u64 uses () {
@@ -1009,6 +1105,12 @@ note:
     │
 134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Deep
+
+note:
+    ┌─ recv_nested_patterns.fe:134:16
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (((u64, u64), u64), bool)
 
 note:
     ┌─ recv_nested_patterns.fe:134:24
@@ -1140,6 +1242,12 @@ note:
     │
 149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Deep
+
+note:
+    ┌─ recv_nested_patterns.fe:149:16
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │                ^^^^^^^^^^^^^^^^^^^^^^^^ (((u64, u64), u64), bool)
 
 note:
     ┌─ recv_nested_patterns.fe:149:24
