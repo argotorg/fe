@@ -27,10 +27,10 @@ use crate::analysis::{
 
 use super::{
     const_ty::{ConstBodyLowering, ConstTyData, LoweringContext, ty_is_fully_ground},
-    diagnostics::{ImplDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
+    diagnostics::{ImplDiag, TyDiagCollection, TyLowerDiag},
     normalize::normalize_ty,
-    shape::{check_shape_value, lower_shape_list, lower_shape_value, param_product_diags},
-    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
+    shape::{check_param_product, check_shape_value, lower_shape_list, lower_shape_value},
+    trait_resolution::PredicateListId,
     ty_def::{InvalidCause, Kind, ShapeMode, TyData, TyId},
     ty_lower::{lower_hir_ty, lower_hir_ty_in_mode, lower_kind_in_bounds},
 };
@@ -114,11 +114,10 @@ pub(crate) fn path_arg_diags<'db>(
                         db,
                         assumptions,
                         const_bodies: ConstBodyLowering::Eager,
-                        solve_cx: None,
-                        diags: WrittenTyDiags::default(),
+                        diags: Vec::new(),
                     };
                     checker.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
-                    checker.diags.errors
+                    checker.diags
                 }
                 GenericArg::AssocType(binding) => {
                     let Some(ty) = binding.ty.to_opt() else {
@@ -233,11 +232,10 @@ pub(crate) fn path_generic_arg_diags<'db>(
         db,
         assumptions,
         const_bodies: ConstBodyLowering::Eager,
-        solve_cx: None,
-        diags: WrittenTyDiags::default(),
+        diags: Vec::new(),
     };
     checker.visit_path_args(path, path_span, scope);
-    checker.diags.errors
+    checker.diags
 }
 
 /// Diagnostics for the types written in `args`, a method call's generic
@@ -253,11 +251,10 @@ pub(crate) fn generic_arg_list_diags<'db>(
         db,
         assumptions,
         const_bodies: ConstBodyLowering::Eager,
-        solve_cx: None,
-        diags: WrittenTyDiags::default(),
+        diags: Vec::new(),
     };
     walk_generic_arg_list(&mut checker, &mut VisitorCtxt::new(db, scope, span), args);
-    checker.diags.errors
+    checker.diags
 }
 
 /// The parts of a shape argument written `mut?`, at any depth: a shape's
@@ -284,34 +281,14 @@ fn maybe_mut_parts<'db>(
     }
 }
 
-/// What [`written_ty_diags`] found in a written type.
-#[derive(Default)]
-pub(super) struct WrittenTyDiags<'db> {
-    /// Path and lowering errors, invalid types, and projections past the
-    /// normalization limit. They come before any other diagnostic of the
-    /// type.
-    pub(super) errors: Vec<TyDiagCollection<'db>>,
-    /// The parts of an otherwise valid type whose bounds do not hold,
-    /// including the trait of a projection.
-    pub(super) ill_formed: Vec<TyDiagCollection<'db>>,
-}
-
-impl<'db> FromIterator<WrittenTyDiags<'db>> for WrittenTyDiags<'db> {
-    fn from_iter<I: IntoIterator<Item = WrittenTyDiags<'db>>>(iter: I) -> Self {
-        let mut all = Self::default();
-        for diags in iter {
-            all.errors.extend(diags.errors);
-            all.ill_formed.extend(diags.ill_formed);
-        }
-        all
-    }
-}
-
-/// The errors in the type `hir_ty` written at `span`: path and lowering
-/// errors, invalid types, and projections past the normalization limit (see
-/// [`written_ty_diags`]). Its bounds are not the site's to check: every
-/// written type's are checked in one place (`written_type_bounds`, and the
-/// body finalizer for a body's).
+/// The errors in the type `hir_ty` written at `span`: each type it is made
+/// of is checked where it is written, inner types first, and only if the
+/// types in it have no error, so each problem is reported once, at the
+/// innermost type that has it. A type is checked for a path or lowering
+/// error, an invalid type, and a projection past the normalization limit.
+/// Its bounds are not the site's to check: every written type's are checked
+/// in one place (`written_type_bounds`, and the body finalizer for a
+/// body's).
 pub(crate) fn check_written_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -320,57 +297,13 @@ pub(crate) fn check_written_ty<'db>(
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
 ) -> Vec<TyDiagCollection<'db>> {
-    written_ty_diags(db, scope, hir_ty, span, assumptions, const_bodies, None).errors
-}
-
-/// The parts of the type `hir_ty` written at `span` whose bounds don't hold
-/// when it is fully applied, the trait of a projection included:
-/// normalization resolves a projection without proving it. Only the checks
-/// of every written type call this.
-pub(super) fn written_ty_ill_formed<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    hir_ty: TypeId<'db>,
-    span: LazyTySpan<'db>,
-    assumptions: PredicateListId<'db>,
-    solve_cx: TraitSolveCx<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    written_ty_diags(
-        db,
-        scope,
-        hir_ty,
-        span,
-        assumptions,
-        ConstBodyLowering::Eager,
-        Some(solve_cx),
-    )
-    .ill_formed
-}
-
-/// Checks the type `hir_ty` written at `span`: each type it is made of is
-/// checked where it is written, inner types first, and only if the types in
-/// it have no diagnostic, so each problem is reported once, at the innermost
-/// type that has it. A type is checked for a path or lowering error, an
-/// invalid type, a projection past the normalization limit, and, with a
-/// `solve_cx`, whether its bounds hold when it is fully applied.
-pub(super) fn written_ty_diags<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    hir_ty: TypeId<'db>,
-    span: LazyTySpan<'db>,
-    assumptions: PredicateListId<'db>,
-    const_bodies: ConstBodyLowering,
-    solve_cx: Option<TraitSolveCx<'db>>,
-) -> WrittenTyDiags<'db> {
     let mut checker = WrittenTyChecker {
         db,
         assumptions,
         const_bodies,
-        solve_cx,
-        diags: WrittenTyDiags::default(),
+        diags: Vec::new(),
     };
-    let mut ctxt = VisitorCtxt::new(db, scope, span);
-    checker.visit_ty(&mut ctxt, hir_ty);
+    checker.visit_ty(&mut VisitorCtxt::new(db, scope, span), hir_ty);
     checker.diags
 }
 
@@ -378,8 +311,7 @@ struct WrittenTyChecker<'db> {
     db: &'db dyn HirAnalysisDb,
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
-    solve_cx: Option<TraitSolveCx<'db>>,
-    diags: WrittenTyDiags<'db>,
+    diags: Vec<TyDiagCollection<'db>>,
 }
 
 impl<'db> WrittenTyChecker<'db> {
@@ -389,7 +321,7 @@ impl<'db> WrittenTyChecker<'db> {
 
     fn push_opt_diag(&mut self, diag: Option<TyDiagCollection<'db>>) {
         if let Some(diag) = diag {
-            self.diags.errors.push(diag)
+            self.diags.push(diag)
         }
     }
 
@@ -410,7 +342,6 @@ impl<'db> WrittenTyChecker<'db> {
                 resolve_type_path_definition(db, path, scope)
         {
             self.diags
-                .errors
                 .extend(path_arg_diags(db, path, path_span, scope, self.assumptions));
             return;
         }
@@ -452,18 +383,14 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
         {
             let span = span.into_type_arg().ty();
             self.diags
-                .errors
                 .extend(maybe_mut_parts(self.db, ty, span.clone()));
-            let product = param_product_diags(
+            self.diags.extend(check_param_product(
                 self.db,
                 ty,
                 ctxt.scope(),
                 span,
                 self.assumptions,
-                self.solve_cx,
-            );
-            self.diags.errors.extend(product.errors);
-            self.diags.ill_formed.extend(product.ill_formed);
+            ));
             return;
         }
 
@@ -500,7 +427,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
             && let Some(span) = ctxt.span()
         {
             let path_span = span.into_type_arg().ty().into_path_type().path();
-            self.diags.errors.extend(err.clone().into_diag(
+            self.diags.extend(err.clone().into_diag(
                 self.db,
                 *path,
                 path_span,
@@ -556,7 +483,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
                                     .segment(path.segment_index(self.db))
                                     .ident();
                                 let diag = PathResDiag::Invisible(span.into(), ident, deriv_span);
-                                self.diags.errors.push(diag.into());
+                                self.diags.push(diag.into());
                             }
                         }
                         Err(err) => {
@@ -566,7 +493,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
                                 path_span.clone(),
                                 ExpectedPathKind::Value,
                             ) {
-                                self.diags.errors.push(diag);
+                                self.diags.push(diag);
                             }
                         }
                     }
@@ -608,8 +535,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
         // invalid too, so it's only reported here if no nested type reported an error; the
         // downside of this is that the diag's span will be too wide (it'll be the span of the
         // current type, not the nested type).
-        let errors_before = self.diags.errors.len();
-        let ill_formed_before = self.diags.ill_formed.len();
+        let errors_before = self.diags.len();
         // If the semantic type is a const type, don't traverse the underlying HIR type
         // structure as a normal type. Const expressions inside types are validated via
         // const-ty lowering/evaluation, and walking their HIR representation as a type
@@ -617,7 +543,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
         if !ty.is_const_ty(self.db) {
             walk_type(self, ctxt, hir_ty);
         }
-        if self.diags.errors.len() > errors_before {
+        if self.diags.len() > errors_before {
             return;
         }
 
@@ -648,37 +574,17 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
         }
 
         // A type is checked further only when nothing inside it was reported.
-        if ty.has_invalid(self.db)
-            || self.diags.errors.len() > errors_before
-            || self.diags.ill_formed.len() > ill_formed_before
-        {
+        if ty.has_invalid(self.db) || self.diags.len() > errors_before {
             return;
         }
-        let scope = ctxt.scope();
         if ty.has_projection(self.db)
-            && first_invalid_ty_cause(self.db, normalize_ty(self.db, ty, scope, self.assumptions))
-                == Some(InvalidCause::TypeNormalizationLimit)
+            && first_invalid_ty_cause(
+                self.db,
+                normalize_ty(self.db, ty, ctxt.scope(), self.assumptions),
+            ) == Some(InvalidCause::TypeNormalizationLimit)
         {
             self.diags
-                .errors
                 .push(TyLowerDiag::TypeNormalizationLimit(span).into());
-            return;
-        }
-        // A partial application's bounds are those of the type it is applied
-        // in. A shape, such as `D::Step<ref>`, is checked like a type.
-        if let Some(solve_cx) = self.solve_cx
-            && !matches!(ty.kind(self.db), Kind::Abs(_))
-            && let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(self.db, solve_cx, ty)
-        {
-            self.diags.ill_formed.push(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span,
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            );
         }
     }
 
@@ -711,15 +617,15 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
             // Written arguments that could be why the path failed report their
             // own errors, and what fails through them reports nothing more.
             Err(err) => {
-                let before = self.diags.errors.len();
+                let before = self.diags.len();
                 if !err.is_independent_of_args(self.db) {
                     self.visit_path_args(path, path_span.clone(), scope);
                 }
-                if self.diags.errors.len() == before
+                if self.diags.len() == before
                     && let Some(diag) =
                         err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
                 {
-                    self.diags.errors.push(diag);
+                    self.diags.push(diag);
                 }
                 return;
             }
@@ -729,7 +635,6 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
             let ident = path.ident(self.db).unwrap();
             let span = path_span.clone().segment(path.segment_index(self.db));
             self.diags
-                .errors
                 .push(PathResDiag::ExpectedType(span.into(), ident, res.kind_name()).into());
         }
         if let Some((path, deriv_span)) = invisible {
@@ -739,7 +644,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
                 .ident();
             let ident = path.ident(self.db);
             let diag = PathResDiag::Invisible(span.into(), ident.unwrap(), deriv_span);
-            self.diags.errors.push(diag.into());
+            self.diags.push(diag.into());
         }
 
         self.visit_path_args(path, path_span, scope);
@@ -785,7 +690,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
                     // Expected a trait in this context
                     let ident = path.ident(self.db).unwrap();
                     let seg_span = span.clone().name();
-                    self.diags.errors.push(
+                    self.diags.push(
                         crate::analysis::name_resolution::diagnostics::PathResDiag::ExpectedTrait(
                             seg_span.into(),
                             ident,
@@ -804,7 +709,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
                             ident,
                             deriv_span,
                         );
-                    self.diags.errors.push(diag.into());
+                    self.diags.push(diag.into());
                 }
             }
             Err(err) => {
@@ -814,7 +719,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
                     span.clone().path(),
                     crate::analysis::name_resolution::ExpectedPathKind::Trait,
                 ) {
-                    self.diags.errors.push(diag);
+                    self.diags.push(diag);
                 }
             }
         }

@@ -314,6 +314,60 @@ error[6-0003]: trait bound is not satisfied
    │                 `W<u16>` doesn't implement `Ty`
    │                 trait bound `u16: Gate` is not satisfied
 
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_type_sites.fe:84:31
+   │
+84 │ fn trait_effect() uses (e: Tr<<W<u16> as Ty>::A>) {}
+   │                               ^^^^^^^^^^^^^^^^^
+   │                               │
+   │                               `W<u16>` doesn't implement `Ty`
+   │                               trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_type_sites.fe:85:49
+   │
+85 │ fn qualified_binding(_ x: <S as Pair<P = Ignore<<W<u16> as Ty>::A>>>::Q) {}
+   │                                                 ^^^^^^^^^^^^^^^^^
+   │                                                 │
+   │                                                 `W<u16>` doesn't implement `Ty`
+   │                                                 trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_type_sites.fe:87:35
+   │
+87 │     let _q: <S as Pair<P = Ignore<<W<u16> as Ty>::A>>>::Q = v
+   │                                   ^^^^^^^^^^^^^^^^^
+   │                                   │
+   │                                   `W<u16>` doesn't implement `Ty`
+   │                                   trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_type_sites.fe:88:11
+   │
+88 │     with (<W<u16> as Ty>::A = v) {}
+   │           ^^^^^^^^^^^^^^^^^
+   │           │
+   │           `W<u16>` doesn't implement `Ty`
+   │           trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_type_sites.fe:89:18
+   │
+89 │     with (Ignore<<W<u16> as Ty>::A> = v) {}
+   │                  ^^^^^^^^^^^^^^^^^
+   │                  │
+   │                  `W<u16>` doesn't implement `Ty`
+   │                  trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_type_sites.fe:90:14
+   │
+90 │     with (Tr<<W<u16> as Ty>::A> = v) {}
+   │              ^^^^^^^^^^^^^^^^^
+   │              │
+   │              `W<u16>` doesn't implement `Ty`
+   │              trait bound `u16: Gate` is not satisfied
+
 error[8-0000]: type mismatch
    ┌─ written_type_sites.fe:19:30
    │
@@ -349,3 +403,15 @@ error[8-0000]: type mismatch
    │
 71 │     let _g = id<<W<u16> as Ty>::A>(v)
    │                                    ^ expected `W<u16>::A`, but `u8` is given
+
+error[8-0075]: keyed effect binding `Tr< <W<u16> as Ty>::A>` requires `u8` to implement `Tr<W<u16>::A>`
+   ┌─ written_type_sites.fe:90:35
+   │
+90 │     with (Tr<<W<u16> as Ty>::A> = v) {}
+   │                                   ^ `u8` does not implement `Tr<W<u16>::A>` for effect `Tr< <W<u16> as Ty>::A>`
+
+error[8-0076]: keyed effect binding `<W<u16> as Ty>::A` requires a provider compatible with `<written_type_sites::W<u16> as Ty>::A`, but `u8` is given
+   ┌─ written_type_sites.fe:88:31
+   │
+88 │     with (<W<u16> as Ty>::A = v) {}
+   │                               ^ `u8` is not compatible with keyed effect `<W<u16> as Ty>::A`

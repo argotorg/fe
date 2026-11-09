@@ -13,7 +13,7 @@ use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::{
     const_ty::ConstBodyLowering,
     subst::substitute_complete,
-    ty_error::written_ty_ill_formed,
+    ty_error::check_written_ty,
     ty_lower::{CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_type_alias},
 };
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
@@ -1740,7 +1740,7 @@ pub(super) struct WrittenType<'db> {
     span: DynLazySpan<'db>,
     /// Its span as a type, unless it is written as a path, as a `with` key
     /// is.
-    pub(super) ty_span: Option<crate::span::types::LazyTySpan<'db>>,
+    ty_span: Option<crate::span::types::LazyTySpan<'db>>,
     pub(super) scope: ScopeId<'db>,
     /// The statement it is written in, in a body.
     pub(super) stmt: Option<StmtId>,
@@ -1759,25 +1759,6 @@ pub(super) struct WrittenProjection<'db> {
     pub(super) span: DynLazySpan<'db>,
     /// The statement it is written in.
     pub(super) stmt: Option<StmtId>,
-}
-
-/// The written types in `entries` that no other is written in, in order.
-pub(super) fn written_roots<'a, 'db>(
-    entries: &'a [WrittenEntry<'db>],
-) -> impl Iterator<Item = &'a WrittenType<'db>> {
-    // An entry follows the entries nested in it, so scanning backwards, a
-    // type before the nested range of the last root is a root.
-    let mut roots = Vec::new();
-    let mut nested_from = entries.len();
-    for (idx, entry) in entries.iter().enumerate().rev() {
-        if let WrittenEntry::Type(written) = entry
-            && idx < nested_from
-        {
-            roots.push(written);
-            nested_from = written.nested_from;
-        }
-    }
-    roots.into_iter().rev()
 }
 
 #[salsa::interned]
@@ -2131,31 +2112,100 @@ fn written_type_bounds_query<'db>(
     db: &'db dyn HirAnalysisDb,
     region: WrittenTypeRegion<'db>,
 ) -> WrittenTypeBounds<'db> {
-    let mut bounds = WrittenTypeBounds::default();
     let item = region.item(db);
     if matches!(item, ItemKind::Body(_)) {
-        return bounds;
+        return WrittenTypeBounds::default();
     }
-    for written in written_roots(written_types(db, item)) {
-        let Some(span) = written.ty_span.clone() else {
+    let entries = written_types(db, item);
+    let failures = written_bound_failures(db, entries, |scope| {
+        (
+            assumptions_at(db, scope),
+            TraitSolveCx::new(db, scope).with_assumptions(param_env(db, enclosing_item(db, scope))),
+        )
+    });
+    let ill_formed = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, entry)| match entry {
+            WrittenEntry::Type(written)
+                if failures[written.nested_from..=idx]
+                    .iter()
+                    .any(Option::is_some) =>
+            {
+                Some(written.hir_ty)
+            }
+            _ => None,
+        })
+        .collect();
+    WrittenTypeBounds {
+        diags: failures.into_iter().flatten().map(Into::into).collect(),
+        ill_formed,
+    }
+}
+
+/// The bound each type in `entries` (`written_types`) fails where it is
+/// written, by entry, under the assumptions and solver `env` gives the
+/// type's scope. A type is checked as fully applied, the trait of a
+/// projection included, since normalization resolves a projection without
+/// proving it. A type with a failing type nested in it isn't checked, so a
+/// failure is reported once, at the innermost type that has it; nor is a
+/// type with an error in it, which its site reports instead.
+pub(super) fn written_bound_failures<'db>(
+    db: &'db dyn HirAnalysisDb,
+    entries: &[WrittenEntry<'db>],
+    env: impl Fn(ScopeId<'db>) -> (PredicateListId<'db>, TraitSolveCx<'db>),
+) -> Vec<Option<TraitConstraintDiag<'db>>> {
+    // Whether each entry, or a type nested in it, fails or has an error.
+    let mut blocked: Vec<bool> = Vec::with_capacity(entries.len());
+    let mut failures = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let WrittenEntry::Type(written) = entry else {
+            blocked.push(false);
+            failures.push(None);
             continue;
         };
-        let solve_cx = TraitSolveCx::new(db, written.scope)
-            .with_assumptions(param_env(db, enclosing_item(db, written.scope)));
-        let ill_formed = written_ty_ill_formed(
-            db,
-            written.scope,
-            written.hir_ty,
-            span,
-            assumptions_at(db, written.scope),
-            solve_cx,
-        );
-        if !ill_formed.is_empty() {
-            bounds.ill_formed.push(written.hir_ty);
-            bounds.diags.extend(ill_formed);
+        if blocked[written.nested_from..].contains(&true) {
+            blocked.push(true);
+            failures.push(None);
+            continue;
         }
+        let (assumptions, solve_cx) = env(written.scope);
+        let ty = lower_hir_ty(db, written.hir_ty, written.scope, assumptions);
+        // A partial application's bounds are those of the type it is applied
+        // in. A shape, such as `D::Step<ref>`, is checked like a type.
+        let checked = !ty.has_invalid(db)
+            && !matches!(ty.kind(db), Kind::Abs(_))
+            && !(ty.has_projection(db)
+                && normalize_ty(db, ty, written.scope, assumptions).has_invalid(db));
+        let failure = match checked.then(|| check_ty_wf(db, solve_cx, ty)) {
+            Some(WellFormedness::IllFormed { goal, subgoal }) => {
+                Some(TraitConstraintDiag::TraitBoundNotSat {
+                    span: written.span.clone(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                })
+            }
+            _ => None,
+        };
+        // Not every error makes a type invalid, as a function named as a type
+        // doesn't.
+        let has_error = failure.is_some()
+            && written.ty_span.clone().is_some_and(|span| {
+                !check_written_ty(
+                    db,
+                    written.scope,
+                    written.hir_ty,
+                    span,
+                    assumptions,
+                    ConstBodyLowering::Eager,
+                )
+                .is_empty()
+            });
+        blocked.push(failure.is_some());
+        failures.push(failure.filter(|_| !has_error));
     }
-    bounds
+    failures
 }
 
 /// The anonymous constants written in `hir_ty` and in every type and trait

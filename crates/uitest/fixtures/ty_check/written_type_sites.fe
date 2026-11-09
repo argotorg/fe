@@ -70,3 +70,22 @@ fn body(_ v: u8) {
     let _c = |x: <W<u16> as Ty>::A| -> u8 { x }
     let _g = id<<W<u16> as Ty>::A>(v)
 }
+
+// Types in trait references and `with` keys.
+trait Pair {
+    type P
+    type Q
+}
+impl Pair for S {
+    type P = u8
+    type Q = u8
+}
+type Ignore<X> = u8
+fn trait_effect() uses (e: Tr<<W<u16> as Ty>::A>) {}
+fn qualified_binding(_ x: <S as Pair<P = Ignore<<W<u16> as Ty>::A>>>::Q) {}
+fn keys(_ v: u8) {
+    let _q: <S as Pair<P = Ignore<<W<u16> as Ty>::A>>>::Q = v
+    with (<W<u16> as Ty>::A = v) {}
+    with (Ignore<<W<u16> as Ty>::A> = v) {}
+    with (Tr<<W<u16> as Ty>::A> = v) {}
+}

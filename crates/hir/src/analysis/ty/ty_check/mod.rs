@@ -132,7 +132,7 @@ use crate::analysis::ty::{
     registered_root_providers,
     ty_error::{
         check_written_ty, diag_from_invalid_cause, emit_invalid_ty_error, path_arg_diags,
-        path_generic_arg_diags, written_ty_ill_formed,
+        path_generic_arg_diags,
     },
 };
 use crate::analysis::{
@@ -7733,30 +7733,21 @@ impl<'db> TyCheckerFinalizer<'db> {
         let Some(body) = self.body.body() else {
             return;
         };
-        let entries = const_requirements::written_types(self.db, ItemKind::Body(body));
-        for written in const_requirements::written_roots(entries) {
-            let Some(span) = written.ty_span.clone() else {
-                continue;
-            };
-            let solve_cx =
-                TraitSolveCx::new(self.db, written.scope).with_assumptions(self.assumptions);
-            let ill_formed = written_ty_ill_formed(
-                self.db,
-                written.scope,
-                written.hir_ty,
-                span,
-                self.assumptions,
-                solve_cx,
-            );
-            for diag in ill_formed {
-                if let TyDiagCollection::Satisfiability(TraitConstraintDiag::TraitBoundNotSat {
-                    primary_goal,
-                    ..
-                }) = &diag
-                {
+        let (db, assumptions) = (self.db, self.assumptions);
+        let entries = const_requirements::written_types(db, ItemKind::Body(body));
+        let failures = const_requirements::written_bound_failures(db, entries, |scope| {
+            (
+                assumptions,
+                TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+            )
+        });
+        for (entry, failure) in entries.iter().zip(failures) {
+            if let (const_requirements::WrittenEntry::Type(written), Some(diag)) = (entry, failure)
+            {
+                if let TraitConstraintDiag::TraitBoundNotSat { primary_goal, .. } = &diag {
                     self.written_goals.insert((written.stmt, *primary_goal));
                 }
-                self.diags.push(diag.into());
+                self.diags.push(TyDiagCollection::from(diag).into());
             }
         }
         // Normalization resolves a projection without proving its trait

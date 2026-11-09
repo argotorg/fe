@@ -13,9 +13,9 @@ use super::{
     corelib::resolve_lib_type_path,
     diagnostics::{TyDiagCollection, TyLowerDiag},
     fold::{TyFoldable, TyFolder},
-    trait_resolution::{PredicateListId, TraitSolveCx},
+    trait_resolution::PredicateListId,
     ty_def::{AssocTy, BorrowKind, InvalidCause, Kind, ShapeCon, ShapeMode, TyData, TyId},
-    ty_error::{WrittenTyDiags, check_written_ty, written_ty_diags},
+    ty_error::check_written_ty,
     ty_lower::{lower_hir_ty, lower_hir_ty_with_minter},
     visitor::{TyVisitable, TyVisitor, walk_assoc_ty},
 };
@@ -877,29 +877,8 @@ pub(crate) fn check_param_product<'db>(
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    param_product_diags(db, ty, scope, span, assumptions, None).errors
-}
-
-/// [`check_param_product`], with the bounds of each part checked too when
-/// given a `solve_cx` (see [`written_ty_diags`]).
-pub(super) fn param_product_diags<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: HirTyId<'db>,
-    scope: ScopeId<'db>,
-    span: LazyTySpan<'db>,
-    assumptions: PredicateListId<'db>,
-    solve_cx: Option<TraitSolveCx<'db>>,
-) -> WrittenTyDiags<'db> {
     let check = |ty: HirTyId<'db>, span: LazyTySpan<'db>| {
-        written_ty_diags(
-            db,
-            scope,
-            ty,
-            span,
-            assumptions,
-            ConstBodyLowering::Eager,
-            solve_cx,
-        )
+        check_written_ty(db, scope, ty, span, assumptions, ConstBodyLowering::Eager)
     };
     let TypeKind::Tuple(elems) = ty.data(db) else {
         return check(ty, span);
@@ -911,45 +890,37 @@ pub(super) fn param_product_diags<'db>(
         .filter_map(|(idx, elem)| {
             Some((elem.to_opt()?, span.clone().into_tuple_type().elem_ty(idx)))
         })
-        .map(|(elem, span)| match elem.data(db) {
+        .flat_map(|(elem, span)| match elem.data(db) {
             // A product's parts carry its modes.
             TypeKind::Mode(_, inner)
                 if inner
                     .to_opt()
                     .is_some_and(|inner| is_param_product(db, inner)) =>
             {
-                WrittenTyDiags {
-                    errors: vec![
-                        TyLowerDiag::ModeOnProduct {
-                            span: span.into(),
-                            shape: false,
-                        }
-                        .into(),
-                    ],
-                    ill_formed: Vec::new(),
-                }
+                vec![
+                    TyLowerDiag::ModeOnProduct {
+                        span: span.into(),
+                        shape: false,
+                    }
+                    .into(),
+                ]
             }
             // A mode's payload is a value's type.
             TypeKind::Mode(_, inner) => inner
                 .to_opt()
                 .map(|inner| {
                     let span = span.into_mode_type().inner();
-                    let checked = check(inner, span.clone());
-                    if checked.errors.is_empty()
+                    let errors = check(inner, span.clone());
+                    if errors.is_empty()
                         && !lower_hir_ty(db, inner, scope, assumptions).is_star_kind(db)
                     {
-                        WrittenTyDiags {
-                            errors: vec![TyLowerDiag::ExpectedStarKind(span.into()).into()],
-                            ill_formed: Vec::new(),
-                        }
+                        vec![TyLowerDiag::ExpectedStarKind(span.into()).into()]
                     } else {
-                        checked
+                        errors
                     }
                 })
                 .unwrap_or_default(),
-            _ if mentions_mode(db, elem) => {
-                param_product_diags(db, elem, scope, span, assumptions, solve_cx)
-            }
+            _ if mentions_mode(db, elem) => check_param_product(db, elem, scope, span, assumptions),
             _ => check(elem, span),
         })
         .collect()
