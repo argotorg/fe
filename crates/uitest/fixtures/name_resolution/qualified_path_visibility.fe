@@ -1,0 +1,32 @@
+// A qualified path is as visible as the type and trait written in it, each
+// reported where it is written.
+mod m {
+    pub struct S {}
+    struct Hidden {}
+    trait Private {
+        type Item
+        fn make() -> u8
+    }
+    pub trait Tr {
+        type Item
+        fn make() -> u8
+    }
+    impl Private for S {
+        type Item = u8
+        fn make() -> u8 { 1 }
+    }
+    impl Tr for Hidden {
+        type Item = u8
+        fn make() -> u8 { 1 }
+    }
+}
+
+fn private_trait(_ x: <m::S as m::Private>::Item) -> u8 {
+    let _y: <m::S as m::Private>::Item = 1
+    <m::S as m::Private>::make()
+}
+
+fn private_type(_ x: <m::Hidden as m::Tr>::Item) -> u8 {
+    let _y: <m::Hidden as m::Tr>::Item = 1
+    <m::Hidden as m::Tr>::make()
+}
