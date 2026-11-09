@@ -85,7 +85,9 @@ on an owned value is an error. Markers
 go on the names only: `match ref x`, `if let Some(v) = mut o` and
 `let (a, b) = mut t` are errors, fixed by marking each name
 (`match x { V(ref v) => … }`). A marker on the scrutinee would hold all of
-it, or make plain names write through.
+it, or make plain names write through. The alternatives of a `|` pattern
+bind each name the same way, and outside a `match` an access they bind
+reaches the same part in each ([Patterns with alternatives](patterns.md#accesses)).
 
 A plain name takes its value as `let x = e` does: a copy of a `Copy` value,
 and otherwise a move where one is possible. A pattern on a place moves only
