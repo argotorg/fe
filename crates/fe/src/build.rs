@@ -146,6 +146,7 @@ fn validate_build_request(
     contract: Option<&str>,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
 ) -> Result<(), String> {
     #[cfg(not(feature = "sp1"))]
     let _ = ingot;
@@ -163,6 +164,9 @@ fn validate_build_request(
     }
     if emit.wasm && backend.name() != "wasm" {
         return Err("`--emit wasm` requires `--backend wasm`".to_string());
+    }
+    if wasm_stack_size.is_some() && !backend.is_wasm() {
+        return Err("`--wasm-stack-size` requires `--backend wasm`".to_string());
     }
 
     match backend {
@@ -295,6 +299,7 @@ pub fn build(
     opt_level: OptLevel,
     emit: &[BuildEmit],
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     profile: &str,
     report_out: Option<&Utf8PathBuf>,
@@ -302,7 +307,8 @@ pub fn build(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(backend, ingot, contract, emit, link) {
+    if let Err(err) = validate_build_request(backend, ingot, contract, emit, link, wasm_stack_size)
+    {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -416,6 +422,7 @@ pub fn build(
             opt_level,
             emit,
             link,
+            wasm_stack_size,
             out_dir,
             report_ctx.as_ref(),
         ),
@@ -434,6 +441,7 @@ pub fn build(
             opt_level,
             emit,
             link,
+            wasm_stack_size,
             out_dir,
             report_ctx.as_ref(),
         ),
@@ -492,6 +500,7 @@ pub fn build_from_metadata(
         contract,
         emit,
         NativeLink::default(),
+        None,
     ) {
         eprintln!("Error: {err}");
         std::process::exit(1);
@@ -635,6 +644,7 @@ pub fn build_from_metadata(
         opt_level,
         emit,
         NativeLink::default(),
+        None,
         Some(&out_dir),
         None,
     );
@@ -655,6 +665,7 @@ fn build_file(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -730,6 +741,7 @@ fn build_file(
         opt_level,
         emit,
         link,
+        wasm_stack_size,
         &out_dir,
         &out_dir,
         ir_file_stem.as_str(),
@@ -750,6 +762,7 @@ fn build_directory(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -792,7 +805,18 @@ fn build_directory(
 
     match config {
         Config::Workspace(_) => build_workspace(
-            db, &canonical, url, ingot, contract, backend, opt_level, emit, link, out_dir, report,
+            db,
+            &canonical,
+            url,
+            ingot,
+            contract,
+            backend,
+            opt_level,
+            emit,
+            link,
+            wasm_stack_size,
+            out_dir,
+            report,
         ),
         Config::Ingot(_) => {
             if ingot.is_some() {
@@ -823,6 +847,7 @@ fn build_directory(
                 opt_level,
                 emit,
                 link,
+                wasm_stack_size,
                 &out_dir,
                 None,
                 None,
@@ -845,6 +870,7 @@ fn build_workspace(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -949,6 +975,7 @@ fn build_workspace(
                 opt_level,
                 emit,
                 link,
+                wasm_stack_size,
                 &out_dir,
                 None,
                 Some(member.name.as_str()),
@@ -1034,6 +1061,7 @@ fn build_workspace(
                     opt_level,
                     emit,
                     link,
+                    wasm_stack_size,
                     &out_dir,
                     workspace_member_ir_out_dir(emit, &out_dir, matches[0].name.as_str()),
                     Some(matches[0].name.as_str()),
@@ -1089,6 +1117,7 @@ fn build_workspace(
             opt_level,
             emit,
             link,
+            wasm_stack_size,
             &out_dir,
             workspace_member_ir_out_dir(emit, &out_dir, member.name.as_str()),
             Some(member.name.as_str()),
@@ -1306,6 +1335,7 @@ fn build_ingot_url(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: &Utf8Path,
     ir_out_dir: Option<Utf8PathBuf>,
     ir_file_stem: Option<&str>,
@@ -1354,6 +1384,7 @@ fn build_ingot_url(
             opt_level,
             emit,
             link,
+            wasm_stack_size,
             out_dir,
             out_dir,
             &ir_file_stem,
@@ -1534,6 +1565,7 @@ fn build_top_mod(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
     ir_file_stem: &str,
@@ -1542,6 +1574,8 @@ fn build_top_mod(
 ) -> BuildSummary {
     #[cfg(not(feature = "cranelift"))]
     let _ = (backend, link);
+    #[cfg(not(feature = "wasm"))]
+    let _ = wasm_stack_size;
 
     #[cfg(feature = "cranelift")]
     if matches!(backend, BuildBackend::Native) {
@@ -1583,6 +1617,7 @@ fn build_top_mod(
             top_mod,
             opt_level,
             emit,
+            wasm_stack_size,
             out_dir,
             ir_file_stem,
             report_dir.map(Utf8PathBuf::as_path),
@@ -1814,11 +1849,13 @@ fn build_sp1_top_mod(
 }
 
 #[cfg(feature = "wasm")]
+#[allow(clippy::too_many_arguments)]
 fn build_wasm_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
     emit: EmitSelection,
+    stack_size: Option<u32>,
     out_dir: &Utf8Path,
     ir_file_stem: &str,
     report_dir: Option<&Utf8Path>,
@@ -1831,6 +1868,7 @@ fn build_wasm_top_mod(
             ir: emit.ir,
             wasm: emit.wasm,
         },
+        stack_size,
     )
     .map_err(|err| err.to_string())?;
     // Nothing is written unless compilation succeeded.

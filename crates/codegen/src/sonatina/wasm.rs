@@ -99,11 +99,14 @@ pub(super) fn lower_wasm_errors(errors: Vec<WasmError>) -> LowerError {
     }
 }
 
+/// `stack_size` is the size of the module's stack in bytes; `None` is the
+/// backend's default, 1 MiB.
 pub fn emit_module_wasm_artifacts(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
     outputs: WasmOutputSelection,
+    stack_size: Option<u32>,
 ) -> Result<WasmArtifacts, LowerError> {
     let WasmExportPackage { package, exports } = build_wasm_export_package(db, top_mod)?;
     let isa = create_wasm32_isa();
@@ -130,11 +133,13 @@ pub fn emit_module_wasm_artifacts(
         &adapters,
     )?;
     remove_unreachable_functions(&module);
-    let backend = if exports.iter().any(WasmExport::takes_text) {
-        WasmBackend::new().with_host_allocator()
-    } else {
-        WasmBackend::new()
-    };
+    let mut backend = WasmBackend::new();
+    if let Some(bytes) = stack_size {
+        backend = backend.with_stack_size(bytes);
+    }
+    if exports.iter().any(WasmExport::takes_text) {
+        backend = backend.with_host_allocator();
+    }
 
     let mut compile =
         Compile::new(module, backend).with_opt_level(to_sonatina_opt_level(opt_level));

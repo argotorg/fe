@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 use build::{NativeLink, build};
 use camino::Utf8PathBuf;
 use check::check;
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, value_parser};
 use colored::Colorize;
 use common::compilation::{Os, Target};
 use driver::project_target::{TargetConflict, project_target};
@@ -270,7 +270,15 @@ pub enum Command {
         #[arg(
             long,
             value_name = "PATH",
-            conflicts_with_all = ["path", "ingot", "standalone", "report", "link", "link_lib"]
+            conflicts_with_all = [
+                "path",
+                "ingot",
+                "standalone",
+                "report",
+                "link",
+                "link_lib",
+                "wasm_stack_size"
+            ]
         )]
         from_metadata: Option<Utf8PathBuf>,
         /// Build a specific contract by name (defaults to all contracts in the target).
@@ -299,6 +307,12 @@ pub enum Command {
         /// compiler's `-l<NAME>`. Repeatable.
         #[arg(long, value_name = "NAME")]
         link_lib: Vec<String>,
+        /// Size in bytes of the stack of a WebAssembly module, which holds the
+        /// frames of its calls (default: 1048576, 1 MiB). It is rounded up so
+        /// that the stack ends on a 64 KiB page boundary. Requires `--backend
+        /// wasm`.
+        #[arg(long, value_name = "BYTES", value_parser = value_parser!(u32).range(1..))]
+        wasm_stack_size: Option<u32>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).
         #[arg(long)]
         report: bool,
@@ -404,10 +418,12 @@ pub enum Command {
         /// `fe.toml`, or `sonatina`.
         #[arg(long, value_enum)]
         backend: Option<TestBackend>,
-        /// Native test wall-time limit in seconds (default: 60, maximum: 3600).
+        /// Wall-time limit of a native or WebAssembly test in seconds (default:
+        /// 60, maximum: 3600).
         #[arg(long, value_name = "SECONDS")]
         native_timeout_secs: Option<u64>,
-        /// Combined native test stdout/stderr limit in KiB (default: 1024, maximum: 16384).
+        /// Combined stdout/stderr limit of a native or WebAssembly test in KiB
+        /// (default: 1024, maximum: 16384).
         #[arg(long, value_name = "KIB")]
         native_output_limit_kib: Option<usize>,
         /// Path(s) to .fe files or directories containing ingots with tests.
@@ -819,6 +835,7 @@ pub fn run(opts: &Options) {
             emit,
             link,
             link_lib,
+            wasm_stack_size,
             report,
             report_out,
             report_failed_only,
@@ -869,6 +886,7 @@ pub fn run(opts: &Options) {
                     paths: link,
                     libraries: link_lib,
                 },
+                *wasm_stack_size,
                 out_dir.as_ref(),
                 profile,
                 (*report).then_some(report_out),

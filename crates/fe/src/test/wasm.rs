@@ -30,8 +30,8 @@ use mir::{TestFunc, collect_test_funcs};
 use tempfile::{Builder, TempDir};
 
 use super::{
-    CompiledTest, SingleTestJob, SuitePreparation, TestEmitSelection, TestOutcome, TestResult,
-    default_test_emit_dir, revert_mismatch, suite_error_result, test_emit_stem,
+    CompiledTest, SingleTestJob, SuitePreparation, TestEmitSelection, TestLimits, TestOutcome,
+    TestResult, default_test_emit_dir, revert_mismatch, suite_error_result, test_emit_stem,
     write_case_status_line, write_test_emit_artifact,
 };
 use crate::report::panic_payload_to_string;
@@ -42,8 +42,6 @@ const RUNNER_MJS: &str = include_str!("wasm_runner.mjs");
 
 /// The oldest Node.js that the host supports (`crypto.subtle` is global).
 const MIN_NODE_MAJOR: u32 = 20;
-const TEST_TIMEOUT: Duration = Duration::from_secs(60);
-const OUTPUT_LIMIT: usize = 1024 * 1024;
 const DIAGNOSTIC_LIMIT: usize = 4096;
 /// The runner's exit status for a test that panicked with a code or reverted.
 const REVERT_STATUS: i32 = 3;
@@ -87,13 +85,12 @@ pub(super) struct WasmTestCase {
     entry: String,
     expected_revert: Option<ExpectedRevert>,
     suite: Arc<SuiteDirectory>,
-    timeout: Duration,
 }
 
 impl WasmTestCase {
-    pub(super) fn run(&self) -> TestOutcome {
+    pub(super) fn run(&self, limits: TestLimits) -> TestOutcome {
         let started = Instant::now();
-        let error_message = match self.execute() {
+        let error_message = match self.execute(limits) {
             Ok(None) => None,
             Ok(Some(message)) => Some(message),
             Err(err) => Some(format!("failed to run the test in Node.js: {err}")),
@@ -111,7 +108,7 @@ impl WasmTestCase {
     }
 
     /// `None` if the test passed, otherwise what to report.
-    fn execute(&self) -> io::Result<Option<String>> {
+    fn execute(&self, limits: TestLimits) -> io::Result<Option<String>> {
         let mut child = Command::new("node")
             .current_dir(self.suite.directory.path())
             .arg("run_test.mjs")
@@ -130,7 +127,7 @@ impl WasmTestCase {
                     // a full pipe.
                     let _ = pipe
                         .by_ref()
-                        .take(OUTPUT_LIMIT as u64 + 1)
+                        .take(limits.output_bytes as u64 + 1)
                         .read_to_end(&mut bytes);
                     let _ = io::copy(&mut pipe, &mut io::sink());
                 }
@@ -149,7 +146,7 @@ impl WasmTestCase {
                 .take()
                 .map(|p| Box::new(p) as Box<dyn Read + Send>),
         );
-        let deadline = Instant::now() + self.timeout;
+        let deadline = Instant::now() + limits.timeout;
         let (status, timed_out) = loop {
             if let Some(status) = child.try_wait()? {
                 break (status, false);
@@ -162,7 +159,7 @@ impl WasmTestCase {
         };
         let stdout = stdout.join().unwrap_or_default();
         let stderr = stderr.join().unwrap_or_default();
-        let over_limit = stdout.len().max(stderr.len()) > OUTPUT_LIMIT;
+        let over_limit = stdout.len() + stderr.len() > limits.output_bytes;
         let ran = !timed_out && !over_limit;
         let succeeded = status.success() && ran;
         let preview = |bytes: &[u8]| {
@@ -181,12 +178,12 @@ impl WasmTestCase {
             if timed_out {
                 format!(
                     "wasm test exceeded the time limit of {} seconds",
-                    self.timeout.as_secs()
+                    limits.timeout.as_secs()
                 )
             } else if over_limit {
                 format!(
                     "wasm test exceeded the output limit of {} KiB",
-                    OUTPUT_LIMIT / 1024
+                    limits.output_bytes / 1024
                 )
             } else if stderr.is_empty() {
                 format!("wasm test failed ({status})")
@@ -382,7 +379,6 @@ pub(super) fn prepare_tests(
                     entry,
                     expected_revert,
                     suite: Arc::clone(&suite_dir),
-                    timeout: TEST_TIMEOUT,
                 }),
                 evm_trace: None,
                 report_root: None,
@@ -415,7 +411,7 @@ mod tests {
         module
     }
 
-    fn case_for(module: &[u8], entry: &str, timeout: Duration) -> WasmTestCase {
+    fn run(module: &[u8], entry: &str, timeout_secs: u64) -> TestOutcome {
         let directory = Builder::new()
             .prefix("fe-wasm-test-unit-")
             .tempdir()
@@ -423,14 +419,17 @@ mod tests {
         fs::write(directory.path().join("host.mjs"), HOST_MJS).unwrap();
         fs::write(directory.path().join("run_test.mjs"), RUNNER_MJS).unwrap();
         fs::write(directory.path().join("m.wasm"), module).unwrap();
-        WasmTestCase {
+        let case = WasmTestCase {
             name: "unit".to_string(),
             module_file: "m.wasm".to_string(),
             entry: entry.to_string(),
             expected_revert: None,
             suite: Arc::new(SuiteDirectory { directory }),
-            timeout,
-        }
+        };
+        case.run(TestLimits {
+            timeout: Duration::from_secs(timeout_secs),
+            output_bytes: 1024 * 1024,
+        })
     }
 
     #[test]
@@ -446,7 +445,7 @@ mod tests {
     fn a_test_that_never_ends_fails_when_its_time_is_up() {
         require_node().expect("these tests need Node.js");
         let started = Instant::now();
-        let outcome = case_for(&module_that_never_ends(), "run", Duration::from_secs(1)).run();
+        let outcome = run(&module_that_never_ends(), "run", 1);
         assert!(!outcome.result.passed);
         assert_eq!(
             outcome.result.error_message.as_deref(),
@@ -458,7 +457,7 @@ mod tests {
     #[test]
     fn an_export_that_does_not_exist_fails_the_test() {
         require_node().expect("these tests need Node.js");
-        let outcome = case_for(&module_that_never_ends(), "absent", Duration::from_secs(30)).run();
+        let outcome = run(&module_that_never_ends(), "absent", 30);
         assert!(!outcome.result.passed);
         let message = outcome.result.error_message.unwrap();
         assert_eq!(

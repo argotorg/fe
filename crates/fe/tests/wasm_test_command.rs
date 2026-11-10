@@ -12,7 +12,8 @@
 //!   the same result for every test.
 //! - `wasm_only.fe` uses the host operations of `std::wasm`.
 //! - `prints.fe` prints through `std::io`; a failed test shows what it printed,
-//!   and a test that prints more than 1 MiB fails.
+//!   and a test that prints more than 1 MiB fails. `--native-timeout-secs` and
+//!   `--native-output-limit-kib` set the limits of time and output.
 //! - `unsupported.fe` has tests that the backend cannot build; they fail with
 //!   the reason and the other test still runs.
 //!
@@ -407,16 +408,64 @@ fn options_that_have_no_meaning_for_wasm_are_refused() {
             &["--report"][..],
             "`--report` and `--report-dir` are not available",
         ),
-        (
-            &["--native-timeout-secs", "5"][..],
-            "native test limits require `--backend native`",
-        ),
     ] {
         let output = fe_test("wasm", "1", args, &fixture("shared"));
         assert_eq!(output.status.code(), Some(1), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(message), "{args:?}: {stderr}");
     }
+}
+
+#[test]
+fn the_limits_of_time_and_output_can_be_set() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("limits.fe");
+    fs::write(
+        &source,
+        "use std::io::Stdout\n\n#[test]\nfn spin() {\n    while true {}\n}\n\n#[test]\nfn noisy() uses (out: mut Stdout) {\n    var i: u32 = 0\n    while i < 2048 {\n        print!(\"A\")\n        i += 1\n    }\n}\n",
+    )
+    .unwrap();
+    for (filter, limit, message) in [
+        (
+            "spin",
+            ["--native-timeout-secs", "1"],
+            "wasm test exceeded the time limit of 1 seconds",
+        ),
+        (
+            "noisy",
+            ["--native-output-limit-kib", "1"],
+            "wasm test exceeded the output limit of 1 KiB",
+        ),
+    ] {
+        let output = fe_test(
+            "wasm",
+            "1",
+            &[&["--filter", filter][..], &limit].concat(),
+            &source,
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+        assert_eq!(failure_of(&output, filter), message);
+        // Within the default limits the test that prints passes.
+        if filter == "noisy" {
+            let output = fe_test("wasm", "1", &["--filter", filter], &source);
+            assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+        }
+        // The EVM has no such limits.
+        let output = fe_test("sonatina", "1", &limit, &source);
+        assert_eq!(output.status.code(), Some(1), "{limit:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("test limits require `--backend native` or `--backend wasm`"),
+            "{limit:?}: {stderr}"
+        );
+    }
+    let output = fe_test("wasm", "1", &["--native-timeout-secs", "0"], &source);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("test limits require 1–3600 seconds and 1–16384 KiB"),
+        "{stderr}"
+    );
 }
 
 #[test]

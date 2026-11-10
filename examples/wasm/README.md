@@ -311,7 +311,9 @@ macOS).
 - A missing or too old `node` ends the run with an error that names the
   requirement.
 - A test that runs for more than 60 seconds fails, and so does one that writes more
-  than 1 MiB to its streams.
+  than 1 MiB to its standard output and standard error together.
+  `--native-timeout-secs <seconds>` and `--native-output-limit-kib <kib>` set these
+  limits, as they do for native tests.
 - A test that calls an `extern` function of its own gets a module of its own, since the
   test host does not supply the import and a module that imports it does not start.
 - `--filter`, `--jobs`, `-O`, `--emit ir` (one `.sona` file and one module per test) and ingot
@@ -383,8 +385,9 @@ cargo test -p fe --all-features \
   `stack_top` back, as `host.mjs` does. A host that does not loses that much of the stack
   for the life of the instance. A trap that happens inside the module, with no host call
   before it, reserves nothing.
-- **Memory.** Calls use a stack of 1 MiB in the module's memory (no option sets it
-  yet) and a call that does not fit traps. Dynamic allocation comes from a heap
+- **Memory.** Calls use a stack of 1 MiB in the module's memory and a call that does
+  not fit traps. `fe build --wasm-stack-size <bytes>` sets the size, which is rounded up
+  so that the stack ends on a 64 KiB page boundary. Dynamic allocation comes from a heap
   of size classes with free lists: a block that is freed is reused, a fallible
   allocation returns `None` when the request cannot be met, any other allocation
   traps, and the memory grows with `memory.grow` and is never given back.

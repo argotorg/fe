@@ -416,8 +416,10 @@ and cross as an `i32`. Any other type, including `u256` and structs, is an error
 that names the function and the type. Inside functions, structs,
 tuples, enums, arrays, constants, `usize` and the dynamic arrays of `core::ptr` work.
 Overflow, division by zero, a failed `assert!` and an index outside an array trap, as
-they do in native executables. Calls use a stack of 1 MiB in the module's memory, and
-a call that does not fit traps; dynamic allocation comes from a heap that reuses
+they do in native executables. Calls use a stack in the module's memory, and
+a call that does not fit traps. The stack has 1 MiB unless `--wasm-stack-size <bytes>`
+sets its size, which is rounded up so that the stack ends on a 64 KiB page boundary; the
+option is an error with any other backend. Dynamic allocation comes from a heap that reuses
 freed blocks and grows the memory without a limit of the module's own; an allocation
 traps when the host refuses to grow it, and a fallible one returns `None`. EVM-only
 instructions are not supported and are errors that name the function and the instruction.
@@ -799,7 +801,10 @@ fe test [--backend <sonatina|native|wasm>] [--filter <pattern>] [--jobs <n>] [--
   message. A test that uses something the backend cannot build (an EVM built-in,
   `balance`) fails with `cannot build <name> for WebAssembly` and the
   reason; no test is skipped silently. A test that runs for more than 60 seconds fails,
-  and so does one that writes more than 1 MiB to its streams. `--emit ir` writes
+  and so does one that writes more than 1 MiB to its standard output and standard error
+  together. `--native-timeout-secs <seconds>` (1 to 3600) and `--native-output-limit-kib
+  <kib>` (1 to 16384) set these limits, as they do for `--backend native`; they are
+  errors with the `sonatina` backend. `--emit ir` writes
   `<suite>.wasm.<test>.test.sona` for each test, where `<test>` is its path below the root
   module with `.` between the names (`inner.first`). `--show-logs`, the tracing options,
   `--debug-dir`, `--emit rmir`, `--report` and `--report-dir` are errors with this backend.
