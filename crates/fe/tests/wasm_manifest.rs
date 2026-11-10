@@ -12,46 +12,17 @@
 
 mod wasm_support;
 
-use std::{
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-};
+use std::{fs, path::Path};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
-use wasm_support::{engine, fe, render_flavour};
-use wasmtime::{ExternType, Module, ValType};
-
-fn manifest_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
+use wasm_support::{Built, assert_matches_the_engine, fe, node_driver, render_flavour};
 
 fn fixture(directory: &str, name: &str) -> String {
-    let path = manifest_dir().join(format!("tests/fixtures/{directory}/{name}.fe"));
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{directory}/{name}.fe"));
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()))
-}
-
-struct Built {
-    dir: PathBuf,
-    stem: String,
-}
-
-impl Built {
-    fn wasm(&self) -> PathBuf {
-        self.dir.join(format!("{}.wasm", self.stem))
-    }
-
-    fn manifest_path(&self) -> PathBuf {
-        self.dir.join(format!("{}.manifest.json", self.stem))
-    }
-
-    fn manifest(&self) -> Value {
-        let text = fs::read_to_string(self.manifest_path()).expect("the manifest is written");
-        serde_json::from_str(&text).expect("the manifest is JSON")
-    }
 }
 
 fn build_source(source: &str, stem: &str, level: &str, temp: &Path) -> Built {
@@ -83,108 +54,6 @@ fn build_source(source: &str, stem: &str, level: &str, temp: &Path) -> Built {
         dir,
         stem: stem.to_string(),
     }
-}
-
-fn wasm_name(ty: &ValType) -> &'static str {
-    match ty {
-        ValType::I32 => "i32",
-        ValType::I64 => "i64",
-        other => panic!("unexpected value type {other:?}"),
-    }
-}
-
-fn signature(ty: &wasmtime::FuncType) -> (Vec<&'static str>, Vec<&'static str>) {
-    (
-        ty.params().map(|t| wasm_name(&t)).collect(),
-        ty.results().map(|t| wasm_name(&t)).collect(),
-    )
-}
-
-/// The import and export sections of the module as an engine reads them must
-/// agree with the manifest: the same names, in the same order for imports, and
-/// the same WebAssembly types.
-fn assert_matches_the_engine(built: &Built) {
-    let bytes = fs::read(built.wasm()).unwrap();
-    let manifest = built.manifest();
-    let module = Module::new(engine(), &bytes).expect("the module validates");
-
-    let imports = manifest["imports"].as_array().unwrap();
-    let engine_imports: Vec<_> = module.imports().collect();
-    assert_eq!(imports.len(), engine_imports.len());
-    for (entry, import) in imports.iter().zip(&engine_imports) {
-        assert_eq!(entry["module"], import.module());
-        assert_eq!(entry["name"], import.name());
-        assert_eq!(entry["kind"], "function");
-        let ExternType::Func(ty) = import.ty() else {
-            panic!("import {} is not a function", import.name());
-        };
-        let (params, results) = signature(&ty);
-        assert_eq!(entry["type"]["params"], json!(params), "{}", import.name());
-        assert_eq!(
-            entry["type"]["results"],
-            json!(results),
-            "{}",
-            import.name()
-        );
-    }
-
-    let exports = manifest["exports"].as_array().unwrap();
-    let engine_exports: Vec<_> = module.exports().collect();
-    assert_eq!(exports.len(), engine_exports.len());
-    let names: Vec<_> = exports
-        .iter()
-        .map(|e| e["name"].as_str().unwrap())
-        .collect();
-    let mut sorted = names.clone();
-    sorted.sort_unstable();
-    assert_eq!(names, sorted, "exports are listed in name order");
-    for entry in exports {
-        let name = entry["name"].as_str().unwrap();
-        let export = module
-            .get_export(name)
-            .unwrap_or_else(|| panic!("no export {name}"));
-        match export {
-            ExternType::Memory(_) => assert_eq!(entry["kind"], "memory"),
-            ExternType::Func(ty) => {
-                assert_eq!(entry["kind"], "function");
-                let (params, results) = signature(&ty);
-                let flat: Vec<_> = entry["params"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .flat_map(|p| {
-                        p["wasm"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .map(|t| t.as_str().unwrap().to_string())
-                    })
-                    .collect();
-                assert_eq!(flat, params, "parameters of {name}");
-                let result: Vec<_> = entry["result"]
-                    .as_object()
-                    .map(|r| {
-                        r["wasm"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .map(|t| t.as_str().unwrap().to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                assert_eq!(result, results, "result of {name}");
-            }
-            other => panic!("unexpected export {name}: {other:?}"),
-        }
-    }
-
-    // The hash is the SHA-256 of the file, written as 64 lowercase digits.
-    assert_eq!(
-        manifest["module"]["sha256"],
-        hex::encode(Sha256::digest(&bytes))
-    );
-    assert_eq!(manifest["module"]["size"], bytes.len());
-    assert_eq!(manifest["module"]["file"], format!("{}.wasm", built.stem));
 }
 
 #[test]
@@ -367,30 +236,6 @@ fn a_failed_build_writes_no_manifest() {
 // ---------------------------------------------------------------------------
 // The Node host.
 // ---------------------------------------------------------------------------
-
-fn node_driver(request: &Value) -> Value {
-    let driver = manifest_dir().join("tests/wasm_support/manifest_driver.mjs");
-    let mut child = Command::new("node")
-        .arg(driver)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("node must be installed to run these tests");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(request.to_string().as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "node failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("the driver prints JSON")
-}
 
 fn refusal(request: &Value) -> String {
     let answer = node_driver(request);

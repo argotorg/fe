@@ -935,24 +935,6 @@ fn ir_can_be_emitted_with_or_without_the_module() {
     }
 }
 
-fn expect_failure(args: &[&str], needles: &[&str]) -> String {
-    let output = fe(args);
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(
-        !output.status.success(),
-        "the build should fail: {output:?}"
-    );
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(
-        !stderr.contains("panicked"),
-        "the compiler panicked:\n{stderr}"
-    );
-    for needle in needles {
-        assert!(stderr.contains(needle), "missing `{needle}` in:\n{stderr}");
-    }
-    stderr
-}
-
 #[test]
 fn other_backends_and_outputs_are_refused_with_a_reason() {
     let temp = tempdir().unwrap();
