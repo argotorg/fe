@@ -104,6 +104,7 @@ revm-state = { opt-level = 3 }
 sonatina-ir = { opt-level = 3 }
 sonatina-codegen = { opt-level = 3 }
 sonatina-cranelift = { opt-level = 3 }
+sonatina-wasm = { opt-level = 3 }
 sonatina-verifier = { opt-level = 3 }
 
 [profile.test.package]
@@ -122,4 +123,5 @@ revm-state = { opt-level = 3 }
 sonatina-ir = { opt-level = 3 }
 sonatina-codegen = { opt-level = 3 }
 sonatina-cranelift = { opt-level = 3 }
+sonatina-wasm = { opt-level = 3 }
 sonatina-verifier = { opt-level = 3 }
