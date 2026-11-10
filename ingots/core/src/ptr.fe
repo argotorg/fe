@@ -832,6 +832,7 @@ impl MemSlice<u8> {
 
     /// The `size_of<T>()` bytes from `offset` on, which need not be aligned,
     /// as a big-endian integer. Reverts unless all of them lie in the span.
+    #[inline(always)]
     pub fn read_be<T: IntWord>(self, _ offset: usize) -> T {
         from_be(unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) })
     }
@@ -866,6 +867,7 @@ impl MemSlice<u8> {
     }
 
     /// The 32 bytes from `offset` on as a big-endian word; see `read_be`.
+    #[inline(always)]
     pub fn read_word(self, _ offset: usize) -> u256 {
         self.read_be<u256>(offset)
     }
@@ -876,6 +878,7 @@ impl MemSlice<u8> {
         self.write_be<u256>(offset, value)
     }
 
+    #[inline(always)]
     fn value_ptr<T>(self, _ offset: usize) -> *u8 {
         if offset > self.len || size_of<T>() > self.len - offset {
             index_out_of_bounds()
