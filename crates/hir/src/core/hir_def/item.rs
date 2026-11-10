@@ -767,6 +767,13 @@ impl<'db> Func<'db> {
         self.attributes(db).has_marker_attr(db, "raw_place")
     }
 
+    /// A `#[cold]` function is rarely called. It is not inlined into a caller
+    /// that is not cold, unless it is `#[inline(always)]`, and native code
+    /// lays out the paths that call it after the others.
+    pub fn is_cold(self, db: &'db dyn HirDb) -> bool {
+        self.attributes(db).has_marker_attr(db, "cold")
+    }
+
     /// A free `#[unsafe(export)]` function, which a native object defines under its
     /// own name for C callers. Elsewhere the attribute is an error.
     pub fn is_exported(self, db: &'db dyn HirDb) -> bool {

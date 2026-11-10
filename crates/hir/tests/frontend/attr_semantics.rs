@@ -54,6 +54,39 @@ fn bad() {}"#,
 }
 
 #[test]
+fn only_a_bare_cold_attr_marks_a_function_cold() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "cold_attr.fe".into(),
+        r#"#[cold]
+fn cold() {}
+
+#[cold(always)]
+fn malformed() {}
+
+fn plain() {}"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let mut cold: Vec<_> = top_mod
+        .all_funcs(&db)
+        .iter()
+        .map(|func| {
+            let name = func.name(&db).to_opt().expect("function should be named");
+            (name.data(&db).to_string(), func.is_cold(&db))
+        })
+        .collect();
+    cold.sort();
+    assert_eq!(
+        cold,
+        [
+            ("cold".to_string(), true),
+            ("malformed".to_string(), false),
+            ("plain".to_string(), false),
+        ]
+    );
+}
+
+#[test]
 fn expr_valued_loop_unroll_attr_does_not_apply_hint() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

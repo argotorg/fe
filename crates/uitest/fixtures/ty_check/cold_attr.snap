@@ -1,0 +1,64 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/cold_attr.fe
+---
+error[12-0001]: unsupported `#[cold]` attribute on struct `Cold`
+   ┌─ cold_attr.fe:45:1
+   │
+45 │ #[cold]
+   │ ^^^^^^^ `#[cold]` is only supported on functions
+
+error[12-0001]: unsupported `#[cold]` attribute on enum `ColdEnum`
+   ┌─ cold_attr.fe:48:1
+   │
+48 │ #[cold]
+   │ ^^^^^^^ `#[cold]` is only supported on functions
+
+error[12-0001]: unsupported `#[cold]` attribute on mod `cold_mod`
+   ┌─ cold_attr.fe:51:1
+   │
+51 │ #[cold]
+   │ ^^^^^^^ `#[cold]` is only supported on functions
+
+error[12-0001]: unsupported `#[cold]` attribute on trait `ColdTrait`
+   ┌─ cold_attr.fe:54:1
+   │
+54 │ #[cold]
+   │ ^^^^^^^ `#[cold]` is only supported on functions
+
+error[12-0001]: unsupported `#[cold]` attribute on impl
+   ┌─ cold_attr.fe:57:1
+   │
+57 │ #[cold]
+   │ ^^^^^^^ `#[cold]` is only supported on functions
+
+error[12-0001]: unsupported `#[cold]` attribute on const `COLD`
+   ┌─ cold_attr.fe:60:1
+   │
+60 │ #[cold]
+   │ ^^^^^^^ `#[cold]` is only supported on functions
+
+error[12-0001]: unsupported `#[cold]` attribute on type alias `ColdAlias`
+   ┌─ cold_attr.fe:63:1
+   │
+63 │ #[cold]
+   │ ^^^^^^^ `#[cold]` is only supported on functions
+
+error[12-0002]: invalid `#[cold]` attribute form on fn `bad_form`
+   ┌─ cold_attr.fe:35:1
+   │
+35 │ #[cold(always)]
+   │ ^^^^^^^^^^^^^^^ expected `#[cold]`
+
+error[12-0002]: invalid `#[cold]` attribute form on fn `bad_value_form`
+   ┌─ cold_attr.fe:38:1
+   │
+38 │ #[cold = true]
+   │ ^^^^^^^^^^^^^^ expected `#[cold]`
+
+error[12-0003]: duplicate `#[cold]` attribute on fn `duplicate`
+   ┌─ cold_attr.fe:42:1
+   │
+42 │ #[cold]
+   │ ^^^^^^^ remove the extra `#[cold]` attribute
