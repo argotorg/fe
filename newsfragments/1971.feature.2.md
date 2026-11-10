@@ -1,0 +1,1 @@
+`DynString::span` and `Bytes::span` are `mut?`: a `mut` span writes the payload in place, leaving its length and padding unchanged, so a string allocated with `zeroed` can be filled without raw pointers.

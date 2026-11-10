@@ -671,6 +671,7 @@ impl<T> MemSlice<T> {
         self.slice(offset: n, len: self.len - n)
     }
 
+    #[inline(always)]
     pub fn ptr_at(self, _ index: usize) -> *T {
         if index >= self.len {
             index_out_of_bounds()
@@ -706,6 +707,29 @@ impl<T> MemSlice<T> {
             }
         }
         Option::Some((mut? head, mut? tail))
+    }
+
+    /// The first `len() / N * N` elements as `N`-element arrays, and the
+    /// `len() % N` elements after them (Rust's `as_chunks`). Reverts when `N`
+    /// is zero.
+    ///
+    /// An index into the chunks is checked against their count alone, so a
+    /// loop over them checks nothing but its own bound, and constant indices
+    /// into a chunk need no check.
+    pub fn as_chunks<const N: usize>(mut? self) -> (mut? MemSlice<[T; N]>, mut? Self) {
+        let count = self.len / N
+        let split = count.wrapping_mul(N)
+        // An array of `N` elements is laid out as `N` consecutive elements,
+        // so the chunks cover the first `split` elements and the rest the
+        // others: both lie in this slice and do not overlap.
+        var chunks = unsafe { MemSlice<[T; N]> { ptr: cast<T, [T; N]>(self.ptr), len: count } }
+        var rest = unsafe {
+            Self {
+                ptr: elem(self.ptr, split),
+                len: self.len.wrapping_sub(split),
+            }
+        }
+        (mut? chunks, mut? rest)
     }
 
     pub fn get(self, _ index: usize) -> Option<T>
@@ -857,6 +881,17 @@ impl MemSlice<u8> {
             index_out_of_bounds()
         }
         offset_bytes(self.ptr, offset)
+    }
+}
+
+impl<const N: usize> MemSlice<[u8; N]> {
+    /// Chunk `index`'s bytes at the start of a word, the bytes after them
+    /// zero: the first 32 when `N` is larger. Reverts unless `index` is
+    /// below `len()`.
+    #[inline(always)]
+    pub fn word_at(self, _ index: usize) -> u256 {
+        // The chunk lies in the slice and holds `N` bytes.
+        unsafe { read_padded_word(byte_ptr(self.ptr_at(index)), N) }
     }
 }
 

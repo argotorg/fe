@@ -1038,7 +1038,9 @@ impl DynString {
         self.size
     }
 
-    pub fn span(self) -> ref ptr::MemSpan {
+    /// The string's bytes. Writing them leaves the length and the zero
+    /// padding after them as they are.
+    pub fn span(mut? self) -> mut? ptr::MemSpan {
         unsafe {
             ptr::MemSpan::from_raw_parts(
                 ptr: ptr::offset_bytes(self.data, 32),
@@ -1181,8 +1183,10 @@ impl Bytes {
         ptr::offset_bytes(self.data, 32)
     }
 
+    /// The payload bytes. Writing them leaves the length and the zero
+    /// padding after them as they are.
     #[inline(always)]
-    pub fn span(self) -> ref ptr::MemSpan {
+    pub fn span(mut? self) -> mut? ptr::MemSpan {
         unsafe { ptr::MemSpan::from_raw_parts(ptr: self.payload_ptr(), len: self.len) }
     }
 

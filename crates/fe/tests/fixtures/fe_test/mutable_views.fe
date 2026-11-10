@@ -1,6 +1,7 @@
 // Mutable views write their owners: a `mut` span from `span` or `slice`, a
-// generic `mut MemSlice` parameter, the halves of `split_at` at `mut`, and
-// owner-side byte indexing on `MemBuffer`.
+// generic `mut MemSlice` parameter, the halves of `split_at` and the parts of
+// `as_chunks` at `mut`, and owner-side byte indexing on `MemBuffer`.
+use core::abi::{Bytes, DynString}
 use core::ptr::{MemArray, MemBuffer, MemSlice}
 
 fn fill<T: Copy>(_ s: mut MemSlice<T>, _ v: T) {
@@ -49,4 +50,50 @@ fn splits_read_and_check_their_bounds() {
         Option::None => true
     }
     assert!(missing)
+}
+
+#[test]
+fn chunks_cover_whole_chunks_then_the_rest() {
+    var buf = MemBuffer::new(8)
+    for i in 0..8 {
+        buf[i] = (i + 1).downcast_truncate()
+    }
+    let (chunks, rest) = buf.span().as_chunks<3>()
+    assert!(chunks.len() == 2 && rest.len() == 2)
+    assert!(chunks[0][0] == 1 && chunks[1][2] == 6 && rest[0] == 7 && rest[1] == 8)
+    let (whole, none) = buf.span().as_chunks<4>()
+    assert!(whole.len() == 2 && none.is_empty())
+    let (wide, short) = buf.span().as_chunks<9>()
+    assert!(wide.is_empty() && short.len() == 8)
+
+    var xs = MemArray<u256>::new_zeroed(5)
+    let (mut pairs, mut last) = xs.as_slice().as_chunks<2>()
+    pairs[1][0] = 3
+    pairs[1] = [pairs[1][0], 4]
+    last[0] = 5
+    assert!(xs[0] == 0 && xs[2] == 3 && xs[3] == 4 && xs[4] == 5)
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn chunks_of_no_elements_revert() {
+    let buf = MemBuffer::new(4)
+    let (chunks, _) = buf.span().as_chunks<0>()
+    assert!(chunks.is_empty())
+}
+
+#[test]
+fn string_and_bytes_spans_write_their_payloads() {
+    var s = DynString::zeroed(3)
+    let text = mut s.span()
+    text[0] = b'a'
+    text[1] = b'b'
+    text[2] = b'c'
+    let expected: DynString = "abc"
+    assert!(s == expected && s.len() == 3)
+
+    var b = Bytes::zeroed(33)
+    b.span()[32] = 7
+    assert!(b.len() == 33 && b.byte_at(32) == 7 && b.byte_at(31) == 0)
+    // The padding after the payload stays zero.
+    assert!(b.encoded_span().read_word(64) == 7 << 248)
 }
