@@ -35,10 +35,11 @@ pub struct WasmOutputSelection {
 }
 
 /// The version of the contract between a module and its host: the module
-/// `env` for imports, the reply word, and the allocator protocol of a module
-/// with text parameters (`std::wasm`). A host refuses a module that names a
-/// version it does not know.
-pub const WASM_HOST_CONTRACT_VERSION: u32 = 1;
+/// `env` for imports, the reply word, the allocator protocol of a module
+/// with text parameters (`std::wasm`), and the `stack_top` global that the
+/// host restores after a call that failed. A host refuses a module that names
+/// a version it does not know.
+pub const WASM_HOST_CONTRACT_VERSION: u32 = 2;
 
 /// The name that a manifest gives to `std::wasm::HostText`.
 pub const WASM_TEXT_TYPE: &str = "HostText";

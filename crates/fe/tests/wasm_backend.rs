@@ -1223,6 +1223,18 @@ fn a_function_named_memory_is_refused() {
 }
 
 #[test]
+fn a_function_named_stack_top_is_refused() {
+    rejected(
+        "reserved_stack",
+        "pub fn stack_top() -> u32 { 1 }\n",
+        &[
+            "cannot export `stack_top`",
+            "reserved for the stack of the module",
+        ],
+    );
+}
+
+#[test]
 fn a_function_that_needs_effects_is_refused() {
     rejected(
         "effects",

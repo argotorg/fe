@@ -423,8 +423,8 @@ test("a manifest of another version is refused", async () => {
   const bytes = assemble();
   const manifest = await manifestFor(bytes);
   await refuses(instantiate(bytes, { manifest: { ...manifest, manifest_version: 2 } }), /format version 2; this host reads version 1/);
-  await refuses(instantiate(bytes, { manifest: { ...manifest, contract_version: 2 } }), /host contract version 2; this host implements version 1/);
-  await refuses(instantiate(bytes, { manifest: { manifest_version: 1, contract_version: 1 } }), /lacks the module hash/);
+  await refuses(instantiate(bytes, { manifest: { ...manifest, contract_version: 3 } }), /host contract version 3; this host implements version 2/);
+  await refuses(instantiate(bytes, { manifest: { manifest_version: 1, contract_version: 2 } }), /lacks the module hash/);
   assert.throws(() => parseManifest("{"), (error) => error instanceof ContractError && /not valid JSON/.test(error.message));
   assert.throws(() => parseManifest("[]"), /format version undefined/);
   assert.deepEqual(parseManifest(JSON.stringify(manifest)), manifest);

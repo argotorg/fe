@@ -84,7 +84,8 @@ struct ExportEntry {
     name: String,
     kind: &'static str,
     /// `"allocator"` for the three functions a module with text parameters
-    /// exports for the host; absent for the program's own functions.
+    /// exports for the host and `"stack"` for the global `stack_top`; absent
+    /// for the program's own functions.
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,6 +129,15 @@ pub fn render(input: &ManifestInput<'_>) -> Result<String, String> {
                     name: export.name.clone(),
                     kind: "memory",
                     role: None,
+                    params: None,
+                    result: None,
+                })
+            }
+            ExportKind::Global if export.name == mir::WASM_STACK_EXPORT => {
+                exports.push(ExportEntry {
+                    name: export.name.clone(),
+                    kind: "global",
+                    role: Some("stack"),
                     params: None,
                     result: None,
                 })

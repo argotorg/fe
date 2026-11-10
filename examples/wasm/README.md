@@ -139,7 +139,13 @@ An import that nothing reachable calls is not in the module.
 - **Traps and errors.** A trap in the module, or an error thrown by an import,
   reaches the caller of the export unchanged. `sys_wasm_abort` throws a
   `GuestAbort` in `host.mjs`.
-- **Contract version.** The version of this contract is 1. It appears in every
+- **The stack after an error.** A module that has imports exports the global
+  `stack_top`, a mutable `i32` that holds where the next call places its first frame. A
+  call to an import moves it and puts it back on return, so an import that throws leaves
+  it above the frames of the calls it ended. A host reads the global before it calls an
+  export and writes that value back if the call ends with an error; `Guest.call` does.
+  The name is reserved.
+- **Contract version.** The version of this contract is 2. It appears in every
   manifest as `contract_version`.
 
 The contract is defined in `ingots/std/src/wasm.fe`, `ingots/std/src/wasm/boundary.fe`
@@ -159,7 +165,7 @@ Whenever `fe build` writes a module it writes `<name>.manifest.json` next to it.
     "size": 7820,
     "initial_memory_pages": 18
   },
-  "contract_version": 1,
+  "contract_version": 2,
   "optimization": "1",
   "compiler": "fe 26.4.0 (…)",
   "imports": [
@@ -180,7 +186,8 @@ Whenever `fe build` writes a module it writes `<name>.manifest.json` next to it.
   section, with WebAssembly types.
 - `exports` is in name order. A function has the Fe parameter names and types, the
   WebAssembly types they become (`wasm`), and a `result` (`null` for none). The
-  three allocator functions have `"role": "allocator"`.
+  three allocator functions have `"role": "allocator"`, and the global `stack_top` of a
+  module with imports has `"kind": "global"` and `"role": "stack"`.
 - `contract_version` is the version of the host contract; `manifest_version` is the
   version of this format.
 - `compiler` is the output of `fe --version`.
@@ -307,9 +314,10 @@ cargo test -p fe --all-features \
   every forged or closed handle, so the protection is the host's check, not the type.
 - **Errors thrown inside an import.** When an import throws, or a callback traps and the
   host passes the error on, the module does not run again before the host call ends, so
-  one stack frame of the function that made the call stays reserved. Each such error
-  reserves one frame for the life of the instance. A trap that happens inside the
-  module, with no host call before it, reserves nothing.
+  the frames of the calls that were active stay reserved until the host writes
+  `stack_top` back, as `host.mjs` does. A host that does not loses that much of the stack
+  for the life of the instance. A trap that happens inside the module, with no host call
+  before it, reserves nothing.
 - **Memory.** Calls use a stack of 1 MiB in the module's memory (no option sets it
   yet) and a call that does not fit traps. Dynamic allocation comes from a heap
   of size classes with free lists: a block that is freed is reused, a fallible

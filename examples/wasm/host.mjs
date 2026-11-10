@@ -23,7 +23,7 @@
 // in `examples/wasm/README.md`; the numbers below repeat it.
 
 /** The version of the host contract that this host implements. */
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;
 
 /** The version of the manifest format that this host reads. */
 export const MANIFEST_VERSION = 1;
@@ -284,13 +284,31 @@ export class Guest {
     });
   }
 
+  /**
+   * Runs `call`, a call of an export. A module with imports exports the top
+   * of its stack as the global `stack_top`. An import that throws leaves it
+   * above the frames of the calls it ended, so it is put back when `call`
+   * fails.
+   */
+  #keepingStack(call) {
+    const top = this.exports.stack_top;
+    if (!(top instanceof WebAssembly.Global)) return call();
+    const before = top.value;
+    try {
+      return call();
+    } catch (error) {
+      top.value = before;
+      throw error;
+    }
+  }
+
   /** Calls an export and returns what it returned. */
   call(name, ...args) {
     const func = this.exports[name];
     if (typeof func !== "function") throw new ContractError(`the module does not export a function \`${name}\``);
     this.#checkAgainstManifest(name, args);
     if (!args.some((arg) => typeof arg === "string" || arg instanceof Uint8Array)) {
-      return func(...args);
+      return this.#keepingStack(() => func(...args));
     }
     this.#requireAllocator();
     // Copy the text before the first allocation, which may grow the memory and
@@ -318,7 +336,7 @@ export class Guest {
           spread.push(arg);
         }
       }
-      return func(...spread);
+      return this.#keepingStack(() => func(...spread));
     } finally {
       this.exports.arena_release(mark);
     }

@@ -77,7 +77,7 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
             "size": bytes.len(),
             "initial_memory_pages": manifest["module"]["initial_memory_pages"],
         },
-        "contract_version": 1,
+        "contract_version": 2,
         "optimization": "1",
         "compiler": version.trim(),
         "imports": [
@@ -111,6 +111,7 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
             { "name": "memory", "kind": "memory" },
             { "name": "ping", "kind": "function",
               "params": [{ "name": "value", "type": "i32", "wasm": ["i32"] }], "result": null },
+            { "name": "stack_top", "kind": "global", "role": "stack" },
         ],
     });
     assert_eq!(manifest, expected);
@@ -237,6 +238,43 @@ fn a_failed_build_writes_no_manifest() {
 // The Node host.
 // ---------------------------------------------------------------------------
 
+#[test]
+fn the_node_host_restores_the_stack_after_an_abort() {
+    // `abort` is an import that throws, a hundred frames deep. Each frame
+    // holds an array, so unless the host puts `stack_top` back the stack of
+    // 1 MiB is gone after a few calls and the rest trap instead of aborting.
+    let source = "use std::wasm::{Abort, abort}
+
+fn dive(_ depth: u32) -> u64 uses (a: mut Abort) {
+    let frame: [u64; 64] = [depth as u64; 64]
+    if depth == 0 {
+        abort(9)
+    }
+    dive(depth - 1) + frame[(depth % 64) as usize]
+}
+
+pub fn run(depth: u32) -> u64 uses (a: mut Abort) {
+    dive(depth)
+}
+";
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2"] {
+        let built = build_source(source, "dive", level, temp.path());
+        let calls = vec![json!({ "export": "run", "args": [100] }); 200];
+        let answer = node_driver(&json!({
+            "wasm": built.wasm(),
+            "manifest": built.manifest(),
+            "calls": calls,
+        }));
+        let abort = json!({
+            "error": { "name": "GuestAbort", "message": "the module aborted with code 9" },
+        });
+        for (call, result) in answer["results"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(result, &abort, "-O {level}, call {call}");
+        }
+    }
+}
+
 fn refusal(request: &Value) -> String {
     let answer = node_driver(request);
     let error = answer
@@ -331,10 +369,10 @@ fn the_node_host_refuses_a_module_that_differs_from_its_manifest() {
 
     // A manifest for another contract version, and for another format version.
     let mut other = manifest.clone();
-    other["contract_version"] = json!(2);
+    other["contract_version"] = json!(3);
     let message = refusal(&json!({ "wasm": built.wasm(), "manifest": other }));
     assert!(
-        message.contains("contract version 2") && message.contains("implements version 1"),
+        message.contains("contract version 3") && message.contains("implements version 2"),
         "{message}"
     );
     let mut other = manifest.clone();
