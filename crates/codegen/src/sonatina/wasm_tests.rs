@@ -18,22 +18,24 @@ use super::{
 };
 use crate::{
     OptLevel,
-    test_output::{TestRootMetadataError, runtime_test_root_metadata},
+    test_output::{ExpectedRevert, TestRootMetadataError, runtime_test_root_metadata},
 };
 
 /// Compiled tests.
 #[derive(Debug)]
 pub struct WasmTestModule {
-    /// The export that runs each test, in the order of the tests.
-    pub entries: Vec<String>,
+    /// The export that runs each test and the revert it expects, in the order
+    /// of the tests.
+    pub entries: Vec<(String, Option<ExpectedRevert>)>,
     pub wasm: Vec<u8>,
     pub ir: Option<String>,
 }
 
-/// Compiles `tests` to one module. An attribute that has no meaning outside
-/// the EVM (`should_revert`, `balance`) is an error, as it is for native
-/// tests, and so is anything else the backend cannot build: the caller builds
-/// fewer tests at once to find the test at fault.
+/// Compiles `tests` to one module. A panic or revert with data calls the test
+/// host's `__fe_revert`, as in a native test. The `balance` attribute has no
+/// meaning outside the EVM and is an error, as is anything else the backend
+/// cannot build: the caller builds fewer tests at once to find the test at
+/// fault.
 pub fn emit_test_wasm(
     db: &DriverDataBase,
     tests: &[TestFunc<'_>],
@@ -49,13 +51,17 @@ pub fn emit_test_wasm(
                 TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
                 TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
             })?;
-            if metadata.expected_revert.is_some() || metadata.initial_balance.is_some() {
+            if metadata.initial_balance.is_some() {
                 return Err(LowerError::Unsupported(format!(
-                    "WebAssembly test `{}` cannot use EVM `should_revert` or `balance` attributes",
+                    "WebAssembly test `{}` cannot use the EVM `balance` attribute",
                     metadata.display_name
                 )));
             }
-            roots.push((metadata.display_name, section.entry.instance(db)));
+            roots.push((
+                metadata.display_name,
+                metadata.expected_revert,
+                section.entry.instance(db),
+            ));
         }
     }
     if roots.len() != tests.len() {
@@ -73,11 +79,11 @@ pub fn emit_test_wasm(
         &isa,
         false,
         &[],
-        lower_runtime::NativePanics::Trap,
+        lower_runtime::NativePanics::HostRevertOrTrap,
     )?;
     let mut entries = Vec::with_capacity(roots.len());
-    for (name, instance) in &roots {
-        let entry = functions[instance];
+    for (name, expected_revert, instance) in roots {
+        let entry = functions[&instance];
         let symbol = module.ctx.func_sig(entry, |signature| {
             if !signature.args().is_empty() || !signature.ret_tys().is_empty() {
                 return Err(LowerError::Internal(format!(
@@ -87,7 +93,7 @@ pub fn emit_test_wasm(
             Ok(signature.name().to_string())
         })?;
         module.ctx.update_func_linkage(entry, Linkage::Public);
-        entries.push(symbol);
+        entries.push((symbol, expected_revert));
     }
     remove_unreachable_functions(&module);
 

@@ -290,9 +290,12 @@ in its own Node.js process with `host.mjs`. A test passes if it returns. The sam
 results on the native backend (the second command, on x86-64 Linux or AArch64
 macOS).
 
-- A failed assertion, an overflow, a division by zero and an index outside an array
-  trap. The test fails with `trap: unreachable`; the engine does not say which of
-  these it was.
+- A failed assertion, an overflow, a division by zero, an index outside an array and
+  a revert with data reach `fe test` as revert data, as from a native test. The test
+  fails with `Test reverted: 0x…` and what the data says, such as `(arithmetic
+  overflow)`, unless it is a `#[test(should_revert)]` test that expected it. A panic
+  without data, `core::panic()`, fails the test with `trap: unreachable`. A module
+  built with `fe build` traps in every case: only a test passes the data to its host.
 - A call of `abort` fails the test with `the test aborted with code N`. A call that
   breaks the host contract fails it with the host's message.
 - The test host answers `Log`, `Clock`, `Abort` and the streams; it has no files, so
@@ -302,8 +305,8 @@ macOS).
   standard error, after `logged:`. A test that passes shows nothing, as on the native
   backend.
 - A test that uses something this backend cannot build fails with `cannot build
-  <name> for WebAssembly: unsupported: …` and the reason (`#[test(should_revert)]`
-  and `balance` are not supported). No test is skipped silently, and a green run
+  <name> for WebAssembly: unsupported: …` and the reason (the `balance`
+  attribute is not supported). No test is skipped silently, and a green run
   means that every selected test ran.
 - A missing or too old `node` ends the run with an error that names the
   requirement.

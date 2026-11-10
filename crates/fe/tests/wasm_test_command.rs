@@ -7,7 +7,7 @@
 //! down here from the source of the fixtures, before any run:
 //!
 //! - `shared.fe` has six tests that pass, `fails_on_purpose` (a failed
-//!   assertion) and three tests that trap. The native backend and the
+//!   assertion) and three tests that panic. The native backend and the
 //!   WebAssembly backend, at the optimization levels 0, 1 and 2, must report
 //!   the same result for every test.
 //! - `wasm_only.fe` uses the host operations of `std::wasm`.
@@ -138,12 +138,19 @@ fn the_native_and_wasm_backends_give_the_same_results() {
 }
 
 #[test]
-fn a_failed_assertion_and_each_trap_are_reported_with_the_engine_message() {
+fn a_failed_assertion_and_each_panic_are_reported_with_the_reason() {
     let output = fe_test("wasm", "1", &[], &fixture("shared"));
-    for name in SHARED_FAILING {
+    // Each is `Panic(uint256)` revert data and what its code means.
+    let reasons = [
+        "01 (assertion failed)",
+        "11 (arithmetic overflow)",
+        "12 (division by zero)",
+        "32 (index out of bounds)",
+    ];
+    for (name, reason) in SHARED_FAILING.into_iter().zip(reasons) {
         let failure = failure_of(&output, name);
         assert!(
-            failure.starts_with("wasm test failed: trap: unreachable"),
+            failure.starts_with("Test reverted: 0x4e487b71") && failure.ends_with(reason),
             "{name}: {failure}"
         );
     }
@@ -204,8 +211,7 @@ fn a_failed_test_shows_what_it_printed() {
             ),
             "-O{level}:\n{text}"
         );
-        let shown = "    wasm test failed: trap: unreachable (Fe code traps on a failed assertion, \
-            arithmetic overflow, division by zero and an index outside an array)\n    \
+        let shown = " (assertion failed)\n    \
             logged:\nstdout:\nthe answer is 42\nno newline at the end\nstderr:\ngiving up at step -3\n";
         assert!(text.contains(shown), "-O{level}:\n{text}");
         // A test that passes shows nothing.
@@ -255,16 +261,16 @@ fn tests_the_backend_cannot_build_fail_with_the_reason() {
         results(&output),
         expected(
             &["builds_and_passes", "lowers_an_evm_builtin"],
-            &["expects_an_evm_revert", "imports_a_zero_sized_parameter"]
+            &["needs_an_evm_balance", "imports_a_zero_sized_parameter"]
         ),
         "{}",
         stdout(&output)
     );
-    let revert = failure_of(&output, "expects_an_evm_revert");
+    let balance = failure_of(&output, "needs_an_evm_balance");
     assert!(
-        revert.contains("cannot build `expects_an_evm_revert` for WebAssembly")
-            && revert.contains("`should_revert`"),
-        "{revert}"
+        balance.contains("cannot build `needs_an_evm_balance` for WebAssembly")
+            && balance.contains("`balance`"),
+        "{balance}"
     );
     let import = failure_of(&output, "imports_a_zero_sized_parameter");
     assert!(
@@ -300,6 +306,36 @@ fn a_test_with_an_import_the_host_lacks_fails_alone() {
         failure.contains("imports env.probe, which the host does not provide"),
         "{failure}"
     );
+}
+
+#[test]
+fn should_revert_tests_pass_when_they_revert() {
+    // Revert data reaches `fe test` as it does from a native test, so the
+    // attribute means the same: any revert, a selector, or a panic code.
+    let temp = tempdir().unwrap();
+    let file = temp.path().join("reverts.fe");
+    fs::write(
+        &file,
+        "#[test(should_revert)]\nfn reverts() {\n    assert(false)\n}\n\n#[test(should_revert)]\nfn returns() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test(should_revert)]\nfn overflows() {\n    var x: u8 = 255\n    x += 1\n}\n",
+    )
+    .unwrap();
+    for backend in ["wasm", "native"] {
+        if backend == "native" && !cfg!(feature = "cranelift") {
+            continue;
+        }
+        let output = fe_test(backend, "1", &[], &file);
+        assert_eq!(
+            results(&output),
+            expected(&["reverts", "overflows"], &["returns"]),
+            "{backend}:\n{}",
+            stdout(&output)
+        );
+        assert_eq!(
+            failure_of(&output, "returns"),
+            "Expected test to revert, but it succeeded",
+            "{backend}"
+        );
+    }
 }
 
 #[test]

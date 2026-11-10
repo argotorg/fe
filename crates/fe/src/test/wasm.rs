@@ -23,7 +23,7 @@ use std::{
 };
 
 use camino::Utf8PathBuf;
-use codegen::{OptLevel, emit_test_wasm};
+use codegen::{ExpectedRevert, OptLevel, emit_test_wasm};
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use mir::{TestFunc, collect_test_funcs};
@@ -31,8 +31,8 @@ use tempfile::{Builder, TempDir};
 
 use super::{
     CompiledTest, SingleTestJob, SuitePreparation, TestEmitSelection, TestOutcome, TestResult,
-    default_test_emit_dir, suite_error_result, test_emit_stem, write_case_status_line,
-    write_test_emit_artifact,
+    default_test_emit_dir, revert_mismatch, suite_error_result, test_emit_stem,
+    write_case_status_line, write_test_emit_artifact,
 };
 use crate::report::panic_payload_to_string;
 
@@ -45,6 +45,8 @@ const MIN_NODE_MAJOR: u32 = 20;
 const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const DIAGNOSTIC_LIMIT: usize = 4096;
+/// The runner's exit status for a test that panicked with a code or reverted.
+const REVERT_STATUS: i32 = 3;
 
 /// Ends the run with an error unless `node` can be started and is recent
 /// enough. Tests are never skipped for lack of Node.js.
@@ -83,6 +85,7 @@ pub(super) struct WasmTestCase {
     name: String,
     module_file: String,
     entry: String,
+    expected_revert: Option<ExpectedRevert>,
     suite: Arc<SuiteDirectory>,
     timeout: Duration,
 }
@@ -160,32 +163,97 @@ impl WasmTestCase {
         let stdout = stdout.join().unwrap_or_default();
         let stderr = stderr.join().unwrap_or_default();
         let over_limit = stdout.len().max(stderr.len()) > OUTPUT_LIMIT;
-        if status.success() && !timed_out && !over_limit {
-            return Ok(None);
-        }
+        let ran = !timed_out && !over_limit;
+        let succeeded = status.success() && ran;
         let preview = |bytes: &[u8]| {
             let text = String::from_utf8_lossy(&bytes[..bytes.len().min(DIAGNOSTIC_LIMIT)]);
             text.trim_end().to_string()
         };
-        let mut message = if timed_out {
-            format!(
-                "wasm test exceeded the time limit of {} seconds",
-                self.timeout.as_secs()
-            )
-        } else if over_limit {
-            format!(
-                "wasm test exceeded the output limit of {} KiB",
-                OUTPUT_LIMIT / 1024
-            )
-        } else if stderr.is_empty() {
-            format!("wasm test failed ({status})")
-        } else {
-            format!("wasm test failed: {}", preview(&stderr))
+        // The runner's line `revert <hex>` holds the data of a panic or revert.
+        let revert = (ran && status.code() == Some(REVERT_STATUS))
+            .then(|| {
+                let line = String::from_utf8_lossy(&stderr);
+                // A revert without data leaves nothing after the word.
+                hex::decode(line.trim().strip_prefix("revert")?.trim()).ok()
+            })
+            .flatten();
+        let failure = || {
+            if timed_out {
+                format!(
+                    "wasm test exceeded the time limit of {} seconds",
+                    self.timeout.as_secs()
+                )
+            } else if over_limit {
+                format!(
+                    "wasm test exceeded the output limit of {} KiB",
+                    OUTPUT_LIMIT / 1024
+                )
+            } else if stderr.is_empty() {
+                format!("wasm test failed ({status})")
+            } else {
+                format!("wasm test failed: {}", preview(&stderr))
+            }
         };
-        if !stdout.is_empty() {
-            let _ = write!(message, "\n    logged:\n{}", preview(&stdout));
+        let message = match (revert, &self.expected_revert) {
+            (Some(data), Some(expected)) => revert_mismatch(expected, &data),
+            (Some(data), None) => Some(format!(
+                "Test reverted: 0x{}{}",
+                hex::encode(&data),
+                revert_reason(&data)
+                    .map(|reason| format!(" ({reason})"))
+                    .unwrap_or_default()
+            )),
+            (None, Some(_)) if succeeded => {
+                Some("Expected test to revert, but it succeeded".to_string())
+            }
+            (None, Some(_)) => Some(format!(
+                "Expected test to revert, but it failed with: {}",
+                failure()
+            )),
+            (None, None) => (!succeeded).then(failure),
+        };
+        Ok(message.map(|mut message| {
+            if !stdout.is_empty() {
+                let _ = write!(message, "\n    logged:\n{}", preview(&stdout));
+            }
+            message
+        }))
+    }
+}
+
+/// What Solidity `Panic(uint256)` or `Error(string)` revert data says, as
+/// `core::rt` reports it natively.
+fn revert_reason(data: &[u8]) -> Option<String> {
+    let (selector, body) = data.split_first_chunk::<4>()?;
+    let word = |index: usize| {
+        let word = body.get(32 * index..32 * index + 32)?;
+        let (high, low) = word.split_at(24);
+        high.iter()
+            .all(|&byte| byte == 0)
+            .then(|| u64::from_be_bytes(low.try_into().unwrap()))
+    };
+    match selector {
+        [0x4e, 0x48, 0x7b, 0x71] if body.len() == 32 => Some(
+            match word(0)? {
+                0x00 => "generic panic",
+                0x01 => "assertion failed",
+                0x11 => "arithmetic overflow",
+                0x12 => "division by zero",
+                0x21 => "invalid enum value",
+                0x22 => "invalid storage encoding",
+                0x31 => "pop from an empty array",
+                0x32 => "index out of bounds",
+                0x41 => "out of memory",
+                0x51 => "call to a zero-initialized function",
+                _ => return None,
+            }
+            .to_string(),
+        ),
+        [0x08, 0xc3, 0x79, 0xa0] if word(0) == Some(32) => {
+            let message = body.get(64..64 + usize::try_from(word(1)?).ok()?)?;
+            Some(String::from_utf8_lossy(message).into_owned())
         }
-        Ok(Some(message))
+        _ => None,
     }
 }
 
@@ -305,13 +373,14 @@ pub(super) fn prepare_tests(
                 return setup_error(err);
             }
         }
-        for (test, entry) in group.iter().zip(module.entries) {
+        for (test, (entry, expected_revert)) in group.iter().zip(module.entries) {
             single_jobs.push(SingleTestJob {
                 suite_key: suite_key.to_string(),
                 case: CompiledTest::Wasm(WasmTestCase {
                     name: test.name.clone(),
                     module_file: module_file.clone(),
                     entry,
+                    expected_revert,
                     suite: Arc::clone(&suite_dir),
                     timeout: TEST_TIMEOUT,
                 }),
@@ -358,6 +427,7 @@ mod tests {
             name: "unit".to_string(),
             module_file: "m.wasm".to_string(),
             entry: entry.to_string(),
+            expected_revert: None,
             suite: Arc::new(SuiteDirectory { directory }),
             timeout,
         }

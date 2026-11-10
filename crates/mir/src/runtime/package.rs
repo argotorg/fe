@@ -458,6 +458,13 @@ fn build_test_package<'db>(
             vec![(RuntimeSectionName::Test(name.clone()), root)],
         ));
     }
+    // A WebAssembly test passes revert data to the test host, as a native
+    // one does; any other WebAssembly module traps.
+    if db.compilation_settings().target(db) == Target::Wasm {
+        for func in [NativeRuntimeFunc::HostPanic, NativeRuntimeFunc::HostRevert] {
+            roots.push(func.instance(db, top_mod)?);
+        }
+    }
     let package = build_sectioned_package(db, top_mod, roots, objects)?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
@@ -1517,8 +1524,9 @@ fn build_non_contract_package<'db>(
 
 /// A `core::rt` function that native code calls to allocate memory or report
 /// a panic. Every native package holds them all, and every WebAssembly package
-/// those that allocate, since its module traps at a panic. The backend drops
-/// those its module never calls.
+/// those that allocate, since its module traps at a panic; a WebAssembly test
+/// package also holds those that pass revert data to the test host. The
+/// backend drops those its module never calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeRuntimeFunc {
     Alloc,

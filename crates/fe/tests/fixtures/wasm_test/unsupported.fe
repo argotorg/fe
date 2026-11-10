@@ -19,9 +19,10 @@ fn lowers_an_evm_builtin() {
     assert(byte(pos: 31, value: 0x1234) == 0x34)
 }
 
-#[test(should_revert)]
-fn expects_an_evm_revert() {
-    assert(false)
+#[test(balance = 5)]
+fn needs_an_evm_balance() {
+    let five: u32 = 5
+    assert(five == 5)
 }
 
 #[test]

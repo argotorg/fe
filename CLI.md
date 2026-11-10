@@ -792,11 +792,12 @@ fe test [--backend <sonatina|native|wasm>] [--filter <pattern>] [--jobs <n>] [--
   answers the `Log`, `Clock`, `Abort` and `Files` operations of `std::wasm` (there are no
   files) and the streams of `std::io` (the standard input is empty). A test passes if it
   returns. A failed test shows the numbers it logged and what it wrote to standard output
-  and standard error. A failed assertion, an overflow, a division by zero and an index
-  outside an array trap, which fails the test with `trap: unreachable`; a call of `abort`
-  fails it with the code; a call that breaks the host contract fails it with the host's
+  and standard error. A failed assertion, an overflow, a division by zero, an index
+  outside an array and a revert with data fail the test with `Test reverted: 0x…` and what
+  the data says, unless `#[test(should_revert)]` expected it; a panic without data fails it
+  with `trap: unreachable`; a call of `abort` fails it with the code; a call that breaks the host contract fails it with the host's
   message. A test that uses something the backend cannot build (an EVM built-in,
-  `should_revert`, `balance`) fails with `cannot build <name> for WebAssembly` and the
+  `balance`) fails with `cannot build <name> for WebAssembly` and the
   reason; no test is skipped silently. A test that runs for more than 60 seconds fails,
   and so does one that writes more than 1 MiB to its streams. `--emit ir` writes
   `<suite>.wasm.<test>.test.sona` for each test, where `<test>` is its path below the root

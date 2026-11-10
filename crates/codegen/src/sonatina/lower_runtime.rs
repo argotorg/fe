@@ -715,8 +715,13 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 // The host sees `bool` and narrow integers as an `i32` holding
                 // the zero-extended value. The package builder has already
                 // named any other type.
+                // The compiler's own imports also pass addresses, as an `i32`.
+                let address = |ty: &Type| {
+                    symbol.starts_with(COMPILER_SYMBOL_PREFIX) && ty.is_pointer(&self.builder.ctx)
+                };
                 if args.iter().chain(ret.iter()).any(|ty| {
                     !matches!(ty, Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64)
+                        && !address(ty)
                 }) {
                     return Err(LowerError::Unsupported(format!(
                         "extern function `{symbol}` requires bool and integer ABI values of at most 64 bits on WebAssembly"
