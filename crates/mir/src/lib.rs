@@ -32,7 +32,7 @@ pub use runtime::{
     format_runtime_body, format_runtime_body_excerpt, format_runtime_package,
     format_runtime_verify_failure, ingot_contracts, native_exports, runtime_instance_stable_key,
     runtime_instance_symbol_key, runtime_param_accesses, scalar_raw_memory_size_bytes,
-    serialize_const_region_bytes,
+    serialize_const_region_bytes, wasm_exports,
 };
 pub use verify::{
     VerifyError, resolve_runtime_place, resolve_runtime_place_address_class, verify_const_region,

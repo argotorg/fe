@@ -147,7 +147,7 @@ fn validate_build_request(
     emit: EmitSelection,
     link: NativeLink<'_>,
 ) -> Result<(), String> {
-    #[cfg(not(any(feature = "sp1", feature = "wasm")))]
+    #[cfg(not(feature = "sp1"))]
     let _ = ingot;
     #[cfg(not(feature = "cranelift"))]
     let _ = contract;
@@ -215,8 +215,8 @@ fn validate_build_request(
         #[cfg(feature = "sp1")]
         BuildBackend::Sp1 => Ok(()),
         #[cfg(feature = "wasm")]
-        BuildBackend::Wasm if ingot.is_some() || contract.is_some() => {
-            Err("WebAssembly output does not support `--ingot` or `--contract`".to_string())
+        BuildBackend::Wasm if contract.is_some() => {
+            Err("WebAssembly output does not support `--contract`".to_string())
         }
         #[cfg(feature = "wasm")]
         BuildBackend::Wasm
@@ -422,11 +422,6 @@ pub fn build(
         #[cfg(feature = "sp1")]
         CliTarget::Directory(_) if matches!(backend, BuildBackend::Sp1) => {
             eprintln!("Error: sp1 executable output only supports standalone `.fe` files");
-            true
-        }
-        #[cfg(feature = "wasm")]
-        CliTarget::Directory(_) if matches!(backend, BuildBackend::Wasm) => {
-            eprintln!("Error: WebAssembly output only supports standalone `.fe` files");
             true
         }
         CliTarget::Directory(dir_path) => build_directory(
@@ -885,8 +880,9 @@ fn build_workspace(
         .cloned()
         .unwrap_or_else(|| workspace_root.join("out"));
 
-    #[cfg(feature = "cranelift")]
-    if backend.is_native() {
+    // Native and WebAssembly output is one artifact for each member, named
+    // after it.
+    if backend.is_native() || backend.is_wasm() {
         let mut built = Vec::new();
         let mut artifact_names = BTreeSet::new();
         for member in members {
@@ -901,8 +897,17 @@ fn build_workspace(
                 .containing_ingot(db, member.url.clone())
                 .expect("analyzed member must resolve")
                 .root_mod(db);
-            // A library is made of exports, and an executable starts at `main`.
-            let has_roots = if emit.library() {
+            // A WebAssembly module and a library are made of exports, and an
+            // executable starts at `main`.
+            let has_roots = if backend.is_wasm() {
+                match mir::wasm_exports(db, root_mod) {
+                    Ok(exports) => !exports.is_empty(),
+                    Err(err) => {
+                        eprintln!("Error: Failed to compile WebAssembly output: {err}");
+                        return true;
+                    }
+                }
+            } else if emit.library() {
                 !mir::native_exports(db, root_mod).is_empty()
             } else {
                 root_mod.main_entry(db).is_some()
@@ -912,13 +917,20 @@ fn build_workspace(
             }
             let artifact = sanitize_name_with_default(member.name.as_str(), "main");
             if !artifact_names.insert(artifact.to_ascii_lowercase()) {
-                eprintln!("Error: Native artifact names collide: {artifact}");
+                let output = if backend.is_wasm() {
+                    "WebAssembly module"
+                } else {
+                    "Native artifact"
+                };
+                eprintln!("Error: {output} names collide: {artifact}");
                 return true;
             }
             built.push(member);
         }
         if built.is_empty() {
-            if emit.library() {
+            if backend.is_wasm() {
+                eprintln!("Error: No WebAssembly exports found to build");
+            } else if emit.library() {
                 eprintln!("Error: No native `#[unsafe(export)]` functions found to build");
             } else {
                 eprintln!("Error: No native executable entry points found to build");
@@ -1331,21 +1343,24 @@ fn build_ingot_url(
         |name| sanitize_name_with_default(name, "module"),
     );
 
-    #[cfg(feature = "cranelift")]
-    if backend.is_native() {
-        return build_native_top_mod(
+    // Native and WebAssembly output is built from the root module and what it
+    // reaches in the ingot and its dependencies.
+    if backend.is_native() || backend.is_wasm() {
+        return build_top_mod(
             db,
             ingot.root_mod(db),
+            None,
+            backend,
             opt_level,
             emit,
             link,
             out_dir,
+            out_dir,
             &ir_file_stem,
+            true,
             report_dir,
         );
     }
-    #[cfg(not(feature = "cranelift"))]
-    let _ = (backend, link);
 
     if report_evm_exports(db, ingot.root_mod(db)) {
         return BuildSummary { had_errors: true };

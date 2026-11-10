@@ -621,22 +621,15 @@ pub struct WasmExportPackage<'db> {
     pub exports: Vec<WasmExport<'db>>,
 }
 
-/// Build the package of a WebAssembly module. Its exports are the `pub fn`
-/// items of the root scope that are not generic, not `extern` and not tests.
-/// Each is rooted with its own signature, which must consist of `bool` and
-/// integers of at most 64 bits. An export that is not scalar is an error that
-/// names it, and so is a module with no exports.
-pub fn build_wasm_export_package<'db>(
+/// The exports of the WebAssembly module of `top_mod`, in name order: the
+/// `pub fn` items of its root scope that are not generic, not `extern` and not
+/// tests. Each is rooted with its own signature, which must consist of `bool`
+/// and integers of at most 64 bits. An export that is not scalar is an error
+/// that names it.
+pub fn wasm_exports<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
-) -> Result<WasmExportPackage<'db>, LowerError> {
-    require_target(db, Target::Wasm)?;
-    if let Some(func) = native_exports(db, top_mod).first() {
-        return Err(LowerError::Unsupported(format!(
-            "`#[unsafe(export)]` requires `--backend native`, but `{}` is exported; a WebAssembly module exports the `pub fn` items in the root of the file",
-            func.scope().pretty_path(db).unwrap_or_default()
-        )));
-    }
+) -> Result<Vec<WasmExport<'db>>, LowerError> {
     let mut exports = Vec::new();
     for item in top_mod.children_non_nested(db) {
         let ItemKind::Func(func) = item else {
@@ -654,9 +647,27 @@ pub fn build_wasm_export_package<'db>(
         }
     }
     exports.sort_by_cached_key(|export| func_display_name(db, export.func));
+    Ok(exports)
+}
+
+/// Build the package of a WebAssembly module from `top_mod`, a standalone file
+/// or the root module of an ingot, and what its `wasm_exports` reach. A module
+/// with no exports is an error.
+pub fn build_wasm_export_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<WasmExportPackage<'db>, LowerError> {
+    require_target(db, Target::Wasm)?;
+    if let Some(func) = native_exports(db, top_mod).first() {
+        return Err(LowerError::Unsupported(format!(
+            "`#[unsafe(export)]` requires `--backend native`, but `{}` is exported; a WebAssembly module exports the `pub fn` items of its root module",
+            func.scope().pretty_path(db).unwrap_or_default()
+        )));
+    }
+    let exports = wasm_exports(db, top_mod)?;
     if exports.is_empty() {
         return Err(LowerError::Unsupported(
-            "WebAssembly output needs at least one exported function: a non-generic `pub fn` in the root of the file".to_string(),
+            "WebAssembly output needs at least one exported function: a non-generic `pub fn` in the root module".to_string(),
         ));
     }
 

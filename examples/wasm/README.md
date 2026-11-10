@@ -1,7 +1,7 @@
 # Fe on WebAssembly
 
-`fe build --backend wasm` compiles a standalone Fe file to a WebAssembly module.
-Every public function in the root of the file becomes an export that a host (a
+`fe build --backend wasm` compiles a standalone Fe file or an ingot to a WebAssembly
+module. Every public function in the root of the file becomes an export that a host (a
 JavaScript program in Node.js or a browser, or any other WebAssembly runtime)
 can call. The module may import small host operations (logging, a clock, abort,
 read-only files), takes text from the host, and returns a number or a tagged
@@ -61,15 +61,19 @@ wasm-tools validate out/lines.wasm
 node examples/wasm/verify.mjs out/lines.wasm
 ```
 
-`fe build` makes a module from one `.fe` file: ingots, workspaces, `--ingot` and
-`--contract` are not supported. `fe check` and `fe test` take ingots, and
-`target = "wasm"` in `fe.toml` selects this backend for them.
+`fe build` also takes an ingot directory, and makes one module named after the ingot
+from the root module `src/lib.fe` and what it calls in the ingot's other modules and
+its dependencies. For a workspace it makes one module for each member whose root
+module has an export, or for the member that `--ingot` names. `--contract` is not
+supported. `target = "wasm"` in `fe.toml` selects this backend for `fe build`,
+`fe check` and `fe test`.
 
 ### What a program may export
 
-Every non-generic `pub fn` in the root of the file is exported under its own name,
-and the module always exports its linear memory as `memory`. `#[unsafe(export)]` is
-an error on this backend. Parameters and results are limited to:
+Every non-generic `pub fn` in the root of the file, or of an ingot's `src/lib.fe`, is
+exported under its own name, and the module always exports its linear memory as
+`memory`. `#[unsafe(export)]` is an error on this backend. Parameters and results are
+limited to:
 
 - `bool` and the integers `u8` to `u64` and `i8` to `i64`;
 - parameters of type `std::wasm::HostText`, text that the host placed in the
@@ -280,7 +284,8 @@ the compiler:
 ```sh
 cargo test -p fe --all-features \
   --test wasm_backend --test wasm_memory --test wasm_imports --test wasm_files \
-  --test wasm_manifest --test wasm_reproducible --test wasm_test_command
+  --test wasm_manifest --test wasm_ingot --test wasm_reproducible \
+  --test wasm_test_command
 ```
 
 ## Known limits
@@ -288,8 +293,9 @@ cargo test -p fe --all-features \
 - **Types.** Floats do not exist in Fe yet. 128-bit and 256-bit integers work inside
   functions (as 64-bit limbs) but cannot cross the boundary. Exports cannot return
   text or aggregates.
-- **Programs.** `fe build` makes one module from one standalone file. Contracts and
-  EVM features are not available: an EVM-only instruction is an error that names it.
+- **Programs.** Every root `pub fn` of an ingot is an export, so an ingot that is a
+  library for other Fe code is a module only if those functions fit the boundary. Contracts
+  and EVM features are not available: an EVM-only instruction is an error that names it.
   `fe check` and the language server do not know the export rule.
 - **Imports.** The module is always `env`; no attribute names another module. Imports
   take scalars only, so the compiler does not check that an address and a length

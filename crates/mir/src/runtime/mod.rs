@@ -22,7 +22,7 @@ pub use package::{
     build_ingot_module_runtime_package, build_native_package, build_native_test_runtime_package,
     build_runtime_package, build_test_runtime_package, build_wasm_export_package,
     build_wasm_test_runtime_package, collect_test_funcs, native_exports,
-    runtime_instance_stable_key, runtime_instance_symbol_key,
+    runtime_instance_stable_key, runtime_instance_symbol_key, wasm_exports,
 };
 pub use pretty::{
     format_runtime_body, format_runtime_body_excerpt, format_runtime_package,

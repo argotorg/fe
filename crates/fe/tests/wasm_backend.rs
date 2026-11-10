@@ -960,27 +960,7 @@ fn other_backends_and_outputs_are_refused_with_a_reason() {
     }
     expect_failure(
         &["build", "--backend", "wasm", "--contract", "C", path],
-        &["WebAssembly output does not support `--ingot` or `--contract`"],
-    );
-}
-
-#[test]
-fn an_ingot_directory_is_refused() {
-    let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("src")).unwrap();
-    fs::write(
-        temp.path().join("fe.toml"),
-        "[ingot]\nname = \"wasm_ingot\"\nversion = \"0.1.0\"\n",
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join("src/lib.fe"),
-        "pub fn one() -> u32 { 1 }\n",
-    )
-    .unwrap();
-    expect_failure(
-        &["build", "--backend", "wasm", temp.path().to_str().unwrap()],
-        &["WebAssembly output only supports standalone `.fe` files"],
+        &["WebAssembly output does not support `--contract`"],
     );
 }
 
@@ -1212,7 +1192,7 @@ fn an_evm_only_instruction_is_a_named_error() {
 
 #[test]
 fn unsafe_export_is_a_named_error() {
-    // A module exports the `pub fn` items in the root of the file, so the
+    // A module exports the `pub fn` items of its root module, so the
     // attribute would do nothing.
     rejected(
         "root_export",

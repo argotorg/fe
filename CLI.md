@@ -157,8 +157,7 @@ For `build` and `check`:
 ## Project target
 
 `target` in `fe.toml` sets the machine a project compiles for: `"evm"`, `"native"` or `"wasm"`.
-`fe check`, `fe build` and `fe test` then use that target's backend without `--backend`. `fe build`
-takes only standalone `.fe` files for `wasm`, so it reports an error for an ingot with this target.
+`fe check`, `fe build` and `fe test` then use that target's backend without `--backend`.
 
 ```toml
 [ingot]
@@ -405,10 +404,12 @@ one program as long as their exported symbols differ.
 
 ### WebAssembly output
 
-With the optional `wasm` Cargo feature, `fe build --backend wasm <file.fe>` compiles
-a standalone `.fe` file to a WebAssembly module (32-bit pointers, one linear memory).
-Every non-generic `pub fn` in the root of the file is exported under its own name,
-and the module also exports its memory as `memory`. Parameters and results must be
+With the optional `wasm` Cargo feature, `fe build --backend wasm <path>` compiles
+a standalone `.fe` file or an ingot to a WebAssembly module (32-bit pointers, one linear
+memory). Every non-generic `pub fn` in the root of the file, or of an ingot's root module
+`src/lib.fe`, is exported under its own name, and the module also exports its memory as
+`memory`. The exports of an ingot may call its other modules and its dependencies, whose
+functions are not exported. Parameters and results must be
 `bool` or integers of at most 64 bits, with two exceptions described below (text
 parameters and a reply result). `usize` and `isize` have 32 bits on this target
 and cross as an `i32`. Any other type, including `u256` and structs, is an error
@@ -420,9 +421,13 @@ a call that does not fit traps; dynamic allocation comes from a heap that reuses
 freed blocks and grows the memory without a limit of the module's own; an allocation
 traps when the host refuses to grow it, and a fallible one returns `None`. EVM-only
 instructions are not supported and are errors that name the function and the instruction.
-The default output is `<out>/<file>.wasm`; `--emit ir` writes
-`<out>/<file>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
-written, `<out>/<file>.manifest.json` is written with it. The manifest records the
+The default output is `<out>/<name>.wasm`, named after the file or the ingot; `--emit ir`
+writes `<out>/<name>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
+written, `<out>/<name>.manifest.json` is written with it. A workspace build writes one module
+for each selected member whose root module has an export, and `--ingot <name>` selects one
+member. A root `pub fn` of a selected member that cannot be an export is an error, so a
+workspace with a library whose root functions take other types needs `--ingot`. `--contract`
+is an error. The manifest records the
 module's file name, SHA-256 and size, its initial memory in pages, the imports (module,
 name, WebAssembly parameter and result types), the exports (for the program's functions
 the Fe parameter names and types, with `HostText` and `Reply` as named by `std::wasm`,
