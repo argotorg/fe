@@ -1,7 +1,7 @@
 //! Decision tree generation for efficient pattern matching compilation
 //! Based on "Compiling pattern matching to good decision trees" (Maranget, 2008)
 
-use super::pattern_analysis::{FeConstructorOracle, to_matchcov_pattern};
+use super::pattern_analysis::{FeConstructorOracle, matches_anything, to_matchcov_pattern};
 use super::pattern_ir::{
     BindingRef, ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind,
 };
@@ -68,7 +68,7 @@ pub fn build_decision_tree<'db>(
     let rows = roots
         .iter()
         .enumerate()
-        .map(|(arm_index, &root)| pattern_row(store, root, arm_index));
+        .map(|(arm_index, &root)| pattern_row(db, store, root, arm_index));
     build(db, store, DecisionMatrix::new(column_ty, rows))
 }
 
@@ -87,7 +87,7 @@ pub(crate) fn build_pattern_branch_decision_tree<'db>(
             choices: Vec::new(),
         },
     );
-    let rows = [pattern_row(store, root, 0), fallback];
+    let rows = [pattern_row(db, store, root, 0), fallback];
     build(
         db,
         store,
@@ -96,12 +96,13 @@ pub(crate) fn build_pattern_branch_decision_tree<'db>(
 }
 
 fn pattern_row<'db>(
+    db: &'db dyn HirAnalysisDb,
     store: &PatternStore<'db>,
     root: ValidatedPatId,
     arm_index: usize,
 ) -> PatternRow<ConstructorKind<'db>, ArmData> {
     PatternRow::new(
-        [simplify_pattern(to_matchcov_pattern(store, root))],
+        [to_matchcov_pattern(db, store, root)],
         ArmData {
             arm_index,
             root: Some(root),
@@ -131,7 +132,7 @@ fn build<'db>(
     }
 
     matrix.swap(select_column(db, &matrix));
-    let matrix = matrix.expand_alternatives(store);
+    let matrix = matrix.expand_alternatives(db, store);
     let signature = matrix.column_signature(db, 0);
     let needs_default = match signature.space {
         ConstructorSpace::Empty => return DecisionTree::Unreachable,
@@ -349,7 +350,11 @@ impl ArmData {
 
 /// The alternatives of the `|` pattern `or`, those of a nested `|` in its
 /// place, up to the first that matches anything.
-fn alternatives<'db>(store: &PatternStore<'db>, or: ValidatedPatId) -> Vec<ValidatedPatId> {
+fn alternatives<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    or: ValidatedPatId,
+) -> Vec<ValidatedPatId> {
     fn flatten<'db>(store: &PatternStore<'db>, pat: ValidatedPatId, out: &mut Vec<ValidatedPatId>) {
         match store.node(pat).kind() {
             ValidatedPatKind::Or(alternatives) => {
@@ -362,13 +367,11 @@ fn alternatives<'db>(store: &PatternStore<'db>, or: ValidatedPatId) -> Vec<Valid
     }
     let mut out = Vec::new();
     flatten(store, or, &mut out);
-    if let Some(wildcard) = out.iter().position(|&alternative| {
-        matches!(
-            simplify_pattern(to_matchcov_pattern(store, alternative)),
-            Pattern::Wildcard
-        )
-    }) {
-        out.truncate(wildcard + 1);
+    if let Some(total) = out
+        .iter()
+        .position(|&alternative| matches_anything(db, &to_matchcov_pattern(db, store, alternative)))
+    {
+        out.truncate(total + 1);
     }
     out
 }
@@ -418,7 +421,7 @@ impl<'db> DecisionMatrix<'db> {
     /// a row for each alternative, in order, which takes that alternative,
     /// as the switch on the column would. matchcov expands the others,
     /// which bind nothing.
-    fn expand_alternatives(self, store: &PatternStore<'db>) -> Self {
+    fn expand_alternatives(self, db: &'db dyn HirAnalysisDb, store: &PatternStore<'db>) -> Self {
         let occurrence = &self.occurrences[0];
         let binding_or = |row: &PatternRow<ConstructorKind<'db>, ArmData>| {
             row.payload().pattern_at(store, occurrence).filter(|&pat| {
@@ -441,11 +444,11 @@ impl<'db> DecisionMatrix<'db> {
                 return vec![row];
             };
             let (patterns, data) = row.into_parts();
-            alternatives(store, or)
+            alternatives(db, store, or)
                 .into_iter()
                 .map(|alternative| {
                     let mut patterns = patterns.clone();
-                    patterns[0] = simplify_pattern(to_matchcov_pattern(store, alternative));
+                    patterns[0] = to_matchcov_pattern(db, store, alternative);
                     let mut data = data.clone();
                     data.choices.push((or, alternative));
                     PatternRow::new(patterns, data)
@@ -480,33 +483,6 @@ impl<'db> DecisionMatrix<'db> {
         Self {
             patterns,
             occurrences: self.occurrences[1..].to_vec(),
-        }
-    }
-}
-
-/// Removes alternatives made redundant by a preceding wildcard.
-fn simplify_pattern<'db>(pat: Pattern<ConstructorKind<'db>>) -> Pattern<ConstructorKind<'db>> {
-    match pat {
-        Pattern::Wildcard => Pattern::Wildcard,
-        Pattern::Constructor { head, arguments } => {
-            Pattern::constructor(head, arguments.into_iter().map(simplify_pattern))
-        }
-        Pattern::Or(alternatives) => {
-            let mut simplified = Vec::new();
-            for alternative in alternatives {
-                let alternative = simplify_pattern(alternative);
-                let is_wildcard = matches!(alternative, Pattern::Wildcard);
-                simplified.push(alternative);
-                if is_wildcard {
-                    break;
-                }
-            }
-
-            if simplified.len() == 1 {
-                simplified.pop().unwrap()
-            } else {
-                Pattern::Or(simplified)
-            }
         }
     }
 }

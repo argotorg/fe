@@ -86,6 +86,36 @@ fn declared() -> u256 {
     x
 }
 
+// An alternative after one that matches anything matches nothing more, and
+// adds nothing to check: twenty such columns check as one would.
+fn wide(
+    _ cols: (
+        (u8, u8), (u8, u8), (u8, u8), (u8, u8), (u8, u8),
+        (u8, u8), (u8, u8), (u8, u8), (u8, u8), (u8, u8),
+        (u8, u8), (u8, u8), (u8, u8), (u8, u8), (u8, u8),
+        (u8, u8), (u8, u8), (u8, u8), (u8, u8), (u8, u8),
+    ),
+) -> u8 {
+    match cols {
+        (
+            (a, _) | (_, a), (b, _) | (_, b), (c, _) | (_, c), (d, _) | (_, d),
+            (e, _) | (_, e), (f, _) | (_, f), (g, _) | (_, g), (h, _) | (_, h),
+            (i, _) | (_, i), (j, _) | (_, j), (k, _) | (_, k), (l, _) | (_, l),
+            (m, _) | (_, m), (n, _) | (_, n), (o, _) | (_, o), (p, _) | (_, p),
+            (q, _) | (_, q), (r, _) | (_, r), (s, _) | (_, s), (t, _) | (_, t),
+        ) => a + b + c + d + t,
+    }
+}
+
+#[test]
+fn test_wide() {
+    let cols = (
+        (0, 9), (1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9),
+        (10, 9), (11, 9), (12, 9), (13, 9), (14, 9), (15, 9), (16, 9), (17, 9), (18, 9), (19, 9),
+    )
+    assert(wide(cols) == 25)
+}
+
 #[test]
 fn test_values() {
     assert(first(E::A(3, 4)) == 3)
