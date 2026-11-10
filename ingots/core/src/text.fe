@@ -292,8 +292,10 @@ fn digit_value(_ byte: u8) -> u256 {
 /// (Solidity `Base64.encode`).
 pub fn base64(_ data: MemSpan) -> DynString {
     var out = DynString::zeroed(4 * ((data.len() + 2) / 3))
-    let alphabet: DynString = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    let digits = alphabet.span()
+    // The alphabet from byte 31 on: the word read at a digit's index ends
+    // with the digit, which `mstore8` stores as it is.
+    let table: DynString = "                               ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let digits = table.span()
     // Four digits for each group of three bytes, and for the one or two
     // bytes after the last group.
     let (groups, rest) = data.as_chunks<3>()
@@ -302,27 +304,28 @@ pub fn base64(_ data: MemSpan) -> DynString {
     for k in 0..groups.len() {
         let bits = groups.word_at(k)
         let o = mut body[k]
-        o[0] = digits[base64_index(bits, 0)]
-        o[1] = digits[base64_index(bits, 1)]
-        o[2] = digits[base64_index(bits, 2)]
-        o[3] = digits[base64_index(bits, 3)]
+        o[0] = base64_digit(digits, bits, 0)
+        o[1] = base64_digit(digits, bits, 1)
+        o[2] = base64_digit(digits, bits, 2)
+        o[3] = base64_digit(digits, bits, 3)
     }
     if !rest.is_empty() {
         let bits = rest.word_at(0)
         let o = mut last[0]
-        o[0] = digits[base64_index(bits, 0)]
-        o[1] = digits[base64_index(bits, 1)]
-        o[2] = if rest.len() > 1 { digits[base64_index(bits, 2)] } else { b'=' }
+        o[0] = base64_digit(digits, bits, 0)
+        o[1] = base64_digit(digits, bits, 1)
+        o[2] = if rest.len() > 1 { base64_digit(digits, bits, 2) } else { b'=' }
         o[3] = b'='
     }
     out
 }
 
-// The alphabet index of digit `n` of the bytes at the start of `bits`: six
-// bits from bit `6 * n` on, counted from the top.
+// Digit `n` of the bytes at the start of `bits`, from their six bits from
+// bit `6 * n` on, counted from the top.
 #[inline(always)]
-fn base64_index(_ bits: u256, _ n: u256) -> usize {
-    ((bits >> (250 - 6 * n)) & 63).downcast_truncate()
+fn base64_digit(_ digits: MemSpan, _ bits: u256, _ n: u256) -> u8 {
+    let index: usize = ((bits >> (250 - 6 * n)) & 63).downcast_truncate()
+    digits.read_word(index).downcast_truncate()
 }
 
 /// Decodes standard base64 with `=` padding, the inverse of `base64`.
