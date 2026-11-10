@@ -4,15 +4,17 @@
 //!
 //! A test that uses something the WebAssembly backend does not support (such
 //! as `should_revert`) gets no module and fails with an error that names it;
-//! no test is skipped silently. A trap, a failed assertion or a call of `abort` fails the test with
-//! the engine's message. Node.js is required: when `node` is missing or too old
-//! the run ends with an error that says so.
+//! no test is skipped silently. A trap, a failed assertion or a call of
+//! `abort` fails the test with the engine's message, followed by the numbers
+//! the test logged and what it wrote to its standard output and standard
+//! error. Node.js is required: when `node` is missing or too old the run ends
+//! with an error that says so.
 
 use std::{
     collections::VecDeque,
     fmt::Write as _,
     fs,
-    io::Read,
+    io::{self, Read},
     panic::{AssertUnwindSafe, catch_unwind},
     process::{Command, Stdio},
     sync::Arc,
@@ -106,7 +108,7 @@ impl WasmTestCase {
     }
 
     /// `None` if the test passed, otherwise what to report.
-    fn execute(&self) -> std::io::Result<Option<String>> {
+    fn execute(&self) -> io::Result<Option<String>> {
         let mut child = Command::new("node")
             .current_dir(self.suite.directory.path())
             .arg("run_test.mjs")
@@ -119,8 +121,15 @@ impl WasmTestCase {
         let capture = |pipe: Option<Box<dyn Read + Send>>| {
             thread::spawn(move || {
                 let mut bytes = Vec::new();
-                if let Some(pipe) = pipe {
-                    let _ = pipe.take(OUTPUT_LIMIT as u64).read_to_end(&mut bytes);
+                if let Some(mut pipe) = pipe {
+                    // One byte above the limit shows that the test passed it.
+                    // The rest is read too, so the test is not left waiting on
+                    // a full pipe.
+                    let _ = pipe
+                        .by_ref()
+                        .take(OUTPUT_LIMIT as u64 + 1)
+                        .read_to_end(&mut bytes);
+                    let _ = io::copy(&mut pipe, &mut io::sink());
                 }
                 bytes
             })
@@ -150,7 +159,8 @@ impl WasmTestCase {
         };
         let stdout = stdout.join().unwrap_or_default();
         let stderr = stderr.join().unwrap_or_default();
-        if status.success() && !timed_out {
+        let over_limit = stdout.len().max(stderr.len()) > OUTPUT_LIMIT;
+        if status.success() && !timed_out && !over_limit {
             return Ok(None);
         }
         let preview = |bytes: &[u8]| {
@@ -161,6 +171,11 @@ impl WasmTestCase {
             format!(
                 "wasm test exceeded the time limit of {} seconds",
                 self.timeout.as_secs()
+            )
+        } else if over_limit {
+            format!(
+                "wasm test exceeded the output limit of {} KiB",
+                OUTPUT_LIMIT / 1024
             )
         } else if stderr.is_empty() {
             format!("wasm test failed ({status})")

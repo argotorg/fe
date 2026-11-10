@@ -790,16 +790,18 @@ fe test [--backend <sonatina|native|wasm>] [--filter <pattern>] [--jobs <n>] [--
   and runs each in its own Node.js process (version 20 or later; `node` must be on `PATH`, and
   the run ends with an error if it is not). The host is `examples/wasm/host.mjs`: it
   answers the `Log`, `Clock`, `Abort` and `Files` operations of `std::wasm` (there are no
-  files). A test passes if it returns. A failed assertion, an overflow, a division by zero
-  and an index outside an array trap, which fails the test with `trap: unreachable`; a call
-  of `abort` fails it with the code; a call that breaks the host contract fails it with
-  the host's message. A test that uses something the backend cannot build (an EVM
-  built-in, `should_revert`, `balance`) fails with `cannot build <name> for WebAssembly`
-  and the reason; no test is skipped silently. A test that runs for more than 60 seconds
-  fails. `--emit ir` writes `<suite>.wasm.<test>.test.sona` for each test, where `<test>` is
-  its path below the root module with `.` between the names (`inner.first`). `--show-logs`,
-  the tracing options, `--debug-dir`, `--emit rmir`, `--report` and `--report-dir` are
-  errors with this backend.
+  files) and the streams of `std::io` (the standard input is empty). A test passes if it
+  returns. A failed test shows the numbers it logged and what it wrote to standard output
+  and standard error. A failed assertion, an overflow, a division by zero and an index
+  outside an array trap, which fails the test with `trap: unreachable`; a call of `abort`
+  fails it with the code; a call that breaks the host contract fails it with the host's
+  message. A test that uses something the backend cannot build (an EVM built-in,
+  `should_revert`, `balance`) fails with `cannot build <name> for WebAssembly` and the
+  reason; no test is skipped silently. A test that runs for more than 60 seconds fails,
+  and so does one that writes more than 1 MiB to its streams. `--emit ir` writes
+  `<suite>.wasm.<test>.test.sona` for each test, where `<test>` is its path below the root
+  module with `.` between the names (`inner.first`). `--show-logs`, the tracing options,
+  `--debug-dir`, `--emit rmir`, `--report` and `--report-dir` are errors with this backend.
 
 ### Reports: `--report` and `--report-dir`
 

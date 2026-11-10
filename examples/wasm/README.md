@@ -295,15 +295,20 @@ macOS).
   these it was.
 - A call of `abort` fails the test with `the test aborted with code N`. A call that
   breaks the host contract fails it with the host's message.
-- The test host answers `Log`, `Clock` and `Abort`; it has no files, so `open` returns
-  `NotFound`. Providers written in Fe (`mock()`) work as usual.
+- The test host answers `Log`, `Clock`, `Abort` and the streams; it has no files, so
+  `open` returns `NotFound`, and its standard input is empty. Providers written in Fe
+  (`mock()`) work as usual.
+- A failed test shows the numbers it logged and what it wrote to standard output and
+  standard error, after `logged:`. A test that passes shows nothing, as on the native
+  backend.
 - A test that uses something this backend cannot build fails with `cannot build
   <name> for WebAssembly: unsupported: …` and the reason (`#[test(should_revert)]`
   and `balance` are not supported). No test is skipped silently, and a green run
   means that every selected test ran.
 - A missing or too old `node` ends the run with an error that names the
   requirement.
-- A test that runs for more than 60 seconds fails.
+- A test that runs for more than 60 seconds fails, and so does one that writes more
+  than 1 MiB to its streams.
 - A test that calls an `extern` function of its own gets a module of its own, since the
   test host does not supply the import and a module that imports it does not start.
 - `--filter`, `--jobs`, `-O`, `--emit ir` (one `.sona` file and one module per test) and ingot
@@ -390,6 +395,7 @@ cargo test -p fe --all-features \
   A function that ends in a call of a recursive cycle makes a tail call, so it is not in
   that stack.
 - **Tests.** Each test runs in a separate process, so tests share nothing. The test host
-  has no files.
+  has no files and an empty standard input, and the output of a test that passes is not
+  shown.
 - **Platforms.** CI runs the compiler's WebAssembly tests on Linux and Windows, and
   on macOS on `master`; `check.sh` runs on Linux. Browsers were not run.

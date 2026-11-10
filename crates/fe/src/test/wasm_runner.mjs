@@ -6,7 +6,9 @@
 // file next to this one), the export is called, and the host is checked for
 // handles that the test left open. Exit status 0 means the test passed. On a
 // failure one line on standard error says what happened, and the status is 1.
-// Standard output carries the numbers that the test logged, one per line.
+// Standard output carries the numbers that the test logged, one per line, and
+// then what it wrote to its standard output and standard error, each under a
+// line that names the stream. The test's standard input is empty.
 import fs from "node:fs";
 import { ContractError, GuestAbort, instantiate } from "./host.mjs";
 
@@ -44,7 +46,13 @@ try {
 for (const entry of guest?.host.logs ?? []) {
   console.log(`log ${entry.type} ${entry.value}`);
 }
+for (const stream of ["stdout", "stderr"]) {
+  const text = guest?.host[stream] ?? "";
+  if (text !== "") console.log(`${stream}:\n${text.replace(/\n$/, "")}`);
+}
 if (failure !== null) {
   console.error(failure);
-  process.exit(1);
+  // The status is set, not `process.exit` called, so that a long output is
+  // written to the end.
+  process.exitCode = 1;
 }

@@ -11,6 +11,8 @@
 //!   WebAssembly backend, at the optimization levels 0, 1 and 2, must report
 //!   the same result for every test.
 //! - `wasm_only.fe` uses the host operations of `std::wasm`.
+//! - `prints.fe` prints through `std::io`; a failed test shows what it printed,
+//!   and a test that prints more than 1 MiB fails.
 //! - `unsupported.fe` has tests that the backend cannot build; they fail with
 //!   the reason and the other test still runs.
 //!
@@ -186,6 +188,63 @@ fn host_operations_logs_aborts_and_refusals() {
         forged.starts_with("wasm test failed: host contract violation:")
             && forged.contains("handle 77 was never issued by this host"),
         "{forged}"
+    );
+}
+
+#[test]
+fn a_failed_test_shows_what_it_printed() {
+    for level in ["0", "2"] {
+        let output = fe_test("wasm", level, &[], &fixture("prints"));
+        let text = stdout(&output);
+        assert_eq!(
+            results(&output),
+            expected(
+                &["prints_and_passes"],
+                &["prints_and_fails", "prints_too_much"]
+            ),
+            "-O{level}:\n{text}"
+        );
+        let shown = "    wasm test failed: trap: unreachable (Fe code traps on a failed assertion, \
+            arithmetic overflow, division by zero and an index outside an array)\n    \
+            logged:\nstdout:\nthe answer is 42\nno newline at the end\nstderr:\ngiving up at step -3\n";
+        assert!(text.contains(shown), "-O{level}:\n{text}");
+        // A test that passes shows nothing.
+        assert!(!text.contains("all is well"), "-O{level}:\n{text}");
+        assert_eq!(
+            failure_of(&output, "prints_too_much"),
+            "wasm test exceeded the output limit of 1024 KiB"
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn the_native_backend_prints_the_same_text() {
+    let output = fe_test("native", "1", &[], &fixture("prints"));
+    let text = stdout(&output);
+    assert_eq!(
+        results(&output),
+        expected(
+            &["prints_and_passes"],
+            &["prints_and_fails", "prints_too_much"]
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "stdout:\nthe answer is 42\nno newline at the end\nstderr:\ngiving up at step -3\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        failure_of(&output, "prints_too_much").contains("native test exceeded the output limit"),
+        "{text}"
     );
 }
 
