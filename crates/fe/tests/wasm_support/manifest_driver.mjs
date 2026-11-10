@@ -3,11 +3,13 @@
 //
 // Standard input is one JSON object:
 //   { "wasm": path, "manifest": object | null, "files": { name: contents },
-//     "calls": [ { "export": name, "args": [...], "reply": bool } ] }
+//     "stdin": text, "calls": [ { "export": name, "args": [...], "reply": bool } ] }
 // An argument is a string (text), a number, or { "u64": "decimal" }. Standard
 // output is one JSON object, either { "error": { "name", "message" } } when the
-// host refused the module, or { "results": [...], "logs": [...] } where a result is
-// { "value": string }, { "reply": {...} } or { "error": { "name", "message" } }.
+// host refused the module, or { "results": [...], "logs": [...], "stdout": text,
+// "stderr": text, "writes": [...] } where a result is { "value": string },
+// { "reply": {...} } or { "error": { "name", "message" } }, and a write is the
+// stream and the text that the host passed on to `onWrite`.
 import fs from "node:fs";
 import { instantiate } from "../../../../examples/wasm/host.mjs";
 
@@ -17,9 +19,16 @@ const argument = (value) =>
   typeof value === "object" && value !== null && "u64" in value ? BigInt(value.u64) : value;
 const failure = (error) => ({ error: { name: error.name, message: error.message } });
 
+const writes = [];
+const decoder = new TextDecoder();
 let guest;
 try {
-  guest = await instantiate(bytes, { manifest: request.manifest ?? null, files: request.files ?? {} });
+  guest = await instantiate(bytes, {
+    manifest: request.manifest ?? null,
+    files: request.files ?? {},
+    stdin: request.stdin ?? "",
+    onWrite: ({ stream, bytes }) => writes.push({ stream, text: decoder.decode(bytes) }),
+  });
 } catch (error) {
   process.stdout.write(JSON.stringify(failure(error)));
   process.exit(0);
@@ -39,5 +48,11 @@ for (const call of request.calls ?? []) {
   }
 }
 process.stdout.write(
-  JSON.stringify({ results, logs: guest.host.logs.map((entry) => ({ type: entry.type, value: String(entry.value) })) }),
+  JSON.stringify({
+    results,
+    logs: guest.host.logs.map((entry) => ({ type: entry.type, value: String(entry.value) })),
+    stdout: guest.host.stdout,
+    stderr: guest.host.stderr,
+    writes,
+  }),
 );

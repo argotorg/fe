@@ -320,6 +320,89 @@ fn the_node_host_runs_a_module_that_matches_its_manifest() {
 }
 
 #[test]
+fn the_node_host_supplies_the_streams() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "2"] {
+        let built = build_source(
+            &fixture("wasm_imports", "streams"),
+            "streams",
+            level,
+            temp.path(),
+        );
+        assert_matches_the_engine(&built);
+        let stream = |name: &str| {
+            json!({ "module": "env", "name": name, "kind": "function",
+                "type": { "params": ["i32", "i32", "i32"], "results": ["i32"] } })
+        };
+        assert_eq!(
+            built.manifest()["imports"],
+            json!([
+                stream("sys_wasm_stream_read"),
+                stream("sys_wasm_stream_write")
+            ]),
+            "-O {level}"
+        );
+        let answer = node_driver(&json!({
+            "wasm": built.wasm(),
+            "manifest": built.manifest(),
+            "stdin": "one\nzwölf\n",
+            "calls": [
+                { "export": "greet", "args": [3, { "u64": "18446744073709551615" }, -128] },
+                { "export": "warn", "args": [-7] },
+                { "export": "number_lines", "args": [] },
+                // More than the host takes in one call.
+                { "export": "digits", "args": [70000] },
+            ],
+        }));
+        assert_eq!(
+            answer["results"],
+            json!([{ "value": "3" }, { "value": "-7" }, { "value": "2" }, { "value": "70000" }]),
+            "-O {level}: {answer}"
+        );
+        let digits: String = "0123456789".repeat(7000);
+        assert_eq!(
+            answer["stdout"],
+            format!(
+                "hello 3 times\nbig 18446744073709551615, small -128, true\n1: one\n2: zwölf\n{digits}"
+            ),
+            "-O {level}"
+        );
+        assert_eq!(
+            answer["stderr"], "warning -7\nno newline2 lines\n",
+            "-O {level}"
+        );
+        // Each print is one write, and a long one is taken in two pieces.
+        let writes: Vec<(&str, usize)> = answer["writes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|write| {
+                (
+                    write["stream"].as_str().unwrap(),
+                    write["text"].as_str().unwrap().len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            writes,
+            [
+                ("stdout", 14),
+                ("stdout", 42),
+                ("stdout", 1),
+                ("stderr", 11),
+                ("stderr", 10),
+                ("stdout", 7),
+                ("stdout", 10),
+                ("stderr", 8),
+                ("stdout", 65536),
+                ("stdout", 4464),
+            ],
+            "-O {level}"
+        );
+    }
+}
+
+#[test]
 fn the_node_host_names_the_import_it_cannot_supply() {
     let temp = tempdir().unwrap();
     let built = build_source(

@@ -32,6 +32,7 @@ programs=(
   "$fixtures"/wasm/*.fe
   "$fixtures"/wasm_manifest/shapes.fe
   "$fixtures"/wasm_files/forge.fe
+  "$fixtures"/wasm_imports/streams.fe
   "$root/examples/wasm/lines.fe"
   "$root/examples/wasm_host.fe"
 )

@@ -12,10 +12,13 @@
 //!
 //! The submodule `files` is a contract for text, handles and errors, and
 //! `HostText` and `Reply` are the shapes that an exported function may take and
-//! return besides numbers.
+//! return besides numbers. The submodule `streams` gives `Host` the standard
+//! streams of `std::io`, so `print!` and its relatives work in an export or a
+//! test that declares `uses (out: mut std::io::Stdout)`.
 
 pub use boundary::{Reply, HostText}
 pub use files::{self}
+use super::native::HostCapabilitySeal
 
 extern {
     // Adapters that the host supplies. They change host state, and their
@@ -43,11 +46,16 @@ pub trait Abort {
 }
 
 /// The WebAssembly root effect, which calls the imports of the host. Exports
-/// and tests receive its capabilities, `Log`, `Clock`, `Abort` and
-/// `files::Files`, by declaring them in `uses`; nothing else can create one.
+/// and tests receive its capabilities, `Log`, `Clock`, `Abort`, `files::Files`
+/// and the streams of `std::io` (`Stdout`, `Stderr`, `Stdin` and `Stdio`), by
+/// declaring them in `uses`; nothing else can create one.
 pub struct Host { unsafe seal: Private }
 
 struct Private {}
+
+// Admits `Host` to the sealed capabilities of `std::io`, which `streams`
+// implements.
+impl HostCapabilitySeal for Host {}
 
 impl Log for Host {
     fn log_i32(mut self, value: i32) {

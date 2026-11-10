@@ -473,7 +473,19 @@ Each can fail with `NotFound` (1), `OutOfRange` (2) or `BadName` (3); no other n
 valid. `Host` provides `Files` by calling the imports `sys_wasm_files_open(addr, len)`, `sys_wasm_files_size`,
 `sys_wasm_files_read_byte` and `sys_wasm_files_close`, which return a reply word (close
 returns nothing), and `mock()` is Fe code that holds files in memory. The compiler does not
-require a handle to be closed; the host counts the handles that stay open. The module
+require a handle to be closed; the host counts the handles that stay open.
+
+`Host` also provides the streams of `std::io` (`Stdout`, `Stderr`, `Stdin`, and `Stdio` for
+all three), so an export or a test that declares `uses (out: mut Stdout)` prints with
+`print!` and `println!`, and the same source builds for the native target. A stream has the
+number of its POSIX descriptor (0, 1 or 2). `sys_wasm_stream_write(stream, addr, len)` offers
+the host the bytes of the range; the host returns how many it took, and the module offers
+the rest again. `sys_wasm_stream_read(stream, addr, len)` asks the host to place at most
+`len` bytes of input in the range; the host returns how many it placed, and 0 at the end of
+the input. A negative count says that the stream failed, and a print or a read then traps.
+`examples/wasm/host.mjs` keeps what a module wrote in `host.stdout` and `host.stderr`, passes
+each write to the option `onWrite`, reads the input from the option `stdin`, and refuses a
+range outside the memory and a stream number that the operation does not apply to. The module
 `examples/wasm/host.mjs` is a host for Node with no dependencies: it supplies the imports,
 places texts, decodes replies, and refuses a forged or closed handle, text outside the
 memory or longer than 64 KiB, and an unknown error number, each with an error that names

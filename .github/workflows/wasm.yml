@@ -17,6 +17,7 @@ on:
       - examples/wasm/**
       - examples/wasm_host.fe
       - ingots/core/**
+      - ingots/std/src/io.fe
       - ingots/std/src/wasm.fe
       - ingots/std/src/wasm/**
       - crates/codegen/**

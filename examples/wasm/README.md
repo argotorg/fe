@@ -4,9 +4,10 @@
 module. Every public function in the root of the file becomes an export that a host (a
 JavaScript program in Node.js or a browser, or any other WebAssembly runtime)
 can call. The module may import small host operations (logging, a clock, abort,
-read-only files), takes text from the host, and returns a number or a tagged
-reply. `fe build` also writes a manifest that describes the module and its hash,
-and `fe test --backend wasm` runs Fe tests as WebAssembly modules in Node.js.
+the standard streams, read-only files), takes text from the host, and returns a
+number or a tagged reply. `fe build` also writes a manifest that describes the module
+and its hash, and `fe test --backend wasm` runs Fe tests as WebAssembly modules in
+Node.js.
 
 This directory holds the pieces a host needs and the scripts that check them:
 
@@ -31,8 +32,8 @@ This directory holds the pieces a host needs and the scripts that check them:
 
   In the commands below, `fe` stands for `target/release/fe`.
 - Node.js 20 or later, to run modules, the tests and the checks. Version 22 was
-  used. The host itself needs only `WebAssembly`, `BigInt`, `TextEncoder` and
-  `crypto.subtle`, but it has not been run in a browser.
+  used. The host itself needs only `WebAssembly`, `BigInt`, `TextEncoder`,
+  `TextDecoder` and `crypto.subtle`, but it has not been run in a browser.
 - `wasm-tools`, to validate modules independently of the engine that runs them
   (optional; `check.sh` needs it). Version 1.247.0 was used.
 
@@ -88,7 +89,9 @@ limited to:
 type, including `u128`, `u256`, structs and pointers, is an error that names the
 function and the parameter. An export may declare the capabilities of
 `std::wasm::Host` in `uses`, as `lines.fe` does; a provider of anything else is chosen
-inside the function with `with`.
+inside the function with `with`. The capabilities include the streams of `std::io`,
+so an export that declares `uses (out: mut Stdout)` prints with `print!` and
+`println!` (see [Printing](#printing)).
 Inside functions, structs, tuples, enums, arrays, constants, `usize` (32 bits, the
 width of an address in a module) and 128-bit and 256-bit integers work. Overflow, division by
 zero, a failed `assert!` and an index outside an array trap (the WebAssembly
@@ -112,12 +115,47 @@ is a provider written in Fe that needs no host:
 | `sys_wasm_log_u64` | `i64` | none | `Log` |
 | `sys_wasm_now_ms` | none | `i64` (milliseconds since the Unix epoch) | `Clock` |
 | `sys_wasm_abort` | `i32` (a code) | never returns | `Abort` |
+| `sys_wasm_stream_write` | stream `i32`, address `i32`, length `i32` | count `i32` | `std::io::Stdout`, `Stderr` |
+| `sys_wasm_stream_read` | stream `i32`, address `i32`, length `i32` | count `i32` | `std::io::Stdin` |
 | `sys_wasm_files_open` | name address `i32`, name length `i32` | reply `i64` | `Files` |
 | `sys_wasm_files_size` | handle `i32` | reply `i64` | `Files` |
 | `sys_wasm_files_read_byte` | handle `i32`, index `i32` | reply `i64` | `Files` |
 | `sys_wasm_files_close` | handle `i32` | none | `Files` |
 
 An import that nothing reachable calls is not in the module.
+
+### Printing
+
+`std::wasm::Host` provides the streams of `std::io`: `Stdout`, `Stderr`, `Stdin`, and
+`Stdio` for all three. An export or a test that declares one in `uses` prints with
+`print!`, `println!`, `eprint!` and `eprintln!` and reads with `std::io::StdinReader`,
+and the same source builds for the native target, whose root effect provides the same
+streams:
+
+```fe
+use std::io::Stdout
+
+pub fn greet(times: u32) uses (out: mut Stdout) {
+    println!("hello, ", times, " times")
+}
+```
+
+Each print is one call of `sys_wasm_stream_write`, or more if the host takes the text
+in pieces. `host.mjs` keeps what a module wrote as text in `host.stdout` and
+`host.stderr`, and passes each write to `onWrite` if the option is given. The input is
+the option `stdin`, a string or a `Uint8Array`, and is empty without it:
+
+```js
+const guest = await instantiate(bytes, {
+  stdin: "one\ntwo\n",
+  onWrite: ({ stream, bytes }) => process[stream].write(bytes),
+});
+guest.call("greet", 3);
+console.log(guest.host.stdout); // "hello, 3 times\n"
+```
+
+The other capabilities of the native root effect (`Args`, `Env`, `Fs`, `Exit`, `Spawn`
+and the clocks of `std::time`) have no provider on this target.
 
 ## The host contract in brief
 
@@ -129,6 +167,16 @@ An import that nothing reachable calls is not in the module.
 - **Replies.** `Reply` is the `i64` described above. The error numbers of the files
   contract are `NotFound` 1, `OutOfRange` 2 and `BadName` 3; a number outside the
   set is a fault, and the host refuses it.
+- **Streams.** A stream has the number of its POSIX descriptor: 0 is standard input, 1
+  standard output and 2 standard error. `sys_wasm_stream_write` offers the host the
+  `length` bytes at `address`; the host takes all of them or only the first ones and
+  returns how many, and the module offers the rest again. `sys_wasm_stream_read` asks
+  the host to place at most `length` bytes of input at `address`; the host returns how
+  many it placed, and 0 at the end of the input. A count that is negative as a signed
+  `i32` says that the stream failed, and so does a count of 0 for a write of one byte or
+  more; `print!` and its relatives and the readers of `std::io` then trap, as they
+  panic on the native target. The range is valid for the call only. `host.mjs` takes or
+  places at most 65,536 bytes in a call and never reports a failure.
 - **Handles.** A handle is one opaque word that the host chooses. In safe Fe a
   `Handle` cannot be made or copied, and `close` takes it by value, so using it
   after `close` is a compile error. Dropping a handle without closing it is
@@ -136,7 +184,9 @@ An import that nothing reachable calls is not in the module.
   `host.assertNoOpenHandles()`).
 - **What the host checks.** It ends a call with a `ContractError` that names the
   problem when a module passes a handle that was never issued or is closed, text
-  outside the memory or longer than 65,536 bytes, or an unknown error number.
+  outside the memory or longer than 65,536 bytes, an unknown error number, a range of
+  a stream outside the memory, or a stream number that the operation does not apply
+  to (a write to 0, a read of 1 or 2, any other number).
 - **Traps and errors.** A trap in the module, or an error thrown by an import,
   reaches the caller of the export unchanged. `sys_wasm_abort` throws a
   `GuestAbort` in `host.mjs`.
@@ -149,8 +199,8 @@ An import that nothing reachable calls is not in the module.
 - **Contract version.** The version of this contract is 2. It appears in every
   manifest as `contract_version`.
 
-The contract is defined in `ingots/std/src/wasm.fe`, `ingots/std/src/wasm/boundary.fe`
-and `ingots/std/src/wasm/files.fe`.
+The contract is defined in `ingots/std/src/wasm.fe`, `ingots/std/src/wasm/boundary.fe`,
+`ingots/std/src/wasm/files.fe` and `ingots/std/src/wasm/streams.fe`.
 
 ## The build manifest
 
@@ -315,6 +365,10 @@ cargo test -p fe --all-features \
 - **Unsafe Fe can forge handles.** A program can declare the four `extern` functions of
   the files contract itself and call them in an `unsafe` block with made-up numbers. The host refuses
   every forged or closed handle, so the protection is the host's check, not the type.
+- **Streams.** The stream traits are sealed: only the root effects provide them, so
+  there is no provider written in Fe that captures what a function prints. Output is
+  not buffered in the module. `host.mjs` keeps everything a module wrote for the life
+  of the instance.
 - **Errors thrown inside an import.** When an import throws, or a callback traps and the
   host passes the error on, the module does not run again before the host call ends, so
   the frames of the calls that were active stay reserved until the host writes
@@ -328,7 +382,8 @@ cargo test -p fe --all-features \
   traps, and the memory grows with `memory.grow` and is never given back.
   `arena_release` frees what a call allocated. A module with text
   parameters starts with 18 pages (about 1.2 MB). The host limits a text to 65,536
-  bytes, a limit of `host.mjs` and not of the compiler. A file has at most
+  bytes, and takes or places at most as many bytes of a stream in one call, a limit of
+  `host.mjs` and not of the compiler. A file has at most
   4,294,967,295 bytes, because a reply carries its size in 32 bits.
 - **Traps.** The engine names the functions in the stack of a trap, from the module's
   name section, but no source location, and the message of a failed assertion is lost.
