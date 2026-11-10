@@ -23,7 +23,7 @@ This directory holds the pieces a host needs and the scripts that check them:
 
 ## Requirements
 
-- A Fe compiler built with the `wasm` feature. The native backend (`cranelift`) is
+- A Fe compiler built with the `wasm` feature, as the released binaries are. The native backend (`cranelift`) is
   needed only to compare `fe test` results with the host-native backend.
 
   ```sh
