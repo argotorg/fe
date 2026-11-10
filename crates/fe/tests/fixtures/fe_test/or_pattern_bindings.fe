@@ -282,6 +282,17 @@ fn value(_ e: E) -> u256 {
     }
 }
 
+// The arm runs one body for both alternatives: `n`, at one part in each,
+// binds once there, and `x` binds in each.
+fn add_tagged(_ t: mut (E, u256)) {
+    match t {
+        (E::A(x, _) | E::B(x), mut n) => {
+            n += x
+        },
+        (E::C, _) => {},
+    }
+}
+
 #[test]
 fn test_accesses_in_match() {
     var a = E::A(1, 2)
@@ -294,6 +305,15 @@ fn test_accesses_in_match() {
     assert(value(b) == 6)
     assert(read(mut b) == 6)
     assert(place_value(mut b) == 6)
+    var ta = (E::A(3, 4), 10)
+    add_tagged(mut ta)
+    assert(ta.1 == 13)
+    var tb = (E::B(7), 10)
+    add_tagged(mut tb)
+    assert(tb.1 == 17)
+    var tc = (E::C, 10)
+    add_tagged(mut tc)
+    assert(tc.1 == 10)
 }
 
 struct Holder { left: bool, v: u256, n: u256 }

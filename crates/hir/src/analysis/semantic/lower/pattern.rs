@@ -268,14 +268,15 @@ impl<'db> DecisionTreeProjectionCache<'db> {
 }
 
 /// What a decision-tree leaf does once a pattern row is known to match.
-#[derive(Clone, Copy)]
-enum DecisionTreeTarget<'a> {
+enum DecisionTreeTarget<'a, 'db> {
     /// `match` expression: lower the arm body, assign the result, jump to the
-    /// join block.
+    /// join block. The leaves of an arm in `shared` are kept for its body,
+    /// lowered once after the tree.
     MatchArms {
         result: SLocalId,
         join_bb: SBlockId,
         arms: &'a [MatchArm],
+        shared: &'a mut [Option<SharedArm<'db>>],
     },
     /// Refutable single-pattern test (`if let` / `while let`): row 0 is the
     /// pattern (bind, then jump to `then_bb`), row 1 is the synthetic wildcard
@@ -287,7 +288,17 @@ enum DecisionTreeTarget<'a> {
     },
 }
 
-impl DecisionTreeTarget<'_> {
+/// A `match` arm that several leaves reach, which runs one copy of its body.
+/// Each leaf binds what depends on its path and jumps to the body, which binds
+/// what every leaf binds at one path (`joined`).
+struct SharedArm<'db> {
+    joined: Option<LeafNode<'db>>,
+    /// Each leaf's block, what it binds there, and the projections its tests
+    /// made.
+    leaves: Vec<(SBlockId, LeafNode<'db>, DecisionTreeProjectionCache<'db>)>,
+}
+
+impl DecisionTreeTarget<'_, '_> {
     /// Where a test the tree makes on the way to arm `arm` is reported: that
     /// arm's pattern.
     fn test_origin<'db>(&self, arm: Option<usize>) -> SemOrigin<'db> {
@@ -309,21 +320,14 @@ fn first_arm(tree: &DecisionTree<'_>) -> Option<usize> {
     }
 }
 
-/// The leaves of `tree` where its pattern, arm 0, matches.
-fn matched_leaves<'t, 'db>(
-    tree: &'t mut DecisionTree<'db>,
-    leaves: &mut Vec<&'t mut LeafNode<'db>>,
-) {
+/// The leaves of `tree`.
+fn tree_leaves<'t, 'db>(tree: &'t mut DecisionTree<'db>, leaves: &mut Vec<&'t mut LeafNode<'db>>) {
     match tree {
         DecisionTree::Unreachable => {}
-        DecisionTree::Leaf(leaf) => {
-            if leaf.arm_index == 0 {
-                leaves.push(leaf);
-            }
-        }
+        DecisionTree::Leaf(leaf) => leaves.push(leaf),
         DecisionTree::Switch(switch) => {
             for (_, subtree) in &mut switch.arms {
-                matched_leaves(subtree, leaves);
+                tree_leaves(subtree, leaves);
             }
         }
     }
@@ -410,7 +414,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let pattern_store = self.typed_body.pattern_store();
         let mut tree = build_pattern_branch_decision_tree(self.db, pattern_store, root);
         let mut matched = Vec::new();
-        matched_leaves(&mut tree, &mut matched);
+        tree_leaves(&mut tree, &mut matched);
+        matched.retain(|leaf| leaf.arm_index == 0);
         // The leaves where the pattern matches meet at `then_bb`. What a
         // place or an access binds, every leaf binding it at the same path,
         // is bound once where they meet: an access binding has one
@@ -418,39 +423,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // alternative that matched, each leaf binds from the parts its tests
         // extracted, which binding again would move twice. Checking rejects
         // an access whose path depends on the alternative.
-        let joins = match &source {
-            PatternSource::Place { .. } => true,
-            PatternSource::Value(value) => holds_carrier(self.db, value.carrier_ty.0),
-        };
-        let local =
-            |binding: &BindingRef<'db>| self.typed_body.pat_binding(binding.representative_pat);
-        let joined = match matched.split_first() {
-            Some((first, rest)) if joins && !rest.is_empty() => {
-                let bindings: IndexMap<_, _> = first
-                    .bindings
-                    .iter()
-                    .filter(|(binding, path)| {
-                        rest.iter().all(|leaf| {
-                            leaf.bindings.iter().any(|(other, other_path)| {
-                                other_path == *path && local(other) == local(binding)
-                            })
-                        })
-                    })
-                    .map(|(binding, path)| (*binding, path.clone()))
-                    .collect();
-                for leaf in &mut matched {
-                    leaf.bindings.retain(|binding, _| {
-                        !bindings
-                            .keys()
-                            .any(|joined| local(joined) == local(binding))
-                    });
-                }
-                (!bindings.is_empty()).then_some(LeafNode {
-                    arm_index: 0,
-                    bindings,
-                })
-            }
-            _ => None,
+        let joined = if self.joins_bindings(&source) && matched.len() > 1 {
+            let joined = self.joined_bindings(&matched);
+            self.split_bindings(&mut matched, joined)
+        } else {
+            None
         };
         let bind_bb = joined.is_some().then(|| self.new_block());
         let mut projections =
@@ -458,7 +435,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.lower_decision_tree(
             &tree,
             &mut projections,
-            DecisionTreeTarget::Branch {
+            &mut DecisionTreeTarget::Branch {
                 then_bb: bind_bb.unwrap_or(then_bb),
                 else_bb,
                 pat,
@@ -475,6 +452,138 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 STerminatorKind::Goto(then_bb),
             );
         }
+    }
+
+    /// Whether leaves that test `source` and meet at one block bind what
+    /// each binds at one path once, there: a place's parts, and a carrier's,
+    /// are accesses, which have one definition.
+    fn joins_bindings(&self, source: &PatternSource<'db>) -> bool {
+        match source {
+            PatternSource::Place { .. } => true,
+            PatternSource::Value(value) => holds_carrier(self.db, value.carrier_ty.0),
+        }
+    }
+
+    /// What every one of `leaves` binds at the same path.
+    fn joined_bindings(
+        &self,
+        leaves: &[&mut LeafNode<'db>],
+    ) -> IndexMap<BindingRef<'db>, ProjectionPath<'db>> {
+        let Some((first, rest)) = leaves.split_first() else {
+            return IndexMap::new();
+        };
+        first
+            .bindings
+            .iter()
+            .filter(|(binding, path)| {
+                rest.iter().all(|leaf| {
+                    leaf.bindings.iter().any(|(other, other_path)| {
+                        other_path == *path && self.same_binding(other, binding)
+                    })
+                })
+            })
+            .map(|(binding, path)| (*binding, path.clone()))
+            .collect()
+    }
+
+    /// Removes `joined` from each of `leaves`, returning the leaf that binds
+    /// it once where they meet.
+    fn split_bindings(
+        &self,
+        leaves: &mut [&mut LeafNode<'db>],
+        joined: IndexMap<BindingRef<'db>, ProjectionPath<'db>>,
+    ) -> Option<LeafNode<'db>> {
+        for leaf in leaves.iter_mut() {
+            leaf.bindings
+                .retain(|binding, _| !joined.keys().any(|other| self.same_binding(other, binding)));
+        }
+        (!joined.is_empty()).then(|| LeafNode {
+            arm_index: leaves[0].arm_index,
+            bindings: joined,
+        })
+    }
+
+    /// Whether `lhs` and `rhs` bind one local, as the alternatives of a `|`
+    /// pattern do.
+    fn same_binding(&self, lhs: &BindingRef<'db>, rhs: &BindingRef<'db>) -> bool {
+        self.typed_body.pat_binding(lhs.representative_pat)
+            == self.typed_body.pat_binding(rhs.representative_pat)
+    }
+
+    /// The arms of a `match` on `source` that several leaves of `tree` reach,
+    /// which run one copy of their body, with what the body binds: the leaves
+    /// keep the rest. An arm whose leaves bind an access at different parts
+    /// runs a copy per leaf, as an access has one definition.
+    fn shared_arms(
+        &self,
+        tree: &mut DecisionTree<'db>,
+        arms: &[MatchArm],
+        source: &PatternSource<'db>,
+    ) -> Vec<Option<SharedArm<'db>>> {
+        let mut leaves = Vec::new();
+        tree_leaves(tree, &mut leaves);
+        let mut arm_leaves: Vec<Vec<_>> = arms.iter().map(|_| Vec::new()).collect();
+        for leaf in leaves {
+            arm_leaves[leaf.arm_index].push(leaf);
+        }
+        let joins = self.joins_bindings(source);
+        arm_leaves
+            .into_iter()
+            .map(|mut leaves| {
+                if leaves.len() < 2 {
+                    return None;
+                }
+                let joined = if joins {
+                    self.joined_bindings(&leaves)
+                } else {
+                    IndexMap::new()
+                };
+                let access_apart =
+                    leaves
+                        .iter()
+                        .flat_map(|leaf| &leaf.bindings)
+                        .any(|(binding, _)| {
+                            !joined.keys().any(|other| self.same_binding(other, binding))
+                                && self
+                                    .typed_body
+                                    .pat_binding(binding.representative_pat)
+                                    .is_some_and(|binding| {
+                                        holds_carrier(self.db, self.binding_ty(binding))
+                                    })
+                        });
+                (!access_apart).then(|| SharedArm {
+                    joined: self.split_bindings(&mut leaves, joined),
+                    leaves: Vec::new(),
+                })
+            })
+            .collect()
+    }
+
+    /// Lowers `arm`'s body in the arm's scope, which the caller began and
+    /// bound the arm's pattern in, passing its value to `result` at
+    /// `join_bb`. Returns whether the body reaches `join_bb`.
+    fn lower_match_arm_body(
+        &mut self,
+        arm: &MatchArm,
+        result: SLocalId,
+        join_bb: SBlockId,
+    ) -> bool {
+        let arm_value = self.lower_expr(arm.body);
+        let falls = !self.is_terminated(self.current);
+        if falls {
+            // The arm's value passes to the join, which takes it.
+            let arm_value = self.take_operand(arm.body, arm_value);
+            self.assign_branch_result(result, SOperand::expr(arm_value, arm.body));
+        }
+        self.pop_drop_scope(None);
+        if falls {
+            self.set_terminator(
+                self.current,
+                SemOrigin::Pat(arm.pat),
+                STerminatorKind::Goto(join_bb),
+            );
+        }
+        falls
     }
 
     fn owned_pattern_value(&self, value: SValueId, carrier_ty: TyId<'db>) -> PatternValue<'db> {
@@ -797,19 +906,49 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .iter()
             .map(|arm| self.validated_root(arm.pat))
             .collect();
-        let tree = build_decision_tree(self.db, self.typed_body.pattern_store(), &roots);
-        let mut projections = DecisionTreeProjectionCache::new(
-            self.db,
-            self.typed_body.pattern_store(),
-            &roots,
-            source,
+        let pattern_store = self.typed_body.pattern_store();
+        let mut tree = build_decision_tree(self.db, pattern_store, &roots);
+        let mut shared = self.shared_arms(&mut tree, arms, &source);
+        let mut projections =
+            DecisionTreeProjectionCache::new(self.db, pattern_store, &roots, source.clone());
+        let mut join_reachable = self.lower_decision_tree(
+            &tree,
+            &mut projections,
+            &mut DecisionTreeTarget::MatchArms {
+                result,
+                join_bb,
+                arms,
+                shared: &mut shared,
+            },
         );
-        let target = DecisionTreeTarget::MatchArms {
-            result,
-            join_bb,
-            arms,
-        };
-        let join_reachable = self.lower_decision_tree(&tree, &mut projections, target);
+        // An arm's scope holds what its leaves bind on the way to its body.
+        for (arm, shared) in arms.iter().zip(shared) {
+            let Some(SharedArm { joined, leaves }) = shared else {
+                continue;
+            };
+            let body_bb = self.new_block();
+            self.push_drop_scope(true);
+            for (block, leaf, mut projections) in leaves {
+                self.switch_to(block);
+                self.bind_decision_tree_leaf(&leaf, &mut projections);
+                self.set_terminator(
+                    self.current,
+                    SemOrigin::Pat(arm.pat),
+                    STerminatorKind::Goto(body_bb),
+                );
+            }
+            self.switch_to(body_bb);
+            if let Some(joined) = joined {
+                let mut projections = DecisionTreeProjectionCache::new(
+                    self.db,
+                    pattern_store,
+                    &roots,
+                    source.clone(),
+                );
+                self.bind_decision_tree_leaf(&joined, &mut projections);
+            }
+            join_reachable |= self.lower_match_arm_body(arm, result, join_bb);
+        }
         self.switch_to(join_bb);
         if join_reachable {
             self.hold_defined(result);
@@ -823,7 +962,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         tree: &DecisionTree<'db>,
         projections: &mut DecisionTreeProjectionCache<'db>,
-        target: DecisionTreeTarget<'_>,
+        target: &mut DecisionTreeTarget<'_, 'db>,
     ) -> bool {
         match tree {
             DecisionTree::Unreachable => match target {
@@ -832,7 +971,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     false
                 }
                 DecisionTreeTarget::Branch { else_bb, .. } => {
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(*else_bb));
                     true
                 }
             },
@@ -842,36 +981,35 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     result,
                     join_bb,
                     arms,
+                    shared,
                 } => {
+                    if let Some(shared) = &mut shared[leaf.arm_index] {
+                        shared
+                            .leaves
+                            .push((self.current, leaf.clone(), projections.clone()));
+                        return false;
+                    }
                     self.push_drop_scope(true);
                     self.bind_decision_tree_leaf(leaf, projections);
-                    let arm = &arms[leaf.arm_index];
-                    let arm_value = self.lower_expr(arm.body);
-                    let falls = !self.is_terminated(self.current);
-                    if falls {
-                        // The arm's value passes to the join, which takes it.
-                        let arm_value = self.take_operand(arm.body, arm_value);
-                        self.assign_branch_result(result, SOperand::expr(arm_value, arm.body));
-                    }
-                    self.pop_drop_scope(None);
-                    if falls {
-                        self.set_terminator(
-                            self.current,
-                            SemOrigin::Pat(arm.pat),
-                            STerminatorKind::Goto(join_bb),
-                        );
-                    }
-                    falls
+                    self.lower_match_arm_body(&arms[leaf.arm_index], *result, *join_bb)
                 }
                 DecisionTreeTarget::Branch {
-                    then_bb, else_bb, ..
+                    then_bb,
+                    else_bb,
+                    pat,
                 } => {
                     if leaf.arm_index == 0 {
                         self.bind_decision_tree_leaf(leaf, projections);
-                        let origin = target.test_origin(Some(0));
-                        self.set_terminator(self.current, origin, STerminatorKind::Goto(then_bb));
+                        self.set_terminator(
+                            self.current,
+                            SemOrigin::Pat(*pat),
+                            STerminatorKind::Goto(*then_bb),
+                        );
                     } else {
-                        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
+                        self.set_synthetic_terminator(
+                            self.current,
+                            STerminatorKind::Goto(*else_bb),
+                        );
                     }
                     true
                 }
@@ -886,7 +1024,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         switch: &SwitchNode<'db>,
         projections: &mut DecisionTreeProjectionCache<'db>,
-        target: DecisionTreeTarget<'_>,
+        target: &mut DecisionTreeTarget<'_, 'db>,
     ) -> bool {
         // A struct or tuple has one constructor, so an inspected place's tests
         // read only the components they test below it.
