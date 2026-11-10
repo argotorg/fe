@@ -32,4 +32,7 @@ pub use sonatina::{
     WASM_HOST_CONTRACT_VERSION, WASM_REPLY_TYPE, WASM_TEXT_TYPE, WasmArtifacts, WasmExportInfo,
     WasmOutputSelection, WasmParamInfo, WasmTestModule, emit_module_wasm_artifacts, emit_test_wasm,
 };
-pub use test_output::{ExpectedRevert, TestMetadata, TestModuleOutput, parse_expected_revert};
+pub use test_output::{
+    ExpectedRevert, TestDebugCode, TestDebugInfo, TestMetadata, TestModuleOutput,
+    parse_expected_revert,
+};

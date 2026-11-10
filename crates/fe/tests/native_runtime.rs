@@ -1476,7 +1476,12 @@ fn native_runner_rejects_evm_attributes_and_trace_options() {
         String::from_utf8_lossy(&result.stdout).contains("cannot use the EVM `balance` attribute"),
         "{result:?}"
     );
-    for option in ["--trace-evm", "--show-logs", "--call-trace"] {
+    for option in [
+        "--trace-evm",
+        "--show-logs",
+        "--call-trace",
+        "--explain-failure",
+    ] {
         let result = Command::new(env!("CARGO_BIN_EXE_fe"))
             .args(["test", "--backend", "native", option])
             .arg(&source)

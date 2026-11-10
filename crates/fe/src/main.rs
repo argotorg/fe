@@ -442,6 +442,9 @@ pub enum Command {
         profile: String,
         #[command(flatten)]
         optimize: OptimizeArgs,
+        /// Explain failed EVM tests with call frames, revert data and verified source locations.
+        #[arg(long)]
+        explain_failure: bool,
         /// Trace executed EVM opcodes while running tests.
         #[arg(long)]
         trace_evm: bool,
@@ -965,6 +968,7 @@ pub fn run(opts: &Options) {
             emit,
             profile,
             optimize,
+            explain_failure,
             trace_evm,
             trace_evm_keep,
             trace_evm_stack_n,
@@ -984,6 +988,7 @@ pub fn run(opts: &Options) {
                 }
             };
             let debug = TestDebugOptions {
+                explain_failure: *explain_failure,
                 trace_evm: *trace_evm,
                 trace_evm_keep: *trace_evm_keep,
                 trace_evm_stack_n: *trace_evm_stack_n,
