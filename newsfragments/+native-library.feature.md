@@ -1,1 +1,0 @@
-`fe build --backend native --emit object` writes `<name>.o` and `--emit staticlib` writes `lib<name>.a`, a library of the `#[unsafe(export)]` functions that C and Rust programs link like any static library. A library needs no `main`. See "Native output" in `CLI.md`.
