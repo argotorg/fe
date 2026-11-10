@@ -1,0 +1,80 @@
+// A recv arm field whose pattern destructures binds what the pattern names,
+// as a destructured parameter does.
+use std::abi::sol
+use std::evm::Evm
+
+#[abi]
+pub struct Pair { pub n: u256, pub flag: bool }
+
+msg M {
+    #[selector = sol("tup((uint256,uint256))")]
+    Tup { t: (u256, u256) } -> u256,
+    #[selector = sol("pair((uint256,bool))")]
+    P { pair: Pair } -> u256,
+    #[selector = sol("mixed(uint256,((uint256,bool),uint256))")]
+    Mixed { a: u256, nested: (Pair, u256) } -> u256,
+    #[selector = sol("flags((uint256,bool))")]
+    Flags { pair: Pair } -> u256,
+}
+
+pub contract C {
+    recv M {
+        Tup { t: (x, y) } -> u256 {
+            x * 10 + y
+        }
+        P { pair: Pair { n, flag } } -> u256 {
+            if flag { n } else { 0 }
+        }
+        Mixed { a, nested: (Pair { n, .. }, k) } -> u256 {
+            a * 100 + n * 10 + k
+        }
+        Flags { pair: Pair { n: value, flag: true | false } } -> u256 {
+            value + 1
+        }
+    }
+}
+
+#[test]
+fn test_recv_field_patterns() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let tup: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: Wei::zero(),
+            message: M::Tup { t: (1, 2) },
+        )
+    assert(tup == 12)
+    let on: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: Wei::zero(),
+            message: M::P { pair: Pair { n: 7, flag: true } },
+        )
+    assert(on == 7)
+    let off: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: Wei::zero(),
+            message: M::P { pair: Pair { n: 7, flag: false } },
+        )
+    assert(off == 0)
+    let mixed: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: Wei::zero(),
+            message: M::Mixed { a: 3, nested: (Pair { n: 4, flag: true }, 5) },
+        )
+    assert(mixed == 345)
+    let flags: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: Wei::zero(),
+            message: M::Flags { pair: Pair { n: 8, flag: false } },
+        )
+    assert(flags == 9)
+}

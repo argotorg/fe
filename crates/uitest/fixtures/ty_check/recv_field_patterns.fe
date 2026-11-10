@@ -1,0 +1,39 @@
+// A recv arm field whose pattern destructures reports what the arm's
+// pattern would: a name it binds twice, an effect's name, or a pattern that
+// may not match.
+use std::abi::sol
+
+msg M {
+    #[selector = sol("tup((uint256,uint256))")]
+    Tup { t: (u256, u256) } -> u256,
+    #[selector = sol("two(uint256,(uint256,uint256))")]
+    Two { a: u256, t: (u256, u256) } -> u256,
+    #[selector = sol("pairs((uint256,uint256),(uint256,uint256))")]
+    Pairs { s: (u256, u256), t: (u256, u256) } -> u256,
+    #[selector = sol("dup((uint256,uint256))")]
+    Dup { t: (u256, u256) } -> u256,
+    #[selector = sol("set((uint256,uint256))")]
+    Set { t: (u256, u256) } -> u256,
+}
+
+pub contract C {
+    mut total: u256,
+
+    recv M {
+        Tup { t: (0, x) } -> u256 {
+            x
+        }
+        Two { a: x, t: (x, _) } -> u256 {
+            x
+        }
+        Pairs { s: (y, _), t: (_, y) } -> u256 {
+            y
+        }
+        Dup { t: (z, z) } -> u256 {
+            z
+        }
+        Set { t: (total, _) } -> u256 uses (mut total) {
+            total
+        }
+    }
+}

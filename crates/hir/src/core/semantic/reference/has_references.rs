@@ -260,9 +260,10 @@ impl<'db> TopLevelMod<'db> {
     /// When references are nested (e.g. `C::InitArgs` inside
     /// `C::InitArgs::ENCODED_SIZE`), the narrowest is the inner type argument
     /// rather than the outer function call. A function's or `init`'s
-    /// parameter patterns are written in its signature, but the body that
-    /// binds them records their references, so that body's references count
-    /// as the item's.
+    /// parameter patterns are written in its signature, and a recv arm's
+    /// destructured field patterns before its body, but the body that binds
+    /// them records their references, so that body's references count as
+    /// the item's.
     pub fn reference_at(
         self,
         db: &'db dyn SpannedHirDb,
@@ -271,14 +272,29 @@ impl<'db> TopLevelMod<'db> {
         self.find_enclosing_items(db, cursor)
             .into_iter()
             .find_map(|item| {
-                let param_body = match item {
-                    ItemKind::Func(func) => func.body(db),
-                    ItemKind::Contract(contract) => contract.init(db).map(|init| init.body(db)),
-                    _ => None,
+                let pattern_bodies: Vec<_> = match item {
+                    ItemKind::Func(func) => func.body(db).into_iter().collect(),
+                    ItemKind::Contract(contract) => contract
+                        .init(db)
+                        .map(|init| init.body(db))
+                        .into_iter()
+                        .chain(
+                            contract
+                                .recvs(db)
+                                .data(db)
+                                .iter()
+                                .flat_map(|recv| recv.arms.data(db).iter().map(|arm| arm.body)),
+                        )
+                        .collect(),
+                    _ => Vec::new(),
                 };
                 item.references(db)
                     .iter()
-                    .chain(param_body.into_iter().flat_map(|body| body.references(db)))
+                    .chain(
+                        pattern_bodies
+                            .into_iter()
+                            .flat_map(|body| body.references(db)),
+                    )
                     .filter_map(|r| {
                         let range = r.span().resolve(db)?.range;
                         range.contains(cursor).then_some((r, range.len()))
