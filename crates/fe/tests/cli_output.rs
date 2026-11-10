@@ -4129,6 +4129,30 @@ fn test_fe_test_native(fixture: Fixture<&str>) {
     }
 }
 
+/// The fixtures that need no EVM also run on WebAssembly, where `usize` has
+/// 32 bits. The run needs Node.js, as the other WebAssembly tests do.
+#[cfg(feature = "wasm")]
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
+    glob: "*.fe",
+)]
+fn test_fe_test_wasm(fixture: Fixture<&str>) {
+    let path = fixture.path();
+    let name = Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .expect("fixture name");
+    // `buffer_capacity_bound` has a `usize` literal of more than 32 bits.
+    if EVM_ONLY_FE_TESTS.binary_search(&name).is_ok() || name == "buffer_capacity_bound" {
+        return;
+    }
+    let (output, exit_code) = run_fe_main(&["test", "--backend", "wasm", "--jobs", "1", path]);
+    assert_eq!(
+        exit_code, 0,
+        "wasm fe test failed for {path}:\n{output}\n\nTo reproduce:\n  cargo run --features wasm --bin fe -- test --backend wasm {path}",
+    );
+}
+
 #[test]
 fn test_fe_test_rejects_oversized_balance_literal() {
     let temp = tempdir().expect("tempdir");
