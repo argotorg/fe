@@ -1,0 +1,43 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/ty_check/recv_field_patterns.fe
+---
+error[8-0032]: duplicate binding `x` in pattern
+   ┌─ recv_field_patterns.fe:26:25
+   │
+26 │         Two { a: x, t: (x, _) } -> u256 {
+   │                  -      ^ `x` is defined again here
+   │                  │
+   │                  first definition of `x` in this pattern
+
+error[8-0032]: duplicate binding `y` in pattern
+   ┌─ recv_field_patterns.fe:29:35
+   │
+29 │         Pairs { s: (y, _), t: (_, y) } -> u256 {
+   │                     -             ^ `y` is defined again here
+   │                     │
+   │                     first definition of `y` in this pattern
+
+error[8-0032]: duplicate binding `z` in pattern
+   ┌─ recv_field_patterns.fe:32:22
+   │
+32 │         Dup { t: (z, z) } -> u256 {
+   │                   -  ^ `z` is defined again here
+   │                   │
+   │                   first definition of `z` in this pattern
+
+error[8-0134]: `total` is also bound by an effect
+   ┌─ recv_field_patterns.fe:35:45
+   │
+35 │         Set { t: (total, _) } -> u256 uses (mut total) {
+   │                   -----                     ^^^^^^^^^ `total` is bound again here
+   │                   │
+   │                   `total` is first bound here
+
+error[8-0153]: refutable pattern in a recv arm
+   ┌─ recv_field_patterns.fe:23:18
+   │
+23 │         Tup { t: (0, x) } -> u256 {
+   │                  ^^^^^^ this pattern may not match every value of its variant

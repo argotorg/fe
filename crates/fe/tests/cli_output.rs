@@ -4002,6 +4002,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "receiver_returns_non_mem_with_same_typed_memory_arg",
     "recv_arm_variant_paths",
     "recv_fallback",
+    "recv_field_patterns",
     "recv_short_calldata_selector_guard",
     "reentrancy_mutex",
     "reentrancy_mutex_storage_map",

@@ -6,8 +6,8 @@ use crate::analysis::{
     name_resolution::method_selection::{MethodCandidate, select_method_candidate},
 };
 use crate::core::hir_def::{
-    BindingMarker, CondId, Expr, ExprId, IdentId, ModeMarker, Partial, Pat, PatId, Stmt, StmtId,
-    Trait,
+    BindingMarker, CondId, Expr, ExprId, FuncParamName, IdentId, ModeMarker, Partial, Pat, PatId,
+    Stmt, StmtId, Trait,
 };
 use crate::span::DynLazySpan;
 
@@ -161,8 +161,15 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(BodyDiag::LetElseMustDiverge { primary });
                 }
             }
-            // The `let` a destructured parameter's body begins with.
+            // The `let` a destructured parameter's body begins with, or a
+            // recv arm's body, destructuring a field.
             let param = self.destructured_param(prop.binding);
+            let field = param.is_none()
+                && matches!(
+                    self.env.expr_data(*expr),
+                    Partial::Present(Expr::Path(Partial::Present(path)))
+                        if FuncParamName::is_destructured_name(self.db, *path)
+                );
             // An access marker on the initializer binds a single name only.
             if !matches!(
                 pat.data(self.db, self.body()),
@@ -189,6 +196,9 @@ impl<'db> TyChecker<'db> {
             if let Some((site, idx)) = param {
                 self.check_param_bindings(*pat, site, idx);
             }
+            if field {
+                self.check_field_bindings(*pat);
+            }
             if let Some(LocalBinding::Local { pat, .. }) = self.env.pat_binding(*pat) {
                 self.env
                     .set_local_borrow_provider(pat, prop.borrow_provider);
@@ -209,6 +219,8 @@ impl<'db> TyChecker<'db> {
                 let primary = pat.span(self.body()).into();
                 self.push_diag(if param.is_some() {
                     BodyDiag::RefutableParamPattern { primary }
+                } else if field {
+                    BodyDiag::RefutableRecvArmPattern { primary }
                 } else {
                     BodyDiag::RefutableLetPattern { primary }
                 });
@@ -322,6 +334,29 @@ impl<'db> TyChecker<'db> {
         self.bound_names(pat, &mut bound);
         for (binding_pat, name) in bound {
             self.check_effect_name(name, binding_pat.span(self.body()).into());
+        }
+    }
+
+    /// Reports each name `pat` binds, the pattern of a field that a recv
+    /// arm's body begins by destructuring, that the arm binds already, as
+    /// the arm's pattern binding it twice, and each that an effect of the
+    /// arm binds. Only the arm's pattern and the fields before it bind
+    /// names before such a `let`.
+    fn check_field_bindings(&mut self, pat: PatId) {
+        let mut bound = Vec::new();
+        self.bound_names(pat, &mut bound);
+        for (binding_pat, name) in bound {
+            let primary = binding_pat.span(self.body()).into();
+            match self.env.visible_binding(name) {
+                Some(LocalBinding::Local { pat: first, .. }) => {
+                    self.push_diag(BodyDiag::DuplicatedBinding {
+                        primary,
+                        conflicat_with: first.span(self.body()).into(),
+                        name,
+                    })
+                }
+                _ => self.check_effect_name(name, primary),
+            }
         }
     }
 

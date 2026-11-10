@@ -93,7 +93,7 @@ impl<'a, 'db> Visitor<'db> for InlayHintCollector<'a, 'db> {
                 && !matches!(
                     expr_id.data(self.db, body),
                     Partial::Present(Expr::Path(Partial::Present(path)))
-                        if FuncParamName::is_destructured_read(self.db, *path)
+                        if FuncParamName::is_destructured_name(self.db, *path)
                 )
             {
                 let inferred_ty = self.typed_body.expr_ty(self.db, expr_id);

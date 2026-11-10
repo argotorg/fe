@@ -3,8 +3,9 @@ use parser::ast::{self, SyntaxNodePtr, prelude::AstNode as _};
 use super::FileLowerCtxt;
 use crate::{
     hir_def::{
-        Body, BodyKind, BodySourceMap, Cond, CondId, Expr, ExprId, FuncParamName, NodeStore,
-        Partial, Pat, PatId, PathId, Stmt, StmtId, TrackedItemId, TrackedItemVariant,
+        BindingMarker, Body, BodyKind, BodySourceMap, Cond, CondId, Expr, ExprId, FuncParamName,
+        NodeStore, Partial, Pat, PatId, PathId, RecordPatField, Stmt, StmtId, TrackedItemId,
+        TrackedItemVariant,
     },
     span::HirOrigin,
 };
@@ -152,6 +153,79 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
                 ))
             })
             .collect()
+    }
+
+    /// `let pat = %label` for each field of `arm_pat`, the pattern of a recv
+    /// arm lowered from `ast`, whose pattern destructures it, which the arm's
+    /// body begins with. The arm's pattern binds such a field by its `%` name
+    /// (see `FuncParamName::destructured_field`), so the arm receives each
+    /// field it binds from whole.
+    pub(super) fn lower_field_lets(
+        &mut self,
+        arm_pat: PatId,
+        ast: Option<ast::Pat>,
+    ) -> Vec<StmtId> {
+        let (Some(ast::PatKind::Record(record)), Partial::Present(Pat::Record(path, fields))) =
+            (ast.map(|ast| ast.kind()), self.pats[arm_pat].clone())
+        else {
+            return Vec::new();
+        };
+        let db = self.f_ctxt.db();
+        let mut lets = Vec::new();
+        let fields = fields
+            .into_iter()
+            .zip(record.fields().into_iter().flatten())
+            .map(|(field, field_ast)| {
+                let Partial::Present(label) = field.label else {
+                    return field;
+                };
+                if matches!(
+                    self.pats[field.pat],
+                    Partial::Absent | Partial::Present(Pat::Path(..) | Pat::WildCard | Pat::Rest)
+                ) || !self.has_name(field.pat)
+                {
+                    return field;
+                }
+                let name = PathId::from_ident(db, FuncParamName::destructured_field(db, label));
+                let ptr = SyntaxNodePtr::new(field_ast.syntax());
+                let pat = self.push_pat(
+                    Pat::Path(Partial::Present(name), BindingMarker::Plain),
+                    HirOrigin::Expanded(ptr),
+                );
+                let source =
+                    self.push_expr(Expr::Path(Partial::Present(name)), HirOrigin::Expanded(ptr));
+                lets.push(self.push_stmt(
+                    Stmt::Let(field.pat, None, Some(source), None),
+                    HirOrigin::Expanded(ptr),
+                ));
+                RecordPatField {
+                    label: field.label,
+                    pat,
+                }
+            })
+            .collect();
+        self.pats[arm_pat] = Partial::Present(Pat::Record(path, fields));
+        lets
+    }
+
+    /// Whether `pat` has a lone name in it, which may bind.
+    fn has_name(&self, pat: PatId) -> bool {
+        match &self.pats[pat] {
+            Partial::Present(Pat::Path(Partial::Present(path), _)) => {
+                path.as_ident(self.f_ctxt.db()).is_some()
+            }
+            Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+                pats.iter().any(|&pat| self.has_name(pat))
+            }
+            Partial::Present(Pat::Record(_, fields)) => {
+                fields.iter().any(|field| self.has_name(field.pat))
+            }
+            Partial::Present(Pat::Or(lhs, rhs)) => self.has_name(*lhs) || self.has_name(*rhs),
+            Partial::Present(
+                Pat::Path(Partial::Absent, _) | Pat::WildCard | Pat::Rest | Pat::Lit(_),
+            )
+            | Partial::Absent => false,
+        }
     }
 
     pub(super) fn push_missing_pat(&mut self) -> PatId {

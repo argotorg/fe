@@ -357,6 +357,31 @@ fn get_x(p: Point) -> i32 {
     }
 
     #[test]
+    fn rename_binding_in_destructured_recv_field() {
+        let code = r#"msg M {
+    #[selector = 0x01]
+    Tup { t: (u256, u256) } -> u256,
+}
+
+pub contract C {
+    recv M {
+        Tup { t: (x, y) } -> u256 { x + y }
+    }
+}
+"#;
+        // From the binding and from its use.
+        for col in [18, 36] {
+            let outcome = run_rename(code, 7, col, "z");
+            let ranges = collect_edit_ranges(&outcome);
+            assert_eq!(
+                ranges,
+                vec![(7, 18, 19), (7, 36, 37)],
+                "renaming from column {col}"
+            );
+        }
+    }
+
+    #[test]
     fn rename_enum_type() {
         let code = r#"enum Status {
     Active,
