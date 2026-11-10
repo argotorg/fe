@@ -1,1 +1,0 @@
-`Result::unwrap` now works natively on error types without a Sol encoding, such as `std::io::Error`, and panics without revert data. On EVM, `fe check` reports such a call at its source location instead of failing during code generation.

@@ -1,1 +1,0 @@
-A contract field whose layout fails, such as one of an unresolved type, no longer makes every other field an unknown effect: only the bad field's error is reported, and the other fields still resolve in `uses` clauses and handler bodies.
