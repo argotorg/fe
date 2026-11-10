@@ -7,9 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
 
-global private const @layout_0 $const_region_0 = {1};
-
-func private %call_unit_method(v0.constref<@layout_0>) {
+func private %call_unit_method(v0.@layout_0) {
     block0:
         jump block1;
 
@@ -18,7 +16,7 @@ func private %call_unit_method(v0.constref<@layout_0>) {
         return;
 }
 
-func private %increment(v0.constref<@layout_0>) {
+func private %increment(v0.@layout_0) {
     block0:
         jump block1;
 
@@ -31,8 +29,8 @@ func private %main() {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
-        call %call_unit_method v1;
+        v3.@layout_0 = insert_value undef.@layout_0 0.i256 1.i256;
+        call %call_unit_method v3;
         return;
 }
 

@@ -6,7 +6,7 @@ use hir::analysis::{
         VariantIndex, eval_const_ref, normalize_int_to_shape, reify_runtime_const_for_ty,
         sem_const_ty,
     },
-    ty::{ty_def::TyId, ty_is_snapshot},
+    ty::ty_def::TyId,
 };
 
 use crate::{
@@ -172,24 +172,22 @@ pub(super) fn aggregate_const_ref_class<'db>(
         return None;
     }
     let node = lower_const_node(db, env, value)?;
-    if !const_node_supports_data_ref(db, &node)
-        || (is_single_scalar_aggregate(&node)
-            && env
-                .scope
-                .is_some_and(|scope| ty_is_snapshot(db, scope, ty, env.assumptions)))
-    {
+    if !const_node_supports_data_ref(db, &node) || const_node_scalars(&node) == 1 {
         return None;
     }
     Some(RuntimeClass::const_ref(layout_for_ty_in_env(db, env, ty)))
 }
 
-/// A one-field snapshot wrapper such as `Wei { amount: 0 }` is passed by copy
-/// and is as cheap as the scalar itself. A const region would turn it into a
-/// pointer for every call it is passed to, and a call taking a constant would
-/// get its own instance. Other one-field aggregates, such as `(true,)`, are
-/// viewed in place, which a const region serves at no cost.
-fn is_single_scalar_aggregate(node: &ConstNode<'_>) -> bool {
-    matches!(node, ConstNode::Aggregate { fields, .. } if matches!(&**fields, [ConstNode::Scalar(_)]))
+/// The scalars a constant holds. A constant of one scalar, such as
+/// `Id { v: 1 }`, `Outer { id: Id { v: 1 } }` or `(true,)`, is one word and as
+/// cheap as the scalar itself. A const region would make it a pointer that
+/// each non-inlined callee takes, in an instance of its own beside the one
+/// that takes the value.
+fn const_node_scalars(node: &ConstNode<'_>) -> usize {
+    match node {
+        ConstNode::Scalar(_) => 1,
+        ConstNode::Aggregate { fields, .. } => fields.iter().map(const_node_scalars).sum(),
+    }
 }
 
 fn const_node_supports_data_ref<'db>(db: &'db dyn MirDb, node: &ConstNode<'db>) -> bool {
