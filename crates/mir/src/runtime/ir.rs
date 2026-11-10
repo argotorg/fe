@@ -1278,6 +1278,13 @@ pub enum RuntimeBuiltin<'db> {
     KeccakWords {
         words: Box<[RValueId]>,
     },
+    /// One SHA-256 compression: the eight state words of `state` after the
+    /// 64 rounds of the sixteen message words of `block`, each an array value.
+    /// Native targets only.
+    Sha256Compress {
+        state: RValueId,
+        block: RValueId,
+    },
     AddMod {
         lhs: RValueId,
         rhs: RValueId,
@@ -1712,6 +1719,7 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::ExtCodeHash { .. }
             | Self::Keccak256 { .. }
             | Self::KeccakWords { .. }
+            | Self::Sha256Compress { .. }
             | Self::AddMod { .. }
             | Self::MulMod { .. }
             | Self::LeadingZeros { .. }
@@ -1877,6 +1885,7 @@ impl<'db> RuntimeBuiltin<'db> {
                 ret_len,
             } => vec![gas, addr, value, args_offset, args_len, ret_offset, ret_len],
             Self::KeccakWords { words } => words.iter_mut().collect(),
+            Self::Sha256Compress { state, block } => vec![state, block],
             Self::Msize
             | Self::CallValue
             | Self::ReturnDataSize

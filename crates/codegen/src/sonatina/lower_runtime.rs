@@ -60,7 +60,7 @@ use sonatina_ir::{
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
             EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, Memcopy,
             Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
-            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            ObjProj, ObjStore, Sha256Compress, SymAddr, SymSize, SymbolRef,
         },
         downcast,
         evm::{
@@ -2956,6 +2956,19 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         words,
                     ),
                     Type::I256,
+                )
+            }
+            RuntimeBuiltin::Sha256Compress { state, block } => {
+                let ty = self.local_ty(*state)?;
+                let state = self.local_value(*state)?;
+                let block = self.local_value(*block)?;
+                self.fb.insert_inst(
+                    Sha256Compress::new(
+                        self.module.required_inst::<Sha256Compress>()?,
+                        state,
+                        block,
+                    ),
+                    ty,
                 )
             }
             RuntimeBuiltin::AddMod { lhs, rhs, modulus } => {

@@ -750,6 +750,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        RuntimeBuiltin::Sha256Compress { state, block } => format!(
+            "sha256_compress {}, {}",
+            format_local_id(*state),
+            format_local_id(*block)
+        ),
         RuntimeBuiltin::AddMod { lhs, rhs, modulus } => format!(
             "addmod {}, {}, {}",
             format_local_id(*lhs),

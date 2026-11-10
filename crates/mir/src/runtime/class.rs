@@ -496,6 +496,19 @@ fn builtin_result_class<'db>(
             }
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
+        RuntimeBuiltin::Sha256Compress { state, block } => {
+            let state_class = runtime_value_class(body, *state)?;
+            if !matches!(state_class, RuntimeClass::AggregateValue { .. }) {
+                return Err(VerifyError::InvalidExprClass(*state));
+            }
+            if !matches!(
+                runtime_value_class(body, *block)?,
+                RuntimeClass::AggregateValue { .. }
+            ) {
+                return Err(VerifyError::InvalidExprClass(*block));
+            }
+            Ok(Some(state_class.clone()))
+        }
         RuntimeBuiltin::AddMod { lhs, rhs, modulus }
         | RuntimeBuiltin::MulMod { lhs, rhs, modulus } => {
             verify_word_value(body, *lhs)?;

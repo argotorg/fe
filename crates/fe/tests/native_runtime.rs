@@ -1634,6 +1634,56 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_sha256_compress_hashes_blocks() {
+    // "abc" is one padded block. The 56-letter message from FIPS 180-2 takes
+    // two: the second is its padding alone.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("sha.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::sha256_compress
+const IV: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+]
+fn same(_ a: [u32; 8], _ b: [u32; 8]) -> bool {
+    for i in 0..8 {
+        if a[i] != b[i] { return false }
+    }
+    true
+}
+pub fn main() -> i32 {
+    var abc: [u32; 16] = [0; 16]
+    abc[0] = 0x61626380
+    abc[15] = 24
+    let one = sha256_compress(IV, abc)
+    let first: [u32; 16] = [
+        0x61626364, 0x62636465, 0x63646566, 0x64656667, 0x65666768, 0x66676869, 0x6768696a, 0x68696a6b,
+        0x696a6b6c, 0x6a6b6c6d, 0x6b6c6d6e, 0x6c6d6e6f, 0x6d6e6f70, 0x6e6f7071, 0x80000000, 0,
+    ]
+    var second: [u32; 16] = [0; 16]
+    second[15] = 448
+    let two = sha256_compress(sha256_compress(IV, first), second)
+    if !same(one, [0xba7816bf, 0x8f01cfea, 0x414140de, 0x5dae2223, 0xb00361a3, 0x96177a9c, 0xb410ff61, 0xf20015ad]) {
+        return 1
+    }
+    if !same(two, [0x248d6a61, 0xd20638b8, 0xe5c02693, 0x0c3e6039, 0xa33ce459, 0x64ff2167, 0xf6ecedd4, 0x19db06c1]) {
+        return 2
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("sha")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_process_clock_preserves_borrows_and_host_io() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("clock.fe");
