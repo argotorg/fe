@@ -126,6 +126,7 @@ const ABI_TARGETS: &str = "structs";
 const MUST_USE_TARGETS: &str = "functions, structs, and enums";
 const VIEW_TARGETS: &str = "structs and enums";
 const RAW_PLACE_TARGETS: &str = "functions";
+const COLD_TARGETS: &str = "functions";
 const PAYABLE_TARGETS: &str = "init blocks and recv arms";
 const EXPORT_TARGETS: &str = "free functions";
 const INDEXED_TARGETS: &str = "event fields";
@@ -152,6 +153,7 @@ fn validate_mod_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("cold", COLD_TARGETS),
             AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
@@ -169,6 +171,7 @@ pub(super) fn validate_module_inner_attrs<'db>(
         &[
             AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
+            AttrRule::unsupported("cold", COLD_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
             AttrRule::unsupported("abi", ABI_TARGETS),
         ],
@@ -223,6 +226,7 @@ fn validate_func_attrs<'db>(
             AttrRule::supported("inline", INLINE_FORM, INLINE_EXPECTED),
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::supported("raw_place", BARE_FORM, "`#[raw_place]`"),
+            AttrRule::supported("cold", BARE_FORM, "`#[cold]`"),
             AttrRule::unsupported("view", VIEW_TARGETS),
             AttrRule::unsupported("event", EVENT_TARGETS),
             AttrRule::unsupported("error", ERROR_TARGETS),
@@ -249,6 +253,7 @@ fn validate_struct_attrs<'db>(
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::supported("view", BARE_FORM, "`#[view]`"),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("cold", COLD_TARGETS),
             AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
@@ -272,6 +277,7 @@ fn validate_enum_attrs<'db>(
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::supported("view", BARE_FORM, "`#[view]`"),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("cold", COLD_TARGETS),
             AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
@@ -302,6 +308,7 @@ fn validate_type_alias_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("cold", COLD_TARGETS),
             AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
@@ -325,6 +332,7 @@ fn validate_unsupported_item_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("raw_place", RAW_PLACE_TARGETS),
+            AttrRule::unsupported("cold", COLD_TARGETS),
             AttrRule::unsupported("export", EXPORT_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],

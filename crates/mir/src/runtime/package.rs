@@ -2195,26 +2195,6 @@ fn memory_span_ty<'db>(
         .ok_or_else(|| LowerError::Unsupported("missing core::ptr::MemSpan".to_string()))
 }
 
-fn make_runtime_function<'db>(
-    db: &'db dyn MirDb,
-    instance: RuntimeInstance<'db>,
-    symbol: String,
-    linkage: RuntimeLinkage,
-    inline_hint: RuntimeInlineHint,
-    owner: RuntimeFunctionOwner<'db>,
-    referenced_const_regions: Vec<ConstRegionId<'db>>,
-) -> RuntimeFunction<'db> {
-    RuntimeFunction::new(
-        db,
-        instance,
-        symbol,
-        linkage,
-        inline_hint,
-        owner,
-        referenced_const_regions,
-    )
-}
-
 fn make_runtime_object<'db>(
     db: &'db dyn MirDb,
     name: String,
@@ -2321,7 +2301,7 @@ fn runtime_function_for_instance<'db>(
     referenced_const_regions: Vec<ConstRegionId<'db>>,
 ) -> RuntimeFunction<'db> {
     match instance.key(db).source(db) {
-        RuntimeInstanceSource::Semantic(semantic) => make_runtime_function(
+        RuntimeInstanceSource::Semantic(semantic) => RuntimeFunction::new(
             db,
             instance,
             symbol,
@@ -2331,6 +2311,7 @@ fn runtime_function_for_instance<'db>(
                 RuntimeLinkage::Private
             },
             inline_hint_for_semantic(db, semantic),
+            matches!(semantic.key(db).owner(db), BodyOwner::Func(func, _) if func.is_cold(db)),
             RuntimeFunctionOwner::Semantic(semantic),
             referenced_const_regions,
         ),
@@ -2343,12 +2324,13 @@ fn runtime_function_for_instance<'db>(
                 // shared memory footprint, including otherwise small call paths.
                 _ => RuntimeInlineHint::Auto,
             };
-            make_runtime_function(
+            RuntimeFunction::new(
                 db,
                 instance,
                 symbol,
                 RuntimeLinkage::Private,
                 inline_hint,
+                false,
                 RuntimeFunctionOwner::Synthetic(spec),
                 referenced_const_regions,
             )

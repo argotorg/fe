@@ -818,6 +818,9 @@ pub struct RuntimeFunction<'db> {
     pub linkage: RuntimeLinkage,
     #[returns(copy)]
     pub inline_hint: RuntimeInlineHint,
+    /// A `#[cold]` function: rarely called.
+    #[returns(copy)]
+    pub cold: bool,
     pub owner: RuntimeFunctionOwner<'db>,
     pub referenced_const_regions: Vec<ConstRegionId<'db>>,
 }

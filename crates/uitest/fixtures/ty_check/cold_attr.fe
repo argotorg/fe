@@ -1,0 +1,70 @@
+#![cold]
+
+// `#[cold]` marks any function rarely called.
+#[cold]
+fn fail(_ code: u256) -> u256 { code }
+
+// It combines with every `#[inline]` form.
+#[cold]
+#[inline]
+fn hinted() {}
+
+#[cold]
+#[inline(always)]
+fn forced() {}
+
+#[cold]
+#[inline(never)]
+fn kept() {}
+
+struct Counter { n: u256 }
+
+impl Counter {
+    #[cold]
+    fn method(self) -> u256 { self.n }
+}
+
+trait Get {
+    #[cold]
+    fn get(self) -> u256
+}
+
+extern {
+    #[cold]
+    fn abort() -> u256
+}
+
+#[cold(always)]
+fn bad_form() {}
+
+#[cold = true]
+fn bad_value_form() {}
+
+#[cold]
+#[cold]
+fn duplicate() {}
+
+#[cold]
+struct Cold {}
+
+#[cold]
+enum ColdEnum { A }
+
+#[cold]
+mod cold_mod {}
+
+#[cold]
+trait ColdTrait {}
+
+#[cold]
+impl Counter {}
+
+#[cold]
+const COLD: u256 = 1
+
+#[cold]
+type ColdAlias = u256
+
+mod cold_inner {
+    #![cold]
+}
