@@ -1,6 +1,13 @@
 # Changelog
 
 [//]: # (release notes start)
+## 26.5.1 (2026-10-28)
+
+### Bugfixes
+
+- The parser no longer hangs and allocates memory without limit on a `#` that is not followed by `[`, such as a file that contains only `#`, a misplaced `#![...]`, or a stray `#` inside an item or function body. This could freeze the language server while typing an attribute. ([#1889](https://github.com/argotorg/fe/issues/1889))
+
+
 ## 26.5.0 (2026-10-26)
 
 ### Features
