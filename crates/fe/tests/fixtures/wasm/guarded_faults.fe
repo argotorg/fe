@@ -1,0 +1,41 @@
+// A division by zero and a read outside a table trap, so the optimizer must
+// leave each under the test that guards it, in a loop too.
+pub fn guarded_div(x: u64, d: u64, n: u64) -> u64 {
+    var sum: u64 = 0
+    var i: u64 = 0
+    while i < n {
+        if d != 0 {
+            sum = sum + x / d
+        }
+        i = i + 1
+    }
+    sum
+}
+
+pub fn guarded_rem_wide(x: u64, d: u64, n: u64) -> u64 {
+    let wide_x: u256 = x as u256
+    let wide_d: u256 = d as u256
+    var sum: u256 = 0
+    var i: u64 = 0
+    while i < n {
+        if wide_d != 0 {
+            sum = sum + wide_x % wide_d
+        }
+        i = i + 1
+    }
+    sum.downcast_truncate()
+}
+
+pub fn pick(i: u32, n: u64) -> u64 {
+    let table: [u64; 4] = [11, 22, 33, 44]
+    let k: usize = i as usize
+    var sum: u64 = 0
+    var j: u64 = 0
+    while j < n {
+        if k < 4 {
+            sum = sum + table[k]
+        }
+        j = j + 1
+    }
+    sum
+}

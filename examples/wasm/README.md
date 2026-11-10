@@ -36,8 +36,9 @@ This directory holds the pieces a host needs and the scripts that check them:
 - `wasm-tools`, to validate modules independently of the engine that runs them
   (optional; `check.sh` needs it). Version 1.247.0 was used.
 
-The compiler emits the WebAssembly features multi-value, sign extension and, for
-programs that copy memory, bulk memory. Every current engine supports them.
+The compiler emits the WebAssembly features multi-value, sign extension, for
+programs that copy memory, bulk memory, and for recursive functions that end in a call,
+tail calls. Every current engine supports them.
 
 ## Build and run a program
 
@@ -327,8 +328,10 @@ cargo test -p fe --all-features \
   parameters starts with 18 pages (about 1.2 MB). The host limits a text to 65,536
   bytes, a limit of `host.mjs` and not of the compiler. A file has at most
   4,294,967,295 bytes, because a reply carries its size in 32 bits.
-- **Traps.** The engine reports a trap without a function name or a source location,
-  because the module has no name section.
+- **Traps.** The engine names the functions in the stack of a trap, from the module's
+  name section, but no source location, and the message of a failed assertion is lost.
+  A function that ends in a call of a recursive cycle makes a tail call, so it is not in
+  that stack.
 - **Tests.** Each test runs in a separate process, so tests share nothing. The test host
   has no files.
 - **Platforms.** CI runs the compiler's WebAssembly tests on Linux and Windows, and

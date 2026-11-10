@@ -1198,6 +1198,41 @@ program_test!(recursion_frames, "recursion_frames", {
     ]
 });
 
+program_test!(tail_recursion, "tail_recursion", {
+    // Millions of calls deep: without tail calls the stack would not hold them.
+    vec![
+        Export::new("sum_to", &[("n", U64)], U64).product(&[vec![0, 1, 10, 3_000_000]], |a| {
+            Some(a[0] * (a[0] + 1) / 2)
+        }),
+        Export::new("even", &[("n", U32)], Bool)
+            .product(&[vec![0, 1, 7, 2_000_000, 2_000_001]], |a| {
+                Some(i128::from(a[0] % 2 == 0))
+            }),
+    ]
+});
+
+program_test!(guarded_faults, "guarded_faults", {
+    let inputs = [vec![0, 7, 100], vec![0, 1, 3], vec![0, 3]];
+    vec![
+        Export::new("guarded_div", &[("x", U64), ("d", U64), ("n", U64)], U64)
+            .product(&inputs, |a| {
+                Some(if a[1] == 0 { 0 } else { a[2] * (a[0] / a[1]) })
+            }),
+        Export::new(
+            "guarded_rem_wide",
+            &[("x", U64), ("d", U64), ("n", U64)],
+            U64,
+        )
+        .product(&inputs, |a| {
+            Some(if a[1] == 0 { 0 } else { a[2] * (a[0] % a[1]) })
+        }),
+        Export::new("pick", &[("i", U32), ("n", U64)], U64)
+            .product(&[vec![0, 3, 4, 1 << 28, 4_294_967_295], vec![0, 3]], |a| {
+                Some(a[1] * [11, 22, 33, 44].get(a[0] as usize).copied().unwrap_or(0))
+            }),
+    ]
+});
+
 program_test!(frame_sizes, "frame_sizes", {
     vec![
         Export::new("big_copy", &[("seed", U32)], U32).product(
