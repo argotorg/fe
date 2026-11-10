@@ -1,14 +1,15 @@
-//! `fe test --backend wasm`: each test is built into a WebAssembly module and
-//! run in its own Node.js process, with the host of `examples/wasm/host.mjs`.
+//! `fe test --backend wasm`: the tests of a suite are built into one
+//! WebAssembly module, and each runs in its own Node.js process, with the host
+//! of `examples/wasm/host.mjs`.
 //!
-//! A module holds one test and what it reaches. A test that uses something the
-//! WebAssembly backend does not support (such as `should_revert`) fails with an
-//! error that names it; no test is skipped
-//! silently. A trap, a failed assertion or a call of `abort` fails the test with
+//! A test that uses something the WebAssembly backend does not support (such
+//! as `should_revert`) gets no module and fails with an error that names it;
+//! no test is skipped silently. A trap, a failed assertion or a call of `abort` fails the test with
 //! the engine's message. Node.js is required: when `node` is missing or too old
 //! the run ends with an error that says so.
 
 use std::{
+    collections::VecDeque,
     fmt::Write as _,
     fs,
     io::Read,
@@ -23,7 +24,7 @@ use camino::Utf8PathBuf;
 use codegen::{OptLevel, emit_test_wasm};
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
-use mir::collect_test_funcs;
+use mir::{TestFunc, collect_test_funcs};
 use tempfile::{Builder, TempDir};
 
 use super::{
@@ -184,8 +185,8 @@ fn reason(message: &str) -> String {
         .to_string()
 }
 
-/// Builds every selected test of the modules into its own module, and returns
-/// the jobs that run them. A test that cannot be built is a failed result with
+/// Builds the selected tests of the modules, and returns the jobs that run
+/// them. A test that cannot be built is a failed result with
 /// the reason, listed in the output like a failed run.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_tests(
@@ -226,12 +227,21 @@ pub(super) fn prepare_tests(
     };
     let suite_dir = Arc::new(SuiteDirectory { directory });
 
+    // The tests share one module. If it cannot be built, each half is tried,
+    // down to the test that the backend refuses, which fails with the reason.
+    // `--emit ir` writes a file per test, so each test gets a module.
+    let mut groups: VecDeque<&[TestFunc<'_>]> = if emit.ir {
+        tests.chunks(1).collect()
+    } else {
+        VecDeque::from([tests.as_slice()])
+    };
     let mut results = Vec::new();
     let mut single_jobs = Vec::new();
-    for (index, test) in tests.iter().enumerate() {
+    let mut modules = 0;
+    while let Some(group) = groups.pop_front() {
         let started = Instant::now();
         let built = catch_unwind(AssertUnwindSafe(|| {
-            emit_test_wasm(db, test, opt_level, emit.ir).map_err(|err| reason(&err.to_string()))
+            emit_test_wasm(db, group, opt_level, emit.ir).map_err(|err| reason(&err.to_string()))
         }))
         .unwrap_or_else(|payload| {
             Err(format!(
@@ -239,9 +249,9 @@ pub(super) fn prepare_tests(
                 panic_payload_to_string(payload.as_ref())
             ))
         });
-        let module = match built {
-            Ok(module) => module,
-            Err(err) => {
+        let module = match (built, group) {
+            (Ok(module), _) => module,
+            (Err(err), [test]) => {
                 let message = format!("cannot build `{}` for WebAssembly: {err}", test.name);
                 write_case_status_line(output, false, started.elapsed(), &test.name);
                 let _ = writeln!(output, "    {message}");
@@ -252,12 +262,19 @@ pub(super) fn prepare_tests(
                 });
                 continue;
             }
+            (Err(_), _) => {
+                let (first, second) = group.split_at(group.len() / 2);
+                groups.push_front(second);
+                groups.push_front(first);
+                continue;
+            }
         };
-        let module_file = format!("{index}.wasm");
+        let module_file = format!("{modules}.wasm");
+        modules += 1;
         if let Err(err) = fs::write(suite_dir.directory.path().join(&module_file), &module.wasm) {
             return setup_error(format!("failed to write {module_file}: {err}"));
         }
-        if let (Some(out_dir), Some(ir)) = (&out_dir, &module.ir) {
+        if let (Some(out_dir), Some(ir), [test]) = (&out_dir, &module.ir, group) {
             // Tests of two modules may share a name, so the file names the
             // test's path below the root module, `inner.first`.
             let path = test.func.scope().pretty_path(db).unwrap_or_default();
@@ -273,18 +290,20 @@ pub(super) fn prepare_tests(
                 return setup_error(err);
             }
         }
-        single_jobs.push(SingleTestJob {
-            suite_key: suite_key.to_string(),
-            case: CompiledTest::Wasm(WasmTestCase {
-                name: test.name.clone(),
-                module_file,
-                entry: module.entry,
-                suite: Arc::clone(&suite_dir),
-                timeout: TEST_TIMEOUT,
-            }),
-            evm_trace: None,
-            report_root: None,
-        });
+        for (test, entry) in group.iter().zip(module.entries) {
+            single_jobs.push(SingleTestJob {
+                suite_key: suite_key.to_string(),
+                case: CompiledTest::Wasm(WasmTestCase {
+                    name: test.name.clone(),
+                    module_file: module_file.clone(),
+                    entry,
+                    suite: Arc::clone(&suite_dir),
+                    timeout: TEST_TIMEOUT,
+                }),
+                evm_trace: None,
+                report_root: None,
+            });
+        }
     }
     SuitePreparation {
         results,

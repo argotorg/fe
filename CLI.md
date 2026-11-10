@@ -774,8 +774,8 @@ fe test [--backend <sonatina|native|wasm>] [--filter <pattern>] [--jobs <n>] [--
 
 - `sonatina` (the default) runs tests on the EVM.
 - `native` (with the `cranelift` feature) runs each test as a host process.
-- `wasm` (with the `wasm` feature) builds each test into its own WebAssembly module and
-  runs it in its own Node.js process (version 20 or later; `node` must be on `PATH`, and
+- `wasm` (with the `wasm` feature) builds the tests of a suite into one WebAssembly module
+  and runs each in its own Node.js process (version 20 or later; `node` must be on `PATH`, and
   the run ends with an error if it is not). The host is `examples/wasm/host.mjs`: it
   answers the `Log`, `Clock`, `Abort` and `Files` operations of `std::wasm` (there are no
   files). A test passes if it returns. A failed assertion, an overflow, a division by zero

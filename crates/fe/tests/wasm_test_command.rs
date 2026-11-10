@@ -218,6 +218,32 @@ fn tests_the_backend_cannot_build_fail_with_the_reason() {
 }
 
 #[test]
+fn a_test_with_an_import_the_host_lacks_fails_alone() {
+    // The tests of a file share a module, but a module that imports a
+    // function the host does not supply does not start, so this test gets
+    // its own and the others still run.
+    let temp = tempdir().unwrap();
+    let file = temp.path().join("imports.fe");
+    fs::write(
+        &file,
+        "extern {\n    fn probe(_ x: u32) -> u32\n}\n\n#[test]\nfn first() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test]\nfn calls_the_probe() {\n    assert(unsafe { probe(1) } == 1)\n}\n\n#[test]\nfn last() {\n    let x: u32 = 2\n    assert(x == 2)\n}\n",
+    )
+    .unwrap();
+    let output = fe_test("wasm", "1", &[], &file);
+    assert_eq!(
+        results(&output),
+        expected(&["first", "last"], &["calls_the_probe"]),
+        "{}",
+        stdout(&output)
+    );
+    let failure = failure_of(&output, "calls_the_probe");
+    assert!(
+        failure.contains("imports env.probe, which the host does not provide"),
+        "{failure}"
+    );
+}
+
+#[test]
 fn a_filter_selects_tests_by_name() {
     let output = fe_test("wasm", "1", &["--filter", "sums"], &fixture("shared"));
     assert_eq!(results(&output), expected(&["sums_a_loop"], &[]));

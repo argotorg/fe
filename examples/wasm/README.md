@@ -235,8 +235,8 @@ fe test --backend wasm examples/wasm/tests.fe
 fe test --backend native examples/wasm/tests.fe
 ```
 
-Each `#[test]` function is built into its own module and run in its own Node.js
-process with `host.mjs`. A test passes if it returns. The same file gives the same
+The `#[test]` functions of a file or an ingot are built into one module, and each runs
+in its own Node.js process with `host.mjs`. A test passes if it returns. The same file gives the same
 results on the native backend (the second command, on x86-64 Linux or AArch64
 macOS).
 
@@ -254,7 +254,9 @@ macOS).
 - A missing or too old `node` ends the run with an error that names the
   requirement.
 - A test that runs for more than 60 seconds fails.
-- `--filter`, `--jobs`, `-O`, `--emit ir` (one `.sona` file per test) and ingot
+- A test that calls an `extern` function of its own gets a module of its own, since the
+  test host does not supply the import and a module that imports it does not start.
+- `--filter`, `--jobs`, `-O`, `--emit ir` (one `.sona` file and one module per test) and ingot
   paths work as for the other backends. `--show-logs`, the tracing options,
   `--debug-dir`, `--emit rmir`, `--report` and `--report-dir` are errors.
 

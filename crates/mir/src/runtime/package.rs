@@ -1,4 +1,4 @@
-use common::{compilation::Target, indexmap::IndexMap};
+use common::{compilation::Target, indexmap::IndexMap, ingot::IngotKind};
 use hir::analysis::ty::AddressSpace;
 use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
@@ -413,15 +413,21 @@ pub fn collect_test_funcs<'db>(
     tests
 }
 
-/// Build the package of one test of a WebAssembly test run: a module with the
-/// test and what it reaches, and nothing else.
+/// Build the package of `tests` of a WebAssembly test run: a module with the
+/// tests and what they reach, and nothing else. Its roots are in the order of
+/// `tests`. Several tests share a module only if every import is one of
+/// `std`'s: the test host supplies no other, and a module that imports one
+/// does not start, which would fail every test in it.
 pub fn build_wasm_test_runtime_package<'db>(
     db: &'db dyn MirDb,
-    test: &TestFunc<'db>,
+    tests: &[TestFunc<'db>],
 ) -> Result<RuntimePackage<'db>, LowerError> {
     require_target(db, Target::Wasm)?;
-    let package = build_test_package(db, test.func.top_mod(db), std::slice::from_ref(test))?;
-    check_wasm_imports(db, &package)?;
+    let first = tests
+        .first()
+        .ok_or_else(|| LowerError::Unsupported("a test module needs a test".into()))?;
+    let package = build_test_package(db, first.func.top_mod(db), tests)?;
+    check_wasm_imports(db, &package, tests.len() > 1)?;
     Ok(package)
 }
 
@@ -705,17 +711,19 @@ pub fn build_wasm_export_package<'db>(
     )?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid WebAssembly package: {err:?}")))?;
-    check_wasm_imports(db, &package)?;
+    check_wasm_imports(db, &package, false)?;
     Ok(WasmExportPackage { package, exports })
 }
 
 /// The imports of a module are the `extern` functions that its exports or its
 /// test reach.
 /// Their signatures cross the boundary by value, so they follow the rule for
-/// exports: `bool` and integers of at most 64 bits.
+/// exports: `bool` and integers of at most 64 bits. With `std_only`, an import
+/// declared outside `std` is an error too.
 fn check_wasm_imports<'db>(
     db: &'db dyn MirDb,
     package: &RuntimePackage<'db>,
+    std_only: bool,
 ) -> Result<(), LowerError> {
     for function in package.functions(db) {
         let instance = function.instance(db);
@@ -730,10 +738,16 @@ fn check_wasm_imports<'db>(
             continue;
         };
         // `core::rt`'s `malloc` and `free` are the module's own allocator.
-        if func.top_mod(db).ingot(db).is_core(db) {
+        let ingot = func.top_mod(db).ingot(db);
+        if ingot.is_core(db) {
             continue;
         }
         let name = func_display_name(db, func);
+        if std_only && ingot.kind(db) != IngotKind::Std {
+            return Err(LowerError::Unsupported(format!(
+                "`{name}` is not an import of `std`, so a test that calls it needs its own module"
+            )));
+        }
         let signature = instance.interface_signature(db);
         let scalar = vec![WasmParamShape::Scalar; signature.params.len()];
         let result = if signature.ret.is_some() {

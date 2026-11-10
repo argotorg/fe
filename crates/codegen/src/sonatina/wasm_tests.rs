@@ -1,11 +1,9 @@
-//! One WebAssembly module for each `#[test]` function.
+//! WebAssembly modules for `#[test]` functions.
 //!
 //! A test is lowered like a native test: a synthetic root without parameters
-//! calls the function and traps if it fails. The root is the only export of the
-//! module (besides the memory), so a host runs the test by calling it. A module
-//! holds one test and what that test reaches, which means a test that uses
-//! something the WebAssembly backend does not support fails alone, with an
-//! error that names it.
+//! calls the function and traps if it fails. The roots are the only exports of
+//! a module (besides the memory), so a host runs a test by calling its root. A
+//! module holds the tests it was built for and what they reach.
 
 use driver::DriverDataBase;
 use mir::{TestFunc, build_wasm_test_runtime_package};
@@ -23,24 +21,26 @@ use crate::{
     test_output::{TestRootMetadataError, runtime_test_root_metadata},
 };
 
-/// A compiled test.
+/// Compiled tests.
 #[derive(Debug)]
 pub struct WasmTestModule {
-    /// The export that runs the test.
-    pub entry: String,
+    /// The export that runs each test, in the order of the tests.
+    pub entries: Vec<String>,
     pub wasm: Vec<u8>,
     pub ir: Option<String>,
 }
 
-/// Compiles one test to a module. An attribute that has no meaning outside the
-/// EVM (`should_revert`, `balance`) is an error, as it is for native tests.
+/// Compiles `tests` to one module. An attribute that has no meaning outside
+/// the EVM (`should_revert`, `balance`) is an error, as it is for native
+/// tests, and so is anything else the backend cannot build: the caller builds
+/// fewer tests at once to find the test at fault.
 pub fn emit_test_wasm(
     db: &DriverDataBase,
-    test: &TestFunc<'_>,
+    tests: &[TestFunc<'_>],
     opt_level: OptLevel,
     emit_ir: bool,
 ) -> Result<WasmTestModule, LowerError> {
-    let package = build_wasm_test_runtime_package(db, test)?;
+    let package = build_wasm_test_runtime_package(db, tests)?;
     let mut roots = Vec::new();
     for object in package.root_objects(db) {
         for section in object.sections(db) {
@@ -58,13 +58,13 @@ pub fn emit_test_wasm(
             roots.push((metadata.display_name, section.entry.instance(db)));
         }
     }
-    let [(name, instance)] = roots.as_slice() else {
+    if roots.len() != tests.len() {
         return Err(LowerError::Internal(format!(
-            "the package of test `{}` has {} test roots instead of one",
-            test.name,
+            "the package of {} tests has {} test roots",
+            tests.len(),
             roots.len()
         )));
-    };
+    }
 
     let isa = create_wasm32_isa();
     let (module, functions) = lower_runtime::compile_runtime_package_sonatina_for_isa(
@@ -75,16 +75,20 @@ pub fn emit_test_wasm(
         &[],
         lower_runtime::NativePanics::Trap,
     )?;
-    let entry = functions[instance];
-    let symbol = module.ctx.func_sig(entry, |signature| {
-        if !signature.args().is_empty() || !signature.ret_tys().is_empty() {
-            return Err(LowerError::Internal(format!(
-                "WebAssembly test wrapper `{name}` must have a void, parameterless signature"
-            )));
-        }
-        Ok(signature.name().to_string())
-    })?;
-    module.ctx.update_func_linkage(entry, Linkage::Public);
+    let mut entries = Vec::with_capacity(roots.len());
+    for (name, instance) in &roots {
+        let entry = functions[instance];
+        let symbol = module.ctx.func_sig(entry, |signature| {
+            if !signature.args().is_empty() || !signature.ret_tys().is_empty() {
+                return Err(LowerError::Internal(format!(
+                    "WebAssembly test wrapper `{name}` must have a void, parameterless signature"
+                )));
+            }
+            Ok(signature.name().to_string())
+        })?;
+        module.ctx.update_func_linkage(entry, Linkage::Public);
+        entries.push(symbol);
+    }
     remove_unreachable_functions(&module);
 
     let mut compile =
@@ -93,9 +97,5 @@ pub fn emit_test_wasm(
     ensure_module_sonatina_ir_valid(compile.module())?;
     let ir = emit_ir.then(|| ModuleWriter::new(compile.module()).dump_string());
     let wasm = compile.compile().map_err(lower_wasm_errors)?.into_bytes();
-    Ok(WasmTestModule {
-        entry: symbol,
-        wasm,
-        ir,
-    })
+    Ok(WasmTestModule { entries, wasm, ir })
 }
