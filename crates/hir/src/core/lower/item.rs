@@ -171,6 +171,7 @@ pub(super) fn validate_module_inner_attrs<'db>(
         &[
             AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
+            AttrRule::unsupported("cold", COLD_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
             AttrRule::unsupported("abi", ABI_TARGETS),
         ],
