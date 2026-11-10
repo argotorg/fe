@@ -231,9 +231,10 @@ fn write_function_summary<'db>(
     };
     let _ = writeln!(
         out,
-        "    {} ({linkage}, inline={:?}, owner={:?})",
+        "    {} ({linkage}, inline={:?}{}, owner={:?})",
         function.symbol(db),
         function.inline_hint(db),
+        if function.cold(db) { ", cold" } else { "" },
         function.owner(db)
     );
     if !function.referenced_const_regions(db).is_empty() {

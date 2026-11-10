@@ -1,0 +1,1 @@
+`#[cold]` marks a function as rarely called. It is not inlined into a caller that is not cold, unless it is also `#[inline(always)]`, and native code lays out the paths that call it after the rest of their function and places cold functions after all others. It applies to free functions, methods, trait methods and `extern` functions. See `docs/language/inline-and-cold.md`.

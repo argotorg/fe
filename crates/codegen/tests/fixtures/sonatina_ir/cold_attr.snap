@@ -1,0 +1,97 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/cold_attr.fe
+---
+target = "evm-ethereum-osaka"
+
+type @layout_0 = {i256};
+
+func cold private %fail(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        (v3.i256, v4.i1) = uaddo v0 1.i256;
+        br v4 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v3;
+}
+
+func inline(always) cold private %forced(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        (v3.i256, v4.i1) = uaddo v0 3.i256;
+        br v4 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v3;
+}
+
+func cold private %get(v0.@layout_0) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func inline(never) cold private %kept(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        (v3.i256, v4.i1) = umulo v0 2.i256;
+        br v4 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v3;
+}
+
+func private %main() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = call %fail 1.i256;
+        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
+        v5.i256 = call %get v4;
+        v6.i256 = call %kept v5;
+        v7.i256 = call %forced v6;
+        return v7;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %main;
+        evm_stop;
+}
+
+
+object @main {
+    section main {
+        entry %main_root;
+    }
+}

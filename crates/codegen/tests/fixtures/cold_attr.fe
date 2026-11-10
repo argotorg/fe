@@ -1,0 +1,30 @@
+#[cold]
+fn fail(code: u256) -> u256 {
+    code + 1
+}
+
+#[cold]
+#[inline(never)]
+fn kept(x: u256) -> u256 {
+    x * 2
+}
+
+#[cold]
+#[inline(always)]
+fn forced(x: u256) -> u256 {
+    x + 3
+}
+
+struct Counter { n: u256 }
+
+impl Counter {
+    #[cold]
+    fn get(self) -> u256 {
+        self.n
+    }
+}
+
+pub fn main() -> u256 {
+    let counter = Counter { n: fail(1) }
+    forced(kept(counter.get()))
+}

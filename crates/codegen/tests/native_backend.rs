@@ -389,6 +389,45 @@ fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
 }
 
 #[test]
+fn native_cold_functions_stay_out_of_line() {
+    let source = r#"
+extern {
+    fn getchar() -> i32
+    #[cold]
+    fn on_failure() -> i32
+}
+
+#[cold]
+fn slow(_ value: i32) -> i32 {
+    value * 3 + 1
+}
+
+pub fn main() -> i32 {
+    let c = unsafe { getchar() }
+    if c < 0 { unsafe { on_failure() } } else { slow(c) }
+}
+"#;
+    with_top_mod_for_source("native_cold.fe", source, |db, top_mod| {
+        let ir = fe_codegen::emit_module_native_ir(db, top_mod, OptLevel::O0)
+            .expect("native IR should emit");
+        assert!(
+            ir.contains("declare cold external %on_failure() -> i32"),
+            "missing cold declaration:\n{ir}"
+        );
+        assert!(
+            ir.contains("func cold private %slow("),
+            "missing cold definition:\n{ir}"
+        );
+        let ir = fe_codegen::emit_module_native_ir(db, top_mod, OptLevel::O2)
+            .expect("optimized native IR should emit");
+        assert!(
+            ir.contains("call %slow"),
+            "a cold callee should stay out of line:\n{ir}"
+        );
+    });
+}
+
+#[test]
 fn native_external_functions_remain_declarations_with_exact_symbols() {
     let source = r#"
 extern {

@@ -78,7 +78,7 @@ use sonatina_ir::{
         logic::{And, Bswap, Clz, Ctz, Not, Or, Xor},
     },
     isa::Isa,
-    module::{FuncRef, ModuleCtx},
+    module::{FuncHints, FuncRef, ModuleCtx},
     object::EmbedSymbol,
     types::{CompoundType, EnumReprHint, EnumVariantRef, VariantData},
 };
@@ -685,7 +685,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     }
                 })?;
             declared.entry(symbol).or_insert((function, external));
-            self.apply_inline_hint(func_ref, function.inline_hint(self.db));
+            self.apply_func_hints(func_ref, function);
             self.func_map.insert(function.instance(self.db), func_ref);
         }
         Ok(())
@@ -772,14 +772,19 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         Ok(signature)
     }
 
-    fn apply_inline_hint(&self, func_ref: FuncRef, hint: RuntimeInlineHint) {
-        let hint = match hint {
+    /// Every runtime function of a symbol shares its Sonatina function,
+    /// which is cold if any of them is.
+    fn apply_func_hints(&self, func_ref: FuncRef, function: RuntimeFunction<'db>) {
+        let hint = match function.inline_hint(self.db) {
             RuntimeInlineHint::Auto => sonatina_ir::InlineHint::Auto,
             RuntimeInlineHint::Hint => sonatina_ir::InlineHint::Inline,
             RuntimeInlineHint::Always => sonatina_ir::InlineHint::Always,
             RuntimeInlineHint::Never => sonatina_ir::InlineHint::Never,
         };
         self.builder.ctx.set_inline_hint(func_ref, hint);
+        if function.cold(self.db) {
+            self.builder.ctx.set_func_hints(func_ref, FuncHints::COLD);
+        }
     }
 
     fn lower_const_regions(&mut self) -> Result<(), LowerError> {

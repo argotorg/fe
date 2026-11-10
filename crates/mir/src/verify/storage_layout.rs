@@ -480,6 +480,7 @@ pub contract Other {
             function.symbol(db),
             RuntimeLinkage::Private,
             RuntimeInlineHint::Auto,
+            false,
             RuntimeFunctionOwner::Synthetic(spec),
             vec![],
         );
