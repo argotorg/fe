@@ -331,10 +331,17 @@ fn should_revert_tests_pass_when_they_revert() {
         "#[test(should_revert)]\nfn reverts() {\n    assert(false)\n}\n\n#[test(should_revert)]\nfn returns() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test(should_revert)]\nfn overflows() {\n    var x: u8 = 255\n    x += 1\n}\n",
     )
     .unwrap();
-    for backend in ["wasm", "native"] {
-        if backend == "native" && !cfg!(feature = "cranelift") {
-            continue;
-        }
+    for backend in [
+        "wasm",
+        #[cfg(all(
+            feature = "cranelift",
+            any(
+                all(target_arch = "x86_64", target_os = "linux"),
+                all(target_arch = "aarch64", target_os = "macos")
+            )
+        ))]
+        "native",
+    ] {
         let output = fe_test(backend, "1", &[], &file);
         assert_eq!(
             results(&output),

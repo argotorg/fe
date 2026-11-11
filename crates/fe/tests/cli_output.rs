@@ -3865,11 +3865,14 @@ fn test_fe_test(fixture: Fixture<&str>) {
     );
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
+#[cfg(any(
+    feature = "wasm",
+    all(
+        feature = "cranelift",
+        any(
+            all(target_arch = "x86_64", target_os = "linux"),
+            all(target_arch = "aarch64", target_os = "macos")
+        )
     )
 ))]
 /// `fe_test` fixtures that need the EVM: contracts, storage, EVM
