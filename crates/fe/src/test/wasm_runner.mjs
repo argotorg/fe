@@ -1,10 +1,12 @@
 // Runs one test of `fe test --backend wasm` in its own Node.js process.
 //
-//   node run_test.mjs <module.wasm> <export>
+//   node run_test.mjs <module.wasm> <export> <output limit in bytes>
 //
 // The module is instantiated with the host of `examples/wasm/host.mjs` (the
 // file next to this one), the export is called, and the host is checked for
-// handles that the test left open. Exit status 0 means the test passed. On a
+// handles that the test left open. A test that logs and writes more than the
+// output limit is stopped there, and `fe test` reports the limit. Exit status
+// 0 means the test passed. On a
 // failure one line on standard error says what happened, and the status is 1.
 // A test that panics with a code or reverts with data ends with status 3 and
 // the line `revert <data in hex>`: `fe test` decides whether that was expected.
@@ -38,11 +40,19 @@ function describe(error) {
   return String(error?.stack ?? error);
 }
 
-const [, , modulePath, entry] = process.argv;
-if (!modulePath || !entry) {
-  console.error("usage: node run_test.mjs <module.wasm> <export>");
+const [, , modulePath, entry, limitArg] = process.argv;
+const limit = Number(limitArg);
+if (!modulePath || !entry || !Number.isSafeInteger(limit)) {
+  console.error("usage: node run_test.mjs <module.wasm> <export> <output limit in bytes>");
   process.exit(2);
 }
+
+// The output is printed when the test ends, so the limit is kept as it grows.
+let printed = 0;
+const print = (length) => {
+  printed += length;
+  if (printed > limit) throw new Error("the test exceeded its output limit");
+};
 
 let guest = null;
 let failure = null;
@@ -65,7 +75,11 @@ const env = {
   },
 };
 try {
-  guest = await instantiate(fs.readFileSync(modulePath), { imports: { env } });
+  guest = await instantiate(fs.readFileSync(modulePath), {
+    imports: { env },
+    onLog: ({ type, value }) => print(`log ${type} ${value}\n`.length),
+    onWrite: ({ bytes }) => print(bytes.length),
+  });
   guest.call(entry);
   guest.host.assertNoOpenHandles();
 } catch (error) {

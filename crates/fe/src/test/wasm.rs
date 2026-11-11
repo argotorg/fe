@@ -114,6 +114,7 @@ impl WasmTestCase {
             .arg("run_test.mjs")
             .arg(&self.module_file)
             .arg(&self.entry)
+            .arg(limits.output_bytes.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

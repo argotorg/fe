@@ -433,7 +433,7 @@ fn the_limits_of_time_and_output_can_be_set() {
     let source = temp.path().join("limits.fe");
     fs::write(
         &source,
-        "use std::io::Stdout\n\n#[test]\nfn spin() {\n    while true {}\n}\n\n#[test]\nfn noisy() uses (out: mut Stdout) {\n    var i: u32 = 0\n    while i < 2048 {\n        print!(\"A\")\n        i += 1\n    }\n}\n",
+        "use std::io::Stdout\n\n#[test]\nfn spin() {\n    while true {}\n}\n\n#[test]\nfn noisy() uses (out: mut Stdout) {\n    var i: u32 = 0\n    while i < 2048 {\n        print!(\"A\")\n        i += 1\n    }\n}\n\n#[test]\nfn endless() uses (out: mut Stdout) {\n    while true {\n        print!(\"A\")\n    }\n}\n",
     )
     .unwrap();
     for (filter, limit, message) in [
@@ -470,6 +470,25 @@ fn the_limits_of_time_and_output_can_be_set() {
             "{limit:?}: {stderr}"
         );
     }
+    // A test that prints without end stops at the output limit, before the
+    // time limit.
+    let output = fe_test(
+        "wasm",
+        "1",
+        &[
+            "--filter",
+            "endless",
+            "--native-output-limit-kib",
+            "1",
+            "--native-timeout-secs",
+            "30",
+        ],
+        &source,
+    );
+    assert_eq!(
+        failure_of(&output, "endless"),
+        "wasm test exceeded the output limit of 1 KiB"
+    );
     let output = fe_test("wasm", "1", &["--native-timeout-secs", "0"], &source);
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
