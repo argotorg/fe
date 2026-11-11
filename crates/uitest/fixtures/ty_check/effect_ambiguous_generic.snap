@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/effect_ambiguous_generic.fe
 ---
@@ -18,3 +17,5 @@ error[8-0040]: multiple effect candidates found
    │
 14 │         needs_storage()
    │         ^^^^^^^^^^^^^^^ effect `Storage<T>` is ambiguous when calling `needs_storage`
+   │
+   = choose its provider with `with (Storage<T> = value) { .. }`
