@@ -6,6 +6,7 @@ use std::{
 use common::{
     InputDb,
     diagnostics::{CompleteDiagnostic, Severity},
+    stdlib::is_embedded_builtin,
 };
 use driver::{DriverDataBase, db::DiagnosticsCollection};
 use hir::{Ingot, analysis::semantic::collect_blocked_semantic_bodies, hir_def::TopLevelMod};
@@ -284,12 +285,6 @@ impl<'db> CompilationDiagnostics<'db> {
             mir,
         }
     }
-}
-
-/// The compiler-owned embedded libraries. Source and workspace replacements of
-/// core and std use ordinary URLs and are validated like other dependencies.
-fn is_embedded_builtin(url: &Url) -> bool {
-    matches!(url.scheme(), "builtin-core" | "builtin-std")
 }
 
 fn ingot_modules<'db>(db: &'db DriverDataBase, ingot: Ingot<'db>) -> Vec<TopLevelMod<'db>> {

@@ -1077,6 +1077,114 @@ async fn mock_lsp_checks_for_the_project_target() {
     client.did_save(&config);
     assert!(client.wait_for_diagnostics(clean).await);
 
+    let diagnostics = Arc::clone(&client.diagnostics);
+    client.shutdown().await;
+    let diagnostics = diagnostics.lock().unwrap();
+    let unexpected = diagnostics.iter().find(|published| {
+        !published
+            .uri
+            .to_file_path()
+            .is_ok_and(|path| path.starts_with(&root))
+    });
+    assert!(
+        unexpected.is_none(),
+        "manifest changes should not publish diagnostics for embedded libraries: {unexpected:?}"
+    );
+}
+
+#[tokio::test]
+async fn mock_lsp_publishes_diagnostics_with_client_uris() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (_, lib) = write_ingot(&root, "tool", "native", NATIVE_ONLY);
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+    client.did_open(&lib, NATIVE_ONLY);
+    assert!(client.wait_for_diagnostics(|d| d.uri == lib).await);
+    client.clear_diagnostics();
+
+    let core_source = Url::parse("builtin-core:/src/lib.fe").unwrap();
+    client
+        .server
+        .request::<DocumentDiagnosticsRequest>(core_source)
+        .await
+        .unwrap();
+    assert!(
+        client
+            .wait_for_diagnostics(|d| d.uri.path().ends_with("/core/src/lib.fe"))
+            .await
+    );
+    let mapped_source = client
+        .diagnostics()
+        .into_iter()
+        .find(|d| d.uri.scheme() == "file" && d.uri.path().ends_with("/core/src/lib.fe"))
+        .unwrap()
+        .uri;
+    client
+        .server
+        .request::<DocumentDiagnosticsRequest>(mapped_source.clone())
+        .await
+        .unwrap();
+    client
+        .server
+        .request::<DocumentDiagnosticsRequest>(Url::parse("builtin-core:/fe.toml").unwrap())
+        .await
+        .unwrap();
+
+    let diagnostics = Arc::clone(&client.diagnostics);
+    client.shutdown().await;
+    let diagnostics = diagnostics.lock().unwrap();
+    let internal = diagnostics
+        .iter()
+        .find(|d| matches!(d.uri.scheme(), "builtin-core" | "builtin-std"));
+    assert!(internal.is_none(), "published internal URI: {internal:?}");
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|d| d.uri == mapped_source)
+            .count(),
+        3
+    );
+    assert!(diagnostics.iter().any(|d| {
+        d.uri.scheme() == "file"
+            && d.uri.path().ends_with("/core/fe.toml")
+            && d.diagnostics.is_empty()
+    }));
+}
+
+#[tokio::test]
+async fn mock_lsp_rechecks_other_projects_after_target_change() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let tool = root.join("tool");
+    let (config, tool_lib) = write_ingot(&tool, "tool", "native", NATIVE_ONLY);
+    let (_, other_lib) = write_ingot(&root.join("other"), "other", "native", NATIVE_ONLY);
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+    for uri in [&tool_lib, &other_lib] {
+        client.did_open(uri, NATIVE_ONLY);
+        assert!(
+            client
+                .wait_for_diagnostics(|d| d.uri == *uri && d.diagnostics.is_empty())
+                .await
+        );
+    }
+
+    client.clear_diagnostics();
+    write_ingot(&tool, "tool", "evm", NATIVE_ONLY);
+    client.file_changed(&config);
+    for uri in [&tool_lib, &other_lib] {
+        assert!(
+            client
+                .wait_for_diagnostics(|d| d.uri == *uri && !d.diagnostics.is_empty())
+                .await,
+            "missing diagnostics for {uri}"
+        );
+    }
     client.shutdown().await;
 }
 
