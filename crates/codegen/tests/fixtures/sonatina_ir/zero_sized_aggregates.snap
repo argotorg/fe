@@ -8,20 +8,17 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {};
 type @layout_1 = {@layout_0, i256};
 
-global private const @layout_1 $const_region_0 = {{}, 1};
-global private const @layout_1 $const_region_1 = {{}, 7};
-global private const @layout_1 $const_region_2 = {{}, 5};
-
 func private %empty_field_assign() {
     block0:
         v0.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
-        v2.constref<@layout_1> = const.ref $const_region_0;
-        v3.constref<@layout_1> = const.ref $const_region_0;
-        v4.@layout_1 = const.load v3;
-        obj.store v0 v4;
+        v5.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
+        v6.@layout_1 = insert_value v5 1.i256 1.i256;
+        v9.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
+        v10.@layout_1 = insert_value v9 1.i256 1.i256;
+        obj.store v0 v10;
         return;
 }
 
@@ -51,8 +48,10 @@ func private %struct_with_empty() -> i256 {
         jump block1;
 
     block1:
-        v1.constref<@layout_1> = const.ref $const_region_1;
-        v2.constref<@layout_1> = const.ref $const_region_1;
+        v4.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
+        v6.@layout_1 = insert_value v4 1.i256 7.i256;
+        v9.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
+        v10.@layout_1 = insert_value v9 1.i256 7.i256;
         return 7.i256;
 }
 
@@ -69,8 +68,10 @@ func private %tuple_with_empty() -> i256 {
         jump block1;
 
     block1:
-        v1.constref<@layout_1> = const.ref $const_region_2;
-        v2.constref<@layout_1> = const.ref $const_region_2;
+        v4.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
+        v6.@layout_1 = insert_value v4 1.i256 5.i256;
+        v9.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
+        v10.@layout_1 = insert_value v9 1.i256 5.i256;
         return 5.i256;
 }
 

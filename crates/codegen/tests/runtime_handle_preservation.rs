@@ -1691,6 +1691,68 @@ pub fn main() -> u8 {
 }
 
 #[test]
+fn one_scalar_constants_do_not_become_const_regions() {
+    with_runtime_package!(
+        "one_scalar_constants_do_not_become_const_regions.fe",
+        r#"pub struct Id { v: usize }
+impl Copy for Id {}
+
+pub struct Outer { id: Id }
+impl Copy for Outer {}
+
+const START: Id = Id { v: 1 }
+const ORIGIN: Outer = Outer { id: Id { v: 2 } }
+
+fn id_next(_ i: Id) -> Id {
+    Id { v: i.v + 1 }
+}
+
+fn outer_depth(_ o: Outer) -> usize {
+    o.id.v * 2
+}
+
+fn flag_value(_ t: (bool,)) -> usize {
+    match t {
+        (true,) => 1,
+        (false,) => 0,
+    }
+}
+
+pub fn main() -> usize {
+    var total: usize = id_next(START).v + outer_depth(ORIGIN) + flag_value((true,))
+    var i: usize = 0
+    while i < 3 {
+        total += id_next(Id { v: i }).v
+        total += outer_depth(Outer { id: Id { v: i } })
+        total += flag_value((i > 1,))
+        i += 1
+    }
+    total
+}"#,
+        |db, package| {
+            assert!(
+                package.const_regions(&db).is_empty(),
+                "one-scalar constants should not create const regions:\n{:#?}",
+                package.const_regions(&db)
+            );
+            for name in ["id_next", "outer_depth", "flag_value"] {
+                let instances = package
+                    .functions(&db)
+                    .iter()
+                    .map(|function| function.symbol(&db))
+                    .filter(|symbol| *symbol == name || symbol.contains(&format!("__{name}_")))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    instances.len(),
+                    1,
+                    "constant and computed arguments should share one `{name}` instance: {instances:?}"
+                );
+            }
+        }
+    );
+}
+
+#[test]
 fn immutable_code_view_parameter_forwarding_does_not_load_aggregate() {
     let ir = sonatina_ir_for_source(
         "immutable_code_view_parameter_forwarding.fe",

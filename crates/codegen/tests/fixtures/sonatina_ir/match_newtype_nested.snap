@@ -8,21 +8,20 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {i256};
 type @layout_1 = {@layout_0};
 
-global private const @layout_0 $const_region_0 = {10};
-global private const @layout_1 $const_region_1 = {{10}};
-
 func private %main() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
-        v2.constref<@layout_1> = const.ref $const_region_1;
-        v3.constref<@layout_1> = const.ref $const_region_1;
-        v4.constref<@layout_1> = const.ref $const_region_1;
-        v5.@layout_1 = const.load v4;
-        v6.i256 = call %match_newtype_nested v5;
-        return v6;
+        v3.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
+        v5.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
+        v7.@layout_1 = insert_value undef.@layout_1 0.i256 v5;
+        v9.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
+        v11.@layout_1 = insert_value undef.@layout_1 0.i256 v9;
+        v13.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
+        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v13;
+        v16.i256 = call %match_newtype_nested v15;
+        return v16;
 }
 
 func private %main_root() {
