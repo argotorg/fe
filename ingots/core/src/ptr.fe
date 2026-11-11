@@ -1415,11 +1415,13 @@ pub(ingot) fn try_alloc_elems<T>(_ len: usize) -> Option<*T> {
 }
 
 /// The capacity growing from `capacity` to fit `needed` takes: double, within
-/// `max`, or `needed` if that is more, and `initial` at least.
+/// `max`, or `needed` if that is more, and `initial` at least, within `max`.
+/// It exceeds `max` only if `needed` does.
 fn grown_capacity(_ capacity: usize, needed: usize, initial: usize, max: usize) -> usize {
     let doubled = if capacity > max / 2 { needed } else { capacity * 2 }
     let grown = if doubled > needed { doubled } else { needed }
-    if grown > initial { grown } else { initial }
+    let least = if initial > max { max } else { initial }
+    if grown > least { grown } else { least }
 }
 
 /// Allocates an array without initializing its contents. The caller must

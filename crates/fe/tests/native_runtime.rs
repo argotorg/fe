@@ -2895,6 +2895,39 @@ fn reserve_beyond_the_host() {
 }
 
 #[test]
+fn native_vectors_of_huge_elements_grow_within_the_allocation_limit() {
+    // Three elements fit in `MAX_ALLOCATION` bytes but not four, the initial
+    // capacity, so growth asks for three, which the host refuses. O0 cannot
+    // translate a value this large, so only O1 and O2 run.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("huge_elements.fe");
+    fs::write(
+        &source,
+        r#"
+use core::MemVec
+#[test]
+fn reserve_huge_elements() {
+    var values: MemVec<[u8; 4611686018427387905]> = MemVec::new()
+    core::assert(!values.try_reserve(1))
+    core::assert(values.capacity() == 0)
+}
+"#,
+    )
+    .unwrap();
+    for level in ["1", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn native_input_reborrows_preserve_independent_buffer_and_scalar_updates() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("forwarded_buffers.fe");
