@@ -827,6 +827,18 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::Malloc { size } => format!("malloc {}", format_local_id(*size)),
         RuntimeBuiltin::TryMalloc { size } => format!("try_malloc {}", format_local_id(*size)),
         RuntimeBuiltin::Free { ptr } => format!("free {}", format_local_id(*ptr)),
+        RuntimeBuiltin::Realloc { ptr, used, size } => format!(
+            "realloc {}, {}, {}",
+            format_local_id(*ptr),
+            format_local_id(*used),
+            format_local_id(*size)
+        ),
+        RuntimeBuiltin::TryRealloc { ptr, used, size } => format!(
+            "try_realloc {}, {}, {}",
+            format_local_id(*ptr),
+            format_local_id(*used),
+            format_local_id(*size)
+        ),
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => format!(
             "ptr_offset_bytes {}, {}",
             format_local_id(*ptr),

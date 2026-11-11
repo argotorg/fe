@@ -21,6 +21,10 @@ fn classifies_core_and_std_runtime_builtins() {
         .expect("failed to resolve core::ptr::try_alloc_raw");
     let dealloc = resolve_lib_func_path(&db, func.scope(), "core::ptr::dealloc_raw")
         .expect("failed to resolve core::ptr::dealloc_raw");
+    let realloc = resolve_lib_func_path(&db, func.scope(), "core::ptr::realloc_raw")
+        .expect("failed to resolve core::ptr::realloc_raw");
+    let try_realloc = resolve_lib_func_path(&db, func.scope(), "core::ptr::try_realloc_raw")
+        .expect("failed to resolve core::ptr::try_realloc_raw");
     let ptr_eq = resolve_lib_func_path(&db, func.scope(), "core::ptr::addr_eq")
         .expect("failed to resolve core::ptr::addr_eq");
     let copy_mem = resolve_lib_func_path(&db, func.scope(), "core::ptr::copy_mem")
@@ -47,6 +51,14 @@ fn classifies_core_and_std_runtime_builtins() {
     assert_eq!(
         runtime_builtin_func_kind(&db, dealloc),
         Some(RuntimeBuiltinFuncKind::Free)
+    );
+    assert_eq!(
+        runtime_builtin_func_kind(&db, realloc),
+        Some(RuntimeBuiltinFuncKind::Realloc)
+    );
+    assert_eq!(
+        runtime_builtin_func_kind(&db, try_realloc),
+        Some(RuntimeBuiltinFuncKind::TryRealloc)
     );
     assert_eq!(
         runtime_builtin_func_kind(&db, ptr_eq),

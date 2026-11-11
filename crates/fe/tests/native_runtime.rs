@@ -2279,7 +2279,21 @@ fn native_empty_owners_take_nothing_from_the_host() {
         let result = run_balanced("empty_owners.fe", &out, level, &[]);
         assert_eq!(
             String::from_utf8_lossy(&result.stderr),
-            "allocations=1 releases=1\n",
+            "allocations=1 releases=1 resizes=0\n",
+            "O{level}"
+        );
+    }
+}
+
+#[test]
+fn native_buffers_resize_past_cached_blocks_and_keep_refused_growth() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let result = run_balanced("resized_buffers.fe", &out, level, &["-DREFUSE_FROM=65536"]);
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            "allocations=10 releases=10 resizes=10\n",
             "O{level}"
         );
     }
@@ -2807,6 +2821,109 @@ pub fn main() -> i32 {
         assert!(linked.status.success(), "{linked:?}");
         let result = Command::new(&executable).output().unwrap();
         assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_buffers_grow_past_the_mmap_threshold() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("large_growth.fe");
+    // glibc maps blocks from 128 KiB, so the later doublings resize mapped
+    // blocks, which it moves with `mremap`.
+    fs::write(
+        &source,
+        r#"
+use core::{MemBuffer, MemVec}
+pub fn main() -> i32 {
+    let words: usize = 1 << 18
+    var bytes = MemBuffer::empty()
+    for i in 0..words {
+        bytes.extend_from_word(i as u256, len: 32)
+    }
+    var values: MemVec<u256> = MemVec::new()
+    for i in 0..words * 4 {
+        values.push(i as u256)
+    }
+    core::assert(values.ptr() as usize % 16 == 0)
+    for i in 0..words {
+        core::assert(bytes.read_word(i * 32) == i as u256)
+    }
+    for i in 0..words * 4 {
+        core::assert(values[i] == i as u256)
+    }
+    // The host cannot make the largest allocation, which leaves both as
+    // they were.
+    let capacity = bytes.capacity()
+    core::assert(!bytes.try_reserve(usize::max() - bytes.len()))
+    core::assert(bytes.len() == words * 32 && bytes.capacity() == capacity)
+    core::assert(bytes.read_word((words - 1) * 32) == (words - 1) as u256)
+    core::assert(!values.try_reserve(usize::max() / 32))
+    core::assert(values.len() == words * 4 && values[words * 4 - 1] == (words * 4 - 1) as u256)
+    0
+}
+"#,
+    )
+    .unwrap();
+    let test_source = temp.path().join("refused_growth.fe");
+    fs::write(
+        &test_source,
+        r#"
+use core::MemBuffer
+#[test(should_revert, panic = 0x41)]
+fn reserve_beyond_the_host() {
+    var buffer = MemBuffer::new(2000)
+    buffer.reserve(usize::max() - 2000)
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("large_growth")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&test_source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn native_vectors_of_huge_elements_grow_within_the_allocation_limit() {
+    // Three elements fit in `MAX_ALLOCATION` bytes but not four, the initial
+    // capacity, so growth asks for three, which the host refuses. O0 cannot
+    // translate a value this large, so only O1 and O2 run.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("huge_elements.fe");
+    fs::write(
+        &source,
+        r#"
+use core::MemVec
+#[test]
+fn reserve_huge_elements() {
+    var values: MemVec<[u8; 4611686018427387905]> = MemVec::new()
+    core::assert(!values.try_reserve(1))
+    core::assert(values.capacity() == 0)
+}
+"#,
+    )
+    .unwrap();
+    for level in ["1", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
     }
 }
 

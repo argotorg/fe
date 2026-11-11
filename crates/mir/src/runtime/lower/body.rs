@@ -3582,6 +3582,23 @@ impl<'db> RmirEmitter<'db> {
                 let [ptr] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::Free { ptr: *ptr }, None)
             }
+            RuntimeBuiltinFuncKind::Realloc | RuntimeBuiltinFuncKind::TryRealloc => {
+                let [ptr, used, size] = args else {
+                    return None;
+                };
+                let (ptr, used, size) = (*ptr, *used, *size);
+                builtin(
+                    if kind == RuntimeBuiltinFuncKind::Realloc {
+                        crate::runtime::RuntimeBuiltin::Realloc { ptr, used, size }
+                    } else {
+                        crate::runtime::RuntimeBuiltin::TryRealloc { ptr, used, size }
+                    },
+                    self.top_level_class_for_ty(
+                        semantic_return_ty(self.db, semantic),
+                        AddressSpace::Memory,
+                    ),
+                )
+            }
             RuntimeBuiltinFuncKind::PtrOffsetBytes => {
                 let [ptr, offset] = args else { return None };
                 builtin(

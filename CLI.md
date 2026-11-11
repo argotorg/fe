@@ -320,7 +320,8 @@ platform's C calling convention, even when no Fe code calls it. It is `unsafe` b
 global: an export replaces any other definition of its name for this object and possibly for code
 linked with it, so you must ensure it does what every caller of that name expects. That includes
 `memcpy`, `memset` and `memmove`, which the compiler calls on its own with their C meanings, and
-`malloc`, `free`, `write`, `fflush` and `abort`, which `core::rt` calls:
+`malloc`, `realloc`, `free`, `write`, `fflush` and `abort`, which `core::rt` calls (replace
+`malloc`, `realloc` and `free` together):
 
 ```fe
 #[unsafe(export)]
@@ -380,8 +381,8 @@ fe build --backend native --link target/release/libhost.a --link-lib gcc_s --lin
 
 #### Linking a native library
 
-A library needs only the C library: native code calls `malloc`, `free`, `memmove`, `write`,
-`fflush` and `abort`, and the `extern` functions its Fe code calls, such as `clock` for
+A library needs only the C library: native code calls `malloc`, `realloc`, `free`, `memmove`,
+`write`, `fflush` and `abort`, and the `extern` functions its Fe code calls, such as `clock` for
 `std::native::cpu_clock_ticks`. C and Rust programs link the C library by default, so a C program
 needs only the Fe library:
 

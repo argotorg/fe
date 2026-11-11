@@ -1541,6 +1541,8 @@ pub enum NativeRuntimeFunc {
     Alloc,
     TryAlloc,
     Dealloc,
+    Realloc,
+    TryRealloc,
     ReportTrap,
     ReportPanic,
     ReportRevert,
@@ -1549,10 +1551,12 @@ pub enum NativeRuntimeFunc {
 }
 
 impl NativeRuntimeFunc {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Alloc,
         Self::TryAlloc,
         Self::Dealloc,
+        Self::Realloc,
+        Self::TryRealloc,
         Self::ReportTrap,
         Self::ReportPanic,
         Self::ReportRevert,
@@ -1560,8 +1564,15 @@ impl NativeRuntimeFunc {
         Self::HostRevert,
     ];
 
-    /// The functions that allocate, which import only `malloc` and `free`.
-    pub const ALLOCATION: [Self; 3] = [Self::Alloc, Self::TryAlloc, Self::Dealloc];
+    /// The functions that allocate, which on WebAssembly import only `malloc`
+    /// and `free`.
+    pub const ALLOCATION: [Self; 5] = [
+        Self::Alloc,
+        Self::TryAlloc,
+        Self::Dealloc,
+        Self::Realloc,
+        Self::TryRealloc,
+    ];
 
     /// The function's instance in the packages of `top_mod`.
     pub fn instance<'db>(
@@ -1569,10 +1580,16 @@ impl NativeRuntimeFunc {
         db: &'db dyn MirDb,
         top_mod: TopLevelMod<'db>,
     ) -> Result<RuntimeInstance<'db>, LowerError> {
+        // WebAssembly's allocator has no `realloc`, so a resize there copies.
+        let wasm = db.compilation_settings().target(db) == Target::Wasm;
         let name = match self {
             Self::Alloc => "alloc",
             Self::TryAlloc => "try_alloc",
             Self::Dealloc => "dealloc",
+            Self::Realloc if wasm => "reallocate_by_copy",
+            Self::TryRealloc if wasm => "try_reallocate_by_copy",
+            Self::Realloc => "reallocate",
+            Self::TryRealloc => "try_reallocate",
             Self::ReportTrap => "report_trap",
             Self::ReportPanic => "report_panic",
             Self::ReportRevert => "report_revert",
