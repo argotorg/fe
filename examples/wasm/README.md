@@ -123,6 +123,7 @@ is a provider written in Fe that needs no host:
 | `sys_wasm_stream_read` | stream `i32`, address `i32`, length `i32` | count `i32` | `std::io::Stdin` |
 | `sys_wasm_files_open` | name address `i32`, name length `i32` | reply `i64` | `Files` |
 | `sys_wasm_files_size` | handle `i32` | reply `i64` | `Files` |
+| `sys_wasm_files_read` | handle `i32`, offset `i32`, address `i32`, length `i32` | reply `i64` (the count) | `Files` |
 | `sys_wasm_files_read_byte` | handle `i32`, index `i32` | reply `i64` | `Files` |
 | `sys_wasm_files_close` | handle `i32` | none | `Files` |
 

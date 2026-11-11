@@ -134,6 +134,13 @@ const CASES: &[Case] = &[
     case("checksum", &[Text("empty")], Good(0), 1),
     case("checksum", &[Text("grüß")], Good(954), 1),
     case("checksum", &[Text("nope")], Bad("NotFound"), 0),
+    // `read` in chunks, which ends with a short chunk or one of nothing.
+    case("read_sum", &[Text("hello.txt"), Num(5)], Good(1128), 1),
+    case("read_sum", &[Text("digits"), Num(3)], Good(525), 1),
+    case("read_sum", &[Text("digits"), Num(100)], Good(525), 1),
+    case("read_sum", &[Text("grüß"), Num(1)], Good(954), 1),
+    case("read_sum", &[Text("empty"), Num(4)], Good(0), 1),
+    case("read_sum", &[Text("nope"), Num(4)], Bad("NotFound"), 0),
     case("open_n", &[Text("digits"), Num(0)], Good(0), 0),
     case("open_n", &[Text("digits"), Num(1)], Good(1), 1),
     case("open_n", &[Text("digits"), Num(50)], Good(50), 50),
@@ -691,7 +698,7 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
     let (_, mock) = build("file_ops", Flavour::Mock, "2", temp.path());
     let host = Module::new(engine(), &host).unwrap();
     let mock = Module::new(engine(), &mock).unwrap();
-    // The four imports of the contract, text as an address and a length, the
+    // The five imports of the contract, text as an address and a length, the
     // reply as one i64, and the revert of `core::rt` in both builds.
     assert_eq!(
         imports_of(&host),
@@ -700,6 +707,7 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
             ("env", "abort", "->"),
             ("env", "sys_wasm_files_close", "i32->"),
             ("env", "sys_wasm_files_open", "i32,i32->i64"),
+            ("env", "sys_wasm_files_read", "i32,i32,i32,i32->i64"),
             ("env", "sys_wasm_files_read_byte", "i32,i32->i64"),
             ("env", "sys_wasm_files_size", "i32->i64"),
         ]
@@ -723,6 +731,7 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
         ("mixed", "i32,i32,i32,i64->i64"),
         ("open_n", "i32,i32,i32->i64"),
         ("plain", "i32,i32->i32"),
+        ("read_sum", "i32,i32,i32->i64"),
         ("size_of", "i32,i32->i64"),
         ("size_unwrapped", "i32,i32->i64"),
         ("sizes_two", "i32,i32,i32,i32->i64"),

@@ -6,8 +6,9 @@
 // and run it with `node examples/wasm/lines.mjs lines.wasm <file>`. The reply is
 // the number of line feeds, plus one if the file does not end with one; an empty
 // file has no lines.
+use core::ptr::MemArray
 use std::wasm::{HostText, Reply}
-use std::wasm::files::{Files, close, open, read_byte, size}
+use std::wasm::files::{Files, close, open, read}
 
 fn count(_ name: HostText) -> Reply uses (files: mut Files) {
     let handle = match open(name.copy()) {
@@ -17,23 +18,30 @@ fn count(_ name: HostText) -> Reply uses (files: mut Files) {
     var lines: u32 = 0
     var last: u8 = 10
     var failure: u32 = 0
-    match size(handle) {
-        Result::Ok(length) => {
-            var index: u32 = 0
-            while index < length {
-                match read_byte(handle, index) {
-                    Result::Ok(byte) => {
-                        if byte == 10 {
-                            lines += 1
-                        }
-                        last = byte
+    // The file is read a block at a time; a read of nothing is its end.
+    var block: MemArray<u8> = MemArray::new_zeroed(4096)
+    var offset: u32 = 0
+    var reading = true
+    while reading {
+        match read(handle, offset, mut block.as_slice()) {
+            Result::Ok(count) => {
+                var index: usize = 0
+                while index < count as usize {
+                    let byte = block[index]
+                    if byte == 10 {
+                        lines += 1
                     }
-                    Result::Err(error) => { failure = error.code() }
+                    last = byte
+                    index += 1
                 }
-                index += 1
+                offset += count
+                reading = count > 0
+            }
+            Result::Err(error) => {
+                failure = error.code()
+                reading = false
             }
         }
-        Result::Err(error) => { failure = error.code() }
     }
     close(handle)
     if failure != 0 {

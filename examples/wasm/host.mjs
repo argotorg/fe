@@ -287,6 +287,14 @@ export function createHost(
     sys_wasm_files_size(handle) {
       return encodeReply(0, lookup(handle, "size").length);
     },
+    sys_wasm_files_read(handle, offset, address, length) {
+      const contents = lookup(handle, "read");
+      const view = memoryHolding(address, length, "read");
+      const start = Math.min(offset >>> 0, contents.length);
+      const count = Math.min(length >>> 0, contents.length - start);
+      view.set(contents.subarray(start, start + count), address >>> 0);
+      return encodeReply(0, count);
+    },
     sys_wasm_files_read_byte(handle, index) {
       const contents = lookup(handle, "read_byte");
       const at = index >>> 0;

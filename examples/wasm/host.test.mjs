@@ -102,6 +102,22 @@ test("size and read_byte, and a read past the end is OutOfRange", () => {
   assert.deepEqual(decodeReply(env.sys_wasm_files_read_byte(handle, -1)), { ok: false, code: 2, error: "OutOfRange" });
 });
 
+test("read places bytes from an offset and counts them, 0 at the end", () => {
+  const { env, memory } = fixture();
+  const handle = open(env, 100, 9).value;
+  const bytes = new Uint8Array(memory.buffer);
+  const read = (offset, address, length) => decodeReply(env.sys_wasm_files_read(handle, offset, address, length));
+  assert.deepEqual(read(0, 300, 5), { ok: true, value: 5 });
+  assert.equal(new TextDecoder().decode(bytes.subarray(300, 305)), "Hello");
+  // A read near the end places what is left; at and past the end, nothing.
+  assert.deepEqual(read(7, 400, 100), { ok: true, value: 5 });
+  assert.equal(new TextDecoder().decode(bytes.subarray(400, 405)), "world");
+  assert.deepEqual(read(12, 400, 4), { ok: true, value: 0 });
+  assert.deepEqual(read(-1, 400, 4), { ok: true, value: 0 });
+  assert.deepEqual(read(0, 400, 0), { ok: true, value: 0 });
+  assert.throws(() => read(0, PAGE - 2, 4), (error) => error instanceof ContractError && /outside the memory/.test(error.message));
+});
+
 test("handles count up from 1 and are not reused", () => {
   const { env } = fixture();
   const first = open(env, 100, 9).value;
@@ -116,6 +132,7 @@ test("a forged handle is refused by every operation", () => {
   for (const forged of [0, 2, 77, -1, 0x7fffffff]) {
     for (const call of [
       () => env.sys_wasm_files_size(forged),
+      () => env.sys_wasm_files_read(forged, 0, 0, 0),
       () => env.sys_wasm_files_read_byte(forged, 0),
       () => env.sys_wasm_files_close(forged),
     ]) {
@@ -133,6 +150,7 @@ test("a closed handle is refused: double close and use after close", () => {
   for (const call of [
     () => env.sys_wasm_files_close(handle),
     () => env.sys_wasm_files_size(handle),
+    () => env.sys_wasm_files_read(handle, 0, 0, 0),
     () => env.sys_wasm_files_read_byte(handle, 0),
   ]) {
     assert.throws(call, (error) => error instanceof ContractError && /handle 1 is closed/.test(error.message));

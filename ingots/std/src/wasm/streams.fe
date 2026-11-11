@@ -76,10 +76,12 @@ fn write_all(stream: u32, _ bytes: MemSpan) -> bool {
 }
 
 // The address of the first byte of `bytes` in linear memory.
-fn address(_ bytes: MemSpan) -> u32 {
+/// The address of `bytes` as the boundary passes it.
+pub(ingot) fn address(_ bytes: MemSpan) -> u32 {
     (bytes.ptr() as usize).downcast().unwrap()
 }
 
-fn length(_ bytes: MemSpan) -> u32 {
+/// The length of `bytes` as the boundary passes it.
+pub(ingot) fn length(_ bytes: MemSpan) -> u32 {
     bytes.len().downcast().unwrap()
 }

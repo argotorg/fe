@@ -474,12 +474,15 @@ host places the texts with `alloc`, makes the call, reads what it needs, and cal
 `arena_release` with the mark it took first. The three names are then reserved. Safe Fe
 code cannot make a `HostText`; only the host and the generated wrapper of the export do.
 
-`std::wasm::files` is a contract built on these shapes, with four operations: `open(name)`
-(the name is borrowed text), `size(handle)`, `read_byte(handle, index)` and
-`close(handle)`, which takes the handle by value, so the compiler rejects a second use.
+`std::wasm::files` is a contract built on these shapes, with five operations: `open(name)`
+(the name is borrowed text), `size(handle)`, `read(handle, offset, buf)`, which places up to
+`buf.len()` bytes from `offset` in `buf` and returns how many (0 at the end),
+`read_byte(handle, index)` and `close(handle)`, which takes the handle by value, so the
+compiler rejects a second use.
 Each can fail with `NotFound` (1), `OutOfRange` (2) or `BadName` (3); no other number is
 valid. `Host` provides `Files` by calling the imports `sys_wasm_files_open(addr, len)`, `sys_wasm_files_size`,
-`sys_wasm_files_read_byte` and `sys_wasm_files_close`, which return a reply word (close
+`sys_wasm_files_read(handle, offset, addr, len)`, `sys_wasm_files_read_byte` and
+`sys_wasm_files_close`, which return a reply word (close
 returns nothing), and `mock()` is Fe code that holds files in memory. The compiler does not
 require a handle to be closed; the host counts the handles that stay open.
 
