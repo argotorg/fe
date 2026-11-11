@@ -1,0 +1,47 @@
+// Effects that are one place share one copy of a packed storage lane, which
+// is stored back once: no effect's write is lost.
+use std::evm::Evm
+
+trait Bump {
+    fn bump(mut self, _ by: u8)
+}
+
+impl Bump for u8 {
+    fn bump(mut self, _ by: u8) {
+        self += by
+    }
+}
+
+fn pair<T: Bump, U: Bump>() uses (x: mut T, y: mut U) {
+    x.bump(1)
+    y.bump(10)
+    x.bump(100)
+}
+
+msg Msg {
+    #[selector = 1]
+    Pair {},
+    #[selector = 2]
+    Get -> u256,
+}
+
+pub contract Packed {
+    mut a: u8,
+    mut b: u8,
+
+    recv Msg {
+        Pair {} uses (mut a) {
+            with (a) { pair<u8, u8>() }
+        }
+        Get -> u256 uses (a, b) {
+            (a as u256) * 1000 + (b as u256)
+        }
+    }
+}
+
+#[test]
+fn one_lane_for_two_effects() uses (evm: mut Evm) {
+    let c = evm.create2<Packed>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Pair {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Get {}) == 111000)
+}

@@ -1,0 +1,61 @@
+// Effects that may be one place, as two of one key from composed rows or
+// generic keys that are one type, are neither `noalias` nor `readonly`; an
+// effect alone in its key keeps both.
+trait Count {
+    uses E
+    fn count(mut self) -> u256 uses E
+}
+
+pub struct Store { n: u256 }
+pub struct Tally { n: u256 }
+
+pub struct Ones {}
+
+impl Count for Ones {
+    uses E = (store: mut Store)
+    fn count(mut self) -> u256 uses E {
+        store.n += 1
+        store.n
+    }
+}
+
+pub struct Tallied {}
+
+impl Count for Tallied {
+    uses E = (store: mut Store, tally: mut Tally)
+    fn count(mut self) -> u256 uses E {
+        tally.n += 1
+        store.n += 100
+        store.n
+    }
+}
+
+fn both<A: Count, B: Count>(_ a: mut A, _ b: mut B) -> u256 uses (A::E, B::E) {
+    let first = a.count()
+    let second = b.count()
+    first + second
+}
+
+fn read_after_write<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: u256, tally: Tally) {
+    w = x
+    r + tally.n
+}
+
+msg Msg {
+    #[selector = 1]
+    Run -> u256,
+}
+
+pub contract C {
+    recv Msg {
+        Run -> u256 {
+            var store = Store { n: 0 }
+            var tally = Tally { n: 0 }
+            var v: u256 = 0
+            var ones = Ones {}
+            var tallied = Tallied {}
+            let counted = with (store, tally) { both(mut ones, mut tallied) }
+            counted + with (v, tally) { read_after_write<u256>(5) }
+        }
+    }
+}

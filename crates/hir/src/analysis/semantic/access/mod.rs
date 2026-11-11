@@ -26,6 +26,7 @@ use salsa::SalsaValue;
 pub use self::control::{
     ExecutableBlock, ExecutableControlFlow, semantic_executable_control_flow, semantic_may_return,
 };
+pub(crate) use self::domain::keys_may_share;
 pub(crate) use self::refine::{CallSiteRefinements, provisional_call_site_provider_refinements};
 use crate::{
     analysis::{

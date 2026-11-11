@@ -177,7 +177,7 @@ impl<'db> Domains<'db> {
 /// Whether one provider may satisfy effects of keys `lhs` and `rhs`: a type
 /// key is provided by a place of its type, a trait key by one of a type
 /// implementing it.
-pub(super) fn keys_may_share<'db>(
+pub(crate) fn keys_may_share<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,

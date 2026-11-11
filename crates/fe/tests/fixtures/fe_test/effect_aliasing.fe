@@ -123,3 +123,82 @@ fn generic_keys_of_two_types() {
     assert(with (c, o) { forward<Counter, Other>() } == 110)
     assert(c.n == 1 && o.n == 10)
 }
+
+// A read-only effect that may be one place with a `mut` one is no copy: it
+// sees the writes.
+fn write_then_read<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: u256) {
+    w = x
+    r
+}
+
+#[test]
+fn shared_read_only_effect_sees_writes() {
+    var v: u256 = 1
+    assert(with (v) { write_then_read<u256>(7) } == 7)
+    assert(v == 7)
+}
+
+trait Count {
+    uses E
+    fn count(mut self) -> u256 uses E
+}
+
+pub struct Store { n: u256 }
+pub struct Tally { n: u256 }
+
+struct Ones {}
+
+impl Count for Ones {
+    uses E = (store: mut Store)
+    fn count(mut self) -> u256 uses E {
+        store.n += 1
+        store.n
+    }
+}
+
+struct Hundreds {}
+
+impl Count for Hundreds {
+    uses E = (store: mut Store)
+    fn count(mut self) -> u256 uses E {
+        store.n += 100
+        store.n
+    }
+}
+
+struct Tallied<C> { inner: C }
+
+impl<C: Count> Count for Tallied<C> {
+    uses E = (C::E, tally: mut Tally)
+    fn count(mut self) -> u256 uses E {
+        tally.n += 1
+        self.inner.count()
+    }
+}
+
+fn both<A: Count, B: Count>(_ a: mut A, _ b: mut B) -> u256 uses (A::E, B::E) {
+    let first = a.count()
+    let second = b.count()
+    let third = a.count()
+    first * 10000 + second * 100 + third
+}
+
+fn own_and_row<A: Count>(_ a: mut A) -> u256 uses (A::E, store: mut Store) {
+    store.n += 1000
+    let counted = a.count()
+    counted + store.n
+}
+
+// Composed rows that need one key take one provider for it, and so does a
+// function's own effect of a key its row needs too.
+#[test]
+fn rows_of_one_key() {
+    var store = Store { n: 0 }
+    var tally = Tally { n: 0 }
+    var ones = Ones {}
+    var tallied = Tallied { inner: Hundreds {} }
+    assert(with (store, tally) { both(mut ones, mut tallied) } == 20202)
+    assert(store.n == 102 && tally.n == 1)
+    assert(with (store) { own_and_row(mut ones) } == 2206)
+    assert(store.n == 1103)
+}

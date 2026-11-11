@@ -3922,6 +3922,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "dyn_array_from_slice",
     "dyn_array_get",
     "dynamic_offset_overflow",
+    "effect_aliasing_lanes",
     "effect_handle_field_deref",
     "eip712_domain",
     "encode_msg_calldata",
@@ -5592,22 +5593,21 @@ fn immutable_aggregate_forwarding_at_all_optimization_levels() {
 
 #[test]
 fn effect_aliasing_at_all_optimization_levels() {
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test/effect_aliasing.fe");
-    // The fixture test covers the default level (1).
-    for level in ["0", "2", "s"] {
-        let (output, exit_code) = run_fe_main(&[
-            "test",
-            "--jobs",
-            "1",
-            "--optimize",
-            level,
-            fixture.to_str().expect("fixture path utf8"),
-        ]);
-        assert_eq!(
-            exit_code, 0,
-            "effect aliasing failed at -O {level}:\n{output}"
-        );
+    // The fixture tests cover the default level (1).
+    for name in ["effect_aliasing", "effect_aliasing_lanes"] {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/fe_test/{name}.fe"));
+        for level in ["0", "2", "s"] {
+            let (output, exit_code) = run_fe_main(&[
+                "test",
+                "--jobs",
+                "1",
+                "--optimize",
+                level,
+                fixture.to_str().expect("fixture path utf8"),
+            ]);
+            assert_eq!(exit_code, 0, "{name} failed at -O {level}:\n{output}");
+        }
     }
 }
 
