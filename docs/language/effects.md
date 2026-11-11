@@ -53,11 +53,27 @@ fn caller(_ totals: mut Totals) {
 }
 ```
 
+A read-only effect of a snapshot type (a scalar or handle: an integer,
+`bool`, `Address`, a raw pointer, or any `core::marker::Snapshot` type) is a
+snapshot, as a view argument of one is: the callee gets a copy taken at the
+call, from memory, storage or any other space, and the copy overlaps
+nothing. So the call's other effects and arguments may write its place, and
+the callee reads the value as it was at the call:
+
+```fe
+fn read_n() -> u256 uses (n: u256, c: mut C) {
+    c.n += 10
+    n                                  // `c.n` as it was at the call
+}
+
+with (C = c, u256 = c.n) { read_n() }  // accepted, as `f(c.n, mut c)` is
+```
+
 A capability that can start an external execution (`Call`, `Create`,
 `Evm`) or address slots directly (`RawStorage`, `RawOps`) reaches all
 persistent and transient state, so it may not be provided beside a `mut`
-effect in storage, nor a `mut` one beside any effect in storage. Two such
-capabilities may be provided together.
+effect in storage, nor a `mut` one beside any effect in storage other than
+a snapshot. Two such capabilities may be provided together.
 
 The callee therefore takes its effects to be disjoint, as its parameters
 are: `settle` iterates `log` while it writes `totals`. The exception is two
@@ -74,8 +90,5 @@ fn pair<T: Bump, U: Bump>() uses (x: mut T, y: mut U) { .. }
 with (counter) { pair<Counter, Counter>() }   // one place for `x` and `y`
 ```
 
-A read-only effect of a snapshot type provided by a memory place is passed
-as a copy, as a view parameter is, unless another effect of the callee may
-be the same place and is `mut`. A packed storage lane provided to `mut`
-effects is a memory copy stored back when the call returns, one copy for
-every effect it provides.
+A packed storage lane provided to `mut` effects is a memory copy stored
+back when the call returns, one copy for every effect it provides.

@@ -1,5 +1,6 @@
 // Effects that are one place share one copy of a packed storage lane, which
-// is stored back once: no effect's write is lost.
+// is stored back once: no effect's write is lost. A read-only effect of a
+// snapshot type is a copy taken at the call, in storage too.
 use std::evm::Evm
 
 trait Bump {
@@ -18,16 +19,33 @@ fn pair<T: Bump, U: Bump>() uses (x: mut T, y: mut U) {
     x.bump(100)
 }
 
+struct Wide { n: u256, m: u256 }
+
+fn read_after_bump<T: Bump>() -> u256 uses (n: u8, x: mut T) {
+    x.bump(5)
+    n as u256
+}
+
+fn read_wide() -> u256 uses (n: u256, w: mut Wide) {
+    w.n += 10
+    n
+}
+
 msg Msg {
     #[selector = 1]
     Pair {},
     #[selector = 2]
     Get -> u256,
+    #[selector = 3]
+    Snapshots {} -> u256,
+    #[selector = 4]
+    GetWide -> u256,
 }
 
 pub contract Packed {
     mut a: u8,
     mut b: u8,
+    mut wide: Wide,
 
     recv Msg {
         Pair {} uses (mut a) {
@@ -35,6 +53,17 @@ pub contract Packed {
         }
         Get -> u256 uses (a, b) {
             (a as u256) * 1000 + (b as u256)
+        }
+        // `n` reads the lane and the word as they were at each call.
+        Snapshots {} -> u256 uses (mut b, mut wide) {
+            b = 1
+            wide.n = 2
+            let lane = with (b) { read_after_bump<u8>() }
+            let word = with (Wide = wide, u256 = wide.n) { read_wide() }
+            lane * 1000 + word
+        }
+        GetWide -> u256 uses (b, wide) {
+            (b as u256) * 1000 + wide.n
         }
     }
 }
@@ -44,4 +73,11 @@ fn one_lane_for_two_effects() uses (evm: mut Evm) {
     let c = evm.create2<Packed>(value: Wei::zero(), args: (), salt: 1)
     evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Pair {})
     assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Get {}) == 111000)
+}
+
+#[test]
+fn snapshot_effects_copy_storage() uses (evm: mut Evm) {
+    let c = evm.create2<Packed>(value: Wei::zero(), args: (), salt: 2)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Snapshots {}) == 1002)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::GetWide {}) == 6012)
 }

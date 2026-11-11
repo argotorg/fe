@@ -21,28 +21,19 @@ error[16-0001]: access conflict in `fn partial_overlap`
    │               │         `n` is provided here
    │               `c` is provided here
 
-error[16-0001]: access conflict in `fn partial_overlap_read`
-   ┌─ effect_aliasing.fe:57:32
-   │
-57 │     with (C = c, u256 = c.n) { read_n() }
-   │               -         ---    ^^^^^^^^ the effects `n` and `c` of `read_n` reach one place, and `c` is `mut`
-   │               │         │
-   │               │         `n` is provided here
-   │               `c` is provided here
-
 error[16-0001]: access conflict in `fn trait_partial`
-    ┌─ effect_aliasing.fe:111:32
+    ┌─ effect_aliasing.fe:112:32
     │
-111 │     with (Bump = c.n, C = c) { trait_and_type() }
+112 │     with (Bump = c.n, C = c) { trait_and_type() }
     │                  ---      -    ^^^^^^^^^^^^^^^^ the effects `b` and `c` of `trait_and_type` reach one place, and `b` is `mut`
     │                  │        │
     │                  │        `c` is provided here
     │                  `b` is provided here
 
 error[16-0001]: access conflict in `fn traits_may_alias`
-    ┌─ effect_aliasing.fe:118:5
+    ┌─ effect_aliasing.fe:119:5
     │
-117 │     let held = ref p
+118 │     let held = ref p
     │                ----- access opened here
-118 │     b.bump()
+119 │     b.bump()
     │     ^ cannot mutably access this place while a `ref` access of it is open

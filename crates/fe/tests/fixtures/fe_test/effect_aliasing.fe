@@ -124,17 +124,45 @@ fn generic_keys_of_two_types() {
     assert(c.n == 1 && o.n == 10)
 }
 
+pub struct Cell { v: u256 }
+
+impl Copy for Cell {}
+
 // A read-only effect that may be one place with a `mut` one is no copy: it
 // sees the writes.
-fn write_then_read<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: u256) {
+fn write_then_read<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: Cell) {
     w = x
-    r
+    r.v
 }
 
 #[test]
 fn shared_read_only_effect_sees_writes() {
+    var c = Cell { v: 1 }
+    assert(with (c) { write_then_read<Cell>(Cell { v: 7 }) } == 7)
+    assert(c.v == 7)
+}
+
+struct Pair { n: u256, m: u256 }
+
+fn read_n() -> u256 uses (n: u256, p: mut Pair) {
+    p.n += 10
+    n
+}
+
+fn write_then_read_snapshot<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: u256) {
+    w = x
+    r
+}
+
+// A read-only effect of a snapshot type is a copy taken at the call, as a
+// snapshot argument is, so another effect of the call may write its place.
+#[test]
+fn snapshot_effect_is_a_copy() {
+    var p = Pair { n: 1, m: 0 }
+    assert(with (Pair = p, u256 = p.n) { read_n() } == 1)
+    assert(p.n == 11)
     var v: u256 = 1
-    assert(with (v) { write_then_read<u256>(7) } == 7)
+    assert(with (v) { write_then_read_snapshot<u256>(7) } == 1)
     assert(v == 7)
 }
 

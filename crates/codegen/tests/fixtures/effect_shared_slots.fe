@@ -1,6 +1,7 @@
 // Effects that may be one place, as two of one key from composed rows or
 // generic keys that are one type, are neither `noalias` nor `readonly`; an
-// effect alone in its key keeps both.
+// effect alone in its key keeps both, and a read-only snapshot effect is a
+// copy, passed by value.
 trait Count {
     uses E
     fn count(mut self) -> u256 uses E
@@ -36,9 +37,13 @@ fn both<A: Count, B: Count>(_ a: mut A, _ b: mut B) -> u256 uses (A::E, B::E) {
     first + second
 }
 
-fn read_after_write<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: u256, tally: Tally) {
+pub struct Cell { v: u256 }
+
+impl Copy for Cell {}
+
+fn read_after_write<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: Cell, snap: u256, tally: Tally) {
     w = x
-    r + tally.n
+    r.v + snap + tally.n
 }
 
 msg Msg {
@@ -51,11 +56,12 @@ pub contract C {
         Run -> u256 {
             var store = Store { n: 0 }
             var tally = Tally { n: 0 }
-            var v: u256 = 0
+            var c = Cell { v: 0 }
+            let n: u256 = 3
             var ones = Ones {}
             var tallied = Tallied {}
             let counted = with (store, tally) { both(mut ones, mut tallied) }
-            counted + with (v, tally) { read_after_write<u256>(5) }
+            counted + with (c, n, tally) { read_after_write<Cell>(Cell { v: 5 }) }
         }
     }
 }

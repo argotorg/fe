@@ -171,13 +171,18 @@ to a function declaring `mut Call` is rejected, and so is providing a field
 of a `mut` effect's place as another effect. Two effects whose keys one
 provider may satisfy may be one place, given as one provider (the same
 normalized argument) or as two of the caller's own such effects, whole;
-two capabilities reaching all state never conflict with each other.
+two capabilities reaching all state never conflict with each other. A
+read-only effect of a snapshot type is a copy the call takes, as a
+snapshot view argument is: its read is checked against the open accesses,
+and it neither conflicts with the call's other parts nor reserves its place
+for a projection's session.
 
-Lowering relies on this: an effect parameter is `noalias` (and `readonly`
-when read-only) unless the instance has another effect that may be the same
-place, one of them `mut` (`SemanticInstance::shared_effects`); a read-only
-snapshot effect from memory is passed by value under the same condition;
-and a call holds one copy of a packed lane for all the effects it provides.
+Lowering relies on this: a function's or closure's read-only snapshot
+effect is passed by value, from any space; any other effect parameter is
+`noalias` (and `readonly` when read-only) unless the instance has another
+such effect that may be the same place, one of them `mut`
+(`SemanticInstance::shared_effects`); and a call holds one copy of a packed
+lane for all the effects it provides.
 
 ## Projections
 

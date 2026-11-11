@@ -46,12 +46,13 @@ fn read_n() -> u256 uses (n: u256, c: mut C) {
     n
 }
 
-// Rejected: a part of `c` provides `n`, whether `n` is `mut` or not.
+// Rejected: a part of `c` provides `n`.
 pub fn partial_overlap() -> u256 {
     var c = C { n: 0, m: 0 }
     with (C = c, u256 = c.n) { both_mut() }
 }
 
+// Accepted: a read-only `u256` is a snapshot, which the call copies.
 pub fn partial_overlap_read() -> u256 {
     var c = C { n: 0, m: 0 }
     with (C = c, u256 = c.n) { read_n() }

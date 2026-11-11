@@ -16,7 +16,7 @@ func private %__C_recv_0_0() -> i256 {
     block0:
         v0.objref<@layout_1> = obj.alloc @layout_1;
         v1.objref<@layout_1> = obj.alloc @layout_1;
-        v2.objref<i256> = obj.alloc i256;
+        v2.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
@@ -26,11 +26,14 @@ func private %__C_recv_0_0() -> i256 {
         v9.@layout_1 = insert_value undef.@layout_1 0.i256 0.i256;
         v11.@layout_1 = insert_value undef.@layout_1 0.i256 0.i256;
         obj.store v1 v11;
-        obj.store v2 0.i256;
-        v12.i256 = call %both v0 v0 v1;
-        v14.i256 = call %read_after_write 5.i256 v2 v2 v1;
-        (v15.i256, v16.i1) = uaddo v12 v14;
-        br v16 block2 block3;
+        v13.@layout_1 = insert_value undef.@layout_1 0.i256 0.i256;
+        v15.@layout_1 = insert_value undef.@layout_1 0.i256 0.i256;
+        obj.store v2 v15;
+        v17.i256 = call %both v0 v0 v1;
+        v20.@layout_1 = insert_value undef.@layout_1 0.i256 5.i256;
+        v21.i256 = call %read_after_write v20 v2 v2 3.i256 v1;
+        (v22.i256, v23.i1) = uaddo v17 v21;
+        br v23 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -38,7 +41,7 @@ func private %__C_recv_0_0() -> i256 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        return v15;
+        return v22;
 }
 
 func private %abi_field_size(v0.i256) -> i256 {
@@ -623,16 +626,15 @@ func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v5;
 }
 
-func private %read_after_write(v0.i256, nocapture v1.objref<i256>, nocapture v2.objref<i256>, noalias nocapture readonly v3.objref<@layout_1>) -> i256 {
+func private %read_after_write(v0.@layout_1, nocapture v1.objref<@layout_1>, nocapture v2.objref<@layout_1>, v3.i256, noalias nocapture readonly v4.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
     block1:
         obj.store v1 v0;
-        v8.objref<i256> = obj.proj v3 0.i256;
-        v9.i256 = obj.load v8;
-        v11.i256 = obj.load v2;
-        (v12.i256, v13.i1) = uaddo v11 v9;
+        v9.objref<i256> = obj.proj v2 0.i256;
+        v10.i256 = obj.load v9;
+        (v12.i256, v13.i1) = uaddo v10 v3;
         br v13 block2 block3;
 
     block2:
@@ -641,7 +643,13 @@ func private %read_after_write(v0.i256, nocapture v1.objref<i256>, nocapture v2.
         evm_revert 0.i256 36.i256;
 
     block3:
-        return v12;
+        v19.objref<i256> = obj.proj v4 0.i256;
+        v20.i256 = obj.load v19;
+        (v21.i256, v22.i1) = uaddo v12 v20;
+        br v22 block2 block4;
+
+    block4:
+        return v21;
 }
 
 func private %return_bytes(noalias nocapture readonly v0.objref<@layout_4>) {

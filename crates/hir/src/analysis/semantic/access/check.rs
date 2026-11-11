@@ -958,7 +958,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
             .filter_map(|(position, arg)| self.capability_arg_footprint(callee, position, arg))
             .collect();
         for effect in effect_args {
-            footprints.extend(self.effect_footprint(callee, effect));
+            if !self.is_snapshot_effect(effect) {
+                footprints.extend(self.effect_footprint(callee, effect));
+            }
         }
         for (position, footprint) in footprints.into_iter().enumerate() {
             let id = self.token(
@@ -2789,9 +2791,15 @@ impl<'a, 'db> Analysis<'a, 'db> {
             (lhs_mode == BorrowKind::Mut || rhs_mode == BorrowKind::Mut)
                 && self.any_overlap(lhs, rhs)
         };
-        // Two effects whose keys one provider may satisfy may be one place,
+        // A snapshot effect is a copy the call takes, which reads its place
+        // there and opens no access, as a snapshot view argument does. Two
+        // other effects whose keys one provider may satisfy may be one place,
         // whole, as one provider or two of the caller's effects that are one
         // place or none; two capabilities reaching all state alias by design.
+        let effects: Vec<_> = effects
+            .into_iter()
+            .filter(|(effect, _)| !self.is_snapshot_effect(effect))
+            .collect();
         for (idx, (lhs, lhs_footprint)) in effects.iter().enumerate() {
             for (rhs, rhs_footprint) in &effects[idx + 1..] {
                 if conflict(
@@ -2839,6 +2847,17 @@ impl<'a, 'db> Analysis<'a, 'db> {
             }
         }
         Ok(())
+    }
+
+    /// Whether `effect` is a snapshot: a read-only effect of a scalar or
+    /// handle type, which the callee takes as a copy in any space.
+    fn is_snapshot_effect(&self, effect: &NEffectArg<'db>) -> bool {
+        let ty = match &effect.arg {
+            NEffectArgValue::Place(place) => place.ty,
+            NEffectArgValue::Value(value) => self.body.values[value.value.index()].ty,
+        };
+        let ty = ty.as_capability(self.db).map_or(ty, |(_, target)| target);
+        !effect.required_mut && ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
     }
 
     /// Whether one provider may satisfy the keys of two of `callee`'s

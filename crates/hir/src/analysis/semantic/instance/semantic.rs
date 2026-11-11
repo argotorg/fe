@@ -1324,9 +1324,26 @@ impl<'db> SemanticInstance<'db> {
     /// with another of its effects, one of the two `mut`: a provider may
     /// satisfy both keys, as of generic keys that are one type here or two
     /// trait keys. A caller gives such effects one place or disjoint ones,
-    /// so neither is exclusive to its slot.
+    /// so neither is exclusive to its slot. A snapshot effect is a copy, no
+    /// place.
     #[salsa::tracked(returns(ref))]
     pub fn shared_effects(self, db: &'db dyn HirAnalysisDb) -> Vec<u32> {
+        let copies: Vec<_> = self
+            .effect_bindings(db)
+            .into_iter()
+            .filter_map(|binding| match binding {
+                LocalBinding::EffectParam {
+                    idx, is_mut: false, ..
+                } if self.binding_role(db, binding)
+                    == SemanticLocalRole::DirectValue {
+                        provenance: ValueProvenance::Ordinary,
+                    } =>
+                {
+                    Some(idx as u32)
+                }
+                _ => None,
+            })
+            .collect();
         let effects: Vec<_> = self
             .effect_requirements(db)
             .iter()
@@ -1334,7 +1351,7 @@ impl<'db> SemanticInstance<'db> {
                 matches!(
                     effect.key.kind(),
                     EffectKeyKind::Type | EffectKeyKind::Trait
-                )
+                ) && !copies.contains(&effect.binding_idx)
             })
             .collect();
         let (scope, assumptions) = (self.normalization_scope(db), self.assumptions(db));
@@ -2478,18 +2495,13 @@ fn classify_binding_role<'db>(
         let value_ty = normalize_ty(db, value_ty, scope, assumptions);
         return SemanticLocalRole::PlaceCarrier { provider, value_ty };
     }
-    // A read-only effect of a snapshot type provided by a memory place is
-    // passed as a copy, as a view parameter is: nothing can write the place
-    // during the call, since the call's other effects are disjoint from it
-    // unless they may be the same place, and a reentrant call has memory of
-    // its own.
+    // A read-only effect of a snapshot type is a copy taken at the call, as
+    // a snapshot view parameter is, in any space: the call's other effects
+    // and arguments may write its place. An entry's effects are its own.
     if let Some(provider) = &provider
-        && let LocalBinding::EffectParam {
-            is_mut: false, idx, ..
-        } = binding
-        && !instance.shared_effects(db).contains(&(idx as u32))
-        && provider.semantics.kind == ProviderKind::Place
-        && provider.semantics.address_space == Some(AddressSpace::Memory)
+        && matches!(owner, BodyOwner::Func(..) | BodyOwner::Closure { .. })
+        && matches!(binding, LocalBinding::EffectParam { is_mut: false, .. })
+        && !matches!(provider.source, ProviderSource::RootProvider { .. })
         && ty_is_snapshot(db, scope, ty, assumptions)
     {
         return SemanticLocalRole::DirectValue {

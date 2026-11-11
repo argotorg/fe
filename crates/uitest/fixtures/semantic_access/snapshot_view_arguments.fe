@@ -16,20 +16,8 @@ contract Forwarder {
     mut target: Address,
     recv PingMsg {
         Ping uses (target, call: mut Call) {
-            let copy = target
-            with (copy) { call_through_address() }
-            target.call(PingMsg::Ping {})
-        }
-    }
-}
-
-// Rejected: an effect is not a snapshot argument; the call's effects may not
-// overlap, and `mut Call` reaches the storage address.
-contract Overlapping {
-    mut target: Address,
-    recv PingMsg {
-        Ping uses (target, call: mut Call) {
             call_through_address()
+            target.call(PingMsg::Ping {})
         }
     }
 }
