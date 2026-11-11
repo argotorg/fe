@@ -1,0 +1,1 @@
+A provider is no longer chosen by matching its name to the callee's effect label: two providers of one key in a scope are ambiguous where a callee needs it, and `with (Key = value)` chooses one. A `uses` list may name a key only once, and a `with` may bind a key only once. See `docs/language/effects.md`.

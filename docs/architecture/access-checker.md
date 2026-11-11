@@ -115,8 +115,13 @@ not conflict with an operation on the map's entries.
   the instance (`EffectProviderSubst::param_spaces`), refined per call site.
 - `Domain(d)`: a resource domain: a contract field, an effect parameter, a
   root provider, or a dynamic domain for a handle of unknown provenance.
-  Distinct contract fields are disjoint; other domains of one address space
-  may alias, since a caller may supply overlapping providers. Where no caller
+  Distinct contract fields are disjoint, and so are a function's or a
+  closure's distinct effects, which its callers prove disjoint, unless one
+  provider may satisfy both keys (`domain::keys_may_share`: generic keys
+  that may be one type, trait keys): those are one place, whole, or
+  disjoint, so places at overlapping paths of the two overlap. A dynamic
+  domain, or one whose effect is unknown, may alias any other of its
+  space. Where no caller
   decides a parameter's or an effect provider's space, as in a generic
   function's own check, a place of a state-only type lies in its pin's space,
   or else in storage, never in memory (`TyId::default_space`). A place that
@@ -160,8 +165,19 @@ Each operation is checked against the open tokens it is not derived from:
 
 So `let v = mut store.value` held across a call whose effects permit
 reentrancy is rejected, while closing the access before the call is accepted.
-A callee's data parameters must be compatible with its own effects: passing a
-storage place as `mut` to a function declaring `mut Call` is rejected.
+A callee's data parameters must be compatible with each other and with its
+effects, and its effects with each other: passing a storage place as `mut`
+to a function declaring `mut Call` is rejected, and so is providing a field
+of a `mut` effect's place as another effect. Two effects whose keys one
+provider may satisfy may be one place, given as one provider (the same
+normalized argument) or as two of the caller's own such effects, whole;
+two capabilities reaching all state never conflict with each other.
+
+Lowering relies on this: an effect parameter is `noalias` (and `readonly`
+when read-only) unless the instance has another effect that may be the same
+place, one of them `mut` (`SemanticInstance::shared_effects`); a read-only
+snapshot effect from memory is passed by value under the same condition;
+and a call holds one copy of a packed lane for all the effects it provides.
 
 ## Projections
 
