@@ -41,6 +41,25 @@ impl Me for u8 {
     }
 }
 
+// A projection whose slide writes its `mut` parameter.
+fn cached(_ x: mut u8) -> mut u8 {
+    var tmp: u8 = x
+    yield mut tmp
+    x = tmp
+}
+
+trait Cached {
+    fn cached(mut self) -> mut u8
+}
+
+impl Cached for u8 {
+    fn cached(mut self) -> mut u8 {
+        var tmp: u8 = self
+        yield mut tmp
+        self = tmp
+    }
+}
+
 fn set_b() uses (pair: mut Pair) {
     let b = mut pair.b_mut()
     b = 0x2a
@@ -63,6 +82,16 @@ fn set_element_b() uses (pairs: mut Pairs) {
 
 fn set_b_through_receiver() uses (pair: mut Pair) {
     let b = mut pair.b.me()
+    b = 0x2a
+}
+
+fn set_b_in_slide() uses (pair: mut Pair) {
+    let b = mut cached(mut pair.b)
+    b = 0x2a
+}
+
+fn set_b_in_receiver_slide() uses (pair: mut Pair) {
+    let b = mut pair.b.cached()
     b = 0x2a
 }
 
@@ -89,6 +118,23 @@ fn test_packed_field_projections() uses (evm: mut Evm) {
         let receiver = 0x400 as u256 as StorPtr<Pair>
         with (mut *receiver) { set_b_through_receiver() }
         assert(evm.sload(0x400) == 0x2a11)
+    }
+}
+
+// The slide's write to a packed field passed as a `mut` argument or receiver
+// is stored after the slide runs.
+#[test]
+fn test_slide_writes_packed_argument() uses (evm: mut Evm) {
+    unsafe {
+        evm.sstore(slot: 0x500, value: 0x11)
+        let pair = 0x500 as u256 as StorPtr<Pair>
+        with (mut *pair) { set_b_in_slide() }
+        assert(evm.sload(0x500) == 0x2a11)
+
+        evm.sstore(slot: 0x600, value: 0x11)
+        let receiver = 0x600 as u256 as StorPtr<Pair>
+        with (mut *receiver) { set_b_in_receiver_slide() }
+        assert(evm.sload(0x600) == 0x2a11)
     }
 }
 

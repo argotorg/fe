@@ -8,9 +8,10 @@
 //! last use there; one that dies on a control-flow edge ends at the start of
 //! the successor, on an edge block of its own when the successor has other
 //! predecessors. An access whose carrier is never used ends right after it
-//! opens. Of the accesses ending at one point, borrows close first, then
-//! sessions finish in reverse creation order, which finishes a session before
-//! any session it depends on.
+//! opens. The accesses ending at one point end in reverse creation order,
+//! which ends an access before any access it depends on: a session finishes
+//! before the borrow passed to its call closes, so its slide can still write
+//! through the borrow.
 use std::cmp::Reverse;
 
 use cranelift_entity::EntityRef;
@@ -33,18 +34,9 @@ pub(super) fn elaborate_ends<'db>(db: &'db dyn HirAnalysisDb, body: &mut Semanti
     if families.is_empty() {
         return;
     }
-    let sessions: FxHashSet<Access> = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.stmts)
-        .filter(
-            |stmt| matches!(&stmt.kind, SStmtKind::Assign { expr, .. } if opens_session(db, expr)),
-        )
-        .map(|stmt| stmt.id)
-        .collect();
     let sorted = |accesses: &mut dyn Iterator<Item = &Access>| -> Vec<Access> {
         let mut accesses: Vec<_> = accesses.copied().collect();
-        accesses.sort_unstable_by_key(|access| (sessions.contains(access), Reverse(*access)));
+        accesses.sort_unstable_by_key(|access| Reverse(*access));
         accesses
     };
     // Locals each access depends on.

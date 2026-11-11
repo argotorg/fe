@@ -49,9 +49,10 @@ flowchart TD
   carrier or any carrier derived from it may be used. It ends right after its
   last use on each path; an access that dies on a control-flow edge ends at
   the start of the successor, on an edge block of its own when the successor
-  has other predecessors. Of the accesses ending at one point, borrows close
-  first, then sessions finish newest first, so a session finishes before any
-  session it depends on.
+  has other predecessors. The accesses ending at one point end newest first,
+  so an access ends before any access it depends on: a session finishes
+  before the borrow passed to its call closes, and its slide can still write
+  through the borrow.
 - `check_semantic_accesses` checks one instance. The runtime lowering gate
   requires it for every concrete instance, and the diagnostics pass checks
   each item's identity instance and, transitively, its concrete callees.
