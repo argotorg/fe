@@ -1581,18 +1581,10 @@ fn build_sectioned_package<'db>(
                         let entry = *functions_by_instance
                             .get(&entry_instance)
                             .expect("section entry should be declared as a runtime function");
-                        let reachable = collect_reachable_from_entry(
-                            &graph,
-                            entry_instance,
-                            &mut reachable_cache,
-                        );
                         RuntimeSection {
                             name: section_name,
                             entry,
                             embeds: Vec::new(),
-                            const_regions: collect_const_regions_for_reachable(
-                                db, &graph, &reachable,
-                            ),
                         }
                     })
                     .collect(),
@@ -1821,33 +1813,6 @@ fn collect_reachable_from_entry<'db>(
     }
     cache.insert(entry, seen.clone());
     seen
-}
-
-fn collect_const_regions_for_reachable<'db>(
-    db: &'db dyn MirDb,
-    graph: &RuntimeGraph<'db>,
-    reachable: &FxHashSet<RuntimeInstance<'db>>,
-) -> Vec<ConstRegionId<'db>> {
-    let mut seen = FxHashSet::default();
-    let mut regions = Vec::new();
-    let mut instances = reachable.iter().copied().collect::<Vec<_>>();
-    instances.sort_by_cached_key(|instance| {
-        (
-            runtime_instance_sort_key(db, *instance),
-            runtime_instance_symbol_key(db, *instance),
-        )
-    });
-    for instance in instances {
-        let Some(node) = graph.nodes.get(&instance) else {
-            continue;
-        };
-        for region in node.referenced_const_regions.iter().copied() {
-            if seen.insert(region) {
-                regions.push(region);
-            }
-        }
-    }
-    regions
 }
 
 fn materialized_contracts_for_roots<'db>(

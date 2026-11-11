@@ -1189,7 +1189,7 @@ fn filter_runtime_package_to_root_objects<'db>(
         .copied()
         .filter(|function| function_set.contains(&function.instance(db)))
         .collect::<Vec<_>>();
-    let const_region_set = reachable_const_regions(db, &objects, &functions);
+    let const_region_set = reachable_const_regions(db, &functions);
     let const_regions = package
         .const_regions(db)
         .iter()
@@ -1258,7 +1258,7 @@ fn isolate_runtime_package_object<'db>(
             .filter(|function| function_set.contains(&function.instance(db)))
             .collect::<Vec<_>>()
     };
-    let const_region_set = reachable_const_regions(db, &objects, &functions);
+    let const_region_set = reachable_const_regions(db, &functions);
     let const_regions = package
         .const_regions(db)
         .iter()
@@ -1376,13 +1376,9 @@ fn reachable_functions<'db>(
 
 fn reachable_const_regions<'db>(
     db: &'db dyn mir::MirDb,
-    objects: &[mir::RuntimeObject<'db>],
     functions: &[mir::RuntimeFunction<'db>],
 ) -> FxHashSet<mir::ConstRegionId<'db>> {
     let mut seen = FxHashSet::default();
-    for section in objects.iter().flat_map(|object| object.sections(db)) {
-        seen.extend(section.const_regions.clone());
-    }
     for function in functions {
         seen.extend(function.referenced_const_regions(db));
     }

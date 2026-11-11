@@ -1,0 +1,31 @@
+msg RangeMsg {
+    #[selector = 0x01]
+    Clamp { x: u256 } -> u256,
+}
+
+struct Range {
+    lo: u256,
+    hi: u256,
+}
+impl Copy for Range {}
+
+const LIMITS: Range = Range { lo: 0x1234567, hi: 0x89abcdef }
+
+fn clamp(_ r: Range, _ x: u256) -> u256 {
+    if x < r.lo { r.lo } else if x > r.hi { r.hi } else { x }
+}
+
+// Reading the code-backed `offset` makes the runtime observe its code size.
+pub contract Clamp {
+    offset: u256
+
+    init(start: u256) uses (mut offset) {
+        offset = start
+    }
+
+    recv RangeMsg {
+        Clamp { x } -> u256 uses (offset) {
+            clamp(LIMITS, x) + offset
+        }
+    }
+}

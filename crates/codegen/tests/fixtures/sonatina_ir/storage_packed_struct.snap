@@ -1305,6 +1305,5 @@ object @Book {
     }
     section runtime {
         entry %contract_runtime_root_Book;
-        data $const_region_0;
     }
 }

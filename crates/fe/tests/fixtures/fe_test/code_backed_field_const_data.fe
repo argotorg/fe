@@ -1,0 +1,53 @@
+// Reading the code-backed `offset` makes the runtime observe its code size;
+// `TABLE` is read at a dynamic index and `LIMITS` only through folded loads.
+msg TableMsg {
+    #[selector = 0x01]
+    Get { i: usize } -> u256,
+    #[selector = 0x02]
+    Clamp { x: u256 } -> u256,
+}
+
+struct Range {
+    lo: u256,
+    hi: u256,
+}
+impl Copy for Range {}
+
+const LIMITS: Range = Range { lo: 0x1234567, hi: 0x89abcdef }
+const TABLE: [u256; 4] = [0x1111, 0x2222222, 0x333333333333, 0x44444444444444444444]
+
+fn clamp(_ r: Range, _ x: u256) -> u256 {
+    if x < r.lo { r.lo } else if x > r.hi { r.hi } else { x }
+}
+
+pub contract Table {
+    offset: u256
+
+    init(start: u256) uses (mut offset) {
+        offset = start
+    }
+
+    recv TableMsg {
+        Get { i } -> u256 uses (offset) {
+            TABLE[i] + offset
+        }
+        Clamp { x } -> u256 uses (offset) {
+            clamp(LIMITS, x) + offset
+        }
+    }
+}
+
+#[test]
+fn test_code_backed_field_const_data() uses (evm: mut Evm) {
+    let addr = evm.create2<Table>(value: Wei::zero(), args: (7,), salt: 0)
+    assert!(addr.word() != 0)
+
+    for (i, expected) in [(0, 0x1111), (2, 0x333333333333), (3, 0x44444444444444444444)] {
+        let value: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: TableMsg::Get { i })
+        assert!(value == expected + 7)
+    }
+    for (x, expected) in [(5, 0x1234567), (0x2000000, 0x2000000), (0xffffffffff, 0x89abcdef)] {
+        let value: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: TableMsg::Clamp { x })
+        assert!(value == expected + 7)
+    }
+}

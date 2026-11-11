@@ -3900,6 +3900,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "closure_effects",
     "closure_trait_effects",
     "code_backed_array_storage_copy",
+    "code_backed_field_const_data",
     "code_backed_scalar_field",
     "code_struct_field_offsets",
     "coin",
