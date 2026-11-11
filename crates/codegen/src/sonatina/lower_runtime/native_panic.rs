@@ -20,6 +20,7 @@ pub(crate) enum NativePanics {
     HostRevert,
     /// As `HostRevert`, except that a panic without data traps: a WebAssembly
     /// test has no stderr of its own to report it on.
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
     HostRevertOrTrap,
     /// Trap without a report.
     Trap,
