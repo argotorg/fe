@@ -2,9 +2,9 @@
 
 //! `fe build --backend wasm` for ingots and workspaces.
 //!
-//! An ingot is built into one module named after it. Its exports are the
-//! `pub fn` items of its root module, `src/lib.fe`, which may call the other
-//! modules of the ingot and its dependencies. A workspace builds one module for
+//! An ingot is built into one module named after it. Its exports are its
+//! `#[unsafe(export)]` functions, in any of its modules, which may call the
+//! rest of the ingot and its dependencies. A workspace builds one module for
 //! each selected member that has exports. The modules run in Node.js with the
 //! host of `examples/wasm/host.mjs`, which checks each against its manifest.
 //! Node must be installed: the tests fail without it.
@@ -18,16 +18,18 @@ use tempfile::tempdir;
 use wasm_support::{Built, assert_matches_the_engine, expect_failure, fe, node_driver};
 
 /// The root module calls a second module, which has a struct and a constant of
-/// its own.
+/// its own, and an export.
 const CALC: [(&str, &str); 2] = [
     (
         "lib",
         "use ingot::table::{Weights, prime, weigh}\n\
          \n\
+         #[unsafe(export)]\n\
          pub fn weighted(a: u32, b: u32) -> u32 {\n\
          \x20   weigh(Weights { first: 3, second: 5 }, a, b)\n\
          }\n\
          \n\
+         #[unsafe(export)]\n\
          pub fn nth_prime(index: u32) -> u64 {\n\
          \x20   prime(index)\n\
          }\n",
@@ -45,6 +47,7 @@ const CALC: [(&str, &str); 2] = [
          \x20   weights.first * a + weights.second * b\n\
          }\n\
          \n\
+         #[unsafe(export)]\n\
          pub fn prime(_ index: u32) -> u64 {\n\
          \x20   PRIMES[index as usize]\n\
          }\n",
@@ -56,6 +59,7 @@ const APP: [(&str, &str); 1] = [(
     "lib",
     "use util::{double, sum}\n\
      \n\
+     #[unsafe(export)]\n\
      pub fn total(a: u64, b: u64) -> u64 {\n\
      \x20   sum([a, b, double(a), double(b)])\n\
      }\n",
@@ -63,10 +67,12 @@ const APP: [(&str, &str); 1] = [(
 
 const APP_DEPENDENCIES: &str = "\n[dependencies]\nutil = { path = \"../util\" }\n";
 
-/// A library for other ingots: `sum` takes an array, which no export can.
+/// A library for other ingots with an export of its own. `sum` takes an
+/// array, which no export can.
 const UTIL: [(&str, &str); 1] = [(
     "lib",
-    "pub fn double(_ x: u64) -> u64 {\n\
+    "#[unsafe(export)]\n\
+     pub fn double(_ x: u64) -> u64 {\n\
      \x20   x * 2\n\
      }\n\
      \n\
@@ -75,10 +81,10 @@ const UTIL: [(&str, &str); 1] = [(
      }\n",
 )];
 
-/// Nothing in the root module is an export.
+/// A `pub fn` without `#[unsafe(export)]` is not an export.
 const NO_EXPORTS: [(&str, &str); 1] = [(
     "lib",
-    "fn private_only() -> u32 { 1 }\npub fn generic<T>(x: own T) -> T { x }\n",
+    "fn private_only() -> u32 { 1 }\npub fn public_only() -> u32 { 2 }\n",
 )];
 
 fn write_ingot(dir: &Path, name: &str, config: &str, modules: &[(&str, &str)]) {
@@ -149,7 +155,7 @@ fn run(built: &Built, calls: Value) -> Value {
 }
 
 #[test]
-fn an_ingot_is_one_module_of_its_root_exports() {
+fn an_ingot_is_one_module_of_its_exports() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("calc");
     write_ingot(&root, "calc", "", &CALC);
@@ -160,16 +166,23 @@ fn an_ingot_is_one_module_of_its_root_exports() {
         stem: "calc".to_string(),
     };
     assert_eq!(files(&built.dir), ["calc.manifest.json", "calc.wasm"]);
-    // The functions of `table` are not exports.
-    assert_eq!(export_names(&built), ["memory", "nth_prime", "weighted"]);
+    // `table::prime` is an export, and `table::weigh` is not.
+    assert_eq!(
+        export_names(&built),
+        ["memory", "nth_prime", "prime", "weighted"]
+    );
     let results = run(
         &built,
         json!([
             { "export": "weighted", "args": [2, 4] },
             { "export": "nth_prime", "args": [4] },
+            { "export": "prime", "args": [1] },
         ]),
     );
-    assert_eq!(results, json!([{ "value": "26" }, { "value": "11" }]));
+    assert_eq!(
+        results,
+        json!([{ "value": "26" }, { "value": "11" }, { "value": "3" }])
+    );
 }
 
 #[test]
@@ -199,7 +212,7 @@ fn an_export_calls_into_a_path_dependency() {
             stem: "app".to_string(),
         };
         assert_eq!(built.manifest()["optimization"], level);
-        // The functions of `util` are not exports, so `sum` may take an array.
+        // The exports of `util` are not exports of `app`.
         assert_eq!(export_names(&built), ["memory", "total"]);
         let results = run(
             &built,
@@ -234,16 +247,23 @@ fn a_workspace_builds_the_member_that_ingot_names() {
     // A member that is named must have exports.
     expect_failure(
         &["build", "--backend", "wasm", "--ingot", "quiet", path],
-        &["needs at least one exported function"],
+        &["requires an `#[unsafe(export)]` function"],
     );
     expect_failure(
         &["build", "--backend", "wasm", "--ingot", "absent", path],
         &["No workspace member named \"absent\""],
     );
-    // Every root `pub fn` of a member is an export, so `util` is not a module.
-    expect_failure(
-        &["build", "--backend", "wasm", path],
-        &["cannot export `sum` to WebAssembly"],
+    // Without `--ingot`, each member with exports is a module.
+    let all = root.join("all");
+    build(&["--out-dir", all.to_str().unwrap(), path]);
+    assert_eq!(
+        files(&all),
+        [
+            "app.manifest.json",
+            "app.wasm",
+            "util.manifest.json",
+            "util.wasm"
+        ]
     );
 }
 
@@ -272,7 +292,7 @@ fn a_workspace_without_exports_is_refused() {
     write_ingot(&temp.path().join("quiet"), "quiet", "", &NO_EXPORTS);
     expect_failure(
         &["build", "--backend", "wasm", temp.path().to_str().unwrap()],
-        &["No WebAssembly exports found to build"],
+        &["No `#[unsafe(export)]` functions found to build"],
     );
     assert!(!temp.path().join("out").exists());
 }
@@ -288,7 +308,7 @@ fn an_ingot_without_exports_is_refused_as_a_file_is() {
     let of_ingot = expect_failure(&["build", "--backend", "wasm", root.to_str().unwrap()], &[]);
     let of_file = expect_failure(&["build", "--backend", "wasm", file.to_str().unwrap()], &[]);
     assert!(
-        of_file.contains("needs at least one exported function"),
+        of_file.contains("requires an `#[unsafe(export)]` function"),
         "{of_file}"
     );
     assert_eq!(of_ingot, of_file);

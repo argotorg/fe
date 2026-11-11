@@ -407,10 +407,13 @@ one program as long as their exported symbols differ.
 
 With the optional `wasm` Cargo feature, `fe build --backend wasm <path>` compiles
 a standalone `.fe` file or an ingot to a WebAssembly module (32-bit pointers, one linear
-memory). Every non-generic `pub fn` in the root of the file, or of an ingot's root module
-`src/lib.fe`, is exported under its own name, and the module also exports its memory as
-`memory`. The exports of an ingot may call its other modules and its dependencies, whose
-functions are not exported. Parameters and results must be
+memory). Its exports are the `#[unsafe(export)]` functions of the file or ingot, in any of its
+modules, as in native output (see "Exported functions"): each is exported under its own name,
+two of one name are an error, and a `pub fn` without the attribute is not an export. The
+module also exports its memory as `memory`. An export may call the rest of the ingot and its
+dependencies, whose own exports are not exports of the module. An export cannot be generic,
+but unlike a native one it may take `uses` effects that the root effect `std::wasm::Host`
+provides (see below). Parameters and results must be
 `bool` or integers of at most 64 bits, with two exceptions described below (text
 parameters and a reply result). `usize` and `isize` have 32 bits on this target
 and cross as an `i32`. Any other type, including `u256` and structs, is an error
@@ -427,10 +430,8 @@ instructions are not supported and are errors that name the function and the ins
 The default output is `<out>/<name>.wasm`, named after the file or the ingot; `--emit ir`
 writes `<out>/<name>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
 written, `<out>/<name>.manifest.json` is written with it. A workspace build writes one module
-for each selected member whose root module has an export, and `--ingot <name>` selects one
-member. A root `pub fn` of a selected member that cannot be an export is an error, so a
-workspace with a library whose root functions take other types needs `--ingot`. `--contract`
-is an error. The manifest records the
+for each selected member with an `#[unsafe(export)]` function, and `--ingot <name>` selects one
+member. `--contract` is an error. The manifest records the
 module's file name, SHA-256 and size, its initial memory in pages, the imports (module,
 name, WebAssembly parameter and result types), the exports (for the program's functions
 the Fe parameter names and types, with `HostText` and `Reply` as named by `std::wasm`,
@@ -451,7 +452,7 @@ no attribute for another module name yet. The module `std::wasm` declares host
 operations as effects (`Log`, `Clock` and `Abort`) with two providers. The root
 effect, `std::wasm::Host`, calls the imports `sys_wasm_log_i32`, `sys_wasm_log_u64`,
 `sys_wasm_now_ms` and `sys_wasm_abort`: an export or a test receives its capabilities by
-declaring them, as in `pub fn stamp() -> u64 uses (clock: mut Clock)`, and nothing else
+declaring them, as in `#[unsafe(export)] pub fn stamp() -> u64 uses (clock: mut Clock)`, and nothing else
 can create one. `mock(now, step)` is Fe code that needs no host, provided with
 `with (Clock = provider) { ... }`. If the host does not supply an import, the engine
 refuses to instantiate the module and names it.

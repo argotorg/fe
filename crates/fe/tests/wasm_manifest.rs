@@ -169,7 +169,11 @@ fn the_manifest_agrees_with_the_module_for_every_kind_of_program() {
 fn the_manifest_is_written_only_with_the_module() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("only.fe");
-    fs::write(&source, "pub fn one() -> u32 {\n    1\n}\n").unwrap();
+    fs::write(
+        &source,
+        "#[unsafe(export)]\npub fn one() -> u32 {\n    1\n}\n",
+    )
+    .unwrap();
     let run = |emit: &str, out: &str| {
         let out = temp.path().join(out);
         let output = fe(&[
@@ -219,7 +223,11 @@ fn the_manifest_is_written_only_with_the_module() {
 fn a_failed_build_writes_no_manifest() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("bad.fe");
-    fs::write(&source, "pub fn wide(_ x: u256) -> u256 {\n    x\n}\n").unwrap();
+    fs::write(
+        &source,
+        "#[unsafe(export)]\npub fn wide(_ x: u256) -> u256 {\n    x\n}\n",
+    )
+    .unwrap();
     let out = temp.path().join("out");
     let output = fe(&[
         "build",
@@ -253,6 +261,7 @@ fn dive(_ depth: u32) -> u64 uses (a: mut Abort) {
     dive(depth - 1) + frame[(depth % 64) as usize]
 }
 
+#[unsafe(export)]
 pub fn run(depth: u32) -> u64 uses (a: mut Abort) {
     dive(depth)
 }

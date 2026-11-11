@@ -1,5 +1,6 @@
 const SORTED: [i32; 8] = [-20, -3, 0, 4, 9, 15, 15, 42]
 
+#[unsafe(export)]
 pub fn binary_search(key: i32) -> i32 {
     var lo: usize = 0
     var hi: usize = 8
@@ -18,6 +19,7 @@ pub fn binary_search(key: i32) -> i32 {
     return -1
 }
 
+#[unsafe(export)]
 pub fn count_equal(key: i32) -> u32 {
     var n: u32 = 0
     for x in SORTED {
@@ -28,6 +30,7 @@ pub fn count_equal(key: i32) -> u32 {
     n
 }
 
+#[unsafe(export)]
 pub fn middle_pair_sum(shift: i32) -> i32 {
     let local: [i32; 6] = [1 + shift, 2 + shift, 3 + shift, 4 + shift, 5 + shift, 6 + shift]
     let mid = local.len() / 2

@@ -1,3 +1,4 @@
+#[unsafe(export)]
 pub fn gcd(a: u32, b: u32) -> u32 {
     var x = a
     var y = b
@@ -9,6 +10,7 @@ pub fn gcd(a: u32, b: u32) -> u32 {
     x
 }
 
+#[unsafe(export)]
 pub fn lcm(a: u32, b: u32) -> u32 {
     if a == 0 || b == 0 {
         return 0

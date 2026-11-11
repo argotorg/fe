@@ -1592,7 +1592,7 @@ fn build_error(source: &str) -> String {
 #[test]
 fn imports_that_are_not_scalar_are_named_errors() {
     let wide = build_error(
-        "extern { fn h(_ a: u256) -> i32 }\npub fn run(x: i32) -> i32 { unsafe { h(1) } }\n",
+        "extern { fn h(_ a: u256) -> i32 }\n#[unsafe(export)]\npub fn run(x: i32) -> i32 { unsafe { h(1) } }\n",
     );
     assert!(
         wide.contains(
@@ -1601,14 +1601,14 @@ fn imports_that_are_not_scalar_are_named_errors() {
         "{wide}"
     );
     let result = build_error(
-        "extern { fn h(_ a: i32) -> u128 }\npub fn run(x: i32) -> i32 {\n    let v = unsafe { h(1) }\n    x\n}\n",
+        "extern { fn h(_ a: i32) -> u128 }\n#[unsafe(export)]\npub fn run(x: i32) -> i32 {\n    let v = unsafe { h(1) }\n    x\n}\n",
     );
     assert!(
         result.contains("cannot import `h` from the WebAssembly host: the result type `u128` is a 128-bit integer"),
         "{result}"
     );
     let aggregate = build_error(
-        "struct P { a: i32 }\nextern { fn h(_ p: P) -> i32 }\npub fn run(x: i32) -> i32 { unsafe { h(P { a: x }) } }\n",
+        "struct P { a: i32 }\nextern { fn h(_ p: P) -> i32 }\n#[unsafe(export)]\npub fn run(x: i32) -> i32 { unsafe { h(P { a: x }) } }\n",
     );
     assert!(
         aggregate.contains(
@@ -1617,14 +1617,14 @@ fn imports_that_are_not_scalar_are_named_errors() {
         "{aggregate}"
     );
     let pointer = build_error(
-        "use core::ptr::MemArray\nextern { fn h(_ p: *u8) -> i32 }\npub fn run(x: i32) -> i32 {\n    let a: MemArray<u8> = MemArray::new_zeroed(4)\n    unsafe { h(a.ptr()) }\n}\n",
+        "use core::ptr::MemArray\nextern { fn h(_ p: *u8) -> i32 }\n#[unsafe(export)]\npub fn run(x: i32) -> i32 {\n    let a: MemArray<u8> = MemArray::new_zeroed(4)\n    unsafe { h(a.ptr()) }\n}\n",
     );
     assert!(
         pointer.contains("cannot import `h` from the WebAssembly host: parameter `p: *u8` is a pointer into Fe memory"),
         "{pointer}"
     );
     let unit = build_error(
-        "extern { fn h(_ unit: (), _ a: i32) -> i32 }\npub fn run(x: i32) -> i32 { unsafe { h((), x) } }\n",
+        "extern { fn h(_ unit: (), _ a: i32) -> i32 }\n#[unsafe(export)]\npub fn run(x: i32) -> i32 { unsafe { h((), x) } }\n",
     );
     assert!(
         unit.contains(

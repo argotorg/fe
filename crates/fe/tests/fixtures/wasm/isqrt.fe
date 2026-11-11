@@ -1,3 +1,4 @@
+#[unsafe(export)]
 pub fn isqrt(n: u64) -> u64 {
     var lo: u64 = 0
     var hi: u64 = 4294967296

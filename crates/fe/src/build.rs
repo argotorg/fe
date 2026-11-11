@@ -925,16 +925,8 @@ fn build_workspace(
                 .root_mod(db);
             // A WebAssembly module and a library are made of exports, and an
             // executable starts at `main`.
-            let has_roots = if backend.is_wasm() {
-                match mir::wasm_exports(db, root_mod) {
-                    Ok(exports) => !exports.is_empty(),
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile WebAssembly output: {err}");
-                        return true;
-                    }
-                }
-            } else if emit.library() {
-                !mir::native_exports(db, root_mod).is_empty()
+            let has_roots = if backend.is_wasm() || emit.library() {
+                !mir::exported_funcs(db, root_mod).is_empty()
             } else {
                 root_mod.main_entry(db).is_some()
             };
@@ -955,7 +947,7 @@ fn build_workspace(
         }
         if built.is_empty() {
             if backend.is_wasm() {
-                eprintln!("Error: No WebAssembly exports found to build");
+                eprintln!("Error: No `#[unsafe(export)]` functions found to build");
             } else if emit.library() {
                 eprintln!("Error: No native `#[unsafe(export)]` functions found to build");
             } else {
@@ -1725,7 +1717,7 @@ fn build_top_mod(
 /// Reports `top_mod`'s ingot's `#[unsafe(export)]` functions, which only native
 /// objects define, rather than dropping them from an EVM build.
 fn report_evm_exports(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
-    let exports = mir::native_exports(db, top_mod);
+    let exports = mir::exported_funcs(db, top_mod);
     for func in &exports {
         eprintln!(
             "Error: `#[unsafe(export)]` requires `--backend native`, but `{}` is exported",

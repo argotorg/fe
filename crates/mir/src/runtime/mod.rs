@@ -21,7 +21,7 @@ pub use package::{
     WASM_MEMORY_EXPORT, WASM_STACK_EXPORT, WasmExport, WasmExportPackage, WasmParamShape,
     WasmResultShape, build_ingot_module_runtime_package, build_native_package,
     build_native_test_runtime_package, build_runtime_package, build_test_runtime_package,
-    build_wasm_export_package, build_wasm_test_runtime_package, collect_test_funcs, native_exports,
+    build_wasm_export_package, build_wasm_test_runtime_package, collect_test_funcs, exported_funcs,
     runtime_instance_stable_key, runtime_instance_symbol_key, wasm_exports,
 };
 pub use pretty::{

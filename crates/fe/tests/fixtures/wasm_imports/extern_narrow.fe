@@ -10,22 +10,27 @@
 //mock: fn host_swap_bool(_ a: bool) -> bool { !a }
 //mock: fn host_add_u16_i16(_ a: u16, _ b: i16) -> i16 { b.wrapping_add(a.downcast_truncate()) }
 
+#[unsafe(export)]
 pub fn inc(a: u8) -> u8 {
     unsafe { host_inc_u8(a) }
 }
 
+#[unsafe(export)]
 pub fn negate(a: i8) -> i8 {
     unsafe { host_negate_i8(a) }
 }
 
+#[unsafe(export)]
 pub fn swap(a: bool) -> bool {
     unsafe { host_swap_bool(a) }
 }
 
+#[unsafe(export)]
 pub fn add_mixed(a: u16, b: i16) -> i16 {
     unsafe { host_add_u16_i16(a, b) }
 }
 
+#[unsafe(export)]
 pub fn widened(a: u8) -> u32 {
     (unsafe { host_inc_u8(a) } as u32) + 1000
 }

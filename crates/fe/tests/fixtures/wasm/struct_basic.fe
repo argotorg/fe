@@ -32,11 +32,13 @@ fn height(r: Rect) -> i32 {
     r.max.y - r.min.y
 }
 
+#[unsafe(export)]
 pub fn area(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
     let r = rect(x0: x0, y0: y0, x1: x1, y1: y1)
     width(r: r) * height(r: r)
 }
 
+#[unsafe(export)]
 pub fn dot_sum(ax: i32, ay: i32, bx: i32, by: i32) -> i32 {
     let a = Point { x: ax, y: ay }
     let b = Point { x: bx, y: by }
@@ -44,6 +46,7 @@ pub fn dot_sum(ax: i32, ay: i32, bx: i32, by: i32) -> i32 {
     c.dot(other: a) + a.dot(other: b)
 }
 
+#[unsafe(export)]
 pub fn copies(x: i32) -> i32 {
     var a = Point { x, y: 1 }
     let b = a

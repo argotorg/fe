@@ -3,9 +3,9 @@
 //!
 //! The module is lowered by the same lowerer as host-native and SP1 output,
 //! for the `wasm32-unknown-native` target: one linear address space and
-//! 32-bit pointers. The exports are the `pub fn` items of the root module, a
-//! standalone file or an ingot's `src/lib.fe`; their bodies may call the rest
-//! of the ingot and its dependencies, and use aggregates, constants and dynamic
+//! 32-bit pointers. The exports are the `#[unsafe(export)]` functions of a
+//! standalone file or an ingot; their bodies may call the rest of the ingot
+//! and its dependencies, and use aggregates, constants and dynamic
 //! memory, which the backend keeps in the linear memory. An export may take
 //! `std::wasm::HostText` parameters and return a `std::wasm::Reply`; a wrapper
 //! converts them to and from the numbers of the boundary, and a module with a

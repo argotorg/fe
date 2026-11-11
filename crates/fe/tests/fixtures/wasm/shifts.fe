@@ -1,23 +1,29 @@
+#[unsafe(export)]
 pub fn shl32(a: u32, n: u32) -> u32 {
     a << n
 }
 
+#[unsafe(export)]
 pub fn shr32(a: u32, n: u32) -> u32 {
     a >> n
 }
 
+#[unsafe(export)]
 pub fn sar32(a: i32, n: i32) -> i32 {
     a >> n
 }
 
+#[unsafe(export)]
 pub fn shl64(a: u64, n: u64) -> u64 {
     a << n
 }
 
+#[unsafe(export)]
 pub fn shr64(a: u64, n: u64) -> u64 {
     a >> n
 }
 
+#[unsafe(export)]
 pub fn rotl32(a: u32, n: u32) -> u32 {
     (a << n) | (a >> (32 - n))
 }

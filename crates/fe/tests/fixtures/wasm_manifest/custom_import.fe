@@ -4,6 +4,7 @@ extern {
     fn custom_import(_ value: u32) -> u32
 }
 
+#[unsafe(export)]
 pub fn run(_ value: u32) -> u32 {
     unsafe { custom_import(value) }
 }

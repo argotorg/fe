@@ -64,17 +64,19 @@ node examples/wasm/verify.mjs out/lines.wasm
 ```
 
 `fe build` also takes an ingot directory, and makes one module named after the ingot
-from the root module `src/lib.fe` and what it calls in the ingot's other modules and
-its dependencies. For a workspace it makes one module for each member whose root
-module has an export, or for the member that `--ingot` names. `--contract` is not
+from its exports and what they call in the ingot and its dependencies. For a workspace
+it makes one module for each member with an export, or for the member that `--ingot`
+names. `--contract` is not
 supported. `target = "wasm"` in `fe.toml` selects this backend for `fe build`,
 `fe check` and `fe test`.
 
 ### What a program may export
 
-Every non-generic `pub fn` in the root of the file, or of an ingot's `src/lib.fe`, is
-exported under its own name, and the module always exports its linear memory as
-`memory`. `#[unsafe(export)]` is an error on this backend. Parameters and results are
+The `#[unsafe(export)]` functions of the file or ingot, in any of its modules, are
+exported under their own names, as in native output, and the module always exports its
+linear memory as `memory`. A `pub fn` without the attribute is not an export, and a
+dependency's exports are not exports of the module. An export cannot be generic, and it
+may take the capabilities of `std::wasm::Host` in `uses`. Parameters and results are
 limited to:
 
 - `bool` and the integers `u8` to `u64` and `i8` to `i64`;
@@ -128,13 +130,13 @@ An import that nothing reachable calls is not in the module.
 
 `std::wasm::Host` provides the streams of `std::io`: `Stdout`, `Stderr`, `Stdin`, and
 `Stdio` for all three. An export or a test that declares one in `uses` prints with
-`print!`, `println!`, `eprint!` and `eprintln!` and reads with `std::io::StdinReader`,
-and the same source builds for the native target, whose root effect provides the same
-streams:
+`print!`, `println!`, `eprint!` and `eprintln!` and reads with `std::io::StdinReader`.
+Natively, the root effect provides the same streams to `main` and to tests:
 
 ```fe
 use std::io::Stdout
 
+#[unsafe(export)]
 pub fn greet(times: u32) uses (out: mut Stdout) {
     println!("hello, ", times, " times")
 }
@@ -363,10 +365,10 @@ cargo test -p fe --all-features \
 - **Types.** Floats do not exist in Fe yet. 128-bit and 256-bit integers work inside
   functions (as 64-bit limbs) but cannot cross the boundary. Exports cannot return
   text or aggregates.
-- **Programs.** Every root `pub fn` of an ingot is an export, so an ingot that is a
-  library for other Fe code is a module only if those functions fit the boundary. Contracts
-  and EVM features are not available: an EVM-only instruction is an error that names it.
-  `fe check` and the language server do not know the export rule.
+- **Programs.** An export that declares effects builds for WebAssembly only, since a
+  native export takes none. Contracts and EVM features are not available: an EVM-only
+  instruction is an error that names it. `fe check` and the language server check that
+  an export is `pub` and not generic, but not the boundary types.
 - **Imports.** The module is always `env`; no attribute names another module. Imports
   take scalars only, so the compiler does not check that an address and a length
   passed to an import describe a text; the host does.

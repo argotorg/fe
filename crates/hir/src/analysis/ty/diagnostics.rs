@@ -364,7 +364,7 @@ pub enum RevealedBy {
     Evaluation,
 }
 
-/// Why a C caller cannot call an `#[unsafe(export)]` function.
+/// Why the caller outside Fe cannot call an `#[unsafe(export)]` function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ExportIssue {
     NotPub,

@@ -23,14 +23,17 @@ fn pow(base: Complex, n: u32) -> Complex {
     result
 }
 
+#[unsafe(export)]
 pub fn power_re(re: i64, im: i64, n: u32) -> i64 {
     pow(base: Complex { re, im }, n: n).re
 }
 
+#[unsafe(export)]
 pub fn power_im(re: i64, im: i64, n: u32) -> i64 {
     pow(base: Complex { re, im }, n: n).im
 }
 
+#[unsafe(export)]
 pub fn mandel_steps(cre: i64, cim: i64, limit: u32) -> u32 {
     var z = Complex { re: 0, im: 0 }
     let c = Complex { re: cre, im: cim }

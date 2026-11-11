@@ -262,6 +262,7 @@ struct Zoo {
 #[inline(never)]
 fn keep(_ zoo: Zoo) -> u8 { zoo.flags.c }
 
+#[unsafe(export)]
 pub fn main() -> i32 {
     let zoo = ptr::alloc<Zoo>()
     let _ = keep(unsafe { *zoo })

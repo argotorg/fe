@@ -1,9 +1,9 @@
 #![cfg(feature = "wasm")]
 
-//! Programs of the native suites, built for WebAssembly and entered at their
-//! `pub fn main() -> i32` export: destruction, owners, raw references,
-//! providers, arithmetic at every width and allocation limits. The host
-//! supplies the `putchar` and `getchar` imports that the programs declare.
+//! Programs of the native suites, built for WebAssembly with their
+//! `pub fn main() -> i32` exported and entered there: destruction, owners, raw
+//! references, providers, arithmetic at every width and allocation limits. The
+//! host supplies the `putchar` and `getchar` imports that the programs declare.
 
 mod wasm_support;
 
@@ -71,10 +71,18 @@ fn fixture(path: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
-/// Builds `source` at each level and runs `main` with `input`.
+/// Builds `source`, a native program, at each level with its `main` exported,
+/// and runs `main` with `input`.
 fn runs(source: &str, input: &[u8]) -> Vec<Run> {
     let temp = tempdir().unwrap();
     let path = temp.path().join("program.fe");
+    // The root module's `main` starts a line; a nested module's is indented.
+    let source = format!("\n{source}").replacen(
+        "\npub fn main() -> i32",
+        "\n#[unsafe(export)]\npub fn main() -> i32",
+        1,
+    );
+    assert!(source.contains("#[unsafe(export)]"), "no `main` to export");
     fs::write(&path, source).unwrap();
     LEVELS
         .iter()
@@ -248,7 +256,9 @@ fn checked_arithmetic_traps() {
             "#[arithmetic({mode})]\nfn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
         ));
     }
-    source.push_str("pub fn main() -> i32 {\n    let selector = unsafe { getchar() }\n");
+    source.push_str(
+        "#[unsafe(export)]\npub fn main() -> i32 {\n    let selector = unsafe { getchar() }\n",
+    );
     for (index, (_, _, _, value, rhs)) in cases.iter().enumerate() {
         source.push_str(&format!(
             "    if selector == {index} {{ if calculate_{index}(value: {value}, rhs: {rhs}) == 0 {{ return 0 }} else {{ return 1 }} }}\n"
@@ -288,6 +298,7 @@ fn fails(_ len: usize) -> bool {
     }
 }
 
+#[unsafe(export)]
 pub fn main() -> i32 {
     if unsafe { getchar() } >= 0 {
         let _ = ptr::alloc_bytes(usize::max())

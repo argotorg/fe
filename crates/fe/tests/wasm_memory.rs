@@ -1511,7 +1511,7 @@ fn the_stack_size_option_sets_how_deep_calls_can_nest() {
     // Each call keeps an array of 512 bytes while the call it makes runs.
     fs::write(
         &source,
-        "pub fn deep(n: u32) -> u64 {\n    if n == 0 {\n        return 0\n    }\n    var frame: [u64; 64] = [0; 64]\n    let i = (n % 64) as usize\n    frame[i] = n as u64\n    deep(n: n - 1) + frame[i]\n}\n",
+        "#[unsafe(export)]\npub fn deep(n: u32) -> u64 {\n    if n == 0 {\n        return 0\n    }\n    var frame: [u64; 64] = [0; 64]\n    let i = (n % 64) as usize\n    frame[i] = n as u64\n    deep(n: n - 1) + frame[i]\n}\n",
     )
     .unwrap();
     let deep = Export::new("deep", &[("n", U32)], U64);

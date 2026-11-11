@@ -602,7 +602,14 @@ pub mod native {
         observed: &[Vec<Result<i128, Trap>>],
         temp: &Path,
     ) {
-        let text = fs::read_to_string(source).unwrap();
+        // The driver calls the exports as ordinary functions, so a native
+        // build does not export them to C.
+        let text = fs::read_to_string(source)
+            .unwrap()
+            .lines()
+            .filter(|line| line.trim() != "#[unsafe(export)]")
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut checks = Vec::new();
         let mut traps = Vec::new();
         for (export, results) in exports.iter().zip(observed) {

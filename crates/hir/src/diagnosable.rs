@@ -391,17 +391,19 @@ impl<'db> Func<'db> {
         diags
     }
 
-    /// An `#[unsafe(export)]` function is public, and a C caller supplies it no
-    /// generic arguments or effects.
+    /// An `#[unsafe(export)]` function is public, and its caller supplies it no
+    /// generic arguments. A C caller supplies no effects either; a WebAssembly
+    /// export takes the effects of the root effect, `std::wasm::Host`.
     pub fn diags_export(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         if !self.is_exported(db) {
             return Vec::new();
         }
+        let wasm = db.compilation_settings().target(db) == Target::Wasm;
         [
             (!self.vis(db).is_pub()).then(|| (self.span().name().into(), ExportIssue::NotPub)),
             (GenericParamOwner::Func(self).params(db).next().is_some())
                 .then(|| (self.span().generic_params().into(), ExportIssue::Generic)),
-            (!self.declared_effects(db).data(db).is_empty())
+            (!wasm && !self.declared_effects(db).data(db).is_empty())
                 .then(|| (self.span().effects().into(), ExportIssue::Effects)),
         ]
         .into_iter()

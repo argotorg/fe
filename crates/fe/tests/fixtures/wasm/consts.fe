@@ -8,18 +8,22 @@ const fn triple(x: u32) -> u32 {
 
 const TRIPLED: u32 = triple(x: 7)
 
+#[unsafe(export)]
 pub fn offset() -> u32 {
     OFFSET
 }
 
+#[unsafe(export)]
 pub fn tripled_plus(x: u32) -> u32 {
     TRIPLED + x
 }
 
+#[unsafe(export)]
 pub fn masked(x: u64) -> u64 {
     x & MASK
 }
 
+#[unsafe(export)]
 pub fn scaled(x: u32) -> u32 {
     x * BASE + OFFSET
 }

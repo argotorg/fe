@@ -777,7 +777,7 @@ fn compile_native_module(
         NativeTarget::Host => (create_native_isa()?, NativePanics::Abort),
         #[cfg(feature = "sp1")]
         NativeTarget::Sp1 => {
-            if let Some(func) = mir::native_exports(db, top_mod).first() {
+            if let Some(func) = mir::exported_funcs(db, top_mod).first() {
                 return Err(LowerError::Unsupported(format!(
                     "SP1 guests export no functions, but `{}` is `#[unsafe(export)]`",
                     func.scope().pretty_path(db).unwrap_or_default()

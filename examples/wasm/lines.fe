@@ -44,6 +44,7 @@ fn count(_ name: HostText) -> Reply uses (files: mut Files) {
 }
 
 // The files come from the root effect, `std::wasm::Host`.
+#[unsafe(export)]
 pub fn lines(name: HostText) -> Reply uses (files: mut Files) {
     count(name)
 }

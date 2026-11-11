@@ -13,7 +13,9 @@ fn roll(_ sides: u32) -> u32 uses (clock: mut Clock) {
     ((second % (sides as u64))).downcast_truncate()
 }
 
+//host: #[unsafe(export)]
 //host: pub fn roll_die(sides: u32) -> u32 uses (clock: mut Clock) {
+//mock: #[unsafe(export)]
 //mock: pub fn roll_die(sides: u32) -> u32 {
 //mock:     var p = provider()
 //mock:     with (Clock = p) {
@@ -21,7 +23,9 @@ fn roll(_ sides: u32) -> u32 uses (clock: mut Clock) {
 //mock:     }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn two_rolls(sides: u32) -> u32 uses (clock: mut Clock) {
+//mock: #[unsafe(export)]
 //mock: pub fn two_rolls(sides: u32) -> u32 {
 //mock:     var p = provider()
 //mock:     with (Clock = p) {

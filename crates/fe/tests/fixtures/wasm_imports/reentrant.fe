@@ -4,6 +4,7 @@
 //host: }
 //mock: fn host_callback(_ x: i32) -> i32 { inner(x) }
 
+#[unsafe(export)]
 pub fn inner(x: i32) -> i32 {
     var scratch: [i32; 16] = [0; 16]
     var i: usize = 0
@@ -22,6 +23,7 @@ struct Held {
     c: i32,
 }
 
+#[unsafe(export)]
 pub fn outer(x: i32) -> i32 {
     var table: [i32; 8] = [0; 8]
     var i: usize = 0
