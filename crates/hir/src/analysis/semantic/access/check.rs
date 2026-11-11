@@ -21,7 +21,7 @@ use smallvec::SmallVec;
 
 use super::{
     DropElaboration, DropFlagPoint, DropFlagUpdate, DropPart, DropStep,
-    domain::Domains,
+    domain::{Alias, Domains, keys_may_share},
     place::{AbsPlace, Base, Path, Step, path_of, paths_overlap},
     refine::provisional_result_spaces,
     space::{PathSpace, PlaceStep},
@@ -245,7 +245,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             scope: instance.key(db).impl_env(db).normalization_scope(db),
             assumptions: instance.assumptions(db),
             param_count,
-            domains: Domains::default(),
+            domains: Domains::new(db, instance),
             root_domain: vec![None; body.roots.len()],
             tokens: Vec::new(),
             values: vec![Held::new(); body.values.len()],
@@ -370,15 +370,14 @@ impl<'a, 'db> Analysis<'a, 'db> {
             } else {
                 // An effect handle names its provider's domain.
                 let domain = match value.source {
-                    Some(LocalBinding::EffectParam { site, idx, .. }) => {
-                        Some(self.domains.provider_source(
-                            ProviderSource::UsesParam {
-                                site: site.slot_site(self.db, idx as u32),
-                                requirement_idx: idx as u32,
-                            },
-                            provider_semantics(self.db, value.ty).address_space,
-                        ))
-                    }
+                    Some(LocalBinding::EffectParam { site, idx, .. }) => Some(self.domains.effect(
+                        ProviderSource::UsesParam {
+                            site: site.slot_site(self.db, idx as u32),
+                            requirement_idx: idx as u32,
+                        },
+                        provider_semantics(self.db, value.ty).address_space,
+                        idx as u32,
+                    )),
                     _ => None,
                 };
                 let Some(domain) = domain else {
@@ -642,7 +641,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
             | (Base::Grant { .. }, Base::State(_)) => false,
             (Base::State(_), _) | (_, Base::State(_)) => same_space(),
             (Base::Domain(lhs_domain), Base::Domain(rhs_domain)) if lhs_domain != rhs_domain => {
-                self.domains.may_alias(lhs_domain, rhs_domain) && same_space()
+                match self.domains.alias(lhs_domain, rhs_domain) {
+                    Alias::Disjoint => false,
+                    Alias::Whole => same_space() && paths_overlap(&lhs.path, &rhs.path),
+                    Alias::Any => same_space(),
+                }
             }
             (lhs_base, rhs_base) => lhs_base == rhs_base && paths_overlap(&lhs.path, &rhs.path),
         }
@@ -2745,9 +2748,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
             .enumerate()
             .filter_map(|(position, arg)| self.capability_arg_footprint(callee, position, arg))
             .collect();
-        for effect in effect_args {
-            footprints.extend(self.effect_footprint(callee, effect));
-        }
+        let effects: Vec<_> = effect_args
+            .iter()
+            .filter_map(|effect| Some((effect, self.effect_footprint(callee, effect)?)))
+            .collect();
         if let Some((func, mode)) = func
             && let Some(access) = external_call_state_access(self.db, func, mode)
         {
@@ -2757,7 +2761,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 parents: TokenSet::new(),
             });
         }
-        for footprint in &footprints {
+        for footprint in footprints
+            .iter()
+            .chain(effects.iter().map(|(_, footprint)| footprint))
+        {
             let kind = match footprint.mode {
                 BorrowKind::Mut => MemoryAccessKind::Write,
                 BorrowKind::Ref => MemoryAccessKind::Read,
@@ -2773,16 +2780,40 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 origin,
             )?;
         }
-        // The callee takes its data parameters to be compatible with each
-        // other and with its effects, so the parts of one call never
-        // authorize each other: a `mut` one excludes any other of the same
-        // place, whatever accesses they are reached through. Two effects may
-        // alias, which the callee allows for.
+        // The callee takes its data parameters and effects to be compatible
+        // with each other, so the parts of one call never authorize each
+        // other: a `mut` one excludes any other of the same place, whatever
+        // accesses they are reached through.
         let conflict = |(lhs, lhs_mode): (&[AbsPlace], BorrowKind),
                         (rhs, rhs_mode): (&[AbsPlace], BorrowKind)| {
             (lhs_mode == BorrowKind::Mut || rhs_mode == BorrowKind::Mut)
                 && self.any_overlap(lhs, rhs)
         };
+        // Two effects whose keys one provider may satisfy may be one place,
+        // whole, as one provider or two of the caller's effects that are one
+        // place or none; two capabilities reaching all state alias by design.
+        for (idx, (lhs, lhs_footprint)) in effects.iter().enumerate() {
+            for (rhs, rhs_footprint) in &effects[idx + 1..] {
+                if conflict(
+                    (&lhs_footprint.regions, lhs_footprint.mode),
+                    (&rhs_footprint.regions, rhs_footprint.mode),
+                ) && !(reaches_state(lhs_footprint) && reaches_state(rhs_footprint))
+                    && !(self.effects_may_share(callee, lhs, rhs)
+                        && (lhs.arg == rhs.arg
+                            || self.whole_alias(&lhs_footprint.regions, &rhs_footprint.regions)))
+                {
+                    return Err(self.effects_conflict(
+                        callee,
+                        [(lhs, lhs_footprint.mode), (rhs, rhs_footprint.mode)],
+                        origin,
+                    ));
+                }
+            }
+        }
+        let footprints: Vec<_> = footprints
+            .into_iter()
+            .chain(effects.into_iter().map(|(_, footprint)| footprint))
+            .collect();
         for (idx, (regions, mode, arg_origin)) in passed.iter().enumerate() {
             if let Some((_, _, other)) = passed[idx + 1..]
                 .iter()
@@ -2808,6 +2839,103 @@ impl<'a, 'db> Analysis<'a, 'db> {
             }
         }
         Ok(())
+    }
+
+    /// Whether one provider may satisfy the keys of two of `callee`'s
+    /// effects.
+    fn effects_may_share(
+        &self,
+        callee: SemanticInstanceKey<'db>,
+        lhs: &NEffectArg<'db>,
+        rhs: &NEffectArg<'db>,
+    ) -> bool {
+        let requirements = SemanticInstance::new(self.db, callee).effect_requirements(self.db);
+        let key = |effect: &NEffectArg<'db>| {
+            requirements
+                .iter()
+                .find(|requirement| requirement.binding_idx == effect.binding_idx)
+                .map(|requirement| &requirement.key)
+        };
+        match (key(lhs), key(rhs)) {
+            (Some(lhs), Some(rhs)) => {
+                keys_may_share(self.db, self.scope, self.assumptions, lhs, rhs)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the places of `lhs` and `rhs` that overlap are each two of
+    /// this body's effects, whole, that are one place or none.
+    fn whole_alias(&self, lhs: &[AbsPlace], rhs: &[AbsPlace]) -> bool {
+        lhs.iter().all(|lhs| {
+            rhs.iter().all(|rhs| {
+                !self.overlaps(lhs, rhs)
+                    || matches!(
+                        (lhs.base, rhs.base),
+                        (Base::Domain(lhs_domain), Base::Domain(rhs_domain))
+                            if lhs_domain != rhs_domain
+                                && self.domains.alias(lhs_domain, rhs_domain) == Alias::Whole
+                    ) && lhs.path.is_empty()
+                        && rhs.path.is_empty()
+            })
+        })
+    }
+
+    /// The conflict between two effects of a call to `callee`, naming both.
+    fn effects_conflict(
+        &self,
+        callee: SemanticInstanceKey<'db>,
+        effects: [(&NEffectArg<'db>, BorrowKind); 2],
+        origin: SemOrigin<'db>,
+    ) -> Diag<'db> {
+        let requirements = SemanticInstance::new(self.db, callee).effect_requirements(self.db);
+        let [lhs, rhs] = effects.map(|(effect, _)| {
+            requirements
+                .iter()
+                .find(|requirement| requirement.binding_idx == effect.binding_idx)
+                .map_or_else(
+                    || "an effect".to_string(),
+                    |requirement| format!("`{}`", requirement.binding_name.data(self.db)),
+                )
+        });
+        let callee_name = match callee.owner(self.db) {
+            BodyOwner::Func(func, _) => func.name(self.db).to_opt().map_or_else(
+                || "the callee".to_string(),
+                |name| format!("`{}`", name.data(self.db)),
+            ),
+            _ => "the closure".to_string(),
+        };
+        let mutable = match effects.map(|(_, mode)| mode) {
+            [BorrowKind::Mut, BorrowKind::Mut] => "both are `mut`".to_string(),
+            [BorrowKind::Mut, BorrowKind::Ref] => format!("{lhs} is `mut`"),
+            _ => format!("{rhs} is `mut`"),
+        };
+        let mut diag = self.diag(
+            SemanticDiagnosticKind::AccessConflict,
+            origin,
+            format!("the effects {lhs} and {rhs} of {callee_name} reach one place, and {mutable}"),
+        );
+        // The call's planned effect arguments, numbered as the callee's
+        // instance numbers its effects.
+        if let SemOrigin::Expr(expr) = origin
+            && !self.provisional
+            && let Some(Some(site)) = self.instance.call_sites(self.db).get(expr.index())
+        {
+            for ((effect, _), name) in effects.iter().zip([&lhs, &rhs]) {
+                if let Some(source) = site
+                    .effect_args
+                    .iter()
+                    .find(|arg| arg.binding_idx == effect.binding_idx)
+                    .and_then(|arg| arg.with_source)
+                {
+                    diag.push_secondary(
+                        format!("{name} is provided here"),
+                        self.span(SemOrigin::Expr(source)),
+                    );
+                }
+            }
+        }
+        diag
     }
 
     fn check_terminator(&mut self, block: NBlockId, state: &State) -> Result<(), Diag<'db>> {
@@ -3102,6 +3230,15 @@ pub(super) fn callee_input_access<'db>(
 ) -> Option<BindingAccess> {
     let typed_body = callee.typed_body(db);
     typed_body.binding_access(*typed_body.input_bindings().get(position)?)
+}
+
+/// Whether `footprint` is a capability's, reaching all persistent and
+/// transient state.
+fn reaches_state(footprint: &Footprint) -> bool {
+    footprint
+        .regions
+        .iter()
+        .all(|region| matches!(region.base, Base::State(_)))
 }
 
 fn state_regions() -> Vec<AbsPlace> {

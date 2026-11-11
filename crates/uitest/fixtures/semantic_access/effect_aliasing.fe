@@ -1,0 +1,134 @@
+// A call's effects, like its arguments, reach disjoint places: overlap with a
+// `mut` one is an error, naming both. Its callee takes distinct effects to be
+// disjoint, unless one provider may satisfy both keys; then they are one
+// place, whole, or disjoint.
+use core::MemVec
+
+pub struct Log { entries: MemVec<u256> }
+
+impl Log {
+    pub fn changes(self) -> ref MemVec<u256> { ref self.entries }
+}
+
+pub struct Totals { sum: u256, log: Log }
+
+impl Totals {
+    pub fn add(mut self, _ x: u256) { self.sum += x }
+}
+
+// Accepted: `log` and `totals` have distinct keys, so they are disjoint.
+pub fn settle() uses (log: Log, totals: mut Totals) {
+    for entry in log.changes() {
+        totals.add(entry)
+    }
+}
+
+// Rejected: the log lies in the totals.
+pub fn nested_providers(_ totals: mut Totals) {
+    with (totals.log, mut totals) { settle() }
+}
+
+// Accepted: distinct places.
+pub fn distinct_providers(_ totals: mut Totals, _ log: Log) {
+    with (log, mut totals) { settle() }
+}
+
+struct C { n: u256, m: u256 }
+
+fn both_mut() -> u256 uses (c: mut C, n: mut u256) {
+    n += 1
+    c.n += 10
+    n
+}
+
+fn read_n() -> u256 uses (n: u256, c: mut C) {
+    c.n += 10
+    n
+}
+
+// Rejected: a part of `c` provides `n`, whether `n` is `mut` or not.
+pub fn partial_overlap() -> u256 {
+    var c = C { n: 0, m: 0 }
+    with (C = c, u256 = c.n) { both_mut() }
+}
+
+pub fn partial_overlap_read() -> u256 {
+    var c = C { n: 0, m: 0 }
+    with (C = c, u256 = c.n) { read_n() }
+}
+
+// Accepted: a sibling field.
+pub fn sibling() -> u256 {
+    var c = C { n: 0, m: 0 }
+    var d = C { n: 0, m: 0 }
+    with (C = c, u256 = d.m) { both_mut() }
+}
+
+trait Bump {
+    fn bump(mut self) -> u256
+}
+
+impl Bump for C {
+    fn bump(mut self) -> u256 {
+        self.n += 1
+        self.n
+    }
+}
+
+impl Bump for u256 {
+    fn bump(mut self) -> u256 {
+        self += 1
+        self
+    }
+}
+
+trait Peek {
+    fn peek(self) -> u256
+}
+
+impl Peek for C {
+    fn peek(self) -> u256 { self.m }
+}
+
+fn traits() -> u256 uses (b: mut Bump, p: Peek) {
+    b.bump() + p.peek()
+}
+
+fn trait_and_type() -> u256 uses (b: mut Bump, c: C) {
+    b.bump() + c.m
+}
+
+// Accepted: one provider for two trait keys, or a trait key and a type key,
+// is one place, whole.
+pub fn one_provider() -> u256 {
+    var c = C { n: 0, m: 0 }
+    with (c) { traits() + trait_and_type() }
+}
+
+// Rejected: two providers of which one holds the other.
+pub fn trait_partial() -> u256 {
+    var c = C { n: 0, m: 0 }
+    with (Bump = c.n, C = c) { trait_and_type() }
+}
+
+// Rejected in the callee: a provider may implement both traits, so `p` and
+// `b` may be one place.
+fn traits_may_alias() uses (b: mut Bump, p: Peek) {
+    let held = ref p
+    b.bump()
+    let v = held.peek()
+}
+
+fn pair<T, U>() uses (x: mut T, y: mut U) {}
+
+// Accepted: forwarded whole, `a` and `b` are one place or disjoint, which
+// `pair` allows for too.
+fn forward<T, U>() uses (a: mut T, b: mut U) {
+    pair<T, U>()
+}
+
+// Accepted: one provider for both of `pair`'s effects.
+pub fn one_generic_provider() {
+    var c = C { n: 0, m: 0 }
+    with (c) { pair<C, C>() }
+}

@@ -1,0 +1,125 @@
+// Effects follow the parameters' aliasing rule: a call's effects reach
+// disjoint places, unless one provider satisfies several of them, which are
+// then one place. Each test runs at every optimization level
+// (`effect_aliasing_at_all_optimization_levels`).
+use core::MemVec
+
+pub struct Log { entries: MemVec<u256> }
+
+impl Log {
+    pub fn changes(self) -> ref MemVec<u256> { ref self.entries }
+}
+
+pub struct Totals { sum: u256, count: u256 }
+
+impl Totals {
+    pub fn add(mut self, _ x: u256) {
+        self.sum += x
+        self.count += 1
+    }
+}
+
+// Effects of distinct keys are disjoint, so a view of one is iterated while
+// the other is written.
+fn settle() uses (log: Log, totals: mut Totals) {
+    for entry in log.changes() {
+        totals.add(entry)
+    }
+}
+
+#[test]
+fn distinct_keys_are_disjoint() {
+    var entries = MemVec<u256>::new()
+    entries.push(3)
+    entries.push(4)
+    let log = Log { entries }
+    var totals = Totals { sum: 0, count: 0 }
+    with (log, totals) { settle() }
+    assert(totals.sum == 7 && totals.count == 2)
+}
+
+struct Counter { n: u256 }
+
+trait Bump {
+    fn bump(mut self) -> u256
+}
+
+impl Bump for Counter {
+    fn bump(mut self) -> u256 {
+        self.n += 1
+        self.n
+    }
+}
+
+trait Jump {
+    fn jump(mut self) -> u256
+}
+
+impl Jump for Counter {
+    fn jump(mut self) -> u256 {
+        self.n += 10
+        self.n
+    }
+}
+
+fn two_traits() -> u256 uses (b: mut Bump, j: mut Jump) {
+    let first = b.bump()
+    let second = j.jump()
+    let third = b.bump()
+    first * 10000 + second * 100 + third
+}
+
+fn trait_and_type() -> u256 uses (b: mut Bump, c: mut Counter) {
+    let first = b.bump()
+    c.n += 10
+    let second = b.bump()
+    first * 10000 + c.n * 100 + second
+}
+
+// One provider for two trait keys, or a trait key and a type key, is one
+// place: each effect sees the others' writes.
+#[test]
+fn one_provider_for_two_keys() {
+    var c = Counter { n: 0 }
+    assert(with (c) { two_traits() } == 11112)
+    assert(c.n == 12)
+    assert(with (c) { trait_and_type() } == 132424)
+    assert(c.n == 24)
+}
+
+fn pair<T: Bump, U: Jump>() -> u256 uses (x: mut T, y: mut U) {
+    let first = x.bump()
+    let second = y.jump()
+    first * 100 + second
+}
+
+fn forward<T: Bump, U: Jump>() -> u256 uses (a: mut T, b: mut U) {
+    pair<T, U>()
+}
+
+// Generic keys that become one type take one provider, whole; forwarded,
+// two effects that may be one place stay so.
+#[test]
+fn generic_keys_of_one_type() {
+    var c = Counter { n: 0 }
+    assert(with (c) { pair<Counter, Counter>() } == 111)
+    assert(with (c) { forward<Counter, Counter>() } == 1222)
+    assert(c.n == 22)
+}
+
+struct Other { n: u256 }
+
+impl Jump for Other {
+    fn jump(mut self) -> u256 {
+        self.n += 10
+        self.n
+    }
+}
+
+#[test]
+fn generic_keys_of_two_types() {
+    var c = Counter { n: 0 }
+    var o = Other { n: 0 }
+    assert(with (c, o) { forward<Counter, Other>() } == 110)
+    assert(c.n == 1 && o.n == 10)
+}

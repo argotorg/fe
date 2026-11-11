@@ -5591,6 +5591,27 @@ fn immutable_aggregate_forwarding_at_all_optimization_levels() {
 }
 
 #[test]
+fn effect_aliasing_at_all_optimization_levels() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/effect_aliasing.fe");
+    // The fixture test covers the default level (1).
+    for level in ["0", "2", "s"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--jobs",
+            "1",
+            "--optimize",
+            level,
+            fixture.to_str().expect("fixture path utf8"),
+        ]);
+        assert_eq!(
+            exit_code, 0,
+            "effect aliasing failed at -O {level}:\n{output}"
+        );
+    }
+}
+
+#[test]
 fn returned_array_copy_at_all_optimization_levels() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test/returned_array_copy.fe");

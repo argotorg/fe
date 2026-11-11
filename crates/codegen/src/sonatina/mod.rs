@@ -2595,13 +2595,13 @@ pub contract ReturnContract {
             file_url.clone(),
             Some(
                 r#"
-use std::evm::Evm
+use std::evm::Ctx
 
 struct Store {
     a: u256,
 }
 
-fn bump(_ x: u256) -> u256 uses (evm: mut Evm, store: mut Store) {
+fn bump(_ x: u256) -> u256 uses (ctx: Ctx, store: mut Store) {
     store.a = store.a + x
     store.a
 }
@@ -2613,14 +2613,14 @@ msg M {
     B { x: u256 } -> u256,
 }
 
-pub contract C uses (evm: mut Evm) {
+pub contract C uses (ctx: Ctx) {
     mut store: Store,
 
     recv M {
-        A { x } -> u256 uses (mut evm, mut store) {
+        A { x } -> u256 uses (ctx, mut store) {
             bump(x)
         }
-        B { x } -> u256 uses (mut evm, mut store) {
+        B { x } -> u256 uses (ctx, mut store) {
             bump(x + 1)
         }
     }

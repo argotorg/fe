@@ -3,10 +3,16 @@ source: crates/uitest/tests/semantic_access.rs
 expression: diags
 input_file: fixtures/semantic_access/snapshot_view_arguments.fe
 ---
-error[16-0001]: access conflict in `fn exclusive_alias`
-   ┌─ snapshot_view_arguments.fe:36:30
+error[16-0001]: access conflict in `fn Overlapping::recv[0][0]`
+   ┌─ snapshot_view_arguments.fe:32:13
    │
-36 │     with (Handle = handle) { mutate(mut handle) }
+32 │             call_through_address()
+   │             ^^^^^^^^^^^^^^^^^^^^^^ the effects `target` and `call` of `call_through_address` reach one place, and `call` is `mut`
+
+error[16-0001]: access conflict in `fn exclusive_alias`
+   ┌─ snapshot_view_arguments.fe:48:30
+   │
+48 │     with (Handle = handle) { mutate(mut handle) }
    │                              ^^^^^^^^^^^^^^^^^^
    │                              │      │
    │                              │      access opened here

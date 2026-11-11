@@ -71,6 +71,13 @@ fn same_type<V: Copy>() uses (a: mut StorageMap<u256, u256>, b: StorageMap<u256,
     entry = 2
 }
 
+// Accepted: effects of distinct keys are disjoint, as their callers prove.
+fn distinct_types() uses (a: mut StorageMap<u256, u256>, b: StorageMap<u256, u8>) {
+    let entry = mut a[1]
+    let other = b[1]
+    entry = 2
+}
+
 msg Msg {
     #[selector = 1]
     Run -> u256,

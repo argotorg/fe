@@ -7,6 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256, i256};
 type @layout_1 = {i256, i256};
+type @layout_3 = {i256, i256};
 type @layout_2 = enum {
     #variant_0,
     #variant_1,
@@ -449,106 +450,208 @@ func private %return_data(noalias nocapture readonly v0.objref<@layout_1>) {
 
 func private %runtime() {
     block0:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
+        v0.objref<@layout_3> = obj.alloc @layout_3;
+        v1.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
-        v3.i256 = call %calldataload 0.i256;
-        v5.i256 = shr 224.i256 v3;
-        v7.i1 = eq v5 2877082652.i256;
-        br v7 block2 block7;
-
-    block2:
-        v9.i256 = call %calldataload 4.i256;
-        v11.i256 = call %calldataload 36.i256;
-        v12.i1 = eq v9 0.i256;
-        br v12 block12 block14;
-
-    block3:
-        v13.i256 = call %calldataload 4.i256;
-        v15.i256 = call %balance_of_raw v13 0.i256;
-        call %abi_encode v15;
-        unreachable;
-
-    block4:
-        v16.i256 = call %calldataload 4.i256;
-        v17.i256 = call %calldataload 36.i256;
-        v18.i1 = eq v16 0.i256;
-        br v18 block16 block18;
-
-    block5:
-        v20.i256 = call %total_supply 2.i256;
-        call %abi_encode v20;
-        unreachable;
-
-    block6:
         jump block20;
 
+    block2:
+        v4.i256 = call %calldataload 4.i256;
+        v6.i256 = call %calldataload 36.i256;
+        v7.i1 = eq v4 0.i256;
+        br v7 block12 block14;
+
+    block3:
+        v8.i256 = call %calldataload 4.i256;
+        v10.i256 = call %balance_of_raw v8 v66;
+        jump block42;
+
+    block4:
+        v11.i256 = call %calldataload 4.i256;
+        v12.i256 = call %calldataload 36.i256;
+        v13.i1 = eq v11 0.i256;
+        br v13 block16 block18;
+
+    block5:
+        v15.i256 = call %total_supply v67;
+        jump block44;
+
+    block6:
+        jump block36;
+
     block7:
-        v23.i1 = eq v5 1818602213.i256;
-        br v23 block3 block8;
+        v18.i1 = eq v70 1818602213.i256;
+        br v18 block3 block8;
 
     block8:
-        v26.i1 = eq v5 217554442.i256;
-        br v26 block4 block9;
+        v21.i1 = eq v70 217554442.i256;
+        br v21 block4 block9;
 
     block9:
-        v29.i1 = eq v5 960555502.i256;
-        br v29 block5 block10;
+        v24.i1 = eq v70 960555502.i256;
+        br v24 block5 block10;
 
     block10:
-        jump block6;
+        jump block46;
 
     block11:
-        v30.i256 = phi (v34 block12) (v38 block13);
-        call %abi_encode v30;
+        v25.i256 = phi (v29 block27) (v33 block29);
+        call %abi_encode v25;
         unreachable;
 
     block12:
-        v34.i256 = call %credit_alice v11 0.i256 2.i256;
-        jump block11;
+        v29.i256 = call %credit_alice v6 v66 v67;
+        jump block48;
 
     block13:
-        v38.i256 = call %credit_bob v11 0.i256 2.i256;
-        jump block11;
+        v33.i256 = call %credit_bob v6 v66 v67;
+        jump block50;
 
     block14:
         jump block13;
 
     block15:
-        v39.@layout_2 = phi (v43 block16) (v46 block17);
-        v40.i256 = call %transfer_result_code v39;
-        call %abi_encode v40;
+        v34.@layout_2 = phi (v38 block31) (v41 block33);
+        v35.i256 = call %transfer_result_code v34;
+        call %abi_encode v35;
         unreachable;
 
     block16:
-        v43.@layout_2 = call %transfer_from_alice v17 0.i256;
-        jump block15;
+        v38.@layout_2 = call %transfer_from_alice v12 v66;
+        jump block52;
 
     block17:
-        v46.@layout_2 = call %transfer_from_bob v17 0.i256;
-        jump block15;
+        v41.@layout_2 = call %transfer_from_bob v12 v66;
+        jump block54;
 
     block18:
         jump block17;
 
     block19:
-        call %return_data v0;
-        unreachable;
+        jump block40;
 
     block20:
-        v48.i256 = call %alloc_bytes 0.i256;
-        v49.i256 = call %cast__gf0ab v48;
-        jump block22;
-
-    block21:
         jump block19;
 
+    block21:
+        call %abi_encode v10;
+        unreachable;
+
     block22:
-        v53.@layout_1 = insert_value undef.@layout_1 0.i256 v49;
-        v56.@layout_1 = insert_value v53 1.i256 0.i256;
-        obj.store v0 v56;
         jump block21;
+
+    block23:
+        call %abi_encode v15;
+        unreachable;
+
+    block24:
+        jump block23;
+
+    block25:
+        jump block6;
+
+    block26:
+        jump block25;
+
+    block27:
+        jump block11;
+
+    block28:
+        jump block27;
+
+    block29:
+        jump block11;
+
+    block30:
+        jump block29;
+
+    block31:
+        jump block15;
+
+    block32:
+        jump block31;
+
+    block33:
+        jump block15;
+
+    block34:
+        jump block33;
+
+    block35:
+        call %return_data v1;
+        unreachable;
+
+    block36:
+        v52.i256 = call %alloc_bytes 0.i256;
+        v53.i256 = call %cast__gf0ab v52;
+        jump block38;
+
+    block37:
+        jump block35;
+
+    block38:
+        v57.@layout_1 = insert_value undef.@layout_1 0.i256 v53;
+        v60.@layout_1 = insert_value v57 1.i256 0.i256;
+        obj.store v1 v60;
+        jump block37;
+
+    block39:
+        v64.@layout_3 = insert_value undef.@layout_3 0.i256 0.i256;
+        v65.@layout_3 = insert_value v64 1.i256 2.i256;
+        obj.store v0 v65;
+        v66.i256 = extract_value v65 0.i256;
+        v67.i256 = extract_value v65 1.i256;
+        v68.i256 = call %calldataload 0.i256;
+        v70.i256 = shr 224.i256 v68;
+        v72.i1 = eq v70 2877082652.i256;
+        br v72 block2 block7;
+
+    block40:
+        jump block39;
+
+    block41:
+        jump block22;
+
+    block42:
+        jump block41;
+
+    block43:
+        jump block24;
+
+    block44:
+        jump block43;
+
+    block45:
+        jump block26;
+
+    block46:
+        jump block45;
+
+    block47:
+        jump block28;
+
+    block48:
+        jump block47;
+
+    block49:
+        jump block30;
+
+    block50:
+        jump block49;
+
+    block51:
+        jump block32;
+
+    block52:
+        jump block51;
+
+    block53:
+        jump block34;
+
+    block54:
+        jump block53;
 }
 
 func private %set_len(noalias nocapture v0.objref<@layout_0>, v1.i256) {

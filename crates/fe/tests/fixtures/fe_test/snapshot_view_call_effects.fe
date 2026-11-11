@@ -31,7 +31,12 @@ pub contract Probe {
     mut target: Address,
     init(address: Address) uses (mut target) { target = address }
     recv ProbeMsg {
-        Indirect uses (target, call: mut Call) { invoke() }
+        // A storage effect and `mut Call` of one call may not overlap: the
+        // arm copies the address to provide it.
+        Indirect uses (target, call: mut Call) {
+            let copy = target
+            with (copy) { invoke() }
+        }
         Direct uses (target, call: mut Call) { target.call(CounterMsg::Ping {}) }
     }
 }

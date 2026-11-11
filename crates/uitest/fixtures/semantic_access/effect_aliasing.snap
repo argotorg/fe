@@ -1,0 +1,48 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/effect_aliasing.fe
+---
+error[16-0001]: access conflict in `fn nested_providers`
+   ┌─ effect_aliasing.fe:28:37
+   │
+28 │     with (totals.log, mut totals) { settle() }
+   │           ----------  ----------    ^^^^^^^^ the effects `log` and `totals` of `settle` reach one place, and `totals` is `mut`
+   │           │           │
+   │           │           `totals` is provided here
+   │           `log` is provided here
+
+error[16-0001]: access conflict in `fn partial_overlap`
+   ┌─ effect_aliasing.fe:52:32
+   │
+52 │     with (C = c, u256 = c.n) { both_mut() }
+   │               -         ---    ^^^^^^^^^^ the effects `c` and `n` of `both_mut` reach one place, and both are `mut`
+   │               │         │
+   │               │         `n` is provided here
+   │               `c` is provided here
+
+error[16-0001]: access conflict in `fn partial_overlap_read`
+   ┌─ effect_aliasing.fe:57:32
+   │
+57 │     with (C = c, u256 = c.n) { read_n() }
+   │               -         ---    ^^^^^^^^ the effects `n` and `c` of `read_n` reach one place, and `c` is `mut`
+   │               │         │
+   │               │         `n` is provided here
+   │               `c` is provided here
+
+error[16-0001]: access conflict in `fn trait_partial`
+    ┌─ effect_aliasing.fe:111:32
+    │
+111 │     with (Bump = c.n, C = c) { trait_and_type() }
+    │                  ---      -    ^^^^^^^^^^^^^^^^ the effects `b` and `c` of `trait_and_type` reach one place, and `b` is `mut`
+    │                  │        │
+    │                  │        `c` is provided here
+    │                  `b` is provided here
+
+error[16-0001]: access conflict in `fn traits_may_alias`
+    ┌─ effect_aliasing.fe:118:5
+    │
+117 │     let held = ref p
+    │                ----- access opened here
+118 │     b.bump()
+    │     ^ cannot mutably access this place while a `ref` access of it is open

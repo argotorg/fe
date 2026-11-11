@@ -1312,6 +1312,12 @@ impl<'db> SemanticInstance<'db> {
             .collect()
     }
 
+    /// The instance's effects, instantiated: its owner's declared effects,
+    /// then the components of the rows they name.
+    pub fn effect_requirements(self, db: &'db dyn HirAnalysisDb) -> &'db [EffectRequirement<'db>] {
+        instantiated_effect_env(db, self).map_or(&[], |env| env.requirements(db).as_slice())
+    }
+
     /// The bindings of the instance's effects: its owner's declared effects,
     /// then the components of the rows they name.
     pub fn effect_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<LocalBinding<'db>> {
