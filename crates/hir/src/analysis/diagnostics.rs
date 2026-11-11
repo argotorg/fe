@@ -1958,6 +1958,28 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::EffectNameBoundTwice { span, first, name } => {
+                let name = name.data(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("`{name}` is bound by more than one effect"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{name}` is bound again here"),
+                            span: span.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{name}` is first bound here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::MaybeMutWithoutResult(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "a `mut?` function's result needs a `mut?` part".to_string(),

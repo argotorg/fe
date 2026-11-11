@@ -18,6 +18,13 @@ and one a method's own list repeats from the row spliced into it. Distinct
 keys stay distinct even if they may be one type, such as `uses (a: T, b: U)`
 or two trait keys.
 
+A body binds each effect by its name, the label or else the key's last
+segment, so the effects of a `uses` list a body sees bind each name once:
+`uses (s: Store, s: Log)` and `uses (Store, other::Store)` are errors, in a
+function (with its implementation's row spliced in), a row, a contract, an
+`init` or a recv arm. A row entry such as `A::E` binds no name. An effect
+that binds a parameter's name would hide it, and is an error too.
+
 ## Providers
 
 A call takes each of its callee's effects from the innermost scope that

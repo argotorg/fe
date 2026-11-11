@@ -835,6 +835,51 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                 }
             }
 
+            // A contract's, its `init`'s and each arm's `uses` bind each
+            // name once.
+            let span = contract.span();
+            let lists = [(contract.effects(db), span.clone().effects())]
+                .into_iter()
+                .chain(
+                    contract
+                        .init(db)
+                        .map(|init| (init.effects(db), span.clone().init_block().effects())),
+                )
+                .chain(contract.recvs(db).data(db).iter().enumerate().flat_map(
+                    |(recv_idx, recv)| {
+                        let span = span.clone();
+                        recv.arms
+                            .data(db)
+                            .iter()
+                            .enumerate()
+                            .map(move |(arm_idx, arm)| {
+                                (
+                                    arm.effects,
+                                    span.clone().recv(recv_idx).arms().arm(arm_idx).effects(),
+                                )
+                            })
+                    },
+                ));
+            for (effects, list_span) in lists {
+                let names: Vec<_> = effects
+                    .data(db)
+                    .iter()
+                    .map(|effect| effect.binding_name(db))
+                    .collect();
+                for (idx, name) in names.iter().enumerate() {
+                    if let Some(name) = *name
+                        && let Some(first) =
+                            names[..idx].iter().position(|other| *other == Some(name))
+                    {
+                        diags.push(Box::new(TyLowerDiag::EffectNameBoundTwice {
+                            span: list_span.clone().param_idx(idx).into(),
+                            first: list_span.clone().param_idx(first).into(),
+                            name,
+                        }) as _);
+                    }
+                }
+            }
+
             // 3. Validate recv blocks
             diags.extend(
                 ty_check::check_contract_recv_blocks(db, contract)

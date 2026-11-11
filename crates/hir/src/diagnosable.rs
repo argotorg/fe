@@ -16,6 +16,7 @@ use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{
     ExportIssue, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
 };
+use crate::analysis::ty::effects::EffectKeyKind;
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
 use crate::analysis::ty::method_cmp::{ConstraintEntailment, classify_constraint_entailment};
 use crate::analysis::ty::method_table::{MethodProbe, probe_method};
@@ -482,6 +483,37 @@ impl<'db> Func<'db> {
             })
             .collect();
         let requirements = self.effect_requirements(db, None);
+        // A body binds each effect of a type or trait key by its name.
+        if self.body(db).is_some() {
+            let bound: Vec<_> = requirements
+                .iter()
+                .filter(|requirement| {
+                    matches!(
+                        requirement.key.kind(),
+                        EffectKeyKind::Type | EffectKeyKind::Trait
+                    )
+                })
+                .collect();
+            for (idx, requirement) in bound.iter().enumerate() {
+                let origin = self.effect_origin(db, requirement.binding_idx as usize);
+                if let Some(first) = bound[..idx]
+                    .iter()
+                    .find(|first| first.binding_name == requirement.binding_name)
+                    && let first_origin = self.effect_origin(db, first.binding_idx as usize)
+                    // Two of one row's effects are its implementation's error.
+                    && first_origin != origin
+                {
+                    diags.push(
+                        TyLowerDiag::EffectNameBoundTwice {
+                            span: self.span().effects().param_idx(origin).into(),
+                            first: self.span().effects().param_idx(first_origin).into(),
+                            name: requirement.binding_name,
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
         for (idx, requirement) in requirements.iter().enumerate() {
             let origin = self.effect_origin(db, requirement.binding_idx as usize);
             if requirement.key != EffectRequirementKey::Other
@@ -1435,11 +1467,12 @@ impl<'db> ImplTrait<'db> {
             })
             .collect();
         // A row has no mode, so none of its effects is `mut?`, and names
-        // each key once.
+        // each key once and binds each name once.
         let assumptions = constraints_for(db, self.into());
         for (row_idx, row) in self.rows(db).iter().enumerate() {
             let span = |idx| self.span().item_list().assoc_row(row_idx).param_idx(idx);
             let mut keys = Vec::new();
+            let mut names = Vec::new();
             for (idx, effect) in row
                 .effects
                 .iter()
@@ -1461,6 +1494,23 @@ impl<'db> ImplTrait<'db> {
                     .into_requirement_key(db);
                 if key == EffectRequirementKey::Other {
                     continue;
+                }
+                // A row a row names binds no name.
+                if key.key_row().is_none()
+                    && let Some(name) = effect.binding_name(db)
+                {
+                    if let Some((_, first)) = names.iter().find(|(known, _)| *known == name) {
+                        diags.push(
+                            TyLowerDiag::EffectNameBoundTwice {
+                                span: span(idx).into(),
+                                first: span(*first).into(),
+                                name,
+                            }
+                            .into(),
+                        );
+                    } else {
+                        names.push((name, idx));
+                    }
                 }
                 if let Some((_, first)) = keys.iter().find(|(known, _)| *known == key) {
                     diags.push(
