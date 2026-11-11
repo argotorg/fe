@@ -22,6 +22,7 @@ use hir::{
     },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::iter;
 
 use crate::{
     db::MirDb,
@@ -416,8 +417,8 @@ pub fn collect_test_funcs<'db>(
 /// Build the package of `tests` of a WebAssembly test run: a module with the
 /// tests and what they reach, and nothing else. Its roots are in the order of
 /// `tests`. Several tests share a module only if every import is one of
-/// `std`'s: the test host supplies no other, and a module that imports one
-/// does not start, which would fail every test in it.
+/// `std::wasm`'s: the test host supplies no other, and a module that imports
+/// one does not start, which would fail every test in it.
 pub fn build_wasm_test_runtime_package<'db>(
     db: &'db dyn MirDb,
     tests: &[TestFunc<'db>],
@@ -725,12 +726,12 @@ pub fn build_wasm_export_package<'db>(
 /// The imports of a module are the `extern` functions that its exports or its
 /// test reach.
 /// Their signatures cross the boundary by value, so they follow the rule for
-/// exports: `bool` and integers of at most 64 bits. With `std_only`, an import
-/// declared outside `std` is an error too.
+/// exports: `bool` and integers of at most 64 bits. With `host_only`, an
+/// import declared outside `std::wasm`, the host contract, is an error too.
 fn check_wasm_imports<'db>(
     db: &'db dyn MirDb,
     package: &RuntimePackage<'db>,
-    std_only: bool,
+    host_only: bool,
 ) -> Result<(), LowerError> {
     for function in package.functions(db) {
         let instance = function.instance(db);
@@ -750,9 +751,17 @@ fn check_wasm_imports<'db>(
             continue;
         }
         let name = func_display_name(db, func);
-        if std_only && ingot.kind(db) != IngotKind::Std {
+        // The modules from the root of `std` down to the declaration.
+        let mut modules = iter::successors(Some(func.top_mod(db)), |module| module.parent(db))
+            .collect::<Vec<_>>();
+        modules.reverse();
+        let in_host_contract = ingot.kind(db) == IngotKind::Std
+            && modules
+                .get(1)
+                .is_some_and(|module| module.name(db).data(db) == "wasm");
+        if host_only && !in_host_contract {
             return Err(LowerError::Unsupported(format!(
-                "`{name}` is not an import of `std`, so a test that calls it needs its own module"
+                "`{name}` is not an import of `std::wasm`, so a test that calls it needs its own module"
             )));
         }
         let signature = instance.interface_signature(db);

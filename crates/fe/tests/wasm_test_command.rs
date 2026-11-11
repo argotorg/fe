@@ -292,21 +292,32 @@ fn a_test_with_an_import_the_host_lacks_fails_alone() {
     let file = temp.path().join("imports.fe");
     fs::write(
         &file,
-        "extern {\n    fn probe(_ x: u32) -> u32\n}\n\n#[test]\nfn first() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test]\nfn calls_the_probe() {\n    assert(unsafe { probe(1) } == 1)\n}\n\n#[test]\nfn last() {\n    let x: u32 = 2\n    assert(x == 2)\n}\n",
+        "extern {\n    fn probe(_ x: u32) -> u32\n}\n\n#[test]\nfn first() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test]\nfn calls_the_probe() {\n    assert(unsafe { probe(1) } == 1)\n}\n\n#[test]\nfn reads_the_native_clock() {\n    assert(std::native::cpu_clock_ticks() != 0)\n}\n\n#[test]\nfn last() {\n    let x: u32 = 2\n    assert(x == 2)\n}\n",
     )
     .unwrap();
     let output = fe_test("wasm", "1", &[], &file);
     assert_eq!(
         results(&output),
-        expected(&["first", "last"], &["calls_the_probe"]),
+        expected(
+            &["first", "last"],
+            &["calls_the_probe", "reads_the_native_clock"]
+        ),
         "{}",
         stdout(&output)
     );
-    let failure = failure_of(&output, "calls_the_probe");
-    assert!(
-        failure.contains("imports env.probe, which the host does not provide"),
-        "{failure}"
-    );
+    for (test, import) in [
+        ("calls_the_probe", "probe"),
+        // An import of `std` outside `std::wasm` is not the test host's either.
+        ("reads_the_native_clock", "clock"),
+    ] {
+        let failure = failure_of(&output, test);
+        assert!(
+            failure.contains(&format!(
+                "imports env.{import}, which the host does not provide"
+            )),
+            "{failure}"
+        );
+    }
 }
 
 #[test]
