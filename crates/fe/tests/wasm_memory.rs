@@ -1521,7 +1521,7 @@ fn the_stack_size_option_sets_how_deep_calls_can_nest() {
             true
         }
         Err(trap) => {
-            assert_eq!(trap, Trap::UnreachableCodeReached);
+            assert_eq!(trap, Fault::Trap(Trap::UnreachableCodeReached));
             false
         }
     };

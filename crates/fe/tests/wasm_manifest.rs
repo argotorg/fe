@@ -77,10 +77,14 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
             "size": bytes.len(),
             "initial_memory_pages": manifest["module"]["initial_memory_pages"],
         },
-        "contract_version": 2,
+        "contract_version": 3,
         "optimization": "1",
         "compiler": version.trim(),
         "imports": [
+            { "module": "env", "name": "__fe_revert", "kind": "function",
+              "type": { "params": ["i32", "i32"], "results": [] } },
+            { "module": "env", "name": "abort", "kind": "function",
+              "type": { "params": [], "results": [] } },
             { "module": "env", "name": "sys_wasm_files_close", "kind": "function",
               "type": { "params": ["i32"], "results": [] } },
             { "module": "env", "name": "sys_wasm_files_open", "kind": "function",
@@ -346,6 +350,10 @@ fn the_node_host_supplies_the_streams() {
         assert_eq!(
             built.manifest()["imports"],
             json!([
+                { "module": "env", "name": "__fe_revert", "kind": "function",
+                  "type": { "params": ["i32", "i32"], "results": [] } },
+                { "module": "env", "name": "abort", "kind": "function",
+                  "type": { "params": [], "results": [] } },
                 stream("sys_wasm_stream_read"),
                 stream("sys_wasm_stream_write")
             ]),
@@ -461,10 +469,10 @@ fn the_node_host_refuses_a_module_that_differs_from_its_manifest() {
 
     // A manifest for another contract version, and for another format version.
     let mut other = manifest.clone();
-    other["contract_version"] = json!(3);
+    other["contract_version"] = json!(4);
     let message = refusal(&json!({ "wasm": built.wasm(), "manifest": other }));
     assert!(
-        message.contains("contract version 3") && message.contains("implements version 2"),
+        message.contains("contract version 4") && message.contains("implements version 3"),
         "{message}"
     );
     let mut other = manifest.clone();

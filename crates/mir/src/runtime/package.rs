@@ -459,13 +459,6 @@ fn build_test_package<'db>(
             vec![(RuntimeSectionName::Test(name.clone()), root)],
         ));
     }
-    // A WebAssembly test passes revert data to the test host, as a native
-    // one does; any other WebAssembly module traps.
-    if db.compilation_settings().target(db) == Target::Wasm {
-        for func in [NativeRuntimeFunc::HostPanic, NativeRuntimeFunc::HostRevert] {
-            roots.push(func.instance(db, top_mod)?);
-        }
-    }
     let package = build_sectioned_package(db, top_mod, roots, objects)?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
@@ -1513,9 +1506,9 @@ fn build_non_contract_package<'db>(
 
 /// A `core::rt` function that native code calls to allocate memory or report
 /// a panic. Every native package holds them all, and every WebAssembly package
-/// those that allocate, since its module traps at a panic; a WebAssembly test
-/// package also holds those that pass revert data to the test host. The
-/// backend drops those its module never calls.
+/// those that allocate and those that pass revert data to the host, since a
+/// module has no stderr to report on. The backend drops those its module never
+/// calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeRuntimeFunc {
     Alloc,
@@ -1544,14 +1537,16 @@ impl NativeRuntimeFunc {
         Self::HostRevert,
     ];
 
-    /// The functions that allocate, which on WebAssembly import only `malloc`
-    /// and `free`.
-    pub const ALLOCATION: [Self; 5] = [
+    /// The functions of a WebAssembly module: those that allocate, which import
+    /// only `malloc` and `free`, and those that pass revert data to the host.
+    pub const WASM: [Self; 7] = [
         Self::Alloc,
         Self::TryAlloc,
         Self::Dealloc,
         Self::Realloc,
         Self::TryRealloc,
+        Self::HostPanic,
+        Self::HostRevert,
     ];
 
     /// The function's instance in the packages of `top_mod`.
@@ -1593,7 +1588,7 @@ fn build_sectioned_package<'db>(
     let runtime_funcs: &[NativeRuntimeFunc] = match db.compilation_settings().target(db) {
         Target::Evm => &[],
         Target::Native => &NativeRuntimeFunc::ALL,
-        Target::Wasm => &NativeRuntimeFunc::ALLOCATION,
+        Target::Wasm => &NativeRuntimeFunc::WASM,
     };
     for func in runtime_funcs {
         roots.push(func.instance(db, top_mod)?);

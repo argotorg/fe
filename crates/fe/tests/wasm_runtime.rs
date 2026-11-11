@@ -10,7 +10,7 @@ mod wasm_support;
 use std::{fs, path::Path};
 
 use tempfile::tempdir;
-use wasm_support::{build_wasm, engine, fe};
+use wasm_support::{build_wasm, define_revert, engine, fe};
 use wasmtime::{Caller, Linker, Module, Store};
 
 const LEVELS: [&str; 2] = ["0", "1"];
@@ -37,6 +37,7 @@ fn run(bytes: &[u8], input: &[u8]) -> Run {
         },
     );
     let mut linker = Linker::new(engine());
+    define_revert(&mut linker);
     linker
         .func_wrap(
             "env",

@@ -9,6 +9,7 @@ import {
   ContractError,
   FILE_ERRORS,
   GuestAbort,
+  GuestRevert,
   MAX_FILE_BYTES,
   MAX_TEXT_BYTES,
   MANIFEST_VERSION,
@@ -18,10 +19,57 @@ import {
   encodeReply,
   instantiate,
   parseManifest,
+  revertReason,
   sha256Hex,
 } from "./host.mjs";
 
 const PAGE = 65536;
+
+/** Solidity revert data: the selector, then 32-byte words. */
+function revertData(selector, ...words) {
+  const data = new Uint8Array(4 + 32 * words.length);
+  new DataView(data.buffer).setUint32(0, selector);
+  words.forEach((word, index) => data.set(word, 4 + 32 * index + 32 - word.length));
+  return data;
+}
+
+test("a revert ends the call with its data and what the data says", () => {
+  const host = createHost({});
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  host.bind({ exports: { memory } });
+  const bytes = new Uint8Array(memory.buffer);
+  const panic = revertData(0x4e487b71, [0x11]);
+  bytes.set(panic, 100);
+  assert.throws(
+    () => host.imports.env.__fe_revert(100, panic.length),
+    (error) =>
+      error instanceof GuestRevert &&
+      error.reason === "arithmetic overflow" &&
+      error.message === "the module reverted: arithmetic overflow" &&
+      assert.deepEqual(error.data, panic) === undefined,
+  );
+  assert.throws(() => host.imports.env.__fe_revert(PAGE - 2, 4), ContractError);
+  assert.throws(
+    () => host.imports.env.abort(),
+    (error) => error instanceof GuestRevert && error.data === null && error.reason === "out of memory",
+  );
+});
+
+test("revert reasons are those of Panic codes and Error strings", () => {
+  const text = new TextEncoder().encode("x must be below 100");
+  const padded = new Uint8Array(32);
+  padded.set(text);
+  const error = new Uint8Array([...revertData(0x08c379a0, [32], [text.length]), ...padded]);
+  assert.equal(revertReason(revertData(0x4e487b71, [0x01])), "assertion failed");
+  assert.equal(revertReason(revertData(0x4e487b71, [0x99])), null);
+  assert.equal(revertReason(error), "x must be below 100");
+  // A length beyond the data, an offset other than 32, short data, other selectors.
+  assert.equal(revertReason(revertData(0x08c379a0, [32], [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])), null);
+  assert.equal(revertReason(revertData(0x08c379a0, [64], [0])), null);
+  assert.equal(revertReason(new Uint8Array([0x4e, 0x48])), null);
+  assert.equal(revertReason(revertData(0x12345678, [1])), null);
+  assert.equal(new GuestRevert(revertData(0x12345678)).message, "the module reverted with data 0x12345678");
+});
 
 /** A host over two files, bound to a memory that holds the names `hello.txt` and `nope` at 100. */
 function fixture() {
@@ -423,8 +471,8 @@ test("a manifest of another version is refused", async () => {
   const bytes = assemble();
   const manifest = await manifestFor(bytes);
   await refuses(instantiate(bytes, { manifest: { ...manifest, manifest_version: 2 } }), /format version 2; this host reads version 1/);
-  await refuses(instantiate(bytes, { manifest: { ...manifest, contract_version: 3 } }), /host contract version 3; this host implements version 2/);
-  await refuses(instantiate(bytes, { manifest: { manifest_version: 1, contract_version: 2 } }), /lacks the module hash/);
+  await refuses(instantiate(bytes, { manifest: { ...manifest, contract_version: 4 } }), /host contract version 4; this host implements version 3/);
+  await refuses(instantiate(bytes, { manifest: { manifest_version: 1, contract_version: 3 } }), /lacks the module hash/);
   assert.throws(() => parseManifest("{"), (error) => error instanceof ContractError && /not valid JSON/.test(error.message));
   assert.throws(() => parseManifest("[]"), /format version undefined/);
   assert.deepEqual(parseManifest(JSON.stringify(manifest)), manifest);

@@ -63,10 +63,12 @@ enum Want {
     Nothing,
     /// The module traps.
     Trap,
+    /// The module reverts with `Panic(uint256)` data that means this.
+    Revert(&'static str),
 }
 
 use Arg::{Num, Text, Wide};
-use Want::{Bad, Good, Nothing, Scalar, Trap};
+use Want::{Bad, Good, Nothing, Revert, Scalar, Trap};
 
 struct Case {
     export: &'static str,
@@ -178,9 +180,19 @@ const CASES: &[Case] = &[
         Good(10),
         0,
     ),
-    case("mixed", &[Num(4294967295), Text("ab"), Wide(0)], Trap, 0),
+    case(
+        "mixed",
+        &[Num(4294967295), Text("ab"), Wide(0)],
+        Revert("arithmetic overflow"),
+        0,
+    ),
     case("plain", &[Num(3), Num(4)], Scalar(7), 0),
-    case("plain", &[Num(4294967295), Num(1)], Trap, 0),
+    case(
+        "plain",
+        &[Num(4294967295), Num(1)],
+        Revert("arithmetic overflow"),
+        0,
+    ),
     // An export with no result.
     case("touch", &[Text("digits")], Nothing, 1),
     case("touch", &[Text("nope")], Nothing, 0),
@@ -309,6 +321,7 @@ fn matches_want(got: &Value, want: &Want) -> bool {
         Scalar(value) => got["kind"] == "value" && got["value"] == json!(value.to_string()),
         Nothing => got["kind"] == "none",
         Trap => got["kind"] == "trap",
+        Revert(reason) => got["kind"] == "revert" && got["reason"] == *reason,
     }
 }
 
@@ -678,10 +691,13 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
     let (_, mock) = build("file_ops", Flavour::Mock, "2", temp.path());
     let host = Module::new(engine(), &host).unwrap();
     let mock = Module::new(engine(), &mock).unwrap();
-    // Four imports, text as an address and a length, the reply as one i64.
+    // The four imports of the contract, text as an address and a length, the
+    // reply as one i64, and the revert of `core::rt` in both builds.
     assert_eq!(
         imports_of(&host),
         [
+            ("env", "__fe_revert", "i32,i32->"),
+            ("env", "abort", "->"),
             ("env", "sys_wasm_files_close", "i32->"),
             ("env", "sys_wasm_files_open", "i32,i32->i64"),
             ("env", "sys_wasm_files_read_byte", "i32,i32->i64"),
@@ -689,7 +705,14 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
         ]
         .map(|(m, n, s)| (m.to_string(), n.to_string(), s.to_string()))
     );
-    assert_eq!(imports_of(&mock), []);
+    assert_eq!(
+        imports_of(&mock),
+        [("env", "__fe_revert", "i32,i32->"), ("env", "abort", "->")].map(|(m, n, s)| (
+            m.to_string(),
+            n.to_string(),
+            s.to_string()
+        ))
+    );
     let mut want = pairs(&[
         ("alloc", "i32->i32"),
         ("arena_mark", "->i32"),

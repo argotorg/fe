@@ -96,8 +96,10 @@ so an export that declares `uses (out: mut Stdout)` prints with `print!` and
 `println!` (see [Printing](#printing)).
 Inside functions, structs, tuples, enums, arrays, constants, `usize` (32 bits, the
 width of an address in a module) and 128-bit and 256-bit integers work. Overflow, division by
-zero, a failed `assert!` and an index outside an array trap (the WebAssembly
-instruction `unreachable`).
+zero, a failed `assert!` and an index outside an array end the call with Solidity
+`Panic(uint256)` data, and `assert!` with a message with `Error(string)` data, which the
+module passes to the host (see [Panics](#the-host-contract-in-brief)). A panic without
+data, `core::panic()`, traps (the WebAssembly instruction `unreachable`).
 
 ### What a program may import
 
@@ -176,8 +178,8 @@ and the clocks of `std::time`) have no provider on this target.
   the host to place at most `length` bytes of input at `address`; the host returns how
   many it placed, and 0 at the end of the input. A count that is negative as a signed
   `i32` says that the stream failed, and so does a count of 0 for a write of one byte or
-  more; `print!` and its relatives and the readers of `std::io` then trap, as they
-  panic on the native target. The range is valid for the call only. `host.mjs` takes or
+  more; `print!` and its relatives and the readers of `std::io` then panic, as they
+  do on the native target, with an `Error(string)` that names the stream. The range is valid for the call only. `host.mjs` takes or
   places at most 65,536 bytes in a call and never reports a failure.
 - **Handles.** A handle is one opaque word that the host chooses. In safe Fe a
   `Handle` cannot be made or copied, and `close` takes it by value, so using it
@@ -189,6 +191,13 @@ and the clocks of `std::time`) have no provider on this target.
   outside the memory or longer than 65,536 bytes, an unknown error number, a range of
   a stream outside the memory, or a stream number that the operation does not apply
   to (a write to 0, a read of 1 or 2, any other number).
+- **Panics.** A panic with a code or a message passes its revert data, Solidity
+  `Panic(uint256)` or `Error(string)` data, to the import `__fe_revert(address, length)`;
+  the host must not return. A module that has no memory left for the data calls the
+  import `abort()` instead. Every module that can panic imports both. `host.mjs` throws a
+  `GuestRevert` whose `data` is the bytes (`null` after `abort`) and whose `reason` is
+  what they say (`revertReason`), such as `assertion failed`, `arithmetic overflow` or
+  the message of `assert!`.
 - **Traps and errors.** A trap in the module, or an error thrown by an import,
   reaches the caller of the export unchanged. `sys_wasm_abort` throws a
   `GuestAbort` in `host.mjs`.
@@ -198,7 +207,7 @@ and the clocks of `std::time`) have no provider on this target.
   it above the frames of the calls it ended. A host reads the global before it calls an
   export and writes that value back if the call ends with an error; `Guest.call` does.
   The name is reserved.
-- **Contract version.** The version of this contract is 2. It appears in every
+- **Contract version.** The version of this contract is 3. It appears in every
   manifest as `contract_version`.
 
 The contract is defined in `ingots/std/src/wasm.fe`, `ingots/std/src/wasm/boundary.fe`,
@@ -218,7 +227,7 @@ Whenever `fe build` writes a module it writes `<name>.manifest.json` next to it.
     "size": 7820,
     "initial_memory_pages": 18
   },
-  "contract_version": 2,
+  "contract_version": 3,
   "optimization": "1",
   "compiler": "fe 26.4.0 (…)",
   "imports": [
@@ -297,7 +306,7 @@ macOS).
   fails with `Test reverted: 0x…` and what the data says, such as `(arithmetic
   overflow)`, unless it is a `#[test(should_revert)]` test that expected it. A panic
   without data, `core::panic()`, fails the test with `trap: unreachable`. A module
-  built with `fe build` traps in every case: only a test passes the data to its host.
+  built with `fe build` passes the same data to its host.
 - A call of `abort` fails the test with `the test aborted with code N`. A call that
   breaks the host contract fails it with the host's message.
 - The test host answers `Log`, `Clock`, `Abort` and the streams; it has no files, so

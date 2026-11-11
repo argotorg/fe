@@ -291,7 +291,7 @@ where
         isa,
         false,
         exports,
-        NativePanics::Trap,
+        NativePanics::HostRevertOrTrap,
         adapters,
     )?;
     for (instance, _) in exports {

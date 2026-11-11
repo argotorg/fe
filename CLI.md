@@ -419,8 +419,12 @@ parameters and a reply result). `usize` and `isize` have 32 bits on this target
 and cross as an `i32`. Any other type, including `u256` and structs, is an error
 that names the function and the type. Inside functions, structs,
 tuples, enums, arrays, constants, `usize` and the dynamic arrays of `core::ptr` work.
-Overflow, division by zero, a failed `assert!` and an index outside an array trap, as
-they do in native executables. Calls use a stack in the module's memory, and
+Overflow, division by zero, a failed `assert!` and an index outside an array end the call
+with Solidity `Panic(uint256)` data, and `assert!` with a message with `Error(string)` data,
+as in a native test: the module passes the data to the import `__fe_revert(address, length)`,
+and imports `abort()` for a panic that finds no memory for it. `examples/wasm/host.mjs`
+throws a `GuestRevert` that holds the data and what it says. A panic without data,
+`core::panic()`, traps. Calls use a stack in the module's memory, and
 a call that does not fit traps. The stack has 1 MiB unless `--wasm-stack-size <bytes>`
 sets its size, which is rounded up so that the stack ends on a 64 KiB page boundary; the
 option is an error with any other backend. Dynamic allocation comes from a heap that reuses
@@ -486,7 +490,8 @@ number of its POSIX descriptor (0, 1 or 2). `sys_wasm_stream_write(stream, addr,
 the host the bytes of the range; the host returns how many it took, and the module offers
 the rest again. `sys_wasm_stream_read(stream, addr, len)` asks the host to place at most
 `len` bytes of input in the range; the host returns how many it placed, and 0 at the end of
-the input. A negative count says that the stream failed, and a print or a read then traps.
+the input. A negative count says that the stream failed, and a print or a read then panics
+with an `Error(string)` that names the stream.
 `examples/wasm/host.mjs` keeps what a module wrote in `host.stdout` and `host.stderr`, passes
 each write to the option `onWrite`, reads the input from the option `stdin`, and refuses a
 range outside the memory and a stream number that the operation does not apply to. The module

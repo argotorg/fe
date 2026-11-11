@@ -20,7 +20,7 @@ use std::{
 
 use tempfile::tempdir;
 use wasm_support::*;
-use wasmtime::{Module, Trap, Val};
+use wasmtime::{Module, Val};
 
 macro_rules! program_test {
     ($test:ident, $file:literal, $exports:expr) => {
@@ -819,7 +819,12 @@ fn the_module_exports_the_marked_functions_and_a_memory() {
         .map(|export| export.name().to_string())
         .collect();
     names.sort();
-    assert_eq!(names, ["another", "memory", "nested", "visible"]);
+    // `visible` can overflow, so the module imports the revert of `core::rt`
+    // and exports its stack.
+    assert_eq!(
+        names,
+        ["another", "memory", "nested", "stack_top", "visible"]
+    );
 }
 
 #[test]
@@ -885,16 +890,29 @@ fn a_trap_leaves_the_instance_usable() {
 }
 
 #[test]
-fn traps_are_the_unreachable_instruction_where_the_program_checks() {
+fn a_failed_check_passes_its_revert_data_to_the_host() {
+    // As natively, a failed assertion is `Panic(0x01)` and one with a message
+    // `Error(string)`, which the module passes to `__fe_revert`.
     let temp = tempdir().unwrap();
     let source = fixture_path("trap_assert");
     let bytes = build_wasm(&source, "1", &temp.path().join("out"));
     let mut running = Running::new(&bytes);
-    let export = Export::new("positive", &[("x", I32)], I32);
+    let positive = Export::new("positive", &[("x", I32)], I32);
     assert_eq!(
-        running.call(&export, &[-3]),
-        Err(Trap::UnreachableCodeReached)
+        running.call(&positive, &[-3]).unwrap_err().panic_code(),
+        Some(0x01)
     );
+    let small = Export::new("small", &[("x", U8)], U8);
+    let Err(Fault::Revert(Revert(data))) = running.call(&small, &[200]) else {
+        panic!("`small(200)` must revert");
+    };
+    assert_eq!(&data[..4], [0x08, 0xc3, 0x79, 0xa0]);
+    assert!(
+        data.windows(19)
+            .any(|bytes| bytes == b"x must be below 100"),
+        "{data:?}"
+    );
+    assert_eq!(running.call(&positive, &[3]), Ok(3));
 }
 
 // ---------------------------------------------------------------------------
@@ -1122,12 +1140,12 @@ fn usize_is_a_32_bit_integer_of_the_module() {
         .unwrap();
     assert_eq!(result[0].unwrap_i32(), 42);
     // The sum of 2^31 and itself does not fit 32 bits.
-    let trap = double
+    let error = double
         .call(&mut running.store, &[Val::I32(i32::MIN)], &mut result)
         .unwrap_err();
     assert_eq!(
-        trap.downcast_ref::<Trap>(),
-        Some(&Trap::UnreachableCodeReached)
+        error.downcast_ref::<Revert>().and_then(Revert::panic_code),
+        Some(0x11)
     );
 }
 

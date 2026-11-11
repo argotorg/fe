@@ -24,7 +24,7 @@ mod wasm_support;
 use std::{fmt, fs, path::Path};
 
 use tempfile::tempdir;
-use wasm_support::{Ty, Ty::*, build_wasm, engine};
+use wasm_support::{Revert, Ty, Ty::*, build_wasm, define_revert, engine};
 use wasmtime::{Caller, FuncType, Linker, Module, Store, Trap, Val, ValType};
 
 const START: u64 = 1000;
@@ -348,8 +348,9 @@ fn define_streams(linker: &mut Linker<State>) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Want {
     Value(i128),
-    /// The module executes `unreachable` or another trap of its own.
-    Trap,
+    /// The module fails on its own: it traps, or a check passes revert data
+    /// to `__fe_revert`.
+    Fail,
     /// The host raised `HostAbort(code)`. Without a host, the mock traps.
     Abort(u32),
 }
@@ -367,9 +368,9 @@ fn value(v: i128, trace: Vec<Event>) -> Expect {
     }
 }
 
-fn traps(trace: Vec<Event>) -> Expect {
+fn fails(trace: Vec<Event>) -> Expect {
     Expect {
-        want: Want::Trap,
+        want: Want::Fail,
         trace,
     }
 }
@@ -506,10 +507,21 @@ fn signature(ty: &FuncType) -> String {
     )
 }
 
-/// The import section of the module as `(module, name, signature)`, sorted.
+/// The imports of `core::rt` that a module that can panic has: `__fe_revert`
+/// takes the revert data, and `abort` ends a module with no memory for it.
+const REVERT_IMPORTS: [(&str, &str, &str); 2] =
+    [("env", "__fe_revert", "i32,i32->"), ("env", "abort", "->")];
+
+/// The import section of the module as `(module, name, signature)`, sorted,
+/// without the `REVERT_IMPORTS`.
 fn import_section(module: &Module) -> Vec<(String, String, String)> {
     let mut found: Vec<_> = module
         .imports()
+        .filter(|import| {
+            !REVERT_IMPORTS
+                .iter()
+                .any(|&(module, name, _)| import.module() == module && import.name() == name)
+        })
         .map(|import| {
             let func = import
                 .ty()
@@ -532,6 +544,8 @@ enum Got {
     Value(i128),
     Trap(Trap),
     Abort(u32),
+    /// The data that the module passed to `__fe_revert`.
+    Revert(Revert),
 }
 
 struct Running {
@@ -542,6 +556,7 @@ struct Running {
 impl Running {
     fn new(module: &Module, define: &[fn(&mut Linker<State>)]) -> Self {
         let mut linker = Linker::new(engine());
+        define_revert(&mut linker);
         for define in define {
             define(&mut linker);
         }
@@ -579,6 +594,8 @@ impl Running {
             Err(error) => {
                 if let Some(abort) = error.downcast_ref::<HostAbort>() {
                     Got::Abort(abort.0)
+                } else if let Some(revert) = error.downcast_ref::<Revert>() {
+                    Got::Revert(revert.clone())
                 } else if let Some(trap) = error.downcast_ref::<Trap>() {
                     Got::Trap(*trap)
                 } else {
@@ -617,7 +634,7 @@ fn run_cases(module: &Module, program: &Program, host: bool, context: &str) -> V
             let what = describe(export, &case.args);
             let ok = match (&case.expect.want, &got) {
                 (Want::Value(want), Got::Value(got)) => want == got,
-                (Want::Trap, Got::Trap(_)) => true,
+                (Want::Fail, Got::Trap(_) | Got::Revert(_)) => true,
                 (Want::Abort(code), Got::Abort(got)) => host && code == got,
                 (Want::Abort(_), Got::Trap(trap)) => !host && *trap == Trap::UnreachableCodeReached,
                 _ => false,
@@ -647,6 +664,7 @@ fn as_mock(got: &Got) -> Got {
         Got::Abort(_) => Got::Trap(Trap::UnreachableCodeReached),
         Got::Trap(trap) => Got::Trap(*trap),
         Got::Value(v) => Got::Value(*v),
+        Got::Revert(revert) => Got::Revert(revert.clone()),
     }
 }
 
@@ -760,7 +778,7 @@ fn log_basic() {
                 &[-3, 0, 1, 2_147_483_647, -2_147_483_648],
                 |a, b| match checked(I32, a + b) {
                     Some(sum) => value(sum, vec![log(a), log(b), log(sum)]),
-                    None => traps(vec![log(a), log(b)]),
+                    None => fails(vec![log(a), log(b)]),
                 },
             ),
             Export::new("log_squares", &[I32], I32).each(
@@ -770,12 +788,12 @@ fn log_basic() {
                     let mut total: i128 = 0;
                     for i in 0..n.max(0) {
                         let Some(square) = checked(I32, i * i) else {
-                            return traps(trace);
+                            return fails(trace);
                         };
                         trace.push(log(square));
                         match checked(I32, total + square) {
                             Some(t) => total = t,
-                            None => return traps(trace),
+                            None => return fails(trace),
                         }
                     }
                     value(total, trace)
@@ -839,7 +857,7 @@ fn log_u64() {
                         trace.push(log(n));
                         n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 };
                         if checked(U64, n).is_none() {
-                            return traps(trace);
+                            return fails(trace);
                         }
                         steps += 1;
                     }
@@ -879,7 +897,7 @@ fn clock_elapsed() {
                     for i in 0..work {
                         acc += i;
                         if checked(U32, acc).is_none() {
-                            return traps(vec![now()]);
+                            return fails(vec![now()]);
                         }
                     }
                     value(i128::from(STEP) + acc, vec![now(), now()])
@@ -1149,7 +1167,7 @@ fn extern_many() {
                     ];
                     match checked(I32, a + b) {
                         Some(sum) => value(sum, trace),
-                        None => traps(trace),
+                        None => fails(trace),
                     }
                 },
             ),
@@ -1178,13 +1196,13 @@ fn mixed_providers() {
                 let trace = vec![ev("now_ms", &[])];
                 match checked(I32, x + 1) {
                     Some(_) => value(clock(0), trace),
-                    None => traps(trace),
+                    None => fails(trace),
                 }
             }),
             Export::new("stamp_count", &[I32], U32).each(&I32_EDGES, |x| {
                 match checked(I32, x + 1) {
                     Some(_) => value(2, vec![ev("now_ms", &[])]),
-                    None => traps(vec![ev("now_ms", &[])]),
+                    None => fails(vec![ev("now_ms", &[])]),
                 }
             }),
         ],
@@ -1224,9 +1242,9 @@ fn reentrant() {
                 match checked(I32, x + 3).zip(checked(I32, x + 15)) {
                     Some((a, b)) => match checked(I32, a + b) {
                         Some(sum) => value(sum, Vec::new()),
-                        None => traps(Vec::new()),
+                        None => fails(Vec::new()),
                     },
-                    None => traps(Vec::new()),
+                    None => fails(Vec::new()),
                 }
             }),
             Export::new("outer", &[I32], I32).each(
@@ -1246,30 +1264,30 @@ fn reentrant() {
                 |x| {
                     // The loop that fills the table, then the struct, then the call.
                     if (0..8).any(|k| checked(I32, x * k).is_none()) {
-                        return traps(Vec::new());
+                        return fails(Vec::new());
                     }
                     if checked(I32, x + 1).is_none() || checked(I32, x + 2).is_none() {
-                        return traps(Vec::new());
+                        return fails(Vec::new());
                     }
                     let call = vec![ev("host_callback", &[x])];
                     let Some(reply) = checked(I32, x + 3)
                         .zip(checked(I32, x + 15))
                         .and_then(|(a, b)| checked(I32, a + b))
                     else {
-                        return traps(call);
+                        return fails(call);
                     };
                     // `reply + held.a + held.b + held.c`, then the table.
                     let mut sum = reply;
                     for part in [x, x + 1, x + 2] {
                         match checked(I32, sum + part) {
                             Some(v) => sum = v,
-                            None => return traps(call),
+                            None => return fails(call),
                         }
                     }
                     for k in 0..8 {
                         match checked(I32, sum + x * k) {
                             Some(v) => sum = v,
-                            None => return traps(call),
+                            None => return fails(call),
                         }
                     }
                     value(sum, call)
@@ -1298,7 +1316,7 @@ fn seeded_roll() {
                 |sides| {
                     let trace = vec![ev("now_ms", &[])];
                     if sides == 0 {
-                        traps(trace)
+                        fails(trace)
                     } else {
                         value(roll(START, sides as u128) as i128, trace)
                     }
@@ -1306,7 +1324,7 @@ fn seeded_roll() {
             ),
             Export::new("two_rolls", &[U32], U32).each(&[0, 1, 6, 20, 99], |sides| {
                 if sides == 0 {
-                    return traps(vec![ev("now_ms", &[])]);
+                    return fails(vec![ev("now_ms", &[])]);
                 }
                 let first = roll(START, sides as u128);
                 let second = roll(START + STEP, sides as u128);
@@ -1330,7 +1348,7 @@ fn unused_extern() {
         exports: vec![Export::new("double", &[I32], I32).each(&I32_EDGES, |x| {
             match checked(I32, x * 2) {
                 Some(v) => value(v, Vec::new()),
-                None => traps(Vec::new()),
+                None => fails(Vec::new()),
             }
         })],
     });
@@ -1445,23 +1463,24 @@ fn a_stream_that_fails_ends_the_program() {
         // A negative count, and no byte of a write taken, are failures.
         for count in [-1, i32::MIN, 0] {
             running.store.data_mut().stream_count = Some(count);
-            for (export, args, call) in [
+            for (export, args, call, message) in [
                 (
                     Export::new("greet", &[U32, U64, I8], U32),
                     &[1, 2, 3][..],
                     ev("write", &[1, 14]),
+                    "failed writing to stdout",
                 ),
                 (
                     Export::new("warn", &[I32], I32),
                     &[5][..],
                     ev("write", &[2, 10]),
+                    "failed writing to stderr",
                 ),
             ] {
-                assert_eq!(
-                    running.call(&export, args),
-                    Got::Trap(Trap::UnreachableCodeReached),
-                    "O{level} {count}"
-                );
+                let Got::Revert(revert) = running.call(&export, args) else {
+                    panic!("O{level} {count}: a failed write must revert");
+                };
+                assert_eq!(revert.message(), Some(message), "O{level} {count}");
                 assert_eq!(running.store.data().trace, [call], "O{level} {count}");
             }
         }
@@ -1469,18 +1488,16 @@ fn a_stream_that_fails_ends_the_program() {
         // the input.
         let number_lines = Export::new("number_lines", &[], U32);
         running.store.data_mut().stream_count = Some(-1);
-        assert_eq!(
-            running.call(&number_lines, &[]),
-            Got::Trap(Trap::UnreachableCodeReached),
-            "O{level}"
-        );
+        let Got::Revert(revert) = running.call(&number_lines, &[]) else {
+            panic!("O{level}: a failed read must revert");
+        };
+        assert_eq!(revert.message(), Some("failed reading stdin"), "O{level}");
         // A host that counts more bytes than the program asked for is at fault.
         running.store.data_mut().stream_count = Some(i32::MAX);
-        assert_eq!(
-            running.call(&number_lines, &[]),
-            Got::Trap(Trap::UnreachableCodeReached),
-            "O{level}"
-        );
+        let Got::Revert(revert) = running.call(&number_lines, &[]) else {
+            panic!("O{level}: an assertion must revert");
+        };
+        assert_eq!(revert.panic_code(), Some(0x01), "O{level}");
         // The instance still works.
         running.store.data_mut().stream_count = None;
         assert_eq!(running.call(&number_lines, &[]), Got::Value(0));
@@ -1521,6 +1538,42 @@ fn the_input_is_read_to_its_end() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn a_module_that_can_panic_imports_the_revert_of_core_rt() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "2"] {
+        // `checked_double` can overflow.
+        let bytes = build("abort_guard", Flavour::Host, level, temp.path());
+        let module = Module::new(engine(), &bytes).unwrap();
+        let mut revert: Vec<_> = module
+            .imports()
+            .filter(|import| ["__fe_revert", "abort"].contains(&import.name()))
+            .map(|import| {
+                (
+                    import.module().to_string(),
+                    import.name().to_string(),
+                    signature(import.ty().func().unwrap()),
+                )
+            })
+            .collect();
+        revert.sort();
+        assert_eq!(
+            revert,
+            REVERT_IMPORTS.map(|(module, name, sig)| (
+                module.to_string(),
+                name.to_string(),
+                sig.to_string()
+            )),
+            "O{level}"
+        );
+    }
+    // A module that cannot panic imports nothing.
+    let source = temp.path().join("plain.fe");
+    fs::write(&source, "#[unsafe(export)]\npub fn one() -> u32 { 1 }\n").unwrap();
+    let bytes = build_wasm(&source, "1", &temp.path().join("plain"));
+    assert_eq!(Module::new(engine(), &bytes).unwrap().imports().count(), 0);
+}
+
+#[test]
 fn a_missing_import_fails_to_instantiate_with_a_message_that_names_it() {
     let temp = tempdir().unwrap();
     let bytes = build("log_u64", Flavour::Host, "2", temp.path());
@@ -1532,12 +1585,13 @@ fn a_missing_import_fails_to_instantiate_with_a_message_that_names_it() {
     let text = format!("{error:?}");
     println!("no imports given: {text}");
     assert!(
-        text.contains("expected 2 imports, found 0"),
+        text.contains("expected 4 imports, found 0"),
         "the number of imports is named: {text}"
     );
 
     // A host that supplies all but one.
     let mut linker = Linker::new(engine());
+    define_revert(&mut linker);
     linker
         .func_wrap("env", "sys_wasm_log_i32", |_: i32| {})
         .unwrap();
@@ -1552,6 +1606,7 @@ fn a_missing_import_fails_to_instantiate_with_a_message_that_names_it() {
 
     // A host that supplies an import with the wrong signature.
     let mut linker = Linker::new(engine());
+    define_revert(&mut linker);
     linker
         .func_wrap("env", "sys_wasm_log_i32", |_: i32| {})
         .unwrap();
