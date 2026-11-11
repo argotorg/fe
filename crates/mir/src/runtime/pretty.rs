@@ -214,9 +214,6 @@ fn write_section_summary<'db>(db: &'db dyn MirDb, out: &mut String, section: &Ru
             embed.as_symbol
         );
     }
-    for const_region in &section.const_regions {
-        let _ = writeln!(out, "        const {const_region:?}");
-    }
 }
 
 fn write_function_summary<'db>(

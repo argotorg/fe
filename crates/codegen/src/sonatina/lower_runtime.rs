@@ -350,7 +350,6 @@ struct ModuleLowerer<'db, 'a, I: 'static> {
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
-    explicit_code_region_sections: FxHashSet<(String, mir::RuntimeSectionName)>,
     external_code: FxHashMap<(String, mir::RuntimeSectionName), GlobalVariableRef>,
     /// The constant byte strings code copies, one global each.
     const_bytes: FxHashMap<Box<[u8]>, GlobalVariableRef>,
@@ -442,7 +441,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             layout_names: FxHashMap::default(),
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
-            explicit_code_region_sections: FxHashSet::default(),
             external_code: FxHashMap::default(),
             const_bytes: FxHashMap::default(),
             adapted: adapters.iter().map(|adapter| adapter.instance).collect(),
@@ -978,11 +976,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 let section_builder =
                     object_builder.section(super::section_name_for_runtime(&section.name));
                 section_builder.entry(self.func_ref(section.entry.instance(self.db))?);
-                if self.section_needs_const_data(object, &section.name) {
-                    for region in &section.const_regions {
-                        section_builder.data(self.lower_const_region(*region)?);
-                    }
-                }
                 for embed in &section.embeds {
                     match &embed.source {
                         mir::RuntimeSectionRef::Local { object: _, section } => {
@@ -1010,30 +1003,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 .map_err(|err| LowerError::Internal(format!("failed to declare object: {err}")))?;
         }
         Ok(())
-    }
-
-    fn section_needs_const_data(
-        &self,
-        object: mir::RuntimeObject<'db>,
-        section: &mir::RuntimeSectionName,
-    ) -> bool {
-        self.explicit_code_region_sections
-            .contains(&(object.name(self.db).clone(), section.clone()))
-    }
-
-    fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
-        let Some(resolved) = self
-            .package
-            .code_regions(self.db)
-            .iter()
-            .copied()
-            .find(|resolved| resolved.region(self.db) == region)
-        else {
-            return;
-        };
-        let source = resolved.source(self.db);
-        self.explicit_code_region_sections
-            .insert((source.object().to_string(), source.section().clone()));
     }
 
     fn func_ref(&self, instance: mir::RuntimeInstance<'db>) -> Result<FuncRef, LowerError> {
@@ -3492,11 +3461,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
-    fn code_region_symbol_ref(&mut self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
+    fn code_region_symbol_ref(&self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
         if let Some(symbol) = self.module.external_code_symbol(region) {
             return symbol;
         }
-        self.module.mark_explicit_code_region(region);
         if !self.current_sections.is_empty()
             && self
                 .module

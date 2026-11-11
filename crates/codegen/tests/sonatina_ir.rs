@@ -371,6 +371,28 @@ fn dynamically_indexed_value_is_stored_once(fixture: Fixture<&str>) {
     );
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "folded_const_data_leaves_no_runtime_data.fe")]
+fn folded_const_data_leaves_no_runtime_data(fixture: Fixture<&str>) {
+    let lo = {
+        let mut word = [0; 32];
+        word[28..].copy_from_slice(&0x1234567u32.to_be_bytes());
+        word
+    };
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::Os] {
+            let bytecode = fe_codegen::emit_module_sonatina_bytecode(db, top_mod, level, None)
+                .expect("bytecode should emit");
+            let runtime = &bytecode["Clamp"].runtime;
+            // Every load of `LIMITS` folds, so its words have no reader.
+            assert!(
+                !runtime.windows(32).any(|window| window == lo),
+                "`LIMITS` data in the runtime at {level:?}: {}",
+                hex::encode(runtime)
+            );
+        }
+    });
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "storage_map_root_effect_reports_runtime_root_error.fe")]
 fn storage_map_root_effect_reports_runtime_root_error(fixture: Fixture<&str>) {
     let err = with_top_mod_for_source(&fixture, |db, top_mod| {

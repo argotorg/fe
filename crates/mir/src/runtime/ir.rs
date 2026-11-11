@@ -1068,7 +1068,6 @@ pub struct RuntimeSection<'db> {
     pub name: RuntimeSectionName,
     pub entry: RuntimeFunction<'db>,
     pub embeds: Vec<RuntimeEmbed>,
-    pub const_regions: Vec<ConstRegionId<'db>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
