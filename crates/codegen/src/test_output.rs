@@ -6,17 +6,14 @@ use hir::{
 };
 use num_bigint::BigUint;
 
+use crate::LowerError;
+
+/// A test of an EVM test suite.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestMetadata {
-    pub display_name: String,
-    pub hir_name: String,
-    pub symbol_name: String,
-    pub object_name: String,
-    pub bytecode: Vec<u8>,
-    pub sonatina_observability_json: Option<String>,
-    pub value_param_count: usize,
-    pub effect_param_count: usize,
-    pub init_bytecode: Vec<u8>,
+    pub name: String,
+    /// The calldata selector that runs the test.
+    pub selector: u32,
     pub expected_revert: Option<ExpectedRevert>,
     pub initial_balance: Option<Vec<u8>>,
 }
@@ -28,31 +25,19 @@ pub enum ExpectedRevert {
     PanicCode(Vec<u8>),
 }
 
+/// The selected tests of an EVM test run, compiled into one object. Its
+/// runtime code runs the test whose selector is the calldata.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestModuleOutput {
+pub struct TestSuiteOutput {
+    /// The init code that deploys the object.
+    pub bytecode: Vec<u8>,
+    pub sonatina_observability_json: Option<String>,
     pub tests: Vec<TestMetadata>,
-}
-
-impl TestModuleOutput {
-    pub(crate) fn extend(&mut self, other: Self) {
-        self.tests.extend(other.tests);
-    }
-
-    pub(crate) fn sort_tests(&mut self) {
-        self.tests.sort_by(|left, right| {
-            left.display_name
-                .cmp(&right.display_name)
-                .then_with(|| left.hir_name.cmp(&right.hir_name))
-                .then_with(|| left.symbol_name.cmp(&right.symbol_name))
-                .then_with(|| left.object_name.cmp(&right.object_name))
-        });
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestRootMetadata {
-    pub hir_name: String,
-    pub display_name: String,
+    pub name: String,
     pub expected_revert: Option<ExpectedRevert>,
     pub initial_balance: Option<Vec<u8>>,
 }
@@ -63,48 +48,52 @@ pub(crate) enum TestRootMetadataError {
     Unsupported(String),
 }
 
+impl From<TestRootMetadataError> for LowerError {
+    fn from(err: TestRootMetadataError) -> Self {
+        match err {
+            TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
+            TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
+        }
+    }
+}
+
+/// The name and `#[test]` attribute arguments of the test that `owner`, a
+/// test root, runs.
 pub(crate) fn runtime_test_root_metadata<'db>(
     db: &'db DriverDataBase,
     owner: &mir::RuntimeFunctionOwner<'db>,
-    section_name: &mir::RuntimeSectionName,
 ) -> Result<TestRootMetadata, TestRootMetadataError> {
-    let mir::RuntimeSectionName::Test(hir_name) = section_name else {
-        return Err(TestRootMetadataError::InvalidPackage(format!(
-            "non-test section `{section_name:?}` used as a test root"
-        )));
-    };
     let mir::RuntimeFunctionOwner::Synthetic(mir::RuntimeSyntheticSpec::TestRoot {
-        callee, ..
+        name,
+        callee,
+        ..
     }) = owner
     else {
-        return Err(TestRootMetadataError::InvalidPackage(format!(
-            "test section `{hir_name}` does not use a TestRoot wrapper"
-        )));
+        return Err(TestRootMetadataError::InvalidPackage(
+            "a test is not run by a TestRoot wrapper".to_string(),
+        ));
     };
     let Some(semantic) = callee.key(db).semantic(db) else {
         return Err(TestRootMetadataError::InvalidPackage(format!(
-            "test section `{hir_name}` does not target a semantic instance"
+            "test `{name}` does not target a semantic instance"
         )));
     };
     let BodyOwner::Func(func, _) = semantic.key(db).owner(db) else {
         return Err(TestRootMetadataError::InvalidPackage(format!(
-            "test section `{hir_name}` does not target a function body"
+            "test `{name}` does not target a function body"
         )));
     };
     let attrs = ItemKind::from(func).attrs(db).ok_or_else(|| {
-        TestRootMetadataError::InvalidPackage(format!("test function `{hir_name}` has no attrs"))
+        TestRootMetadataError::InvalidPackage(format!("test function `{name}` has no attrs"))
     })?;
     let test_attr = attrs.get_attr(db, "test").ok_or_else(|| {
-        TestRootMetadataError::InvalidPackage(format!(
-            "test function `{hir_name}` is missing #[test]"
-        ))
+        TestRootMetadataError::InvalidPackage(format!("test function `{name}` is missing #[test]"))
     })?;
-    let expected_revert = parse_expected_revert(db, hir_name, test_attr)
-        .map_err(TestRootMetadataError::Unsupported)?;
-    let initial_balance = parse_test_balance_arg(db, hir_name, test_attr)?;
+    let expected_revert =
+        parse_expected_revert(db, name, test_attr).map_err(TestRootMetadataError::Unsupported)?;
+    let initial_balance = parse_test_balance_arg(db, name, test_attr)?;
     Ok(TestRootMetadata {
-        hir_name: hir_name.clone(),
-        display_name: hir_name.clone(),
+        name: name.clone(),
         expected_revert,
         initial_balance,
     })

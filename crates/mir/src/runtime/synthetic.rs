@@ -61,6 +61,7 @@ pub(crate) fn runtime_synthetic_exit_behavior<'db>(
         }
         RuntimeSyntheticSpec::MainRoot { .. }
         | RuntimeSyntheticSpec::TestRoot { .. }
+        | RuntimeSyntheticSpec::TestSuiteRoot { .. }
         | RuntimeSyntheticSpec::ManualContractRoot { .. }
         | RuntimeSyntheticSpec::ContractRecvAbi { .. }
         | RuntimeSyntheticSpec::ContractInitRoot { .. }
@@ -134,7 +135,10 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
         } => builder.build_contract_init_root(contract, init_abi, runtime_region),
         RuntimeSyntheticSpec::ContractRuntimeRoot {
             dispatch, default, ..
-        } => builder.build_contract_runtime_root(&dispatch, default),
+        } => builder.build_dispatch_root(&dispatch, default),
+        RuntimeSyntheticSpec::TestSuiteRoot { dispatch } => {
+            builder.build_dispatch_root(&dispatch, DispatchDefault::RevertEmpty)
+        }
     }
     Ok(builder.finish())
 }
@@ -809,7 +813,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
         }
     }
 
-    fn build_contract_runtime_root(
+    /// Runs the wrapper that the calldata selector names, or `default`.
+    fn build_dispatch_root(
         &mut self,
         dispatch: &[crate::runtime::DispatchArm<'db>],
         default: DispatchDefault<'db>,
@@ -1791,7 +1796,7 @@ fn test_raw_storage_root() uses (storage: mut RawStorage) {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        let package = build_test_runtime_package(&db, top_mod, Some("test_raw_storage_root"))
+        let package = build_test_runtime_package(&db, &[top_mod], Some("test_raw_storage_root"))
             .expect("test runtime package should build");
         let functions = package.functions(&db);
         let root = functions

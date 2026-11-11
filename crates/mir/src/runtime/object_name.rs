@@ -34,6 +34,7 @@ const FINGERPRINT_LEN: usize = 4;
 const SEGMENT_SEPARATOR: &str = "__";
 /// The name of the executable object. No contract takes it.
 const MAIN_OBJECT_NAME: &str = "main";
+const TEST_SUITE_OBJECT_NAME: &str = "test_suite";
 
 /// What a runtime object is built from. The object's name is derived from this
 /// once every object of a package is known, never from a bare string.
@@ -51,6 +52,8 @@ pub(crate) enum ObjectId<'db> {
     },
     /// A `#[test]` function.
     Test(Func<'db>),
+    /// The selected tests of an EVM test run.
+    TestSuite,
 }
 
 impl<'db> ObjectId<'db> {
@@ -65,6 +68,7 @@ impl<'db> ObjectId<'db> {
     pub(crate) fn base_name(&self, db: &'db dyn MirDb) -> String {
         match self {
             Self::Main => MAIN_OBJECT_NAME.to_string(),
+            Self::TestSuite => TEST_SUITE_OBJECT_NAME.to_string(),
             Self::Contract(contract) => contract_name(db, *contract),
             Self::ManualContract { name, .. } => name.clone(),
             Self::Test(func) => sanitize_object_name(
@@ -84,6 +88,7 @@ impl<'db> ObjectId<'db> {
     fn identity(&self, db: &'db dyn MirDb) -> String {
         match self {
             Self::Main => MAIN_OBJECT_NAME.to_string(),
+            Self::TestSuite => TEST_SUITE_OBJECT_NAME.to_string(),
             Self::Contract(contract) => item_identity(db, (*contract).into()),
             Self::ManualContract { top_mod, name } => {
                 format!("{}${name}", item_identity(db, ItemKind::TopMod(*top_mod)))
@@ -98,7 +103,7 @@ impl<'db> ObjectId<'db> {
     fn candidates(&self, db: &'db dyn MirDb) -> Vec<String> {
         let base = self.base_name(db);
         let (scope, mut module_parts) = match self {
-            Self::Main => return vec![base],
+            Self::Main | Self::TestSuite => return vec![base],
             Self::Contract(contract) => (
                 contract.scope(),
                 module_path_components_for_scope(db, contract.scope()),
@@ -227,7 +232,9 @@ pub fn ingot_contracts<'db>(db: &'db dyn MirDb, ingot: Ingot<'db>) -> Vec<IngotC
                 (contract.scope().top_mod(db), modules)
             }
             ObjectId::ManualContract { top_mod, .. } => (*top_mod, Vec::new()),
-            ObjectId::Main | ObjectId::Test(_) => unreachable!("declared objects are contracts"),
+            ObjectId::Main | ObjectId::Test(_) | ObjectId::TestSuite => {
+                unreachable!("declared objects are contracts")
+            }
         };
         let source_name = id.base_name(db);
         path.push(source_name.clone());

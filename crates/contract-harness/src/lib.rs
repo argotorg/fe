@@ -628,6 +628,29 @@ fn format_logs(logs: &[Log]) -> Vec<String> {
     logs.iter().map(|log| format!("{log:?}")).collect()
 }
 
+/// The accounts of a [`RuntimeInstance`] and their state. Unlike an instance,
+/// it can be shared between threads, and each can start instances from it.
+pub struct RuntimeSnapshot {
+    db: InMemoryDB,
+    address: Address,
+    next_nonce_by_caller: HashMap<Address, u64>,
+}
+
+impl RuntimeSnapshot {
+    /// An instance of its own that starts in this state.
+    pub fn instance(&self) -> RuntimeInstance {
+        RuntimeInstance {
+            evm: Context::mainnet()
+                .with_db(self.db.clone())
+                .modify_cfg_chained(configure_test_cfg)
+                .build_mainnet(),
+            address: self.address,
+            next_nonce_by_caller: self.next_nonce_by_caller.clone(),
+            trace_options: None,
+        }
+    }
+}
+
 /// Stateful runtime instance backed by a persistent in-memory database.
 pub struct RuntimeInstance {
     evm: MainnetEvm<MainnetContext<InMemoryDB>>,
@@ -746,6 +769,15 @@ impl RuntimeInstance {
             ExecutionResult::Halt { reason, gas_used } => {
                 Err(HarnessError::Halted { reason, gas_used })
             }
+        }
+    }
+
+    /// The accounts of this instance, with the state they have now.
+    pub fn snapshot(&self) -> RuntimeSnapshot {
+        RuntimeSnapshot {
+            db: self.evm.ctx.journaled_state.database.clone(),
+            address: self.address,
+            next_nonce_by_caller: self.next_nonce_by_caller.clone(),
         }
     }
 

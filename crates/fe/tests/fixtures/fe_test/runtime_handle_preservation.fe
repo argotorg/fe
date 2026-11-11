@@ -81,7 +81,7 @@ fn test_explicit_root_provider_params_keep_runtime_carriers() uses (evm: mut Evm
     let direct_len = evm.input().len()
 
     assert!(generic_len == direct_len)
-    assert!(generic_len == 0)
+    assert!(generic_len == 4)
 }
 
 #[test]

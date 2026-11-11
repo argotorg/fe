@@ -41,11 +41,12 @@ pub(super) struct NativeTestCase {
     entry_index: usize,
     expected_revert: Option<ExpectedRevert>,
     executable: Arc<NativeExecutable>,
+    report_root: Option<Utf8PathBuf>,
 }
 
 impl NativeTestCase {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) fn run(&self, report: Option<&ReportContext>, limits: TestLimits) -> TestOutcome {
+    pub(super) fn run(&self, limits: TestLimits) -> TestOutcome {
         let started = Instant::now();
         let revert_path = self
             .executable
@@ -208,10 +209,8 @@ impl NativeTestCase {
         })();
         let error_message = match result {
             Ok((status, stdout, stderr, reason)) => {
-                if let Some(report) = report {
-                    let dir = report
-                        .root_dir
-                        .join(format!("artifacts/native/test-{}", self.entry_index));
+                if let Some(root) = &self.report_root {
+                    let dir = root.join(format!("artifacts/native/test-{}", self.entry_index));
                     let _ = fs::create_dir_all(&dir);
                     let _ = fs::write(dir.join("stdout.txt"), &stdout);
                     let _ = fs::write(dir.join("stderr.txt"), &stderr);
@@ -283,7 +282,7 @@ impl NativeTestCase {
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    pub(super) fn run(&self, _report: Option<&ReportContext>, _limits: TestLimits) -> TestOutcome {
+    pub(super) fn run(&self, _limits: TestLimits) -> TestOutcome {
         TestOutcome {
             result: TestResult {
                 name: self.name.clone(),
@@ -421,9 +420,9 @@ _exit({NATIVE_TEST_REVERT_STATUS});
                         entry_index,
                         expected_revert: test.expected_revert,
                         executable: Arc::clone(&executable),
+                        report_root: report.map(|ctx| ctx.root_dir.clone()),
                     }),
                     evm_trace: None,
-                    report_root: report.map(|ctx| ctx.root_dir.clone()),
                 })
                 .collect())
         },
@@ -494,14 +493,12 @@ mod tests {
             entry_index: 0,
             expected_revert: None,
             executable: Arc::new(NativeExecutable { directory }),
+            report_root: None,
         };
-        let outcome = case.run(
-            None,
-            TestLimits {
-                timeout: Duration::from_secs(5),
-                output_bytes: 1024,
-            },
-        );
+        let outcome = case.run(TestLimits {
+            timeout: Duration::from_secs(5),
+            output_bytes: 1024,
+        });
         assert!(outcome.result.passed, "{:?}", outcome.result);
         thread::sleep(Duration::from_secs(3));
         assert!(!marker.exists(), "native test descendant survived cleanup");

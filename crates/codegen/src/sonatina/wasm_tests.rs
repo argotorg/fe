@@ -18,7 +18,7 @@ use super::{
 };
 use crate::{
     OptLevel,
-    test_output::{ExpectedRevert, TestRootMetadataError, runtime_test_root_metadata},
+    test_output::{ExpectedRevert, runtime_test_root_metadata},
 };
 
 /// Compiled tests.
@@ -46,19 +46,15 @@ pub fn emit_test_wasm(
     let mut roots = Vec::new();
     for object in package.root_objects(db) {
         for section in object.sections(db) {
-            let metadata = runtime_test_root_metadata(db, section.entry.owner(db), &section.name)
-                .map_err(|err| match err {
-                TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
-                TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
-            })?;
+            let metadata = runtime_test_root_metadata(db, section.entry.owner(db))?;
             if metadata.initial_balance.is_some() {
                 return Err(LowerError::Unsupported(format!(
                     "WebAssembly test `{}` cannot use the EVM `balance` attribute",
-                    metadata.display_name
+                    metadata.name
                 )));
             }
             roots.push((
-                metadata.display_name,
+                metadata.name,
                 metadata.expected_revert,
                 section.entry.instance(db),
             ));

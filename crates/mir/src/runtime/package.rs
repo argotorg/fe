@@ -341,12 +341,47 @@ pub fn build_ingot_module_runtime_package<'db>(
         .transpose()
 }
 
+/// Build the package of an EVM test run: one object for every selected test
+/// of `top_mods`. Its entry runs the test whose index, in the order of
+/// [`collect_test_funcs`], is the calldata selector. The tests share one
+/// object so that the code they have in common is compiled once.
 pub fn build_test_runtime_package<'db>(
     db: &'db dyn MirDb,
-    top_mod: TopLevelMod<'db>,
+    top_mods: &[TopLevelMod<'db>],
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    build_test_package(db, top_mod, &collect_test_funcs(db, &[top_mod], filter))
+    require_target(db, Target::Evm)?;
+    let &top_mod = top_mods.first().ok_or_else(|| {
+        LowerError::Unsupported("test runtime package needs a source module".into())
+    })?;
+    let dispatch = collect_test_funcs(db, top_mods, filter)
+        .iter()
+        .zip(0..)
+        .map(|(test, selector)| {
+            Ok(DispatchArm {
+                selector,
+                wrapper: test_root(db, test)?,
+            })
+        })
+        .collect::<Result<Box<[_]>, LowerError>>()?;
+    let mut roots = Vec::new();
+    let mut objects = Vec::new();
+    if !dispatch.is_empty() {
+        let root = synthetic_instance(
+            db,
+            RuntimeSyntheticSpec::TestSuiteRoot { dispatch },
+            Vec::new(),
+        );
+        roots.push(root);
+        objects.push((
+            ObjectId::TestSuite,
+            vec![(RuntimeSectionName::TestSuite, root)],
+        ));
+    }
+    let package = build_sectioned_package(db, top_mod, roots, objects)?;
+    verify_runtime_package(db, package)
+        .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
+    Ok(package)
 }
 
 /// Build one reachable runtime graph for every selected native test in a suite.
@@ -439,24 +474,12 @@ fn build_test_package<'db>(
 ) -> Result<RuntimePackage<'db>, LowerError> {
     let mut roots = Vec::new();
     let mut objects = Vec::new();
-    for &TestFunc { func, ref name } in tests {
-        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
-        let entry_args =
-            entry_semantic_args_plan(db, EntryEffectContext::TestFunc { func }, semantic)?;
-        let runtime_root = runtime_instance_for_semantic(db, semantic);
-        let root = synthetic_instance(
-            db,
-            RuntimeSyntheticSpec::TestRoot {
-                name: name.clone(),
-                callee: runtime_root,
-                entry_args,
-            },
-            Vec::new(),
-        );
+    for test in tests {
+        let root = test_root(db, test)?;
         roots.push(root);
         objects.push((
-            ObjectId::Test(func),
-            vec![(RuntimeSectionName::Test(name.clone()), root)],
+            ObjectId::Test(test.func),
+            vec![(RuntimeSectionName::Test(test.name.clone()), root)],
         ));
     }
     // A WebAssembly test passes revert data to the test host, as a native
@@ -470,6 +493,28 @@ fn build_test_package<'db>(
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
     Ok(package)
+}
+
+/// The root that runs `test` with the effects of a test entry.
+fn test_root<'db>(
+    db: &'db dyn MirDb,
+    test: &TestFunc<'db>,
+) -> Result<RuntimeInstance<'db>, LowerError> {
+    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(test.func, None))?;
+    let entry_args = entry_semantic_args_plan(
+        db,
+        EntryEffectContext::TestFunc { func: test.func },
+        semantic,
+    )?;
+    Ok(synthetic_instance(
+        db,
+        RuntimeSyntheticSpec::TestRoot {
+            name: test.name.clone(),
+            callee: runtime_instance_for_semantic(db, semantic),
+            entry_args,
+        },
+        Vec::new(),
+    ))
 }
 
 fn build_contract_package<'db>(
@@ -1774,6 +1819,7 @@ fn resolved_section_region<'db>(
             )),
             RuntimeSectionName::Main
             | RuntimeSectionName::Test(_)
+            | RuntimeSectionName::TestSuite
             | RuntimeSectionName::Export(_) => None,
         },
         RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ManualContractRoot {
@@ -1791,6 +1837,7 @@ fn resolved_section_region<'db>(
         RuntimeFunctionOwner::Synthetic(
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
+            | RuntimeSyntheticSpec::TestSuiteRoot { .. }
             | RuntimeSyntheticSpec::ExportRoot { .. }
             | RuntimeSyntheticSpec::ContractInitAbi { .. }
             | RuntimeSyntheticSpec::ContractRecvAbi { .. },
@@ -1895,6 +1942,7 @@ fn materialized_contracts_for_roots<'db>(
                 | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => Some(*contract),
                 RuntimeSyntheticSpec::MainRoot { .. }
                 | RuntimeSyntheticSpec::TestRoot { .. }
+                | RuntimeSyntheticSpec::TestSuiteRoot { .. }
                 | RuntimeSyntheticSpec::ExportRoot { .. }
                 | RuntimeSyntheticSpec::ManualContractRoot { .. }
                 | RuntimeSyntheticSpec::ContractInitAbi { .. }
@@ -2472,6 +2520,14 @@ fn runtime_synthetic_spec_key<'db>(
             instance_key(callee),
             entry_semantic_args_sort_key(db, &entry_args)
         ),
+        RuntimeSyntheticSpec::TestSuiteRoot { dispatch } => format!(
+            "__synthetic:test_suite_root:{}",
+            dispatch
+                .iter()
+                .map(|arm| format!("{}:{}", arm.selector, instance_key(arm.wrapper)))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
         RuntimeSyntheticSpec::ExportRoot { callee, entry_args } => format!(
             "__synthetic:export_root:{}:{}",
             instance_key(callee),
@@ -2905,6 +2961,7 @@ fn symbol_base_for_runtime_instance<'db>(
         RuntimeSyntheticSpec::TestRoot { name, .. } => {
             format!("test_root_{}", sanitize_symbol(name))
         }
+        RuntimeSyntheticSpec::TestSuiteRoot { .. } => "test_suite_root".to_string(),
         RuntimeSyntheticSpec::ManualContractRoot { func, .. } => {
             let (contract_name, section) = match func.manual_contract_root_attr(db) {
                 Some(ManualContractRootAttr::Init { contract_name }) => {
@@ -3103,8 +3160,68 @@ pub fn main() -> i32 {
             .touch(&mut db, file_url, Some(source.to_string()));
         let top_mod = db.top_mod(file);
         let package =
-            build_test_runtime_package(&db, top_mod, filter).expect("test package should build");
+            build_test_runtime_package(&db, &[top_mod], filter).expect("test package should build");
         f(&db, package)
+    }
+
+    #[test]
+    fn selected_evm_tests_share_one_object() {
+        let source = r#"
+fn helper() -> u256 {
+    1
+}
+
+#[test]
+fn first() {
+    assert!(helper() == 1)
+}
+
+#[test]
+fn second() {
+    assert!(helper() == 1)
+}
+
+#[test]
+fn other() {}
+"#;
+        for (filter, expected) in [
+            (None, vec!["first", "second", "other"]),
+            (Some("s"), vec!["first", "second"]),
+        ] {
+            with_test_runtime_package("test_suite.fe", source, filter, |db, package| {
+                let [object] = package.objects(db) else {
+                    panic!("the tests should share one object");
+                };
+                let [section] = object.sections(db).as_slice() else {
+                    panic!("the test suite object should have one section");
+                };
+                assert_eq!(section.name, RuntimeSectionName::TestSuite);
+                let RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::TestSuiteRoot {
+                    dispatch,
+                }) = section.entry.owner(db)
+                else {
+                    panic!("the test suite section should be entered through its root");
+                };
+                let tests: Vec<_> = dispatch
+                    .iter()
+                    .map(|arm| {
+                        let RuntimeInstanceSource::Synthetic(synthetic) =
+                            arm.wrapper.key(db).source(db)
+                        else {
+                            panic!("a test should be run by a synthetic root");
+                        };
+                        let RuntimeSyntheticSpec::TestRoot { name, .. } = synthetic.spec(db) else {
+                            panic!("a test should be run by a test root");
+                        };
+                        (arm.selector, name.as_str())
+                    })
+                    .collect();
+                assert_eq!(tests, (0..).zip(expected).collect::<Vec<_>>());
+            });
+        }
+        with_test_runtime_package("test_suite.fe", source, Some("absent"), |db, package| {
+            assert!(package.objects(db).is_empty());
+        });
     }
 
     #[test]
@@ -3270,15 +3387,15 @@ fn deploys_both() uses (evm: mut Evm) {
 "#,
             None,
             |db, package| {
-                assert_eq!(package_root_object_names(db, package), vec!["deploys_both"]);
+                assert_eq!(package_root_object_names(db, package), vec!["test_suite"]);
                 let mut names = package_object_names(db, package);
                 names.sort();
                 assert_eq!(
                     names,
                     vec![
-                        "deploys_both",
                         "same_named_deployed__C",
-                        "same_named_deployed__inner__C"
+                        "same_named_deployed__inner__C",
+                        "test_suite"
                     ]
                 );
             },
@@ -3332,8 +3449,8 @@ fn ignored() {
 "#,
             Some("selected"),
             |db, package| {
-                assert_eq!(package_root_object_names(db, package), vec!["selected"]);
-                assert_eq!(package_object_names(db, package), vec!["selected"]);
+                assert_eq!(package_root_object_names(db, package), vec!["test_suite"]);
+                assert_eq!(package_object_names(db, package), vec!["test_suite"]);
             },
         );
     }
@@ -3371,7 +3488,7 @@ fn selected() uses (evm: mut Evm) {
             |db, package| {
                 let object_names = package_object_names(db, package);
 
-                assert_eq!(package_root_object_names(db, package), vec!["selected"]);
+                assert_eq!(package_root_object_names(db, package), vec!["test_suite"]);
                 assert!(
                     object_names.contains(&"Child".to_string()),
                     "selected test package should discover create2 contract dependency: {object_names:?}"

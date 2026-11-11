@@ -18,8 +18,8 @@ pub use sonatina::{
     emit_ingot_sonatina_ir, emit_ingot_sonatina_ir_optimized, emit_module_sonatina_bytecode,
     emit_module_sonatina_bytecode_with_observability, emit_module_sonatina_ir,
     emit_module_sonatina_ir_optimized, emit_runtime_package_sonatina_ir,
-    emit_runtime_package_sonatina_ir_optimized, emit_test_ingot_sonatina,
-    emit_test_module_sonatina, validate_module_sonatina_ir,
+    emit_runtime_package_sonatina_ir_optimized, emit_test_suite_sonatina,
+    validate_module_sonatina_ir,
 };
 #[cfg(feature = "cranelift")]
 pub use sonatina::{
@@ -32,4 +32,4 @@ pub use sonatina::{
     WASM_HOST_CONTRACT_VERSION, WASM_REPLY_TYPE, WASM_TEXT_TYPE, WasmArtifacts, WasmExportInfo,
     WasmOutputSelection, WasmParamInfo, WasmTestModule, emit_module_wasm_artifacts, emit_test_wasm,
 };
-pub use test_output::{ExpectedRevert, TestMetadata, TestModuleOutput, parse_expected_revert};
+pub use test_output::{ExpectedRevert, TestMetadata, TestSuiteOutput, parse_expected_revert};

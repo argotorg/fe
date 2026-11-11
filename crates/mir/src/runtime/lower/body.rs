@@ -6427,7 +6427,7 @@ fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        let package = build_test_runtime_package(&db, top_mod, Some("test_deterministic"));
+        let package = build_test_runtime_package(&db, &[top_mod], Some("test_deterministic"));
         assert!(
             package.is_ok(),
             "poseidon_mock should lower through range consts with runtime-zst fields: {package:#?}"
