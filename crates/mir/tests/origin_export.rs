@@ -40,8 +40,12 @@ fn runtime_instance_for_func<'db>(
     let semantic_key = root_semantic_instance_key(db, BodyOwner::Func(func, None))
         .expect("fixture function should have a root semantic instance key");
     let semantic = SemanticInstance::new(db, semantic_key);
-    let runtime_key =
-        RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), Vec::new());
+    let runtime_key = RuntimeInstanceKey::new(
+        db,
+        RuntimeInstanceSource::Semantic(semantic),
+        Vec::new(),
+        false,
+    );
     get_or_build_runtime_instance(db, runtime_key)
 }
 

@@ -3954,6 +3954,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "invalid_enum_tag",
     "known_product_destructure_storage",
     "lane_accesses",
+    "lane_holds_before_halts",
     "lane_pattern_writes",
     "lane_projection_spaces",
     "leading_zeros",
@@ -4964,6 +4965,24 @@ fn test_sol_storage_collections_execute_at_o0() {
         output.contains("19 passed; 0 failed"),
         "expected every storage collection test to run at -O0:\n{output}"
     );
+}
+
+/// Unwinding a successful halt through the frames that hold lane copies
+/// differs by optimization level: the fixture directory runs it at the
+/// default level only.
+#[test]
+fn test_lane_holds_before_halts_execute_at_every_level() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/lane_holds_before_halts.fe");
+    let fixture = fixture.to_str().expect("fixture path utf8");
+    for level in ["-O0", "-O1", "-O2", "-Os"] {
+        let (output, exit_code) = run_fe_main(&["test", "--jobs", "1", level, fixture]);
+        assert_eq!(exit_code, 0, "fe test {level} failed:\n{output}");
+        assert!(
+            output.contains("11 passed; 0 failed"),
+            "expected every halting lane test to run at {level}:\n{output}"
+        );
+    }
 }
 
 #[test]

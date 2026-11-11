@@ -412,6 +412,15 @@ fn format_stmt<'db>(db: &'db dyn MirDb, stmt: &RStmt<'db>) -> String {
             )
         }
         RStmt::End { session } => format!("end {}", format_local_id(*session)),
+        RStmt::HoldLane { copy, flush } => {
+            let flush = flush
+                .iter()
+                .map(|stmt| format_stmt(db, stmt))
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!("hold_lane {} {{ {flush} }}", format_local_id(*copy))
+        }
+        RStmt::ReleaseLane { copy } => format!("release_lane {}", format_local_id(*copy)),
         RStmt::EnumWriteVariant {
             root,
             variant,

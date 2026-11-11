@@ -344,6 +344,15 @@ fn runtime_stmt_display(stmt: &RStmt<'_>) -> String {
             fields,
         } => format!("write_variant {root:?}, {variant:?}, {fields:?}"),
         RStmt::End { session } => format!("end {session:?}"),
+        RStmt::HoldLane { copy, flush } => format!(
+            "hold_lane {copy:?} {{ {} }}",
+            flush
+                .iter()
+                .map(runtime_stmt_display)
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+        RStmt::ReleaseLane { copy } => format!("release_lane {copy:?}"),
     }
 }
 

@@ -10,6 +10,7 @@ use crate::{
 };
 
 use super::{
+    halts::halt_record_class,
     interface::runtime_param_locals,
     returns::{declaration_runtime_return_class, declared_return_class_admits},
     semantic_body::RuntimeSemanticBody,
@@ -23,9 +24,33 @@ pub(crate) fn runtime_declaration_signature<'db>(
         let RuntimeInstanceSource::Synthetic(synthetic) = key.source(db) else {
             unreachable!()
         };
-        return runtime_synthetic_interface_signature(db, synthetic.spec(db).clone());
+        return with_halt_record(
+            db,
+            key,
+            runtime_synthetic_interface_signature(db, synthetic.spec(db).clone()),
+        );
     };
-    semantic_runtime_signature(db, key, declaration_runtime_return_class(db, key))
+    with_halt_record(
+        db,
+        key,
+        semantic_runtime_signature(db, key, declaration_runtime_return_class(db, key)),
+    )
+}
+
+/// `signature`, with the halt record an unwinding variant takes last
+/// (`unwind_halts`).
+fn with_halt_record<'db>(
+    db: &'db dyn MirDb,
+    key: RuntimeInstanceKey<'db>,
+    mut signature: RuntimeInterfaceSignature<'db>,
+) -> RuntimeInterfaceSignature<'db> {
+    if key.unwinds(db) {
+        signature.params.push(RuntimeParam {
+            local: RLocalId::from_u32(signature.params.len() as u32),
+            class: halt_record_class(db),
+        });
+    }
+    signature
 }
 
 fn semantic_runtime_signature<'db>(

@@ -36,7 +36,8 @@ pub contract Token {
 A packed field is a lane of its slot: reading it extracts its bytes and
 writing it keeps the rest of the slot. Like a packed struct field, it is read
 and written in place, but a `mut` binding, argument or provided effect of it
-works on a memory copy that is stored back when the access ends. A field
+works on a memory copy that is stored back when the access ends, or before
+the execution halts successfully while the access is open. A field
 placed with `#[slot(e)]` takes its slot alone, and fields numbered around it
 pack as if it were not there.
 

@@ -803,6 +803,10 @@ pub(crate) fn runtime_exit_behavior<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> RuntimeExitBehavior {
+    // An unwinding variant returns from the halts it records.
+    if key.unwinds(db) {
+        return RuntimeExitBehavior::MayReturn;
+    }
     match key.source(db) {
         RuntimeInstanceSource::Semantic(semantic) if semantic_never_returns(db, semantic) => {
             RuntimeExitBehavior::NeverReturns

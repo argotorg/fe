@@ -33,7 +33,7 @@ use rustc_hash::FxHashMap;
 use super::RmirEmitter;
 use crate::{
     db::MirDb,
-    instance::{RuntimeInstance, runtime::runtime_instance_lowered_body},
+    instance::{RuntimeInstance, runtime::runtime_body_with_lane_holds},
     runtime::{
         ConstScalar, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody,
         RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, ScalarClass, ScalarRepr, ScalarRole,
@@ -680,10 +680,10 @@ fn runtime_instance_has_effect<'db>(db: &'db dyn MirDb, instance: RuntimeInstanc
     if instance.is_external_declaration(db) {
         return true;
     }
-    let Ok(lowered) = runtime_instance_lowered_body(db, instance) else {
+    let Ok(body) = runtime_body_with_lane_holds(db, instance) else {
         return true;
     };
-    has_effect(db, lowered.body(db))
+    has_effect(db, body)
 }
 
 fn has_effect<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'db>) -> bool {
@@ -747,7 +747,7 @@ fn block_has_effect<'db>(db: &'db dyn MirDb, block: &RBlock<'db>) -> bool {
             RExpr::EnumAssertVariantRef { .. } => true,
             _ => false,
         },
-        RStmt::End { .. } => false,
+        RStmt::End { .. } | RStmt::HoldLane { .. } | RStmt::ReleaseLane { .. } => false,
         RStmt::AssertIndexInBounds { .. }
         | RStmt::EnumAssertVariant { .. }
         | RStmt::Store { .. }

@@ -474,7 +474,8 @@ the compiler gives any other element `BITS` of 256 per slot its storage
 layout takes. A
 lane is read and written in place, but a `mut` binding, argument, provided
 effect or yield of one works on a memory copy that is stored back into the
-lane when the access ends.
+lane when the access ends, or before the execution halts successfully
+(returns or stops) while the access is open, wherever the halt happens.
 
 ```fe
 let x = mut balances[from]

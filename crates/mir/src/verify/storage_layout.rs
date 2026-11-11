@@ -473,7 +473,12 @@ pub contract Other {
         let (function, mut spec) = wrapper_spec(db, package, contract, kind);
         mutate(&mut spec);
         let synthetic = RuntimeSyntheticInstance::new(db, spec.clone());
-        let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Synthetic(synthetic), vec![]);
+        let key = RuntimeInstanceKey::new(
+            db,
+            RuntimeInstanceSource::Synthetic(synthetic),
+            vec![],
+            false,
+        );
         let instance = get_or_build_runtime_instance(db, key);
         let function = RuntimeFunction::new(
             db,

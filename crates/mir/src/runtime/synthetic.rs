@@ -1159,8 +1159,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
             "synthetic specialized callee metadata mismatch for {callee:?}"
         );
         let params: Vec<RuntimeClass<'db>> = args.iter().map(|arg| arg.class.clone()).collect();
-        let key =
-            RuntimeInstanceKey::new(self.db, RuntimeInstanceSource::Semantic(semantic), params);
+        let key = RuntimeInstanceKey::new(
+            self.db,
+            RuntimeInstanceSource::Semantic(semantic),
+            params,
+            false,
+        );
         if key == callee.key(self.db) {
             callee
         } else {
