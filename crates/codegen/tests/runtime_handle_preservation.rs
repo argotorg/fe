@@ -91,7 +91,7 @@ macro_rules! with_test_runtime_package {
             .expect("file should be loaded");
         let top_mod = $db.top_mod(file);
         let $package =
-            build_test_runtime_package(&$db, top_mod, None).expect("runtime test package");
+            build_test_runtime_package(&$db, &[top_mod], None).expect("runtime test package");
         $body
     }};
 }
@@ -2603,10 +2603,13 @@ fn exercise() {
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
-            assert!(
-                !output.contains("enum.set_tag") && !output.contains("br_table"),
-                "a struct result should keep its enum field inside one whole store:\n{output}"
-            );
+            for name in ["build", "exercise"] {
+                let body = sonatina_function_body(&output, name);
+                assert!(
+                    !body.contains("enum.set_tag") && !body.contains("br_table"),
+                    "a struct result should keep its enum field inside one whole store:\n{body}"
+                );
+            }
         }
     );
 }
@@ -2726,7 +2729,10 @@ fn in_memory() {
     with_top_mod_for_source("sum_shapes.fe", source, |db, top_mod| {
         for (package, symbol) in [
             (build_runtime_package(db, top_mod), "__C_recv_0_0"),
-            (build_test_runtime_package(db, top_mod, None), "in_memory"),
+            (
+                build_test_runtime_package(db, &[top_mod], None),
+                "in_memory",
+            ),
         ] {
             let package = package.expect("the package lowers");
             let body = runtime_body_for_symbol(db, package, symbol);

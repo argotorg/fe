@@ -9,10 +9,7 @@ use super::{
     LowerError, NativePanics, create_native_isa, debug_ensure_module_sonatina_ir_valid,
     format_cranelift_errors, lower_runtime, remove_unreachable_functions, to_sonatina_opt_level,
 };
-use crate::{
-    ExpectedRevert, OptLevel,
-    test_output::{TestRootMetadataError, runtime_test_root_metadata},
-};
+use crate::{ExpectedRevert, OptLevel, test_output::runtime_test_root_metadata};
 
 #[derive(Debug)]
 pub struct NativeTestEntry {
@@ -45,19 +42,15 @@ pub fn emit_test_suite_native(
     let mut roots = Vec::new();
     for &object in package.root_objects(db) {
         for section in object.sections(db) {
-            let metadata = runtime_test_root_metadata(db, section.entry.owner(db), &section.name)
-                .map_err(|err| match err {
-                TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
-                TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
-            })?;
+            let metadata = runtime_test_root_metadata(db, section.entry.owner(db))?;
             if metadata.initial_balance.is_some() {
                 return Err(LowerError::Unsupported(format!(
                     "native test `{}` cannot use the EVM `balance` attribute",
-                    metadata.display_name
+                    metadata.name
                 )));
             }
             roots.push((
-                metadata.display_name,
+                metadata.name,
                 metadata.expected_revert,
                 section.entry.instance(db),
             ));

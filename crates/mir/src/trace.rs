@@ -974,6 +974,9 @@ fn synthetic_context_instances<'db>(spec: RuntimeSyntheticSpec<'db>) -> Vec<Runt
         RuntimeSyntheticSpec::ContractInitAbi { plan } => plan.user_init.into_iter().collect(),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => vec![plan.user_recv],
         RuntimeSyntheticSpec::ContractInitRoot { init_abi, .. } => vec![init_abi],
+        RuntimeSyntheticSpec::TestSuiteRoot { dispatch } => {
+            dispatch.iter().map(|arm| arm.wrapper).collect()
+        }
         RuntimeSyntheticSpec::ContractRuntimeRoot {
             dispatch, default, ..
         } => {

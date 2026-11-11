@@ -787,7 +787,13 @@ fe test [--backend <sonatina|native|wasm>] [--filter <pattern>] [--jobs <n>] [--
 
 ### Backends: `--backend`
 
-- `sonatina` (the default) runs tests on the EVM.
+- `sonatina` (the default) runs tests on the EVM. The selected tests of a suite (a file, or
+  every module of an ingot) are compiled into one contract, so code that several tests use is
+  compiled once. The contract is deployed once, and each test runs as a call to it in an EVM
+  of its own that starts from that deployment. The calldata of the call is a 4-byte selector
+  that names the test, so a test that reads its own input (`evm.input()`) sees those 4 bytes.
+  A test's code, and so its gas use, depends on the other selected tests, and therefore on
+  `--filter`.
 - `native` (with the `cranelift` feature) runs each test as a host process.
 - `wasm` (with the `wasm` feature) builds the tests of a suite into one WebAssembly module
   and runs each in its own Node.js process (version 20 or later; `node` must be on `PATH`, and

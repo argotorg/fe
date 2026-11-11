@@ -21,9 +21,8 @@ use crate::workspace_ingot::{
 use crate::{BuildBackend, TestEmit};
 use camino::Utf8PathBuf;
 use codegen::{
-    ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata,
-    emit_runtime_package_sonatina_ir_optimized, emit_test_ingot_sonatina,
-    emit_test_module_sonatina,
+    ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata, TestSuiteOutput,
+    emit_runtime_package_sonatina_ir_optimized, emit_test_suite_sonatina,
 };
 use colored::Colorize;
 use common::{
@@ -31,7 +30,7 @@ use common::{
     config::{Config, WorkspaceMemberSelection},
     ingot::Ingot,
 };
-use contract_harness::{EvmTraceOptions, ExecutionOptions, RuntimeInstance, U256};
+use contract_harness::{EvmTraceOptions, ExecutionOptions, RuntimeInstance, RuntimeSnapshot, U256};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use driver::DriverDataBase;
 use driver::project_target::dependency_target_mismatch;
@@ -40,7 +39,7 @@ use mir::{build_runtime_package, build_test_runtime_package, format_runtime_pack
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Setter;
 use std::{
-    fmt::Write as _,
+    fmt::{self, Write as _},
     io,
     sync::Arc,
     thread,
@@ -163,12 +162,25 @@ struct SingleTestJob {
     suite_key: String,
     case: CompiledTest,
     evm_trace: Option<EvmTraceOptions>,
-    report_root: Option<Utf8PathBuf>,
+}
+
+/// A test of an EVM test suite, with the state in which the suite's object
+/// is deployed. Each test runs in an instance of its own.
+#[derive(Clone)]
+struct EvmTestCase {
+    test: TestMetadata,
+    suite: Arc<RuntimeSnapshot>,
+}
+
+impl fmt::Debug for EvmTestCase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.test.fmt(f)
+    }
 }
 
 #[derive(Debug, Clone)]
 enum CompiledTest {
-    Evm(Box<TestMetadata>),
+    Evm(EvmTestCase),
     #[cfg(feature = "cranelift")]
     Native(native::NativeTestCase),
     #[cfg(feature = "wasm")]
@@ -226,11 +238,6 @@ struct SuiteState {
     expected_singles: usize,
     completed_singles: usize,
     aggregate_suite_staging: Option<ReportStaging>,
-}
-
-#[derive(Debug)]
-struct DiscoverResult {
-    tests: Vec<TestMetadata>,
 }
 
 #[derive(Debug)]
@@ -1592,20 +1599,15 @@ fn prepare_suite_job(
 }
 
 fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> SingleRunResult {
-    let report_ctx = job.report_root.as_ref().map(|root| ReportContext {
-        root_dir: root.clone(),
-    });
-    let case = job.case;
-    let outcome = match case {
-        CompiledTest::Evm(case) => compile_and_run_test(
+    let outcome = match job.case {
+        CompiledTest::Evm(case) => run_evm_test(
             &case,
             shared.show_logs,
             job.evm_trace.as_ref(),
-            report_ctx.as_ref(),
             shared.call_trace,
         ),
         #[cfg(feature = "cranelift")]
-        CompiledTest::Native(case) => case.run(report_ctx.as_ref(), shared.limits),
+        CompiledTest::Native(case) => case.run(shared.limits),
         #[cfg(feature = "wasm")]
         CompiledTest::Wasm(case) => case.run(shared.limits),
     };
@@ -1840,54 +1842,15 @@ fn prepare_tests_single_file(
     }
 
     maybe_write_suite_ir(db, top_mod, opt_level, report);
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        maybe_write_requested_suite_artifacts_for_top_mod(
-            db,
-            top_mod,
-            RequestedSuiteArtifacts {
-                source_path: file_path,
-                suite_key,
-                filter,
-                opt_level,
-                emit,
-            },
-            output,
-        )
-    })) {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => {
-            let msg = format!("Failed to emit requested test artifacts: {err}");
-            let _ = writeln!(output, "{msg}");
-            if let Some(report) = report {
-                write_codegen_report_error(report, &msg);
-            }
-            return SuitePreparation {
-                results: suite_error_result(suite, "codegen", msg),
-                single_jobs: Vec::new(),
-            };
-        }
-        Err(payload) => {
-            let msg = format!(
-                "test artifact emission panicked: {}",
-                panic_payload_to_string(payload.as_ref())
-            );
-            let _ = writeln!(output, "{msg}");
-            if let Some(report) = report {
-                write_report_error(report, "codegen_panic.txt", &msg);
-            }
-            return SuitePreparation {
-                results: suite_error_result(suite, "codegen", msg),
-                single_jobs: Vec::new(),
-            };
-        }
-    }
-    prepare_discovered_tests(
+    prepare_evm_tests(
         db,
-        top_mod,
+        &[top_mod],
+        file_path,
         suite,
         suite_key,
         filter,
         opt_level,
+        emit,
         debug,
         sonatina_options,
         report,
@@ -2031,10 +1994,10 @@ fn prepare_tests_ingot(
         };
     }
 
+    let mut top_mods = ingot.all_modules(db).to_vec();
+    top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
     #[cfg(feature = "cranelift")]
     if backend.is_native() {
-        let mut top_mods = ingot.all_modules(db).to_vec();
-        top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
         return native::prepare_tests(
             db, top_mods, dir_path, suite, suite_key, filter, opt_level, emit, report, output,
         );
@@ -2043,20 +2006,51 @@ fn prepare_tests_ingot(
     let _ = backend;
     #[cfg(feature = "wasm")]
     if backend.is_wasm() {
-        let mut top_mods = ingot.all_modules(db).to_vec();
-        top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
         return wasm::prepare_tests(
             db, top_mods, dir_path, suite, suite_key, filter, opt_level, emit, output,
         );
     }
 
     maybe_write_suite_ir(db, root_mod, opt_level, report);
+    prepare_evm_tests(
+        db,
+        &top_mods,
+        dir_path,
+        suite,
+        suite_key,
+        filter,
+        opt_level,
+        emit,
+        debug,
+        sonatina_options,
+        report,
+        output,
+    )
+}
+
+/// Compiles the selected tests of `top_mods` into one EVM object, and makes
+/// a job of each test.
+#[allow(clippy::too_many_arguments)]
+fn prepare_evm_tests(
+    db: &DriverDataBase,
+    top_mods: &[TopLevelMod<'_>],
+    source_path: &Utf8PathBuf,
+    suite: &str,
+    suite_key: &str,
+    filter: Option<&str>,
+    opt_level: OptLevel,
+    emit: TestEmitSelection,
+    debug: &TestDebugOptions,
+    sonatina_options: SonatinaTestOptions,
+    report: Option<&ReportContext>,
+    output: &mut String,
+) -> SuitePreparation {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        maybe_write_requested_suite_artifacts_for_ingot(
+        maybe_write_requested_suite_artifacts(
             db,
-            ingot,
+            top_mods,
             RequestedSuiteArtifacts {
-                source_path: dir_path,
+                source_path,
                 suite_key,
                 filter,
                 opt_level,
@@ -2092,44 +2086,21 @@ fn prepare_tests_ingot(
             };
         }
     }
-    prepare_ingot_discovered_tests(
-        db,
-        ingot,
-        suite,
-        suite_key,
-        filter,
-        opt_level,
-        debug,
-        sonatina_options,
-        report,
-        output,
-    )
-}
 
-#[allow(clippy::too_many_arguments)]
-fn prepare_discovered_tests(
-    db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
-    suite: &str,
-    suite_key: &str,
-    filter: Option<&str>,
-    opt_level: OptLevel,
-    debug: &TestDebugOptions,
-    sonatina_options: SonatinaTestOptions,
-    report: Option<&ReportContext>,
-    output: &mut String,
-) -> SuitePreparation {
-    let discovered = match discover_tests(
-        db,
-        top_mod,
+    let compiled = match emit_with_catch_unwind(
+        || emit_test_suite_sonatina(db, top_mods, opt_level, sonatina_options, filter),
+        "Sonatina",
         suite,
-        filter,
-        opt_level,
-        sonatina_options,
         report,
         output,
     ) {
-        Ok(discovered) => discovered,
+        Ok(Some(compiled)) => compiled,
+        Ok(None) => {
+            return SuitePreparation {
+                results: Vec::new(),
+                single_jobs: Vec::new(),
+            };
+        }
         Err(results) => {
             return SuitePreparation {
                 results,
@@ -2137,70 +2108,33 @@ fn prepare_discovered_tests(
             };
         }
     };
+    if let Some(report) = report {
+        write_sonatina_suite_artifacts(report, &compiled);
+    }
 
-    suite_preparation_from_discovered(discovered, suite, suite_key, filter, debug, report, output)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn prepare_ingot_discovered_tests(
-    db: &DriverDataBase,
-    ingot: Ingot<'_>,
-    suite: &str,
-    suite_key: &str,
-    filter: Option<&str>,
-    opt_level: OptLevel,
-    debug: &TestDebugOptions,
-    sonatina_options: SonatinaTestOptions,
-    report: Option<&ReportContext>,
-    output: &mut String,
-) -> SuitePreparation {
-    let discovered = match discover_ingot_tests(
-        db,
-        ingot,
-        suite,
-        filter,
-        opt_level,
-        sonatina_options,
-        report,
-        output,
-    ) {
-        Ok(discovered) => discovered,
-        Err(results) => {
+    // The init code only returns the runtime code, so the tests can share
+    // one deployment.
+    let deployed = match RuntimeInstance::deploy(&hex::encode(&compiled.bytecode)) {
+        Ok(deployed) => Arc::new(deployed.snapshot()),
+        Err(err) => {
+            let msg = format!("Failed to deploy the test suite: {err}");
+            let _ = writeln!(output, "{msg}");
             return SuitePreparation {
-                results,
+                results: suite_error_result(suite, "deploy", msg),
                 single_jobs: Vec::new(),
             };
         }
     };
-
-    suite_preparation_from_discovered(discovered, suite, suite_key, filter, debug, report, output)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn suite_preparation_from_discovered(
-    discovered: DiscoverResult,
-    suite: &str,
-    suite_key: &str,
-    filter: Option<&str>,
-    debug: &TestDebugOptions,
-    report: Option<&ReportContext>,
-    output: &mut String,
-) -> SuitePreparation {
-    let report_root = report.map(|ctx| ctx.root_dir.clone());
     let mut results = Vec::new();
     let mut single_jobs = Vec::new();
-    for case in discovered.tests {
-        if !test_case_matches_filter(&case, filter) {
-            continue;
-        }
-
-        let evm_trace = match debug.evm_trace_options_for_test(Some(suite), &case.display_name) {
+    for test in compiled.tests {
+        let evm_trace = match debug.evm_trace_options_for_test(Some(suite), &test.name) {
             Ok(value) => value,
             Err(err) => {
-                write_case_status_line(output, false, Duration::ZERO, &case.display_name);
+                write_case_status_line(output, false, Duration::ZERO, &test.name);
                 let _ = writeln!(output, "    {err}");
                 results.push(TestResult {
-                    name: case.display_name.clone(),
+                    name: test.name,
                     passed: false,
                     error_message: Some(err),
                 });
@@ -2210,9 +2144,11 @@ fn suite_preparation_from_discovered(
 
         single_jobs.push(SingleTestJob {
             suite_key: suite_key.to_string(),
-            case: CompiledTest::Evm(Box::new(case)),
+            case: CompiledTest::Evm(EvmTestCase {
+                test,
+                suite: Arc::clone(&deployed),
+            }),
             evm_trace,
-            report_root: report_root.clone(),
         });
     }
 
@@ -2257,72 +2193,6 @@ pub(super) fn emit_with_catch_unwind<T, E: std::fmt::Display>(
             Err(suite_error_result(suite, "codegen", msg))
         }
     }
-}
-
-/// Discovers `#[test]` functions, compiles them, and executes each one.
-///
-/// * `db` - Driver database used for compilation.
-/// * `top_mod` - Root module to scan for tests.
-/// * `filter` - Optional substring filter for test names.
-/// * `show_logs` - Whether to show event logs from test execution.
-///
-/// Returns the collected test results.
-#[allow(clippy::too_many_arguments)]
-fn discover_tests(
-    db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
-    suite: &str,
-    filter: Option<&str>,
-    opt_level: OptLevel,
-    sonatina_options: SonatinaTestOptions,
-    report: Option<&ReportContext>,
-    output: &mut String,
-) -> Result<DiscoverResult, Vec<TestResult>> {
-    let emit_result = emit_with_catch_unwind(
-        || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_options, filter),
-        "Sonatina",
-        suite,
-        report,
-        output,
-    );
-    let module_output = emit_result?;
-
-    if module_output.tests.is_empty() {
-        return Ok(DiscoverResult { tests: Vec::new() });
-    }
-
-    Ok(DiscoverResult {
-        tests: module_output.tests,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn discover_ingot_tests(
-    db: &DriverDataBase,
-    ingot: Ingot<'_>,
-    suite: &str,
-    filter: Option<&str>,
-    opt_level: OptLevel,
-    sonatina_options: SonatinaTestOptions,
-    report: Option<&ReportContext>,
-    output: &mut String,
-) -> Result<DiscoverResult, Vec<TestResult>> {
-    let emit_result = emit_with_catch_unwind(
-        || emit_test_ingot_sonatina(db, ingot, opt_level, sonatina_options, filter),
-        "Sonatina",
-        suite,
-        report,
-        output,
-    );
-    let module_output = emit_result?;
-
-    if module_output.tests.is_empty() {
-        return Ok(DiscoverResult { tests: Vec::new() });
-    }
-
-    Ok(DiscoverResult {
-        tests: module_output.tests,
-    })
 }
 
 fn write_case_output(output: &mut String, outcome: &TestOutcome, show_logs: bool) {
@@ -2378,15 +2248,6 @@ fn write_case_status_line(output: &mut String, passed: bool, elapsed: Duration, 
     let _ = writeln!(output, "{status} {name}");
 }
 
-pub(super) fn test_case_matches_filter(case: &TestMetadata, filter: Option<&str>) -> bool {
-    let Some(pattern) = filter else {
-        return true;
-    };
-    case.hir_name.contains(pattern)
-        || case.symbol_name.contains(pattern)
-        || case.display_name.contains(pattern)
-}
-
 fn test_emit_stem(suite_key: &str) -> String {
     let stem = sanitize_filename(suite_key);
     if stem.is_empty() {
@@ -2437,9 +2298,9 @@ fn emit_runtime_package_ir(
     ))
 }
 
-fn maybe_write_requested_suite_artifacts_for_top_mod(
+fn maybe_write_requested_suite_artifacts(
     db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
+    top_mods: &[TopLevelMod<'_>],
     request: RequestedSuiteArtifacts<'_>,
     output: &mut String,
 ) -> Result<(), String> {
@@ -2448,7 +2309,10 @@ fn maybe_write_requested_suite_artifacts_for_top_mod(
     }
 
     let package =
-        build_test_runtime_package(db, top_mod, request.filter).map_err(|err| err.to_string())?;
+        build_test_runtime_package(db, top_mods, request.filter).map_err(|err| err.to_string())?;
+    if package.root_objects(db).is_empty() {
+        return Ok(());
+    }
     let out_dir = default_test_emit_dir(request.source_path)?;
     let stem = test_emit_stem(request.suite_key);
     if request.emit.ir {
@@ -2457,62 +2321,6 @@ fn maybe_write_requested_suite_artifacts_for_top_mod(
     }
     if request.emit.rmir {
         let rmir = format_runtime_package(db, &package);
-        write_test_emit_artifact(&out_dir, &stem, "rmir", &rmir, output)?;
-    }
-    Ok(())
-}
-
-fn maybe_write_requested_suite_artifacts_for_ingot(
-    db: &DriverDataBase,
-    ingot: Ingot<'_>,
-    request: RequestedSuiteArtifacts<'_>,
-    output: &mut String,
-) -> Result<(), String> {
-    if request.emit.is_empty() {
-        return Ok(());
-    }
-
-    let mut top_mods = ingot.all_modules(db).to_vec();
-    top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
-
-    let mut runtime_packages = Vec::new();
-    for top_mod in top_mods {
-        if has_test_functions(db, top_mod) {
-            runtime_packages.push((
-                format!("{:?}", top_mod.name(db)),
-                build_test_runtime_package(db, top_mod, request.filter)
-                    .map_err(|err| err.to_string())?,
-            ));
-        }
-    }
-
-    if runtime_packages.is_empty() {
-        return Ok(());
-    }
-
-    let out_dir = default_test_emit_dir(request.source_path)?;
-    let stem = test_emit_stem(request.suite_key);
-    if request.emit.ir {
-        let mut ir = String::new();
-        for (idx, (module_name, package)) in runtime_packages.iter().enumerate() {
-            if idx != 0 {
-                ir.push_str("\n\n");
-            }
-            let _ = writeln!(ir, "=== {module_name} ===");
-            let (_, module_ir) = emit_runtime_package_ir(db, request.opt_level, package)?;
-            ir.push_str(&module_ir);
-        }
-        write_test_emit_artifact(&out_dir, &stem, "sona", &ir, output)?;
-    }
-    if request.emit.rmir {
-        let mut rmir = String::new();
-        for (idx, (module_name, package)) in runtime_packages.iter().enumerate() {
-            if idx != 0 {
-                rmir.push_str("\n\n");
-            }
-            let _ = writeln!(rmir, "=== {module_name} ===");
-            rmir.push_str(&format_runtime_package(db, package));
-        }
         write_test_emit_artifact(&out_dir, &stem, "rmir", &rmir, output)?;
     }
     Ok(())
@@ -2765,73 +2573,44 @@ fn create_suite_report_staging(suite: &str) -> Result<ReportStaging, String> {
     create_report_staging_root("target/fe-test-report-staging", &name)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn compile_and_run_test(
-    case: &TestMetadata,
+/// Deploys the suite's object and runs `case` in it.
+fn run_evm_test(
+    case: &EvmTestCase,
     show_logs: bool,
     evm_trace: Option<&EvmTraceOptions>,
-    report: Option<&ReportContext>,
     call_trace: bool,
 ) -> TestOutcome {
     let started = Instant::now();
-    let failure = |message: String| TestOutcome {
-        result: TestResult {
-            name: case.display_name.clone(),
-            passed: false,
-            error_message: Some(message),
-        },
-        logs: Vec::new(),
-        trace: None,
-        elapsed: started.elapsed(),
-    };
-
-    if case.value_param_count > 0 {
-        return failure(format!(
-            "tests with value parameters are not supported (found {})",
-            case.value_param_count
-        ));
-    }
-
-    if case.object_name.trim().is_empty() {
-        return failure(format!(
-            "missing test object name for `{}`",
-            case.display_name
-        ));
-    }
-
-    let initial_balance = match case
+    let test = &case.test;
+    let (result, logs, trace) = match test
         .initial_balance
         .as_deref()
         .map(be_bytes_to_u256)
         .transpose()
     {
-        Ok(balance) => balance,
-        Err(err) => {
-            return failure(format!(
-                "invalid initial balance for test `{}`: {err}",
-                case.display_name
-            ));
-        }
+        Ok(initial_balance) => execute_test(
+            &test.name,
+            case.suite.instance(),
+            &test.selector.to_be_bytes(),
+            show_logs,
+            test.expected_revert.as_ref(),
+            evm_trace,
+            call_trace,
+            initial_balance,
+        ),
+        Err(err) => (
+            TestResult {
+                name: test.name.clone(),
+                passed: false,
+                error_message: Some(format!(
+                    "invalid initial balance for test `{}`: {err}",
+                    test.name
+                )),
+            },
+            Vec::new(),
+            None,
+        ),
     };
-
-    if case.bytecode.is_empty() {
-        return failure(format!("missing test bytecode for `{}`", case.display_name));
-    }
-
-    if let Some(report) = report {
-        write_sonatina_case_artifacts(report, case);
-    }
-
-    let bytecode = hex::encode(&case.bytecode);
-    let (result, logs, trace) = execute_test(
-        &case.display_name,
-        &bytecode,
-        show_logs,
-        case.expected_revert.as_ref(),
-        evm_trace,
-        call_trace,
-        initial_balance,
-    );
     TestOutcome {
         result,
         logs,
@@ -2840,26 +2619,27 @@ pub(super) fn compile_and_run_test(
     }
 }
 
-fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
-    let dir = report
-        .root_dir
-        .join("artifacts")
-        .join("tests")
-        .join(sanitize_filename(&case.display_name))
-        .join("sonatina");
+/// Writes the suite's object, and the selector that runs each of its tests.
+fn write_sonatina_suite_artifacts(report: &ReportContext, suite: &TestSuiteOutput) {
+    let dir = report.root_dir.join("artifacts").join("sonatina");
     let _ = create_dir_all_utf8(&dir);
 
-    let init_path = dir.join("initcode.hex");
-    let _ = std::fs::write(&init_path, hex::encode(&case.bytecode));
+    let _ = std::fs::write(dir.join("initcode.hex"), hex::encode(&suite.bytecode));
 
-    if let Some(runtime) = extract_runtime_from_sonatina_initcode(&case.bytecode) {
+    if let Some(runtime) = extract_runtime_from_sonatina_initcode(&suite.bytecode) {
         let _ = std::fs::write(dir.join("runtime.bin"), runtime);
         let _ = std::fs::write(dir.join("runtime.hex"), hex::encode(runtime));
     }
 
-    if let Some(json) = &case.sonatina_observability_json {
+    if let Some(json) = &suite.sonatina_observability_json {
         let _ = std::fs::write(dir.join("observability.json"), json);
     }
+
+    let mut selectors = String::new();
+    for test in &suite.tests {
+        let _ = writeln!(selectors, "0x{:08x} {}", test.selector, test.name);
+    }
+    let _ = std::fs::write(dir.join("test_selectors.txt"), selectors);
 }
 
 fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
@@ -2913,7 +2693,7 @@ fn write_report_manifest(
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str("sonatina_ir: Sonatina reports include pre-opt IR at `artifacts/sonatina_ir.txt` and post-selected-opt-level IR at `artifacts/sonatina_ir_optimized.txt` (with `opt_level: 0`, both represent the same unoptimized module)\n");
-    out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/observability.json`\n");
+    out.push_str("sonatina_tests: a suite's tests share one object, `artifacts/sonatina/initcode.hex`; `artifacts/sonatina/test_selectors.txt` lists the calldata selector that runs each test, and `artifacts/sonatina/observability.json` is written when available\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));
@@ -2928,15 +2708,6 @@ fn write_report_manifest(
     let _ = std::fs::write(staging.join("manifest.txt"), out);
 }
 
-/// Deploys and executes compiled test bytecode in revm.
-///
-/// The test passes if the function returns normally, fails if it reverts.
-///
-/// * `name` - Display name used for reporting.
-/// * `bytecode_hex` - Hex-encoded init bytecode for the test object.
-/// * `show_logs` - Whether to execute with log collection enabled.
-///
-/// Returns the test result and any emitted logs.
 fn be_bytes_to_u256(bytes: &[u8]) -> Result<U256, &'static str> {
     if bytes.len() > 32 {
         return Err("initial balance exceeds u256");
@@ -2948,31 +2719,27 @@ fn be_bytes_to_u256(bytes: &[u8]) -> Result<U256, &'static str> {
     Ok(U256::from_be_bytes(buf))
 }
 
+/// Runs a test in revm, in an instance of its deployed suite.
+///
+/// The test passes if the function returns normally, fails if it reverts.
+///
+/// * `name` - Display name used for reporting.
+/// * `instance` - An instance of the deployed test suite object.
+/// * `calldata` - The selector that runs the test.
+/// * `show_logs` - Whether to execute with log collection enabled.
+///
+/// Returns the test result and any emitted logs.
 #[allow(clippy::too_many_arguments)]
 fn execute_test(
     name: &str,
-    bytecode_hex: &str,
+    mut instance: RuntimeInstance,
+    calldata: &[u8],
     show_logs: bool,
     expected_revert: Option<&ExpectedRevert>,
     evm_trace: Option<&EvmTraceOptions>,
     call_trace: bool,
     initial_balance: Option<U256>,
 ) -> (TestResult, Vec<String>, Option<contract_harness::CallTrace>) {
-    // Deploy the test contract
-    let (mut instance, _) = match RuntimeInstance::deploy_tracked(bytecode_hex) {
-        Ok(deployed) => deployed,
-        Err(err) => {
-            return (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format!("Failed to deploy test: {err}")),
-                },
-                Vec::new(),
-                None,
-            );
-        }
-    };
     // Optionally seed the test contract with ETH (opt-in via #[test(balance = N)]).
     if let Some(balance) = initial_balance {
         instance.fund_contract(balance);
@@ -2980,23 +2747,22 @@ fn execute_test(
 
     instance.set_trace_options(evm_trace.cloned());
 
-    // Execute the test (empty calldata since test functions take no args)
     let options = ExecutionOptions::default();
 
     // Capture call trace BEFORE the real execution so the cloned context
     // has the right pre-call state (contract deployed but not yet called).
     let trace = if call_trace {
-        Some(instance.call_raw_traced(&[], options))
+        Some(instance.call_raw_traced(calldata, options))
     } else {
         None
     };
 
     let call_result = if show_logs {
         instance
-            .call_raw_with_logs(&[], options)
+            .call_raw_with_logs(calldata, options)
             .map(|outcome| outcome.logs)
     } else {
-        instance.call_raw(&[], options).map(|_| Vec::new())
+        instance.call_raw(calldata, options).map(|_| Vec::new())
     };
 
     match (call_result, expected_revert) {

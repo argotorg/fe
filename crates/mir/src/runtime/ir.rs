@@ -857,6 +857,11 @@ pub enum RuntimeSyntheticSpec<'db> {
         callee: RuntimeInstance<'db>,
         entry_args: EntrySemanticArgsPlan<'db>,
     },
+    /// The entry of an EVM test suite. It runs the test root that the
+    /// calldata selector names, and reverts for any other calldata.
+    TestSuiteRoot {
+        dispatch: Box<[DispatchArm<'db>]>,
+    },
     ManualContractRoot {
         func: Func<'db>,
         callee: RuntimeInstance<'db>,
@@ -1076,6 +1081,8 @@ pub enum RuntimeSectionName {
     Runtime,
     Main,
     Test(String),
+    /// The selected tests of an EVM test run.
+    TestSuite,
     /// A native object's `#[unsafe(export)]` function, defined under this symbol.
     Export(String),
 }

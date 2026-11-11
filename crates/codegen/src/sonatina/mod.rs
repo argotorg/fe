@@ -31,7 +31,7 @@ use mir::runtime::ir::RuntimePackagePlan;
 use mir::{NativeOutputKind, RuntimeSectionName, build_native_package};
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rayon::prelude::*;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(feature = "cranelift")]
 use sonatina_codegen::Compile;
 #[cfg(any(feature = "cranelift", feature = "wasm"))]
@@ -75,9 +75,8 @@ use sonatina_verifier::{
 };
 
 use crate::{
-    OptLevel, TestMetadata, TestModuleOutput,
-    runtime_package::ensure_runtime_package_has_roots,
-    test_output::{TestRootMetadataError, runtime_test_root_metadata},
+    OptLevel, TestMetadata, TestSuiteOutput, runtime_package::ensure_runtime_package_has_roots,
+    test_output::runtime_test_root_metadata,
 };
 
 #[derive(Debug)]
@@ -642,6 +641,7 @@ fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::Sect
         mir::RuntimeSectionName::Runtime => "runtime".into(),
         mir::RuntimeSectionName::Main => "main".into(),
         mir::RuntimeSectionName::Test(name) => format!("test_{name}").into(),
+        mir::RuntimeSectionName::TestSuite => "test_suite".into(),
         mir::RuntimeSectionName::Export(symbol) => format!("export_{symbol}").into(),
     }
 }
@@ -2085,17 +2085,47 @@ fn emit_ingot_sonatina_bytecode_with_options(
     Ok(outputs)
 }
 
-pub fn emit_test_module_sonatina(
+/// Compile the tests of `top_mods` whose names contain `filter` into one
+/// object, or `None` when there is no such test.
+pub fn emit_test_suite_sonatina(
     db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
+    top_mods: &[TopLevelMod<'_>],
     opt_level: OptLevel,
     options: SonatinaTestOptions,
     filter: Option<&str>,
-) -> Result<TestModuleOutput, LowerError> {
-    let package = build_test_runtime_package(db, top_mod, filter)?;
-    if package.root_objects(db).is_empty() {
-        return Ok(TestModuleOutput { tests: Vec::new() });
+) -> Result<Option<TestSuiteOutput>, LowerError> {
+    let package = build_test_runtime_package(db, top_mods, filter)?;
+    let Some(&object) = package.root_objects(db).first() else {
+        return Ok(None);
+    };
+    let [section] = object.sections(db).as_slice() else {
+        return Err(LowerError::Internal(
+            "the test suite object does not have exactly one section".to_string(),
+        ));
+    };
+    let mir::RuntimeFunctionOwner::Synthetic(mir::RuntimeSyntheticSpec::TestSuiteRoot { dispatch }) =
+        section.entry.owner(db)
+    else {
+        return Err(LowerError::Internal(
+            "the test suite section is not entered through a TestSuiteRoot".to_string(),
+        ));
+    };
+    let owners: FxHashMap<_, _> = package
+        .functions(db)
+        .iter()
+        .map(|function| (function.instance(db), function.owner(db)))
+        .collect();
+    let mut tests = Vec::with_capacity(dispatch.len());
+    for arm in dispatch {
+        let metadata = runtime_test_root_metadata(db, owners[&arm.wrapper])?;
+        tests.push(TestMetadata {
+            name: metadata.name,
+            selector: arm.selector,
+            expected_revert: metadata.expected_revert,
+            initial_balance: metadata.initial_balance,
+        });
     }
+
     let mut compiler = IsolatedObjectCompiler {
         db,
         package: &package,
@@ -2105,73 +2135,22 @@ pub fn emit_test_module_sonatina(
         trace_owner: None,
         trace_facts: BTreeMap::new(),
     };
-    let roots: Vec<_> = package
-        .root_objects(db)
-        .iter()
-        .copied()
-        .filter(|object| {
-            object
-                .sections(db)
-                .first()
-                .is_some_and(|section| matches!(section.name, mir::RuntimeSectionName::Test(_)))
-        })
-        .collect();
-    compiler.precompile(&roots);
-    let mut tests = Vec::new();
-    for object in roots {
-        let sections = object.sections(db);
-        let section = sections.first().expect("test roots have a test section");
-        compiler.compile(std::slice::from_ref(object.name(db)))?;
-        let artifact = &compiler.compiled[object.name(db).as_str()];
-        let runtime = artifact
-            .sections
-            .get(&section_name_for_runtime(&section.name))
-            .ok_or_else(|| {
-                LowerError::Internal(format!(
-                    "compiled object `{}` missing test section",
-                    object.name(db)
-                ))
-            })?;
-        let metadata = runtime_test_root_metadata(db, section.entry.owner(db), &section.name)
-            .map_err(|err| match err {
-                TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
-                TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
-            })?;
-        tests.push(TestMetadata {
-            display_name: metadata.display_name,
-            hir_name: metadata.hir_name,
-            symbol_name: section.entry.symbol(db).clone(),
-            object_name: object.name(db).clone(),
-            bytecode: wrap_as_init_code(&runtime.bytes),
-            sonatina_observability_json: artifact.observability_json(),
-            value_param_count: 0,
-            effect_param_count: 0,
-            init_bytecode: Vec::new(),
-            expected_revert: metadata.expected_revert,
-            initial_balance: metadata.initial_balance,
-        });
-    }
-    Ok(TestModuleOutput { tests })
-}
-
-pub fn emit_test_ingot_sonatina(
-    db: &DriverDataBase,
-    ingot: Ingot<'_>,
-    opt_level: OptLevel,
-    options: SonatinaTestOptions,
-    filter: Option<&str>,
-) -> Result<TestModuleOutput, LowerError> {
-    let mut top_mods = ingot.all_modules(db).to_vec();
-    top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
-
-    let mut output = TestModuleOutput { tests: Vec::new() };
-    for top_mod in top_mods {
-        output.extend(emit_test_module_sonatina(
-            db, top_mod, opt_level, options, filter,
-        )?);
-    }
-    output.sort_tests();
-    Ok(output)
+    let object_name = object.name(db);
+    compiler.compile(std::slice::from_ref(object_name))?;
+    let artifact = &compiler.compiled[object_name.as_str()];
+    let runtime = artifact
+        .sections
+        .get(&section_name_for_runtime(&section.name))
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "compiled object `{object_name}` is missing the test suite section"
+            ))
+        })?;
+    Ok(Some(TestSuiteOutput {
+        bytecode: wrap_as_init_code(&runtime.bytes),
+        sonatina_observability_json: artifact.observability_json(),
+        tests,
+    }))
 }
 
 #[cfg(test)]
@@ -2694,7 +2673,7 @@ pub contract C uses (evm: mut Evm) {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        let package = build_test_runtime_package(&db, top_mod, None)
+        let package = build_test_runtime_package(&db, &[top_mod], None)
             .expect("test runtime package should build");
 
         let module = compile_runtime_package_sonatina(&db, &package)
@@ -2746,7 +2725,7 @@ pub contract C uses (evm: mut Evm) {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        let package = build_test_runtime_package(&db, top_mod, None)
+        let package = build_test_runtime_package(&db, &[top_mod], None)
             .expect("test runtime package should build");
 
         let module = compile_runtime_package_sonatina(&db, &package)
@@ -2775,7 +2754,7 @@ pub contract C uses (evm: mut Evm) {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        let package = build_test_runtime_package(&db, top_mod, None)
+        let package = build_test_runtime_package(&db, &[top_mod], None)
             .expect("test runtime package should build");
 
         let module = compile_runtime_package_sonatina(&db, &package)
@@ -2821,9 +2800,9 @@ fn roundtrip() {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
 
-        emit_test_module_sonatina(
+        emit_test_suite_sonatina(
             &db,
-            top_mod,
+            &[top_mod],
             OptLevel::O0,
             SonatinaTestOptions::default(),
             None,

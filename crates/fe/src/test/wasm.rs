@@ -382,7 +382,6 @@ pub(super) fn prepare_tests(
                     suite: Arc::clone(&suite_dir),
                 }),
                 evm_trace: None,
-                report_root: None,
             });
         }
     }
