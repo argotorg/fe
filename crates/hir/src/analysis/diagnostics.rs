@@ -1933,6 +1933,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 primary_diag(Severity::Error, message, label, span.resolve(db), error_code)
             }
 
+            Self::EffectKeyNamedTwice { span, first, key } => {
+                let key = key.pretty_print(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("effect `{key}` is required twice"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{key}` is required again here"),
+                            span: span.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{key}` is first required here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "an effect is identified by its key, and a caller provides one value per key"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::MaybeMutWithoutResult(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "a `mut?` function's result needs a `mut?` part".to_string(),

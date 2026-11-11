@@ -1,0 +1,52 @@
+// An effect is identified by its key, so a `uses` list names each key once.
+struct Store { n: u256 }
+struct Log { n: u256 }
+trait Counter {
+    uses E
+    fn count(mut self) -> u256 uses E
+}
+
+fn type_key() uses (a: mut Store, b: Store) {}
+
+fn generic_key<T>() uses (a: T, b: mut T) {}
+
+fn trait_key() uses (a: Counter, b: mut Counter) {}
+
+// Accepted: distinct keys, though `T` and `U` may be one type, or `Store`
+// may implement both traits.
+fn distinct<T, U>() uses (a: T, b: mut U, c: Store, d: Log) {}
+
+trait Reader<T> {
+    fn read(self) -> T
+}
+
+fn trait_args() uses (a: Reader<u8>, b: Reader<u256>) {}
+
+struct S {}
+
+impl Counter for S {
+    uses E = (store: mut Store, again: Store)
+    fn count(mut self) -> u256 uses E {
+        store.n
+    }
+}
+
+trait Logger {
+    uses E
+    fn log(mut self) uses (E, also: Log)
+}
+
+struct L {}
+
+// An implementation's row is spliced into its methods' lists.
+impl Logger for L {
+    uses E = (log: mut Log)
+    fn log(mut self) uses (E, also: Log) {
+        log.n += also.n
+    }
+}
+
+// Accepted: rows of distinct keys, whose effects may share keys.
+fn rows<A: Counter, B: Counter>() uses (A::E, B::E) {}
+
+fn row_twice<A: Counter>() uses (A::E, A::E) {}

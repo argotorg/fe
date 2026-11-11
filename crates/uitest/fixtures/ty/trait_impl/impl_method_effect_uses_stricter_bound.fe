@@ -1,4 +1,5 @@
 trait Cap {}
+trait Extra {}
 
 struct S {}
 
@@ -7,5 +8,5 @@ trait T {
 }
 
 impl T for S {
-    fn f() uses (cap: Cap, extra: Cap) {}
+    fn f() uses (cap: Cap, extra: Extra) {}
 }

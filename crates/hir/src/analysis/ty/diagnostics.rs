@@ -133,6 +133,12 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         entry: bool,
     },
+    /// A `uses` list names `key` twice.
+    EffectKeyNamedTwice {
+        span: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        key: HirTypeId<'db>,
+    },
     /// A spread parameter, `..A`, that is not the last of a trait method's
     /// declaration.
     MisplacedSpread(DynLazySpan<'db>),
@@ -396,6 +402,7 @@ impl TyLowerDiag<'_> {
             Self::InvalidMainReturn { .. } => 91,
             Self::MaybeMutWithoutResult(_) => 77,
             Self::MaybeMutRowEffect { .. } => 78,
+            Self::EffectKeyNamedTwice { .. } => 92,
             Self::MisplacedSpread(_) => 80,
             Self::SpreadOfNonShape { .. } => 81,
             Self::MaybeMutBound(_) => 71,

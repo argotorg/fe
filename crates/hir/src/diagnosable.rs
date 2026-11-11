@@ -41,10 +41,11 @@ use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::trait_def::{ImplementorId, impls_for_trait_def};
 use crate::semantic::{
-    FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, VariantView,
-    WherePredicateBoundView, WherePredicateView, constraints_for, has_access_in_every_impl,
-    header_constraints_for, lower_hir_kind_local, param_env, returned_shapes, shape_contract_diag,
-    signature_mentions_maybe_mut, trait_returns_shape, trait_self_predicate,
+    EffectRequirementKey, FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility,
+    VariantView, WherePredicateBoundView, WherePredicateView, constraints_for,
+    has_access_in_every_impl, header_constraints_for, lower_hir_kind_local, param_env,
+    returned_shapes, shape_contract_diag, signature_mentions_maybe_mut, trait_returns_shape,
+    trait_self_predicate,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -462,9 +463,12 @@ impl<'db> Func<'db> {
     }
 
     /// A row's components carry their own modes, so a `uses` entry naming a
-    /// row takes no `mut?`.
+    /// row takes no `mut?`. An effect is identified by its key, so a `uses`
+    /// list names each key once; an implementation's row spliced into its
+    /// method's list counts as written there.
     pub fn diags_effects(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.declared_effects(db)
+        let mut diags: Vec<TyDiagCollection<'db>> = self
+            .declared_effects(db)
             .data(db)
             .iter()
             .enumerate()
@@ -476,7 +480,29 @@ impl<'db> Func<'db> {
                 }
                 .into()
             })
-            .collect()
+            .collect();
+        let requirements = self.effect_requirements(db, None);
+        for (idx, requirement) in requirements.iter().enumerate() {
+            let origin = self.effect_origin(db, requirement.binding_idx as usize);
+            if requirement.key != EffectRequirementKey::Other
+                && let Some(first) = requirements[..idx]
+                    .iter()
+                    .find(|first| first.key == requirement.key)
+                && let first_origin = self.effect_origin(db, first.binding_idx as usize)
+                // Two of one row's effects are its implementation's error.
+                && first_origin != origin
+            {
+                diags.push(
+                    TyLowerDiag::EffectKeyNamedTwice {
+                        span: self.span().effects().param_idx(origin).ty().into(),
+                        first: self.span().effects().param_idx(first_origin).ty().into(),
+                        key: requirement.binding_ty,
+                    }
+                    .into(),
+                );
+            }
+        }
+        diags
     }
 
     /// A `#[view]` type is taken only by view and `mut` parameters and
@@ -1408,22 +1434,45 @@ impl<'db> ImplTrait<'db> {
                 })
             })
             .collect();
-        // A row has no mode, so none of its effects is `mut?`.
+        // A row has no mode, so none of its effects is `mut?`, and names
+        // each key once.
+        let assumptions = constraints_for(db, self.into());
         for (row_idx, row) in self.rows(db).iter().enumerate() {
+            let span = |idx| self.span().item_list().assoc_row(row_idx).param_idx(idx);
+            let mut keys = Vec::new();
             for (idx, effect) in row
                 .effects
                 .iter()
                 .flat_map(|effects| effects.data(db).iter().enumerate())
             {
                 if effect.mode == ModeMarker::MaybeMut {
-                    let span = self.span().item_list().assoc_row(row_idx).param_idx(idx);
                     diags.push(
                         TyLowerDiag::MaybeMutRowEffect {
-                            span: span.into(),
+                            span: span(idx).into(),
                             entry: false,
                         }
                         .into(),
                     );
+                }
+                let Some(key_ty) = effect.key_ty.to_opt() else {
+                    continue;
+                };
+                let key = ty::effects::resolve_effect_key(db, key_ty, self.scope(), assumptions)
+                    .into_requirement_key(db);
+                if key == EffectRequirementKey::Other {
+                    continue;
+                }
+                if let Some((_, first)) = keys.iter().find(|(known, _)| *known == key) {
+                    diags.push(
+                        TyLowerDiag::EffectKeyNamedTwice {
+                            span: span(idx).ty().into(),
+                            first: span(*first).ty().into(),
+                            key: key_ty,
+                        }
+                        .into(),
+                    );
+                } else {
+                    keys.push((key, idx));
                 }
             }
         }
