@@ -41,6 +41,16 @@ void free(void *pointer) {
     munmap(header, header->info.extent);
 }
 
+// A resize moves the block, so a use of the old address faults.
+void *realloc(void *pointer, size_t size) {
+    void *resized = malloc(size);
+    if (resized == NULL || pointer == NULL) return resized;
+    size_t old = ((Header *)pointer - 1)->info.extent - sizeof(Header);
+    memcpy(resized, pointer, old < size ? old : size);
+    free(pointer);
+    return resized;
+}
+
 __attribute__((destructor)) static void check_releases(void) {
     if (allocations != 2 || releases != 2 || failures != 2) _Exit(101);
 }

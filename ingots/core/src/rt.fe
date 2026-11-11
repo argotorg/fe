@@ -2,7 +2,8 @@
 //! and to report panics; the EVM calls none of them. Their C functions are
 //! ordinary `extern` declarations, so a program's own declarations of the
 //! same functions must agree with them, and an `#[unsafe(export)]` of one
-//! replaces it here too.
+//! replaces it here too. As in C, a program that replaces `malloc` replaces
+//! `realloc` and `free` with it.
 //!
 //! The reports never panic themselves: their arithmetic wraps and their
 //! memory accesses are raw.
@@ -16,10 +17,11 @@ use super::panics::{
     PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY, PANIC_OVERFLOW, PANIC_POP_EMPTY,
     PANIC_STORAGE_ENCODING, PANIC_ZERO_INIT_FUNCTION_POINTER,
 }
-use super::ptr::offset_bytes
+use super::ptr::{copy_mem, offset_bytes}
 
 extern {
     fn malloc(_ size: usize) -> *u8
+    fn realloc(_ ptr: *u8, _ size: usize) -> *u8
     fn free(_ ptr: *u8)
     fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize
     fn fflush(_ stream: *u8) -> i32
@@ -32,6 +34,12 @@ extern {
 /// host. It is aligned for any value and lies in the unmapped first page, so
 /// no host allocation has it.
 const EMPTY_ALLOCATION: usize = 16
+
+/// The largest block, in bytes, that glibc's per-thread cache holds on a
+/// 64-bit host. `realloc` bypasses the cache, so a resize to at most this
+/// many bytes is faster through `malloc` and `free`, which take cached
+/// blocks: it allocates and copies.
+const CACHED_BLOCK: usize = 1032
 
 /// The selectors of Solidity `Panic(uint256)` and `Error(string)` data.
 const PANIC_SELECTOR: u32 = 0x4e487b71
@@ -67,6 +75,56 @@ unsafe fn dealloc(_ ptr: *u8) {
     if ptr as usize != EMPTY_ALLOCATION {
         unsafe { free(ptr) }
     }
+}
+
+/// Resizes an allocation, as `core::ptr::realloc_raw`. Reverts with
+/// `Panic(0x41)` when the host is out of memory.
+unsafe fn reallocate(_ ptr: *u8, _ used: usize, _ size: usize) -> *u8 {
+    let resized = unsafe { try_reallocate(ptr, used, size) }
+    if resized as usize == 0 {
+        panic_code(PANIC_OUT_OF_MEMORY)
+    }
+    resized
+}
+
+/// Resizes an allocation, as `core::ptr::try_realloc_raw`, or returns null,
+/// leaving it as it was, when the host is out of memory. A block of more
+/// than `CACHED_BLOCK` bytes takes C's `realloc`, which extends it where it
+/// lies when it can, and on glibc moves a block it maps (from
+/// `M_MMAP_THRESHOLD` bytes) with `mremap`, so neither copies. `realloc`
+/// keeps the whole block, `used` bytes or more, aligned as `malloc` aligns:
+/// to 16 bytes, the most a native layout needs.
+unsafe fn try_reallocate(_ ptr: *u8, _ used: usize, _ size: usize) -> *u8 {
+    if ptr as usize == EMPTY_ALLOCATION {
+        return try_alloc(size)
+    }
+    if size <= CACHED_BLOCK {
+        return unsafe { try_reallocate_by_copy(ptr, used, size) }
+    }
+    unsafe { realloc(ptr, size) }
+}
+
+/// As `reallocate`, by allocating, copying the first `used` bytes and
+/// releasing, as WebAssembly does: its allocator has no `realloc`.
+unsafe fn reallocate_by_copy(_ ptr: *u8, _ used: usize, _ size: usize) -> *u8 {
+    let resized = alloc(size)
+    unsafe {
+        copy_mem(resized, ptr, used)
+        dealloc(ptr)
+    }
+    resized
+}
+
+/// As `try_reallocate`, by copying; see `reallocate_by_copy`.
+unsafe fn try_reallocate_by_copy(_ ptr: *u8, _ used: usize, _ size: usize) -> *u8 {
+    let resized = try_alloc(size)
+    if resized as usize != 0 {
+        unsafe {
+            copy_mem(resized, ptr, used)
+            dealloc(ptr)
+        }
+    }
+    resized
 }
 
 /// Reports a panic without data, as `core::panic`.

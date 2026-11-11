@@ -1,0 +1,37 @@
+use core::{MemBuffer, MemVec, Result}
+
+// Growth to more than 1032 bytes resizes through `realloc`, which the linked
+// allocator counts, and smaller growth allocates and copies. The allocator
+// refuses 64 KiB or more, so the last growth of each owner fails and leaves
+// it as it was.
+pub fn main() -> i32 {
+    // Allocated at 32 bytes, moved up to 1024 and resized up to 32768.
+    var bytes = MemBuffer::empty()
+    for i in 0..32768 {
+        bytes.push(byte(i))
+    }
+    let ptr = bytes.ptr()
+    core::assert(!bytes.try_reserve(1))
+    core::assert(bytes.ptr() == ptr && bytes.len() == 32768 && bytes.capacity() == 32768)
+    for i in 0..32768 {
+        core::assert(bytes[i] == byte(i))
+    }
+    // Allocated at 4 words, moved up to 32 and resized up to 1024.
+    var words: MemVec<u256> = MemVec::new()
+    for i in 0..1024 {
+        words.push(i as u256)
+    }
+    match words.try_push(1024) {
+        Result::Ok(()) => core::panic()
+        Result::Err(word) => core::assert(word == 1024)
+    }
+    core::assert(words.len() == 1024 && words.capacity() == 1024)
+    for i in 0..1024 {
+        core::assert(words[i] == i as u256)
+    }
+    0
+}
+
+fn byte(_ i: usize) -> u8 {
+    (i % 251).downcast_truncate()
+}

@@ -575,6 +575,16 @@ fn builtin_result_class<'db>(
             verify_address_operand(db, body, *ptr, AddressSpace::Memory)?;
             Ok(None)
         }
+        RuntimeBuiltin::Realloc { ptr, used, size }
+        | RuntimeBuiltin::TryRealloc { ptr, used, size } => {
+            verify_address_operand(db, body, *ptr, AddressSpace::Memory)?;
+            verify_memory_int(db, body, *used)?;
+            verify_memory_int(db, body, *size)?;
+            Ok(Some(RuntimeClass::Scalar(pointer_class(
+                db,
+                AddressSpace::Memory,
+            ))))
+        }
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
             let pointer = RuntimeClass::Scalar(pointer_class(db, AddressSpace::Memory));
             if runtime_value_class(body, *ptr)? != &pointer {

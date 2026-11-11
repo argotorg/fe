@@ -1372,9 +1372,23 @@ pub enum RuntimeBuiltin<'db> {
     TryMalloc {
         size: RValueId,
     },
-    /// Releases an allocation from `Malloc` or `TryMalloc`.
+    /// Releases an allocation from `Malloc`, `TryMalloc` or a resize.
     Free {
         ptr: RValueId,
+    },
+    /// Resizes the allocation at `ptr` to `size` bytes, keeping its first
+    /// `used`, and yields the address that replaces `ptr`.
+    Realloc {
+        ptr: RValueId,
+        used: RValueId,
+        size: RValueId,
+    },
+    /// Like `Realloc`, but yields a null address, leaving the allocation as it
+    /// was, when the host cannot allocate.
+    TryRealloc {
+        ptr: RValueId,
+        used: RValueId,
+        size: RValueId,
     },
     PtrOffsetBytes {
         ptr: RValueId,
@@ -1697,6 +1711,8 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::ExtCodeCopy { .. }
             | Self::BlackBox { .. }
             | Self::Free { .. }
+            | Self::Realloc { .. }
+            | Self::TryRealloc { .. }
             | Self::Call { .. }
             | Self::StaticCall { .. }
             | Self::DelegateCall { .. }
@@ -1807,6 +1823,16 @@ impl<'db> RuntimeBuiltin<'db> {
                 dst: a,
                 offset: b,
                 len: c,
+            }
+            | Self::Realloc {
+                ptr: a,
+                used: b,
+                size: c,
+            }
+            | Self::TryRealloc {
+                ptr: a,
+                used: b,
+                size: c,
             }
             | Self::AddMod {
                 lhs: a,

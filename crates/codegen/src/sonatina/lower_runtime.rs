@@ -3173,6 +3173,38 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 }
                 zero_for_type(&mut self.fb, Type::Unit)
             }
+            RuntimeBuiltin::Realloc { ptr, used, size }
+            | RuntimeBuiltin::TryRealloc { ptr, used, size } => {
+                let ptr = self.local_value(*ptr)?;
+                let used = self.local_value(*used)?;
+                let size = self.local_value(*size)?;
+                let pointer = self.fb.ptr_type(Type::I8);
+                if self.module.is_native_target() {
+                    let func = if matches!(builtin, RuntimeBuiltin::TryRealloc { .. }) {
+                        NativeRuntimeFunc::TryRealloc
+                    } else {
+                        NativeRuntimeFunc::Realloc
+                    };
+                    let address = self
+                        .call_native_runtime(func, &[ptr, used, size])?
+                        .expect("a resize returns its address");
+                    self.coerce_value_to_ty(address, pointer)?
+                } else {
+                    // EVM memory runs out only with the gas and is never
+                    // reclaimed, so a resize is a fresh allocation and a copy.
+                    let address = self.fb.insert_inst(
+                        EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
+                        pointer,
+                    );
+                    self.fb.insert_inst_no_result(EvmMcopy::new(
+                        self.module.required_inst::<EvmMcopy>()?,
+                        address,
+                        ptr,
+                        used,
+                    ));
+                    address
+                }
+            }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
                 let ptr = self.local_value(*ptr)?;
                 let offset = self.local_value(*offset)?;

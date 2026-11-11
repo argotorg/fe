@@ -1,0 +1,1 @@
+Native `MemVec` and `MemBuffer` growth past 1032 bytes resizes the allocation with C's `realloc`, which extends a block where it lies, or remaps a large one, instead of copying it. A program that replaces `malloc` and `free` must now replace `realloc` too.

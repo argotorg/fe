@@ -27,9 +27,26 @@ extern {
     /// `try_alloc_bytes`, which bounds the size.
     fn try_alloc_raw(_ size: usize) -> *u8
 
-    /// Releases an allocation that `alloc_raw` or `try_alloc_raw` made. Native
-    /// hosts and WebAssembly modules free it; EVM memory is never reclaimed.
+    /// Releases an allocation that `alloc_raw`, `try_alloc_raw` or a resize
+    /// made. Native hosts and WebAssembly modules free it; EVM memory is never
+    /// reclaimed.
     unsafe fn dealloc_raw(_ ptr: *u8)
+
+    /// Resizes an allocation that `alloc_raw`, `try_alloc_raw` or a resize
+    /// made to `size` bytes and returns its first byte, which replaces `ptr`:
+    /// no access may use `ptr` afterwards. The first `used` bytes, at most
+    /// the old size and `size`, keep their values. A native host resizes to
+    /// more than 1032 bytes with C's `realloc`, which extends an allocation
+    /// where it lies when it can, and moves a smaller one, as EVM memory and
+    /// WebAssembly modules move every one: it allocates, copies and releases.
+    /// Reverts with `Panic(0x41)` when the native host cannot allocate. Every
+    /// call goes through `realloc_bytes`, which bounds the size.
+    unsafe fn realloc_raw(_ ptr: *u8, _ used: usize, _ size: usize) -> *u8
+
+    /// As `realloc_raw`, but returns a null address, leaving the allocation as
+    /// it was, when the native host cannot allocate. Its callers bound the
+    /// size.
+    unsafe fn try_realloc_raw(_ ptr: *u8, _ used: usize, _ size: usize) -> *u8
 
     /// Copies `len` bytes between linear-memory regions.
     ///
@@ -64,10 +81,10 @@ pub struct MemArray<T> {
 /// A growable array in linear memory.
 ///
 /// The first `len` of the `capacity` elements its allocation holds are in
-/// use. An allocation cannot grow in place, so growing past the capacity
-/// moves the elements to a larger one; growth takes `mut self`, so no element
-/// access is open across it. Destroying the vector destroys the elements in
-/// use, then frees the allocation.
+/// use. Growing past the capacity resizes the allocation, which may move the
+/// elements; growth takes `mut self`, so no element access is open across
+/// it. Destroying the vector destroys the elements in use, then frees the
+/// allocation.
 pub struct MemVec<T> {
     unsafe ptr: *T,
     unsafe len: usize,
@@ -398,8 +415,12 @@ impl<T> MemVec<T> {
     #[inline(never)]
     fn grow(mut self, needed: usize) {
         let capacity = grown_capacity(self.capacity, needed, initial: 4, max: MAX_ALLOCATION)
-        let replacement = cast<u8, T>(alloc_bytes(capacity * size_of<T>()))
-        unsafe { self.move_to(replacement, capacity) }
+        let size = capacity * size_of<T>()
+        // The resized allocation keeps the elements in use.
+        unsafe {
+            self.ptr = cast<u8, T>(realloc_bytes(byte_ptr(self.ptr), used: self.as_slice().byte_len(), size))
+            self.capacity = capacity
+        }
     }
 
     /// As `reserve`, but `false`, leaving the vector as it was, when the
@@ -418,27 +439,17 @@ impl<T> MemVec<T> {
             return false
         }
         let capacity = grown_capacity(self.capacity, needed: self.len + additional, initial: 4, max)
-        match try_alloc_elems<T>(capacity) {
-            Option::Some(replacement) => {
-                unsafe { self.move_to(replacement, capacity) }
-                true
+        // `capacity` elements fit in `MAX_ALLOCATION` bytes, and the resized
+        // allocation keeps the elements in use.
+        unsafe {
+            let ptr = try_realloc_raw(byte_ptr(self.ptr), self.as_slice().byte_len(), capacity * size)
+            if ptr as usize == 0 {
+                return false
             }
-            Option::None => false
+            self.ptr = cast<u8, T>(ptr)
+            self.capacity = capacity
         }
-    }
-
-    /// Moves the elements in use to `replacement` and frees the old
-    /// allocation.
-    ///
-    /// `replacement` must be a fresh allocation of `capacity` elements, at
-    /// least `len`.
-    #[inline(always)]
-    unsafe fn move_to(mut self, _ replacement: *T, _ capacity: usize) {
-        // The replacement holds every element in use, in `capacity` elements.
-        copy(dest: byte_ptr(replacement), source: self.as_slice().as_bytes())
-        dealloc(self.ptr)
-        self.ptr = replacement
-        self.capacity = capacity
+        true
     }
 
     /// Append `value`, growing the allocation when it is full.
@@ -1014,8 +1025,8 @@ impl MemBuffer {
 
     /// Ensure that `additional` bytes fit after the logical extent.
     ///
-    /// Linear-memory allocations cannot grow in place, so growth allocates a
-    /// larger region and copies the initialized bytes.
+    /// Growth resizes the allocation, which keeps the initialized bytes but
+    /// may move them; see `realloc_raw`.
     pub fn reserve(mut self, _ additional: usize) {
         let needed = self.len + additional
         if needed > self.capacity {
@@ -1028,8 +1039,11 @@ impl MemBuffer {
     #[inline(never)]
     fn grow(mut self, needed: usize) {
         let capacity = grown_capacity(self.capacity, needed, initial: 32, max: MAX_ALLOCATION)
-        let replacement = alloc_bytes(capacity)
-        unsafe { self.move_to(replacement, capacity) }
+        // The resized allocation keeps the logical extent.
+        unsafe {
+            self.ptr = realloc_bytes(self.ptr, used: self.len, size: capacity)
+            self.capacity = capacity
+        }
     }
 
     /// As `reserve`, but `false`, leaving the buffer as it was, when the
@@ -1043,27 +1057,17 @@ impl MemBuffer {
             return false
         }
         let capacity = grown_capacity(self.capacity, needed: self.len + additional, initial: 32, max)
-        match try_alloc_bytes(capacity) {
-            Option::Some(replacement) => {
-                unsafe { self.move_to(replacement, capacity) }
-                true
+        // `capacity` is at most `MAX_ALLOCATION`, and the resized allocation
+        // keeps the logical extent.
+        unsafe {
+            let ptr = try_realloc_raw(self.ptr, self.len, capacity)
+            if ptr as usize == 0 {
+                return false
             }
-            Option::None => false
+            self.ptr = ptr
+            self.capacity = capacity
         }
-    }
-
-    /// Moves the logical extent to `replacement` and frees the old
-    /// allocation.
-    ///
-    /// `replacement` must be a fresh allocation of `capacity` bytes, at least
-    /// `len`.
-    #[inline(always)]
-    unsafe fn move_to(mut self, _ replacement: *u8, _ capacity: usize) {
-        // The replacement holds every initialized byte, in `capacity` bytes.
-        copy(dest: replacement, source: self.span())
-        dealloc(self.ptr)
-        self.ptr = replacement
-        self.capacity = capacity
+        true
     }
 
     /// Set the logical extent to `len`, appending zero bytes when it grows.
@@ -1368,12 +1372,28 @@ pub fn try_alloc_bytes(_ len: usize) -> Option<*u8> {
     if ptr as usize == 0 { Option::None } else { Option::Some(ptr) }
 }
 
-/// Releases an allocation made by `alloc_bytes` or `try_alloc_bytes`.
+/// Releases an allocation made by `alloc_bytes` or `try_alloc_bytes`, or a
+/// resize of one.
 ///
 /// The caller must own the allocation, `ptr` must be its first byte, and
 /// nothing may access it afterwards.
 pub unsafe fn dealloc<T>(_ ptr: *T) {
     dealloc_raw(cast<T, u8>(ptr))
+}
+
+/// Resizes the allocation at `ptr` to `size` bytes, keeping its first `used`
+/// bytes; see `realloc_raw`. Reverts with `Panic(0x41)` above `MAX_ALLOCATION`
+/// bytes, as `alloc_bytes` does.
+///
+/// The caller must own the allocation, `ptr` must be its first byte, `used`
+/// must be at most its size and `size`, and nothing may access it through
+/// `ptr` afterwards.
+#[inline(always)]
+unsafe fn realloc_bytes(_ ptr: *u8, used: usize, size: usize) -> *u8 {
+    if size > MAX_ALLOCATION {
+        panic_code(PANIC_OUT_OF_MEMORY)
+    }
+    realloc_raw(ptr, used, size)
 }
 
 /// Allocates `len` bytes, without initializing them or bounding `len`. The
