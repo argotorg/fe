@@ -423,8 +423,8 @@ test("a manifest of another version is refused", async () => {
   const bytes = assemble();
   const manifest = await manifestFor(bytes);
   await refuses(instantiate(bytes, { manifest: { ...manifest, manifest_version: 2 } }), /format version 2; this host reads version 1/);
-  await refuses(instantiate(bytes, { manifest: { ...manifest, contract_version: 2 } }), /host contract version 2; this host implements version 1/);
-  await refuses(instantiate(bytes, { manifest: { manifest_version: 1, contract_version: 1 } }), /lacks the module hash/);
+  await refuses(instantiate(bytes, { manifest: { ...manifest, contract_version: 3 } }), /host contract version 3; this host implements version 2/);
+  await refuses(instantiate(bytes, { manifest: { manifest_version: 1, contract_version: 2 } }), /lacks the module hash/);
   assert.throws(() => parseManifest("{"), (error) => error instanceof ContractError && /not valid JSON/.test(error.message));
   assert.throws(() => parseManifest("[]"), /format version undefined/);
   assert.deepEqual(parseManifest(JSON.stringify(manifest)), manifest);
@@ -452,4 +452,106 @@ test("log, clock and abort are supplied", () => {
   assert.equal(env.sys_wasm_now_ms(), 1234567890123n);
   assert.throws(() => env.sys_wasm_abort(7), (error) => error instanceof GuestAbort && error.code === 7);
   assert.throws(() => env.sys_wasm_abort(-1), (error) => error instanceof GuestAbort && error.code === 0xffffffff);
+});
+
+/** A host bound to a memory of one page that holds `text` at 100. */
+function streams(text, options = {}) {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const host = createHost({}, options);
+  host.bind({ exports: { memory } });
+  const bytes = new Uint8Array(memory.buffer);
+  bytes.set(new TextEncoder().encode(text), 100);
+  return { host, env: host.imports.env, bytes };
+}
+
+test("a write goes to its stream, is kept as text and is passed on", () => {
+  const seen = [];
+  const { host, env, bytes } = streams("Hello, wörld\n", { onWrite: (entry) => seen.push(entry) });
+  assert.equal(env.sys_wasm_stream_write(1, 100, 7), 7);
+  // The two bytes of "ö" arrive in two writes.
+  assert.equal(env.sys_wasm_stream_write(1, 107, 2), 2);
+  assert.equal(env.sys_wasm_stream_write(1, 109, 5), 5);
+  assert.equal(env.sys_wasm_stream_write(2, 100, 5), 5);
+  assert.equal(env.sys_wasm_stream_write(2, 100, 0), 0);
+  assert.equal(host.stdout, "Hello, wörld\n");
+  assert.equal(host.stderr, "Hello");
+  assert.deepEqual(
+    seen.map(({ stream, bytes }) => [stream, bytes.length]),
+    [["stdout", 7], ["stdout", 2], ["stdout", 5], ["stderr", 5], ["stderr", 0]],
+  );
+  // The host keeps a copy: the module may change its memory after the call.
+  bytes.fill(0, 100, 120);
+  assert.deepEqual(seen[0].bytes, new TextEncoder().encode("Hello, "));
+});
+
+test("a long write is taken in pieces of at most MAX_TEXT_BYTES", () => {
+  const memory = new WebAssembly.Memory({ initial: 3 });
+  const host = createHost({});
+  host.bind({ exports: { memory } });
+  new Uint8Array(memory.buffer).fill(0x61);
+  const { env } = host.imports;
+  const length = MAX_TEXT_BYTES + 10;
+  assert.equal(env.sys_wasm_stream_write(1, 5, length), MAX_TEXT_BYTES);
+  assert.equal(env.sys_wasm_stream_write(1, 5 + MAX_TEXT_BYTES, 10), 10);
+  assert.equal(host.stdout, "a".repeat(length));
+});
+
+test("a write outside the memory, or to another stream, is refused", () => {
+  const { host, env } = streams("x");
+  for (const [address, length] of [
+    [PAGE - 4, 5],
+    [PAGE, 1],
+    [0xffffff00, 100],
+    [-1, 2],
+    [0, -1], // a negative i32 length is a large unsigned one
+    [0, 0x80000000],
+  ]) {
+    for (const call of [
+      () => env.sys_wasm_stream_write(1, address, length),
+      () => env.sys_wasm_stream_write(2, address, length),
+      () => env.sys_wasm_stream_read(0, address, length),
+    ]) {
+      assert.throws(
+        call,
+        (error) => error instanceof ContractError && /lies outside the memory of 65536 bytes/.test(error.message),
+        `${address}+${length}`,
+      );
+    }
+  }
+  // A range that ends at the last byte of the memory is inside it.
+  assert.equal(env.sys_wasm_stream_write(1, PAGE - 4, 4), 4);
+  assert.equal(env.sys_wasm_stream_write(1, PAGE, 0), 0);
+  for (const stream of [0, 3, -1]) {
+    assert.throws(
+      () => env.sys_wasm_stream_write(stream, 100, 1),
+      (error) => error instanceof ContractError && /is not standard output \(1\) or standard error \(2\)/.test(error.message),
+    );
+  }
+  for (const stream of [1, 2, 3, -1]) {
+    assert.throws(
+      () => env.sys_wasm_stream_read(stream, 100, 1),
+      (error) => error instanceof ContractError && /is not standard input \(0\)/.test(error.message),
+    );
+  }
+  assert.equal(host.stdout, "\0\0\0\0", "a refused call writes nothing");
+  assert.equal(host.stderr, "");
+});
+
+test("a read places the next bytes of the input, and none at its end", () => {
+  const { env, bytes } = streams("", { stdin: "one\ntwo" });
+  assert.equal(env.sys_wasm_stream_read(0, 100, 5), 5);
+  assert.deepEqual(bytes.slice(99, 106), new Uint8Array([0, ...new TextEncoder().encode("one\nt"), 0]));
+  assert.equal(env.sys_wasm_stream_read(0, 200, 0), 0);
+  assert.equal(env.sys_wasm_stream_read(0, 200, 50), 2);
+  assert.deepEqual(bytes.slice(200, 203), new Uint8Array([...new TextEncoder().encode("wo"), 0]));
+  assert.equal(env.sys_wasm_stream_read(0, 200, 50), 0);
+  // Without `stdin` the input is empty.
+  assert.equal(streams("").env.sys_wasm_stream_read(0, 0, 10), 0);
+  assert.throws(() => createHost({}, { stdin: 5 }), /the standard input must be a string or a Uint8Array/);
+});
+
+test("a host that was not bound refuses the streams", () => {
+  const { env } = createHost({}).imports;
+  assert.throws(() => env.sys_wasm_stream_write(1, 0, 0), /not bound/);
+  assert.throws(() => env.sys_wasm_stream_read(0, 0, 0), /not bound/);
 });

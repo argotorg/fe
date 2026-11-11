@@ -18,6 +18,10 @@ pub(crate) enum NativePanics {
     /// As `Abort`, except that revert data goes to the host's `__fe_revert`,
     /// as the `fe test` launcher defines it.
     HostRevert,
+    /// As `HostRevert`, except that a panic without data traps: a WebAssembly
+    /// test has no stderr of its own to report it on.
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+    HostRevertOrTrap,
     /// Trap without a report.
     Trap,
 }
@@ -38,12 +42,16 @@ impl NativePanics {
     /// when the module traps.
     pub(super) fn function(self, panic: NativePanic) -> Option<NativeRuntimeFunc> {
         Some(match (self, panic) {
-            (Self::Trap, _) => return None,
+            (Self::Trap, _) | (Self::HostRevertOrTrap, NativePanic::Trap) => return None,
             (_, NativePanic::Trap) => NativeRuntimeFunc::ReportTrap,
             (Self::Abort, NativePanic::Revert) => NativeRuntimeFunc::ReportRevert,
             (Self::Abort, NativePanic::Code) => NativeRuntimeFunc::ReportPanic,
-            (Self::HostRevert, NativePanic::Revert) => NativeRuntimeFunc::HostRevert,
-            (Self::HostRevert, NativePanic::Code) => NativeRuntimeFunc::HostPanic,
+            (Self::HostRevert | Self::HostRevertOrTrap, NativePanic::Revert) => {
+                NativeRuntimeFunc::HostRevert
+            }
+            (Self::HostRevert | Self::HostRevertOrTrap, NativePanic::Code) => {
+                NativeRuntimeFunc::HostPanic
+            }
         })
     }
 }

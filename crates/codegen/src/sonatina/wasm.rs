@@ -3,12 +3,14 @@
 //!
 //! The module is lowered by the same lowerer as host-native and SP1 output,
 //! for the `wasm32-unknown-native` target: one linear address space and
-//! 32-bit pointers. The exports are the `pub fn` items of the file; their
-//! bodies may use aggregates, constants and dynamic memory, which the backend
-//! keeps in the linear memory. An export may take `std::wasm::HostText` parameters
-//! and return a `std::wasm::Reply`; a wrapper converts them to and from the
-//! numbers of the boundary, and a module with a text parameter exports the
-//! allocator through which the host places the text.
+//! 32-bit pointers. The exports are the `pub fn` items of the root module, a
+//! standalone file or an ingot's `src/lib.fe`; their bodies may call the rest
+//! of the ingot and its dependencies, and use aggregates, constants and dynamic
+//! memory, which the backend keeps in the linear memory. An export may take
+//! `std::wasm::HostText` parameters and return a `std::wasm::Reply`; a wrapper
+//! converts them to and from the numbers of the boundary, and a module with a
+//! text parameter exports the allocator through which the host places the
+//! text.
 
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
@@ -33,10 +35,11 @@ pub struct WasmOutputSelection {
 }
 
 /// The version of the contract between a module and its host: the module
-/// `env` for imports, the reply word, and the allocator protocol of a module
-/// with text parameters (`std::wasm`). A host refuses a module that names a
-/// version it does not know.
-pub const WASM_HOST_CONTRACT_VERSION: u32 = 1;
+/// `env` for imports, the reply word, the allocator protocol of a module
+/// with text parameters (`std::wasm`), and the `stack_top` global that the
+/// host restores after a call that failed. A host refuses a module that names
+/// a version it does not know.
+pub const WASM_HOST_CONTRACT_VERSION: u32 = 2;
 
 /// The name that a manifest gives to `std::wasm::HostText`.
 pub const WASM_TEXT_TYPE: &str = "HostText";
@@ -96,11 +99,14 @@ pub(super) fn lower_wasm_errors(errors: Vec<WasmError>) -> LowerError {
     }
 }
 
+/// `stack_size` is the size of the module's stack in bytes; `None` is the
+/// backend's default, 1 MiB.
 pub fn emit_module_wasm_artifacts(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
     outputs: WasmOutputSelection,
+    stack_size: Option<u32>,
 ) -> Result<WasmArtifacts, LowerError> {
     let WasmExportPackage { package, exports } = build_wasm_export_package(db, top_mod)?;
     let isa = create_wasm32_isa();
@@ -127,11 +133,13 @@ pub fn emit_module_wasm_artifacts(
         &adapters,
     )?;
     remove_unreachable_functions(&module);
-    let backend = if exports.iter().any(WasmExport::takes_text) {
-        WasmBackend::new().with_host_allocator()
-    } else {
-        WasmBackend::new()
-    };
+    let mut backend = WasmBackend::new();
+    if let Some(bytes) = stack_size {
+        backend = backend.with_stack_size(bytes);
+    }
+    if exports.iter().any(WasmExport::takes_text) {
+        backend = backend.with_host_allocator();
+    }
 
     let mut compile =
         Compile::new(module, backend).with_opt_level(to_sonatina_opt_level(opt_level));

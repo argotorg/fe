@@ -15,6 +15,9 @@
 //! clock is the one the mock has: it reads 1000 first and advances by 10 at each
 //! reading. A line of a fixture that starts with `//host:` or `//mock:` belongs
 //! to that build only.
+//!
+//! The streams of `std::io` have no mock: `streams.fe` is built for the host
+//! only, and the host keeps what the program writes.
 
 mod wasm_support;
 
@@ -45,6 +48,15 @@ struct State {
     trace: Vec<Event>,
     /// When set, `sys_wasm_abort` returns instead of trapping.
     abort_returns: bool,
+    /// What the program wrote to standard output and to standard error.
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    /// The standard input that the program has not read yet.
+    stdin: Vec<u8>,
+    /// The most bytes the host takes or places in one call of a stream import.
+    stream_chunk: Option<usize>,
+    /// When set, the stream imports return this count and do nothing else.
+    stream_count: Option<i32>,
 }
 
 /// The error the host raises in `sys_wasm_abort`.
@@ -266,6 +278,64 @@ fn define_reentrant(linker: &mut Linker<State>) {
                 let mut out = [Val::I32(0)];
                 inner.call(&mut c, &[Val::I32(x)], &mut out)?;
                 Ok(out[0].unwrap_i32())
+            },
+        )
+        .unwrap();
+}
+
+/// The streams of `std::io`. The trace holds the stream and the length of
+/// each call.
+fn define_streams(linker: &mut Linker<State>) {
+    linker
+        .func_wrap(
+            "env",
+            "sys_wasm_stream_write",
+            |mut c: Caller<'_, State>, stream: i32, addr: i32, len: i32| -> i32 {
+                let memory = c
+                    .get_export("memory")
+                    .and_then(|export| export.into_memory())
+                    .expect("the module exports `memory`");
+                let (data, state) = memory.data_and_store_mut(&mut c);
+                state
+                    .trace
+                    .push(ev("write", &[i128::from(stream), i128::from(len as u32)]));
+                if let Some(count) = state.stream_count {
+                    return count;
+                }
+                let offered = &data[addr as u32 as usize..][..len as u32 as usize];
+                let count = offered.len().min(state.stream_chunk.unwrap_or(usize::MAX));
+                match stream {
+                    1 => state.stdout.extend_from_slice(&offered[..count]),
+                    2 => state.stderr.extend_from_slice(&offered[..count]),
+                    _ => panic!("a write to stream {stream}"),
+                }
+                count as i32
+            },
+        )
+        .unwrap();
+    linker
+        .func_wrap(
+            "env",
+            "sys_wasm_stream_read",
+            |mut c: Caller<'_, State>, stream: i32, addr: i32, len: i32| -> i32 {
+                assert_eq!(stream, 0, "a read of stream {stream}");
+                let memory = c
+                    .get_export("memory")
+                    .and_then(|export| export.into_memory())
+                    .expect("the module exports `memory`");
+                let (data, state) = memory.data_and_store_mut(&mut c);
+                state.trace.push(ev("read", &[i128::from(len as u32)]));
+                if let Some(count) = state.stream_count {
+                    return count;
+                }
+                let room = &mut data[addr as u32 as usize..][..len as u32 as usize];
+                let count = room
+                    .len()
+                    .min(state.stdin.len())
+                    .min(state.stream_chunk.unwrap_or(usize::MAX));
+                room[..count].copy_from_slice(&state.stdin[..count]);
+                state.stdin.drain(..count);
+                count as i32
             },
         )
         .unwrap();
@@ -1264,6 +1334,186 @@ fn unused_extern() {
             }
         })],
     });
+}
+
+// --- streams ---------------------------------------------------------------
+
+/// `streams.fe` at `level`, running against the host.
+fn streams(level: &str, temp: &Path) -> Running {
+    let bytes = build("streams", Flavour::Host, level, temp);
+    let module = Module::new(engine(), &bytes).unwrap();
+    assert_eq!(
+        import_section(&module),
+        [
+            ("env", "sys_wasm_stream_read", "i32,i32,i32->i32"),
+            ("env", "sys_wasm_stream_write", "i32,i32,i32->i32"),
+        ]
+        .map(|(m, n, s)| (m.to_string(), n.to_string(), s.to_string())),
+        "O{level}"
+    );
+    Running::new(&module, &[define_streams])
+}
+
+/// What the program wrote to standard output and standard error since the
+/// last call of this function.
+fn written(running: &mut Running) -> (String, String) {
+    let state = running.store.data_mut();
+    let text = |bytes: &mut Vec<u8>| String::from_utf8(std::mem::take(bytes)).unwrap();
+    (text(&mut state.stdout), text(&mut state.stderr))
+}
+
+#[test]
+fn prints_go_to_their_stream_in_one_write_each() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2", "s"] {
+        let mut running = streams(level, temp.path());
+        let greet = Export::new("greet", &[U32, U64, I8], U32);
+        let big = i128::from(u64::MAX);
+        assert_eq!(running.call(&greet, &[3, big, -128]), Got::Value(3));
+        let second = "big 18446744073709551615, small -128, true";
+        assert_eq!(
+            written(&mut running),
+            (format!("hello 3 times\n{second}\n"), String::new()),
+            "O{level}"
+        );
+        assert_eq!(
+            running.store.data().trace,
+            [
+                ev("write", &[1, 14]),
+                ev("write", &[1, second.len() as i128]),
+                ev("write", &[1, 1]),
+            ],
+            "O{level}"
+        );
+
+        let warn = Export::new("warn", &[I32], I32);
+        assert_eq!(running.call(&warn, &[-7]), Got::Value(-7));
+        assert_eq!(
+            written(&mut running),
+            (String::new(), "warning -7\nno newline".to_string()),
+            "O{level}"
+        );
+        assert_eq!(
+            running.store.data().trace,
+            [ev("write", &[2, 11]), ev("write", &[2, 10])],
+            "O{level}"
+        );
+    }
+}
+
+#[test]
+fn a_write_that_the_host_takes_in_pieces_is_offered_until_it_is_whole() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "2"] {
+        let mut running = streams(level, temp.path());
+        running.store.data_mut().stream_chunk = Some(7);
+        let digits = Export::new("digits", &[U32], U32);
+        assert_eq!(running.call(&digits, &[30]), Got::Value(30));
+        assert_eq!(
+            written(&mut running).0,
+            "012345678901234567890123456789",
+            "O{level}"
+        );
+        assert_eq!(
+            running.store.data().trace,
+            [30, 23, 16, 9, 2].map(|rest| ev("write", &[1, rest])),
+            "O{level}"
+        );
+        // A print of nothing calls no import.
+        assert_eq!(running.call(&digits, &[0]), Got::Value(0));
+        assert_eq!(running.store.data().trace, [], "O{level}");
+        // More than the 65,536 bytes that the Node host takes in one call.
+        running.store.data_mut().stream_chunk = Some(65536);
+        assert_eq!(running.call(&digits, &[150_000]), Got::Value(150_000));
+        let (out, _) = written(&mut running);
+        assert_eq!(out.len(), 150_000, "O{level}");
+        assert!(
+            out.bytes()
+                .enumerate()
+                .all(|(i, byte)| byte == b'0' + (i % 10) as u8),
+            "O{level}"
+        );
+        assert_eq!(running.store.data().trace.len(), 3, "O{level}");
+    }
+}
+
+#[test]
+fn a_stream_that_fails_ends_the_program() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "2"] {
+        let mut running = streams(level, temp.path());
+        // A negative count, and no byte of a write taken, are failures.
+        for count in [-1, i32::MIN, 0] {
+            running.store.data_mut().stream_count = Some(count);
+            for (export, args, call) in [
+                (
+                    Export::new("greet", &[U32, U64, I8], U32),
+                    &[1, 2, 3][..],
+                    ev("write", &[1, 14]),
+                ),
+                (
+                    Export::new("warn", &[I32], I32),
+                    &[5][..],
+                    ev("write", &[2, 10]),
+                ),
+            ] {
+                assert_eq!(
+                    running.call(&export, args),
+                    Got::Trap(Trap::UnreachableCodeReached),
+                    "O{level} {count}"
+                );
+                assert_eq!(running.store.data().trace, [call], "O{level} {count}");
+            }
+        }
+        // A read that fails ends the program; a read of nothing is the end of
+        // the input.
+        let number_lines = Export::new("number_lines", &[], U32);
+        running.store.data_mut().stream_count = Some(-1);
+        assert_eq!(
+            running.call(&number_lines, &[]),
+            Got::Trap(Trap::UnreachableCodeReached),
+            "O{level}"
+        );
+        // A host that counts more bytes than the program asked for is at fault.
+        running.store.data_mut().stream_count = Some(i32::MAX);
+        assert_eq!(
+            running.call(&number_lines, &[]),
+            Got::Trap(Trap::UnreachableCodeReached),
+            "O{level}"
+        );
+        // The instance still works.
+        running.store.data_mut().stream_count = None;
+        assert_eq!(running.call(&number_lines, &[]), Got::Value(0));
+        assert_eq!(
+            written(&mut running),
+            (String::new(), "0 lines\n".to_string()),
+            "O{level}"
+        );
+    }
+}
+
+#[test]
+fn the_input_is_read_to_its_end() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2", "s"] {
+        let mut running = streams(level, temp.path());
+        let number_lines = Export::new("number_lines", &[], U32);
+        // The host gives the input whole, and then three bytes at a time.
+        for chunk in [None, Some(3)] {
+            let state = running.store.data_mut();
+            state.stdin = b"first\n\nthe third line\nlast, without a newline".to_vec();
+            state.stream_chunk = chunk;
+            assert_eq!(running.call(&number_lines, &[]), Got::Value(4));
+            assert_eq!(
+                written(&mut running),
+                (
+                    "1: first\n2: \n3: the third line\n4: last, without a newline\n".to_string(),
+                    "4 lines\n".to_string()
+                ),
+                "O{level} {chunk:?}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

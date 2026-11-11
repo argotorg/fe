@@ -17,6 +17,7 @@ on:
       - examples/wasm/**
       - examples/wasm_host.fe
       - ingots/core/**
+      - ingots/std/src/io.fe
       - ingots/std/src/wasm.fe
       - ingots/std/src/wasm/**
       - crates/codegen/**
@@ -73,4 +74,5 @@ jobs:
         run: >-
           cargo test --locked --profile test-release -p fe --all-features
           --test wasm_backend --test wasm_memory --test wasm_imports --test wasm_files
-          --test wasm_manifest --test wasm_reproducible --test wasm_test_command
+          --test wasm_manifest --test wasm_ingot --test wasm_reproducible
+          --test wasm_test_command

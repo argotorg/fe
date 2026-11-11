@@ -8,7 +8,8 @@ pub struct Host { unsafe seal: Private }
 
 struct Private {}
 
-/// Seals the host capabilities, so that only `Host` provides them.
+/// Seals the host capabilities, so that only the root effects provide them:
+/// `Host`, and `std::wasm::Host` for the streams of `std::io`.
 pub(ingot) trait HostCapabilitySeal {}
 
 impl HostCapabilitySeal for Host {}

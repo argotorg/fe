@@ -1,0 +1,46 @@
+// Prints and reads through the streams of `std::io`, which the root effect
+// `std::wasm::Host` provides with the imports `sys_wasm_stream_write` and
+// `sys_wasm_stream_read`. There is no mock build: only a root effect provides
+// the streams.
+use core::MemBuffer
+use std::io::{Stderr, Stdio, Stdout, StdinReader}
+
+pub fn greet(count: u32, big: u64, small: i8) -> u32 uses (out: mut Stdout) {
+    println!("hello ", count, " times")
+    print!("big ", big, ", small ", small, ", ", count > 2)
+    println!()
+    count
+}
+
+pub fn warn(code: i32) -> i32 uses (err: mut Stderr) {
+    eprintln!("warning ", code)
+    eprint!("no newline")
+    code
+}
+
+// The digits 0 to 9 over and over, `len` bytes in one print.
+pub fn digits(len: u32) -> u32 uses (out: mut Stdout) {
+    var text = MemBuffer::with_capacity(len as usize)
+    var i: u32 = 0
+    while i < len {
+        text.push((48 + i % 10).downcast_truncate())
+        i += 1
+    }
+    print!(text)
+    len
+}
+
+// Prints each line of the input after its number, and the count of lines to
+// standard error.
+pub fn number_lines() -> u32 uses (io: mut Stdio) {
+    var reader = StdinReader::new()
+    var line = MemBuffer::empty()
+    var count: u32 = 0
+    while reader.read_line(mut line) {
+        count += 1
+        println!(count, ": ", line)
+        line.clear()
+    }
+    eprintln!(count, " lines")
+    count
+}

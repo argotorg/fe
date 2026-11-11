@@ -1,7 +1,10 @@
-/// Standard input, output and error of a native program.
+/// Standard input, output and error of a native program or a WebAssembly
+/// module.
 ///
-/// Each stream is a capability of the native root effect, `std::native::Host`.
-/// `main` and tests receive the streams they declare, as in
+/// Each stream is a capability of the target's root effect: `std::native::Host`,
+/// which reads and writes the process's descriptors, and `std::wasm::Host`,
+/// which calls imports of the host (`std::wasm::streams`). `main`, tests and
+/// WebAssembly exports receive the streams they declare, as in
 /// `pub fn main() -> i32 uses (out: mut Stdout)`, and a function that prints
 /// declares the stream it writes. `Stdio` provides all three:
 /// `uses (io: mut Stdio)`.
@@ -14,8 +17,8 @@
 /// `buf`, a `MemBuffer` held by a local, a field or an effect
 /// (`uses (text: mut MemBuffer)`). They work on any target.
 ///
-/// A host operation that fails, such as one of `std::fs` or `std::process`,
-/// returns the host's reason as an `Error`.
+/// A native host operation that fails, such as one of `std::fs` or
+/// `std::process`, returns the host's reason as an `Error`.
 use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes}
 use core::abi::DynString
 use core::fixed::{Fixed, UFixed}
@@ -98,19 +101,19 @@ pub enum ErrorKind {
 
 impl Copy for ErrorKind {}
 
-/// The process's standard output.
+/// The standard output of the process, or of a WebAssembly module's host.
 pub trait Stdout: HostCapabilitySeal {
     /// Writes all of `bytes`; false if the stream fails first.
     fn write_stdout(mut self, _ bytes: MemSpan) -> bool
 }
 
-/// The process's standard error.
+/// The standard error of the process, or of a WebAssembly module's host.
 pub trait Stderr: HostCapabilitySeal {
     /// Writes all of `bytes`; false if the stream fails first.
     fn write_stderr(mut self, _ bytes: MemSpan) -> bool
 }
 
-/// The process's standard input.
+/// The standard input of the process, or of a WebAssembly module's host.
 pub trait Stdin: HostCapabilitySeal {
     /// Reads at most `buf.len()` bytes into the start of `buf`: the number
     /// read, zero at the end of input, or `None` if the stream fails.

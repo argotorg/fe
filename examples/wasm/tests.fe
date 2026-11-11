@@ -3,8 +3,11 @@
 //
 //   fe test --backend wasm examples/wasm/tests.fe
 //
-// The tests use only the language, so the native backend gives the same
+// The tests use only the language and the streams of `std::io`, which the root
+// effect of either target provides, so the native backend gives the same
 // results: `fe test --backend native examples/wasm/tests.fe`.
+use std::io::Stdout
+
 struct Point {
     x: i32,
     y: i32,
@@ -57,4 +60,10 @@ fn wide_integers_work_inside_a_function() {
     let big: u256 = (1 as u256) << 200
     assert(big + 1 > big)
     assert((big >> 199) == 2)
+}
+
+// What a test prints is shown if the test fails.
+#[test]
+fn prints_a_line() uses (out: mut Stdout) {
+    println!("the sum is ", sum_to(10))
 }

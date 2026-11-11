@@ -7,18 +7,25 @@
 //! optimization levels (0, 1, 2 and s) and run with wasmtime. On x86-64 Linux
 //! with the `cranelift` feature, the same functions are also built for the host
 //! and the native executable is checked against the wasm results.
+//!
+//! A module that was built with its manifest (`Built`) is checked against the
+//! manifest as wasmtime reads it, and run in Node.js with the host of
+//! `examples/wasm/host.mjs`.
 
 #![allow(dead_code)]
 
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     sync::OnceLock,
 };
 
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
-use wasmtime::{Engine, Instance, Module, Store, Trap, Val};
+use wasmtime::{Engine, ExternType, FuncType, Instance, Module, Store, Trap, Val, ValType};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ty {
@@ -221,6 +228,26 @@ pub fn fe(args: &[&str]) -> Output {
         .expect("fe should run")
 }
 
+/// Runs `fe`, which must exit with status 1 and every needle in its standard
+/// error, without a panic. Returns the standard error.
+pub fn expect_failure(args: &[&str], needles: &[&str]) -> String {
+    let output = fe(args);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        !output.status.success(),
+        "the build should fail: {output:?}"
+    );
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "the compiler panicked:\n{stderr}"
+    );
+    for needle in needles {
+        assert!(stderr.contains(needle), "missing `{needle}` in:\n{stderr}");
+    }
+    stderr
+}
+
 pub fn build_wasm(source: &Path, level: &str, out: &Path) -> Vec<u8> {
     let output = fe(&[
         "build",
@@ -246,6 +273,165 @@ pub fn build_wasm(source: &Path, level: &str, out: &Path) -> Vec<u8> {
 pub fn engine() -> &'static Engine {
     static ENGINE: OnceLock<Engine> = OnceLock::new();
     ENGINE.get_or_init(Engine::default)
+}
+
+/// A module that `fe build` wrote to `dir` under the name `stem`, with its
+/// manifest.
+pub struct Built {
+    pub dir: PathBuf,
+    pub stem: String,
+}
+
+impl Built {
+    pub fn wasm(&self) -> PathBuf {
+        self.dir.join(format!("{}.wasm", self.stem))
+    }
+
+    pub fn manifest_path(&self) -> PathBuf {
+        self.dir.join(format!("{}.manifest.json", self.stem))
+    }
+
+    pub fn manifest(&self) -> Value {
+        let text = fs::read_to_string(self.manifest_path()).expect("the manifest is written");
+        serde_json::from_str(&text).expect("the manifest is JSON")
+    }
+}
+
+fn wasm_name(ty: &ValType) -> &'static str {
+    match ty {
+        ValType::I32 => "i32",
+        ValType::I64 => "i64",
+        other => panic!("unexpected value type {other:?}"),
+    }
+}
+
+fn signature(ty: &FuncType) -> (Vec<&'static str>, Vec<&'static str>) {
+    (
+        ty.params().map(|t| wasm_name(&t)).collect(),
+        ty.results().map(|t| wasm_name(&t)).collect(),
+    )
+}
+
+/// The import and export sections of the module as an engine reads them must
+/// agree with the manifest: the same names, in the same order for imports, and
+/// the same WebAssembly types.
+pub fn assert_matches_the_engine(built: &Built) {
+    let bytes = fs::read(built.wasm()).unwrap();
+    let manifest = built.manifest();
+    let module = Module::new(engine(), &bytes).expect("the module validates");
+
+    let imports = manifest["imports"].as_array().unwrap();
+    let engine_imports: Vec<_> = module.imports().collect();
+    assert_eq!(imports.len(), engine_imports.len());
+    for (entry, import) in imports.iter().zip(&engine_imports) {
+        assert_eq!(entry["module"], import.module());
+        assert_eq!(entry["name"], import.name());
+        assert_eq!(entry["kind"], "function");
+        let ExternType::Func(ty) = import.ty() else {
+            panic!("import {} is not a function", import.name());
+        };
+        let (params, results) = signature(&ty);
+        assert_eq!(entry["type"]["params"], json!(params), "{}", import.name());
+        assert_eq!(
+            entry["type"]["results"],
+            json!(results),
+            "{}",
+            import.name()
+        );
+    }
+
+    let exports = manifest["exports"].as_array().unwrap();
+    let engine_exports: Vec<_> = module.exports().collect();
+    assert_eq!(exports.len(), engine_exports.len());
+    let names: Vec<_> = exports
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted, "exports are listed in name order");
+    for entry in exports {
+        let name = entry["name"].as_str().unwrap();
+        let export = module
+            .get_export(name)
+            .unwrap_or_else(|| panic!("no export {name}"));
+        match export {
+            ExternType::Memory(_) => assert_eq!(entry["kind"], "memory"),
+            ExternType::Global(_) => {
+                assert_eq!(name, "stack_top");
+                assert_eq!(
+                    (&entry["kind"], &entry["role"]),
+                    (&json!("global"), &json!("stack"))
+                );
+            }
+            ExternType::Func(ty) => {
+                assert_eq!(entry["kind"], "function");
+                let (params, results) = signature(&ty);
+                let flat: Vec<_> = entry["params"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|p| {
+                        p["wasm"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|t| t.as_str().unwrap().to_string())
+                    })
+                    .collect();
+                assert_eq!(flat, params, "parameters of {name}");
+                let result: Vec<_> = entry["result"]
+                    .as_object()
+                    .map(|r| {
+                        r["wasm"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|t| t.as_str().unwrap().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                assert_eq!(result, results, "result of {name}");
+            }
+            other => panic!("unexpected export {name}: {other:?}"),
+        }
+    }
+
+    // The hash is the SHA-256 of the file, written as 64 lowercase digits.
+    assert_eq!(
+        manifest["module"]["sha256"],
+        hex::encode(Sha256::digest(&bytes))
+    );
+    assert_eq!(manifest["module"]["size"], bytes.len());
+    assert_eq!(manifest["module"]["file"], format!("{}.wasm", built.stem));
+}
+
+/// Instantiates a module with the Node host (`examples/wasm/host.mjs`) and
+/// makes the calls of `request`, which `wasm_support/manifest_driver.mjs`
+/// describes with the answer. Node must be installed.
+pub fn node_driver(request: &Value) -> Value {
+    let driver =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/wasm_support/manifest_driver.mjs");
+    let mut child = Command::new("node")
+        .arg(driver)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("node must be installed to run these tests");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "node failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("the driver prints JSON")
 }
 
 pub struct Running {

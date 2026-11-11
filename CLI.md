@@ -157,8 +157,7 @@ For `build` and `check`:
 ## Project target
 
 `target` in `fe.toml` sets the machine a project compiles for: `"evm"`, `"native"` or `"wasm"`.
-`fe check`, `fe build` and `fe test` then use that target's backend without `--backend`. `fe build`
-takes only standalone `.fe` files for `wasm`, so it reports an error for an ingot with this target.
+`fe check`, `fe build` and `fe test` then use that target's backend without `--backend`.
 
 ```toml
 [ingot]
@@ -405,24 +404,32 @@ one program as long as their exported symbols differ.
 
 ### WebAssembly output
 
-With the optional `wasm` Cargo feature, `fe build --backend wasm <file.fe>` compiles
-a standalone `.fe` file to a WebAssembly module (32-bit pointers, one linear memory).
-Every non-generic `pub fn` in the root of the file is exported under its own name,
-and the module also exports its memory as `memory`. Parameters and results must be
+With the optional `wasm` Cargo feature, `fe build --backend wasm <path>` compiles
+a standalone `.fe` file or an ingot to a WebAssembly module (32-bit pointers, one linear
+memory). Every non-generic `pub fn` in the root of the file, or of an ingot's root module
+`src/lib.fe`, is exported under its own name, and the module also exports its memory as
+`memory`. The exports of an ingot may call its other modules and its dependencies, whose
+functions are not exported. Parameters and results must be
 `bool` or integers of at most 64 bits, with two exceptions described below (text
 parameters and a reply result). `usize` and `isize` have 32 bits on this target
 and cross as an `i32`. Any other type, including `u256` and structs, is an error
 that names the function and the type. Inside functions, structs,
 tuples, enums, arrays, constants, `usize` and the dynamic arrays of `core::ptr` work.
 Overflow, division by zero, a failed `assert!` and an index outside an array trap, as
-they do in native executables. Calls use a stack of 1 MiB in the module's memory, and
-a call that does not fit traps; dynamic allocation comes from a heap that reuses
+they do in native executables. Calls use a stack in the module's memory, and
+a call that does not fit traps. The stack has 1 MiB unless `--wasm-stack-size <bytes>`
+sets its size, which is rounded up so that the stack ends on a 64 KiB page boundary; the
+option is an error with any other backend. Dynamic allocation comes from a heap that reuses
 freed blocks and grows the memory without a limit of the module's own; an allocation
 traps when the host refuses to grow it, and a fallible one returns `None`. EVM-only
 instructions are not supported and are errors that name the function and the instruction.
-The default output is `<out>/<file>.wasm`; `--emit ir` writes
-`<out>/<file>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
-written, `<out>/<file>.manifest.json` is written with it. The manifest records the
+The default output is `<out>/<name>.wasm`, named after the file or the ingot; `--emit ir`
+writes `<out>/<name>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
+written, `<out>/<name>.manifest.json` is written with it. A workspace build writes one module
+for each selected member whose root module has an export, and `--ingot <name>` selects one
+member. A root `pub fn` of a selected member that cannot be an export is an error, so a
+workspace with a library whose root functions take other types needs `--ingot`. `--contract`
+is an error. The manifest records the
 module's file name, SHA-256 and size, its initial memory in pages, the imports (module,
 name, WebAssembly parameter and result types), the exports (for the program's functions
 the Fe parameter names and types, with `HostText` and `Reply` as named by `std::wasm`,
@@ -468,7 +475,19 @@ Each can fail with `NotFound` (1), `OutOfRange` (2) or `BadName` (3); no other n
 valid. `Host` provides `Files` by calling the imports `sys_wasm_files_open(addr, len)`, `sys_wasm_files_size`,
 `sys_wasm_files_read_byte` and `sys_wasm_files_close`, which return a reply word (close
 returns nothing), and `mock()` is Fe code that holds files in memory. The compiler does not
-require a handle to be closed; the host counts the handles that stay open. The module
+require a handle to be closed; the host counts the handles that stay open.
+
+`Host` also provides the streams of `std::io` (`Stdout`, `Stderr`, `Stdin`, and `Stdio` for
+all three), so an export or a test that declares `uses (out: mut Stdout)` prints with
+`print!` and `println!`, and the same source builds for the native target. A stream has the
+number of its POSIX descriptor (0, 1 or 2). `sys_wasm_stream_write(stream, addr, len)` offers
+the host the bytes of the range; the host returns how many it took, and the module offers
+the rest again. `sys_wasm_stream_read(stream, addr, len)` asks the host to place at most
+`len` bytes of input in the range; the host returns how many it placed, and 0 at the end of
+the input. A negative count says that the stream failed, and a print or a read then traps.
+`examples/wasm/host.mjs` keeps what a module wrote in `host.stdout` and `host.stderr`, passes
+each write to the option `onWrite`, reads the input from the option `stdin`, and refuses a
+range outside the memory and a stream number that the operation does not apply to. The module
 `examples/wasm/host.mjs` is a host for Node with no dependencies: it supplies the imports,
 places texts, decodes replies, and refuses a forged or closed handle, text outside the
 memory or longer than 64 KiB, and an unknown error number, each with an error that names
@@ -769,20 +788,26 @@ fe test [--backend <sonatina|native|wasm>] [--filter <pattern>] [--jobs <n>] [--
 
 - `sonatina` (the default) runs tests on the EVM.
 - `native` (with the `cranelift` feature) runs each test as a host process.
-- `wasm` (with the `wasm` feature) builds each test into its own WebAssembly module and
-  runs it in its own Node.js process (version 20 or later; `node` must be on `PATH`, and
+- `wasm` (with the `wasm` feature) builds the tests of a suite into one WebAssembly module
+  and runs each in its own Node.js process (version 20 or later; `node` must be on `PATH`, and
   the run ends with an error if it is not). The host is `examples/wasm/host.mjs`: it
   answers the `Log`, `Clock`, `Abort` and `Files` operations of `std::wasm` (there are no
-  files). A test passes if it returns. A failed assertion, an overflow, a division by zero
-  and an index outside an array trap, which fails the test with `trap: unreachable`; a call
-  of `abort` fails it with the code; a call that breaks the host contract fails it with
-  the host's message. A test that uses something the backend cannot build (an EVM
-  built-in, `should_revert`, `balance`) fails with `cannot build <name> for WebAssembly`
-  and the reason; no test is skipped silently. A test that runs for more than 60 seconds
-  fails. `--emit ir` writes `<suite>.wasm.<test>.test.sona` for each test, where `<test>` is
-  its path below the root module with `.` between the names (`inner.first`). `--show-logs`,
-  the tracing options, `--debug-dir`, `--emit rmir`, `--report` and `--report-dir` are
-  errors with this backend.
+  files) and the streams of `std::io` (the standard input is empty). A test passes if it
+  returns. A failed test shows the numbers it logged and what it wrote to standard output
+  and standard error. A failed assertion, an overflow, a division by zero, an index
+  outside an array and a revert with data fail the test with `Test reverted: 0x…` and what
+  the data says, unless `#[test(should_revert)]` expected it; a panic without data fails it
+  with `trap: unreachable`; a call of `abort` fails it with the code; a call that breaks the host contract fails it with the host's
+  message. A test that uses something the backend cannot build (an EVM built-in,
+  `balance`) fails with `cannot build <name> for WebAssembly` and the
+  reason; no test is skipped silently. A test that runs for more than 60 seconds fails,
+  and so does one that writes more than 1 MiB to its standard output and standard error
+  together. `--native-timeout-secs <seconds>` (1 to 3600) and `--native-output-limit-kib
+  <kib>` (1 to 16384) set these limits, as they do for `--backend native`; they are
+  errors with the `sonatina` backend. `--emit ir` writes
+  `<suite>.wasm.<test>.test.sona` for each test, where `<test>` is its path below the root
+  module with `.` between the names (`inner.first`). `--show-logs`, the tracing options,
+  `--debug-dir`, `--emit rmir`, `--report` and `--report-dir` are errors with this backend.
 
 ### Reports: `--report` and `--report-dir`
 

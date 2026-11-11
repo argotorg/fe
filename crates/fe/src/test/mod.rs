@@ -52,9 +52,11 @@ const MAX_STREAMED_SUITE_LABEL_CHARS: usize = 20;
 const STREAMED_SUITE_LABEL_ELLIPSIS: &str = "..";
 const STREAMED_STATUS_COLUMN_WIDTH: usize = 16;
 
-#[cfg(feature = "cranelift")]
+/// The wall time and the combined stdout/stderr bytes that a native or
+/// WebAssembly test may use.
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
 #[derive(Debug, Clone, Copy)]
-struct NativeTestLimits {
+struct TestLimits {
     timeout: Duration,
     output_bytes: usize,
 }
@@ -243,8 +245,8 @@ struct WorkerSharedConfig {
     profile: String,
     opt_level: OptLevel,
     backend: BuildBackend,
-    #[cfg(feature = "cranelift")]
-    native_limits: NativeTestLimits,
+    #[cfg(any(feature = "cranelift", feature = "wasm"))]
+    limits: TestLimits,
     emit: TestEmitSelection,
     debug: TestDebugOptions,
     report_failed_only: bool,
@@ -805,17 +807,18 @@ pub fn run_tests(
         }
         wasm::require_node()?;
     }
-    if !backend.is_native() && (native_timeout_secs.is_some() || native_output_limit_kib.is_some())
+    if !(backend.is_native() || backend.is_wasm())
+        && (native_timeout_secs.is_some() || native_output_limit_kib.is_some())
     {
-        return Err("native test limits require `--backend native`".to_string());
+        return Err("test limits require `--backend native` or `--backend wasm`".to_string());
     }
     let timeout_secs = native_timeout_secs.unwrap_or(60);
     let output_limit_kib = native_output_limit_kib.unwrap_or(1024);
     if !(1..=3600).contains(&timeout_secs) || !(1..=16384).contains(&output_limit_kib) {
-        return Err("native test limits require 1–3600 seconds and 1–16384 KiB".to_string());
+        return Err("test limits require 1–3600 seconds and 1–16384 KiB".to_string());
     }
-    #[cfg(feature = "cranelift")]
-    let native_limits = NativeTestLimits {
+    #[cfg(any(feature = "cranelift", feature = "wasm"))]
+    let limits = TestLimits {
         timeout: Duration::from_secs(timeout_secs),
         output_bytes: output_limit_kib * 1024,
     };
@@ -867,8 +870,8 @@ pub fn run_tests(
         profile: profile.to_string(),
         opt_level,
         backend,
-        #[cfg(feature = "cranelift")]
-        native_limits,
+        #[cfg(any(feature = "cranelift", feature = "wasm"))]
+        limits,
         emit: TestEmitSelection::from_requested(emit),
         debug: debug.clone(),
         report_failed_only,
@@ -1602,9 +1605,9 @@ fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> Singl
             shared.call_trace,
         ),
         #[cfg(feature = "cranelift")]
-        CompiledTest::Native(case) => case.run(report_ctx.as_ref(), shared.native_limits),
+        CompiledTest::Native(case) => case.run(report_ctx.as_ref(), shared.limits),
         #[cfg(feature = "wasm")]
-        CompiledTest::Wasm(case) => case.run(),
+        CompiledTest::Wasm(case) => case.run(shared.limits),
     };
     let elapsed = outcome.elapsed;
     let mut output = String::new();
@@ -3165,8 +3168,8 @@ mod tests {
                 profile: "test".into(),
                 opt_level: OptLevel::O0,
                 backend: BuildBackend::Sonatina,
-                #[cfg(feature = "cranelift")]
-                native_limits: NativeTestLimits {
+                #[cfg(any(feature = "cranelift", feature = "wasm"))]
+                limits: TestLimits {
                     timeout: Duration::from_secs(60),
                     output_bytes: 1024 * 1024,
                 },

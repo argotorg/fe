@@ -935,24 +935,6 @@ fn ir_can_be_emitted_with_or_without_the_module() {
     }
 }
 
-fn expect_failure(args: &[&str], needles: &[&str]) -> String {
-    let output = fe(args);
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(
-        !output.status.success(),
-        "the build should fail: {output:?}"
-    );
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(
-        !stderr.contains("panicked"),
-        "the compiler panicked:\n{stderr}"
-    );
-    for needle in needles {
-        assert!(stderr.contains(needle), "missing `{needle}` in:\n{stderr}");
-    }
-    stderr
-}
-
 #[test]
 fn other_backends_and_outputs_are_refused_with_a_reason() {
     let temp = tempdir().unwrap();
@@ -978,27 +960,7 @@ fn other_backends_and_outputs_are_refused_with_a_reason() {
     }
     expect_failure(
         &["build", "--backend", "wasm", "--contract", "C", path],
-        &["WebAssembly output does not support `--ingot` or `--contract`"],
-    );
-}
-
-#[test]
-fn an_ingot_directory_is_refused() {
-    let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("src")).unwrap();
-    fs::write(
-        temp.path().join("fe.toml"),
-        "[ingot]\nname = \"wasm_ingot\"\nversion = \"0.1.0\"\n",
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join("src/lib.fe"),
-        "pub fn one() -> u32 { 1 }\n",
-    )
-    .unwrap();
-    expect_failure(
-        &["build", "--backend", "wasm", temp.path().to_str().unwrap()],
-        &["WebAssembly output only supports standalone `.fe` files"],
+        &["WebAssembly output does not support `--contract`"],
     );
 }
 
@@ -1230,7 +1192,7 @@ fn an_evm_only_instruction_is_a_named_error() {
 
 #[test]
 fn unsafe_export_is_a_named_error() {
-    // A module exports the `pub fn` items in the root of the file, so the
+    // A module exports the `pub fn` items of its root module, so the
     // attribute would do nothing.
     rejected(
         "root_export",
@@ -1257,6 +1219,18 @@ fn a_function_named_memory_is_refused() {
         "reserved_name",
         "pub fn memory() -> u32 { 1 }\n",
         &["cannot export `memory`", "reserved for the linear memory"],
+    );
+}
+
+#[test]
+fn a_function_named_stack_top_is_refused() {
+    rejected(
+        "reserved_stack",
+        "pub fn stack_top() -> u32 { 1 }\n",
+        &[
+            "cannot export `stack_top`",
+            "reserved for the stack of the module",
+        ],
     );
 }
 

@@ -1,0 +1,32 @@
+// Tests that print through `std::io`. The root effect of the target provides
+// the streams, so the file gives the same results with `fe test --backend
+// wasm` and `fe test --backend native`. What a test printed is shown when it
+// fails, and a test that prints more than 1 MiB fails.
+use std::io::{Stderr, Stdout}
+
+fn report(_ step: i32) uses (err: mut Stderr) {
+    eprintln!("giving up at step ", step)
+}
+
+#[test]
+fn prints_and_passes() uses (out: mut Stdout) {
+    println!("all is well")
+}
+
+#[test]
+fn prints_and_fails() uses (out: mut Stdout, err: mut Stderr) {
+    let answer: u32 = 42
+    println!("the answer is ", answer)
+    print!("no newline at the end")
+    report(-3)
+    assert(false)
+}
+
+#[test]
+fn prints_too_much() uses (out: mut Stdout) {
+    var line: u32 = 0
+    while line < 20000 {
+        println!("line ", line, " of a test that prints more than a mebibyte in all")
+        line += 1
+    }
+}

@@ -1,0 +1,85 @@
+//! The standard streams: `Host` provides `std::io`'s `Stdout`, `Stderr`,
+//! `Stdin` and `Stdio`, so an export or a test that declares a stream in
+//! `uses` prints with `print!` and `eprint!` and reads with
+//! `std::io::StdinReader`, as a native program does.
+//!
+//! Two imports of the module `env` carry the bytes. A stream has the number of
+//! its POSIX descriptor: 0 is standard input, 1 standard output and 2
+//! standard error.
+//!
+//! | Import | Parameters | Result |
+//! | --- | --- | --- |
+//! | `sys_wasm_stream_write` | stream `i32`, address `i32`, length `i32` | count `i32` |
+//! | `sys_wasm_stream_read` | stream `i32`, address `i32`, length `i32` | count `i32` |
+//!
+//! `sys_wasm_stream_write` offers the host the bytes in the range. The host
+//! takes all of them or only the first ones and returns how many it took; the
+//! program offers the rest again. `sys_wasm_stream_read` asks the host to
+//! place at most `length` bytes of input at the address. It returns how many
+//! it placed, and 0 at the end of the input. A count that is negative as a
+//! signed `i32` says that the stream failed; a count of 0 for a write of one
+//! byte or more says the same.
+//!
+//! The range is valid for the call only. The host checks that it lies inside
+//! the memory, that a write names stream 1 or 2 and that a read names stream 0.
+use core::{MemSpan, Option}
+use ingot::io::{Stderr, Stdin, Stdio, Stdout}
+use super::Host
+
+extern {
+    fn sys_wasm_stream_write(_ stream: u32, _ addr: u32, _ len: u32) -> i32
+    fn sys_wasm_stream_read(_ stream: u32, _ addr: u32, _ len: u32) -> i32
+}
+
+const STDIN: u32 = 0
+const STDOUT: u32 = 1
+const STDERR: u32 = 2
+
+impl Stdio for Host {}
+
+impl Stdout for Host {
+    fn write_stdout(mut self, _ bytes: MemSpan) -> bool {
+        write_all(stream: STDOUT, bytes)
+    }
+}
+
+impl Stderr for Host {
+    fn write_stderr(mut self, _ bytes: MemSpan) -> bool {
+        write_all(stream: STDERR, bytes)
+    }
+}
+
+impl Stdin for Host {
+    fn read_stdin(mut self, _ buf: mut MemSpan) -> Option<usize> {
+        let count = sys_wasm_stream_read(STDIN, address(buf), length(buf))
+        if count < 0 {
+            return Option::None
+        }
+        let count: usize = count.downcast_unchecked()
+        // A host that counts more bytes than it was given room for is at fault.
+        assert!(count <= buf.len())
+        Option::Some(count)
+    }
+}
+
+fn write_all(stream: u32, _ bytes: MemSpan) -> bool {
+    var written: usize = 0
+    while written < bytes.len() {
+        let rest = bytes.slice(offset: written, len: bytes.len() - written)
+        let count = sys_wasm_stream_write(stream, address(rest), length(rest))
+        if count <= 0 {
+            return false
+        }
+        written += count.downcast_unchecked()
+    }
+    true
+}
+
+// The address of the first byte of `bytes` in linear memory.
+fn address(_ bytes: MemSpan) -> u32 {
+    (bytes.ptr() as usize).downcast().unwrap()
+}
+
+fn length(_ bytes: MemSpan) -> u32 {
+    bytes.len().downcast().unwrap()
+}

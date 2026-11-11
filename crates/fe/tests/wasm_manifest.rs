@@ -12,46 +12,17 @@
 
 mod wasm_support;
 
-use std::{
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-};
+use std::{fs, path::Path};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
-use wasm_support::{engine, fe, render_flavour};
-use wasmtime::{ExternType, Module, ValType};
-
-fn manifest_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
+use wasm_support::{Built, assert_matches_the_engine, fe, node_driver, render_flavour};
 
 fn fixture(directory: &str, name: &str) -> String {
-    let path = manifest_dir().join(format!("tests/fixtures/{directory}/{name}.fe"));
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{directory}/{name}.fe"));
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()))
-}
-
-struct Built {
-    dir: PathBuf,
-    stem: String,
-}
-
-impl Built {
-    fn wasm(&self) -> PathBuf {
-        self.dir.join(format!("{}.wasm", self.stem))
-    }
-
-    fn manifest_path(&self) -> PathBuf {
-        self.dir.join(format!("{}.manifest.json", self.stem))
-    }
-
-    fn manifest(&self) -> Value {
-        let text = fs::read_to_string(self.manifest_path()).expect("the manifest is written");
-        serde_json::from_str(&text).expect("the manifest is JSON")
-    }
 }
 
 fn build_source(source: &str, stem: &str, level: &str, temp: &Path) -> Built {
@@ -85,108 +56,6 @@ fn build_source(source: &str, stem: &str, level: &str, temp: &Path) -> Built {
     }
 }
 
-fn wasm_name(ty: &ValType) -> &'static str {
-    match ty {
-        ValType::I32 => "i32",
-        ValType::I64 => "i64",
-        other => panic!("unexpected value type {other:?}"),
-    }
-}
-
-fn signature(ty: &wasmtime::FuncType) -> (Vec<&'static str>, Vec<&'static str>) {
-    (
-        ty.params().map(|t| wasm_name(&t)).collect(),
-        ty.results().map(|t| wasm_name(&t)).collect(),
-    )
-}
-
-/// The import and export sections of the module as an engine reads them must
-/// agree with the manifest: the same names, in the same order for imports, and
-/// the same WebAssembly types.
-fn assert_matches_the_engine(built: &Built) {
-    let bytes = fs::read(built.wasm()).unwrap();
-    let manifest = built.manifest();
-    let module = Module::new(engine(), &bytes).expect("the module validates");
-
-    let imports = manifest["imports"].as_array().unwrap();
-    let engine_imports: Vec<_> = module.imports().collect();
-    assert_eq!(imports.len(), engine_imports.len());
-    for (entry, import) in imports.iter().zip(&engine_imports) {
-        assert_eq!(entry["module"], import.module());
-        assert_eq!(entry["name"], import.name());
-        assert_eq!(entry["kind"], "function");
-        let ExternType::Func(ty) = import.ty() else {
-            panic!("import {} is not a function", import.name());
-        };
-        let (params, results) = signature(&ty);
-        assert_eq!(entry["type"]["params"], json!(params), "{}", import.name());
-        assert_eq!(
-            entry["type"]["results"],
-            json!(results),
-            "{}",
-            import.name()
-        );
-    }
-
-    let exports = manifest["exports"].as_array().unwrap();
-    let engine_exports: Vec<_> = module.exports().collect();
-    assert_eq!(exports.len(), engine_exports.len());
-    let names: Vec<_> = exports
-        .iter()
-        .map(|e| e["name"].as_str().unwrap())
-        .collect();
-    let mut sorted = names.clone();
-    sorted.sort_unstable();
-    assert_eq!(names, sorted, "exports are listed in name order");
-    for entry in exports {
-        let name = entry["name"].as_str().unwrap();
-        let export = module
-            .get_export(name)
-            .unwrap_or_else(|| panic!("no export {name}"));
-        match export {
-            ExternType::Memory(_) => assert_eq!(entry["kind"], "memory"),
-            ExternType::Func(ty) => {
-                assert_eq!(entry["kind"], "function");
-                let (params, results) = signature(&ty);
-                let flat: Vec<_> = entry["params"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .flat_map(|p| {
-                        p["wasm"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .map(|t| t.as_str().unwrap().to_string())
-                    })
-                    .collect();
-                assert_eq!(flat, params, "parameters of {name}");
-                let result: Vec<_> = entry["result"]
-                    .as_object()
-                    .map(|r| {
-                        r["wasm"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .map(|t| t.as_str().unwrap().to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                assert_eq!(result, results, "result of {name}");
-            }
-            other => panic!("unexpected export {name}: {other:?}"),
-        }
-    }
-
-    // The hash is the SHA-256 of the file, written as 64 lowercase digits.
-    assert_eq!(
-        manifest["module"]["sha256"],
-        hex::encode(Sha256::digest(&bytes))
-    );
-    assert_eq!(manifest["module"]["size"], bytes.len());
-    assert_eq!(manifest["module"]["file"], format!("{}.wasm", built.stem));
-}
-
 #[test]
 fn the_manifest_describes_every_kind_of_export_and_import() {
     let temp = tempdir().unwrap();
@@ -208,7 +77,7 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
             "size": bytes.len(),
             "initial_memory_pages": manifest["module"]["initial_memory_pages"],
         },
-        "contract_version": 1,
+        "contract_version": 2,
         "optimization": "1",
         "compiler": version.trim(),
         "imports": [
@@ -242,6 +111,7 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
             { "name": "memory", "kind": "memory" },
             { "name": "ping", "kind": "function",
               "params": [{ "name": "value", "type": "i32", "wasm": ["i32"] }], "result": null },
+            { "name": "stack_top", "kind": "global", "role": "stack" },
         ],
     });
     assert_eq!(manifest, expected);
@@ -368,28 +238,41 @@ fn a_failed_build_writes_no_manifest() {
 // The Node host.
 // ---------------------------------------------------------------------------
 
-fn node_driver(request: &Value) -> Value {
-    let driver = manifest_dir().join("tests/wasm_support/manifest_driver.mjs");
-    let mut child = Command::new("node")
-        .arg(driver)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("node must be installed to run these tests");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(request.to_string().as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "node failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("the driver prints JSON")
+#[test]
+fn the_node_host_restores_the_stack_after_an_abort() {
+    // `abort` is an import that throws, a hundred frames deep. Each frame
+    // holds an array, so unless the host puts `stack_top` back the stack of
+    // 1 MiB is gone after a few calls and the rest trap instead of aborting.
+    let source = "use std::wasm::{Abort, abort}
+
+fn dive(_ depth: u32) -> u64 uses (a: mut Abort) {
+    let frame: [u64; 64] = [depth as u64; 64]
+    if depth == 0 {
+        abort(9)
+    }
+    dive(depth - 1) + frame[(depth % 64) as usize]
+}
+
+pub fn run(depth: u32) -> u64 uses (a: mut Abort) {
+    dive(depth)
+}
+";
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2"] {
+        let built = build_source(source, "dive", level, temp.path());
+        let calls = vec![json!({ "export": "run", "args": [100] }); 200];
+        let answer = node_driver(&json!({
+            "wasm": built.wasm(),
+            "manifest": built.manifest(),
+            "calls": calls,
+        }));
+        let abort = json!({
+            "error": { "name": "GuestAbort", "message": "the module aborted with code 9" },
+        });
+        for (call, result) in answer["results"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(result, &abort, "-O {level}, call {call}");
+        }
+    }
 }
 
 fn refusal(request: &Value) -> String {
@@ -434,6 +317,89 @@ fn the_node_host_runs_a_module_that_matches_its_manifest() {
         "{answer}"
     );
     assert_eq!(answer["logs"], json!([{ "type": "i32", "value": "-7" }]));
+}
+
+#[test]
+fn the_node_host_supplies_the_streams() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "2"] {
+        let built = build_source(
+            &fixture("wasm_imports", "streams"),
+            "streams",
+            level,
+            temp.path(),
+        );
+        assert_matches_the_engine(&built);
+        let stream = |name: &str| {
+            json!({ "module": "env", "name": name, "kind": "function",
+                "type": { "params": ["i32", "i32", "i32"], "results": ["i32"] } })
+        };
+        assert_eq!(
+            built.manifest()["imports"],
+            json!([
+                stream("sys_wasm_stream_read"),
+                stream("sys_wasm_stream_write")
+            ]),
+            "-O {level}"
+        );
+        let answer = node_driver(&json!({
+            "wasm": built.wasm(),
+            "manifest": built.manifest(),
+            "stdin": "one\nzwölf\n",
+            "calls": [
+                { "export": "greet", "args": [3, { "u64": "18446744073709551615" }, -128] },
+                { "export": "warn", "args": [-7] },
+                { "export": "number_lines", "args": [] },
+                // More than the host takes in one call.
+                { "export": "digits", "args": [70000] },
+            ],
+        }));
+        assert_eq!(
+            answer["results"],
+            json!([{ "value": "3" }, { "value": "-7" }, { "value": "2" }, { "value": "70000" }]),
+            "-O {level}: {answer}"
+        );
+        let digits: String = "0123456789".repeat(7000);
+        assert_eq!(
+            answer["stdout"],
+            format!(
+                "hello 3 times\nbig 18446744073709551615, small -128, true\n1: one\n2: zwölf\n{digits}"
+            ),
+            "-O {level}"
+        );
+        assert_eq!(
+            answer["stderr"], "warning -7\nno newline2 lines\n",
+            "-O {level}"
+        );
+        // Each print is one write, and a long one is taken in two pieces.
+        let writes: Vec<(&str, usize)> = answer["writes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|write| {
+                (
+                    write["stream"].as_str().unwrap(),
+                    write["text"].as_str().unwrap().len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            writes,
+            [
+                ("stdout", 14),
+                ("stdout", 42),
+                ("stdout", 1),
+                ("stderr", 11),
+                ("stderr", 10),
+                ("stdout", 7),
+                ("stdout", 10),
+                ("stderr", 8),
+                ("stdout", 65536),
+                ("stdout", 4464),
+            ],
+            "-O {level}"
+        );
+    }
 }
 
 #[test]
@@ -486,10 +452,10 @@ fn the_node_host_refuses_a_module_that_differs_from_its_manifest() {
 
     // A manifest for another contract version, and for another format version.
     let mut other = manifest.clone();
-    other["contract_version"] = json!(2);
+    other["contract_version"] = json!(3);
     let message = refusal(&json!({ "wasm": built.wasm(), "manifest": other }));
     assert!(
-        message.contains("contract version 2") && message.contains("implements version 1"),
+        message.contains("contract version 3") && message.contains("implements version 2"),
         "{message}"
     );
     let mut other = manifest.clone();

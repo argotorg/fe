@@ -7,10 +7,13 @@
 //! down here from the source of the fixtures, before any run:
 //!
 //! - `shared.fe` has six tests that pass, `fails_on_purpose` (a failed
-//!   assertion) and three tests that trap. The native backend and the
+//!   assertion) and three tests that panic. The native backend and the
 //!   WebAssembly backend, at the optimization levels 0, 1 and 2, must report
 //!   the same result for every test.
 //! - `wasm_only.fe` uses the host operations of `std::wasm`.
+//! - `prints.fe` prints through `std::io`; a failed test shows what it printed,
+//!   and a test that prints more than 1 MiB fails. `--native-timeout-secs` and
+//!   `--native-output-limit-kib` set the limits of time and output.
 //! - `unsupported.fe` has tests that the backend cannot build; they fail with
 //!   the reason and the other test still runs.
 //!
@@ -136,12 +139,19 @@ fn the_native_and_wasm_backends_give_the_same_results() {
 }
 
 #[test]
-fn a_failed_assertion_and_each_trap_are_reported_with_the_engine_message() {
+fn a_failed_assertion_and_each_panic_are_reported_with_the_reason() {
     let output = fe_test("wasm", "1", &[], &fixture("shared"));
-    for name in SHARED_FAILING {
+    // Each is `Panic(uint256)` revert data and what its code means.
+    let reasons = [
+        "01 (assertion failed)",
+        "11 (arithmetic overflow)",
+        "12 (division by zero)",
+        "32 (index out of bounds)",
+    ];
+    for (name, reason) in SHARED_FAILING.into_iter().zip(reasons) {
         let failure = failure_of(&output, name);
         assert!(
-            failure.starts_with("wasm test failed: trap: unreachable"),
+            failure.starts_with("Test reverted: 0x4e487b71") && failure.ends_with(reason),
             "{name}: {failure}"
         );
     }
@@ -190,22 +200,78 @@ fn host_operations_logs_aborts_and_refusals() {
 }
 
 #[test]
+fn a_failed_test_shows_what_it_printed() {
+    for level in ["0", "2"] {
+        let output = fe_test("wasm", level, &[], &fixture("prints"));
+        let text = stdout(&output);
+        assert_eq!(
+            results(&output),
+            expected(
+                &["prints_and_passes"],
+                &["prints_and_fails", "prints_too_much"]
+            ),
+            "-O{level}:\n{text}"
+        );
+        let shown = " (assertion failed)\n    \
+            logged:\nstdout:\nthe answer is 42\nno newline at the end\nstderr:\ngiving up at step -3\n";
+        assert!(text.contains(shown), "-O{level}:\n{text}");
+        // A test that passes shows nothing.
+        assert!(!text.contains("all is well"), "-O{level}:\n{text}");
+        assert_eq!(
+            failure_of(&output, "prints_too_much"),
+            "wasm test exceeded the output limit of 1024 KiB"
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn the_native_backend_prints_the_same_text() {
+    let output = fe_test("native", "1", &[], &fixture("prints"));
+    let text = stdout(&output);
+    assert_eq!(
+        results(&output),
+        expected(
+            &["prints_and_passes"],
+            &["prints_and_fails", "prints_too_much"]
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "stdout:\nthe answer is 42\nno newline at the end\nstderr:\ngiving up at step -3\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        failure_of(&output, "prints_too_much").contains("native test exceeded the output limit"),
+        "{text}"
+    );
+}
+
+#[test]
 fn tests_the_backend_cannot_build_fail_with_the_reason() {
     let output = fe_test("wasm", "1", &[], &fixture("unsupported"));
     assert_eq!(
         results(&output),
         expected(
             &["builds_and_passes", "lowers_an_evm_builtin"],
-            &["expects_an_evm_revert", "imports_a_zero_sized_parameter"]
+            &["needs_an_evm_balance", "imports_a_zero_sized_parameter"]
         ),
         "{}",
         stdout(&output)
     );
-    let revert = failure_of(&output, "expects_an_evm_revert");
+    let balance = failure_of(&output, "needs_an_evm_balance");
     assert!(
-        revert.contains("cannot build `expects_an_evm_revert` for WebAssembly")
-            && revert.contains("`should_revert`"),
-        "{revert}"
+        balance.contains("cannot build `needs_an_evm_balance` for WebAssembly")
+            && balance.contains("`balance`"),
+        "{balance}"
     );
     let import = failure_of(&output, "imports_a_zero_sized_parameter");
     assert!(
@@ -215,6 +281,80 @@ fn tests_the_backend_cannot_build_fail_with_the_reason() {
     );
     assert_eq!(output.status.code(), Some(1));
     assert!(stdout(&output).contains("2 passed; 2 failed"));
+}
+
+#[test]
+fn a_test_with_an_import_the_host_lacks_fails_alone() {
+    // The tests of a file share a module, but a module that imports a
+    // function the host does not supply does not start, so this test gets
+    // its own and the others still run.
+    let temp = tempdir().unwrap();
+    let file = temp.path().join("imports.fe");
+    fs::write(
+        &file,
+        "extern {\n    fn probe(_ x: u32) -> u32\n}\n\n#[test]\nfn first() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test]\nfn calls_the_probe() {\n    assert(unsafe { probe(1) } == 1)\n}\n\n#[test]\nfn reads_the_native_clock() {\n    assert(std::native::cpu_clock_ticks() != 0)\n}\n\n#[test]\nfn last() {\n    let x: u32 = 2\n    assert(x == 2)\n}\n",
+    )
+    .unwrap();
+    let output = fe_test("wasm", "1", &[], &file);
+    assert_eq!(
+        results(&output),
+        expected(
+            &["first", "last"],
+            &["calls_the_probe", "reads_the_native_clock"]
+        ),
+        "{}",
+        stdout(&output)
+    );
+    for (test, import) in [
+        ("calls_the_probe", "probe"),
+        // An import of `std` outside `std::wasm` is not the test host's either.
+        ("reads_the_native_clock", "clock"),
+    ] {
+        let failure = failure_of(&output, test);
+        assert!(
+            failure.contains(&format!(
+                "imports env.{import}, which the host does not provide"
+            )),
+            "{failure}"
+        );
+    }
+}
+
+#[test]
+fn should_revert_tests_pass_when_they_revert() {
+    // Revert data reaches `fe test` as it does from a native test, so the
+    // attribute means the same: any revert, a selector, or a panic code.
+    let temp = tempdir().unwrap();
+    let file = temp.path().join("reverts.fe");
+    fs::write(
+        &file,
+        "#[test(should_revert)]\nfn reverts() {\n    assert(false)\n}\n\n#[test(should_revert)]\nfn returns() {\n    let x: u32 = 1\n    assert(x == 1)\n}\n\n#[test(should_revert)]\nfn overflows() {\n    var x: u8 = 255\n    x += 1\n}\n",
+    )
+    .unwrap();
+    for backend in [
+        "wasm",
+        #[cfg(all(
+            feature = "cranelift",
+            any(
+                all(target_arch = "x86_64", target_os = "linux"),
+                all(target_arch = "aarch64", target_os = "macos")
+            )
+        ))]
+        "native",
+    ] {
+        let output = fe_test(backend, "1", &[], &file);
+        assert_eq!(
+            results(&output),
+            expected(&["reverts", "overflows"], &["returns"]),
+            "{backend}:\n{}",
+            stdout(&output)
+        );
+        assert_eq!(
+            failure_of(&output, "returns"),
+            "Expected test to revert, but it succeeded",
+            "{backend}"
+        );
+    }
 }
 
 #[test]
@@ -286,16 +426,83 @@ fn options_that_have_no_meaning_for_wasm_are_refused() {
             &["--report"][..],
             "`--report` and `--report-dir` are not available",
         ),
-        (
-            &["--native-timeout-secs", "5"][..],
-            "native test limits require `--backend native`",
-        ),
     ] {
         let output = fe_test("wasm", "1", args, &fixture("shared"));
         assert_eq!(output.status.code(), Some(1), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(message), "{args:?}: {stderr}");
     }
+}
+
+#[test]
+fn the_limits_of_time_and_output_can_be_set() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("limits.fe");
+    fs::write(
+        &source,
+        "use std::io::Stdout\n\n#[test]\nfn spin() {\n    while true {}\n}\n\n#[test]\nfn noisy() uses (out: mut Stdout) {\n    var i: u32 = 0\n    while i < 2048 {\n        print!(\"A\")\n        i += 1\n    }\n}\n\n#[test]\nfn endless() uses (out: mut Stdout) {\n    while true {\n        print!(\"A\")\n    }\n}\n",
+    )
+    .unwrap();
+    for (filter, limit, message) in [
+        (
+            "spin",
+            ["--native-timeout-secs", "1"],
+            "wasm test exceeded the time limit of 1 seconds",
+        ),
+        (
+            "noisy",
+            ["--native-output-limit-kib", "1"],
+            "wasm test exceeded the output limit of 1 KiB",
+        ),
+    ] {
+        let output = fe_test(
+            "wasm",
+            "1",
+            &[&["--filter", filter][..], &limit].concat(),
+            &source,
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+        assert_eq!(failure_of(&output, filter), message);
+        // Within the default limits the test that prints passes.
+        if filter == "noisy" {
+            let output = fe_test("wasm", "1", &["--filter", filter], &source);
+            assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+        }
+        // The EVM has no such limits.
+        let output = fe_test("sonatina", "1", &limit, &source);
+        assert_eq!(output.status.code(), Some(1), "{limit:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("test limits require `--backend native` or `--backend wasm`"),
+            "{limit:?}: {stderr}"
+        );
+    }
+    // A test that prints without end stops at the output limit, before the
+    // time limit.
+    let output = fe_test(
+        "wasm",
+        "1",
+        &[
+            "--filter",
+            "endless",
+            "--native-output-limit-kib",
+            "1",
+            "--native-timeout-secs",
+            "30",
+        ],
+        &source,
+    );
+    assert_eq!(
+        failure_of(&output, "endless"),
+        "wasm test exceeded the output limit of 1 KiB"
+    );
+    let output = fe_test("wasm", "1", &["--native-timeout-secs", "0"], &source);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("test limits require 1–3600 seconds and 1–16384 KiB"),
+        "{stderr}"
+    );
 }
 
 #[test]

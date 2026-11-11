@@ -146,8 +146,9 @@ fn validate_build_request(
     contract: Option<&str>,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
 ) -> Result<(), String> {
-    #[cfg(not(any(feature = "sp1", feature = "wasm")))]
+    #[cfg(not(feature = "sp1"))]
     let _ = ingot;
     #[cfg(not(feature = "cranelift"))]
     let _ = contract;
@@ -163,6 +164,9 @@ fn validate_build_request(
     }
     if emit.wasm && backend.name() != "wasm" {
         return Err("`--emit wasm` requires `--backend wasm`".to_string());
+    }
+    if wasm_stack_size.is_some() && !backend.is_wasm() {
+        return Err("`--wasm-stack-size` requires `--backend wasm`".to_string());
     }
 
     match backend {
@@ -215,8 +219,8 @@ fn validate_build_request(
         #[cfg(feature = "sp1")]
         BuildBackend::Sp1 => Ok(()),
         #[cfg(feature = "wasm")]
-        BuildBackend::Wasm if ingot.is_some() || contract.is_some() => {
-            Err("WebAssembly output does not support `--ingot` or `--contract`".to_string())
+        BuildBackend::Wasm if contract.is_some() => {
+            Err("WebAssembly output does not support `--contract`".to_string())
         }
         #[cfg(feature = "wasm")]
         BuildBackend::Wasm
@@ -295,6 +299,7 @@ pub fn build(
     opt_level: OptLevel,
     emit: &[BuildEmit],
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     profile: &str,
     report_out: Option<&Utf8PathBuf>,
@@ -302,7 +307,8 @@ pub fn build(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(backend, ingot, contract, emit, link) {
+    if let Err(err) = validate_build_request(backend, ingot, contract, emit, link, wasm_stack_size)
+    {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -416,17 +422,13 @@ pub fn build(
             opt_level,
             emit,
             link,
+            wasm_stack_size,
             out_dir,
             report_ctx.as_ref(),
         ),
         #[cfg(feature = "sp1")]
         CliTarget::Directory(_) if matches!(backend, BuildBackend::Sp1) => {
             eprintln!("Error: sp1 executable output only supports standalone `.fe` files");
-            true
-        }
-        #[cfg(feature = "wasm")]
-        CliTarget::Directory(_) if matches!(backend, BuildBackend::Wasm) => {
-            eprintln!("Error: WebAssembly output only supports standalone `.fe` files");
             true
         }
         CliTarget::Directory(dir_path) => build_directory(
@@ -439,6 +441,7 @@ pub fn build(
             opt_level,
             emit,
             link,
+            wasm_stack_size,
             out_dir,
             report_ctx.as_ref(),
         ),
@@ -497,6 +500,7 @@ pub fn build_from_metadata(
         contract,
         emit,
         NativeLink::default(),
+        None,
     ) {
         eprintln!("Error: {err}");
         std::process::exit(1);
@@ -640,6 +644,7 @@ pub fn build_from_metadata(
         opt_level,
         emit,
         NativeLink::default(),
+        None,
         Some(&out_dir),
         None,
     );
@@ -660,6 +665,7 @@ fn build_file(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -735,6 +741,7 @@ fn build_file(
         opt_level,
         emit,
         link,
+        wasm_stack_size,
         &out_dir,
         &out_dir,
         ir_file_stem.as_str(),
@@ -755,6 +762,7 @@ fn build_directory(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -797,7 +805,18 @@ fn build_directory(
 
     match config {
         Config::Workspace(_) => build_workspace(
-            db, &canonical, url, ingot, contract, backend, opt_level, emit, link, out_dir, report,
+            db,
+            &canonical,
+            url,
+            ingot,
+            contract,
+            backend,
+            opt_level,
+            emit,
+            link,
+            wasm_stack_size,
+            out_dir,
+            report,
         ),
         Config::Ingot(_) => {
             if ingot.is_some() {
@@ -828,6 +847,7 @@ fn build_directory(
                 opt_level,
                 emit,
                 link,
+                wasm_stack_size,
                 &out_dir,
                 None,
                 None,
@@ -850,6 +870,7 @@ fn build_workspace(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
@@ -885,8 +906,9 @@ fn build_workspace(
         .cloned()
         .unwrap_or_else(|| workspace_root.join("out"));
 
-    #[cfg(feature = "cranelift")]
-    if backend.is_native() {
+    // Native and WebAssembly output is one artifact for each member, named
+    // after it.
+    if backend.is_native() || backend.is_wasm() {
         let mut built = Vec::new();
         let mut artifact_names = BTreeSet::new();
         for member in members {
@@ -901,8 +923,17 @@ fn build_workspace(
                 .containing_ingot(db, member.url.clone())
                 .expect("analyzed member must resolve")
                 .root_mod(db);
-            // A library is made of exports, and an executable starts at `main`.
-            let has_roots = if emit.library() {
+            // A WebAssembly module and a library are made of exports, and an
+            // executable starts at `main`.
+            let has_roots = if backend.is_wasm() {
+                match mir::wasm_exports(db, root_mod) {
+                    Ok(exports) => !exports.is_empty(),
+                    Err(err) => {
+                        eprintln!("Error: Failed to compile WebAssembly output: {err}");
+                        return true;
+                    }
+                }
+            } else if emit.library() {
                 !mir::native_exports(db, root_mod).is_empty()
             } else {
                 root_mod.main_entry(db).is_some()
@@ -912,13 +943,20 @@ fn build_workspace(
             }
             let artifact = sanitize_name_with_default(member.name.as_str(), "main");
             if !artifact_names.insert(artifact.to_ascii_lowercase()) {
-                eprintln!("Error: Native artifact names collide: {artifact}");
+                let output = if backend.is_wasm() {
+                    "WebAssembly module"
+                } else {
+                    "Native artifact"
+                };
+                eprintln!("Error: {output} names collide: {artifact}");
                 return true;
             }
             built.push(member);
         }
         if built.is_empty() {
-            if emit.library() {
+            if backend.is_wasm() {
+                eprintln!("Error: No WebAssembly exports found to build");
+            } else if emit.library() {
                 eprintln!("Error: No native `#[unsafe(export)]` functions found to build");
             } else {
                 eprintln!("Error: No native executable entry points found to build");
@@ -937,6 +975,7 @@ fn build_workspace(
                 opt_level,
                 emit,
                 link,
+                wasm_stack_size,
                 &out_dir,
                 None,
                 Some(member.name.as_str()),
@@ -1022,6 +1061,7 @@ fn build_workspace(
                     opt_level,
                     emit,
                     link,
+                    wasm_stack_size,
                     &out_dir,
                     workspace_member_ir_out_dir(emit, &out_dir, matches[0].name.as_str()),
                     Some(matches[0].name.as_str()),
@@ -1077,6 +1117,7 @@ fn build_workspace(
             opt_level,
             emit,
             link,
+            wasm_stack_size,
             &out_dir,
             workspace_member_ir_out_dir(emit, &out_dir, member.name.as_str()),
             Some(member.name.as_str()),
@@ -1294,6 +1335,7 @@ fn build_ingot_url(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: &Utf8Path,
     ir_out_dir: Option<Utf8PathBuf>,
     ir_file_stem: Option<&str>,
@@ -1331,21 +1373,25 @@ fn build_ingot_url(
         |name| sanitize_name_with_default(name, "module"),
     );
 
-    #[cfg(feature = "cranelift")]
-    if backend.is_native() {
-        return build_native_top_mod(
+    // Native and WebAssembly output is built from the root module and what it
+    // reaches in the ingot and its dependencies.
+    if backend.is_native() || backend.is_wasm() {
+        return build_top_mod(
             db,
             ingot.root_mod(db),
+            None,
+            backend,
             opt_level,
             emit,
             link,
+            wasm_stack_size,
+            out_dir,
             out_dir,
             &ir_file_stem,
+            true,
             report_dir,
         );
     }
-    #[cfg(not(feature = "cranelift"))]
-    let _ = (backend, link);
 
     if report_evm_exports(db, ingot.root_mod(db)) {
         return BuildSummary { had_errors: true };
@@ -1519,6 +1565,7 @@ fn build_top_mod(
     opt_level: OptLevel,
     emit: EmitSelection,
     link: NativeLink<'_>,
+    wasm_stack_size: Option<u32>,
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
     ir_file_stem: &str,
@@ -1527,6 +1574,8 @@ fn build_top_mod(
 ) -> BuildSummary {
     #[cfg(not(feature = "cranelift"))]
     let _ = (backend, link);
+    #[cfg(not(feature = "wasm"))]
+    let _ = wasm_stack_size;
 
     #[cfg(feature = "cranelift")]
     if matches!(backend, BuildBackend::Native) {
@@ -1568,6 +1617,7 @@ fn build_top_mod(
             top_mod,
             opt_level,
             emit,
+            wasm_stack_size,
             out_dir,
             ir_file_stem,
             report_dir.map(Utf8PathBuf::as_path),
@@ -1799,11 +1849,13 @@ fn build_sp1_top_mod(
 }
 
 #[cfg(feature = "wasm")]
+#[allow(clippy::too_many_arguments)]
 fn build_wasm_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
     emit: EmitSelection,
+    stack_size: Option<u32>,
     out_dir: &Utf8Path,
     ir_file_stem: &str,
     report_dir: Option<&Utf8Path>,
@@ -1816,6 +1868,7 @@ fn build_wasm_top_mod(
             ir: emit.ir,
             wasm: emit.wasm,
         },
+        stack_size,
     )
     .map_err(|err| err.to_string())?;
     // Nothing is written unless compilation succeeded.

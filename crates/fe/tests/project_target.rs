@@ -107,10 +107,10 @@ fn commands_use_a_wasm_target() {
 
     assert_ok(&fe(temp.path(), &["check"]));
     assert_ok(&fe(temp.path(), &["test"]));
-    assert_err(
-        &fe(temp.path(), &["build"]),
-        "WebAssembly output only supports standalone",
-    );
+    assert_ok(&fe(temp.path(), &["build"]));
+    let module = fs::read(temp.path().join("out/module.wasm")).unwrap();
+    assert_eq!(&module[..4], b"\0asm");
+    assert!(temp.path().join("out/module.manifest.json").is_file());
 }
 
 #[test]

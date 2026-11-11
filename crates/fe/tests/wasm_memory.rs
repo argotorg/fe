@@ -13,7 +13,10 @@
 
 mod wasm_support;
 
+use std::fs;
+
 use wasm_support::*;
+use wasmtime::Trap;
 
 macro_rules! program_test {
     ($test:ident, $file:literal, $exports:expr) => {
@@ -1198,6 +1201,41 @@ program_test!(recursion_frames, "recursion_frames", {
     ]
 });
 
+program_test!(tail_recursion, "tail_recursion", {
+    // Millions of calls deep: without tail calls the stack would not hold them.
+    vec![
+        Export::new("sum_to", &[("n", U64)], U64).product(&[vec![0, 1, 10, 3_000_000]], |a| {
+            Some(a[0] * (a[0] + 1) / 2)
+        }),
+        Export::new("even", &[("n", U32)], Bool)
+            .product(&[vec![0, 1, 7, 2_000_000, 2_000_001]], |a| {
+                Some(i128::from(a[0] % 2 == 0))
+            }),
+    ]
+});
+
+program_test!(guarded_faults, "guarded_faults", {
+    let inputs = [vec![0, 7, 100], vec![0, 1, 3], vec![0, 3]];
+    vec![
+        Export::new("guarded_div", &[("x", U64), ("d", U64), ("n", U64)], U64)
+            .product(&inputs, |a| {
+                Some(if a[1] == 0 { 0 } else { a[2] * (a[0] / a[1]) })
+            }),
+        Export::new(
+            "guarded_rem_wide",
+            &[("x", U64), ("d", U64), ("n", U64)],
+            U64,
+        )
+        .product(&inputs, |a| {
+            Some(if a[1] == 0 { 0 } else { a[2] * (a[0] % a[1]) })
+        }),
+        Export::new("pick", &[("i", U32), ("n", U64)], U64)
+            .product(&[vec![0, 3, 4, 1 << 28, 4_294_967_295], vec![0, 3]], |a| {
+                Some(a[1] * [11, 22, 33, 44].get(a[0] as usize).copied().unwrap_or(0))
+            }),
+    ]
+});
+
 program_test!(frame_sizes, "frame_sizes", {
     vec![
         Export::new("big_copy", &[("seed", U32)], U32).product(
@@ -1464,4 +1502,87 @@ fn a_fallible_allocation_that_cannot_be_met_is_none_and_not_a_trap() {
         let churn = Export::new("churn", &[("rounds", U32), ("n", U32)], U32);
         assert_eq!(running.call(&churn, &[10, 10]), Ok(5), "O{level}");
     }
+}
+
+#[test]
+fn the_stack_size_option_sets_how_deep_calls_can_nest() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("deep.fe");
+    // Each call keeps an array of 512 bytes while the call it makes runs.
+    fs::write(
+        &source,
+        "pub fn deep(n: u32) -> u64 {\n    if n == 0 {\n        return 0\n    }\n    var frame: [u64; 64] = [0; 64]\n    let i = (n % 64) as usize\n    frame[i] = n as u64\n    deep(n: n - 1) + frame[i]\n}\n",
+    )
+    .unwrap();
+    let deep = Export::new("deep", &[("n", U32)], U64);
+    let reaches = |bytes: &[u8], n: i128| match Running::new(bytes).call(&deep, &[n]) {
+        Ok(sum) => {
+            assert_eq!(sum, n * (n + 1) / 2);
+            true
+        }
+        Err(trap) => {
+            assert_eq!(trap, Trap::UnreachableCodeReached);
+            false
+        }
+    };
+    for level in ["0", "2"] {
+        let build = |stack: Option<&str>| {
+            let out = temp
+                .path()
+                .join(format!("o{level}-{}", stack.unwrap_or("default")));
+            let mut args = vec!["build", "--backend", "wasm", "-O", level, "--out-dir"];
+            args.extend([out.to_str().unwrap(), source.to_str().unwrap()]);
+            args.extend(stack.iter().flat_map(|size| ["--wasm-stack-size", size]));
+            let output = fe(&args);
+            assert!(output.status.success(), "{output:?}");
+            fs::read(out.join("deep.wasm")).unwrap()
+        };
+        // The stack ends on a page boundary, so it has up to 64 KiB more than
+        // was asked for: 1 MiB holds 2,000 frames and not 2,500.
+        let default = build(None);
+        assert!(reaches(&default, 2000), "O{level}");
+        assert!(!reaches(&default, 2500), "O{level}");
+        let large = build(Some("4194304"));
+        assert!(reaches(&large, 2500), "O{level}");
+        let small = build(Some("65536"));
+        assert!(reaches(&small, 100), "O{level}");
+        assert!(!reaches(&small, 300), "O{level}");
+    }
+}
+
+#[test]
+fn the_stack_size_option_needs_the_wasm_backend_and_a_size() {
+    let source = fixture_path("factorial");
+    let source = source.to_str().unwrap();
+    for backend in [
+        "sonatina",
+        #[cfg(feature = "cranelift")]
+        "native",
+    ] {
+        expect_failure(
+            &[
+                "build",
+                "--backend",
+                backend,
+                "--wasm-stack-size",
+                "65536",
+                source,
+            ],
+            &["`--wasm-stack-size` requires `--backend wasm`"],
+        );
+    }
+    let output = fe(&[
+        "build",
+        "--backend",
+        "wasm",
+        "--wasm-stack-size",
+        "0",
+        source,
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid value '0' for '--wasm-stack-size <BYTES>'"),
+        "{stderr}"
+    );
 }

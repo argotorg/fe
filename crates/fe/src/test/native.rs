@@ -18,9 +18,9 @@ use tempfile::{Builder, TempDir};
 use crate::native::link_executable;
 
 use super::{
-    CompiledTest, NativeTestLimits, ReportContext, SingleTestJob, SuitePreparation,
-    TestEmitSelection, TestOutcome, TestResult, default_test_emit_dir, emit_with_catch_unwind,
-    revert_mismatch, test_emit_stem, write_test_emit_artifact,
+    CompiledTest, ReportContext, SingleTestJob, SuitePreparation, TestEmitSelection, TestLimits,
+    TestOutcome, TestResult, default_test_emit_dir, emit_with_catch_unwind, revert_mismatch,
+    test_emit_stem, write_test_emit_artifact,
 };
 
 #[cfg(target_os = "linux")]
@@ -45,11 +45,7 @@ pub(super) struct NativeTestCase {
 
 impl NativeTestCase {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) fn run(
-        &self,
-        report: Option<&ReportContext>,
-        limits: NativeTestLimits,
-    ) -> TestOutcome {
+    pub(super) fn run(&self, report: Option<&ReportContext>, limits: TestLimits) -> TestOutcome {
         let started = Instant::now();
         let revert_path = self
             .executable
@@ -287,11 +283,7 @@ impl NativeTestCase {
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    pub(super) fn run(
-        &self,
-        _report: Option<&ReportContext>,
-        _limits: NativeTestLimits,
-    ) -> TestOutcome {
+    pub(super) fn run(&self, _report: Option<&ReportContext>, _limits: TestLimits) -> TestOutcome {
         TestOutcome {
             result: TestResult {
                 name: self.name.clone(),
@@ -505,7 +497,7 @@ mod tests {
         };
         let outcome = case.run(
             None,
-            NativeTestLimits {
+            TestLimits {
                 timeout: Duration::from_secs(5),
                 output_bytes: 1024,
             },

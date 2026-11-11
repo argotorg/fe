@@ -1,13 +1,14 @@
 // A host for WebAssembly modules built from Fe with `--backend wasm`.
 //
-// It supplies the imports of `std::wasm` (the four scalar operations and the
-// files contract), places text in the module's memory before a call, decodes
-// the reply of an export, counts open handles, and checks a module against its
-// build manifest before running it. It checks everything a module hands it
-// before acting on it, and ends the call with a `ContractError` that names the
-// problem when the module breaks the contract. The file is a plain ES module
-// with no dependencies; it needs `WebAssembly`, `BigInt`, `TextEncoder` and
-// `crypto.subtle` (Node.js 20 or later, and current browsers).
+// It supplies the imports of `std::wasm` (the four scalar operations, the
+// standard streams and the files contract), places text in the module's memory
+// before a call, decodes the reply of an export, counts open handles, and
+// checks a module against its build manifest before running it. It checks
+// everything a module hands it before acting on it, and ends the call with a
+// `ContractError` that names the problem when the module breaks the contract.
+// The file is a plain ES module with no dependencies; it needs `WebAssembly`,
+// `BigInt`, `TextEncoder`, `TextDecoder` and `crypto.subtle` (Node.js 20 or
+// later, and current browsers).
 //
 //   import { instantiate } from "./host.mjs";
 //   const manifest = JSON.parse(fs.readFileSync("lines.manifest.json", "utf8"));
@@ -19,11 +20,12 @@
 //   guest.host.assertNoOpenHandles();
 //
 // The contract is described in `ingots/std/src/wasm.fe`,
-// `ingots/std/src/wasm/boundary.fe` and `ingots/std/src/wasm/files.fe`, and
-// in `examples/wasm/README.md`; the numbers below repeat it.
+// `ingots/std/src/wasm/boundary.fe`, `ingots/std/src/wasm/files.fe` and
+// `ingots/std/src/wasm/streams.fe`, and in `examples/wasm/README.md`; the
+// numbers below repeat it.
 
 /** The version of the host contract that this host implements. */
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;
 
 /** The version of the manifest format that this host reads. */
 export const MANIFEST_VERSION = 1;
@@ -35,8 +37,17 @@ export const FILE_ERRORS = Object.freeze({
   3: "BadName",
 });
 
-/** The longest text, in bytes, that the host reads from the module or places in it. */
+/**
+ * The longest text, in bytes, that the host reads from the module or places in
+ * it, and the most bytes of a stream that it takes or places in one call.
+ */
 export const MAX_TEXT_BYTES = 65536;
+
+/** The streams a module writes, by number. Stream 0 is standard input. */
+export const OUTPUT_STREAMS = Object.freeze({
+  1: "stdout",
+  2: "stderr",
+});
 
 /** The longest file, in bytes: a reply carries its size in 32 bits. */
 export const MAX_FILE_BYTES = 0xffffffff;
@@ -121,11 +132,19 @@ function keyOf(bytes) {
  * - `now`: the clock, a function returning milliseconds since the Unix epoch
  *   (`Date.now` by default);
  * - `onLog`: called with `{ type: "i32", value }` or `{ type: "u64", value }`
- *   for each logged number; the entries are also kept in `host.logs`.
+ *   for each logged number; the entries are also kept in `host.logs`;
+ * - `stdin`: the standard input, a string or a Uint8Array (empty by default);
+ * - `onWrite`: called with `{ stream: "stdout" | "stderr", bytes }` for each
+ *   write to a stream, `bytes` being a Uint8Array of its own. In Node.js,
+ *   `({ stream, bytes }) => process[stream].write(bytes)` passes the output on.
+ *   The text is also kept in `host.stdout` and `host.stderr`.
  *
  * `abort` throws a `GuestAbort`.
  */
-export function createHost(files = {}, { imports = {}, now = Date.now, onLog = null } = {}) {
+export function createHost(
+  files = {},
+  { imports = {}, now = Date.now, onLog = null, stdin = "", onWrite = null } = {},
+) {
   const table = new Map();
   for (const [name, contents] of Object.entries(files)) {
     const bytes = toBytes(contents, `the contents of ${name}`);
@@ -136,6 +155,11 @@ export function createHost(files = {}, { imports = {}, now = Date.now, onLog = n
   }
   const open = new Map(); // handle -> contents
   const logs = [];
+  const input = toBytes(stdin, "the standard input");
+  let consumed = 0;
+  // A decoder for each stream keeps a character that two writes split.
+  const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
+  const written = { stdout: "", stderr: "" };
   let issued = 0;
   let closed = 0;
   let memory = null;
@@ -149,6 +173,17 @@ export function createHost(files = {}, { imports = {}, now = Date.now, onLog = n
     return new Uint8Array(memory.buffer);
   };
 
+  /** The module's memory, after a check that the `length` bytes at `address` lie inside it. */
+  const memoryHolding = (address, length, what) => {
+    const addr = address >>> 0;
+    const len = length >>> 0;
+    const view = bytesOfMemory();
+    if (addr + len > view.length) {
+      throw new ContractError(`${what}: text at ${addr} of length ${len} lies outside the memory of ${view.length} bytes`);
+    }
+    return view;
+  };
+
   /** The text at `address` of `length` bytes, copied out of the module's memory. */
   const readText = (address, length, what) => {
     const addr = address >>> 0;
@@ -156,11 +191,7 @@ export function createHost(files = {}, { imports = {}, now = Date.now, onLog = n
     if (len > MAX_TEXT_BYTES) {
       throw new ContractError(`${what}: text length ${len} is above the limit of ${MAX_TEXT_BYTES} bytes`);
     }
-    const view = bytesOfMemory();
-    if (addr + len > view.length) {
-      throw new ContractError(`${what}: text at ${addr} of length ${len} lies outside the memory of ${view.length} bytes`);
-    }
-    return view.slice(addr, addr + len);
+    return memoryHolding(addr, len, what).slice(addr, addr + len);
   };
 
   const lookup = (handle, what) => {
@@ -197,6 +228,30 @@ export function createHost(files = {}, { imports = {}, now = Date.now, onLog = n
       open.delete(handle >>> 0);
       closed += 1;
     },
+    sys_wasm_stream_write(stream, address, length) {
+      const name = OUTPUT_STREAMS[stream >>> 0];
+      if (name === undefined) {
+        throw new ContractError(`write: stream ${stream >>> 0} is not standard output (1) or standard error (2)`);
+      }
+      const view = memoryHolding(address, length, "write");
+      const addr = address >>> 0;
+      // The module offers the rest of a longer write again.
+      const count = Math.min(length >>> 0, MAX_TEXT_BYTES);
+      const bytes = view.slice(addr, addr + count);
+      written[name] += decoders[name].decode(bytes, { stream: true });
+      if (onWrite !== null) onWrite({ stream: name, bytes });
+      return count;
+    },
+    sys_wasm_stream_read(stream, address, length) {
+      if (stream >>> 0 !== 0) {
+        throw new ContractError(`read: stream ${stream >>> 0} is not standard input (0)`);
+      }
+      const view = memoryHolding(address, length, "read");
+      const count = Math.min(length >>> 0, MAX_TEXT_BYTES, input.length - consumed);
+      view.set(input.subarray(consumed, consumed + count), address >>> 0);
+      consumed += count;
+      return count;
+    },
     sys_wasm_log_i32(value) {
       log({ type: "i32", value: value | 0 });
     },
@@ -216,6 +271,10 @@ export function createHost(files = {}, { imports = {}, now = Date.now, onLog = n
     imports: { ...imports, env },
     /** The numbers the module logged, in order. */
     logs,
+    /** What the module wrote to standard output so far, as text (UTF-8). */
+    get stdout() { return written.stdout; },
+    /** What the module wrote to standard error so far, as text (UTF-8). */
+    get stderr() { return written.stderr; },
     /** Gives the host the instance whose memory the module's text lives in. */
     bind(instance) {
       memory = instance.exports.memory;
@@ -284,13 +343,31 @@ export class Guest {
     });
   }
 
+  /**
+   * Runs `call`, a call of an export. A module with imports exports the top
+   * of its stack as the global `stack_top`. An import that throws leaves it
+   * above the frames of the calls it ended, so it is put back when `call`
+   * fails.
+   */
+  #keepingStack(call) {
+    const top = this.exports.stack_top;
+    if (!(top instanceof WebAssembly.Global)) return call();
+    const before = top.value;
+    try {
+      return call();
+    } catch (error) {
+      top.value = before;
+      throw error;
+    }
+  }
+
   /** Calls an export and returns what it returned. */
   call(name, ...args) {
     const func = this.exports[name];
     if (typeof func !== "function") throw new ContractError(`the module does not export a function \`${name}\``);
     this.#checkAgainstManifest(name, args);
     if (!args.some((arg) => typeof arg === "string" || arg instanceof Uint8Array)) {
-      return func(...args);
+      return this.#keepingStack(() => func(...args));
     }
     this.#requireAllocator();
     // Copy the text before the first allocation, which may grow the memory and
@@ -318,7 +395,7 @@ export class Guest {
           spread.push(arg);
         }
       }
-      return func(...spread);
+      return this.#keepingStack(() => func(...spread));
     } finally {
       this.exports.arena_release(mark);
     }
@@ -456,7 +533,8 @@ export async function checkModule(bytes, imports, manifest = null) {
  * Instantiates a module with the standard imports and returns it with its host.
  *
  * Options: `manifest` (the parsed manifest; the module is then checked against
- * it), `files` (the files the module can open) and the options of `createHost`.
+ * it), `files` (the files the module can open) and the options of `createHost`,
+ * such as `stdin` and `onWrite`.
  * The host refuses a module whose imports it does not provide, before it runs.
  */
 export async function instantiate(bytes, { manifest = null, files = {}, ...options } = {}) {
