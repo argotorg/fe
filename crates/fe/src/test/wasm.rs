@@ -247,7 +247,7 @@ fn revert_reason(data: &[u8]) -> Option<String> {
             .to_string(),
         ),
         [0x08, 0xc3, 0x79, 0xa0] if word(0) == Some(32) => {
-            let message = body.get(64..64 + usize::try_from(word(1)?).ok()?)?;
+            let message = body.get(64..)?.get(..usize::try_from(word(1)?).ok()?)?;
             Some(String::from_utf8_lossy(message).into_owned())
         }
         _ => None,
@@ -430,6 +430,22 @@ mod tests {
             timeout: Duration::from_secs(timeout_secs),
             output_bytes: 1024 * 1024,
         })
+    }
+
+    #[test]
+    fn an_error_string_longer_than_its_data_has_no_reason() {
+        let error = |length: u64| {
+            let mut data = vec![0x08, 0xc3, 0x79, 0xa0];
+            data.extend([0; 31]);
+            data.push(32);
+            data.extend([0; 24]);
+            data.extend(length.to_be_bytes());
+            data.extend(b"hi");
+            data
+        };
+        assert_eq!(revert_reason(&error(2)).as_deref(), Some("hi"));
+        assert_eq!(revert_reason(&error(3)), None);
+        assert_eq!(revert_reason(&error(u64::MAX)), None);
     }
 
     #[test]
