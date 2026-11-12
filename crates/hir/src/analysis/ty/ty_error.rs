@@ -784,21 +784,35 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     self.diags.push(diag.into());
                 }
             }
+            // Written arguments that could be why the trait failed report their
+            // own errors, as a bound's do, and what fails through them reports
+            // nothing more.
             Err(err) => {
-                if let Some(diag) = err.into_diag(
-                    self.db,
-                    path,
-                    span.clone().path(),
-                    crate::analysis::name_resolution::ExpectedPathKind::Trait,
-                ) {
+                let before = self.diags.len();
+                if !err.is_independent_of_args(self.db) {
+                    self.diags.extend(path_arg_diags(
+                        self.db,
+                        path,
+                        span.clone().path(),
+                        scope,
+                        self.assumptions,
+                    ));
+                }
+                if self.diags.len() == before
+                    && let Some(diag) = err.into_diag(
+                        self.db,
+                        path,
+                        span.clone().path(),
+                        crate::analysis::name_resolution::ExpectedPathKind::Trait,
+                    )
+                {
                     self.diags.push(diag);
                 }
             }
         }
 
         // Do not recurse into the trait path via visit_path to avoid emitting
-        // type-expected diagnostics for trait-qualified segments. Generic
-        // arguments under the trait path are checked elsewhere during lowering.
+        // type-expected diagnostics for trait-qualified segments.
     }
 }
 
