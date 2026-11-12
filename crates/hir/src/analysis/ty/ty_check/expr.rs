@@ -954,7 +954,7 @@ impl<'db> TyChecker<'db> {
     /// Provides a new component of a closure's row in its body, below any
     /// `with` the body opens.
     fn seed_closure_effect(&mut self, provided: ProvidedEffect<'db>) {
-        let Some(LocalBinding::EffectParam { site, idx, .. }) = provided.binding else {
+        let Some(LocalBinding::EffectParam { site, idx, .. }) = provided.binding() else {
             return;
         };
         let (scope, assumptions) = (self.env.owner().scope(), self.env.assumptions());
@@ -1946,10 +1946,10 @@ impl<'db> TyChecker<'db> {
             let provided = ProvidedEffect {
                 origin: EffectOrigin::With {
                     value_expr: binding.value,
+                    binding: value_prop.binding,
                 },
                 ty: self.table.fold_ty(self.db, value_prop.ty),
                 is_mut,
-                binding: value_prop.binding,
             };
 
             match binding.key_path {
@@ -2618,12 +2618,9 @@ impl<'db> TyChecker<'db> {
                         self.effect_providers
                             .insert((call, req.binding_idx), provider);
                     }
-                    let Some(arg) = (match provider.origin {
-                        EffectOrigin::With { value_expr } => Some(EffectArg::With(value_expr)),
-                        EffectOrigin::Param { .. } => provider.binding.map(EffectArg::Binding),
-                    }) else {
-                        self.push_missing_effect(defer, missing());
-                        continue;
+                    let arg = match provider.origin {
+                        EffectOrigin::With { value_expr, .. } => EffectArg::With(value_expr),
+                        EffectOrigin::Param(binding) => EffectArg::Binding(binding),
                     };
                     // A type key's provider is the place it names, or a
                     // temporary; a trait key's is the provider as it is.
@@ -2912,10 +2909,8 @@ impl<'db> TyChecker<'db> {
     /// The place a provider names: its `with` value's or effect binding's.
     fn provider_place(&self, provider: ProvidedEffect<'db>) -> Option<Place<'db>> {
         match provider.origin {
-            EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
-            EffectOrigin::Param { .. } => provider
-                .binding
-                .map(|binding| Place::new(PlaceBase::Binding(binding))),
+            EffectOrigin::With { value_expr, .. } => self.env.expr_place(value_expr),
+            EffectOrigin::Param(binding) => Some(Place::new(PlaceBase::Binding(binding))),
         }
     }
 
@@ -3057,7 +3052,7 @@ impl<'db> TyChecker<'db> {
             site: EffectParamSite::Closure(closure),
             idx,
             ..
-        }) = provider.binding
+        }) = provider.binding()
             && !self.env.require_mut_closure_effect(closure, idx)
         {
             self.push_diag(BodyDiag::LateClosureEffect {
@@ -3076,14 +3071,14 @@ impl<'db> TyChecker<'db> {
                 key,
                 provided_span: Some(provider.origin.span(self.db, self.body())),
                 read_only: provider
-                    .binding
+                    .binding()
                     .filter(|&binding| self.binding_is_maybe_mut(binding))
                     .map(|binding| ReadOnlyProvider::Binding(binding.binding_name(&self.env)))
                     .or_else(|| match provider.origin {
-                        EffectOrigin::With { value_expr } => self
+                        EffectOrigin::With { value_expr, .. } => self
                             .ref_maybe_mut_callee(value_expr)
                             .map(ReadOnlyProvider::Call),
-                        EffectOrigin::Param { .. } => None,
+                        EffectOrigin::Param(_) => None,
                     }),
                 split: self
                     .split_demand
@@ -3187,18 +3182,17 @@ impl<'db> TyChecker<'db> {
                 let PlaceBase::Binding(binding) = place.base;
                 place.projections.is_empty().then_some(binding)
             }
-            None => provided.binding,
+            None => provided.binding(),
         };
         let owner = self.env.owner();
         let provenance = match (binding, provided.origin) {
-            (Some(binding), _) => EffectProviderProvenance::Binding { owner, binding },
-            (None, EffectOrigin::With { value_expr }) => EffectProviderProvenance::Expr {
+            (Some(binding), _) | (None, EffectOrigin::Param(binding)) => {
+                EffectProviderProvenance::Binding { owner, binding }
+            }
+            (None, EffectOrigin::With { value_expr, .. }) => EffectProviderProvenance::Expr {
                 owner,
                 expr: value_expr,
             },
-            (None, EffectOrigin::Param { .. }) => {
-                panic!("missing call-site provider provenance for {provided:?} in {owner:?}")
-            }
         };
         let target_ty = provider_target_ty.map(|ty| self.table.fold_ty(self.db, ty));
         let existing = match binding {
