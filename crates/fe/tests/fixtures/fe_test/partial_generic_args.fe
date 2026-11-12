@@ -49,6 +49,18 @@ impl Vm {
     fn step<F: Rules, T: Tracer>(self, _ c: Cursor<F>, _ tracer: mut T) -> u64 {
         self.op_push<1>(c, mut tracer) + self.op_push<2, F>(c, mut tracer)
     }
+
+    fn step_inferred<F: Rules, T: Tracer>(self, _ c: Cursor<F>, _ tracer: mut T) -> u64 {
+        self.op_push<3, _, T>(c, mut tracer) + self.op_push<4, _, _>(c, mut tracer)
+    }
+}
+
+fn size_of_default<T = u8>(_ value: own T) -> usize {
+    core::size_of<T>()
+}
+
+fn len<T, const N: usize>(_ values: [T; N]) -> usize {
+    N
 }
 
 fn run<F: Rules>(_ c: Cursor<F>) -> u64 {
@@ -73,4 +85,23 @@ fn omitted_method_arguments_are_inferred() {
     assert!(vm.step(Cursor<Osaka> { gas: 5 }, mut tracer) == 105 + 105)
     assert!(tracer.calls == 4)
     assert!(tracer.sum == 6)
+}
+
+#[test]
+fn underscore_arguments_are_inferred() {
+    assert!(op<1, _>(Cursor<Amsterdam> { gas: 5 }) == 6)
+    assert!(op<1, _>(Cursor<Osaka> { gas: 5 }) == 5)
+    assert!(scaled<2, _>(Cursor<Amsterdam> { gas: 1 }) == 30)
+    assert!(len<_, 3>([true, false, true]) == 3)
+    assert!(len<u16, _>([1, 2]) == 2)
+    // `_` infers a parameter that has a default.
+    let wide: u256 = 1
+    assert!(size_of_default<_>(wide) == 32)
+    assert!(size_of_default(1) == 1)
+    let vm = Vm { pc: 0 }
+    var tracer = Count { calls: 0, sum: 0 }
+    assert!(
+        vm.step_inferred(Cursor<Amsterdam> { gas: 1 }, mut tracer) == 4 + 5,
+    )
+    assert!(tracer.sum == 7)
 }

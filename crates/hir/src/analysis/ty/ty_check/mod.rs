@@ -4174,9 +4174,20 @@ impl<'db> TyChecker<'db> {
 
         // The path's generic arguments report their errors as a written type's
         // do, and an invalid type that none of them reports is reported for
-        // its segment. What resolves through them reports nothing more.
-        let mut arg_diags =
-            path_generic_arg_diags(self.db, path, span.clone(), scope, self.env.assumptions());
+        // its segment. What resolves through them reports nothing more. A
+        // callee's own arguments are a call's, which infers a `_`.
+        let call = matches!(
+            res,
+            Ok(PathRes::Func(_) | PathRes::Method(..) | PathRes::TraitMethod(..))
+        );
+        let mut arg_diags = path_generic_arg_diags(
+            self.db,
+            path,
+            span.clone(),
+            scope,
+            self.env.assumptions(),
+            call,
+        );
         if arg_diags.is_empty()
             && path.generic_args(self.db).is_given(self.db)
             && let Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) = res

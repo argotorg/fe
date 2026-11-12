@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId,
-        ItemKind, LitKind, ModeMarker, Partial,
+        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArg, GenericArgListId,
+        IdentId, ItemKind, LitKind, ModeMarker, Partial,
     },
     span::{
         DynLazySpan,
@@ -183,7 +183,8 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     let lowering_cx = LoweringContext::new();
     let offset = callable.callable_def.offset_to_explicit_params_position(db);
     let explicit_arg_count = callable.generic_args.len() - offset;
-    let given_count = args.len(db);
+    let given = args.data(db);
+    let given_count = given.len();
     if given_count > explicit_arg_count {
         return Err(CallGenericArgUnifyError::TooManyArgs {
             given: given_count,
@@ -191,12 +192,20 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
         });
     }
 
-    // The given arguments fill the explicit parameters from the left. An
-    // omitted parameter takes its default, or else stays the inference
-    // variable the callee was instantiated with.
-    let mut provided =
-        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx);
+    // The given arguments fill the explicit parameters from the left. A `_`
+    // stays the inference variable the callee was instantiated with, as does
+    // an omitted parameter without a default; one with a default takes it.
     let inferred = &callable.generic_args[offset..];
+    let mut provided: Vec<_> =
+        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx)
+            .into_iter()
+            .zip(given)
+            .zip(inferred)
+            .map(|((lowered, arg), &var)| match arg {
+                GenericArg::Infer => var,
+                _ => lowered,
+            })
+            .collect();
     let completed_args = match callable.callable_def {
         CallableDef::Func(func) => {
             let param_set = collect_generic_params(db, func.into());
@@ -230,7 +239,10 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
         .zip(&mut callable.generic_args[offset..])
         .enumerate()
     {
-        if idx >= given_count {
+        if given
+            .get(idx)
+            .is_none_or(|arg| matches!(arg, GenericArg::Infer))
+        {
             *current = completed;
         } else if !unify_arg(tc, idx, completed, current) {
             return Err(CallGenericArgUnifyError::UnificationFailed);
