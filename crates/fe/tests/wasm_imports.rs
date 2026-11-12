@@ -551,6 +551,8 @@ enum Got {
 struct Running {
     store: Store<State>,
     instance: wasmtime::Instance,
+    module: Module,
+    linker: Linker<State>,
 }
 
 impl Running {
@@ -564,7 +566,12 @@ impl Running {
         let instance = linker
             .instantiate(&mut store, module)
             .unwrap_or_else(|e| panic!("the module should instantiate: {e:?}"));
-        Self { store, instance }
+        Self {
+            store,
+            instance,
+            module: module.clone(),
+            linker,
+        }
     }
 
     fn call(&mut self, export: &Export, args: &[i128]) -> Got {
@@ -592,6 +599,12 @@ impl Running {
                 Got::Value(export.ret.decode_raw(raw))
             }
             Err(error) => {
+                // A failed call frees nothing it allocated, so the next call
+                // runs in a new instance, as a host does.
+                self.instance = self
+                    .linker
+                    .instantiate(&mut self.store, &self.module)
+                    .expect("the module instantiated before");
                 if let Some(abort) = error.downcast_ref::<HostAbort>() {
                     Got::Abort(abort.0)
                 } else if let Some(revert) = error.downcast_ref::<Revert>() {

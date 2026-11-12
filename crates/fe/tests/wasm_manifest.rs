@@ -251,10 +251,11 @@ fn a_failed_build_writes_no_manifest() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_node_host_restores_the_stack_after_an_abort() {
+fn the_node_host_runs_a_new_instance_after_an_abort() {
     // `abort` is an import that throws, a hundred frames deep. Each frame
-    // holds an array, so unless the host puts `stack_top` back the stack of
-    // 1 MiB is gone after a few calls and the rest trap instead of aborting.
+    // holds an array, so on one instance the stack of 1 MiB would be gone
+    // after a few calls and the rest would trap instead of aborting. The host
+    // makes a new instance after each failed call.
     let source = "use std::wasm::{Abort, abort}
 
 fn dive(_ depth: u32) -> u64 uses (a: mut Abort) {

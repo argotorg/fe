@@ -530,6 +530,8 @@ impl Fault {
 pub struct Running {
     pub store: Store<()>,
     pub instance: Instance,
+    module: Module,
+    linker: Linker<()>,
 }
 
 impl Running {
@@ -541,10 +543,16 @@ impl Running {
         let instance = linker
             .instantiate(&mut store, &module)
             .expect("the module needs no imports but those of `core::rt`");
-        Self { store, instance }
+        Self {
+            store,
+            instance,
+            module,
+            linker,
+        }
     }
 
-    /// The result of the call, or how it failed.
+    /// The result of the call, or how it failed. A failed call frees nothing
+    /// it allocated, so the next call runs in a new instance, as a host does.
     pub fn call(&mut self, export: &Export, args: &[i128]) -> Result<i128, Fault> {
         let func = self
             .instance
@@ -566,16 +574,22 @@ impl Running {
                 };
                 Ok(export.ret.decode_raw(raw))
             }
-            Err(error) => Err(
-                match (error.downcast_ref::<Trap>(), error.downcast_ref::<Revert>()) {
-                    (Some(trap), _) => Fault::Trap(*trap),
-                    (_, Some(revert)) => Fault::Revert(revert.clone()),
-                    _ => panic!(
-                        "`{}` failed without a trap or a revert: {error}",
-                        export.name
-                    ),
-                },
-            ),
+            Err(error) => {
+                self.instance = self
+                    .linker
+                    .instantiate(&mut self.store, &self.module)
+                    .expect("the module instantiated before");
+                Err(
+                    match (error.downcast_ref::<Trap>(), error.downcast_ref::<Revert>()) {
+                        (Some(trap), _) => Fault::Trap(*trap),
+                        (_, Some(revert)) => Fault::Revert(revert.clone()),
+                        _ => panic!(
+                            "`{}` failed without a trap or a revert: {error}",
+                            export.name
+                        ),
+                    },
+                )
+            }
         }
     }
 }

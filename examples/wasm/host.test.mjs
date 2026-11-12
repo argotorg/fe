@@ -442,6 +442,19 @@ test("text in the guest's memory is copied before an allocation grows the memory
   assert.equal(guest.call("pair", memory.subarray(0, 2), memory.subarray(2, 5)), (7 << 8) | 9 | (5 << 16));
 });
 
+test("after a failed call the guest runs a new instance of the module", async () => {
+  // The first text is placed, which grows the memory by a page; the second
+  // is too long, so the call fails before it runs. The new instance has the
+  // module's single page again, and the next call runs in it.
+  const guest = await instantiate(assembleAllocator());
+  const first = guest.instance;
+  assert.throws(() => guest.call("pair", "a", "x".repeat(MAX_TEXT_BYTES + 1)), ContractError);
+  assert.notEqual(guest.instance, first);
+  assert.equal(guest.exports, guest.instance.exports);
+  assert.equal(guest.exports.memory.buffer.byteLength, PAGE);
+  assert.equal(guest.call("pair", "a", "bc"), (97 << 8) | 98 | (3 << 16));
+});
+
 test("the bytes that match the manifest are the bytes that run", async () => {
   const bytes = assemble();
   const manifest = await manifestFor(bytes);

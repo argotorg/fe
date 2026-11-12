@@ -4,8 +4,9 @@
 // standard streams and the files contract) and the revert of `core::rt`, which
 // ends a call with a `GuestRevert` that carries the data of a panic or a
 // revert. It places text in the module's memory
-// before a call, decodes the reply of an export, counts open handles, and
-// checks a module against its build manifest before running it. It checks
+// before a call, decodes the reply of an export, makes a new instance of the
+// module after a call fails, counts open handles, and checks a module against
+// its build manifest before running it. It checks
 // everything a module hands it before acting on it, and ends the call with a
 // `ContractError` that names the problem when the module breaks the contract.
 // The file is a plain ES module with no dependencies; it needs `WebAssembly`,
@@ -391,13 +392,26 @@ export function createHost(
  * guest was made with a manifest, a call must also match the function that the
  * manifest describes: its name, the number of arguments, and which of them are
  * text.
+ *
+ * A call that fails can leave the stack and the heap of the instance in use: a
+ * failed call frees nothing it allocated. So when a call throws, the guest
+ * makes a new instance of the module, with the same host, before the error
+ * reaches the caller. `instance` and `exports` are then those of the new
+ * instance, whose memory holds only the module's initial data.
  */
 export class Guest {
-  constructor(instance, host, manifest = null) {
-    this.instance = instance;
+  constructor(module, host, manifest = null) {
+    this.module = module;
     this.host = host;
     this.manifest = manifest;
-    this.exports = instance.exports;
+    this.#start();
+  }
+
+  /** Makes a new instance of the module and binds the host to it. */
+  #start() {
+    this.instance = new WebAssembly.Instance(this.module, this.host.imports);
+    this.host.bind(this.instance);
+    this.exports = this.instance.exports;
   }
 
   #requireAllocator() {
@@ -431,31 +445,13 @@ export class Guest {
     });
   }
 
-  /**
-   * Runs `call`, a call of an export. A module with imports exports the top
-   * of its stack as the global `stack_top`. An import that throws leaves it
-   * above the frames of the calls it ended, so it is put back when `call`
-   * fails.
-   */
-  #keepingStack(call) {
-    const top = this.exports.stack_top;
-    if (!(top instanceof WebAssembly.Global)) return call();
-    const before = top.value;
-    try {
-      return call();
-    } catch (error) {
-      top.value = before;
-      throw error;
-    }
-  }
-
   /** Calls an export and returns what it returned. */
   call(name, ...args) {
     const func = this.exports[name];
     if (typeof func !== "function") throw new ContractError(`the module does not export a function \`${name}\``);
     this.#checkAgainstManifest(name, args);
     if (!args.some((arg) => typeof arg === "string" || arg instanceof Uint8Array)) {
-      return this.#keepingStack(() => func(...args));
+      return this.#restartingOnFailure(() => func(...args));
     }
     this.#requireAllocator();
     // Copy the text before the first allocation, which may grow the memory and
@@ -463,8 +459,8 @@ export class Guest {
     const texts = args.map((arg) =>
       typeof arg === "string" || arg instanceof Uint8Array ? toBytes(arg, "a text argument").slice() : null,
     );
-    const mark = this.exports.arena_mark();
-    try {
+    return this.#restartingOnFailure(() => {
+      const mark = this.exports.arena_mark();
       const spread = [];
       for (const [index, arg] of args.entries()) {
         const bytes = texts[index];
@@ -483,9 +479,19 @@ export class Guest {
           spread.push(arg);
         }
       }
-      return this.#keepingStack(() => func(...spread));
-    } finally {
+      const result = func(...spread);
       this.exports.arena_release(mark);
+      return result;
+    });
+  }
+
+  /** Runs `call`, and makes a new instance when it throws. */
+  #restartingOnFailure(call) {
+    try {
+      return call();
+    } catch (error) {
+      this.#start();
+      throw error;
     }
   }
 
@@ -628,7 +634,5 @@ export async function checkModule(bytes, imports, manifest = null) {
 export async function instantiate(bytes, { manifest = null, files = {}, ...options } = {}) {
   const host = createHost(files, options);
   const module = await checkModule(bytes, host.imports, manifest);
-  const instance = await WebAssembly.instantiate(module, host.imports);
-  host.bind(instance);
-  return new Guest(instance, host, manifest);
+  return new Guest(module, host, manifest);
 }

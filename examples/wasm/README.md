@@ -202,12 +202,11 @@ and the clocks of `std::time`) have no provider on this target.
 - **Traps and errors.** A trap in the module, or an error thrown by an import,
   reaches the caller of the export unchanged. `sys_wasm_abort` throws a
   `GuestAbort` in `host.mjs`.
-- **The stack after an error.** A module that has imports exports the global
-  `stack_top`, a mutable `i32` that holds where the next call places its first frame. A
-  call to an import moves it and puts it back on return, so an import that throws leaves
-  it above the frames of the calls it ended. A host reads the global before it calls an
-  export and writes that value back if the call ends with an error; `Guest.call` does.
-  The name is reserved.
+- **After an error.** A call that fails, by a trap, a revert or an import that throws,
+  frees nothing it allocated: its frames stay reserved and its heap blocks stay in use.
+  A host does not call that instance again; it makes a new instance of the module, as
+  `Guest.call` does. A module keeps nothing between calls, so the new instance can
+  take the next call.
 - **Contract version.** The version of this contract is 3. It appears in every
   manifest as `contract_version`.
 
@@ -391,12 +390,10 @@ cargo test -p fe --all-features \
   there is no provider written in Fe that captures what a function prints. Output is
   not buffered in the module. `host.mjs` keeps everything a module wrote for the life
   of the instance.
-- **Errors thrown inside an import.** When an import throws, or a callback traps and the
-  host passes the error on, the module does not run again before the host call ends, so
-  the frames of the calls that were active stay reserved until the host writes
-  `stack_top` back, as `host.mjs` does. A host that does not loses that much of the stack
-  for the life of the instance. A trap that happens inside the module, with no host call
-  before it, reserves nothing.
+- **A failed call.** A trap, a revert or an import that throws leaves the frames of the
+  calls that were active reserved and their heap blocks in use, so `host.mjs` makes a
+  new instance after one. That discards what the module wrote to its memory, which a
+  module does not rely on between calls.
 - **Memory.** Calls use a stack of 1 MiB in the module's memory and a call that does
   not fit traps. `fe build --wasm-stack-size <bytes>` sets the size, which is rounded up
   so that the stack ends on a 64 KiB page boundary. Dynamic allocation comes from a heap
