@@ -3601,14 +3601,7 @@ impl<'db> TyChecker<'db> {
             ok
         };
 
-        let matches_key = |this: &mut Self, actual_ty: TyId<'db>| {
-            if can_commit_key_relation(this, actual_ty) {
-                return true;
-            }
-
-            false
-        };
-        matches_key(self, provided.ty).then_some(provided.ty)
+        can_commit_key_relation(self, provided.ty).then_some(provided.ty)
     }
 
     pub(super) fn apply_effect_commit_plan(&mut self, commit: EffectCommitPlan<'db>) -> bool {

@@ -156,19 +156,19 @@ impl BuildBackend {
     }
 
     pub fn is_native(self) -> bool {
-        #[cfg(feature = "cranelift")]
-        if matches!(self, Self::Native) {
-            return true;
+        match self {
+            #[cfg(feature = "cranelift")]
+            Self::Native => true,
+            _ => false,
         }
-        false
     }
 
     pub fn is_wasm(self) -> bool {
-        #[cfg(feature = "wasm")]
-        if matches!(self, Self::Wasm) {
-            return true;
+        match self {
+            #[cfg(feature = "wasm")]
+            Self::Wasm => true,
+            _ => false,
         }
-        false
     }
 
     fn default_emit(self) -> Vec<BuildEmit> {
