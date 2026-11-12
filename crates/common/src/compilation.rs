@@ -1,3 +1,5 @@
+use std::fmt;
+
 use smol_str::SmolStr;
 
 use crate::{InputDb, layout::MemoryLayout};
@@ -93,25 +95,117 @@ pub enum Os {
 impl Os {
     pub const ALL: [Os; 2] = [Os::Linux, Os::Macos];
 
-    /// The operating system native builds target: the compiler's host, if
-    /// native code supports it. Native code supports x86-64 Linux and
-    /// AArch64 macOS, so code for an OS can assume its architecture.
-    pub fn host() -> Option<Os> {
-        if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
-            Some(Os::Linux)
-        } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
-            Some(Os::Macos)
-        } else {
-            None
-        }
+    /// The operating system `name` names, as in `#[cfg(target_os = ..)]`.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|os| os.name() == name)
     }
 
-    /// The name `#[cfg(target_os = ..)]` matches.
+    /// The name `#[cfg(target_os = ..)]` matches, as Rust's `std::env::consts::OS`.
     pub fn name(self) -> &'static str {
         match self {
             Os::Linux => "linux",
             Os::Macos => "macos",
         }
+    }
+
+    /// Whether `#[cfg(target_family = "unix")]` holds on it.
+    pub fn is_unix(self) -> bool {
+        match self {
+            Os::Linux | Os::Macos => true,
+        }
+    }
+}
+
+impl fmt::Display for Os {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Os::Linux => "Linux",
+            Os::Macos => "macOS",
+        })
+    }
+}
+
+/// The processor architecture native code runs on, which
+/// `#[cfg(target_arch = ..)]` selects items by. Fe's integer widths and type
+/// layouts are the same on every one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Arch {
+    X86_64,
+    Aarch64,
+}
+
+impl Arch {
+    pub const ALL: [Arch; 2] = [Arch::X86_64, Arch::Aarch64];
+
+    /// The architecture `name` names, as in `#[cfg(target_arch = ..)]`.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|arch| arch.name() == name)
+    }
+
+    /// The name `#[cfg(target_arch = ..)]` matches, as Rust's
+    /// `std::env::consts::ARCH`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Arch::X86_64 => "x86_64",
+            Arch::Aarch64 => "aarch64",
+        }
+    }
+}
+
+impl fmt::Display for Arch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Arch::X86_64 => "x86-64",
+            Arch::Aarch64 => "AArch64",
+        })
+    }
+}
+
+/// The operating system and architecture native code runs on. Native code is
+/// built for the host's platform, when it is one of [`Platform::SUPPORTED`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Platform {
+    pub os: Os,
+    pub arch: Arch,
+}
+
+impl Platform {
+    /// The platforms native code supports.
+    pub const SUPPORTED: [Platform; 3] = [
+        Platform {
+            os: Os::Linux,
+            arch: Arch::X86_64,
+        },
+        Platform {
+            os: Os::Linux,
+            arch: Arch::Aarch64,
+        },
+        Platform {
+            os: Os::Macos,
+            arch: Arch::Aarch64,
+        },
+    ];
+
+    /// The compiler's host platform, when native code supports it.
+    pub fn host() -> Option<Platform> {
+        let platform = Platform {
+            os: Os::parse(std::env::consts::OS)?,
+            arch: Arch::parse(std::env::consts::ARCH)?,
+        };
+        Self::SUPPORTED.contains(&platform).then_some(platform)
+    }
+
+    /// The supported platforms, for a message that refuses another host.
+    pub fn supported_hosts() -> String {
+        Self::SUPPORTED
+            .map(|platform| platform.to_string())
+            .join(", ")
+    }
+}
+
+impl fmt::Display for Platform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.arch, self.os)
     }
 }
 
@@ -121,10 +215,10 @@ pub struct CompilationSettings {
     pub profile: SmolStr,
     #[returns(copy)]
     pub target: Target,
-    /// None for EVM code and for native code without an operating system,
-    /// such as an SP1 guest.
+    /// None for EVM code, WebAssembly, and native code without an operating
+    /// system, such as an SP1 guest.
     #[returns(copy)]
-    pub os: Option<Os>,
+    pub platform: Option<Platform>,
 }
 
 #[salsa::tracked]

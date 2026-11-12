@@ -300,7 +300,7 @@ guest input and public values, and proof verification tests.
 ### Native output
 
 With the optional `cranelift` Cargo feature, `fe build --backend native` compiles for the host
-(x86-64 Linux or AArch64 macOS). `--emit` selects:
+(x86-64 Linux, AArch64 Linux or AArch64 macOS). `--emit` selects:
 
 - `executable` (the default): `<out>/<name>`, entered at the root module's
   `pub fn main()`, which exits with 0, or `pub fn main() -> i32`, whose result is the exit status.

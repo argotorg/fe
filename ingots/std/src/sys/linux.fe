@@ -1,5 +1,5 @@
 #![cfg(target_os = "linux")]
-/// glibc's x86-64 layouts and values.
+/// glibc's Linux layouts and values, on x86-64 and AArch64.
 use core::MemSpan
 
 extern {
@@ -11,8 +11,15 @@ pub fn errno_location() -> *i32 {
 }
 
 // `struct stat` and `struct dirent`.
+#[cfg(target_arch = "x86_64")]
 pub fn stat_mode(_ stat: MemSpan) -> u32 {
     stat.read_le<u32>(24)
+}
+
+// AArch64 uses the kernel's generic `struct stat`, where `st_mode` follows `st_ino`.
+#[cfg(target_arch = "aarch64")]
+pub fn stat_mode(_ stat: MemSpan) -> u32 {
+    stat.read_le<u32>(16)
 }
 
 pub fn stat_size(_ stat: MemSpan) -> u64 {

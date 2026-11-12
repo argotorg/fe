@@ -121,7 +121,7 @@ fn the_wasm_backend_reports_what_was_written_down() {
     }
 }
 
-#[cfg(all(feature = "cranelift", target_arch = "x86_64", target_os = "linux"))]
+#[cfg(all(feature = "cranelift", native_host, target_os = "linux"))]
 #[test]
 fn the_native_and_wasm_backends_give_the_same_results() {
     for level in ["0", "1", "2"] {
@@ -224,13 +224,7 @@ fn a_failed_test_shows_what_it_printed() {
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn the_native_backend_prints_the_same_text() {
     let output = fe_test("native", "1", &[], &fixture("prints"));
@@ -333,13 +327,7 @@ fn should_revert_tests_pass_when_they_revert() {
     .unwrap();
     for backend in [
         "wasm",
-        #[cfg(all(
-            feature = "cranelift",
-            any(
-                all(target_arch = "x86_64", target_os = "linux"),
-                all(target_arch = "aarch64", target_os = "macos")
-            )
-        ))]
+        #[cfg(all(feature = "cranelift", native_host))]
         "native",
     ] {
         let output = fe_test(backend, "1", &[], &file);
