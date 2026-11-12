@@ -10,7 +10,9 @@ fn ticks(_ deadline: u64) -> u32 uses (clock: mut Clock) {
     n
 }
 
+//host: #[unsafe(export)]
 //host: pub fn ticks_until(deadline: u64) -> u32 uses (clock: mut Clock) {
+//mock: #[unsafe(export)]
 //mock: pub fn ticks_until(deadline: u64) -> u32 {
 //mock:     var p = provider()
 //mock:     with (Clock = p) {

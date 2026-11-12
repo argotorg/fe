@@ -1,3 +1,4 @@
+#[unsafe(export)]
 pub fn sign(x: i32) -> i32 {
     if x < 0 {
         -1
@@ -8,6 +9,7 @@ pub fn sign(x: i32) -> i32 {
     }
 }
 
+#[unsafe(export)]
 pub fn clamp(x: i32, lo: i32, hi: i32) -> i32 {
     if x < lo {
         return lo
@@ -18,10 +20,12 @@ pub fn clamp(x: i32, lo: i32, hi: i32) -> i32 {
     x
 }
 
+#[unsafe(export)]
 pub fn abs(x: i32) -> i32 {
     if x < 0 { -x } else { x }
 }
 
+#[unsafe(export)]
 pub fn classify(x: u32) -> u32 {
     if x < 10 {
         1

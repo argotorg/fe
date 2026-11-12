@@ -1,9 +1,12 @@
 // A host for WebAssembly modules built from Fe with `--backend wasm`.
 //
 // It supplies the imports of `std::wasm` (the four scalar operations, the
-// standard streams and the files contract), places text in the module's memory
-// before a call, decodes the reply of an export, counts open handles, and
-// checks a module against its build manifest before running it. It checks
+// standard streams and the files contract) and the revert of `core::rt`, which
+// ends a call with a `GuestRevert` that carries the data of a panic or a
+// revert. It places text in the module's memory
+// before a call, decodes the reply of an export, makes a new instance of the
+// module after a call fails, counts open handles, and checks a module against
+// its build manifest before running it. It checks
 // everything a module hands it before acting on it, and ends the call with a
 // `ContractError` that names the problem when the module breaks the contract.
 // The file is a plain ES module with no dependencies; it needs `WebAssembly`,
@@ -25,7 +28,7 @@
 // numbers below repeat it.
 
 /** The version of the host contract that this host implements. */
-export const CONTRACT_VERSION = 2;
+export const CONTRACT_VERSION = 3;
 
 /** The version of the manifest format that this host reads. */
 export const MANIFEST_VERSION = 1;
@@ -60,12 +63,79 @@ export class ContractError extends Error {
   }
 }
 
-/** The module called `abort`. `code` is the number it passed (an unsigned 32-bit integer). */
+/** The module called `sys_wasm_abort`. `code` is the number it passed (an unsigned 32-bit integer). */
 export class GuestAbort extends Error {
   constructor(code) {
     super(`the module aborted with code ${code}`);
     this.name = "GuestAbort";
     this.code = code;
+  }
+}
+
+/** What the codes of Solidity `Panic(uint256)` revert data mean, as `fe test` reports them. */
+export const PANIC_CODES = Object.freeze({
+  0x00: "generic panic",
+  0x01: "assertion failed",
+  0x11: "arithmetic overflow",
+  0x12: "division by zero",
+  0x21: "invalid enum value",
+  0x22: "invalid storage encoding",
+  0x31: "pop from an empty array",
+  0x32: "index out of bounds",
+  0x41: "out of memory",
+  0x51: "call to a zero-initialized function",
+});
+
+const PANIC_SELECTOR = 0x4e487b71;
+const ERROR_SELECTOR = 0x08c379a0;
+
+/**
+ * What revert data says: the meaning of the code of `Panic(uint256)` data, the
+ * message of `Error(string)` data, or `null` for any other data.
+ */
+export function revertReason(data) {
+  if (data.length < 4) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  // The word at `index` after the selector, if it fits 64 bits.
+  const word = (index) => {
+    const at = 4 + 32 * index;
+    if (data.length < at + 32 || data.subarray(at, at + 24).some((byte) => byte !== 0)) return null;
+    return view.getBigUint64(at + 24);
+  };
+  const selector = view.getUint32(0);
+  if (selector === PANIC_SELECTOR && data.length === 36) {
+    const code = word(0);
+    return code === null ? null : (PANIC_CODES[Number(code)] ?? null);
+  }
+  if (selector === ERROR_SELECTOR && word(0) === 32n) {
+    const length = word(1);
+    if (length === null || length > BigInt(data.length - 68)) return null;
+    return new TextDecoder().decode(data.subarray(68, 68 + Number(length)));
+  }
+  return null;
+}
+
+/**
+ * The module panicked with a code or reverted with data: a failed assertion, an
+ * overflow, a division by zero and an index outside an array pass Solidity
+ * `Panic(uint256)` data. `data` is the revert data, or `null` when the module had
+ * no memory left to make it, and `reason` is what the data says (`revertReason`).
+ * A panic without data traps instead.
+ */
+export class GuestRevert extends Error {
+  constructor(data) {
+    const reason = data === null ? "out of memory" : revertReason(data);
+    const hex = data === null ? "" : Array.from(data, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    super(
+      data === null
+        ? "the module panicked and had no memory left for the revert data"
+        : reason === null
+          ? `the module reverted with data 0x${hex}`
+          : `the module reverted: ${reason}`,
+    );
+    this.name = "GuestRevert";
+    this.data = data;
+    this.reason = reason;
   }
 }
 
@@ -139,7 +209,8 @@ function keyOf(bytes) {
  *   `({ stream, bytes }) => process[stream].write(bytes)` passes the output on.
  *   The text is also kept in `host.stdout` and `host.stderr`.
  *
- * `abort` throws a `GuestAbort`.
+ * `sys_wasm_abort` throws a `GuestAbort`, and `__fe_revert` and `abort` a
+ * `GuestRevert`.
  */
 export function createHost(
   files = {},
@@ -217,6 +288,14 @@ export function createHost(
     sys_wasm_files_size(handle) {
       return encodeReply(0, lookup(handle, "size").length);
     },
+    sys_wasm_files_read(handle, offset, address, length) {
+      const contents = lookup(handle, "read");
+      const view = memoryHolding(address, length, "read");
+      const start = Math.min(offset >>> 0, contents.length);
+      const count = Math.min(length >>> 0, contents.length - start);
+      view.set(contents.subarray(start, start + count), address >>> 0);
+      return encodeReply(0, count);
+    },
     sys_wasm_files_read_byte(handle, index) {
       const contents = lookup(handle, "read_byte");
       const at = index >>> 0;
@@ -264,6 +343,16 @@ export function createHost(
     sys_wasm_abort(code) {
       throw new GuestAbort(code >>> 0);
     },
+    // `core::rt` passes the data of a panic with a code or of a revert here,
+    // and calls `abort` when it has no memory left for that data.
+    __fe_revert(address, length) {
+      const view = memoryHolding(address, length, "revert");
+      const addr = address >>> 0;
+      throw new GuestRevert(view.slice(addr, addr + (length >>> 0)));
+    },
+    abort() {
+      throw new GuestRevert(null);
+    },
     ...(imports.env ?? {}),
   };
 
@@ -303,13 +392,34 @@ export function createHost(
  * guest was made with a manifest, a call must also match the function that the
  * manifest describes: its name, the number of arguments, and which of them are
  * text.
+ *
+ * A call that fails can leave the stack and the heap of the instance in use: a
+ * failed call frees nothing it allocated. So after a call throws, the guest
+ * makes a new instance of the module, with the same host, before the error
+ * reaches the caller. `instance` and `exports` are then those of the new
+ * instance, whose memory holds only the module's initial data. A call that an
+ * import makes back into the module runs inside an outer call, which goes on in
+ * the same instance when the import catches the error, so the guest makes the
+ * new instance when the outermost call ends.
  */
 export class Guest {
-  constructor(instance, host, manifest = null) {
-    this.instance = instance;
+  /** The calls running now: the outermost and those that imports made in it. */
+  #depth = 0;
+  /** Whether a call failed since the outermost call began. */
+  #failed = false;
+
+  constructor(module, host, manifest = null) {
+    this.module = module;
     this.host = host;
     this.manifest = manifest;
-    this.exports = instance.exports;
+    this.#start();
+  }
+
+  /** Makes a new instance of the module and binds the host to it. */
+  #start() {
+    this.instance = new WebAssembly.Instance(this.module, this.host.imports);
+    this.host.bind(this.instance);
+    this.exports = this.instance.exports;
   }
 
   #requireAllocator() {
@@ -343,31 +453,13 @@ export class Guest {
     });
   }
 
-  /**
-   * Runs `call`, a call of an export. A module with imports exports the top
-   * of its stack as the global `stack_top`. An import that throws leaves it
-   * above the frames of the calls it ended, so it is put back when `call`
-   * fails.
-   */
-  #keepingStack(call) {
-    const top = this.exports.stack_top;
-    if (!(top instanceof WebAssembly.Global)) return call();
-    const before = top.value;
-    try {
-      return call();
-    } catch (error) {
-      top.value = before;
-      throw error;
-    }
-  }
-
   /** Calls an export and returns what it returned. */
   call(name, ...args) {
     const func = this.exports[name];
     if (typeof func !== "function") throw new ContractError(`the module does not export a function \`${name}\``);
     this.#checkAgainstManifest(name, args);
     if (!args.some((arg) => typeof arg === "string" || arg instanceof Uint8Array)) {
-      return this.#keepingStack(() => func(...args));
+      return this.#restartingOnFailure(() => func(...args));
     }
     this.#requireAllocator();
     // Copy the text before the first allocation, which may grow the memory and
@@ -375,8 +467,8 @@ export class Guest {
     const texts = args.map((arg) =>
       typeof arg === "string" || arg instanceof Uint8Array ? toBytes(arg, "a text argument").slice() : null,
     );
-    const mark = this.exports.arena_mark();
-    try {
+    return this.#restartingOnFailure(() => {
+      const mark = this.exports.arena_mark();
       const spread = [];
       for (const [index, arg] of args.entries()) {
         const bytes = texts[index];
@@ -395,9 +487,29 @@ export class Guest {
           spread.push(arg);
         }
       }
-      return this.#keepingStack(() => func(...spread));
-    } finally {
+      const result = func(...spread);
       this.exports.arena_release(mark);
+      return result;
+    });
+  }
+
+  /**
+   * Runs `call`, and makes a new instance when the outermost call ends if it
+   * or a call inside it threw.
+   */
+  #restartingOnFailure(call) {
+    this.#depth += 1;
+    try {
+      return call();
+    } catch (error) {
+      this.#failed = true;
+      throw error;
+    } finally {
+      this.#depth -= 1;
+      if (this.#depth === 0 && this.#failed) {
+        this.#failed = false;
+        this.#start();
+      }
     }
   }
 
@@ -540,7 +652,5 @@ export async function checkModule(bytes, imports, manifest = null) {
 export async function instantiate(bytes, { manifest = null, files = {}, ...options } = {}) {
   const host = createHost(files, options);
   const module = await checkModule(bytes, host.imports, manifest);
-  const instance = await WebAssembly.instantiate(module, host.imports);
-  host.bind(instance);
-  return new Guest(instance, host, manifest);
+  return new Guest(module, host, manifest);
 }

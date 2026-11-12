@@ -1,11 +1,14 @@
+#[unsafe(export)]
 pub fn square(x: i64) -> i64 {
     x * x
 }
 
+#[unsafe(export)]
 pub fn sum_squares(a: i64, b: i64) -> i64 {
     square(x: a) + square(x: b)
 }
 
+#[unsafe(export)]
 pub fn hypot_squared(a: i64, b: i64) -> i64 {
     sum_squares(a: a, b: b)
 }

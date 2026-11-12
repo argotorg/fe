@@ -6,27 +6,22 @@
 // file next to this one), the export is called, and the host is checked for
 // handles that the test left open. A test that logs and writes more than the
 // output limit is stopped there, and `fe test` reports the limit. Exit status
-// 0 means the test passed. On a
-// failure one line on standard error says what happened, and the status is 1.
-// A test that panics with a code or reverts with data ends with status 3 and
+// 0 means the test passed. On a failure one line on standard error says what
+// happened, and the status is 1. A test that panics with a code or reverts
+// with data, which the host reports as a `GuestRevert`, ends with status 3 and
 // the line `revert <data in hex>`: `fe test` decides whether that was expected.
 // Standard output carries the numbers that the test logged, one per line, and
 // then what it wrote to its standard output and standard error, each under a
 // line that names the stream. The test's standard input is empty.
 import fs from "node:fs";
-import { ContractError, GuestAbort, instantiate } from "./host.mjs";
-
-/** The test panicked with a code or reverted: `data` is the revert data. */
-class TestRevert extends Error {
-  constructor(data) {
-    super("the test reverted");
-    this.data = data;
-  }
-}
+import { ContractError, GuestAbort, GuestRevert, instantiate } from "./host.mjs";
 
 function describe(error) {
   if (error instanceof WebAssembly.RuntimeError) {
     return `trap: ${error.message}`;
+  }
+  if (error instanceof GuestRevert) {
+    return error.message;
   }
   if (error instanceof GuestAbort) {
     return `the test aborted with code ${error.code}`;
@@ -57,33 +52,15 @@ const print = (length) => {
 let guest = null;
 let failure = null;
 let revert = null;
-// What `core::rt` imports in a test: the data of a panic or a revert goes to
-// `__fe_revert`, as in a native test, and `abort` ends a test that cannot
-// allocate that data.
-const env = {
-  __fe_revert(address, length) {
-    const memory = new Uint8Array(guest.exports.memory.buffer);
-    const start = address >>> 0;
-    const end = start + (length >>> 0);
-    if (end > memory.length) {
-      throw new ContractError(`revert data at ${start} of length ${length >>> 0} lies outside the memory`);
-    }
-    throw new TestRevert(memory.slice(start, end));
-  },
-  abort() {
-    throw new Error("the test ran out of memory while it reverted");
-  },
-};
 try {
   guest = await instantiate(fs.readFileSync(modulePath), {
-    imports: { env },
     onLog: ({ type, value }) => print(`log ${type} ${value}\n`.length),
     onWrite: ({ bytes }) => print(bytes.length),
   });
   guest.call(entry);
   guest.host.assertNoOpenHandles();
 } catch (error) {
-  if (error instanceof TestRevert) {
+  if (error instanceof GuestRevert && error.data !== null) {
     revert = Buffer.from(error.data).toString("hex");
   } else {
     failure = describe(error);

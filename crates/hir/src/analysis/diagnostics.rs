@@ -1836,12 +1836,12 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     ExportIssue::Generic => (
                         "an `#[unsafe(export)]` function cannot be generic",
                         "generic parameters",
-                        Some("a C caller supplies no generic arguments: export a function for each one"),
+                        Some("a C caller or WebAssembly host supplies no generic arguments: export a function for each one"),
                     ),
                     ExportIssue::Effects => (
                         "an `#[unsafe(export)]` function cannot take effects",
                         "effects",
-                        Some("a C caller provides no effects: provide them in the body with `with`"),
+                        Some("a C caller provides no effects: provide them in the body with `with`; a WebAssembly export takes those of `std::wasm::Host`"),
                     ),
                 };
                 CompleteDiagnostic {

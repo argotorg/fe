@@ -1,6 +1,7 @@
 // A copy of a text that the host lent belongs to the program, which frees it.
 use std::wasm::HostText
 
+#[unsafe(export)]
 pub fn copied_len(_ text: HostText) -> u32 {
     text.copy().len().downcast().unwrap()
 }

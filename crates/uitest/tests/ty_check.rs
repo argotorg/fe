@@ -92,6 +92,29 @@ fn native_signatures() {
     assert!(!evm.contains("native `main`"), "{evm}");
 }
 
+// A WebAssembly export takes the effects of the root effect, `std::wasm::Host`,
+// where a C caller provides none. The other rules for exports hold on both.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn wasm_exports_take_effects() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/ty_check/export_attr.fe"
+    );
+    let content = include_str!("../fixtures/ty_check/export_attr.fe");
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Wasm);
+    let wasm = diagnostics(&mut db, path, content);
+    assert!(!wasm.contains("cannot take effects"), "{wasm}");
+    assert!(wasm.contains("cannot be generic"), "{wasm}");
+    assert!(wasm.contains("must be `pub`"), "{wasm}");
+
+    let evm = diagnostics(&mut DriverDataBase::default(), path, content);
+    assert!(evm.contains("cannot take effects"), "{evm}");
+}
+
 // `#[cfg]` keeps the items whose predicates hold for the target and OS.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

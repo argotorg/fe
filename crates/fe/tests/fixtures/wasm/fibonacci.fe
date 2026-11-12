@@ -6,6 +6,7 @@ fn fib_recursive(n: u32) -> u32 {
     }
 }
 
+#[unsafe(export)]
 pub fn fib_iter(n: u32) -> u64 {
     var a: u64 = 0
     var b: u64 = 1
@@ -19,6 +20,7 @@ pub fn fib_iter(n: u32) -> u64 {
     a
 }
 
+#[unsafe(export)]
 pub fn fib(n: u32) -> u32 {
     fib_recursive(n)
 }

@@ -40,6 +40,7 @@ const WASM_ONLY: &str = r#"
 #[cfg(target = "wasm")]
 fn answer() -> i32 { 0 }
 
+#[unsafe(export)]
 pub fn called() -> i32 { answer() }
 
 #[test]

@@ -23,6 +23,7 @@ fn filled(seed: u32) -> [u32; 64] {
     a
 }
 
+#[unsafe(export)]
 pub fn big_copy(seed: u32) -> u32 {
     let a = filled(seed: seed)
     var b = a
@@ -39,10 +40,12 @@ fn deeper(n: u32, a: [u32; 64]) -> u32 {
     deeper(n: n - 1, a: b)
 }
 
+#[unsafe(export)]
 pub fn recurse(n: u32) -> u32 {
     deeper(n: n, a: filled(seed: 1))
 }
 
+#[unsafe(export)]
 pub fn bytes_hash(seed: u8) -> u32 {
     var buf: [u8; 512] = [0; 512]
     var i: usize = 0

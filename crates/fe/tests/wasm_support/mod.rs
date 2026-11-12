@@ -1,9 +1,11 @@
 //! Shared machinery for the programs of `tests/fixtures/wasm`.
 //!
 //! A Rust reference gives the expected result of every call, or says that the
-//! call traps: the reference computes the exact integer result and the call
-//! traps when the result does not fit the declared type or the operation is
-//! undefined (division by zero). Every program is built at the four
+//! call fails: the reference computes the exact integer result and the call
+//! fails when the result does not fit the declared type or the operation is
+//! undefined (division by zero). A check that fails passes Solidity
+//! `Panic(uint256)` data to the import `__fe_revert`, which the host turns into
+//! an error; a panic without data traps. Every program is built at the four
 //! optimization levels (0, 1, 2 and s) and run with wasmtime. On x86-64 Linux
 //! with the `cranelift` feature, the same functions are also built for the host
 //! and the native executable is checked against the wasm results.
@@ -15,7 +17,7 @@
 #![allow(dead_code)]
 
 use std::{
-    fs,
+    error, fmt, fs,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -25,7 +27,10 @@ use std::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
-use wasmtime::{Engine, ExternType, FuncType, Instance, Module, Store, Trap, Val, ValType};
+use wasmtime::{
+    Caller, Engine, Extern, ExternType, FuncType, Instance, Linker, Module, Store, Trap, Val,
+    ValType,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ty {
@@ -142,7 +147,8 @@ impl Ty {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Want {
     Value(i128),
-    Trap,
+    /// The call traps or reverts.
+    Fail,
 }
 
 #[derive(Clone, Debug)]
@@ -192,7 +198,7 @@ impl Export {
         for args in combos {
             let want = match reference(&args).and_then(|value| self.ret.chk(value)) {
                 Some(value) => Want::Value(value),
-                None => Want::Trap,
+                None => Want::Fail,
             };
             self.cases.push(Case { args, want });
         }
@@ -357,13 +363,6 @@ pub fn assert_matches_the_engine(built: &Built) {
             .unwrap_or_else(|| panic!("no export {name}"));
         match export {
             ExternType::Memory(_) => assert_eq!(entry["kind"], "memory"),
-            ExternType::Global(_) => {
-                assert_eq!(name, "stack_top");
-                assert_eq!(
-                    (&entry["kind"], &entry["role"]),
-                    (&json!("global"), &json!("stack"))
-                );
-            }
             ExternType::Func(ty) => {
                 assert_eq!(entry["kind"], "function");
                 let (params, results) = signature(&ty);
@@ -434,21 +433,120 @@ pub fn node_driver(request: &Value) -> Value {
     serde_json::from_slice(&output.stdout).expect("the driver prints JSON")
 }
 
+/// The revert data that a module passed to `__fe_revert`, as the error that
+/// ends the call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Revert(pub Vec<u8>);
+
+impl Revert {
+    /// The code of Solidity `Panic(uint256)` data.
+    pub fn panic_code(&self) -> Option<u8> {
+        match self.0.as_slice() {
+            [0x4e, 0x48, 0x7b, 0x71, word @ ..] if word.len() == 32 => {
+                word[..31].iter().all(|&byte| byte == 0).then(|| word[31])
+            }
+            _ => None,
+        }
+    }
+
+    /// The message of Solidity `Error(string)` data.
+    pub fn message(&self) -> Option<&str> {
+        let [0x08, 0xc3, 0x79, 0xa0, body @ ..] = self.0.as_slice() else {
+            return None;
+        };
+        let word = |index: usize| {
+            let word = body.get(32 * index..32 * index + 32)?;
+            word[..24]
+                .iter()
+                .all(|&byte| byte == 0)
+                .then(|| u64::from_be_bytes(word[24..].try_into().unwrap()))
+        };
+        let len = usize::try_from(word(1)?).ok()?;
+        (word(0)? == 32)
+            .then(|| body.get(64..)?.get(..len))
+            .flatten()
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+    }
+}
+
+impl fmt::Display for Revert {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the module reverted with {} bytes of data", self.0.len())
+    }
+}
+
+impl error::Error for Revert {}
+
+/// The imports of `core::rt` that a panic calls: `__fe_revert` ends the call
+/// with a `Revert`, and `abort`, which `core::rt` calls when it has no memory
+/// for the data, with an error.
+pub fn define_revert<T: 'static>(linker: &mut Linker<T>) {
+    linker
+        .func_wrap(
+            "env",
+            "__fe_revert",
+            |mut caller: Caller<'_, T>, address: i32, length: i32| -> wasmtime::Result<()> {
+                let memory = caller
+                    .get_export("memory")
+                    .and_then(Extern::into_memory)
+                    .expect("the module exports its memory");
+                let start = address as u32 as usize;
+                let data = memory.data(&caller)[start..start + length as u32 as usize].to_vec();
+                Err(wasmtime::Error::new(Revert(data)))
+            },
+        )
+        .unwrap();
+    linker
+        .func_wrap("env", "abort", || -> wasmtime::Result<()> {
+            Err(wasmtime::Error::msg("no memory for the revert data"))
+        })
+        .unwrap();
+}
+
+/// How a call failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fault {
+    Trap(Trap),
+    Revert(Revert),
+}
+
+impl Fault {
+    /// The code of a revert with Solidity `Panic(uint256)` data.
+    pub fn panic_code(&self) -> Option<u8> {
+        match self {
+            Self::Revert(revert) => revert.panic_code(),
+            Self::Trap(_) => None,
+        }
+    }
+}
+
 pub struct Running {
     pub store: Store<()>,
     pub instance: Instance,
+    module: Module,
+    linker: Linker<()>,
 }
 
 impl Running {
     pub fn new(bytes: &[u8]) -> Self {
         let module = Module::new(engine(), bytes).expect("the module should validate");
         let mut store = Store::new(engine(), ());
-        let instance = Instance::new(&mut store, &module, &[]).expect("no imports are needed");
-        Self { store, instance }
+        let mut linker = Linker::new(engine());
+        define_revert(&mut linker);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("the module needs no imports but those of `core::rt`");
+        Self {
+            store,
+            instance,
+            module,
+            linker,
+        }
     }
 
-    /// The result of the call, or the trap it ended in.
-    pub fn call(&mut self, export: &Export, args: &[i128]) -> Result<i128, Trap> {
+    /// The result of the call, or how it failed. A failed call frees nothing
+    /// it allocated, so the next call runs in a new instance, as a host does.
+    pub fn call(&mut self, export: &Export, args: &[i128]) -> Result<i128, Fault> {
         let func = self
             .instance
             .get_func(&mut self.store, export.name)
@@ -469,9 +567,22 @@ impl Running {
                 };
                 Ok(export.ret.decode_raw(raw))
             }
-            Err(error) => Err(*error
-                .downcast_ref::<Trap>()
-                .unwrap_or_else(|| panic!("`{}` failed without a trap: {error}", export.name))),
+            Err(error) => {
+                self.instance = self
+                    .linker
+                    .instantiate(&mut self.store, &self.module)
+                    .expect("the module instantiated before");
+                Err(
+                    match (error.downcast_ref::<Trap>(), error.downcast_ref::<Revert>()) {
+                        (Some(trap), _) => Fault::Trap(*trap),
+                        (_, Some(revert)) => Fault::Revert(revert.clone()),
+                        _ => panic!(
+                            "`{}` failed without a trap or a revert: {error}",
+                            export.name
+                        ),
+                    },
+                )
+            }
         }
     }
 }
@@ -489,7 +600,7 @@ pub fn describe(export: &Export, case: &Case) -> String {
 
 /// Runs every case of `exports` against the module and returns the observed
 /// results in the same order.
-pub fn run_cases(bytes: &[u8], exports: &[Export], context: &str) -> Vec<Vec<Result<i128, Trap>>> {
+pub fn run_cases(bytes: &[u8], exports: &[Export], context: &str) -> Vec<Vec<Result<i128, Fault>>> {
     let mut running = Running::new(bytes);
     let mut observed = Vec::new();
     for export in exports {
@@ -498,7 +609,7 @@ pub fn run_cases(bytes: &[u8], exports: &[Export], context: &str) -> Vec<Vec<Res
             let got = running.call(export, &case.args);
             let ok = match (&case.want, &got) {
                 (Want::Value(want), Ok(got)) => want == got,
-                (Want::Trap, Err(_)) => true,
+                (Want::Fail, Err(_)) => true,
                 _ => false,
             };
             assert!(
@@ -519,7 +630,7 @@ pub fn check_program(file: &str, exports: Vec<Export>) {
     let traps = exports
         .iter()
         .flat_map(|export| &export.cases)
-        .filter(|case| case.want == Want::Trap)
+        .filter(|case| case.want == Want::Fail)
         .count();
     println!(
         "{file}: {} exports, {calls} calls, {traps} expected traps",
@@ -599,10 +710,17 @@ pub mod native {
         file: &str,
         source: &Path,
         exports: &[Export],
-        observed: &[Vec<Result<i128, Trap>>],
+        observed: &[Vec<Result<i128, Fault>>],
         temp: &Path,
     ) {
-        let text = fs::read_to_string(source).unwrap();
+        // The driver calls the exports as ordinary functions, so a native
+        // build does not export them to C.
+        let text = fs::read_to_string(source)
+            .unwrap()
+            .lines()
+            .filter(|line| line.trim() != "#[unsafe(export)]")
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut checks = Vec::new();
         let mut traps = Vec::new();
         for (export, results) in exports.iter().zip(observed) {

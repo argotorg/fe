@@ -2,6 +2,7 @@
 // allocates a larger block and copies the elements.
 use core::ptr::{MemArray, MemVec}
 
+#[unsafe(export)]
 pub fn vec_sum(n: u32) -> u32 {
     var v: MemVec<u32> = MemVec::new()
     var i: u32 = 0
@@ -18,6 +19,7 @@ pub fn vec_sum(n: u32) -> u32 {
     s
 }
 
+#[unsafe(export)]
 pub fn vec_pop_all(n: u32) -> u32 {
     var v: MemVec<u32> = MemVec::new()
     var i: u32 = 0
@@ -37,6 +39,7 @@ pub fn vec_pop_all(n: u32) -> u32 {
     weighted
 }
 
+#[unsafe(export)]
 pub fn zeroed_then_filled(n: u32, at: u32) -> u32 {
     var a: MemArray<u32> = MemArray::new_zeroed(8)
     a.set(at as usize, n)
@@ -51,6 +54,7 @@ pub fn zeroed_then_filled(n: u32, at: u32) -> u32 {
 
 // Three live blocks, each written with its own value, then all read back: a
 // block that overlapped another would show the other's value.
+#[unsafe(export)]
 pub fn live_blocks_keep_their_contents(a: u32, b: u32, c: u32) -> u32 {
     var x: MemArray<u32> = MemArray::new_zeroed(10)
     var y: MemArray<u32> = MemArray::new_zeroed(20)

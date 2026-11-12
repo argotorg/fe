@@ -1,3 +1,4 @@
+#[unsafe(export)]
 pub fn triangle(n: u32) -> u32 {
     var total: u32 = 0
     var i: u32 = 0
@@ -12,6 +13,7 @@ pub fn triangle(n: u32) -> u32 {
     total
 }
 
+#[unsafe(export)]
 pub fn count_odd(n: u32) -> u32 {
     var i: u32 = 0
     var c: u32 = 0
@@ -28,6 +30,7 @@ pub fn count_odd(n: u32) -> u32 {
     c
 }
 
+#[unsafe(export)]
 pub fn first_multiple(of: u32, above: u32) -> u32 {
     var n = above + 1
     while true {

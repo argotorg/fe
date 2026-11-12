@@ -407,17 +407,25 @@ one program as long as their exported symbols differ.
 
 With the optional `wasm` Cargo feature, `fe build --backend wasm <path>` compiles
 a standalone `.fe` file or an ingot to a WebAssembly module (32-bit pointers, one linear
-memory). Every non-generic `pub fn` in the root of the file, or of an ingot's root module
-`src/lib.fe`, is exported under its own name, and the module also exports its memory as
-`memory`. The exports of an ingot may call its other modules and its dependencies, whose
-functions are not exported. Parameters and results must be
+memory). Its exports are the `#[unsafe(export)]` functions of the file or ingot, in any of its
+modules, as in native output (see "Exported functions"): each is exported under its own name,
+two of one name are an error, and a `pub fn` without the attribute is not an export. The
+module also exports its memory as `memory`. An export may call the rest of the ingot and its
+dependencies, whose own exports are not exports of the module. An export cannot be generic,
+but unlike a native one it may take `uses` effects that the root effect `std::wasm::Host`
+provides (see below). Parameters and results must be
 `bool` or integers of at most 64 bits, with two exceptions described below (text
 parameters and a reply result). `usize` and `isize` have 32 bits on this target
 and cross as an `i32`. Any other type, including `u256` and structs, is an error
 that names the function and the type. Inside functions, structs,
 tuples, enums, arrays, constants, `usize` and the dynamic arrays of `core::ptr` work.
-Overflow, division by zero, a failed `assert!` and an index outside an array trap, as
-they do in native executables. Calls use a stack in the module's memory, and
+Overflow, division by zero, a failed `assert!` and an index outside an array end the call
+with Solidity `Panic(uint256)` data, and `assert!` with a message with `Error(string)` data,
+as in a native test: the module passes the data to the import `__fe_revert(address, length)`.
+The data of a constant code is a constant of the module; a module whose panic data must be
+allocated imports `abort()` for a panic that finds no memory for it. `examples/wasm/host.mjs`
+throws a `GuestRevert` that holds the data and what it says. A panic without data,
+`core::panic()`, traps. Calls use a stack in the module's memory, and
 a call that does not fit traps. The stack has 1 MiB unless `--wasm-stack-size <bytes>`
 sets its size, which is rounded up so that the stack ends on a 64 KiB page boundary; the
 option is an error with any other backend. Dynamic allocation comes from a heap that reuses
@@ -427,10 +435,8 @@ instructions are not supported and are errors that name the function and the ins
 The default output is `<out>/<name>.wasm`, named after the file or the ingot; `--emit ir`
 writes `<out>/<name>.wasm.sona`, and `--emit wasm,ir` writes both. Whenever the module is
 written, `<out>/<name>.manifest.json` is written with it. A workspace build writes one module
-for each selected member whose root module has an export, and `--ingot <name>` selects one
-member. A root `pub fn` of a selected member that cannot be an export is an error, so a
-workspace with a library whose root functions take other types needs `--ingot`. `--contract`
-is an error. The manifest records the
+for each selected member with an `#[unsafe(export)]` function, and `--ingot <name>` selects one
+member. `--contract` is an error. The manifest records the
 module's file name, SHA-256 and size, its initial memory in pages, the imports (module,
 name, WebAssembly parameter and result types), the exports (for the program's functions
 the Fe parameter names and types, with `HostText` and `Reply` as named by `std::wasm`,
@@ -451,7 +457,7 @@ no attribute for another module name yet. The module `std::wasm` declares host
 operations as effects (`Log`, `Clock` and `Abort`) with two providers. The root
 effect, `std::wasm::Host`, calls the imports `sys_wasm_log_i32`, `sys_wasm_log_u64`,
 `sys_wasm_now_ms` and `sys_wasm_abort`: an export or a test receives its capabilities by
-declaring them, as in `pub fn stamp() -> u64 uses (clock: mut Clock)`, and nothing else
+declaring them, as in `#[unsafe(export)] pub fn stamp() -> u64 uses (clock: mut Clock)`, and nothing else
 can create one. `mock(now, step)` is Fe code that needs no host, provided with
 `with (Clock = provider) { ... }`. If the host does not supply an import, the engine
 refuses to instantiate the module and names it.
@@ -469,12 +475,15 @@ host places the texts with `alloc`, makes the call, reads what it needs, and cal
 `arena_release` with the mark it took first. The three names are then reserved. Safe Fe
 code cannot make a `HostText`; only the host and the generated wrapper of the export do.
 
-`std::wasm::files` is a contract built on these shapes, with four operations: `open(name)`
-(the name is borrowed text), `size(handle)`, `read_byte(handle, index)` and
-`close(handle)`, which takes the handle by value, so the compiler rejects a second use.
+`std::wasm::files` is a contract built on these shapes, with five operations: `open(name)`
+(the name is borrowed text), `size(handle)`, `read(handle, offset, buf)`, which places up to
+`buf.len()` bytes from `offset` in `buf` and returns how many (0 at the end),
+`read_byte(handle, index)` and `close(handle)`, which takes the handle by value, so the
+compiler rejects a second use.
 Each can fail with `NotFound` (1), `OutOfRange` (2) or `BadName` (3); no other number is
 valid. `Host` provides `Files` by calling the imports `sys_wasm_files_open(addr, len)`, `sys_wasm_files_size`,
-`sys_wasm_files_read_byte` and `sys_wasm_files_close`, which return a reply word (close
+`sys_wasm_files_read(handle, offset, addr, len)`, `sys_wasm_files_read_byte` and
+`sys_wasm_files_close`, which return a reply word (close
 returns nothing), and `mock()` is Fe code that holds files in memory. The compiler does not
 require a handle to be closed; the host counts the handles that stay open.
 
@@ -485,7 +494,8 @@ number of its POSIX descriptor (0, 1 or 2). `sys_wasm_stream_write(stream, addr,
 the host the bytes of the range; the host returns how many it took, and the module offers
 the rest again. `sys_wasm_stream_read(stream, addr, len)` asks the host to place at most
 `len` bytes of input in the range; the host returns how many it placed, and 0 at the end of
-the input. A negative count says that the stream failed, and a print or a read then traps.
+the input. A negative count says that the stream failed, and a print or a read then panics
+with an `Error(string)` that names the stream.
 `examples/wasm/host.mjs` keeps what a module wrote in `host.stdout` and `host.stderr`, passes
 each write to the option `onWrite`, reads the input from the option `stdin`, and refuses a
 range outside the memory and a stream number that the operation does not apply to. The module

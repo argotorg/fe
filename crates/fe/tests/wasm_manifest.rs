@@ -77,10 +77,12 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
             "size": bytes.len(),
             "initial_memory_pages": manifest["module"]["initial_memory_pages"],
         },
-        "contract_version": 2,
+        "contract_version": 3,
         "optimization": "1",
         "compiler": version.trim(),
         "imports": [
+            { "module": "env", "name": "__fe_revert", "kind": "function",
+              "type": { "params": ["i32", "i32"], "results": [] } },
             { "module": "env", "name": "sys_wasm_files_close", "kind": "function",
               "type": { "params": ["i32"], "results": [] } },
             { "module": "env", "name": "sys_wasm_files_open", "kind": "function",
@@ -111,7 +113,6 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
             { "name": "memory", "kind": "memory" },
             { "name": "ping", "kind": "function",
               "params": [{ "name": "value", "type": "i32", "wasm": ["i32"] }], "result": null },
-            { "name": "stack_top", "kind": "global", "role": "stack" },
         ],
     });
     assert_eq!(manifest, expected);
@@ -169,7 +170,11 @@ fn the_manifest_agrees_with_the_module_for_every_kind_of_program() {
 fn the_manifest_is_written_only_with_the_module() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("only.fe");
-    fs::write(&source, "pub fn one() -> u32 {\n    1\n}\n").unwrap();
+    fs::write(
+        &source,
+        "#[unsafe(export)]\npub fn one() -> u32 {\n    1\n}\n",
+    )
+    .unwrap();
     let run = |emit: &str, out: &str| {
         let out = temp.path().join(out);
         let output = fe(&[
@@ -219,7 +224,11 @@ fn the_manifest_is_written_only_with_the_module() {
 fn a_failed_build_writes_no_manifest() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("bad.fe");
-    fs::write(&source, "pub fn wide(_ x: u256) -> u256 {\n    x\n}\n").unwrap();
+    fs::write(
+        &source,
+        "#[unsafe(export)]\npub fn wide(_ x: u256) -> u256 {\n    x\n}\n",
+    )
+    .unwrap();
     let out = temp.path().join("out");
     let output = fe(&[
         "build",
@@ -239,10 +248,11 @@ fn a_failed_build_writes_no_manifest() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_node_host_restores_the_stack_after_an_abort() {
+fn the_node_host_runs_a_new_instance_after_an_abort() {
     // `abort` is an import that throws, a hundred frames deep. Each frame
-    // holds an array, so unless the host puts `stack_top` back the stack of
-    // 1 MiB is gone after a few calls and the rest trap instead of aborting.
+    // holds an array, so on one instance the stack of 1 MiB would be gone
+    // after a few calls and the rest would trap instead of aborting. The host
+    // makes a new instance after each failed call.
     let source = "use std::wasm::{Abort, abort}
 
 fn dive(_ depth: u32) -> u64 uses (a: mut Abort) {
@@ -253,6 +263,7 @@ fn dive(_ depth: u32) -> u64 uses (a: mut Abort) {
     dive(depth - 1) + frame[(depth % 64) as usize]
 }
 
+#[unsafe(export)]
 pub fn run(depth: u32) -> u64 uses (a: mut Abort) {
     dive(depth)
 }
@@ -337,6 +348,8 @@ fn the_node_host_supplies_the_streams() {
         assert_eq!(
             built.manifest()["imports"],
             json!([
+                { "module": "env", "name": "__fe_revert", "kind": "function",
+                  "type": { "params": ["i32", "i32"], "results": [] } },
                 stream("sys_wasm_stream_read"),
                 stream("sys_wasm_stream_write")
             ]),
@@ -452,10 +465,10 @@ fn the_node_host_refuses_a_module_that_differs_from_its_manifest() {
 
     // A manifest for another contract version, and for another format version.
     let mut other = manifest.clone();
-    other["contract_version"] = json!(3);
+    other["contract_version"] = json!(4);
     let message = refusal(&json!({ "wasm": built.wasm(), "manifest": other }));
     assert!(
-        message.contains("contract version 3") && message.contains("implements version 2"),
+        message.contains("contract version 4") && message.contains("implements version 3"),
         "{message}"
     );
     let mut other = manifest.clone();

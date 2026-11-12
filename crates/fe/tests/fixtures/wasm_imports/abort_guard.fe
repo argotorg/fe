@@ -12,7 +12,9 @@ fn checked(_ x: i32) -> i32 uses (a: mut Abort) {
     x * 2
 }
 
+//host: #[unsafe(export)]
 //host: pub fn checked_double(x: i32) -> i32 uses (a: mut Abort) {
+//mock: #[unsafe(export)]
 //mock: pub fn checked_double(x: i32) -> i32 {
 //mock:     var p = provider()
 //mock:     with (Abort = p) {
@@ -20,7 +22,9 @@ fn checked(_ x: i32) -> i32 uses (a: mut Abort) {
 //mock:     }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn abort_with(code: u32) -> u32 uses (a: mut Abort) {
+//mock: #[unsafe(export)]
 //mock: pub fn abort_with(code: u32) -> u32 {
 //mock:     var p = provider()
 //mock:     with (Abort = p) {

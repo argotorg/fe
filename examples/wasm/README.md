@@ -64,17 +64,19 @@ node examples/wasm/verify.mjs out/lines.wasm
 ```
 
 `fe build` also takes an ingot directory, and makes one module named after the ingot
-from the root module `src/lib.fe` and what it calls in the ingot's other modules and
-its dependencies. For a workspace it makes one module for each member whose root
-module has an export, or for the member that `--ingot` names. `--contract` is not
+from its exports and what they call in the ingot and its dependencies. For a workspace
+it makes one module for each member with an export, or for the member that `--ingot`
+names. `--contract` is not
 supported. `target = "wasm"` in `fe.toml` selects this backend for `fe build`,
 `fe check` and `fe test`.
 
 ### What a program may export
 
-Every non-generic `pub fn` in the root of the file, or of an ingot's `src/lib.fe`, is
-exported under its own name, and the module always exports its linear memory as
-`memory`. `#[unsafe(export)]` is an error on this backend. Parameters and results are
+The `#[unsafe(export)]` functions of the file or ingot, in any of its modules, are
+exported under their own names, as in native output, and the module always exports its
+linear memory as `memory`. A `pub fn` without the attribute is not an export, and a
+dependency's exports are not exports of the module. An export cannot be generic, and it
+may take the capabilities of `std::wasm::Host` in `uses`. Parameters and results are
 limited to:
 
 - `bool` and the integers `u8` to `u64` and `i8` to `i64`;
@@ -94,8 +96,10 @@ so an export that declares `uses (out: mut Stdout)` prints with `print!` and
 `println!` (see [Printing](#printing)).
 Inside functions, structs, tuples, enums, arrays, constants, `usize` (32 bits, the
 width of an address in a module) and 128-bit and 256-bit integers work. Overflow, division by
-zero, a failed `assert!` and an index outside an array trap (the WebAssembly
-instruction `unreachable`).
+zero, a failed `assert!` and an index outside an array end the call with Solidity
+`Panic(uint256)` data, and `assert!` with a message with `Error(string)` data, which the
+module passes to the host (see [Panics](#the-host-contract-in-brief)). A panic without
+data, `core::panic()`, traps (the WebAssembly instruction `unreachable`).
 
 ### What a program may import
 
@@ -119,6 +123,7 @@ is a provider written in Fe that needs no host:
 | `sys_wasm_stream_read` | stream `i32`, address `i32`, length `i32` | count `i32` | `std::io::Stdin` |
 | `sys_wasm_files_open` | name address `i32`, name length `i32` | reply `i64` | `Files` |
 | `sys_wasm_files_size` | handle `i32` | reply `i64` | `Files` |
+| `sys_wasm_files_read` | handle `i32`, offset `i32`, address `i32`, length `i32` | reply `i64` (the count) | `Files` |
 | `sys_wasm_files_read_byte` | handle `i32`, index `i32` | reply `i64` | `Files` |
 | `sys_wasm_files_close` | handle `i32` | none | `Files` |
 
@@ -128,13 +133,13 @@ An import that nothing reachable calls is not in the module.
 
 `std::wasm::Host` provides the streams of `std::io`: `Stdout`, `Stderr`, `Stdin`, and
 `Stdio` for all three. An export or a test that declares one in `uses` prints with
-`print!`, `println!`, `eprint!` and `eprintln!` and reads with `std::io::StdinReader`,
-and the same source builds for the native target, whose root effect provides the same
-streams:
+`print!`, `println!`, `eprint!` and `eprintln!` and reads with `std::io::StdinReader`.
+Natively, the root effect provides the same streams to `main` and to tests:
 
 ```fe
 use std::io::Stdout
 
+#[unsafe(export)]
 pub fn greet(times: u32) uses (out: mut Stdout) {
     println!("hello, ", times, " times")
 }
@@ -174,8 +179,8 @@ and the clocks of `std::time`) have no provider on this target.
   the host to place at most `length` bytes of input at `address`; the host returns how
   many it placed, and 0 at the end of the input. A count that is negative as a signed
   `i32` says that the stream failed, and so does a count of 0 for a write of one byte or
-  more; `print!` and its relatives and the readers of `std::io` then trap, as they
-  panic on the native target. The range is valid for the call only. `host.mjs` takes or
+  more; `print!` and its relatives and the readers of `std::io` then panic, as they
+  do on the native target, with an `Error(string)` that names the stream. The range is valid for the call only. `host.mjs` takes or
   places at most 65,536 bytes in a call and never reports a failure.
 - **Handles.** A handle is one opaque word that the host chooses. In safe Fe a
   `Handle` cannot be made or copied, and `close` takes it by value, so using it
@@ -187,16 +192,26 @@ and the clocks of `std::time`) have no provider on this target.
   outside the memory or longer than 65,536 bytes, an unknown error number, a range of
   a stream outside the memory, or a stream number that the operation does not apply
   to (a write to 0, a read of 1 or 2, any other number).
+- **Panics.** A panic with a code or a message passes its revert data, Solidity
+  `Panic(uint256)` or `Error(string)` data, to the import `__fe_revert(address, length)`;
+  the host must not return. The data of a panic with a constant code, such as an
+  overflow check's, is a constant of the module. Other data is allocated, and a module
+  that has no memory left for it calls the import `abort()` instead; only a module
+  with such a panic imports `abort`. `host.mjs` throws a
+  `GuestRevert` whose `data` is the bytes (`null` after `abort`) and whose `reason` is
+  what they say (`revertReason`), such as `assertion failed`, `arithmetic overflow` or
+  the message of `assert!`.
 - **Traps and errors.** A trap in the module, or an error thrown by an import,
   reaches the caller of the export unchanged. `sys_wasm_abort` throws a
   `GuestAbort` in `host.mjs`.
-- **The stack after an error.** A module that has imports exports the global
-  `stack_top`, a mutable `i32` that holds where the next call places its first frame. A
-  call to an import moves it and puts it back on return, so an import that throws leaves
-  it above the frames of the calls it ended. A host reads the global before it calls an
-  export and writes that value back if the call ends with an error; `Guest.call` does.
-  The name is reserved.
-- **Contract version.** The version of this contract is 2. It appears in every
+- **After an error.** A call that fails, by a trap, a revert or an import that throws,
+  frees nothing it allocated: its frames stay reserved and its heap blocks stay in use.
+  A host does not call that instance again; it makes a new instance of the module, as
+  `Guest.call` does. A module keeps nothing between calls, so the new instance can
+  take the next call. A call that an import makes back into the module runs inside the
+  outer call, which goes on in the same instance if the import catches the error, so
+  the new instance comes when the outermost call ends.
+- **Contract version.** The version of this contract is 3. It appears in every
   manifest as `contract_version`.
 
 The contract is defined in `ingots/std/src/wasm.fe`, `ingots/std/src/wasm/boundary.fe`,
@@ -216,7 +231,7 @@ Whenever `fe build` writes a module it writes `<name>.manifest.json` next to it.
     "size": 7820,
     "initial_memory_pages": 18
   },
-  "contract_version": 2,
+  "contract_version": 3,
   "optimization": "1",
   "compiler": "fe 26.4.0 (…)",
   "imports": [
@@ -237,8 +252,7 @@ Whenever `fe build` writes a module it writes `<name>.manifest.json` next to it.
   section, with WebAssembly types.
 - `exports` is in name order. A function has the Fe parameter names and types, the
   WebAssembly types they become (`wasm`), and a `result` (`null` for none). The
-  three allocator functions have `"role": "allocator"`, and the global `stack_top` of a
-  module with imports has `"kind": "global"` and `"role": "stack"`.
+  three allocator functions have `"role": "allocator"`.
 - `contract_version` is the version of the host contract; `manifest_version` is the
   version of this format.
 - `compiler` is the output of `fe --version`.
@@ -295,7 +309,7 @@ macOS).
   fails with `Test reverted: 0x…` and what the data says, such as `(arithmetic
   overflow)`, unless it is a `#[test(should_revert)]` test that expected it. A panic
   without data, `core::panic()`, fails the test with `trap: unreachable`. A module
-  built with `fe build` traps in every case: only a test passes the data to its host.
+  built with `fe build` passes the same data to its host.
 - A call of `abort` fails the test with `the test aborted with code N`. A call that
   breaks the host contract fails it with the host's message.
 - The test host answers `Log`, `Clock`, `Abort` and the streams; it has no files, so
@@ -363,10 +377,10 @@ cargo test -p fe --all-features \
 - **Types.** Floats do not exist in Fe yet. 128-bit and 256-bit integers work inside
   functions (as 64-bit limbs) but cannot cross the boundary. Exports cannot return
   text or aggregates.
-- **Programs.** Every root `pub fn` of an ingot is an export, so an ingot that is a
-  library for other Fe code is a module only if those functions fit the boundary. Contracts
-  and EVM features are not available: an EVM-only instruction is an error that names it.
-  `fe check` and the language server do not know the export rule.
+- **Programs.** An export that declares effects builds for WebAssembly only, since a
+  native export takes none. Contracts and EVM features are not available: an EVM-only
+  instruction is an error that names it. `fe check` and the language server check that
+  an export is `pub` and not generic, but not the boundary types.
 - **Imports.** The module is always `env`; no attribute names another module. Imports
   take scalars only, so the compiler does not check that an address and a length
   passed to an import describe a text; the host does.
@@ -379,12 +393,10 @@ cargo test -p fe --all-features \
   there is no provider written in Fe that captures what a function prints. Output is
   not buffered in the module. `host.mjs` keeps everything a module wrote for the life
   of the instance.
-- **Errors thrown inside an import.** When an import throws, or a callback traps and the
-  host passes the error on, the module does not run again before the host call ends, so
-  the frames of the calls that were active stay reserved until the host writes
-  `stack_top` back, as `host.mjs` does. A host that does not loses that much of the stack
-  for the life of the instance. A trap that happens inside the module, with no host call
-  before it, reserves nothing.
+- **A failed call.** A trap, a revert or an import that throws leaves the frames of the
+  calls that were active reserved and their heap blocks in use, so `host.mjs` makes a
+  new instance after one. That discards what the module wrote to its memory, which a
+  module does not rely on between calls.
 - **Memory.** Calls use a stack of 1 MiB in the module's memory and a call that does
   not fit traps. `fe build --wasm-stack-size <bytes>` sets the size, which is rounded up
   so that the stack ends on a 64 KiB page boundary. Dynamic allocation comes from a heap

@@ -5,10 +5,12 @@
 //mock: fn host_mix(_ a: i64, _ b: u64) -> u64 { b.wrapping_mul(31).wrapping_add(a.downcast_unchecked()) }
 //mock: fn host_high(_ a: u64) -> u32 { (a / 4294967296).downcast_truncate() }
 
+#[unsafe(export)]
 pub fn mix(a: i64, b: u64) -> u64 {
     unsafe { host_mix(a, b) }
 }
 
+#[unsafe(export)]
 pub fn high_word(a: u64) -> u32 {
     unsafe { host_high(a) }
 }

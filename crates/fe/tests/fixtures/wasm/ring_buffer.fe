@@ -27,6 +27,7 @@ fn pop(r: mut Ring) -> u32 {
     value
 }
 
+#[unsafe(export)]
 pub fn script(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
     var r = Ring { items: [0; 4], head: 0, len: 0 }
     push(r: mut r, value: a)
@@ -41,11 +42,13 @@ pub fn script(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
     x * 1000000 + y * 10000 + z * 100 + (if rejected { 1 } else { 0 })
 }
 
+#[unsafe(export)]
 pub fn underflow() -> u32 {
     var r = Ring { items: [0; 4], head: 0, len: 0 }
     pop(r: mut r)
 }
 
+#[unsafe(export)]
 pub fn wraps(n: u32) -> u32 {
     var r = Ring { items: [0; 4], head: 0, len: 0 }
     var i: u32 = 0

@@ -17,8 +17,8 @@ use hir::{
         },
     },
     hir_def::{
-        Contract, Func, HirIngot, IdentId, InlineHint, ItemKind, ManualContractRootAttr,
-        TopLevelMod, params::FuncParamMode,
+        Contract, Func, HirIngot, IdentId, InlineHint, ManualContractRootAttr, TopLevelMod,
+        params::FuncParamMode,
     },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -482,13 +482,6 @@ fn build_test_package<'db>(
             vec![(RuntimeSectionName::Test(test.name.clone()), root)],
         ));
     }
-    // A WebAssembly test passes revert data to the test host, as a native
-    // one does; any other WebAssembly module traps.
-    if db.compilation_settings().target(db) == Target::Wasm {
-        for func in [NativeRuntimeFunc::HostPanic, NativeRuntimeFunc::HostRevert] {
-            roots.push(func.instance(db, top_mod)?);
-        }
-    }
     let package = build_sectioned_package(db, top_mod, roots, objects)?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
@@ -542,8 +535,8 @@ fn build_contract_package<'db>(
 }
 
 /// The `#[unsafe(export)]` functions of `top_mod`'s ingot, which a native object
-/// defines under their own names.
-pub fn native_exports<'db>(db: &'db dyn MirDb, top_mod: TopLevelMod<'db>) -> Vec<Func<'db>> {
+/// or a WebAssembly module defines under their own names.
+pub fn exported_funcs<'db>(db: &'db dyn MirDb, top_mod: TopLevelMod<'db>) -> Vec<Func<'db>> {
     top_mod
         .ingot(db)
         .all_funcs(db)
@@ -590,7 +583,7 @@ pub fn build_native_package<'db>(
         symbols.insert("main".to_string(), main);
         sections.push((RuntimeSectionName::Main, root(main)?));
     }
-    for func in native_exports(db, top_mod) {
+    for func in exported_funcs(db, top_mod) {
         let symbol = func_display_name(db, func);
         match symbols.insert(symbol.clone(), func) {
             Some(other) if other == func => continue,
@@ -624,11 +617,6 @@ pub fn build_native_package<'db>(
 /// The name of the linear memory that every WebAssembly module exports. A
 /// function cannot be exported under it.
 pub const WASM_MEMORY_EXPORT: &str = "memory";
-
-/// The name under which a WebAssembly module with imports exports the global
-/// that holds the top of its stack, which a host puts back after a call that
-/// an import ended by throwing. A function cannot be exported under it.
-pub const WASM_STACK_EXPORT: &str = "stack_top";
 
 /// The names of the exports that give the host an allocator. A module has them
 /// when an export takes text, and no function of the module may use them.
@@ -685,32 +673,28 @@ pub struct WasmExportPackage<'db> {
     pub exports: Vec<WasmExport<'db>>,
 }
 
-/// The exports of the WebAssembly module of `top_mod`, in name order: the
-/// `pub fn` items of its root scope that are not generic, not `extern` and not
-/// tests. Each is rooted with its own signature, which must consist of `bool`
-/// and integers of at most 64 bits. An export that is not scalar is an error
-/// that names it.
+/// The exports of the WebAssembly module of `top_mod`'s ingot, in name order:
+/// its `#[unsafe(export)]` functions, as natively. Each is rooted with its own
+/// signature, which must cross the boundary (see `WasmBoundary::rule`); an
+/// export that does not is an error that names it.
 pub fn wasm_exports<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
 ) -> Result<Vec<WasmExport<'db>>, LowerError> {
-    let mut exports = Vec::new();
-    for item in top_mod.children_non_nested(db) {
-        let ItemKind::Func(func) = item else {
-            continue;
-        };
-        if func.is_extern(db)
-            || func.is_associated_func(db)
-            || func.is_test(db)
-            || !func.vis(db).is_pub()
-        {
-            continue;
-        }
-        if let Some(export) = wasm_export_for_func(db, func)? {
-            exports.push(export);
-        }
+    let mut exports = exported_funcs(db, top_mod)
+        .into_iter()
+        .map(|func| wasm_export_for_func(db, func))
+        .collect::<Result<Vec<_>, _>>()?;
+    exports.sort_by(|a, b| a.name.cmp(&b.name));
+    if let Some([a, b]) = exports.windows(2).find(|pair| pair[0].name == pair[1].name) {
+        let path = |func: Func<'db>| func.scope().pretty_path(db).unwrap_or_default();
+        return Err(LowerError::Unsupported(format!(
+            "`{}` and `{}` both define the WebAssembly export `{}`",
+            path(a.func),
+            path(b.func),
+            a.name
+        )));
     }
-    exports.sort_by_cached_key(|export| func_display_name(db, export.func));
     Ok(exports)
 }
 
@@ -722,16 +706,10 @@ pub fn build_wasm_export_package<'db>(
     top_mod: TopLevelMod<'db>,
 ) -> Result<WasmExportPackage<'db>, LowerError> {
     require_target(db, Target::Wasm)?;
-    if let Some(func) = native_exports(db, top_mod).first() {
-        return Err(LowerError::Unsupported(format!(
-            "`#[unsafe(export)]` requires `--backend native`, but `{}` is exported; a WebAssembly module exports the `pub fn` items of its root module",
-            func.scope().pretty_path(db).unwrap_or_default()
-        )));
-    }
     let exports = wasm_exports(db, top_mod)?;
     if exports.is_empty() {
         return Err(LowerError::Unsupported(
-            "WebAssembly output needs at least one exported function: a non-generic `pub fn` in the root module".to_string(),
+            "WebAssembly output requires an `#[unsafe(export)]` function".to_string(),
         ));
     }
 
@@ -1028,30 +1006,16 @@ fn wasm_export_shapes<'db>(
 fn wasm_export_for_func<'db>(
     db: &'db dyn MirDb,
     func: Func<'db>,
-) -> Result<Option<WasmExport<'db>>, LowerError> {
+) -> Result<WasmExport<'db>, LowerError> {
     let name = func_display_name(db, func);
-    let semantic = match root_semantic_instance_key(db, BodyOwner::Func(func, None)) {
-        Ok(key) => SemanticInstance::new(db, key),
-        // A generic function has no WebAssembly form until a caller picks
-        // its arguments, so it is not an export.
-        Err(RootSemanticInstanceError::UnsupportedGenericParam { offending_ty, .. })
-            if !is_implicit_layout_const_param(db, offending_ty) =>
-        {
-            return Ok(None);
-        }
-        Err(err) => {
-            return Err(LowerError::Unsupported(
-                format_root_semantic_instance_rejection(db, &name, &err),
-            ));
-        }
-    };
-    let reserved = [
-        (WASM_MEMORY_EXPORT, "linear memory"),
-        (WASM_STACK_EXPORT, "stack of the module"),
-    ];
-    if let Some((_, what)) = reserved.iter().find(|(reserved, _)| name == *reserved) {
+    let semantic = root_semantic_instance_key(db, BodyOwner::Func(func, None))
+        .map(|key| SemanticInstance::new(db, key))
+        .map_err(|err| {
+            LowerError::Unsupported(format_root_semantic_instance_rejection(db, &name, &err))
+        })?;
+    if name == WASM_MEMORY_EXPORT {
         return Err(LowerError::Unsupported(format!(
-            "cannot export `{name}` to WebAssembly: the name is reserved for the {what}"
+            "cannot export `{name}` to WebAssembly: the name is reserved for the linear memory"
         )));
     }
     let entry_args =
@@ -1086,13 +1050,13 @@ fn wasm_export_for_func<'db>(
             "cannot export `{name}` to WebAssembly: {reason}"
         )));
     }
-    Ok(Some(WasmExport {
+    Ok(WasmExport {
         name,
         func,
         instance,
         params,
         result,
-    }))
+    })
 }
 
 /// Why `class` cannot cross the WebAssembly boundary by value, or `None` for
@@ -1578,9 +1542,9 @@ fn build_non_contract_package<'db>(
 
 /// A `core::rt` function that native code calls to allocate memory or report
 /// a panic. Every native package holds them all, and every WebAssembly package
-/// those that allocate, since its module traps at a panic; a WebAssembly test
-/// package also holds those that pass revert data to the test host. The
-/// backend drops those its module never calls.
+/// those that allocate and those that pass revert data to the host, since a
+/// module has no stderr to report on. The backend drops those its module never
+/// calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeRuntimeFunc {
     Alloc,
@@ -1609,14 +1573,16 @@ impl NativeRuntimeFunc {
         Self::HostRevert,
     ];
 
-    /// The functions that allocate, which on WebAssembly import only `malloc`
-    /// and `free`.
-    pub const ALLOCATION: [Self; 5] = [
+    /// The functions of a WebAssembly module: those that allocate, which import
+    /// only `malloc` and `free`, and those that pass revert data to the host.
+    pub const WASM: [Self; 7] = [
         Self::Alloc,
         Self::TryAlloc,
         Self::Dealloc,
         Self::Realloc,
         Self::TryRealloc,
+        Self::HostPanic,
+        Self::HostRevert,
     ];
 
     /// The function's instance in the packages of `top_mod`.
@@ -1658,7 +1624,7 @@ fn build_sectioned_package<'db>(
     let runtime_funcs: &[NativeRuntimeFunc] = match db.compilation_settings().target(db) {
         Target::Evm => &[],
         Target::Native => &NativeRuntimeFunc::ALL,
-        Target::Wasm => &NativeRuntimeFunc::ALLOCATION,
+        Target::Wasm => &NativeRuntimeFunc::WASM,
     };
     for func in runtime_funcs {
         roots.push(func.instance(db, top_mod)?);

@@ -34,11 +34,13 @@ fn span_y(s: Shape) -> i32 {
     s.seg.to.y - s.seg.from.y
 }
 
+#[unsafe(export)]
 pub fn spans(a: i32, b: i32, c: i32, d: i32) -> i32 {
     let s = shape(id: 1, a: a, b: b, c: c, d: d, weight: 0)
     span_x(s: s) * 1000 + span_y(s: s)
 }
 
+#[unsafe(export)]
 pub fn reversed(a: i32, b: i32, c: i32, d: i32) -> i32 {
     var s = shape(id: 2, a: a, b: b, c: c, d: d, weight: 5)
     let old = s.seg
@@ -47,12 +49,14 @@ pub fn reversed(a: i32, b: i32, c: i32, d: i32) -> i32 {
     span_x(s: s) * 1000 + span_y(s: s)
 }
 
+#[unsafe(export)]
 pub fn weighted(a: i32, b: i32, w: i64) -> i64 {
     let s = shape(id: 3, a: a, b: b, c: b, d: a, weight: w)
     let t = s
     (s.id as i64) + t.weight * (t.seg.from.x as i64) + (t.seg.to.y as i64)
 }
 
+#[unsafe(export)]
 pub fn untouched_copy(a: i32) -> i32 {
     var s = shape(id: 4, a: a, b: 2, c: 3, d: 4, weight: 9)
     let saved = s.seg.from

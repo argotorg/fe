@@ -1,3 +1,4 @@
+#[unsafe(export)]
 pub fn pow_mod(base: u64, exp: u64, modulus: u64) -> u64 {
     var result: u64 = 1
     var b = base % modulus

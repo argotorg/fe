@@ -69,7 +69,7 @@ error[3-0088]: an `#[unsafe(export)]` function cannot be generic
 9 │ pub fn generic<T>(_ x: own T) {}
   │               ^^^ generic parameters
   │
-  = a C caller supplies no generic arguments: export a function for each one
+  = a C caller or WebAssembly host supplies no generic arguments: export a function for each one
 
 error[3-0088]: an `#[unsafe(export)]` function cannot be generic
    ┌─ export_attr.fe:12:13
@@ -77,7 +77,7 @@ error[3-0088]: an `#[unsafe(export)]` function cannot be generic
 12 │ pub fn sized<const N: usize>() -> usize { N }
    │             ^^^^^^^^^^^^^^^^ generic parameters
    │
-   = a C caller supplies no generic arguments: export a function for each one
+   = a C caller or WebAssembly host supplies no generic arguments: export a function for each one
 
 error[3-0088]: an `#[unsafe(export)]` function cannot take effects
    ┌─ export_attr.fe:17:25
@@ -85,4 +85,4 @@ error[3-0088]: an `#[unsafe(export)]` function cannot take effects
 17 │ pub fn effects() -> i64 uses (counter: Counter) { counter.n }
    │                         ^^^^^^^^^^^^^^^^^^^^^^^ effects
    │
-   = a C caller provides no effects: provide them in the body with `with`
+   = a C caller provides no effects: provide them in the body with `with`; a WebAssembly export takes those of `std::wasm::Host`

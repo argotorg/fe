@@ -14,14 +14,17 @@ fn max_of(a: i32, b: i32) -> i32 {
     if a > b { a } else { b }
 }
 
+#[unsafe(export)]
 pub fn run(x: u32) -> u32 {
     compose(x: compose(x: x))
 }
 
+#[unsafe(export)]
 pub fn max3(a: i32, b: i32, c: i32) -> i32 {
     max_of(a: max_of(a: a, b: b), b: c)
 }
 
+#[unsafe(export)]
 pub fn abs_diff(a: i32, b: i32) -> i32 {
     if a > b { a - b } else { b - a }
 }

@@ -128,6 +128,7 @@ unsafe fn try_reallocate_by_copy(_ ptr: *u8, _ used: usize, _ size: usize) -> *u
 }
 
 /// Reports a panic without data, as `core::panic`.
+#[cold]
 fn report_trap() -> ! {
     var report = Report::new()
     report.push("panicked\n")
@@ -135,12 +136,14 @@ fn report_trap() -> ! {
 }
 
 /// Reports `Panic(code)` data, as `core::panic_code`.
+#[cold]
 fn report_panic(_ code: u256) -> ! {
     report_revert(panic_data(code), 36)
 }
 
 /// Reports `Panic(uint256)` data by its code's reason, `Error(string)` data
 /// by its message, and other revert data in hex.
+#[cold]
 fn report_revert(_ data: *u8, _ len: usize) -> ! {
     var report = Report::new()
     let selector = data_selector(data, len)
@@ -176,11 +179,13 @@ fn report_revert(_ data: *u8, _ len: usize) -> ! {
 }
 
 /// Passes `Panic(code)` data to the `fe test` launcher.
+#[cold]
 fn host_panic(_ code: u256) -> ! {
     host_revert(panic_data(code), 36)
 }
 
 /// Passes revert data to the `fe test` launcher.
+#[cold]
 fn host_revert(_ data: *u8, _ len: usize) -> ! {
     unsafe { __fe_revert(data, len) }
 }

@@ -1,3 +1,4 @@
+#[unsafe(export)]
 pub fn is_prime(n: u32) -> bool {
     if n < 2 {
         return false
@@ -12,6 +13,7 @@ pub fn is_prime(n: u32) -> bool {
     true
 }
 
+#[unsafe(export)]
 pub fn count_primes(limit: u32) -> u32 {
     var count: u32 = 0
     var n: u32 = 2
