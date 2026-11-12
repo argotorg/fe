@@ -455,6 +455,71 @@ test("after a failed call the guest runs a new instance of the module", async ()
   assert.equal(guest.call("pair", "a", "bc"), (97 << 8) | 98 | (3 << 16));
 });
 
+/**
+ * A module that imports `env.callback` and the stream write, with an export
+ * `outer` that stores "A" at address 0, calls `callback`, writes that byte to
+ * standard output and returns it, and an export `fail` that traps.
+ */
+function assembleReentrant() {
+  const body = (code) => [...leb(code.length + 1), 0, ...code];
+  const bytes = [
+    0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+    ...section(
+      1,
+      vec([
+        [0x60, 0, 0], // () -> ()
+        [0x60, 3, 0x7f, 0x7f, 0x7f, 1, 0x7f], // (i32, i32, i32) -> i32
+        [0x60, 0, 1, 0x7f], // () -> i32
+      ]),
+    ),
+    ...section(2, vec([[...text("env"), ...text("callback"), 0, 0], [...text("env"), ...text("sys_wasm_stream_write"), 0, 1]])),
+    ...section(3, vec([[2], [0]])),
+    ...section(5, vec([[0, 1]])),
+    ...section(7, vec([[...text("memory"), 2, 0], [...text("outer"), 0, 2], [...text("fail"), 0, 3]])),
+    ...section(
+      10,
+      vec([
+        body([
+          0x41, 0, 0x41, 0xc1, 0x00, 0x3a, 0, 0, // store8 [0] = 'A'
+          0x10, 0, // call callback
+          0x41, 1, 0x41, 0, 0x41, 1, 0x10, 1, 0x1a, // write [0..1] to stream 1, drop the count
+          0x41, 0, 0x2d, 0, 0, // load8_u [0]
+          0x0b,
+        ]),
+        body([0x00, 0x0b]), // unreachable
+      ]),
+    ),
+  ];
+  return new Uint8Array(bytes);
+}
+
+test("a call that fails inside an import's call replaces the instance after the outer call", async () => {
+  // The import catches the failure, so `outer` goes on in its instance, and
+  // the host still reads that instance's memory for the write.
+  let guest;
+  let nested = null;
+  guest = await instantiate(assembleReentrant(), {
+    imports: {
+      env: {
+        callback() {
+          try {
+            guest.call("fail");
+          } catch (error) {
+            nested = error;
+          }
+        },
+      },
+    },
+  });
+  const first = guest.instance;
+  assert.equal(guest.call("outer"), 65);
+  assert.ok(nested instanceof WebAssembly.RuntimeError);
+  assert.equal(guest.host.stdout, "A");
+  assert.notEqual(guest.instance, first, "the failed call's instance is replaced after the outer call");
+  assert.equal(guest.call("outer"), 65);
+  assert.equal(guest.host.stdout, "AA");
+});
+
 test("the bytes that match the manifest are the bytes that run", async () => {
   const bytes = assemble();
   const manifest = await manifestFor(bytes);

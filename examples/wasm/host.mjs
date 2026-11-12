@@ -394,12 +394,20 @@ export function createHost(
  * text.
  *
  * A call that fails can leave the stack and the heap of the instance in use: a
- * failed call frees nothing it allocated. So when a call throws, the guest
+ * failed call frees nothing it allocated. So after a call throws, the guest
  * makes a new instance of the module, with the same host, before the error
  * reaches the caller. `instance` and `exports` are then those of the new
- * instance, whose memory holds only the module's initial data.
+ * instance, whose memory holds only the module's initial data. A call that an
+ * import makes back into the module runs inside an outer call, which goes on in
+ * the same instance when the import catches the error, so the guest makes the
+ * new instance when the outermost call ends.
  */
 export class Guest {
+  /** The calls running now: the outermost and those that imports made in it. */
+  #depth = 0;
+  /** Whether a call failed since the outermost call began. */
+  #failed = false;
+
   constructor(module, host, manifest = null) {
     this.module = module;
     this.host = host;
@@ -485,13 +493,23 @@ export class Guest {
     });
   }
 
-  /** Runs `call`, and makes a new instance when it throws. */
+  /**
+   * Runs `call`, and makes a new instance when the outermost call ends if it
+   * or a call inside it threw.
+   */
   #restartingOnFailure(call) {
+    this.#depth += 1;
     try {
       return call();
     } catch (error) {
-      this.#start();
+      this.#failed = true;
       throw error;
+    } finally {
+      this.#depth -= 1;
+      if (this.#depth === 0 && this.#failed) {
+        this.#failed = false;
+        this.#start();
+      }
     }
   }
 

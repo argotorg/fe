@@ -208,7 +208,9 @@ and the clocks of `std::time`) have no provider on this target.
   frees nothing it allocated: its frames stay reserved and its heap blocks stay in use.
   A host does not call that instance again; it makes a new instance of the module, as
   `Guest.call` does. A module keeps nothing between calls, so the new instance can
-  take the next call.
+  take the next call. A call that an import makes back into the module runs inside the
+  outer call, which goes on in the same instance if the import catches the error, so
+  the new instance comes when the outermost call ends.
 - **Contract version.** The version of this contract is 3. It appears in every
   manifest as `contract_version`.
 
