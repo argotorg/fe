@@ -155,7 +155,6 @@ enum AssignLhsStatus {
 pub(super) struct EffectCommitPlan<'db> {
     key_match: Option<KeyMatchCommit<'db>>,
     trait_solutions: SmallVec<[(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>); 2]>,
-    extra_unifications: SmallVec<[(TyId<'db>, TyId<'db>); 4]>,
 }
 
 #[derive(Debug, Clone)]
@@ -203,7 +202,6 @@ fn keyed_effect_evidence<'db>(matched: MatchedKeyedEntry<'db>) -> EffectEvidence
         commit: EffectCommitPlan {
             key_match: Some(key_commit),
             trait_solutions: SmallVec::new(),
-            extra_unifications: SmallVec::new(),
         },
     }
 }
@@ -2996,7 +2994,6 @@ impl<'db> TyChecker<'db> {
             commit: EffectCommitPlan {
                 key_match: Some(key_match),
                 trait_solutions: SmallVec::new(),
-                extra_unifications: SmallVec::new(),
             },
         })
     }
@@ -3023,7 +3020,6 @@ impl<'db> TyChecker<'db> {
             commit: EffectCommitPlan {
                 key_match: None,
                 trait_solutions: SmallVec::from_iter([(trait_goal, solution)]),
-                extra_unifications: SmallVec::new(),
             },
         })
     }
@@ -3264,51 +3260,20 @@ impl<'db> TyChecker<'db> {
     }
 
     /// The provided type, when it matches the type key `pattern`.
-    fn select_type_effect_binding_match(
-        &mut self,
-        pattern: TypePatternKey<'db>,
-        provided: ProvidedEffect<'db>,
-    ) -> Option<TyId<'db>> {
-        let can_commit_key_relation = |this: &mut Self, given: TyId<'db>| {
-            let snapshot = this.snapshot_state();
-            let ok = apply_key_match_commit(
-                this,
-                KeyMatchCommit::QueryToType {
-                    query: pattern.clone(),
-                    actual: given,
-                },
-            );
-            this.rollback_state(snapshot);
-            ok
-        };
-
-        can_commit_key_relation(self, provided.ty).then_some(provided.ty)
-    }
-
     pub(super) fn apply_effect_commit_plan(&mut self, commit: EffectCommitPlan<'db>) -> bool {
         let snapshot = self.snapshot_state();
-        let ok = self.apply_effect_commit_plan_inner(commit);
+        for (goal, solution) in commit.trait_solutions {
+            self.commit_trait_goal_solution(goal, solution);
+        }
+        let ok = commit
+            .key_match
+            .is_none_or(|key_match| apply_key_match_commit(self, key_match));
         if ok {
             self.commit_state(snapshot);
         } else {
             self.rollback_state(snapshot);
         }
         ok
-    }
-
-    fn apply_effect_commit_plan_inner(&mut self, commit: EffectCommitPlan<'db>) -> bool {
-        for (goal, solution) in commit.trait_solutions {
-            self.commit_trait_goal_solution(goal, solution);
-        }
-        if let Some(key_match) = commit.key_match
-            && !apply_key_match_commit(self, key_match)
-        {
-            return false;
-        }
-        commit
-            .extra_unifications
-            .into_iter()
-            .all(|(expected, given)| self.table.unify(expected, given).is_ok())
     }
 
     fn validate_keyed_with(
@@ -3401,68 +3366,56 @@ impl<'db> TyChecker<'db> {
         } = options;
         match pattern {
             EffectPatternKey::Type(pattern) => {
-                if matches!(mode, WitnessBuildMode::ExplicitKeyedWith)
+                let explicit = matches!(mode, WitnessBuildMode::ExplicitKeyedWith);
+                let key_match = KeyMatchCommit::QueryToType {
+                    query: pattern.clone(),
+                    actual: provider.ty,
+                };
+                let omits_arg = explicit
                     && pattern
                         .slots
                         .entries
                         .iter()
-                        .any(|slot| slot.kind == PatternSlotKind::OmittedExplicitArg)
-                {
-                    if emit_diag {
-                        self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
-                            primary: span.clone(),
-                            key: key_path,
-                            expected: pattern.carrier,
-                            given: provider.ty,
-                        });
-                    }
-                    return Err(Box::new(EffectPatternKey::Type(pattern)));
-                }
-                let Some(actual) = self.select_type_effect_binding_match(pattern.clone(), provider)
-                else {
-                    if emit_diag {
-                        self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
-                            primary: span.clone(),
-                            key: key_path,
-                            expected: pattern.carrier,
-                            given: provider.ty,
-                        });
-                    }
-                    return Err(Box::new(EffectPatternKey::Type(pattern)));
-                };
-                let snapshot = self.snapshot_state();
-                let specialized = self
-                    .specialize_type_pattern_key(pattern.clone(), actual)
-                    .map(|carrier| StoredTypeKey {
-                        carrier,
-                        family: pattern.family,
-                    })
-                    .and_then(|stored| {
-                        finalize_stored_effect_key(
-                            self.db,
-                            StoredEffectKey::Type(stored),
-                            scope,
-                            assumptions,
-                        )
-                    });
-                self.rollback_state(snapshot);
-                let Some(key) = specialized.filter(|key| {
-                    !matches!(
-                        (mode, key),
-                        (WitnessBuildMode::ExplicitKeyedWith, StoredEffectKey::Type(stored))
-                            if stored_value_contains_implicit_layout_params(
+                        .any(|slot| slot.kind == PatternSlotKind::OmittedExplicitArg);
+                // The key as the provider's type specializes it.
+                let key = if omits_arg {
+                    None
+                } else {
+                    let snapshot = self.snapshot_state();
+                    let key = apply_key_match_commit(self, key_match.clone())
+                        .then(|| self.table.fold_ty(self.db, provider.ty))
+                        .and_then(|carrier| {
+                            finalize_stored_effect_key(
                                 self.db,
-                                stored.carrier,
-                            ) || stored_value_contains_out_of_scope_params(
-                                self.db,
+                                StoredEffectKey::Type(StoredTypeKey {
+                                    carrier,
+                                    family: pattern.family,
+                                }),
                                 scope,
-                                stored.carrier,
+                                assumptions,
                             )
-                    )
-                }) else {
+                        });
+                    self.rollback_state(snapshot);
+                    key.filter(|key| {
+                        !matches!(
+                            key,
+                            StoredEffectKey::Type(stored)
+                                if explicit
+                                    && (stored_value_contains_implicit_layout_params(
+                                        self.db,
+                                        stored.carrier,
+                                    ) || stored_value_contains_out_of_scope_params(
+                                        self.db,
+                                        scope,
+                                        stored.carrier,
+                                    ))
+                        )
+                    })
+                };
+                let Some(key) = key else {
                     if emit_diag {
                         self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
-                            primary: span.clone(),
+                            primary: span,
                             key: key_path,
                             expected: pattern.carrier,
                             given: provider.ty,
@@ -3473,12 +3426,8 @@ impl<'db> TyChecker<'db> {
                 Ok((
                     EffectWitness { key, provider },
                     EffectCommitPlan {
-                        key_match: Some(KeyMatchCommit::QueryToType {
-                            query: pattern,
-                            actual,
-                        }),
+                        key_match: Some(key_match),
                         trait_solutions: SmallVec::new(),
-                        extra_unifications: SmallVec::new(),
                     },
                 ))
             }
@@ -3578,23 +3527,10 @@ impl<'db> TyChecker<'db> {
                     EffectCommitPlan {
                         key_match: None,
                         trait_solutions: SmallVec::new(),
-                        extra_unifications: SmallVec::new(),
                     },
                 ))
             }
         }
-    }
-
-    fn specialize_type_pattern_key(
-        &mut self,
-        pattern: TypePatternKey<'db>,
-        actual: TyId<'db>,
-    ) -> Option<TyId<'db>> {
-        let key_match = KeyMatchCommit::QueryToType {
-            query: pattern,
-            actual,
-        };
-        apply_key_match_commit(self, key_match).then(|| self.table.fold_ty(self.db, actual))
     }
 
     /// Hides the key `pattern` of the invalid `with` binding keyed
