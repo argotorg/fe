@@ -807,6 +807,9 @@ pub struct InstructionExtentFact {
     pub instruction: OriginExportKey,
     #[trace_ref]
     pub code_object: OriginExportKey,
+    // Each `trace_col` is its own column; clippy takes the shared `kind` for a
+    // repeated attribute.
+    #[allow(clippy::duplicated_attributes)]
     #[trace_col(name = "pc_start", kind = "u32", expr = "self.pc_range.start")]
     #[trace_col(name = "pc_end", kind = "u32", expr = "self.pc_range.end")]
     pub pc_range: PcRange,

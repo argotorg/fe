@@ -1,5 +1,5 @@
 use common::ingot::IngotKind;
-use parser::ast::{self, WhereClauseOwner as _, prelude::*};
+use parser::ast::{self, WhereClauseOwner, prelude::*};
 
 use super::{
     FileLowerCtxt,

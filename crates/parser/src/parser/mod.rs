@@ -813,7 +813,7 @@ impl From<Infallible> for ErrProof {
 
 impl From<Recovery<Infallible>> for Recovery<ErrProof> {
     fn from(recovery: Recovery<Infallible>) -> Self {
-        Self(recovery.0, recovery.1.into())
+        match recovery.1 {}
     }
 }
 
