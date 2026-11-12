@@ -12,7 +12,6 @@ pub(crate) mod infer;
 pub(crate) mod inline;
 pub(crate) mod interface;
 pub(crate) mod layout;
-mod provider_space;
 pub(crate) mod realize;
 pub(crate) mod returns;
 pub(crate) mod semantic_body;

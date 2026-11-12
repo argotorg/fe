@@ -9,11 +9,8 @@ use crate::{
 };
 
 use super::{
-    boundary::{BoundarySiteAllocator, StagedBoundary, default_by_place_boundary},
-    classify::{desired_runtime_effect_arg_boundary, runtime_effect_binding_plan_for_binding_idx},
-    provider_space::resolved_effect_arg_address_space,
-    semantic_body::RuntimeSemanticBody,
-    type_info::{RuntimeTypeEnv, provider_class_for_target_in_env},
+    boundary::{BoundarySiteAllocator, StagedBoundary},
+    classify::runtime_effect_binding_plan_for_binding_idx,
 };
 
 #[derive(Clone, Debug)]
@@ -28,7 +25,6 @@ pub(super) enum CompiledMaterializationPlan<'db> {
 pub(super) enum CompiledValuePassPlan<'db> {
     Erased,
     VisibleValue,
-    ActualValue,
     ExactTransport(RuntimeClass<'db>),
     ExactShapeAggregate(RuntimeClass<'db>),
     ExactShapeRefLike(StagedBoundary<'db>),
@@ -42,20 +38,8 @@ pub(super) enum CompiledValuePassPlan<'db> {
 #[derive(Clone, Debug)]
 pub(super) enum CompiledEffectArgPlan<'db> {
     Erased,
-    Value(CompiledEffectValuePlan<'db>),
-    Place(CompiledEffectPlacePlan<'db>),
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum CompiledEffectValuePlan<'db> {
-    ErasedPlainValue,
-    ByValue(CompiledValuePassPlan<'db>),
-    ByValueFallback(RuntimeClass<'db>),
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum CompiledEffectPlacePlan<'db> {
-    Boundary(StagedBoundary<'db>),
+    Value(CompiledValuePassPlan<'db>),
+    Place(StagedBoundary<'db>),
 }
 
 #[derive(Clone, Debug)]
@@ -97,9 +81,7 @@ pub(super) fn compile_value_pass_plan<'db>(
 
 pub(super) fn compile_call_input_plan_for_semantic<'db>(
     db: &'db dyn MirDb,
-    body: &RuntimeSemanticBody<'db>,
     semantic: SemanticInstance<'db>,
-    type_env: RuntimeTypeEnv<'db>,
     effect_args: &[NEffectArg<'db>],
     boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledCallInputPlan<'db> {
@@ -109,65 +91,29 @@ pub(super) fn compile_call_input_plan_for_semantic<'db>(
         .map(|plan| compile_value_pass_plan(plan, boundary_sites))
         .collect::<Vec<_>>()
         .into_boxed_slice();
+    // The callee's plan for the effect decides how its provider is passed.
     let effect_plans = effect_args
         .iter()
-        .map(|arg| compile_effect_arg_plan(db, body, semantic, type_env, arg, boundary_sites))
+        .map(|arg| {
+            let Some(plan) =
+                runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx)
+            else {
+                return CompiledEffectArgPlan::Erased;
+            };
+            match arg.arg {
+                NEffectArgValue::Value(_) => CompiledEffectArgPlan::Value(compile_value_pass_plan(
+                    RuntimeParamPlan::Boundary(plan.boundary),
+                    boundary_sites,
+                )),
+                NEffectArgValue::Place(_) => {
+                    CompiledEffectArgPlan::Place(boundary_sites.stage(plan.boundary))
+                }
+            }
+        })
         .collect::<Vec<_>>()
         .into_boxed_slice();
     CompiledCallInputPlan {
         param_plans,
         effect_plans,
-    }
-}
-
-fn compile_effect_arg_plan<'db>(
-    db: &'db dyn MirDb,
-    body: &RuntimeSemanticBody<'db>,
-    semantic: SemanticInstance<'db>,
-    type_env: RuntimeTypeEnv<'db>,
-    arg: &NEffectArg<'db>,
-    boundary_sites: &mut BoundarySiteAllocator,
-) -> CompiledEffectArgPlan<'db> {
-    let binding_plan = runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx);
-    if binding_plan.is_none() {
-        return CompiledEffectArgPlan::Erased;
-    }
-    let space = resolved_effect_arg_address_space(db, body, arg);
-    let boundary =
-        desired_runtime_effect_arg_boundary(db, type_env, arg, binding_plan.as_ref(), space);
-    if boundary.is_none() && arg.provider.is_none() && arg.provider_target_ty.is_none() {
-        return match &arg.arg {
-            NEffectArgValue::Value(_) => {
-                CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ErasedPlainValue)
-            }
-            NEffectArgValue::Place(_) => panic!(
-                "effect arg without provider/target should compile as a plain value: owner={:?}; arg={arg:?}",
-                body.owner().key(db).owner(db),
-            ),
-        };
-    }
-    match &arg.arg {
-        NEffectArgValue::Value(_) => {
-            let plan = boundary.map_or(CompiledValuePassPlan::ActualValue, |boundary| {
-                compile_value_pass_plan(RuntimeParamPlan::Boundary(boundary), boundary_sites)
-            });
-            if matches!(plan, CompiledValuePassPlan::ActualValue)
-                && (arg.provider.is_some() || arg.provider_target_ty.is_some())
-            {
-                CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByValueFallback(
-                    provider_class_for_target_in_env(db, type_env, arg.provider_target_ty, space),
-                ))
-            } else {
-                CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByValue(plan))
-            }
-        }
-        NEffectArgValue::Place(_) => {
-            let boundary = boundary.unwrap_or_else(|| {
-                default_by_place_boundary(db, type_env, arg.provider_target_ty, space)
-            });
-            CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Boundary(
-                boundary_sites.stage(boundary),
-            ))
-        }
     }
 }
