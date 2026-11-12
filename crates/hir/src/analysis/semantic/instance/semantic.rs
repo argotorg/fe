@@ -2516,8 +2516,12 @@ fn classify_binding_role<'db>(
     let scope = owner.scope();
     let ty = normalize_ty(db, ty, scope, assumptions);
     if let Some((_, value_ty)) = ty.as_capability(db) {
+        assert!(
+            provider.is_none(),
+            "an effect binding's type is never a borrow type"
+        );
         let value_ty = normalize_ty(db, value_ty, scope, assumptions);
-        return SemanticLocalRole::PlaceCarrier { provider, value_ty };
+        return SemanticLocalRole::PlaceCarrier { value_ty };
     }
     // A read-only effect of a snapshot type is a copy taken at the call, as
     // a snapshot view parameter is, in any space: the call's other effects

@@ -1179,17 +1179,13 @@ fn root_provider_for_runtime_visible_binding<'db>(
         SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
         }
-        | SemanticLocalRole::PlaceCarrier {
-            provider: Some(provider),
-            ..
-        }
         | SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             ..
         } => Some(provider),
         SemanticLocalRole::Erased
         | SemanticLocalRole::DirectValue { .. }
-        | SemanticLocalRole::PlaceCarrier { provider: None, .. }
+        | SemanticLocalRole::PlaceCarrier { .. }
         | SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::Derived(_),
             ..
@@ -1906,35 +1902,8 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
-        SemanticLocalRole::PlaceCarrier {
-            provider: Some(provider),
-            value_ty,
-        } => {
-            if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
-                return None;
-            }
-            let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
-            if class.is_zero_sized(db) {
-                return None;
-            }
-            let boundary =
-                effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions);
-            let boundary = specialize_effect_binding_boundary_for_class(db, boundary, &class);
-            Some(RuntimeEffectBindingPlan { class, boundary })
-        }
-        SemanticLocalRole::PlaceCarrier {
-            provider: None,
-            value_ty,
-        } => {
-            if runtime_zero_sized_ty(db, value_ty, env.scope, env.assumptions) {
-                return None;
-            }
-            let class =
-                provider_class_for_target_in_env(db, env, Some(value_ty), AddressSpace::Memory);
-            Some(RuntimeEffectBindingPlan {
-                class: class.clone(),
-                boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
-            })
+        SemanticLocalRole::PlaceCarrier { .. } => {
+            unreachable!("an effect binding's type is never a borrow type")
         }
         SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
@@ -1990,14 +1959,7 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
             db, env, binding, binding_ty,
         )
         .or_else(|| top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpace::Memory)),
-        SemanticLocalRole::PlaceCarrier {
-            provider: Some(provider),
-            value_ty,
-        } => runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty),
-        SemanticLocalRole::PlaceCarrier {
-            provider: None,
-            value_ty,
-        } => {
+        SemanticLocalRole::PlaceCarrier { value_ty } => {
             // A view of a primitive scalar or a pointer is passed by copy.
             let carrier_ty = semantic
                 .key(db)

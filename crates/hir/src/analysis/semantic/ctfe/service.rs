@@ -407,10 +407,7 @@ fn extract_pure_body_term<'db>(
         let slot = body.locals.get(local.index())?;
         let compatible = match slot.role {
             SemanticLocalRole::DirectValue { .. } => slot.ty == term.term.ty(db),
-            SemanticLocalRole::PlaceCarrier {
-                provider: None,
-                value_ty,
-            } => value_ty == term.term.ty(db),
+            SemanticLocalRole::PlaceCarrier { value_ty } => value_ty == term.term.ty(db),
             _ => false,
         };
         if !compatible || state.assigned[local.index()] {

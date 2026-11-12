@@ -2551,11 +2551,7 @@ fn semantic_root_provider<'db>(
         SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
         } => Some((provider.clone(), local_ty)),
-        SemanticLocalRole::PlaceCarrier {
-            provider: Some(provider),
-            value_ty,
-        }
-        | SemanticLocalRole::PlaceBoundValue {
+        SemanticLocalRole::PlaceBoundValue {
             provenance: PlaceProvenance::RootProvider(provider),
             value_ty,
         } => Some((provider.clone(), *value_ty)),
@@ -2563,7 +2559,7 @@ fn semantic_root_provider<'db>(
         | SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::Ordinary,
         }
-        | SemanticLocalRole::PlaceCarrier { provider: None, .. }
+        | SemanticLocalRole::PlaceCarrier { .. }
         | SemanticLocalRole::PlaceBoundValue {
             provenance: PlaceProvenance::Derived(_),
             ..
