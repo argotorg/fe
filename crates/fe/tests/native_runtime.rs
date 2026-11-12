@@ -1,10 +1,4 @@
-#![cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#![cfg(all(feature = "cranelift", native_host))]
 
 use std::{
     array,
@@ -1400,6 +1394,9 @@ fn fail_assertion() { core::assert(false) }
 
 #[test]
 fn native_runner_bounds_time_and_combined_output() {
+    // Bounds each `fe test` run, which also builds the test. With a debug build of
+    // `fe`, the build alone took over 15 seconds on an AArch64 Linux host.
+    const DEADLINE: Duration = Duration::from_secs(60);
     let temp = tempdir().unwrap();
     let source = temp.path().join("limits.fe");
     fs::write(
@@ -1441,7 +1438,7 @@ fn noisy() uses (out: mut Stdout) {
             .process_group(0)
             .spawn()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + DEADLINE;
         loop {
             if child.try_wait().unwrap().is_some() {
                 break;
@@ -1449,7 +1446,7 @@ fn noisy() uses (out: mut Stdout) {
             if Instant::now() >= deadline {
                 unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
                 child.wait().unwrap();
-                panic!("native {filter} test did not terminate within 15 seconds");
+                panic!("native {filter} test did not terminate within {DEADLINE:?}");
             }
             thread::sleep(Duration::from_millis(10));
         }

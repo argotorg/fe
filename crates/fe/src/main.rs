@@ -28,9 +28,12 @@ use camino::Utf8PathBuf;
 use check::check;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, value_parser};
 use colored::Colorize;
-use common::compilation::{Os, Target};
+use common::InputDb;
+use common::compilation::{Platform, Target};
+use driver::DriverDataBase;
 use driver::project_target::{TargetConflict, project_target};
 use fmt as fe_fmt;
+use salsa::Setter;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
@@ -71,8 +74,8 @@ pub enum BuildEmit {
 pub enum BuildBackend {
     Sonatina,
     #[cfg(feature = "cranelift")]
-    /// Host-native IR, or executables and libraries on x86-64 Linux and
-    /// AArch64 macOS.
+    /// Host-native IR, or executables and libraries on x86-64 Linux,
+    /// AArch64 Linux or AArch64 macOS.
     Native,
     #[cfg(feature = "sp1")]
     /// RV64IM SP1 guest IR or ELF executables.
@@ -149,10 +152,35 @@ impl BuildBackend {
         }
     }
 
-    /// The operating system this backend's code runs on: the host's for
-    /// native executables, none for EVM code and SP1 guests.
-    pub fn os(self) -> Option<Os> {
-        if self.is_native() { Os::host() } else { None }
+    /// The platform this backend's code runs on: the host's for native
+    /// executables, none for EVM code, WebAssembly and SP1 guests.
+    pub fn platform(self) -> Option<Platform> {
+        if self.is_native() {
+            Platform::host()
+        } else {
+            None
+        }
+    }
+
+    /// Creates an empty compiler database that compiles for this backend's
+    /// target and platform.
+    pub fn database(self, profile: &str, recovery_mode: bool) -> DriverDataBase {
+        let mut db = DriverDataBase::default();
+        self.configure(&mut db, profile, recovery_mode);
+        db
+    }
+
+    /// Sets up a new compiler database to compile for this backend's target
+    /// and platform, as [`BuildBackend::database`] does.
+    pub fn configure(self, db: &mut DriverDataBase, profile: &str, recovery_mode: bool) {
+        db.compiler_options()
+            .set_recovery_mode(db)
+            .to(recovery_mode);
+        db.compilation_settings().set_profile(db).to(profile.into());
+        db.compilation_settings().set_target(db).to(self.target());
+        db.compilation_settings()
+            .set_platform(db)
+            .to(self.platform());
     }
 
     pub fn is_native(self) -> bool {
@@ -1562,5 +1590,16 @@ fn format_single_file(path: &Utf8PathBuf, config: &fe_fmt::Config, check: bool) 
     FormatResult::Formatted {
         original,
         formatted,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::compilation::Platform;
+
+    /// build.rs sets `native_host` from its own copy of `Platform::SUPPORTED`.
+    #[test]
+    fn native_host_cfg_matches_platform_host() {
+        assert_eq!(cfg!(native_host), Platform::host().is_some());
     }
 }

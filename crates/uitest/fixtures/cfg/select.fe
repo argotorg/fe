@@ -15,6 +15,12 @@ fn linux() { linux_kept }
 #[cfg(target_os = "macos")]
 fn macos() { macos_kept }
 
+#[cfg(target_arch = "x86_64")]
+fn x86_64() { x86_64_kept }
+
+#[cfg(target_arch = "aarch64")]
+fn aarch64() { aarch64_kept }
+
 #[cfg(target_family = "unix")]
 fn unix() { unix_kept }
 

@@ -10,7 +10,6 @@ use driver::cli_target::{CliTarget, resolve_cli_target};
 use driver::project_target::dependency_target_mismatch;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::build_runtime_package;
-use salsa::Setter;
 use url::Url;
 
 use crate::BuildBackend;
@@ -49,17 +48,7 @@ pub fn check(
     report_failed_only: bool,
     recovery_mode: bool,
 ) -> Result<bool, String> {
-    let mut db = DriverDataBase::default();
-    db.compiler_options()
-        .set_recovery_mode(&mut db)
-        .to(recovery_mode);
-    db.compilation_settings()
-        .set_profile(&mut db)
-        .to(profile.into());
-    db.compilation_settings()
-        .set_target(&mut db)
-        .to(backend.target());
-    db.compilation_settings().set_os(&mut db).to(backend.os());
+    let mut db = backend.database(profile, recovery_mode);
 
     let report_root = report_out
         .map(|out| -> Result<_, String> {

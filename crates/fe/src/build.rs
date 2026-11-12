@@ -10,7 +10,7 @@ use codegen::{OptLevel, SonatinaContractBytecode};
 #[cfg(feature = "sp1")]
 use common::cache::cache_dir;
 #[cfg(feature = "cranelift")]
-use common::compilation::Os;
+use common::compilation::Platform;
 use common::{
     InputDb,
     config::{
@@ -26,7 +26,6 @@ use driver::project_target::dependency_target_mismatch;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use hir::lower::map_file_to_mod;
 use mir::build_runtime_package;
-use salsa::Setter;
 use smol_str::SmolStr;
 #[cfg(feature = "sp1")]
 use sonatina_sp1::{Sp1Runtime, Sp1Toolchain};
@@ -193,12 +192,12 @@ fn validate_build_request(
         ),
         #[cfg(feature = "cranelift")]
         BuildBackend::Native
-            if (emit.executable || emit.library()) && Os::host().is_none() =>
+            if (emit.executable || emit.library()) && Platform::host().is_none() =>
         {
-            Err(
-                "native executable and library output currently require an x86-64 Linux or AArch64 macOS host"
-                    .to_string(),
-            )
+            Err(format!(
+                "native executable and library output requires one of these hosts: {}",
+                Platform::supported_hosts()
+            ))
         }
         #[cfg(feature = "cranelift")]
         BuildBackend::Native => Ok(()),
@@ -312,17 +311,7 @@ pub fn build(
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
-    let mut db = DriverDataBase::default();
-    db.compiler_options()
-        .set_recovery_mode(&mut db)
-        .to(use_recovery_mode);
-    db.compilation_settings()
-        .set_profile(&mut db)
-        .to(profile.into());
-    db.compilation_settings()
-        .set_target(&mut db)
-        .to(backend.target());
-    db.compilation_settings().set_os(&mut db).to(backend.os());
+    let mut db = backend.database(profile, use_recovery_mode);
 
     let report_root = match report_out
         .map(|out| -> Result<_, String> {
@@ -493,15 +482,11 @@ pub fn build_from_metadata(
     profile: &str,
     use_recovery_mode: bool,
 ) {
+    let backend = BuildBackend::Sonatina;
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(
-        BuildBackend::Sonatina,
-        None,
-        contract,
-        emit,
-        NativeLink::default(),
-        None,
-    ) {
+    if let Err(err) =
+        validate_build_request(backend, None, contract, emit, NativeLink::default(), None)
+    {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -626,13 +611,7 @@ pub fn build_from_metadata(
 
     let out_dir = out_dir.cloned().unwrap_or_else(|| Utf8PathBuf::from("out"));
 
-    let mut db = DriverDataBase::default();
-    db.compiler_options()
-        .set_recovery_mode(&mut db)
-        .to(use_recovery_mode);
-    db.compilation_settings()
-        .set_profile(&mut db)
-        .to(profile.into());
+    let mut db = backend.database(profile, use_recovery_mode);
 
     let had_errors = build_directory(
         &mut db,
@@ -640,7 +619,7 @@ pub fn build_from_metadata(
         None,
         contract.as_deref(),
         target_source.as_deref(),
-        BuildBackend::Sonatina,
+        backend,
         opt_level,
         emit,
         NativeLink::default(),

@@ -9,6 +9,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FE_GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=FE_GIT_HASH");
 
+    emit_native_host_cfg();
+
     let repo = git_repo();
     if let Some(repo) = &repo {
         emit_git_rerun_paths(repo);
@@ -39,6 +41,20 @@ fn main() {
 
     let hash = head_id.shorten_or_id();
     println!("cargo:rustc-env=FE_GIT_HASH={hash}");
+}
+
+// Mirrors `Platform::SUPPORTED` in crates/common/src/compilation.rs. The test
+// `native_host_cfg_matches_platform_host` in src/main.rs checks that the two agree.
+fn emit_native_host_cfg() {
+    println!("cargo::rustc-check-cfg=cfg(native_host)");
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if matches!(
+        (arch.as_str(), os.as_str()),
+        ("x86_64", "linux") | ("aarch64", "linux") | ("aarch64", "macos")
+    ) {
+        println!("cargo::rustc-cfg=native_host");
+    }
 }
 
 fn repo_head_commit(repo: Option<&gix::Repository>) -> Option<String> {

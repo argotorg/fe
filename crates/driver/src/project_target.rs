@@ -5,7 +5,7 @@ use std::fmt;
 use camino::{Utf8Path, Utf8PathBuf};
 use common::{
     InputDb,
-    compilation::{Os, Target},
+    compilation::{Platform, Target},
     config::{Config, WorkspaceConfig, WorkspaceMemberSelection},
 };
 use resolver::workspace::{discover_context, expand_workspace_members};
@@ -95,19 +95,19 @@ pub fn ingots_target(urls: &[Url]) -> Result<Option<Target>, TargetConflict> {
     Ok(common.target())
 }
 
-/// Sets the target of `db` and the operating system that goes with it, and
+/// Sets the target of `db` and the platform that goes with it, and
 /// returns whether that changed the target.
 pub fn set_target(db: &mut DriverDataBase, target: Target) -> bool {
     if db.compilation_settings().target(db) == target {
         return false;
     }
     db.compilation_settings().set_target(db).to(target);
-    let os = if target == Target::Native {
-        Os::host()
+    let platform = if target == Target::Native {
+        Platform::host()
     } else {
         None
     };
-    db.compilation_settings().set_os(db).to(os);
+    db.compilation_settings().set_platform(db).to(platform);
     true
 }
 

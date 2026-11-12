@@ -301,8 +301,8 @@ fe test --backend native examples/wasm/tests.fe
 
 The `#[test]` functions of a file or an ingot are built into one module, and each runs
 in its own Node.js process with `host.mjs`. A test passes if it returns. The same file gives the same
-results on the native backend (the second command, on x86-64 Linux or AArch64
-macOS).
+results on the native backend (the second command, on a host that
+[native output](../../CLI.md#native-output) supports).
 
 - A failed assertion, an overflow, a division by zero, an index outside an array and
   a revert with data reach `fe test` as revert data, as from a native test. The test

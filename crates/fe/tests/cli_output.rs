@@ -1,13 +1,7 @@
 use dir_test::{Fixture, dir_test};
 use serde_json::Value;
 use std::{fs, io::IsTerminal, path::Path, process::Command};
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 use std::{
     path::PathBuf,
     thread,
@@ -781,13 +775,7 @@ fn test_cli_build_emit_sizes_accounts_for_every_code_byte() {
     );
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
     let temp = tempdir().expect("tempdir");
@@ -819,13 +807,7 @@ fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
     assert_eq!(status.code(), Some(42));
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
     let fixture_dir =
@@ -850,26 +832,14 @@ fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 fn native_exit_code(source: &str, level: &str) -> Option<i32> {
     let temp = tempdir().expect("tempdir");
     let executable = build_native_program(source, level, temp.path());
     native_program_exit_code(&executable, &[], level)
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 fn build_native_program(source: &str, level: &str, temp: &Path) -> PathBuf {
     let source_path = temp.join("program.fe");
     fs::write(&source_path, source).expect("write native source");
@@ -891,13 +861,7 @@ fn build_native_program(source: &str, level: &str, temp: &Path) -> PathBuf {
     out_dir.join("program")
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 fn native_program_exit_code(executable: &Path, args: &[&str], level: &str) -> Option<i32> {
     test_utils::skip_crash_reports();
     let mut child = Command::new(executable)
@@ -918,13 +882,7 @@ fn native_program_exit_code(executable: &Path, args: &[&str], level: &str) -> Op
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_native_trait_provider_repeated_calls_retain_state() {
     for copy_impl in ["impl Copy for Counter {}", ""] {
@@ -956,13 +914,7 @@ pub fn main() -> i32 {{
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_native_trait_provider_source_capture() {
     let source = include_str!("fixtures/fe_test/trait_provider_identity.fe");
@@ -971,13 +923,7 @@ fn test_cli_native_trait_provider_source_capture() {
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_unchecked_div_rem_integer_widths() {
     for bits in [8, 16, 32, 64, 128, 256] {
@@ -1019,13 +965,7 @@ pub fn main() -> i32 {{
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_arithmetic_traps() {
     let mut cases = Vec::new();
@@ -1159,13 +1099,7 @@ pub fn main() -> i32 {{ if verify() {{ 0 }} else {{ 1 }} }}
     )
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_power_edges() {
     for bits in [8, 128, 256] {
@@ -1201,13 +1135,7 @@ fn test_cli_evm_power_edges() {
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    not(any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    ))
-))]
+#[cfg(all(feature = "cranelift", not(native_host)))]
 #[test]
 fn test_cli_build_native_rejects_executable_on_unsupported_host() {
     let temp = tempdir().expect("tempdir");
@@ -1222,9 +1150,10 @@ fn test_cli_build_native_rejects_executable_on_unsupported_host() {
     ]);
     assert_eq!(exit_code, 1, "expected native host rejection:\n{output}");
     assert!(
-        output.contains(
-            "native executable and library output currently require an x86-64 Linux or AArch64 macOS host"
-        ),
+        output.contains(&format!(
+            "native executable and library output requires one of these hosts: {}",
+            common::compilation::Platform::supported_hosts()
+        )),
         "unexpected output:\n{output}"
     );
 }
@@ -1253,13 +1182,7 @@ fn test_cli_build_native_rejects_evm_artifacts() {
     );
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_library_needs_exports_and_no_executable() {
     let temp = tempdir().expect("tempdir");
@@ -3865,16 +3788,7 @@ fn test_fe_test(fixture: Fixture<&str>) {
     );
 }
 
-#[cfg(any(
-    feature = "wasm",
-    all(
-        feature = "cranelift",
-        any(
-            all(target_arch = "x86_64", target_os = "linux"),
-            all(target_arch = "aarch64", target_os = "macos")
-        )
-    )
-))]
+#[cfg(any(feature = "wasm", all(feature = "cranelift", native_host)))]
 /// `fe_test` fixtures that need the EVM: contracts, storage, EVM
 /// instructions or EVM effects. Sorted.
 const EVM_ONLY_FE_TESTS: &[&str] = &[
@@ -4082,20 +3996,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "zero_option_result",
 ];
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
     glob: "*.fe",
