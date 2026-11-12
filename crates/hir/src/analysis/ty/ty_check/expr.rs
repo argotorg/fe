@@ -44,9 +44,9 @@ use crate::analysis::ty::{
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{
-        BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
-        EffectRequirementDecl, EffectWitness, ForwardedEffectKey, PatternSlotKind, StoredEffectKey,
-        StoredTraitKey, StoredTypeKey, TraitKeySchema, TraitPatternKey, TypePatternKey,
+        EffectKeyKind, EffectPatternKey, EffectQuery, EffectRequirementDecl, EffectWitness,
+        ForwardedEffectKey, PatternSlotKind, StoredEffectKey, StoredTraitKey, StoredTypeKey,
+        TraitKeySchema, TraitPatternKey, TypePatternKey,
         elaborate::{
             build_barrier_pattern_for_with_key,
             build_conservative_same_family_barrier_pattern_in_scope, build_effect_query_for_call,
@@ -1971,16 +1971,11 @@ impl<'db> TyChecker<'db> {
                                     "validated keyed `with` binding commit failed"
                                 );
                                 if !committed {
-                                    let barrier = EffectBarrier {
-                                        pattern: build_barrier_pattern_for_with_key(self, key_path)
-                                            .expect("validated keyed binding should have a barrier pattern"),
-                                        reason: self.barrier_reason_for_pattern(
-                                            key_path,
-                                            witness.key.clone(),
-                                            binding.value.span(self.body()).into(),
-                                        ),
-                                    };
-                                    self.insert_effect_barrier(barrier);
+                                    let pattern =
+                                        build_barrier_pattern_for_with_key(self, key_path).expect(
+                                            "validated keyed binding should have a barrier pattern",
+                                        );
+                                    self.insert_effect_barrier(key_path, pattern);
                                     continue;
                                 }
                                 let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
@@ -2004,9 +1999,7 @@ impl<'db> TyChecker<'db> {
                                     assumptions,
                                 );
                             }
-                            Err(barrier) => {
-                                self.insert_effect_barrier(*barrier);
-                            }
+                            Err(pattern) => self.insert_effect_barrier(key_path, *pattern),
                         }
                     }
                 }
@@ -2931,12 +2924,10 @@ impl<'db> TyChecker<'db> {
                 FrameLookupResult::KeyedMatched {
                     entries,
                     blocked_by_barrier,
-                    barrier_reason,
                 } => {
                     viable.extend(entries.iter().cloned().map(keyed_effect_evidence));
                     if viable.is_empty() {
                         return if blocked_by_barrier {
-                            let _ = barrier_reason;
                             EffectResolution::BlockedByBarrier
                         } else {
                             EffectResolution::Missing
@@ -3330,7 +3321,7 @@ impl<'db> TyChecker<'db> {
             EffectWitness<'db, ProvidedEffect<'db>>,
             EffectCommitPlan<'db>,
         ),
-        Box<EffectBarrier<'db>>,
+        Box<EffectPatternKey<'db>>,
     > {
         let Some(pattern) = build_barrier_pattern_for_with_key(self, key_path) else {
             let fallback = build_conservative_same_family_barrier_pattern_in_scope(
@@ -3355,10 +3346,7 @@ impl<'db> TyChecker<'db> {
                     ),
                     given: provider.ty,
                 });
-                return Err(Box::new(EffectBarrier {
-                    pattern: EffectPatternKey::Trait(pattern),
-                    reason: BarrierReason::InvalidExplicitTraitKey { span, key_path },
-                }));
+                return Err(Box::new(EffectPatternKey::Trait(pattern)));
             }
             let expected = TyId::invalid(self.db, InvalidCause::Other);
             self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
@@ -3367,14 +3355,13 @@ impl<'db> TyChecker<'db> {
                 expected,
                 given: provider.ty,
             });
-            return Err(Box::new(EffectBarrier {
-                pattern: fallback.unwrap_or(EffectPatternKey::Type(TypePatternKey {
+            return Err(Box::new(fallback.unwrap_or(EffectPatternKey::Type(
+                TypePatternKey {
                     carrier: expected,
                     family: crate::analysis::ty::effects::effect_family_for_type(self.db, expected),
                     slots: crate::analysis::ty::effects::PatternSlots::empty(),
-                })),
-                reason: BarrierReason::InvalidExplicitTypeKey { span, key_path },
-            }));
+                },
+            ))));
         };
 
         self.build_keyed_witness_from_pattern_in_scope(
@@ -3405,7 +3392,7 @@ impl<'db> TyChecker<'db> {
             EffectWitness<'db, ProvidedEffect<'db>>,
             EffectCommitPlan<'db>,
         ),
-        Box<EffectBarrier<'db>>,
+        Box<EffectPatternKey<'db>>,
     > {
         let KeyedWitnessBuildOptions {
             scope: KeyedWitnessBuildScope { scope, assumptions },
@@ -3429,13 +3416,7 @@ impl<'db> TyChecker<'db> {
                             given: provider.ty,
                         });
                     }
-                    return Err(Box::new(EffectBarrier {
-                        pattern: EffectPatternKey::Type(pattern),
-                        reason: BarrierReason::InvalidExplicitTypeKey {
-                            span: span.clone(),
-                            key_path,
-                        },
-                    }));
+                    return Err(Box::new(EffectPatternKey::Type(pattern)));
                 }
                 let Some(actual) = self.select_type_effect_binding_match(pattern.clone(), provider)
                 else {
@@ -3447,13 +3428,7 @@ impl<'db> TyChecker<'db> {
                             given: provider.ty,
                         });
                     }
-                    return Err(Box::new(EffectBarrier {
-                        pattern: EffectPatternKey::Type(pattern),
-                        reason: BarrierReason::InvalidExplicitTypeKey {
-                            span: span.clone(),
-                            key_path,
-                        },
-                    }));
+                    return Err(Box::new(EffectPatternKey::Type(pattern)));
                 };
                 let snapshot = self.snapshot_state();
                 let specialized = self
@@ -3493,13 +3468,7 @@ impl<'db> TyChecker<'db> {
                             given: provider.ty,
                         });
                     }
-                    return Err(Box::new(EffectBarrier {
-                        pattern: EffectPatternKey::Type(pattern),
-                        reason: BarrierReason::InvalidExplicitTypeKey {
-                            span: span.clone(),
-                            key_path,
-                        },
-                    }));
+                    return Err(Box::new(EffectPatternKey::Type(pattern)));
                 };
                 Ok((
                     EffectWitness { key, provider },
@@ -3539,13 +3508,7 @@ impl<'db> TyChecker<'db> {
                             given: provider.ty,
                         });
                     }
-                    return Err(Box::new(EffectBarrier {
-                        pattern: EffectPatternKey::Trait(pattern),
-                        reason: BarrierReason::InvalidExplicitTraitKey {
-                            span: span.clone(),
-                            key_path,
-                        },
-                    }));
+                    return Err(Box::new(EffectPatternKey::Trait(pattern)));
                 }
                 if provider.ty.has_var(self.db) {
                     if emit_diag {
@@ -3554,13 +3517,7 @@ impl<'db> TyChecker<'db> {
                             ty: provider.ty,
                         });
                     }
-                    return Err(Box::new(EffectBarrier {
-                        pattern: EffectPatternKey::Trait(pattern),
-                        reason: BarrierReason::UnstableExplicitKeyedProvider {
-                            span: span.clone(),
-                            key_path,
-                        },
-                    }));
+                    return Err(Box::new(EffectPatternKey::Trait(pattern)));
                 }
                 let mut table = UnificationTable::new(self.db);
                 let (instantiated, slot_bindings) = instantiate_trait_pattern_in_with_bindings(
@@ -3580,13 +3537,7 @@ impl<'db> TyChecker<'db> {
                             given: provider.ty,
                         });
                     }
-                    return Err(Box::new(EffectBarrier {
-                        pattern: EffectPatternKey::Trait(pattern),
-                        reason: BarrierReason::InvalidExplicitTraitKey {
-                            span: span.clone(),
-                            key_path,
-                        },
-                    }));
+                    return Err(Box::new(EffectPatternKey::Trait(pattern)));
                 };
                 let canonical_goal = Canonicalized::new(self.db, trait_goal);
                 let solved = canonical_goal.extract_solution(&mut table, solution);
@@ -3620,10 +3571,7 @@ impl<'db> TyChecker<'db> {
                     scope,
                     assumptions,
                 ) else {
-                    return Err(Box::new(EffectBarrier {
-                        pattern: EffectPatternKey::Trait(pattern),
-                        reason: BarrierReason::InvalidExplicitTraitKey { span, key_path },
-                    }));
+                    return Err(Box::new(EffectPatternKey::Trait(pattern)));
                 };
                 Ok((
                     EffectWitness { key, provider },
@@ -3649,55 +3597,25 @@ impl<'db> TyChecker<'db> {
         apply_key_match_commit(self, key_match).then(|| self.table.fold_ty(self.db, actual))
     }
 
-    fn barrier_reason_for_pattern(
-        &self,
-        key_path: PathId<'db>,
-        key: StoredEffectKey<'db>,
-        span: DynLazySpan<'db>,
-    ) -> BarrierReason<'db> {
-        match key {
-            StoredEffectKey::Type(_) => BarrierReason::InvalidExplicitTypeKey { span, key_path },
-            StoredEffectKey::Trait(_) => BarrierReason::InvalidExplicitTraitKey { span, key_path },
-        }
-    }
-
-    fn insert_effect_barrier(&mut self, barrier: EffectBarrier<'db>) {
-        let Some(barrier) = self.refine_effect_barrier(barrier) else {
-            return;
+    /// Hides the key `pattern` of the invalid `with` binding keyed
+    /// `key_path` from the frames outside it. A pattern that is not fully
+    /// resolved hides its whole family.
+    fn insert_effect_barrier(&mut self, key_path: PathId<'db>, pattern: EffectPatternKey<'db>) {
+        let precise = !query_contains_unresolved_inference(self.db, &pattern)
+            && !contains_projection_or_invalid_query_state(self.db, &pattern);
+        let pattern = if precise {
+            Some(pattern)
+        } else {
+            build_conservative_same_family_barrier_pattern_in_scope(
+                self.db,
+                self.env.scope(),
+                self.env.assumptions(),
+                key_path,
+            )
         };
-        self.env
-            .effect_env_mut()
-            .insert_barrier(barrier.pattern.clone().family(), barrier);
-    }
-
-    fn refine_effect_barrier(&self, barrier: EffectBarrier<'db>) -> Option<EffectBarrier<'db>> {
-        if self.barrier_pattern_is_precise(&barrier.pattern) {
-            return Some(barrier);
+        if let Some(pattern) = pattern {
+            self.env.effect_env_mut().insert_barrier(pattern);
         }
-
-        // Exact invalid keyed barriers participate only when precise; otherwise we downgrade to
-        // a same-family conservative barrier so invalid explicit keyed bindings still shadow outer
-        // providers conservatively.
-        let key_path = match &barrier.reason {
-            BarrierReason::InvalidExplicitTypeKey { key_path, .. }
-            | BarrierReason::InvalidExplicitTraitKey { key_path, .. }
-            | BarrierReason::UnstableExplicitKeyedProvider { key_path, .. } => *key_path,
-        };
-        let pattern = build_conservative_same_family_barrier_pattern_in_scope(
-            self.db,
-            self.env.scope(),
-            self.env.assumptions(),
-            key_path,
-        )?;
-        Some(EffectBarrier {
-            pattern,
-            reason: barrier.reason,
-        })
-    }
-
-    fn barrier_pattern_is_precise(&self, pattern: &EffectPatternKey<'db>) -> bool {
-        !query_contains_unresolved_inference(self.db, pattern)
-            && !contains_projection_or_invalid_query_state(self.db, pattern)
     }
 
     fn specialize_same_trait_method_inst(
