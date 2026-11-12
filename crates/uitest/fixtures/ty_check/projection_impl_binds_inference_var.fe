@@ -1,0 +1,82 @@
+trait Mark {}
+trait Seq {
+    type Tail
+}
+trait Tr {
+    type Out
+}
+
+struct Nil {}
+struct Cons<T> {
+    t: T,
+}
+struct W<T> {
+    t: T,
+}
+struct V<T> {
+    t: T,
+}
+
+impl<T> Seq for Cons<T> {
+    type Tail = T
+}
+
+impl Tr for W<Nil> {
+    type Out = u8
+}
+impl<T: Mark> Tr for W<T> {
+    type Out = bool
+}
+
+impl Tr for V<Nil> {
+    type Out = u8
+}
+impl<T: Seq> Tr for V<T>
+where
+    V<T::Tail>: Tr,
+{
+    type Out = <V<T::Tail> as Tr>::Out
+}
+
+fn make<T>() -> W<T> {
+    todo()
+}
+
+fn out<T>(_ w: W<T>) -> <W<T> as Tr>::Out
+where
+    W<T>: Tr,
+{
+    todo()
+}
+
+fn take(_ w: W<Nil>) {}
+
+// `W<Nil>: Tr` matches only once `w` is known to be a `W<Nil>`.
+fn late() -> bool {
+    let w = make()
+    let x: bool = out(w)
+    take(w)
+    x
+}
+
+fn make_v<T>() -> V<T> {
+    todo()
+}
+
+fn out_v<T>(_ v: V<T>) -> <V<T> as Tr>::Out
+where
+    V<T>: Tr,
+{
+    todo()
+}
+
+fn late_recursive() -> u8 {
+    let v = make_v()
+    let x = out_v(v)
+    let _known: V<Cons<Nil>> = v
+    x
+}
+
+fn unknown() {
+    let _x = out_v(make_v())
+}

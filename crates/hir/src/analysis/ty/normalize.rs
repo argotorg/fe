@@ -641,6 +641,10 @@ impl<'db> TypeNormalizer<'db> {
         // Canonicalize the target trait instance so we can unify against it in a
         // fresh table without mixing inference keys from other tables.
         let canonical_target = Canonicalized::new(self.db, trait_inst);
+        // Whether a candidate matches only for some types of the target's
+        // inference variables: which impl applies is not known until they
+        // are.
+        let mut binds = false;
         canonical_target.with_materialized(self.db, |cx| {
             let target_inst = cx.query();
             let original_target = cx.try_extract::<TraitInstId<'db>>(target_inst);
@@ -658,6 +662,7 @@ impl<'db> TypeNormalizer<'db> {
                     |cx, inst, assoc_ty| {
                         cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
                         if cx.try_extract::<TraitInstId<'db>>(target_inst) != original_target {
+                            binds = true;
                             return None;
                         }
                         let assoc_ty = cx.resolve::<TyId<'db>>(assoc_ty);
@@ -671,7 +676,7 @@ impl<'db> TypeNormalizer<'db> {
         });
 
         let (&definition, implementor) = match definitions.len() {
-            1 => definitions.first()?,
+            1 if !binds => definitions.first()?,
             _ => return None,
         };
         Some(match implementor.origin(self.db) {
