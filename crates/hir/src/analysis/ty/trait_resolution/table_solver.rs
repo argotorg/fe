@@ -96,14 +96,13 @@ fn normalize_assoc_binding<'db>(
     table: &mut PersistentUnificationTable<'db>,
     ty: TyId<'db>,
     scope: ScopeId<'db>,
-    assumptions: super::PredicateListId<'db>,
-    resolve_impls: bool,
+    solve_cx: TraitSolveCx<'db>,
 ) -> TyId<'db> {
     let ty = ty.fold_with(db, table);
-    if resolve_impls {
-        normalize_ty(db, ty, scope, assumptions)
+    if solve_cx.resolve_impls {
+        normalize_ty(db, ty, scope, solve_cx.assumptions)
     } else {
-        normalize_from_assumptions(db, ty, scope, assumptions)
+        normalize_from_assumptions(db, ty, scope, solve_cx.assumptions)
     }
 }
 
@@ -125,7 +124,7 @@ fn unify_or_undecided<'db, T>(
     table: &mut PersistentUnificationTable<'db>,
     a: T,
     b: T,
-    resolve_impls: bool,
+    solve_cx: TraitSolveCx<'db>,
 ) -> Result<(), Mismatch>
 where
     T: Copy + TyFoldable<'db> + Unifiable<'db>,
@@ -146,7 +145,7 @@ where
     if table.unify(a, b).is_ok() {
         return Ok(());
     }
-    if resolve_impls {
+    if solve_cx.resolve_impls {
         return Err(Mismatch::Rejected);
     }
     let snapshot = table.snapshot();
@@ -167,15 +166,14 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
     candidate: TraitInstId<'db>,
     goal: TraitInstId<'db>,
     scope: ScopeId<'db>,
-    assumptions: super::PredicateListId<'db>,
-    resolve_impls: bool,
+    solve_cx: TraitSolveCx<'db>,
 ) -> Result<(), Mismatch> {
     unify_or_undecided(
         db,
         table,
         trait_inst_head(db, candidate),
         trait_inst_head(db, goal),
-        resolve_impls,
+        solve_cx,
     )?;
 
     // Each of the goal's equalities holds by the candidate's, which may bind
@@ -184,17 +182,10 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
         let candidate_assoc_ty = candidate
             .bound_assoc_ty(db, binding)
             .ok_or(Mismatch::Rejected)?;
-        let candidate_assoc_ty = normalize_assoc_binding(
-            db,
-            table,
-            candidate_assoc_ty,
-            scope,
-            assumptions,
-            resolve_impls,
-        );
-        let goal_assoc_ty =
-            normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions, resolve_impls);
-        unify_or_undecided(db, table, candidate_assoc_ty, goal_assoc_ty, resolve_impls)?;
+        let candidate_assoc_ty =
+            normalize_assoc_binding(db, table, candidate_assoc_ty, scope, solve_cx);
+        let goal_assoc_ty = normalize_assoc_binding(db, table, goal_assoc_ty, scope, solve_cx);
+        unify_or_undecided(db, table, candidate_assoc_ty, goal_assoc_ty, solve_cx)?;
     }
 
     Ok(())
@@ -208,21 +199,12 @@ fn assumption_answers<'db>(
     assumption: TraitInstId<'db>,
     goal: TraitInstId<'db>,
     scope: ScopeId<'db>,
-    assumptions: super::PredicateListId<'db>,
-    resolve_impls: bool,
+    solve_cx: TraitSolveCx<'db>,
 ) -> Result<(), Mismatch> {
     if goal.is_mut(db) && !assumption.is_mut(db) {
         return Err(Mismatch::Rejected);
     }
-    unify_trait_inst_with_normalized_assoc_bindings(
-        db,
-        table,
-        assumption,
-        goal,
-        scope,
-        assumptions,
-        resolve_impls,
-    )
+    unify_trait_inst_with_normalized_assoc_bindings(db, table, assumption, goal, scope, solve_cx)
 }
 
 /// The position, in `solve_cx`'s extended assumption list, of the first
@@ -233,22 +215,29 @@ pub(crate) fn answering_assumption<'db>(
     goal: TraitInstId<'db>,
 ) -> Option<usize> {
     let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
-    let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-    let resolve_impls = solve_cx.resolve_impls();
-    let goal =
-        normalize_trait_inst_preserving_validity(db, goal, scope, assumptions, resolve_impls);
-    assumptions.list(db).iter().position(|&assumption| {
-        assumption_answers(
-            db,
-            &mut PersistentUnificationTable::new(db),
-            assumption,
-            goal,
-            scope,
-            assumptions,
-            resolve_impls,
-        )
-        .is_ok()
-    })
+    let solve_cx = solve_cx.with_assumptions(solve_cx.assumptions.extend_all_bounds(db));
+    let goal = normalize_trait_inst_preserving_validity(
+        db,
+        goal,
+        scope,
+        solve_cx.assumptions,
+        solve_cx.resolve_impls,
+    );
+    solve_cx
+        .assumptions
+        .list(db)
+        .iter()
+        .position(|&assumption| {
+            assumption_answers(
+                db,
+                &mut PersistentUnificationTable::new(db),
+                assumption,
+                goal,
+                scope,
+                solve_cx,
+            )
+            .is_ok()
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,6 +363,15 @@ impl<'db> TraitResolutionContext<'db> {
         match mismatch {
             Mismatch::Rejected => Transition::Reject,
             Mismatch::Undecided => Transition::Stop(StopReason::UnresolvedProjection),
+        }
+    }
+
+    /// The search's context with the assumptions of one of its queries.
+    fn solve_cx(&self, assumptions: super::PredicateListId<'db>) -> TraitSolveCx<'db> {
+        TraitSolveCx {
+            origin_ingot: self.origin_ingot,
+            assumptions,
+            resolve_impls: self.resolve_impls,
         }
     }
 
@@ -627,8 +625,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     normalized_candidate,
                     normalized_goal,
                     scope,
-                    query.assumptions,
-                    self.resolve_impls,
+                    self.solve_cx(query.assumptions),
                 ) {
                     return Ok(Self::mismatch_transition(mismatch));
                 }
@@ -661,8 +658,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     assumption,
                     normalized_goal,
                     scope,
-                    query.assumptions,
-                    self.resolve_impls,
+                    self.solve_cx(query.assumptions),
                 ) {
                     return Ok(Self::mismatch_transition(mismatch));
                 }
@@ -700,8 +696,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     implementor.trait_inst(self.db),
                     normalized_goal,
                     scope,
-                    query.assumptions,
-                    self.resolve_impls,
+                    self.solve_cx(query.assumptions),
                 ) {
                     return Ok(Self::mismatch_transition(mismatch));
                 }
@@ -761,7 +756,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             &mut branch.table,
             normalized_pending,
             normalized_solution,
-            self.resolve_impls,
+            self.solve_cx(rebase.assumptions()),
         ) {
             return Ok(Self::mismatch_transition(mismatch));
         }
