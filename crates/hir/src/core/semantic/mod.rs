@@ -41,6 +41,7 @@ use crate::analysis::ty::ty_def::{AssocTy, BorrowKind, Kind, ShapeMode};
 use crate::analysis::ty::ty_error::{collect_hir_ty_diags, qualified_path_wf_diags};
 use crate::hir_def::params::{FuncParamMode, KindBound as HirKindBound};
 use crate::hir_def::scope_graph::ScopeId;
+use crate::span::types::LazyTySpan;
 use crate::{HirDb, SpannedHirDb};
 pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
@@ -5235,72 +5236,34 @@ impl<'db> ImplAssocTypeView<'db> {
     /// All type-related diagnostics for this associated type.
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let def = self.owner.types(db)[self.idx];
-        let Some(hir) = def.type_ref.to_opt() else {
+        let (Some(hir), Some(ty)) = (def.type_ref.to_opt(), self.ty(db)) else {
             return Vec::new();
         };
-
         let ty_span = self.span().ty();
-        let assumptions = constraints_for(db, self.owner.into());
-
-        let scope = self.owner.scope();
-        let errs = if def.is_shape {
-            shape_value_diags(db, hir, scope, ty_span.clone(), assumptions)
-        } else {
-            collect_ty_lower_errors(db, scope, hir, ty_span.clone(), assumptions)
-        };
-        if !errs.is_empty() {
-            return errs;
-        }
-
-        let Some(ty) = self.ty(db) else {
-            return Vec::new();
-        };
-        if let Some(diag) = ty.emit_diag(db, ty_span.clone().into()) {
-            return vec![diag];
-        }
-        // A type is of its declaration's kind: `*`, unless a bound gives
-        // another.
-        if !def.is_shape
-            && let Some(trait_) = self.owner.trait_def(db)
-            && let Some(decl) = trait_
+        let trait_ = self.owner.trait_def(db);
+        let decl = trait_.and_then(|trait_| {
+            trait_
                 .assoc_types(db)
                 .find(|assoc| assoc.name(db) == def.name.to_opt())
-            && !decl.is_shape(db)
-        {
-            let expected = lower_kind_in_bounds(decl.bounds_raw(db)).unwrap_or(Kind::Star);
-            if !ty.kind(db).does_match(&expected) {
-                return vec![
-                    TyLowerDiag::InvalidTypeArgKind {
-                        span: ty_span.into(),
-                        expected: Some(expected),
-                        given: ty,
-                    }
-                    .into(),
-                ];
-            }
-        }
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        });
+        let diags = assoc_ty_value_diags(
             db,
-            TraitSolveCx::new(db, self.owner.scope())
-                .with_assumptions(param_env(db, self.owner.into())),
+            self.owner.into(),
+            decl,
+            def.is_shape,
+            hir,
             ty,
-        ) {
-            return vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: ty_span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ];
+            ty_span.clone(),
+        );
+        if !diags.is_empty() {
+            return diags;
         }
 
         if def.is_shape
             && let Some(name) = def.name.to_opt()
             && let Some(diag) = shape_contract_diag(
                 db,
-                self.owner.trait_def(db),
+                trait_,
                 name,
                 ty,
                 param_env(db, self.owner.into()),
@@ -5312,6 +5275,67 @@ impl<'db> ImplAssocTypeView<'db> {
 
         Vec::new()
     }
+}
+
+/// Diagnostics for an associated type's value, `ty` written as `hir` in
+/// `owner`: an impl's, or a trait's default. What lowering the written type
+/// reports, and else a type that is invalid, not of the kind `decl` declares
+/// (`*`, unless a bound gives another) or not well-formed in `owner`.
+pub(crate) fn assoc_ty_value_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: ItemKind<'db>,
+    decl: Option<TraitAssocTypeView<'db>>,
+    is_shape: bool,
+    hir: TypeId<'db>,
+    ty: TyId<'db>,
+    span: LazyTySpan<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let scope = owner.scope();
+    let assumptions = constraints_for(db, owner);
+    let errs = if is_shape {
+        shape_value_diags(db, hir, scope, span.clone(), assumptions)
+    } else {
+        collect_ty_lower_errors(db, scope, hir, span.clone(), assumptions)
+    };
+    if !errs.is_empty() {
+        return errs;
+    }
+
+    if let Some(diag) = ty.emit_diag(db, span.clone().into()) {
+        return vec![diag];
+    }
+    if !is_shape
+        && let Some(decl) = decl
+        && !decl.is_shape(db)
+    {
+        let expected = lower_kind_in_bounds(decl.bounds_raw(db)).unwrap_or(Kind::Star);
+        if !ty.kind(db).does_match(&expected) {
+            return vec![
+                TyLowerDiag::InvalidTypeArgKind {
+                    span: span.into(),
+                    expected: Some(expected),
+                    given: ty,
+                }
+                .into(),
+            ];
+        }
+    }
+    if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        db,
+        TraitSolveCx::new(db, scope).with_assumptions(param_env(db, owner)),
+        ty,
+    ) {
+        return vec![
+            TraitConstraintDiag::TraitBoundNotSat {
+                span: span.into(),
+                primary_goal: goal,
+                unsat_subgoal: subgoal,
+                required_by: None,
+            }
+            .into(),
+        ];
+    }
+    Vec::new()
 }
 
 /// The contract an associated shape's value `ty`, given for the shape `name`
@@ -5551,6 +5575,11 @@ impl<'db> TraitAssocTypeView<'db> {
     /// Raw bounds for this associated type (HIR). Prefer semantic checks where possible.
     pub(in crate::core) fn bounds_raw(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
         &self.decl(db).bounds
+    }
+
+    /// The default as written, if any.
+    pub(crate) fn default_hir(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        self.decl(db).default
     }
 
     /// Semantic default type for this associated type, lowered in the trait's

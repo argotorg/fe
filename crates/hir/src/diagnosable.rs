@@ -43,10 +43,10 @@ use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::trait_def::{ImplementorId, impls_for_trait_def};
 use crate::semantic::{
     EffectRequirementKey, FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility,
-    VariantView, WherePredicateBoundView, WherePredicateView, constraints_for,
-    has_access_in_every_impl, header_constraints_for, lower_hir_kind_local, param_env,
-    returned_shapes, shape_contract_diag, signature_mentions_maybe_mut, trait_returns_shape,
-    trait_self_predicate,
+    VariantView, WherePredicateBoundView, WherePredicateView, assoc_ty_value_diags,
+    constraints_for, has_access_in_every_impl, header_constraints_for, lower_hir_kind_local,
+    param_env, returned_shapes, shape_contract_diag, signature_mentions_maybe_mut,
+    trait_returns_shape, trait_self_predicate,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -668,14 +668,29 @@ impl<'db> Diagnosable<'db> for TypeAlias<'db> {
 }
 
 impl<'db> Trait<'db> {
-    /// Diagnostics for associated type defaults (bounds satisfaction), in the trait's context.
+    /// Diagnostics for associated type defaults, in the trait's context: the
+    /// written type, as an impl's value is checked, and bounds satisfaction.
     pub fn diags_assoc_defaults(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut diags = Vec::new();
         let assumptions = param_env(db, self.into());
         for assoc in self.assoc_types(db) {
-            let Some(default_ty) = assoc.default_ty(db) else {
+            let (Some(hir), Some(default_ty)) = (assoc.default_hir(db), assoc.default_ty(db))
+            else {
                 continue;
             };
+            let value_diags = assoc_ty_value_diags(
+                db,
+                self.into(),
+                Some(assoc),
+                assoc.is_shape(db),
+                hir,
+                default_ty,
+                assoc.span().ty(),
+            );
+            if !value_diags.is_empty() {
+                diags.extend(value_diags);
+                continue;
+            }
             // A default shape keeps the contract an impl's does.
             if assoc.is_shape(db)
                 && let Some(name) = assoc.name(db)
