@@ -121,18 +121,6 @@ func inline(always) private %core__lib__ptr__alloc_bytes_8b3e(v0.i256) -> i256 {
         return v11;
 }
 
-func private %allowance__g7ab3(v0.@layout_0, v1.@layout_0, v2.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v7.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v9.@layout_2 = insert_value v7 1.i256 v1;
-        v11.i256 = add v2 1.i256;
-        v12.i256 = call %get__g4007 v11 v9;
-        return v12;
-}
-
 func private %impl_Erc20__allowance(v0.i256, v1.@layout_0, v2.@layout_0) -> i256 {
     block0:
         jump block1;
@@ -141,6 +129,18 @@ func private %impl_Erc20__allowance(v0.i256, v1.@layout_0, v2.@layout_0) -> i256
         v7.@layout_2 = insert_value undef.@layout_2 0.i256 v1;
         v9.@layout_2 = insert_value v7 1.i256 v2;
         v11.i256 = add v0 1.i256;
+        v12.i256 = call %get__g4007 v11 v9;
+        return v12;
+}
+
+func private %allowance__g7ab3(v0.@layout_0, v1.@layout_0, v2.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v7.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
+        v9.@layout_2 = insert_value v7 1.i256 v1;
+        v11.i256 = add v2 1.i256;
         v12.i256 = call %get__g4007 v11 v9;
         return v12;
 }
@@ -1274,6 +1274,16 @@ func private %impl_Erc20__transfer(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256)
         return;
 }
 
+func private %transfer_from__g5bd7(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.@layout_0 = call %caller;
+        call %impl_Erc20__transfer_from v3 v4 v0 v1 v2;
+        return 1.i256;
+}
+
 func private %impl_Erc20__transfer_from(v0.i256, v1.@layout_0, v2.@layout_0, v3.@layout_0, v4.i256) {
     block0:
         jump block1;
@@ -1306,16 +1316,6 @@ func private %impl_Erc20__transfer_from(v0.i256, v1.@layout_0, v2.@layout_0, v3.
         v30.i256 = add v0 1.i256;
         call %set__g4007 v30 v21 v23;
         return;
-}
-
-func private %transfer_from__g5bd7(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.@layout_0 = call %caller;
-        call %impl_Erc20__transfer_from v3 v4 v0 v1 v2;
-        return 1.i256;
 }
 
 func inline(always) private %impl_trait_u256__write_key(v0.i256, v1.i256) {

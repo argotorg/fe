@@ -375,7 +375,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                             site: site.slot_site(self.db, idx as u32),
                             requirement_idx: idx as u32,
                         },
-                        provider_semantics(self.db, value.ty).address_space,
+                        Some(provider_semantics(self.db, value.ty).address_space),
                         idx as u32,
                     )),
                     _ => None,

@@ -602,7 +602,7 @@ fn instance_effect_args<'db>(
                 required_mut: callee.requirement.is_mut,
                 instantiated_key_ty: callee.requirement.key.key_ty(),
                 provider_target_ty: provider.semantics.target_ty,
-                provider: provider.semantics.address_space,
+                provider: Some(provider.semantics.address_space),
             });
             providers.push(EffectProviderSpecialization {
                 provider: ProviderBinding {
@@ -2293,7 +2293,7 @@ fn provisional_provider_binding_for_effect<'db>(
                     semantics: crate::analysis::ty::provider::ProviderSemantics {
                         provider_ty,
                         kind: ProviderKind::Place,
-                        address_space: Some(field.address_space),
+                        address_space: field.address_space,
                         target_ty: Some(provider_ty),
                     },
                 });
@@ -2979,7 +2979,7 @@ fn instantiate_provider_binding<'db>(
             db,
             provider_ty,
             target_ty,
-            provider.semantics.address_space,
+            Some(provider.semantics.address_space),
         )
     };
     Ok(ProviderBinding {

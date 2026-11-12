@@ -3211,7 +3211,7 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
     );
     assert_eq!(
         local_provider.semantics.address_space,
-        Some(fe_hir::analysis::ty::AddressSpace::Storage)
+        fe_hir::analysis::ty::AddressSpace::Storage
     );
     assert_eq!(local_provider.semantics.target_ty, Some(*value_ty));
     assert_eq!(value_ty.pretty_print(&db).to_string(), "Cell");
@@ -3526,7 +3526,7 @@ fn free_function_effect_bindings_keep_explicit_memory_address_space() {
         .expect("write_effect resolved provider should exist");
     assert_eq!(
         provider.semantics.address_space,
-        Some(fe_hir::analysis::ty::AddressSpace::Memory),
+        fe_hir::analysis::ty::AddressSpace::Memory,
         "free-function effect providers should keep explicit memory address spaces: {:#?}",
         env.providers(&db),
     );

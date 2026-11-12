@@ -1623,12 +1623,9 @@ pub(super) fn provider_root_space<'db>(
 ) -> AddressSpace {
     root_class
         .address_space()
-        .unwrap_or_else(|| match binding.semantics.kind {
+        .unwrap_or(match binding.semantics.kind {
             ProviderKind::RootObject => AddressSpace::Memory,
-            ProviderKind::Place => binding
-                .semantics
-                .address_space
-                .unwrap_or_else(|| panic!("provider binding missing resolved space")),
+            ProviderKind::Place => binding.semantics.address_space,
         })
 }
 
@@ -1664,7 +1661,7 @@ pub(crate) fn runtime_class_for_provider_binding<'db>(
                 db,
                 RuntimeTypeEnv::new(scope, assumptions),
                 provider.semantics.target_ty,
-                provider.semantics.address_space?,
+                provider.semantics.address_space,
             ),
         )),
     }
@@ -1719,10 +1716,7 @@ pub(crate) fn runtime_class_for_effect_binding_provider_in_env<'db>(
             db,
             env,
             Some(provider.semantics.target_ty.unwrap_or(provider.provider_ty)),
-            provider
-                .semantics
-                .address_space
-                .unwrap_or(AddressSpace::Memory),
+            provider.semantics.address_space,
         )),
         ProviderKind::Place => {
             runtime_class_for_provider_binding(db, provider, env.scope, env.assumptions)
@@ -1743,19 +1737,12 @@ fn runtime_class_for_provider_value_ty_in_env<'db>(
     env: RuntimeTypeEnv<'db>,
     provider: &ProviderBinding<'db>,
     value_ty: TyId<'db>,
-) -> Option<RuntimeClass<'db>> {
-    let space = match provider.semantics.kind {
-        ProviderKind::RootObject => provider
-            .semantics
-            .address_space
-            .unwrap_or(AddressSpace::Memory),
-        ProviderKind::Place => provider.semantics.address_space?,
-    };
-    Some(with_provider_lane(
+) -> RuntimeClass<'db> {
+    with_provider_lane(
         db,
         provider,
-        provider_class_for_target_in_env(db, env, Some(value_ty), space),
-    ))
+        provider_class_for_target_in_env(db, env, Some(value_ty), provider.semantics.address_space),
+    )
 }
 
 fn effect_binding_borrow_boundary<'db>(
@@ -1879,7 +1866,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
                 return None;
             }
-            let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
+            let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty);
             if class.is_zero_sized(db) {
                 return None;
             }
@@ -1912,7 +1899,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
                 return None;
             }
-            let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
+            let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty);
             if class.is_zero_sized(db) {
                 return None;
             }
@@ -1954,7 +1941,9 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
         SemanticLocalRole::Erased => None,
         SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
-        } => runtime_class_for_provider_value_ty_in_env(db, env, &provider, binding_ty),
+        } => Some(runtime_class_for_provider_value_ty_in_env(
+            db, env, &provider, binding_ty,
+        )),
         SemanticLocalRole::DirectValue { .. } => runtime_exact_class_for_ordinary_binding_in_env(
             db, env, binding, binding_ty,
         )
@@ -1978,7 +1967,9 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
         SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             value_ty,
-        } => runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty),
+        } => Some(runtime_class_for_provider_value_ty_in_env(
+            db, env, &provider, value_ty,
+        )),
         SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::Derived(_),
             ..

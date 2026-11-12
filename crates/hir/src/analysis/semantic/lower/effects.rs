@@ -82,7 +82,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 EffectArg::Binding(binding) => binding,
             };
-            self.binding_provider(binding)?.semantics.address_space
+            Some(self.binding_provider(binding)?.semantics.address_space)
         })
     }
 

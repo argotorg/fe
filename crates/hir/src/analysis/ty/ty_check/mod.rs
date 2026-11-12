@@ -2033,7 +2033,7 @@ impl<'db> TyChecker<'db> {
     fn concrete_borrow_provider_for_capability_ty(&self, ty: TyId<'db>) -> Option<AddressSpace> {
         let semantics = provider_semantics(self.db, ty);
         // Root-object defaults are binding-site semantics, not type-implied address spaces.
-        (!matches!(semantics.kind, ProviderKind::RootObject)).then_some(semantics.address_space)?
+        (!matches!(semantics.kind, ProviderKind::RootObject)).then_some(semantics.address_space)
     }
 
     fn concrete_borrow_provider_for_effect_field(
@@ -2041,10 +2041,12 @@ impl<'db> TyChecker<'db> {
         site: EffectParamSite<'db>,
         idx: usize,
     ) -> Option<AddressSpace> {
-        self.env
-            .resolved_provider_binding(site, idx)?
-            .semantics
-            .address_space
+        Some(
+            self.env
+                .resolved_provider_binding(site, idx)?
+                .semantics
+                .address_space,
+        )
     }
 
     fn concrete_borrow_provider_for_binding(
@@ -2058,7 +2060,7 @@ impl<'db> TyChecker<'db> {
             } => self
                 .env
                 .provider_binding(site, provider_idx)
-                .and_then(|provider| provider.semantics.address_space),
+                .map(|provider| provider.semantics.address_space),
             LocalBinding::Param {
                 site: ParamSite::EffectField(site),
                 idx,
