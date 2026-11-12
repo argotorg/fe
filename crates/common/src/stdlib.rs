@@ -18,6 +18,11 @@ const _: &str = env!("FE_BUILTIN_FINGERPRINT");
 pub static BUILTIN_CORE_BASE_URL: &str = "builtin-core:/";
 pub static BUILTIN_STD_BASE_URL: &str = "builtin-std:/";
 
+/// Whether a URL belongs to an embedded library rather than a source replacement.
+pub fn is_embedded_builtin(url: &Url) -> bool {
+    matches!(url.scheme(), "builtin-core" | "builtin-std")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinLibrary {
     Core,

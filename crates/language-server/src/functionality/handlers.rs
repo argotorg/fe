@@ -10,8 +10,7 @@ use async_lsp::{
     },
 };
 
-use common::InputDb;
-use common::compilation::Target;
+use common::{InputDb, compilation::Target, stdlib::is_embedded_builtin};
 use driver::{
     init_ingot,
     project_target::{ingots_target, set_target},
@@ -20,7 +19,7 @@ use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
 };
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use url::Url;
 
 use super::{capabilities::server_capabilities, hover::hover_helper};
@@ -571,17 +570,7 @@ pub async fn handle_file_change(
 
                 sync_project_target(backend);
 
-                // Emit diagnostics for all workspace files
-                let all_files: Vec<_> = backend
-                    .db
-                    .workspace()
-                    .all_files(&backend.db)
-                    .iter()
-                    .map(|(url, _file)| url)
-                    .collect();
-                for url in all_files {
-                    let _ = backend.client.emit(NeedsDiagnostics(url));
-                }
+                emit_workspace_diagnostics(backend);
                 return Ok(());
             }
         }
@@ -647,20 +636,18 @@ fn load_ingot_files(
     }
     sync_project_target(backend);
 
-    // Emit diagnostics for all files that were loaded
-    let all_files: Vec<_> = backend
-        .db
-        .workspace()
-        .all_files(&backend.db)
-        .iter()
-        .map(|(url, _file)| url)
-        .collect();
-
-    for url in all_files {
-        let _ = backend.client.emit(NeedsDiagnostics(url));
-    }
+    emit_workspace_diagnostics(backend);
 
     Ok(())
+}
+
+fn emit_workspace_diagnostics(backend: &Backend) {
+    // Embedded libraries are compiler-owned; source replacements still need checks.
+    for (url, _) in backend.db.workspace().all_files(&backend.db).iter() {
+        if !is_embedded_builtin(&url) {
+            let _ = backend.client.emit(NeedsDiagnostics(url));
+        }
+    }
 }
 
 pub async fn handle_files_need_diagnostics(
@@ -673,16 +660,23 @@ pub async fn handle_files_need_diagnostics(
 
     // Track all requested URIs so we can clear stale diagnostics for any that
     // don't appear in the computed diagnostics (e.g. deleted files, fixed errors)
-    let mut pending_clear: FxHashSet<url::Url> = need_diagnostics
+    let mut pending_clear: FxHashMap<Url, Url> = need_diagnostics
         .iter()
-        .map(|NeedsDiagnostics(u)| u.clone())
+        .map(|NeedsDiagnostics(uri)| {
+            (
+                backend.map_client_uri_to_internal(uri.clone()),
+                backend.map_internal_uri_to_client(uri.clone()),
+            )
+        })
         .collect();
 
-    let ingots_need_diagnostics: FxHashSet<_> = need_diagnostics
-        .iter()
-        .filter_map(|NeedsDiagnostics(url)| {
-            let url = backend.map_client_uri_to_internal(url.clone());
-            backend.db.workspace().containing_ingot(&backend.db, url)
+    let ingots_need_diagnostics: FxHashSet<_> = pending_clear
+        .keys()
+        .filter_map(|url| {
+            backend
+                .db
+                .workspace()
+                .containing_ingot(&backend.db, url.clone())
         })
         .collect();
 
@@ -729,8 +723,8 @@ pub async fn handle_files_need_diagnostics(
         };
 
         for (internal_uri, diags) in diagnostics_map.iter() {
+            pending_clear.remove(internal_uri);
             let uri = backend.map_internal_uri_to_client(internal_uri.clone());
-            pending_clear.remove(&uri);
             let mut diagnostic = diags.clone();
             map_related_info_uris(backend, &mut diagnostic);
             let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
@@ -745,7 +739,7 @@ pub async fn handle_files_need_diagnostics(
     }
 
     // Clear diagnostics for any requested URIs that weren't covered above
-    for uri in pending_clear {
+    for uri in pending_clear.into_values() {
         let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
             uri: uri.clone(),
             diagnostics: Vec::new(),

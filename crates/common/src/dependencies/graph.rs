@@ -10,7 +10,7 @@ use smol_str::SmolStr;
 use url::Url;
 
 use super::{DependencyAlias, DependencyArguments, RemoteFiles, WorkspaceMemberRecord};
-use crate::{InputDb, config::ArithmeticMode, ingot::Version};
+use crate::{InputDb, config::ArithmeticMode, ingot::Version, stdlib::is_embedded_builtin};
 
 type EdgeWeight = (DependencyAlias, DependencyArguments);
 
@@ -250,10 +250,7 @@ impl DependencyGraph {
         let graph = self.graph(db);
         let mut pending: Vec<_> = graph
             .node_indices()
-            .filter(|&idx| {
-                matches!(graph[idx].scheme(), "builtin-core" | "builtin-std")
-                    || self.is_trust_root(db, &graph[idx])
-            })
+            .filter(|&idx| is_embedded_builtin(&graph[idx]) || self.is_trust_root(db, &graph[idx]))
             .collect();
         let mut trusted = HashSet::new();
         while let Some(idx) = pending.pop() {
