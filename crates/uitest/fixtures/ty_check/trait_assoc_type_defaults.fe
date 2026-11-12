@@ -1,0 +1,33 @@
+// An associated type's default in a trait is checked where it is written,
+// as an impl's value is, whether or not an impl takes it. A body that uses
+// a bad default reports nothing more.
+trait Marker {}
+
+struct Marked {}
+
+impl Marker for Marked {}
+
+struct NotMarked {}
+
+struct Foo<T: Marker> {}
+
+trait Defaults {
+    type Missing = Option<Nope>
+    type Mode = Option<ref>
+    type Kind = Option
+    type Ill = Foo<NotMarked>
+    type Fine = Foo<Marked>
+    shape Step = (own Nope,)
+
+    fn count(_ x: Self::Mode) -> u8 {
+        1
+    }
+}
+
+impl Defaults for u8 {}
+
+fn uses_default() -> u8 {
+    let v: Option<u8> = Option::None
+    let fine: <u8 as Defaults>::Fine = Foo {}
+    <u8 as Defaults>::count(v)
+}
