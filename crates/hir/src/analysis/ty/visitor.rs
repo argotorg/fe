@@ -442,9 +442,8 @@ impl<'db> TyVisitable<'db> for EffectArg<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         match self {
-            EffectArg::Place(place) => place.visit_with(visitor),
+            EffectArg::With(_) => {}
             EffectArg::Binding(binding) => binding.visit_with(visitor),
-            EffectArg::Value(_) => {}
         }
     }
 }

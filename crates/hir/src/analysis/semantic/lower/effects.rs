@@ -74,16 +74,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn effect_arg_provider_space(&self, arg: &CallEffectArg<'db>) -> Option<AddressSpace> {
-        arg.provider.or_else(|| match &arg.arg {
-            EffectArg::Place(place) => {
-                let PlaceBase::Binding(binding) = place.base;
-                self.binding_provider(binding)
-                    .and_then(|provider| provider.semantics.address_space)
-            }
-            EffectArg::Binding(binding) => self
-                .binding_provider(*binding)
-                .and_then(|provider| provider.semantics.address_space),
-            EffectArg::Value(_) => None,
+        arg.provider.or_else(|| {
+            let binding = match arg.arg {
+                EffectArg::With(value) => {
+                    let PlaceBase::Binding(binding) = self.typed_body.expr_place(value)?.base;
+                    binding
+                }
+                EffectArg::Binding(binding) => binding,
+            };
+            self.binding_provider(binding)?.semantics.address_space
         })
     }
 
@@ -106,30 +105,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn lower_effect_arg(&mut self, arg: &CallEffectArg<'db>) -> SEffectArg<'db> {
-        let source = arg.with_source.map(|expr| {
-            self.with_binding_sources
-                .get(&expr)
+        let place = match arg.arg {
+            EffectArg::With(value) => match self
+                .with_binding_sources
+                .get(&value)
                 .expect("effect provider should be captured by its with binding")
                 .clone()
-        });
-        let place = match source {
-            Some(WithBindingSource::Place(place)) => place,
-            Some(WithBindingSource::Temporary(local)) => {
-                // Only owned temporaries acquire mutability from their uses. Read-only
-                // providers can remain const-backed, and captured places keep their access.
-                if arg.required_mut {
-                    self.locals[local.index()].mutability = Mutability::Mutable;
-                }
-                SPlace::new(local)
-            }
-            None => match &arg.arg {
-                EffectArg::Place(place) => self.lower_place_data(place),
-                // The caller's own provider, passed on.
-                EffectArg::Binding(binding) => SPlace::new(self.alloc_binding_local(*binding)),
-                EffectArg::Value(_) => {
-                    unreachable!("a `with` value is captured where its block is entered")
+            {
+                WithBindingSource::Place(place) => place,
+                WithBindingSource::Temporary(local) => {
+                    // Only owned temporaries acquire mutability from their uses. Read-only
+                    // providers can remain const-backed, and captured places keep their access.
+                    if arg.required_mut {
+                        self.locals[local.index()].mutability = Mutability::Mutable;
+                    }
+                    SPlace::new(local)
                 }
             },
+            // The caller's own provider, passed on.
+            EffectArg::Binding(binding) => SPlace::new(self.alloc_binding_local(binding)),
         };
         SEffectArg {
             binding_idx: arg.binding_idx,

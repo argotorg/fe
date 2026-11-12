@@ -4331,23 +4331,14 @@ impl<'db> TyChecker<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
-pub enum EffectArg<'db> {
-    Place(Place<'db>),
-    Value(ExprId),
-    Binding(LocalBinding<'db>),
-}
-
+/// What a call passes for an effect: always a place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
-pub enum EffectPassMode {
-    /// The provider of a type key names a place, which is passed.
-    ByPlace,
-    /// The provider of a type key is a `with` value that names no place;
-    /// a temporary holds it for the block.
-    ByTempPlace,
-    /// The provider is the callee's provider as it is: a trait key's, whose
-    /// type implements the trait, or a row's, passed on.
-    ByValue,
+pub enum EffectArg<'db> {
+    /// A `with` binding's value, captured where its block is entered: the
+    /// place it names, or a temporary holding it.
+    With(ExprId),
+    /// The caller's own effect binding.
+    Binding(LocalBinding<'db>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
@@ -4356,9 +4347,6 @@ pub struct ResolvedEffectArg<'db> {
     pub target: EffectArgTarget<'db>,
     pub key: HirTyId<'db>,
     pub arg: EffectArg<'db>,
-    /// The with-binding whose source was evaluated on entry to the block.
-    pub with_source: Option<ExprId>,
-    pub pass_mode: EffectPassMode,
     pub required_mut: bool,
     pub key_kind: EffectKeyKind,
     pub instantiated_key_ty: Option<TyId<'db>>,
@@ -6320,25 +6308,27 @@ impl<'db> TypedBody<'db> {
                         EffectArgTarget::Component { path, .. } => component == Some(path),
                         EffectArgTarget::Forwarded { .. } => false,
                     })?;
-                    match &effect_arg.arg {
-                        EffectArg::Place(place) => self.forwarded_return_sources_from_place(
-                            db,
-                            body,
-                            place,
-                            seen,
-                            visited_locals,
-                        ),
-                        EffectArg::Value(expr) => self.forwarded_return_param_sources_from_expr(
-                            db,
-                            body,
-                            *expr,
-                            seen,
-                            visited_locals,
-                        ),
+                    match effect_arg.arg {
+                        EffectArg::With(value) => match self.expr_place(value) {
+                            Some(place) => self.forwarded_return_sources_from_place(
+                                db,
+                                body,
+                                place,
+                                seen,
+                                visited_locals,
+                            ),
+                            None => self.forwarded_return_param_sources_from_expr(
+                                db,
+                                body,
+                                value,
+                                seen,
+                                visited_locals,
+                            ),
+                        },
                         EffectArg::Binding(binding) => self.forwarded_return_sources_from_place(
                             db,
                             body,
-                            &Place::new(PlaceBase::Binding(*binding)),
+                            &Place::new(PlaceBase::Binding(binding)),
                             seen,
                             visited_locals,
                         ),

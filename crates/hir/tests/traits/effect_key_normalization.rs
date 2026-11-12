@@ -10,7 +10,7 @@ use fe_hir::analysis::ty::evidence::EvidenceList;
 use fe_hir::analysis::ty::evidence::prove;
 use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
 use fe_hir::analysis::ty::ty_check::{
-    BodyOwner, EffectPassMode, TypedBody, check_contract_recv_arm_body, check_func_body,
+    BodyOwner, TypedBody, check_contract_recv_arm_body, check_func_body,
 };
 use fe_hir::analysis::ty::ty_def::{TyData, TyId};
 use fe_hir::hir_def::{CallableDef, Contract, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
@@ -3582,7 +3582,6 @@ fn test_spaces() uses (st: mut RawStorage) {
         .call_effect_args(mem_call)
         .expect("bump_mem should have a resolved effect arg");
     assert_eq!(mem_args.len(), 1);
-    assert_eq!(mem_args[0].pass_mode, EffectPassMode::ByPlace);
     assert_eq!(
         mem_args[0].provider,
         Some(fe_hir::analysis::ty::AddressSpace::Memory)
@@ -3592,7 +3591,6 @@ fn test_spaces() uses (st: mut RawStorage) {
         .call_effect_args(stor_call)
         .expect("bump_stor should have a resolved effect arg");
     assert_eq!(stor_args.len(), 1);
-    assert_eq!(stor_args[0].pass_mode, EffectPassMode::ByPlace);
     assert_eq!(
         stor_args[0].provider,
         Some(fe_hir::analysis::ty::AddressSpace::Storage)
@@ -3639,7 +3637,6 @@ fn test_projected(slot: u256, value: u256) uses (evm: mut Evm) {
         .call_effect_args(call_expr)
         .expect("write_cell should have a resolved effect arg");
     assert_eq!(effect_args.len(), 1);
-    assert_eq!(effect_args[0].pass_mode, EffectPassMode::ByPlace);
     assert_eq!(
         effect_args[0].provider,
         Some(fe_hir::analysis::ty::AddressSpace::Storage)

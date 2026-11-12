@@ -188,7 +188,6 @@ pub(crate) enum SemanticBodyAdmissionError<'db> {
 pub struct CallEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: EffectArg<'db>,
-    pub with_source: Option<ExprId>,
     pub required_mut: bool,
     pub instantiated_key_ty: Option<TyId<'db>>,
     pub provider_target_ty: Option<TyId<'db>>,
@@ -199,8 +198,7 @@ impl<'db> CallEffectArg<'db> {
     fn new(binding_idx: u32, arg: &ResolvedEffectArg<'db>) -> Self {
         Self {
             binding_idx,
-            arg: arg.arg.clone(),
-            with_source: arg.with_source,
+            arg: arg.arg,
             required_mut: arg.required_mut,
             instantiated_key_ty: arg.instantiated_key_ty,
             provider_target_ty: arg.provider_target_ty,
@@ -601,7 +599,6 @@ fn instance_effect_args<'db>(
             expanded.push(CallEffectArg {
                 binding_idx: target,
                 arg: EffectArg::Binding(binding),
-                with_source: None,
                 required_mut: callee.requirement.is_mut,
                 instantiated_key_ty: callee.requirement.key.key_ty(),
                 provider_target_ty: provider.semantics.target_ty,

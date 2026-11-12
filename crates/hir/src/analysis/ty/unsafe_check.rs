@@ -8,7 +8,7 @@ use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::effects::rows::expand_rows;
 use crate::analysis::ty::provider::AddressSpace;
 use crate::analysis::ty::shape::Shape;
-use crate::analysis::ty::ty_check::{BodyOwner, TypedBody};
+use crate::analysis::ty::ty_check::{BodyOwner, EffectArg, TypedBody};
 use crate::analysis::ty::ty_check::{RecordInitLowering, transparent_newtype_field_ty};
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::ty_def::{BorrowKind, ClosureDef};
@@ -386,7 +386,7 @@ impl<'db> UnsafeChecker<'db, '_> {
         let typed_body = self.typed_body;
         for arg in typed_body.call_effect_args(expr).into_iter().flatten() {
             if arg.required_mut
-                && let Some(source) = arg.with_source
+                && let EffectArg::With(source) = arg.arg
             {
                 self.check_place_write(source);
             }
