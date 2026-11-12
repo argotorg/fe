@@ -200,14 +200,15 @@ pub fn provider_semantics_for_specialized_call<'db>(
     let mut semantics = provider_semantics(db, provider_ty);
     // A capability names its target's place, and so does a root object
     // specialized to its own type.
-    if provider_ty.as_capability(db).is_some() || target_ty == Some(provider_ty) {
-        if let Some(target_ty) = target_ty {
-            semantics.kind = ProviderKind::Place;
-            semantics.target_ty = Some(target_ty);
-        }
-        if let Some(address_space) = address_space {
-            semantics.address_space = Some(address_space);
-        }
+    if let Some(target_ty) = target_ty
+        && (provider_ty.as_capability(db).is_some() || target_ty == provider_ty)
+    {
+        semantics.kind = ProviderKind::Place;
+        semantics.target_ty = Some(target_ty);
+    }
+    // Any provider a call passes is a place, which lies in a space.
+    if address_space.is_some() {
+        semantics.address_space = address_space;
     }
     semantics
 }

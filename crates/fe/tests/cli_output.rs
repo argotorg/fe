@@ -3982,6 +3982,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "storage_slots_closures",
     "time_units",
     "trait_effect_lane_writes",
+    "trait_effect_storage_param_provider",
     "tslot_values",
     "tstorptr_field_projection_shapes",
     "tstorptr_struct_field",

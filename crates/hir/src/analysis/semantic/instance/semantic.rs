@@ -2978,20 +2978,12 @@ fn instantiate_provider_binding<'db>(
             ..provider.semantics
         }
     } else {
-        let mut semantics = provider_semantics_for_specialized_call(
+        provider_semantics_for_specialized_call(
             db,
             provider_ty,
             target_ty,
             provider.semantics.address_space,
-        );
-        // A root object lies where its binding says, which its type alone
-        // cannot tell (`effect_param_provider_semantics`).
-        if provider_ty.as_capability(db).is_none()
-            && provider.semantics.provider_ty.as_capability(db).is_none()
-        {
-            semantics.address_space = provider.semantics.address_space;
-        }
-        semantics
+        )
     };
     Ok(ProviderBinding {
         provider_ty,
