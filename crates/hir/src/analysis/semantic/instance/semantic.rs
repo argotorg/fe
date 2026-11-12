@@ -61,7 +61,9 @@ use crate::{
             visitor::{TyVisitable, TyVisitor, collect_flags},
         },
     },
-    hir_def::{CallableDef, Contract, ExprId, FuncParamMode, StmtId, scope_graph::ScopeId},
+    hir_def::{
+        CallableDef, Contract, ExprId, FuncParamMode, IdentId, StmtId, scope_graph::ScopeId,
+    },
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
         ResolvedEffectBinding, effect_param_provider_semantics, effect_requirements_for_site,
@@ -285,13 +287,12 @@ struct ProvisionalCallSiteData<'db, T: SalsaValue + PartialEq + Eq + Clone> {
 #[derive(Debug, Clone)]
 pub enum RootSemanticInstanceError<'db> {
     UnsupportedGenericParam {
-        owner: BodyOwner<'db>,
-        owner_scope: ScopeId<'db>,
         offending_ty: TyId<'db>,
         param_idx: usize,
     },
+    /// Nothing provides the named effect of a root.
     MissingRootProvider {
-        owner: BodyOwner<'db>,
+        effect: Option<IdentId<'db>>,
     },
     UnclosedEffectEnv(SemanticEffectEnvInstantiationError<'db>),
 }
@@ -2803,13 +2804,15 @@ fn root_owner_effect_providers<'db>(
                     specialized_root_provider_target_ty(db, &requirement, root_provider),
                 )
             } else {
-                let target_ty = requirement.key.binding_ty(db)?;
-                let provider_ty = if requirement.is_mut {
-                    TyId::borrow_mut_of(db, target_ty)
-                } else {
-                    TyId::borrow_ref_of(db, target_ty)
+                // A root has no caller to provide the effect. A type key
+                // stands for a place of its own type, which only a
+                // zero-sized type needs no storage for. A trait key names no
+                // type to stand for it.
+                let EffectRequirementKey::Type(key_ty) = requirement.key else {
+                    return None;
                 };
-                (provider_ty, slot.source.clone(), Some(target_ty))
+                let target_ty = normalize_ty(db, key_ty, func.scope(), assumptions);
+                (target_ty, slot.source.clone(), Some(target_ty))
             };
             Some(ProviderBinding {
                 provider_idx: slot.provider_idx,
@@ -2836,7 +2839,9 @@ fn root_provider_satisfies_effect_requirement<'db>(
     requirement: &EffectRequirement<'db>,
 ) -> bool {
     match requirement.key {
-        EffectRequirementKey::Type(provider_ty) => provider_ty == root_provider.provider_ty,
+        EffectRequirementKey::Type(provider_ty) => {
+            normalize_ty(db, provider_ty, func.scope(), assumptions) == root_provider.provider_ty
+        }
         EffectRequirementKey::Trait(trait_inst) => {
             let goal = instantiate_trait_self(db, trait_inst, root_provider.provider_ty);
             matches!(
@@ -2868,8 +2873,6 @@ fn root_func_generic_args<'db>(
     if provider_param_idxs.is_empty() {
         if let Some((param_idx, &offending_ty)) = params.iter().enumerate().next() {
             return Err(RootSemanticInstanceError::UnsupportedGenericParam {
-                owner,
-                owner_scope,
                 offending_ty,
                 param_idx,
             });
@@ -2881,7 +2884,9 @@ fn root_func_generic_args<'db>(
         .into_iter()
         .map(|provider| (provider.provider_idx, provider.provider_ty))
         .collect::<FxHashMap<_, _>>();
-    let resolved_provider_by_effect = EffectEnvView::new(site)
+    let view = EffectEnvView::new(site);
+    let requirements = view.requirements(db);
+    let resolved_provider_by_effect = view
         .resolutions(db)
         .into_iter()
         .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
@@ -2900,8 +2905,6 @@ fn root_func_generic_args<'db>(
         );
         if !is_effect_provider {
             return Err(RootSemanticInstanceError::UnsupportedGenericParam {
-                owner,
-                owner_scope,
                 offending_ty: param_ty,
                 param_idx,
             });
@@ -2911,18 +2914,17 @@ fn root_func_generic_args<'db>(
         .iter()
         .enumerate()
         .map(|(param_idx, _)| {
-            let effect_idx = effect_idx_by_param
-                .get(&param_idx)
+            let effect_idx = effect_idx_by_param.get(&param_idx);
+            effect_idx
+                .and_then(|effect_idx| resolved_provider_by_effect.get(effect_idx))
+                .and_then(|provider_idx| provider_ty_by_idx.get(provider_idx))
                 .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
-            let provider_idx = resolved_provider_by_effect
-                .get(&effect_idx)
-                .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
-            provider_ty_by_idx
-                .get(&provider_idx)
-                .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })
+                .ok_or_else(|| RootSemanticInstanceError::MissingRootProvider {
+                    effect: requirements
+                        .iter()
+                        .find(|requirement| Some(&(requirement.binding_idx as usize)) == effect_idx)
+                        .map(|requirement| requirement.binding_name),
+                })
         })
         .collect()
 }

@@ -1011,7 +1011,10 @@ fn wasm_export_for_func<'db>(
     let semantic = root_semantic_instance_key(db, BodyOwner::Func(func, None))
         .map(|key| SemanticInstance::new(db, key))
         .map_err(|err| {
-            LowerError::Unsupported(format_root_semantic_instance_rejection(db, &name, &err))
+            LowerError::Unsupported(format!(
+                "cannot export `{name}` to WebAssembly: {}",
+                format_root_semantic_instance_rejection(db, &name, &err)
+            ))
         })?;
     if name == WASM_MEMORY_EXPORT {
         return Err(LowerError::Unsupported(format!(
@@ -1923,22 +1926,13 @@ fn semantic_instance_for_root_owner<'db>(
     db: &'db dyn MirDb,
     owner: BodyOwner<'db>,
 ) -> Result<SemanticInstance<'db>, LowerError> {
-    let key = root_semantic_instance_key(db, owner).map_err(|err| match err {
-        RootSemanticInstanceError::UnsupportedGenericParam {
-            owner,
-            owner_scope,
-            offending_ty,
-            param_idx,
-        } => LowerError::Unsupported(format!(
-            "root semantic instance for {owner:?} has unsupported generic param {param_idx} in {owner_scope:?}: {}",
-            offending_ty.pretty_print(db),
-        )),
-        RootSemanticInstanceError::MissingRootProvider { owner } => LowerError::Unsupported(
-            format!("root semantic instance for {owner:?} is missing a root provider binding"),
-        ),
-        RootSemanticInstanceError::UnclosedEffectEnv(err) => LowerError::Unsupported(format!(
-            "root semantic instance is not closed under synthesized root substitution: {err:?}"
-        )),
+    let key = root_semantic_instance_key(db, owner).map_err(|err| {
+        LowerError::Unsupported(match owner {
+            BodyOwner::Func(func, _) => {
+                format_root_semantic_instance_rejection(db, &func_display_name(db, func), &err)
+            }
+            _ => format!("root semantic instance for {owner:?} cannot be built: {err:?}"),
+        })
     })?;
     Ok(SemanticInstance::new(db, key))
 }
@@ -1988,8 +1982,9 @@ fn format_root_semantic_instance_rejection<'db>(
             "function `{func_name}` cannot be used as a standalone runtime root because generic parameter {param_idx} is not supported for root instantiation: {}",
             offending_ty.pretty_print(db),
         ),
-        RootSemanticInstanceError::MissingRootProvider { .. } => format!(
-            "function `{func_name}` cannot be used as a standalone runtime root because an effect provider could not be synthesized"
+        RootSemanticInstanceError::MissingRootProvider { effect } => format!(
+            "function `{func_name}` cannot be used as a standalone runtime root because nothing provides its effect{}; a root has no caller to provide effects, so move the effectful logic into a helper and call it from `{func_name}` with a concrete provider using `with (...)`",
+            effect.map_or_else(String::new, |name| format!(" `{}`", name.data(db))),
         ),
         RootSemanticInstanceError::UnclosedEffectEnv(_) => format!(
             "function `{func_name}` cannot be used as a standalone runtime root because its effect environment is not fully concrete"
