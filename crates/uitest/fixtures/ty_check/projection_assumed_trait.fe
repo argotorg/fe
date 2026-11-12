@@ -1,0 +1,144 @@
+// A projection whose trait a where clause in scope answers resolves only
+// through an impl whose where clauses hold: an instantiation may use another
+// impl.
+trait Mark {}
+trait Seq {
+    type Tail
+}
+trait Tr {
+    type Out
+}
+trait Sub: Tr {}
+
+struct Nil {}
+struct Cons<T> {
+    t: T,
+}
+struct Wrap<T> {
+    t: T,
+}
+struct W<T> {
+    t: T,
+}
+struct V<T> {
+    t: T,
+}
+struct X<T> {
+    t: T,
+}
+struct Y<T> {
+    t: T,
+}
+
+impl<T> Seq for Cons<T> {
+    type Tail = T
+}
+impl<T> Seq for Wrap<T> {
+    type Tail = T
+}
+
+impl Tr for W<Nil> {
+    type Out = u8
+}
+impl<T: Mark> Tr for W<T> {
+    type Out = bool
+}
+
+// `T::Tail: Mark` is not known, and `tail_caller` uses the other impl.
+fn tail<T: Seq>(_ x: <W<T::Tail> as Tr>::Out) -> bool
+where
+    W<T::Tail>: Tr,
+{
+    x
+}
+
+fn tail_caller() -> bool {
+    tail<Cons<Nil>>(5)
+}
+
+impl Tr for V<Nil> {
+    type Out = u8
+}
+impl<T> Tr for V<T>
+where
+    <Wrap<T> as Seq>::Tail: Mark,
+{
+    type Out = bool
+}
+impl Sub for V<Nil> {}
+
+// The where clause of the generic impl needs an impl to resolve its
+// projection.
+fn clause_projection<T>(_ x: <V<T> as Tr>::Out) -> bool
+where
+    V<T>: Tr,
+{
+    x
+}
+
+// A super trait answers the projection's trait.
+fn by_super_trait<T>(_ x: <V<T> as Tr>::Out) -> bool
+where
+    V<T>: Sub,
+{
+    x
+}
+
+trait User {
+    fn go<T>(self, _ x: <V<T> as Tr>::Out) -> bool
+    where
+        V<T>: Tr
+}
+struct U {}
+impl User for U {
+    fn go<T>(self, _ x: <V<T> as Tr>::Out) -> bool
+    where
+        V<T>: Tr,
+    {
+        x
+    }
+}
+
+impl<T> Tr for Y<T>
+where
+    <Wrap<T> as Seq>::Tail: Mark,
+{
+    type Out = bool
+}
+
+// Nothing answers `Y<T>: Tr` but the impl.
+fn not_assumed<T: Mark>(_ x: <Y<T> as Tr>::Out) -> bool {
+    x
+}
+
+// The where clause answers it, though only the one impl matches.
+fn restated<T: Mark>(_ x: <Y<T> as Tr>::Out) -> bool
+where
+    Y<T>: Tr,
+{
+    x
+}
+
+impl<T: Seq> Tr for X<T>
+where
+    T::Tail: Mark,
+{
+    type Out = bool
+}
+
+// The where clause holds by an assumption, as no impl resolves `T::Tail`.
+fn clause_holds<T: Seq>(_ x: <X<T> as Tr>::Out) -> bool
+where
+    T::Tail: Mark,
+    X<T>: Tr,
+{
+    x
+}
+
+// The assumption gives the definition.
+fn assumed_definition<T>(_ x: <V<T> as Tr>::Out) -> u16
+where
+    V<T>: Tr<Out = u16>,
+{
+    x
+}

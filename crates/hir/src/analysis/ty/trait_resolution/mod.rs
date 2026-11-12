@@ -879,8 +879,9 @@ pub enum TraitSolveCompletion {
     PendingWorkLimit { limit: usize },
     /// Fe's bounded-type-growth guard stopped the search.
     MaximumTypeDepth,
-    /// A goal names a projection that only an impl could resolve, in a search
-    /// that doesn't resolve projections through impls.
+    /// The search passed over a candidate that only a projection an impl could
+    /// resolve kept from answering its goal, in a search that doesn't resolve
+    /// projections through impls.
     UnresolvedProjection,
     /// Salsa is iterating a recursive query to a fixpoint.
     Cycle,

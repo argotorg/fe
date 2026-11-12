@@ -17,11 +17,11 @@ use super::{
     fold::{TyFoldable, TyFolder},
     shape::Shape,
     trait_def::{
-        AssocBinding, ImplementorId, ImplementorOrigin, TraitInstId, TraitRefId,
-        impl_where_clause_refuted, impls_for_trait_inst,
+        AssocBinding, ImplWhereClauses, ImplementorId, ImplementorOrigin, TraitInstId, TraitRefId,
+        impl_where_clauses, impls_for_trait_inst,
     },
     trait_lower::complete_impl_assoc_ty,
-    trait_resolution::{PredicateListId, TraitSolveCx},
+    trait_resolution::{PredicateListId, TraitSolveCx, answering_assumption},
     ty_def::{
         AssocTy, InvalidCause, ShapeCon, ShapeMode, TyBase, TyData, TyId, TyParam,
         collect_variables,
@@ -605,6 +605,13 @@ impl<'db> TypeNormalizer<'db> {
     /// is checked where the projection is written. A clause known not to hold
     /// keeps a projection that is written somewhere nothing checks from
     /// resolving as though it did.
+    ///
+    /// Where an assumption answers the trait reference, that check proves
+    /// nothing of the impl found here, and an instantiation may hold by
+    /// another: with `impl Tr for W<Nil>` and `impl<T: Mark> Tr for W<T>`,
+    /// `fn f<T: Seq>(..) where W<T::Tail>: Tr` is called with `Nil` for
+    /// `T::Tail`. An impl then gives the definition only if its where clauses
+    /// hold.
     fn try_resolve_assoc_ty_from_impls(&mut self, assoc: &AssocTy<'db>) -> Option<TyId<'db>> {
         let trait_inst = assoc.trait_.fold_with(self.db, self).as_predicate(self.db);
         let canonical_inst = Canonical::new(self.db, trait_inst);
@@ -616,8 +623,17 @@ impl<'db> TypeNormalizer<'db> {
             .flatten()
             .flat_map(|ingot| impls_for_trait_inst(self.db, ingot, canonical_inst))
             .collect();
+        // Whether an assumption answers the trait reference, found once asked.
+        let mut assumed = None;
         candidates.retain(|&implementor| {
-            !impl_where_clause_refuted(self.db, solve_cx, implementor, canonical_inst)
+            match impl_where_clauses(self.db, solve_cx, implementor, canonical_inst) {
+                ImplWhereClauses::Hold => true,
+                ImplWhereClauses::Refuted => false,
+                ImplWhereClauses::Undecided => !*assumed.get_or_insert_with(|| {
+                    let solve_cx = solve_cx.without_impl_normalization();
+                    answering_assumption(self.db, solve_cx, trait_inst).is_some()
+                }),
+            }
         });
 
         // The definitions the candidates give, each with the impl giving it.

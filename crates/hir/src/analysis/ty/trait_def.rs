@@ -646,9 +646,9 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
 
 /// Returns the implementors of `inst`'s trait whose header, the self type and
 /// every trait argument, unifies with `inst`. Nothing is proved: normalization
-/// drops only the impls whose where clauses are known not to hold (see
-/// [`impl_where_clause_refuted`]), and the trait reference of a projection
-/// is checked where its type is written. Not a tracked query: lowering an
+/// drops the impls whose where clauses are known not to hold (see
+/// [`impl_where_clauses`]), and the trait reference of a projection is
+/// checked where its type is written. Not a tracked query: lowering an
 /// impl's header can normalize a projection, which looks up the impls of a
 /// trait whose headers are being lowered, and that cycle is the trait
 /// environment's to settle.
@@ -669,37 +669,81 @@ pub(crate) fn impls_for_trait_inst<'db>(
     )
 }
 
-/// Whether some where clause of `implementor`, with its header unified with
-/// `inst`, is known not to hold. The clauses are solved without resolving
-/// projections through impls: a clause may name the projection whose impl is
-/// being chosen, as in `impl Tr for S where <S as Tr>::Out: Show`, and one
-/// that needs an impl to resolve a projection is not refuted.
-pub(crate) fn impl_where_clause_refuted<'db>(
+/// Whether the header of some impl in `primary` or `secondary` matches `inst`
+/// (see [`impls_for_trait_inst`]). While the trait environment is being
+/// collected, one may.
+#[salsa::tracked(returns(copy), cycle_initial=impl_header_matches_cycle_initial)]
+pub(crate) fn impl_header_matches<'db>(
+    db: &'db dyn HirAnalysisDb,
+    primary: Ingot<'db>,
+    secondary: Option<Ingot<'db>>,
+    inst: Canonical<TraitInstId<'db>>,
+) -> bool {
+    [Some(primary), secondary]
+        .into_iter()
+        .flatten()
+        .any(|ingot| !impls_for_trait_inst(db, ingot, inst).is_empty())
+}
+
+fn impl_header_matches_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _primary: Ingot<'db>,
+    _secondary: Option<Ingot<'db>>,
+    _inst: Canonical<TraitInstId<'db>>,
+) -> bool {
+    true
+}
+
+/// What is known of the where clauses of an impl whose header matches a
+/// trait reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImplWhereClauses {
+    /// Each holds.
+    Hold,
+    /// One does not hold.
+    Refuted,
+    /// One needs an impl to resolve a projection, or its search stopped at a
+    /// limit, and none is known not to hold.
+    Undecided,
+}
+
+/// Solves the where clauses of `implementor`, with its header unified with
+/// `inst`, without resolving projections through impls: a clause may name
+/// the projection whose impl is being chosen, as in `impl Tr for S where <S
+/// as Tr>::Out: Show`.
+pub(crate) fn impl_where_clauses<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     implementor: ImplementorId<'db>,
     inst: Canonical<TraitInstId<'db>>,
-) -> bool {
+) -> ImplWhereClauses {
     let solve_cx = solve_cx.without_impl_normalization();
     let mut table = UnificationTable::new(db);
     let inst = inst.extract_identity(&mut table);
     let instantiated = table.instantiate_with_fresh_vars(implementor);
-    !header_unifies(
+    if !header_unifies(
         db,
         &mut table,
         instantiated,
         inst.self_ty(db),
         ImplHeader::TraitInst(inst),
-    ) || instantiated
-        .constraints(db)
-        .list(db)
-        .iter()
-        .any(|&constraint| {
-            matches!(
-                is_goal_satisfiable(db, solve_cx, constraint.fold_with(db, &mut table)),
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-            )
-        })
+    ) {
+        return ImplWhereClauses::Refuted;
+    }
+    let mut clauses = ImplWhereClauses::Hold;
+    for &constraint in instantiated.constraints(db).list(db) {
+        match is_goal_satisfiable(db, solve_cx, constraint.fold_with(db, &mut table)) {
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
+                return ImplWhereClauses::Refuted;
+            }
+            GoalSatisfiability::NeedsConfirmation { solutions, .. } if solutions.is_empty() => {
+                clauses = ImplWhereClauses::Undecided;
+            }
+            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. } => {}
+        }
+    }
+    clauses
 }
 
 /// What the header of an impl must match besides its self type.
