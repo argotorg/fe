@@ -1,0 +1,203 @@
+// A `mut` effect with a trait key is passed the place that provides it, as
+// one with a type key is: a write through it reaches a packed storage lane,
+// a field of a stored struct, and a local, whether the provider is named in
+// a `with` or is the caller's own effect, passed on.
+use std::evm::{Address, Evm}
+
+trait Counter {
+    fn bump(mut self) -> u256
+    fn peek(self) -> u256
+}
+
+impl Counter for u8 {
+    fn bump(mut self) -> u256 {
+        self += 1
+        self as u256
+    }
+    fn peek(self) -> u256 {
+        self as u256
+    }
+}
+
+fn bump() -> u256 uses (c: mut Counter) {
+    c.bump()
+}
+
+fn peek() -> u256 uses (c: Counter) {
+    c.peek()
+}
+
+fn forward() -> u256 uses (c: mut Counter) {
+    bump()
+}
+
+fn forward_twice() -> u256 uses (c: mut Counter) {
+    bump()
+    forward()
+}
+
+fn from_param(_ x: mut u8) -> u256 {
+    with (Counter = x) { bump() }
+}
+
+fn from_type_effect() -> u256 uses (x: mut u8) {
+    with (Counter = x) { bump() }
+}
+
+fn reborrow(_ x: mut u8) -> mut u8 {
+    mut x
+}
+
+struct Pair {
+    pub a: u8,
+    pub b: u8,
+}
+
+msg Msg {
+    #[selector = 1]
+    Keyed -> u256,
+    #[selector = 2]
+    Unkeyed -> u256,
+    #[selector = 3]
+    Forward -> u256,
+    #[selector = 4]
+    ForwardTwice -> u256,
+    #[selector = 5]
+    FromParam -> u256,
+    #[selector = 6]
+    FromTypeEffect -> u256,
+    #[selector = 7]
+    StructField -> u256,
+    #[selector = 8]
+    Peek -> u256,
+    #[selector = 9]
+    Get -> u256,
+}
+
+pub contract Packed {
+    mut a: u8,
+    mut b: u8,
+    mut pair: Pair,
+
+    recv Msg {
+        Keyed -> u256 uses (mut b) {
+            with (Counter = b) { bump() }
+        }
+        Unkeyed -> u256 uses (mut b) {
+            with (b) { bump() }
+        }
+        Forward -> u256 uses (mut b) {
+            with (Counter = b) { forward() }
+        }
+        ForwardTwice -> u256 uses (mut b) {
+            with (Counter = b) { forward_twice() }
+        }
+        FromParam -> u256 uses (mut b) {
+            from_param(mut b)
+        }
+        FromTypeEffect -> u256 uses (mut b) {
+            with (b) { from_type_effect() }
+        }
+        StructField -> u256 uses (mut pair) {
+            with (Counter = pair.b) { bump() }
+        }
+        Peek -> u256 uses (b) {
+            with (Counter = b) { peek() }
+        }
+        // The neighbours of each written lane keep their zeroes.
+        Get -> u256 uses (a, b, pair) {
+            (a as u256) * 1000000 + (b as u256) * 10000 + (pair.a as u256) * 100 + (pair.b as u256)
+        }
+    }
+}
+
+fn deploy() -> Address uses (evm: mut Evm) {
+    evm.create2<Packed>(value: Wei::zero(), args: (), salt: 1)
+}
+
+fn get(_ c: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Get {})
+}
+
+#[test]
+fn keyed_provider() uses (evm: mut Evm) {
+    let c = deploy()
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Keyed {})
+    assert!(v == 1)
+    assert!(get(c) == 10000)
+}
+
+#[test]
+fn unkeyed_provider() uses (evm: mut Evm) {
+    let c = deploy()
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Unkeyed {})
+    assert!(v == 1)
+    assert!(get(c) == 10000)
+}
+
+#[test]
+fn forwarded() uses (evm: mut Evm) {
+    let c = deploy()
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Forward {})
+    assert!(v == 1)
+    assert!(get(c) == 10000)
+}
+
+#[test]
+fn forwarded_twice() uses (evm: mut Evm) {
+    let c = deploy()
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::ForwardTwice {})
+    assert!(v == 2)
+    assert!(get(c) == 20000)
+}
+
+#[test]
+fn provider_from_param() uses (evm: mut Evm) {
+    let c = deploy()
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::FromParam {})
+    assert!(v == 1)
+    assert!(get(c) == 10000)
+}
+
+#[test]
+fn provider_from_type_effect() uses (evm: mut Evm) {
+    let c = deploy()
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::FromTypeEffect {})
+    assert!(v == 1)
+    assert!(get(c) == 10000)
+}
+
+#[test]
+fn stored_struct_field() uses (evm: mut Evm) {
+    let c = deploy()
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::StructField {})
+    assert!(v == 1)
+    assert!(get(c) == 1)
+}
+
+#[test]
+fn read_only() uses (evm: mut Evm) {
+    let c = deploy()
+    let _: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Keyed {})
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Peek {})
+    assert!(v == 1)
+    assert!(get(c) == 10000)
+}
+
+#[test]
+fn local_providers() {
+    var k: u8 = 0
+    assert!(with (Counter = k) { bump() } == 1)
+    assert!(from_param(mut k) == 2)
+    assert!(with (Counter = mut k) { forward_twice() } == 4)
+    assert!(with (Counter = reborrow(mut k)) { bump() } == 5)
+    let r = mut k
+    assert!(with (Counter = r) { bump() } == 6)
+    assert!(k == 6)
+}
+
+// A provider that is not a place is held in a temporary for the block.
+#[test]
+fn value_provider() {
+    assert!(with (Counter = 5 as u8) { forward_twice() } == 7)
+}

@@ -147,12 +147,13 @@ error[16-0001]: access conflict in `fn Case44WriteDuringCall::__init__`
     │             ^^^^^^^^^^^^^^^^^^^^^^^^ cannot write to this place while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn Case44EffectDuringCall::__init__`
-    ┌─ acceptance.fe:679:30
+    ┌─ acceptance.fe:679:13
     │
-678 │         with (mut ledger) {
-    │               ---------- access opened here
 679 │             credit_and_reset(mut ledger.balances, Address::new(1))
-    │                              ^^^^^^^^^^^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    │             │                │
+    │             │                access opened here
+    │             cannot mutably access this place while a `mut` access of it is open
 
 error[16-0002]: move conflict in `fn case13_uninitialized`
     ┌─ acceptance.fe:222:11

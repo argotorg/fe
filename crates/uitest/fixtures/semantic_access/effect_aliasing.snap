@@ -37,3 +37,21 @@ error[16-0001]: access conflict in `fn traits_may_alias`
     │                ----- access opened here
 119 │     b.bump()
     │     ^ cannot mutably access this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn argument_is_provider`
+    ┌─ effect_aliasing.fe:145:23
+    │
+145 │     with (Bump = n) { read_during_bump(ref n) }
+    │                       ^^^^^^^^^^^^^^^^^^^^^^^
+    │                       │                │
+    │                       │                access opened here
+    │                       cannot mutably access this place while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn ArgumentIsField::__init__`
+    ┌─ effect_aliasing.fe:152:27
+    │
+152 │         with (Bump = n) { read_during_bump(ref n) }
+    │                           ^^^^^^^^^^^^^^^^^^^^^^^
+    │                           │                │
+    │                           │                access opened here
+    │                           cannot mutably access this place while a `ref` access of it is open

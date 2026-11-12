@@ -3115,10 +3115,11 @@ mod tests {
                 BinaryOp, FieldIndex, Mutability, Overflow, SConst, SStmtId, SemanticInstance,
                 UnaryOp, VariantIndex, identity_semantic_instance_key,
                 normalized::{
-                    NDataPath, NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootId,
-                    NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
-                    NormalizedBodyVerifyError, NormalizedLayoutPlanVerifyError, StructuralRepack,
-                    normalize_raw_body, verify_normalized_body, verify_normalized_layout_plan,
+                    NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
+                    NPlaceBase, NRootId, NStatementKind, NTerminatorKind, NValueDefinition,
+                    NValueId, NormalizedBodyVerifyError, NormalizedLayoutPlanVerifyError, ReadMode,
+                    StructuralRepack, normalize_raw_body, verify_normalized_body,
+                    verify_normalized_layout_plan,
                 },
                 unit_const,
             },
@@ -3632,6 +3633,10 @@ fn call_effect() -> u256 uses (value: u256) {
     read_effect()
 }
 
+fn call_effect_from(seed: u256) -> u256 uses (value: u256) {
+    read_effect()
+}
+
 fn call_identity() -> u256 {
     identity(value: 1)
 }
@@ -3853,6 +3858,35 @@ fn generic_boundaries<T>(pair: (T, T), array: [T; 2]) -> (T, T) {
         *effect_args = Box::new([]);
         assert_eq!(
             verify_normalized_body(&db, &missing_effect_arg),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut plain_effect_value = normalized_func(&db, top_mod, "call_effect_from").body;
+        let seed = plain_effect_value
+            .values
+            .iter()
+            .position(|value| matches!(value.definition, NValueDefinition::EntryParam { param: 0 }))
+            .map(NValueId::new)
+            .expect("seed parameter");
+        let effect_arg = plain_effect_value
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { effect_args, .. },
+                    ..
+                } => effect_args.first_mut(),
+                _ => None,
+            })
+            .expect("effectful call argument");
+        effect_arg.arg = NEffectArgValue::Value(NOperand {
+            value: seed,
+            origin: None,
+            mode: ReadMode::Copy,
+        });
+        assert_eq!(
+            verify_normalized_body(&db, &plain_effect_value),
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 

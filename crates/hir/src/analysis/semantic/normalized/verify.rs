@@ -442,6 +442,13 @@ fn verify_expr<'db>(
                     NEffectArgValue::Place(place) => place.ty,
                     NEffectArgValue::Value(value) => operand_ty(body, *value)?,
                 };
+                // Only a capability is its own provider. Any other provider
+                // is the place that holds it.
+                if matches!(arg.arg, NEffectArgValue::Value(_))
+                    && arg_ty.as_capability(db).is_none()
+                {
+                    return Err(NormalizedBodyVerifyError::ExpressionType);
+                }
                 let semantics = provider_semantics(db, arg_ty);
                 if let Some(target_ty) = arg.provider_target_ty
                     && !structural_types_are_boundary_compatible(

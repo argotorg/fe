@@ -133,3 +133,22 @@ pub fn one_generic_provider() {
     var c = C { n: 0, m: 0 }
     with (c) { pair<C, C>() }
 }
+
+fn read_during_bump(_ x: ref u256) -> u256 uses (b: mut Bump) {
+    let before: u256 = x
+    b.bump() - before
+}
+
+// Rejected: the argument is the place that provides `b`.
+pub fn argument_is_provider() -> u256 {
+    var n: u256 = 0
+    with (Bump = n) { read_during_bump(ref n) }
+}
+
+// Rejected: a contract field provides `b` as a local does.
+pub contract ArgumentIsField {
+    mut n: u256,
+    init() uses (mut n) {
+        with (Bump = n) { read_during_bump(ref n) }
+    }
+}
