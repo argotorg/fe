@@ -40,7 +40,7 @@ use crate::analysis::{
             EffectKeyKind,
             elaborate::{build_pattern_from_requirement_decl, seed_forwarder_from_requirement},
             model::EffectRequirementDecl,
-            rows::{RowComponent, expand_rows},
+            rows::{RowComponent, RowComponentRequirement, expand_rows},
         },
         evidence::prove,
         fold::{TyFoldable, TyFolder},
@@ -89,33 +89,52 @@ pub(crate) fn func_declared_bounds<'db>(
     let mut preds = base.list(db).to_vec();
     preds.extend(collect_func_effect_provider_constraints(db, func));
     if let Some(body) = func.body(db) {
-        // A row that stays abstract may expand in an instance and renumber
-        // the components after it, so components are only bound when every
-        // row expands.
-        let rows = expand_rows(
-            db,
-            func.effect_requirements(db, mode),
-            func.scope(),
-            base.extend_all_bounds(db),
-        );
-        if rows.abstract_rows.is_empty()
-            && rows
-                .components
+        preds.extend(
+            func_row_components(db, func, mode)
                 .iter()
-                .all(|component| component.requirement.key.key_row().is_none())
-        {
-            preds.extend(rows.components.iter().filter_map(|component| {
-                let trait_inst = component.requirement.key.key_trait()?;
-                let provider = row_effect_provider(db, body.scope(), None, &component.requirement);
-                Some(super::super::instantiate_trait_self(
-                    db,
-                    trait_inst,
-                    provider.provider_ty,
-                ))
-            }));
-        }
+                .filter_map(|component| {
+                    let trait_inst = component.requirement.key.key_trait()?;
+                    let provider =
+                        row_effect_provider(db, body.scope(), None, &component.requirement);
+                    Some(super::super::instantiate_trait_self(
+                        db,
+                        trait_inst,
+                        provider.provider_ty,
+                    ))
+                }),
+        );
     }
     PredicateListId::new(db, preds)
+}
+
+/// The components of `func`'s rows its body binds at `mode`, numbered after
+/// its declared effects. A row that stays abstract may expand in an instance
+/// and renumber the components after it, so components are only bound when
+/// every row expands.
+#[salsa::tracked(returns(ref))]
+pub(crate) fn func_row_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+    mode: Option<BorrowKind>,
+) -> Vec<RowComponentRequirement<'db>> {
+    let rows = expand_rows(
+        db,
+        func.effect_requirements(db, mode),
+        func.scope(),
+        crate::semantic::func_body_assumptions(db, func)
+            .at_mode(db, mode)
+            .extend_all_bounds(db),
+    );
+    if rows.abstract_rows.is_empty()
+        && rows
+            .components
+            .iter()
+            .all(|component| component.requirement.key.key_row().is_none())
+    {
+        rows.components
+    } else {
+        Vec::new()
+    }
 }
 
 pub(crate) struct TyCheckEnv<'db> {
@@ -450,25 +469,8 @@ impl<'db> TyCheckEnv<'db> {
                 LocalBinding::effect_param(&resolved_binding),
             );
         }
-        // A row that stays abstract may expand in an instance and renumber
-        // the components after it, so components are only seeded when every
-        // row expands.
-        let rows = expand_rows(
-            self.db,
-            func.effect_requirements(self.db, mode),
-            func.scope(),
-            self.base_assumptions,
-        );
-        if !rows.abstract_rows.is_empty()
-            || rows
-                .components
-                .iter()
-                .any(|component| component.requirement.key.key_row().is_some())
-        {
-            return;
-        }
-        for component in rows.components {
-            let requirement = component.requirement;
+        for component in func_row_components(self.db, func, mode) {
+            let requirement = component.requirement.clone();
             let provider = row_effect_provider(self.db, self.body.scope(), None, &requirement);
             self.row_components.push(ResolvedEffectBindingInfo {
                 requirement,

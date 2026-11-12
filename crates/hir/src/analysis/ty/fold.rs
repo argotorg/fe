@@ -6,7 +6,10 @@ use common::indexmap::{IndexMap, IndexSet};
 use super::{
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
-    ty_check::{ClosureCapture, ClosureInfo, EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
+    ty_check::{
+        ClosureCapture, ClosureInfo, EffectArg, EffectArgTarget, ExprProp, LocalBinding,
+        ResolvedEffectArg,
+    },
     ty_def::{ClosureTy, TyBase as TyBaseData, TyData, TyId},
     visitor::TyVisitable,
 };
@@ -679,19 +682,19 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
     where
         F: TyFolder<'db>,
     {
+        let target = match self.target {
+            EffectArgTarget::Component { path, provider } => EffectArgTarget::Component {
+                path,
+                provider: provider.fold_with(db, folder),
+            },
+            target @ (EffectArgTarget::Declared(_) | EffectArgTarget::Forwarded { .. }) => target,
+        };
         Self {
-            param_idx: self.param_idx,
-            binding_idx: self.binding_idx,
-            key: self.key,
+            target,
             arg: self.arg.fold_with(db, folder),
-            with_source: self.with_source,
-            pass_mode: self.pass_mode,
-            required_mut: self.required_mut,
-            key_kind: self.key_kind,
             instantiated_key_ty: self.instantiated_key_ty.map(|ty| ty.fold_with(db, folder)),
             provider_target_ty: self.provider_target_ty.map(|ty| ty.fold_with(db, folder)),
-            provider: self.provider,
-            row_arg: self.row_arg,
+            ..self
         }
     }
 }

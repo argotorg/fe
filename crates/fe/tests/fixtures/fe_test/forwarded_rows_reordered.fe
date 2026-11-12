@@ -1,0 +1,78 @@
+// A function forwards two rows to a callee that names them in another
+// order, and gives the components of a third between them.
+
+struct Store { n: u256 }
+struct Log { n: u256, pad: u256 }
+struct Aux { a: u256, b: u256, c: u256 }
+struct Extra { x: u256 }
+trait Reader {
+    uses E
+    uses F
+    fn read(self) -> u256 uses (E, log: mut Log)
+    fn both(self) -> u256 uses (E, F)
+}
+struct R {}
+impl Reader for R {
+    uses E = (store: Store)
+    uses F = (aux: Aux)
+    // reordered relative to the trait
+    fn read(self) -> u256 uses (log: mut Log, E) {
+        log.n += 1
+        store.n
+    }
+    fn both(self) -> u256 uses (F, E) { store.n * 10 + aux.c }
+}
+struct W<T> { t: T }
+impl<T: Reader> Reader for W<T> {
+    uses E = (T::F, T::E)
+    uses F = (extra: Extra, log: mut Log)
+    fn read(self) -> u256 uses (log: mut Log, E) {
+        log.n += 100
+        self.t.both()
+    }
+    fn both(self) -> u256 uses (F, E) { self.t.read() + self.t.both() + extra.x }
+}
+fn g_read<T: Reader>(_ t: T) -> u256 uses (log: mut Log, T::E) { t.read() }
+fn g_both<T: Reader>(_ t: T) -> u256 uses (T::E, T::F) { t.both() }
+// `T::E` and `T::F` are forwarded; `W<T>::F` is expanded in this body.
+fn g_wrapped<T: Reader>(_ t: own T) -> u256 uses (T::E, extra: Extra, T::F, log: mut Log) {
+    g_both(W { t })
+}
+#[test]
+fn test_impl_reorders_effects() {
+    let s = Store { n: 7 }
+    let x = Aux { a: 1, b: 2, c: 3 }
+    var l = Log { n: 0, pad: 0 }
+    with (Store = s, Aux = x, Log = mut l) {
+        assert(R {}.read() == 7)
+        assert(R {}.both() == 73)
+        assert(g_read(R {}) == 7)
+        assert(g_both(R {}) == 73)
+    }
+    assert(l.n == 2)
+}
+#[test]
+fn test_wrapper_rows() {
+    let s = Store { n: 7 }
+    let x = Aux { a: 1, b: 2, c: 3 }
+    let e = Extra { x: 1000 }
+    var l = Log { n: 0, pad: 0 }
+    with (Store = s, Aux = x, Extra = e, Log = mut l) {
+        assert(W { t: R {} }.read() == 73)
+        assert(g_read(W { t: R {} }) == 73)
+        assert(W { t: R {} }.both() == 1080)
+        assert(g_both(W { t: R {} }) == 1080)
+    }
+    assert(l.n == 100 + 100 + 1 + 1)
+}
+#[test]
+fn test_forwarded_rows_reordered() {
+    let s = Store { n: 7 }
+    let x = Aux { a: 1, b: 2, c: 3 }
+    let e = Extra { x: 1000 }
+    var l = Log { n: 0, pad: 0 }
+    with (Store = s, Aux = x, Extra = e, Log = mut l) {
+        assert(g_wrapped(R {}) == 1080)
+    }
+    assert(l.n == 1)
+}
