@@ -1719,6 +1719,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::InferArgOutsideCall(span) => primary_diag(
+                Severity::Error,
+                "`_` is only allowed as a call's generic argument",
+                "`_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::AssocBindingNotOnTrait(span) => primary_diag(
                 Severity::Error,
                 "an associated type binding names a trait's associated type",

@@ -136,6 +136,7 @@ impl<'db> GenericArg<'db> {
             } else {
                 TypeMode::Ref
             }),
+            ast::GenericArgKind::Infer(_) => Self::Infer,
         }
     }
 }

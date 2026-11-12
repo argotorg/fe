@@ -584,8 +584,9 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     for (arg, lowered) in generic_args.data(db).iter().zip(lowered) {
         match arg {
             GenericArg::Type(_) | GenericArg::Const(_) => provided_explicit.push(lowered),
-            // A trait takes no mode, which is reported where it is written.
-            GenericArg::Mode(_) => return Err(TraitArgError::Ignored),
+            // A trait takes no mode or `_`, which is reported where it is
+            // written.
+            GenericArg::Mode(_) | GenericArg::Infer => return Err(TraitArgError::Ignored),
             GenericArg::AssocType(AssocTypeGenericArg { name, mode, ty }) => {
                 if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
                     // An associated shape is bound to a shape, at a mode.

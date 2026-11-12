@@ -90,6 +90,7 @@ impl<'db> GenericArgListId<'db> {
                             format!("{name}{mode} = {ty}")
                         }
                         GenericArg::Mode(mode) => mode.keyword().to_string(),
+                        GenericArg::Infer => "_".to_string(),
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -230,6 +231,8 @@ pub enum GenericArg<'db> {
     /// `ref` or `mut`: the mode an associated shape is named at,
     /// `D::Step<ref>`.
     Mode(TypeMode),
+    /// `_`: an argument a call infers, `f<_, u8>(x)`.
+    Infer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]

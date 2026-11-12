@@ -1146,6 +1146,7 @@ impl ToDoc for ast::GenericArg {
             GenericArgKind::Const(const_arg) => const_arg.to_doc(ctx),
             GenericArgKind::AssocType(assoc_arg) => assoc_arg.to_doc(ctx),
             GenericArgKind::Mode(mode) => ctx.alloc.text(if mode.is_mut() { "mut" } else { "ref" }),
+            GenericArgKind::Infer(_) => ctx.alloc.text("_"),
         }
     }
 }

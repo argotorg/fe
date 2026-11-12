@@ -554,6 +554,13 @@ impl super::Parse for GenericArgScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
 
+        // `_` is an argument a call infers.
+        if parser.current_kind() == Some(SyntaxKind::Underscore) {
+            parser.set_scope_kind(SyntaxKind::InferGenericArg);
+            parser.bump();
+            return Ok(());
+        }
+
         // `ref` or `mut` alone is the mode of an associated shape.
         if matches!(
             parser.peek_n_non_trivia(2).as_slice(),

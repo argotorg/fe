@@ -860,6 +860,8 @@ pub(crate) fn lower_generic_arg_list<'db>(
                 _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, lowering_cx),
             },
             GenericArg::Mode(_) => TyId::invalid(db, InvalidCause::ModeArgNotShape),
+            // A call infers `_` itself, and nothing else takes it.
+            GenericArg::Infer => TyId::invalid(db, InvalidCause::InferArgOutsideCall),
             GenericArg::Const(const_arg) => TyId::const_ty(
                 db,
                 lower_opt_const_body(db, const_arg.value, scope, assumptions, lowering_cx),

@@ -206,6 +206,7 @@ pub(crate) fn path_arg_diags<'db>(
                 }
                 GenericArg::Const(_) => Vec::new(),
                 GenericArg::Mode(_) => vec![TyLowerDiag::ModeArgNotShape(span.into()).into()],
+                GenericArg::Infer => vec![TyLowerDiag::InferArgOutsideCall(span.into()).into()],
             }
         })
         .chain(duplicates)
@@ -459,6 +460,14 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // A trait checks its own bindings. Anywhere else, lowering rejects a
         // binding whatever it binds.
         if matches!(arg, GenericArg::AssocType(_)) {
+            return;
+        }
+
+        if matches!(arg, GenericArg::Infer)
+            && let Some(span) = ctxt.span()
+        {
+            self.diags
+                .push(TyLowerDiag::InferArgOutsideCall(span.into()).into());
             return;
         }
 
@@ -977,6 +986,8 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         InvalidCause::ModeNotType => TyLowerDiag::ModeNotType(span).into(),
 
         InvalidCause::ModeArgNotShape => TyLowerDiag::ModeArgNotShape(span).into(),
+
+        InvalidCause::InferArgOutsideCall => TyLowerDiag::InferArgOutsideCall(span).into(),
 
         InvalidCause::AssocBindingNotOnTrait => TyLowerDiag::AssocBindingNotOnTrait(span).into(),
 

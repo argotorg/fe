@@ -1,0 +1,6 @@
+fn calls(vm: Vm) {
+    op< 1,_ >(c)
+    vm.op_push<  _ , u8>(c)
+    Vm::assoc<_>(c)
+    let f = op<_,_>
+}

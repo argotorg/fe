@@ -1,0 +1,106 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/infer_generic_args.fe
+---
+Root@0..52
+  CallExpr@0..11
+    PathExpr@0..8
+      Path@0..8
+        PathSegment@0..8
+          Ident@0..2 "op"
+          GenericArgList@2..8
+            Lt@2..3 "<"
+            ConstGenericArg@3..4
+              LitExpr@3..4
+                Lit@3..4
+                  Int@3..4 "1"
+            Comma@4..5 ","
+            WhiteSpace@5..6 " "
+            InferGenericArg@6..7
+              Underscore@6..7 "_"
+            Gt@7..8 ">"
+    CallArgList@8..11
+      LParen@8..9 "("
+      CallArg@9..10
+        PathExpr@9..10
+          Path@9..10
+            PathSegment@9..10
+              Ident@9..10 "c"
+      RParen@10..11 ")"
+  Newline@11..12 "\n"
+  CallExpr@12..23
+    PathExpr@12..20
+      Path@12..20
+        PathSegment@12..20
+          Ident@12..13 "f"
+          GenericArgList@13..20
+            Lt@13..14 "<"
+            InferGenericArg@14..15
+              Underscore@14..15 "_"
+            Comma@15..16 ","
+            WhiteSpace@16..17 " "
+            TypeGenericArg@17..19
+              PathType@17..19
+                Path@17..19
+                  PathSegment@17..19
+                    Ident@17..19 "u8"
+            Gt@19..20 ">"
+    CallArgList@20..23
+      LParen@20..21 "("
+      CallArg@21..22
+        PathExpr@21..22
+          Path@21..22
+            PathSegment@21..22
+              Ident@21..22 "x"
+      RParen@22..23 ")"
+  Newline@23..24 "\n"
+  MethodCallExpr@24..33
+    PathExpr@24..25
+      Path@24..25
+        PathSegment@24..25
+          Ident@24..25 "s"
+    Dot@25..26 "."
+    Ident@26..27 "m"
+    GenericArgList@27..30
+      Lt@27..28 "<"
+      InferGenericArg@28..29
+        Underscore@28..29 "_"
+      Gt@29..30 ">"
+    CallArgList@30..33
+      LParen@30..31 "("
+      CallArg@31..32
+        PathExpr@31..32
+          Path@31..32
+            PathSegment@31..32
+              Ident@31..32 "x"
+      RParen@32..33 ")"
+  Newline@33..34 "\n"
+  CallExpr@34..51
+    PathExpr@34..48
+      Path@34..48
+        PathSegment@34..37
+          Ident@34..37 "Foo"
+        Colon2@37..39 "::"
+        PathSegment@39..48
+          Ident@39..42 "bar"
+          GenericArgList@42..48
+            Lt@42..43 "<"
+            InferGenericArg@43..44
+              Underscore@43..44 "_"
+            Comma@44..45 ","
+            WhiteSpace@45..46 " "
+            ConstGenericArg@46..47
+              LitExpr@46..47
+                Lit@46..47
+                  Int@46..47 "2"
+            Gt@47..48 ">"
+    CallArgList@48..51
+      LParen@48..49 "("
+      CallArg@49..50
+        PathExpr@49..50
+          Path@49..50
+            PathSegment@49..50
+              Ident@49..50 "x"
+      RParen@50..51 ")"
+  Newline@51..52 "\n"
