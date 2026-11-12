@@ -4,8 +4,7 @@ use hir::analysis::{
     semantic::{
         SLocalId, SemanticLocalKind,
         normalized::{
-            NEffectArg, NEffectArgValue, NOperand as SemanticOperand, NPlace, NPlaceBase,
-            NValueDefinition,
+            NEffectArg, NOperand as SemanticOperand, NPlace, NPlaceBase, NValueDefinition,
         },
     },
     ty::ty_def::TyId,
@@ -22,8 +21,8 @@ use super::{
         specialize_boundary_for_runtime_source_in_context,
     },
     call_input::{
-        CompiledCallInputPlan, CompiledEffectArgPlan, CompiledMaterializationPlan,
-        CompiledValuePassPlan, compile_value_pass_plan,
+        CompiledCallInputPlan, CompiledMaterializationPlan, CompiledValuePassPlan,
+        compile_value_pass_plan,
     },
     classify::{
         BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
@@ -153,17 +152,19 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         );
         assert_eq!(
             effect_args.len(),
-            plan.effect_plans.len(),
-            "runtime effect arg count mismatch during value evaluation: caller={:?} effect_args={effect_args:?} plans={:?}",
+            plan.effect_boundaries.len(),
+            "runtime effect arg count mismatch during value evaluation: caller={:?} effect_args={effect_args:?} boundaries={:?}",
             self.env.body().owner().key(self.env.db()),
-            plan.effect_plans,
+            plan.effect_boundaries,
         );
         let mut selected = self.selected_param_inputs(args, &plan.param_plans);
         selected.extend(
             effect_args
                 .iter()
-                .zip(plan.effect_plans.iter())
-                .filter_map(|(arg, effect_plan)| self.select_effect_arg(arg, effect_plan)),
+                .zip(plan.effect_boundaries.iter())
+                .filter_map(|(arg, boundary)| {
+                    Some(self.select_effect_arg(arg, boundary.as_ref()?))
+                }),
         );
         selected
     }
@@ -713,45 +714,26 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     fn select_effect_arg(
         &mut self,
         arg: &NEffectArg<'db>,
-        plan: &CompiledEffectArgPlan<'db>,
-    ) -> Option<SelectedRuntimeArg<'db>> {
+        boundary: &StagedBoundary<'db>,
+    ) -> SelectedRuntimeArg<'db> {
         let db = self.env.db();
-        match (&arg.arg, plan) {
-            (_, CompiledEffectArgPlan::Erased) => None,
-            (NEffectArgValue::Value(value), CompiledEffectArgPlan::Value(plan)) => {
-                let value = self.env.body().runtime_operand(*value)?;
-                self.selected_value_pass_plan(value, plan)
-            }
-            (NEffectArgValue::Place(place), CompiledEffectArgPlan::Place(boundary)) => {
-                // Like value arguments, place arguments carry their actual aggregate
-                // layout. Project the whole place: a field or indexed provider need not
-                // have the same layout as its containing root.
-                let layout = self
-                    .env
-                    .normalized_place_class(self.carriers, place)
-                    .and_then(|class| class.aggregate_layout());
-                let boundary =
-                    specialize_boundary_for_aggregate_layout(db, &boundary.boundary, layout)
-                        .into_owned();
-                let target_ty = arg.provider_target_ty.unwrap_or_else(|| TyId::unit(db));
-                let selected = self
-                    .select_place_for_boundary(place.clone(), target_ty, boundary.clone())
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "effect place arg boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
-                            self.env.body().owner().key(db).owner(db),
-                        )
-                    });
-                Some(selected)
-            }
-            (NEffectArgValue::Value(_), CompiledEffectArgPlan::Place(_))
-            | (NEffectArgValue::Place(_), CompiledEffectArgPlan::Value(_)) => {
+        // Like value arguments, place arguments carry their actual aggregate
+        // layout. Project the whole place: a field or indexed provider need not
+        // have the same layout as its containing root.
+        let layout = self
+            .env
+            .normalized_place_class(self.carriers, &arg.place)
+            .and_then(|class| class.aggregate_layout());
+        let boundary =
+            specialize_boundary_for_aggregate_layout(db, &boundary.boundary, layout).into_owned();
+        let target_ty = arg.provider_target_ty.unwrap_or_else(|| TyId::unit(db));
+        self.select_place_for_boundary(arg.place.clone(), target_ty, boundary.clone())
+            .unwrap_or_else(|| {
                 panic!(
-                    "compiled effect arg source kind mismatch: owner={:?}; arg={arg:?}; plan={plan:?}",
+                    "effect place arg boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
                     self.env.body().owner().key(db).owner(db),
                 )
-            }
-        }
+            })
     }
 
     fn select_materializable_semantic_value(

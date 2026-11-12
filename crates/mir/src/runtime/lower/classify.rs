@@ -10,8 +10,8 @@ use hir::analysis::{
         FieldIndex, Mutability, SConst, SLocal, SLocalId, SemanticInstance, SemanticLocalKind,
         SemanticLocalRole, ValueProvenance, VariantIndex,
         normalized::{
-            NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
-            NPlaceBase, NRootKind, NStatementKind, NValueDefinition, NValueId, copied_scalar_ty,
+            NDataPath, NDataProjection, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRootKind,
+            NStatementKind, NValueDefinition, NValueId, copied_scalar_ty,
         },
     },
     ty::{
@@ -1332,15 +1332,9 @@ fn local_disallows_const_ref_storage(body: &RuntimeSemanticBody<'_>, local: SLoc
                 NStatementKind::Define {
                     expr: NExpr::Call { effect_args, .. },
                     ..
-                } => effect_args.iter().any(|arg| {
-                    arg.required_mut
-                        && match &arg.arg {
-                            NEffectArgValue::Place(place) => place_uses_local(place),
-                            NEffectArgValue::Value(value) => {
-                                body.operand_local(*value) == Some(local)
-                            }
-                        }
-                }),
+                } => effect_args
+                    .iter()
+                    .any(|arg| arg.required_mut && place_uses_local(&arg.place)),
                 NStatementKind::Define { .. } => false,
             })
     })

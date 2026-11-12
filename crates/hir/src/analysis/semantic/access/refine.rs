@@ -1,7 +1,6 @@
 //! Address-space refinement of call inputs: the space of the place each
 //! effect argument and each `mut` or view argument names, which instantiates
 //! the callee per space.
-use cranelift_entity::EntityRef;
 use salsa::SalsaValue;
 
 use super::check::{Analysis, callee_input_access};
@@ -14,10 +13,7 @@ use crate::analysis::{
             SemanticDiagnosticSpan, SemanticNormalizationFailure,
         },
         instance::refined_callee,
-        normalized::{
-            NEffectArgValue, NExpr, NStatementKind, NormalizedBody,
-            normalize_semantic_body_provisional,
-        },
+        normalized::{NExpr, NStatementKind, NormalizedBody, normalize_semantic_body_provisional},
         provisional_provider_idx_for_requirement,
     },
     ty::{
@@ -167,18 +163,7 @@ fn input_refinements<'db>(
                 }
             }
             for arg in effect_args {
-                let (regions, origin) = match &arg.arg {
-                    NEffectArgValue::Place(place) => {
-                        (analysis.resolve(place).regions, statement.origin)
-                    }
-                    NEffectArgValue::Value(value) => (
-                        analysis.values[value.value.index()]
-                            .iter()
-                            .flat_map(|(token, _)| analysis.tokens[*token as usize].regions.clone())
-                            .collect(),
-                        value.origin.map_or(statement.origin, SemOrigin::Expr),
-                    ),
-                };
+                let regions = analysis.resolve(&arg.place).regions;
                 let input = RefinedInput::Effect {
                     binding_idx: arg.binding_idx,
                     provider_idx: provisional_provider_idx_for_requirement(
@@ -187,7 +172,7 @@ fn input_refinements<'db>(
                         arg.binding_idx,
                     ),
                 };
-                inputs.push((input, regions, arg.provider, origin));
+                inputs.push((input, regions, arg.provider, statement.origin));
             }
             for (input, regions, declared, origin) in inputs {
                 let mut spaces = Vec::new();

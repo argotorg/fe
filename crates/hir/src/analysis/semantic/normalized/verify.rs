@@ -438,17 +438,7 @@ fn verify_expr<'db>(
                 {
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 }
-                let arg_ty = match &arg.arg {
-                    NEffectArgValue::Place(place) => place.ty,
-                    NEffectArgValue::Value(value) => operand_ty(body, *value)?,
-                };
-                // Only a capability is its own provider. Any other provider
-                // is the place that holds it.
-                if matches!(arg.arg, NEffectArgValue::Value(_))
-                    && arg_ty.as_capability(db).is_none()
-                {
-                    return Err(NormalizedBodyVerifyError::ExpressionType);
-                }
+                let arg_ty = arg.place.ty;
                 let semantics = provider_semantics(db, arg_ty);
                 if let Some(target_ty) = arg.provider_target_ty
                     && !structural_types_are_boundary_compatible(
@@ -460,10 +450,8 @@ fn verify_expr<'db>(
                 {
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 }
-                if arg.required_mut
-                    && let NEffectArgValue::Place(place) = &arg.arg
-                {
-                    verify_mutation(db, body, place, false)?;
+                if arg.required_mut {
+                    verify_mutation(db, body, &arg.place, false)?;
                 }
             }
             if effect_args.len() != requirements.len()

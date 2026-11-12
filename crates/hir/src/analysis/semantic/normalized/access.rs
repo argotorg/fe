@@ -6,9 +6,9 @@
 use cranelift_entity::EntityRef;
 
 use super::{
-    NDataPath, NDataProjection, NDropTarget, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
-    NPlaceBase, NStatementKind, NStructuralPath, NSuccessor, NTerminatorKind, NValueId,
-    NormalizedBody, ReadMode,
+    NDataPath, NDataProjection, NDropTarget, NExpr, NIndex, NOperand, NPlace, NPlaceBase,
+    NStatementKind, NStructuralPath, NSuccessor, NTerminatorKind, NValueId, NormalizedBody,
+    ReadMode,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -104,21 +104,14 @@ impl<'db> NStatementKind<'db> {
                         args.iter()
                             .map(|arg| OperationAccess::operand(db, body, *arg)),
                     );
-                    for effect in effect_args {
-                        accesses.push(match &effect.arg {
-                            NEffectArgValue::Value(value) => {
-                                OperationAccess::operand(db, body, *value)
-                            }
-                            NEffectArgValue::Place(place) => OperationAccess {
-                                target: AccessTarget::Place(place),
-                                kind: if effect.required_mut {
-                                    MemoryAccessKind::MutAccess
-                                } else {
-                                    MemoryAccessKind::Read
-                                },
-                            },
-                        });
-                    }
+                    accesses.extend(effect_args.iter().map(|effect| OperationAccess {
+                        target: AccessTarget::Place(&effect.place),
+                        kind: if effect.required_mut {
+                            MemoryAccessKind::MutAccess
+                        } else {
+                            MemoryAccessKind::Read
+                        },
+                    }));
                 }
                 NExpr::Forward { src }
                 | NExpr::StructuralRepack { value: src, .. }

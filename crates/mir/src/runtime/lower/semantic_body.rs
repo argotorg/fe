@@ -5,10 +5,10 @@ use hir::analysis::{
         ExecutableBlock, PlaceProvenance, SLocal, SLocalId, SemOrigin, SemanticBody,
         SemanticInstance, SemanticLocalRole,
         normalized::{
-            NBlock, NBlockId, NDataProjection, NEffectArgValue, NExpr, NIndex,
-            NLayoutBackingSource, NLayoutLocals, NLayoutPlan, NOperand, NPlace, NPlaceBase,
-            NRootId, NRootKind, NStatementKind, NSuccessor, NTerminator, NTerminatorKind,
-            NValueDefinition, NValueId, NormalizedBody, normalize_runtime_semantic_body,
+            NBlock, NBlockId, NDataProjection, NExpr, NIndex, NLayoutBackingSource, NLayoutLocals,
+            NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind,
+            NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
+            normalize_runtime_semantic_body,
         },
         semantic_executable_control_flow,
     },
@@ -323,8 +323,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                 });
                 for arg in effect_args {
                     // A provider the callee takes by value is only read.
-                    if let NEffectArgValue::Place(place) = &arg.arg
-                        && self.place_source(place) == Some(local)
+                    if self.place_source(&arg.place) == Some(local)
                         && runtime_effect_binding_plan_for_binding_idx(db, callee, arg.binding_idx)
                             .is_none_or(|plan| plan.class.is_transport())
                     {

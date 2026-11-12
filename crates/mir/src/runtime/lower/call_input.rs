@@ -1,7 +1,4 @@
-use hir::analysis::semantic::{
-    SemanticInstance,
-    normalized::{NEffectArg, NEffectArgValue},
-};
+use hir::analysis::semantic::{SemanticInstance, normalized::NEffectArg};
 
 use crate::{
     db::MirDb,
@@ -36,16 +33,11 @@ pub(super) enum CompiledValuePassPlan<'db> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum CompiledEffectArgPlan<'db> {
-    Erased,
-    Value(CompiledValuePassPlan<'db>),
-    Place(StagedBoundary<'db>),
-}
-
-#[derive(Clone, Debug)]
 pub(super) struct CompiledCallInputPlan<'db> {
     pub(super) param_plans: Box<[CompiledValuePassPlan<'db>]>,
-    pub(super) effect_plans: Box<[CompiledEffectArgPlan<'db>]>,
+    /// The boundary each effect's place crosses, if the callee has a
+    /// runtime plan for the effect.
+    pub(super) effect_boundaries: Box<[Option<StagedBoundary<'db>>]>,
 }
 
 pub(super) fn compile_value_pass_plan<'db>(
@@ -92,28 +84,15 @@ pub(super) fn compile_call_input_plan_for_semantic<'db>(
         .collect::<Vec<_>>()
         .into_boxed_slice();
     // The callee's plan for the effect decides how its provider is passed.
-    let effect_plans = effect_args
+    let effect_boundaries = effect_args
         .iter()
         .map(|arg| {
-            let Some(plan) =
-                runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx)
-            else {
-                return CompiledEffectArgPlan::Erased;
-            };
-            match arg.arg {
-                NEffectArgValue::Value(_) => CompiledEffectArgPlan::Value(compile_value_pass_plan(
-                    RuntimeParamPlan::Boundary(plan.boundary),
-                    boundary_sites,
-                )),
-                NEffectArgValue::Place(_) => {
-                    CompiledEffectArgPlan::Place(boundary_sites.stage(plan.boundary))
-                }
-            }
+            runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx)
+                .map(|plan| boundary_sites.stage(plan.boundary))
         })
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
+        .collect();
     CompiledCallInputPlan {
         param_plans,
-        effect_plans,
+        effect_boundaries,
     }
 }

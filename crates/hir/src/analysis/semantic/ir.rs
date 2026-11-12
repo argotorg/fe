@@ -411,16 +411,10 @@ impl SPlace<'_> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SEffectArg<'db> {
     pub binding_idx: u32,
-    pub arg: SEffectArgValue<'db>,
+    pub place: SPlace<'db>,
     pub required_mut: bool,
     pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<AddressSpace>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
-pub enum SEffectArgValue<'db> {
-    Place(SPlace<'db>),
-    Value(SOperand),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
@@ -716,10 +710,7 @@ impl SExpr<'_> {
             } => {
                 locals.extend(args.iter().map(|arg| arg.value));
                 for arg in effect_args {
-                    match &arg.arg {
-                        SEffectArgValue::Place(place) => locals.extend(place.used_locals()),
-                        SEffectArgValue::Value(value) => locals.push(value.value),
-                    }
+                    locals.extend(arg.place.used_locals());
                 }
             }
             Self::CodeRegionRef { .. }

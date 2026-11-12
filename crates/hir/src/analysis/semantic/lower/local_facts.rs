@@ -5,9 +5,8 @@ use crate::{
     analysis::{
         semantic::{
             FieldIndex, LayoutBackingPlace, LayoutBackingProjection, LayoutBackingSource,
-            PlaceProvenance, SEffectArgValue, SExpr, SLocalId, SPlace, SStmtKind,
-            SemanticLocalRole, SemanticProjectionPath, ValueProvenance, VariantIndex,
-            layout_backing_query,
+            PlaceProvenance, SExpr, SLocalId, SPlace, SStmtKind, SemanticLocalRole,
+            SemanticProjectionPath, ValueProvenance, VariantIndex, layout_backing_query,
         },
         ty::{
             adt_def::instantiate_adt_field_shape,
@@ -307,21 +306,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     else {
                         continue;
                     };
-                    match &effect_arg.arg {
-                        SEffectArgValue::Place(place) => (
-                            effect_arg
-                                .provider_target_ty
-                                .unwrap_or(self.locals[place.local.index()].ty),
-                            self.layout_backing_sources_for_place(place),
-                        ),
-                        SEffectArgValue::Value(value) => {
-                            let base = value.value;
-                            (
-                                self.locals[base.index()].ty,
-                                self.local_layout_backing_sources(base),
-                            )
-                        }
-                    }
+                    let place = &effect_arg.place;
+                    (
+                        effect_arg
+                            .provider_target_ty
+                            .unwrap_or(self.locals[place.local.index()].ty),
+                        self.layout_backing_sources_for_place(place),
+                    )
                 }
             };
             let Some((target, path)) =
