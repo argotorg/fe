@@ -2949,7 +2949,7 @@ impl<'db> RmirEmitter<'db> {
         effect_args: &[NEffectArg<'db>],
     ) -> RLocalId {
         let semantic = SemanticInstance::new(self.db, callee.key);
-        if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
+        if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args) {
             return ret;
         }
         let mut boundary_sites = BoundarySiteAllocator::default();
@@ -3049,7 +3049,6 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         semantic: SemanticInstance<'db>,
         args: &[NOperand],
-        effect_args: &[NEffectArg<'db>],
     ) -> Option<RLocalId> {
         let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
             return None;
@@ -3171,7 +3170,6 @@ impl<'db> RmirEmitter<'db> {
         }
         let lowered = self.lower_extern_builtin(semantic, &args)?;
         let ret_ty = semantic_return_ty(self.db, semantic);
-        let _ = effect_args;
         Some(match lowered {
             LoweredBuiltinCall::Expr { builtin, class } => {
                 let ret = class
