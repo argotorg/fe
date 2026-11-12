@@ -169,7 +169,7 @@ fn an_ingot_is_one_module_of_its_exports() {
     // `table::prime` is an export, and `table::weigh` is not.
     assert_eq!(
         export_names(&built),
-        ["memory", "nth_prime", "prime", "stack_top", "weighted"]
+        ["memory", "nth_prime", "prime", "weighted"]
     );
     let results = run(
         &built,
@@ -213,7 +213,7 @@ fn an_export_calls_into_a_path_dependency() {
         };
         assert_eq!(built.manifest()["optimization"], level);
         // The exports of `util` are not exports of `app`.
-        assert_eq!(export_names(&built), ["memory", "stack_top", "total"]);
+        assert_eq!(export_names(&built), ["memory", "total"]);
         let results = run(
             &built,
             json!([{ "export": "total", "args": [{ "u64": "4294967296" }, { "u64": "1" }] }]),

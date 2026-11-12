@@ -248,8 +248,7 @@ Whenever `fe build` writes a module it writes `<name>.manifest.json` next to it.
   section, with WebAssembly types.
 - `exports` is in name order. A function has the Fe parameter names and types, the
   WebAssembly types they become (`wasm`), and a `result` (`null` for none). The
-  three allocator functions have `"role": "allocator"`, and the global `stack_top` of a
-  module with imports has `"kind": "global"` and `"role": "stack"`.
+  three allocator functions have `"role": "allocator"`.
 - `contract_version` is the version of the host contract; `manifest_version` is the
   version of this format.
 - `compiler` is the output of `fe --version`.

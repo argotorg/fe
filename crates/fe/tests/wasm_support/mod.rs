@@ -363,13 +363,6 @@ pub fn assert_matches_the_engine(built: &Built) {
             .unwrap_or_else(|| panic!("no export {name}"));
         match export {
             ExternType::Memory(_) => assert_eq!(entry["kind"], "memory"),
-            ExternType::Global(_) => {
-                assert_eq!(name, "stack_top");
-                assert_eq!(
-                    (&entry["kind"], &entry["role"]),
-                    (&json!("global"), &json!("stack"))
-                );
-            }
             ExternType::Func(ty) => {
                 assert_eq!(entry["kind"], "function");
                 let (params, results) = signature(&ty);

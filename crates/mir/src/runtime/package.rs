@@ -573,11 +573,6 @@ pub fn build_native_package<'db>(
 /// function cannot be exported under it.
 pub const WASM_MEMORY_EXPORT: &str = "memory";
 
-/// The name under which a WebAssembly module with imports exports the global
-/// that holds the top of its stack, which a host puts back after a call that
-/// an import ended by throwing. A function cannot be exported under it.
-pub const WASM_STACK_EXPORT: &str = "stack_top";
-
 /// The names of the exports that give the host an allocator. A module has them
 /// when an export takes text, and no function of the module may use them.
 pub const WASM_ALLOCATOR_EXPORTS: [&str; 3] = ["alloc", "arena_mark", "arena_release"];
@@ -973,13 +968,9 @@ fn wasm_export_for_func<'db>(
         .map_err(|err| {
             LowerError::Unsupported(format_root_semantic_instance_rejection(db, &name, &err))
         })?;
-    let reserved = [
-        (WASM_MEMORY_EXPORT, "linear memory"),
-        (WASM_STACK_EXPORT, "stack of the module"),
-    ];
-    if let Some((_, what)) = reserved.iter().find(|(reserved, _)| name == *reserved) {
+    if name == WASM_MEMORY_EXPORT {
         return Err(LowerError::Unsupported(format!(
-            "cannot export `{name}` to WebAssembly: the name is reserved for the {what}"
+            "cannot export `{name}` to WebAssembly: the name is reserved for the linear memory"
         )));
     }
     let entry_args =

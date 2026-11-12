@@ -821,10 +821,7 @@ fn the_module_exports_the_marked_functions_and_a_memory() {
     names.sort();
     // `visible` can overflow, so the module imports the revert of `core::rt`
     // and exports its stack.
-    assert_eq!(
-        names,
-        ["another", "memory", "nested", "stack_top", "visible"]
-    );
+    assert_eq!(names, ["another", "memory", "nested", "visible"]);
 }
 
 #[test]
@@ -1252,18 +1249,6 @@ fn a_function_named_memory_is_refused() {
         "reserved_name",
         "#[unsafe(export)]\npub fn memory() -> u32 { 1 }\n",
         &["cannot export `memory`", "reserved for the linear memory"],
-    );
-}
-
-#[test]
-fn a_function_named_stack_top_is_refused() {
-    rejected(
-        "reserved_stack",
-        "#[unsafe(export)]\npub fn stack_top() -> u32 { 1 }\n",
-        &[
-            "cannot export `stack_top`",
-            "reserved for the stack of the module",
-        ],
     );
 }
 

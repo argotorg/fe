@@ -115,7 +115,6 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
             { "name": "memory", "kind": "memory" },
             { "name": "ping", "kind": "function",
               "params": [{ "name": "value", "type": "i32", "wasm": ["i32"] }], "result": null },
-            { "name": "stack_top", "kind": "global", "role": "stack" },
         ],
     });
     assert_eq!(manifest, expected);
