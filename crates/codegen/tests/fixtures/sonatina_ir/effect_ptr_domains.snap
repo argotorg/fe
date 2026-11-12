@@ -41,7 +41,7 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         return v11;
 }
 
-func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_5804(noalias nocapture v0.objref<@layout_0>) {
+func private %standalone_effect_ptr_domains__effect_ptr_domains__bump_2946(noalias nocapture v0.objref<@layout_0>) {
     block0:
         jump block1;
 
@@ -70,34 +70,7 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_580
         return;
 }
 
-func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_b71c(v0.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = mload v0 i256;
-        (v4.i256, v5.i1) = uaddo v2 1.i256;
-        br v5 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        mstore v0 v4 i256;
-        v13.i256 = add v0 32.i256;
-        v14.i256 = mload v13 i256;
-        (v16.i256, v17.i1) = uaddo v14 2.i256;
-        br v17 block2 block4;
-
-    block4:
-        v19.i256 = add v0 32.i256;
-        mstore v19 v16 i256;
-        return;
-}
-
-func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_f565(v0.i256) {
+func private %standalone_effect_ptr_domains__effect_ptr_domains__bump_b87b(v0.i256) {
     block0:
         jump block1;
 
@@ -124,6 +97,33 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_f56
         return;
 }
 
+func private %standalone_effect_ptr_domains__effect_ptr_domains__bump_fe9f(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = mload v0 i256;
+        (v4.i256, v5.i1) = uaddo v2 1.i256;
+        br v5 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        mstore v0 v4 i256;
+        v13.i256 = add v0 32.i256;
+        v14.i256 = mload v13 i256;
+        (v16.i256, v17.i1) = uaddo v14 2.i256;
+        br v17 block2 block4;
+
+    block4:
+        v19.i256 = add v0 32.i256;
+        mstore v19 v16 i256;
+        return;
+}
+
 func private %cast(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -139,13 +139,13 @@ func private %main() {
 
     block1:
         v1.i256 = call %alloc;
-        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_b71c v1;
-        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_f565 0.i256;
+        call %standalone_effect_ptr_domains__effect_ptr_domains__bump_fe9f v1;
+        call %standalone_effect_ptr_domains__effect_ptr_domains__bump_b87b 0.i256;
         v7.constref<@layout_0> = const.ref $const_region_0;
         v8.constref<@layout_0> = const.ref $const_region_0;
         v9.@layout_0 = const.load v8;
         obj.store v0 v9;
-        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_5804 v0;
+        call %standalone_effect_ptr_domains__effect_ptr_domains__bump_2946 v0;
         return;
 }
 

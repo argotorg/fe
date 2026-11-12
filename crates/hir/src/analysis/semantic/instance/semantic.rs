@@ -39,7 +39,7 @@ use crate::{
             },
             provider::{
                 AddressSpace, ProviderKind, RootProviderRegistration, RootProviderScope,
-                provider_semantics_for_specialized_call, registered_root_providers,
+                provider_semantics_for_specialized_call,
             },
             shape::Shape,
             subst::substitute_complete,
@@ -64,7 +64,7 @@ use crate::{
     },
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
-        ResolvedEffectBinding, effect_param_provider_semantics, effect_requirements_for_site,
+        ResolvedEffectBinding, effect_resolutions_for_site, provider_bindings_for_site,
         storage_slot_span,
     },
 };
@@ -2164,14 +2164,9 @@ pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
     };
     match binding {
         LocalBinding::EffectParam {
-            site,
-            idx,
-            provider_idx,
-            is_mut,
-            ..
-        } => provider_from_subst(provider_idx).or_else(|| {
-            provisional_provider_binding_for_effect(db, key, site, idx as u32, provider_idx, is_mut)
-        }),
+            site, provider_idx, ..
+        } => provider_from_subst(provider_idx)
+            .or_else(|| provisional_provider_binding_for_effect(db, key, site, provider_idx)),
         LocalBinding::Param {
             site: ParamSite::EffectField(effect_site),
             idx,
@@ -2184,14 +2179,7 @@ pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
             let provider_idx =
                 provisional_provider_idx_for_requirement(db, effect_site, requirement.binding_idx)?;
             provider_from_subst(provider_idx).or_else(|| {
-                provisional_provider_binding_for_effect(
-                    db,
-                    key,
-                    effect_site,
-                    requirement.binding_idx,
-                    provider_idx,
-                    requirement.is_mut,
-                )
+                provisional_provider_binding_for_effect(db, key, effect_site, provider_idx)
             })
         }
         LocalBinding::Local { .. }
@@ -2206,14 +2194,10 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
     requirement_idx: u32,
 ) -> Option<u32> {
     match site {
-        EffectParamSite::Func(func, _) => place_effect_provider_param_index_map(db, func)
-            .get(requirement_idx as usize)
-            .and_then(|param_idx| param_idx.map(|_| requirement_idx))
-            .or_else(|| {
-                registered_root_providers(db, site)
-                    .first()
-                    .map(RootProviderRegistration::func_provider_idx)
-            }),
+        EffectParamSite::Func(..) => effect_resolutions_for_site(db, site)
+            .iter()
+            .find(|resolution| resolution.requirement_idx == requirement_idx)
+            .map(|resolution| resolution.provider_idx),
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
@@ -2246,36 +2230,9 @@ fn provisional_provider_binding_for_effect<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
     site: EffectParamSite<'db>,
-    requirement_idx: u32,
     provider_idx: u32,
-    is_mut: bool,
 ) -> Option<ProviderBinding<'db>> {
     match site {
-        EffectParamSite::Func(func, _) => {
-            let provider_map = place_effect_provider_param_index_map(db, func);
-            if provider_map
-                .get(requirement_idx as usize)
-                .is_some_and(Option::is_some)
-                && provider_idx == requirement_idx
-            {
-                let provider_param_idx = provider_map[requirement_idx as usize]?;
-                let provider_ty = *CallableDef::Func(func).params(db).get(provider_param_idx)?;
-                let requirement = effect_requirements_for_site(db, site)
-                    .into_iter()
-                    .find(|requirement| requirement.binding_idx == requirement_idx)?;
-                return Some(ProviderBinding {
-                    provider_idx,
-                    provider_ty,
-                    is_mut,
-                    source: ProviderSource::UsesParam {
-                        site: site.slot_site(db, requirement_idx),
-                        requirement_idx,
-                    },
-                    semantics: effect_param_provider_semantics(db, provider_ty, &requirement.key),
-                });
-            }
-            provisional_root_provider_binding(db, key, site, provider_idx)
-        }
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
@@ -2300,11 +2257,12 @@ fn provisional_provider_binding_for_effect<'db>(
             }
             provisional_root_provider_binding(db, key, site, provider_idx)
         }
-        EffectParamSite::Closure(_) => EffectEnvView::new(site)
-            .providers(db)
-            .into_iter()
-            .find(|provider| provider.provider_idx == provider_idx)
-            .and_then(|provider| instantiate_provider_binding(db, key, provider).ok()),
+        EffectParamSite::Func(..) | EffectParamSite::Closure(_) => {
+            provider_bindings_for_site(db, site)
+                .iter()
+                .find(|provider| provider.provider_idx == provider_idx)
+                .and_then(|provider| instantiate_provider_binding(db, key, provider.clone()).ok())
+        }
     }
 }
 

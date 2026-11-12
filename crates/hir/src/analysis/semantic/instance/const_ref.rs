@@ -1,8 +1,7 @@
 use super::{
     CallEffectArg, EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance,
     SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
-    provisional_provider_idx_for_requirement, resolved_provider_binding_for_instance_effect,
-    row_expansion_for_key,
+    resolved_provider_binding_for_instance_effect, row_expansion_for_key,
 };
 use crate::{
     analysis::{
@@ -39,7 +38,10 @@ use crate::{
             visitor::{TyVisitable, TyVisitor, collect_flags},
         },
     },
-    core::semantic::{EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding},
+    core::semantic::{
+        EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding,
+        effect_resolutions_for_site,
+    },
     hir_def::{
         CallableDef, Const, Func, GenericParamOwner, HirIngot, IdentId, scope_graph::ScopeId,
     },
@@ -1179,23 +1181,10 @@ fn resolve_callable_effect_providers<'db>(
 ) -> Vec<EffectProviderSpecialization<'db>> {
     let providers =
         resolve_provider_specializations(db, caller, effect_providers, provider_resolution_mode);
-    let site = EffectParamSite::Func(func, mode);
-    let effect_env = EffectEnvView::new(site);
-    let resolution_by_req = match provider_resolution_mode {
-        ProviderResolutionMode::Final => effect_env
-            .resolutions(db)
-            .into_iter()
-            .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
-            .collect::<FxHashMap<_, _>>(),
-        ProviderResolutionMode::Provisional => effect_env
-            .requirements(db)
-            .into_iter()
-            .filter_map(|requirement| {
-                provisional_provider_idx_for_requirement(db, site, requirement.binding_idx)
-                    .map(|provider_idx| (requirement.binding_idx as usize, provider_idx))
-            })
-            .collect::<FxHashMap<_, _>>(),
-    };
+    let resolution_by_req = effect_resolutions_for_site(db, EffectParamSite::Func(func, mode))
+        .iter()
+        .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
+        .collect::<FxHashMap<_, _>>();
     let provider_by_idx = providers
         .iter()
         .map(|provider| (provider.provider.provider_idx, provider))

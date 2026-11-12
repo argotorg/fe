@@ -13,10 +13,7 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         const_ty::{ConstBodyLowering, LoweringContext, RebaseConstUseEnv},
-        effects::{
-            EffectKeyKind, canonical_effect_identity_for_binding,
-            place_effect_provider_param_index_map,
-        },
+        effects::{canonical_effect_identity_for_binding, place_effect_provider_param_index_map},
         fold::TyFoldable,
         instantiate_trait_self,
         trait_def::TraitInstId,
@@ -46,13 +43,6 @@ pub(crate) fn collect_func_effect_provider_constraints<'db>(
     let mut out = Vec::new();
     // The bounds don't depend on the effects' modes.
     for binding in func.effect_requirements(db, func.modes(db)[0]) {
-        if !matches!(
-            binding.key.kind(),
-            EffectKeyKind::Type | EffectKeyKind::Trait
-        ) {
-            continue;
-        }
-
         let Some(provider_idx) = provider_map
             .get(binding.binding_idx as usize)
             .copied()
@@ -785,9 +775,8 @@ where
         let func = find_func(&db, top_mod, "f");
         let provider_map = place_effect_provider_param_index_map(&db, func);
         assert_eq!(provider_map.len(), 2);
-        let cap_provider_idx = provider_map[0].expect("missing provider slot for cap");
-        let slot_provider_idx = provider_map[1].expect("missing provider slot for slot");
-        assert!(cap_provider_idx < slot_provider_idx);
+        assert!(provider_map[0].is_some(), "missing provider slot for cap");
+        assert!(provider_map[1].is_none(), "provider slot for a type key");
 
         let effect_bindings = func.effect_requirements(&db, None);
         let slot_binding = effect_bindings
@@ -810,7 +799,7 @@ where
                 _ => None,
             })
             .collect();
-        assert_eq!(provider_names, vec!["cap".to_string(), "slot".to_string()]);
+        assert_eq!(provider_names, vec!["cap".to_string()]);
     }
 
     #[test]

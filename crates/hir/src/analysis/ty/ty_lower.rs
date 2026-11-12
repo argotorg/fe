@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
     Body, CallableDef, Expr, GenericArg, GenericArgListId, GenericParam, GenericParamOwner,
-    GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
+    GenericParamView, IdentId, ItemKind, KindBound as HirKindBound, Partial, PathId, Stmt,
     TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
     scope_graph::ScopeId,
 };
@@ -28,7 +28,8 @@ use super::{
 };
 use crate::analysis::name_resolution::{
     NameDomain, NameResKind, PathRes, TypePosition, path_resolver::PathResolutionResult,
-    resolve_ident_to_bucket, resolve_path_with_minter, resolve_type_position_path_with_minter,
+    resolve_ident_to_bucket, resolve_path_with_minter, resolve_type_path_definition,
+    resolve_type_position_path_with_minter,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -596,8 +597,8 @@ fn collect_generic_params_cycle_initial<'db>(
     }
 }
 
-/// The parameters a function adds after its inherited ones: one provider per
-/// keyed effect, in effect order.
+/// The parameters a function adds after its inherited ones: the provider
+/// type of each effect whose key is a trait, in effect order.
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(crate) struct FuncImplicitParamPlan<'db> {
     pub(crate) implicit_precursors: Vec<TyParamPrecursor<'db>>,
@@ -625,12 +626,24 @@ pub(crate) fn func_implicit_param_plan<'db>(
     let prefix_len = func_inherited_param_precursors(db, func).len();
     let mut implicit_precursors = Vec::new();
     let mut provider_param_index_by_effect = vec![None; func.effects(db).data(db).len()];
-    // Reserve providers from syntax, including invalid keys. Key validation depends
-    // on the explicit parameters after this prefix; letting it add/remove slots
-    // makes their indices oscillate during generic-parameter query recovery.
+    // A key is a trait by the definition its path names alone, whether or
+    // not it is a valid key. Lowering the key depends on the explicit
+    // parameters after this prefix; letting it add or remove slots makes
+    // their indices oscillate during generic-parameter query recovery.
     for (provider_idx, effect) in func
         .effect_params(db)
-        .filter(|effect| effect.key_ty(db).is_some())
+        .filter(|effect| {
+            effect
+                .key_ty(db)
+                .and_then(|key| key.as_path(db))
+                .is_some_and(|path| {
+                    !path.is_self_ty(db)
+                        && matches!(
+                            resolve_type_path_definition(db, path, func.scope()),
+                            Some(NameResKind::Scope(ScopeId::Item(ItemKind::Trait(_))))
+                        )
+                })
+        })
         .enumerate()
     {
         let lowered_idx = prefix_len + implicit_precursors.len();
