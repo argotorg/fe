@@ -1015,7 +1015,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         } else if ty.has_var(db) {
             None
         } else if let TyData::TyParam(param) = ty.data(db)
-            && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
+            && (param.is_effect_provider() || param.is_trait_self())
         {
             Some(EMPTY)
         } else if ty.has_param(db) {

@@ -252,7 +252,7 @@ where
             .expect("effect key slot has a formal");
         if formal
             .as_generic_param(db)
-            .is_some_and(|param| param.is_effect() || param.is_implicit())
+            .is_some_and(|param| param.is_implicit())
         {
             *arg = formal;
         }
