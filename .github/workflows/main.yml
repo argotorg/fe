@@ -188,6 +188,44 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # The `test` job covers native code on x86-64 Linux and AArch64 macOS. This
+  # runs the native tests alone on AArch64 Linux, where std's layouts differ.
+  native-linux-arm64:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: Generate tree-sitter parser
+        working-directory: crates/tree-sitter-fe
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild tree-sitter-cli
+          npx tree-sitter generate --abi=14
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@badb8c3638e0b773c6c17a6025c2306a8f1c4303 # nextest
+        with:
+          tool: nextest
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      - name: Run native tests
+        run: >-
+          cargo nextest run --cargo-profile test-release -p fe -p fe-codegen
+          --features fe/cranelift,fe-codegen/cranelift --no-fail-fast --locked
+          -E 'binary(native_runtime) | binary(project_target) | binary(native_backend) | test(/native/)'
+
   wasm-wasi-check:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
