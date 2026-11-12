@@ -31,9 +31,9 @@ use crate::analysis::{
         sol_codec::sol_codec_implementor,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         trait_lower::complete_candidate_impl_assoc_ty,
-        ty_def::{BorrowKind, TyData, TyId, TyVarSort},
+        ty_def::{AssocTy, BorrowKind, TyData, TyId, TyVarSort},
         unify::{PersistentUnificationTable, Unifiable},
-        visitor::{TyVisitable, TyVisitor},
+        visitor::{TyVisitable, TyVisitor, walk_assoc_ty},
     },
 };
 use crate::hir_def::scope_graph::ScopeId;
@@ -238,6 +238,35 @@ pub(crate) fn answering_assumption<'db>(
             )
             .is_ok()
         })
+}
+
+/// The trait reference of each projection `goal` names, an outer projection's
+/// before those of the projections in its arguments.
+fn projection_traits<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: TraitInstId<'db>,
+) -> IndexSet<TraitInstId<'db>> {
+    struct ProjectionTraits<'db> {
+        db: &'db dyn HirAnalysisDb,
+        traits: IndexSet<TraitInstId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for ProjectionTraits<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_assoc_ty(&mut self, assoc: &AssocTy<'db>) {
+            self.traits.insert(assoc.trait_.as_predicate(self.db));
+            walk_assoc_ty(self, assoc);
+        }
+    }
+
+    let mut visitor = ProjectionTraits {
+        db,
+        traits: IndexSet::default(),
+    };
+    goal.visit_with(&mut visitor);
+    visitor.traits
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -631,7 +660,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 }
 
                 let constraints = candidate.constraints(self.db);
-                let remaining_goals = constraints
+                let mut remaining_goals: Vec<_> = constraints
                     .list(self.db)
                     .iter()
                     .map(|constraint| {
@@ -640,6 +669,13 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                             .fold_with(self.db, &mut table)
                     })
                     .collect();
+                // A projection the goal still names is well formed only if
+                // its trait reference holds, which is settled before the where
+                // clauses, from the innermost projection. Otherwise `impl<T:
+                // Seq> Tr for W<T> where W<T::Tail>: Tr` answers `W<Nil>: Tr`
+                // by `W<<Nil as Seq>::Tail>: Tr`, which it answers by the next
+                // tail, without end.
+                remaining_goals.extend(projection_traits(self.db, normalized_goal));
                 let branch = Branch {
                     table,
                     root_goal: query.goal,
@@ -994,8 +1030,11 @@ pub(crate) fn ty_depth_impl<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> u
         | TyData::Never
         | TyData::TyBase(_)
         | TyData::TyParam(_)
-        | TyData::AssocTy { .. }
         | TyData::TyVar(_) => 1,
+        TyData::AssocTy(assoc) => {
+            let args = assoc.trait_.args(db).iter();
+            args.map(|&arg| ty_depth_impl(db, arg)).max().unwrap_or(0) + 1
+        }
         TyData::QualifiedTy(trait_inst) => ty_depth_impl(db, trait_inst.self_ty(db)) + 1,
         TyData::TyApp(lhs, rhs) => {
             let lhs_depth = ty_depth_impl(db, *lhs);
