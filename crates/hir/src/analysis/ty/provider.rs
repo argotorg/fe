@@ -53,20 +53,12 @@ pub enum ProviderKind {
     Place,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
-pub enum ProviderTransport {
-    ByValue,
-    ByPlace,
-    ByTempPlace,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ProviderSemantics<'db> {
     pub provider_ty: TyId<'db>,
     pub kind: ProviderKind,
     pub address_space: Option<AddressSpace>,
     pub target_ty: Option<TyId<'db>>,
-    pub transport: ProviderTransport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
@@ -196,7 +188,6 @@ pub fn provider_semantics<'db>(
         kind,
         address_space: Some(AddressSpace::Memory),
         target_ty,
-        transport: ProviderTransport::ByValue,
     }
 }
 
@@ -205,7 +196,6 @@ pub fn provider_semantics_for_specialized_call<'db>(
     provider_ty: TyId<'db>,
     target_ty: Option<TyId<'db>>,
     address_space: Option<AddressSpace>,
-    transport: ProviderTransport,
 ) -> ProviderSemantics<'db> {
     let mut semantics = provider_semantics(db, provider_ty);
     // A capability names its target's place, and so does a root object
@@ -219,7 +209,6 @@ pub fn provider_semantics_for_specialized_call<'db>(
             semantics.address_space = Some(address_space);
         }
     }
-    semantics.transport = transport;
     semantics
 }
 

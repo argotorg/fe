@@ -4,7 +4,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     analysis::{
         HirAnalysisDb,
-        place::{Place, PlaceBase},
         semantic::{
             CallSiteId, PlaceProvenance, RuntimeSizeError, SExpr, SLocalId, SStmtKind, SemOrigin,
             SemanticBody, SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
@@ -39,9 +38,8 @@ use crate::{
                 tree_size_within,
             },
             provider::{
-                AddressSpace, ProviderKind, ProviderTransport, RootProviderRegistration,
-                RootProviderScope, provider_semantics_for_specialized_call,
-                registered_root_providers,
+                AddressSpace, ProviderKind, RootProviderRegistration, RootProviderScope,
+                provider_semantics_for_specialized_call, registered_root_providers,
             },
             shape::Shape,
             subst::substitute_complete,
@@ -51,9 +49,9 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
-                EffectParamSite, EffectPassMode, EffectProviderProvenance,
-                EffectProviderSpecialization, ForLoopStep, LocalBinding, ParamSite,
-                ResolvedEffectArg, SemanticExprLowering, SmirLoweringIssue, TypedBody,
+                EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
+                ForLoopStep, LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering,
+                SmirLoweringIssue, TypedBody,
             },
             ty_def::{BorrowKind, InvalidCause, TyData, TyId},
             ty_is_snapshot,
@@ -191,7 +189,6 @@ pub struct CallEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: EffectArg<'db>,
     pub with_source: Option<ExprId>,
-    pub pass_mode: EffectPassMode,
     pub required_mut: bool,
     pub instantiated_key_ty: Option<TyId<'db>>,
     pub provider_target_ty: Option<TyId<'db>>,
@@ -204,7 +201,6 @@ impl<'db> CallEffectArg<'db> {
             binding_idx,
             arg: arg.arg.clone(),
             with_source: arg.with_source,
-            pass_mode: arg.pass_mode,
             required_mut: arg.required_mut,
             instantiated_key_ty: arg.instantiated_key_ty,
             provider_target_ty: arg.provider_target_ty,
@@ -601,21 +597,11 @@ fn instance_effect_args<'db>(
             else {
                 continue;
             };
-            let (arg, pass_mode) = match provider.semantics.transport {
-                ProviderTransport::ByValue => {
-                    (EffectArg::Binding(binding), EffectPassMode::ByValue)
-                }
-                ProviderTransport::ByPlace | ProviderTransport::ByTempPlace => (
-                    EffectArg::Place(Place::new(PlaceBase::Binding(binding))),
-                    EffectPassMode::ByPlace,
-                ),
-            };
             let target = callee.requirement.binding_idx;
             expanded.push(CallEffectArg {
                 binding_idx: target,
-                arg,
+                arg: EffectArg::Binding(binding),
                 with_source: None,
-                pass_mode,
                 required_mut: callee.requirement.is_mut,
                 instantiated_key_ty: callee.requirement.key.key_ty(),
                 provider_target_ty: provider.semantics.target_ty,
@@ -1178,7 +1164,6 @@ fn specialize_provider_address_space<'db>(
         provider.provider_ty,
         provider.semantics.target_ty,
         Some(address_space),
-        provider.semantics.transport,
     );
     specialization.provider.semantics = semantics;
 }
@@ -2313,7 +2298,6 @@ fn provisional_provider_binding_for_effect<'db>(
                         kind: ProviderKind::Place,
                         address_space: Some(field.address_space),
                         target_ty: Some(provider_ty),
-                        transport: ProviderTransport::ByValue,
                     },
                 });
             }
@@ -2828,7 +2812,6 @@ fn root_owner_effect_providers<'db>(
                     provider_ty,
                     target_ty,
                     Some(AddressSpace::Memory),
-                    ProviderTransport::ByValue,
                 ),
             })
         })
@@ -3000,7 +2983,6 @@ fn instantiate_provider_binding<'db>(
             provider_ty,
             target_ty,
             provider.semantics.address_space,
-            provider.semantics.transport,
         );
         // A root object lies where its binding says, which its type alone
         // cannot tell (`effect_param_provider_semantics`).

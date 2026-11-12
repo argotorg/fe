@@ -17,7 +17,7 @@ use crate::span::{DynLazySpan, types::LazyTySpan};
 
 use super::{
     BodyOwner, BuiltinOp, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, EffectArgTarget,
-    RecordLike, SemanticExprLowering, SumShapeOp, Typeable, ValuePathRef,
+    EffectPassMode, RecordLike, SemanticExprLowering, SumShapeOp, Typeable, ValuePathRef,
     effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
@@ -67,7 +67,7 @@ use crate::analysis::ty::{
     fold::{TyFoldable as _, TyFolder},
     instantiate_trait_self,
     normalize::normalize_with_trait_evidence,
-    provider::{ProviderTransport, provider_semantics_for_specialized_call},
+    provider::provider_semantics_for_specialized_call,
     shape::{
         Shape, SumKind, is_param_product, lower_opaque_param, lower_param_product, may_name_shape,
         param_product_diags, sum_kind,
@@ -144,25 +144,18 @@ enum EffectEvidence<'db> {
         key_kind: EffectKeyKind,
         target_ty: Option<TyId<'db>>,
         commit: EffectCommitPlan<'db>,
-        arg_style: EffectArgStyle,
+        pass_mode: EffectPassMode,
     },
     UnkeyedType {
         provider: ProvidedEffect<'db>,
         commit: EffectCommitPlan<'db>,
-        arg_style: EffectArgStyle,
+        pass_mode: EffectPassMode,
     },
     UnkeyedTrait {
         provider: ProvidedEffect<'db>,
         commit: EffectCommitPlan<'db>,
-        arg_style: EffectArgStyle,
+        pass_mode: EffectPassMode,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EffectArgStyle {
-    Place,
-    TempPlace,
-    Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2583,13 +2576,13 @@ impl<'db> TyChecker<'db> {
             }
             match resolution {
                 EffectResolution::Chosen(evidence) => {
-                    let (provider, arg_style, key_kind, instantiated_key_ty) = match *evidence {
+                    let (provider, pass_mode, key_kind, instantiated_key_ty) = match *evidence {
                         EffectEvidence::Keyed {
                             provider,
                             key_kind,
                             target_ty,
                             commit,
-                            arg_style,
+                            pass_mode,
                         } => {
                             let committed = self.apply_effect_commit_plan(commit);
                             debug_assert!(committed, "chosen keyed effect evidence commit failed");
@@ -2597,12 +2590,12 @@ impl<'db> TyChecker<'db> {
                                 self.push_missing_effect(defer, missing());
                                 continue;
                             }
-                            (provider, arg_style, key_kind, target_ty)
+                            (provider, pass_mode, key_kind, target_ty)
                         }
                         EffectEvidence::UnkeyedType {
                             provider,
                             commit,
-                            arg_style,
+                            pass_mode,
                         } => {
                             let target_ty = match commit.key_match.clone() {
                                 Some(KeyMatchCommit::QueryToType { actual, .. }) => {
@@ -2624,12 +2617,12 @@ impl<'db> TyChecker<'db> {
                                 self.push_missing_effect(defer, missing());
                                 continue;
                             }
-                            (provider, arg_style, EffectKeyKind::Type, target_ty)
+                            (provider, pass_mode, EffectKeyKind::Type, target_ty)
                         }
                         EffectEvidence::UnkeyedTrait {
                             provider,
                             commit,
-                            arg_style,
+                            pass_mode,
                         } => {
                             let committed = self.apply_effect_commit_plan(commit);
                             debug_assert!(
@@ -2640,7 +2633,7 @@ impl<'db> TyChecker<'db> {
                                 self.push_missing_effect(defer, missing());
                                 continue;
                             }
-                            (provider, arg_style, EffectKeyKind::Trait, None)
+                            (provider, pass_mode, EffectKeyKind::Trait, None)
                         }
                     };
 
@@ -2657,8 +2650,7 @@ impl<'db> TyChecker<'db> {
                         self.effect_providers
                             .insert((call, req.binding_idx), provider);
                     }
-                    let Some((arg, pass_mode)) = self.effect_arg_for_provider(provider, arg_style)
-                    else {
+                    let Some(arg) = self.effect_arg_for_provider(provider, pass_mode) else {
                         self.push_missing_effect(defer, missing());
                         continue;
                     };
@@ -2692,12 +2684,12 @@ impl<'db> TyChecker<'db> {
                         .effect_arg_provider_space(&arg)
                         .or_else(|| self.concrete_borrow_provider_for_capability_ty(provider.ty))
                         .or_else(|| {
-                            matches!(pass_mode, super::EffectPassMode::ByTempPlace)
+                            matches!(pass_mode, EffectPassMode::ByTempPlace)
                                 .then_some(AddressSpace::Memory)
                         });
                     if matches!(
                         pass_mode,
-                        super::EffectPassMode::ByPlace | super::EffectPassMode::ByTempPlace
+                        EffectPassMode::ByPlace | EffectPassMode::ByTempPlace
                     ) && provider_space.is_none()
                         && !self.effect_arg_provider_space_can_remain_unresolved(&arg)
                     {
@@ -2800,7 +2792,7 @@ impl<'db> TyChecker<'db> {
                     key: requirement.binding_ty,
                     arg: super::EffectArg::Binding(binding),
                     with_source: None,
-                    pass_mode: super::EffectPassMode::ByValue,
+                    pass_mode: EffectPassMode::ByValue,
                     required_mut: requirement.is_mut,
                     key_kind: EffectKeyKind::Row,
                     instantiated_key_ty: None,
@@ -3074,11 +3066,11 @@ impl<'db> TyChecker<'db> {
             }
         };
         // A type key is provided by its place; a trait key by value.
-        let arg_style = match target_ty {
+        let pass_mode = match target_ty {
             Some(_) => self
-                .direct_arg_style_for_provider(provider)
-                .unwrap_or(EffectArgStyle::Value),
-            None => EffectArgStyle::Value,
+                .direct_pass_mode_for_provider(provider)
+                .unwrap_or(EffectPassMode::ByValue),
+            None => EffectPassMode::ByValue,
         };
         Some(EffectEvidence::Keyed {
             provider,
@@ -3089,7 +3081,7 @@ impl<'db> TyChecker<'db> {
                 trait_solutions: SmallVec::new(),
                 extra_unifications: SmallVec::new(),
             },
-            arg_style,
+            pass_mode,
         })
     }
 
@@ -3098,8 +3090,7 @@ impl<'db> TyChecker<'db> {
         query: TypePatternKey<'db>,
         provider: ProvidedEffect<'db>,
     ) -> Option<EffectEvidence<'db>> {
-        let direct_style = self.direct_arg_style_for_provider(provider);
-        if let Some(arg_style) = direct_style {
+        if let Some(pass_mode) = self.direct_pass_mode_for_provider(provider) {
             let snapshot = self.snapshot_state();
             let ok = apply_key_match_commit(
                 self,
@@ -3120,7 +3111,7 @@ impl<'db> TyChecker<'db> {
                         trait_solutions: SmallVec::new(),
                         extra_unifications: SmallVec::new(),
                     },
-                    arg_style,
+                    pass_mode,
                 });
             }
         }
@@ -3151,18 +3142,18 @@ impl<'db> TyChecker<'db> {
                 trait_solutions: SmallVec::from_iter([(trait_goal, solution)]),
                 extra_unifications: SmallVec::new(),
             },
-            arg_style: EffectArgStyle::Value,
+            pass_mode: EffectPassMode::ByValue,
         })
     }
 
-    fn direct_arg_style_for_provider(
+    fn direct_pass_mode_for_provider(
         &self,
         provider: ProvidedEffect<'db>,
-    ) -> Option<EffectArgStyle> {
+    ) -> Option<EffectPassMode> {
         Some(match self.provider_place(provider) {
-            Some(_) => EffectArgStyle::Place,
+            Some(_) => EffectPassMode::ByPlace,
             None if matches!(provider.origin, EffectOrigin::With { .. }) => {
-                EffectArgStyle::TempPlace
+                EffectPassMode::ByTempPlace
             }
             None => return None,
         })
@@ -3252,31 +3243,23 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    /// The argument that passes `provider` in `arg_style`, if it can be
+    /// The argument that passes `provider` in `pass_mode`, if it can be
     /// passed so.
     fn effect_arg_for_provider(
-        &mut self,
+        &self,
         provider: ProvidedEffect<'db>,
-        arg_style: EffectArgStyle,
-    ) -> Option<(super::EffectArg<'db>, super::EffectPassMode)> {
-        Some(match (arg_style, provider.origin) {
-            (EffectArgStyle::Place, _) => (
-                super::EffectArg::Place(self.provider_place(provider)?),
-                super::EffectPassMode::ByPlace,
-            ),
-            (EffectArgStyle::TempPlace, EffectOrigin::With { value_expr }) => (
-                super::EffectArg::Value(value_expr),
-                super::EffectPassMode::ByTempPlace,
-            ),
-            (EffectArgStyle::TempPlace, EffectOrigin::Param { .. }) => return None,
-            (EffectArgStyle::Value, EffectOrigin::With { value_expr }) => (
-                super::EffectArg::Value(value_expr),
-                super::EffectPassMode::ByValue,
-            ),
-            (EffectArgStyle::Value, EffectOrigin::Param { .. }) => (
-                super::EffectArg::Binding(provider.binding?),
-                super::EffectPassMode::ByValue,
-            ),
+        pass_mode: EffectPassMode,
+    ) -> Option<super::EffectArg<'db>> {
+        Some(match (pass_mode, provider.origin) {
+            (EffectPassMode::ByPlace, _) => super::EffectArg::Place(self.provider_place(provider)?),
+            (
+                EffectPassMode::ByTempPlace | EffectPassMode::ByValue,
+                EffectOrigin::With { value_expr },
+            ) => super::EffectArg::Value(value_expr),
+            (EffectPassMode::ByTempPlace, EffectOrigin::Param { .. }) => return None,
+            (EffectPassMode::ByValue, EffectOrigin::Param { .. }) => {
+                super::EffectArg::Binding(provider.binding?)
+            }
         })
     }
 
@@ -3284,16 +3267,16 @@ impl<'db> TyChecker<'db> {
         &mut self,
         provider: ProvidedEffect<'db>,
         arg: &super::EffectArg<'db>,
-        pass_mode: super::EffectPassMode,
+        pass_mode: EffectPassMode,
         provider_target_ty: Option<TyId<'db>>,
     ) -> Option<TyId<'db>> {
         match pass_mode {
-            super::EffectPassMode::ByValue => Some(self.table.fold_ty(self.db, provider.ty)),
-            super::EffectPassMode::ByTempPlace => {
+            EffectPassMode::ByValue => Some(self.table.fold_ty(self.db, provider.ty)),
+            EffectPassMode::ByTempPlace => {
                 let target_ty = self.table.fold_ty(self.db, provider_target_ty?);
                 Some(TyId::ptr_to(self.db, target_ty))
             }
-            super::EffectPassMode::ByPlace => {
+            EffectPassMode::ByPlace => {
                 let binding = match arg {
                     super::EffectArg::Place(place) => {
                         let PlaceBase::Binding(binding) = place.base;
@@ -3370,7 +3353,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         provided: ProvidedEffect<'db>,
         arg: &super::EffectArg<'db>,
-        pass_mode: super::EffectPassMode,
+        pass_mode: EffectPassMode,
         provider_target_ty: Option<TyId<'db>>,
         provider_space: Option<AddressSpace>,
     ) -> EffectArgProvider<'db> {
@@ -3405,11 +3388,6 @@ impl<'db> TyChecker<'db> {
             provider_ty,
             target_ty,
             provider_space,
-            match pass_mode {
-                super::EffectPassMode::ByPlace => ProviderTransport::ByPlace,
-                super::EffectPassMode::ByTempPlace => ProviderTransport::ByTempPlace,
-                super::EffectPassMode::ByValue => ProviderTransport::ByValue,
-            },
         );
         EffectArgProvider {
             provider_ty,

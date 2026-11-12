@@ -74,8 +74,8 @@ pub mod visitor;
 
 pub use msg_selector::MsgAnalysisPass;
 pub use provider::{
-    AddressSpace, ProviderKind, ProviderSemantics, ProviderTransport, RootProviderRegistration,
-    RootProviderScope, RootProviderSiteKind, provider_semantics, registered_root_providers,
+    AddressSpace, ProviderKind, ProviderSemantics, RootProviderRegistration, RootProviderScope,
+    RootProviderSiteKind, provider_semantics, registered_root_providers,
 };
 
 const EVM_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];

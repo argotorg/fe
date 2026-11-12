@@ -30,7 +30,7 @@ func private %__CoolCoin_init(v0.i256, v1.@layout_0, v2.i256, v3.i256) {
         br v12 block2 block3;
 
     block2:
-        call %standalone_erc20__erc20__mint__g5a03_2a84 v1 v0 v2;
+        call %standalone_erc20__erc20__mint__g5a03_041c v1 v0 v2;
         jump block4;
 
     block3:
@@ -132,7 +132,7 @@ func private %__CoolCoin_recv_1_0(v0.@layout_0, v1.i256, v2.i256, v3.i256) -> i1
 
     block1:
         call %require v3 1.i256;
-        call %standalone_erc20__erc20__mint__g5a03_4dba v0 v1 v2;
+        call %standalone_erc20__erc20__mint__g5a03_6577 v0 v1 v2;
         return 1.i1;
 }
 
@@ -3365,7 +3365,7 @@ func inline(always) private %mapping_slot__g7bf4(v0.i256, v1.@layout_8) -> i256 
         jump block3;
 }
 
-func private %standalone_erc20__erc20__mint__g5a03_2a84(v0.@layout_0, v1.i256, v2.i256) {
+func private %standalone_erc20__erc20__mint__g5a03_041c(v0.@layout_0, v1.i256, v2.i256) {
     block0:
         jump block1;
 
@@ -3410,7 +3410,7 @@ func private %standalone_erc20__erc20__mint__g5a03_2a84(v0.@layout_0, v1.i256, v
         return;
 }
 
-func private %standalone_erc20__erc20__mint__g5a03_4dba(v0.@layout_0, v1.i256, v2.i256) {
+func private %standalone_erc20__erc20__mint__g5a03_6577(v0.@layout_0, v1.i256, v2.i256) {
     block0:
         jump block1;
 

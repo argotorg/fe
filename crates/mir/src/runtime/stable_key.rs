@@ -272,8 +272,8 @@ fn provider_semantics_identity<'db>(
         IdentityMode::Symbol => String::new(),
     };
     format!(
-        "{ty}kind${:?}$space${:?}$target${target}$transport${:?}",
-        semantics.kind, semantics.address_space, semantics.transport
+        "{ty}kind${:?}$space${:?}$target${target}",
+        semantics.kind, semantics.address_space
     )
 }
 
