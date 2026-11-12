@@ -2657,13 +2657,13 @@ impl<'db> TyChecker<'db> {
                         self.effect_providers
                             .insert((call, req.binding_idx), provider);
                     }
-                    let (arg, pass_mode) = self.effect_arg_for_provider(provider, arg_style);
-                    let provider_target_ty =
-                        instantiated_key_ty.map(|ty| self.table.fold_ty(self.db, ty));
-                    if !self.effect_arg_is_valid(&arg, pass_mode) {
+                    let Some((arg, pass_mode)) = self.effect_arg_for_provider(provider, arg_style)
+                    else {
                         self.push_missing_effect(defer, missing());
                         continue;
-                    }
+                    };
+                    let provider_target_ty =
+                        instantiated_key_ty.map(|ty| self.table.fold_ty(self.db, ty));
                     if let Some(provider_arg_idx) = provider_arg_idx_for_param
                         && let Some(provider_var) =
                             callable.generic_args().get(provider_arg_idx).copied()
@@ -2689,7 +2689,7 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                     let provider_space = self
-                        .effect_arg_provider_space(&arg, pass_mode)
+                        .effect_arg_provider_space(&arg)
                         .or_else(|| self.concrete_borrow_provider_for_capability_ty(provider.ty))
                         .or_else(|| {
                             matches!(pass_mode, super::EffectPassMode::ByTempPlace)
@@ -3252,36 +3252,32 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// The argument that passes `provider` in `arg_style`, if it can be
+    /// passed so.
     fn effect_arg_for_provider(
         &mut self,
         provider: ProvidedEffect<'db>,
         arg_style: EffectArgStyle,
-    ) -> (super::EffectArg<'db>, super::EffectPassMode) {
-        match arg_style {
-            EffectArgStyle::Place => (
-                self.provider_place(provider)
-                    .map_or(super::EffectArg::Unknown, super::EffectArg::Place),
+    ) -> Option<(super::EffectArg<'db>, super::EffectPassMode)> {
+        Some(match (arg_style, provider.origin) {
+            (EffectArgStyle::Place, _) => (
+                super::EffectArg::Place(self.provider_place(provider)?),
                 super::EffectPassMode::ByPlace,
             ),
-            EffectArgStyle::TempPlace => match provider.origin {
-                EffectOrigin::With { value_expr } => (
-                    super::EffectArg::Value(value_expr),
-                    super::EffectPassMode::ByTempPlace,
-                ),
-                EffectOrigin::Param { .. } => {
-                    (super::EffectArg::Unknown, super::EffectPassMode::Unknown)
-                }
-            },
-            EffectArgStyle::Value => (
-                match provider.origin {
-                    EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
-                    EffectOrigin::Param { .. } => provider
-                        .binding
-                        .map_or(super::EffectArg::Unknown, super::EffectArg::Binding),
-                },
+            (EffectArgStyle::TempPlace, EffectOrigin::With { value_expr }) => (
+                super::EffectArg::Value(value_expr),
+                super::EffectPassMode::ByTempPlace,
+            ),
+            (EffectArgStyle::TempPlace, EffectOrigin::Param { .. }) => return None,
+            (EffectArgStyle::Value, EffectOrigin::With { value_expr }) => (
+                super::EffectArg::Value(value_expr),
                 super::EffectPassMode::ByValue,
             ),
-        }
+            (EffectArgStyle::Value, EffectOrigin::Param { .. }) => (
+                super::EffectArg::Binding(provider.binding?),
+                super::EffectPassMode::ByValue,
+            ),
+        })
     }
 
     fn inferred_provider_ty_for_effect_arg(
@@ -3304,7 +3300,7 @@ impl<'db> TyChecker<'db> {
                         Some(binding)
                     }
                     super::EffectArg::Binding(binding) => Some(*binding),
-                    super::EffectArg::Value(_) | super::EffectArg::Unknown => provider.binding,
+                    super::EffectArg::Value(_) => provider.binding,
                 }?;
 
                 let inferred = match binding {
@@ -3339,62 +3335,19 @@ impl<'db> TyChecker<'db> {
 
                 Some(self.table.fold_ty(self.db, inferred))
             }
-            super::EffectPassMode::Unknown => None,
         }
     }
 
-    fn effect_arg_is_valid(
-        &self,
-        arg: &super::EffectArg<'db>,
-        pass_mode: super::EffectPassMode,
-    ) -> bool {
-        match pass_mode {
-            super::EffectPassMode::ByPlace => matches!(arg, &super::EffectArg::Place(_)),
-            super::EffectPassMode::ByTempPlace => matches!(arg, &super::EffectArg::Value(_)),
-            super::EffectPassMode::ByValue => !matches!(
-                arg,
-                &super::EffectArg::Unknown | &super::EffectArg::Place(_)
-            ),
-            super::EffectPassMode::Unknown => false,
-        }
-    }
-
-    fn effect_arg_provider_space(
-        &self,
-        arg: &super::EffectArg<'db>,
-        pass_mode: super::EffectPassMode,
-    ) -> Option<AddressSpace> {
-        match pass_mode {
-            super::EffectPassMode::ByTempPlace => match arg {
-                super::EffectArg::Value(expr) => self.env.typed_expr(*expr).and_then(|prop| {
-                    prop.borrow_provider
-                        .or_else(|| self.concrete_borrow_provider_for_capability_ty(prop.ty))
-                }),
-                super::EffectArg::Place(place) => self.concrete_borrow_provider_for_place(place),
-                super::EffectArg::Binding(binding) => {
-                    self.concrete_borrow_provider_for_binding(*binding)
-                }
-                super::EffectArg::Unknown => None,
-            },
-            super::EffectPassMode::ByPlace => match arg {
-                super::EffectArg::Place(place) => self.concrete_borrow_provider_for_place(place),
-                super::EffectArg::Binding(binding) => {
-                    self.concrete_borrow_provider_for_binding(*binding)
-                }
-                super::EffectArg::Value(_) | super::EffectArg::Unknown => None,
-            },
-            super::EffectPassMode::ByValue => match arg {
-                super::EffectArg::Place(place) => self.concrete_borrow_provider_for_place(place),
-                super::EffectArg::Value(expr) => self.env.typed_expr(*expr).and_then(|prop| {
-                    prop.borrow_provider
-                        .or_else(|| self.concrete_borrow_provider_for_capability_ty(prop.ty))
-                }),
-                super::EffectArg::Binding(binding) => {
-                    self.concrete_borrow_provider_for_binding(*binding)
-                }
-                super::EffectArg::Unknown => None,
-            },
-            super::EffectPassMode::Unknown => None,
+    fn effect_arg_provider_space(&self, arg: &super::EffectArg<'db>) -> Option<AddressSpace> {
+        match arg {
+            super::EffectArg::Place(place) => self.concrete_borrow_provider_for_place(place),
+            super::EffectArg::Value(expr) => self.env.typed_expr(*expr).and_then(|prop| {
+                prop.borrow_provider
+                    .or_else(|| self.concrete_borrow_provider_for_capability_ty(prop.ty))
+            }),
+            super::EffectArg::Binding(binding) => {
+                self.concrete_borrow_provider_for_binding(*binding)
+            }
         }
     }
 
@@ -3405,7 +3358,7 @@ impl<'db> TyChecker<'db> {
                 Some(binding)
             }
             super::EffectArg::Binding(binding) => Some(*binding),
-            super::EffectArg::Value(_) | super::EffectArg::Unknown => None,
+            super::EffectArg::Value(_) => None,
         };
 
         matches!(binding, Some(LocalBinding::EffectParam { .. }))
@@ -3455,9 +3408,7 @@ impl<'db> TyChecker<'db> {
             match pass_mode {
                 super::EffectPassMode::ByPlace => ProviderTransport::ByPlace,
                 super::EffectPassMode::ByTempPlace => ProviderTransport::ByTempPlace,
-                super::EffectPassMode::ByValue | super::EffectPassMode::Unknown => {
-                    ProviderTransport::ByValue
-                }
+                super::EffectPassMode::ByValue => ProviderTransport::ByValue,
             },
         );
         EffectArgProvider {
@@ -3483,7 +3434,7 @@ impl<'db> TyChecker<'db> {
                 Some(binding)
             }
             super::EffectArg::Binding(binding) => Some(*binding),
-            super::EffectArg::Value(_) | super::EffectArg::Unknown => provided.binding,
+            super::EffectArg::Value(_) => provided.binding,
         }?;
         match binding {
             LocalBinding::EffectParam {
@@ -3520,7 +3471,7 @@ impl<'db> TyChecker<'db> {
                 Some(binding)
             }
             super::EffectArg::Binding(binding) => Some(*binding),
-            super::EffectArg::Value(_) | super::EffectArg::Unknown => provided.binding,
+            super::EffectArg::Value(_) => provided.binding,
         };
         binding
             .map(|binding| EffectProviderProvenance::Binding { owner, binding })

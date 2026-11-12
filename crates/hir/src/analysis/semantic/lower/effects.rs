@@ -89,7 +89,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             EffectArg::Binding(binding) => self
                 .binding_provider(*binding)
                 .and_then(|provider| provider.semantics.address_space),
-            EffectArg::Value(_) | EffectArg::Unknown => None,
+            EffectArg::Value(_) => None,
         })
     }
 
@@ -154,9 +154,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         SEffectArgValue::Place(SPlace::new(local))
                     }
                 }
-                EffectArg::Value(expr) => SEffectArgValue::Value(self.lower_expr_operand(*expr)),
-                EffectArg::Unknown => {
-                    SEffectArgValue::Value(SOperand::synthetic(self.unit_value()))
+                EffectArg::Value(_) => {
+                    unreachable!("a `with` value is captured where its block is entered")
                 }
             },
         };
