@@ -83,8 +83,6 @@ fn the_manifest_describes_every_kind_of_export_and_import() {
         "imports": [
             { "module": "env", "name": "__fe_revert", "kind": "function",
               "type": { "params": ["i32", "i32"], "results": [] } },
-            { "module": "env", "name": "abort", "kind": "function",
-              "type": { "params": [], "results": [] } },
             { "module": "env", "name": "sys_wasm_files_close", "kind": "function",
               "type": { "params": ["i32"], "results": [] } },
             { "module": "env", "name": "sys_wasm_files_open", "kind": "function",
@@ -352,8 +350,6 @@ fn the_node_host_supplies_the_streams() {
             json!([
                 { "module": "env", "name": "__fe_revert", "kind": "function",
                   "type": { "params": ["i32", "i32"], "results": [] } },
-                { "module": "env", "name": "abort", "kind": "function",
-                  "type": { "params": [], "results": [] } },
                 stream("sys_wasm_stream_read"),
                 stream("sys_wasm_stream_write")
             ]),

@@ -194,8 +194,10 @@ and the clocks of `std::time`) have no provider on this target.
   to (a write to 0, a read of 1 or 2, any other number).
 - **Panics.** A panic with a code or a message passes its revert data, Solidity
   `Panic(uint256)` or `Error(string)` data, to the import `__fe_revert(address, length)`;
-  the host must not return. A module that has no memory left for the data calls the
-  import `abort()` instead. Every module that can panic imports both. `host.mjs` throws a
+  the host must not return. The data of a panic with a constant code, such as an
+  overflow check's, is a constant of the module. Other data is allocated, and a module
+  that has no memory left for it calls the import `abort()` instead; only a module
+  with such a panic imports `abort`. `host.mjs` throws a
   `GuestRevert` whose `data` is the bytes (`null` after `abort`) and whose `reason` is
   what they say (`revertReason`), such as `assertion failed`, `arithmetic overflow` or
   the message of `assert!`.

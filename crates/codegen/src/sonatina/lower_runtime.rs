@@ -6800,9 +6800,29 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     /// Ends the block at a revert with Solidity `Panic(code)` data for the
-    /// word `code`. On the EVM, the data is in scratch memory at 0.
+    /// word `code`. On the EVM, the data is in scratch memory at 0. Native code
+    /// that passes revert data to the host passes that of a constant code from
+    /// a constant global, so the check that panics allocates nothing and makes
+    /// a call of two arguments.
     fn insert_panic_revert(&mut self, code: ValueId) -> Result<(), LowerError> {
         let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
+            if self.module.panics.reverts_to_host()
+                && let Value::Immediate { imm, .. } = self.fb.func.dfg.value(code)
+            {
+                let word = imm.as_i256().to_u256();
+                let mut data = [0; 36];
+                data[..4].copy_from_slice(&PANIC_SELECTOR);
+                for (index, byte) in data[4..].iter_mut().rev().enumerate() {
+                    *byte = word.byte(index);
+                }
+                let gv = self.module.const_bytes_global(&data);
+                let address = self.fb.insert_inst(
+                    SymAddr::new(self.module.inst_set(), SymbolRef::Global(gv)),
+                    self.fb.module_builder.ctx.type_layout.pointer_repl(),
+                );
+                let len = self.fb.make_imm_value(data.len() as i64);
+                return self.insert_native_panic(NativePanic::Revert, &[address, len]);
+            }
             return self.insert_native_panic(NativePanic::Code, &[code]);
         };
         let zero = self.fb.make_imm_value(I256::zero());
@@ -7399,9 +7419,12 @@ fn bytes_to_i256(bytes: &[u8], signed: bool) -> I256 {
     I256::from_be_bytes(bytes)
 }
 
+/// The selector of Solidity's `Panic(uint256)`.
+const PANIC_SELECTOR: [u8; 4] = [0x4e, 0x48, 0x7b, 0x71];
+
 fn panic_selector_immediate() -> Immediate {
     let mut bytes = [0; 32];
-    bytes[..4].copy_from_slice(&[0x4e, 0x48, 0x7b, 0x71]);
+    bytes[..4].copy_from_slice(&PANIC_SELECTOR);
     Immediate::from_i256(bytes_to_i256(&bytes, false), Type::I256)
 }
 

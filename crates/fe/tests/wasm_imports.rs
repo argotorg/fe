@@ -1553,13 +1553,15 @@ fn the_input_is_read_to_its_end() {
 #[test]
 fn a_module_that_can_panic_imports_the_revert_of_core_rt() {
     let temp = tempdir().unwrap();
-    for level in ["0", "2"] {
-        // `checked_double` can overflow.
-        let bytes = build("abort_guard", Flavour::Host, level, temp.path());
-        let module = Module::new(engine(), &bytes).unwrap();
+    let revert_imports = |bytes: &[u8]| {
+        let module = Module::new(engine(), bytes).unwrap();
         let mut revert: Vec<_> = module
             .imports()
-            .filter(|import| ["__fe_revert", "abort"].contains(&import.name()))
+            .filter(|import| {
+                REVERT_IMPORTS
+                    .iter()
+                    .any(|&(_, name, _)| import.name() == name)
+            })
             .map(|import| {
                 (
                     import.module().to_string(),
@@ -1569,15 +1571,33 @@ fn a_module_that_can_panic_imports_the_revert_of_core_rt() {
             })
             .collect();
         revert.sort();
-        assert_eq!(
-            revert,
-            REVERT_IMPORTS.map(|(module, name, sig)| (
-                module.to_string(),
-                name.to_string(),
-                sig.to_string()
-            )),
-            "O{level}"
+        revert
+    };
+    let expected = |count: usize| {
+        REVERT_IMPORTS[..count]
+            .iter()
+            .map(|&(module, name, sig)| (module.to_string(), name.to_string(), sig.to_string()))
+            .collect::<Vec<_>>()
+    };
+    // A panic with a constant code passes constant data, so a module whose
+    // panics are those of `checked_double`, which can overflow, has nothing
+    // to allocate and no `abort`. A code that is a value needs its data
+    // allocated, and `abort` for when that fails.
+    let dynamic = temp.path().join("dynamic.fe");
+    fs::write(
+        &dynamic,
+        "#[unsafe(export)]\npub fn fail(code: u32) -> u32 {\n    core::panic_code(code as u256)\n}\n",
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let bytes = build("abort_guard", Flavour::Host, level, temp.path());
+        assert_eq!(revert_imports(&bytes), expected(1), "O{level}");
+        let bytes = build_wasm(
+            &dynamic,
+            level,
+            &temp.path().join(format!("dynamic{level}")),
         );
+        assert_eq!(revert_imports(&bytes), expected(2), "O{level}");
     }
     // A module that cannot panic imports nothing.
     let source = temp.path().join("plain.fe");
@@ -1598,7 +1618,7 @@ fn a_missing_import_fails_to_instantiate_with_a_message_that_names_it() {
     let text = format!("{error:?}");
     println!("no imports given: {text}");
     assert!(
-        text.contains("expected 4 imports, found 0"),
+        text.contains("expected 3 imports, found 0"),
         "the number of imports is named: {text}"
     );
 

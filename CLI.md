@@ -421,8 +421,9 @@ that names the function and the type. Inside functions, structs,
 tuples, enums, arrays, constants, `usize` and the dynamic arrays of `core::ptr` work.
 Overflow, division by zero, a failed `assert!` and an index outside an array end the call
 with Solidity `Panic(uint256)` data, and `assert!` with a message with `Error(string)` data,
-as in a native test: the module passes the data to the import `__fe_revert(address, length)`,
-and imports `abort()` for a panic that finds no memory for it. `examples/wasm/host.mjs`
+as in a native test: the module passes the data to the import `__fe_revert(address, length)`.
+The data of a constant code is a constant of the module; a module whose panic data must be
+allocated imports `abort()` for a panic that finds no memory for it. `examples/wasm/host.mjs`
 throws a `GuestRevert` that holds the data and what it says. A panic without data,
 `core::panic()`, traps. Calls use a stack in the module's memory, and
 a call that does not fit traps. The stack has 1 MiB unless `--wasm-stack-size <bytes>`

@@ -704,7 +704,6 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
         imports_of(&host),
         [
             ("env", "__fe_revert", "i32,i32->"),
-            ("env", "abort", "->"),
             ("env", "sys_wasm_files_close", "i32->"),
             ("env", "sys_wasm_files_open", "i32,i32->i64"),
             ("env", "sys_wasm_files_read", "i32,i32,i32,i32->i64"),
@@ -715,7 +714,7 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
     );
     assert_eq!(
         imports_of(&mock),
-        [("env", "__fe_revert", "i32,i32->"), ("env", "abort", "->")].map(|(m, n, s)| (
+        [("env", "__fe_revert", "i32,i32->")].map(|(m, n, s)| (
             m.to_string(),
             n.to_string(),
             s.to_string()
