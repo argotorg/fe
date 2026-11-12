@@ -19,6 +19,27 @@ pub fn available_traits_in_scope<'db>(
     available_traits_in_scope_impl(db, TraitScope::new(db, item_scope(db, scope)))
 }
 
+/// The candidates a method call or `Type::Item` path chooses among: a sole
+/// candidate wherever its trait is, but among several only those `visible`
+/// accepts, the ones whose trait is in scope, so an unrelated trait elsewhere,
+/// even in another ingot, cannot make the selection ambiguous. When several
+/// candidates are found and none is visible, they are all returned as the
+/// error.
+pub(crate) fn visible_candidates<T, P: Fn(&T) -> bool>(
+    mut candidates: Vec<T>,
+    visible: impl FnOnce() -> P,
+) -> Result<Vec<T>, Vec<T>> {
+    if candidates.len() < 2 {
+        return Ok(candidates);
+    }
+    let visible = visible();
+    if !candidates.iter().any(&visible) {
+        return Err(candidates);
+    }
+    candidates.retain(visible);
+    Ok(candidates)
+}
+
 /// The traits whose items a method call or `Type::Item` path in `scope` may
 /// select among several candidates: those in scope, `traits` (such as the
 /// traits of the assumptions), and all their super-traits.

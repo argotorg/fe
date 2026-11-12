@@ -1,0 +1,67 @@
+// An impl whose where clause is its own trait at a projection of its
+// parameter. It does not answer `W<Nil>: All`: `Nil` has no `Tail`.
+trait Seq {
+    type Tail
+}
+trait SubSeq: Seq {}
+trait All {}
+
+struct Nil {}
+struct Mid {}
+struct Cons<T> {
+    t: T,
+}
+struct W<T> {
+    t: T,
+}
+struct V<T> {
+    t: T,
+}
+
+impl<T> Seq for Cons<T> {
+    type Tail = T
+}
+impl<T> SubSeq for Cons<T> {}
+
+impl All for W<Nil> {}
+impl<T: Seq> All for W<T> where W<T::Tail>: All {}
+
+// `T: Seq` holds by a super trait of the impl's bound.
+impl All for V<Nil> {}
+impl<T: SubSeq> All for V<T> where V<<T as Seq>::Tail>: All {}
+
+fn need<T: All>(_ t: T) {}
+
+fn concrete(_ w: W<Cons<Cons<Nil>>>, _ v: V<Cons<Cons<Nil>>>) {
+    need(w)
+    need(v)
+}
+
+fn generic<T: Seq>(_ w: W<T>)
+where
+    W<T>: All,
+{
+    need(w)
+}
+
+fn generic_sub<T: SubSeq>(_ v: V<T>)
+where
+    V<T>: All,
+{
+    need(v)
+}
+
+fn tail<T: Seq>(_ w: W<Cons<T>>)
+where
+    W<T>: All,
+{
+    need(w)
+}
+
+fn base_missing(_ w: W<Cons<Mid>>) {
+    need(w)
+}
+
+fn bound_missing<T: Seq>(_ w: W<T>) {
+    need(w)
+}

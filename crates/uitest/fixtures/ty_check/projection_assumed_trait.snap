@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/projection_assumed_trait.fe
+---
+error[8-0000]: type mismatch
+   ┌─ projection_assumed_trait.fe:52:5
+   │
+52 │     x
+   │     ^ expected `bool`, but `W<T::Tail>::Out` is given
+
+error[8-0000]: type mismatch
+   ┌─ projection_assumed_trait.fe:76:5
+   │
+76 │     x
+   │     ^ expected `bool`, but `V<T>::Out` is given
+
+error[8-0000]: type mismatch
+   ┌─ projection_assumed_trait.fe:84:5
+   │
+84 │     x
+   │     ^ expected `bool`, but `V<T>::Out` is given
+
+error[8-0000]: type mismatch
+   ┌─ projection_assumed_trait.fe:98:9
+   │
+98 │         x
+   │         ^ expected `bool`, but `V<T>::Out` is given
+
+error[8-0000]: type mismatch
+    ┌─ projection_assumed_trait.fe:119:5
+    │
+119 │     x
+    │     ^ expected `bool`, but `Y<T>::Out` is given

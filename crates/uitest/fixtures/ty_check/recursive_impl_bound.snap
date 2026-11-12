@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recursive_impl_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ recursive_impl_bound.fe:62:5
+   │
+33 │ fn need<T: All>(_ t: T) {}
+   │            --- required by this bound on `need`
+   ·
+62 │     need(w)
+   │     ^^^^
+   │     │
+   │     `W<Cons<Mid>>` doesn't implement `All`
+   │     trait bound `W<Cons<Mid>::Tail>: All` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ recursive_impl_bound.fe:66:5
+   │
+33 │ fn need<T: All>(_ t: T) {}
+   │            --- required by this bound on `need`
+   ·
+66 │     need(w)
+   │     ^^^^
+   │     │
+   │     `W<T>` doesn't implement `All`
+   │     trait bound `W<T::Tail>: All` is not satisfied

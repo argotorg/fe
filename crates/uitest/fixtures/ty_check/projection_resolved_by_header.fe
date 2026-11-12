@@ -1,0 +1,114 @@
+// A projection resolves through the impl whose header matches, without
+// proving the impl's where clauses, so a where clause may name the projection
+// the impl defines, directly or through other impls. The trait reference is
+// proved where the projection is written.
+trait Show {}
+impl Show for u8 {}
+
+trait Tr {
+    type Out
+}
+
+struct Direct {}
+impl Tr for Direct where <Direct as Tr>::Out: Show {
+    type Out = u8
+}
+
+struct Left {}
+struct Right {}
+impl Tr for Left where <Right as Tr>::Out: Show {
+    type Out = u8
+}
+impl Tr for Right where <Left as Tr>::Out: Show {
+    type Out = u8
+}
+
+trait Other {}
+struct Through {}
+impl Other for Through where <Through as Tr>::Out: Show {}
+impl Tr for Through where Through: Other {
+    type Out = u8
+}
+
+trait Binds {
+    type X
+}
+struct Bound {}
+impl Binds for Bound {
+    type X = <Bound as Tr>::Out
+}
+impl Tr for Bound where Bound: Binds<X = u8> {
+    type Out = u8
+}
+
+trait Conv<T> {}
+struct Header {}
+impl Conv<<Header as Tr>::Out> for Header {}
+impl Tr for Header where Header: Conv<u8> {
+    type Out = u8
+}
+
+// Where clauses choose between impls whose headers both match.
+trait Never {}
+struct Pick<T> {
+    t: T,
+}
+impl Tr for Pick<u8> where u8: Show {
+    type Out = u8
+}
+impl Tr for Pick<u8> where u8: Never {
+    type Out = bool
+}
+
+// A blanket impl whose bound fails gives way to a specific one.
+trait Foo {}
+struct Spec<T> {
+    t: T,
+}
+impl Tr for Spec<u8> {
+    type Out = u8
+}
+impl<T: Foo> Tr for Spec<T> {
+    type Out = bool
+}
+
+// A where clause that names the projection being resolved doesn't choose:
+// an impl would have to resolve the projection to decide it.
+struct Own<T> {
+    t: T,
+}
+impl Tr for Own<u8> where <Own<u8> as Tr>::Out: Show {
+    type Out = u8
+}
+impl Tr for Own<u8> where <Own<u8> as Tr>::Out: Never {
+    type Out = bool
+}
+
+fn direct(x: u8) -> <Direct as Tr>::Out {
+    let a: <Direct as Tr>::Out = x
+    a
+}
+
+fn cycle(x: <Left as Tr>::Out) -> <Right as Tr>::Out {
+    x
+}
+
+fn through(x: u8) -> <Through as Tr>::Out {
+    x
+}
+
+fn binding(x: <Bound as Tr>::Out) -> u8 {
+    x
+}
+
+fn header(x: <Header as Tr>::Out) -> u8 {
+    x
+}
+
+fn pick(x: u8) -> <Pick<u8> as Tr>::Out {
+    x
+}
+
+fn spec(x: u8) -> <Spec<u8> as Tr>::Out {
+    x
+}

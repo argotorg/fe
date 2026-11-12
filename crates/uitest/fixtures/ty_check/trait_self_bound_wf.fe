@@ -1,0 +1,16 @@
+// A trait's `where Self: Bound` is a requirement on its implementors, but the
+// types the bound writes, and what its trait requires of them, are checked
+// where the bound is written. What the trait requires of `Self` falls to the
+// implementors.
+trait Gate {}
+trait Ty { type A }
+struct W<T> { t: T }
+impl<T: Gate> Ty for W<T> { type A = u8 }
+trait Show {}
+trait Tr<X> {}
+trait Gated<X: Gate> {}
+trait NeedsShow where Self: Show {}
+
+trait Projected where Self: Tr<<W<u16> as Ty>::A> {}
+trait ArgBound where Self: Gated<u16> {}
+trait SelfReqs where Self: NeedsShow + Tr<u8> {}

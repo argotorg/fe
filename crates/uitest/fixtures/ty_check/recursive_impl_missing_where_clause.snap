@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recursive_impl_missing_where_clause.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ recursive_impl_missing_where_clause.fe:24:16
+   │
+24 │     type Out = <W<T::Tail> as Tr>::Out
+   │                ^^^^^^^^^^^^^^^^^^^^^^^
+   │                │
+   │                `W<T::Tail>` doesn't implement `Tr`
+   │                trait bound `T::Tail: Seq` is not satisfied
