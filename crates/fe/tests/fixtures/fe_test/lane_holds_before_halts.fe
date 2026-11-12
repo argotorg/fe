@@ -1,0 +1,331 @@
+// A `mut` access of a lane works on a memory copy that is stored back when
+// the access ends. A callee that halts successfully ends the execution
+// without returning, so every copy held on the way, whether passed as an
+// argument, provided as an effect, granted by a projection or held across
+// its yield, is stored back before the halt. Each arm halts, and the test
+// reads back what it wrote.
+use std::abi::Sol
+use std::abi::sol::Uint24
+use std::evm::{Evm, RawStorage, SolArray}
+use std::evm::storage_bytes::encode_bytes_return_from_calldata
+
+struct Small { a: u8, b: u8 }
+
+impl Small {
+    fn a_mut(mut self) -> mut u8 {
+        mut self.a
+    }
+
+    fn pick(mut self, _ c: bool) -> mut u8 {
+        if c { mut self.b } else { mut self.a }
+    }
+
+    fn maybe_b(mut self, _ c: bool) -> Option<mut u8> {
+        if c { Option::Some(mut self.b) } else { Option::None }
+    }
+}
+
+/// Returns the 32 bytes after the selector as ABI `bytes`.
+fn halt() -> ! {
+    encode_bytes_return_from_calldata(data_ptr: 4, len: 32)
+}
+
+fn maybe_halt(_ h: bool) {
+    if h { halt() }
+}
+
+fn bump_halt(_ x: mut u8) -> ! {
+    x += 1
+    halt()
+}
+
+fn bump_effect_halt() -> ! uses (x: mut u8) {
+    x += 1
+    halt()
+}
+
+fn bump_maybe_halt(_ x: mut u8, _ h: bool) {
+    x += 1
+    maybe_halt(h)
+}
+
+fn bump(_ x: mut u8) {
+    x += 10
+}
+
+/// The copy reaches the halt through a frame that writes it first.
+fn bump_then_halt(_ x: mut u8) -> ! {
+    bump(mut x)
+    halt()
+}
+
+/// The halt is two frames down, and both frames write the copy.
+fn bump_twice_halt(_ x: mut u8) -> ! {
+    x += 1
+    bump_halt(mut x)
+}
+
+fn bump_effect_twice_halt() -> ! uses (x: mut u8) {
+    x += 1
+    bump_effect_halt()
+}
+
+/// A frame that holds a copy of its own when its callee halts.
+fn bump_with_own_lane_halt(_ x: mut u8) -> ! uses (small: mut Small) {
+    x += 1
+    bump_halt(mut small.b)
+}
+
+fn bump24_halt(_ x: mut Uint24) -> ! {
+    x.val += 1
+    halt()
+}
+
+fn id8(_ x: mut u8) -> mut u8 {
+    mut x
+}
+
+msg Msg {
+    #[selector = 1]
+    Arg { word: u256 } -> Bytes,
+    #[selector = 2]
+    Effect { word: u256 } -> Bytes,
+    #[selector = 3]
+    MaybeHalt { word: u256, halts: bool } -> Bytes,
+    #[selector = 4]
+    Nested { word: u256 } -> Bytes,
+    #[selector = 5]
+    TwoDown { word: u256 } -> Bytes,
+    #[selector = 6]
+    EffectTwoDown { word: u256 } -> Bytes,
+    #[selector = 7]
+    OwnLane { word: u256 } -> Bytes,
+    #[selector = 8]
+    GrantLive { word: u256 } -> Bytes,
+    #[selector = 9]
+    GrantPassed { word: u256 } -> Bytes,
+    #[selector = 10]
+    YieldLive { word: u256 } -> Bytes,
+    #[selector = 11]
+    YieldPassed { word: u256 } -> Bytes,
+    #[selector = 12]
+    Pick { word: u256, c: bool } -> Bytes,
+    #[selector = 13]
+    Maybe { word: u256, c: bool } -> Bytes,
+    #[selector = 14]
+    FieldEffect { word: u256 } -> Bytes,
+    #[selector = 15]
+    Element { word: u256 } -> Bytes,
+    #[selector = 16]
+    StructElement { word: u256 } -> Bytes,
+    #[selector = 17]
+    Push {},
+    #[selector = 18]
+    Get -> u256,
+}
+
+pub contract C {
+    mut a: u8,
+    mut b: u8,
+    mut small: Small,
+
+    recv Msg {
+        Arg { word } -> Bytes uses (mut a) {
+            bump_halt(mut a)
+        }
+        Effect { word } -> Bytes uses (mut a) {
+            with (mut a) { bump_effect_halt() }
+        }
+        MaybeHalt { word, halts } -> Bytes uses (mut a) {
+            bump_maybe_halt(mut a, halts)
+            a += 10
+            halt()
+        }
+        Nested { word } -> Bytes uses (mut a) {
+            bump_then_halt(mut a)
+        }
+        TwoDown { word } -> Bytes uses (mut a) {
+            bump_twice_halt(mut a)
+        }
+        EffectTwoDown { word } -> Bytes uses (mut a) {
+            with (mut a) { bump_effect_twice_halt() }
+        }
+        OwnLane { word } -> Bytes uses (mut a, mut small) {
+            with (mut small) { bump_with_own_lane_halt(mut a) }
+        }
+        GrantLive { word } -> Bytes uses (mut a) {
+            let q = mut id8(mut a)
+            q = 5
+            maybe_halt(true)
+            q += 1
+            halt()
+        }
+        GrantPassed { word } -> Bytes uses (mut a) {
+            let q = mut id8(mut a)
+            q = 5
+            bump_halt(mut q)
+        }
+        YieldLive { word } -> Bytes uses (mut small) {
+            let q = mut small.a_mut()
+            q = 5
+            maybe_halt(true)
+            q += 1
+            halt()
+        }
+        YieldPassed { word } -> Bytes uses (mut small) {
+            let q = mut small.a_mut()
+            q = 5
+            bump_halt(mut q)
+        }
+        Pick { word, c } -> Bytes uses (mut small) {
+            let q = mut small.pick(c)
+            q = 5
+            maybe_halt(true)
+            q += 1
+            halt()
+        }
+        Maybe { word, c } -> Bytes uses (mut small) {
+            if let Option::Some(mut q) = small.maybe_b(c) {
+                q = 5
+                maybe_halt(true)
+                q += 1
+            }
+            small.a = 7
+            halt()
+        }
+        FieldEffect { word } -> Bytes uses (mut small) {
+            with (mut small.b) { bump_effect_halt() }
+        }
+        Element { word } -> Bytes uses (storage: mut RawStorage) {
+            with (RawStorage = storage) {
+                let lanes = unsafe { mut SolArray<u8>::at(100) }
+                bump_halt(mut lanes[1])
+            }
+        }
+        StructElement { word } -> Bytes uses (storage: mut RawStorage) {
+            with (RawStorage = storage) {
+                let lanes = unsafe { mut SolArray<Uint24>::at(200) }
+                bump24_halt(mut lanes[1])
+            }
+        }
+        Push {} uses (storage: mut RawStorage) {
+            with (RawStorage = storage) {
+                let lanes = unsafe { mut SolArray<u8>::at(100) }
+                lanes.push(3)
+                lanes.push(4)
+                let structs = unsafe { mut SolArray<Uint24>::at(200) }
+                structs.push(Uint24 { val: 5 })
+                structs.push(Uint24 { val: 6 })
+            }
+        }
+        Get -> u256 uses (a, b, small, storage: RawStorage) {
+            with (RawStorage = storage) {
+                let lanes = unsafe { SolArray<u8>::at(100) }
+                let structs = unsafe { SolArray<Uint24>::at(200) }
+                var element: u256 = 0
+                if lanes.len() == 2 {
+                    element = lanes[1] as u256 * 1000 + structs[1].val as u256
+                }
+                a as u256 * 0x1000000 + b as u256 * 0x10000 + small.a as u256 * 0x100
+                    + small.b as u256 + element * 0x100000000
+            }
+        }
+    }
+}
+
+/// Sends `message`, which halts with the 32 bytes of its `word`, and
+/// returns what `Get` reads afterwards.
+fn halts<M>(_ c: Address, _ message: own M) -> u256
+    uses (evm: mut Evm)
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+{
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Get {})
+}
+
+fn fresh(_ salt: u256) -> Address uses (evm: mut Evm) {
+    evm.create2<C>(value: Wei::zero(), args: (), salt)
+}
+
+#[test]
+fn argument_reaches_storage_before_halt() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::Arg { word: 0 }) == 0x1000000)
+}
+
+#[test]
+fn effect_reaches_storage_before_halt() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::Effect { word: 0 }) == 0x1000000)
+}
+
+#[test]
+fn callee_that_may_halt() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::MaybeHalt { word: 0, halts: true }) == 0x1000000)
+    assert(halts(c, Msg::MaybeHalt { word: 0, halts: false }) == 12 * 0x1000000)
+}
+
+#[test]
+fn copy_passed_through_frames() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::Nested { word: 0 }) == 10 * 0x1000000)
+    assert(halts(c, Msg::TwoDown { word: 0 }) == 12 * 0x1000000)
+    assert(halts(c, Msg::EffectTwoDown { word: 0 }) == 14 * 0x1000000)
+}
+
+#[test]
+fn every_frame_stores_its_copies() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::OwnLane { word: 0 }) == 0x1000000 + 1)
+}
+
+#[test]
+fn grants_of_copies() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::GrantLive { word: 0 }) == 5 * 0x1000000)
+    assert(halts(c, Msg::GrantPassed { word: 0 }) == 6 * 0x1000000)
+}
+
+#[test]
+fn copies_held_across_a_yield() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::YieldLive { word: 0 }) == 5 * 0x100)
+    assert(halts(c, Msg::YieldPassed { word: 0 }) == 6 * 0x100)
+}
+
+#[test]
+fn copies_of_the_yield_site_taken() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::Pick { word: 0, c: true }) == 5)
+    assert(halts(c, Msg::Pick { word: 0, c: false }) == 5 * 0x100 + 5)
+    let d = fresh(2)
+    assert(halts(d, Msg::Maybe { word: 0, c: false }) == 7 * 0x100)
+    assert(halts(d, Msg::Maybe { word: 0, c: true }) == 7 * 0x100 + 5)
+}
+
+#[test]
+fn packed_struct_field_effect() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(halts(c, Msg::FieldEffect { word: 0 }) == 1)
+}
+
+#[test]
+fn collection_elements() uses (evm: mut Evm) {
+    let c = fresh(1)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Push {})
+    assert(halts(c, Msg::Element { word: 0 }) == (5 * 1000 + 6) * 0x100000000)
+    assert(halts(c, Msg::Element { word: 0 }) == (6 * 1000 + 6) * 0x100000000)
+    assert(halts(c, Msg::StructElement { word: 0 }) == (6 * 1000 + 7) * 0x100000000)
+}
+
+// The return data a halt leaves survives the frames that store their copies
+// back after it.
+#[test]
+fn halt_returns_its_data() uses (evm: mut Evm) {
+    let c = fresh(1)
+    let echoed = evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::OwnLane { word: 0x2a })
+    assert(echoed.len() == 32 && echoed.byte_at(31) == 0x2a && echoed.byte_at(0) == 0)
+    let echoed = evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Pick { word: 0x2b, c: false })
+    assert(echoed.len() == 32 && echoed.byte_at(31) == 0x2b)
+}

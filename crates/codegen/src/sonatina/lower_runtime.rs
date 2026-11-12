@@ -2100,6 +2100,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     "projection sessions are inlined before code generation".into(),
                 ));
             }
+            RStmt::HoldLane { .. } | RStmt::ReleaseLane { .. } => {
+                return Err(LowerError::Internal(
+                    "lane holds are resolved before code generation".into(),
+                ));
+            }
         }
         Ok(Lowered::Value(()))
     }

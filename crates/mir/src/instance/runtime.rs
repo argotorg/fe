@@ -16,6 +16,7 @@ use crate::{
                 collect_referenced_code_regions, collect_referenced_const_regions,
                 collect_runtime_calls as collect_runtime_calls_lowered,
             },
+            halts::unwind_halts,
             inline::inline_projections,
             returns::{check_projection_result_spaces, runtime_exit_behavior},
         },
@@ -41,6 +42,12 @@ pub struct RuntimeInstanceKey<'db> {
     #[returns(copy)]
     pub source: RuntimeInstanceSource<'db>,
     pub params: Vec<RuntimeClass<'db>>,
+    /// Whether the instance returns to its caller from a successful halt,
+    /// which it records through its last parameter, a halt record, so the
+    /// caller can store back the lane copies it holds first
+    /// (`unwind_halts`).
+    #[returns(copy)]
+    pub unwinds: bool,
 }
 
 impl<'db> RuntimeInstanceKey<'db> {
@@ -129,12 +136,14 @@ pub fn get_or_build_runtime_instance<'db>(
     RuntimeInstance::new(db, key)
 }
 
-#[salsa::tracked(returns(clone))]
-fn lower_runtime_body<'db>(
+/// The body of `instance` as lowering and projection inlining leave it,
+/// with the lane copies it holds still marked (`RStmt::HoldLane`).
+#[salsa::tracked(returns(ref))]
+pub(crate) fn runtime_body_with_lane_holds<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
-) -> Result<LoweredRuntimeBody<'db>, LowerError> {
-    let body = match instance.key(db).source(db) {
+) -> Result<RuntimeBody<'db>, LowerError> {
+    match instance.key(db).source(db) {
         RuntimeInstanceSource::Semantic(semantic) => {
             if let Err(diag) = check_semantic_accesses(db, semantic) {
                 return Err(LowerError::Unsupported(format!(
@@ -148,12 +157,21 @@ fn lower_runtime_body<'db>(
                 check_projection_result_spaces(db, semantic, body.signature.ret.as_ref())?;
             }
             inline_projections(db, &mut body)?;
-            body
+            Ok(body)
         }
         RuntimeInstanceSource::Synthetic(synthetic) => {
-            lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())?
+            lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())
         }
-    };
+    }
+}
+
+#[salsa::tracked(returns(clone))]
+fn lower_runtime_body<'db>(
+    db: &'db dyn MirDb,
+    instance: RuntimeInstance<'db>,
+) -> Result<LoweredRuntimeBody<'db>, LowerError> {
+    let mut body = runtime_body_with_lane_holds(db, instance).clone()?;
+    unwind_halts(db, &mut body);
     // Anchor lowering to the canonical class discipline: in debug builds,
     // verify each body as it is produced so a divergence is attributed to
     // the instance being lowered instead of surfacing later at package

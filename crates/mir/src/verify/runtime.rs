@@ -146,7 +146,10 @@ fn verify_stmt<'db>(
             variant,
             fields,
         } => verify_enum_write_variant(program, body, *root, *variant, fields),
-        RStmt::End { .. } => Ok(()),
+        RStmt::End { .. } | RStmt::ReleaseLane { .. } => Ok(()),
+        RStmt::HoldLane { flush, .. } => flush
+            .iter()
+            .try_for_each(|stmt| verify_stmt(db, program, body, site, stmt)),
     }
 }
 
@@ -289,7 +292,9 @@ fn enum_variant_proven<'db>(
             | RStmt::CopyInto { .. }
             | RStmt::EnumSetTag { .. }
             | RStmt::EnumWriteVariant { .. }
-            | RStmt::End { .. } => {}
+            | RStmt::End { .. }
+            | RStmt::HoldLane { .. }
+            | RStmt::ReleaseLane { .. } => {}
         }
     }
     proven

@@ -1629,6 +1629,18 @@ pub enum RStmt<'db> {
     End {
         session: RLocalId,
     },
+    /// Opens the hold of `copy`, the memory copy of a lane an access works
+    /// on: until `ReleaseLane`, the lane may lack what was written to the
+    /// copy, and a successful halt runs `flush`, which stores it back,
+    /// first. `unwind_halts` removes it once projections are inlined.
+    HoldLane {
+        copy: RLocalId,
+        flush: Box<[RStmt<'db>]>,
+    },
+    /// Closes the hold of `copy` once it is stored back.
+    ReleaseLane {
+        copy: RLocalId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
@@ -2021,19 +2033,24 @@ impl<'db> RExpr<'db> {
 }
 
 impl<'db> RStmt<'db> {
-    pub fn place_mut(&mut self) -> Option<&mut RuntimePlace<'db>> {
+    /// The places the statement names, including those of a `HoldLane`'s
+    /// flush.
+    pub fn places_mut(&mut self) -> Vec<&mut RuntimePlace<'db>> {
         match self {
-            Self::Assign { expr, .. } => expr.place_mut(),
-            Self::Store { dst, .. } | Self::CopyInto { dst, .. } => Some(dst),
+            Self::Assign { expr, .. } => expr.place_mut().into_iter().collect(),
+            Self::Store { dst, .. } | Self::CopyInto { dst, .. } => vec![dst],
+            Self::HoldLane { flush, .. } => flush.iter_mut().flat_map(Self::places_mut).collect(),
             Self::AssertIndexInBounds { .. }
             | Self::EnumAssertVariant { .. }
             | Self::EnumSetTag { .. }
             | Self::EnumWriteVariant { .. }
-            | Self::End { .. } => None,
+            | Self::End { .. }
+            | Self::ReleaseLane { .. } => Vec::new(),
         }
     }
 
-    /// The locals the statement reads or writes, including those in its places.
+    /// The locals the statement reads or writes, including those in its
+    /// places and in a `HoldLane`'s flush.
     pub fn locals_mut(&mut self) -> Vec<&mut RLocalId> {
         match self {
             Self::Assign { dst, expr } => {
@@ -2047,7 +2064,8 @@ impl<'db> RStmt<'db> {
             },
             Self::EnumAssertVariant { value, .. }
             | Self::EnumSetTag { root: value, .. }
-            | Self::End { session: value } => vec![value],
+            | Self::End { session: value }
+            | Self::ReleaseLane { copy: value } => vec![value],
             Self::Store { dst, src } | Self::CopyInto { dst, src } => {
                 let mut locals: Vec<_> = dst.values_mut().collect();
                 locals.push(src);
@@ -2056,6 +2074,9 @@ impl<'db> RStmt<'db> {
             Self::EnumWriteVariant { root, fields, .. } => {
                 std::iter::once(root).chain(fields.iter_mut()).collect()
             }
+            Self::HoldLane { copy, flush } => std::iter::once(copy)
+                .chain(flush.iter_mut().flat_map(Self::locals_mut))
+                .collect(),
         }
     }
 }

@@ -26,7 +26,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     db::MirDb,
-    instance::runtime::runtime_instance_lowered_body,
+    instance::runtime::runtime_body_with_lane_holds,
     runtime::{
         Layout, LayoutId, LowerError, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt,
         RTerminator, RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot,
@@ -52,7 +52,9 @@ pub(crate) fn inline_projections<'db>(
         else {
             unreachable!("found a projection call")
         };
-        let callee = runtime_instance_lowered_body(db, callee)?.body(db);
+        let callee = runtime_body_with_lane_holds(db, callee)
+            .as_ref()
+            .map_err(Clone::clone)?;
         inline_session(db, body, block, stmt, dst, &args, callee);
     }
     prune_unreachable_blocks(body);
@@ -702,11 +704,12 @@ impl<'db> Splice<'_, 'db> {
                     for local in stmt.locals_mut() {
                         *local = self.local(*local);
                     }
-                    if let Some(place) = stmt.place_mut()
-                        && let PlaceRoot::Provider(binding) = &mut place.root
-                    {
-                        *binding =
-                            RuntimeProviderBindingId::from_u32(self.bindings + binding.as_u32());
+                    for place in stmt.places_mut() {
+                        if let PlaceRoot::Provider(binding) = &mut place.root {
+                            *binding = RuntimeProviderBindingId::from_u32(
+                                self.bindings + binding.as_u32(),
+                            );
+                        }
                     }
                     stmt
                 })

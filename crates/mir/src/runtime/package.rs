@@ -2071,7 +2071,7 @@ pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
             })
         })
         .collect();
-    let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), params);
+    let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), params, false);
     get_or_build_runtime_instance(db, key)
 }
 
@@ -2116,7 +2116,12 @@ fn synthetic_instance<'db>(
     params: Vec<crate::runtime::RuntimeClass<'db>>,
 ) -> RuntimeInstance<'db> {
     let synthetic = RuntimeSyntheticInstance::new(db, spec);
-    let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Synthetic(synthetic), params);
+    let key = RuntimeInstanceKey::new(
+        db,
+        RuntimeInstanceSource::Synthetic(synthetic),
+        params,
+        false,
+    );
     get_or_build_runtime_instance(db, key)
 }
 
@@ -2478,7 +2483,8 @@ fn runtime_instance_key_for_mode<'db>(
         .map(|param| runtime_class_sort_key(db, param))
         .collect::<Vec<_>>()
         .join(",");
-    format!("{source}:params[{params}]")
+    let unwinds = if key.unwinds(db) { ":unwinds" } else { "" };
+    format!("{source}:params[{params}]{unwinds}")
 }
 
 fn runtime_instance_source_key<'db>(
@@ -2888,13 +2894,19 @@ pub(crate) fn runtime_instance_display_name<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
 ) -> String {
-    match instance.key(db).source(db) {
+    let key = instance.key(db);
+    let base = match key.source(db) {
         RuntimeInstanceSource::Semantic(semantic) => {
             symbol_base_for_semantic_instance(db, semantic)
         }
         RuntimeInstanceSource::Synthetic(synthetic) => {
             symbol_base_for_runtime_instance(db, synthetic.spec(db))
         }
+    };
+    if key.unwinds(db) {
+        format!("{base}__unwinds")
+    } else {
+        base
     }
 }
 

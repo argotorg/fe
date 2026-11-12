@@ -778,6 +778,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     self.db,
                     RuntimeInstanceSource::Semantic(facts.semantic),
                     param_classes,
+                    false,
                 ));
             }
         })
@@ -3911,6 +3912,7 @@ uses (slot: Slot<u256>)
                         &db,
                         RuntimeInstanceSource::Semantic(call_facts.semantic),
                         selected_classes,
+                        false,
                     ),
                 );
                 if !selected.is_empty() {
