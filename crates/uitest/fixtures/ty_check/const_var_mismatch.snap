@@ -15,5 +15,5 @@ error[8-0031]: type annotation is needed
 7 │     let x: [u16; 4] = zeros()
   │                  ^
   │                  │
-  │                  type annotation is needed
-  │                  consider giving `: fn zeros<_>` here
+  │                  cannot infer the const parameter `N` of `zeros`
+  │                  consider giving it explicitly: `zeros<N>`
