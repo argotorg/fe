@@ -994,7 +994,8 @@ fn semantic_callee_key_with_assumptions<'db>(
         // caller's assumptions, and its ground bounds hold without them. A
         // bound on a caller's parameter is one of the callee instance's own
         // assumptions, so equal calls written in different bodies share one
-        // instance.
+        // instance. A row of a caller's parameter expands as far as the
+        // caller's assumptions select implementations, so it keeps them.
         let empty = PredicateListId::empty_list(db);
         let scope = nominal_func.scope();
         let caller_scope = impl_env.normalization_scope(db);
@@ -1019,7 +1020,15 @@ fn semantic_callee_key_with_assumptions<'db>(
             && effect_args
                 .iter()
                 .filter_map(|arg| arg.instantiated_key_ty.or(arg.provider_target_ty))
-                .all(same_without_caller);
+                .all(same_without_caller)
+            && !nominal_func
+                .effect_requirements(db, callable.mode())
+                .iter()
+                .filter_map(|requirement| requirement.key.key_row())
+                .any(|row| {
+                    let row = Binder::bind(nominal_func.into(), row).instantiate(db, &subst_args);
+                    collect_flags(db, row).contains(TyFlags::HAS_PARAM)
+                });
         (independent, true)
     } else {
         (false, true)

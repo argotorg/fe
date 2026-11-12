@@ -57,6 +57,17 @@ fn in_closure<T: Reader + Copy>(_ t: T) -> u256 uses (T::E, log: mut Log, other:
     apply(|| read_it(Both { a: t, b: Q {} }))
 }
 
+// `T::E` is forwarded; `Q::E`, within `Both<T, Q>::E`, is expanded and given
+// by the `with`.
+fn nested_local<T: Reader + Copy>(_ t: T) -> u256 uses (T::E) {
+    let o = Other { m: 5, pad: 0 }
+    var l = Log { n: 0 }
+    let read = with (Other = o, Log = mut l) {
+        read_it(Both { a: t, b: Q {} })
+    }
+    read + l.n
+}
+
 #[test]
 fn test_two_rows() {
     let s = Store { n: 7 }
@@ -80,6 +91,14 @@ fn test_nested_row() {
     }
     assert(l.n == 10)
     assert(s.n == 7)
+}
+
+#[test]
+fn test_nested_local() {
+    let s = Store { n: 7 }
+    with (Store = s) {
+        assert(nested_local(R {}) == 715)
+    }
 }
 
 #[test]
