@@ -1,0 +1,31 @@
+// An omitted parameter with a default takes it; one that nothing infers
+// is reported at the call, and a call may not give more arguments than its
+// callee has parameters.
+fn dependent<T, U, V = U>(_ t: T, _ u: U, _ v: own V) {}
+
+fn body_const<T, const N: u64>(_ t: T) -> u64 {
+    N
+}
+
+fn unused<A, B>() {}
+
+fn shape_only<shape A>() {}
+
+fn defaulted<T = u8>(_ t: T) {}
+
+struct Vm {}
+
+impl Vm {
+    fn op<const N: u64, T>(self) -> u64 {
+        N
+    }
+}
+
+fn calls(vm: Vm, x: u16) -> u64 {
+    dependent<u8>(1, true, x)
+    unused<u8>()
+    shape_only()
+    defaulted<u8, u8>(1)
+    vm.op<1, u8, u8>()
+    body_const(true) + body_const<bool>(true) + vm.op<1>()
+}

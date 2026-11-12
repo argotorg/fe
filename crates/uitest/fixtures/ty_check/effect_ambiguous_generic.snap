@@ -9,8 +9,8 @@ error[8-0031]: type annotation is needed
 14 │         needs_storage()
    │         ^^^^^^^^^^^^^
    │         │
-   │         type annotation is needed
-   │         consider giving `: fn needs_storage<_>` here
+   │         cannot infer the type parameter `T` of `needs_storage`
+   │         consider giving it explicitly: `needs_storage<T>`
 
 error[8-0040]: multiple effect candidates found
    ┌─ effect_ambiguous_generic.fe:14:9

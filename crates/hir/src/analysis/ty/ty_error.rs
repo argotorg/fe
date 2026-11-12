@@ -8,10 +8,7 @@ use crate::{
         path::LazyPathSpan,
         types::LazyTySpan,
     },
-    visitor::{
-        Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_generic_arg_list,
-        walk_path, walk_type,
-    },
+    visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_path, walk_type},
 };
 
 use crate::analysis::{
@@ -206,6 +203,7 @@ pub(crate) fn path_arg_diags<'db>(
                 }
                 GenericArg::Const(_) => Vec::new(),
                 GenericArg::Mode(_) => vec![TyLowerDiag::ModeArgNotShape(span.into()).into()],
+                GenericArg::Infer => vec![TyLowerDiag::InferArgOutsideCall(span.into()).into()],
             }
         })
         .chain(duplicates)
@@ -214,13 +212,15 @@ pub(crate) fn path_arg_diags<'db>(
 
 /// Diagnostics for the types written as generic arguments of `path`'s
 /// segments, each at its own span, as a written type reports them. `path`
-/// itself isn't resolved: its resolution reports its own segments.
+/// itself isn't resolved: its resolution reports its own segments. With
+/// `call`, the last segment's arguments are a call's, which infers a `_`.
 pub(crate) fn path_generic_arg_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     path_span: LazyPathSpan<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    call: bool,
 ) -> Vec<TyDiagCollection<'db>> {
     let mut vis = HirTyErrVisitor {
         db,
@@ -228,12 +228,13 @@ pub(crate) fn path_generic_arg_diags<'db>(
         diags: Vec::new(),
         const_bodies: ConstBodyLowering::Eager,
     };
-    vis.visit_path_args(path, path_span, scope);
+    vis.visit_path_args(path, path_span, scope, call);
     vis.diags
 }
 
 /// Diagnostics for the types written in `args`, a method call's generic
-/// arguments, each at its own span, as a written type reports them.
+/// arguments, each at its own span, as a written type reports them. The
+/// call infers a `_`.
 pub(crate) fn generic_arg_list_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     args: GenericArgListId<'db>,
@@ -247,7 +248,11 @@ pub(crate) fn generic_arg_list_diags<'db>(
         diags: Vec::new(),
         const_bodies: ConstBodyLowering::Eager,
     };
-    walk_generic_arg_list(&mut vis, &mut VisitorCtxt::new(db, scope, span), args);
+    for (idx, arg) in args.data(db).iter().enumerate() {
+        if !matches!(arg, GenericArg::Infer) {
+            vis.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span.clone().arg(idx)), arg);
+        }
+    }
     vis.diags
 }
 
@@ -415,15 +420,18 @@ impl<'db> HirTyErrVisitor<'db> {
 
     /// Visits what `path`'s segments write. A trait's arguments are checked as
     /// a trait reference's are, since a binding's value depends on what it binds.
+    /// With `call`, the last segment's arguments are a call's, which infers a
+    /// `_`.
     fn visit_path_args(
         &mut self,
         path: PathId<'db>,
         path_span: LazyPathSpan<'db>,
         scope: ScopeId<'db>,
+        call: bool,
     ) {
         let db = self.db;
         if let Some(parent) = path.parent(db) {
-            self.visit_path_args(parent, path_span.clone(), scope);
+            self.visit_path_args(parent, path_span.clone(), scope, false);
         }
         if path.generic_args(db).is_given(db)
             && let Some(NameResKind::Scope(ScopeId::Item(ItemKind::Trait(_)))) =
@@ -445,7 +453,9 @@ impl<'db> HirTyErrVisitor<'db> {
             );
         }
         for (arg, span) in path_generic_args(db, path, path_span) {
-            self.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
+            if !(call && matches!(arg, GenericArg::Infer)) {
+                self.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
+            }
         }
     }
 }
@@ -459,6 +469,14 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // A trait checks its own bindings. Anywhere else, lowering rejects a
         // binding whatever it binds.
         if matches!(arg, GenericArg::AssocType(_)) {
+            return;
+        }
+
+        if matches!(arg, GenericArg::Infer)
+            && let Some(span) = ctxt.span()
+        {
+            self.diags
+                .push(TyLowerDiag::InferArgOutsideCall(span.into()).into());
             return;
         }
 
@@ -588,7 +606,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
 
                     // Walk the underlying path to validate any nested generic arguments,
                     // but don't validate the path itself as a type.
-                    self.visit_path_args(path, path_span, ctxt.scope());
+                    self.visit_path_args(path, path_span, ctxt.scope(), false);
                 }
                 return;
             }
@@ -691,7 +709,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             Err(err) => {
                 let before = self.diags.len();
                 if !err.is_independent_of_args(self.db) {
-                    self.visit_path_args(path, path_span.clone(), scope);
+                    self.visit_path_args(path, path_span.clone(), scope, false);
                 }
                 if self.diags.len() == before
                     && let Some(diag) =
@@ -719,7 +737,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             self.diags.push(diag.into());
         }
 
-        self.visit_path_args(path, path_span, scope);
+        self.visit_path_args(path, path_span, scope, false);
     }
 
     fn visit_trait_ref(
@@ -977,6 +995,8 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         InvalidCause::ModeNotType => TyLowerDiag::ModeNotType(span).into(),
 
         InvalidCause::ModeArgNotShape => TyLowerDiag::ModeArgNotShape(span).into(),
+
+        InvalidCause::InferArgOutsideCall => TyLowerDiag::InferArgOutsideCall(span).into(),
 
         InvalidCause::AssocBindingNotOnTrait => TyLowerDiag::AssocBindingNotOnTrait(span).into(),
 

@@ -1408,6 +1408,9 @@ pub enum InvalidCause<'db> {
     /// shape.
     ModeArgNotShape,
 
+    /// `_` as a generic argument of anything but a call.
+    InferArgOutsideCall,
+
     /// An associated type binding as a generic argument of anything but a
     /// trait.
     AssocBindingNotOnTrait,
@@ -1746,6 +1749,7 @@ impl InvalidCause<'_> {
             InvalidCause::NotFullyApplied
             | InvalidCause::ModeNotType
             | InvalidCause::ModeArgNotShape
+            | InvalidCause::InferArgOutsideCall
             | InvalidCause::AssocBindingNotOnTrait
             | InvalidCause::TooManyGenericArgs { .. }
             | InvalidCause::InvalidConstParamTy

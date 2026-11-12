@@ -654,6 +654,7 @@ module.exports = grammar({
     _generic_arg: $ => choice(
       $.assoc_type_generic_arg,
       $.mode_generic_arg,
+      $.infer_generic_arg,
       $._type,
       // Const generic args: block expressions like {3 + 4} and literals
       $.block,
@@ -662,6 +663,9 @@ module.exports = grammar({
 
     // `ref` or `mut`: the mode an associated shape is named at, `D::Step<ref>`
     mode_generic_arg: $ => choice('ref', 'mut'),
+
+    // `_`: a generic argument a call infers, `f<_, u8>(x)`
+    infer_generic_arg: $ => '_',
 
     // `Item = T`, or an associated shape at a mode, `Step<ref> = ref T`
     assoc_type_generic_arg: $ => seq(

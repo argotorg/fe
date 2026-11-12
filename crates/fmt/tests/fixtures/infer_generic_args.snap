@@ -1,0 +1,11 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/infer_generic_args.fe
+---
+fn calls(vm: Vm) {
+    op<1, _>(c)
+    vm.op_push<_, u8>(c)
+    Vm::assoc<_>(c)
+    let f = op<_, _>
+}

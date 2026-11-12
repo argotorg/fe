@@ -404,6 +404,7 @@ pub fn recv_arm_resolution<'db>(
         path_span.clone(),
         contract.scope(),
         PredicateListId::empty_list(db),
+        false,
     );
     let args_reported = !arg_diags.is_empty();
     diags.extend(arg_diags.into_iter().map(Into::into));

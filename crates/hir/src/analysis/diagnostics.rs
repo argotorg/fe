@@ -20,7 +20,8 @@ use crate::analysis::{
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
-        ty_def::{BorrowKind, TyData, TyId, TyVarSort},
+        ty_def::{BorrowKind, Kind, PrimTy, TyBase, TyData, TyId, TyVarSort},
+        ty_lower::collect_generic_params,
     },
 };
 use crate::{
@@ -59,23 +60,19 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
             format!("<{} as {}>", self_ty, trait_inst.pretty_print(db, false))
         }
         TyData::TyApp(_, _) => pretty_print_ty_app_for_mismatch(db, ty),
-        TyData::TyBase(base) => {
-            use crate::analysis::ty::ty_def::TyBase;
-
-            match base {
-                TyBase::Adt(adt) => adt
-                    .scope(db)
-                    .pretty_path(db)
-                    .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-                TyBase::Contract(contract) => contract
-                    .scope()
-                    .pretty_path(db)
-                    .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-                TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::Shape(_) => {
-                    ty.pretty_print(db).to_string()
-                }
+        TyData::TyBase(base) => match base {
+            TyBase::Adt(adt) => adt
+                .scope(db)
+                .pretty_path(db)
+                .unwrap_or_else(|| ty.pretty_print(db).to_string()),
+            TyBase::Contract(contract) => contract
+                .scope()
+                .pretty_path(db)
+                .unwrap_or_else(|| ty.pretty_print(db).to_string()),
+            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::Shape(_) => {
+                ty.pretty_print(db).to_string()
             }
-        }
+        },
         TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
         TyData::Never => "!".to_string(),
         TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
@@ -86,8 +83,6 @@ fn pretty_print_ty_app_for_mismatch<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     ty: TyId<'db>,
 ) -> String {
-    use crate::analysis::ty::ty_def::{PrimTy, TyBase};
-
     let (base, args) = ty.decompose_ty_app(db);
     match base.data(db) {
         TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)) => {
@@ -1720,6 +1715,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 Severity::Error,
                 "a mode argument names an associated shape's mode",
                 "only an associated shape takes `ref` or `mut`, as in `D::Step<ref>`",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::InferArgOutsideCall(span) => primary_diag(
+                Severity::Error,
+                "`_` is only allowed as a call's generic argument",
+                "`_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`",
                 span.resolve(db),
                 error_code,
             ),
@@ -4986,20 +4989,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::CallGenericArgNumMismatch {
+            Self::TooManyCallGenericArgs {
                 primary,
                 def_span,
                 given,
                 expected,
             } => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "given generic argument number mismatch".to_string(),
+                message: "too many generic arguments".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: format!(
-                            "expected {expected} generic arguments, but {given} given"
-                        ),
+                        message: match expected {
+                            0 => format!("expected no generic arguments, but {given} given"),
+                            1 => format!("expected at most 1 generic argument, but {given} given"),
+                            _ => format!(
+                                "expected at most {expected} generic arguments, but {given} given"
+                            ),
+                        },
                         span: primary.resolve(db),
                     },
                     SubDiagnostic {
@@ -5360,30 +5367,71 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::TypeAnnotationNeeded { span: primary, ty } => {
-                let mut sub_diagnostics = vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "type annotation is needed".to_string(),
-                    span: primary.resolve(db),
-                }];
-
-                let sub_diag_msg = match ty.base_ty(db).data(db) {
-                    TyData::TyVar(var) if var.sort == TyVarSort::Integral => {
-                        "no default type is provided for an integer type. consider giving integer type".to_string()
-                    }
-                    TyData::TyVar(_) => "consider giving `: Type` here".to_string(),
-                    _ => format!("consider giving `: {}` here", ty.pretty_print(db)),
+                // A function's own generic parameter that its call leaves
+                // open is named, with the arguments that would close it.
+                let uninferred_param = || {
+                    let (base, args) = ty.decompose_ty_app(db);
+                    let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(db)
+                    else {
+                        return None;
+                    };
+                    let params = collect_generic_params(db, (*func).into());
+                    let explicit = args.get(params.offset_to_explicit_params_position(db)..)?;
+                    let idx = explicit.iter().position(|arg| arg.has_var(db))?;
+                    let kind = match params.explicit_params(db).get(idx)? {
+                        param if param.is_const_ty(db) => "const",
+                        param if *param.kind(db) == Kind::Shape => "shape",
+                        _ => "type",
+                    };
+                    let param = GenericParamOwner::Func(*func)
+                        .params(db)
+                        .nth(idx)?
+                        .name()
+                        .to_opt()?
+                        .data(db);
+                    let name = func.name(db).to_opt()?.data(db);
+                    let args = explicit[..idx]
+                        .iter()
+                        .map(|arg| {
+                            if arg.has_var(db) {
+                                "_".to_string()
+                            } else {
+                                arg.pretty_print(db).to_string()
+                            }
+                        })
+                        .chain([param.to_string()])
+                        .join(", ");
+                    Some((
+                        format!("cannot infer the {kind} parameter `{param}` of `{name}`"),
+                        format!("consider giving it explicitly: `{name}<{args}>`"),
+                    ))
                 };
-
-                sub_diagnostics.push(SubDiagnostic {
-                    style: LabelStyle::Secondary,
-                    message: sub_diag_msg,
-                    span: primary.resolve(db),
+                let (label, hint) = uninferred_param().unwrap_or_else(|| {
+                    let hint = match ty.base_ty(db).data(db) {
+                        TyData::TyVar(var) if var.sort == TyVarSort::Integral => {
+                            "no default type is provided for an integer type. consider giving integer type".to_string()
+                        }
+                        TyData::TyVar(_) => "consider giving `: Type` here".to_string(),
+                        _ => format!("consider giving `: {}` here", ty.pretty_print(db)),
+                    };
+                    ("type annotation is needed".to_string(), hint)
                 });
 
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: "type annotation is needed".to_string(),
-                    sub_diagnostics,
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: label,
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: hint,
+                            span: primary.resolve(db),
+                        },
+                    ],
                     notes: vec![],
                     error_code,
                 }

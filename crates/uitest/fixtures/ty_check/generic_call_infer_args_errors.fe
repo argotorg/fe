@@ -1,0 +1,27 @@
+// A `_` that nothing infers is reported at the call, as is a `_` beyond the
+// callee's parameters. An omitted parameter with a default takes it, where
+// `_` would infer it.
+fn defaulted<T = u8>(_ t: own T) -> T {
+    t
+}
+
+fn body_const<T, const N: u64>(_ t: T) -> u64 {
+    N
+}
+
+fn unused<T>() {}
+
+struct Vm {}
+
+impl Vm {
+    fn op<const N: u64>(self) -> u64 {
+        N
+    }
+}
+
+fn calls(vm: Vm) -> u64 {
+    defaulted(true)
+    unused<_>()
+    unused<_, _>()
+    vm.op<_>() + vm.op<1, _>() + body_const<_, _>(true)
+}

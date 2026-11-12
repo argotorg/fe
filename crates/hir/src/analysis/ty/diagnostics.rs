@@ -71,6 +71,8 @@ pub enum TyLowerDiag<'db> {
     /// `ref` or `mut` as a generic argument of anything but an associated
     /// shape.
     ModeArgNotShape(DynLazySpan<'db>),
+    /// `_` as a generic argument of anything but a call.
+    InferArgOutsideCall(DynLazySpan<'db>),
     /// An associated type binding as a generic argument of anything but a
     /// trait.
     AssocBindingNotOnTrait(DynLazySpan<'db>),
@@ -398,6 +400,7 @@ impl TyLowerDiag<'_> {
             Self::ModeNotType(_) => 58,
             Self::ModeOnProduct { .. } => 82,
             Self::ModeArgNotShape(_) => 83,
+            Self::InferArgOutsideCall(_) => 94,
             Self::AssocBindingNotOnTrait(_) => 89,
             Self::ShapeWithoutMode(_) => 84,
             Self::ProductReceiver(_) => 74,
@@ -1168,7 +1171,8 @@ pub enum BodyDiag<'db> {
         func_ty: TyId<'db>,
     },
 
-    CallGenericArgNumMismatch {
+    /// More generic arguments at a call than the callee has parameters.
+    TooManyCallGenericArgs {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
         given: usize,
@@ -1614,7 +1618,7 @@ impl<'db> BodyDiag<'db> {
             Self::LoopControlOutsideOfLoop { .. } => 19,
             Self::TraitNotImplemented { .. } => 20,
             Self::NotCallable(..) => 21,
-            Self::CallGenericArgNumMismatch { .. } => 22,
+            Self::TooManyCallGenericArgs { .. } => 22,
             Self::CallArgNumMismatch { .. } => 23,
             Self::AssertArgNumMismatch { .. } => 82,
             Self::AssertMessageMustBeStringLiteral { .. } => 83,
