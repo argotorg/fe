@@ -174,11 +174,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         };
         SEffectArg {
             binding_idx: arg.binding_idx,
-            pass_mode: if matches!(value, SEffectArgValue::Place(_)) {
-                EffectPassMode::ByPlace
-            } else {
-                arg.pass_mode
-            },
             arg: value,
             required_mut: arg.required_mut,
             provider_target_ty: arg.provider_target_ty,

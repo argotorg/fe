@@ -11,7 +11,6 @@ use crate::analysis::{
     ty::{
         adt_def::AdtRef,
         provider::provider_semantics,
-        ty_check::EffectPassMode,
         ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
         ty_is_copy,
     },
@@ -434,13 +433,7 @@ fn verify_expr<'db>(
                 else {
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 };
-                let shape_matches = matches!(
-                    (&arg.pass_mode, &arg.arg),
-                    (EffectPassMode::ByPlace, NEffectArgValue::Place(_))
-                        | (EffectPassMode::ByValue, NEffectArgValue::Value(_))
-                );
                 if requirement.is_mut != arg.required_mut
-                    || !shape_matches
                     || arg.provider_target_ty.is_some_and(|ty| ty.has_invalid(db))
                 {
                     return Err(NormalizedBodyVerifyError::ExpressionType);

@@ -40,7 +40,7 @@ use crate::{
             normalize::normalize_ty,
             provider::AddressSpace,
             ty_check::{
-                BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, infer_body,
+                BodyOwner, EffectParamSite, LocalBinding, ParamSite, infer_body,
                 inference_met_lowering_cycle,
             },
             ty_def::{InvalidCause, TyData, TyId},
@@ -1500,10 +1500,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 let mut effects = Vec::with_capacity(effect_args.len());
                 for arg in &effect_args {
                     if arg.required_mut
-                        || !matches!(
-                            arg.pass_mode,
-                            EffectPassMode::ByValue | EffectPassMode::ByPlace
-                        )
                         || arg
                             .provider
                             .is_some_and(|space| space != AddressSpace::Memory)

@@ -1168,7 +1168,6 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                     )?)
                                 }
                             },
-                            pass_mode: arg.pass_mode,
                             required_mut: arg.required_mut,
                             provider_target_ty: arg
                                 .provider_target_ty
@@ -3116,17 +3115,14 @@ mod tests {
                 BinaryOp, FieldIndex, Mutability, Overflow, SConst, SStmtId, SemanticInstance,
                 UnaryOp, VariantIndex, identity_semantic_instance_key,
                 normalized::{
-                    NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NPlace, NPlaceBase,
-                    NRootId, NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
+                    NDataPath, NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootId,
+                    NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
                     NormalizedBodyVerifyError, NormalizedLayoutPlanVerifyError, StructuralRepack,
                     normalize_raw_body, verify_normalized_body, verify_normalized_layout_plan,
                 },
                 unit_const,
             },
-            ty::{
-                ty_check::{BodyOwner, EffectPassMode},
-                ty_def::TyId,
-            },
+            ty::{ty_check::BodyOwner, ty_def::TyId},
         },
         hir_def::ItemKind,
         test_db::HirAnalysisTestDb,
@@ -3857,47 +3853,6 @@ fn generic_boundaries<T>(pair: (T, T), array: [T; 2]) -> (T, T) {
         *effect_args = Box::new([]);
         assert_eq!(
             verify_normalized_body(&db, &missing_effect_arg),
-            Err(NormalizedBodyVerifyError::ExpressionType)
-        );
-
-        let mut invalid_effect_shape = normalized_func(&db, top_mod, "call_effect").body;
-        let effect_arg = invalid_effect_shape
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.statements)
-            .find_map(|statement| match &mut statement.kind {
-                NStatementKind::Define {
-                    expr: NExpr::Call { effect_args, .. },
-                    ..
-                } => effect_args.first_mut(),
-                _ => None,
-            })
-            .expect("effectful call argument");
-        effect_arg.pass_mode = match effect_arg.arg {
-            NEffectArgValue::Place(_) => EffectPassMode::ByValue,
-            NEffectArgValue::Value(_) => EffectPassMode::ByPlace,
-        };
-        assert_eq!(
-            verify_normalized_body(&db, &invalid_effect_shape),
-            Err(NormalizedBodyVerifyError::ExpressionType)
-        );
-
-        let mut unknown_effect_mode = normalized_func(&db, top_mod, "call_effect").body;
-        let effect_arg = unknown_effect_mode
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.statements)
-            .find_map(|statement| match &mut statement.kind {
-                NStatementKind::Define {
-                    expr: NExpr::Call { effect_args, .. },
-                    ..
-                } => effect_args.first_mut(),
-                _ => None,
-            })
-            .expect("effectful call argument");
-        effect_arg.pass_mode = EffectPassMode::Unknown;
-        assert_eq!(
-            verify_normalized_body(&db, &unknown_effect_mode),
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 

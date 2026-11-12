@@ -811,11 +811,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             CompiledEffectPlacePlan::Boundary(boundary) => {
                 self.select_effect_place_for_boundary(arg, place, boundary.boundary.clone())
             }
-            CompiledEffectPlacePlan::Fallback(fallback) => self.select_effect_place_for_boundary(
-                arg,
-                place,
-                RuntimeBoundarySpec::ExactTransport(fallback.clone()),
-            ),
         }
     }
 

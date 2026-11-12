@@ -1,9 +1,6 @@
-use hir::analysis::{
-    semantic::{
-        SemanticInstance,
-        normalized::{NEffectArg, NEffectArgValue},
-    },
-    ty::ty_check::EffectPassMode,
+use hir::analysis::semantic::{
+    SemanticInstance,
+    normalized::{NEffectArg, NEffectArgValue},
 };
 
 use crate::{
@@ -59,7 +56,6 @@ pub(super) enum CompiledEffectValuePlan<'db> {
 #[derive(Clone, Debug)]
 pub(super) enum CompiledEffectPlacePlan<'db> {
     Boundary(StagedBoundary<'db>),
-    Fallback(RuntimeClass<'db>),
 }
 
 #[derive(Clone, Debug)]
@@ -140,22 +136,18 @@ fn compile_effect_arg_plan<'db>(
     let boundary =
         desired_runtime_effect_arg_boundary(db, type_env, arg, binding_plan.as_ref(), space);
     if boundary.is_none() && arg.provider.is_none() && arg.provider_target_ty.is_none() {
-        return match (&arg.pass_mode, &arg.arg) {
-            (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(_)) => {
+        return match &arg.arg {
+            NEffectArgValue::Value(_) => {
                 CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ErasedPlainValue)
             }
-            (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_))
-            | (
-                EffectPassMode::ByPlace | EffectPassMode::ByTempPlace,
-                NEffectArgValue::Value(_) | NEffectArgValue::Place(_),
-            ) => panic!(
+            NEffectArgValue::Place(_) => panic!(
                 "effect arg without provider/target should compile as a plain value: owner={:?}; arg={arg:?}",
                 body.owner().key(db).owner(db),
             ),
         };
     }
-    match (&arg.pass_mode, &arg.arg) {
-        (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(_)) => {
+    match &arg.arg {
+        NEffectArgValue::Value(_) => {
             let plan = boundary.map_or(CompiledValuePassPlan::ActualValue, |boundary| {
                 compile_value_pass_plan(RuntimeParamPlan::Boundary(boundary), boundary_sites)
             });
@@ -169,28 +161,7 @@ fn compile_effect_arg_plan<'db>(
                 CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByValue(plan))
             }
         }
-        (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_)) => boundary
-            .map_or_else(
-                || {
-                    CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Fallback(
-                        provider_class_for_target_in_env(
-                            db,
-                            type_env,
-                            arg.provider_target_ty,
-                            space,
-                        ),
-                    ))
-                },
-                |boundary| {
-                    CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Boundary(
-                        boundary_sites.stage(boundary),
-                    ))
-                },
-            ),
-        (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Value(_)) => {
-            panic!("borrowed effect argument must already have a stable provider place: {arg:?}")
-        }
-        (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Place(_)) => {
+        NEffectArgValue::Place(_) => {
             let boundary = boundary.unwrap_or_else(|| {
                 default_by_place_boundary(db, type_env, arg.provider_target_ty, space)
             });

@@ -11,7 +11,7 @@ use crate::{
         },
         ty::{
             provider::AddressSpace,
-            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
     },
@@ -546,7 +546,6 @@ pub struct NOperand {
 pub struct NEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: NEffectArgValue<'db>,
-    pub pass_mode: EffectPassMode,
     pub required_mut: bool,
     pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<AddressSpace>,

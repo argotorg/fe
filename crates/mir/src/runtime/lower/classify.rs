@@ -10,8 +10,9 @@ use hir::analysis::{
         FieldIndex, Mutability, SConst, SLocal, SLocalId, SemanticInstance, SemanticLocalKind,
         SemanticLocalRole, ValueProvenance, VariantIndex,
         normalized::{
-            NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase,
-            NRootKind, NStatementKind, NValueDefinition, NValueId, copied_scalar_ty,
+            NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex, NOperand,
+            NPlace, NPlaceBase, NRootKind, NStatementKind, NValueDefinition, NValueId,
+            copied_scalar_ty,
         },
     },
     ty::{
@@ -19,7 +20,7 @@ use hir::analysis::{
         corelib::{ContractMetadataKind, runtime_builtin_func_kind},
         provider::registered_root_providers,
         trait_resolution::PredicateListId,
-        ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
+        ty_check::{BodyOwner, EffectParamSite, LocalBinding, ParamSite},
         ty_def::{CapabilityKind, TyData, TyId},
     },
 };
@@ -2717,21 +2718,16 @@ pub(crate) fn desired_runtime_effect_arg_boundary<'db>(
     if runtime_zero_sized_ty(db, target_ty, env.scope, env.assumptions) {
         return None;
     }
-    Some(match arg.pass_mode {
-        EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => RuntimeBoundarySpec::BorrowLike {
+    Some(match arg.arg {
+        NEffectArgValue::Place(_) => RuntimeBoundarySpec::BorrowLike {
             pointee: stored_class_for_ty_in_env(db, env, target_ty),
             access: BorrowAccess::ReadWrite,
             allow: default_borrow_transport_set(BorrowAccess::ReadWrite, effect_space),
         },
-        EffectPassMode::ByValue | EffectPassMode::Unknown => boundary_spec_for_ty_in_env(
-            db,
-            env,
-            target_ty,
-            effect_space,
-        )
-        .unwrap_or(RuntimeBoundarySpec::ExactShape(
-            provider_class_for_target_in_env(db, env, Some(target_ty), effect_space),
-        )),
+        NEffectArgValue::Value(_) => boundary_spec_for_ty_in_env(db, env, target_ty, effect_space)
+            .unwrap_or(RuntimeBoundarySpec::ExactShape(
+                provider_class_for_target_in_env(db, env, Some(target_ty), effect_space),
+            )),
     })
 }
 
